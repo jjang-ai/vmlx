@@ -18,10 +18,19 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from tests.cross_matrix.release_regression_manifest import build_manifest
+from tests.cross_matrix.release_regression_manifest import (
+    build_manifest,
+    validate_current_proof_sweep_artifacts,
+)
 
 
 DEFAULT_OUT = Path("build/current-release-regression-manifest-20260521.json")
+
+
+def build_manifest_artifact(root: Path) -> dict:
+    manifest = build_manifest()
+    manifest["current_proof_sweep"] = validate_current_proof_sweep_artifacts(root)
+    return manifest
 
 
 def main() -> int:
@@ -29,12 +38,13 @@ def main() -> int:
     parser.add_argument("--out", type=Path, default=DEFAULT_OUT)
     args = parser.parse_args()
 
-    manifest = build_manifest()
+    manifest = build_manifest_artifact(Path("."))
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
     print(args.out)
     print(f"rows={len(manifest['rows'])}")
     print("domains=" + ",".join(sorted({row["domain"] for row in manifest["rows"]})))
+    print(f"current_proof_sweep={manifest['current_proof_sweep']['status']}")
     return 0
 
 

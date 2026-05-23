@@ -1,6 +1,7 @@
 from pathlib import Path
 import shlex
 
+from tests.cross_matrix.run_release_regression_manifest import build_manifest_artifact
 from tests.cross_matrix.release_regression_manifest import (
     CURRENT_POST_BUDGET_EDGE_ARTIFACTS,
     REQUIRED_RELEASE_DOMAINS,
@@ -129,6 +130,21 @@ def test_release_regression_manifest_rejects_missing_or_failing_current_artifact
     assert result["status"] == "fail"
     assert result["missing"] == [artifacts[0]]
     assert result["not_pass"] == [{"artifact": artifacts[1], "status": "fail"}]
+
+
+def test_release_regression_manifest_runner_embeds_current_proof_validation(tmp_path):
+    for artifact in CURRENT_POST_BUDGET_EDGE_ARTIFACTS.values():
+        path = tmp_path / artifact
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text('{"status":"pass","failed":[]}\n', encoding="utf-8")
+
+    artifact = build_manifest_artifact(tmp_path)
+
+    assert artifact["current_proof_sweep"] == {
+        "status": "pass",
+        "missing": [],
+        "not_pass": [],
+    }
 
 
 def test_release_regression_manifest_tracks_legacy_completions_output_boundary():
