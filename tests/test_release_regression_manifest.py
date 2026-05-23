@@ -256,12 +256,16 @@ def test_release_regression_manifest_tracks_qwen_jang_live_speed_review():
     assert "current-decode-speed-live-qwen27-jang4m-text-baseline-20260523.json" in joined
     assert "current-decode-speed-live-qwen27-jang4m-mtp-source-bypass-fix-20260523.json" in joined
     assert "current-decode-speed-live-qwen27-jang4m-mtp-prefill-trace3-20260523.json" in joined
+    assert "current-decode-speed-live-qwen27-jang4m-text-baseline-source-isolated-20260523.json" in joined
+    assert "current-decode-speed-live-qwen27-jang4m-mtp-prefill2048-source-isolated-20260523.json" in joined
+    assert "current-decode-speed-live-qwen27-jang4m-mtp-prefill2048-cacheon-isolated-20260523.json" in joined
+    assert "current-decode-speed-live-qwen27-jang4m-mtp-prefill-trace-isolated-20260523.json" in joined
     assert "MLX and MLX-metal wheel tags" in joined
     assert "selective live TurboQuant for Qwen attention KV layers" in joined
     assert "SingleBatchGenerator honors the explicit prefill keep-alloc CLI/env path" in joined
-    assert "compat packaged artifact remains retained as the regression diagnostic" in joined
-    assert "Tahoe-native packaged qwen27_jang4m live row clears PP speed" in joined
-    assert "prompt-processing floor compares native-MTP/VL prefill against the text-loader baseline" in joined
+    assert "Compat bundled MTP prefill is retained as the user-facing packaged regression diagnostic" in joined
+    assert "native-MTP MLLM/VL prefill remains below the floor" in joined
+    assert "prompt-processing floor compares isolated native-MTP/VL prefill against the isolated text-loader baseline" in joined
 
 
 def test_release_regression_manifest_tracks_packaged_integrity_with_runner_artifact():

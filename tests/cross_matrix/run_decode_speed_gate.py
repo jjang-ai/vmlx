@@ -31,6 +31,7 @@ DEFAULT_PY = (
     / "panel/release/mac-arm64/vMLX.app/Contents/Resources/bundled-python/python/bin/python3"
 )
 DEFAULT_OUT = REPO / "docs/internal/release-gates/decode_speed_gate_latest.json"
+SAFE_SERVER_CWD = Path("/tmp")
 DSV4_AFFINE_MODEL_CANDIDATES = (
     "/Users/example/models/JANGQ/"
     "DeepSeek-V4-Flash-JANG_DQ2-Token8-DownG32-Gate3Math6-NoMTP",
@@ -404,10 +405,13 @@ def build_serve_command(
     prefill_step_size: int,
 ) -> list[str]:
     """Build the exact live server command for one decode-speed row."""
+    if not python.is_absolute():
+        python = python.absolute()
     cmd = [
         str(python),
         "-B",
         "-s",
+        "-P",
         "-m",
         "vmlx_engine.cli",
         "serve",
@@ -462,7 +466,8 @@ def resolve_runtime_wheel_tags(python: Path) -> dict[str, list[str]]:
     packages = ("mlx", "mlx-metal")
     if not python.exists():
         return {name: ["unavailable: python missing"] for name in packages}
-    python = python.resolve()
+    if not python.is_absolute():
+        python = python.absolute()
     script = r"""
 import importlib.metadata
 import json
@@ -486,7 +491,7 @@ print(json.dumps(out))
     env = build_clean_env()
     try:
         proc = subprocess.run(
-            [str(python), "-B", "-s", "-c", script],
+            [str(python), "-B", "-s", "-P", "-c", script],
             cwd="/tmp",
             env=env,
             text=True,
@@ -727,7 +732,13 @@ def run_row(
     env = build_clean_env()
 
     with log_path.open("w") as log:
-        proc = subprocess.Popen(cmd, stdout=log, stderr=subprocess.STDOUT, env=env)
+        proc = subprocess.Popen(
+            cmd,
+            stdout=log,
+            stderr=subprocess.STDOUT,
+            env=env,
+            cwd=str(SAFE_SERVER_CWD),
+        )
     try:
         health0 = wait_health(port, proc, timeout_s)
         url = f"http://127.0.0.1:{port}/v1/chat/completions"

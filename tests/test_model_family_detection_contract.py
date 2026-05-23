@@ -134,6 +134,83 @@ def test_decode_speed_gate_does_not_force_legacy_32k_startup_output_cap():
     assert '"32768",' not in source
 
 
+def test_decode_speed_gate_server_import_isolated_from_repo_cwd():
+    import inspect
+
+    from tests.cross_matrix.run_decode_speed_gate import (
+        ROWS,
+        SAFE_SERVER_CWD,
+        build_serve_command,
+        run_row,
+    )
+
+    cmd = build_serve_command(
+        ROWS["qwen27_jang4m"],
+        python=Path("/bundle/python3"),
+        port=8799,
+        prefill_step_size=2048,
+    )
+
+    assert cmd[:4] == ["/bundle/python3", "-B", "-s", "-P"]
+    assert SAFE_SERVER_CWD == Path("/tmp")
+    assert "cwd=str(SAFE_SERVER_CWD)" in inspect.getsource(run_row)
+
+
+def test_decode_speed_gate_keeps_venv_python_symlink_identity():
+    from tests.cross_matrix.run_decode_speed_gate import ROWS, build_serve_command
+
+    python = Path(".venv/bin/python")
+
+    cmd = build_serve_command(
+        ROWS["qwen27_jang4m"],
+        python=python,
+        port=8799,
+        prefill_step_size=2048,
+    )
+
+    assert cmd[0] == str(python.absolute())
+    assert "uv/python" not in cmd[0]
+
+
+def test_decode_speed_gate_wheel_probe_keeps_venv_python_symlink_identity(monkeypatch):
+    import json
+    import subprocess
+
+    from tests.cross_matrix.run_decode_speed_gate import resolve_runtime_wheel_tags
+
+    captured: dict[str, object] = {}
+
+    def fake_run(cmd, **kwargs):
+        captured["cmd"] = cmd
+        captured["cwd"] = kwargs.get("cwd")
+        return subprocess.CompletedProcess(
+            cmd,
+            0,
+            stdout=json.dumps(
+                {
+                    "mlx": ["cp313-cp313-macosx_26_0_arm64"],
+                    "mlx-metal": ["py3-none-macosx_26_0_arm64"],
+                }
+            ),
+            stderr="",
+        )
+
+    monkeypatch.setattr(Path, "exists", lambda self: True)
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    tags = resolve_runtime_wheel_tags(Path(".venv/bin/python"))
+
+    assert captured["cmd"][:4] == [
+        str(Path(".venv/bin/python").absolute()),
+        "-B",
+        "-s",
+        "-P",
+    ]
+    assert "uv/python" not in captured["cmd"][0]
+    assert captured["cwd"] == "/tmp"
+    assert tags["mlx"] == ["cp313-cp313-macosx_26_0_arm64"]
+
+
 def test_decode_speed_gate_has_explicit_qwen36_mxfp8_and_native_mtp_rows():
     from tests.cross_matrix.run_decode_speed_gate import ROWS
 

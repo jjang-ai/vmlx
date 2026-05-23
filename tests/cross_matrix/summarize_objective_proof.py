@@ -58,9 +58,10 @@ VL_MEDIA_CONTRACT_REL = "build/current-vl-media-cache-contract-20260521.json"
 QWEN_JANG_SOURCE_SPEED_REL = "build/current-decode-speed-live-qwen27-jang4m-source-keepalloc-20260522.json"
 QWEN_JANG_PACKAGED_SPEED_REL = "build/current-decode-speed-live-qwen27-jang4m-packaged-tahoe-dmg-20260522.json"
 QWEN_NATIVE_MTP_SPEED_REL = "build/current-decode-speed-live-qwen27-jang4m-mtp-20260523.json"
-QWEN_NATIVE_MTP_PREFILL_SPEED_REL = "build/current-decode-speed-live-qwen27-jang4m-mtp-source-bypass-fix-20260523.json"
-QWEN_NATIVE_MTP_PREFILL_TRACE_REL = "build/current-decode-speed-live-qwen27-jang4m-mtp-prefill-trace3-20260523.json"
-QWEN_JANG_TEXT_BASELINE_SPEED_REL = "build/current-decode-speed-live-qwen27-jang4m-text-baseline-20260523.json"
+QWEN_NATIVE_MTP_PREFILL_SPEED_REL = "build/current-decode-speed-live-qwen27-jang4m-mtp-prefill2048-source-isolated-20260523.json"
+QWEN_NATIVE_MTP_PACKAGED_PREFILL_SPEED_REL = "build/current-decode-speed-live-qwen27-jang4m-mtp-prefill2048-cacheon-isolated-20260523.json"
+QWEN_NATIVE_MTP_PREFILL_TRACE_REL = "build/current-decode-speed-live-qwen27-jang4m-mtp-prefill-trace-isolated-20260523.json"
+QWEN_JANG_TEXT_BASELINE_SPEED_REL = "build/current-decode-speed-live-qwen27-jang4m-text-baseline-source-isolated-20260523.json"
 QWEN_NATIVE_MTP_AB_REL = "build/current-native-mtp-speed-ab-qwen27-jang4m-mtp-20260523/result.json"
 DSV4_DEFAULT_CACHE_TOOL_LOOP_REL = "build/current-dsv4-default-cache-tool-loop/result.json"
 DSV4_QUALITY_CLEARANCE_CHECKS = (
@@ -535,14 +536,17 @@ def _prefill_trace_detail(payload: dict[str, Any]) -> dict[str, Any]:
 def _prompt_processing_speed_detail(
     text_payload: dict[str, Any],
     mtp_prefill_payload: dict[str, Any],
+    mtp_packaged_payload: dict[str, Any],
     trace_payload: dict[str, Any],
 ) -> tuple[bool, dict[str, Any]]:
     text_ok, text_details = _speed_artifact_detail(text_payload)
     mtp_ok, mtp_details = _speed_artifact_detail(mtp_prefill_payload)
+    mtp_packaged_ok, mtp_packaged_details = _speed_artifact_detail(mtp_packaged_payload)
     trace_details = _prefill_trace_detail(trace_payload)
-    return text_ok and mtp_ok, {
+    return text_ok and mtp_ok and mtp_packaged_ok, {
         "text_loader": text_details,
-        "native_mtp_prefill": mtp_details,
+        "native_mtp_prefill_source_native_wheels": mtp_details,
+        "native_mtp_prefill_packaged_compat_wheels": mtp_packaged_details,
         "prefill_trace": trace_details,
     }
 
@@ -574,6 +578,7 @@ def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
     qwen_jang_packaged_speed = _load(root, QWEN_JANG_PACKAGED_SPEED_REL)
     qwen_jang_text_baseline_speed = _load(root, QWEN_JANG_TEXT_BASELINE_SPEED_REL)
     qwen_native_mtp_prefill_speed = _load(root, QWEN_NATIVE_MTP_PREFILL_SPEED_REL)
+    qwen_native_mtp_packaged_prefill_speed = _load(root, QWEN_NATIVE_MTP_PACKAGED_PREFILL_SPEED_REL)
     qwen_native_mtp_prefill_trace = _load(root, QWEN_NATIVE_MTP_PREFILL_TRACE_REL)
     qwen_native_mtp_ab = _load(root, QWEN_NATIVE_MTP_AB_REL)
 
@@ -1016,6 +1021,7 @@ def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
     qwen_prompt_ok, qwen_prompt_details = _prompt_processing_speed_detail(
         qwen_jang_text_baseline_speed,
         qwen_native_mtp_prefill_speed,
+        qwen_native_mtp_packaged_prefill_speed,
         qwen_native_mtp_prefill_trace,
     )
     _add(
@@ -1025,14 +1031,16 @@ def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
         [
             QWEN_JANG_TEXT_BASELINE_SPEED_REL,
             QWEN_NATIVE_MTP_PREFILL_SPEED_REL,
+            QWEN_NATIVE_MTP_PACKAGED_PREFILL_SPEED_REL,
             QWEN_NATIVE_MTP_PREFILL_TRACE_REL,
         ],
         caveat=(
-            "Fresh evidence shows native-MTP decode is good while both the "
-            "MTP/VL prefill route and comparable text-loader Qwen 27B row can "
-            "miss the current 600 pp/s floor. This row remains open until the "
-            "floor is calibrated to artifact/hardware reality or a real "
-            "language-forward optimization lands."
+            "Fresh isolated evidence shows native-MTP decode is good and the "
+            "native text-loader Qwen/JANG row clears the 600 pp/s floor, but "
+            "the native-MTP MLLM/VL prefill route misses it on both native "
+            "Tahoe wheels and compat bundled wheels. This row remains open "
+            "until the MLLM/VL prefill route is optimized or the threshold is "
+            "explicitly recalibrated for that route."
         ),
         details=qwen_prompt_details,
     )

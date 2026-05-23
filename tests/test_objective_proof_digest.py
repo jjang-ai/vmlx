@@ -541,17 +541,22 @@ def _write_passing_base_artifacts(tmp_path: Path) -> None:
     )
     _write_json(
         tmp_path,
-        "build/current-decode-speed-live-qwen27-jang4m-mtp-source-bypass-fix-20260523.json",
+        "build/current-decode-speed-live-qwen27-jang4m-mtp-prefill2048-source-isolated-20260523.json",
         mtp_speed_base,
     )
     _write_json(
         tmp_path,
-        "build/current-decode-speed-live-qwen27-jang4m-text-baseline-20260523.json",
+        "build/current-decode-speed-live-qwen27-jang4m-mtp-prefill2048-cacheon-isolated-20260523.json",
+        mtp_speed_base,
+    )
+    _write_json(
+        tmp_path,
+        "build/current-decode-speed-live-qwen27-jang4m-text-baseline-source-isolated-20260523.json",
         speed_base,
     )
     _write_json(
         tmp_path,
-        "build/current-decode-speed-live-qwen27-jang4m-mtp-prefill-trace3-20260523.json",
+        "build/current-decode-speed-live-qwen27-jang4m-mtp-prefill-trace-isolated-20260523.json",
         {
             "results": [
                 {
@@ -953,8 +958,8 @@ def test_objective_proof_digest_opens_qwen_prompt_processing_when_prefill_is_rev
 
     row = rows["Qwen 27B JANG_4M prompt-processing speed floor is release-cleared"]
     assert row["status"] == "open"
-    assert row["details"]["native_mtp_prefill"]["status"] == "review"
-    assert row["details"]["native_mtp_prefill"]["min_pp_wall_tok_s"] == 143.74
+    assert row["details"]["native_mtp_prefill_source_native_wheels"]["status"] == "review"
+    assert row["details"]["native_mtp_prefill_source_native_wheels"]["min_pp_wall_tok_s"] == 143.74
     assert row["details"]["text_loader"]["min_pp_wall_tok_s"] >= 600
 
 
@@ -985,7 +990,8 @@ def test_objective_proof_digest_accepts_qwen_prompt_processing_when_text_and_mtp
     row = rows["Qwen 27B JANG_4M prompt-processing speed floor is release-cleared"]
     assert row["status"] == "pass"
     assert row["details"]["text_loader"]["min_pp_wall_tok_s"] >= 600
-    assert row["details"]["native_mtp_prefill"]["min_pp_wall_tok_s"] >= 600
+    assert row["details"]["native_mtp_prefill_source_native_wheels"]["min_pp_wall_tok_s"] >= 600
+    assert row["details"]["native_mtp_prefill_packaged_compat_wheels"]["min_pp_wall_tok_s"] >= 600
     assert row["details"]["prefill_trace"]["last_prefill_trace"]["logits_eval_ms"] == 204.2
 
 
