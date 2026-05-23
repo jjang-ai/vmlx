@@ -111,6 +111,7 @@ REQUIRED_MAX_OUTPUT_CONTEXT_TEST_MARKERS = (
     "Auto chat maxTokens omits per-request output caps so server default can apply",
     "switching chats never carries a previous chat maxTokens into Auto Chat Completions",
     "switching chats never carries a previous chat maxTokens into Auto Responses",
+    "profile-loaded chat maxTokens remains request-scoped and later Auto still uses the server default",
     "default profiles cannot make maxTokens sticky on clean new chats",
     "new chats preserve model-owned maxTokens while refusing inherited output caps",
     "does not turn model max_new_tokens into a sticky per-chat max_tokens override",

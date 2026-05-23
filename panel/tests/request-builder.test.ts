@@ -311,6 +311,43 @@ describe('buildRequestBody — Chat Completions API', () => {
         expect(raisedChat.max_tokens).toBe(8192)
     })
 
+    it('profile-loaded chat maxTokens remains request-scoped and later Auto still uses the server default', () => {
+        const serverStartupDefaultMaxTokens = 4096
+        const profileLoadedCompletions = buildRequestBody(
+            'completions',
+            'gpt-4',
+            messages,
+            { maxTokens: 12000, builtinToolsEnabled: true },
+            false,
+            false,
+        )
+        const profileLoadedResponses = buildRequestBody(
+            'responses',
+            'gpt-4',
+            messages,
+            { maxTokens: 12000, builtinToolsEnabled: true },
+            false,
+            false,
+        )
+        const laterAutoCompletions = buildRequestBody('completions', 'gpt-4', messages, {}, false, false)
+        const laterAutoResponses = buildRequestBody('responses', 'gpt-4', messages, {}, false, false)
+
+        expect(profileLoadedCompletions.max_tokens).toBe(12000)
+        expect(profileLoadedResponses.max_output_tokens).toBe(12000)
+        expect(profileLoadedCompletions.max_tokens).toBeGreaterThan(serverStartupDefaultMaxTokens)
+        expect(profileLoadedResponses.max_output_tokens).toBeGreaterThan(serverStartupDefaultMaxTokens)
+
+        for (const body of [profileLoadedCompletions, profileLoadedResponses]) {
+            expect(body.max_prompt_tokens).toBeUndefined()
+            expect(body.max_context_tokens).toBeUndefined()
+            expect(body.max_context).toBeUndefined()
+        }
+        expect(laterAutoCompletions.max_tokens).toBeUndefined()
+        expect(laterAutoResponses.max_output_tokens).toBeUndefined()
+        expect(laterAutoCompletions.max_prompt_tokens).toBeUndefined()
+        expect(laterAutoResponses.max_prompt_tokens).toBeUndefined()
+    })
+
     it('forwards reasoning_effort', () => {
         const body = buildRequestBody('completions', 'gpt-4', messages, { reasoningEffort: 'high' }, false, true)
         expect(body.reasoning_effort).toBe('high')

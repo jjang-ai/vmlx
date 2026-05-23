@@ -34,7 +34,7 @@ REQUIRED_RELEASE_DOMAINS = {
 }
 
 CURRENT_POST_BUDGET_EDGE_ARTIFACTS = {
-    "chat-settings-max-output-context-ui": "build/current-max-output-context-contract-20260523-dsv4-budget-edge.json",
+    "chat-settings-max-output-context-ui": "build/current-max-output-context-contract-20260523-profile-chat-cap.json",
     "panel-session-cache-settings-family-gating": "build/current-panel-settings-contract-proof-20260523-post-budget-edge.json",
     "generation-defaults-no-hidden-forcing": "build/current-generation-defaults-contract-20260523-post-budget-edge.json",
     "parser-registry-tool-reasoning-parity": "build/current-parser-registry-contract-20260523-post-budget-edge.json",
@@ -52,7 +52,7 @@ CURRENT_POST_BUDGET_EDGE_ARTIFACTS = {
 }
 
 CURRENT_REGRESSION_SUITE_ARTIFACT = (
-    "build/current-regression-suite-20260523-proof-sweep-required-clean-jang.json"
+    "build/current-regression-suite-20260523-profile-chat-cap-clean-jang.json"
 )
 
 EXPECTED_CURRENT_OPEN_REQUIREMENTS = [
@@ -102,6 +102,7 @@ _ROWS: list[dict[str, Any]] = [
             ".venv/bin/python tests/cross_matrix/run_max_output_context_contract.py --out build/current-max-output-context-contract-20260522-recheck-server-chat-output-compat.json",
         ],
         "artifacts": [
+            "build/current-max-output-context-contract-20260523-profile-chat-cap.json",
             "build/current-max-output-context-contract-20260523-dsv4-budget-edge.json",
             "build/current-max-output-context-contract-20260522-recheck-server-chat-output-compat.json",
             "build/current-max-output-context-contract-20260522-persisted-chat-output-cap.json",
