@@ -208,6 +208,11 @@ def test_current_regression_suite_refreshes_release_regression_manifest(monkeypa
         "run_release_regression_manifest.py" in " ".join(cmd)
         for _name, cmd in seen_steps
     )
+    assert any(
+        name == "release_regression_manifest"
+        and "--require-current-proof-sweep" in cmd
+        for name, cmd in seen_steps
+    )
 
 
 def test_current_regression_suite_runs_panel_tool_security_contracts(monkeypatch, tmp_path):

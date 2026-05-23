@@ -166,6 +166,7 @@ def build_suite_artifact(
         "release_regression_manifest": [
             sys.executable,
             "tests/cross_matrix/run_release_regression_manifest.py",
+            "--require-current-proof-sweep",
             "--out",
             "build/current-release-regression-manifest-20260521.json",
         ],

@@ -147,6 +147,13 @@ def test_release_regression_manifest_runner_embeds_current_proof_validation(tmp_
     }
 
 
+def test_release_regression_manifest_runner_can_require_current_proof_sweep(tmp_path):
+    artifact = build_manifest_artifact(tmp_path, require_current_proof_sweep=True)
+
+    assert artifact["status"] == "fail"
+    assert artifact["current_proof_sweep"]["missing"]
+
+
 def test_release_regression_manifest_tracks_legacy_completions_output_boundary():
     manifest = build_manifest()
     rows = {row["id"]: row for row in manifest["rows"]}
