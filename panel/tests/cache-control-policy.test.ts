@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 import {
   cacheControlUpdatesForDsv4BlockDiskToggle,
   cacheControlUpdatesForDsv4CompositeToggle,
+  cacheControlUpdatesForDsv4PoolQuantToggle,
   cacheControlUpdatesForBlockDiskToggle,
   cacheControlUpdatesForDiskToggle,
   cacheControlUpdatesForPagedToggle,
@@ -177,6 +178,20 @@ describe('cache control policy', () => {
 
     expect(cacheControlUpdatesForDsv4BlockDiskToggle(false)).toEqual([
       ['enableBlockDiskCache', false],
+    ])
+  })
+
+  it('DSV4 pool quant opt-in enables the native composite cache prerequisites', () => {
+    expect(cacheControlUpdatesForDsv4PoolQuantToggle(true)).toEqual([
+      ['dsv4PrefixCache', true],
+      ['enablePrefixCache', true],
+      ['usePagedCache', true],
+      ['enableBlockDiskCache', true],
+      ['dsv4PoolQuant', true],
+    ])
+
+    expect(cacheControlUpdatesForDsv4PoolQuantToggle(false)).toEqual([
+      ['dsv4PoolQuant', false],
     ])
   })
 })

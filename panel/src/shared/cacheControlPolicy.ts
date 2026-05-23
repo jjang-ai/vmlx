@@ -144,3 +144,14 @@ export function cacheControlUpdatesForDsv4BlockDiskToggle(enabled: boolean): Cac
     ['enableBlockDiskCache', true],
   ]
 }
+
+export function cacheControlUpdatesForDsv4PoolQuantToggle(enabled: boolean): CacheControlUpdate[] {
+  if (!enabled) return [['dsv4PoolQuant', false]]
+  return [
+    ['dsv4PrefixCache', true],
+    ['enablePrefixCache', true],
+    ['usePagedCache', true],
+    ['enableBlockDiskCache', true],
+    ['dsv4PoolQuant', true],
+  ]
+}
