@@ -1436,6 +1436,31 @@ def responses_tool_choice_output_ok(text: str) -> bool:
     return not any(marker.lower() in lowered for marker in leak_markers)
 
 
+def responses_tool_call_arguments_ok(
+    calls: list[dict[str, Any]],
+    *,
+    expected_name: str,
+    expected_arguments: dict[str, Any],
+) -> bool:
+    """Return true when a Responses function call has exact JSON arguments."""
+    for call in calls:
+        if call.get("name") != expected_name:
+            continue
+        raw_args = call.get("arguments")
+        if isinstance(raw_args, str):
+            try:
+                args = json.loads(raw_args)
+            except json.JSONDecodeError:
+                continue
+        elif isinstance(raw_args, dict):
+            args = raw_args
+        else:
+            continue
+        if args == expected_arguments:
+            return True
+    return False
+
+
 def extract_anthropic_text_and_stop(resp: Any) -> tuple[str, str]:
     """Return visible Anthropic text blocks and stop reason.
 
@@ -3022,10 +3047,16 @@ def live_audit(row: ModelRow, py: Path, port: int, timeout_load: int, keep_runni
             code == 200
             and bool(fcalls)
             and any(c.get("name") == "list_directory" for c in fcalls)
+            and responses_tool_call_arguments_ok(
+                fcalls,
+                expected_name="list_directory",
+                expected_arguments={"path": "."},
+            )
             and responses_tool_choice_output_ok(raw_tool_text),
             {
                 "code": code,
                 "function_calls": fcalls,
+                "expected_arguments": {"path": "."},
                 "text": raw_tool_text[:300],
                 "elapsed_sec": resp_tool_elapsed,
                 "raw_keys": list(resp_tool.keys()) if isinstance(resp_tool, dict) else None,

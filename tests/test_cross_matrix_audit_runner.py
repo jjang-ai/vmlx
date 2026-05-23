@@ -382,6 +382,46 @@ def test_responses_tool_choice_rejects_visible_tool_markup_leak():
     assert audit_harness.responses_tool_choice_output_ok("")
 
 
+def test_responses_tool_choice_requires_exact_function_arguments():
+    good = [
+        {
+            "type": "function_call",
+            "name": "list_directory",
+            "arguments": '{"path": "."}',
+        }
+    ]
+    wrapped = [
+        {
+            "type": "function_call",
+            "name": "list_directory",
+            "arguments": '{"path": "<value>.</value>"}',
+        }
+    ]
+    placeholder = [
+        {
+            "type": "function_call",
+            "name": "list_directory",
+            "arguments": '{"path": "VALUE HERE"}',
+        }
+    ]
+
+    assert audit_harness.responses_tool_call_arguments_ok(
+        good,
+        expected_name="list_directory",
+        expected_arguments={"path": "."},
+    )
+    assert not audit_harness.responses_tool_call_arguments_ok(
+        wrapped,
+        expected_name="list_directory",
+        expected_arguments={"path": "."},
+    )
+    assert not audit_harness.responses_tool_call_arguments_ok(
+        placeholder,
+        expected_name="list_directory",
+        expected_arguments={"path": "."},
+    )
+
+
 def test_live_audit_can_opt_into_source_vmlx_imports():
     row = next(row for row in ROWS if row.id == "zaya_vl_jangtq4")
 
