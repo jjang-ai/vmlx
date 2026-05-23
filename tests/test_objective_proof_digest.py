@@ -202,6 +202,28 @@ def _write_passing_base_artifacts(tmp_path: Path) -> None:
     )
     _write_json(
         tmp_path,
+        "build/current-dsv4-live-identifier-matrix-20260523.json",
+        {
+            "status": "pass",
+            "probes": [
+                {
+                    "id": "copy_identifiers_only",
+                    "status": "pass",
+                    "required_identifier_counts": {
+                        "THREE.Scene": 1,
+                        "THREE.WebGLRenderer": 1,
+                        "THREE.PerspectiveCamera": 1,
+                        "THREE.BoxGeometry": 1,
+                        "THREE.MeshBasicMaterial": 1,
+                    },
+                    "has_markdown_fence": False,
+                    "content": "THREE.Scene\nTHREE.WebGLRenderer\nTHREE.PerspectiveCamera\nTHREE.BoxGeometry\nTHREE.MeshBasicMaterial",
+                }
+            ],
+        },
+    )
+    _write_json(
+        tmp_path,
         "tests/test_engine_audit.py",
         {"fixture": "engine-audit"},
     )
@@ -661,6 +683,62 @@ def test_objective_proof_digest_surfaces_current_dsv4_identifier_canary(tmp_path
     assert canary["finish_reason"] == "stop"
     assert canary["usage"]["completion_tokens"] == 52
     assert "THREE.ScScene" in canary["content"]
+
+
+def test_objective_proof_digest_surfaces_current_dsv4_identifier_matrix(tmp_path):
+    from tests.cross_matrix.summarize_objective_proof import build_digest
+
+    _write_passing_base_artifacts(tmp_path)
+    _write_json(
+        tmp_path,
+        "build/current-dsv4-live-identifier-matrix-20260523.json",
+        {
+            "status": "review",
+            "probes": [
+                {
+                    "id": "copy_identifiers_only",
+                    "status": "review",
+                    "elapsed_sec": 10.119,
+                    "required_identifier_counts": {
+                        "THREE.Scene": 1,
+                        "THREE.WebGLRenderer": 1,
+                        "THREE.PerspectiveCamera": 0,
+                    },
+                    "has_markdown_fence": False,
+                    "content": "THREE.PerscpectiveCamera",
+                },
+                {
+                    "id": "single_line_threejs_code",
+                    "status": "review",
+                    "elapsed_sec": 23.797,
+                    "required_identifier_counts": {
+                        "THREE.Scene": 1,
+                        "THREE.WebGLRenderer": 0,
+                        "THREE.PerspectiveCamera": 0,
+                    },
+                    "has_markdown_fence": True,
+                    "content": "new THREE.WebWebGLRenderer(); new THREE.PersPerspectiveCamera();",
+                },
+            ],
+        },
+    )
+
+    digest = build_digest(tmp_path)
+    rows = {item["requirement"]: item for item in digest["requirements"]}
+
+    quality = rows["DSV4 long-output/code/file-generation quality is release-cleared"]
+    matrix = quality["details"]["current_installed_identifier_matrix"]
+    assert quality["status"] == "open"
+    assert matrix["status"] == "review"
+    assert matrix["probe_count"] == 2
+    assert matrix["failed_probe_ids"] == [
+        "copy_identifiers_only",
+        "single_line_threejs_code",
+    ]
+    assert matrix["copy_task_failed"] is True
+    assert matrix["code_task_failed"] is True
+    assert "THREE.PerscpectiveCamera" in matrix["probe_summaries"][0]["content"]
+    assert "THREE.WebWebGLRenderer" in matrix["probe_summaries"][1]["content"]
 
 
 def test_objective_proof_digest_downgrades_pass_rows_with_missing_evidence(tmp_path):

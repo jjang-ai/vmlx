@@ -47,6 +47,7 @@ from tests.cross_matrix.run_vl_media_cache_contract import (
 DEFAULT_OUT = Path("build/current-objective-proof-audit-20260521.json")
 DSV4_QUALITY_CLEARANCE_REL = "build/current-dsv4-long-output-quality-clearance-20260521.json"
 DSV4_CURRENT_IDENTIFIER_CANARY_REL = "build/current-dsv4-live-identifier-canary-20260523.json"
+DSV4_CURRENT_IDENTIFIER_MATRIX_REL = "build/current-dsv4-live-identifier-matrix-20260523.json"
 API_CACHE_CONTRACT_REL = "build/current-api-cache-contract-proof-20260521.json"
 PANEL_SETTINGS_CONTRACT_REL = "build/current-panel-settings-contract-proof-20260521.json"
 MAX_OUTPUT_CONTEXT_CONTRACT_REL = "build/current-max-output-context-contract-20260521.json"
@@ -391,6 +392,42 @@ def _dsv4_identifier_canary_detail(canary: dict[str, Any], root: Path) -> dict[s
     }
 
 
+def _dsv4_identifier_matrix_detail(matrix: dict[str, Any], root: Path) -> dict[str, Any]:
+    path_present = _path_present(root, DSV4_CURRENT_IDENTIFIER_MATRIX_REL)
+    probes = matrix.get("probes") if isinstance(matrix.get("probes"), list) else []
+    probe_summaries: list[dict[str, Any]] = []
+    failed_probe_ids: list[str] = []
+    for probe in probes:
+        if not isinstance(probe, dict):
+            continue
+        probe_id = probe.get("id")
+        if probe.get("status") != "pass" and isinstance(probe_id, str):
+            failed_probe_ids.append(probe_id)
+        content = probe.get("content")
+        if not isinstance(content, str):
+            content = ""
+        probe_summaries.append(
+            {
+                "id": probe_id,
+                "status": probe.get("status"),
+                "elapsed_sec": probe.get("elapsed_sec"),
+                "required_identifier_counts": probe.get("required_identifier_counts") or {},
+                "has_markdown_fence": probe.get("has_markdown_fence"),
+                "content": content[:1000],
+            }
+        )
+    return {
+        "artifact": DSV4_CURRENT_IDENTIFIER_MATRIX_REL,
+        "present": path_present,
+        "status": matrix.get("status") if path_present else "missing",
+        "probe_count": len(probe_summaries),
+        "failed_probe_ids": failed_probe_ids,
+        "copy_task_failed": "copy_identifiers_only" in failed_probe_ids,
+        "code_task_failed": "single_line_threejs_code" in failed_probe_ids,
+        "probe_summaries": probe_summaries,
+    }
+
+
 def _contract_checks(payload: dict[str, Any], required: tuple[str, ...]) -> tuple[bool, dict[str, bool]]:
     checks = payload.get("checks") or {}
     required_checks = {key: checks.get(key) is True for key in required}
@@ -638,6 +675,7 @@ def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
     longctx = _load(root, "build/current-dsv4-long-context-proof-digest-20260521.json")
     quality_clearance = _load(root, DSV4_QUALITY_CLEARANCE_REL)
     dsv4_current_identifier_canary = _load(root, DSV4_CURRENT_IDENTIFIER_CANARY_REL)
+    dsv4_current_identifier_matrix = _load(root, DSV4_CURRENT_IDENTIFIER_MATRIX_REL)
     api_cache_contract = _load(root, API_CACHE_CONTRACT_REL)
     panel_settings_contract = _load(root, PANEL_SETTINGS_CONTRACT_REL)
     max_output_context_contract = _load(root, MAX_OUTPUT_CONTEXT_CONTRACT_REL)
@@ -1148,6 +1186,9 @@ def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
             "current_installed_identifier_canary": _dsv4_identifier_canary_detail(
                 dsv4_current_identifier_canary, root
             ),
+            "current_installed_identifier_matrix": _dsv4_identifier_matrix_detail(
+                dsv4_current_identifier_matrix, root
+            ),
         }
     )
     _add(
@@ -1158,6 +1199,7 @@ def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
             DSV4_QUALITY_CLEARANCE_REL,
             "build/current-dsv4-long-context-proof-digest-20260521.json",
             "build/current-dsv4-identifier-count-ablation-20260521/result.json",
+            DSV4_CURRENT_IDENTIFIER_MATRIX_REL,
             "docs/internal/release-gates/20260520_sisyphus_dsv4_identifier_gate_jang_affine_current/result.json",
         ],
         caveat=(
