@@ -2053,6 +2053,24 @@ def test_zaya_xml_tool_parser_registered_and_parses_native_format():
     assert ToolParserManager.get_tool_parser("zaya").supports_native_format()
 
 
+def test_zaya_xml_tool_parser_unwraps_value_tags_inside_parameters():
+    from vmlx_engine.tool_parsers import ToolParserManager
+
+    parser = ToolParserManager.get_tool_parser("zaya_xml")()
+    result = parser.extract_tool_calls(
+        "<zyphra_tool_call>\n"
+        "<function=list_directory>\n"
+        "<parameter=path>\n"
+        "<value>.</value>\n"
+        "</parameter>\n"
+        "</function>\n"
+        "</zyphra_tool_call>"
+    )
+
+    assert result.tools_called is True
+    assert json.loads(result.tool_calls[0]["arguments"]) == {"path": "."}
+
+
 def test_zaya_rendered_chat_prompt_encoding_does_not_append_eos():
     """Rendered chat templates already carry BOS/turn markers.
 

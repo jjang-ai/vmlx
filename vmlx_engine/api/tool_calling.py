@@ -181,12 +181,20 @@ def check_and_inject_fallback_tools(
         wrapper_open: str,
         wrapper_close: str,
     ) -> str:
+        def _example_value(param: str) -> str:
+            normalized = param.strip().lower()
+            if normalized in {"path", "dir", "directory"} or normalized.endswith("_path"):
+                return "."
+            if "content" in normalized or "text" in normalized:
+                return "example"
+            return "example"
+
         blocks: list[str] = []
         for tool in tools:
             name, props = _tool_props(tool)
             lines = [wrapper_open, f"<function={name}>"]
             for param in props:
-                lines.extend([f"<parameter={param}>", "VALUE HERE", "</parameter>"])
+                lines.extend([f"<parameter={param}>", _example_value(param), "</parameter>"])
             lines.extend(["</function>", wrapper_close])
             blocks.append("\n".join(lines))
         return "\n\n".join(blocks)

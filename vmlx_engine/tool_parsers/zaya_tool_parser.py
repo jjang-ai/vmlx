@@ -44,6 +44,18 @@ class ZayaToolParser(ToolParser):
         r"<parameter=([^>]+)>\s*(.*?)\s*</parameter>",
         re.DOTALL,
     )
+    VALUE_WRAPPER_PATTERN = re.compile(
+        r"^<value>\s*(.*?)\s*</value>$",
+        re.DOTALL,
+    )
+
+    @classmethod
+    def _clean_parameter_value(cls, value: str) -> str:
+        value = value.strip()
+        wrapped = cls.VALUE_WRAPPER_PATTERN.match(value)
+        if wrapped:
+            value = wrapped.group(1).strip()
+        return value
 
     def extract_tool_calls(
         self, model_output: str, request: dict[str, Any] | None = None
@@ -58,7 +70,7 @@ class ZayaToolParser(ToolParser):
             for func_name, body in self.FUNCTION_PATTERN.findall(block):
                 arguments: dict[str, Any] = {}
                 for param_name, param_value in self.PARAM_PATTERN.findall(body):
-                    value = param_value.strip()
+                    value = self._clean_parameter_value(param_value)
                     try:
                         arguments[param_name.strip()] = json.loads(value)
                     except (json.JSONDecodeError, ValueError):

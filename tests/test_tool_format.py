@@ -897,6 +897,40 @@ class TestFallbackToolPromptFormat:
         assert "fake directory listing" in rendered
         assert "tools" not in tokenizer.last_kwargs
 
+    def test_zaya_fallback_examples_do_not_teach_placeholder_path_values(self):
+        from vmlx_engine.api.tool_calling import check_and_inject_fallback_tools
+
+        class FakeTokenizer:
+            def apply_chat_template(self, messages, **kwargs):
+                return "\n".join(m.get("content", "") for m in messages)
+
+        tools = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "list_directory",
+                    "description": "List files",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"path": {"type": "string"}},
+                        "required": ["path"],
+                    },
+                },
+            }
+        ]
+
+        rendered = check_and_inject_fallback_tools(
+            "<|user|>\nUse list_directory\n<|assistant|>\n",
+            [{"role": "user", "content": "Use list_directory for path '.'"}],
+            tools,
+            FakeTokenizer(),
+            {"tokenize": False, "add_generation_prompt": True, "tools": tools},
+            tool_parser_id="zaya_xml",
+        )
+
+        assert "VALUE HERE" not in rendered
+        assert "<parameter=path>\n.\n</parameter>" in rendered
+
     def test_zaya_fallback_injects_native_example_for_each_tool(self):
         from vmlx_engine.api.tool_calling import check_and_inject_fallback_tools
 
