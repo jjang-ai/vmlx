@@ -290,6 +290,54 @@ class TestMLLMBatchStats:
         assert stats.prompt_tps == 0
         assert stats.generation_tps == 0
 
+    def test_prefill_trace_records_named_segments_and_stats_surface(self, monkeypatch):
+        """MLLM prefill diagnostics must expose segment timing when enabled."""
+        import time
+
+        import vmlx_engine.mllm_batch_generator as mbg
+        from vmlx_engine.mllm_batch_generator import MLLMBatchStats
+
+        monkeypatch.setenv("VMLINUX_MLLM_PREFILL_TRACE", "1")
+        monkeypatch.setattr(mbg, "_mllm_prefill_trace_sync", lambda: None)
+        ticks = iter([10.0, 10.010, 10.020, 10.030, 10.060, 10.060])
+        monkeypatch.setattr(time, "perf_counter", lambda: next(ticks))
+
+        trace = mbg._MLLMPrefillTrace(
+            request_id="req-trace",
+            prompt_tokens=32,
+            has_images=False,
+            is_hybrid=True,
+            native_mtp=True,
+            prefix_cache_enabled=False,
+        )
+        trace.start("preprocess")
+        trace.stop("preprocess")
+        trace.start("forward")
+        trace.stop("forward")
+        trace.set(cached_tokens=0, cache_detail="none")
+
+        data = trace.to_dict()
+        stats = MLLMBatchStats()
+        stats.last_prefill_trace = data
+
+        assert data["request_id"] == "req-trace"
+        assert data["prompt_tokens"] == 32
+        assert data["has_images"] is False
+        assert data["is_hybrid"] is True
+        assert data["native_mtp"] is True
+        assert data["prefix_cache_enabled"] is False
+        assert data["preprocess_ms"] == 10.0
+        assert data["forward_ms"] == 30.0
+        assert data["total_ms"] == 60.0
+        assert stats.to_dict()["last_prefill_trace"] == data
+
+    def test_prefill_trace_uses_existing_native_mtp_head_detector(self):
+        """Diagnostics must not reference non-existent generator runtime fields."""
+        source = Path("vmlx_engine/mllm_batch_generator.py").read_text()
+
+        assert "_native_mtp_runtime" not in source
+        assert "native_mtp=_native_mtp_model_has_head(self.language_model)" in source
+
 
 class TestMLLMSchedulerConfig:
     """Tests for MLLMSchedulerConfig."""

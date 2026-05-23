@@ -1323,6 +1323,134 @@ def _native_mtp_async_eval(*arrays: Any) -> None:
         mx.eval(*arrays)
 
 
+def _mllm_prefill_trace_enabled() -> bool:
+    return os.environ.get("VMLINUX_MLLM_PREFILL_TRACE", "").lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
+def _mllm_prefill_trace_sync() -> None:
+    try:
+        mx.synchronize()
+    except Exception:
+        pass
+
+
+class _MLLMPrefillTrace:
+    """Env-gated timing for diagnosing MLLM/VL prefill throughput."""
+
+    def __init__(
+        self,
+        *,
+        request_id: str,
+        prompt_tokens: int,
+        has_images: bool,
+        is_hybrid: bool,
+        native_mtp: bool,
+        prefix_cache_enabled: bool,
+    ) -> None:
+        self.enabled = _mllm_prefill_trace_enabled()
+        self.request_id = request_id
+        self.prompt_tokens = int(prompt_tokens or 0)
+        self.has_images = bool(has_images)
+        self.is_hybrid = bool(is_hybrid)
+        self.native_mtp = bool(native_mtp)
+        self.prefix_cache_enabled = bool(prefix_cache_enabled)
+        self.cached_tokens = 0
+        self.cache_detail = "none"
+        self._segments: Dict[str, float] = {}
+        self._open: Dict[str, float] = {}
+        self._start = 0.0
+        if self.enabled:
+            _mllm_prefill_trace_sync()
+            self._start = time.perf_counter()
+
+    def start(self, name: str) -> None:
+        if not self.enabled:
+            return
+        _mllm_prefill_trace_sync()
+        self._open[name] = time.perf_counter()
+
+    def stop(self, name: str) -> None:
+        if not self.enabled:
+            return
+        start = self._open.pop(name, None)
+        if start is None:
+            return
+        _mllm_prefill_trace_sync()
+        elapsed = time.perf_counter() - start
+        if elapsed > 0.0:
+            self._segments[name] = self._segments.get(name, 0.0) + elapsed
+
+    def set(self, **values: Any) -> None:
+        if not self.enabled:
+            return
+        if "prompt_tokens" in values:
+            self.prompt_tokens = int(values["prompt_tokens"] or 0)
+        if "cached_tokens" in values:
+            self.cached_tokens = int(values["cached_tokens"] or 0)
+        if "cache_detail" in values:
+            self.cache_detail = str(values["cache_detail"] or "none")
+        if "has_images" in values:
+            self.has_images = bool(values["has_images"])
+
+    @staticmethod
+    def _ms(value: float) -> float:
+        return round(value * 1000.0, 3)
+
+    def to_dict(self) -> Dict[str, Any]:
+        data: Dict[str, Any] = {
+            "request_id": self.request_id,
+            "prompt_tokens": self.prompt_tokens,
+            "cached_tokens": self.cached_tokens,
+            "cache_detail": self.cache_detail,
+            "has_images": self.has_images,
+            "is_hybrid": self.is_hybrid,
+            "native_mtp": self.native_mtp,
+            "prefix_cache_enabled": self.prefix_cache_enabled,
+        }
+        if self.enabled:
+            for name, value in self._segments.items():
+                data[f"{name}_ms"] = self._ms(value)
+            _mllm_prefill_trace_sync()
+            data["total_ms"] = self._ms(time.perf_counter() - self._start)
+        return data
+
+    def log(self) -> Optional[Dict[str, Any]]:
+        if not self.enabled:
+            return None
+        data = self.to_dict()
+        ordered = [
+            "request_id",
+            "prompt_tokens",
+            "cached_tokens",
+            "cache_detail",
+            "has_images",
+            "is_hybrid",
+            "native_mtp",
+            "prefix_cache_enabled",
+            "total_ms",
+            "preprocess_ms",
+            "cache_lookup_ms",
+            "cache_prepare_ms",
+            "forward_ms",
+            "sample_ms",
+            "logits_eval_ms",
+            "clear_cache_ms",
+            "sample_call_ms",
+            "cache_submit_ms",
+            "token_item_ms",
+            "ssm_capture_ms",
+            "cache_merge_ms",
+        ]
+        parts = [f"{key}={data[key]}" for key in ordered if key in data]
+        logger.info("VMLINUX_MLLM_PREFILL_TRACE %s", " ".join(parts))
+        return data
+
+
 def _native_mtp_ensure_uint32(token: mx.array) -> mx.array:
     return token if token.dtype == mx.uint32 else token.astype(mx.uint32)
 
@@ -2092,6 +2220,7 @@ class MLLMBatchStats:
         self.hybrid_kv_without_ssm_tokens: int = 0
         self.last_hybrid_kv_without_ssm: Optional[Dict[str, Any]] = None
         self.last_native_mtp: Optional[Dict[str, Any]] = None
+        self.last_prefill_trace: Optional[Dict[str, Any]] = None
 
     def record_native_mtp(
         self,
@@ -2136,6 +2265,7 @@ class MLLMBatchStats:
             "hybrid_kv_without_ssm_tokens": self.hybrid_kv_without_ssm_tokens,
             "last_hybrid_kv_without_ssm": self.last_hybrid_kv_without_ssm,
             "last_native_mtp": self.last_native_mtp,
+            "last_prefill_trace": self.last_prefill_trace,
         }
 
 
@@ -3840,11 +3970,24 @@ class MLLMBatchGenerator:
             MLLMBatch with merged cache, first tokens, and request metadata.
         """
         tic = time.perf_counter()
+        prefill_traces: Dict[str, _MLLMPrefillTrace] = {}
 
         for req in requests:
+            trace = _MLLMPrefillTrace(
+                request_id=req.request_id,
+                prompt_tokens=0,
+                has_images=False,
+                is_hybrid=self._is_hybrid,
+                native_mtp=_native_mtp_model_has_head(self.language_model),
+                prefix_cache_enabled=self._prefix_cache_enabled,
+            )
+            prefill_traces[req.request_id] = trace
             try:
+                trace.start("preprocess")
                 self._preprocess_request(req)
+                trace.stop("preprocess")
             except PromptTooLongError as prompt_err:
+                trace.stop("preprocess")
                 logger.info(
                     "Rejected VLM prompt for %s before cache lookup/store: %s",
                     req.request_id,
@@ -3895,6 +4038,11 @@ class MLLMBatchGenerator:
             req._original_token_ids = _all_tokens
             # Track how many prompt tokens were served from cache (for usage reporting)
             req._cached_tokens = 0
+            trace.set(
+                prompt_tokens=len(_all_tokens),
+                has_images=req.pixel_values is not None,
+            )
+            trace.start("cache_lookup")
             # After preprocessing, the prompt is fully tokenized including image patches.
             # Query the BlockAwarePrefixCache for reusable KV blocks.
             # fetch_cache returns (block_table, remaining_tokens) — NOT cache objects!
@@ -4506,6 +4654,7 @@ class MLLMBatchGenerator:
                                         )
                     except Exception as e:
                         logger.debug(f"VLM disk cache fetch failed for {req.request_id}: {e}")
+            trace.stop("cache_lookup")
 
         # Get token sequences and lengths
         input_ids_list = [
@@ -4524,6 +4673,10 @@ class MLLMBatchGenerator:
         for i, req in enumerate(requests):
           try:
             with mx.stream(MLLMBatchGenerator._stream):
+                trace = prefill_traces.get(req.request_id)
+                if trace is not None:
+                    trace.stop("cache_lookup")
+                    trace.start("cache_prepare")
                 # Reset stale per-batch module state on the language model before
                 # each request's forward pass.
                 #
@@ -4588,9 +4741,21 @@ class MLLMBatchGenerator:
                         from mlx_lm.models.cache import KVCache
                         req_cache = [KVCache() for _ in self.language_model.layers]
 
+                if trace is not None:
+                    trace.stop("cache_prepare")
+                    trace.set(
+                        cached_tokens=getattr(req, "_cached_tokens", 0),
+                        cache_detail=getattr(req, "_cache_detail", "none"),
+                    )
                 try:
+                    if trace is not None:
+                        trace.start("forward")
                     logits = self._run_vision_encoding(req, cache=req_cache)
+                    if trace is not None:
+                        trace.stop("forward")
                 except ValueError as ve:
+                    if trace is not None:
+                        trace.stop("forward")
                     if "broadcast" in str(ve).lower():
                         # Cache shape mismatch (e.g., GQA head count differs between
                         # stored cache and model's current KV projection — root cause:
@@ -4636,7 +4801,11 @@ class MLLMBatchGenerator:
                             # (SSM layers need ArraysCache), but at least we tried.
                             from mlx_lm.models.cache import KVCache
                             req_cache = [KVCache() for _ in self.language_model.layers]
+                        if trace is not None:
+                            trace.start("forward")
                         logits = self._run_vision_encoding(req, cache=req_cache)
+                        if trace is not None:
+                            trace.stop("forward")
                     else:
                         raise
                 per_request_caches.append(req_cache)
@@ -4659,18 +4828,33 @@ class MLLMBatchGenerator:
                 # Wrapping in `_MaybeStream()` makes every op share the
                 # same Stream handle so cross-thread resolution works.
                 with _MaybeStream():
+                    if trace is not None:
+                        trace.start("sample")
                     last_logits = logits[:, -1, :]
+                    if trace is not None:
+                        trace.start("logits_eval")
                     mx.eval(last_logits)
+                    if trace is not None:
+                        trace.stop("logits_eval")
+                        trace.start("clear_cache")
                     del logits
                     mx.clear_cache()
+                    if trace is not None:
+                        trace.stop("clear_cache")
                     req_sampler = self._make_request_sampler(req)
+                    if trace is not None:
+                        trace.start("sample_call")
                     sampled, logprobs = _sample_mllm_prefill_logits(
                         last_logits,
                         req_sampler,
                     )
+                    if trace is not None:
+                        trace.stop("sample_call")
 
                     # Async submit cache states to GPU for CPU/GPU overlap
                     try:
+                        if trace is not None:
+                            trace.start("cache_submit")
                         cache_states = []
                         for c in req_cache:
                             if hasattr(c, 'state'):
@@ -4682,15 +4866,31 @@ class MLLMBatchGenerator:
                             elif hasattr(c, 'cache'):
                                 cache_states.extend(x for x in c.cache if x is not None)
                         _native_mtp_async_eval(sampled, logprobs, *cache_states)
+                        if trace is not None:
+                            trace.stop("cache_submit")
                     except Exception as e:
+                        if trace is not None:
+                            trace.stop("cache_submit")
                         logger.warning(f"Cache state submission error (non-fatal): {e}")
+                        if trace is not None:
+                            trace.start("cache_submit")
                         _native_mtp_async_eval(sampled, logprobs)
+                        if trace is not None:
+                            trace.stop("cache_submit")
 
+                    if trace is not None:
+                        trace.start("token_item")
                     _sampled_value = sampled.item()
+                    if trace is not None:
+                        trace.stop("token_item")
+                    if trace is not None:
+                        trace.stop("sample")
                 first_tokens.append(_sampled_value)
                 all_logprobs.append(logprobs.squeeze(0) if logprobs is not None else None)
                 succeeded_requests.append(req)
 
+                if trace is not None:
+                    trace.start("ssm_capture")
                 # Capture SSM state at prompt boundary for hybrid models.
                 # Must fire on BOTH cache-miss AND cache-hit turns: on a hit,
                 # the SSM state advances during prefill of remaining tokens,
@@ -4900,6 +5100,8 @@ class MLLMBatchGenerator:
                                 )
                     except Exception as e:
                         logger.debug(f"SSM state capture failed for {req.request_id}: {e}")
+                if trace is not None:
+                    trace.stop("ssm_capture")
           except Exception as prefill_err:
                 # Broadcast shape errors from stale cache (prefix, paged blocks, or
                 # residual batch state) — retry with completely fresh cache.
@@ -5070,6 +5272,10 @@ class MLLMBatchGenerator:
         # Merge per-request caches into batch-aware caches for batched decode.
         # Handles KVCache→BatchKVCache, MambaCache→BatchMambaCache, etc.
         try:
+            for req in requests:
+                trace = prefill_traces.get(req.request_id)
+                if trace is not None:
+                    trace.start("cache_merge")
             if len(per_request_caches) == 1 and not force_batch_cache:
                 # Single request with no active batch: keep raw KVCache/ArraysCache
                 # to preserve integer offsets (Qwen3.5 needs cache.offset as int).
@@ -5078,7 +5284,15 @@ class MLLMBatchGenerator:
                 batch_cache = per_request_caches[0]
             else:
                 batch_cache = _merge_caches(per_request_caches)
+            for req in requests:
+                trace = prefill_traces.get(req.request_id)
+                if trace is not None:
+                    trace.stop("cache_merge")
         except Exception as e:
+            for req in requests:
+                trace = prefill_traces.get(req.request_id)
+                if trace is not None:
+                    trace.stop("cache_merge")
             logger.error(f"Cache merge failed: {e}")
             for req in requests:
                 self._prefill_errors.append(
@@ -5093,6 +5307,12 @@ class MLLMBatchGenerator:
             return None
 
         self._stats.prompt_time += time.perf_counter() - tic
+        for req in requests:
+            trace = prefill_traces.get(req.request_id)
+            if trace is not None:
+                logged = trace.log()
+                if logged is not None:
+                    self._stats.last_prefill_trace = logged
 
         batch = MLLMBatch(
             uids=[req.uid for req in requests],
