@@ -1011,6 +1011,47 @@ class TestNativeMtpAutodetect:
         assert "advance = getattr(cache, \"advance\", None)" in patched
         assert "advance(seq_len)" in patched
 
+    def test_qwen36_vlm_gated_delta_kernel_has_diagnostic_disable_env(self, tmp_path):
+        import inspect
+
+        from mlx_vlm.models.qwen3_5 import language as vl_language
+
+        from vmlx_engine import native_mtp
+
+        _write_qwen36_mxfp4_mtp_bundle(tmp_path)
+
+        status = native_mtp.maybe_apply_native_mtp(str(tmp_path), allow_runtime=True)
+
+        assert status["runtime_active"] is True
+        from vmlx_engine.patches.mlx_vlm_mtp import qwen35_vl
+
+        helper = inspect.getsource(qwen35_vl._qwen_vlm_gated_delta_kernel_enabled)
+        patched = inspect.getsource(vl_language.Qwen3_5GatedDeltaNet._process_chunk)
+        assert "VMLINUX_QWEN_VLM_GATED_DELTA_KERNEL" in helper
+        assert "VMLX_QWEN_VLM_GATED_DELTA_KERNEL" in helper
+        assert "use_kernel=_qwen_vlm_gated_delta_kernel_enabled(self)" in patched
+
+    def test_qwen36_vlm_gated_delta_kernel_defaults_to_inference_fast_path(
+        self, monkeypatch
+    ):
+        from types import SimpleNamespace
+
+        from vmlx_engine.patches.mlx_vlm_mtp.qwen35_vl import (
+            _qwen_vlm_gated_delta_kernel_enabled,
+        )
+
+        monkeypatch.delenv("VMLINUX_QWEN_VLM_GATED_DELTA_KERNEL", raising=False)
+        monkeypatch.delenv("VMLX_QWEN_VLM_GATED_DELTA_KERNEL", raising=False)
+
+        assert _qwen_vlm_gated_delta_kernel_enabled(SimpleNamespace(training=False)) is True
+        assert _qwen_vlm_gated_delta_kernel_enabled(SimpleNamespace(training=True)) is False
+
+        monkeypatch.setenv("VMLINUX_QWEN_VLM_GATED_DELTA_KERNEL", "1")
+        assert _qwen_vlm_gated_delta_kernel_enabled(SimpleNamespace(training=True)) is True
+
+        monkeypatch.setenv("VMLINUX_QWEN_VLM_GATED_DELTA_KERNEL", "0")
+        assert _qwen_vlm_gated_delta_kernel_enabled(SimpleNamespace(training=False)) is False
+
     def test_mxfp4_vlm_sanitize_shifts_mtp_norms_only(self, tmp_path):
         import mlx.core as mx
 
@@ -1063,7 +1104,7 @@ class TestNativeMtpAutodetect:
         ]
         assert sanitized["language_model.mtp.norm.weight"].tolist() == [1.0, 1.0]
 
-    def test_qwen36_vlm_sanitize_does_not_shift_jang_ready_transformer_norms(
+    def test_qwen36_vlm_sanitize_shifts_unshifted_jang_transformer_norms(
         self, tmp_path
     ):
         import mlx.core as mx
@@ -1099,10 +1140,50 @@ class TestNativeMtpAutodetect:
 
             assert sanitized[
                 "language_model.model.layers.0.input_layernorm.weight"
-            ].tolist() == [0.0, 0.0]
+            ].tolist() == [1.0, 1.0]
             assert sanitized[
                 "language_model.model.layers.0.post_attention_layernorm.weight"
-            ].tolist() == [0.0, 0.0]
+            ].tolist() == [1.0, 1.0]
+
+    def test_qwen36_vlm_sanitize_does_not_shift_already_shifted_norm_shard(
+        self, tmp_path
+    ):
+        import mlx.core as mx
+
+        from mlx_vlm.models.qwen3_5 import qwen3_5 as qwen_vl
+
+        from vmlx_engine import native_mtp
+
+        _write_qwen36_mxfp4_mtp_bundle(tmp_path)
+        native_mtp.maybe_apply_native_mtp(str(tmp_path), allow_runtime=True)
+
+        fake_model = qwen_vl.Model.__new__(qwen_vl.Model)
+        fake_model.config = SimpleNamespace(
+            text_config=SimpleNamespace(
+                tie_word_embeddings=False,
+                num_hidden_layers=1,
+            )
+        )
+
+        sanitized = qwen_vl.Model.sanitize(
+            fake_model,
+            {
+                "model.language_model.layers.0.input_layernorm.weight": mx.array(
+                    [0.9375, 0.9375], dtype=mx.float16
+                ),
+                "model.language_model.norm.weight": mx.array(
+                    [1.9, 1.9], dtype=mx.float16
+                ),
+            },
+        )
+
+        assert sanitized[
+            "language_model.model.layers.0.input_layernorm.weight"
+        ].tolist() == [0.9375, 0.9375]
+        assert sanitized["language_model.model.norm.weight"].tolist() == [
+            1.900390625,
+            1.900390625,
+        ]
 
     def test_bundle_index_layer_count_accepts_qwen_mtp_layers_layout(self, tmp_path):
         from vmlx_engine.server import _bundle_index_mtp_layer_count
@@ -1564,6 +1645,39 @@ class TestNativeMtpAutodetect:
         )
 
         assert args.mtp_num_hidden_layers == 1
+
+    def test_qwen_text_sanitize_shifts_unshifted_mtp_artifact_norms(self):
+        import mlx.core as mx
+
+        from vmlx_engine.patches.mlx_lm_mtp import qwen35_model
+
+        if not qwen35_model.apply():
+            raise AssertionError("qwen35_model patch did not apply")
+
+        from mlx_lm.models.qwen3_5 import TextModel
+
+        fake_model = TextModel.__new__(TextModel)
+        fake_model.args = SimpleNamespace(tie_word_embeddings=False)
+        fake_model.mtp = object()
+
+        sanitized = TextModel.sanitize(
+            fake_model,
+            {
+                "model.layers.0.input_layernorm.weight": mx.array(
+                    [-0.0625, -0.0625], dtype=mx.float16
+                ),
+                "model.norm.weight": mx.array([0.91, 0.91], dtype=mx.float16),
+            },
+        )
+
+        assert sanitized["model.layers.0.input_layernorm.weight"].tolist() == [
+            0.9375,
+            0.9375,
+        ]
+        assert sanitized["model.norm.weight"].tolist() == [
+            1.91015625,
+            1.91015625,
+        ]
 
     def test_mllm_generator_runs_vmlx_owned_native_mtp_decode_loop(self, monkeypatch):
         import mlx.core as mx

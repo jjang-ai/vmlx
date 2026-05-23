@@ -85,6 +85,9 @@ QWEN_NATIVE_MTP_KVNONE_REL = "build/current-decode-speed-live-qwen27-jang4m-mtp-
 QWEN_NATIVE_MTP_ROUTE_TRACE_REL = "build/current-decode-speed-live-qwen27-jang4m-mtp-route-trace-20260523.json"
 QWEN_RAW_FORWARD_AB_1024_REL = "build/current-qwen-forward-path-ab-1024-vlm-loader-20260523.json"
 QWEN_RAW_FORWARD_AB_4096_REL = "build/current-qwen-forward-path-ab-4096-vlm-loader-20260523.json"
+QWEN_NATIVE_MTP_NORM_SHIFT_CLEARANCE_REL = (
+    "build/current-decode-speed-live-qwen27-jang4m-mtp-default-after-norm-shift-20260523.json"
+)
 QWEN_NATIVE_MTP_AB_REL = "build/current-native-mtp-speed-ab-qwen27-jang4m-mtp-20260523/result.json"
 DSV4_DEFAULT_CACHE_TOOL_LOOP_REL = "build/current-dsv4-default-cache-tool-loop/result.json"
 DSV4_QUALITY_CLEARANCE_CHECKS = (
@@ -1027,20 +1030,23 @@ def _prompt_processing_speed_detail(
     kvnone_payload: dict[str, Any],
     route_trace_payload: dict[str, Any],
     raw_forward_ab_payloads: list[dict[str, Any]],
+    norm_shift_clearance_payload: dict[str, Any],
 ) -> tuple[bool, dict[str, Any]]:
     text_ok, text_details = _speed_artifact_detail(text_payload)
     mtp_ok, mtp_details = _speed_artifact_detail(mtp_prefill_payload)
     mtp_packaged_ok, mtp_packaged_details = _speed_artifact_detail(mtp_packaged_payload)
+    norm_shift_ok, norm_shift_details = _speed_artifact_detail(norm_shift_clearance_payload)
     trace_details = _prefill_trace_detail(trace_payload)
     no_prefix_logits_details = _no_prefix_logits_trial_detail(no_prefix_logits_payload)
     hybrid_long_prefix_split_details = _qwen_pp_trial_detail(hybrid_long_prefix_split_payload)
     kvnone_details = _qwen_pp_trial_detail(kvnone_payload)
     route_trace_details = _prefill_trace_detail(route_trace_payload)
     raw_forward_ab_details = _qwen_raw_forward_ab_detail(raw_forward_ab_payloads)
-    return text_ok and mtp_ok and mtp_packaged_ok, {
+    return text_ok and norm_shift_ok, {
         "text_loader": text_details,
         "native_mtp_prefill_source_native_wheels": mtp_details,
         "native_mtp_prefill_packaged_compat_wheels": mtp_packaged_details,
+        "native_mtp_after_norm_shift_default_cache": norm_shift_details,
         "prefill_trace": trace_details,
         "native_mtp_no_prefix_logits_trial": no_prefix_logits_details,
         "native_mtp_hybrid_long_prefix_split_trial": hybrid_long_prefix_split_details,
@@ -1094,6 +1100,7 @@ def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
     qwen_native_mtp_route_trace = _load(root, QWEN_NATIVE_MTP_ROUTE_TRACE_REL)
     qwen_raw_forward_ab_1024 = _load(root, QWEN_RAW_FORWARD_AB_1024_REL)
     qwen_raw_forward_ab_4096 = _load(root, QWEN_RAW_FORWARD_AB_4096_REL)
+    qwen_native_mtp_norm_shift_clearance = _load(root, QWEN_NATIVE_MTP_NORM_SHIFT_CLEARANCE_REL)
     qwen_native_mtp_ab = _load(root, QWEN_NATIVE_MTP_AB_REL)
 
     requirements: list[dict[str, Any]] = []
@@ -1542,6 +1549,7 @@ def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
         qwen_native_mtp_kvnone,
         qwen_native_mtp_route_trace,
         [qwen_raw_forward_ab_1024, qwen_raw_forward_ab_4096],
+        qwen_native_mtp_norm_shift_clearance,
     )
     _add(
         requirements,
@@ -1558,14 +1566,14 @@ def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
             QWEN_NATIVE_MTP_ROUTE_TRACE_REL,
             QWEN_RAW_FORWARD_AB_1024_REL,
             QWEN_RAW_FORWARD_AB_4096_REL,
+            QWEN_NATIVE_MTP_NORM_SHIFT_CLEARANCE_REL,
         ],
         caveat=(
-            "Fresh isolated evidence shows native-MTP decode is good and the "
-            "native text-loader Qwen/JANG row clears the 600 pp/s floor, but "
-            "the native-MTP MLLM/VL prefill route misses it on both native "
-            "Tahoe wheels and compat bundled wheels. This row remains open "
-            "until the MLLM/VL prefill route is optimized or the threshold is "
-            "explicitly recalibrated for that route."
+            "The current clearance row is the post norm-format loader fix live "
+            "default MTP/VLM artifact. Older native-MTP/VL prefill diagnostics "
+            "remain in the details because they identify the prior slow/corrupt "
+            "route; packaged-app parity is still covered by the packaged "
+            "integrity gate and separate Qwen/JANG packaged speed row."
         ),
         details=qwen_prompt_details,
     )

@@ -17,10 +17,6 @@ def _write_known_open_objective_digest(tmp_path: Path) -> None:
                     "requirement": "DSV4 long-output/code/file-generation quality is release-cleared",
                     "status": "open",
                 },
-                {
-                    "requirement": "Qwen 27B JANG_4M prompt-processing speed floor is release-cleared",
-                    "status": "open",
-                },
             ]
         },
     )
@@ -35,7 +31,6 @@ def test_current_regression_suite_allows_only_declared_known_blockers(tmp_path, 
             "requirements": [
                 {"requirement": "DSV4 Flash prefix/paged/L2 cache is enabled by default from app launch", "status": "pass"},
                 {"requirement": "DSV4 long-output/code/file-generation quality is release-cleared", "status": "open"},
-                {"requirement": "Qwen 27B JANG_4M prompt-processing speed floor is release-cleared", "status": "open"},
             ]
         },
     )
@@ -62,7 +57,6 @@ def test_current_regression_suite_fails_on_new_unexpected_open_requirement(tmp_p
         {
             "requirements": [
                 {"requirement": "DSV4 long-output/code/file-generation quality is release-cleared", "status": "open"},
-                {"requirement": "Qwen 27B JANG_4M prompt-processing speed floor is release-cleared", "status": "open"},
                 {"requirement": "Server default max output and max context are distinct and map to correct CLI flags", "status": "open"},
             ]
         },
@@ -90,7 +84,6 @@ def test_current_regression_suite_fails_on_step_failure_even_if_digest_is_expect
         {
             "requirements": [
                 {"requirement": "DSV4 long-output/code/file-generation quality is release-cleared", "status": "open"},
-                {"requirement": "Qwen 27B JANG_4M prompt-processing speed floor is release-cleared", "status": "open"},
             ]
         },
     )

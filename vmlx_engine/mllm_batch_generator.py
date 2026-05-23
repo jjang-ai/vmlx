@@ -3687,9 +3687,10 @@ class MLLMBatchGenerator:
         # Metal single-buffer OOM (~9.5 GB cap per allocation) because
         # `attention_scores` blows up to (1, heads, seq_len, seq_len) * 2 bytes.
         #
-        # Qwen3.5 hybrid (GatedDeltaNet + attention) was verified safe with
-        # chunked prefill: both `KVCache.make_mask(N)` and `ArraysCache.state`
-        # carry across chunks correctly. Other hybrid architectures may produce
+        # Qwen3.5 hybrid (GatedDeltaNet + attention) has an opt-in chunked
+        # prefill path for diagnostics and OOM escape hatches. Live decode
+        # equivalence is not release-cleared, so native-MTP hybrid text splitting
+        # must stay disabled by default. Other hybrid architectures may produce
         # incorrect output when chunked, so we only override the opt-in default
         # when one-shot prefill is *guaranteed* to OOM — a wrong answer beats
         # a hard crash that kills the session.
@@ -3698,7 +3699,13 @@ class MLLMBatchGenerator:
             or os.environ.get("VMLINUX_ALLOW_HYBRID_CHUNKED_PREFILL")
         ) in ("1", "true", "True", "yes", "on")
         _hybrid_blocks_chunk = self._is_hybrid and not _allow_hybrid_chunked
+        _allow_native_mtp_hybrid_text_split = (
+            os.environ.get("VMLINUX_ENABLE_NATIVE_MTP_HYBRID_TEXT_SPLIT")
+            or os.environ.get("VMLX_ENABLE_NATIVE_MTP_HYBRID_TEXT_SPLIT")
+        ) in ("1", "true", "True", "yes", "on")
         _native_mtp_hybrid_text_split = (
+            _allow_native_mtp_hybrid_text_split
+            and
             not has_images
             and self._is_hybrid
             and _native_mtp_model_has_head(self.language_model)

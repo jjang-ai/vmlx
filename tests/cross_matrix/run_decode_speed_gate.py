@@ -58,6 +58,7 @@ class Row:
     expected_min_pp: float | None = None
     pp_targets: list[int] = field(default_factory=lambda: [1024, 4096, 16384])
     extra_args: list[str] = field(default_factory=list)
+    extra_serve_env: dict[str, str] = field(default_factory=dict)
 
 
 ROWS: dict[str, Row] = {
@@ -461,6 +462,19 @@ def row_with_extra_serve_args(row: Row, extra_args: list[str] | None) -> Row:
     return replace(row, extra_args=[*row.extra_args, *extra_args])
 
 
+def row_with_extra_serve_env(row: Row, extra_env: list[str] | None) -> Row:
+    """Return a row copy with one-off server env overrides for live A/B probes."""
+    if not extra_env:
+        return row
+    merged = dict(row.extra_serve_env)
+    for item in extra_env:
+        key, sep, value = item.partition("=")
+        if not sep or not key:
+            raise ValueError(f"invalid --serve-extra-env value: {item!r}")
+        merged[key] = value
+    return replace(row, extra_serve_env=merged)
+
+
 def resolve_runtime_wheel_tags(python: Path) -> dict[str, list[str]]:
     """Return MLX wheel tags for the Python runtime used by a live speed row."""
     packages = ("mlx", "mlx-metal")
@@ -730,6 +744,7 @@ def run_row(
         prefill_step_size=prefill_step_size,
     )
     env = build_clean_env()
+    env.update(row.extra_serve_env)
 
     with log_path.open("w") as log:
         proc = subprocess.Popen(
@@ -883,6 +898,15 @@ def main() -> None:
             "--serve-extra-arg=--flag for values that start with '-'."
         ),
     )
+    parser.add_argument(
+        "--serve-extra-env",
+        action="append",
+        default=[],
+        help=(
+            "Append one KEY=VALUE environment override to the launched server "
+            "for live A/B probes."
+        ),
+    )
     args = parser.parse_args()
 
     logs = args.out.parent / "decode-speed-logs"
@@ -894,6 +918,7 @@ def main() -> None:
             results.append({"name": name, "status": "unknown-row"})
             continue
         row = row_with_extra_serve_args(row, args.serve_extra_arg)
+        row = row_with_extra_serve_env(row, args.serve_extra_env)
         print(f"[decode-gate] row={name} path={row.path}", flush=True)
         result = run_row(
             row,

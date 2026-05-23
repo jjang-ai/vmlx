@@ -11,11 +11,43 @@ hybrid SSM state for draft rejection rollback.
 from __future__ import annotations
 
 import logging
+import os
 from typing import Any, Optional
+
+import mlx.core as mx
 
 logger = logging.getLogger(__name__)
 
 _PATCHED = False
+_DISABLE_ENV_VALUES = {"0", "false", "FALSE", "no", "NO", "off", "OFF"}
+
+
+def _qwen_vlm_gated_delta_kernel_enabled(module: Any) -> bool:
+    for name in (
+        "VMLINUX_QWEN_VLM_GATED_DELTA_KERNEL",
+        "VMLX_QWEN_VLM_GATED_DELTA_KERNEL",
+    ):
+        if name in os.environ:
+            return os.environ.get(name) not in _DISABLE_ENV_VALUES
+    return not getattr(module, "training", False)
+
+
+def _qwen_norm_shard_looks_unshifted(weights, norm_keys) -> bool:
+    for key, value in weights.items():
+        if not any(key.endswith(sfx) for sfx in norm_keys):
+            continue
+        if getattr(value, "ndim", 0) != 1:
+            continue
+        try:
+            sample = value[: min(int(value.shape[0]), 1024)].astype(mx.float32)
+            mean = float(mx.mean(sample).item())
+        except Exception:
+            continue
+        if key.endswith("model.norm.weight") and mean < 1.5:
+            return True
+        if mean < 0.5:
+            return True
+    return False
 
 
 def apply() -> bool:
@@ -322,7 +354,7 @@ def _patch_gated_delta_net(qlang: Any) -> None:
             self.dt_bias,
             ssm_state,
             ssm_mask,
-            use_kernel=not self.training,
+            use_kernel=_qwen_vlm_gated_delta_kernel_enabled(self),
         )
         return out, new_conv_state, new_ssm_state
 
@@ -916,7 +948,14 @@ def _patch_outer_model(qvl: Any) -> None:
             is_norm = any(key.endswith(sfx) for sfx in norm_keys)
             is_mtp_norm = ".mtp." in key and is_norm
             should_shift_norm = (
-                (not norms_are_mlx_ready and has_unsanitized_conv1d) or is_mtp_norm
+                (
+                    not norms_are_mlx_ready
+                    and (
+                        has_unsanitized_conv1d
+                        or _qwen_norm_shard_looks_unshifted(weights, norm_keys)
+                    )
+                )
+                or is_mtp_norm
             )
             if should_shift_norm and is_norm:
                 if value.ndim == 1:
@@ -1038,7 +1077,14 @@ def _patch_moe_outer_model(qmoe_vl: Any) -> None:
             is_norm = any(key.endswith(sfx) for sfx in norm_keys)
             is_mtp_norm = ".mtp." in key and is_norm
             should_shift_norm = (
-                (not norms_are_mlx_ready and has_unsanitized_conv1d) or is_mtp_norm
+                (
+                    not norms_are_mlx_ready
+                    and (
+                        has_unsanitized_conv1d
+                        or _qwen_norm_shard_looks_unshifted(weights, norm_keys)
+                    )
+                )
+                or is_mtp_norm
             )
             if should_shift_norm and is_norm:
                 if value.ndim == 1:

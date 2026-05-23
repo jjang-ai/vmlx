@@ -22,6 +22,7 @@ from tests.cross_matrix.release_regression_manifest import (
     EXPECTED_CURRENT_TOOL_CALL_CHECKS,
     EXPECTED_CURRENT_VL_MEDIA_CHECKS,
     REQUIRED_RELEASE_DOMAINS,
+    _current_regression_suite_state_is_acceptable,
     build_manifest,
     validate_current_proof_sweep_artifacts,
 )
@@ -553,8 +554,21 @@ def test_release_regression_manifest_rejects_unexpected_current_regression_suite
             "Server max output/context wiring regressed",
         ],
         "unexpected_open_requirements": ["Server max output/context wiring regressed"],
-        "missing_expected_open_requirements": [EXPECTED_CURRENT_OPEN_REQUIREMENTS[1]],
+        "missing_expected_open_requirements": [],
     }
+
+
+def test_release_regression_manifest_allows_current_suite_bootstrap_self_reference(tmp_path):
+    result = {
+        "artifact": CURRENT_REGRESSION_SUITE_ARTIFACT,
+        "status": "open",
+        "failed_steps": ["release_regression_manifest"],
+        "open_requirements": EXPECTED_CURRENT_OPEN_REQUIREMENTS,
+        "unexpected_open_requirements": [],
+        "missing_expected_open_requirements": [],
+    }
+
+    assert _current_regression_suite_state_is_acceptable(result)
 
 
 def test_release_regression_manifest_rejects_incomplete_current_max_output_context_matrix(tmp_path):
@@ -659,9 +673,7 @@ def test_release_regression_manifest_rejects_incomplete_current_packaged_integri
     assert result["packaged_integrity_matrix"]["unexpected_open_requirements"] == [
         "Unexpected release gate blocker"
     ]
-    assert result["packaged_integrity_matrix"]["missing_expected_open_requirements"] == [
-        EXPECTED_CURRENT_OPEN_REQUIREMENTS[1]
-    ]
+    assert result["packaged_integrity_matrix"]["missing_expected_open_requirements"] == []
 
 
 def test_release_regression_manifest_rejects_incomplete_current_release_surface_matrix(tmp_path):
@@ -2603,8 +2615,10 @@ def test_release_regression_manifest_tracks_qwen_jang_live_speed_review():
     assert "current-decode-speed-live-qwen27-jang4m-mtp-prefill2048-source-isolated-20260523.json" in joined
     assert "current-decode-speed-live-qwen27-jang4m-mtp-prefill2048-cacheon-isolated-20260523.json" in joined
     assert "current-decode-speed-live-qwen27-jang4m-mtp-prefill-trace-isolated-20260523.json" in joined
+    assert "current-decode-speed-live-qwen27-jang4m-mtp-default-after-norm-shift-20260523.json" in joined
     assert "MLX and MLX-metal wheel tags" in joined
     assert "selective live TurboQuant for Qwen attention KV layers" in joined
+    assert "Post norm-format loader fix live Qwen MTP/VLM default-cache row clears coherency" in joined
     assert "SingleBatchGenerator honors the explicit prefill keep-alloc CLI/env path" in joined
     assert "Compat bundled MTP prefill is retained as the user-facing packaged regression diagnostic" in joined
     assert "native-MTP MLLM/VL prefill remains below the floor" in joined

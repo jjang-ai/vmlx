@@ -736,6 +736,11 @@ def _write_passing_base_artifacts(tmp_path: Path) -> None:
     )
     _write_json(
         tmp_path,
+        "build/current-decode-speed-live-qwen27-jang4m-mtp-default-after-norm-shift-20260523.json",
+        mtp_speed_base,
+    )
+    _write_json(
+        tmp_path,
         "build/current-qwen-forward-path-ab-1024-vlm-loader-20260523.json",
         {
             "comparison": [
@@ -1581,7 +1586,7 @@ def test_objective_proof_digest_accepts_qwen_jang_speed_when_source_and_packaged
     assert "packaged-tahoe-dmg" in QWEN_JANG_PACKAGED_SPEED_REL
 
 
-def test_objective_proof_digest_opens_qwen_prompt_processing_when_prefill_is_review(tmp_path):
+def test_objective_proof_digest_keeps_qwen_prefill_review_as_historical_diagnostic(tmp_path):
     from tests.cross_matrix.summarize_objective_proof import (
         QWEN_NATIVE_MTP_PREFILL_SPEED_REL,
         build_digest,
@@ -1605,10 +1610,36 @@ def test_objective_proof_digest_opens_qwen_prompt_processing_when_prefill_is_rev
     rows = {item["requirement"]: item for item in digest["requirements"]}
 
     row = rows["Qwen 27B JANG_4M prompt-processing speed floor is release-cleared"]
-    assert row["status"] == "open"
+    assert row["status"] == "pass"
     assert row["details"]["native_mtp_prefill_source_native_wheels"]["status"] == "review"
     assert row["details"]["native_mtp_prefill_source_native_wheels"]["min_pp_wall_tok_s"] == 143.74
+    assert row["details"]["native_mtp_after_norm_shift_default_cache"]["status"] == "pass"
     assert row["details"]["text_loader"]["min_pp_wall_tok_s"] >= 600
+
+
+def test_objective_proof_digest_opens_qwen_prompt_processing_when_norm_shift_clearance_is_review(tmp_path):
+    from tests.cross_matrix.summarize_objective_proof import (
+        QWEN_NATIVE_MTP_NORM_SHIFT_CLEARANCE_REL,
+        build_digest,
+    )
+
+    _write_passing_base_artifacts(tmp_path)
+    path = tmp_path / QWEN_NATIVE_MTP_NORM_SHIFT_CLEARANCE_REL
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["results"][0]["status"] = "review"
+    payload["results"][0]["notes"] = ["loopish output detected"]
+    payload["results"][0]["pp_rows"] = [
+        {"target_tokens": 1024, "pp_wall_tok_s": 710.1, "loopish": True},
+    ]
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    digest = build_digest(tmp_path)
+    rows = {item["requirement"]: item for item in digest["requirements"]}
+
+    row = rows["Qwen 27B JANG_4M prompt-processing speed floor is release-cleared"]
+    assert row["status"] == "open"
+    assert row["details"]["native_mtp_after_norm_shift_default_cache"]["status"] == "review"
+    assert row["details"]["native_mtp_after_norm_shift_default_cache"]["loopish_values"] == [True]
 
 
 def test_objective_proof_digest_explains_qwen_mllm_prefill_trace_bottleneck(tmp_path):
@@ -1683,7 +1714,7 @@ def test_objective_proof_digest_surfaces_qwen_no_prefix_logits_trial(tmp_path):
 
     row = rows["Qwen 27B JANG_4M prompt-processing speed floor is release-cleared"]
     trial = row["details"]["native_mtp_no_prefix_logits_trial"]
-    assert row["status"] == "open"
+    assert row["status"] == "pass"
     assert trial["status"] == "review"
     assert trial["min_pp_wall_tok_s"] == 256.75
     assert trial["clears_prompt_processing_floor"] is False
@@ -1812,7 +1843,7 @@ def test_objective_proof_digest_surfaces_qwen_vlm_route_ab_trials(tmp_path):
     kvnone = row["details"]["native_mtp_kvnone_trial"]
     route_trace = row["details"]["native_mtp_vlm_route_trace"]
     forward_ab = row["details"]["raw_forward_path_ab"]
-    assert row["status"] == "open"
+    assert row["status"] == "pass"
     assert prefix_split["clears_prompt_processing_floor"] is False
     assert prefix_split["min_pp_wall_tok_s"] == 284.58
     assert kvnone["clears_prompt_processing_floor"] is False
@@ -1854,8 +1885,7 @@ def test_objective_proof_digest_accepts_qwen_prompt_processing_when_text_and_mtp
     row = rows["Qwen 27B JANG_4M prompt-processing speed floor is release-cleared"]
     assert row["status"] == "pass"
     assert row["details"]["text_loader"]["min_pp_wall_tok_s"] >= 600
-    assert row["details"]["native_mtp_prefill_source_native_wheels"]["min_pp_wall_tok_s"] >= 600
-    assert row["details"]["native_mtp_prefill_packaged_compat_wheels"]["min_pp_wall_tok_s"] >= 600
+    assert row["details"]["native_mtp_after_norm_shift_default_cache"]["min_pp_wall_tok_s"] >= 600
     assert row["details"]["prefill_trace"]["last_prefill_trace"]["logits_eval_ms"] == 204.2
 
 

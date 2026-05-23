@@ -51,9 +51,29 @@ from __future__ import annotations
 import logging
 from typing import Any, Optional
 
+import mlx.core as mx
+
 logger = logging.getLogger(__name__)
 
 _PATCHED = False
+
+
+def _qwen_norm_shard_looks_unshifted(weights, norm_keys) -> bool:
+    for key, value in weights.items():
+        if not any(key.endswith(sfx) for sfx in norm_keys):
+            continue
+        if getattr(value, "ndim", 0) != 1:
+            continue
+        try:
+            sample = value[: min(int(value.shape[0]), 1024)].astype(mx.float32)
+            mean = float(mx.mean(sample).item())
+        except Exception:
+            continue
+        if key.endswith("model.norm.weight") and mean < 1.5:
+            return True
+        if mean < 0.5:
+            return True
+    return False
 
 
 def apply() -> bool:
@@ -498,12 +518,6 @@ def _patch_text_model(q35: Any) -> None:
         # - detect raw HF conv1d layout by shape, not by MTP key presence;
         # - shift Qwen norm weights only for raw HF layout so already-MLX
         #   JANG/MXFP bundles do not get shifted twice.
-        has_unsanitized_conv1d = any(
-            "conv1d.weight" in k and getattr(v, "shape", (1,))[-1] != 1
-            for k, v in weights.items()
-        )
-        should_shift_norm_weights = has_unsanitized_conv1d
-
         if not hasattr(self, "mtp"):
             weights = {k: v for k, v in weights.items() if "mtp." not in k}
         # vMLX's JANG loader sanitizes and loads one safetensor shard at a
@@ -524,6 +538,14 @@ def _patch_text_model(q35: Any) -> None:
             ".pre_fc_norm_hidden.weight",
             ".pre_fc_norm_embedding.weight",
             "mtp.norm.weight",
+        )
+        has_unsanitized_conv1d = any(
+            "conv1d.weight" in k and getattr(v, "shape", (1,))[-1] != 1
+            for k, v in weights.items()
+        )
+        should_shift_norm_weights = (
+            has_unsanitized_conv1d
+            or _qwen_norm_shard_looks_unshifted(weights, norm_keys)
         )
         for k, v in list(weights.items()):
             if "conv1d.weight" in k and v.shape[-1] != 1:

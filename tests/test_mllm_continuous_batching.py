@@ -437,8 +437,8 @@ class TestMLLMBatchStats:
             {"tokens": 1, "return_logits": True},
         ]
 
-    def test_default_native_mtp_hybrid_text_prefill_avoids_full_prompt_logits(self, monkeypatch):
-        """Qwen native-MTP hybrid text requests must not need the chunking env to skip prefix logits."""
+    def test_default_native_mtp_hybrid_text_prefill_stays_on_full_prompt_logits(self, monkeypatch):
+        """Native-MTP hybrid split is diagnostic-only until live equivalence is proven."""
         from mlx_lm.models.cache import KVCache
 
         from vmlx_engine.mllm_batch_generator import (
@@ -448,6 +448,8 @@ class TestMLLMBatchStats:
 
         monkeypatch.delenv("VMLX_ALLOW_HYBRID_CHUNKED_PREFILL", raising=False)
         monkeypatch.delenv("VMLINUX_ALLOW_HYBRID_CHUNKED_PREFILL", raising=False)
+        monkeypatch.delenv("VMLX_ENABLE_NATIVE_MTP_HYBRID_TEXT_SPLIT", raising=False)
+        monkeypatch.delenv("VMLINUX_ENABLE_NATIVE_MTP_HYBRID_TEXT_SPLIT", raising=False)
 
         class DummySSMCache:
             def __init__(self):
@@ -504,13 +506,12 @@ class TestMLLMBatchStats:
             cache=model.language_model.make_cache(),
         )
 
-        assert output.shape == (1, 1, 8)
+        assert output.shape == (1, 6, 8)
         assert model.language_model.calls == [
-            {"tokens": 5, "return_logits": False},
-            {"tokens": 1, "return_logits": True},
+            {"tokens": 6, "return_logits": True},
         ]
 
-    def test_default_native_mtp_hybrid_prefix_split_materializes_cache_before_final_logits(self, monkeypatch):
+    def test_opt_in_native_mtp_hybrid_prefix_split_materializes_cache_before_final_logits(self, monkeypatch):
         """Prefix-only native-MTP hybrid work must not remain lazy until final logits eval."""
         from vmlx_engine.mllm_batch_generator import (
             MLLMBatchGenerator,
@@ -520,6 +521,7 @@ class TestMLLMBatchStats:
 
         monkeypatch.delenv("VMLX_ALLOW_HYBRID_CHUNKED_PREFILL", raising=False)
         monkeypatch.delenv("VMLINUX_ALLOW_HYBRID_CHUNKED_PREFILL", raising=False)
+        monkeypatch.setenv("VMLINUX_ENABLE_NATIVE_MTP_HYBRID_TEXT_SPLIT", "1")
         eval_calls = []
 
         def fake_eval(*items):
@@ -594,7 +596,7 @@ class TestMLLMBatchStats:
         assert model.language_model.calls[0] == {"tokens": 5, "return_logits": False}
         assert any(len(items) >= 3 for items in eval_calls)
 
-    def test_default_native_mtp_hybrid_long_text_prefill_uses_chunked_prefix_split(self, monkeypatch):
+    def test_opt_in_native_mtp_hybrid_long_text_prefill_uses_chunked_prefix_split(self, monkeypatch):
         """Native-MTP hybrid text prompts above the short threshold must not fall back to one-shot logits."""
         from mlx_lm.models.cache import KVCache
 
@@ -605,6 +607,7 @@ class TestMLLMBatchStats:
 
         monkeypatch.delenv("VMLX_ALLOW_HYBRID_CHUNKED_PREFILL", raising=False)
         monkeypatch.delenv("VMLINUX_ALLOW_HYBRID_CHUNKED_PREFILL", raising=False)
+        monkeypatch.setenv("VMLINUX_ENABLE_NATIVE_MTP_HYBRID_TEXT_SPLIT", "1")
 
         class DummySSMCache:
             def __init__(self):

@@ -347,6 +347,66 @@ def test_decode_speed_gate_extra_serve_arg_is_opt_in_without_mutating_row_defaul
     assert "--prefill-keep-alloc" not in base.extra_args
 
 
+def test_decode_speed_gate_extra_serve_env_is_opt_in_without_mutating_row_defaults(
+    monkeypatch, tmp_path
+):
+    from tests.cross_matrix import run_decode_speed_gate as gate
+
+    base = gate.ROWS["qwen27_jang4m_mtp"]
+    assert not getattr(base, "extra_serve_env", {})
+
+    row = gate.row_with_extra_serve_env(
+        base,
+        ["VMLINUX_QWEN_VLM_GATED_DELTA_KERNEL=0"],
+    )
+    assert row.extra_serve_env == {"VMLINUX_QWEN_VLM_GATED_DELTA_KERNEL": "0"}
+    assert not getattr(base, "extra_serve_env", {})
+
+    captured: dict[str, object] = {}
+
+    class FakeProc:
+        def poll(self):
+            return 0
+
+        def send_signal(self, _signal):
+            return None
+
+        def wait(self, timeout=None):
+            return 0
+
+    def fake_popen(cmd, **kwargs):
+        captured["cmd"] = cmd
+        captured["env"] = kwargs.get("env")
+        return FakeProc()
+
+    monkeypatch.setattr(gate.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(gate.Path, "exists", lambda self: True)
+    monkeypatch.setattr(gate, "resolve_runtime_wheel_tags", lambda _python: {})
+    monkeypatch.setattr(gate, "resolve_row_registry_metadata", lambda _row: {})
+    monkeypatch.setattr(gate, "wait_health", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(
+        gate,
+        "post_json",
+        lambda *_args, **_kwargs: {
+            "choices": [{"message": {"content": "1 2 3"}}],
+            "usage": {"completion_tokens": 3, "prompt_tokens": 3},
+        },
+    )
+    monkeypatch.setattr(gate, "get_json", lambda *_args, **_kwargs: {})
+
+    result = gate.run_row(
+        row,
+        port=8801,
+        python=tmp_path / "python3",
+        keep_logs=tmp_path,
+        timeout_s=1,
+        prefill_step_size=2048,
+    )
+
+    assert result["status"] == "pass"
+    assert captured["env"]["VMLINUX_QWEN_VLM_GATED_DELTA_KERNEL"] == "0"
+
+
 def test_decode_speed_gate_records_runtime_mlx_wheel_tags():
     from tests.cross_matrix.run_decode_speed_gate import resolve_runtime_wheel_tags
 
