@@ -43,6 +43,19 @@ EXPECTED_CURRENT_CACHE_ARCHITECTURE_CHECKS = (
     "legacy_count_floor_still_nontrivial",
 )
 
+EXPECTED_CURRENT_PARSER_REGISTRY_CHECKS = (
+    "engine_accepts_registered_reasoning_parsers",
+    "engine_accepts_registered_tool_parsers",
+    "panel_emitted_reasoning_parsers_are_engine_valid",
+    "panel_emitted_tool_parsers_are_engine_valid",
+    "minimax_m2_reasoning_parser_regression",
+    "parser_aliases_are_canonical_before_cli",
+    "zaya_hy3_ling_dsv4_parser_rows_are_present",
+    "non_reasoning_family_boundaries_are_present",
+    "all_required_parser_markers_present",
+    "legacy_count_floor_still_nontrivial",
+)
+
 
 REQUIRED_RELEASE_DOMAINS = {
     "chat_ui_settings",
@@ -639,6 +652,7 @@ def validate_current_proof_sweep_artifacts(root: Path) -> dict[str, Any]:
     model_family_matrix = _validate_current_model_family_matrix_artifact(root)
     model_artifact_matrix = _validate_current_model_artifact_matrix_artifact(root)
     cache_architecture_matrix = _validate_current_cache_architecture_matrix_artifact(root)
+    parser_registry_matrix = _validate_current_parser_registry_matrix_artifact(root)
     regression_suite_ok = (
         regression_suite["status"] == "pass"
         and not regression_suite["failed_steps"]
@@ -665,6 +679,12 @@ def validate_current_proof_sweep_artifacts(root: Path) -> dict[str, Any]:
         and not cache_architecture_matrix["failed_checks"]
         and not cache_architecture_matrix["missing_expected_checks"]
     )
+    parser_registry_matrix_ok = (
+        parser_registry_matrix["status"] == "pass"
+        and not parser_registry_matrix["missing_markers"]
+        and not parser_registry_matrix["failed_checks"]
+        and not parser_registry_matrix["missing_expected_checks"]
+    )
 
     return {
         "status": "pass"
@@ -675,6 +695,7 @@ def validate_current_proof_sweep_artifacts(root: Path) -> dict[str, Any]:
             and model_family_matrix_ok
             and model_artifact_matrix_ok
             and cache_architecture_matrix_ok
+            and parser_registry_matrix_ok
         )
         else "fail",
         "missing": missing,
@@ -683,6 +704,7 @@ def validate_current_proof_sweep_artifacts(root: Path) -> dict[str, Any]:
         "model_family_matrix": model_family_matrix,
         "model_artifact_matrix": model_artifact_matrix,
         "cache_architecture_matrix": cache_architecture_matrix,
+        "parser_registry_matrix": parser_registry_matrix,
     }
 
 
@@ -814,6 +836,48 @@ def _validate_current_model_artifact_matrix_artifact(root: Path) -> dict[str, An
             "status": str(payload.get("status")),
             "checks": checks,
             "missing_markers": missing_markers,
+            "failed_checks": failed_checks,
+            "missing_expected_checks": missing_expected_checks,
+        }
+    )
+    return result
+
+
+def _validate_current_parser_registry_matrix_artifact(root: Path) -> dict[str, Any]:
+    artifact = CURRENT_POST_BUDGET_EDGE_ARTIFACTS["parser-registry-tool-reasoning-parity"]
+    result: dict[str, Any] = {
+        "artifact": artifact,
+        "status": "missing",
+        "checks": {},
+        "missing_markers": [],
+        "failed_checks": list(EXPECTED_CURRENT_PARSER_REGISTRY_CHECKS),
+        "missing_expected_checks": list(EXPECTED_CURRENT_PARSER_REGISTRY_CHECKS),
+    }
+    path = root / artifact
+    if not path.exists():
+        return result
+
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception as exc:  # noqa: BLE001 - diagnostic helper reports load failures
+        result["status"] = f"load_error:{type(exc).__name__}"
+        return result
+
+    checks = {
+        str(name): bool(value)
+        for name, value in dict(payload.get("checks", {})).items()
+    }
+    missing_expected_checks = [
+        name for name in EXPECTED_CURRENT_PARSER_REGISTRY_CHECKS if name not in checks
+    ]
+    failed_checks = [
+        name for name in EXPECTED_CURRENT_PARSER_REGISTRY_CHECKS if checks.get(name) is not True
+    ]
+    result.update(
+        {
+            "status": str(payload.get("status")),
+            "checks": checks,
+            "missing_markers": [str(item) for item in payload.get("missing_markers", [])],
             "failed_checks": failed_checks,
             "missing_expected_checks": missing_expected_checks,
         }
