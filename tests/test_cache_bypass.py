@@ -313,6 +313,29 @@ class TestSchedulerBypassGating:
             f"fetches — found only {src.count('not _mllm_bypass')} gates"
         )
 
+    def test_mllm_batch_generator_bypass_skips_ssm_capture_work(self):
+        src = self._read("vmlx_engine/mllm_batch_generator.py")
+        clean_idx = src.index("def _clean_ssm_boundary_for(")
+        clean_window = src[clean_idx : src.index("def _ssm_capture_boundaries_for(", clean_idx)]
+        assert 'getattr(request, "_bypass_prefix_cache", False)' in clean_window, (
+            "cache_salt/skip_prefix_cache must skip inline SSM boundary "
+            "splitting; bypassed benchmark/API requests should not pay hidden "
+            "companion-cache capture work"
+        )
+
+        store_idx = src.index("# Capture SSM state at prompt boundary for hybrid models.")
+        store_window = src[store_idx : store_idx + 900]
+        assert "not getattr(req, '_bypass_prefix_cache', False)" in store_window, (
+            "cache_salt/skip_prefix_cache must skip MLLM SSM companion "
+            "store/rederive work, not only lookup"
+        )
+        capture_idx = src.index("def _ssm_capture_boundaries_for(")
+        capture_window = src[capture_idx : src.index("def _ssm_block_aligned_boundary(", capture_idx)]
+        assert 'os.environ.get("VMLX_DISABLE_SSM_INLINE_CAPTURE")' in capture_window, (
+            "MLLM SSM inline capture killswitch must use the canonical VMLX_* "
+            "env var; a VMLINUX typo leaves the documented bypass ineffective"
+        )
+
     def test_mllm_batch_generator_gates_vision_pixel_cache_on_bypass(self):
         src = self._read("vmlx_engine/mllm_batch_generator.py")
         idx = src.index("media_cache_sources = all_images + video_cache_sources")

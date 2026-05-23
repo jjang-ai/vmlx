@@ -3262,6 +3262,8 @@ class MLLMBatchGenerator:
         """
         if has_images or not self._is_hybrid:
             return 0
+        if getattr(request, "_bypass_prefix_cache", False):
+            return 0
         if os.environ.get("VMLX_DISABLE_SSM_INLINE_CAPTURE") in (
             "1", "true", "True", "yes", "on"
         ):
@@ -3289,7 +3291,7 @@ class MLLMBatchGenerator:
         """Return clean SSM checkpoint boundaries to capture during prefill."""
         if has_images or not self._is_hybrid:
             return []
-        if os.environ.get("VMLINUX_DISABLE_SSM_INLINE_CAPTURE") in (
+        if os.environ.get("VMLX_DISABLE_SSM_INLINE_CAPTURE") in (
             "1", "true", "True", "yes", "on"
         ):
             return []
@@ -4694,7 +4696,11 @@ class MLLMBatchGenerator:
                 # the SSM state advances during prefill of remaining tokens,
                 # so the next turn needs a fresh companion keyed on the longer
                 # token list.  (Fixes alternating miss/hit pattern — #45)
-                if self._is_hybrid and self._ssm_companion_enabled:
+                if (
+                    self._is_hybrid
+                    and self._ssm_companion_enabled
+                    and not getattr(req, '_bypass_prefix_cache', False)
+                ):
                     # Guard: skip SSM capture+rederive on tokens containing
                     # image/video context. Rederive's text-only forward pass
                     # would produce wrong state at vision positions, corrupting
