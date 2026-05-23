@@ -8,6 +8,24 @@ def _write_json(path: Path, obj: dict) -> None:
     path.write_text(json.dumps(obj), encoding="utf-8")
 
 
+def _write_known_open_objective_digest(tmp_path: Path) -> None:
+    _write_json(
+        tmp_path / "build/current-objective-proof-audit-20260521.json",
+        {
+            "requirements": [
+                {
+                    "requirement": "DSV4 long-output/code/file-generation quality is release-cleared",
+                    "status": "open",
+                },
+                {
+                    "requirement": "Qwen native MTP live decode and prefill speed are release-cleared",
+                    "status": "open",
+                },
+            ]
+        },
+    )
+
+
 def test_current_regression_suite_allows_only_declared_known_blockers(tmp_path, monkeypatch):
     from tests.cross_matrix import run_current_regression_suite as suite
 
@@ -17,6 +35,7 @@ def test_current_regression_suite_allows_only_declared_known_blockers(tmp_path, 
             "requirements": [
                 {"requirement": "DSV4 Flash prefix/paged/L2 cache is enabled by default from app launch", "status": "pass"},
                 {"requirement": "DSV4 long-output/code/file-generation quality is release-cleared", "status": "open"},
+                {"requirement": "Qwen native MTP live decode and prefill speed are release-cleared", "status": "open"},
             ]
         },
     )
@@ -43,6 +62,7 @@ def test_current_regression_suite_fails_on_new_unexpected_open_requirement(tmp_p
         {
             "requirements": [
                 {"requirement": "DSV4 long-output/code/file-generation quality is release-cleared", "status": "open"},
+                {"requirement": "Qwen native MTP live decode and prefill speed are release-cleared", "status": "open"},
                 {"requirement": "Server default max output and max context are distinct and map to correct CLI flags", "status": "open"},
             ]
         },
@@ -70,6 +90,7 @@ def test_current_regression_suite_fails_on_step_failure_even_if_digest_is_expect
         {
             "requirements": [
                 {"requirement": "DSV4 long-output/code/file-generation quality is release-cleared", "status": "open"},
+                {"requirement": "Qwen native MTP live decode and prefill speed are release-cleared", "status": "open"},
             ]
         },
     )
@@ -169,14 +190,7 @@ def test_noheavy_panel_settings_contract_runs_model_family_registry_tests():
 def test_current_regression_suite_refreshes_release_regression_manifest(monkeypatch, tmp_path):
     from tests.cross_matrix import run_current_regression_suite as suite
 
-    _write_json(
-        tmp_path / "build/current-objective-proof-audit-20260521.json",
-        {
-            "requirements": [
-                {"requirement": "DSV4 long-output/code/file-generation quality is release-cleared", "status": "open"},
-            ]
-        },
-    )
+    _write_known_open_objective_digest(tmp_path)
 
     seen_steps = []
 
@@ -199,14 +213,7 @@ def test_current_regression_suite_refreshes_release_regression_manifest(monkeypa
 def test_current_regression_suite_runs_panel_tool_security_contracts(monkeypatch, tmp_path):
     from tests.cross_matrix import run_current_regression_suite as suite
 
-    _write_json(
-        tmp_path / "build/current-objective-proof-audit-20260521.json",
-        {
-            "requirements": [
-                {"requirement": "DSV4 long-output/code/file-generation quality is release-cleared", "status": "open"},
-            ]
-        },
-    )
+    _write_known_open_objective_digest(tmp_path)
 
     seen_steps = []
 
@@ -229,14 +236,7 @@ def test_current_regression_suite_runs_panel_tool_security_contracts(monkeypatch
 def test_current_regression_suite_runs_release_surface_contract(monkeypatch, tmp_path):
     from tests.cross_matrix import run_current_regression_suite as suite
 
-    _write_json(
-        tmp_path / "build/current-objective-proof-audit-20260521.json",
-        {
-            "requirements": [
-                {"requirement": "DSV4 long-output/code/file-generation quality is release-cleared", "status": "open"},
-            ]
-        },
-    )
+    _write_known_open_objective_digest(tmp_path)
 
     seen_steps = []
 
@@ -259,14 +259,7 @@ def test_current_regression_suite_runs_release_surface_contract(monkeypatch, tmp
 def test_current_regression_suite_runs_cli_release_contracts(monkeypatch, tmp_path):
     from tests.cross_matrix import run_current_regression_suite as suite
 
-    _write_json(
-        tmp_path / "build/current-objective-proof-audit-20260521.json",
-        {
-            "requirements": [
-                {"requirement": "DSV4 long-output/code/file-generation quality is release-cleared", "status": "open"},
-            ]
-        },
-    )
+    _write_known_open_objective_digest(tmp_path)
 
     seen_steps = []
 
@@ -289,14 +282,7 @@ def test_current_regression_suite_runs_cli_release_contracts(monkeypatch, tmp_pa
 def test_current_regression_suite_runs_jang_model_compat_contracts(monkeypatch, tmp_path):
     from tests.cross_matrix import run_current_regression_suite as suite
 
-    _write_json(
-        tmp_path / "build/current-objective-proof-audit-20260521.json",
-        {
-            "requirements": [
-                {"requirement": "DSV4 long-output/code/file-generation quality is release-cleared", "status": "open"},
-            ]
-        },
-    )
+    _write_known_open_objective_digest(tmp_path)
 
     seen_steps = []
 
@@ -319,14 +305,7 @@ def test_current_regression_suite_runs_jang_model_compat_contracts(monkeypatch, 
 def test_current_regression_suite_runs_model_artifact_format_contracts(monkeypatch, tmp_path):
     from tests.cross_matrix import run_current_regression_suite as suite
 
-    _write_json(
-        tmp_path / "build/current-objective-proof-audit-20260521.json",
-        {
-            "requirements": [
-                {"requirement": "DSV4 long-output/code/file-generation quality is release-cleared", "status": "open"},
-            ]
-        },
-    )
+    _write_known_open_objective_digest(tmp_path)
 
     seen_steps = []
 
@@ -349,14 +328,7 @@ def test_current_regression_suite_runs_model_artifact_format_contracts(monkeypat
 def test_current_regression_suite_runs_model_family_detection_contracts(monkeypatch, tmp_path):
     from tests.cross_matrix import run_current_regression_suite as suite
 
-    _write_json(
-        tmp_path / "build/current-objective-proof-audit-20260521.json",
-        {
-            "requirements": [
-                {"requirement": "DSV4 long-output/code/file-generation quality is release-cleared", "status": "open"},
-            ]
-        },
-    )
+    _write_known_open_objective_digest(tmp_path)
 
     seen_steps = []
 
@@ -379,14 +351,7 @@ def test_current_regression_suite_runs_model_family_detection_contracts(monkeypa
 def test_current_regression_suite_runs_parser_registry_contracts(monkeypatch, tmp_path):
     from tests.cross_matrix import run_current_regression_suite as suite
 
-    _write_json(
-        tmp_path / "build/current-objective-proof-audit-20260521.json",
-        {
-            "requirements": [
-                {"requirement": "DSV4 long-output/code/file-generation quality is release-cleared", "status": "open"},
-            ]
-        },
-    )
+    _write_known_open_objective_digest(tmp_path)
 
     seen_steps = []
 
@@ -409,14 +374,7 @@ def test_current_regression_suite_runs_parser_registry_contracts(monkeypatch, tm
 def test_current_regression_suite_runs_max_output_context_contracts(monkeypatch, tmp_path):
     from tests.cross_matrix import run_current_regression_suite as suite
 
-    _write_json(
-        tmp_path / "build/current-objective-proof-audit-20260521.json",
-        {
-            "requirements": [
-                {"requirement": "DSV4 long-output/code/file-generation quality is release-cleared", "status": "open"},
-            ]
-        },
-    )
+    _write_known_open_objective_digest(tmp_path)
 
     seen_steps = []
 
@@ -439,14 +397,7 @@ def test_current_regression_suite_runs_max_output_context_contracts(monkeypatch,
 def test_current_regression_suite_runs_vl_media_cache_contracts(monkeypatch, tmp_path):
     from tests.cross_matrix import run_current_regression_suite as suite
 
-    _write_json(
-        tmp_path / "build/current-objective-proof-audit-20260521.json",
-        {
-            "requirements": [
-                {"requirement": "DSV4 long-output/code/file-generation quality is release-cleared", "status": "open"},
-            ]
-        },
-    )
+    _write_known_open_objective_digest(tmp_path)
 
     seen_steps = []
 
@@ -469,14 +420,7 @@ def test_current_regression_suite_runs_vl_media_cache_contracts(monkeypatch, tmp
 def test_current_regression_suite_runs_cache_architecture_contracts(monkeypatch, tmp_path):
     from tests.cross_matrix import run_current_regression_suite as suite
 
-    _write_json(
-        tmp_path / "build/current-objective-proof-audit-20260521.json",
-        {
-            "requirements": [
-                {"requirement": "DSV4 long-output/code/file-generation quality is release-cleared", "status": "open"},
-            ]
-        },
-    )
+    _write_known_open_objective_digest(tmp_path)
 
     seen_steps = []
 
@@ -499,14 +443,7 @@ def test_current_regression_suite_runs_cache_architecture_contracts(monkeypatch,
 def test_current_regression_suite_runs_native_mtp_contracts(monkeypatch, tmp_path):
     from tests.cross_matrix import run_current_regression_suite as suite
 
-    _write_json(
-        tmp_path / "build/current-objective-proof-audit-20260521.json",
-        {
-            "requirements": [
-                {"requirement": "DSV4 long-output/code/file-generation quality is release-cleared", "status": "open"},
-            ]
-        },
-    )
+    _write_known_open_objective_digest(tmp_path)
 
     seen_steps = []
 
@@ -529,14 +466,7 @@ def test_current_regression_suite_runs_native_mtp_contracts(monkeypatch, tmp_pat
 def test_current_regression_suite_runs_generation_defaults_contracts(monkeypatch, tmp_path):
     from tests.cross_matrix import run_current_regression_suite as suite
 
-    _write_json(
-        tmp_path / "build/current-objective-proof-audit-20260521.json",
-        {
-            "requirements": [
-                {"requirement": "DSV4 long-output/code/file-generation quality is release-cleared", "status": "open"},
-            ]
-        },
-    )
+    _write_known_open_objective_digest(tmp_path)
 
     seen_steps = []
 
@@ -559,14 +489,7 @@ def test_current_regression_suite_runs_generation_defaults_contracts(monkeypatch
 def test_current_regression_suite_runs_reasoning_template_contracts(monkeypatch, tmp_path):
     from tests.cross_matrix import run_current_regression_suite as suite
 
-    _write_json(
-        tmp_path / "build/current-objective-proof-audit-20260521.json",
-        {
-            "requirements": [
-                {"requirement": "DSV4 long-output/code/file-generation quality is release-cleared", "status": "open"},
-            ]
-        },
-    )
+    _write_known_open_objective_digest(tmp_path)
 
     seen_steps = []
 
@@ -589,14 +512,7 @@ def test_current_regression_suite_runs_reasoning_template_contracts(monkeypatch,
 def test_current_regression_suite_runs_api_surface_contracts(monkeypatch, tmp_path):
     from tests.cross_matrix import run_current_regression_suite as suite
 
-    _write_json(
-        tmp_path / "build/current-objective-proof-audit-20260521.json",
-        {
-            "requirements": [
-                {"requirement": "DSV4 long-output/code/file-generation quality is release-cleared", "status": "open"},
-            ]
-        },
-    )
+    _write_known_open_objective_digest(tmp_path)
 
     seen_steps = []
 
@@ -619,14 +535,7 @@ def test_current_regression_suite_runs_api_surface_contracts(monkeypatch, tmp_pa
 def test_current_regression_suite_runs_tool_call_contracts(monkeypatch, tmp_path):
     from tests.cross_matrix import run_current_regression_suite as suite
 
-    _write_json(
-        tmp_path / "build/current-objective-proof-audit-20260521.json",
-        {
-            "requirements": [
-                {"requirement": "DSV4 long-output/code/file-generation quality is release-cleared", "status": "open"},
-            ]
-        },
-    )
+    _write_known_open_objective_digest(tmp_path)
 
     seen_steps = []
 
@@ -649,14 +558,7 @@ def test_current_regression_suite_runs_tool_call_contracts(monkeypatch, tmp_path
 def test_current_regression_suite_runs_mcp_policy_contracts(monkeypatch, tmp_path):
     from tests.cross_matrix import run_current_regression_suite as suite
 
-    _write_json(
-        tmp_path / "build/current-objective-proof-audit-20260521.json",
-        {
-            "requirements": [
-                {"requirement": "DSV4 long-output/code/file-generation quality is release-cleared", "status": "open"},
-            ]
-        },
-    )
+    _write_known_open_objective_digest(tmp_path)
 
     seen_steps = []
 
@@ -679,14 +581,7 @@ def test_current_regression_suite_runs_mcp_policy_contracts(monkeypatch, tmp_pat
 def test_current_regression_suite_runs_mcp_policy_marker_contract(monkeypatch, tmp_path):
     from tests.cross_matrix import run_current_regression_suite as suite
 
-    _write_json(
-        tmp_path / "build/current-objective-proof-audit-20260521.json",
-        {
-            "requirements": [
-                {"requirement": "DSV4 long-output/code/file-generation quality is release-cleared", "status": "open"},
-            ]
-        },
-    )
+    _write_known_open_objective_digest(tmp_path)
 
     seen_steps = []
 
@@ -708,14 +603,7 @@ def test_current_regression_suite_runs_mcp_policy_marker_contract(monkeypatch, t
 def test_current_regression_suite_runs_packaged_integrity_contracts(monkeypatch, tmp_path):
     from tests.cross_matrix import run_current_regression_suite as suite
 
-    _write_json(
-        tmp_path / "build/current-objective-proof-audit-20260521.json",
-        {
-            "requirements": [
-                {"requirement": "DSV4 long-output/code/file-generation quality is release-cleared", "status": "open"},
-            ]
-        },
-    )
+    _write_known_open_objective_digest(tmp_path)
 
     seen_steps = []
 
@@ -738,14 +626,7 @@ def test_current_regression_suite_runs_packaged_integrity_contracts(monkeypatch,
 def test_current_regression_suite_sets_clean_jang_source_env_for_release_children(monkeypatch, tmp_path):
     from tests.cross_matrix import run_current_regression_suite as suite
 
-    _write_json(
-        tmp_path / "build/current-objective-proof-audit-20260521.json",
-        {
-            "requirements": [
-                {"requirement": "DSV4 long-output/code/file-generation quality is release-cleared", "status": "open"},
-            ]
-        },
-    )
+    _write_known_open_objective_digest(tmp_path)
 
     clean_jang = tmp_path / "clean-jang" / "jang-tools"
     seen_env = {}

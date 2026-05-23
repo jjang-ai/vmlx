@@ -328,13 +328,16 @@ _ROWS: list[dict[str, Any]] = [
             "DSV4 stale additionalArgs cannot reenable Native MTP, deterministic MTP sampling, hidden default sampling, or startup max-token overrides",
             "Config-only MTP bundles without indexed mtp.* tensors do not activate native MTP or expose Native MTP launch controls",
             "Runtime-active MTP still requires live equivalence/speed rows before release claims",
+            "Qwen native-MTP live decode must be paired with MLLM/VL hybrid prefill speed clearance; deterministic MTP decode alone is not enough",
         ],
         "commands": [
             ".venv/bin/python tests/cross_matrix/run_native_mtp_contract.py --out build/current-native-mtp-contract-20260522-dsv4-additional-args.json",
+            ".venv/bin/python tests/cross_matrix/run_decode_speed_gate.py --rows qwen27_jang4m_mtp --port 8795 --timeout 360 --out build/current-decode-speed-live-qwen27-jang4m-mtp-20260523.json",
         ],
         "artifacts": [
             "build/current-native-mtp-contract-20260522-dsv4-additional-args.json",
             "build/current-native-mtp-contract-20260522-config-only.json",
+            "build/current-decode-speed-live-qwen27-jang4m-mtp-20260523.json",
         ],
     },
     {

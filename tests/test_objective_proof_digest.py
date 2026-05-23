@@ -495,6 +495,50 @@ def _write_passing_base_artifacts(tmp_path: Path) -> None:
         "build/current-decode-speed-live-qwen27-jang4m-packaged-tahoe-dmg-20260522.json",
         speed_base,
     )
+    mtp_speed_base = {
+        "created_at": 1779498428.0,
+        "results": [
+            {
+                "name": "qwen27_jang4m_mtp",
+                "status": "pass",
+                "notes": [],
+                "registry": {
+                    "family_name": "qwen3_5",
+                    "cache_type": "hybrid",
+                    "is_mllm": True,
+                    "tool_parser": "qwen",
+                    "reasoning_parser": "qwen3",
+                },
+                "pp_rows": [
+                    {"target_tokens": 1024, "pp_wall_tok_s": 710.1, "loopish": False},
+                    {"target_tokens": 4096, "pp_wall_tok_s": 714.5, "loopish": False},
+                    {"target_tokens": 16384, "pp_wall_tok_s": 679.4, "loopish": False},
+                ],
+                "greedy_topk0": {
+                    "decode_tps_wall": 33.4,
+                    "loopish": False,
+                    "completion_tokens": 320,
+                },
+                "health_after": {
+                    "scheduler": {
+                        "batch_generator": {
+                            "last_native_mtp": {
+                                "final_depth": 1,
+                                "accepted_tokens": 169,
+                                "drafted_tokens": 180,
+                                "acceptance_rate": 0.9388888889,
+                            }
+                        }
+                    }
+                },
+            }
+        ],
+    }
+    _write_json(
+        tmp_path,
+        "build/current-decode-speed-live-qwen27-jang4m-mtp-20260523.json",
+        mtp_speed_base,
+    )
 
 
 def test_objective_proof_digest_keeps_dsv4_long_quality_open(tmp_path):
@@ -824,6 +868,52 @@ def test_objective_proof_digest_accepts_qwen_jang_speed_when_source_and_packaged
     assert row["details"]["source"]["min_pp_wall_tok_s"] >= 600
     assert row["details"]["packaged"]["min_pp_wall_tok_s"] >= 600
     assert "packaged-tahoe-dmg" in QWEN_JANG_PACKAGED_SPEED_REL
+
+
+def test_objective_proof_digest_opens_qwen_native_mtp_speed_when_prefill_is_review(tmp_path):
+    from tests.cross_matrix.summarize_objective_proof import (
+        QWEN_NATIVE_MTP_SPEED_REL,
+        build_digest,
+    )
+
+    _write_passing_base_artifacts(tmp_path)
+    path = tmp_path / QWEN_NATIVE_MTP_SPEED_REL
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["results"][0]["status"] = "review"
+    payload["results"][0]["notes"] = [
+        "PP below expected 600.00: 143.74, 146.48, 146.66"
+    ]
+    payload["results"][0]["pp_rows"] = [
+        {"target_tokens": 1024, "pp_wall_tok_s": 143.74, "loopish": False},
+        {"target_tokens": 4096, "pp_wall_tok_s": 146.48, "loopish": False},
+        {"target_tokens": 16384, "pp_wall_tok_s": 146.66, "loopish": False},
+    ]
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    digest = build_digest(tmp_path)
+    rows = {item["requirement"]: item for item in digest["requirements"]}
+
+    row = rows["Qwen native MTP live decode and prefill speed are release-cleared"]
+    assert row["status"] == "open"
+    assert row["details"]["status"] == "review"
+    assert row["details"]["min_pp_wall_tok_s"] == 143.74
+    assert row["details"]["greedy_decode_tps_wall"] == 33.4
+    assert row["details"]["native_mtp_acceptance_rate"] == 0.9388888889
+
+
+def test_objective_proof_digest_accepts_qwen_native_mtp_speed_when_decode_and_prefill_pass(tmp_path):
+    from tests.cross_matrix.summarize_objective_proof import build_digest
+
+    _write_passing_base_artifacts(tmp_path)
+
+    digest = build_digest(tmp_path)
+    rows = {item["requirement"]: item for item in digest["requirements"]}
+
+    row = rows["Qwen native MTP live decode and prefill speed are release-cleared"]
+    assert row["status"] == "pass"
+    assert row["details"]["min_pp_wall_tok_s"] >= 600
+    assert row["details"]["greedy_decode_tps_wall"] >= 25
+    assert row["details"]["native_mtp_acceptance_rate"] >= 0.5
 
 
 def test_objective_proof_digest_rejects_stale_panel_settings_contract_artifact(tmp_path):

@@ -22,6 +22,7 @@ from typing import Any
 DEFAULT_OUT = Path("build/current-regression-suite-20260521.json")
 
 EXPECTED_OPEN_REQUIREMENTS = [
+    "Qwen native MTP live decode and prefill speed are release-cleared",
     "DSV4 long-output/code/file-generation quality is release-cleared",
 ]
 

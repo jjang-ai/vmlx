@@ -696,3 +696,5 @@ def test_release_regression_manifest_tracks_native_mtp_with_runner_artifact():
     assert "Config-only MTP bundles" in joined
     assert "indexed mtp.* tensors" in joined
     assert "live equivalence/speed" in joined
+    assert "current-decode-speed-live-qwen27-jang4m-mtp-20260523.json" in joined
+    assert "prefill" in joined

@@ -57,6 +57,7 @@ NATIVE_MTP_CONTRACT_REL = "build/current-native-mtp-contract-20260521.json"
 VL_MEDIA_CONTRACT_REL = "build/current-vl-media-cache-contract-20260521.json"
 QWEN_JANG_SOURCE_SPEED_REL = "build/current-decode-speed-live-qwen27-jang4m-source-keepalloc-20260522.json"
 QWEN_JANG_PACKAGED_SPEED_REL = "build/current-decode-speed-live-qwen27-jang4m-packaged-tahoe-dmg-20260522.json"
+QWEN_NATIVE_MTP_SPEED_REL = "build/current-decode-speed-live-qwen27-jang4m-mtp-20260523.json"
 DSV4_DEFAULT_CACHE_TOOL_LOOP_REL = "build/current-dsv4-default-cache-tool-loop/result.json"
 DSV4_QUALITY_CLEARANCE_CHECKS = (
     "identifier_integrity",
@@ -463,6 +464,54 @@ def _speed_artifact_detail(payload: dict[str, Any]) -> tuple[bool, dict[str, Any
     }
 
 
+def _native_mtp_speed_artifact_detail(payload: dict[str, Any]) -> tuple[bool, dict[str, Any]]:
+    ok, details = _speed_artifact_detail(payload)
+    results = payload.get("results") or []
+    row = results[0] if results and isinstance(results[0], dict) else {}
+    greedy = row.get("greedy_topk0") if isinstance(row.get("greedy_topk0"), dict) else {}
+    health = row.get("health_after") if isinstance(row.get("health_after"), dict) else {}
+    scheduler = health.get("scheduler") if isinstance(health.get("scheduler"), dict) else {}
+    batch_generator = (
+        scheduler.get("batch_generator")
+        if isinstance(scheduler.get("batch_generator"), dict)
+        else {}
+    )
+    last_native_mtp = (
+        batch_generator.get("last_native_mtp")
+        if isinstance(batch_generator.get("last_native_mtp"), dict)
+        else {}
+    )
+    try:
+        greedy_tps = float(greedy.get("decode_tps_wall"))
+    except (TypeError, ValueError):
+        greedy_tps = None
+    try:
+        acceptance_rate = float(last_native_mtp.get("acceptance_rate"))
+    except (TypeError, ValueError):
+        acceptance_rate = None
+    native_ok = (
+        ok
+        and greedy_tps is not None
+        and greedy_tps >= 25.0
+        and acceptance_rate is not None
+        and acceptance_rate >= 0.5
+        and not bool(greedy.get("loopish"))
+    )
+    details.update(
+        {
+            "row_name": row.get("name"),
+            "registry": row.get("registry"),
+            "greedy_decode_tps_wall": greedy_tps,
+            "greedy_completion_tokens": greedy.get("completion_tokens"),
+            "native_mtp_acceptance_rate": acceptance_rate,
+            "native_mtp_final_depth": last_native_mtp.get("final_depth"),
+            "native_mtp_accepted_tokens": last_native_mtp.get("accepted_tokens"),
+            "native_mtp_drafted_tokens": last_native_mtp.get("drafted_tokens"),
+        }
+    )
+    return native_ok, details
+
+
 def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
     root = Path(root)
     cache = _load(root, "build/current-dsv4-cache-proof-digest-20260521.json")
@@ -488,6 +537,7 @@ def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
     vl_media_contract = _load(root, VL_MEDIA_CONTRACT_REL)
     qwen_jang_source_speed = _load(root, QWEN_JANG_SOURCE_SPEED_REL)
     qwen_jang_packaged_speed = _load(root, QWEN_JANG_PACKAGED_SPEED_REL)
+    qwen_native_mtp_speed = _load(root, QWEN_NATIVE_MTP_SPEED_REL)
 
     requirements: list[dict[str, Any]] = []
     cache_checks = cache.get("checks") or {}
@@ -909,6 +959,21 @@ def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
             "source": qwen_source_speed_details,
             "packaged": qwen_packaged_speed_details,
         },
+    )
+    qwen_native_mtp_speed_ok, qwen_native_mtp_speed_details = (
+        _native_mtp_speed_artifact_detail(qwen_native_mtp_speed)
+    )
+    _add(
+        requirements,
+        "Qwen native MTP live decode and prefill speed are release-cleared",
+        _status(qwen_native_mtp_speed_ok),
+        [QWEN_NATIVE_MTP_SPEED_REL],
+        caveat=(
+            "Native MTP activation is deterministic-request gated. This row "
+            "requires both MTP decode speed/acceptance and MLLM/VL hybrid "
+            "prefill speed; no-heavy native-MTP wiring alone is not enough."
+        ),
+        details=qwen_native_mtp_speed_details,
     )
     api_cache_ok, api_cache_checks = _contract_checks(
         api_cache_contract, API_CACHE_CONTRACT_CHECKS
