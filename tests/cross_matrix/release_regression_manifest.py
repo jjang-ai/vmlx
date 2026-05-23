@@ -329,15 +329,18 @@ _ROWS: list[dict[str, Any]] = [
             "Config-only MTP bundles without indexed mtp.* tensors do not activate native MTP or expose Native MTP launch controls",
             "Runtime-active MTP still requires live equivalence/speed rows before release claims",
             "Qwen native-MTP live decode must be paired with MLLM/VL hybrid prefill speed clearance; deterministic MTP decode alone is not enough",
+            "The same-artifact AR-vs-MTP live A/B proves MTP decode is not the MLLM prefill bottleneck; native MTP D3 is faster than the AR baseline with identical output",
         ],
         "commands": [
             ".venv/bin/python tests/cross_matrix/run_native_mtp_contract.py --out build/current-native-mtp-contract-20260522-dsv4-additional-args.json",
             ".venv/bin/python tests/cross_matrix/run_decode_speed_gate.py --rows qwen27_jang4m_mtp --port 8795 --timeout 360 --out build/current-decode-speed-live-qwen27-jang4m-mtp-20260523.json",
+            ".venv/bin/python bench/native_mtp_speed_ab.py /Users/example/models/JANGQ/Qwen3.6-27B-JANG_4M-MTP --served-name qwen27-jang4m-mtp-ab --port 8798 --cache off --max-num-seqs 1 --max-tokens 320 --repeats 1 --warmup 0 --load-timeout-s 420 --out build/current-native-mtp-speed-ab-qwen27-jang4m-mtp-20260523 --disable-prompt-reuse",
         ],
         "artifacts": [
             "build/current-native-mtp-contract-20260522-dsv4-additional-args.json",
             "build/current-native-mtp-contract-20260522-config-only.json",
             "build/current-decode-speed-live-qwen27-jang4m-mtp-20260523.json",
+            "build/current-native-mtp-speed-ab-qwen27-jang4m-mtp-20260523/result.json",
         ],
     },
     {

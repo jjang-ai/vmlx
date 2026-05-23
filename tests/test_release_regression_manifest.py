@@ -697,4 +697,7 @@ def test_release_regression_manifest_tracks_native_mtp_with_runner_artifact():
     assert "indexed mtp.* tensors" in joined
     assert "live equivalence/speed" in joined
     assert "current-decode-speed-live-qwen27-jang4m-mtp-20260523.json" in joined
+    assert "current-native-mtp-speed-ab-qwen27-jang4m-mtp-20260523/result.json" in joined
+    assert "same-artifact AR-vs-MTP" in joined
+    assert "MTP decode is not the MLLM prefill bottleneck" in joined
     assert "prefill" in joined
