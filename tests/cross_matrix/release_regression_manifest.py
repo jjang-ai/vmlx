@@ -125,6 +125,20 @@ EXPECTED_CURRENT_NATIVE_MTP_CHECKS = (
     "legacy_count_floor_still_nontrivial",
 )
 
+EXPECTED_CURRENT_VL_MEDIA_CHECKS = (
+    "video_url_request_schema",
+    "video_fallback_processing",
+    "qwen36_vl_video_detection",
+    "media_cache_salt_separates_modal_inputs",
+    "hybrid_ssm_vlm_cache_contracts",
+    "mllm_tool_replay_preserves_effective_tools",
+    "panel_read_video_builtin_tool",
+    "panel_media_tool_followup_content_parts",
+    "panel_image_display_consistency",
+    "panel_vlm_launch_settings",
+    "all_required_panel_markers_present",
+)
+
 
 REQUIRED_RELEASE_DOMAINS = {
     "chat_ui_settings",
@@ -727,6 +741,7 @@ def validate_current_proof_sweep_artifacts(root: Path) -> dict[str, Any]:
     reasoning_template_matrix = _validate_current_reasoning_template_matrix_artifact(root)
     tool_call_matrix = _validate_current_tool_call_matrix_artifact(root)
     native_mtp_matrix = _validate_current_native_mtp_matrix_artifact(root)
+    vl_media_matrix = _validate_current_vl_media_matrix_artifact(root)
     regression_suite_ok = (
         regression_suite["status"] == "pass"
         and not regression_suite["failed_steps"]
@@ -791,6 +806,13 @@ def validate_current_proof_sweep_artifacts(root: Path) -> dict[str, Any]:
         and not native_mtp_matrix["failed_checks"]
         and not native_mtp_matrix["missing_expected_checks"]
     )
+    vl_media_matrix_ok = (
+        vl_media_matrix["status"] == "pass"
+        and not vl_media_matrix["missing_engine_markers"]
+        and not vl_media_matrix["missing_panel_markers"]
+        and not vl_media_matrix["failed_checks"]
+        and not vl_media_matrix["missing_expected_checks"]
+    )
 
     return {
         "status": "pass"
@@ -807,6 +829,7 @@ def validate_current_proof_sweep_artifacts(root: Path) -> dict[str, Any]:
             and reasoning_template_matrix_ok
             and tool_call_matrix_ok
             and native_mtp_matrix_ok
+            and vl_media_matrix_ok
         )
         else "fail",
         "missing": missing,
@@ -821,6 +844,7 @@ def validate_current_proof_sweep_artifacts(root: Path) -> dict[str, Any]:
         "reasoning_template_matrix": reasoning_template_matrix,
         "tool_call_matrix": tool_call_matrix,
         "native_mtp_matrix": native_mtp_matrix,
+        "vl_media_matrix": vl_media_matrix,
     }
 
 
@@ -1214,6 +1238,54 @@ def _validate_current_native_mtp_matrix_artifact(root: Path) -> dict[str, Any]:
             "status": str(payload.get("status")),
             "checks": checks,
             "missing_markers": [str(item) for item in payload.get("missing_markers", [])],
+            "failed_checks": failed_checks,
+            "missing_expected_checks": missing_expected_checks,
+        }
+    )
+    return result
+
+
+def _validate_current_vl_media_matrix_artifact(root: Path) -> dict[str, Any]:
+    artifact = CURRENT_POST_BUDGET_EDGE_ARTIFACTS["vl-media-cache-tool-followup"]
+    result: dict[str, Any] = {
+        "artifact": artifact,
+        "status": "missing",
+        "checks": {},
+        "missing_engine_markers": [],
+        "missing_panel_markers": [],
+        "failed_checks": list(EXPECTED_CURRENT_VL_MEDIA_CHECKS),
+        "missing_expected_checks": list(EXPECTED_CURRENT_VL_MEDIA_CHECKS),
+    }
+    path = root / artifact
+    if not path.exists():
+        return result
+
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception as exc:  # noqa: BLE001 - diagnostic helper reports load failures
+        result["status"] = f"load_error:{type(exc).__name__}"
+        return result
+
+    checks = {
+        str(name): bool(value)
+        for name, value in dict(payload.get("checks", {})).items()
+    }
+    missing_expected_checks = [
+        name for name in EXPECTED_CURRENT_VL_MEDIA_CHECKS if name not in checks
+    ]
+    failed_checks = [
+        name for name in EXPECTED_CURRENT_VL_MEDIA_CHECKS if checks.get(name) is not True
+    ]
+    result.update(
+        {
+            "status": str(payload.get("status")),
+            "checks": checks,
+            "missing_engine_markers": [
+                str(item) for item in payload.get("missing_engine_markers", [])
+            ],
+            "missing_panel_markers": [
+                str(item) for item in payload.get("missing_panel_markers", [])
+            ],
             "failed_checks": failed_checks,
             "missing_expected_checks": missing_expected_checks,
         }
