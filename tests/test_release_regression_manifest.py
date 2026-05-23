@@ -301,6 +301,9 @@ def test_release_regression_manifest_tracks_public_release_surface_preflight():
     assert "updater" in joined.lower()
     assert "post-release-updater" in joined
     assert "published updater state is complete" in joined
+    assert "--live-public" in joined
+    assert "mlx.studio/update/latest.json" in joined
+    assert "PyPI files" in joined
 
 
 def test_release_regression_manifest_tracks_current_updater_and_i18n_rechecks():

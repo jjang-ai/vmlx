@@ -414,11 +414,14 @@ _ROWS: list[dict[str, Any]] = [
             "complete post-release updater state is accepted while incomplete bumped latest.json state is rejected",
             "after release, latest.json may equal the source version only when the published updater state is complete",
             "PyPI, GitHub release, and updater feeds remain explicit operator checks before public release",
+            "live public release-surface mode checks raw GitHub latest.json, mlx.studio/update/latest.json, PyPI files, and GitHub release DMG asset digest after a release is cut",
         ],
         "commands": [
             ".venv/bin/python tests/cross_matrix/run_release_surface_contract.py --out build/current-release-surface-contract-20260522-recheck-updater-i18n.json",
+            ".venv/bin/python tests/cross_matrix/run_release_surface_contract.py --live-public --out build/current-release-surface-contract-20260522-live-public-v1548.json",
         ],
         "artifacts": [
+            "build/current-release-surface-contract-20260522-live-public-v1548.json",
             "build/current-release-surface-contract-20260522-post-release-updater.json",
             "build/current-release-surface-contract-20260522-recheck-updater-i18n.json",
             "build/current-release-surface-contract-20260521.json",

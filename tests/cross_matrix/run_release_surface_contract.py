@@ -16,8 +16,9 @@ import json
 import re
 import time
 import tomllib
+import urllib.request
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 
 DEFAULT_OUT = Path("build/current-release-surface-contract-20260521.json")
@@ -27,9 +28,12 @@ SOURCE_HASH_FILES = (
     "panel/package.json",
     "panel/src/main/update-checker.ts",
     "pyproject.toml",
+    ".github/workflows/publish-pypi.yml",
     "tests/cross_matrix/run_release_surface_contract.py",
     "tests/test_release_surface_contract.py",
 )
+
+FetchJson = Callable[[str], dict[str, Any]]
 
 
 def _sha256(path: Path) -> str:
@@ -43,6 +47,19 @@ def _parse_version(value: str) -> tuple[int, ...]:
 
 def _load_json(path: Path) -> dict[str, Any]:
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _fetch_json(url: str) -> dict[str, Any]:
+    request = urllib.request.Request(
+        url,
+        headers={
+            "Accept": "application/json",
+            "Cache-Control": "no-cache",
+            "User-Agent": "vmlx-release-surface-contract",
+        },
+    )
+    with urllib.request.urlopen(request, timeout=30) as response:
+        return json.loads(response.read().decode("utf-8"))
 
 
 def _source_versions(root: Path) -> dict[str, str | None]:
@@ -94,7 +111,117 @@ def _local_updater_checks(source_version: str, latest: dict[str, Any]) -> dict[s
     }
 
 
-def build_artifact(root: Path) -> dict[str, Any]:
+def _updater_matches_local(public: dict[str, Any], local: dict[str, Any]) -> bool:
+    return all(
+        str(public.get(key) or "") == str(local.get(key) or "")
+        for key in ("version", "url", "sha256")
+    )
+
+
+def _public_release_checks(
+    source_version: str,
+    latest: dict[str, Any],
+    fetch_json: FetchJson,
+) -> tuple[dict[str, bool], dict[str, Any]]:
+    raw_latest_url = "https://raw.githubusercontent.com/jjang-ai/mlxstudio/main/latest.json"
+    site_latest_url = "https://mlx.studio/update/latest.json"
+    pypi_url = f"https://pypi.org/pypi/vmlx/{source_version}/json"
+    github_release_url = (
+        f"https://api.github.com/repos/jjang-ai/mlxstudio/releases/tags/v{source_version}"
+    )
+
+    public: dict[str, Any] = {}
+    checks: dict[str, bool] = {}
+
+    try:
+        raw_latest = fetch_json(raw_latest_url)
+        public["raw_latest"] = {
+            "version": raw_latest.get("version"),
+            "url": raw_latest.get("url"),
+            "sha256": raw_latest.get("sha256"),
+        }
+        checks["public_raw_updater_matches_local"] = _updater_matches_local(
+            raw_latest, latest
+        )
+    except Exception as exc:  # pragma: no cover - exercised by live failures.
+        public["raw_latest_error"] = repr(exc)
+        checks["public_raw_updater_matches_local"] = False
+
+    try:
+        site_latest = fetch_json(site_latest_url)
+        public["site_latest"] = {
+            "version": site_latest.get("version"),
+            "url": site_latest.get("url"),
+            "sha256": site_latest.get("sha256"),
+        }
+        checks["public_site_updater_matches_local"] = _updater_matches_local(
+            site_latest, latest
+        )
+    except Exception as exc:  # pragma: no cover - exercised by live failures.
+        public["site_latest_error"] = repr(exc)
+        checks["public_site_updater_matches_local"] = False
+
+    expected_wheel = f"vmlx-{source_version}-py3-none-any.whl"
+    expected_sdist = f"vmlx-{source_version}.tar.gz"
+    try:
+        pypi = fetch_json(pypi_url)
+        pypi_files = sorted(str(file.get("filename") or "") for file in pypi.get("urls", []))
+        public["pypi"] = {
+            "version": pypi.get("info", {}).get("version"),
+            "files": pypi_files,
+        }
+        checks["public_pypi_has_release_files"] = (
+            pypi.get("info", {}).get("version") == source_version
+            and expected_wheel in pypi_files
+            and expected_sdist in pypi_files
+        )
+    except Exception as exc:  # pragma: no cover - exercised by live failures.
+        public["pypi_error"] = repr(exc)
+        checks["public_pypi_has_release_files"] = False
+
+    updater_asset_name = str(latest.get("url") or "").rsplit("/", 1)[-1]
+    expected_digest = "sha256:" + str(latest.get("sha256") or "")
+    try:
+        release = fetch_json(github_release_url)
+        assets = release.get("assets", [])
+        asset_summaries = [
+            {
+                "name": asset.get("name"),
+                "digest": asset.get("digest"),
+                "state": asset.get("state"),
+            }
+            for asset in assets
+        ]
+        public["github_release"] = {
+            "draft": release.get("draft"),
+            "prerelease": release.get("prerelease"),
+            "assets": asset_summaries,
+        }
+        checks["public_github_release_published"] = (
+            release.get("draft") is False and release.get("prerelease") is False
+        )
+        checks["public_github_release_has_updater_asset"] = any(
+            asset.get("name") == updater_asset_name
+            and (
+                not asset.get("digest")
+                or str(asset.get("digest")) == expected_digest
+            )
+            for asset in assets
+        )
+    except Exception as exc:  # pragma: no cover - exercised by live failures.
+        public["github_release_error"] = repr(exc)
+        checks["public_github_release_published"] = False
+        checks["public_github_release_has_updater_asset"] = False
+
+    return checks, public
+
+
+def build_artifact(
+    root: Path,
+    *,
+    live_public: bool = False,
+    fetch_json: FetchJson = _fetch_json,
+) -> dict[str, Any]:
     versions = _source_versions(root)
     source_version = versions["pyproject"]
     panel_version = versions["panel_package"]
@@ -104,6 +231,12 @@ def build_artifact(root: Path) -> dict[str, Any]:
         "source_version_consistent": bool(source_version and source_version == panel_version),
         **_local_updater_checks(str(source_version or ""), latest),
     }
+    public_surfaces: dict[str, Any] = {}
+    if live_public and source_version:
+        public_checks, public_surfaces = _public_release_checks(
+            str(source_version), latest, fetch_json
+        )
+        checks.update(public_checks)
     status_check_names = {
         "source_version_consistent",
         "local_updater_not_ahead_of_source",
@@ -113,6 +246,16 @@ def build_artifact(root: Path) -> dict[str, Any]:
         "local_updater_sha256_valid",
         "local_updater_notes_match_version",
     }
+    if live_public:
+        status_check_names.update(
+            {
+                "public_raw_updater_matches_local",
+                "public_site_updater_matches_local",
+                "public_pypi_has_release_files",
+                "public_github_release_published",
+                "public_github_release_has_updater_asset",
+            }
+        )
     status = "pass" if all(checks[name] for name in status_check_names) else "fail"
     return {
         "created_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
@@ -125,6 +268,8 @@ def build_artifact(root: Path) -> dict[str, Any]:
             "sha256": latest.get("sha256"),
             "notes_head": str(latest.get("notes") or "").splitlines()[:8],
         },
+        "live_public": live_public,
+        "public_surfaces": public_surfaces,
         "source_hashes": {
             rel: _sha256(root / rel)
             for rel in SOURCE_HASH_FILES
@@ -137,9 +282,14 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", type=Path, default=Path("."))
     parser.add_argument("--out", type=Path, default=DEFAULT_OUT)
+    parser.add_argument(
+        "--live-public",
+        action="store_true",
+        help="Also verify public GitHub raw/latest, mlx.studio latest, PyPI, and GitHub release asset state.",
+    )
     args = parser.parse_args()
 
-    artifact = build_artifact(args.root)
+    artifact = build_artifact(args.root, live_public=args.live_public)
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(json.dumps(artifact, indent=2) + "\n", encoding="utf-8")
     print(args.out)

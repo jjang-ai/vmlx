@@ -2,6 +2,25 @@ import json
 from pathlib import Path
 
 
+def _write_release_root(tmp_path: Path, version: str = "1.5.48") -> dict[str, str]:
+    (tmp_path / "pyproject.toml").write_text(
+        f'version = "{version}"\n', encoding="utf-8"
+    )
+    panel = tmp_path / "panel"
+    panel.mkdir()
+    (panel / "package.json").write_text(
+        json.dumps({"version": version}), encoding="utf-8"
+    )
+    latest = {
+        "version": version,
+        "url": f"https://github.com/jjang-ai/mlxstudio/releases/download/v{version}/vMLX-{version}-sequoia-arm64.dmg",
+        "sha256": "a" * 64,
+        "notes": f"vMLX {version}\n\nRelease notes.",
+    }
+    (tmp_path / "latest.json").write_text(json.dumps(latest), encoding="utf-8")
+    return latest
+
+
 def test_release_surface_contract_allows_source_ahead_of_local_updater(tmp_path):
     from tests.cross_matrix import run_release_surface_contract as gate
 
@@ -113,3 +132,96 @@ def test_release_surface_contract_allows_complete_post_release_updater(tmp_path)
     assert artifact["status"] == "pass"
     assert artifact["checks"]["local_updater_not_ahead_of_source"] is True
     assert artifact["checks"]["local_updater_release_state_valid"] is True
+
+
+def test_release_surface_live_public_checks_detect_stale_site_updater(tmp_path):
+    from tests.cross_matrix import run_release_surface_contract as gate
+
+    latest = _write_release_root(tmp_path)
+
+    def fetch_json(url: str):
+        if "raw.githubusercontent.com" in url:
+            return latest
+        if "mlx.studio/update/latest.json" in url:
+            return {**latest, "version": "1.5.46"}
+        if "pypi.org" in url:
+            return {
+                "info": {"version": "1.5.48"},
+                "urls": [
+                    {"filename": "vmlx-1.5.48-py3-none-any.whl"},
+                    {"filename": "vmlx-1.5.48.tar.gz"},
+                ],
+            }
+        if "api.github.com" in url:
+            return {
+                "draft": False,
+                "prerelease": False,
+                "assets": [
+                    {
+                        "name": "vMLX-1.5.48-sequoia-arm64.dmg",
+                        "digest": "sha256:" + latest["sha256"],
+                    }
+                ],
+            }
+        raise AssertionError(url)
+
+    artifact = gate.build_artifact(tmp_path, live_public=True, fetch_json=fetch_json)
+
+    assert artifact["status"] == "fail"
+    assert artifact["checks"]["public_raw_updater_matches_local"] is True
+    assert artifact["checks"]["public_site_updater_matches_local"] is False
+
+
+def test_release_surface_live_public_checks_require_pypi_files(tmp_path):
+    from tests.cross_matrix import run_release_surface_contract as gate
+
+    latest = _write_release_root(tmp_path)
+
+    def fetch_json(url: str):
+        if "raw.githubusercontent.com" in url or "mlx.studio/update/latest.json" in url:
+            return latest
+        if "pypi.org" in url:
+            return {"info": {"version": "1.5.48"}, "urls": []}
+        if "api.github.com" in url:
+            return {
+                "draft": False,
+                "prerelease": False,
+                "assets": [
+                    {
+                        "name": "vMLX-1.5.48-sequoia-arm64.dmg",
+                        "digest": "sha256:" + latest["sha256"],
+                    }
+                ],
+            }
+        raise AssertionError(url)
+
+    artifact = gate.build_artifact(tmp_path, live_public=True, fetch_json=fetch_json)
+
+    assert artifact["status"] == "fail"
+    assert artifact["checks"]["public_pypi_has_release_files"] is False
+
+
+def test_release_surface_live_public_checks_require_github_release_asset(tmp_path):
+    from tests.cross_matrix import run_release_surface_contract as gate
+
+    latest = _write_release_root(tmp_path)
+
+    def fetch_json(url: str):
+        if "raw.githubusercontent.com" in url or "mlx.studio/update/latest.json" in url:
+            return latest
+        if "pypi.org" in url:
+            return {
+                "info": {"version": "1.5.48"},
+                "urls": [
+                    {"filename": "vmlx-1.5.48-py3-none-any.whl"},
+                    {"filename": "vmlx-1.5.48.tar.gz"},
+                ],
+            }
+        if "api.github.com" in url:
+            return {"draft": False, "prerelease": False, "assets": []}
+        raise AssertionError(url)
+
+    artifact = gate.build_artifact(tmp_path, live_public=True, fetch_json=fetch_json)
+
+    assert artifact["status"] == "fail"
+    assert artifact["checks"]["public_github_release_has_updater_asset"] is False
