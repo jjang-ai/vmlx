@@ -14,6 +14,7 @@ from tests.cross_matrix.release_regression_manifest import (
     EXPECTED_CURRENT_MODEL_FAMILY_ROWS,
     EXPECTED_CURRENT_PARSER_REGISTRY_CHECKS,
     EXPECTED_CURRENT_REASONING_TEMPLATE_CHECKS,
+    EXPECTED_CURRENT_TOOL_CALL_CHECKS,
     REQUIRED_RELEASE_DOMAINS,
     build_manifest,
     validate_current_proof_sweep_artifacts,
@@ -122,6 +123,7 @@ def test_release_regression_manifest_validates_current_proof_sweep_artifacts(tmp
     generation_artifact = CURRENT_POST_BUDGET_EDGE_ARTIFACTS["generation-defaults-no-hidden-forcing"]
     api_artifact = CURRENT_POST_BUDGET_EDGE_ARTIFACTS["api-chat-responses-anthropic-ollama-parity"]
     reasoning_artifact = CURRENT_POST_BUDGET_EDGE_ARTIFACTS["reasoning-template-no-think-tag-leak"]
+    tool_artifact = CURRENT_POST_BUDGET_EDGE_ARTIFACTS["tool-call-loop-parser-cleanup"]
     for artifact in CURRENT_POST_BUDGET_EDGE_ARTIFACTS.values():
         path = tmp_path / artifact
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -226,6 +228,20 @@ def test_release_regression_manifest_validates_current_proof_sweep_artifacts(tmp
                 + "\n",
                 encoding="utf-8",
             )
+        elif artifact == tool_artifact:
+            path.write_text(
+                json.dumps(
+                    {
+                        "status": "pass",
+                        "checks": {
+                            name: True for name in EXPECTED_CURRENT_TOOL_CALL_CHECKS
+                        },
+                        "missing_markers": [],
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
         else:
             path.write_text('{"status":"pass","failed":[]}\n', encoding="utf-8")
     regression_suite = tmp_path / CURRENT_REGRESSION_SUITE_ARTIFACT
@@ -311,6 +327,14 @@ def test_release_regression_manifest_validates_current_proof_sweep_artifacts(tmp
         "artifact": reasoning_artifact,
         "status": "pass",
         "checks": {name: True for name in EXPECTED_CURRENT_REASONING_TEMPLATE_CHECKS},
+        "missing_markers": [],
+        "failed_checks": [],
+        "missing_expected_checks": [],
+    }
+    assert result["tool_call_matrix"] == {
+        "artifact": tool_artifact,
+        "status": "pass",
+        "checks": {name: True for name in EXPECTED_CURRENT_TOOL_CALL_CHECKS},
         "missing_markers": [],
         "failed_checks": [],
         "missing_expected_checks": [],
@@ -1035,6 +1059,157 @@ def test_release_regression_manifest_rejects_incomplete_current_reasoning_templa
     ]
 
 
+def test_release_regression_manifest_rejects_incomplete_current_tool_call_matrix(tmp_path):
+    tool_artifact = CURRENT_POST_BUDGET_EDGE_ARTIFACTS["tool-call-loop-parser-cleanup"]
+    for artifact in CURRENT_POST_BUDGET_EDGE_ARTIFACTS.values():
+        path = tmp_path / artifact
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if artifact == CURRENT_POST_BUDGET_EDGE_ARTIFACTS["model-family-detection-noheavy"]:
+            path.write_text(
+                json.dumps(
+                    {
+                        "status": "pass",
+                        "matched_rows": EXPECTED_CURRENT_MODEL_FAMILY_ROWS,
+                        "missing_rows": [],
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+        elif artifact == CURRENT_POST_BUDGET_EDGE_ARTIFACTS["model-artifact-format-detection"]:
+            path.write_text(
+                json.dumps(
+                    {
+                        "status": "pass",
+                        "checks": {
+                            name: True for name in EXPECTED_CURRENT_MODEL_ARTIFACT_CHECKS
+                        },
+                        "missing_markers": [],
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+        elif artifact == CURRENT_POST_BUDGET_EDGE_ARTIFACTS["cache-architecture-family-classification"]:
+            path.write_text(
+                json.dumps(
+                    {
+                        "status": "pass",
+                        "checks": {
+                            name: True for name in EXPECTED_CURRENT_CACHE_ARCHITECTURE_CHECKS
+                        },
+                        "missing_markers": [],
+                        "missing_api_checks": [],
+                        "missing_api_command_markers": [],
+                        "missing_panel_markers": [],
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+        elif artifact == CURRENT_POST_BUDGET_EDGE_ARTIFACTS["parser-registry-tool-reasoning-parity"]:
+            path.write_text(
+                json.dumps(
+                    {
+                        "status": "pass",
+                        "checks": {
+                            name: True for name in EXPECTED_CURRENT_PARSER_REGISTRY_CHECKS
+                        },
+                        "missing_markers": [],
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+        elif artifact == CURRENT_POST_BUDGET_EDGE_ARTIFACTS["generation-defaults-no-hidden-forcing"]:
+            path.write_text(
+                json.dumps(
+                    {
+                        "status": "pass",
+                        "checks": {
+                            name: True for name in EXPECTED_CURRENT_GENERATION_DEFAULTS_CHECKS
+                        },
+                        "missing_markers": [],
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+        elif artifact == CURRENT_POST_BUDGET_EDGE_ARTIFACTS["api-chat-responses-anthropic-ollama-parity"]:
+            path.write_text(
+                json.dumps(
+                    {
+                        "status": "pass",
+                        "checks": {
+                            name: True for name in EXPECTED_CURRENT_API_SURFACE_CHECKS
+                        },
+                        "missing_nested_checks": [],
+                        "missing_nested_markers": [],
+                        "missing_panel_markers": [],
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+        elif artifact == CURRENT_POST_BUDGET_EDGE_ARTIFACTS["reasoning-template-no-think-tag-leak"]:
+            path.write_text(
+                json.dumps(
+                    {
+                        "status": "pass",
+                        "checks": {
+                            name: True for name in EXPECTED_CURRENT_REASONING_TEMPLATE_CHECKS
+                        },
+                        "missing_markers": [],
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+        elif artifact == tool_artifact:
+            checks = {name: True for name in EXPECTED_CURRENT_TOOL_CALL_CHECKS[:-1]}
+            checks[EXPECTED_CURRENT_TOOL_CALL_CHECKS[-1]] = False
+            path.write_text(
+                json.dumps(
+                    {
+                        "status": "pass",
+                        "checks": checks,
+                        "missing_markers": [
+                            "panel max tool iterations caps tool loops"
+                        ],
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+        else:
+            path.write_text('{"status":"pass","failed":[]}\n', encoding="utf-8")
+    regression_suite = tmp_path / CURRENT_REGRESSION_SUITE_ARTIFACT
+    regression_suite.parent.mkdir(parents=True, exist_ok=True)
+    regression_suite.write_text(
+        json.dumps(
+            {
+                "status": "pass",
+                "failed_steps": [],
+                "open_requirements": EXPECTED_CURRENT_OPEN_REQUIREMENTS,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    result = validate_current_proof_sweep_artifacts(tmp_path)
+
+    assert result["status"] == "fail"
+    assert result["tool_call_matrix"]["artifact"] == tool_artifact
+    assert result["tool_call_matrix"]["status"] == "pass"
+    assert result["tool_call_matrix"]["missing_markers"] == [
+        "panel max tool iterations caps tool loops"
+    ]
+    assert result["tool_call_matrix"]["failed_checks"] == [
+        EXPECTED_CURRENT_TOOL_CALL_CHECKS[-1]
+    ]
+
+
 def test_release_regression_manifest_runner_embeds_current_proof_validation(tmp_path):
     model_family_artifact = CURRENT_POST_BUDGET_EDGE_ARTIFACTS["model-family-detection-noheavy"]
     model_artifact = CURRENT_POST_BUDGET_EDGE_ARTIFACTS["model-artifact-format-detection"]
@@ -1043,6 +1218,7 @@ def test_release_regression_manifest_runner_embeds_current_proof_validation(tmp_
     generation_artifact = CURRENT_POST_BUDGET_EDGE_ARTIFACTS["generation-defaults-no-hidden-forcing"]
     api_artifact = CURRENT_POST_BUDGET_EDGE_ARTIFACTS["api-chat-responses-anthropic-ollama-parity"]
     reasoning_artifact = CURRENT_POST_BUDGET_EDGE_ARTIFACTS["reasoning-template-no-think-tag-leak"]
+    tool_artifact = CURRENT_POST_BUDGET_EDGE_ARTIFACTS["tool-call-loop-parser-cleanup"]
     for artifact in CURRENT_POST_BUDGET_EDGE_ARTIFACTS.values():
         path = tmp_path / artifact
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -1147,6 +1323,20 @@ def test_release_regression_manifest_runner_embeds_current_proof_validation(tmp_
                 + "\n",
                 encoding="utf-8",
             )
+        elif artifact == tool_artifact:
+            path.write_text(
+                json.dumps(
+                    {
+                        "status": "pass",
+                        "checks": {
+                            name: True for name in EXPECTED_CURRENT_TOOL_CALL_CHECKS
+                        },
+                        "missing_markers": [],
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
         else:
             path.write_text('{"status":"pass","failed":[]}\n', encoding="utf-8")
     regression_suite = tmp_path / CURRENT_REGRESSION_SUITE_ARTIFACT
@@ -1233,6 +1423,14 @@ def test_release_regression_manifest_runner_embeds_current_proof_validation(tmp_
             "artifact": reasoning_artifact,
             "status": "pass",
             "checks": {name: True for name in EXPECTED_CURRENT_REASONING_TEMPLATE_CHECKS},
+            "missing_markers": [],
+            "failed_checks": [],
+            "missing_expected_checks": [],
+        },
+        "tool_call_matrix": {
+            "artifact": tool_artifact,
+            "status": "pass",
+            "checks": {name: True for name in EXPECTED_CURRENT_TOOL_CALL_CHECKS},
             "missing_markers": [],
             "failed_checks": [],
             "missing_expected_checks": [],

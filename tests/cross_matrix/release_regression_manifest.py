@@ -99,6 +99,18 @@ EXPECTED_CURRENT_REASONING_TEMPLATE_CHECKS = (
     "legacy_count_floor_still_nontrivial",
 )
 
+EXPECTED_CURRENT_TOOL_CALL_CHECKS = (
+    "tool_parser_residue_rejected_instead_of_executed",
+    "schema_valid_dsml_tool_call_preserved",
+    "dsv4_default_cache_degraded_dsml_shapes_repaired_when_schema_valid",
+    "dsv4_tool_preamble_suppressed_and_not_stored_without_call",
+    "tool_choice_none_does_not_fallback_to_raw_dsml",
+    "panel_tool_executor_blocks_unsafe_paths_and_commands",
+    "panel_max_tool_iterations_caps_tool_loops",
+    "live_default_cache_dsv4_tool_loop_artifact_present",
+    "all_required_tool_call_markers_present",
+)
+
 
 REQUIRED_RELEASE_DOMAINS = {
     "chat_ui_settings",
@@ -699,6 +711,7 @@ def validate_current_proof_sweep_artifacts(root: Path) -> dict[str, Any]:
     generation_defaults_matrix = _validate_current_generation_defaults_matrix_artifact(root)
     api_surface_matrix = _validate_current_api_surface_matrix_artifact(root)
     reasoning_template_matrix = _validate_current_reasoning_template_matrix_artifact(root)
+    tool_call_matrix = _validate_current_tool_call_matrix_artifact(root)
     regression_suite_ok = (
         regression_suite["status"] == "pass"
         and not regression_suite["failed_steps"]
@@ -751,6 +764,12 @@ def validate_current_proof_sweep_artifacts(root: Path) -> dict[str, Any]:
         and not reasoning_template_matrix["failed_checks"]
         and not reasoning_template_matrix["missing_expected_checks"]
     )
+    tool_call_matrix_ok = (
+        tool_call_matrix["status"] == "pass"
+        and not tool_call_matrix["missing_markers"]
+        and not tool_call_matrix["failed_checks"]
+        and not tool_call_matrix["missing_expected_checks"]
+    )
 
     return {
         "status": "pass"
@@ -765,6 +784,7 @@ def validate_current_proof_sweep_artifacts(root: Path) -> dict[str, Any]:
             and generation_defaults_matrix_ok
             and api_surface_matrix_ok
             and reasoning_template_matrix_ok
+            and tool_call_matrix_ok
         )
         else "fail",
         "missing": missing,
@@ -777,6 +797,7 @@ def validate_current_proof_sweep_artifacts(root: Path) -> dict[str, Any]:
         "generation_defaults_matrix": generation_defaults_matrix,
         "api_surface_matrix": api_surface_matrix,
         "reasoning_template_matrix": reasoning_template_matrix,
+        "tool_call_matrix": tool_call_matrix,
     }
 
 
@@ -1080,6 +1101,48 @@ def _validate_current_reasoning_template_matrix_artifact(root: Path) -> dict[str
     ]
     failed_checks = [
         name for name in EXPECTED_CURRENT_REASONING_TEMPLATE_CHECKS if checks.get(name) is not True
+    ]
+    result.update(
+        {
+            "status": str(payload.get("status")),
+            "checks": checks,
+            "missing_markers": [str(item) for item in payload.get("missing_markers", [])],
+            "failed_checks": failed_checks,
+            "missing_expected_checks": missing_expected_checks,
+        }
+    )
+    return result
+
+
+def _validate_current_tool_call_matrix_artifact(root: Path) -> dict[str, Any]:
+    artifact = CURRENT_POST_BUDGET_EDGE_ARTIFACTS["tool-call-loop-parser-cleanup"]
+    result: dict[str, Any] = {
+        "artifact": artifact,
+        "status": "missing",
+        "checks": {},
+        "missing_markers": [],
+        "failed_checks": list(EXPECTED_CURRENT_TOOL_CALL_CHECKS),
+        "missing_expected_checks": list(EXPECTED_CURRENT_TOOL_CALL_CHECKS),
+    }
+    path = root / artifact
+    if not path.exists():
+        return result
+
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception as exc:  # noqa: BLE001 - diagnostic helper reports load failures
+        result["status"] = f"load_error:{type(exc).__name__}"
+        return result
+
+    checks = {
+        str(name): bool(value)
+        for name, value in dict(payload.get("checks", {})).items()
+    }
+    missing_expected_checks = [
+        name for name in EXPECTED_CURRENT_TOOL_CALL_CHECKS if name not in checks
+    ]
+    failed_checks = [
+        name for name in EXPECTED_CURRENT_TOOL_CALL_CHECKS if checks.get(name) is not True
     ]
     result.update(
         {
