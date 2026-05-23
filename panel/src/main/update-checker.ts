@@ -1,5 +1,12 @@
 import { BrowserWindow } from 'electron'
 import { net } from 'electron'
+import {
+  compareVersions,
+  isValidUpdateUrl,
+  LatestRelease,
+  selectDownloadForMacOS,
+  selectHighestRelease,
+} from './update-manifest'
 
 // Query BOTH sources and take the highest version — mlx.studio drifts stale
 // when CI release workflow only updates GitHub, so relying on first-hit order
@@ -9,35 +16,6 @@ const LATEST_URLS = [
   'https://mlx.studio/update/latest.json',
 ]
 const CHECK_DELAY_MS = 5000 // Wait 5s after startup before checking
-
-interface LatestRelease {
-  version: string
-  url: string
-  notes?: string
-}
-
-function parseVersion(v: string): number[] {
-  const clean = v.replace(/-.*$/, '') // Strip pre-release suffix
-  return clean.split('.').map(Number)
-}
-
-// Returns >0 if a > b, <0 if a < b, 0 if equal. NaN components → 0.
-function versionCompare(a: string, b: string): number {
-  const av = parseVersion(a)
-  const bv = parseVersion(b)
-  for (let i = 0; i < Math.max(av.length, bv.length); i++) {
-    const ai = av[i] ?? 0
-    const bi = bv[i] ?? 0
-    if (isNaN(ai) || isNaN(bi)) return 0
-    if (ai > bi) return 1
-    if (ai < bi) return -1
-  }
-  return 0
-}
-
-function compareVersions(current: string, latest: string): boolean {
-  return versionCompare(latest, current) > 0
-}
 
 export function checkForUpdates(getWindow: () => BrowserWindow | null, currentVersion: string): void {
   if (process.env.VMLX_SKIP_UPDATE_CHECK === '1') {
@@ -67,28 +45,21 @@ export function checkForUpdates(getWindow: () => BrowserWindow | null, currentVe
     })
 
     const results = (await Promise.all(fetches)).filter((r): r is LatestRelease => r != null)
-    let data: LatestRelease | null = null
-    for (const r of results) {
-      if (data === null || versionCompare(r.version, data.version) > 0) {
-        data = r
-      }
-    }
+    let data = selectHighestRelease(results)
 
     if (!data) {
       console.log('[UPDATE] All update sources failed')
       return
     }
     console.log(`[UPDATE] Picked highest version across sources: v${data.version}`)
+    const selected = selectDownloadForMacOS(data)
+    if (selected.url !== data.url) {
+      console.log(`[UPDATE] Selected native macOS download: ${selected.url}`)
+      data = selected
+    }
 
     // Only accept HTTPS URLs from trusted domains
-    try {
-      const parsed = new URL(data.url)
-      const trusted = ['github.com', 'mlx.studio']
-      if (parsed.protocol !== 'https:' || !trusted.some(d => parsed.hostname === d || parsed.hostname.endsWith(`.${d}`))) {
-        console.log(`[UPDATE] Rejected untrusted URL: ${data.url}`)
-        return
-      }
-    } catch {
+    if (!isValidUpdateUrl(data.url)) {
       console.log(`[UPDATE] Invalid URL in manifest: ${data.url}`)
       return
     }

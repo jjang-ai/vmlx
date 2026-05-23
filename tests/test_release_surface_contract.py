@@ -15,6 +15,16 @@ def _write_release_root(tmp_path: Path, version: str = "1.5.48") -> dict[str, st
         "version": version,
         "url": f"https://github.com/jjang-ai/mlxstudio/releases/download/v{version}/vMLX-{version}-sequoia-arm64.dmg",
         "sha256": "a" * 64,
+        "downloads": {
+            "sequoia": {
+                "url": f"https://github.com/jjang-ai/mlxstudio/releases/download/v{version}/vMLX-{version}-sequoia-arm64.dmg",
+                "sha256": "a" * 64,
+            },
+            "tahoe": {
+                "url": f"https://github.com/jjang-ai/mlxstudio/releases/download/v{version}/vMLX-{version}-tahoe-arm64.dmg",
+                "sha256": "b" * 64,
+            },
+        },
         "notes": f"vMLX {version}\n\nRelease notes.",
     }
     (tmp_path / "latest.json").write_text(json.dumps(latest), encoding="utf-8")
@@ -121,6 +131,16 @@ def test_release_surface_contract_allows_complete_post_release_updater(tmp_path)
                 "version": "1.5.47",
                 "url": "https://github.com/jjang-ai/mlxstudio/releases/download/v1.5.47/vMLX-1.5.47-sequoia-arm64.dmg",
                 "sha256": "c" * 64,
+                "downloads": {
+                    "sequoia": {
+                        "url": "https://github.com/jjang-ai/mlxstudio/releases/download/v1.5.47/vMLX-1.5.47-sequoia-arm64.dmg",
+                        "sha256": "c" * 64,
+                    },
+                    "tahoe": {
+                        "url": "https://github.com/jjang-ai/mlxstudio/releases/download/v1.5.47/vMLX-1.5.47-tahoe-arm64.dmg",
+                        "sha256": "d" * 64,
+                    },
+                },
                 "notes": "vMLX 1.5.47\n\nKnown follow-up: DSV4 quality row.",
             }
         ),
@@ -132,6 +152,30 @@ def test_release_surface_contract_allows_complete_post_release_updater(tmp_path)
     assert artifact["status"] == "pass"
     assert artifact["checks"]["local_updater_not_ahead_of_source"] is True
     assert artifact["checks"]["local_updater_release_state_valid"] is True
+
+
+def test_release_surface_contract_requires_platform_downloads_when_updater_is_public(tmp_path):
+    from tests.cross_matrix import run_release_surface_contract as gate
+
+    latest = _write_release_root(tmp_path)
+    artifact = gate.build_artifact(tmp_path)
+
+    assert artifact["status"] == "pass"
+    assert artifact["checks"]["local_updater_platform_downloads_valid"] is True
+    assert artifact["local_latest"]["downloads"]["tahoe"]["url"] == latest["downloads"]["tahoe"]["url"]
+
+
+def test_release_surface_contract_rejects_missing_tahoe_download_for_public_updater(tmp_path):
+    from tests.cross_matrix import run_release_surface_contract as gate
+
+    latest = _write_release_root(tmp_path)
+    latest["downloads"].pop("tahoe")
+    (tmp_path / "latest.json").write_text(json.dumps(latest), encoding="utf-8")
+
+    artifact = gate.build_artifact(tmp_path)
+
+    assert artifact["status"] == "fail"
+    assert artifact["checks"]["local_updater_platform_downloads_valid"] is False
 
 
 def test_release_surface_live_public_checks_detect_stale_site_updater(tmp_path):
@@ -225,3 +269,38 @@ def test_release_surface_live_public_checks_require_github_release_asset(tmp_pat
 
     assert artifact["status"] == "fail"
     assert artifact["checks"]["public_github_release_has_updater_asset"] is False
+
+
+def test_release_surface_live_public_checks_require_all_manifest_download_assets(tmp_path):
+    from tests.cross_matrix import run_release_surface_contract as gate
+
+    latest = _write_release_root(tmp_path)
+
+    def fetch_json(url: str):
+        if "raw.githubusercontent.com" in url or "mlx.studio/update/latest.json" in url:
+            return latest
+        if "pypi.org" in url:
+            return {
+                "info": {"version": "1.5.48"},
+                "urls": [
+                    {"filename": "vmlx-1.5.48-py3-none-any.whl"},
+                    {"filename": "vmlx-1.5.48.tar.gz"},
+                ],
+            }
+        if "api.github.com" in url:
+            return {
+                "draft": False,
+                "prerelease": False,
+                "assets": [
+                    {
+                        "name": "vMLX-1.5.48-sequoia-arm64.dmg",
+                        "digest": "sha256:" + latest["downloads"]["sequoia"]["sha256"],
+                    }
+                ],
+            }
+        raise AssertionError(url)
+
+    artifact = gate.build_artifact(tmp_path, live_public=True, fetch_json=fetch_json)
+
+    assert artifact["status"] == "fail"
+    assert artifact["checks"]["public_github_release_has_all_manifest_download_assets"] is False

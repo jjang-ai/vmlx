@@ -89,12 +89,27 @@ def _local_updater_checks(source_version: str, latest: dict[str, Any]) -> dict[s
         and re.fullmatch(r"[0-9a-fA-F]{64}", latest_sha) is not None
         and source_version in latest_notes
     )
+    downloads = latest.get("downloads")
+    sequoia = downloads.get("sequoia") if isinstance(downloads, dict) else None
+    tahoe = downloads.get("tahoe") if isinstance(downloads, dict) else None
+    platform_downloads_valid = True
+    if bumped_to_source:
+        platform_downloads_valid = all(
+            isinstance(row, dict)
+            and isinstance(row.get("url"), str)
+            and f"v{source_version}" in row.get("url", "")
+            and flavor in row.get("url", "")
+            and isinstance(row.get("sha256"), str)
+            and re.fullmatch(r"[0-9a-fA-F]{64}", row.get("sha256", "")) is not None
+            for flavor, row in (("sequoia", sequoia), ("tahoe", tahoe))
+        )
     return {
         "local_updater_not_ahead_of_source": bool(latest_tuple <= source_tuple),
         "staged_source_version_not_public": bool(latest_tuple < source_tuple),
         "local_updater_release_state_valid": bool(
-            latest_tuple < source_tuple or complete_bumped_release
+            latest_tuple < source_tuple or (complete_bumped_release and platform_downloads_valid)
         ),
+        "local_updater_platform_downloads_valid": bool(platform_downloads_valid),
         "local_updater_has_required_fields": all(
             isinstance(latest.get(key), str) and latest.get(key)
             for key in ("version", "url", "sha256", "notes")
@@ -181,6 +196,19 @@ def _public_release_checks(
 
     updater_asset_name = str(latest.get("url") or "").rsplit("/", 1)[-1]
     expected_digest = "sha256:" + str(latest.get("sha256") or "")
+    expected_assets = {
+        updater_asset_name: expected_digest,
+    }
+    downloads = latest.get("downloads")
+    if isinstance(downloads, dict):
+        for row in downloads.values():
+            if not isinstance(row, dict):
+                continue
+            url = str(row.get("url") or "")
+            sha = str(row.get("sha256") or "")
+            name = url.rsplit("/", 1)[-1]
+            if name:
+                expected_assets[name] = "sha256:" + sha if sha else ""
     try:
         release = fetch_json(github_release_url)
         assets = release.get("assets", [])
@@ -208,10 +236,23 @@ def _public_release_checks(
             )
             for asset in assets
         )
+        checks["public_github_release_has_all_manifest_download_assets"] = all(
+            any(
+                asset.get("name") == name
+                and (
+                    not expected
+                    or not asset.get("digest")
+                    or str(asset.get("digest")) == expected
+                )
+                for asset in assets
+            )
+            for name, expected in expected_assets.items()
+        )
     except Exception as exc:  # pragma: no cover - exercised by live failures.
         public["github_release_error"] = repr(exc)
         checks["public_github_release_published"] = False
         checks["public_github_release_has_updater_asset"] = False
+        checks["public_github_release_has_all_manifest_download_assets"] = False
 
     return checks, public
 
@@ -245,6 +286,7 @@ def build_artifact(
         "local_updater_url_matches_version",
         "local_updater_sha256_valid",
         "local_updater_notes_match_version",
+        "local_updater_platform_downloads_valid",
     }
     if live_public:
         status_check_names.update(
@@ -254,6 +296,7 @@ def build_artifact(
                 "public_pypi_has_release_files",
                 "public_github_release_published",
                 "public_github_release_has_updater_asset",
+                "public_github_release_has_all_manifest_download_assets",
             }
         )
     status = "pass" if all(checks[name] for name in status_check_names) else "fail"
@@ -266,6 +309,7 @@ def build_artifact(
             "version": latest.get("version"),
             "url": latest.get("url"),
             "sha256": latest.get("sha256"),
+            "downloads": latest.get("downloads"),
             "notes_head": str(latest.get("notes") or "").splitlines()[:8],
         },
         "live_public": live_public,

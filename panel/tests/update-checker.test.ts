@@ -6,6 +6,11 @@
  * to avoid Electron import dependencies in vitest.
  */
 import { describe, it, expect } from 'vitest'
+import {
+  compareVersions as compareVersionsFromSource,
+  isValidUpdateUrl as isValidUpdateUrlFromSource,
+  selectDownloadForMacOS,
+} from '../src/main/update-manifest'
 
 // Mirror of compareVersions from src/main/update-checker.ts
 function compareVersions(current: string, latest: string): boolean {
@@ -151,5 +156,53 @@ describe('update URL validation', () => {
 
   it('rejects empty string', () => {
     expect(isValidUpdateUrl('')).toBe(false)
+  })
+})
+
+describe('native macOS update asset selection', () => {
+  const manifest = {
+    version: '1.5.49',
+    url: 'https://github.com/jjang-ai/mlxstudio/releases/download/v1.5.49/vMLX-1.5.49-sequoia-arm64.dmg',
+    sha256: 's'.repeat(64),
+    downloads: {
+      sequoia: {
+        url: 'https://github.com/jjang-ai/mlxstudio/releases/download/v1.5.49/vMLX-1.5.49-sequoia-arm64.dmg',
+        sha256: 's'.repeat(64),
+      },
+      tahoe: {
+        url: 'https://github.com/jjang-ai/mlxstudio/releases/download/v1.5.49/vMLX-1.5.49-tahoe-arm64.dmg',
+        sha256: 't'.repeat(64),
+      },
+    },
+  }
+
+  it('selects the Tahoe-native DMG on macOS 26 so M5/Tahoe installs get native MLX wheels', () => {
+    const selected = selectDownloadForMacOS(manifest, '26.3.2')
+
+    expect(selected.url).toContain('-tahoe-arm64.dmg')
+    expect(selected.sha256).toBe('t'.repeat(64))
+  })
+
+  it('keeps the Sequoia-compatible DMG on macOS 15', () => {
+    const selected = selectDownloadForMacOS(manifest, '15.6.0')
+
+    expect(selected.url).toContain('-sequoia-arm64.dmg')
+    expect(selected.sha256).toBe('s'.repeat(64))
+  })
+
+  it('can derive the Tahoe URL from a legacy Sequoia-only manifest without trusting new domains', () => {
+    const selected = selectDownloadForMacOS({
+      version: '1.5.49',
+      url: 'https://github.com/jjang-ai/mlxstudio/releases/download/v1.5.49/vMLX-1.5.49-sequoia-arm64.dmg',
+      sha256: 's'.repeat(64),
+    }, '26.0.0')
+
+    expect(selected.url).toBe('https://github.com/jjang-ai/mlxstudio/releases/download/v1.5.49/vMLX-1.5.49-tahoe-arm64.dmg')
+    expect(selected.sha256).toBeUndefined()
+  })
+
+  it('uses the source version comparison and URL validation helpers', () => {
+    expect(compareVersionsFromSource('1.5.48', '1.5.49')).toBe(true)
+    expect(isValidUpdateUrlFromSource(manifest.downloads.tahoe.url)).toBe(true)
   })
 })
