@@ -19,6 +19,7 @@ interface ChatOverrides {
   topK?: number
   minP?: number
   maxTokens?: number
+  maxThinkingTokens?: number
   repeatPenalty?: number
   systemPrompt?: string
   stopSequences?: string
@@ -125,6 +126,7 @@ export function ChatSettings({ chatId, session, reasoningParser, onClose, onOver
             if (gen.minP != null) detectedModelDefaults.minP = gen.minP
             if (gen.repeatPenalty != null) detectedModelDefaults.repeatPenalty = gen.repeatPenalty
             if (gen.maxNewTokens != null) detectedModelDefaults.maxTokens = gen.maxNewTokens
+            if (gen.maxThinkingTokens != null) detectedModelDefaults.maxThinkingTokens = gen.maxThinkingTokens
           }
         } catch (_) {/* no generation_config.json / jang_config sampling defaults */}
         try {
@@ -573,6 +575,15 @@ export function ChatSettings({ chatId, session, reasoningParser, onClose, onOver
               placeholder={modelDefaults.maxTokens ? `${modelDefaults.maxTokens} (model default)` : t('chat.settings.maxTokensPlaceholder')}
               help={t('chat.settings.maxTokensHelp')}
             />
+            {thinkingSupported && displayedEnableThinking !== false && (
+              <NumberField
+                label={t('chat.settings.maxThinkingTokens')}
+                value={overrides.maxThinkingTokens}
+                onChange={v => update('maxThinkingTokens', v)}
+                placeholder={modelDefaults.maxThinkingTokens ? `${modelDefaults.maxThinkingTokens} (model default)` : t('chat.settings.maxThinkingTokensPlaceholder')}
+                help={t('chat.settings.maxThinkingTokensHelp')}
+              />
+            )}
             <SliderField
               label={t('chat.settings.topK')}
               value={Math.max(0, overrides.topK ?? modelDefaults.topK ?? 0)}

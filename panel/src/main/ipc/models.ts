@@ -143,7 +143,17 @@ export interface GenerationDefaults {
   minP?: number;
   repeatPenalty?: number;
   maxNewTokens?: number;
+  maxThinkingTokens?: number;
   source?: "jang_config" | "generation_config";
+}
+
+function positiveIntegerDefault(...values: unknown[]): number | undefined {
+  for (const value of values) {
+    if (typeof value === "number" && Number.isFinite(value) && value > 0) {
+      return Math.floor(value);
+    }
+  }
+  return undefined;
 }
 
 /** Read bundle sampling defaults, preferring JANG chat metadata over generation_config. */
@@ -168,6 +178,13 @@ export async function readGenerationDefaults(
         defaults.repeatPenalty = config.repetition_penalty;
       if (typeof config.max_new_tokens === "number")
         defaults.maxNewTokens = config.max_new_tokens;
+      const maxThinkingTokens = positiveIntegerDefault(
+        config.max_thinking_tokens,
+        config.thinking_budget,
+        config.reasoning_budget,
+        config.reasoning?.budget_tokens,
+      );
+      if (maxThinkingTokens != null) defaults.maxThinkingTokens = maxThinkingTokens;
       if (Object.keys(defaults).length > 0) defaults.source = "generation_config";
     } catch {
       // generation_config.json is optional; JANG metadata below may still exist.
@@ -204,6 +221,15 @@ export async function readGenerationDefaults(
         if (typeof rep === "number") defaults.repeatPenalty = rep;
         if (typeof sampling.max_new_tokens === "number")
           defaults.maxNewTokens = sampling.max_new_tokens;
+        const maxThinkingTokens = positiveIntegerDefault(
+          sampling.max_thinking_tokens,
+          sampling.thinking_budget,
+          sampling.reasoning_budget,
+          jang?.chat?.reasoning?.max_thinking_tokens,
+          jang?.chat?.reasoning?.thinking_budget,
+          jang?.chat?.reasoning?.budget_tokens,
+        );
+        if (maxThinkingTokens != null) defaults.maxThinkingTokens = maxThinkingTokens;
         defaults.source = "jang_config";
       }
     } catch {

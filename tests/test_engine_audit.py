@@ -1644,6 +1644,88 @@ class TestServerSamplingResolution:
         assert captured[0]["chat_template_kwargs"]["thinking_budget"] == 32768
         assert captured[1]["chat_template_kwargs"]["thinking_budget"] == 32768
 
+    def test_explicit_max_thinking_tokens_overrides_effort_budget_without_rewriting_output_length(
+        self,
+        tmp_path,
+        monkeypatch,
+    ):
+        """max_thinking_tokens controls template budget, not output/context caps."""
+        from fastapi.testclient import TestClient
+
+        import vmlx_engine.server as server
+        from vmlx_engine.engine.base import GenerationOutput
+
+        (tmp_path / "generation_config.json").write_text(
+            json.dumps({"max_new_tokens": 2048})
+        )
+
+        class FakeTokenizer:
+            has_thinking = False
+
+        class FakeEngine:
+            is_mllm = False
+            tokenizer = FakeTokenizer()
+            preserve_native_tool_format = False
+
+        captured: list[dict] = []
+
+        async def fake_await_chat(*args, **kwargs):
+            captured.append(dict(kwargs["chat_kwargs"]))
+            return GenerationOutput(text="ok", prompt_tokens=3, completion_tokens=1)
+
+        monkeypatch.setattr(server, "_engine", FakeEngine())
+        monkeypatch.setattr(server, "_model_path", str(tmp_path))
+        monkeypatch.setattr(server, "_model_name", "bundle-model")
+        monkeypatch.setattr(server, "_reasoning_parser", None)
+        monkeypatch.setattr(server, "_mcp_manager", None)
+        monkeypatch.setattr(server, "_api_key", None, raising=False)
+        monkeypatch.setattr(server, "_default_max_tokens", 32768)
+        monkeypatch.setattr(server, "_default_max_tokens_explicit", False, raising=False)
+        monkeypatch.setattr(server, "_default_temperature", None)
+        monkeypatch.setattr(server, "_default_top_p", None)
+        monkeypatch.setattr(server, "_default_top_k", None)
+        monkeypatch.setattr(server, "_default_min_p", None)
+        monkeypatch.setattr(server, "_default_repetition_penalty", None)
+        monkeypatch.setattr(
+            server,
+            "_await_chat_with_disconnect_abort",
+            fake_await_chat,
+        )
+        server._jang_sampling_defaults_cache.clear()
+        server._generation_defaults_cache.clear()
+
+        client = TestClient(server.app)
+
+        chat_resp = client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "bundle-model",
+                "messages": [{"role": "user", "content": "hi"}],
+                "stream": False,
+                "reasoning_effort": "high",
+                "max_thinking_tokens": 4096,
+            },
+        )
+        responses_resp = client.post(
+            "/v1/responses",
+            json={
+                "model": "bundle-model",
+                "input": "hi",
+                "stream": False,
+                "reasoning_effort": "high",
+                "max_thinking_tokens": 4096,
+            },
+        )
+
+        assert chat_resp.status_code == 200
+        assert responses_resp.status_code == 200
+        assert captured[0]["max_tokens"] == 2048
+        assert captured[1]["max_tokens"] == 2048
+        assert captured[0]["chat_template_kwargs"]["thinking_budget"] == 4096
+        assert captured[1]["chat_template_kwargs"]["thinking_budget"] == 4096
+        assert captured[0]["max_prompt_tokens"] == 0
+        assert captured[1]["max_prompt_tokens"] == 0
+
     def test_anthropic_messages_omitted_max_tokens_uses_bundle_default(
         self,
         tmp_path,
@@ -2375,6 +2457,14 @@ class TestAPIModels:
             CompletionRequest(model="test", prompt="hi", max_tokens=-1)
         with pytest.raises(ValidationError, match="max_output_tokens must be at least 1"):
             ResponsesRequest(model="test", input="hi", max_output_tokens=0)
+        with pytest.raises(ValidationError, match="max_thinking_tokens must be at least 1"):
+            ChatCompletionRequest(
+                model="test",
+                messages=[{"role": "user", "content": "hi"}],
+                max_thinking_tokens=0,
+            )
+        with pytest.raises(ValidationError, match="max_thinking_tokens must be at least 1"):
+            ResponsesRequest(model="test", input="hi", max_thinking_tokens=0)
 
 
 # ===========================================================================

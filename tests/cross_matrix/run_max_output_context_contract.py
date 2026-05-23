@@ -32,6 +32,7 @@ SOURCE_HASH_FILES = (
     "tests/test_max_output_context_contract.py",
     "panel/src/main/api-gateway.ts",
     "panel/src/main/chat-override-policy.ts",
+    "panel/src/main/ipc/models.ts",
     "panel/src/main/sessions.ts",
     "panel/src/main/ipc/chat.ts",
     "panel/src/shared/dsv4RequestBudget.ts",
@@ -45,6 +46,7 @@ SOURCE_HASH_FILES = (
     "panel/tests/settings-flow.test.ts",
     "panel/tests/chat-settings-compatibility.test.ts",
     "panel/tests/database-migrations.test.ts",
+    "panel/tests/generation-defaults.test.ts",
     "panel/tests/request-builder.test.ts",
     "panel/tests/chat-override-policy.test.ts",
     "panel/tests/chat-settings-reset-policy.test.ts",
@@ -115,9 +117,15 @@ REQUIRED_MAX_OUTPUT_CONTEXT_TEST_MARKERS = (
     "default profiles cannot make maxTokens sticky on clean new chats",
     "new chats preserve model-owned maxTokens while refusing inherited output caps",
     "does not turn model max_new_tokens into a sticky per-chat max_tokens override",
+    "keeps per-chat maxThinkingTokens as template thinking budget only, never output or prompt context",
+    "keeps Responses maxThinkingTokens as thinking budget only and separate from output caps",
+    "suppresses stale maxThinkingTokens when thinking is explicitly off",
+    "chat:setOverrides treats maxThinkingTokens as an explicit thinking budget, not an output cap",
     "coding tool configs keep output limit separate from context fallback",
     "does not synthesize a DSV4 max token budget when the request leaves it to server/model defaults",
     "preserves DSV4 Responses max_output_tokens for Max thinking",
+    "test_explicit_max_thinking_tokens_overrides_effort_budget_without_rewriting_output_length",
+    "test_public_api_models_reject_non_positive_output_caps",
     "DSV4 request budget rejects invalid caps and floors fractional explicit caps",
     "omits unset and disabled sampling sentinels without dropping explicit overrides",
 )
@@ -126,7 +134,7 @@ PANEL_PATTERN = (
     "maxTokens|Max Tokens|Max Output|Max Context|max context|max output|"
     "max_tokens|max_output_tokens|32768|server default output|per-chat|"
     "omits max_tokens|max token budget|output budgets|output limit|output cap|"
-    "context fallback|coding tool"
+    "context fallback|coding tool|maxThinkingTokens|max_thinking_tokens|thinking_budget"
 )
 
 COMMANDS: dict[str, tuple[Path, list[str]]] = {
@@ -157,6 +165,7 @@ COMMANDS: dict[str, tuple[Path, list[str]]] = {
             "tests/test_engine_audit.py::TestServerSamplingResolution::test_wake_reload_preserves_max_tokens_explicitness",
             "tests/test_engine_audit.py::TestServerSamplingResolution::test_cli_serve_implicit_max_tokens_uses_bounded_fallback",
             "tests/test_engine_audit.py::TestServerSamplingResolution::test_anthropic_messages_omitted_max_tokens_uses_bundle_default",
+            "tests/test_engine_audit.py::TestServerSamplingResolution::test_explicit_max_thinking_tokens_overrides_effort_budget_without_rewriting_output_length",
             "tests/test_ollama_adapter.py::test_ollama_generate_default_uses_chat_template_request_shape",
             "tests/test_ollama_adapter.py::test_ollama_chat_omits_non_positive_num_predict_sentinels",
             "tests/test_ollama_adapter.py::test_ollama_generate_omits_non_positive_num_predict_sentinels",
@@ -173,6 +182,7 @@ COMMANDS: dict[str, tuple[Path, list[str]]] = {
             "tests/settings-flow.test.ts",
             "tests/chat-settings-compatibility.test.ts",
             "tests/database-migrations.test.ts",
+            "tests/generation-defaults.test.ts",
             "tests/request-builder.test.ts",
             "tests/chat-override-policy.test.ts",
             "tests/chat-settings-reset-policy.test.ts",
@@ -323,9 +333,11 @@ def build_artifact(root: Path) -> dict[str, Any]:
             not failed
             and "chat settings expose per-chat max tokens without hidden DSV4 floors" not in missing_markers
             and "chat:setOverrides treats maxTokens 0 or lower as Auto instead of a one-token cap" not in missing_markers
+            and "chat:setOverrides treats maxThinkingTokens as an explicit thinking budget, not an output cap" not in missing_markers
             and "chat:setOverrides rejects non-finite or non-numeric maxTokens instead of poisoning server defaults" not in missing_markers
             and "persisted chat maxTokens cannot relaunch server with a new startup maxTokens" not in missing_markers
             and "per-chat maxTokens below or above the server startup default remain request scoped" not in missing_markers
+            and "keeps per-chat maxThinkingTokens as template thinking budget only, never output or prompt context" not in missing_markers
         ),
         "request_builders_omit_auto_output_cap": (
             not failed
@@ -336,6 +348,8 @@ def build_artifact(root: Path) -> dict[str, Any]:
             and "cleared persisted chat maxTokens null stays Auto for Chat Completions and Responses" not in missing_markers
             and "switching chats never carries a previous chat maxTokens into Auto Chat Completions" not in missing_markers
             and "switching chats never carries a previous chat maxTokens into Auto Responses" not in missing_markers
+            and "keeps Responses maxThinkingTokens as thinking budget only and separate from output caps" not in missing_markers
+            and "suppresses stale maxThinkingTokens when thinking is explicitly off" not in missing_markers
         ),
         "new_chat_output_caps_are_not_inherited_or_made_sticky": (
             not failed

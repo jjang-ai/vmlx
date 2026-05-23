@@ -144,6 +144,8 @@ function summarizeRequestForLog(bodyJson: string, useResponsesApi: boolean): Rec
       enable_thinking: body.enable_thinking,
       thinking_mode: body.thinking_mode,
       reasoning_effort: body.reasoning_effort,
+      max_thinking_tokens: body.max_thinking_tokens,
+      thinking_budget: body.chat_template_kwargs?.thinking_budget,
       previous_response_id: body.previous_response_id ? "<present>" : undefined,
       has_tools: Array.isArray(body.tools) && body.tools.length > 0,
       messages: Array.isArray(items)
@@ -1533,12 +1535,31 @@ export function registerChatHandlers(
             chatDetectedFamily,
             overrides?.reasoningEffort,
           );
+          const resolvedThinkingBudget =
+            typeof overrides?.maxThinkingTokens === "number" &&
+              Number.isFinite(overrides.maxThinkingTokens) &&
+              overrides.maxThinkingTokens > 0
+              ? Math.floor(overrides.maxThinkingTokens)
+              : undefined;
           const effectiveEnableThinkingOverride =
             !isRemote &&
             !sessionHasReasoningParser &&
             chatDetectedFamily !== "deepseek-v4"
               ? undefined
               : overrides?.enableThinking;
+          const applyLocalThinkingBudget = (obj: Record<string, any>) => {
+            if (isRemote || resolvedThinkingBudget == null || obj.enable_thinking === false) {
+              return;
+            }
+            if (!sessionHasReasoningParser && chatDetectedFamily !== "deepseek-v4") {
+              return;
+            }
+            obj.max_thinking_tokens = resolvedThinkingBudget;
+            obj.chat_template_kwargs = {
+              ...(obj.chat_template_kwargs || {}),
+              thinking_budget: resolvedThinkingBudget,
+            };
+          };
           if (useResponsesApi) {
             const systemMessages = requestMessages.filter(
               (m: any) => m.role === "system",
@@ -1600,6 +1621,7 @@ export function registerChatHandlers(
               obj.chat_template_kwargs = {
                 enable_thinking: obj.enable_thinking,
               };
+            applyLocalThinkingBudget(obj);
             if (
               shouldForwardReasoningEffort(
                 overrides?.reasoningEffort,
@@ -1682,6 +1704,7 @@ export function registerChatHandlers(
               obj.chat_template_kwargs = {
                 enable_thinking: obj.enable_thinking,
               };
+            applyLocalThinkingBudget(obj);
             if (
               !isStrictApi &&
               shouldForwardReasoningEffort(

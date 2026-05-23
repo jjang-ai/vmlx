@@ -229,6 +229,7 @@ class ChatCompletionRequest(BaseModel):
     enable_thinking: bool | None = None
     # Reasoning effort level for models that support it (e.g., GPT-OSS: low/medium/high)
     reasoning_effort: str | None = None
+    max_thinking_tokens: int | None = None
     # Canonical vMLX shorthand for discrete UI/API modes:
     # instruct/chat/off -> enable_thinking=False
     # reasoning/thinking/on -> enable_thinking=True, reasoning_effort=medium when absent
@@ -277,6 +278,9 @@ class ChatCompletionRequest(BaseModel):
         # still opts into thinking when no explicit effort is present.
         if self.reasoning is not None and self.reasoning_effort is None:
             eff = self.reasoning.get("effort")
+            budget_tokens = self.reasoning.get("budget_tokens")
+            if self.max_thinking_tokens is None and isinstance(budget_tokens, int):
+                self.max_thinking_tokens = budget_tokens
             if _is_no_reasoning_effort(eff):
                 if self.enable_thinking is None:
                     self.enable_thinking = False
@@ -347,6 +351,13 @@ class ChatCompletionRequest(BaseModel):
     def validate_max_tokens(cls, v):
         if v is not None and v < 1:
             raise ValueError("max_tokens must be at least 1")
+        return v
+
+    @field_validator("max_thinking_tokens")
+    @classmethod
+    def validate_max_thinking_tokens(cls, v):
+        if v is not None and v < 1:
+            raise ValueError("max_thinking_tokens must be at least 1")
         return v
 
     @field_validator("top_k")
@@ -822,6 +833,7 @@ class ResponsesRequest(BaseModel):
     enable_thinking: bool | None = None
     # Reasoning effort level for models that support it (e.g., GPT-OSS: low/medium/high)
     reasoning_effort: str | None = None
+    max_thinking_tokens: int | None = None
     thinking_mode: str | None = None
     reasoning: dict | None = None
     # Extra kwargs passed directly to tokenizer.apply_chat_template()
@@ -848,6 +860,9 @@ class ResponsesRequest(BaseModel):
         _normalize_prompt_context_aliases(self)
         if self.reasoning is not None and self.reasoning_effort is None:
             eff = self.reasoning.get("effort")
+            budget_tokens = self.reasoning.get("budget_tokens")
+            if self.max_thinking_tokens is None and isinstance(budget_tokens, int):
+                self.max_thinking_tokens = budget_tokens
             if _is_no_reasoning_effort(eff):
                 if self.enable_thinking is None:
                     self.enable_thinking = False
@@ -911,6 +926,13 @@ class ResponsesRequest(BaseModel):
     def validate_max_output_tokens(cls, v):
         if v is not None and v < 1:
             raise ValueError("max_output_tokens must be at least 1")
+        return v
+
+    @field_validator("max_thinking_tokens")
+    @classmethod
+    def validate_max_thinking_tokens(cls, v):
+        if v is not None and v < 1:
+            raise ValueError("max_thinking_tokens must be at least 1")
         return v
 
     @field_validator("top_k")

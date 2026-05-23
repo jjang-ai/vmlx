@@ -27,6 +27,7 @@ describe('new-chat override inheritance policy', () => {
       topK: 1,
       minP: 0.2,
       maxTokens: 128,
+      maxThinkingTokens: 4096,
       repeatPenalty: 1.3,
       stopSequences: '<bad>',
       wireApi: 'completions',
@@ -121,6 +122,7 @@ describe('new-chat override inheritance policy', () => {
     const inherited = buildNewChatInheritedOverrides({ chatId: 'new-chat' }, {
       chatId: 'profile-default',
       maxTokens: 32768,
+      maxThinkingTokens: 32768,
       temperature: 2.0,
       repeatPenalty: 2.0,
       systemPrompt: 'sticky prompt text that should stay chat-scoped',
@@ -136,6 +138,7 @@ describe('new-chat override inheritance policy', () => {
       workingDirectory: '/Users/example/code',
     })
     expect(inherited.maxTokens).toBeUndefined()
+    expect(inherited.maxThinkingTokens).toBeUndefined()
     expect(inherited.temperature).toBeUndefined()
     expect(inherited.repeatPenalty).toBeUndefined()
     expect(inherited.systemPrompt).toBeUndefined()
@@ -202,6 +205,23 @@ describe('new-chat override inheritance policy', () => {
     expect(sanitizeChatOverrides({ chatId: 'chat', maxTokens: -20 }).maxTokens).toBeUndefined()
     expect(sanitizeChatOverrides({ chatId: 'chat', maxTokens: 512 }).maxTokens).toBe(512)
     expect(sanitizeChatOverrides({ chatId: 'chat', maxTokens: 2_000_000 }).maxTokens).toBe(1_000_000)
+  })
+
+  it('chat:setOverrides treats maxThinkingTokens as an explicit thinking budget, not an output cap', () => {
+    expect(sanitizeChatOverrides({ chatId: 'chat', maxThinkingTokens: 0 }).maxThinkingTokens).toBeUndefined()
+    expect(sanitizeChatOverrides({ chatId: 'chat', maxThinkingTokens: -20 }).maxThinkingTokens).toBeUndefined()
+    expect(sanitizeChatOverrides({ chatId: 'chat', maxThinkingTokens: Number.NaN }).maxThinkingTokens).toBeUndefined()
+    expect(sanitizeChatOverrides({ chatId: 'chat', maxThinkingTokens: '4096' as any }).maxThinkingTokens).toBeUndefined()
+    expect(sanitizeChatOverrides({ chatId: 'chat', maxThinkingTokens: 4096.9 }).maxThinkingTokens).toBe(4096)
+    expect(sanitizeChatOverrides({ chatId: 'chat', maxThinkingTokens: 2_000_000 }).maxThinkingTokens).toBe(1_000_000)
+
+    const sanitized = sanitizeChatOverrides({
+      chatId: 'chat',
+      maxTokens: 512,
+      maxThinkingTokens: 4096,
+    })
+    expect(sanitized.maxTokens).toBe(512)
+    expect(sanitized.maxThinkingTokens).toBe(4096)
   })
 
   it('chat:setOverrides rejects non-finite or non-numeric maxTokens instead of poisoning server defaults', () => {
@@ -281,7 +301,9 @@ describe('new-chat override inheritance policy', () => {
 
     expect(setChatOverridesBlock).toContain('INSERT OR REPLACE INTO chat_overrides')
     expect(setChatOverridesBlock).toContain('max_tokens')
+    expect(setChatOverridesBlock).toContain('max_thinking_tokens')
     expect(setChatOverridesBlock).toContain('overrides.maxTokens')
+    expect(setChatOverridesBlock).toContain('overrides.maxThinkingTokens')
     expect(setChatOverridesBlock).not.toContain('sessions')
     expect(setChatOverridesBlock).not.toContain('model_settings')
     expect(setChatOverridesBlock).not.toContain('saveModelSettings')
@@ -297,6 +319,7 @@ describe('new-chat override inheritance policy', () => {
     expect(performanceLaunchBlock).not.toContain('getChatOverrides')
     expect(performanceLaunchBlock).not.toContain('chat_overrides')
     expect(performanceLaunchBlock).not.toContain('overrides.maxTokens')
+    expect(performanceLaunchBlock).not.toContain('overrides.maxThinkingTokens')
   })
 
   it('server startup maxTokens and chat maxTokens remain independent when both are set', () => {
@@ -326,9 +349,13 @@ describe('new-chat override inheritance policy', () => {
     )
 
     expect(requestBuildBlock).toContain('overrides?.maxTokens')
+    expect(requestBuildBlock).toContain('overrides?.maxThinkingTokens')
     expect(requestBuildBlock).toContain('max_output_tokens: resolvedOutputBudget')
     expect(requestBuildBlock).toContain('max_tokens: resolvedOutputBudget')
+    expect(requestBuildBlock).toContain('max_thinking_tokens')
+    expect(requestBuildBlock).toContain('thinking_budget')
     expect(requestBuildBlock).not.toContain('config.maxTokens')
+    expect(requestBuildBlock).not.toContain('config.maxThinkingTokens')
     expect(requestBuildBlock).not.toContain('session.config.maxTokens')
   })
 

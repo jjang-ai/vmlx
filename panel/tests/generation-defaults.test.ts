@@ -49,6 +49,7 @@ describe('readGenerationDefaults generation_config defaults', () => {
         min_p: 0.02,
         repetition_penalty: 1.05,
         max_new_tokens: 8192,
+        max_thinking_tokens: 4096,
       },
     }, 'vmlx-generation-defaults-mlx-vl-')
 
@@ -59,6 +60,7 @@ describe('readGenerationDefaults generation_config defaults', () => {
       minP: 0.02,
       repeatPenalty: 1.05,
       maxNewTokens: 8192,
+      maxThinkingTokens: 4096,
       source: 'generation_config',
     })
   })
@@ -161,6 +163,7 @@ describe('readGenerationDefaults JANG sampling defaults', () => {
             repetition_penalty_thinking: 1.0,
             repetition_penalty_chat: 1.05,
             max_new_tokens: 4096,
+            thinking_budget: 2048,
           },
         },
       },
@@ -171,6 +174,7 @@ describe('readGenerationDefaults JANG sampling defaults', () => {
       topP: 0.95,
       repeatPenalty: 1.05,
       maxNewTokens: 4096,
+      maxThinkingTokens: 2048,
       source: 'jang_config',
     })
   })

@@ -15,6 +15,7 @@ interface ChatOverrides {
     topK?: number
     minP?: number
     maxTokens?: number
+    maxThinkingTokens?: number
     repeatPenalty?: number
     systemPrompt?: string
     stopSequences?: string
@@ -48,12 +49,26 @@ function buildRequestBody(
         detectedFamily,
         overrides?.reasoningEffort,
     )
+    const thinkingBudget = typeof overrides?.maxThinkingTokens === 'number' &&
+        Number.isFinite(overrides.maxThinkingTokens) &&
+        overrides.maxThinkingTokens > 0
+        ? Math.floor(overrides.maxThinkingTokens)
+        : undefined
     const effectiveEnableThinkingOverride =
         !isRemote &&
         !sessionHasReasoningParser &&
         detectedFamily !== 'deepseek-v4'
             ? undefined
             : overrides?.enableThinking
+    const applyLocalThinkingBudget = (obj: Record<string, any>) => {
+        if (isRemote || thinkingBudget == null || obj.enable_thinking === false) return
+        if (!sessionHasReasoningParser && detectedFamily !== 'deepseek-v4') return
+        obj.max_thinking_tokens = thinkingBudget
+        obj.chat_template_kwargs = {
+            ...(obj.chat_template_kwargs || {}),
+            thinking_budget: thinkingBudget,
+        }
+    }
 
     if (wireApi === 'responses') {
         const systemMessages = requestMessages.filter(m => m.role === 'system')
@@ -91,6 +106,7 @@ function buildRequestBody(
             obj.enable_thinking = sessionHasReasoningParser
         }
         if (!isRemote && obj.enable_thinking !== undefined) obj.chat_template_kwargs = { enable_thinking: obj.enable_thinking }
+        applyLocalThinkingBudget(obj)
         if (shouldForwardReasoningEffort) obj.reasoning_effort = overrides.reasoningEffort
         return obj
     } else {
@@ -117,6 +133,7 @@ function buildRequestBody(
             obj.enable_thinking = sessionHasReasoningParser
         }
         if (!isRemote && obj.enable_thinking !== undefined) obj.chat_template_kwargs = { enable_thinking: obj.enable_thinking }
+        applyLocalThinkingBudget(obj)
         if (shouldForwardReasoningEffort) obj.reasoning_effort = overrides.reasoningEffort
         return obj
     }
@@ -293,8 +310,32 @@ describe('buildRequestBody — Chat Completions API', () => {
             expect(body.max_prompt_tokens).toBeUndefined()
             expect(body.max_context_tokens).toBeUndefined()
             expect(body.max_context).toBeUndefined()
+            expect(body.max_thinking_tokens).toBeUndefined()
+            expect(body.chat_template_kwargs?.thinking_budget).toBeUndefined()
         }
         expect(dsv4MaxThinkingAuto.reasoning_effort).toBe('max')
+    })
+
+    it('keeps per-chat maxThinkingTokens as template thinking budget only, never output or prompt context', () => {
+        const body = buildRequestBody(
+            'completions',
+            'dsv4',
+            messages,
+            { enableThinking: true, reasoningEffort: 'max', maxThinkingTokens: 4096 },
+            false,
+            true,
+            undefined,
+            'deepseek-v4',
+        )
+
+        expect(body.max_thinking_tokens).toBe(4096)
+        expect(body.chat_template_kwargs).toEqual({ enable_thinking: true, thinking_budget: 4096 })
+        expect(body.reasoning_effort).toBe('max')
+        expect(body.max_tokens).toBeUndefined()
+        expect(body.max_output_tokens).toBeUndefined()
+        expect(body.max_prompt_tokens).toBeUndefined()
+        expect(body.max_context_tokens).toBeUndefined()
+        expect(body.max_context).toBeUndefined()
     })
 
     it('switching chats never carries a previous chat maxTokens into Auto Chat Completions', () => {
@@ -528,6 +569,45 @@ describe('buildRequestBody — Responses API', () => {
         expect(body.max_output_tokens).toBe(300)
         expect(body.reasoning_effort).toBe('max')
         expect(body.dsv4_finalizer_tokens).toBeUndefined()
+    })
+
+    it('keeps Responses maxThinkingTokens as thinking budget only and separate from output caps', () => {
+        const body = buildRequestBody(
+            'responses',
+            'dsv4',
+            messages,
+            { enableThinking: true, maxTokens: 300, reasoningEffort: 'max', maxThinkingTokens: 4096 },
+            false,
+            true,
+            undefined,
+            'deepseek-v4',
+        )
+        expect(body.max_output_tokens).toBe(300)
+        expect(body.max_thinking_tokens).toBe(4096)
+        expect(body.chat_template_kwargs).toEqual({ enable_thinking: true, thinking_budget: 4096 })
+        expect(body.reasoning_effort).toBe('max')
+        expect(body.max_tokens).toBeUndefined()
+        expect(body.max_prompt_tokens).toBeUndefined()
+        expect(body.max_context_tokens).toBeUndefined()
+        expect(body.max_context).toBeUndefined()
+    })
+
+    it('suppresses stale maxThinkingTokens when thinking is explicitly off', () => {
+        const body = buildRequestBody(
+            'responses',
+            'dsv4',
+            messages,
+            { enableThinking: false, maxTokens: 300, reasoningEffort: 'max', maxThinkingTokens: 4096 },
+            false,
+            true,
+            undefined,
+            'deepseek-v4',
+        )
+        expect(body.max_output_tokens).toBe(300)
+        expect(body.max_thinking_tokens).toBeUndefined()
+        expect(body.chat_template_kwargs).toEqual({ enable_thinking: false })
+        expect(body.chat_template_kwargs.thinking_budget).toBeUndefined()
+        expect(body.reasoning_effort).toBeUndefined()
     })
 
     it('suppresses stale Responses reasoning_effort when thinking is explicitly off', () => {

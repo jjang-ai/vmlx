@@ -9833,6 +9833,8 @@ async def create_chat_completion(
         _budget = _EFFORT_THINKING_BUDGET.get(_effort_lower)
         if _budget:
             _ct_kwargs.setdefault("thinking_budget", _budget)
+    if getattr(request, "max_thinking_tokens", None) is not None and request.enable_thinking is not False:
+        _ct_kwargs["thinking_budget"] = int(request.max_thinking_tokens)
 
     # Auto-map enable_thinking → reasoning_effort for Mistral 4.
     # Mistral 4's template uses reasoning_effort ("none"/"high"), not enable_thinking.
@@ -11192,6 +11194,8 @@ async def create_response(
         _budget = _EFFORT_THINKING_BUDGET.get(_effort_lower)
         if _budget:
             _ct_kwargs.setdefault("thinking_budget", _budget)
+    if getattr(request, "max_thinking_tokens", None) is not None and request.enable_thinking is not False:
+        _ct_kwargs["thinking_budget"] = int(request.max_thinking_tokens)
 
     # Auto-map enable_thinking → reasoning_effort for Mistral 4 (Responses API path).
     if (

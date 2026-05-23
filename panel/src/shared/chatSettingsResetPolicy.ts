@@ -4,6 +4,7 @@ export interface ChatSettingsResetOverrides {
   topK?: number
   minP?: number
   maxTokens?: number
+  maxThinkingTokens?: number
   repeatPenalty?: number
   systemPrompt?: string
   stopSequences?: string
@@ -32,6 +33,7 @@ export interface ChatSettingsGenerationDefaults {
   minP?: number
   repeatPenalty?: number
   maxNewTokens?: number
+  maxThinkingTokens?: number
 }
 
 export const CHAT_SETTINGS_RESET_PRESERVE_KEYS = [
@@ -71,6 +73,8 @@ export function buildChatSettingsResetOverrides<T extends ChatSettingsResetOverr
   // Keep max_new_tokens model-owned. Saving it as a per-chat maxTokens
   // override makes the UI enforce a sticky output cap even though the server
   // can resolve the same bundle default when the request omits max_tokens.
+  // Keep maxThinkingTokens model-owned too. The chat setting is an explicit
+  // template budget override, not a profile/reset default.
 
   return reset
 }

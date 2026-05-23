@@ -5,6 +5,7 @@ export interface ChatOverridePolicyInput {
   topK?: number
   minP?: number
   maxTokens?: number
+  maxThinkingTokens?: number
   repeatPenalty?: number
   systemPrompt?: string
   stopSequences?: string
@@ -101,6 +102,14 @@ export function sanitizeChatOverrides<T extends ChatOverridePolicyInput>(overrid
       delete sanitized.maxTokens
     } else {
       sanitized.maxTokens = maxTokens
+    }
+  }
+  if (sanitized.maxThinkingTokens != null) {
+    const maxThinkingTokens = sanitizePositiveInteger(sanitized.maxThinkingTokens, 1000000)
+    if (maxThinkingTokens == null) {
+      delete sanitized.maxThinkingTokens
+    } else {
+      sanitized.maxThinkingTokens = maxThinkingTokens
     }
   }
   if (sanitized.repeatPenalty != null) {

@@ -7,9 +7,11 @@ def test_max_output_context_contract_covers_all_public_api_surfaces():
     assert "vmlx_engine/api/anthropic_adapter.py" in sources
     assert "vmlx_engine/api/ollama_adapter.py" in sources
     assert "panel/src/main/api-gateway.ts" in sources
+    assert "panel/src/main/ipc/models.ts" in sources
     assert "panel/src/shared/dsv4RequestBudget.ts" in sources
     assert "tests/test_ollama_adapter.py" in sources
     assert "panel/tests/chat-settings-compatibility.test.ts" in sources
+    assert "panel/tests/generation-defaults.test.ts" in sources
 
     joined_commands = "\n".join(
         " ".join(command)
@@ -66,6 +68,11 @@ def test_max_output_context_contract_covers_all_public_api_surfaces():
     assert "switching chats never carries a previous chat maxTokens into Auto Responses" in required
     assert "new chats preserve model-owned maxTokens while refusing inherited output caps" in required
     assert "persisted chat maxTokens cannot relaunch server with a new startup maxTokens" in required
+    assert "keeps per-chat maxThinkingTokens as template thinking budget only, never output or prompt context" in required
+    assert "keeps Responses maxThinkingTokens as thinking budget only and separate from output caps" in required
+    assert "chat:setOverrides treats maxThinkingTokens as an explicit thinking budget, not an output cap" in required
+    assert "test_explicit_max_thinking_tokens_overrides_effort_budget_without_rewriting_output_length" in required
+    assert "test_public_api_models_reject_non_positive_output_caps" in required
 
     assert "new_chat_output_caps_are_not_inherited_or_made_sticky" in gate.build_artifact.__code__.co_consts
     assert "chat_output_cap_remains_per_chat_override" in gate.build_artifact.__code__.co_consts
