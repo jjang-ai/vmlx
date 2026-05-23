@@ -1464,19 +1464,72 @@ def _native_mtp_model_has_head(language_model: Any) -> bool:
     )
 
 
+def _lm_supports_return_logits(lm: Any) -> bool:
+    try:
+        sig = inspect.signature(lm.__call__)
+    except (TypeError, ValueError):
+        return False
+    return "return_logits" in sig.parameters
+
+
 def _call_lm_prefix_without_logits(
     lm: Any,
     input_ids: mx.array,
     kwargs: Dict[str, Any],
 ) -> Any:
     """Run a prefix-only language-model step without projecting full logits when supported."""
-    try:
-        sig = inspect.signature(lm.__call__)
-    except (TypeError, ValueError):
-        sig = None
-    if sig is not None and "return_logits" in sig.parameters:
+    if _lm_supports_return_logits(lm):
         return lm(input_ids, **kwargs, return_logits=False)
     return lm(input_ids, **kwargs)
+
+
+def _prefill_cache_materialization_items(cache: Optional[List[Any]]) -> List[Any]:
+    """Collect KV/SSM cache arrays that should be realized after prefix prefill."""
+    items: List[Any] = []
+
+    def _collect(cache_obj: Any) -> None:
+        if cache_obj is None:
+            return
+        keys = getattr(cache_obj, "keys", None)
+        values = getattr(cache_obj, "values", None)
+        if keys is not None or values is not None:
+            for value in (keys, values):
+                if isinstance(value, (list, tuple)):
+                    items.extend(v for v in value if v is not None)
+                elif value is not None:
+                    items.append(value)
+            return
+        nested = getattr(cache_obj, "caches", None)
+        if isinstance(nested, (list, tuple)):
+            for sub_cache in nested:
+                _collect(sub_cache)
+            return
+        ssm_cache = getattr(cache_obj, "cache", None)
+        if isinstance(ssm_cache, list):
+            items.extend(arr for arr in ssm_cache if arr is not None)
+            return
+        state = getattr(cache_obj, "state", None)
+        if isinstance(state, (list, tuple)):
+            items.extend(arr for arr in state if arr is not None)
+        elif state is not None:
+            items.append(state)
+
+    for entry in cache or []:
+        _collect(entry)
+    return items
+
+
+def _materialize_prefill_cache_state(cache: Optional[List[Any]]) -> None:
+    items = _prefill_cache_materialization_items(cache)
+    if not items:
+        return
+    try:
+        mx.eval(*items)
+    except RuntimeError as eval_err:
+        if "Stream" in str(eval_err):
+            mx.synchronize()
+        else:
+            raise
 
 
 def _native_mtp_clear_rollback(cache: List[Any]) -> None:
@@ -3633,6 +3686,12 @@ class MLLMBatchGenerator:
             or os.environ.get("VMLINUX_ALLOW_HYBRID_CHUNKED_PREFILL")
         ) in ("1", "true", "True", "yes", "on")
         _hybrid_blocks_chunk = self._is_hybrid and not _allow_hybrid_chunked
+        _native_mtp_hybrid_text_split = (
+            not has_images
+            and self._is_hybrid
+            and _native_mtp_model_has_head(self.language_model)
+            and _lm_supports_return_logits(self.language_model)
+        )
 
         # mlxstudio#83: auto-force chunking when a one-shot forward would
         # exceed the Metal single-buffer cap (reported by QwenCode/Opencode
@@ -3692,7 +3751,7 @@ class MLLMBatchGenerator:
         # None for text-only models routed through MLLM path (e.g., smelt) and
         # silently skipped chunking, falling through to the OOM-prone
         # single-shot `self.model(input_ids, **kwargs)` at the bottom.
-        if not has_images and not _hybrid_blocks_chunk:
+        if not has_images and (not _hybrid_blocks_chunk or _native_mtp_hybrid_text_split):
             lm = self.language_model
             if lm is not None and cache is not None:
                 _abs_position_ids = _absolute_text_position_ids(
@@ -3727,7 +3786,6 @@ class MLLMBatchGenerator:
                         request, seq_len, has_images, boundary
                     )
                     final_start = max(seq_len - 1, 0)
-                    _state_layers = [c for c in cache if hasattr(c, "state")]
                     if ssm_boundaries:
                         # Use pre-materialized Python list to avoid an
                         # mx.array → list eval cycle that can pin the
@@ -3744,6 +3802,7 @@ class MLLMBatchGenerator:
                                     input_ids[:, processed:capture_boundary],
                                     _lm_kwargs_for(processed, capture_boundary),
                                 )
+                                _materialize_prefill_cache_state(cache)
                                 processed = capture_boundary
                             self._maybe_capture_clean_ssm_boundary(
                                 request, cache, all_tokens, capture_boundary
@@ -3754,14 +3813,14 @@ class MLLMBatchGenerator:
                                 input_ids[:, processed:final_start],
                                 _lm_kwargs_for(processed, final_start),
                             )
+                            _materialize_prefill_cache_state(cache)
                     elif final_start > 0:
                         _call_lm_prefix_without_logits(
                             lm,
                             input_ids[:, :final_start],
                             _lm_kwargs_for(0, final_start),
                         )
-                    if final_start > 0 and _state_layers:
-                        mx.eval([c.state for c in _state_layers])
+                        _materialize_prefill_cache_state(cache)
                     output = lm(
                         input_ids[:, final_start:],
                         **_lm_kwargs_for(final_start, seq_len),
@@ -3776,7 +3835,11 @@ class MLLMBatchGenerator:
         # Hybrid SSM default: one-shot (safe). Opt-in via
         # VMLX_ALLOW_HYBRID_CHUNKED_PREFILL=1 for hybrid architectures that
         # have been verified cache-aware (Qwen3.5 GatedDeltaNet + attention).
-        if not has_images and seq_len > self.prefill_step_size * 2 and not _hybrid_blocks_chunk:
+        if (
+            not has_images
+            and seq_len > self.prefill_step_size * 2
+            and (not _hybrid_blocks_chunk or _native_mtp_hybrid_text_split)
+        ):
             # Use language_model directly for chunked text prefill
             lm = self.language_model
             if lm is not None and cache is not None:
@@ -3807,7 +3870,6 @@ class MLLMBatchGenerator:
                 _sorted_boundaries: List[int] = sorted(set(ssm_boundaries))
                 _boundary_idx = 0
                 ssm_captured_boundaries: set[int] = set()
-                _state_layers = [c for c in cache if hasattr(c, "state")]
                 _hoisted_all_tokens: Optional[List[int]] = getattr(
                     request, "_original_token_ids", None
                 )
@@ -3863,14 +3925,7 @@ class MLLMBatchGenerator:
                             f"[cache: {', '.join(_cache_diag)}]"
                         )
                         raise
-                    try:
-                        if _state_layers:
-                            mx.eval([c.state for c in _state_layers])
-                    except RuntimeError as _eval_err:
-                        if "Stream" in str(_eval_err):
-                            mx.synchronize()
-                        else:
-                            raise
+                    _materialize_prefill_cache_state(cache)
                     processed += chunk_size
                     chunk_num += 1
                     if processed in ssm_boundaries and processed not in ssm_captured_boundaries:

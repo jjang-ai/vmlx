@@ -412,6 +412,238 @@ class TestMLLMBatchStats:
             {"tokens": 1, "return_logits": True},
         ]
 
+    def test_default_native_mtp_hybrid_text_prefill_avoids_full_prompt_logits(self, monkeypatch):
+        """Qwen native-MTP hybrid text requests must not need the chunking env to skip prefix logits."""
+        from mlx_lm.models.cache import KVCache
+
+        from vmlx_engine.mllm_batch_generator import (
+            MLLMBatchGenerator,
+            MLLMBatchRequest,
+        )
+
+        monkeypatch.delenv("VMLX_ALLOW_HYBRID_CHUNKED_PREFILL", raising=False)
+        monkeypatch.delenv("VMLINUX_ALLOW_HYBRID_CHUNKED_PREFILL", raising=False)
+
+        class DummySSMCache:
+            def __init__(self):
+                self.state = mx.array([0])
+                self.cache = [mx.array([0])]
+
+        class DummyNativeMTPHead:
+            pass
+
+        class DummyLanguageModel:
+            def __init__(self):
+                self.calls = []
+                self.mtp = DummyNativeMTPHead()
+
+            def make_cache(self):
+                return [KVCache(), DummySSMCache()]
+
+            def make_mtp_cache(self):
+                return []
+
+            def mtp_forward(self, *args, **kwargs):
+                return mx.zeros((1, 1, 8)), mx.zeros((1, 1, 8))
+
+            def __call__(self, input_ids, *, return_logits=True, **kwargs):
+                self.calls.append(
+                    {
+                        "tokens": int(input_ids.shape[1]),
+                        "return_logits": return_logits,
+                    }
+                )
+                return mx.zeros((input_ids.shape[0], input_ids.shape[1], 8))
+
+        class DummyVLM:
+            def __init__(self):
+                self.language_model = DummyLanguageModel()
+
+        model = DummyVLM()
+        generator = MLLMBatchGenerator(
+            model=model,
+            processor=object(),
+            prefill_step_size=2048,
+            enable_prefix_cache=False,
+        )
+        request = MLLMBatchRequest(
+            uid=0,
+            request_id="default-native-mtp-hybrid",
+            prompt="",
+            input_ids=mx.array([[1, 2, 3, 4, 5, 6]], dtype=mx.int32),
+            temperature=0.0,
+        )
+
+        output = generator._run_vision_encoding_inner(
+            request,
+            cache=model.language_model.make_cache(),
+        )
+
+        assert output.shape == (1, 1, 8)
+        assert model.language_model.calls == [
+            {"tokens": 5, "return_logits": False},
+            {"tokens": 1, "return_logits": True},
+        ]
+
+    def test_default_native_mtp_hybrid_prefix_split_materializes_cache_before_final_logits(self, monkeypatch):
+        """Prefix-only native-MTP hybrid work must not remain lazy until final logits eval."""
+        from vmlx_engine.mllm_batch_generator import (
+            MLLMBatchGenerator,
+            MLLMBatchRequest,
+        )
+        import vmlx_engine.mllm_batch_generator as mllm_mod
+
+        monkeypatch.delenv("VMLX_ALLOW_HYBRID_CHUNKED_PREFILL", raising=False)
+        monkeypatch.delenv("VMLINUX_ALLOW_HYBRID_CHUNKED_PREFILL", raising=False)
+        eval_calls = []
+
+        def fake_eval(*items):
+            eval_calls.append(items)
+
+        monkeypatch.setattr(mllm_mod.mx, "eval", fake_eval)
+
+        class DummyKVCache:
+            def __init__(self):
+                self.keys = None
+                self.values = None
+
+        class DummySSMCache:
+            def __init__(self):
+                self.state = mx.array([0])
+                self.cache = [mx.array([0])]
+
+        class DummyNativeMTPHead:
+            pass
+
+        class DummyLanguageModel:
+            def __init__(self):
+                self.calls = []
+                self.mtp = DummyNativeMTPHead()
+
+            def make_cache(self):
+                return [DummyKVCache(), DummySSMCache()]
+
+            def make_mtp_cache(self):
+                return []
+
+            def mtp_forward(self, *args, **kwargs):
+                return mx.zeros((1, 1, 8)), mx.zeros((1, 1, 8))
+
+            def __call__(self, input_ids, *, cache=None, return_logits=True, **kwargs):
+                self.calls.append(
+                    {
+                        "tokens": int(input_ids.shape[1]),
+                        "return_logits": return_logits,
+                    }
+                )
+                if cache is not None:
+                    cache[0].keys = mx.array([[11]])
+                    cache[0].values = mx.array([[12]])
+                    cache[1].cache = [mx.array([[13]])]
+                return mx.zeros((input_ids.shape[0], input_ids.shape[1], 8))
+
+        class DummyVLM:
+            def __init__(self):
+                self.language_model = DummyLanguageModel()
+
+        model = DummyVLM()
+        generator = MLLMBatchGenerator(
+            model=model,
+            processor=object(),
+            prefill_step_size=2048,
+            enable_prefix_cache=False,
+        )
+        request = MLLMBatchRequest(
+            uid=0,
+            request_id="default-native-mtp-hybrid-materialize",
+            prompt="",
+            input_ids=mx.array([[1, 2, 3, 4, 5, 6]], dtype=mx.int32),
+            temperature=0.0,
+        )
+
+        generator._run_vision_encoding_inner(
+            request,
+            cache=model.language_model.make_cache(),
+        )
+
+        assert model.language_model.calls[0] == {"tokens": 5, "return_logits": False}
+        assert any(len(items) >= 3 for items in eval_calls)
+
+    def test_default_native_mtp_hybrid_long_text_prefill_uses_chunked_prefix_split(self, monkeypatch):
+        """Native-MTP hybrid text prompts above the short threshold must not fall back to one-shot logits."""
+        from mlx_lm.models.cache import KVCache
+
+        from vmlx_engine.mllm_batch_generator import (
+            MLLMBatchGenerator,
+            MLLMBatchRequest,
+        )
+
+        monkeypatch.delenv("VMLX_ALLOW_HYBRID_CHUNKED_PREFILL", raising=False)
+        monkeypatch.delenv("VMLINUX_ALLOW_HYBRID_CHUNKED_PREFILL", raising=False)
+
+        class DummySSMCache:
+            def __init__(self):
+                self.state = mx.array([0])
+                self.cache = [mx.array([0])]
+
+        class DummyNativeMTPHead:
+            pass
+
+        class DummyLanguageModel:
+            def __init__(self):
+                self.calls = []
+                self.mtp = DummyNativeMTPHead()
+
+            def make_cache(self):
+                return [KVCache(), DummySSMCache()]
+
+            def make_mtp_cache(self):
+                return []
+
+            def mtp_forward(self, *args, **kwargs):
+                return mx.zeros((1, 1, 8)), mx.zeros((1, 1, 8))
+
+            def __call__(self, input_ids, *, return_logits=True, **kwargs):
+                self.calls.append(
+                    {
+                        "tokens": int(input_ids.shape[1]),
+                        "return_logits": return_logits,
+                    }
+                )
+                return mx.zeros((input_ids.shape[0], input_ids.shape[1], 8))
+
+        class DummyVLM:
+            def __init__(self):
+                self.language_model = DummyLanguageModel()
+
+        model = DummyVLM()
+        generator = MLLMBatchGenerator(
+            model=model,
+            processor=object(),
+            prefill_step_size=2,
+            enable_prefix_cache=False,
+        )
+        request = MLLMBatchRequest(
+            uid=0,
+            request_id="default-native-mtp-hybrid-long",
+            prompt="",
+            input_ids=mx.array([[1, 2, 3, 4, 5, 6]], dtype=mx.int32),
+            temperature=0.0,
+        )
+
+        output = generator._run_vision_encoding_inner(
+            request,
+            cache=model.language_model.make_cache(),
+        )
+
+        assert output.shape == (1, 1, 8)
+        assert model.language_model.calls == [
+            {"tokens": 2, "return_logits": False},
+            {"tokens": 2, "return_logits": False},
+            {"tokens": 1, "return_logits": False},
+            {"tokens": 1, "return_logits": True},
+        ]
+
 
 class TestMLLMSchedulerConfig:
     """Tests for MLLMSchedulerConfig."""
