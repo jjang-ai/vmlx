@@ -55,6 +55,8 @@ MODEL_ARTIFACT_FORMAT_CONTRACT_REL = "build/current-model-artifact-format-contra
 GENERATION_DEFAULTS_CONTRACT_REL = "build/current-generation-defaults-contract-20260521.json"
 NATIVE_MTP_CONTRACT_REL = "build/current-native-mtp-contract-20260521.json"
 VL_MEDIA_CONTRACT_REL = "build/current-vl-media-cache-contract-20260521.json"
+QWEN_JANG_SOURCE_SPEED_REL = "build/current-decode-speed-live-qwen27-jang4m-source-keepalloc-20260522.json"
+QWEN_JANG_PACKAGED_SPEED_REL = "build/current-decode-speed-live-qwen27-jang4m-packaged-keepalloc-20260522.json"
 DSV4_DEFAULT_CACHE_TOOL_LOOP_REL = "build/current-dsv4-default-cache-tool-loop/result.json"
 DSV4_QUALITY_CLEARANCE_CHECKS = (
     "identifier_integrity",
@@ -427,6 +429,40 @@ def _contract_detail(
     }
 
 
+def _speed_artifact_detail(payload: dict[str, Any]) -> tuple[bool, dict[str, Any]]:
+    results = payload.get("results") or []
+    row = results[0] if results and isinstance(results[0], dict) else {}
+    pp_rows = row.get("pp_rows") or []
+    pp_values: list[float] = []
+    loopish_values: list[bool] = []
+    for item in pp_rows:
+        if not isinstance(item, dict):
+            continue
+        try:
+            pp_values.append(float(item.get("pp_wall_tok_s")))
+        except (TypeError, ValueError):
+            pass
+        loopish_values.append(bool(item.get("loopish")))
+    min_pp = min(pp_values) if pp_values else None
+    status = row.get("status")
+    notes = row.get("notes") or []
+    ok = (
+        status == "pass"
+        and min_pp is not None
+        and min_pp >= 600.0
+        and not any(loopish_values)
+        and not notes
+    )
+    return ok, {
+        "status": status,
+        "notes": notes,
+        "runtime_wheels": row.get("runtime_wheels"),
+        "pp_wall_tok_s": pp_values,
+        "min_pp_wall_tok_s": min_pp,
+        "loopish_values": loopish_values,
+    }
+
+
 def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
     root = Path(root)
     cache = _load(root, "build/current-dsv4-cache-proof-digest-20260521.json")
@@ -450,6 +486,8 @@ def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
     generation_defaults_contract = _load(root, GENERATION_DEFAULTS_CONTRACT_REL)
     native_mtp_contract = _load(root, NATIVE_MTP_CONTRACT_REL)
     vl_media_contract = _load(root, VL_MEDIA_CONTRACT_REL)
+    qwen_jang_source_speed = _load(root, QWEN_JANG_SOURCE_SPEED_REL)
+    qwen_jang_packaged_speed = _load(root, QWEN_JANG_PACKAGED_SPEED_REL)
 
     requirements: list[dict[str, Any]] = []
     cache_checks = cache.get("checks") or {}
@@ -850,6 +888,26 @@ def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
             "generation_defaults": generation_defaults_details,
             "native_mtp": native_mtp_details,
             "vl_media": vl_media_details,
+        },
+    )
+    qwen_source_speed_ok, qwen_source_speed_details = _speed_artifact_detail(
+        qwen_jang_source_speed
+    )
+    qwen_packaged_speed_ok, qwen_packaged_speed_details = _speed_artifact_detail(
+        qwen_jang_packaged_speed
+    )
+    _add(
+        requirements,
+        "Qwen/JANG packaged MX matmul speed is release-cleared",
+        _status(qwen_source_speed_ok and qwen_packaged_speed_ok),
+        [QWEN_JANG_SOURCE_SPEED_REL, QWEN_JANG_PACKAGED_SPEED_REL],
+        caveat=(
+            "Source/native-wheel speed and packaged-app speed are separate. "
+            "A source pass does not clear a packaged compat-wheel PP review."
+        ),
+        details={
+            "source": qwen_source_speed_details,
+            "packaged": qwen_packaged_speed_details,
         },
     )
     api_cache_ok, api_cache_checks = _contract_checks(

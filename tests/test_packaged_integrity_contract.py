@@ -18,6 +18,12 @@ def _result(name: str, returncode: int, stdout_tail: list[str], passed: int | No
     }
 
 
+def _expected_open_digest_line() -> str:
+    return "[FAIL] objective proof digest: " + "; ".join(
+        runner.EXPECTED_OPEN_REQUIREMENTS
+    )
+
+
 def test_packaged_integrity_accepts_current_release_gate_unit_count(monkeypatch, tmp_path):
     def fake_run(_root: Path, name: str, _cwd_rel: Path, _cmd: list[str]):
         if name == "release_gate_unit_contracts":
@@ -38,7 +44,7 @@ def test_packaged_integrity_accepts_current_release_gate_unit_count(monkeypatch,
             return _result(
                 name,
                 1,
-                [f"[FAIL] objective proof digest: {runner.EXPECTED_OPEN_REQUIREMENT}"],
+                [_expected_open_digest_line()],
             )
         raise AssertionError(name)
 
@@ -48,7 +54,10 @@ def test_packaged_integrity_accepts_current_release_gate_unit_count(monkeypatch,
     artifact = runner.build_artifact(tmp_path)
 
     assert artifact["checks"]["release_gate_unit_contracts_pass"] is True
-    assert artifact["checks"]["dry_release_gate_fails_only_on_known_dsv4_objective"] is True
+    assert artifact["checks"]["dry_release_gate_fails_only_on_known_objectives"] is True
+    assert artifact["known_expected_release_gate_open_requirements"] == (
+        runner.EXPECTED_OPEN_REQUIREMENTS
+    )
     assert artifact["status"] == "pass"
 
 
@@ -79,7 +88,7 @@ def test_packaged_integrity_sets_clean_jang_source_env_for_bundle_checks(monkeyp
             return _result(
                 name,
                 1,
-                [f"[FAIL] objective proof digest: {runner.EXPECTED_OPEN_REQUIREMENT}"],
+                [_expected_open_digest_line()],
             )
         raise AssertionError(name)
 

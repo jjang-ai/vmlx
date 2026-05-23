@@ -4,7 +4,7 @@
 This gate does not build, tag, upload, notarize, or update release feeds. It
 checks the release-gate script contracts, bundled Python verifier, and the dry
 release gate behavior. The current dry gate is allowed to fail only for the
-known DSV4 long-output/code quality objective row.
+known objective digest rows.
 """
 
 from __future__ import annotations
@@ -23,7 +23,10 @@ from typing import Any
 
 
 DEFAULT_OUT = Path("build/current-packaged-integrity-contract-20260521.json")
-EXPECTED_OPEN_REQUIREMENT = "DSV4 long-output/code/file-generation quality is release-cleared"
+EXPECTED_OPEN_REQUIREMENTS = [
+    "Qwen/JANG packaged MX matmul speed is release-cleared",
+    "DSV4 long-output/code/file-generation quality is release-cleared",
+]
 MIN_RELEASE_GATE_UNIT_TESTS = 34
 
 SOURCE_HASH_FILES = (
@@ -137,7 +140,10 @@ def release_gate_failure_is_expected(step: dict[str, Any]) -> bool:
         return True
     text = "\n".join(step.get("stdout_tail", []))
     fail_lines = [line for line in text.splitlines() if line.startswith("[FAIL]")]
-    expected = f"[FAIL] objective proof digest: {EXPECTED_OPEN_REQUIREMENT}"
+    expected = (
+        "[FAIL] objective proof digest: "
+        + "; ".join(EXPECTED_OPEN_REQUIREMENTS)
+    )
     forbidden = (
         "bundled python import gate: FAIL",
         "panel typecheck: FAIL",
@@ -186,7 +192,7 @@ def build_artifact(
             results["bundled_python_verifier"]["returncode"] == 0
             and "bundled-python: all critical imports ok" in verifier_output
         ),
-        "dry_release_gate_fails_only_on_known_dsv4_objective": release_gate_ok,
+        "dry_release_gate_fails_only_on_known_objectives": release_gate_ok,
     }
     failed = [
         name
@@ -198,7 +204,7 @@ def build_artifact(
         "status": "pass" if all(checks.values()) and not failed else "fail",
         "checks": checks,
         "failed": failed,
-        "known_expected_release_gate_open_requirement": EXPECTED_OPEN_REQUIREMENT,
+        "known_expected_release_gate_open_requirements": EXPECTED_OPEN_REQUIREMENTS,
         "source_hashes": {
             rel: _sha256(root / rel)
             for rel in SOURCE_HASH_FILES

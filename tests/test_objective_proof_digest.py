@@ -466,6 +466,35 @@ def _write_passing_base_artifacts(tmp_path: Path) -> None:
             },
         },
     )
+    speed_base = {
+        "created_at": 1779493036.61303,
+        "results": [
+            {
+                "name": "qwen27_jang4m",
+                "status": "pass",
+                "notes": [],
+                "runtime_wheels": {
+                    "mlx": ["cp312-cp312-macosx_26_0_arm64"],
+                    "mlx-metal": ["py3-none-macosx_26_0_arm64"],
+                },
+                "pp_rows": [
+                    {"target_tokens": 1024, "pp_wall_tok_s": 910.1, "loopish": False},
+                    {"target_tokens": 4096, "pp_wall_tok_s": 914.5, "loopish": False},
+                    {"target_tokens": 16384, "pp_wall_tok_s": 779.4, "loopish": False},
+                ],
+            }
+        ],
+    }
+    _write_json(
+        tmp_path,
+        "build/current-decode-speed-live-qwen27-jang4m-source-keepalloc-20260522.json",
+        speed_base,
+    )
+    _write_json(
+        tmp_path,
+        "build/current-decode-speed-live-qwen27-jang4m-packaged-keepalloc-20260522.json",
+        speed_base,
+    )
 
 
 def test_objective_proof_digest_keeps_dsv4_long_quality_open(tmp_path):
@@ -739,6 +768,55 @@ def test_objective_proof_digest_accepts_generation_mtp_vl_contracts(tmp_path):
     assert row["details"]["generation_defaults"]["stale_source_hashes"] == []
     assert row["details"]["native_mtp"]["stale_source_hashes"] == []
     assert row["details"]["vl_media"]["stale_source_hashes"] == []
+
+
+def test_objective_proof_digest_surfaces_qwen_jang_packaged_speed_review(tmp_path):
+    from tests.cross_matrix.summarize_objective_proof import build_digest
+
+    _write_passing_base_artifacts(tmp_path)
+    packaged = tmp_path / "build/current-decode-speed-live-qwen27-jang4m-packaged-keepalloc-20260522.json"
+    payload = json.loads(packaged.read_text(encoding="utf-8"))
+    payload["results"][0]["status"] = "review"
+    payload["results"][0]["notes"] = [
+        "PP below expected 600.00: 294.83, 288.07, 249.49"
+    ]
+    payload["results"][0]["runtime_wheels"] = {
+        "mlx": ["cp312-cp312-macosx_14_0_arm64"],
+        "mlx-metal": ["py3-none-macosx_14_0_arm64"],
+    }
+    payload["results"][0]["pp_rows"] = [
+        {"target_tokens": 1024, "pp_wall_tok_s": 294.83, "loopish": False},
+        {"target_tokens": 4096, "pp_wall_tok_s": 288.07, "loopish": False},
+        {"target_tokens": 16384, "pp_wall_tok_s": 249.49, "loopish": False},
+    ]
+    packaged.write_text(json.dumps(payload), encoding="utf-8")
+
+    digest = build_digest(tmp_path)
+    rows = {item["requirement"]: item for item in digest["requirements"]}
+
+    row = rows["Qwen/JANG packaged MX matmul speed is release-cleared"]
+    assert row["status"] == "open"
+    assert row["details"]["packaged"]["status"] == "review"
+    assert row["details"]["packaged"]["notes"] == [
+        "PP below expected 600.00: 294.83, 288.07, 249.49"
+    ]
+    assert row["details"]["packaged"]["min_pp_wall_tok_s"] == 249.49
+
+
+def test_objective_proof_digest_accepts_qwen_jang_speed_when_source_and_packaged_pass(tmp_path):
+    from tests.cross_matrix.summarize_objective_proof import build_digest
+
+    _write_passing_base_artifacts(tmp_path)
+
+    digest = build_digest(tmp_path)
+    rows = {item["requirement"]: item for item in digest["requirements"]}
+
+    row = rows["Qwen/JANG packaged MX matmul speed is release-cleared"]
+    assert row["status"] == "pass"
+    assert row["details"]["source"]["status"] == "pass"
+    assert row["details"]["packaged"]["status"] == "pass"
+    assert row["details"]["source"]["min_pp_wall_tok_s"] >= 600
+    assert row["details"]["packaged"]["min_pp_wall_tok_s"] >= 600
 
 
 def test_objective_proof_digest_rejects_stale_panel_settings_contract_artifact(tmp_path):

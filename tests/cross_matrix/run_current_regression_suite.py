@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Run the current no-heavy regression suite for the release-blocker work.
 
-This suite is intentionally explicit about the DSV4 row that is still
-open. It should fail for any *new* open objective row, failed no-heavy contract,
-or release-gate failure that is not the known objective digest block.
+This suite is intentionally explicit about known-open objective rows. It
+should fail for any *new* open objective row, failed no-heavy contract, or
+release-gate failure that is not the known objective digest block.
 """
 
 from __future__ import annotations
@@ -22,6 +22,7 @@ from typing import Any
 DEFAULT_OUT = Path("build/current-regression-suite-20260521.json")
 
 EXPECTED_OPEN_REQUIREMENTS = [
+    "Qwen/JANG packaged MX matmul speed is release-cleared",
     "DSV4 long-output/code/file-generation quality is release-cleared",
 ]
 
