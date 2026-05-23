@@ -51,6 +51,9 @@ DSV4_CURRENT_IDENTIFIER_MATRIX_REL = "build/current-dsv4-live-identifier-matrix-
 DSV4_INSTALLED_TOKENIZER_ROUNDTRIP_REL = "build/current-dsv4-installed-tokenizer-roundtrip-20260523.json"
 DSV4_LIVE_LOGPROBS_COPY_REL = "build/current-dsv4-live-logprobs-copy-20260523.json"
 DSV4_LIVE_LOGPROB_CONTEXT_MATRIX_REL = "build/current-dsv4-live-logprob-context-matrix-20260523.json"
+DSV4_LIVE_CACHE_CONTEXT_IDENTIFIER_REL = (
+    "build/current-dsv4-live-cache-context-identifier-probe-20260523.json"
+)
 API_CACHE_CONTRACT_REL = "build/current-api-cache-contract-proof-20260521.json"
 PANEL_SETTINGS_CONTRACT_REL = "build/current-panel-settings-contract-proof-20260521.json"
 MAX_OUTPUT_CONTEXT_CONTRACT_REL = "build/current-max-output-context-contract-20260521.json"
@@ -563,6 +566,73 @@ def _dsv4_logprob_context_matrix_detail(payload: dict[str, Any], root: Path) -> 
     }
 
 
+def _dsv4_cache_context_identifier_detail(payload: dict[str, Any], root: Path) -> dict[str, Any]:
+    path_present = _path_present(root, DSV4_LIVE_CACHE_CONTEXT_IDENTIFIER_REL)
+    results = payload.get("results") if isinstance(payload.get("results"), list) else []
+    probe_summaries: dict[str, dict[str, Any]] = {}
+    corrupt_identifiers_by_probe: dict[str, list[str]] = {}
+    missing_identifiers_by_probe: dict[str, list[str]] = {}
+    for result in results:
+        if not isinstance(result, dict):
+            continue
+        name = result.get("name")
+        if not isinstance(name, str):
+            continue
+        corrupt = [
+            item
+            for item in (result.get("corrupt_identifier_tokens") or [])
+            if isinstance(item, str)
+        ]
+        missing = [
+            item
+            for item in (result.get("expected_identifiers_missing") or [])
+            if isinstance(item, str)
+        ]
+        content = result.get("content") if isinstance(result.get("content"), str) else ""
+        corrupt_identifiers_by_probe[name] = corrupt
+        missing_identifiers_by_probe[name] = missing
+        probe_summaries[name] = {
+            "status": result.get("status"),
+            "elapsed_sec": result.get("elapsed_sec"),
+            "content": content[:1000],
+            "expected_identifiers_missing": missing,
+            "corrupt_identifier_tokens": corrupt,
+        }
+    health_before = payload.get("health_before") if isinstance(payload.get("health_before"), dict) else {}
+    native_cache = (
+        health_before.get("native_cache") if isinstance(health_before.get("native_cache"), dict) else {}
+    )
+    pool_quant = (
+        native_cache.get("pool_quant") if isinstance(native_cache.get("pool_quant"), dict) else {}
+    )
+    generic_tq = (
+        native_cache.get("generic_turboquant_kv")
+        if isinstance(native_cache.get("generic_turboquant_kv"), dict)
+        else {}
+    )
+    return {
+        "artifact": DSV4_LIVE_CACHE_CONTEXT_IDENTIFIER_REL,
+        "present": path_present,
+        "status": payload.get("status") if path_present else "missing",
+        "plain_list_failed": bool(
+            corrupt_identifiers_by_probe.get("list_plain")
+            or missing_identifiers_by_probe.get("list_plain")
+        ),
+        "unique_prefix_failed": bool(
+            corrupt_identifiers_by_probe.get("list_unique_prefix")
+            or missing_identifiers_by_probe.get("list_unique_prefix")
+        ),
+        "constructor_unique_prefix_passed": (
+            probe_summaries.get("constructor_unique_prefix", {}).get("status") == "pass"
+        ),
+        "native_cache_pool_quant_enabled": pool_quant.get("enabled") is True,
+        "generic_turboquant_kv_enabled": generic_tq.get("enabled") is True,
+        "corrupt_identifiers_by_probe": corrupt_identifiers_by_probe,
+        "missing_identifiers_by_probe": missing_identifiers_by_probe,
+        "probe_summaries": probe_summaries,
+    }
+
+
 def _contract_checks(payload: dict[str, Any], required: tuple[str, ...]) -> tuple[bool, dict[str, bool]]:
     checks = payload.get("checks") or {}
     required_checks = {key: checks.get(key) is True for key in required}
@@ -814,6 +884,7 @@ def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
     dsv4_installed_tokenizer_roundtrip = _load(root, DSV4_INSTALLED_TOKENIZER_ROUNDTRIP_REL)
     dsv4_live_logprobs_copy = _load(root, DSV4_LIVE_LOGPROBS_COPY_REL)
     dsv4_live_logprob_context_matrix = _load(root, DSV4_LIVE_LOGPROB_CONTEXT_MATRIX_REL)
+    dsv4_live_cache_context_identifier = _load(root, DSV4_LIVE_CACHE_CONTEXT_IDENTIFIER_REL)
     api_cache_contract = _load(root, API_CACHE_CONTRACT_REL)
     panel_settings_contract = _load(root, PANEL_SETTINGS_CONTRACT_REL)
     max_output_context_contract = _load(root, MAX_OUTPUT_CONTEXT_CONTRACT_REL)
@@ -1336,6 +1407,9 @@ def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
             "current_installed_logprob_context_matrix": _dsv4_logprob_context_matrix_detail(
                 dsv4_live_logprob_context_matrix, root
             ),
+            "current_installed_unique_prefix_identifier_probe": _dsv4_cache_context_identifier_detail(
+                dsv4_live_cache_context_identifier, root
+            ),
         }
     )
     _add(
@@ -1350,6 +1424,7 @@ def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
             DSV4_INSTALLED_TOKENIZER_ROUNDTRIP_REL,
             DSV4_LIVE_LOGPROBS_COPY_REL,
             DSV4_LIVE_LOGPROB_CONTEXT_MATRIX_REL,
+            DSV4_LIVE_CACHE_CONTEXT_IDENTIFIER_REL,
             "docs/internal/release-gates/20260520_sisyphus_dsv4_identifier_gate_jang_affine_current/result.json",
         ],
         caveat=(

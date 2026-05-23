@@ -302,6 +302,46 @@ def _write_passing_base_artifacts(tmp_path: Path) -> None:
     )
     _write_json(
         tmp_path,
+        "build/current-dsv4-live-cache-context-identifier-probe-20260523.json",
+        {
+            "status": "pass",
+            "health_before": {
+                "native_cache": {
+                    "pool_quant": {"enabled": True, "env": "1"},
+                    "prefix": True,
+                    "paged": True,
+                    "block_disk_l2": True,
+                    "generic_turboquant_kv": {"enabled": False},
+                },
+                "kv_cache_quantization": {"enabled": False},
+            },
+            "results": [
+                {
+                    "name": "list_plain",
+                    "status": "pass",
+                    "content": "THREE.Scene\nTHREE.WebGLRenderer\nTHREE.PerspectiveCamera\nTHREE.BoxGeometry\nTHREE.MeshBasicMaterial",
+                    "expected_identifiers_missing": [],
+                    "corrupt_identifier_tokens": [],
+                },
+                {
+                    "name": "list_unique_prefix",
+                    "status": "pass",
+                    "content": "THREE.Scene\nTHREE.WebGLRenderer\nTHREE.PerspectiveCamera\nTHREE.BoxGeometry\nTHREE.MeshBasicMaterial",
+                    "expected_identifiers_missing": [],
+                    "corrupt_identifier_tokens": [],
+                },
+                {
+                    "name": "constructor_unique_prefix",
+                    "status": "pass",
+                    "content": "new THREE.PerspectiveCamera(45, 1, 0.1, 1000)",
+                    "expected_identifiers_missing": [],
+                    "corrupt_identifier_tokens": [],
+                },
+            ],
+        },
+    )
+    _write_json(
+        tmp_path,
         "tests/test_engine_audit.py",
         {"fixture": "engine-audit"},
     )
@@ -976,6 +1016,74 @@ def test_objective_proof_digest_surfaces_dsv4_logprob_context_matrix(tmp_path):
     assert matrix["constructor_sentence_failed"] is True
     assert matrix["context_sensitive_identifier_failure"] is True
     assert matrix["probe_summaries"]["constructor_sentence"]["content"].startswith("new THREE.PermpectiveCamera")
+
+
+def test_objective_proof_digest_surfaces_dsv4_unique_prefix_identifier_probe(tmp_path):
+    from tests.cross_matrix.summarize_objective_proof import build_digest
+
+    _write_passing_base_artifacts(tmp_path)
+    _write_json(
+        tmp_path,
+        "build/current-dsv4-live-cache-context-identifier-probe-20260523.json",
+        {
+            "status": "review",
+            "health_before": {
+                "native_cache": {
+                    "pool_quant": {"enabled": True, "env": "1"},
+                    "prefix": True,
+                    "paged": True,
+                    "block_disk_l2": True,
+                },
+                "kv_cache_quantization": {"enabled": False},
+            },
+            "health_after": {
+                "cache": {
+                    "scheduler_cache": {
+                        "cache_hits": 2,
+                        "disk_hits": 1,
+                    }
+                }
+            },
+            "results": [
+                {
+                    "name": "list_plain",
+                    "status": "review",
+                    "content": "THREE.Scene\nTHIVE.WebGLRenderer\nTHREE.PerspectiveCamera",
+                    "expected_identifiers_missing": ["THREE.WebGLRenderer"],
+                    "corrupt_identifier_tokens": ["THIVE.WebGLRenderer"],
+                },
+                {
+                    "name": "list_unique_prefix",
+                    "status": "review",
+                    "content": "THREE.Scene\nTHUEE.WebGLRenderer\nTHREE.PerspectiveCamera",
+                    "expected_identifiers_missing": ["THREE.WebGLRenderer"],
+                    "corrupt_identifier_tokens": ["THUEE.WebGLRenderer"],
+                },
+                {
+                    "name": "constructor_unique_prefix",
+                    "status": "pass",
+                    "content": "new THREE.PerspectiveCamera(45, 1, 0.1, 1000)",
+                    "expected_identifiers_missing": [],
+                    "corrupt_identifier_tokens": [],
+                },
+            ],
+        },
+    )
+
+    digest = build_digest(tmp_path)
+    rows = {item["requirement"]: item for item in digest["requirements"]}
+
+    quality = rows["DSV4 long-output/code/file-generation quality is release-cleared"]
+    probe = quality["details"]["current_installed_unique_prefix_identifier_probe"]
+    assert quality["status"] == "open"
+    assert probe["status"] == "review"
+    assert probe["unique_prefix_failed"] is True
+    assert probe["plain_list_failed"] is True
+    assert probe["constructor_unique_prefix_passed"] is True
+    assert probe["native_cache_pool_quant_enabled"] is True
+    assert probe["generic_turboquant_kv_enabled"] is False
+    assert probe["corrupt_identifiers_by_probe"]["list_plain"] == ["THIVE.WebGLRenderer"]
+    assert probe["corrupt_identifiers_by_probe"]["list_unique_prefix"] == ["THUEE.WebGLRenderer"]
 
 
 def test_objective_proof_digest_downgrades_pass_rows_with_missing_evidence(tmp_path):
