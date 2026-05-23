@@ -82,6 +82,7 @@ QWEN_JANG_TEXT_BASELINE_SPEED_REL = "build/current-decode-speed-live-qwen27-jang
 QWEN_NATIVE_MTP_NO_PREFIX_LOGITS_REL = "build/current-decode-speed-live-qwen27-jang4m-mtp-no-prefix-logits-20260523.json"
 QWEN_NATIVE_MTP_HYBRID_LONG_PREFIX_SPLIT_REL = "build/current-decode-speed-live-qwen27-jang4m-mtp-hybrid-long-prefix-split-20260523.json"
 QWEN_NATIVE_MTP_KVNONE_REL = "build/current-decode-speed-live-qwen27-jang4m-mtp-kvnone-20260523.json"
+QWEN_NATIVE_MTP_ROUTE_TRACE_REL = "build/current-decode-speed-live-qwen27-jang4m-mtp-route-trace-20260523.json"
 QWEN_NATIVE_MTP_AB_REL = "build/current-native-mtp-speed-ab-qwen27-jang4m-mtp-20260523/result.json"
 DSV4_DEFAULT_CACHE_TOOL_LOOP_REL = "build/current-dsv4-default-cache-tool-loop/result.json"
 DSV4_QUALITY_CLEARANCE_CHECKS = (
@@ -923,6 +924,11 @@ def _prefill_trace_detail(payload: dict[str, Any]) -> dict[str, Any]:
             "text_only_mllm_path": trace.get("has_images") is False,
             "native_mtp": trace.get("native_mtp") is True,
             "is_hybrid": trace.get("is_hybrid") is True,
+            "uses_vlm_language_copy": str(trace.get("language_model_class") or "").startswith(
+                "mlx_vlm."
+            ),
+            "force_text_rope_1d": trace.get("force_text_rope_1d") is True,
+            "supports_return_logits": trace.get("supports_return_logits") is True,
             "preprocess_is_not_bottleneck": (
                 preprocess_ms is not None
                 and total_ms is not None
@@ -987,6 +993,7 @@ def _prompt_processing_speed_detail(
     no_prefix_logits_payload: dict[str, Any],
     hybrid_long_prefix_split_payload: dict[str, Any],
     kvnone_payload: dict[str, Any],
+    route_trace_payload: dict[str, Any],
 ) -> tuple[bool, dict[str, Any]]:
     text_ok, text_details = _speed_artifact_detail(text_payload)
     mtp_ok, mtp_details = _speed_artifact_detail(mtp_prefill_payload)
@@ -995,6 +1002,7 @@ def _prompt_processing_speed_detail(
     no_prefix_logits_details = _no_prefix_logits_trial_detail(no_prefix_logits_payload)
     hybrid_long_prefix_split_details = _qwen_pp_trial_detail(hybrid_long_prefix_split_payload)
     kvnone_details = _qwen_pp_trial_detail(kvnone_payload)
+    route_trace_details = _prefill_trace_detail(route_trace_payload)
     return text_ok and mtp_ok and mtp_packaged_ok, {
         "text_loader": text_details,
         "native_mtp_prefill_source_native_wheels": mtp_details,
@@ -1003,6 +1011,7 @@ def _prompt_processing_speed_detail(
         "native_mtp_no_prefix_logits_trial": no_prefix_logits_details,
         "native_mtp_hybrid_long_prefix_split_trial": hybrid_long_prefix_split_details,
         "native_mtp_kvnone_trial": kvnone_details,
+        "native_mtp_vlm_route_trace": route_trace_details,
     }
 
 
@@ -1047,6 +1056,7 @@ def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
     qwen_native_mtp_no_prefix_logits = _load(root, QWEN_NATIVE_MTP_NO_PREFIX_LOGITS_REL)
     qwen_native_mtp_hybrid_long_prefix_split = _load(root, QWEN_NATIVE_MTP_HYBRID_LONG_PREFIX_SPLIT_REL)
     qwen_native_mtp_kvnone = _load(root, QWEN_NATIVE_MTP_KVNONE_REL)
+    qwen_native_mtp_route_trace = _load(root, QWEN_NATIVE_MTP_ROUTE_TRACE_REL)
     qwen_native_mtp_ab = _load(root, QWEN_NATIVE_MTP_AB_REL)
 
     requirements: list[dict[str, Any]] = []
@@ -1493,6 +1503,7 @@ def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
         qwen_native_mtp_no_prefix_logits,
         qwen_native_mtp_hybrid_long_prefix_split,
         qwen_native_mtp_kvnone,
+        qwen_native_mtp_route_trace,
     )
     _add(
         requirements,
@@ -1506,6 +1517,7 @@ def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
             QWEN_NATIVE_MTP_NO_PREFIX_LOGITS_REL,
             QWEN_NATIVE_MTP_HYBRID_LONG_PREFIX_SPLIT_REL,
             QWEN_NATIVE_MTP_KVNONE_REL,
+            QWEN_NATIVE_MTP_ROUTE_TRACE_REL,
         ],
         caveat=(
             "Fresh isolated evidence shows native-MTP decode is good and the "

@@ -331,6 +331,31 @@ class TestMLLMBatchStats:
         assert data["total_ms"] == 60.0
         assert stats.to_dict()["last_prefill_trace"] == data
 
+    def test_prefill_trace_records_language_model_route_metadata(self, monkeypatch):
+        """Qwen VLM speed artifacts must expose the model-call route under test."""
+        import vmlx_engine.mllm_batch_generator as mbg
+
+        monkeypatch.setenv("VMLINUX_MLLM_PREFILL_TRACE", "1")
+        monkeypatch.setattr(mbg, "_mllm_prefill_trace_sync", lambda: None)
+
+        trace = mbg._MLLMPrefillTrace(
+            request_id="req-route",
+            prompt_tokens=64,
+            has_images=False,
+            is_hybrid=True,
+            native_mtp=True,
+            prefix_cache_enabled=True,
+            language_model_class="mlx_vlm.models.qwen3_5.language.LanguageModel",
+            force_text_rope_1d=True,
+            supports_return_logits=True,
+        )
+
+        data = trace.to_dict()
+
+        assert data["language_model_class"] == "mlx_vlm.models.qwen3_5.language.LanguageModel"
+        assert data["force_text_rope_1d"] is True
+        assert data["supports_return_logits"] is True
+
     def test_prefill_trace_uses_existing_native_mtp_head_detector(self):
         """Diagnostics must not reference non-existent generator runtime fields."""
         source = Path("vmlx_engine/mllm_batch_generator.py").read_text()

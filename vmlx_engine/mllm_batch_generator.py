@@ -1351,6 +1351,9 @@ class _MLLMPrefillTrace:
         is_hybrid: bool,
         native_mtp: bool,
         prefix_cache_enabled: bool,
+        language_model_class: str = "",
+        force_text_rope_1d: bool = False,
+        supports_return_logits: bool = False,
     ) -> None:
         self.enabled = _mllm_prefill_trace_enabled()
         self.request_id = request_id
@@ -1359,6 +1362,9 @@ class _MLLMPrefillTrace:
         self.is_hybrid = bool(is_hybrid)
         self.native_mtp = bool(native_mtp)
         self.prefix_cache_enabled = bool(prefix_cache_enabled)
+        self.language_model_class = str(language_model_class or "")
+        self.force_text_rope_1d = bool(force_text_rope_1d)
+        self.supports_return_logits = bool(supports_return_logits)
         self.cached_tokens = 0
         self.cache_detail = "none"
         self._segments: Dict[str, float] = {}
@@ -1411,6 +1417,9 @@ class _MLLMPrefillTrace:
             "is_hybrid": self.is_hybrid,
             "native_mtp": self.native_mtp,
             "prefix_cache_enabled": self.prefix_cache_enabled,
+            "language_model_class": self.language_model_class,
+            "force_text_rope_1d": self.force_text_rope_1d,
+            "supports_return_logits": self.supports_return_logits,
         }
         if self.enabled:
             for name, value in self._segments.items():
@@ -1432,6 +1441,9 @@ class _MLLMPrefillTrace:
             "is_hybrid",
             "native_mtp",
             "prefix_cache_enabled",
+            "language_model_class",
+            "force_text_rope_1d",
+            "supports_return_logits",
             "total_ms",
             "preprocess_ms",
             "cache_lookup_ms",
@@ -4066,6 +4078,8 @@ class MLLMBatchGenerator:
         """
         tic = time.perf_counter()
         prefill_traces: Dict[str, _MLLMPrefillTrace] = {}
+        language_model_cls = type(self.language_model)
+        language_model_class = f"{language_model_cls.__module__}.{language_model_cls.__qualname__}"
 
         for req in requests:
             trace = _MLLMPrefillTrace(
@@ -4075,6 +4089,11 @@ class MLLMBatchGenerator:
                 is_hybrid=self._is_hybrid,
                 native_mtp=_native_mtp_model_has_head(self.language_model),
                 prefix_cache_enabled=self._prefix_cache_enabled,
+                language_model_class=language_model_class,
+                force_text_rope_1d=bool(
+                    getattr(self.language_model, "_vmlx_force_text_rope_1d", False)
+                ),
+                supports_return_logits=_lm_supports_return_logits(self.language_model),
             )
             prefill_traces[req.request_id] = trace
             try:

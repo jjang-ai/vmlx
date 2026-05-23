@@ -731,6 +731,11 @@ def _write_passing_base_artifacts(tmp_path: Path) -> None:
     )
     _write_json(
         tmp_path,
+        "build/current-decode-speed-live-qwen27-jang4m-mtp-route-trace-20260523.json",
+        mtp_speed_base,
+    )
+    _write_json(
+        tmp_path,
         "build/current-native-mtp-speed-ab-qwen27-jang4m-mtp-20260523/result.json",
         {
             "speedup_vs_baseline": 1.83,
@@ -1702,6 +1707,42 @@ def test_objective_proof_digest_surfaces_qwen_vlm_route_ab_trials(tmp_path):
             ]
         },
     )
+    _write_json(
+        tmp_path,
+        "build/current-decode-speed-live-qwen27-jang4m-mtp-route-trace-20260523.json",
+        {
+            "results": [
+                {
+                    "status": "review",
+                    "notes": ["PP below expected 600.00: 274.09, 294.17, 268.92"],
+                    "pp_rows": [
+                        {"pp_wall_tok_s": 274.09, "loopish": False},
+                        {"pp_wall_tok_s": 294.17, "loopish": False},
+                        {"pp_wall_tok_s": 268.92, "loopish": False},
+                    ],
+                    "bundle_sampling": {"decode_tps_wall": 23.54, "loopish": False},
+                    "health_after": {
+                        "scheduler": {
+                            "batch_generator": {
+                                "last_prefill_trace": {
+                                    "has_images": False,
+                                    "is_hybrid": True,
+                                    "native_mtp": True,
+                                    "prefix_cache_enabled": True,
+                                    "language_model_class": "mlx_vlm.models.qwen3_5.language.LanguageModel",
+                                    "force_text_rope_1d": True,
+                                    "supports_return_logits": True,
+                                    "forward_ms": 169.813,
+                                    "logits_eval_ms": 36.577,
+                                    "total_ms": 211.097,
+                                }
+                            }
+                        }
+                    },
+                }
+            ]
+        },
+    )
 
     digest = build_digest(tmp_path)
     rows = {item["requirement"]: item for item in digest["requirements"]}
@@ -1709,11 +1750,16 @@ def test_objective_proof_digest_surfaces_qwen_vlm_route_ab_trials(tmp_path):
     row = rows["Qwen 27B JANG_4M prompt-processing speed floor is release-cleared"]
     prefix_split = row["details"]["native_mtp_hybrid_long_prefix_split_trial"]
     kvnone = row["details"]["native_mtp_kvnone_trial"]
+    route_trace = row["details"]["native_mtp_vlm_route_trace"]
     assert row["status"] == "open"
     assert prefix_split["clears_prompt_processing_floor"] is False
     assert prefix_split["min_pp_wall_tok_s"] == 284.58
     assert kvnone["clears_prompt_processing_floor"] is False
     assert kvnone["min_pp_wall_tok_s"] == 274.78
+    assert route_trace["last_prefill_trace"]["language_model_class"] == "mlx_vlm.models.qwen3_5.language.LanguageModel"
+    assert route_trace["diagnosis"]["uses_vlm_language_copy"] is True
+    assert route_trace["diagnosis"]["force_text_rope_1d"] is True
+    assert route_trace["diagnosis"]["supports_return_logits"] is True
 
 
 def test_objective_proof_digest_accepts_qwen_native_mtp_decode_ab_when_equivalent_and_faster(tmp_path):
