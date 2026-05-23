@@ -197,6 +197,38 @@ describe('detectModelConfigFromDir JANG multimodal detection', () => {
     expect(detected.nativeMtp).toBeUndefined()
   })
 
+  it('does not expose Native MTP for Ling/Bailing config-only bundles without indexed mtp tensors', () => {
+    const dir = makeModelDir(
+      {
+        model_type: 'bailing_hybrid',
+        num_nextn_predict_layers: 1,
+      },
+      {
+        format: 'mxtq',
+        capabilities: {
+          family: 'ling',
+          cache_type: 'hybrid_ssm',
+        },
+      },
+    )
+    writeFileSync(join(dir, 'model.safetensors.index.json'), JSON.stringify({
+      weight_map: {
+        'model.embed_tokens.weight': 'model.safetensors',
+        'model.layers.0.self_attn.q_proj.weight': 'model.safetensors',
+        'model.layers.0.mlp.gate_proj.weight': 'model.safetensors',
+      },
+    }))
+
+    const detected = detectModelConfigFromDir(dir)
+
+    expect(detected.family).toBe('ling')
+    // The panel collapses Ling/Bailing's engine-level hybrid_ssm_typed cache
+    // contract into the existing hybrid settings category.
+    expect(detected.cacheType).toBe('hybrid')
+    expect(detected.usePagedCache).toBe(true)
+    expect(detected.nativeMtp).toBeUndefined()
+  })
+
   it('keeps JANG_2K Native MTP blocked by default to match Python runtime policy', () => {
     const dir = makeModelDir(
       {

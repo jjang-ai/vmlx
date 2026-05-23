@@ -67,6 +67,7 @@ REQUIRED_NATIVE_MTP_TEST_MARKERS = (
     "keeps non-MTP models on bundle-owned generation defaults",
     "DSV4 additional args cannot reenable native MTP or deterministic sampling policy",
     "does not expose Native MTP for config-only bundles without indexed mtp tensors",
+    "does not expose Native MTP for Ling/Bailing config-only bundles without indexed mtp tensors",
     "real session launcher and settings form expose native MTP controls",
 )
 
