@@ -50,6 +50,7 @@ DSV4_CURRENT_IDENTIFIER_CANARY_REL = "build/current-dsv4-live-identifier-canary-
 DSV4_CURRENT_IDENTIFIER_MATRIX_REL = "build/current-dsv4-live-identifier-matrix-20260523.json"
 DSV4_INSTALLED_TOKENIZER_ROUNDTRIP_REL = "build/current-dsv4-installed-tokenizer-roundtrip-20260523.json"
 DSV4_LIVE_LOGPROBS_COPY_REL = "build/current-dsv4-live-logprobs-copy-20260523.json"
+DSV4_LIVE_LOGPROB_CONTEXT_MATRIX_REL = "build/current-dsv4-live-logprob-context-matrix-20260523.json"
 API_CACHE_CONTRACT_REL = "build/current-api-cache-contract-proof-20260521.json"
 PANEL_SETTINGS_CONTRACT_REL = "build/current-panel-settings-contract-proof-20260521.json"
 MAX_OUTPUT_CONTEXT_CONTRACT_REL = "build/current-max-output-context-contract-20260521.json"
@@ -523,6 +524,45 @@ def _dsv4_logprob_copy_detail(payload: dict[str, Any], root: Path) -> dict[str, 
     }
 
 
+def _dsv4_logprob_context_matrix_detail(payload: dict[str, Any], root: Path) -> dict[str, Any]:
+    path_present = _path_present(root, DSV4_LIVE_LOGPROB_CONTEXT_MATRIX_REL)
+    probes = payload.get("probes") if isinstance(payload.get("probes"), list) else []
+    probe_summaries: dict[str, dict[str, Any]] = {}
+    for probe in probes:
+        if not isinstance(probe, dict):
+            continue
+        probe_id = probe.get("id")
+        if not isinstance(probe_id, str):
+            continue
+        content = probe.get("content") if isinstance(probe.get("content"), str) else ""
+        probe_summaries[probe_id] = {
+            "content": content[:1000],
+            "target_count": probe.get("target_count"),
+            "has_wrong_perscpective": probe.get("has_wrong_perscpective") is True,
+            "tokens": probe.get("tokens") or [],
+            "wrong_c_after_pers_events": probe.get("wrong_c_after_pers_events") or [],
+        }
+    isolated = probe_summaries.get("isolated_identifier", {})
+    list_copy = probe_summaries.get("list_copy", {})
+    constructor = probe_summaries.get("constructor_sentence", {})
+    isolated_passed = isolated.get("target_count") == 1 and not isolated.get("has_wrong_perscpective")
+    list_failed = list_copy.get("target_count") == 0 and bool(list_copy.get("wrong_c_after_pers_events"))
+    constructor_content = constructor.get("content") if isinstance(constructor.get("content"), str) else ""
+    constructor_failed = constructor.get("target_count") == 0 and "PerspectiveCamera" not in constructor_content
+    return {
+        "artifact": DSV4_LIVE_LOGPROB_CONTEXT_MATRIX_REL,
+        "present": path_present,
+        "status": payload.get("status") if path_present else "missing",
+        "target": payload.get("target"),
+        "isolated_identifier_passed": isolated_passed,
+        "list_copy_failed": list_failed,
+        "constructor_sentence_failed": constructor_failed,
+        "context_sensitive_identifier_failure": isolated_passed
+        and (list_failed or constructor_failed),
+        "probe_summaries": probe_summaries,
+    }
+
+
 def _contract_checks(payload: dict[str, Any], required: tuple[str, ...]) -> tuple[bool, dict[str, bool]]:
     checks = payload.get("checks") or {}
     required_checks = {key: checks.get(key) is True for key in required}
@@ -773,6 +813,7 @@ def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
     dsv4_current_identifier_matrix = _load(root, DSV4_CURRENT_IDENTIFIER_MATRIX_REL)
     dsv4_installed_tokenizer_roundtrip = _load(root, DSV4_INSTALLED_TOKENIZER_ROUNDTRIP_REL)
     dsv4_live_logprobs_copy = _load(root, DSV4_LIVE_LOGPROBS_COPY_REL)
+    dsv4_live_logprob_context_matrix = _load(root, DSV4_LIVE_LOGPROB_CONTEXT_MATRIX_REL)
     api_cache_contract = _load(root, API_CACHE_CONTRACT_REL)
     panel_settings_contract = _load(root, PANEL_SETTINGS_CONTRACT_REL)
     max_output_context_contract = _load(root, MAX_OUTPUT_CONTEXT_CONTRACT_REL)
@@ -1292,6 +1333,9 @@ def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
             "current_installed_logprob_copy_probe": _dsv4_logprob_copy_detail(
                 dsv4_live_logprobs_copy, root
             ),
+            "current_installed_logprob_context_matrix": _dsv4_logprob_context_matrix_detail(
+                dsv4_live_logprob_context_matrix, root
+            ),
         }
     )
     _add(
@@ -1305,6 +1349,7 @@ def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
             DSV4_CURRENT_IDENTIFIER_MATRIX_REL,
             DSV4_INSTALLED_TOKENIZER_ROUNDTRIP_REL,
             DSV4_LIVE_LOGPROBS_COPY_REL,
+            DSV4_LIVE_LOGPROB_CONTEXT_MATRIX_REL,
             "docs/internal/release-gates/20260520_sisyphus_dsv4_identifier_gate_jang_affine_current/result.json",
         ],
         caveat=(

@@ -268,6 +268,40 @@ def _write_passing_base_artifacts(tmp_path: Path) -> None:
     )
     _write_json(
         tmp_path,
+        "build/current-dsv4-live-logprob-context-matrix-20260523.json",
+        {
+            "status": "pass",
+            "target": "THREE.PerspectiveCamera",
+            "probes": [
+                {
+                    "id": "isolated_identifier",
+                    "content": "THREE.PerspectiveCamera",
+                    "target_count": 1,
+                    "has_wrong_perscpective": False,
+                    "tokens": ["TH", "REE", ".P", "ers", "pective", "Camera"],
+                    "wrong_c_after_pers_events": [],
+                },
+                {
+                    "id": "list_copy",
+                    "content": "THREE.PerspectiveCamera",
+                    "target_count": 1,
+                    "has_wrong_perscpective": False,
+                    "tokens": ["TH", "REE", ".P", "ers", "pective", "Camera"],
+                    "wrong_c_after_pers_events": [],
+                },
+                {
+                    "id": "constructor_sentence",
+                    "content": "new THREE.PerspectiveCamera(45, 1, 0.1, 1000)",
+                    "target_count": 1,
+                    "has_wrong_perscpective": False,
+                    "tokens": ["new", " THREE", ".P", "ers", "pective", "Camera"],
+                    "wrong_c_after_pers_events": [],
+                },
+            ],
+        },
+    )
+    _write_json(
+        tmp_path,
         "tests/test_engine_audit.py",
         {"fixture": "engine-audit"},
     )
@@ -882,6 +916,66 @@ def test_objective_proof_digest_surfaces_dsv4_logprob_corruption_boundary(tmp_pa
     assert logprobs["correct_token_rank"] == 2
     assert logprobs["model_preferred_wrong_token"] is True
     assert logprobs["tokens"] == ["TH", "REE", ".P", "ers", "c", "pective", "Camera"]
+
+
+def test_objective_proof_digest_surfaces_dsv4_logprob_context_matrix(tmp_path):
+    from tests.cross_matrix.summarize_objective_proof import build_digest
+
+    _write_passing_base_artifacts(tmp_path)
+    _write_json(
+        tmp_path,
+        "build/current-dsv4-live-logprob-context-matrix-20260523.json",
+        {
+            "status": "review",
+            "target": "THREE.PerspectiveCamera",
+            "probes": [
+                {
+                    "id": "isolated_identifier",
+                    "content": "THREE.PerspectiveCamera",
+                    "target_count": 1,
+                    "has_wrong_perscpective": False,
+                    "tokens": ["TH", "REE", ".P", "ers", "pective", "Camera"],
+                    "wrong_c_after_pers_events": [],
+                },
+                {
+                    "id": "list_copy",
+                    "content": "THREE.PerscpectiveCamera",
+                    "target_count": 0,
+                    "has_wrong_perscpective": True,
+                    "tokens": ["TH", "REE", ".P", "ers", "c", "pective", "Camera"],
+                    "wrong_c_after_pers_events": [
+                        {
+                            "token": "c",
+                            "wrong_token_rank": 1,
+                            "correct_token_rank": 2,
+                            "model_preferred_wrong_token": True,
+                        }
+                    ],
+                },
+                {
+                    "id": "constructor_sentence",
+                    "content": "new THREE.PermpectiveCamera(45, 1, 0.1, 1000)",
+                    "target_count": 0,
+                    "has_wrong_perscpective": False,
+                    "tokens": ["new", " THREE", ".P", "erm", "pective", "Camera"],
+                    "wrong_c_after_pers_events": [],
+                },
+            ],
+        },
+    )
+
+    digest = build_digest(tmp_path)
+    rows = {item["requirement"]: item for item in digest["requirements"]}
+
+    quality = rows["DSV4 long-output/code/file-generation quality is release-cleared"]
+    matrix = quality["details"]["current_installed_logprob_context_matrix"]
+    assert quality["status"] == "open"
+    assert matrix["status"] == "review"
+    assert matrix["isolated_identifier_passed"] is True
+    assert matrix["list_copy_failed"] is True
+    assert matrix["constructor_sentence_failed"] is True
+    assert matrix["context_sensitive_identifier_failure"] is True
+    assert matrix["probe_summaries"]["constructor_sentence"]["content"].startswith("new THREE.PermpectiveCamera")
 
 
 def test_objective_proof_digest_downgrades_pass_rows_with_missing_evidence(tmp_path):
