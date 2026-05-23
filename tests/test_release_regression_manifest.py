@@ -6,6 +6,7 @@ from tests.cross_matrix.run_release_regression_manifest import build_manifest_ar
 from tests.cross_matrix.release_regression_manifest import (
     CURRENT_POST_BUDGET_EDGE_ARTIFACTS,
     CURRENT_REGRESSION_SUITE_ARTIFACT,
+    EXPECTED_CURRENT_MODEL_ARTIFACT_CHECKS,
     EXPECTED_CURRENT_OPEN_REQUIREMENTS,
     EXPECTED_CURRENT_MODEL_FAMILY_ROWS,
     REQUIRED_RELEASE_DOMAINS,
@@ -110,6 +111,7 @@ def test_release_regression_manifest_tracks_current_post_budget_edge_proof_sweep
 
 def test_release_regression_manifest_validates_current_proof_sweep_artifacts(tmp_path):
     model_family_artifact = CURRENT_POST_BUDGET_EDGE_ARTIFACTS["model-family-detection-noheavy"]
+    model_artifact = CURRENT_POST_BUDGET_EDGE_ARTIFACTS["model-artifact-format-detection"]
     for artifact in CURRENT_POST_BUDGET_EDGE_ARTIFACTS.values():
         path = tmp_path / artifact
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -120,6 +122,20 @@ def test_release_regression_manifest_validates_current_proof_sweep_artifacts(tmp
                         "status": "pass",
                         "matched_rows": EXPECTED_CURRENT_MODEL_FAMILY_ROWS,
                         "missing_rows": [],
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+        elif artifact == model_artifact:
+            path.write_text(
+                json.dumps(
+                    {
+                        "status": "pass",
+                        "checks": {
+                            name: True for name in EXPECTED_CURRENT_MODEL_ARTIFACT_CHECKS
+                        },
+                        "missing_markers": [],
                     }
                 )
                 + "\n",
@@ -160,6 +176,14 @@ def test_release_regression_manifest_validates_current_proof_sweep_artifacts(tmp
         "matched_rows": list(EXPECTED_CURRENT_MODEL_FAMILY_ROWS),
         "missing_rows": [],
         "missing_expected_rows": [],
+    }
+    assert result["model_artifact_matrix"] == {
+        "artifact": model_artifact,
+        "status": "pass",
+        "checks": {name: True for name in EXPECTED_CURRENT_MODEL_ARTIFACT_CHECKS},
+        "missing_markers": [],
+        "failed_checks": [],
+        "missing_expected_checks": [],
     }
 
 
@@ -271,8 +295,69 @@ def test_release_regression_manifest_rejects_incomplete_current_model_family_mat
     assert result["model_family_matrix"]["missing_expected_rows"] == [EXPECTED_CURRENT_MODEL_FAMILY_ROWS[-1]]
 
 
+def test_release_regression_manifest_rejects_incomplete_current_model_artifact_matrix(tmp_path):
+    model_artifact = CURRENT_POST_BUDGET_EDGE_ARTIFACTS["model-artifact-format-detection"]
+    for artifact in CURRENT_POST_BUDGET_EDGE_ARTIFACTS.values():
+        path = tmp_path / artifact
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if artifact == CURRENT_POST_BUDGET_EDGE_ARTIFACTS["model-family-detection-noheavy"]:
+            path.write_text(
+                json.dumps(
+                    {
+                        "status": "pass",
+                        "matched_rows": EXPECTED_CURRENT_MODEL_FAMILY_ROWS,
+                        "missing_rows": [],
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+        elif artifact == model_artifact:
+            checks = {name: True for name in EXPECTED_CURRENT_MODEL_ARTIFACT_CHECKS[:-1]}
+            checks[EXPECTED_CURRENT_MODEL_ARTIFACT_CHECKS[-1]] = False
+            path.write_text(
+                json.dumps(
+                    {
+                        "status": "pass",
+                        "checks": checks,
+                        "missing_markers": ["test_native_mtp_detection_uses_weights_not_path_name"],
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+        else:
+            path.write_text('{"status":"pass","failed":[]}\n', encoding="utf-8")
+    regression_suite = tmp_path / CURRENT_REGRESSION_SUITE_ARTIFACT
+    regression_suite.parent.mkdir(parents=True, exist_ok=True)
+    regression_suite.write_text(
+        json.dumps(
+            {
+                "status": "pass",
+                "failed_steps": [],
+                "open_requirements": EXPECTED_CURRENT_OPEN_REQUIREMENTS,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    result = validate_current_proof_sweep_artifacts(tmp_path)
+
+    assert result["status"] == "fail"
+    assert result["model_artifact_matrix"]["artifact"] == model_artifact
+    assert result["model_artifact_matrix"]["status"] == "pass"
+    assert result["model_artifact_matrix"]["missing_markers"] == [
+        "test_native_mtp_detection_uses_weights_not_path_name"
+    ]
+    assert result["model_artifact_matrix"]["failed_checks"] == [
+        EXPECTED_CURRENT_MODEL_ARTIFACT_CHECKS[-1]
+    ]
+
+
 def test_release_regression_manifest_runner_embeds_current_proof_validation(tmp_path):
     model_family_artifact = CURRENT_POST_BUDGET_EDGE_ARTIFACTS["model-family-detection-noheavy"]
+    model_artifact = CURRENT_POST_BUDGET_EDGE_ARTIFACTS["model-artifact-format-detection"]
     for artifact in CURRENT_POST_BUDGET_EDGE_ARTIFACTS.values():
         path = tmp_path / artifact
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -283,6 +368,20 @@ def test_release_regression_manifest_runner_embeds_current_proof_validation(tmp_
                         "status": "pass",
                         "matched_rows": EXPECTED_CURRENT_MODEL_FAMILY_ROWS,
                         "missing_rows": [],
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+        elif artifact == model_artifact:
+            path.write_text(
+                json.dumps(
+                    {
+                        "status": "pass",
+                        "checks": {
+                            name: True for name in EXPECTED_CURRENT_MODEL_ARTIFACT_CHECKS
+                        },
+                        "missing_markers": [],
                     }
                 )
                 + "\n",
@@ -324,6 +423,14 @@ def test_release_regression_manifest_runner_embeds_current_proof_validation(tmp_
             "matched_rows": list(EXPECTED_CURRENT_MODEL_FAMILY_ROWS),
             "missing_rows": [],
             "missing_expected_rows": [],
+        },
+        "model_artifact_matrix": {
+            "artifact": model_artifact,
+            "status": "pass",
+            "checks": {name: True for name in EXPECTED_CURRENT_MODEL_ARTIFACT_CHECKS},
+            "missing_markers": [],
+            "failed_checks": [],
+            "missing_expected_checks": [],
         },
     }
 
