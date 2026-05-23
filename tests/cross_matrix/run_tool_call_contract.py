@@ -60,6 +60,7 @@ REQUIRED_TOOL_CALL_TEST_MARKERS = (
     "increments the auto-continue counter once per follow-up attempt",
     "resets text-chat tool streaming state before chained follow-up requests",
     "panel max tool iterations caps tool loops",
+    "Responses API preserves the augmented custom system prompt when built-in tools are enabled",
 )
 
 SOURCE_HASH_FILES = (
@@ -73,6 +74,7 @@ SOURCE_HASH_FILES = (
     "panel/src/main/ipc/chat.ts",
     "panel/tests/tool-executor-security.test.ts",
     "panel/tests/tool-auto-continue.test.ts",
+    "panel/tests/request-builder.test.ts",
 )
 
 COMMANDS: dict[str, tuple[Path, list[str]]] = {
@@ -99,6 +101,7 @@ COMMANDS: dict[str, tuple[Path, list[str]]] = {
             "run",
             "tests/tool-executor-security.test.ts",
             "tests/tool-auto-continue.test.ts",
+            "tests/request-builder.test.ts",
             "--reporter=verbose",
         ],
     ),

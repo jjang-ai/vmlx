@@ -57,7 +57,10 @@ function buildRequestBody(
 
     if (wireApi === 'responses') {
         const systemMessages = requestMessages.filter(m => m.role === 'system')
-        const instructions = overrides?.systemPrompt || (systemMessages.length > 0 ? systemMessages.map(m => m.content).join('\n') : undefined)
+        const instructions =
+            overrides?.builtinToolsEnabled && systemMessages.length > 0
+                ? systemMessages.map(m => m.content).join('\n')
+                : overrides?.systemPrompt || (systemMessages.length > 0 ? systemMessages.map(m => m.content).join('\n') : undefined)
         const inputMessages = requestMessages.filter(m => m.role !== 'system')
         const obj: Record<string, any> = {
             model: modelName,
@@ -575,6 +578,27 @@ describe('buildRequestBody — Tool format', () => {
         const body = buildRequestBody('responses', 'model', messages, undefined, false, false, sampleTools)
         expect(body.tools[0].name).toBe('read_file')
         expect(body.tools[0].function).toBeUndefined()
+    })
+
+    it('Responses API preserves the augmented custom system prompt when built-in tools are enabled', () => {
+        const augmentedSystemPrompt =
+            'Custom coding instructions\n\nIMPORTANT: After using any tools, you MUST always provide a substantive response explaining what you found or did. Never stop after just executing tools.'
+        const body = buildRequestBody(
+            'responses',
+            'model',
+            [
+                { role: 'system', content: augmentedSystemPrompt },
+                { role: 'user', content: 'Create index.html' },
+            ],
+            { systemPrompt: 'Custom coding instructions', builtinToolsEnabled: true },
+            false,
+            false,
+            sampleTools,
+        )
+
+        expect(body.instructions).toBe(augmentedSystemPrompt)
+        expect(body.input).toEqual([{ role: 'user', content: 'Create index.html' }])
+        expect(body.tools[0].name).toBe('read_file')
     })
 })
 

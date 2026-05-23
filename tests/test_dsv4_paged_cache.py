@@ -338,7 +338,9 @@ def test_dsv4_ui_defaults_composite_cache_off_but_exposes_diagnostic_opt_in():
     assert "const multimodalActive = !dsv4Active" in form
     assert "checked={effectiveContinuousBatching}" in form
     assert "checked={effectivePrefixCacheEnabled}" in form
-    assert "disabled={dsv4Active && !dsv4CompositeCacheOptIn}" in form
+    assert "cacheControlUpdatesForDsv4CompositeToggle" in form
+    assert "applyDsv4CompositeCacheToggle" in form
+    assert "disabled={!dsv4Active && cachePolicy.pagedCacheDisabled}" in form
     assert "DSV4 Composite Prefix Cache" in form
     assert "checked={dsv4Active ? true : config.enablePrefixCache}" not in form
     assert "hidden={isImage || dsv4Active}" in form

@@ -3,6 +3,7 @@ export type CacheControlKey =
   | 'usePagedCache'
   | 'enableDiskCache'
   | 'enableBlockDiskCache'
+  | 'dsv4PrefixCache'
 
 export type CacheControlUpdate = [CacheControlKey, boolean]
 
@@ -119,4 +120,24 @@ export function cacheControlUpdatesForBlockDiskToggle(enabled: boolean, state: C
   if (enabled && state.enableDiskCache) updates.push(['enableDiskCache', false])
   updates.push(['enableBlockDiskCache', enabled])
   return updates
+}
+
+export function cacheControlUpdatesForDsv4CompositeToggle(enabled: boolean): CacheControlUpdate[] {
+  return [
+    ['dsv4PrefixCache', enabled],
+    ['enablePrefixCache', enabled],
+    ['usePagedCache', enabled],
+    ['enableBlockDiskCache', enabled],
+  ]
+}
+
+export function cacheControlUpdatesForDsv4BlockDiskToggle(enabled: boolean): CacheControlUpdate[] {
+  if (!enabled) return [['enableBlockDiskCache', false]]
+  return [
+    ['dsv4PrefixCache', true],
+    ['enablePrefixCache', true],
+    ['usePagedCache', true],
+    ['enableDiskCache', false],
+    ['enableBlockDiskCache', true],
+  ]
 }

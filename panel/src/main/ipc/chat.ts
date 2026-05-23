@@ -1544,7 +1544,9 @@ export function registerChatHandlers(
               (m: any) => m.role === "system",
             );
             const instructions =
-              overrides?.systemPrompt ||
+              overrides?.builtinToolsEnabled && systemMessages.length > 0
+                ? systemMessages.map((m: any) => m.content).join("\n")
+                : overrides?.systemPrompt ||
               (systemMessages.length > 0
                 ? systemMessages.map((m: any) => m.content).join("\n")
                 : undefined);
