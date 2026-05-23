@@ -225,19 +225,18 @@ def _patch_attention_text_rope(qlang: Any) -> None:
         kv_seq_len = keys.shape[-2]
         text_position_ids = position_ids is not None and position_ids.ndim == 2
         if position_ids is None:
-            kv_seq_len += cache.offset + 1
-            position_ids = qlang.mx.arange(cache.offset, cache.offset + seq_len)
-            position_ids = qlang.mx.expand_dims(position_ids, axis=0)
+            offset = cache.offset if cache is not None else 0
+            kv_seq_len += offset + 1
             text_position_ids = True
         else:
             kv_seq_len += cache.offset + 1 if cache is not None else 0
+            offset = _position_offset(position_ids)
 
         if text_position_ids:
             # mlx-vlm's M-RoPE implementation is required for true media
             # positions, but Qwen3.5/3.6 text-only axes must match mlx-lm's
             # 1D RoPE path. Use the native RoPE kernel for those rows instead
             # of passing identical text axes through the multimodal splitter.
-            offset = _position_offset(position_ids)
             rope = self._vmlx_text_rope()
             queries = rope(queries, offset=offset)
             keys = rope(keys, offset=offset)
@@ -279,7 +278,6 @@ def _patch_gated_delta_net(qlang: Any) -> None:
 
     import mlx.core as mx
     import mlx.nn as nn
-    original_call = cls.__call__
 
     def _process_chunk(
         self,
@@ -335,9 +333,6 @@ def _patch_gated_delta_net(qlang: Any) -> None:
         cache: Optional[Any] = None,
         n_confirmed: int = 0,
     ):
-        if n_confirmed == 0:
-            return original_call(self, inputs, mask, cache)
-
         batch_size, seq_len, _ = inputs.shape
 
         qkv = self.in_proj_qkv(inputs)

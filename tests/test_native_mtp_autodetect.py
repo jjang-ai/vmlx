@@ -976,6 +976,41 @@ class TestNativeMtpAutodetect:
         assert "vision_tower.patch_embed.proj.weight" in sanitized_moe
         assert "language_model.lm_head.weight" not in sanitized_moe
 
+    def test_qwen36_vlm_text_rope_fresh_prefill_uses_scalar_cache_offset(
+        self, tmp_path
+    ):
+        import inspect
+
+        from mlx_vlm.models.qwen3_5 import language as vl_language
+
+        from vmlx_engine import native_mtp
+
+        _write_qwen36_mxfp4_mtp_bundle(tmp_path)
+
+        status = native_mtp.maybe_apply_native_mtp(str(tmp_path), allow_runtime=True)
+
+        assert status["runtime_active"] is True
+        patched = inspect.getsource(vl_language.Qwen3_5Attention.__call__)
+        assert "position_ids = qlang.mx.arange(cache.offset" not in patched
+        assert "offset = cache.offset if cache is not None else 0" in patched
+
+    def test_qwen36_vlm_gated_delta_normal_path_advances_cache(self, tmp_path):
+        import inspect
+
+        from mlx_vlm.models.qwen3_5 import language as vl_language
+
+        from vmlx_engine import native_mtp
+
+        _write_qwen36_mxfp4_mtp_bundle(tmp_path)
+
+        status = native_mtp.maybe_apply_native_mtp(str(tmp_path), allow_runtime=True)
+
+        assert status["runtime_active"] is True
+        patched = inspect.getsource(vl_language.Qwen3_5GatedDeltaNet.__call__)
+        assert "if n_confirmed == 0:" not in patched
+        assert "advance = getattr(cache, \"advance\", None)" in patched
+        assert "advance(seq_len)" in patched
+
     def test_mxfp4_vlm_sanitize_shifts_mtp_norms_only(self, tmp_path):
         import mlx.core as mx
 
