@@ -127,13 +127,21 @@ def _prepare_runtime_weight_quantization(
 ) -> tuple[dict, int, int]:
     """Return ``(config, bits, group_size)`` safe for MLX model quantization."""
     qcfg = config.setdefault("quantization", {})
-    qcfg.setdefault("group_size", _jang_quant_block_size(jang_cfg))
+    jang_block_size = _jang_quant_block_size(jang_cfg)
+    if jang_block_size in _MLX_WEIGHT_QUANT_GROUP_SIZES:
+        qcfg["group_size"] = jang_block_size
+    else:
+        qcfg.setdefault("group_size", jang_block_size)
     qcfg.setdefault("bits", _jang_default_bits(jang_cfg, fallback_bits))
 
     config = _apply_runtime_quant_shape_repair(path, config, context=context)
     qcfg = config.setdefault("quantization", {})
     bits = int(qcfg.get("bits") or _jang_default_bits(jang_cfg, fallback_bits))
-    group_size = int(qcfg.get("group_size") or _jang_quant_block_size(jang_cfg))
+    if jang_block_size in _MLX_WEIGHT_QUANT_GROUP_SIZES:
+        group_size = int(jang_block_size)
+        qcfg["group_size"] = group_size
+    else:
+        group_size = int(qcfg.get("group_size") or jang_block_size)
 
     if bits not in _MLX_WEIGHT_QUANT_BITS or group_size not in _MLX_WEIGHT_QUANT_GROUP_SIZES:
         raise ValueError(
@@ -4211,14 +4219,41 @@ def _fix_quantized_bits(model, quantization_overrides: dict | None = None):
                         module.group_size = try_gs
                     continue
 
-            # Router/gate tensors prefer gs=64 (precision-critical in JANG)
+            logical_input_dims = getattr(module, "dims", None)
+            if logical_input_dims is None:
+                logical_input_dims = getattr(module, "input_dims", None)
+            if logical_input_dims is not None:
+                try:
+                    logical_input_dims = int(logical_input_dims)
+                except Exception:
+                    logical_input_dims = None
+
+            # Router/gate tensors prefer gs=64 (precision-critical in JANG).
+            # QuantizedEmbedding has a stronger invariant: the dequantized
+            # output width must equal module.dims. Some Qwen3.6 JANG embeds
+            # are ambiguous by packed/scales shape alone; picking the first
+            # valid pair can produce half-width token embeddings.
             name_lower = name.lower()
             is_router = (
                 ".gate." in name_lower
                 or name_lower.endswith(".gate")
                 or "shared_expert_gate" in name_lower
             )
-            if is_router:
+            if logical_input_dims:
+                gs_candidates = []
+                for gs in (module.group_size, 64, 128, 32):
+                    try_gs = int(gs)
+                    if (
+                        try_gs not in gs_candidates
+                        and logical_input_dims % try_gs == 0
+                        and s_cols * try_gs == logical_input_dims
+                    ):
+                        gs_candidates.append(try_gs)
+                for gs in (module.group_size, 64, 128, 32):
+                    try_gs = int(gs)
+                    if try_gs not in gs_candidates:
+                        gs_candidates.append(try_gs)
+            elif is_router:
                 gs_candidates = [64, module.group_size, 128]
             else:
                 gs_candidates = [module.group_size]
@@ -4232,6 +4267,8 @@ def _fix_quantized_bits(model, quantization_overrides: dict | None = None):
                     continue
                 try_bits = (w_cols * 32) // in_dim
                 if try_bits in (2, 3, 4, 5, 6, 8):
+                    if logical_input_dims and in_dim != logical_input_dims:
+                        continue
                     if try_bits != module.bits:
                         module.bits = try_bits
                     if try_gs != module.group_size:

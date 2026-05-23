@@ -71,6 +71,34 @@ class TestJangDetection:
         )
 
 
+def test_fix_quantized_bits_uses_embedding_logical_dims_for_ambiguous_affine_shape():
+    """Qwen3.6 JANG_4M embeds must dequantize to 5120, not 2560."""
+    import mlx.core as mx
+    import mlx.nn as nn
+
+    from vmlx_engine.utils.jang_loader import _fix_quantized_bits
+
+    module = nn.QuantizedEmbedding(248320, 5120, group_size=32, bits=8)
+    module.weight = mx.zeros((248320, 640), dtype=mx.uint32)
+    module.scales = mx.zeros((248320, 80), dtype=mx.float16)
+    module.biases = mx.zeros((248320, 80), dtype=mx.float16)
+
+    class Wrapper(nn.Module):
+        def __init__(self, child):
+            super().__init__()
+            self.child = child
+
+    wrapper = Wrapper(module)
+
+    _fix_quantized_bits(wrapper)
+
+    assert wrapper.child.bits == 4
+    assert wrapper.child.group_size == 64
+    out = wrapper.child(mx.array([[0, 1]], dtype=mx.uint32))
+    mx.eval(out)
+    assert out.shape == (1, 2, 5120)
+
+
 class TestTreeFlattenImport:
     """Verify the tree_flatten fix uses correct import path."""
 

@@ -439,6 +439,61 @@ def _qwen_hybrid_without_module_overrides(config: Dict[str, Any]) -> bool:
     return bool(config.get("vision_config"))
 
 
+def _int_config_value(config: Dict[str, Any], key: str) -> Optional[int]:
+    value = config.get(key)
+    try:
+        return int(value) if value is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _qwen_hybrid_expected_input_dim(
+    config: Dict[str, Any],
+    module_name: str,
+) -> Optional[int]:
+    """Return the architecture input dim for Qwen3.5/3.6 hybrid modules.
+
+    Qwen affine-JANG bundles can stamp stale per-module quantization metadata
+    that is still shape-compatible. In those ambiguous cases, the only safe
+    tiebreaker is the module's real architecture input dimension.
+    """
+    text_config = config.get("text_config")
+    if not isinstance(text_config, dict):
+        text_config = config
+    hidden = _int_config_value(text_config, "hidden_size")
+    intermediate = _int_config_value(text_config, "intermediate_size")
+    num_heads = _int_config_value(text_config, "num_attention_heads")
+    head_dim = _int_config_value(text_config, "head_dim")
+    linear_v_heads = _int_config_value(text_config, "linear_num_value_heads")
+    linear_v_dim = _int_config_value(text_config, "linear_value_head_dim")
+
+    name = module_name
+    if name.startswith("model."):
+        name = name[len("model.") :]
+    if name.endswith("embed_tokens") or name.endswith("lm_head"):
+        return hidden
+
+    if ".linear_attn." in name:
+        if name.endswith((".in_proj_qkv", ".in_proj_z", ".in_proj_b", ".in_proj_a")):
+            return hidden
+        if name.endswith(".out_proj") and linear_v_heads and linear_v_dim:
+            return linear_v_heads * linear_v_dim
+
+    if ".self_attn." in name:
+        if name.endswith((".q_proj", ".k_proj", ".v_proj")):
+            return hidden
+        if name.endswith(".o_proj") and num_heads and head_dim:
+            return num_heads * head_dim
+
+    if ".mlp." in name:
+        if name.endswith((".gate_proj", ".up_proj")):
+            return hidden
+        if name.endswith(".down_proj"):
+            return intermediate
+
+    return None
+
+
 def _deepseek_v4_sanitized_aliases(module_name: str) -> List[str]:
     """Return mlx-lm module paths produced by jang_tools DSV4 sanitize().
 
@@ -531,10 +586,12 @@ def infer_quant_overrides_for_bundle(
     cfg = dict(config)
     qcfg_raw = cfg.get("quantization")
     qcfg = dict(qcfg_raw) if isinstance(qcfg_raw, dict) else {}
-    distrust_ambiguous_global_claim = (
+    qwen_hybrid_mixed_affine = (
         _qwen_hybrid_without_module_overrides(cfg)
-        and not _has_per_module_quant_overrides(qcfg)
         and _sidecar_reports_mixed_affine_bits(bp)
+    )
+    distrust_ambiguous_global_claim = (
+        qwen_hybrid_mixed_affine and not _has_per_module_quant_overrides(qcfg)
     )
 
     patched: Dict[str, Tuple[int, int]] = {}
@@ -582,7 +639,26 @@ def infer_quant_overrides_for_bundle(
         claim = per_module_claim if per_module_claim is not None else top_claim
         claim_is_only_global = per_module_claim is None and top_claim is not None
         effective: Optional[Tuple[int, int]] = None
-        if claim is not None and claim in candidates:
+        dim_inferred: Optional[Tuple[int, int]] = None
+        if qwen_hybrid_mixed_affine and len(candidates) > 1:
+            expected_dim = _qwen_hybrid_expected_input_dim(cfg, mod)
+            if expected_dim:
+                matching = [
+                    (bits, gsz)
+                    for bits, gsz in candidates
+                    if scales_n * gsz == expected_dim
+                    and (packed * 32) // bits == expected_dim
+                ]
+                if len(matching) == 1:
+                    dim_inferred = matching[0]
+
+        if dim_inferred is not None:
+            effective = dim_inferred
+            if claim != dim_inferred:
+                patched[mod] = dim_inferred
+        if effective is not None:
+            pass
+        elif claim is not None and claim in candidates:
             if (
                 distrust_ambiguous_global_claim
                 and claim_is_only_global

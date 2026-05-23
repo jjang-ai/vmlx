@@ -560,18 +560,53 @@ class TestJANGLoader:
         assert _infer_weight_shape("layers.0.mlp.w1", config, 14336 * 4096) == (14336, 4096)
         assert _infer_weight_shape("layers.0.mlp.w2", config, 4096 * 14336) == (4096, 14336)
 
-    def test_qwen_mixed_jang_without_module_overrides_distrusts_stale_global_claim(self, tmp_path):
-        """Qwen3.6 JANG-MTP rebundles can lose the real per-module bit map.
+    def test_qwen_mixed_jang_uses_arch_dims_over_stale_shape_compatible_claims(self, tmp_path):
+        """Qwen3.6 JANG_4M bundles can stamp stale shape-compatible bit maps.
 
-        The stale top-level 4b/g64 claim is shape-compatible with 8b/g32
-        tensors, so shape inference must use the mixed-bit sidecar and module
-        class instead of blindly trusting the global config claim.
+        The live Qwen3.6-27B JANG_4M artifact has mixed 4/8-bit affine weights.
+        Some hidden-size projections are shape-compatible with stale 8b/g32
+        per-module claims, but using those claims dequantizes 5120-wide tensors
+        as 2560-wide tensors and trips the first RMSNorm. For Qwen hybrid
+        bundles with a mixed-bit sidecar, architecture input dims must break the
+        ambiguity before config-trust.
         """
         config = {
             "model_type": "qwen3_5",
             "vision_config": {"hidden_size": 128},
-            "text_config": {"model_type": "qwen3_5_text"},
-            "quantization": {"bits": 4, "group_size": 64},
+            "text_config": {
+                "model_type": "qwen3_5_text",
+                "hidden_size": 5120,
+                "intermediate_size": 17408,
+                "num_attention_heads": 24,
+                "head_dim": 256,
+                "linear_num_value_heads": 48,
+                "linear_value_head_dim": 128,
+            },
+            "quantization": {
+                "bits": 8,
+                "group_size": 32,
+                "language_model.model.embed_tokens": {
+                    "bits": 8,
+                    "group_size": 32,
+                },
+                "language_model.model.layers.0.linear_attn.in_proj_qkv": {
+                    "bits": 8,
+                    "group_size": 32,
+                },
+                "language_model.model.layers.0.linear_attn.out_proj": {
+                    "bits": 8,
+                    "group_size": 32,
+                },
+                "language_model.model.layers.0.mlp.gate_proj": {
+                    "bits": 8,
+                    "group_size": 32,
+                },
+                "language_model.model.layers.3.self_attn.q_proj": {
+                    "bits": 8,
+                    "group_size": 64,
+                },
+                "language_model.lm_head": {"bits": 8, "group_size": 64},
+            },
         }
         (tmp_path / "config.json").write_text(json.dumps(config))
         (tmp_path / "jang_config.json").write_text(
@@ -586,6 +621,12 @@ class TestJANGLoader:
             )
         )
         weight_map = {
+            "language_model.model.embed_tokens.weight": "model.safetensors",
+            "language_model.model.embed_tokens.scales": "model.safetensors",
+            "language_model.model.layers.0.linear_attn.in_proj_qkv.weight": "model.safetensors",
+            "language_model.model.layers.0.linear_attn.in_proj_qkv.scales": "model.safetensors",
+            "language_model.model.layers.0.linear_attn.out_proj.weight": "model.safetensors",
+            "language_model.model.layers.0.linear_attn.out_proj.scales": "model.safetensors",
             "language_model.model.layers.0.mlp.gate_proj.weight": "model.safetensors",
             "language_model.model.layers.0.mlp.gate_proj.scales": "model.safetensors",
             "language_model.model.layers.3.self_attn.q_proj.weight": "model.safetensors",
@@ -600,6 +641,32 @@ class TestJANGLoader:
             tmp_path / "model.safetensors",
             {
                 # ratio_x32=256: valid as 8/g32, 4/g64, or 2/g128.
+                # Qwen hidden-size modules need 4/g64 here: 640 * 32 / 4
+                # restores 5120 input dims; 8/g32 would restore 2560.
+                "language_model.model.embed_tokens.weight": {
+                    "dtype": "U32",
+                    "shape": [248320, 640],
+                },
+                "language_model.model.embed_tokens.scales": {
+                    "dtype": "F16",
+                    "shape": [248320, 80],
+                },
+                "language_model.model.layers.0.linear_attn.in_proj_qkv.weight": {
+                    "dtype": "U32",
+                    "shape": [10240, 640],
+                },
+                "language_model.model.layers.0.linear_attn.in_proj_qkv.scales": {
+                    "dtype": "F16",
+                    "shape": [10240, 80],
+                },
+                "language_model.model.layers.0.linear_attn.out_proj.weight": {
+                    "dtype": "U32",
+                    "shape": [5120, 768],
+                },
+                "language_model.model.layers.0.linear_attn.out_proj.scales": {
+                    "dtype": "F16",
+                    "shape": [5120, 96],
+                },
                 "language_model.model.layers.0.mlp.gate_proj.weight": {
                     "dtype": "U32",
                     "shape": [17408, 640],
@@ -635,9 +702,21 @@ class TestJANGLoader:
         repaired = infer_quant_overrides_for_bundle(tmp_path, config)
         quant = repaired["quantization"]
 
+        assert quant["language_model.model.embed_tokens"] == {
+            "bits": 4,
+            "group_size": 64,
+        }
+        assert quant["language_model.model.layers.0.linear_attn.in_proj_qkv"] == {
+            "bits": 4,
+            "group_size": 64,
+        }
+        assert quant["language_model.model.layers.0.linear_attn.out_proj"] == {
+            "bits": 4,
+            "group_size": 64,
+        }
         assert quant["language_model.model.layers.0.mlp.gate_proj"] == {
-            "bits": 8,
-            "group_size": 32,
+            "bits": 4,
+            "group_size": 64,
         }
         assert quant["language_model.model.layers.3.self_attn.q_proj"] == {
             "bits": 8,

@@ -235,6 +235,14 @@ class TestSchedulerLogprobs:
         assert "if needs_cpu_detour:" in source
         assert "A per-token synchronize here costs MiniMax/Qwen throughput" in source
 
+    def test_prompt_batch_prepare_runs_for_equal_length_multi_prompt_batches(self):
+        import inspect
+        from vmlx_engine.utils import mamba_cache
+
+        source = inspect.getsource(mamba_cache._patch_prompt_cache_sync)
+        assert "if max_padding > 0 or len(tokens) > 1:" in source
+        assert "c.prepare(lengths=lengths, right_padding=padding)" in source
+
     def test_format_token_logprobs_includes_sampled_token_and_top_k(self):
         import mlx.core as mx
 

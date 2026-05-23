@@ -1033,10 +1033,11 @@ def _patch_prompt_cache_sync():
             from mlx_lm.generate import _right_pad_prompts
             if max_padding > 0:
                 tokens_arr = _right_pad_prompts(tokens, max_length=max_length)
-                for c in self.prompt_cache:
-                    c.prepare(lengths=lengths, right_padding=padding)
             else:
                 tokens_arr = mx.array(tokens)
+            if max_padding > 0 or len(tokens) > 1:
+                for c in self.prompt_cache:
+                    c.prepare(lengths=lengths, right_padding=padding)
             while tokens_arr.shape[1] > 0:
                 n_to_process = min(self.prefill_step_size, tokens_arr.shape[1])
                 self.model(tokens_arr[:, :n_to_process], cache=self.prompt_cache)
