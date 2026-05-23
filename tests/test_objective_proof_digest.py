@@ -344,6 +344,67 @@ def _write_passing_base_artifacts(tmp_path: Path) -> None:
             },
         },
     )
+    from tests.cross_matrix.summarize_objective_proof import (
+        MODEL_ARTIFACT_FORMAT_CONTRACT_CHECKS,
+        MODEL_ARTIFACT_FORMAT_SOURCE_HASH_FILES,
+        MODEL_FAMILY_CONTRACT_CHECKS,
+        MODEL_FAMILY_SOURCE_HASH_FILES,
+        PARSER_REGISTRY_CONTRACT_CHECKS,
+        PARSER_REGISTRY_SOURCE_HASH_FILES,
+    )
+
+    for rel in (
+        *MODEL_FAMILY_SOURCE_HASH_FILES,
+        *PARSER_REGISTRY_SOURCE_HASH_FILES,
+        *MODEL_ARTIFACT_FORMAT_SOURCE_HASH_FILES,
+    ):
+        if not (tmp_path / rel).exists():
+            _write_json(tmp_path, rel, {"fixture": rel})
+    _write_json(
+        tmp_path,
+        "build/current-model-family-detection-contract-20260521.json",
+        {
+            "status": "pass",
+            "checks": {key: True for key in MODEL_FAMILY_CONTRACT_CHECKS},
+            "failed": [],
+            "missing_rows": [],
+            "source_hashes": {
+                rel: _sha256(tmp_path / rel)
+                for rel in MODEL_FAMILY_SOURCE_HASH_FILES
+            },
+        },
+    )
+    _write_json(
+        tmp_path,
+        "build/current-parser-registry-contract-20260521.json",
+        {
+            "status": "pass",
+            "checks": {key: True for key in PARSER_REGISTRY_CONTRACT_CHECKS},
+            "failed": [],
+            "missing_markers": [],
+            "source_hashes": {
+                rel: _sha256(tmp_path / rel)
+                for rel in PARSER_REGISTRY_SOURCE_HASH_FILES
+            },
+        },
+    )
+    _write_json(
+        tmp_path,
+        "build/current-model-artifact-format-contract-20260521.json",
+        {
+            "status": "pass",
+            "checks": {
+                key: True
+                for key in MODEL_ARTIFACT_FORMAT_CONTRACT_CHECKS
+            },
+            "failed": [],
+            "missing_markers": [],
+            "source_hashes": {
+                rel: _sha256(tmp_path / rel)
+                for rel in MODEL_ARTIFACT_FORMAT_SOURCE_HASH_FILES
+            },
+        },
+    )
 
 
 def test_objective_proof_digest_keeps_dsv4_long_quality_open(tmp_path):
@@ -545,6 +606,42 @@ def test_objective_proof_digest_accepts_max_output_context_contract_artifact(tmp
     assert row["details"]["contract_checks"]["new_chat_output_caps_are_not_inherited_or_made_sticky"] is True
     assert row["details"]["missing_evidence"] == []
     assert row["details"]["stale_source_hashes"] == []
+
+
+def test_objective_proof_digest_requires_model_family_parser_artifact_contracts(tmp_path):
+    from tests.cross_matrix.summarize_objective_proof import build_digest
+
+    _write_passing_base_artifacts(tmp_path)
+    (tmp_path / "build/current-parser-registry-contract-20260521.json").unlink(
+        missing_ok=True
+    )
+
+    digest = build_digest(tmp_path)
+    rows = {item["requirement"]: item for item in digest["requirements"]}
+
+    row = rows["High-risk model family parser, artifact, and launch policy gates are current"]
+    assert row["status"] == "open"
+    assert row["details"]["missing_evidence"] == [
+        "build/current-parser-registry-contract-20260521.json"
+    ]
+
+
+def test_objective_proof_digest_accepts_model_family_parser_artifact_contracts(tmp_path):
+    from tests.cross_matrix.summarize_objective_proof import build_digest
+
+    _write_passing_base_artifacts(tmp_path)
+
+    digest = build_digest(tmp_path)
+    rows = {item["requirement"]: item for item in digest["requirements"]}
+
+    row = rows["High-risk model family parser, artifact, and launch policy gates are current"]
+    assert row["status"] == "pass"
+    assert row["details"]["model_family"]["missing_rows"] == []
+    assert row["details"]["parser_registry"]["missing_markers"] == []
+    assert row["details"]["model_artifact_format"]["missing_markers"] == []
+    assert row["details"]["model_family"]["missing_source_hashes"] == []
+    assert row["details"]["parser_registry"]["stale_source_hashes"] == []
+    assert row["details"]["model_artifact_format"]["stale_source_hashes"] == []
 
 
 def test_objective_proof_digest_rejects_stale_panel_settings_contract_artifact(tmp_path):

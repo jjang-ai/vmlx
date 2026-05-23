@@ -23,6 +23,16 @@ if str(ROOT) not in sys.path:
 from tests.cross_matrix.run_max_output_context_contract import (
     SOURCE_HASH_FILES as MAX_OUTPUT_CONTEXT_SOURCE_HASH_FILES,
 )
+from tests.cross_matrix.run_model_artifact_format_contract import (
+    SOURCE_HASH_FILES as MODEL_ARTIFACT_FORMAT_SOURCE_HASH_FILES,
+)
+from tests.cross_matrix.run_model_family_detection_contract import (
+    REQUIRED_ROWS as MODEL_FAMILY_CONTRACT_CHECKS,
+    SOURCE_HASH_FILES as MODEL_FAMILY_SOURCE_HASH_FILES,
+)
+from tests.cross_matrix.run_parser_registry_contract import (
+    SOURCE_HASH_FILES as PARSER_REGISTRY_SOURCE_HASH_FILES,
+)
 
 
 DEFAULT_OUT = Path("build/current-objective-proof-audit-20260521.json")
@@ -30,6 +40,9 @@ DSV4_QUALITY_CLEARANCE_REL = "build/current-dsv4-long-output-quality-clearance-2
 API_CACHE_CONTRACT_REL = "build/current-api-cache-contract-proof-20260521.json"
 PANEL_SETTINGS_CONTRACT_REL = "build/current-panel-settings-contract-proof-20260521.json"
 MAX_OUTPUT_CONTEXT_CONTRACT_REL = "build/current-max-output-context-contract-20260521.json"
+MODEL_FAMILY_CONTRACT_REL = "build/current-model-family-detection-contract-20260521.json"
+PARSER_REGISTRY_CONTRACT_REL = "build/current-parser-registry-contract-20260521.json"
+MODEL_ARTIFACT_FORMAT_CONTRACT_REL = "build/current-model-artifact-format-contract-20260521.json"
 DSV4_DEFAULT_CACHE_TOOL_LOOP_REL = "build/current-dsv4-default-cache-tool-loop/result.json"
 DSV4_QUALITY_CLEARANCE_CHECKS = (
     "identifier_integrity",
@@ -96,6 +109,28 @@ MAX_OUTPUT_CONTEXT_CONTRACT_CHECKS = (
     "all_family_max_token_precedence_stays_uniform",
     "wake_reload_and_cli_preserve_explicitness",
     "all_required_max_output_context_markers_present",
+)
+PARSER_REGISTRY_CONTRACT_CHECKS = (
+    "engine_accepts_registered_reasoning_parsers",
+    "engine_accepts_registered_tool_parsers",
+    "panel_emitted_reasoning_parsers_are_engine_valid",
+    "panel_emitted_tool_parsers_are_engine_valid",
+    "minimax_m2_reasoning_parser_regression",
+    "parser_aliases_are_canonical_before_cli",
+    "zaya_hy3_ling_dsv4_parser_rows_are_present",
+    "non_reasoning_family_boundaries_are_present",
+    "all_required_parser_markers_present",
+)
+MODEL_ARTIFACT_FORMAT_CONTRACT_CHECKS = (
+    "jang_and_jangtq_detection",
+    "ling_bailing_hybrid_loader_repairs",
+    "mxfp4_detection",
+    "mxfp8_detection",
+    "plain_mlx_4bit_detection",
+    "dropped_mtp_detection",
+    "preserved_mtp_detection",
+    "cache_profile_detection",
+    "not_path_name_only",
 )
 PANEL_SETTINGS_SOURCE_HASH_FILES = (
     "panel/src/main/sessions.ts",
@@ -315,6 +350,34 @@ def _source_hash_status(
     }
 
 
+def _contract_detail(
+    root: Path,
+    payload: dict[str, Any],
+    required_checks: tuple[str, ...],
+    required_files: tuple[str, ...],
+) -> tuple[bool, dict[str, Any]]:
+    checks_ok, required = _contract_checks(payload, required_checks)
+    hashes_ok, hash_details = _source_hash_status(root, payload, required_files)
+    missing_rows = payload.get("missing_rows") or []
+    missing_markers = payload.get("missing_markers") or []
+    failed = payload.get("failed") or []
+    ok = (
+        checks_ok
+        and hashes_ok
+        and not missing_rows
+        and not missing_markers
+        and not failed
+    )
+    return ok, {
+        "status": payload.get("status"),
+        "failed": failed,
+        "missing_rows": missing_rows,
+        "missing_markers": missing_markers,
+        "contract_checks": required,
+        **hash_details,
+    }
+
+
 def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
     root = Path(root)
     cache = _load(root, "build/current-dsv4-cache-proof-digest-20260521.json")
@@ -332,6 +395,9 @@ def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
     api_cache_contract = _load(root, API_CACHE_CONTRACT_REL)
     panel_settings_contract = _load(root, PANEL_SETTINGS_CONTRACT_REL)
     max_output_context_contract = _load(root, MAX_OUTPUT_CONTEXT_CONTRACT_REL)
+    model_family_contract = _load(root, MODEL_FAMILY_CONTRACT_REL)
+    parser_registry_contract = _load(root, PARSER_REGISTRY_CONTRACT_REL)
+    model_artifact_format_contract = _load(root, MODEL_ARTIFACT_FORMAT_CONTRACT_REL)
 
     requirements: list[dict[str, Any]] = []
     cache_checks = cache.get("checks") or {}
@@ -657,6 +723,43 @@ def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
                 "issues": (rows.get(row_id) or {}).get("issues"),
             }
             for row_id in expected_profiles
+        },
+    )
+    model_family_ok, model_family_details = _contract_detail(
+        root,
+        model_family_contract,
+        MODEL_FAMILY_CONTRACT_CHECKS,
+        MODEL_FAMILY_SOURCE_HASH_FILES,
+    )
+    parser_registry_ok, parser_registry_details = _contract_detail(
+        root,
+        parser_registry_contract,
+        PARSER_REGISTRY_CONTRACT_CHECKS,
+        PARSER_REGISTRY_SOURCE_HASH_FILES,
+    )
+    model_artifact_format_ok, model_artifact_format_details = _contract_detail(
+        root,
+        model_artifact_format_contract,
+        MODEL_ARTIFACT_FORMAT_CONTRACT_CHECKS,
+        MODEL_ARTIFACT_FORMAT_SOURCE_HASH_FILES,
+    )
+    _add(
+        requirements,
+        "High-risk model family parser, artifact, and launch policy gates are current",
+        _status(model_family_ok and parser_registry_ok and model_artifact_format_ok),
+        [
+            MODEL_FAMILY_CONTRACT_REL,
+            PARSER_REGISTRY_CONTRACT_REL,
+            MODEL_ARTIFACT_FORMAT_CONTRACT_REL,
+        ],
+        caveat=(
+            "This is no-heavy source/static compatibility proof; live multi-turn "
+            "output quality and speed rows remain separate."
+        ),
+        details={
+            "model_family": model_family_details,
+            "parser_registry": parser_registry_details,
+            "model_artifact_format": model_artifact_format_details,
         },
     )
     api_cache_ok, api_cache_checks = _contract_checks(
