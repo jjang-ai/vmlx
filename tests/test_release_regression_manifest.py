@@ -7,6 +7,7 @@ from tests.cross_matrix.release_regression_manifest import (
     CURRENT_POST_BUDGET_EDGE_ARTIFACTS,
     CURRENT_REGRESSION_SUITE_ARTIFACT,
     EXPECTED_CURRENT_OPEN_REQUIREMENTS,
+    EXPECTED_CURRENT_MODEL_FAMILY_ROWS,
     REQUIRED_RELEASE_DOMAINS,
     build_manifest,
     validate_current_proof_sweep_artifacts,
@@ -108,10 +109,24 @@ def test_release_regression_manifest_tracks_current_post_budget_edge_proof_sweep
 
 
 def test_release_regression_manifest_validates_current_proof_sweep_artifacts(tmp_path):
+    model_family_artifact = CURRENT_POST_BUDGET_EDGE_ARTIFACTS["model-family-detection-noheavy"]
     for artifact in CURRENT_POST_BUDGET_EDGE_ARTIFACTS.values():
         path = tmp_path / artifact
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text('{"status":"pass","failed":[]}\n', encoding="utf-8")
+        if artifact == model_family_artifact:
+            path.write_text(
+                json.dumps(
+                    {
+                        "status": "pass",
+                        "matched_rows": EXPECTED_CURRENT_MODEL_FAMILY_ROWS,
+                        "missing_rows": [],
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+        else:
+            path.write_text('{"status":"pass","failed":[]}\n', encoding="utf-8")
     regression_suite = tmp_path / CURRENT_REGRESSION_SUITE_ARTIFACT
     regression_suite.parent.mkdir(parents=True, exist_ok=True)
     regression_suite.write_text(
@@ -138,6 +153,13 @@ def test_release_regression_manifest_validates_current_proof_sweep_artifacts(tmp
         "open_requirements": EXPECTED_CURRENT_OPEN_REQUIREMENTS,
         "unexpected_open_requirements": [],
         "missing_expected_open_requirements": [],
+    }
+    assert result["model_family_matrix"] == {
+        "artifact": model_family_artifact,
+        "status": "pass",
+        "matched_rows": list(EXPECTED_CURRENT_MODEL_FAMILY_ROWS),
+        "missing_rows": [],
+        "missing_expected_rows": [],
     }
 
 
@@ -207,11 +229,67 @@ def test_release_regression_manifest_rejects_unexpected_current_regression_suite
     }
 
 
-def test_release_regression_manifest_runner_embeds_current_proof_validation(tmp_path):
+def test_release_regression_manifest_rejects_incomplete_current_model_family_matrix(tmp_path):
+    model_family_artifact = CURRENT_POST_BUDGET_EDGE_ARTIFACTS["model-family-detection-noheavy"]
     for artifact in CURRENT_POST_BUDGET_EDGE_ARTIFACTS.values():
         path = tmp_path / artifact
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text('{"status":"pass","failed":[]}\n', encoding="utf-8")
+        if artifact == model_family_artifact:
+            path.write_text(
+                json.dumps(
+                    {
+                        "status": "pass",
+                        "matched_rows": EXPECTED_CURRENT_MODEL_FAMILY_ROWS[:-1],
+                        "missing_rows": [EXPECTED_CURRENT_MODEL_FAMILY_ROWS[-1]],
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+        else:
+            path.write_text('{"status":"pass","failed":[]}\n', encoding="utf-8")
+    regression_suite = tmp_path / CURRENT_REGRESSION_SUITE_ARTIFACT
+    regression_suite.parent.mkdir(parents=True, exist_ok=True)
+    regression_suite.write_text(
+        json.dumps(
+            {
+                "status": "pass",
+                "failed_steps": [],
+                "open_requirements": EXPECTED_CURRENT_OPEN_REQUIREMENTS,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    result = validate_current_proof_sweep_artifacts(tmp_path)
+
+    assert result["status"] == "fail"
+    assert result["model_family_matrix"]["artifact"] == model_family_artifact
+    assert result["model_family_matrix"]["status"] == "pass"
+    assert result["model_family_matrix"]["missing_rows"] == [EXPECTED_CURRENT_MODEL_FAMILY_ROWS[-1]]
+    assert result["model_family_matrix"]["missing_expected_rows"] == [EXPECTED_CURRENT_MODEL_FAMILY_ROWS[-1]]
+
+
+def test_release_regression_manifest_runner_embeds_current_proof_validation(tmp_path):
+    model_family_artifact = CURRENT_POST_BUDGET_EDGE_ARTIFACTS["model-family-detection-noheavy"]
+    for artifact in CURRENT_POST_BUDGET_EDGE_ARTIFACTS.values():
+        path = tmp_path / artifact
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if artifact == model_family_artifact:
+            path.write_text(
+                json.dumps(
+                    {
+                        "status": "pass",
+                        "matched_rows": EXPECTED_CURRENT_MODEL_FAMILY_ROWS,
+                        "missing_rows": [],
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+        else:
+            path.write_text('{"status":"pass","failed":[]}\n', encoding="utf-8")
     regression_suite = tmp_path / CURRENT_REGRESSION_SUITE_ARTIFACT
     regression_suite.parent.mkdir(parents=True, exist_ok=True)
     regression_suite.write_text(
@@ -239,6 +317,13 @@ def test_release_regression_manifest_runner_embeds_current_proof_validation(tmp_
             "open_requirements": EXPECTED_CURRENT_OPEN_REQUIREMENTS,
             "unexpected_open_requirements": [],
             "missing_expected_open_requirements": [],
+        },
+        "model_family_matrix": {
+            "artifact": model_family_artifact,
+            "status": "pass",
+            "matched_rows": list(EXPECTED_CURRENT_MODEL_FAMILY_ROWS),
+            "missing_rows": [],
+            "missing_expected_rows": [],
         },
     }
 

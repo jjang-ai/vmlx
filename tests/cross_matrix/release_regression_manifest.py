@@ -13,6 +13,10 @@ import json
 from pathlib import Path
 from typing import Any
 
+from tests.cross_matrix.run_model_family_detection_contract import (
+    REQUIRED_ROWS as EXPECTED_CURRENT_MODEL_FAMILY_ROWS,
+)
+
 
 REQUIRED_RELEASE_DOMAINS = {
     "chat_ui_settings",
@@ -606,18 +610,27 @@ def validate_current_proof_sweep_artifacts(root: Path) -> dict[str, Any]:
             not_pass.append({"artifact": artifact, "status": status})
 
     regression_suite = _validate_current_regression_suite_artifact(root)
+    model_family_matrix = _validate_current_model_family_matrix_artifact(root)
     regression_suite_ok = (
         regression_suite["status"] == "pass"
         and not regression_suite["failed_steps"]
         and not regression_suite["unexpected_open_requirements"]
         and not regression_suite["missing_expected_open_requirements"]
     )
+    model_family_matrix_ok = (
+        model_family_matrix["status"] == "pass"
+        and not model_family_matrix["missing_rows"]
+        and not model_family_matrix["missing_expected_rows"]
+    )
 
     return {
-        "status": "pass" if not missing and not not_pass and regression_suite_ok else "fail",
+        "status": "pass"
+        if not missing and not not_pass and regression_suite_ok and model_family_matrix_ok
+        else "fail",
         "missing": missing,
         "not_pass": not_pass,
         "regression_suite": regression_suite,
+        "model_family_matrix": model_family_matrix,
     }
 
 
@@ -656,6 +669,41 @@ def _validate_current_regression_suite_artifact(root: Path) -> dict[str, Any]:
             "open_requirements": open_requirements,
             "unexpected_open_requirements": unexpected_open_requirements,
             "missing_expected_open_requirements": missing_expected_open_requirements,
+        }
+    )
+    return result
+
+
+def _validate_current_model_family_matrix_artifact(root: Path) -> dict[str, Any]:
+    artifact = CURRENT_POST_BUDGET_EDGE_ARTIFACTS["model-family-detection-noheavy"]
+    result: dict[str, Any] = {
+        "artifact": artifact,
+        "status": "missing",
+        "matched_rows": [],
+        "missing_rows": [],
+        "missing_expected_rows": list(EXPECTED_CURRENT_MODEL_FAMILY_ROWS),
+    }
+    path = root / artifact
+    if not path.exists():
+        return result
+
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception as exc:  # noqa: BLE001 - diagnostic helper reports load failures
+        result["status"] = f"load_error:{type(exc).__name__}"
+        return result
+
+    matched_rows = [str(item) for item in payload.get("matched_rows", [])]
+    missing_rows = [str(item) for item in payload.get("missing_rows", [])]
+    missing_expected_rows = [
+        row for row in EXPECTED_CURRENT_MODEL_FAMILY_ROWS if row not in matched_rows
+    ]
+    result.update(
+        {
+            "status": str(payload.get("status")),
+            "matched_rows": matched_rows,
+            "missing_rows": missing_rows,
+            "missing_expected_rows": missing_expected_rows,
         }
     )
     return result
