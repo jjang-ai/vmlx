@@ -93,6 +93,31 @@ def test_release_regression_manifest_tracks_server_chat_max_output_boundary():
     assert "current-max-output-context-contract-20260522-casual-server-output-cap.json" in joined
 
 
+def test_release_regression_manifest_tracks_current_post_budget_edge_proof_sweep():
+    manifest = build_manifest()
+    rows = {row["id"]: row for row in manifest["rows"]}
+    expected_artifacts = {
+        "chat-settings-max-output-context-ui": "build/current-max-output-context-contract-20260523-dsv4-budget-edge.json",
+        "panel-session-cache-settings-family-gating": "build/current-panel-settings-contract-proof-20260523-post-budget-edge.json",
+        "generation-defaults-no-hidden-forcing": "build/current-generation-defaults-contract-20260523-post-budget-edge.json",
+        "parser-registry-tool-reasoning-parity": "build/current-parser-registry-contract-20260523-post-budget-edge.json",
+        "reasoning-template-no-think-tag-leak": "build/current-reasoning-template-contract-20260523-post-budget-edge.json",
+        "tool-call-loop-parser-cleanup": "build/current-tool-call-contract-20260523-post-budget-edge.json",
+        "api-chat-responses-anthropic-ollama-parity": "build/current-api-surface-contract-20260523-post-budget-edge.json",
+        "cache-architecture-family-classification": "build/current-cache-architecture-contract-20260523-post-budget-edge.json",
+        "model-artifact-format-detection": "build/current-model-artifact-format-contract-20260523-post-budget-edge.json",
+        "model-family-detection-noheavy": "build/current-model-family-detection-contract-20260523-post-budget-edge.json",
+        "native-mtp-d3-effect-policy": "build/current-native-mtp-contract-20260523-post-budget-edge.json",
+        "mcp-policy-ui-gateway": "build/current-mcp-policy-contract-20260523-post-budget-edge.json",
+        "vl-media-cache-tool-followup": "build/current-vl-media-cache-contract-20260523-post-budget-edge.json",
+        "packaged-release-integrity": "build/current-packaged-integrity-contract-20260523-post-budget-edge-refreshed.json",
+        "public-release-surface-preflight": "build/current-release-surface-contract-20260523-post-budget-edge.json",
+    }
+
+    for row_id, artifact in expected_artifacts.items():
+        assert artifact in rows[row_id]["artifacts"], row_id
+
+
 def test_release_regression_manifest_tracks_legacy_completions_output_boundary():
     manifest = build_manifest()
     rows = {row["id"]: row for row in manifest["rows"]}

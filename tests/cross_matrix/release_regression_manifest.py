@@ -73,6 +73,7 @@ _ROWS: list[dict[str, Any]] = [
             ".venv/bin/python tests/cross_matrix/run_max_output_context_contract.py --out build/current-max-output-context-contract-20260522-recheck-server-chat-output-compat.json",
         ],
         "artifacts": [
+            "build/current-max-output-context-contract-20260523-dsv4-budget-edge.json",
             "build/current-max-output-context-contract-20260522-recheck-server-chat-output-compat.json",
             "build/current-max-output-context-contract-20260522-persisted-chat-output-cap.json",
             "build/current-max-output-context-contract-20260522-new-chat-output-cap-nonsticky.json",
@@ -106,6 +107,7 @@ _ROWS: list[dict[str, Any]] = [
             ".venv/bin/python tests/cross_matrix/run_noheavy_panel_settings_contract.py --out build/current-panel-settings-contract-proof-20260522-recheck-update-notice-i18n.json",
         ],
         "artifacts": [
+            "build/current-panel-settings-contract-proof-20260523-post-budget-edge.json",
             "build/current-panel-settings-contract-proof-20260522-launch-memory-warning.json",
             "build/current-panel-settings-contract-proof-20260522-recheck-update-notice-i18n.json",
         ],
@@ -126,6 +128,7 @@ _ROWS: list[dict[str, Any]] = [
             ".venv/bin/python tests/cross_matrix/run_generation_defaults_contract.py --out build/current-generation-defaults-contract-20260522-recheck-no-hidden-forcing.json",
         ],
         "artifacts": [
+            "build/current-generation-defaults-contract-20260523-post-budget-edge.json",
             "build/current-generation-defaults-contract-20260521.json",
             "build/current-generation-defaults-contract-20260522-recheck-no-hidden-forcing.json",
         ],
@@ -147,6 +150,7 @@ _ROWS: list[dict[str, Any]] = [
             ".venv/bin/python tests/cross_matrix/run_parser_registry_contract.py --out build/current-parser-registry-contract-20260522-non-reasoning-boundaries.json",
         ],
         "artifacts": [
+            "build/current-parser-registry-contract-20260523-post-budget-edge.json",
             "build/current-parser-registry-contract-20260522-reasoning-dropdown.json",
             "build/current-parser-registry-contract-20260522-non-reasoning-boundaries.json",
         ],
@@ -169,6 +173,7 @@ _ROWS: list[dict[str, Any]] = [
             ".venv/bin/python tests/cross_matrix/run_reasoning_template_contract.py --out build/current-reasoning-template-contract-20260522-recheck-parser-rails.json",
         ],
         "artifacts": [
+            "build/current-reasoning-template-contract-20260523-post-budget-edge.json",
             "build/current-reasoning-template-contract-20260521.json",
             "build/current-reasoning-template-contract-20260522-recheck-parser-rails.json",
         ],
@@ -188,6 +193,7 @@ _ROWS: list[dict[str, Any]] = [
             ".venv/bin/python tests/cross_matrix/run_tool_call_contract.py --out build/current-tool-call-contract-20260522-dsv4-live-write-file-repair.json",
         ],
         "artifacts": [
+            "build/current-tool-call-contract-20260523-post-budget-edge.json",
             "build/current-tool-call-contract-20260521.json",
             "build/current-tool-call-contract-20260522-dsv4-live-write-file-repair.json",
             "build/current-dsv4-default-cache-tool-loop/result.json",
@@ -215,6 +221,7 @@ _ROWS: list[dict[str, Any]] = [
             ".venv/bin/python tests/cross_matrix/run_api_surface_contract.py --out build/current-api-surface-contract-20260522-recheck-endpoint-assembly.json",
         ],
         "artifacts": [
+            "build/current-api-surface-contract-20260523-post-budget-edge.json",
             "build/current-api-surface-contract-20260522-stream-cache-detail.json",
             "build/current-api-surface-contract-20260522-recheck-endpoint-assembly.json",
         ],
@@ -239,6 +246,7 @@ _ROWS: list[dict[str, Any]] = [
             ".venv/bin/python tests/cross_matrix/run_cache_architecture_contract.py --out build/current-cache-architecture-contract-20260522-dsv4-pool-ui-wired.json",
         ],
         "artifacts": [
+            "build/current-cache-architecture-contract-20260523-post-budget-edge.json",
             "build/current-cache-architecture-contract-20260521.json",
             "build/current-cache-architecture-contract-20260522-panel-cache-launch.json",
             "build/current-cache-architecture-contract-20260522-dsv4-pool-quant-append.json",
@@ -270,6 +278,7 @@ _ROWS: list[dict[str, Any]] = [
             ".venv/bin/python tests/cross_matrix/run_model_artifact_format_contract.py --out build/current-model-artifact-format-contract-20260522-recheck-jang-mxfp-mtp-loaders.json",
         ],
         "artifacts": [
+            "build/current-model-artifact-format-contract-20260523-post-budget-edge.json",
             "build/current-model-artifact-format-contract-20260522-recheck-jang-mxfp-mtp-loaders.json",
             "build/current-model-artifact-format-contract-20260522-affine-jang-loader.json",
             "build/current-model-artifact-format-contract-20260522-mxfp-vlm-loader.json",
@@ -311,6 +320,7 @@ _ROWS: list[dict[str, Any]] = [
             ".venv/bin/python tests/cross_matrix/run_model_family_detection_contract.py --out build/current-model-family-detection-contract-20260522-recheck-launch-policy-matrix.json",
         ],
         "artifacts": [
+            "build/current-model-family-detection-contract-20260523-post-budget-edge.json",
             "build/current-model-family-detection-contract-20260522-recheck-launch-policy-matrix.json",
             "build/current-model-family-detection-contract-20260522-jang-only-mx-matmul-policy.json",
             "build/current-model-family-detection-contract-20260522-qwen-nemotron-hybrid-cache.json",
@@ -343,6 +353,7 @@ _ROWS: list[dict[str, Any]] = [
             ".venv/bin/python bench/native_mtp_speed_ab.py /Users/example/models/JANGQ/Qwen3.6-27B-JANG_4M-MTP --served-name qwen27-jang4m-mtp-ab --port 8798 --cache off --max-num-seqs 1 --max-tokens 320 --repeats 1 --warmup 0 --load-timeout-s 420 --out build/current-native-mtp-speed-ab-qwen27-jang4m-mtp-20260523 --disable-prompt-reuse",
         ],
         "artifacts": [
+            "build/current-native-mtp-contract-20260523-post-budget-edge.json",
             "build/current-native-mtp-contract-20260522-dsv4-additional-args.json",
             "build/current-native-mtp-contract-20260522-config-only.json",
             "build/current-native-mtp-speed-ab-qwen27-jang4m-mtp-20260523/result.json",
@@ -364,6 +375,7 @@ _ROWS: list[dict[str, Any]] = [
             ".venv/bin/python tests/cross_matrix/run_mcp_policy_contract.py --out build/current-mcp-policy-contract-20260522-recheck-ui-gateway.json",
         ],
         "artifacts": [
+            "build/current-mcp-policy-contract-20260523-post-budget-edge.json",
             "build/current-mcp-policy-contract-20260521.json",
             "build/current-mcp-policy-contract-20260522-recheck-ui-gateway.json",
         ],
@@ -387,6 +399,7 @@ _ROWS: list[dict[str, Any]] = [
             ".venv/bin/python tests/cross_matrix/run_vl_media_cache_contract.py --out build/current-vl-media-cache-contract-20260522-recheck-qwen-zaya-media.json",
         ],
         "artifacts": [
+            "build/current-vl-media-cache-contract-20260523-post-budget-edge.json",
             "build/current-vl-media-cache-contract-20260522-panel-family.json",
             "build/current-vl-media-cache-contract-20260522-recheck-qwen-zaya-media.json",
         ],
@@ -408,6 +421,7 @@ _ROWS: list[dict[str, Any]] = [
             ".venv/bin/python tests/cross_matrix/run_packaged_integrity_contract.py --jang-tools-source /Users/example/jang/.worktrees/vmlx-release-clean-b5f66a7/jang-tools --out build/current-packaged-integrity-contract-20260522-recheck-bundled-release-gate.json",
         ],
         "artifacts": [
+            "build/current-packaged-integrity-contract-20260523-post-budget-edge-refreshed.json",
             "build/current-packaged-integrity-contract-20260522-recheck-bundled-release-gate.json",
             "build/current-packaged-integrity-contract-20260522-objective-gate-enforced.json",
             "build/current-packaged-integrity-contract-20260521.json",
@@ -432,6 +446,7 @@ _ROWS: list[dict[str, Any]] = [
             ".venv/bin/python tests/cross_matrix/run_release_surface_contract.py --live-public --out build/current-release-surface-contract-20260522-live-public-v1548.json",
         ],
         "artifacts": [
+            "build/current-release-surface-contract-20260523-post-budget-edge.json",
             "build/current-release-surface-contract-20260522-live-public-v1548.json",
             "build/current-release-surface-contract-20260522-post-release-updater.json",
             "build/current-release-surface-contract-20260522-recheck-updater-i18n.json",
