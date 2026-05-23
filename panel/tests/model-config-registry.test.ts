@@ -548,6 +548,47 @@ describe('detectModelConfigFromDir JANG multimodal detection', () => {
     expect(detected.isTurboQuant).toBe(true)
   })
 
+  it('does not expose Native MTP for Hy3 config-only bundles without indexed mtp tensors', () => {
+    const dir = makeModelDir(
+      {
+        model_type: 'hy_v3',
+        num_hidden_layers: 80,
+        num_nextn_predict_layers: 1,
+      },
+      {
+        weight_format: 'mxtq',
+        runtime: {
+          bundle_has_mtp: true,
+          mtp_layers: 1,
+          mtp_mode: 'preserved_disabled',
+        },
+        capabilities: {
+          family: 'hy_v3',
+          tool_parser: 'hunyuan',
+          reasoning_parser: 'qwen3',
+          think_in_template: false,
+          supports_thinking: true,
+          cache_type: 'kv',
+          modality: 'text',
+        },
+      },
+    )
+    writeFileSync(join(dir, 'model.safetensors.index.json'), JSON.stringify({
+      weight_map: {
+        'model.embed_tokens.weight': 'model.safetensors',
+        'model.layers.0.self_attn.q_proj.weight': 'model.safetensors',
+        'model.layers.0.mlp.gate_proj.weight': 'model.safetensors',
+      },
+    }))
+
+    const detected = detectModelConfigFromDir(dir)
+
+    expect(detected.family).toBe('hy3')
+    expect(detected.toolParser).toBe('hunyuan')
+    expect(detected.reasoningParser).toBe('qwen3')
+    expect(detected.nativeMtp).toBeUndefined()
+  })
+
   it('keeps Hy3 JANGTQ2 Low/High reasoning contract despite 2-bit routed experts', () => {
     const dir = makeModelDir(
       {
