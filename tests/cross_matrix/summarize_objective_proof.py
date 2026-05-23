@@ -58,6 +58,10 @@ VL_MEDIA_CONTRACT_REL = "build/current-vl-media-cache-contract-20260521.json"
 QWEN_JANG_SOURCE_SPEED_REL = "build/current-decode-speed-live-qwen27-jang4m-source-keepalloc-20260522.json"
 QWEN_JANG_PACKAGED_SPEED_REL = "build/current-decode-speed-live-qwen27-jang4m-packaged-tahoe-dmg-20260522.json"
 QWEN_NATIVE_MTP_SPEED_REL = "build/current-decode-speed-live-qwen27-jang4m-mtp-20260523.json"
+QWEN_NATIVE_MTP_PREFILL_SPEED_REL = "build/current-decode-speed-live-qwen27-jang4m-mtp-source-bypass-fix-20260523.json"
+QWEN_NATIVE_MTP_PREFILL_TRACE_REL = "build/current-decode-speed-live-qwen27-jang4m-mtp-prefill-trace3-20260523.json"
+QWEN_JANG_TEXT_BASELINE_SPEED_REL = "build/current-decode-speed-live-qwen27-jang4m-text-baseline-20260523.json"
+QWEN_NATIVE_MTP_AB_REL = "build/current-native-mtp-speed-ab-qwen27-jang4m-mtp-20260523/result.json"
 DSV4_DEFAULT_CACHE_TOOL_LOOP_REL = "build/current-dsv4-default-cache-tool-loop/result.json"
 DSV4_QUALITY_CLEARANCE_CHECKS = (
     "identifier_integrity",
@@ -464,11 +468,56 @@ def _speed_artifact_detail(payload: dict[str, Any]) -> tuple[bool, dict[str, Any
     }
 
 
-def _native_mtp_speed_artifact_detail(payload: dict[str, Any]) -> tuple[bool, dict[str, Any]]:
-    ok, details = _speed_artifact_detail(payload)
+def _float_or_none(value: Any) -> float | None:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _native_mtp_ab_detail(payload: dict[str, Any]) -> tuple[bool, dict[str, Any]]:
+    rows = payload.get("rows") or []
+    by_label = {
+        row.get("label"): row
+        for row in rows
+        if isinstance(row, dict) and isinstance(row.get("label"), str)
+    }
+    baseline = by_label.get("baseline_no_mtp") or {}
+    native = by_label.get("native_mtp") or {}
+    baseline_tps = _float_or_none((baseline.get("summary") or {}).get("mean_wall_tok_s"))
+    native_tps = _float_or_none((native.get("summary") or {}).get("mean_wall_tok_s"))
+    speedup = _float_or_none(payload.get("speedup_vs_baseline"))
+    output_equivalence = payload.get("output_equivalence") or {}
+    mtp_totals = ((native.get("mtp_stats") or {}).get("totals") or {})
+    acceptance_rate = _float_or_none(mtp_totals.get("acceptance_rate"))
+    ok = (
+        bool(output_equivalence.get("all_content_equal"))
+        and bool(output_equivalence.get("all_full_text_equal"))
+        and speedup is not None
+        and speedup >= 1.1
+        and native_tps is not None
+        and native_tps >= 25.0
+        and acceptance_rate is not None
+        and acceptance_rate >= 0.5
+    )
+    return ok, {
+        "speedup_vs_baseline": speedup,
+        "baseline_decode_tps_wall": baseline_tps,
+        "native_mtp_decode_tps_wall": native_tps,
+        "output_equivalence": {
+            "all_content_equal": output_equivalence.get("all_content_equal"),
+            "all_full_text_equal": output_equivalence.get("all_full_text_equal"),
+        },
+        "native_mtp_acceptance_rate": acceptance_rate,
+        "native_mtp_accepted_tokens": mtp_totals.get("accepted_tokens"),
+        "native_mtp_drafted_tokens": mtp_totals.get("drafted_tokens"),
+        "best_native_mtp_depth": payload.get("best_native_mtp_depth"),
+    }
+
+
+def _prefill_trace_detail(payload: dict[str, Any]) -> dict[str, Any]:
     results = payload.get("results") or []
     row = results[0] if results and isinstance(results[0], dict) else {}
-    greedy = row.get("greedy_topk0") if isinstance(row.get("greedy_topk0"), dict) else {}
     health = row.get("health_after") if isinstance(row.get("health_after"), dict) else {}
     scheduler = health.get("scheduler") if isinstance(health.get("scheduler"), dict) else {}
     batch_generator = (
@@ -476,40 +525,26 @@ def _native_mtp_speed_artifact_detail(payload: dict[str, Any]) -> tuple[bool, di
         if isinstance(scheduler.get("batch_generator"), dict)
         else {}
     )
-    last_native_mtp = (
-        batch_generator.get("last_native_mtp")
-        if isinstance(batch_generator.get("last_native_mtp"), dict)
-        else {}
-    )
-    try:
-        greedy_tps = float(greedy.get("decode_tps_wall"))
-    except (TypeError, ValueError):
-        greedy_tps = None
-    try:
-        acceptance_rate = float(last_native_mtp.get("acceptance_rate"))
-    except (TypeError, ValueError):
-        acceptance_rate = None
-    native_ok = (
-        ok
-        and greedy_tps is not None
-        and greedy_tps >= 25.0
-        and acceptance_rate is not None
-        and acceptance_rate >= 0.5
-        and not bool(greedy.get("loopish"))
-    )
-    details.update(
-        {
-            "row_name": row.get("name"),
-            "registry": row.get("registry"),
-            "greedy_decode_tps_wall": greedy_tps,
-            "greedy_completion_tokens": greedy.get("completion_tokens"),
-            "native_mtp_acceptance_rate": acceptance_rate,
-            "native_mtp_final_depth": last_native_mtp.get("final_depth"),
-            "native_mtp_accepted_tokens": last_native_mtp.get("accepted_tokens"),
-            "native_mtp_drafted_tokens": last_native_mtp.get("drafted_tokens"),
-        }
-    )
-    return native_ok, details
+    return {
+        "status": row.get("status"),
+        "notes": row.get("notes") or [],
+        "last_prefill_trace": batch_generator.get("last_prefill_trace"),
+    }
+
+
+def _prompt_processing_speed_detail(
+    text_payload: dict[str, Any],
+    mtp_prefill_payload: dict[str, Any],
+    trace_payload: dict[str, Any],
+) -> tuple[bool, dict[str, Any]]:
+    text_ok, text_details = _speed_artifact_detail(text_payload)
+    mtp_ok, mtp_details = _speed_artifact_detail(mtp_prefill_payload)
+    trace_details = _prefill_trace_detail(trace_payload)
+    return text_ok and mtp_ok, {
+        "text_loader": text_details,
+        "native_mtp_prefill": mtp_details,
+        "prefill_trace": trace_details,
+    }
 
 
 def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
@@ -537,7 +572,10 @@ def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
     vl_media_contract = _load(root, VL_MEDIA_CONTRACT_REL)
     qwen_jang_source_speed = _load(root, QWEN_JANG_SOURCE_SPEED_REL)
     qwen_jang_packaged_speed = _load(root, QWEN_JANG_PACKAGED_SPEED_REL)
-    qwen_native_mtp_speed = _load(root, QWEN_NATIVE_MTP_SPEED_REL)
+    qwen_jang_text_baseline_speed = _load(root, QWEN_JANG_TEXT_BASELINE_SPEED_REL)
+    qwen_native_mtp_prefill_speed = _load(root, QWEN_NATIVE_MTP_PREFILL_SPEED_REL)
+    qwen_native_mtp_prefill_trace = _load(root, QWEN_NATIVE_MTP_PREFILL_TRACE_REL)
+    qwen_native_mtp_ab = _load(root, QWEN_NATIVE_MTP_AB_REL)
 
     requirements: list[dict[str, Any]] = []
     cache_checks = cache.get("checks") or {}
@@ -960,20 +998,43 @@ def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
             "packaged": qwen_packaged_speed_details,
         },
     )
-    qwen_native_mtp_speed_ok, qwen_native_mtp_speed_details = (
-        _native_mtp_speed_artifact_detail(qwen_native_mtp_speed)
+    qwen_native_mtp_decode_ok, qwen_native_mtp_decode_details = (
+        _native_mtp_ab_detail(qwen_native_mtp_ab)
     )
     _add(
         requirements,
-        "Qwen native MTP live decode and prefill speed are release-cleared",
-        _status(qwen_native_mtp_speed_ok),
-        [QWEN_NATIVE_MTP_SPEED_REL],
+        "Qwen native MTP live decode speed and output equivalence are release-cleared",
+        _status(qwen_native_mtp_decode_ok),
+        [QWEN_NATIVE_MTP_AB_REL],
         caveat=(
-            "Native MTP activation is deterministic-request gated. This row "
-            "requires both MTP decode speed/acceptance and MLLM/VL hybrid "
-            "prefill speed; no-heavy native-MTP wiring alone is not enough."
+            "This row covers decode speed/equivalence only. Prompt-processing "
+            "throughput is tracked separately so MTP decode is not blamed for "
+            "a broader Qwen/JANG PP floor failure."
         ),
-        details=qwen_native_mtp_speed_details,
+        details=qwen_native_mtp_decode_details,
+    )
+    qwen_prompt_ok, qwen_prompt_details = _prompt_processing_speed_detail(
+        qwen_jang_text_baseline_speed,
+        qwen_native_mtp_prefill_speed,
+        qwen_native_mtp_prefill_trace,
+    )
+    _add(
+        requirements,
+        "Qwen 27B JANG_4M prompt-processing speed floor is release-cleared",
+        _status(qwen_prompt_ok),
+        [
+            QWEN_JANG_TEXT_BASELINE_SPEED_REL,
+            QWEN_NATIVE_MTP_PREFILL_SPEED_REL,
+            QWEN_NATIVE_MTP_PREFILL_TRACE_REL,
+        ],
+        caveat=(
+            "Fresh evidence shows native-MTP decode is good while both the "
+            "MTP/VL prefill route and comparable text-loader Qwen 27B row can "
+            "miss the current 600 pp/s floor. This row remains open until the "
+            "floor is calibrated to artifact/hardware reality or a real "
+            "language-forward optimization lands."
+        ),
+        details=qwen_prompt_details,
     )
     api_cache_ok, api_cache_checks = _contract_checks(
         api_cache_contract, API_CACHE_CONTRACT_CHECKS

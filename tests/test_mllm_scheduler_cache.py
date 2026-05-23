@@ -1303,7 +1303,7 @@ class TestProcessPromptsCacheFetch:
         generator.block_aware_cache = SimpleNamespace(block_size=64)
         request = SimpleNamespace(_ssm_required_checkpoint_tokens=128)
 
-        monkeypatch.setenv("VMLINUX_DISABLE_SSM_INLINE_CAPTURE", "1")
+        monkeypatch.setenv("VMLX_DISABLE_SSM_INLINE_CAPTURE", "1")
 
         assert generator._ssm_capture_boundaries_for(
             request,

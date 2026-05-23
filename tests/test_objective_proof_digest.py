@@ -539,6 +539,64 @@ def _write_passing_base_artifacts(tmp_path: Path) -> None:
         "build/current-decode-speed-live-qwen27-jang4m-mtp-20260523.json",
         mtp_speed_base,
     )
+    _write_json(
+        tmp_path,
+        "build/current-decode-speed-live-qwen27-jang4m-mtp-source-bypass-fix-20260523.json",
+        mtp_speed_base,
+    )
+    _write_json(
+        tmp_path,
+        "build/current-decode-speed-live-qwen27-jang4m-text-baseline-20260523.json",
+        speed_base,
+    )
+    _write_json(
+        tmp_path,
+        "build/current-decode-speed-live-qwen27-jang4m-mtp-prefill-trace3-20260523.json",
+        {
+            "results": [
+                {
+                    "health_after": {
+                        "scheduler": {
+                            "batch_generator": {
+                                "last_prefill_trace": {
+                                    "forward_ms": 10.7,
+                                    "logits_eval_ms": 204.2,
+                                }
+                            }
+                        }
+                    }
+                }
+            ]
+        },
+    )
+    _write_json(
+        tmp_path,
+        "build/current-native-mtp-speed-ab-qwen27-jang4m-mtp-20260523/result.json",
+        {
+            "speedup_vs_baseline": 1.83,
+            "output_equivalence": {
+                "all_content_equal": True,
+                "all_full_text_equal": True,
+            },
+            "rows": [
+                {
+                    "label": "baseline_no_mtp",
+                    "summary": {"mean_wall_tok_s": 25.61},
+                },
+                {
+                    "label": "native_mtp",
+                    "summary": {"mean_wall_tok_s": 46.96},
+                    "mtp_stats": {
+                        "totals": {
+                            "accepted_tokens": 218,
+                            "drafted_tokens": 228,
+                            "acceptance_rate": 0.956,
+                        }
+                    },
+                },
+            ],
+        },
+    )
 
 
 def test_objective_proof_digest_keeps_dsv4_long_quality_open(tmp_path):
@@ -870,14 +928,14 @@ def test_objective_proof_digest_accepts_qwen_jang_speed_when_source_and_packaged
     assert "packaged-tahoe-dmg" in QWEN_JANG_PACKAGED_SPEED_REL
 
 
-def test_objective_proof_digest_opens_qwen_native_mtp_speed_when_prefill_is_review(tmp_path):
+def test_objective_proof_digest_opens_qwen_prompt_processing_when_prefill_is_review(tmp_path):
     from tests.cross_matrix.summarize_objective_proof import (
-        QWEN_NATIVE_MTP_SPEED_REL,
+        QWEN_NATIVE_MTP_PREFILL_SPEED_REL,
         build_digest,
     )
 
     _write_passing_base_artifacts(tmp_path)
-    path = tmp_path / QWEN_NATIVE_MTP_SPEED_REL
+    path = tmp_path / QWEN_NATIVE_MTP_PREFILL_SPEED_REL
     payload = json.loads(path.read_text(encoding="utf-8"))
     payload["results"][0]["status"] = "review"
     payload["results"][0]["notes"] = [
@@ -893,15 +951,14 @@ def test_objective_proof_digest_opens_qwen_native_mtp_speed_when_prefill_is_revi
     digest = build_digest(tmp_path)
     rows = {item["requirement"]: item for item in digest["requirements"]}
 
-    row = rows["Qwen native MTP live decode and prefill speed are release-cleared"]
+    row = rows["Qwen 27B JANG_4M prompt-processing speed floor is release-cleared"]
     assert row["status"] == "open"
-    assert row["details"]["status"] == "review"
-    assert row["details"]["min_pp_wall_tok_s"] == 143.74
-    assert row["details"]["greedy_decode_tps_wall"] == 33.4
-    assert row["details"]["native_mtp_acceptance_rate"] == 0.9388888889
+    assert row["details"]["native_mtp_prefill"]["status"] == "review"
+    assert row["details"]["native_mtp_prefill"]["min_pp_wall_tok_s"] == 143.74
+    assert row["details"]["text_loader"]["min_pp_wall_tok_s"] >= 600
 
 
-def test_objective_proof_digest_accepts_qwen_native_mtp_speed_when_decode_and_prefill_pass(tmp_path):
+def test_objective_proof_digest_accepts_qwen_native_mtp_decode_ab_when_equivalent_and_faster(tmp_path):
     from tests.cross_matrix.summarize_objective_proof import build_digest
 
     _write_passing_base_artifacts(tmp_path)
@@ -909,11 +966,27 @@ def test_objective_proof_digest_accepts_qwen_native_mtp_speed_when_decode_and_pr
     digest = build_digest(tmp_path)
     rows = {item["requirement"]: item for item in digest["requirements"]}
 
-    row = rows["Qwen native MTP live decode and prefill speed are release-cleared"]
+    row = rows["Qwen native MTP live decode speed and output equivalence are release-cleared"]
     assert row["status"] == "pass"
-    assert row["details"]["min_pp_wall_tok_s"] >= 600
-    assert row["details"]["greedy_decode_tps_wall"] >= 25
+    assert row["details"]["speedup_vs_baseline"] >= 1.1
+    assert row["details"]["baseline_decode_tps_wall"] >= 20
+    assert row["details"]["native_mtp_decode_tps_wall"] >= 25
     assert row["details"]["native_mtp_acceptance_rate"] >= 0.5
+
+
+def test_objective_proof_digest_accepts_qwen_prompt_processing_when_text_and_mtp_prefill_pass(tmp_path):
+    from tests.cross_matrix.summarize_objective_proof import build_digest
+
+    _write_passing_base_artifacts(tmp_path)
+
+    digest = build_digest(tmp_path)
+    rows = {item["requirement"]: item for item in digest["requirements"]}
+
+    row = rows["Qwen 27B JANG_4M prompt-processing speed floor is release-cleared"]
+    assert row["status"] == "pass"
+    assert row["details"]["text_loader"]["min_pp_wall_tok_s"] >= 600
+    assert row["details"]["native_mtp_prefill"]["min_pp_wall_tok_s"] >= 600
+    assert row["details"]["prefill_trace"]["last_prefill_trace"]["logits_eval_ms"] == 204.2
 
 
 def test_objective_proof_digest_rejects_stale_panel_settings_contract_artifact(tmp_path):
