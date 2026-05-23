@@ -549,10 +549,59 @@ def _prefill_trace_detail(payload: dict[str, Any]) -> dict[str, Any]:
         if isinstance(scheduler.get("batch_generator"), dict)
         else {}
     )
+    trace = batch_generator.get("last_prefill_trace")
+    diagnosis: dict[str, Any] = {}
+    if isinstance(trace, dict):
+        forward_ms = _float_or_none(trace.get("forward_ms"))
+        logits_eval_ms = _float_or_none(trace.get("logits_eval_ms"))
+        sample_ms = _float_or_none(trace.get("sample_ms"))
+        total_ms = _float_or_none(trace.get("total_ms"))
+        preprocess_ms = _float_or_none(trace.get("preprocess_ms"))
+        diagnosis = {
+            "text_only_mllm_path": trace.get("has_images") is False,
+            "native_mtp": trace.get("native_mtp") is True,
+            "is_hybrid": trace.get("is_hybrid") is True,
+            "preprocess_is_not_bottleneck": (
+                preprocess_ms is not None
+                and total_ms is not None
+                and total_ms > 0
+                and preprocess_ms / total_ms < 0.01
+            ),
+            "logits_eval_dominates_forward": (
+                logits_eval_ms is not None
+                and forward_ms is not None
+                and forward_ms > 0
+                and logits_eval_ms / forward_ms >= 5.0
+            ),
+            "sample_dominates_total": (
+                sample_ms is not None
+                and total_ms is not None
+                and total_ms > 0
+                and sample_ms / total_ms >= 0.5
+            ),
+            "logits_eval_to_forward_ratio": (
+                round(logits_eval_ms / forward_ms, 3)
+                if logits_eval_ms is not None and forward_ms is not None and forward_ms > 0
+                else None
+            ),
+            "sample_to_total_ratio": (
+                round(sample_ms / total_ms, 3)
+                if sample_ms is not None and total_ms is not None and total_ms > 0
+                else None
+            ),
+            "suspected_bottleneck": "unknown",
+        }
+        if (
+            diagnosis["text_only_mllm_path"]
+            and diagnosis["logits_eval_dominates_forward"]
+            and diagnosis["sample_dominates_total"]
+        ):
+            diagnosis["suspected_bottleneck"] = "logits/sample materialization"
     return {
         "status": row.get("status"),
         "notes": row.get("notes") or [],
-        "last_prefill_trace": batch_generator.get("last_prefill_trace"),
+        "last_prefill_trace": trace,
+        "diagnosis": diagnosis,
     }
 
 

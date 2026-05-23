@@ -1005,6 +1005,42 @@ def test_objective_proof_digest_opens_qwen_prompt_processing_when_prefill_is_rev
     assert row["details"]["text_loader"]["min_pp_wall_tok_s"] >= 600
 
 
+def test_objective_proof_digest_explains_qwen_mllm_prefill_trace_bottleneck(tmp_path):
+    from tests.cross_matrix.summarize_objective_proof import (
+        QWEN_NATIVE_MTP_PREFILL_TRACE_REL,
+        build_digest,
+    )
+
+    _write_passing_base_artifacts(tmp_path)
+    path = tmp_path / QWEN_NATIVE_MTP_PREFILL_TRACE_REL
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["results"][0]["status"] = "review"
+    payload["results"][0]["notes"] = ["PP below expected 600.00: 286.68, 285.13, 288.24"]
+    payload["results"][0]["health_after"]["scheduler"]["batch_generator"]["last_prefill_trace"] = {
+        "has_images": False,
+        "is_hybrid": True,
+        "native_mtp": True,
+        "prefix_cache_enabled": True,
+        "preprocess_ms": 0.085,
+        "forward_ms": 10.967,
+        "logits_eval_ms": 162.888,
+        "sample_ms": 167.646,
+        "total_ms": 179.031,
+    }
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    digest = build_digest(tmp_path)
+    rows = {item["requirement"]: item for item in digest["requirements"]}
+
+    row = rows["Qwen 27B JANG_4M prompt-processing speed floor is release-cleared"]
+    diagnosis = row["details"]["prefill_trace"]["diagnosis"]
+    assert diagnosis["text_only_mllm_path"] is True
+    assert diagnosis["preprocess_is_not_bottleneck"] is True
+    assert diagnosis["logits_eval_dominates_forward"] is True
+    assert diagnosis["sample_dominates_total"] is True
+    assert diagnosis["suspected_bottleneck"] == "logits/sample materialization"
+
+
 def test_objective_proof_digest_accepts_qwen_native_mtp_decode_ab_when_equivalent_and_faster(tmp_path):
     from tests.cross_matrix.summarize_objective_proof import build_digest
 
