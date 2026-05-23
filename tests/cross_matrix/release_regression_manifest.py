@@ -184,6 +184,7 @@ EXPECTED_CURRENT_PACKAGED_INTEGRITY_CHECKS = (
     "bundled_jang_tools_hash_parity",
     "bundled_console_scripts_relocatable",
     "bundled_media_and_jang_dependencies_import",
+    "packaged_renderer_dsv4_cache_ui_deduped",
     "dry_release_gate_fails_only_on_known_objectives",
 )
 

@@ -28,6 +28,20 @@ EXPECTED_OPEN_REQUIREMENTS = [
     "DSV4 long-output/code/file-generation quality is release-cleared",
 ]
 MIN_RELEASE_GATE_UNIT_TESTS = 34
+PACKAGED_RENDERER_ASAR = Path(
+    "panel/release/mac-arm64/vMLX.app/Contents/Resources/app.asar"
+)
+PACKAGED_RENDERER_REQUIRED_DSV4_CACHE_UI_STRINGS = (
+    b"DSV4 Native Composite Prefix Cache",
+    b"DSV4 CSA/HCA Pool Codec",
+    b"actually emit DSV4_POOL_QUANT=1",
+)
+PACKAGED_RENDERER_FORBIDDEN_DSV4_CACHE_UI_STRINGS = (
+    b"DSV4 Native Cache",
+    b"DSV4 Composite Prefix Cache",
+    b"DSV4 Pool Quantization",
+    b"DSV4 Flash composite prefix cache is disabled",
+)
 
 SOURCE_HASH_FILES = (
     "panel/scripts/release-gate-python-app.py",
@@ -114,6 +128,18 @@ def _parse_counts(output: str) -> dict[str, int | None]:
     return {"passed": passed, "skipped": skipped, "deselected": deselected}
 
 
+def _check_packaged_renderer_dsv4_cache_ui(root: Path) -> bool:
+    app_asar = root / PACKAGED_RENDERER_ASAR
+    if not app_asar.exists():
+        return False
+    data = app_asar.read_bytes()
+    return all(
+        marker in data for marker in PACKAGED_RENDERER_REQUIRED_DSV4_CACHE_UI_STRINGS
+    ) and not any(
+        marker in data for marker in PACKAGED_RENDERER_FORBIDDEN_DSV4_CACHE_UI_STRINGS
+    )
+
+
 def _run(root: Path, name: str, cwd_rel: Path, cmd: list[str]) -> dict[str, Any]:
     started = time.monotonic()
     proc = subprocess.run(
@@ -191,6 +217,9 @@ def build_artifact(
         "bundled_media_and_jang_dependencies_import": (
             results["bundled_python_verifier"]["returncode"] == 0
             and "bundled-python: all critical imports ok" in verifier_output
+        ),
+        "packaged_renderer_dsv4_cache_ui_deduped": (
+            _check_packaged_renderer_dsv4_cache_ui(root)
         ),
         "dry_release_gate_fails_only_on_known_objectives": release_gate_ok,
     }
