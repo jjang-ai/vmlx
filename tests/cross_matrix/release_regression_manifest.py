@@ -153,6 +153,29 @@ EXPECTED_CURRENT_MCP_POLICY_CHECKS = (
     "all_required_mcp_policy_markers_present",
 )
 
+EXPECTED_CURRENT_MAX_OUTPUT_CONTEXT_CHECKS = (
+    "server_default_output_cap_uses_max_tokens",
+    "startup_output_cap_is_default_not_request_ceiling",
+    "request_output_caps_can_go_below_or_above_startup_default",
+    "request_output_caps_do_not_mutate_server_default",
+    "legacy_completions_output_cap_overrides_server_default",
+    "chat_max_tokens_overrides_server_default_per_request",
+    "responses_max_output_tokens_overrides_server_default_per_request",
+    "anthropic_messages_preserves_bundle_and_explicit_output_caps",
+    "ollama_num_predict_maps_only_positive_output_caps",
+    "prompt_context_caps_do_not_rewrite_output_cap",
+    "panel_server_default_output_maps_to_max_tokens",
+    "panel_max_context_maps_to_max_prompt_tokens",
+    "stale_32768_session_output_caps_are_migrated",
+    "chat_output_cap_remains_per_chat_override",
+    "request_builders_omit_auto_output_cap",
+    "new_chat_output_caps_are_not_inherited_or_made_sticky",
+    "all_family_max_token_precedence_stays_uniform",
+    "wake_reload_and_cli_preserve_explicitness",
+    "legacy_count_floor_still_nontrivial",
+    "all_required_max_output_context_markers_present",
+)
+
 
 REQUIRED_RELEASE_DOMAINS = {
     "chat_ui_settings",
@@ -757,6 +780,7 @@ def validate_current_proof_sweep_artifacts(root: Path) -> dict[str, Any]:
     native_mtp_matrix = _validate_current_native_mtp_matrix_artifact(root)
     vl_media_matrix = _validate_current_vl_media_matrix_artifact(root)
     mcp_policy_matrix = _validate_current_mcp_policy_matrix_artifact(root)
+    max_output_context_matrix = _validate_current_max_output_context_matrix_artifact(root)
     regression_suite_ok = (
         regression_suite["status"] == "pass"
         and not regression_suite["failed_steps"]
@@ -834,6 +858,13 @@ def validate_current_proof_sweep_artifacts(root: Path) -> dict[str, Any]:
         and not mcp_policy_matrix["failed_checks"]
         and not mcp_policy_matrix["missing_expected_checks"]
     )
+    max_output_context_matrix_ok = (
+        max_output_context_matrix["status"] == "pass"
+        and not max_output_context_matrix["failed"]
+        and not max_output_context_matrix["missing_markers"]
+        and not max_output_context_matrix["failed_checks"]
+        and not max_output_context_matrix["missing_expected_checks"]
+    )
 
     return {
         "status": "pass"
@@ -852,6 +883,7 @@ def validate_current_proof_sweep_artifacts(root: Path) -> dict[str, Any]:
             and native_mtp_matrix_ok
             and vl_media_matrix_ok
             and mcp_policy_matrix_ok
+            and max_output_context_matrix_ok
         )
         else "fail",
         "missing": missing,
@@ -868,6 +900,7 @@ def validate_current_proof_sweep_artifacts(root: Path) -> dict[str, Any]:
         "native_mtp_matrix": native_mtp_matrix,
         "vl_media_matrix": vl_media_matrix,
         "mcp_policy_matrix": mcp_policy_matrix,
+        "max_output_context_matrix": max_output_context_matrix,
     }
 
 
@@ -1351,6 +1384,52 @@ def _validate_current_mcp_policy_matrix_artifact(root: Path) -> dict[str, Any]:
             "status": str(payload.get("status")),
             "checks": checks,
             "missing_markers": [str(item) for item in payload.get("missing_markers", [])],
+            "failed_checks": failed_checks,
+            "missing_expected_checks": missing_expected_checks,
+        }
+    )
+    return result
+
+
+def _validate_current_max_output_context_matrix_artifact(root: Path) -> dict[str, Any]:
+    artifact = CURRENT_POST_BUDGET_EDGE_ARTIFACTS["chat-settings-max-output-context-ui"]
+    result: dict[str, Any] = {
+        "artifact": artifact,
+        "status": "missing",
+        "checks": {},
+        "missing_markers": [],
+        "failed": [],
+        "failed_checks": list(EXPECTED_CURRENT_MAX_OUTPUT_CONTEXT_CHECKS),
+        "missing_expected_checks": list(EXPECTED_CURRENT_MAX_OUTPUT_CONTEXT_CHECKS),
+    }
+    path = root / artifact
+    if not path.exists():
+        return result
+
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception as exc:  # noqa: BLE001 - diagnostic helper reports load failures
+        result["status"] = f"load_error:{type(exc).__name__}"
+        return result
+
+    checks = {
+        str(name): bool(value)
+        for name, value in dict(payload.get("checks", {})).items()
+    }
+    missing_expected_checks = [
+        name for name in EXPECTED_CURRENT_MAX_OUTPUT_CONTEXT_CHECKS if name not in checks
+    ]
+    failed_checks = [
+        name
+        for name in EXPECTED_CURRENT_MAX_OUTPUT_CONTEXT_CHECKS
+        if checks.get(name) is not True
+    ]
+    result.update(
+        {
+            "status": str(payload.get("status")),
+            "checks": checks,
+            "missing_markers": [str(item) for item in payload.get("missing_markers", [])],
+            "failed": [str(item) for item in payload.get("failed", [])],
             "failed_checks": failed_checks,
             "missing_expected_checks": missing_expected_checks,
         }

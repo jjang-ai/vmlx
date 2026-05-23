@@ -9,6 +9,7 @@ from tests.cross_matrix.release_regression_manifest import (
     EXPECTED_CURRENT_API_SURFACE_CHECKS,
     EXPECTED_CURRENT_CACHE_ARCHITECTURE_CHECKS,
     EXPECTED_CURRENT_GENERATION_DEFAULTS_CHECKS,
+    EXPECTED_CURRENT_MAX_OUTPUT_CONTEXT_CHECKS,
     EXPECTED_CURRENT_MCP_POLICY_CHECKS,
     EXPECTED_CURRENT_MODEL_ARTIFACT_CHECKS,
     EXPECTED_CURRENT_NATIVE_MTP_CHECKS,
@@ -130,6 +131,8 @@ def test_release_regression_manifest_validates_current_proof_sweep_artifacts(tmp
     mtp_artifact = CURRENT_POST_BUDGET_EDGE_ARTIFACTS["native-mtp-d3-effect-policy"]
     vl_artifact = CURRENT_POST_BUDGET_EDGE_ARTIFACTS["vl-media-cache-tool-followup"]
     mcp_artifact = CURRENT_POST_BUDGET_EDGE_ARTIFACTS["mcp-policy-ui-gateway"]
+    max_output_artifact = CURRENT_POST_BUDGET_EDGE_ARTIFACTS["chat-settings-max-output-context-ui"]
+    max_output_artifact = CURRENT_POST_BUDGET_EDGE_ARTIFACTS["chat-settings-max-output-context-ui"]
     for artifact in CURRENT_POST_BUDGET_EDGE_ARTIFACTS.values():
         path = tmp_path / artifact
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -140,6 +143,36 @@ def test_release_regression_manifest_validates_current_proof_sweep_artifacts(tmp
                         "status": "pass",
                         "matched_rows": EXPECTED_CURRENT_MODEL_FAMILY_ROWS,
                         "missing_rows": [],
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+        elif artifact == max_output_artifact:
+            path.write_text(
+                json.dumps(
+                    {
+                        "status": "pass",
+                        "checks": {
+                            name: True for name in EXPECTED_CURRENT_MAX_OUTPUT_CONTEXT_CHECKS
+                        },
+                        "missing_markers": [],
+                        "failed": [],
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+        elif artifact == max_output_artifact:
+            path.write_text(
+                json.dumps(
+                    {
+                        "status": "pass",
+                        "checks": {
+                            name: True for name in EXPECTED_CURRENT_MAX_OUTPUT_CONTEXT_CHECKS
+                        },
+                        "missing_markers": [],
+                        "failed": [],
                     }
                 )
                 + "\n",
@@ -413,6 +446,15 @@ def test_release_regression_manifest_validates_current_proof_sweep_artifacts(tmp
         "failed_checks": [],
         "missing_expected_checks": [],
     }
+    assert result["max_output_context_matrix"] == {
+        "artifact": max_output_artifact,
+        "status": "pass",
+        "checks": {name: True for name in EXPECTED_CURRENT_MAX_OUTPUT_CONTEXT_CHECKS},
+        "missing_markers": [],
+        "failed": [],
+        "failed_checks": [],
+        "missing_expected_checks": [],
+    }
 
 
 def test_release_regression_manifest_rejects_missing_or_failing_current_artifacts(tmp_path):
@@ -479,6 +521,57 @@ def test_release_regression_manifest_rejects_unexpected_current_regression_suite
         "unexpected_open_requirements": ["Server max output/context wiring regressed"],
         "missing_expected_open_requirements": [EXPECTED_CURRENT_OPEN_REQUIREMENTS[1]],
     }
+
+
+def test_release_regression_manifest_rejects_incomplete_current_max_output_context_matrix(tmp_path):
+    max_output_artifact = CURRENT_POST_BUDGET_EDGE_ARTIFACTS["chat-settings-max-output-context-ui"]
+    for artifact in CURRENT_POST_BUDGET_EDGE_ARTIFACTS.values():
+        path = tmp_path / artifact
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if artifact == max_output_artifact:
+            checks = {name: True for name in EXPECTED_CURRENT_MAX_OUTPUT_CONTEXT_CHECKS[:-1]}
+            checks[EXPECTED_CURRENT_MAX_OUTPUT_CONTEXT_CHECKS[-1]] = False
+            path.write_text(
+                json.dumps(
+                    {
+                        "status": "pass",
+                        "checks": checks,
+                        "missing_markers": [
+                            "server startup maxTokens and chat maxTokens remain independent when both are set"
+                        ],
+                        "failed": [],
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+        else:
+            path.write_text('{"status":"pass","failed":[]}\n', encoding="utf-8")
+    regression_suite = tmp_path / CURRENT_REGRESSION_SUITE_ARTIFACT
+    regression_suite.parent.mkdir(parents=True, exist_ok=True)
+    regression_suite.write_text(
+        json.dumps(
+            {
+                "status": "pass",
+                "failed_steps": [],
+                "open_requirements": EXPECTED_CURRENT_OPEN_REQUIREMENTS,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    result = validate_current_proof_sweep_artifacts(tmp_path)
+
+    assert result["status"] == "fail"
+    assert result["max_output_context_matrix"]["artifact"] == max_output_artifact
+    assert result["max_output_context_matrix"]["status"] == "pass"
+    assert result["max_output_context_matrix"]["missing_markers"] == [
+        "server startup maxTokens and chat maxTokens remain independent when both are set"
+    ]
+    assert result["max_output_context_matrix"]["failed_checks"] == [
+        EXPECTED_CURRENT_MAX_OUTPUT_CONTEXT_CHECKS[-1]
+    ]
 
 
 def test_release_regression_manifest_rejects_incomplete_current_model_family_matrix(tmp_path):
@@ -1838,6 +1931,7 @@ def test_release_regression_manifest_runner_embeds_current_proof_validation(tmp_
     mtp_artifact = CURRENT_POST_BUDGET_EDGE_ARTIFACTS["native-mtp-d3-effect-policy"]
     vl_artifact = CURRENT_POST_BUDGET_EDGE_ARTIFACTS["vl-media-cache-tool-followup"]
     mcp_artifact = CURRENT_POST_BUDGET_EDGE_ARTIFACTS["mcp-policy-ui-gateway"]
+    max_output_artifact = CURRENT_POST_BUDGET_EDGE_ARTIFACTS["chat-settings-max-output-context-ui"]
     for artifact in CURRENT_POST_BUDGET_EDGE_ARTIFACTS.values():
         path = tmp_path / artifact
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -1848,6 +1942,21 @@ def test_release_regression_manifest_runner_embeds_current_proof_validation(tmp_
                         "status": "pass",
                         "matched_rows": EXPECTED_CURRENT_MODEL_FAMILY_ROWS,
                         "missing_rows": [],
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+        elif artifact == max_output_artifact:
+            path.write_text(
+                json.dumps(
+                    {
+                        "status": "pass",
+                        "checks": {
+                            name: True for name in EXPECTED_CURRENT_MAX_OUTPUT_CONTEXT_CHECKS
+                        },
+                        "missing_markers": [],
+                        "failed": [],
                     }
                 )
                 + "\n",
@@ -2119,6 +2228,15 @@ def test_release_regression_manifest_runner_embeds_current_proof_validation(tmp_
             "status": "pass",
             "checks": {name: True for name in EXPECTED_CURRENT_MCP_POLICY_CHECKS},
             "missing_markers": [],
+            "failed_checks": [],
+            "missing_expected_checks": [],
+        },
+        "max_output_context_matrix": {
+            "artifact": max_output_artifact,
+            "status": "pass",
+            "checks": {name: True for name in EXPECTED_CURRENT_MAX_OUTPUT_CONTEXT_CHECKS},
+            "missing_markers": [],
+            "failed": [],
             "failed_checks": [],
             "missing_expected_checks": [],
         },
