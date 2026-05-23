@@ -159,6 +159,7 @@ describe('cache control policy', () => {
 
     expect(cacheControlUpdatesForDsv4CompositeToggle(false)).toEqual([
       ['dsv4PrefixCache', false],
+      ['dsv4PoolQuant', false],
       ['enablePrefixCache', false],
       ['usePagedCache', false],
       ['enableBlockDiskCache', false],

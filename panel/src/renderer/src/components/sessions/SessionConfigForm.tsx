@@ -1127,8 +1127,9 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
             <CheckField
               label="DSV4 Pool Quantization"
               tooltip="Optional native DSV4 CSA/HCA pool compression. The runtime reuses the materialized CSA/HCA pool view between appends; keep off unless you are validating pool-on DSV4 cache behavior."
-              checked={!!config.dsv4PoolQuant}
-              onChange={v => onChange('dsv4PoolQuant', v)}
+              checked={dsv4CompositeCacheOptIn && !!config.dsv4PoolQuant}
+              onChange={v => onChange('dsv4PoolQuant', dsv4CompositeCacheOptIn && v)}
+              disabled={!dsv4CompositeCacheOptIn}
             />
           </>
         )}

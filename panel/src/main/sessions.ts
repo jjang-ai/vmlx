@@ -150,6 +150,10 @@ function applyFamilyStartupDefaults(config: Partial<ServerConfig>, modelPath?: s
         config.dsv4PoolQuant = false
         changed = true
       }
+      if (!dsv4PrefixOptIn && config.dsv4PoolQuant === true) {
+        config.dsv4PoolQuant = false
+        changed = true
+      }
     }
     return changed
   } catch {
@@ -1141,6 +1145,7 @@ export class SessionManager extends EventEmitter {
               config.isMultimodal !== false
             config.continuousBatching = true
             config.dsv4PrefixCache = dsv4PrefixOptIn
+            config.dsv4PoolQuant = dsv4PrefixOptIn && config.dsv4PoolQuant === true
             config.enablePrefixCache = dsv4PrefixOptIn
             config.usePagedCache = dsv4PrefixOptIn
             config.pagedCacheBlockSize = DSV4_PAGED_CACHE_BLOCK_SIZE

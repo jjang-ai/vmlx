@@ -43,7 +43,7 @@ export function dsv4EnvFromConfig(
 
   if (options.dsv4Active === true) {
     env.DSV4_LONG_CTX = '1'
-    env.DSV4_POOL_QUANT = config.dsv4PoolQuant === true ? '1' : '0'
+    env.DSV4_POOL_QUANT = config.dsv4PrefixCache === true && config.dsv4PoolQuant === true ? '1' : '0'
     if (config.dsv4PrefixCache === true) {
       env.VMLX_DSV4_ENABLE_PREFIX_CACHE = '1'
     }

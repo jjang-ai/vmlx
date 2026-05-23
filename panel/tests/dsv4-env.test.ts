@@ -19,10 +19,18 @@ describe('dsv4EnvFromConfig', () => {
     })
   })
 
-  it('enables DSV4 pool quant only when explicit config asks for it', () => {
+  it('does not enable DSV4 pool quant unless native composite prefix cache is enabled', () => {
     expect(dsv4EnvFromConfig({ dsv4PoolQuant: true }, { dsv4Active: true })).toEqual({
       DSV4_LONG_CTX: '1',
+      DSV4_POOL_QUANT: '0',
+    })
+  })
+
+  it('enables DSV4 pool quant only when explicit config asks for it under native composite cache', () => {
+    expect(dsv4EnvFromConfig({ dsv4PrefixCache: true, dsv4PoolQuant: true }, { dsv4Active: true })).toEqual({
+      DSV4_LONG_CTX: '1',
       DSV4_POOL_QUANT: '1',
+      VMLX_DSV4_ENABLE_PREFIX_CACHE: '1',
     })
   })
 
@@ -168,7 +176,8 @@ describe('DSV4 runtime controls in SessionConfigForm', () => {
     expect(source).toContain('applyDsv4CompositeCacheToggle')
     expect(source).toContain('DSV4 Pool Quantization')
     expect(source).toContain('reuses the materialized CSA/HCA pool view')
-    expect(source).toContain("onChange={v => onChange('dsv4PoolQuant', v)}")
+    expect(source).toContain("disabled={!dsv4CompositeCacheOptIn}")
+    expect(source).toContain("onChange={v => onChange('dsv4PoolQuant', dsv4CompositeCacheOptIn && v)}")
     expect(source).not.toContain("onChange={() => onChange('dsv4PoolQuant', false)}")
     expect(source).not.toContain('DSV4 Raw Max Thinking')
     expect(source).not.toContain('DSV4 Force Direct Rail')
