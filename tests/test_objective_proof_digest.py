@@ -621,6 +621,48 @@ def test_objective_proof_digest_keeps_dsv4_long_quality_open(tmp_path):
     assert sum(item["status"] == "open" for item in digest["requirements"]) == 1
 
 
+def test_objective_proof_digest_surfaces_current_dsv4_identifier_canary(tmp_path):
+    from tests.cross_matrix.summarize_objective_proof import build_digest
+
+    _write_passing_base_artifacts(tmp_path)
+    _write_json(
+        tmp_path,
+        "build/current-dsv4-live-identifier-canary-20260523.json",
+        {
+            "status": "review",
+            "elapsed_sec": 62.352,
+            "required_identifier_counts": {
+                "THREE.Scene": 0,
+                "THREE.WebGLRenderer": 1,
+            },
+            "bad_patterns": [],
+            "has_markdown_fence": True,
+            "content": "```javascript\nconst scene = new THREE.ScScene();\n```",
+            "response": {
+                "usage": {
+                    "prompt_tokens": 81,
+                    "completion_tokens": 52,
+                    "total_tokens": 133,
+                },
+                "choices": [{"finish_reason": "stop"}],
+            },
+        },
+    )
+
+    digest = build_digest(tmp_path)
+    rows = {item["requirement"]: item for item in digest["requirements"]}
+
+    quality = rows["DSV4 long-output/code/file-generation quality is release-cleared"]
+    canary = quality["details"]["current_installed_identifier_canary"]
+    assert quality["status"] == "open"
+    assert canary["status"] == "review"
+    assert canary["required_identifier_counts"]["THREE.Scene"] == 0
+    assert canary["has_markdown_fence"] is True
+    assert canary["finish_reason"] == "stop"
+    assert canary["usage"]["completion_tokens"] == 52
+    assert "THREE.ScScene" in canary["content"]
+
+
 def test_objective_proof_digest_downgrades_pass_rows_with_missing_evidence(tmp_path):
     from tests.cross_matrix.summarize_objective_proof import build_digest
 

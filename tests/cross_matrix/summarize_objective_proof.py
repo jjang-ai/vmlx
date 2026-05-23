@@ -46,6 +46,7 @@ from tests.cross_matrix.run_vl_media_cache_contract import (
 
 DEFAULT_OUT = Path("build/current-objective-proof-audit-20260521.json")
 DSV4_QUALITY_CLEARANCE_REL = "build/current-dsv4-long-output-quality-clearance-20260521.json"
+DSV4_CURRENT_IDENTIFIER_CANARY_REL = "build/current-dsv4-live-identifier-canary-20260523.json"
 API_CACHE_CONTRACT_REL = "build/current-api-cache-contract-proof-20260521.json"
 PANEL_SETTINGS_CONTRACT_REL = "build/current-panel-settings-contract-proof-20260521.json"
 MAX_OUTPUT_CONTEXT_CONTRACT_REL = "build/current-max-output-context-contract-20260521.json"
@@ -368,6 +369,28 @@ def _dsv4_quality_clearance(clearance: dict[str, Any], root: Path) -> tuple[bool
     }
 
 
+def _dsv4_identifier_canary_detail(canary: dict[str, Any], root: Path) -> dict[str, Any]:
+    path_present = _path_present(root, DSV4_CURRENT_IDENTIFIER_CANARY_REL)
+    response = canary.get("response") if isinstance(canary.get("response"), dict) else {}
+    choices = response.get("choices") if isinstance(response, dict) else []
+    first_choice = choices[0] if choices and isinstance(choices[0], dict) else {}
+    content = canary.get("content")
+    if not isinstance(content, str):
+        content = ""
+    return {
+        "artifact": DSV4_CURRENT_IDENTIFIER_CANARY_REL,
+        "present": path_present,
+        "status": canary.get("status") if path_present else "missing",
+        "elapsed_sec": canary.get("elapsed_sec"),
+        "required_identifier_counts": canary.get("required_identifier_counts") or {},
+        "bad_patterns": canary.get("bad_patterns") or [],
+        "has_markdown_fence": canary.get("has_markdown_fence"),
+        "finish_reason": first_choice.get("finish_reason"),
+        "usage": response.get("usage") if isinstance(response, dict) else None,
+        "content": content[:1000],
+    }
+
+
 def _contract_checks(payload: dict[str, Any], required: tuple[str, ...]) -> tuple[bool, dict[str, bool]]:
     checks = payload.get("checks") or {}
     required_checks = {key: checks.get(key) is True for key in required}
@@ -565,6 +588,7 @@ def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
     static = _load(root, "build/current-static-cache-architecture-audit-full-qwen-hybrid-20260521.json")
     longctx = _load(root, "build/current-dsv4-long-context-proof-digest-20260521.json")
     quality_clearance = _load(root, DSV4_QUALITY_CLEARANCE_REL)
+    dsv4_current_identifier_canary = _load(root, DSV4_CURRENT_IDENTIFIER_CANARY_REL)
     api_cache_contract = _load(root, API_CACHE_CONTRACT_REL)
     panel_settings_contract = _load(root, PANEL_SETTINGS_CONTRACT_REL)
     max_output_context_contract = _load(root, MAX_OUTPUT_CONTEXT_CONTRACT_REL)
@@ -1072,6 +1096,9 @@ def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
         {
             "long_context_status": longctx.get("status"),
             "long_context_notes": longctx.get("notes"),
+            "current_installed_identifier_canary": _dsv4_identifier_canary_detail(
+                dsv4_current_identifier_canary, root
+            ),
         }
     )
     _add(
