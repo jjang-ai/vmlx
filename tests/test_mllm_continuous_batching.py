@@ -338,6 +338,60 @@ class TestMLLMBatchStats:
         assert "_native_mtp_runtime" not in source
         assert "native_mtp=_native_mtp_model_has_head(self.language_model)" in source
 
+    def test_text_only_hybrid_short_prefill_avoids_full_prompt_logits(self, monkeypatch):
+        """Short text-only hybrid MLLM prompts should not materialize lm_head for every prompt token."""
+        from mlx_lm.models.cache import KVCache
+
+        from vmlx_engine.mllm_batch_generator import (
+            MLLMBatchGenerator,
+            MLLMBatchRequest,
+        )
+
+        monkeypatch.setenv("VMLX_ALLOW_HYBRID_CHUNKED_PREFILL", "1")
+
+        class DummySSMCache:
+            def __init__(self):
+                self.state = mx.array([0])
+                self.cache = [mx.array([0])]
+
+        class DummyLanguageModel:
+            def __init__(self):
+                self.calls = []
+
+            def make_cache(self):
+                return [KVCache(), DummySSMCache()]
+
+            def __call__(self, input_ids, **_kwargs):
+                self.calls.append(int(input_ids.shape[1]))
+                return mx.zeros((input_ids.shape[0], input_ids.shape[1], 8))
+
+        class DummyVLM:
+            def __init__(self):
+                self.language_model = DummyLanguageModel()
+
+        model = DummyVLM()
+        generator = MLLMBatchGenerator(
+            model=model,
+            processor=object(),
+            prefill_step_size=2048,
+            enable_prefix_cache=False,
+        )
+        request = MLLMBatchRequest(
+            uid=0,
+            request_id="short-hybrid",
+            prompt="",
+            input_ids=mx.array([[1, 2, 3, 4, 5, 6]], dtype=mx.int32),
+            temperature=0.0,
+        )
+
+        output = generator._run_vision_encoding_inner(
+            request,
+            cache=model.language_model.make_cache(),
+        )
+
+        assert output.shape == (1, 1, 8)
+        assert model.language_model.calls == [5, 1]
+
 
 class TestMLLMSchedulerConfig:
     """Tests for MLLMSchedulerConfig."""

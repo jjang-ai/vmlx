@@ -3613,8 +3613,9 @@ class MLLMBatchGenerator:
         # incorrect output when chunked, so we only override the opt-in default
         # when one-shot prefill is *guaranteed* to OOM — a wrong answer beats
         # a hard crash that kills the session.
-        _allow_hybrid_chunked = os.environ.get(
-            "VMLX_ALLOW_HYBRID_CHUNKED_PREFILL"
+        _allow_hybrid_chunked = (
+            os.environ.get("VMLX_ALLOW_HYBRID_CHUNKED_PREFILL")
+            or os.environ.get("VMLINUX_ALLOW_HYBRID_CHUNKED_PREFILL")
         ) in ("1", "true", "True", "yes", "on")
         _hybrid_blocks_chunk = self._is_hybrid and not _allow_hybrid_chunked
 
@@ -3692,7 +3693,12 @@ class MLLMBatchGenerator:
                     return _kwargs
 
                 if seq_len <= self.prefill_step_size * 2:
-                    # Short text: single-shot through language_model.
+                    # Short text-only hybrid prompts still avoid materializing
+                    # lm_head for every prompt token. Prefill the prefix to
+                    # update cache/state, then ask for logits only on the final
+                    # token. This mirrors the text SingleBatch path and keeps
+                    # Qwen3.6 native-MTP/VL PP from paying full-prompt output
+                    # projection cost on "short" 1-4K prompts.
                     # vmlx#109: for hybrid+thinking models we split the
                     # prefill at the gen-prompt boundary so we can capture
                     # SSM state without contamination. Phase A processes
@@ -3705,6 +3711,8 @@ class MLLMBatchGenerator:
                     ssm_boundaries = self._ssm_capture_boundaries_for(
                         request, seq_len, has_images, boundary
                     )
+                    final_start = max(seq_len - 1, 0)
+                    _state_layers = [c for c in cache if hasattr(c, "state")]
                     if ssm_boundaries:
                         # Use pre-materialized Python list to avoid an
                         # mx.array → list eval cycle that can pin the
@@ -3724,12 +3732,22 @@ class MLLMBatchGenerator:
                             self._maybe_capture_clean_ssm_boundary(
                                 request, cache, all_tokens, capture_boundary
                             )
-                        output = lm(
-                            input_ids[:, processed:],
-                            **_lm_kwargs_for(processed, seq_len),
+                        if final_start > processed:
+                            lm(
+                                input_ids[:, processed:final_start],
+                                **_lm_kwargs_for(processed, final_start),
+                            )
+                    elif final_start > 0:
+                        lm(
+                            input_ids[:, :final_start],
+                            **_lm_kwargs_for(0, final_start),
                         )
-                    else:
-                        output = lm(input_ids, **_lm_kwargs_for(0, seq_len))
+                    if final_start > 0 and _state_layers:
+                        mx.eval([c.state for c in _state_layers])
+                    output = lm(
+                        input_ids[:, final_start:],
+                        **_lm_kwargs_for(final_start, seq_len),
+                    )
                     request.vision_encoded = True
                     if hasattr(output, "logits"):
                         return output.logits
