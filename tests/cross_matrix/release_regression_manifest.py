@@ -51,6 +51,15 @@ CURRENT_POST_BUDGET_EDGE_ARTIFACTS = {
     "public-release-surface-preflight": "build/current-release-surface-contract-20260523-post-budget-edge.json",
 }
 
+CURRENT_REGRESSION_SUITE_ARTIFACT = (
+    "build/current-regression-suite-20260523-proof-sweep-required-clean-jang.json"
+)
+
+EXPECTED_CURRENT_OPEN_REQUIREMENTS = [
+    "Qwen 27B JANG_4M prompt-processing speed floor is release-cleared",
+    "DSV4 long-output/code/file-generation quality is release-cleared",
+]
+
 
 _ROWS: list[dict[str, Any]] = [
     {
@@ -595,8 +604,57 @@ def validate_current_proof_sweep_artifacts(root: Path) -> dict[str, Any]:
         if status != "pass":
             not_pass.append({"artifact": artifact, "status": status})
 
+    regression_suite = _validate_current_regression_suite_artifact(root)
+    regression_suite_ok = (
+        regression_suite["status"] == "pass"
+        and not regression_suite["failed_steps"]
+        and not regression_suite["unexpected_open_requirements"]
+        and not regression_suite["missing_expected_open_requirements"]
+    )
+
     return {
-        "status": "pass" if not missing and not not_pass else "fail",
+        "status": "pass" if not missing and not not_pass and regression_suite_ok else "fail",
         "missing": missing,
         "not_pass": not_pass,
+        "regression_suite": regression_suite,
     }
+
+
+def _validate_current_regression_suite_artifact(root: Path) -> dict[str, Any]:
+    result: dict[str, Any] = {
+        "artifact": CURRENT_REGRESSION_SUITE_ARTIFACT,
+        "status": "missing",
+        "failed_steps": [],
+        "open_requirements": [],
+        "unexpected_open_requirements": [],
+        "missing_expected_open_requirements": EXPECTED_CURRENT_OPEN_REQUIREMENTS.copy(),
+    }
+    path = root / CURRENT_REGRESSION_SUITE_ARTIFACT
+    if not path.exists():
+        return result
+
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception as exc:  # noqa: BLE001 - diagnostic helper reports load failures
+        result["status"] = f"load_error:{type(exc).__name__}"
+        return result
+
+    open_requirements = [str(item) for item in payload.get("open_requirements", [])]
+    failed_steps = [str(item) for item in payload.get("failed_steps", [])]
+    unexpected_open_requirements = [
+        item for item in open_requirements if item not in EXPECTED_CURRENT_OPEN_REQUIREMENTS
+    ]
+    missing_expected_open_requirements = [
+        item for item in EXPECTED_CURRENT_OPEN_REQUIREMENTS if item not in open_requirements
+    ]
+
+    result.update(
+        {
+            "status": str(payload.get("status")),
+            "failed_steps": failed_steps,
+            "open_requirements": open_requirements,
+            "unexpected_open_requirements": unexpected_open_requirements,
+            "missing_expected_open_requirements": missing_expected_open_requirements,
+        }
+    )
+    return result

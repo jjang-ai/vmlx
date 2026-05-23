@@ -1,9 +1,12 @@
+import json
 from pathlib import Path
 import shlex
 
 from tests.cross_matrix.run_release_regression_manifest import build_manifest_artifact
 from tests.cross_matrix.release_regression_manifest import (
     CURRENT_POST_BUDGET_EDGE_ARTIFACTS,
+    CURRENT_REGRESSION_SUITE_ARTIFACT,
+    EXPECTED_CURRENT_OPEN_REQUIREMENTS,
     REQUIRED_RELEASE_DOMAINS,
     build_manifest,
     validate_current_proof_sweep_artifacts,
@@ -109,12 +112,33 @@ def test_release_regression_manifest_validates_current_proof_sweep_artifacts(tmp
         path = tmp_path / artifact
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text('{"status":"pass","failed":[]}\n', encoding="utf-8")
+    regression_suite = tmp_path / CURRENT_REGRESSION_SUITE_ARTIFACT
+    regression_suite.parent.mkdir(parents=True, exist_ok=True)
+    regression_suite.write_text(
+        json.dumps(
+            {
+                "status": "pass",
+                "failed_steps": [],
+                "open_requirements": EXPECTED_CURRENT_OPEN_REQUIREMENTS,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
 
     result = validate_current_proof_sweep_artifacts(tmp_path)
 
     assert result["status"] == "pass"
     assert result["missing"] == []
     assert result["not_pass"] == []
+    assert result["regression_suite"] == {
+        "artifact": CURRENT_REGRESSION_SUITE_ARTIFACT,
+        "status": "pass",
+        "failed_steps": [],
+        "open_requirements": EXPECTED_CURRENT_OPEN_REQUIREMENTS,
+        "unexpected_open_requirements": [],
+        "missing_expected_open_requirements": [],
+    }
 
 
 def test_release_regression_manifest_rejects_missing_or_failing_current_artifacts(tmp_path):
@@ -124,6 +148,19 @@ def test_release_regression_manifest_rejects_missing_or_failing_current_artifact
         path.parent.mkdir(parents=True, exist_ok=True)
         status = "fail" if artifact == artifacts[1] else "pass"
         path.write_text(f'{{"status":"{status}","failed":["example"]}}\n', encoding="utf-8")
+    regression_suite = tmp_path / CURRENT_REGRESSION_SUITE_ARTIFACT
+    regression_suite.parent.mkdir(parents=True, exist_ok=True)
+    regression_suite.write_text(
+        json.dumps(
+            {
+                "status": "pass",
+                "failed_steps": [],
+                "open_requirements": EXPECTED_CURRENT_OPEN_REQUIREMENTS,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
 
     result = validate_current_proof_sweep_artifacts(tmp_path)
 
@@ -132,11 +169,62 @@ def test_release_regression_manifest_rejects_missing_or_failing_current_artifact
     assert result["not_pass"] == [{"artifact": artifacts[1], "status": "fail"}]
 
 
+def test_release_regression_manifest_rejects_unexpected_current_regression_suite_state(tmp_path):
+    for artifact in CURRENT_POST_BUDGET_EDGE_ARTIFACTS.values():
+        path = tmp_path / artifact
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text('{"status":"pass","failed":[]}\n', encoding="utf-8")
+    regression_suite = tmp_path / CURRENT_REGRESSION_SUITE_ARTIFACT
+    regression_suite.parent.mkdir(parents=True, exist_ok=True)
+    regression_suite.write_text(
+        json.dumps(
+            {
+                "status": "pass",
+                "failed_steps": ["new_failure"],
+                "open_requirements": [
+                    EXPECTED_CURRENT_OPEN_REQUIREMENTS[0],
+                    "Server max output/context wiring regressed",
+                ],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    result = validate_current_proof_sweep_artifacts(tmp_path)
+
+    assert result["status"] == "fail"
+    assert result["regression_suite"] == {
+        "artifact": CURRENT_REGRESSION_SUITE_ARTIFACT,
+        "status": "pass",
+        "failed_steps": ["new_failure"],
+        "open_requirements": [
+            EXPECTED_CURRENT_OPEN_REQUIREMENTS[0],
+            "Server max output/context wiring regressed",
+        ],
+        "unexpected_open_requirements": ["Server max output/context wiring regressed"],
+        "missing_expected_open_requirements": [EXPECTED_CURRENT_OPEN_REQUIREMENTS[1]],
+    }
+
+
 def test_release_regression_manifest_runner_embeds_current_proof_validation(tmp_path):
     for artifact in CURRENT_POST_BUDGET_EDGE_ARTIFACTS.values():
         path = tmp_path / artifact
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text('{"status":"pass","failed":[]}\n', encoding="utf-8")
+    regression_suite = tmp_path / CURRENT_REGRESSION_SUITE_ARTIFACT
+    regression_suite.parent.mkdir(parents=True, exist_ok=True)
+    regression_suite.write_text(
+        json.dumps(
+            {
+                "status": "pass",
+                "failed_steps": [],
+                "open_requirements": EXPECTED_CURRENT_OPEN_REQUIREMENTS,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
 
     artifact = build_manifest_artifact(tmp_path)
 
@@ -144,6 +232,14 @@ def test_release_regression_manifest_runner_embeds_current_proof_validation(tmp_
         "status": "pass",
         "missing": [],
         "not_pass": [],
+        "regression_suite": {
+            "artifact": CURRENT_REGRESSION_SUITE_ARTIFACT,
+            "status": "pass",
+            "failed_steps": [],
+            "open_requirements": EXPECTED_CURRENT_OPEN_REQUIREMENTS,
+            "unexpected_open_requirements": [],
+            "missing_expected_open_requirements": [],
+        },
     }
 
 
