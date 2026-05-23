@@ -24,7 +24,6 @@ from typing import Any
 
 DEFAULT_OUT = Path("build/current-packaged-integrity-contract-20260521.json")
 EXPECTED_OPEN_REQUIREMENTS = [
-    "Qwen/JANG packaged MX matmul speed is release-cleared",
     "DSV4 long-output/code/file-generation quality is release-cleared",
 ]
 MIN_RELEASE_GATE_UNIT_TESTS = 34

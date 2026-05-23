@@ -492,7 +492,7 @@ def _write_passing_base_artifacts(tmp_path: Path) -> None:
     )
     _write_json(
         tmp_path,
-        "build/current-decode-speed-live-qwen27-jang4m-packaged-keepalloc-20260522.json",
+        "build/current-decode-speed-live-qwen27-jang4m-packaged-tahoe-dmg-20260522.json",
         speed_base,
     )
 
@@ -771,10 +771,13 @@ def test_objective_proof_digest_accepts_generation_mtp_vl_contracts(tmp_path):
 
 
 def test_objective_proof_digest_surfaces_qwen_jang_packaged_speed_review(tmp_path):
-    from tests.cross_matrix.summarize_objective_proof import build_digest
+    from tests.cross_matrix.summarize_objective_proof import (
+        QWEN_JANG_PACKAGED_SPEED_REL,
+        build_digest,
+    )
 
     _write_passing_base_artifacts(tmp_path)
-    packaged = tmp_path / "build/current-decode-speed-live-qwen27-jang4m-packaged-keepalloc-20260522.json"
+    packaged = tmp_path / QWEN_JANG_PACKAGED_SPEED_REL
     payload = json.loads(packaged.read_text(encoding="utf-8"))
     payload["results"][0]["status"] = "review"
     payload["results"][0]["notes"] = [
@@ -804,7 +807,10 @@ def test_objective_proof_digest_surfaces_qwen_jang_packaged_speed_review(tmp_pat
 
 
 def test_objective_proof_digest_accepts_qwen_jang_speed_when_source_and_packaged_pass(tmp_path):
-    from tests.cross_matrix.summarize_objective_proof import build_digest
+    from tests.cross_matrix.summarize_objective_proof import (
+        QWEN_JANG_PACKAGED_SPEED_REL,
+        build_digest,
+    )
 
     _write_passing_base_artifacts(tmp_path)
 
@@ -817,6 +823,7 @@ def test_objective_proof_digest_accepts_qwen_jang_speed_when_source_and_packaged
     assert row["details"]["packaged"]["status"] == "pass"
     assert row["details"]["source"]["min_pp_wall_tok_s"] >= 600
     assert row["details"]["packaged"]["min_pp_wall_tok_s"] >= 600
+    assert "packaged-tahoe-dmg" in QWEN_JANG_PACKAGED_SPEED_REL
 
 
 def test_objective_proof_digest_rejects_stale_panel_settings_contract_artifact(tmp_path):

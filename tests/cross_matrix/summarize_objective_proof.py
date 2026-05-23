@@ -56,7 +56,7 @@ GENERATION_DEFAULTS_CONTRACT_REL = "build/current-generation-defaults-contract-2
 NATIVE_MTP_CONTRACT_REL = "build/current-native-mtp-contract-20260521.json"
 VL_MEDIA_CONTRACT_REL = "build/current-vl-media-cache-contract-20260521.json"
 QWEN_JANG_SOURCE_SPEED_REL = "build/current-decode-speed-live-qwen27-jang4m-source-keepalloc-20260522.json"
-QWEN_JANG_PACKAGED_SPEED_REL = "build/current-decode-speed-live-qwen27-jang4m-packaged-keepalloc-20260522.json"
+QWEN_JANG_PACKAGED_SPEED_REL = "build/current-decode-speed-live-qwen27-jang4m-packaged-tahoe-dmg-20260522.json"
 DSV4_DEFAULT_CACHE_TOOL_LOOP_REL = "build/current-dsv4-default-cache-tool-loop/result.json"
 DSV4_QUALITY_CLEARANCE_CHECKS = (
     "identifier_integrity",

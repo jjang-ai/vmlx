@@ -252,11 +252,12 @@ def test_release_regression_manifest_tracks_qwen_jang_live_speed_review():
     assert "current-decode-speed-live-qwen27-jang4m-20260522-hybrid-tq-review.json" in joined
     assert "current-decode-speed-live-qwen27-jang4m-source-keepalloc-20260522.json" in joined
     assert "current-decode-speed-live-qwen27-jang4m-packaged-keepalloc-20260522.json" in joined
+    assert "current-decode-speed-live-qwen27-jang4m-packaged-tahoe-dmg-20260522.json" in joined
     assert "MLX and MLX-metal wheel tags" in joined
     assert "selective live TurboQuant for Qwen attention KV layers" in joined
     assert "SingleBatchGenerator honors the explicit prefill keep-alloc CLI/env path" in joined
-    assert "PP below expected" in joined
-    assert "review, not release-clear" in joined
+    assert "compat packaged artifact remains retained as the regression diagnostic" in joined
+    assert "Tahoe-native packaged qwen27_jang4m live row clears PP speed" in joined
 
 
 def test_release_regression_manifest_tracks_packaged_integrity_with_runner_artifact():

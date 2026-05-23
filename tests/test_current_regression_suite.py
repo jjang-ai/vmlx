@@ -16,7 +16,6 @@ def test_current_regression_suite_allows_only_declared_known_blockers(tmp_path, 
         {
             "requirements": [
                 {"requirement": "DSV4 Flash prefix/paged/L2 cache is enabled by default from app launch", "status": "pass"},
-                {"requirement": "Qwen/JANG packaged MX matmul speed is release-cleared", "status": "open"},
                 {"requirement": "DSV4 long-output/code/file-generation quality is release-cleared", "status": "open"},
             ]
         },
@@ -43,7 +42,6 @@ def test_current_regression_suite_fails_on_new_unexpected_open_requirement(tmp_p
         tmp_path / "build/current-objective-proof-audit-20260521.json",
         {
             "requirements": [
-                {"requirement": "Qwen/JANG packaged MX matmul speed is release-cleared", "status": "open"},
                 {"requirement": "DSV4 long-output/code/file-generation quality is release-cleared", "status": "open"},
                 {"requirement": "Server default max output and max context are distinct and map to correct CLI flags", "status": "open"},
             ]
@@ -71,7 +69,6 @@ def test_current_regression_suite_fails_on_step_failure_even_if_digest_is_expect
         tmp_path / "build/current-objective-proof-audit-20260521.json",
         {
             "requirements": [
-                {"requirement": "Qwen/JANG packaged MX matmul speed is release-cleared", "status": "open"},
                 {"requirement": "DSV4 long-output/code/file-generation quality is release-cleared", "status": "open"},
             ]
         },
@@ -176,7 +173,6 @@ def test_current_regression_suite_refreshes_release_regression_manifest(monkeypa
         tmp_path / "build/current-objective-proof-audit-20260521.json",
         {
             "requirements": [
-                {"requirement": "Qwen/JANG packaged MX matmul speed is release-cleared", "status": "open"},
                 {"requirement": "DSV4 long-output/code/file-generation quality is release-cleared", "status": "open"},
             ]
         },
@@ -207,7 +203,6 @@ def test_current_regression_suite_runs_panel_tool_security_contracts(monkeypatch
         tmp_path / "build/current-objective-proof-audit-20260521.json",
         {
             "requirements": [
-                {"requirement": "Qwen/JANG packaged MX matmul speed is release-cleared", "status": "open"},
                 {"requirement": "DSV4 long-output/code/file-generation quality is release-cleared", "status": "open"},
             ]
         },
@@ -238,7 +233,6 @@ def test_current_regression_suite_runs_release_surface_contract(monkeypatch, tmp
         tmp_path / "build/current-objective-proof-audit-20260521.json",
         {
             "requirements": [
-                {"requirement": "Qwen/JANG packaged MX matmul speed is release-cleared", "status": "open"},
                 {"requirement": "DSV4 long-output/code/file-generation quality is release-cleared", "status": "open"},
             ]
         },
@@ -269,7 +263,6 @@ def test_current_regression_suite_runs_cli_release_contracts(monkeypatch, tmp_pa
         tmp_path / "build/current-objective-proof-audit-20260521.json",
         {
             "requirements": [
-                {"requirement": "Qwen/JANG packaged MX matmul speed is release-cleared", "status": "open"},
                 {"requirement": "DSV4 long-output/code/file-generation quality is release-cleared", "status": "open"},
             ]
         },
@@ -300,7 +293,6 @@ def test_current_regression_suite_runs_jang_model_compat_contracts(monkeypatch, 
         tmp_path / "build/current-objective-proof-audit-20260521.json",
         {
             "requirements": [
-                {"requirement": "Qwen/JANG packaged MX matmul speed is release-cleared", "status": "open"},
                 {"requirement": "DSV4 long-output/code/file-generation quality is release-cleared", "status": "open"},
             ]
         },
@@ -331,7 +323,6 @@ def test_current_regression_suite_runs_model_artifact_format_contracts(monkeypat
         tmp_path / "build/current-objective-proof-audit-20260521.json",
         {
             "requirements": [
-                {"requirement": "Qwen/JANG packaged MX matmul speed is release-cleared", "status": "open"},
                 {"requirement": "DSV4 long-output/code/file-generation quality is release-cleared", "status": "open"},
             ]
         },
@@ -362,7 +353,6 @@ def test_current_regression_suite_runs_model_family_detection_contracts(monkeypa
         tmp_path / "build/current-objective-proof-audit-20260521.json",
         {
             "requirements": [
-                {"requirement": "Qwen/JANG packaged MX matmul speed is release-cleared", "status": "open"},
                 {"requirement": "DSV4 long-output/code/file-generation quality is release-cleared", "status": "open"},
             ]
         },
@@ -393,7 +383,6 @@ def test_current_regression_suite_runs_parser_registry_contracts(monkeypatch, tm
         tmp_path / "build/current-objective-proof-audit-20260521.json",
         {
             "requirements": [
-                {"requirement": "Qwen/JANG packaged MX matmul speed is release-cleared", "status": "open"},
                 {"requirement": "DSV4 long-output/code/file-generation quality is release-cleared", "status": "open"},
             ]
         },
@@ -424,7 +413,6 @@ def test_current_regression_suite_runs_max_output_context_contracts(monkeypatch,
         tmp_path / "build/current-objective-proof-audit-20260521.json",
         {
             "requirements": [
-                {"requirement": "Qwen/JANG packaged MX matmul speed is release-cleared", "status": "open"},
                 {"requirement": "DSV4 long-output/code/file-generation quality is release-cleared", "status": "open"},
             ]
         },
@@ -455,7 +443,6 @@ def test_current_regression_suite_runs_vl_media_cache_contracts(monkeypatch, tmp
         tmp_path / "build/current-objective-proof-audit-20260521.json",
         {
             "requirements": [
-                {"requirement": "Qwen/JANG packaged MX matmul speed is release-cleared", "status": "open"},
                 {"requirement": "DSV4 long-output/code/file-generation quality is release-cleared", "status": "open"},
             ]
         },
@@ -486,7 +473,6 @@ def test_current_regression_suite_runs_cache_architecture_contracts(monkeypatch,
         tmp_path / "build/current-objective-proof-audit-20260521.json",
         {
             "requirements": [
-                {"requirement": "Qwen/JANG packaged MX matmul speed is release-cleared", "status": "open"},
                 {"requirement": "DSV4 long-output/code/file-generation quality is release-cleared", "status": "open"},
             ]
         },
@@ -517,7 +503,6 @@ def test_current_regression_suite_runs_native_mtp_contracts(monkeypatch, tmp_pat
         tmp_path / "build/current-objective-proof-audit-20260521.json",
         {
             "requirements": [
-                {"requirement": "Qwen/JANG packaged MX matmul speed is release-cleared", "status": "open"},
                 {"requirement": "DSV4 long-output/code/file-generation quality is release-cleared", "status": "open"},
             ]
         },
@@ -548,7 +533,6 @@ def test_current_regression_suite_runs_generation_defaults_contracts(monkeypatch
         tmp_path / "build/current-objective-proof-audit-20260521.json",
         {
             "requirements": [
-                {"requirement": "Qwen/JANG packaged MX matmul speed is release-cleared", "status": "open"},
                 {"requirement": "DSV4 long-output/code/file-generation quality is release-cleared", "status": "open"},
             ]
         },
@@ -579,7 +563,6 @@ def test_current_regression_suite_runs_reasoning_template_contracts(monkeypatch,
         tmp_path / "build/current-objective-proof-audit-20260521.json",
         {
             "requirements": [
-                {"requirement": "Qwen/JANG packaged MX matmul speed is release-cleared", "status": "open"},
                 {"requirement": "DSV4 long-output/code/file-generation quality is release-cleared", "status": "open"},
             ]
         },
@@ -610,7 +593,6 @@ def test_current_regression_suite_runs_api_surface_contracts(monkeypatch, tmp_pa
         tmp_path / "build/current-objective-proof-audit-20260521.json",
         {
             "requirements": [
-                {"requirement": "Qwen/JANG packaged MX matmul speed is release-cleared", "status": "open"},
                 {"requirement": "DSV4 long-output/code/file-generation quality is release-cleared", "status": "open"},
             ]
         },
@@ -641,7 +623,6 @@ def test_current_regression_suite_runs_tool_call_contracts(monkeypatch, tmp_path
         tmp_path / "build/current-objective-proof-audit-20260521.json",
         {
             "requirements": [
-                {"requirement": "Qwen/JANG packaged MX matmul speed is release-cleared", "status": "open"},
                 {"requirement": "DSV4 long-output/code/file-generation quality is release-cleared", "status": "open"},
             ]
         },
@@ -672,7 +653,6 @@ def test_current_regression_suite_runs_mcp_policy_contracts(monkeypatch, tmp_pat
         tmp_path / "build/current-objective-proof-audit-20260521.json",
         {
             "requirements": [
-                {"requirement": "Qwen/JANG packaged MX matmul speed is release-cleared", "status": "open"},
                 {"requirement": "DSV4 long-output/code/file-generation quality is release-cleared", "status": "open"},
             ]
         },
@@ -703,7 +683,6 @@ def test_current_regression_suite_runs_mcp_policy_marker_contract(monkeypatch, t
         tmp_path / "build/current-objective-proof-audit-20260521.json",
         {
             "requirements": [
-                {"requirement": "Qwen/JANG packaged MX matmul speed is release-cleared", "status": "open"},
                 {"requirement": "DSV4 long-output/code/file-generation quality is release-cleared", "status": "open"},
             ]
         },
@@ -733,7 +712,6 @@ def test_current_regression_suite_runs_packaged_integrity_contracts(monkeypatch,
         tmp_path / "build/current-objective-proof-audit-20260521.json",
         {
             "requirements": [
-                {"requirement": "Qwen/JANG packaged MX matmul speed is release-cleared", "status": "open"},
                 {"requirement": "DSV4 long-output/code/file-generation quality is release-cleared", "status": "open"},
             ]
         },
@@ -764,7 +742,6 @@ def test_current_regression_suite_sets_clean_jang_source_env_for_release_childre
         tmp_path / "build/current-objective-proof-audit-20260521.json",
         {
             "requirements": [
-                {"requirement": "Qwen/JANG packaged MX matmul speed is release-cleared", "status": "open"},
                 {"requirement": "DSV4 long-output/code/file-generation quality is release-cleared", "status": "open"},
             ]
         },
