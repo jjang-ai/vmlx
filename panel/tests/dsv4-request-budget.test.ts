@@ -22,6 +22,14 @@ describe('DSV4 chat request budget helpers', () => {
     expect(dsv4FinalizerTokens(true, 'deepseek-v4', Number.NaN)).toBeUndefined()
   })
 
+  it('DSV4 request budget rejects invalid caps and floors fractional explicit caps', () => {
+    for (const value of [0, -1, Number.NaN, Number.POSITIVE_INFINITY, '8192', null]) {
+      expect(dsv4OutputBudget(value, true, 'deepseek-v4')).toBeUndefined()
+    }
+
+    expect(dsv4OutputBudget(8192.9, true, 'deepseek-v4')).toBe(8192)
+  })
+
   it('does not change explicit Max reasoning budgets', () => {
     expect(dsv4OutputBudget(128, true, 'deepseek-v4', 'max')).toBe(128)
   })
