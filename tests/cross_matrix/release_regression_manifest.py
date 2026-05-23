@@ -139,6 +139,20 @@ EXPECTED_CURRENT_VL_MEDIA_CHECKS = (
     "all_required_panel_markers_present",
 )
 
+EXPECTED_CURRENT_MCP_POLICY_CHECKS = (
+    "mcp_autodiscovery_without_cli_or_env",
+    "mcp_policy_filters_servers_tools_before_schema_merge",
+    "mcp_disabled_tool_execution_rejected_server_side",
+    "mcp_status_redacts_urls_headers_env",
+    "mcp_command_security_blocks_injection",
+    "panel_mcp_policy_flags_and_preview_wired",
+    "panel_mcp_config_import_redacts_metadata",
+    "mcp_gateway_routes_by_explicit_model",
+    "mcp_gateway_rejects_ambiguous_multi_session_requests",
+    "builtin_electron_tools_separate_from_mcp_execution",
+    "all_required_mcp_policy_markers_present",
+)
+
 
 REQUIRED_RELEASE_DOMAINS = {
     "chat_ui_settings",
@@ -742,6 +756,7 @@ def validate_current_proof_sweep_artifacts(root: Path) -> dict[str, Any]:
     tool_call_matrix = _validate_current_tool_call_matrix_artifact(root)
     native_mtp_matrix = _validate_current_native_mtp_matrix_artifact(root)
     vl_media_matrix = _validate_current_vl_media_matrix_artifact(root)
+    mcp_policy_matrix = _validate_current_mcp_policy_matrix_artifact(root)
     regression_suite_ok = (
         regression_suite["status"] == "pass"
         and not regression_suite["failed_steps"]
@@ -813,6 +828,12 @@ def validate_current_proof_sweep_artifacts(root: Path) -> dict[str, Any]:
         and not vl_media_matrix["failed_checks"]
         and not vl_media_matrix["missing_expected_checks"]
     )
+    mcp_policy_matrix_ok = (
+        mcp_policy_matrix["status"] == "pass"
+        and not mcp_policy_matrix["missing_markers"]
+        and not mcp_policy_matrix["failed_checks"]
+        and not mcp_policy_matrix["missing_expected_checks"]
+    )
 
     return {
         "status": "pass"
@@ -830,6 +851,7 @@ def validate_current_proof_sweep_artifacts(root: Path) -> dict[str, Any]:
             and tool_call_matrix_ok
             and native_mtp_matrix_ok
             and vl_media_matrix_ok
+            and mcp_policy_matrix_ok
         )
         else "fail",
         "missing": missing,
@@ -845,6 +867,7 @@ def validate_current_proof_sweep_artifacts(root: Path) -> dict[str, Any]:
         "tool_call_matrix": tool_call_matrix,
         "native_mtp_matrix": native_mtp_matrix,
         "vl_media_matrix": vl_media_matrix,
+        "mcp_policy_matrix": mcp_policy_matrix,
     }
 
 
@@ -1286,6 +1309,48 @@ def _validate_current_vl_media_matrix_artifact(root: Path) -> dict[str, Any]:
             "missing_panel_markers": [
                 str(item) for item in payload.get("missing_panel_markers", [])
             ],
+            "failed_checks": failed_checks,
+            "missing_expected_checks": missing_expected_checks,
+        }
+    )
+    return result
+
+
+def _validate_current_mcp_policy_matrix_artifact(root: Path) -> dict[str, Any]:
+    artifact = CURRENT_POST_BUDGET_EDGE_ARTIFACTS["mcp-policy-ui-gateway"]
+    result: dict[str, Any] = {
+        "artifact": artifact,
+        "status": "missing",
+        "checks": {},
+        "missing_markers": [],
+        "failed_checks": list(EXPECTED_CURRENT_MCP_POLICY_CHECKS),
+        "missing_expected_checks": list(EXPECTED_CURRENT_MCP_POLICY_CHECKS),
+    }
+    path = root / artifact
+    if not path.exists():
+        return result
+
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception as exc:  # noqa: BLE001 - diagnostic helper reports load failures
+        result["status"] = f"load_error:{type(exc).__name__}"
+        return result
+
+    checks = {
+        str(name): bool(value)
+        for name, value in dict(payload.get("checks", {})).items()
+    }
+    missing_expected_checks = [
+        name for name in EXPECTED_CURRENT_MCP_POLICY_CHECKS if name not in checks
+    ]
+    failed_checks = [
+        name for name in EXPECTED_CURRENT_MCP_POLICY_CHECKS if checks.get(name) is not True
+    ]
+    result.update(
+        {
+            "status": str(payload.get("status")),
+            "checks": checks,
+            "missing_markers": [str(item) for item in payload.get("missing_markers", [])],
             "failed_checks": failed_checks,
             "missing_expected_checks": missing_expected_checks,
         }
