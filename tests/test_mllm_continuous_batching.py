@@ -338,6 +338,18 @@ class TestMLLMBatchStats:
         assert "_native_mtp_runtime" not in source
         assert "native_mtp=_native_mtp_model_has_head(self.language_model)" in source
 
+    def test_qwen_mtp_patches_support_prefix_without_lm_head(self):
+        """Qwen native-MTP text/VL wrappers must let MLLM prefill skip prefix lm_head."""
+        sources = [
+            Path("vmlx_engine/patches/mlx_lm_mtp/qwen35_model.py").read_text(),
+            Path("vmlx_engine/patches/mlx_vlm_mtp/qwen35_vl.py").read_text(),
+        ]
+
+        for source in sources:
+            assert "return_logits: bool = True" in source
+            assert "if not return_logits:" in source
+            assert "return hidden" in source
+
     def test_text_only_hybrid_short_prefill_avoids_full_prompt_logits(self, monkeypatch):
         """Short text-only hybrid MLLM prompts should not materialize lm_head for every prompt token."""
         from mlx_lm.models.cache import KVCache
@@ -361,8 +373,13 @@ class TestMLLMBatchStats:
             def make_cache(self):
                 return [KVCache(), DummySSMCache()]
 
-            def __call__(self, input_ids, **_kwargs):
-                self.calls.append(int(input_ids.shape[1]))
+            def __call__(self, input_ids, *, return_logits=True, **kwargs):
+                self.calls.append(
+                    {
+                        "tokens": int(input_ids.shape[1]),
+                        "return_logits": return_logits,
+                    }
+                )
                 return mx.zeros((input_ids.shape[0], input_ids.shape[1], 8))
 
         class DummyVLM:
@@ -390,7 +407,10 @@ class TestMLLMBatchStats:
         )
 
         assert output.shape == (1, 1, 8)
-        assert model.language_model.calls == [5, 1]
+        assert model.language_model.calls == [
+            {"tokens": 5, "return_logits": False},
+            {"tokens": 1, "return_logits": True},
+        ]
 
 
 class TestMLLMSchedulerConfig:

@@ -613,11 +613,12 @@ def _patch_language_model(qlang: Any) -> None:
         mask=None,
         cache=None,
         return_hidden: bool = False,
+        return_logits: bool = True,
         n_confirmed: int = 0,
         **kwargs,
     ):
         force_text_rope = bool(getattr(self, "_vmlx_force_text_rope_1d", False))
-        if not force_text_rope and not return_hidden and n_confirmed == 0:
+        if not force_text_rope and not return_hidden and return_logits and n_confirmed == 0:
             return original_call(
                 self,
                 inputs,
@@ -726,8 +727,13 @@ def _patch_language_model(qlang: Any) -> None:
             inputs_embeds=inputs_embeds,
             position_ids=position_ids,
             n_confirmed=n_confirmed,
-            return_unnormed=force_text_rope or return_hidden or n_confirmed > 0,
+            return_unnormed=force_text_rope
+            or return_hidden
+            or not return_logits
+            or n_confirmed > 0,
         )
+        if not return_logits:
+            return hidden
         normed = self.model.norm(hidden)
         if self.args.tie_word_embeddings:
             logits = self.model.embed_tokens.as_linear(normed)
@@ -847,6 +853,7 @@ def _patch_outer_model(qvl: Any) -> None:
         mask=None,
         cache=None,
         return_hidden: bool = False,
+        return_logits: bool = True,
         n_confirmed: int = 0,
         **kwargs,
     ):
@@ -864,6 +871,7 @@ def _patch_outer_model(qvl: Any) -> None:
             mask=mask,
             cache=cache,
             return_hidden=return_hidden,
+            return_logits=return_logits,
             n_confirmed=n_confirmed,
             **kwargs,
         )

@@ -1464,6 +1464,21 @@ def _native_mtp_model_has_head(language_model: Any) -> bool:
     )
 
 
+def _call_lm_prefix_without_logits(
+    lm: Any,
+    input_ids: mx.array,
+    kwargs: Dict[str, Any],
+) -> Any:
+    """Run a prefix-only language-model step without projecting full logits when supported."""
+    try:
+        sig = inspect.signature(lm.__call__)
+    except (TypeError, ValueError):
+        sig = None
+    if sig is not None and "return_logits" in sig.parameters:
+        return lm(input_ids, **kwargs, return_logits=False)
+    return lm(input_ids, **kwargs)
+
+
 def _native_mtp_clear_rollback(cache: List[Any]) -> None:
     for layer in cache:
         if hasattr(layer, "rollback_state") and layer.rollback_state is not None:
@@ -3724,23 +3739,26 @@ class MLLMBatchGenerator:
                         processed = 0
                         for capture_boundary in ssm_boundaries:
                             if capture_boundary > processed:
-                                lm(
+                                _call_lm_prefix_without_logits(
+                                    lm,
                                     input_ids[:, processed:capture_boundary],
-                                    **_lm_kwargs_for(processed, capture_boundary),
+                                    _lm_kwargs_for(processed, capture_boundary),
                                 )
                                 processed = capture_boundary
                             self._maybe_capture_clean_ssm_boundary(
                                 request, cache, all_tokens, capture_boundary
                             )
                         if final_start > processed:
-                            lm(
+                            _call_lm_prefix_without_logits(
+                                lm,
                                 input_ids[:, processed:final_start],
-                                **_lm_kwargs_for(processed, final_start),
+                                _lm_kwargs_for(processed, final_start),
                             )
                     elif final_start > 0:
-                        lm(
+                        _call_lm_prefix_without_logits(
+                            lm,
                             input_ids[:, :final_start],
-                            **_lm_kwargs_for(0, final_start),
+                            _lm_kwargs_for(0, final_start),
                         )
                     if final_start > 0 and _state_layers:
                         mx.eval([c.state for c in _state_layers])
@@ -3820,7 +3838,11 @@ class MLLMBatchGenerator:
                         chunk_size = next_ssm_boundary - processed
                     chunk = input_ids[:, processed:processed + chunk_size]
                     try:
-                        lm(chunk, **_lm_kwargs_for(processed, processed + chunk_size))
+                        _call_lm_prefix_without_logits(
+                            lm,
+                            chunk,
+                            _lm_kwargs_for(processed, processed + chunk_size),
+                        )
                     except Exception as chunk_err:
                         # Log cache state at failure point for diagnosis
                         _cache_diag = []

@@ -452,6 +452,7 @@ def _patch_text_model(q35: Any) -> None:
         cache=None,
         input_embeddings=None,
         return_hidden: bool = False,
+        return_logits: bool = True,
         n_confirmed: int = 0,
     ):
         hidden = self.model(
@@ -460,6 +461,8 @@ def _patch_text_model(q35: Any) -> None:
             input_embeddings=input_embeddings,
             n_confirmed=n_confirmed,
         )
+        if not return_logits:
+            return hidden
         normed = self.model.norm(hidden)
         if self.args.tie_word_embeddings:
             out = self.model.embed_tokens.as_linear(normed)

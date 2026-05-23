@@ -716,6 +716,11 @@ def _write_passing_base_artifacts(tmp_path: Path) -> None:
     )
     _write_json(
         tmp_path,
+        "build/current-decode-speed-live-qwen27-jang4m-mtp-no-prefix-logits-20260523.json",
+        mtp_speed_base,
+    )
+    _write_json(
+        tmp_path,
         "build/current-native-mtp-speed-ab-qwen27-jang4m-mtp-20260523/result.json",
         {
             "speedup_vs_baseline": 1.83,
@@ -1597,6 +1602,48 @@ def test_objective_proof_digest_explains_qwen_mllm_prefill_trace_bottleneck(tmp_
     assert diagnosis["suspected_bottleneck"] == "logits/sample materialization"
 
 
+def test_objective_proof_digest_surfaces_qwen_no_prefix_logits_trial(tmp_path):
+    from tests.cross_matrix.summarize_objective_proof import build_digest
+
+    _write_passing_base_artifacts(tmp_path)
+    mtp_prefill = tmp_path / "build/current-decode-speed-live-qwen27-jang4m-mtp-prefill2048-source-isolated-20260523.json"
+    mtp_payload = json.loads(mtp_prefill.read_text(encoding="utf-8"))
+    mtp_payload["results"][0]["status"] = "review"
+    mtp_payload["results"][0]["notes"] = ["PP below expected 600.00: 286.56"]
+    mtp_payload["results"][0]["pp_rows"] = [
+        {"pp_wall_tok_s": 286.56, "loopish": False},
+    ]
+    mtp_prefill.write_text(json.dumps(mtp_payload), encoding="utf-8")
+    _write_json(
+        tmp_path,
+        "build/current-decode-speed-live-qwen27-jang4m-mtp-no-prefix-logits-20260523.json",
+        {
+            "results": [
+                {
+                    "status": "review",
+                    "notes": ["PP below expected 600.00: 271.38, 282.35, 256.75"],
+                    "pp_rows": [
+                        {"pp_wall_tok_s": 271.38, "loopish": False},
+                        {"pp_wall_tok_s": 282.35, "loopish": False},
+                        {"pp_wall_tok_s": 256.75, "loopish": False},
+                    ],
+                    "bundle_sampling": {"decode_tps_wall": 24.42, "loopish": False},
+                }
+            ]
+        },
+    )
+
+    digest = build_digest(tmp_path)
+    rows = {item["requirement"]: item for item in digest["requirements"]}
+
+    row = rows["Qwen 27B JANG_4M prompt-processing speed floor is release-cleared"]
+    trial = row["details"]["native_mtp_no_prefix_logits_trial"]
+    assert row["status"] == "open"
+    assert trial["status"] == "review"
+    assert trial["min_pp_wall_tok_s"] == 256.75
+    assert trial["clears_prompt_processing_floor"] is False
+
+
 def test_objective_proof_digest_accepts_qwen_native_mtp_decode_ab_when_equivalent_and_faster(tmp_path):
     from tests.cross_matrix.summarize_objective_proof import build_digest
 
@@ -1723,6 +1770,42 @@ def test_objective_proof_digest_accepts_dsv4_quality_clearance_artifact(tmp_path
                     "THREE.PerspectiveCamera": 1,
                 },
             },
+        },
+    )
+    _write_json(
+        tmp_path,
+        "build/current-dsv4-live-identifier-sameprompt-nocache-source-20260523.json",
+        {
+            "status": "pass",
+            "probe": {
+                "analysis": {
+                    "content": "THREE.Scene\nTHREE.WebGLRenderer\nTHREE.PerspectiveCamera\nTHREE.BoxGeometry",
+                    "missing_identifiers": [],
+                    "has_common_corruptions": False,
+                },
+                "usage": {"completion_tokens": 32},
+            },
+        },
+    )
+    _write_json(
+        tmp_path,
+        "build/current-dsv4-live-identifier-cache-source-comparison-20260523.json",
+        {
+            "status": "pass",
+            "cases": [
+                {
+                    "name": "pooloff",
+                    "status": "pass",
+                    "artifact": "build/current-dsv4-live-identifier-cache-source-pooloff-20260523.json",
+                    "failures": [],
+                },
+                {
+                    "name": "poolon",
+                    "status": "pass",
+                    "artifact": "build/current-dsv4-live-identifier-cache-source-poolon-20260523.json",
+                    "failures": [],
+                },
+            ],
         },
     )
     _write_json(
