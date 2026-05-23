@@ -2238,7 +2238,7 @@ describe('JIT Toggle', () => {
         expect(sessions).toContain('zayaCcaActive ||')
     })
 
-    it('settings form and launch code surface DSV4 composite cache as diagnostic opt-in', () => {
+    it('settings form and launch code surface one DSV4 native composite cache switch', () => {
         const fs = require('fs')
         const form = fs.readFileSync(
             'src/renderer/src/components/sessions/SessionConfigForm.tsx',
@@ -2252,16 +2252,21 @@ describe('JIT Toggle', () => {
 
         expect(form).toContain('dsv4CompositeRequiresPaged')
         expect(form).toContain('dsv4CompositeCacheOptIn')
-        expect(form).toContain('DSV4 Composite Prefix Cache')
-        expect(form).toContain('disabled by default until deterministic cache equivalence is proven')
+        expect(form).toContain('DSV4 Native Composite Prefix Cache')
+        expect(form).toContain('DSV4 CSA/HCA Pool Codec')
+        expect(form).toContain('native composite prefix cache is off for this session')
         expect(form).toContain('cacheControlUpdatesForDsv4CompositeToggle')
         expect(form).toContain('cacheControlUpdatesForDsv4BlockDiskToggle')
         expect(form).toContain('applyDsv4CompositeCacheToggle')
-        expect(form).toContain("dsv4Active ? applyDsv4CompositeCacheToggle(v) : applyCacheControlUpdates(cacheControlUpdatesForPagedToggle")
+        expect(form).not.toContain('DSV4 Native Cache')
+        expect(form).not.toContain('DSV4 Composite Prefix Cache')
+        expect(form).not.toContain('DSV4 Pool Quantization')
+        expect(form).not.toContain('DSV4 Flash composite prefix cache is disabled')
+        expect(form).not.toContain("dsv4Active ? applyDsv4CompositeCacheToggle(v) : applyCacheControlUpdates(cacheControlUpdatesForPagedToggle")
         expect(form).toContain("dsv4Active ? cacheControlUpdatesForDsv4BlockDiskToggle(v) : cacheControlUpdatesForBlockDiskToggle")
         expect(form).toContain('disabled={!dsv4Active && cachePolicy.pagedCacheDisabled}')
         expect(form).toContain('block size is fixed to 256 tokens')
-        expect(form).toContain('checked={effectivePrefixCacheEnabled}')
+        expect(form).toContain('checked={!!config.dsv4PrefixCache}')
         expect(form).not.toContain('checked={dsv4Active ? true : config.enablePrefixCache}')
         expect(settings).toContain('DSV4_PAGED_CACHE_BLOCK_SIZE = 256')
         expect(settings).toContain('dsv4PrefixCacheOptIn')
@@ -2271,20 +2276,20 @@ describe('JIT Toggle', () => {
         expect(sessions).not.toContain('const prefixCacheOff = dsv4Active ? false')
     })
 
-    it('settings form hides generic paged-cache warnings in the DSV4 native cache section', () => {
+    it('settings form hides generic paged-cache warnings for the DSV4 native cache path', () => {
         const fs = require('fs')
         const form = fs.readFileSync(
             'src/renderer/src/components/sessions/SessionConfigForm.tsx',
             'utf-8',
         )
 
-        expect(form).toContain('{!dsv4CompositeRequiresPaged && config.enableDiskCache &&')
-        expect(form).toContain('{!dsv4CompositeRequiresPaged && !batchingOff && prefixOff &&')
-        expect(form).toContain('DSV4 Flash stores persistent prefix state through Block Disk Cache (L2) in the native cache section.')
+        expect(form).toContain('{!dsv4Active && !dsv4CompositeRequiresPaged && config.enableDiskCache &&')
+        expect(form).toContain('{!dsv4Active && !dsv4CompositeRequiresPaged && !batchingOff && prefixOff &&')
+        expect(form).toContain('Persist DeepSeek-V4 native SWA+CSA/HCA composite cache records to SSD')
         expect(form).toContain("cachePolicy.legacyDiskCacheUnavailableReason === 'paged-cache-active'")
         expect(form).toContain("cachePolicy.legacyDiskCacheUnavailableReason === 'architecture-requires-paged-cache'")
         expect(form).toContain('This is not generic paged KV')
-        expect(form).toContain('Native Composite Prefix Cache')
+        expect(form).toContain('DSV4 Native Composite Prefix Cache')
     })
 
     it('enableJit does not affect other flags', () => {
