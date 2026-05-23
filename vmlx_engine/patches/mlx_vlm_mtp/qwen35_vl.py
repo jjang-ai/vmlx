@@ -886,6 +886,10 @@ def _patch_outer_model(qvl: Any) -> None:
 
     def sanitize(self, weights):
         norms_are_mlx_ready = bool(getattr(self, "_vmlx_norms_are_mlx_ready", False))
+        has_unsanitized_conv1d = any(
+            "conv1d.weight" in key and getattr(value, "shape", (1,))[-1] != 1
+            for key, value in weights.items()
+        )
         norm_keys = (
             ".input_layernorm.weight",
             ".post_attention_layernorm.weight",
@@ -911,7 +915,10 @@ def _patch_outer_model(qvl: Any) -> None:
                 value = value.moveaxis(2, 1)
             is_norm = any(key.endswith(sfx) for sfx in norm_keys)
             is_mtp_norm = ".mtp." in key and is_norm
-            if (not norms_are_mlx_ready or is_mtp_norm) and is_norm:
+            should_shift_norm = (
+                (not norms_are_mlx_ready and has_unsanitized_conv1d) or is_mtp_norm
+            )
+            if should_shift_norm and is_norm:
                 if value.ndim == 1:
                     value = value + 1.0
             sanitized_weights[key] = value
@@ -1001,6 +1008,10 @@ def _patch_moe_outer_model(qmoe_vl: Any) -> None:
                 weights[f"{prefix}.switch_mlp.down_proj.weight"] = weights.pop(down)
 
         norms_are_mlx_ready = bool(getattr(self, "_vmlx_norms_are_mlx_ready", False))
+        has_unsanitized_conv1d = any(
+            "conv1d.weight" in key and getattr(value, "shape", (1,))[-1] != 1
+            for key, value in weights.items()
+        )
         norm_keys = (
             ".input_layernorm.weight",
             ".post_attention_layernorm.weight",
@@ -1026,7 +1037,10 @@ def _patch_moe_outer_model(qmoe_vl: Any) -> None:
                 value = value.moveaxis(2, 1)
             is_norm = any(key.endswith(sfx) for sfx in norm_keys)
             is_mtp_norm = ".mtp." in key and is_norm
-            if (not norms_are_mlx_ready or is_mtp_norm) and is_norm:
+            should_shift_norm = (
+                (not norms_are_mlx_ready and has_unsanitized_conv1d) or is_mtp_norm
+            )
+            if should_shift_norm and is_norm:
                 if value.ndim == 1:
                     value = value + 1.0
             sanitized_weights[key] = value

@@ -1063,6 +1063,47 @@ class TestNativeMtpAutodetect:
         ]
         assert sanitized["language_model.mtp.norm.weight"].tolist() == [1.0, 1.0]
 
+    def test_qwen36_vlm_sanitize_does_not_shift_jang_ready_transformer_norms(
+        self, tmp_path
+    ):
+        import mlx.core as mx
+
+        from mlx_vlm.models.qwen3_5 import qwen3_5 as qwen_vl
+        from mlx_vlm.models.qwen3_5_moe import qwen3_5_moe as qwen_moe_vl
+
+        from vmlx_engine import native_mtp
+
+        _write_qwen36_mxfp4_mtp_bundle(tmp_path)
+        native_mtp.maybe_apply_native_mtp(str(tmp_path), allow_runtime=True)
+
+        for model_cls in (qwen_vl.Model, qwen_moe_vl.Model):
+            fake_model = model_cls.__new__(model_cls)
+            fake_model.config = SimpleNamespace(
+                text_config=SimpleNamespace(
+                    tie_word_embeddings=False,
+                    num_hidden_layers=1,
+                )
+            )
+
+            sanitized = model_cls.sanitize(
+                fake_model,
+                {
+                    "model.language_model.layers.0.input_layernorm.weight": mx.zeros(
+                        (2,), dtype=mx.float16
+                    ),
+                    "model.language_model.layers.0.post_attention_layernorm.weight": mx.zeros(
+                        (2,), dtype=mx.float16
+                    ),
+                },
+            )
+
+            assert sanitized[
+                "language_model.model.layers.0.input_layernorm.weight"
+            ].tolist() == [0.0, 0.0]
+            assert sanitized[
+                "language_model.model.layers.0.post_attention_layernorm.weight"
+            ].tolist() == [0.0, 0.0]
+
     def test_bundle_index_layer_count_accepts_qwen_mtp_layers_layout(self, tmp_path):
         from vmlx_engine.server import _bundle_index_mtp_layer_count
 
