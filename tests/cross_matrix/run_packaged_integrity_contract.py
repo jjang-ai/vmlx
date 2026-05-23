@@ -42,6 +42,12 @@ PACKAGED_RENDERER_FORBIDDEN_DSV4_CACHE_UI_STRINGS = (
     b"DSV4 Pool Quantization",
     b"DSV4 Flash composite prefix cache is disabled",
 )
+PACKAGED_RENDERER_REQUIRED_MAX_THINKING_STRINGS = (
+    b"Max Thinking Tokens",
+    b"maxThinkingTokens",
+    b"max_thinking_tokens",
+    b"thinking_budget",
+)
 
 SOURCE_HASH_FILES = (
     "panel/scripts/release-gate-python-app.py",
@@ -140,6 +146,14 @@ def _check_packaged_renderer_dsv4_cache_ui(root: Path) -> bool:
     )
 
 
+def _check_packaged_renderer_max_thinking_tokens(root: Path) -> bool:
+    app_asar = root / PACKAGED_RENDERER_ASAR
+    if not app_asar.exists():
+        return False
+    data = app_asar.read_bytes()
+    return all(marker in data for marker in PACKAGED_RENDERER_REQUIRED_MAX_THINKING_STRINGS)
+
+
 def _run(root: Path, name: str, cwd_rel: Path, cmd: list[str]) -> dict[str, Any]:
     started = time.monotonic()
     proc = subprocess.run(
@@ -220,6 +234,9 @@ def build_artifact(
         ),
         "packaged_renderer_dsv4_cache_ui_deduped": (
             _check_packaged_renderer_dsv4_cache_ui(root)
+        ),
+        "packaged_renderer_max_thinking_tokens_wired": (
+            _check_packaged_renderer_max_thinking_tokens(root)
         ),
         "dry_release_gate_fails_only_on_known_objectives": release_gate_ok,
     }
