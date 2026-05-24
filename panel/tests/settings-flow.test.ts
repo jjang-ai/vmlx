@@ -290,7 +290,8 @@ function buildCommandPreview(
     const dsv4Active = detectedFamily === 'deepseek-v4'
     const dsv4PrefixCacheOptIn = dsv4Active && config.dsv4PrefixCache !== false
     const omniBackendActive = detectedFamily === 'nemotron-h' && detected?.isMultimodal === true
-    const isVLM = dsv4Active || detected?.forceTextOnly ? false : (!!detected?.isMultimodal || config.isMultimodal === true)
+    const effectiveSmelt = !!config.smelt && !dsv4Active
+    const isVLM = dsv4Active || effectiveSmelt || detected?.forceTextOnly ? false : (!!detected?.isMultimodal || config.isMultimodal === true)
     const zayaCcaActive = isZayaCcaFamily(detectedFamily)
     const hybridCacheActive = detected?.cacheType === 'hybrid' || detected?.cacheType === 'mamba'
     const effectiveDistributed = requestedDistributed && !dsv4Active
@@ -424,6 +425,12 @@ function buildCommandPreview(
 
     if (config.mcpConfig) parts.push('--mcp-config', config.mcpConfig)
     parts.push(...buildMcpPolicyArgs(config))
+
+    if (effectiveSmelt) {
+        parts.push('--smelt')
+        const pct = finitePositiveInteger(config.smeltExperts) ?? 50
+        if (pct !== 50) parts.push('--smelt-experts', pct.toString())
+    }
 
     // Flash MoE and distributed compute mirror sessions.ts compatibility gates.
     if (effectiveFlashMoe) {
@@ -658,6 +665,15 @@ describe('VLM Mode', () => {
 
     it('forceTextOnly detection wins over stale forced multimodal settings', () => {
         const out = preview({ isMultimodal: true }, { isMultimodal: false, forceTextOnly: true })
+        expect(hasFlag(out, '--is-mllm')).toBe(false)
+    })
+
+    it('Smelt suppresses VLM launch even when stale multimodal settings remain', () => {
+        const out = preview(
+            { smelt: true, isMultimodal: true },
+            { isMultimodal: true },
+        )
+        expect(hasFlag(out, '--smelt')).toBe(true)
         expect(hasFlag(out, '--is-mllm')).toBe(false)
     })
 })
