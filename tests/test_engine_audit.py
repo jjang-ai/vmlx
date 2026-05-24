@@ -4695,6 +4695,23 @@ class TestResponsesSuppressedReasoningToolCalls:
             "Responses API must not leave parsed suppressed-reasoning tool calls un-emitted"
         )
 
+    def test_responses_nonstreaming_extracts_reasoning_tool_calls_before_finalize(self):
+        """Non-streaming Responses must not strand real tool calls inside reasoning."""
+        import inspect
+        from vmlx_engine.server import create_response
+
+        source = inspect.getsource(create_response)
+        extract_idx = source.find("tool markers in reasoning")
+        branch_idx = source.find("# Add tool calls as separate function_call output items")
+
+        assert extract_idx != -1, (
+            "Non-streaming Responses must extract tool calls from reasoning text before finalization"
+        )
+        assert branch_idx != -1, "Responses API function_call output branch missing"
+        assert extract_idx < branch_idx, (
+            "Reasoning tool extraction must run before Responses function_call output items are built"
+        )
+
 
 class TestAnthropicOmniStreamingAdapter:
     """Anthropic Omni streaming must not leak OpenAI SSE chunks."""

@@ -11699,6 +11699,24 @@ async def create_response(
         )
     )
 
+    if (
+        not tool_calls
+        and reasoning_text
+        and not _suppress_tools
+        and any(m in reasoning_text for m in _TOOL_CALL_MARKERS)
+    ):
+        logger.info(
+            f"Request {response_id}: tool markers in reasoning — "
+            "extracting before Responses API finalization"
+        )
+        _tc_cleaned, _tc_calls = _parse_tool_calls_with_parser(
+            reasoning_text.strip(), request
+        )
+        if _tc_calls:
+            tool_calls = _tc_calls
+            cleaned_text = ""
+            reasoning_text = clean_output_text(_tc_cleaned).strip() or None
+
     # Process text format (json_schema with strict) if specified — mirrors Chat Completions behavior
     _text_format = request.text if hasattr(request, "text") else None
     if _text_format and hasattr(_text_format, "model_dump"):
