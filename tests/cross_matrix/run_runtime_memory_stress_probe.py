@@ -266,6 +266,7 @@ def build_request(
     image_path: Path | None,
     retained_image_turns: int,
     enable_thinking: bool | None = None,
+    max_thinking_tokens: int | None = None,
 ) -> dict[str, Any]:
     messages: list[dict[str, Any]] = []
     if image_path:
@@ -300,9 +301,15 @@ def build_request(
             "temperature": 0,
             "top_p": 1,
         }
+    template_kwargs: dict[str, Any] = {}
     if enable_thinking is not None:
         request["enable_thinking"] = enable_thinking
-        request["chat_template_kwargs"] = {"enable_thinking": enable_thinking}
+        template_kwargs["enable_thinking"] = enable_thinking
+    if max_thinking_tokens is not None:
+        request["max_thinking_tokens"] = int(max_thinking_tokens)
+        template_kwargs["thinking_budget"] = int(max_thinking_tokens)
+    if template_kwargs:
+        request["chat_template_kwargs"] = template_kwargs
     return request
 
 
@@ -489,6 +496,7 @@ def run_probe(args: argparse.Namespace) -> dict[str, Any]:
         "request_route": args.route,
         "prompt_tokens": args.prompt_tokens,
         "max_tokens": args.max_tokens,
+        "max_thinking_tokens": args.max_thinking_tokens,
         "image_path": str(args.image_path) if args.image_path else None,
         "retained_image_turns": args.retained_image_turns,
         "abort_thresholds": {
@@ -553,6 +561,7 @@ def run_probe(args: argparse.Namespace) -> dict[str, Any]:
                 Path(args.image_path) if args.image_path else None,
                 args.retained_image_turns,
                 args.enable_thinking,
+                args.max_thinking_tokens,
             )
             started = time.time()
             try:
@@ -604,6 +613,7 @@ def parse_args() -> argparse.Namespace:
     thinking.add_argument("--enable-thinking", dest="enable_thinking", action="store_true")
     thinking.add_argument("--disable-thinking", dest="enable_thinking", action="store_false")
     parser.set_defaults(enable_thinking=None)
+    parser.add_argument("--max-thinking-tokens", type=int, default=None)
     parser.add_argument("--image-path")
     parser.add_argument("--retained-image-turns", type=int, default=1)
     parser.add_argument("--abort-rss-gb", type=float, default=0.0)

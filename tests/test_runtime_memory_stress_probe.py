@@ -121,3 +121,41 @@ def test_build_request_can_disable_thinking_for_chat_and_responses():
     assert chat["chat_template_kwargs"] == {"enable_thinking": False}
     assert responses["enable_thinking"] is False
     assert responses["chat_template_kwargs"] == {"enable_thinking": False}
+
+
+def test_build_request_can_set_explicit_max_thinking_tokens_without_changing_output_cap():
+    row = Row("gemma", "/models/Gemma-4-26B")
+
+    chat = build_request(
+        row,
+        "Think briefly, then answer.",
+        128,
+        "chat",
+        None,
+        retained_image_turns=1,
+        enable_thinking=True,
+        max_thinking_tokens=16,
+    )
+    responses = build_request(
+        row,
+        "Think briefly, then answer.",
+        128,
+        "responses",
+        None,
+        retained_image_turns=1,
+        enable_thinking=True,
+        max_thinking_tokens=16,
+    )
+
+    assert chat["max_tokens"] == 128
+    assert chat["max_thinking_tokens"] == 16
+    assert chat["chat_template_kwargs"] == {
+        "enable_thinking": True,
+        "thinking_budget": 16,
+    }
+    assert responses["max_output_tokens"] == 128
+    assert responses["max_thinking_tokens"] == 16
+    assert responses["chat_template_kwargs"] == {
+        "enable_thinking": True,
+        "thinking_budget": 16,
+    }
