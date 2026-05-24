@@ -148,6 +148,38 @@ describe('dsv4EnvFromConfig wired into sessions.ts spawnEnv', () => {
     expect(source).not.toContain("'dsv4RawMax'")
     expect(source).not.toContain("'dsv4ForceDirect'")
   })
+
+  it('logs the effective DSV4 native cache env knobs once in the engine child probe', () => {
+    const fs = require('node:fs')
+    const path = require('node:path')
+    const sessionsPath = path.resolve(__dirname, '../src/main/sessions.ts')
+    const source = fs.readFileSync(sessionsPath, 'utf8')
+    const probeStart = source.indexOf('const scrubbedEnvProbeKeys = [')
+    const probeEnd = source.indexOf(']', probeStart)
+    const probeBlock = source.slice(probeStart, probeEnd)
+
+    expect(probeBlock).toContain("'DSV4_LONG_CTX'")
+    expect(probeBlock).toContain("'DSV4_POOL_QUANT'")
+    expect(probeBlock).toContain("'VMLX_DSV4_ENABLE_PREFIX_CACHE'")
+    expect((probeBlock.match(/DSV4_POOL_QUANT/g) ?? [])).toHaveLength(1)
+  })
+
+  it('scrubs inherited MCP policy env exactly once per key before applying session policy', () => {
+    const fs = require('node:fs')
+    const path = require('node:path')
+    const sessionsPath = path.resolve(__dirname, '../src/main/sessions.ts')
+    const source = fs.readFileSync(sessionsPath, 'utf8')
+
+    for (const key of [
+      'VLLM_MLX_MCP_CONFIG',
+      'VLLM_MLX_MCP_ENABLED_SERVERS',
+      'VLLM_MLX_MCP_DISABLED_SERVERS',
+      'VLLM_MLX_MCP_ENABLED_TOOLS',
+      'VLLM_MLX_MCP_DISABLED_TOOLS',
+    ]) {
+      expect((source.match(new RegExp(`delete spawnEnv\\.${key}`, 'g')) ?? [])).toHaveLength(1)
+    }
+  })
 })
 
 describe('DSV4 runtime controls in SessionConfigForm', () => {
