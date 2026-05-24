@@ -58,11 +58,13 @@ SOURCE_HASH_FILES = (
     "panel/tests/load-progress-honesty.test.ts",
     "panel/tests/model-config-registry.test.ts",
     "tests/test_model_config_registry.py",
+    "tests/test_panel_cli_flag_contract.py",
 )
 
 REQUIRED_PANEL_SETTINGS_SOURCE_MARKERS = (
     "DSV4 pool quant and native prefix controls stay DSV4-only",
     "launch memory admission is warning-only for lazy-mmap bundles",
+    "test_panel_serve_flags_are_registered_engine_cli_flags",
 )
 
 COMMANDS: dict[str, list[str]] = {
@@ -90,6 +92,13 @@ COMMANDS: dict[str, list[str]] = {
         "pytest",
         "-q",
         "../tests/test_model_config_registry.py",
+    ],
+    "engine_panel_cli_flag_contract": [
+        sys.executable,
+        "-m",
+        "pytest",
+        "-q",
+        "../tests/test_panel_cli_flag_contract.py",
     ],
 }
 
@@ -153,6 +162,7 @@ def missing_source_markers(root: Path) -> list[str]:
         for rel in (
             "panel/tests/settings-flow.test.ts",
             "panel/tests/dsv4-env.test.ts",
+            "tests/test_panel_cli_flag_contract.py",
         )
     )
     return [
@@ -173,6 +183,7 @@ def build_artifact(root: Path) -> dict[str, Any]:
     model_counts = commands["panel_model_config_registry"]["counts"]
     engine_model_ok = commands["engine_model_config_registry"]["returncode"] == 0
     engine_model_counts = commands["engine_model_config_registry"]["counts"]
+    cli_flag_ok = commands["engine_panel_cli_flag_contract"]["returncode"] == 0
     settings_coverage_ok = (
         settings_counts["test_files_passed"] == 6
         and (settings_counts["tests_passed"] or 0) >= 260
@@ -205,6 +216,7 @@ def build_artifact(root: Path) -> dict[str, Any]:
         "native_mtp_d3_default_policy": panel_model_ok,
         "model_family_parser_registry": panel_model_ok and engine_model_coverage_ok,
         "engine_cache_architecture_registry": engine_model_coverage_ok,
+        "panel_emitted_flags_are_registered_engine_cli_flags": cli_flag_ok,
         "panel_typecheck": typecheck_ok,
     }
     return {
