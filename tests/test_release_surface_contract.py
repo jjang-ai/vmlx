@@ -348,3 +348,50 @@ def test_release_surface_live_public_checks_require_all_manifest_download_assets
 
     assert artifact["status"] == "fail"
     assert artifact["checks"]["public_github_release_has_all_manifest_download_assets"] is False
+
+
+def test_release_surface_live_public_checks_require_release_tag_to_match_source_head(tmp_path):
+    from tests.cross_matrix import run_release_surface_contract as gate
+
+    latest = _write_release_root(tmp_path)
+
+    def fetch_json(url: str):
+        if "raw.githubusercontent.com" in url or "mlx.studio/update/latest.json" in url:
+            return latest
+        if "pypi.org" in url:
+            return {
+                "info": {"version": "1.5.48"},
+                "urls": [
+                    {"filename": "vmlx-1.5.48-py3-none-any.whl"},
+                    {"filename": "vmlx-1.5.48.tar.gz"},
+                ],
+            }
+        if "releases/tags" in url:
+            return {
+                "draft": False,
+                "prerelease": False,
+                "assets": [
+                    {
+                        "name": "vMLX-1.5.48-sequoia-arm64.dmg",
+                        "digest": "sha256:" + latest["downloads"]["sequoia"]["sha256"],
+                    },
+                    {
+                        "name": "vMLX-1.5.48-tahoe-arm64.dmg",
+                        "digest": "sha256:" + latest["downloads"]["tahoe"]["sha256"],
+                    },
+                ],
+            }
+        if "git/ref/tags" in url:
+            return {"object": {"sha": "old-release-commit"}}
+        raise AssertionError(url)
+
+    artifact = gate.build_artifact(
+        tmp_path,
+        live_public=True,
+        fetch_json=fetch_json,
+        current_revision="current-source-head",
+    )
+
+    assert artifact["status"] == "fail"
+    assert artifact["checks"]["public_github_source_release_tag_matches_source_head"] is False
+    assert artifact["public_surfaces"]["github_source_release_tag"]["sha"] == "old-release-commit"

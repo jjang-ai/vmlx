@@ -14,6 +14,7 @@ import argparse
 import hashlib
 import json
 import re
+import subprocess
 import time
 import tomllib
 import urllib.request
@@ -76,6 +77,20 @@ def _fetch_headers(url: str) -> dict[str, str]:
     )
     with urllib.request.urlopen(request, timeout=30) as response:
         return {key.lower(): value for key, value in response.headers.items()}
+
+
+def _current_git_head(root: Path) -> str | None:
+    proc = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=root,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        check=False,
+    )
+    if proc.returncode != 0:
+        return None
+    return proc.stdout.strip() or None
 
 
 def _source_versions(root: Path) -> dict[str, str | None]:
@@ -154,12 +169,16 @@ def _public_release_checks(
     latest: dict[str, Any],
     fetch_json: FetchJson,
     fetch_headers: FetchHeaders,
+    current_revision: str | None,
 ) -> tuple[dict[str, bool], dict[str, Any]]:
     raw_latest_url = "https://raw.githubusercontent.com/jjang-ai/mlxstudio/main/latest.json"
     site_latest_url = "https://mlx.studio/update/latest.json"
     pypi_url = f"https://pypi.org/pypi/vmlx/{source_version}/json"
     github_release_url = (
         f"https://api.github.com/repos/jjang-ai/mlxstudio/releases/tags/v{source_version}"
+    )
+    github_source_tag_ref_url = (
+        f"https://api.github.com/repos/jjang-ai/vmlx/git/ref/tags/v{source_version}"
     )
 
     public: dict[str, Any] = {}
@@ -299,6 +318,22 @@ def _public_release_checks(
         checks["public_github_release_has_updater_asset"] = False
         checks["public_github_release_has_all_manifest_download_assets"] = False
 
+    try:
+        tag_ref = fetch_json(github_source_tag_ref_url)
+        tag_object = tag_ref.get("object") if isinstance(tag_ref.get("object"), dict) else {}
+        tag_sha = str(tag_object.get("sha") or "")
+        public["github_source_release_tag"] = {
+            "sha": tag_sha,
+            "type": tag_object.get("type"),
+            "current_revision": current_revision,
+        }
+        checks["public_github_source_release_tag_matches_source_head"] = bool(
+            current_revision and tag_sha == current_revision
+        )
+    except Exception as exc:  # pragma: no cover - exercised by live failures.
+        public["github_source_release_tag_error"] = repr(exc)
+        checks["public_github_source_release_tag_matches_source_head"] = False
+
     return checks, public
 
 
@@ -308,6 +343,7 @@ def build_artifact(
     live_public: bool = False,
     fetch_json: FetchJson = _fetch_json,
     fetch_headers: FetchHeaders = _fetch_headers,
+    current_revision: str | None = None,
 ) -> dict[str, Any]:
     versions = _source_versions(root)
     source_version = versions["pyproject"]
@@ -319,9 +355,10 @@ def build_artifact(
         **_local_updater_checks(str(source_version or ""), latest),
     }
     public_surfaces: dict[str, Any] = {}
+    current_revision = current_revision or _current_git_head(root)
     if live_public and source_version:
         public_checks, public_surfaces = _public_release_checks(
-            str(source_version), latest, fetch_json, fetch_headers
+            str(source_version), latest, fetch_json, fetch_headers, current_revision
         )
         checks.update(public_checks)
     status_check_names = {
@@ -344,6 +381,7 @@ def build_artifact(
                 "public_github_release_published",
                 "public_github_release_has_updater_asset",
                 "public_github_release_has_all_manifest_download_assets",
+                "public_github_source_release_tag_matches_source_head",
             }
         )
     status = "pass" if all(checks[name] for name in status_check_names) else "fail"
@@ -361,6 +399,7 @@ def build_artifact(
         },
         "live_public": live_public,
         "public_surfaces": public_surfaces,
+        "current_revision": current_revision,
         "source_hashes": {
             rel: _sha256(root / rel)
             for rel in SOURCE_HASH_FILES

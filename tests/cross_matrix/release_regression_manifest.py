@@ -658,12 +658,15 @@ _ROWS: list[dict[str, Any]] = [
             "PyPI, GitHub release, and updater feeds remain explicit operator checks before public release",
             "live public release-surface mode checks raw GitHub latest.json, mlx.studio/update/latest.json, PyPI files, and GitHub release DMG asset digest after a release is cut",
             "live public release-surface mode requires mlx.studio/update/latest.json no-store/no-cache headers so browser and CDN cache cannot hide a newer release",
+            "live public release-surface mode compares the source repo release tag to the current source head so green updater feeds cannot hide post-release source-only fixes",
         ],
         "commands": [
             ".venv/bin/python tests/cross_matrix/run_release_surface_contract.py --out build/current-release-surface-contract-20260522-recheck-updater-i18n.json",
             ".venv/bin/python tests/cross_matrix/run_release_surface_contract.py --live-public --out build/current-release-surface-contract-20260522-live-public-v1548.json",
+            ".venv/bin/python tests/cross_matrix/run_release_surface_contract.py --live-public --out build/current-release-surface-contract-20260524-live-source-tag-parity.json",
         ],
         "artifacts": [
+            "build/current-release-surface-contract-20260524-live-source-tag-parity.json",
             "build/current-release-surface-contract-20260523-post-budget-edge.json",
             "build/current-release-surface-contract-20260522-live-public-v1548.json",
             "build/current-release-surface-contract-20260522-post-release-updater.json",
