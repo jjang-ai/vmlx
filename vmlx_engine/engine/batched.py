@@ -41,8 +41,12 @@ def _raise_prompt_too_long_from_output(output: Any) -> None:
             request_id=getattr(output, "request_id", None),
         )
     if getattr(output, "error_code", None) == VLMImagePrefillBudgetError.code:
+        detail = str(getattr(output, "error", None) or "VLM image prefill too large")
+        prefix = f"{VLMImagePrefillBudgetError.__name__}: "
+        if detail.startswith(prefix):
+            detail = detail[len(prefix):]
         raise VLMImagePrefillBudgetError(
-            str(getattr(output, "error", None) or "VLM image prefill too large"),
+            detail,
             request_id=getattr(output, "request_id", None),
         )
     error = getattr(output, "error", None)

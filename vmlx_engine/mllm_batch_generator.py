@@ -5464,11 +5464,15 @@ class MLLMBatchGenerator:
                 # "prompt_tokens": 0}` and had no way to distinguish "empty
                 # completion" from "prefill crashed".
                 import traceback as _tb
-                _err_detail = f"{type(prefill_err).__name__}: {prefill_err}"
                 _err_code = (
                     VLMImagePrefillBudgetError.code
                     if isinstance(prefill_err, VLMImagePrefillBudgetError)
                     else None
+                )
+                _err_detail = (
+                    str(prefill_err)
+                    if _err_code == VLMImagePrefillBudgetError.code
+                    else f"{type(prefill_err).__name__}: {prefill_err}"
                 )
                 logger.error(
                     f"Prefill failed for {req.request_id}: {_err_detail}\n"

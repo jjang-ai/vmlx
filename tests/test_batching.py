@@ -581,6 +581,28 @@ class TestSchedulerBasic:
         assert exc_info.value.request_id == "vl-image-budget"
         assert "predicted attention buffer" in str(exc_info.value)
 
+    def test_mllm_vlm_image_prefill_budget_error_strips_legacy_type_prefix(self):
+        """Older queued errors may include a class prefix; API text should not."""
+        from vmlx_engine.engine.batched import _raise_prompt_too_long_from_output
+        from vmlx_engine.errors import VLMImagePrefillBudgetError
+        from vmlx_engine.request import RequestOutput
+
+        output = RequestOutput(
+            request_id="vl-image-budget",
+            finished=True,
+            finish_reason="error",
+            error=(
+                "VLMImagePrefillBudgetError: VLM image prefill rejected before "
+                "Metal forward: predicted attention buffer 65.2GB"
+            ),
+            error_code="vlm_image_prefill_too_large",
+        )
+
+        with pytest.raises(VLMImagePrefillBudgetError) as exc_info:
+            _raise_prompt_too_long_from_output(output)
+
+        assert not str(exc_info.value).startswith("VLMImagePrefillBudgetError:")
+
     def test_memory_cache_exact_hit_with_generation_suffix_refeeds_last_key_token(
         self, mock_model, mock_tokenizer
     ):

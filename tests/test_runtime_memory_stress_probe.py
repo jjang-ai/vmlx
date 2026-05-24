@@ -1,6 +1,7 @@
 from tests.cross_matrix.run_runtime_memory_stress_probe import (
     add_speed_metrics,
     build_request,
+    classify_http_stage_status,
     extract_usage,
     probe_status_from_results,
     redact_large_payloads,
@@ -93,6 +94,43 @@ def test_probe_status_from_results_rejects_http_error_stage():
 
     assert status == "fail"
     assert "http_error" in reason
+
+
+def test_probe_status_from_results_accepts_expected_http_error_stage():
+    status, reason = probe_status_from_results(
+        [
+            {"status": "expected_http_error", "http_code": 413},
+        ]
+    )
+
+    assert status == "pass"
+    assert reason is None
+
+
+def test_classify_http_stage_requires_expected_error_code_when_supplied():
+    response = {
+        "error": {
+            "message": "too large",
+            "type": "invalid_request_error",
+            "code": "vlm_image_prefill_too_large",
+        }
+    }
+
+    assert classify_http_stage_status(413, response, 413) == "expected_http_error"
+    assert (
+        classify_http_stage_status(
+            413,
+            response,
+            413,
+            "vlm_image_prefill_too_large",
+        )
+        == "expected_http_error"
+    )
+    assert classify_http_stage_status(413, response, 413, "other_error") == "http_error"
+    assert (
+        classify_http_stage_status(500, response, 413, "vlm_image_prefill_too_large")
+        == "http_error"
+    )
 
 
 def test_build_request_can_disable_thinking_for_chat_and_responses():

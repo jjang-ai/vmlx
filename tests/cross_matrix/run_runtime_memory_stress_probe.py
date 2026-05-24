@@ -458,11 +458,36 @@ def add_speed_metrics(stage: dict[str, Any]) -> None:
     }
 
 
+def extract_response_error_code(resp: Any) -> str | None:
+    if not isinstance(resp, dict):
+        return None
+    error = resp.get("error")
+    if not isinstance(error, dict):
+        return None
+    code = error.get("code")
+    return str(code) if code is not None else None
+
+
+def classify_http_stage_status(
+    http_code: int,
+    resp: Any,
+    expect_http_code: int = 0,
+    expect_error_code: str | None = None,
+) -> str:
+    if 200 <= http_code < 300:
+        return "ok"
+    if expect_http_code and http_code == expect_http_code:
+        actual_error_code = extract_response_error_code(resp)
+        if not expect_error_code or actual_error_code == expect_error_code:
+            return "expected_http_error"
+    return "http_error"
+
+
 def probe_status_from_results(results: list[dict[str, Any]]) -> tuple[str, str | None]:
     bad_stages = [
         f"{idx}:{stage.get('status')}"
         for idx, stage in enumerate(results)
-        if stage.get("status") != "ok"
+        if stage.get("status") not in {"ok", "expected_http_error"}
     ]
     if bad_stages:
         return "fail", "non-ok stage(s): " + ", ".join(bad_stages)
@@ -570,7 +595,13 @@ def run_probe(args: argparse.Namespace) -> dict[str, Any]:
                 stage["response"] = redact_large_payloads(resp)
                 stage["elapsed_s"] = round(time.time() - started, 3)
                 add_speed_metrics(stage)
-                stage["status"] = "ok" if 200 <= code < 300 else "http_error"
+                stage["error_code"] = extract_response_error_code(resp)
+                stage["status"] = classify_http_stage_status(
+                    code,
+                    resp,
+                    args.expect_http_code,
+                    args.expect_error_code,
+                )
             except Exception as exc:  # noqa: BLE001
                 stage["status"] = "request_exception"
                 stage["error"] = repr(exc)
@@ -618,6 +649,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--retained-image-turns", type=int, default=1)
     parser.add_argument("--abort-rss-gb", type=float, default=0.0)
     parser.add_argument("--abort-metal-active-gb", type=float, default=0.0)
+    parser.add_argument("--expect-http-code", type=int, default=0)
+    parser.add_argument("--expect-error-code", default=None)
     parser.add_argument("--serve-extra-arg", action="append", default=[])
     parser.add_argument("--serve-env", action="append", default=[])
     parser.add_argument("--out", required=True)
