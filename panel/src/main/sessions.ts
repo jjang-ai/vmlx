@@ -330,8 +330,9 @@ function filterAdditionalArgs(raw: string | undefined, blockedFlags: Set<string>
   const filtered: string[] = []
   for (let i = 0; i < extra.length; i++) {
     const flag = extra[i]
-    if (blockedFlags.has(flag)) {
-      if (ADDITIONAL_ARG_VALUE_FLAGS.has(flag)) i++
+    const flagName = flag.includes('=') ? flag.slice(0, flag.indexOf('=')) : flag
+    if (blockedFlags.has(flagName)) {
+      if (flag === flagName && ADDITIONAL_ARG_VALUE_FLAGS.has(flagName)) i++
       continue
     }
     filtered.push(flag)

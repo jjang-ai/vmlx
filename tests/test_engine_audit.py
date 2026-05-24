@@ -7718,6 +7718,9 @@ class TestTurboQuantKVTelemetry:
         assert "IMAGE_ADDITIONAL_ARG_BLOCKLIST" in preview_source
         assert "DSV4_ADDITIONAL_ARG_BLOCKLIST" in sessions_source
         assert "DSV4_ADDITIONAL_ARG_BLOCKLIST" in preview_source
+        for source in (sessions_source, preview_source):
+            assert "flag.includes('=')" in source
+            assert "flag.slice(0, flag.indexOf('='))" in source
         assert "canonicalizeToolParserId" in sessions_source
         preview_parser_block = preview_source[
             preview_source.index("// Parser resolution"):

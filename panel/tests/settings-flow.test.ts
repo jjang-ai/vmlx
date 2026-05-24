@@ -287,8 +287,9 @@ function filterAdditionalArgs(raw: string | undefined, blockedFlags: Set<string>
     const filtered: string[] = []
     for (let i = 0; i < extra.length; i++) {
         const flag = extra[i]
-        if (blockedFlags.has(flag)) {
-            if (ADDITIONAL_ARG_VALUE_FLAGS.has(flag)) i++
+        const flagName = flag.includes('=') ? flag.slice(0, flag.indexOf('=')) : flag
+        if (blockedFlags.has(flagName)) {
+            if (flag === flagName && ADDITIONAL_ARG_VALUE_FLAGS.has(flagName)) i++
             continue
         }
         filtered.push(flag)
@@ -1586,6 +1587,11 @@ describe('Additional Arguments', () => {
                     '--dsv4-enable-prefix-cache',
                     '--default-temperature 0',
                     '--max-tokens 32768',
+                    '--max-tokens=32768',
+                    '--log-level=DEBUG',
+                    '--uds=/tmp/stale-dsv4.sock',
+                    '--no-state-machine-stops',
+                    '--prefill-keep-alloc',
                     '--log-level DEBUG',
                 ].join(' '),
             },
@@ -1601,6 +1607,11 @@ describe('Additional Arguments', () => {
         expect(normalized).not.toContain('--default-temperature')
         expect(normalized).not.toContain('--max-tokens')
         expect(normalized).not.toContain('--log-level DEBUG')
+        expect(normalized).not.toContain('--log-level=DEBUG')
+        expect(normalized).not.toContain('--uds')
+        expect(normalized).not.toContain('/tmp/stale-dsv4.sock')
+        expect(normalized).not.toContain('--no-state-machine-stops')
+        expect(normalized).not.toContain('--prefill-keep-alloc')
 
         const sessionsSource = readFileSync('src/main/sessions.ts', 'utf8')
         const settingsSource = readFileSync('src/renderer/src/components/sessions/SessionSettings.tsx', 'utf8')
@@ -1610,6 +1621,30 @@ describe('Additional Arguments', () => {
             expect(source).toContain("'--disable-native-mtp'")
             expect(source).toContain("'--dsv4-enable-prefix-cache'")
         }
+    })
+
+    it('DSV4 additional args strips blocked equals-form serve overrides', () => {
+        const out = preview(
+            {
+                additionalArgs: [
+                    '--uds=/tmp/vmlx.sock',
+                    '--inference-endpoints=http://127.0.0.1:9999',
+                    '--wake-timeout=999',
+                    '--prefill-keep-alloc',
+                    '--no-state-machine-stops',
+                    '--allowed-custom-flag=yes',
+                ].join(' '),
+            },
+            { family: 'deepseek-v4', usePagedCache: false },
+        )
+        const normalized = out.replace(/\s*\\\n\s*/g, ' ')
+
+        expect(normalized).not.toContain('--uds')
+        expect(normalized).not.toContain('--inference-endpoints')
+        expect(normalized).not.toContain('--wake-timeout')
+        expect(normalized).not.toContain('--prefill-keep-alloc')
+        expect(normalized).not.toContain('--no-state-machine-stops')
+        expect(normalized).toContain('--allowed-custom-flag=yes')
     })
 
     it('omits additional args when empty', () => {
