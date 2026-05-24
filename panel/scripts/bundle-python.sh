@@ -171,14 +171,14 @@ echo "==> Installing vmlx-engine + jang_tools (local source)..."
 VMLX_LOCAL="$(cd "$(dirname "$0")/../.." && pwd)"
 if [ -f "$VMLX_LOCAL/pyproject.toml" ] && [ -d "$VMLX_LOCAL/vmlx_engine" ]; then
   echo "    using local vmlx at $VMLX_LOCAL"
-  "$PYTHON" -m pip install --force-reinstall --no-deps "$VMLX_LOCAL"
+  "$PYTHON" -m pip install --force-reinstall --no-deps --no-cache-dir "$VMLX_LOCAL"
 else
   echo "    local vmlx missing, falling back to PyPI"
   "$PYTHON" -m pip install --no-deps "vmlx>=1.5.24"
 fi
 if [ -f "$JANG_LOCAL/pyproject.toml" ]; then
   echo "    using local jang-tools at $JANG_LOCAL"
-  "$PYTHON" -m pip install --force-reinstall --no-deps "$JANG_LOCAL"
+  "$PYTHON" -m pip install --force-reinstall --no-deps --no-cache-dir "$JANG_LOCAL"
 else
   if [ "${VMLX_ALLOW_PYPI_JANG:-${VMLINUX_ALLOW_PYPI_JANG:-0}}" = "1" ]; then
     echo "    local jang-tools missing; VMLX_ALLOW_PYPI_JANG=1 so using PyPI fallback"
@@ -604,12 +604,11 @@ echo ""
 echo "==> Rewriting console-script shebangs to relocatable bundled Python..."
 SHEBANG_FIXED=0
 for SCRIPT in "$BUNDLE_DIR/python/bin/"*; do
-  if [ ! -f "$SCRIPT" ] || ! head -c 2 "$SCRIPT" 2>/dev/null | grep -q '^#!'; then
+  if [ ! -f "$SCRIPT" ]; then
     continue
   fi
   FIRST_LINE="$(LC_ALL=C head -n 1 "$SCRIPT" 2>/dev/null || true)"
-  if printf '%s\n' "$FIRST_LINE" | grep -Eq '^#!.*python[0-9.]*([[:space:]]|$)' \
-    && ! printf '%s\n' "$FIRST_LINE" | grep -Eq '^#!/bin/sh'; then
+  if [[ "$FIRST_LINE" == '#!'*python* ]] && [[ "$FIRST_LINE" != '#!/bin/sh'* ]]; then
     TMP_SCRIPT="$(mktemp "${SCRIPT}.XXXXXX")"
     {
       printf '%s\n' '#!/bin/sh'

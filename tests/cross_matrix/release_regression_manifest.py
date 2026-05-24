@@ -233,7 +233,7 @@ CURRENT_POST_BUDGET_EDGE_ARTIFACTS = {
     "native-mtp-d3-effect-policy": "build/current-native-mtp-contract-20260523-post-budget-edge.json",
     "mcp-policy-ui-gateway": "build/current-mcp-policy-contract-20260523-post-budget-edge.json",
     "vl-media-cache-tool-followup": "build/current-vl-media-cache-contract-20260523-post-budget-edge.json",
-    "packaged-release-integrity": "build/current-packaged-integrity-contract-20260523-post-budget-edge-refreshed.json",
+    "packaged-release-integrity": "build/current-packaged-integrity-contract-20260523-v1549-after-bundle-refresh-local-jang.json",
     "public-release-surface-preflight": "build/current-release-surface-contract-20260523-post-budget-edge.json",
 }
 
@@ -311,7 +311,7 @@ _ROWS: list[dict[str, Any]] = [
         "heavy": False,
         "proves": [
             "DSV4 pool quant and native prefix controls stay DSV4-only",
-            "DSV4 native composite prefix cache remains diagnostic opt-in",
+            "DSV4 native composite prefix cache defaults on while explicit disable remains honored",
             "generic KV quantization is suppressed for DSV4 native composite cache",
             "non-DSV4 JANG/JANGTQ/MXFP cache toggles keep normal prefix/paged/L2/KV semantics",
             "launch-memory admission is warning-only for lazy-mmap JANG/JANGTQ bundles and does not hard-block on macOS cache pressure",
@@ -452,10 +452,10 @@ _ROWS: list[dict[str, Any]] = [
             "Bundled JANG DSV4 pool quant codec appends only newly generated CSA/HCA pool rows instead of requantizing the whole accumulated pool",
             "DSV4 pool quant reads reuse a materialized pool view instead of dequantizing and concatenating historical CSA/HCA pool segments on every read",
             "DSV4 short prompts skip synchronous composite prompt snapshots and do not replace that saved time with a synchronous prompt-only re-prefill store",
-            "DSV4 panel env mapping enables pool quant only from explicit DSV4 config while the default remains off",
+            "DSV4 panel env mapping enables pool quant by default only under DSV4 native composite cache",
             "DSV4 timing probe covers prefix-cache replay and cold-store boundaries before speed/cache root-cause claims",
             "Cache detail telemetry reports paged, typed native, and TQ/L2 state",
-            "Panel session launch builder preserves DSV4 default and diagnostic prefix-cache policy, DSV4-only native cache controls, Qwen3.6 hybrid and Mamba paged-cache forcing, and regular KV stale saved false semantics",
+            "Panel session launch builder preserves DSV4 default-on native prefix-cache policy, DSV4-only native cache controls, Qwen3.6 hybrid and Mamba paged-cache forcing, and regular KV stale saved false semantics",
         ],
         "commands": [
             ".venv/bin/python tests/cross_matrix/run_cache_architecture_contract.py --out build/current-cache-architecture-contract-20260522-dsv4-pool-ui-wired.json",
@@ -633,9 +633,11 @@ _ROWS: list[dict[str, Any]] = [
             "dry release gate fails only on the known DSV4 objective row while version, typecheck, bundled import, and digest refresh steps pass",
         ],
         "commands": [
+            ".venv/bin/python tests/cross_matrix/run_packaged_integrity_contract.py --jang-tools-source /Users/example/jang/jang-tools --out build/current-packaged-integrity-contract-20260523-v1549-after-bundle-refresh-local-jang.json",
             ".venv/bin/python tests/cross_matrix/run_packaged_integrity_contract.py --jang-tools-source /Users/example/jang/.worktrees/vmlx-release-clean-b5f66a7/jang-tools --out build/current-packaged-integrity-contract-20260522-recheck-bundled-release-gate.json",
         ],
         "artifacts": [
+            "build/current-packaged-integrity-contract-20260523-v1549-after-bundle-refresh-local-jang.json",
             "build/current-packaged-integrity-contract-20260523-post-budget-edge-refreshed.json",
             "build/current-packaged-integrity-contract-20260522-recheck-bundled-release-gate.json",
             "build/current-packaged-integrity-contract-20260522-objective-gate-enforced.json",

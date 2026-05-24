@@ -259,7 +259,7 @@ function buildCommandPreview(
   const requestedFlashMoe = !!(config as any).flashMoe
   const detectedFamily = normalizeDetectedFamilyName(detected?.family)
   const dsv4Active = detectedFamily === 'deepseek-v4'
-  const dsv4PrefixCacheOptIn = dsv4Active && config.dsv4PrefixCache === true
+  const dsv4PrefixCacheOptIn = dsv4Active && config.dsv4PrefixCache !== false
   const effectiveSmelt = !!(config as any).smelt && !dsv4Active
   const isVLM = dsv4Active || effectiveSmelt || detected?.forceTextOnly ? false
     : detected?.isMultimodal ? true
@@ -660,10 +660,11 @@ export function SessionSettings({ sessionId, onBack }: SessionSettingsProps) {
         if (detected && detected.family !== 'unknown') {
           base.enableAutoToolChoice = detected.enableAutoToolChoice
           if (detected.family === 'deepseek-v4') {
-            base.dsv4PrefixCache = false
-            base.enablePrefixCache = false
-            base.usePagedCache = false
-            base.enableBlockDiskCache = false
+            base.dsv4PrefixCache = true
+            base.dsv4PoolQuant = true
+            base.enablePrefixCache = true
+            base.usePagedCache = true
+            base.enableBlockDiskCache = true
             base.pagedCacheBlockSize = DSV4_PAGED_CACHE_BLOCK_SIZE
           } else {
             base.usePagedCache = detected.usePagedCache

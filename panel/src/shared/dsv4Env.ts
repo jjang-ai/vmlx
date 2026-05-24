@@ -10,12 +10,11 @@
  *     migration compatibility with older saved sessions. They intentionally
  *     do not emit env vars: the runtime must not inject thinking tags or
  *     silently flip requested reasoning rails.
- *   - `dsv4PrefixCache` -> `VMLX_DSV4_ENABLE_PREFIX_CACHE=1` — diagnostic
- *     opt-in for native SWA+CSA/HCA composite prefix reuse. Default off until
- *     deterministic cached-vs-no-cache equivalence is proven.
- *   - `dsv4PoolQuant` -> `DSV4_POOL_QUANT=1` only when the user explicitly
- *     enables the native CSA/HCA pool codec. Default remains off; generic
- *     TurboQuant KV is still suppressed for DSV4 composite cache.
+ *   - `dsv4PrefixCache` -> `VMLX_DSV4_ENABLE_PREFIX_CACHE=1` for native
+ *     SWA+CSA/HCA composite prefix reuse.
+ *   - `dsv4PoolQuant` -> `DSV4_POOL_QUANT=1` when native composite prefix
+ *     cache is active. Generic TurboQuant KV is still suppressed for DSV4
+ *     composite cache.
  *
  * Natural model behavior wins: bundle chat/generation config plus explicit
  * per-request controls are the only model-behavior inputs.
@@ -42,9 +41,11 @@ export function dsv4EnvFromConfig(
   const env: Record<string, string> = {}
 
   if (options.dsv4Active === true) {
+    const prefixEnabled = config.dsv4PrefixCache !== false
+    const poolQuantEnabled = prefixEnabled && config.dsv4PoolQuant !== false
     env.DSV4_LONG_CTX = '1'
-    env.DSV4_POOL_QUANT = config.dsv4PrefixCache === true && config.dsv4PoolQuant === true ? '1' : '0'
-    if (config.dsv4PrefixCache === true) {
+    env.DSV4_POOL_QUANT = poolQuantEnabled ? '1' : '0'
+    if (prefixEnabled) {
       env.VMLX_DSV4_ENABLE_PREFIX_CACHE = '1'
     }
   }

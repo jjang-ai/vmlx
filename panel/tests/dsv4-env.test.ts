@@ -12,21 +12,22 @@ describe('dsv4EnvFromConfig', () => {
     expect(dsv4EnvFromConfig({ host: 'x', port: 1 })).toEqual({})
   })
 
-  it('pins production DSV4 runtime env when the detected family is DSV4', () => {
+  it('defaults production DSV4 runtime env to native composite cache and materialized pool quant', () => {
     expect(dsv4EnvFromConfig({}, { dsv4Active: true })).toEqual({
       DSV4_LONG_CTX: '1',
-      DSV4_POOL_QUANT: '0',
+      DSV4_POOL_QUANT: '1',
+      VMLX_DSV4_ENABLE_PREFIX_CACHE: '1',
     })
   })
 
   it('does not enable DSV4 pool quant unless native composite prefix cache is enabled', () => {
-    expect(dsv4EnvFromConfig({ dsv4PoolQuant: true }, { dsv4Active: true })).toEqual({
+    expect(dsv4EnvFromConfig({ dsv4PrefixCache: false, dsv4PoolQuant: true }, { dsv4Active: true })).toEqual({
       DSV4_LONG_CTX: '1',
       DSV4_POOL_QUANT: '0',
     })
   })
 
-  it('enables DSV4 pool quant only when explicit config asks for it under native composite cache', () => {
+  it('enables DSV4 pool quant by default only under DSV4 native composite cache', () => {
     expect(dsv4EnvFromConfig({ dsv4PrefixCache: true, dsv4PoolQuant: true }, { dsv4Active: true })).toEqual({
       DSV4_LONG_CTX: '1',
       DSV4_POOL_QUANT: '1',
@@ -34,8 +35,13 @@ describe('dsv4EnvFromConfig', () => {
     })
   })
 
-  it('keeps DSV4 composite prefix cache explicit and opt-in when enabled', () => {
+  it('keeps DSV4 composite prefix cache active while allowing pool quant override off', () => {
     expect(dsv4EnvFromConfig({ dsv4PrefixCache: true }, { dsv4Active: true })).toEqual({
+      DSV4_LONG_CTX: '1',
+      DSV4_POOL_QUANT: '1',
+      VMLX_DSV4_ENABLE_PREFIX_CACHE: '1',
+    })
+    expect(dsv4EnvFromConfig({ dsv4PrefixCache: true, dsv4PoolQuant: false }, { dsv4Active: true })).toEqual({
       DSV4_LONG_CTX: '1',
       DSV4_POOL_QUANT: '0',
       VMLX_DSV4_ENABLE_PREFIX_CACHE: '1',
@@ -153,8 +159,8 @@ describe('DSV4 runtime controls in SessionConfigForm', () => {
 
     expect(source).toContain('dsv4PoolQuant?: boolean')
     expect(source).toContain('dsv4PrefixCache?: boolean')
-    expect(source).toContain('dsv4PoolQuant: false')
-    expect(source).toContain('dsv4PrefixCache: false')
+    expect(source).toContain('dsv4PoolQuant: true')
+    expect(source).toContain('dsv4PrefixCache: true')
     expect(source).not.toContain('dsv4FinalizerTokens')
   })
 
@@ -181,7 +187,7 @@ describe('DSV4 runtime controls in SessionConfigForm', () => {
     expect(source).not.toContain('DSV4 Composite Prefix Cache')
     expect(source).not.toContain('DSV4 Pool Quantization')
     expect(source).not.toContain('DSV4 Flash composite prefix cache is disabled')
-    expect(source).toContain('Turning this on also enables the DSV4 Native Composite Prefix Cache prerequisites')
+    expect(source).toContain('Generic KV q4/q8 stays suppressed for DSV4')
     expect(source).not.toContain("disabled={!dsv4CompositeCacheOptIn}")
     expect(source).not.toContain("onChange={v => onChange('dsv4PoolQuant', dsv4CompositeCacheOptIn && v)}")
     expect(source).not.toContain("onChange={() => onChange('dsv4PoolQuant', false)}")

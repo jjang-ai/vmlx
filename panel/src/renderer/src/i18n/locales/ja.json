@@ -886,7 +886,7 @@
       "section3BodyB": "Prefix cache、paged cache、L2 disk cache、TurboQuant KV は、cache reuse を推測ではなく確認できるように health counters を明確化しました。",
       "section4Heading": "Release integrity と updater safety",
       "section4BodyA": "Release 前に packaged app の Developer ID signing、notarization、bundled source hashes、critical imports、GUI launch、latest.json/update manifest compatibility を確認します。",
-      "section4BodyB": "DeepSeek V4 Flash は保守的な扱いです。composite cache は opt-in のままで、exact long-code output は identifier gate が通るまで follow-up として残します。",
+      "section4BodyB": "DeepSeek V4 Flash は native composite cache path をデフォルトで使い、generic KV q4/q8 は引き続き抑止します。exact long-code output は identifier gate が通るまで follow-up として残します。",
       "footer": "MLX Studio と JANG をご利用いただきありがとうございます。— Jinho Jang",
       "dismiss": "了解 — 次のアップデートまで表示しない"
     }

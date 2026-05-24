@@ -886,7 +886,7 @@
       "section3BodyB": "Prefix cache、paged cache、L2 disk cache 与 TurboQuant KV 路径现在公开更清晰的 health counters，让 cache reuse 可被确认而不是猜测。",
       "section4Heading": "Release integrity 与 updater safety",
       "section4BodyA": "发布前会检查 packaged app 的 Developer ID signing、notarization、bundled source hashes、critical imports、GUI launch，以及 latest.json/update manifest compatibility。",
-      "section4BodyB": "DeepSeek V4 Flash 仍保持保守策略：composite cache 继续 opt-in，exact long-code output 在 identifier gate 清除前列为 follow-up。",
+      "section4BodyB": "DeepSeek V4 Flash 现在默认使用 native composite cache path，同时继续抑制 generic KV q4/q8；exact long-code output 在 identifier gate 清除前仍列为 follow-up。",
       "footer": "感谢您使用 MLX Studio 和 JANG。— Jinho Jang",
       "dismiss": "知道了 — 下次更新前不再显示"
     }

@@ -27,10 +27,14 @@ def _env_truthy(name: str) -> bool:
 
 
 def _dsv4_prefix_cache_opt_in(args=None) -> bool:
-    """Return whether DSV4 composite prefix reuse was explicitly enabled."""
+    """Return whether DSV4 composite prefix reuse should be active."""
 
-    return bool(getattr(args, "dsv4_enable_prefix_cache", False)) or _env_truthy(
-        DSV4_PREFIX_CACHE_ENV
+    if bool(getattr(args, "disable_prefix_cache", False)):
+        return False
+    return (
+        bool(getattr(args, "dsv4_enable_prefix_cache", False))
+        or _env_truthy(DSV4_PREFIX_CACHE_ENV)
+        or os.environ.get(DSV4_PREFIX_CACHE_ENV) is None
     )
 
 
@@ -128,9 +132,9 @@ def _apply_dsv4_cache_policy(args, logger):
 
     DSV4 paged-prefix entries hold prompt-boundary DeepseekV4Cache snapshots
     for SWA plus CSA/HCA compressed pools. Treating those records like generic
-    KV pages makes stale app defaults too easy to launch. A live deterministic
-    patched-config DSV4 run showed cached-vs-no-cache output divergence, so
-    composite prefix reuse is opt-in until byte-equivalence is proven.
+    KV pages makes stale app defaults too easy to launch. DSV4 uses this
+    native composite path by default; explicit --disable-prefix-cache remains
+    a full opt-out and also suppresses paged/L2 dependent state.
     """
 
     changed = []
@@ -147,19 +151,17 @@ def _apply_dsv4_cache_policy(args, logger):
         ):
             args.enable_prefix_cache = False
             args.disable_prefix_cache = True
-            changed.append("prefix_cache=disabled_until_dsv4_equivalence")
+            changed.append("prefix_cache=explicitly_disabled")
         if getattr(args, "use_paged_cache", False):
             args.use_paged_cache = False
-            changed.append("paged=disabled_until_dsv4_equivalence")
+            changed.append("paged=disabled_without_prefix")
         if getattr(args, "enable_block_disk_cache", False):
             args.enable_block_disk_cache = False
-            changed.append("L2 disk=disabled_until_dsv4_equivalence")
+            changed.append("L2 disk=disabled_without_prefix")
         logger.warning(
-            "DSV4-Flash composite prefix cache is disabled by default. A "
-            "patched-config live DSV4 gate produced deterministic cached-vs-"
-            "no-cache divergence on the paged+dsv4 path; serving will use "
-            "full prefill unless --dsv4-enable-prefix-cache or %s=1 is set "
-            "for diagnostic opt-in.",
+            "DSV4-Flash native composite prefix cache is explicitly disabled. "
+            "Serving will use full prefill for this session unless it enables "
+            "--dsv4-enable-prefix-cache or leaves %s unset/default-on.",
             DSV4_PREFIX_CACHE_ENV,
         )
         return tuple(changed)
@@ -183,7 +185,7 @@ def _apply_dsv4_cache_policy(args, logger):
 
     if changed:
         logger.info(
-            "DSV4-Flash diagnostic cache policy applied: %s. Paged prefix "
+            "DSV4-Flash native composite cache policy applied: %s. Paged prefix "
             "cache stores native SWA+CSA/HCA composite prompt-boundary state; "
             "using %d-token blocks for DS4 decode-cache compatibility.",
             ", ".join(changed),
@@ -204,8 +206,8 @@ def _apply_dsv4_runtime_policy(args, logger, *, clamp_max_num_seqs: bool = False
         dsv4_pool_quant = _configure_dsv4_pool_quant_default()
     except Exception:
         os.environ["DSV4_LONG_CTX"] = "1"
-        os.environ.setdefault("DSV4_POOL_QUANT", "0")
-        dsv4_pool_quant = os.environ.get("DSV4_POOL_QUANT", "0")
+        os.environ.setdefault("DSV4_POOL_QUANT", "1")
+        dsv4_pool_quant = os.environ.get("DSV4_POOL_QUANT", "1")
 
     if getattr(args, "continuous_batching", True) is False:
         args.continuous_batching = True
@@ -620,10 +622,9 @@ def serve_command(args):
         from .model_config_registry import get_model_config_registry
         _mc = get_model_config_registry().lookup(args.model)
         # DSV4-Flash auto-config. DSV4_LONG_CTX=1 is the only supported
-        # runtime mode (tri-mode SWA+CSA/HCA). Pool quant is intentionally
-        # opt-in until restored-prefix parity is proven for the active DSV4
-        # runtime; explicit DSV4_POOL_QUANT env overrides are preserved for
-        # debug/bisect.
+        # runtime mode (tri-mode SWA+CSA/HCA). The native composite prefix
+        # cache and materialized CSA/HCA pool codec are the default path;
+        # explicit disable flags/env overrides are preserved for debug/bisect.
         if _mc.family_name == "deepseek_v4":
             _is_dsv4_model = True
             _apply_dsv4_runtime_policy(args, logger)
@@ -1946,10 +1947,9 @@ Examples:
     serve_parser.add_argument(
         "--dsv4-enable-prefix-cache",
         action="store_true",
-        help="Diagnostic opt-in for DeepSeek-V4 Flash native SWA+CSA/HCA "
-             "composite prefix cache reuse. Default is off until cached-vs-"
-             "no-cache byte equivalence is proven; VMLX_DSV4_ENABLE_PREFIX_CACHE=1 "
-             "is the equivalent environment override.",
+        help="Enable DeepSeek-V4 Flash native SWA+CSA/HCA composite prefix "
+             "cache reuse. This is the default when neither --disable-prefix-cache "
+             "nor VMLX_DSV4_ENABLE_PREFIX_CACHE=0 is set.",
     )
     serve_parser.add_argument(
         "--prefix-cache-size",
@@ -2597,9 +2597,9 @@ Examples:
     bench_parser.add_argument(
         "--dsv4-enable-prefix-cache",
         action="store_true",
-        help="Diagnostic opt-in for DeepSeek-V4 Flash native composite prefix "
-             "cache reuse. Default is off until cached-vs-no-cache equivalence "
-             "is proven; VMLX_DSV4_ENABLE_PREFIX_CACHE=1 is equivalent.",
+        help="Enable DeepSeek-V4 Flash native composite prefix cache reuse. "
+             "This is the default when neither --disable-prefix-cache nor "
+             "VMLINUX_DSV4_ENABLE_PREFIX_CACHE=0 is set.",
     )
     bench_parser.add_argument(
         "--prefix-cache-size",

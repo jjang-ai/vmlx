@@ -122,7 +122,7 @@ function applyFamilyStartupDefaults(config: Partial<ServerConfig>, modelPath?: s
       changed = true
     }
     if (normalizeDetectedFamilyName(detected.family) === 'deepseek-v4') {
-      const dsv4PrefixOptIn = config.dsv4PrefixCache === true
+      const dsv4PrefixOptIn = config.dsv4PrefixCache !== false
       const desiredPrefix = dsv4PrefixOptIn
       const desiredPaged = dsv4PrefixOptIn
       const desiredBlockDisk = dsv4PrefixOptIn
@@ -143,11 +143,11 @@ function applyFamilyStartupDefaults(config: Partial<ServerConfig>, modelPath?: s
         changed = true
       }
       if (config.dsv4PrefixCache == null) {
-        config.dsv4PrefixCache = false
+        config.dsv4PrefixCache = true
         changed = true
       }
       if (config.dsv4PoolQuant == null) {
-        config.dsv4PoolQuant = false
+        config.dsv4PoolQuant = true
         changed = true
       }
       if (!dsv4PrefixOptIn && config.dsv4PoolQuant === true) {
@@ -1127,7 +1127,7 @@ export class SessionManager extends EventEmitter {
             config.reasoningParser = freshConfig.reasoningParser || 'auto'
           }
           if (freshFamily === 'deepseek-v4') {
-            const dsv4PrefixOptIn = config.dsv4PrefixCache === true
+            const dsv4PrefixOptIn = config.dsv4PrefixCache !== false
             const dsv4Changed =
               config.continuousBatching !== true ||
               config.dsv4PrefixCache !== dsv4PrefixOptIn ||
@@ -1145,7 +1145,7 @@ export class SessionManager extends EventEmitter {
               config.isMultimodal !== false
             config.continuousBatching = true
             config.dsv4PrefixCache = dsv4PrefixOptIn
-            config.dsv4PoolQuant = dsv4PrefixOptIn && config.dsv4PoolQuant === true
+            config.dsv4PoolQuant = dsv4PrefixOptIn && config.dsv4PoolQuant !== false
             config.enablePrefixCache = dsv4PrefixOptIn
             config.usePagedCache = dsv4PrefixOptIn
             config.pagedCacheBlockSize = DSV4_PAGED_CACHE_BLOCK_SIZE
@@ -1164,8 +1164,8 @@ export class SessionManager extends EventEmitter {
             config.isMultimodal = false
             if (dsv4Changed) {
               this.pushLog(sessionId, dsv4PrefixOptIn
-                ? '[INFO] DSV4-Flash detected; diagnostic native SWA+CSA/HCA composite cache opt-in is active with 256-token blocks'
-                : '[INFO] DSV4-Flash detected; composite prefix/paged/L2 cache is disabled by default until cached-vs-no-cache equivalence is proven')
+                ? '[INFO] DSV4-Flash detected; native SWA+CSA/HCA composite prefix/paged/L2 cache is active by default with 256-token blocks'
+                : '[INFO] DSV4-Flash detected; native composite prefix/paged/L2 cache explicitly disabled for this session')
             }
           }
           // Refresh multimodal detection from disk. A detected VLM must win
@@ -1731,7 +1731,7 @@ export class SessionManager extends EventEmitter {
         // multi-user batch shape while keeping those features active.
         // Stream interval 1 = lowest latency per-token delivery.
         const detectedFamily = normalizeDetectedFamilyName(detected.family)
-        const dsv4DefaultCacheOptIn = false
+        const dsv4DefaultCacheOptIn = true
         const defaultConfig: ServerConfig = {
           modelPath: proc.modelPath,
           host: '127.0.0.1',
@@ -1763,7 +1763,7 @@ export class SessionManager extends EventEmitter {
           toolCallParser: 'auto',
           reasoningParser: 'auto',
           dsv4PrefixCache: dsv4DefaultCacheOptIn,
-          dsv4PoolQuant: false,
+          dsv4PoolQuant: dsv4DefaultCacheOptIn,
           defaultEnableThinking: undefined,
           nativeMtpMode: 'deterministic',
           nativeMtpDepth: (detected as any).nativeMtp?.depth ?? 3,
@@ -2485,7 +2485,7 @@ export class SessionManager extends EventEmitter {
     // single-batch even though the generic session profile defaults higher.
     const detectedFamily = normalizeDetectedFamilyName(detected.family)
     const dsv4Active = detectedFamily === 'deepseek-v4'
-    const dsv4PrefixCacheOptIn = dsv4Active && config.dsv4PrefixCache === true
+    const dsv4PrefixCacheOptIn = dsv4Active && config.dsv4PrefixCache !== false
 
     // Concurrent processing
     // When value is 0 ("No limit" in UI), omit the flag so backend uses its default.
@@ -2583,9 +2583,9 @@ export class SessionManager extends EventEmitter {
     console.log(`[SESSION] Model family: ${detected.family} | tool: ${effectiveToolParser || 'none'} (user=${userToolParser}, detected=${detected.toolParser || 'none'}) | reasoning: ${effectiveReasoningParser || 'none'} (user=${userReasoningParser}, detected=${detected.reasoningParser || 'none'}) | autoTool: ${effectiveAutoTool} | VLM: ${isVLM}`)
     if (dsv4PrefixCacheOptIn) {
       args.push('--dsv4-enable-prefix-cache')
-      console.log('[SESSION] DSV4-Flash composite prefix cache diagnostic opt-in is active')
+      console.log('[SESSION] DSV4-Flash native composite prefix cache is active')
     } else if (dsv4Active) {
-      console.log('[SESSION] DSV4-Flash composite prefix/paged/L2 cache disabled by default until deterministic cache equivalence is proven')
+      console.log('[SESSION] DSV4-Flash native composite prefix/paged/L2 cache explicitly disabled for this session')
     }
 
     // Prefix cache — requires --continuous-batching to take effect in vmlx-engine

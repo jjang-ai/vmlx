@@ -4,6 +4,26 @@ All notable changes to vMLX Engine will be documented in this file.
 
 ## [Unreleased]
 
+## [1.5.49] - 2026-05-23
+
+### Fixed
+- Shipped the current Responses tool-call parser fix so non-streaming
+  `/v1/responses` extracts real tool calls emitted inside reasoning text before
+  finalizing output items.
+- Bundled the materialized DSV4 CSA/HCA pool codec fix so DSV4 pool-quant reads
+  reuse the cached materialized pool instead of dequantizing and concatenating
+  historical pool segments on every attention read.
+- Made DSV4 Flash native composite prefix cache and the materialized pool codec
+  the default DSV4 launch path while keeping generic KV q4/q8 suppressed for
+  DSV4 and preserving explicit per-session disable.
+- Refreshed panel settings, CLI preview, i18n "What's New", cache architecture,
+  API/cache, MTP, and VL/media gates so cache defaults, DSV4-only controls, and
+  command preview wiring stay aligned.
+
+### Known Follow-ups
+- DSV4 Flash long full-output/code-generation quality remains a documented
+  release exception pending separate exact-code/runtime-quality clearance.
+
 ## [1.5.48] - 2026-05-22
 
 ### Fixed

@@ -886,7 +886,7 @@
       "section3BodyB": "Prefix cache, paged cache, L2 disk cache y TurboQuant KV muestran contadores de salud más claros para que la reutilización de caché sea visible y no supuesta.",
       "section4Heading": "Integridad de release y seguridad del actualizador",
       "section4BodyA": "La app empaquetada se comprueba para Developer ID, notarización, hashes de fuente incluidos, imports críticos, arranque GUI y compatibilidad con latest.json/update manifest antes del release.",
-      "section4BodyB": "DeepSeek V4 Flash sigue en modo conservador: composite cache queda opt-in y la salida exacta de código largo figura como seguimiento hasta limpiar el gate de identificadores.",
+      "section4BodyB": "DeepSeek V4 Flash ahora inicia con su ruta native composite cache por defecto mientras q4/q8 KV genérico sigue desactivado; la salida exacta de código largo sigue como seguimiento hasta limpiar el gate de identificadores.",
       "footer": "Gracias por usar MLX Studio y JANG. — Jinho Jang",
       "dismiss": "Entendido — no mostrar hasta la próxima actualización"
     }

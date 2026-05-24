@@ -167,8 +167,8 @@ export const DEFAULT_CONFIG: SessionConfig = {
   defaultRepetitionPenalty: 0,
   defaultMaxNewTokens: 0,
   defaultEnableThinking: undefined,
-  dsv4PrefixCache: false,
-  dsv4PoolQuant: false,
+  dsv4PrefixCache: true,
+  dsv4PoolQuant: true,
   embeddingModel: '',
   additionalArgs: '',
   enableJit: true,
@@ -310,7 +310,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
   const turboQuantActive = !!detectedIsTurboQuant
   const multimodalActive = !dsv4Active && !detectedForceTextOnly && (!!detectedIsMultimodal || config.isMultimodal === true)
   const hybridCacheActive = detectedCacheType === 'hybrid' || detectedCacheType === 'mamba'
-  const dsv4CompositeCacheOptIn = dsv4Active && config.dsv4PrefixCache === true
+  const dsv4CompositeCacheOptIn = dsv4Active && config.dsv4PrefixCache !== false
   const effectiveContinuousBatching = dsv4Active ? true : config.continuousBatching
   const batchingOff = !effectiveContinuousBatching
   const effectivelyNoBatching = batchingOff
@@ -709,7 +709,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
             <CheckField
               label="DSV4 Native Composite Prefix Cache"
               tooltip="The only DeepSeek-V4 prefix-cache switch. It enables native SWA+CSA/HCA prompt-boundary snapshots, fixed 256-token block indexing, and the DSV4-compatible paged/L2 transport. It does not enable generic KV q4/q8."
-              checked={!!config.dsv4PrefixCache}
+              checked={config.dsv4PrefixCache !== false}
               onChange={applyDsv4CompositeCacheToggle}
             />
           </>
@@ -956,7 +956,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
         {dsv4Active && (
           <CheckField
             label="DSV4 CSA/HCA Pool Codec"
-            tooltip="Diagnostic DSV4_POOL_QUANT=1 native CSA/HCA pool codec. Turning this on also enables the DSV4 Native Composite Prefix Cache prerequisites so the launch can actually emit DSV4_POOL_QUANT=1. Keep off for production correctness unless testing native pool compression."
+            tooltip="DSV4_POOL_QUANT=1 native CSA/HCA pool codec. This is the default for DSV4 Flash when the Native Composite Prefix Cache is active. Generic KV q4/q8 stays suppressed for DSV4."
             checked={dsv4CompositeCacheOptIn && !!config.dsv4PoolQuant}
             onChange={applyDsv4PoolQuantToggle}
           />
@@ -1007,7 +1007,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
         {dsv4Active ? (
           <InfoNote text={dsv4CompositeCacheOptIn
             ? "DSV4 Flash stores persistent prefix state through Block Disk Cache (L2) in the native cache section. Legacy disk cache is disabled because DSV4 restores typed SWA+CSA/HCA composite records, not generic KV entries."
-            : "DSV4 Flash composite prefix and Block Disk Cache (L2) reuse are disabled by default until deterministic cache equivalence is proven. Legacy disk cache is also unavailable for DSV4 typed cache records."} />
+            : "DSV4 Flash native composite prefix and Block Disk Cache (L2) reuse are explicitly disabled for this session. Legacy disk cache is also unavailable for DSV4 typed cache records."} />
         ) : (
           <InfoNote text="Legacy disk cache works with memory-aware prefix cache. Block disk cache (in the Paged KV Cache section) works with paged cache. Only one can be active at a time." />
         )}

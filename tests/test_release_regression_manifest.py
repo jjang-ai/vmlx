@@ -2647,6 +2647,7 @@ def test_release_regression_manifest_tracks_current_packaged_integrity_recheck()
     joined = " ".join(row["commands"] + row["artifacts"] + row["proves"])
 
     assert "current-packaged-integrity-contract-20260522-recheck-bundled-release-gate.json" in joined
+    assert "current-packaged-integrity-contract-20260523-v1549-after-bundle-refresh-local-jang.json" in joined
     assert "clean JANG source path" in joined
     assert "bundled critical jang_tools files match source content" in joined
     assert "console-script shebangs are relocatable" in joined
@@ -3040,10 +3041,10 @@ def test_release_regression_manifest_tracks_cache_architecture_with_runner_artif
     assert "DSV4 pool quant reads reuse a materialized pool view" in joined
     assert "current-cache-architecture-contract-20260522-dsv4-pool-materialized-cache.json" in joined
     assert "pool quant codec appends only newly generated CSA/HCA pool rows" in joined
-    assert "DSV4 panel env mapping enables pool quant only from explicit DSV4 config" in joined
+    assert "DSV4 panel env mapping enables pool quant by default only under DSV4 native composite cache" in joined
     assert "current-cache-architecture-contract-20260522-dsv4-pool-ui-wired.json" in joined
     assert "DSV4 timing probe covers prefix-cache replay and cold-store boundaries" in joined
-    assert "Panel session launch builder preserves DSV4 default and diagnostic prefix-cache policy" in joined
+    assert "Panel session launch builder preserves DSV4 default-on native prefix-cache policy" in joined
     assert "Qwen3.6 hybrid and Mamba paged-cache forcing" in joined
     assert "regular KV stale saved false semantics" in joined
 

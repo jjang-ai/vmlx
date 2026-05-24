@@ -90,7 +90,7 @@ COMMANDS: dict[str, tuple[Path, list[str]]] = {
                 "passes MiniMax through the registered minimax_m2 reasoning parser|"
                 "detected Qwen3.6 hybrid cache forces paged cache over stale saved false|"
                 "ZAYA sessions keep the qwen3 reasoning parser and model-owned no-thinking default|"
-                "deepseek-v4 disables composite prefix cache by default even with stale cache config|"
+                "deepseek-v4 enables native composite prefix cache by default even with stale cache config|"
                 "DSV4 additional args cannot reenable native MTP or deterministic sampling policy|"
                 "defaults native-MTP bundles to deterministic measured-depth launch policy"
             ),
@@ -252,7 +252,7 @@ ROW_MARKERS: dict[str, tuple[str, ...]] = {
         "passes MiniMax through the registered minimax_m2 reasoning parser",
         "detected Qwen3.6 hybrid cache forces paged cache over stale saved false",
         "ZAYA sessions keep the qwen3 reasoning parser and model-owned no-thinking default",
-        "deepseek-v4 disables composite prefix cache by default even with stale cache config",
+        "deepseek-v4 enables native composite prefix cache by default even with stale cache config",
         "DSV4 additional args cannot reenable native MTP or deterministic sampling policy",
         "defaults native-MTP bundles to deterministic measured-depth launch policy",
     ),

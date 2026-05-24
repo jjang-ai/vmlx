@@ -4992,9 +4992,9 @@ class TestStartupCompatibilityGuards:
             : bundle_script.index("# Clean up to reduce size")
         ]
 
-        assert '"$PYTHON" -m pip install --force-reinstall --no-deps "$VMLX_LOCAL"' in local_install_block
+        assert '"$PYTHON" -m pip install --force-reinstall --no-deps --no-cache-dir "$VMLX_LOCAL"' in local_install_block
         assert 'JANG_LOCAL="${VMLX_JANG_TOOLS_SOURCE:-${VMLINUX_JANG_TOOLS_SOURCE:-$HOME/jang/jang-tools}}"' in bundle_script
-        assert '"$PYTHON" -m pip install --force-reinstall --no-deps "$JANG_LOCAL"' in local_install_block
+        assert '"$PYTHON" -m pip install --force-reinstall --no-deps --no-cache-dir "$JANG_LOCAL"' in local_install_block
 
     def test_bundled_python_does_not_silently_fallback_to_pypi_jang_tools(self):
         bundle_script = Path("./panel/scripts/bundle-python.sh").read_text()
@@ -5205,6 +5205,7 @@ class TestStartupCompatibilityGuards:
     def test_release_build_declares_sequoia_and_tahoe_dmg_flavors(self):
         """vmlx#169 release packaging must build both wheel-tag variants."""
         script = Path("./panel/scripts/build-release-dmgs.sh")
+        panel_package = json.loads(Path("./panel/package.json").read_text())
 
         assert script.is_file()
         source = script.read_text()
@@ -5216,6 +5217,7 @@ class TestStartupCompatibilityGuards:
         assert "electron-builder --mac" in source
         assert "gh release" not in source
         assert "latest.json" not in source
+        assert panel_package["build"]["dmg"]["sign"] is True
 
     def test_macos_compat_error_points_to_sequoia_dmg_for_tahoe_wheels(self):
         """Wrong-DMG installs should fail before MLX import with actionable text."""

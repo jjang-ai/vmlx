@@ -33,7 +33,7 @@ PACKAGED_RENDERER_ASAR = Path(
 PACKAGED_RENDERER_REQUIRED_DSV4_CACHE_UI_STRINGS = (
     b"DSV4 Native Composite Prefix Cache",
     b"DSV4 CSA/HCA Pool Codec",
-    b"actually emit DSV4_POOL_QUANT=1",
+    b"DSV4_POOL_QUANT=1 native CSA/HCA pool codec",
 )
 PACKAGED_RENDERER_FORBIDDEN_DSV4_CACHE_UI_STRINGS = (
     b"DSV4 Native Cache",

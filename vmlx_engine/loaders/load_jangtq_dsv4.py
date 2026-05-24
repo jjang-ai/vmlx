@@ -1282,11 +1282,11 @@ def _install_dsv4_memory_defaults() -> None:
 
 
 def _configure_dsv4_pool_quant_default() -> str:
-    """Keep DSV4 pool quant explicit until cached-prefix parity is proven."""
+    """Default DSV4 to the materialized native pool codec unless overridden."""
     os.environ["DSV4_LONG_CTX"] = "1"
     if "DSV4_POOL_QUANT" in os.environ:
         return os.environ["DSV4_POOL_QUANT"]
-    os.environ["DSV4_POOL_QUANT"] = "0"
+    os.environ["DSV4_POOL_QUANT"] = "1"
     return os.environ["DSV4_POOL_QUANT"]
 
 
@@ -1374,10 +1374,10 @@ def load_jangtq_dsv4_model(model_path: str, *, skip_params_eval: bool = True) ->
     # DSV4_LONG_CTX=1 is the only supported runtime mode. The installed JANG
     # attention path must carry the native mask-width and per-query compressed
     # pool fixes; vMLX verifies that contract below and does not patch the class.
-    # Pool quant remains opt-in until restored-prefix parity is proven for
-    # the active DSV4 runtime. The native unquantized composite cache is the
-    # correctness-safe default; explicit DSV4_POOL_QUANT env overrides are
-    # preserved for debug/bisect.
+    # DSV4 pool quant now defaults on because the bundled JANG runtime keeps a
+    # materialized pool view and no longer dequantizes/concats historical pool
+    # rows on each read. Explicit DSV4_POOL_QUANT env overrides are preserved
+    # for debug/bisect.
     pool_quant = _configure_dsv4_pool_quant_default()
     _log.info("DSV4 runtime defaults: DSV4_LONG_CTX=1, DSV4_POOL_QUANT=%s", pool_quant)
     _install_dsv4_memory_defaults()

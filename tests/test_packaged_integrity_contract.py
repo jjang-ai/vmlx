@@ -266,7 +266,7 @@ def test_packaged_renderer_dsv4_cache_ui_check_accepts_deduped_labels(tmp_path):
     app_asar.write_bytes(
         b"DSV4 Native Composite Prefix Cache\n"
         b"DSV4 CSA/HCA Pool Codec\n"
-        b"actually emit DSV4_POOL_QUANT=1\n"
+        b"DSV4_POOL_QUANT=1 native CSA/HCA pool codec\n"
     )
 
     assert runner._check_packaged_renderer_dsv4_cache_ui(tmp_path) is True

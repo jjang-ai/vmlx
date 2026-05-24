@@ -88,10 +88,11 @@ export function CreateSession({ initialModelPath, onBack, onCreated, filterType:
         enableAutoToolChoice: detected?.enableAutoToolChoice,
         toolCallParser: 'auto',
         reasoningParser: 'auto',
-        dsv4PrefixCache: detected?.family === 'deepseek-v4' ? false : prev.dsv4PrefixCache,
-        enablePrefixCache: detected?.family === 'deepseek-v4' ? false : prev.enablePrefixCache,
-        usePagedCache: detected?.family === 'deepseek-v4' ? false : detected?.usePagedCache,
-        enableBlockDiskCache: detected?.family === 'deepseek-v4' ? false : prev.enableBlockDiskCache,
+        dsv4PrefixCache: detected?.family === 'deepseek-v4' ? true : prev.dsv4PrefixCache,
+        dsv4PoolQuant: detected?.family === 'deepseek-v4' ? true : prev.dsv4PoolQuant,
+        enablePrefixCache: detected?.family === 'deepseek-v4' ? true : prev.enablePrefixCache,
+        usePagedCache: detected?.family === 'deepseek-v4' ? true : detected?.usePagedCache,
+        enableBlockDiskCache: detected?.family === 'deepseek-v4' ? true : prev.enableBlockDiskCache,
         pagedCacheBlockSize: detected?.family === 'deepseek-v4' ? 256 : prev.pagedCacheBlockSize,
       }
       return applyGenerationDefaultsToConfig(next, gen)
@@ -191,10 +192,11 @@ export function CreateSession({ initialModelPath, onBack, onCreated, filterType:
           base.enableAutoToolChoice = detected.enableAutoToolChoice
           if (detected.family === 'deepseek-v4') {
             base.timeout = 900
-            base.dsv4PrefixCache = false
-            base.enablePrefixCache = false
-            base.usePagedCache = false
-            base.enableBlockDiskCache = false
+            base.dsv4PrefixCache = true
+            base.dsv4PoolQuant = true
+            base.enablePrefixCache = true
+            base.usePagedCache = true
+            base.enableBlockDiskCache = true
             base.pagedCacheBlockSize = 256
           } else {
             base.usePagedCache = detected.usePagedCache
