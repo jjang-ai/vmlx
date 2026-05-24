@@ -27,6 +27,7 @@ from tests.cross_matrix.run_production_family_audit import (
     extract_anthropic_text_and_stop,
     extract_ollama_visible_text_and_stop,
     is_non_length_stop,
+    live_request_perf_summary,
     normalize_python_executable,
     normalize_short_answer,
     family_matches_expected,
@@ -460,6 +461,52 @@ def test_live_audit_deferred_rows_keep_failure_details():
     assert result["status"] == "DEFERRED"
     assert "Responses tool-history" in result["reason"]
     assert result["failures"][0]["name"] == "responses_tool_history_continuation"
+
+
+def test_live_request_perf_summary_derives_wall_token_rates_from_chat_usage():
+    perf = live_request_perf_summary(
+        {
+            "prompt_tokens": 120,
+            "completion_tokens": 30,
+            "total_tokens": 150,
+        },
+        elapsed_sec=10.0,
+    )
+
+    assert perf == {
+        "elapsed_sec": 10.0,
+        "basis": "api_usage_wall_clock",
+        "prompt_tokens": 120,
+        "completion_tokens": 30,
+        "total_tokens": 150,
+        "prompt_tokens_per_sec_wall": 12.0,
+        "completion_tokens_per_sec_wall": 3.0,
+        "total_tokens_per_sec_wall": 15.0,
+    }
+
+
+def test_live_request_perf_summary_derives_wall_token_rates_from_responses_usage():
+    perf = live_request_perf_summary(
+        {
+            "input_tokens": 64,
+            "output_tokens": 16,
+            "total_tokens": 80,
+        },
+        elapsed_sec=4.0,
+    )
+
+    assert perf["prompt_tokens"] == 64
+    assert perf["completion_tokens"] == 16
+    assert perf["prompt_tokens_per_sec_wall"] == 16.0
+    assert perf["completion_tokens_per_sec_wall"] == 4.0
+
+
+def test_live_request_perf_summary_marks_missing_usage_without_fake_rates():
+    perf = live_request_perf_summary(None, elapsed_sec=3.0)
+
+    assert perf["elapsed_sec"] == 3.0
+    assert perf["basis"] == "missing_api_usage"
+    assert "completion_tokens_per_sec_wall" not in perf
 
 def test_live_audit_root_points_at_current_checkout():
     """Worktree gates must not import modules from the stale main checkout."""

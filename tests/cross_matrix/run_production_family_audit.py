@@ -1298,6 +1298,67 @@ def http_json(method: str, url: str, body: Any | None = None, timeout: int = 240
         return 0, {"error": f"{type(e).__name__}: {e}"}
 
 
+def _usage_int(usage: Any, *keys: str) -> int | None:
+    if not isinstance(usage, dict):
+        return None
+    for key in keys:
+        value = usage.get(key)
+        if isinstance(value, bool):
+            continue
+        if isinstance(value, int):
+            return value
+        if isinstance(value, float) and value.is_integer():
+            return int(value)
+    return None
+
+
+def live_request_perf_summary(usage: Any, elapsed_sec: float) -> dict[str, Any]:
+    """Derive explicit wall-clock token rates for live proof artifacts.
+
+    These are intentionally labeled as wall-clock rates: they include request
+    assembly, prompt processing, generation, and response serialization. They
+    are not TTFT or engine-internal decode-only metrics.
+    """
+    elapsed = round(float(elapsed_sec), 3)
+    if not isinstance(usage, dict):
+        return {"elapsed_sec": elapsed, "basis": "missing_api_usage"}
+
+    prompt_tokens = _usage_int(usage, "prompt_tokens", "input_tokens")
+    completion_tokens = _usage_int(
+        usage, "completion_tokens", "output_tokens", "generated_tokens"
+    )
+    total_tokens = _usage_int(usage, "total_tokens")
+    if total_tokens is None:
+        if prompt_tokens is not None and completion_tokens is not None:
+            total_tokens = prompt_tokens + completion_tokens
+        elif prompt_tokens is not None:
+            total_tokens = prompt_tokens
+        elif completion_tokens is not None:
+            total_tokens = completion_tokens
+
+    summary: dict[str, Any] = {
+        "elapsed_sec": elapsed,
+        "basis": "api_usage_wall_clock",
+    }
+    if prompt_tokens is not None:
+        summary["prompt_tokens"] = prompt_tokens
+    if completion_tokens is not None:
+        summary["completion_tokens"] = completion_tokens
+    if total_tokens is not None:
+        summary["total_tokens"] = total_tokens
+
+    if elapsed > 0:
+        if prompt_tokens is not None:
+            summary["prompt_tokens_per_sec_wall"] = round(prompt_tokens / elapsed, 3)
+        if completion_tokens is not None:
+            summary["completion_tokens_per_sec_wall"] = round(
+                completion_tokens / elapsed, 3
+            )
+        if total_tokens is not None:
+            summary["total_tokens_per_sec_wall"] = round(total_tokens / elapsed, 3)
+    return summary
+
+
 def _directory_size_and_count(path: Path) -> dict[str, Any]:
     files = 0
     total = 0
@@ -2172,11 +2233,15 @@ def post_chat(
         body["chat_template_kwargs"] = {"enable_thinking": thinking}
     t0 = time.perf_counter()
     code, resp = http_json("POST", f"{base}/v1/chat/completions", body)
+    elapsed = round(time.perf_counter() - t0, 3)
+    usage = resp.get("usage") if isinstance(resp, dict) else None
     return {
         "code": code,
         "body": resp,
         "request": body,
-        "elapsed_sec": round(time.perf_counter() - t0, 3),
+        "elapsed_sec": elapsed,
+        "usage": usage,
+        "perf": live_request_perf_summary(usage, elapsed),
     }
 
 
@@ -2360,12 +2425,20 @@ def live_audit(row: ModelRow, py: Path, port: int, timeout_load: int, keep_runni
         code, resp = http_json(method, f"{base}{path}", body, timeout=timeout)
         elapsed = round(time.perf_counter() - t0, 3)
         usage = resp.get("usage") if isinstance(resp, dict) else None
+        perf = live_request_perf_summary(usage, elapsed)
         artifact = None
         if method == "POST":
             artifact = write_probe_output(
                 row.id,
                 name,
-                {"request": body, "code": code, "elapsed_sec": elapsed, "response": resp},
+                {
+                    "request": body,
+                    "code": code,
+                    "elapsed_sec": elapsed,
+                    "usage": usage,
+                    "perf": perf,
+                    "response": resp,
+                },
             )
         result["requests"].append(
             {
@@ -2375,6 +2448,7 @@ def live_audit(row: ModelRow, py: Path, port: int, timeout_load: int, keep_runni
                 "code": code,
                 "elapsed_sec": elapsed,
                 "usage": usage,
+                "perf": perf,
                 "artifact": artifact,
             }
         )
@@ -2490,9 +2564,16 @@ def live_audit(row: ModelRow, py: Path, port: int, timeout_load: int, keep_runni
             temperature=temperature,
         )
         usage = (
-            probe.get("body", {}).get("usage")
-            if isinstance(probe.get("body"), dict)
-            else None
+            probe.get("usage")
+            if isinstance(probe.get("usage"), dict)
+            else (
+                probe.get("body", {}).get("usage")
+                if isinstance(probe.get("body"), dict)
+                else None
+            )
+        )
+        perf = probe.get("perf") or live_request_perf_summary(
+            usage, float(probe["elapsed_sec"])
         )
         content, reasoning, finish = extract_chat_text(probe["body"])
         artifact = write_probe_output(
@@ -2506,6 +2587,7 @@ def live_audit(row: ModelRow, py: Path, port: int, timeout_load: int, keep_runni
                 "content": content,
                 "reasoning": reasoning,
                 "usage": usage,
+                "perf": perf,
                 "raw_response": probe["body"],
             },
         )
@@ -2517,6 +2599,7 @@ def live_audit(row: ModelRow, py: Path, port: int, timeout_load: int, keep_runni
                 "code": probe["code"],
                 "elapsed_sec": probe["elapsed_sec"],
                 "usage": usage,
+                "perf": perf,
                 "artifact": artifact,
             }
         )
@@ -2636,6 +2719,7 @@ def live_audit(row: ModelRow, py: Path, port: int, timeout_load: int, keep_runni
             "code": r1["code"],
             "elapsed_sec": r1["elapsed_sec"],
             "usage": r1.get("body", {}).get("usage") if isinstance(r1.get("body"), dict) else None,
+            "perf": r1.get("perf"),
         },
     )
     history += r1["request"]["messages"] + [{"role": "assistant", "content": c1}]
@@ -2664,6 +2748,7 @@ def live_audit(row: ModelRow, py: Path, port: int, timeout_load: int, keep_runni
             "code": r2["code"],
             "elapsed_sec": r2["elapsed_sec"],
             "usage": r2.get("body", {}).get("usage") if isinstance(r2.get("body"), dict) else None,
+            "perf": r2.get("perf"),
         },
     )
 
@@ -2936,6 +3021,8 @@ def live_audit(row: ModelRow, py: Path, port: int, timeout_load: int, keep_runni
         loop_full = f"{loop_reasoning}\n{loop_content}".strip()
         loop_score = simple_loop_score(loop_full)
         loop_quality = text_quality_summary(loop_full)
+        loop_usage = loop_resp.get("usage") if isinstance(loop_resp, dict) else None
+        loop_perf = live_request_perf_summary(loop_usage, loop_elapsed)
         loop_artifact = write_probe_output(
             row.id,
             artifact_name,
@@ -2948,6 +3035,8 @@ def live_audit(row: ModelRow, py: Path, port: int, timeout_load: int, keep_runni
                 "quality": loop_quality,
                 "raw_response": loop_resp,
                 "elapsed_sec": loop_elapsed,
+                "usage": loop_usage,
+                "perf": loop_perf,
             },
         )
         check(
@@ -2961,6 +3050,8 @@ def live_audit(row: ModelRow, py: Path, port: int, timeout_load: int, keep_runni
                 "loop_score": loop_score,
                 "quality": loop_quality,
                 "elapsed_sec": loop_elapsed,
+                "usage": loop_usage,
+                "perf": loop_perf,
                 "artifact": loop_artifact,
                 "head": loop_full[:300],
                 "tail": loop_full[-300:],

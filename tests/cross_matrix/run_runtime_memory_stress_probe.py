@@ -438,6 +438,17 @@ def add_speed_metrics(stage: dict[str, Any]) -> None:
     }
 
 
+def probe_status_from_results(results: list[dict[str, Any]]) -> tuple[str, str | None]:
+    bad_stages = [
+        f"{idx}:{stage.get('status')}"
+        for idx, stage in enumerate(results)
+        if stage.get("status") != "ok"
+    ]
+    if bad_stages:
+        return "fail", "non-ok stage(s): " + ", ".join(bad_stages)
+    return "pass", None
+
+
 def terminate(proc: subprocess.Popen[str]) -> None:
     if proc.poll() is not None:
         return
@@ -549,7 +560,11 @@ def run_probe(args: argparse.Namespace) -> dict[str, Any]:
                 out["results"].append(stage)
                 break
             out["results"].append(stage)
-        out.setdefault("status", "pass")
+        if "status" not in out:
+            status, reason = probe_status_from_results(out["results"])
+            out["status"] = status
+            if reason:
+                out["reason"] = reason
     except Exception as exc:  # noqa: BLE001
         out["status"] = "error"
         out["error"] = repr(exc)

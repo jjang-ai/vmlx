@@ -1,6 +1,7 @@
 from tests.cross_matrix.run_runtime_memory_stress_probe import (
     add_speed_metrics,
     extract_usage,
+    probe_status_from_results,
     redact_large_payloads,
 )
 
@@ -78,3 +79,15 @@ def test_redact_large_payloads_hides_data_urls_and_long_text():
 
     assert redacted["image_url"].startswith("data:image/png;base64,<redacted chars=")
     assert "<redacted chars=5001>" in redacted["text"]
+
+
+def test_probe_status_from_results_rejects_http_error_stage():
+    status, reason = probe_status_from_results(
+        [
+            {"status": "ok", "http_code": 200},
+            {"status": "http_error", "http_code": 400},
+        ]
+    )
+
+    assert status == "fail"
+    assert "http_error" in reason
