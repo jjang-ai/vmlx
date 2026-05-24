@@ -106,6 +106,8 @@ const ADDITIONAL_ARG_VALUE_FLAGS = new Set([
   '--mcp-enabled-servers',
   '--mcp-enabled-tools',
   '--mflux-class',
+  '--native-mtp-depth',
+  '--native-mtp-sampling-policy',
   '--num-draft-tokens',
   '--paged-cache-block-size',
   '--pld-summary-interval',

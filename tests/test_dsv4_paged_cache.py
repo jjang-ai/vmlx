@@ -392,6 +392,107 @@ def test_dsv4_launch_filters_stale_saved_and_additional_args():
     assert "--dsv4-enable-prefix-cache" in sessions
 
 
+def test_dsv4_cache_ui_has_one_prefix_owner_and_no_stale_duplicate_labels():
+    """The DSV4 settings surface must expose one prefix owner, not layered generic duplicates."""
+    from pathlib import Path
+
+    form = Path("panel/src/renderer/src/components/sessions/SessionConfigForm.tsx").read_text()
+
+    assert 'label="DSV4 Native Composite Prefix Cache"' in form
+    assert 'label="DSV4 CSA/HCA Pool Codec"' in form
+    assert 'label={dsv4Active ? "DSV4 Block Disk Cache (L2)"' in form
+
+    # Generic prefix/paged/stored-KV controls must be hidden or disabled for
+    # DSV4. The internal paged path is only the block index/L2 transport for
+    # DeepseekV4Cache state; it is not a second DSV4 prefix toggle.
+    assert '!dsv4Active && (\n          <CheckField label="Enable Prefix Cache"' in form
+    assert '{!dsv4Active && <CheckField label="Use Paged KV Cache"' in form
+    assert 'disabled={effectivelyNoBatching || prefixOff || dsv4Active}' in form
+    assert "const effectiveStoredCacheQuantization = dsv4Active ? 'auto'" in form
+
+    for stale_label in (
+        "DSV4 Native Cache",
+        "DSV4 Composite Prefix Cache",
+        "DSV4 Pool Quantization",
+        "DSV4 Flash composite prefix cache is disabled",
+    ):
+        assert stale_label not in form
+
+
+def test_dsv4_cache_toggle_updates_and_env_are_one_contract():
+    """DSV4 composite-cache, L2, and pool-codec toggles must map to one launch/env policy."""
+    from pathlib import Path
+
+    policy = Path("panel/src/shared/cacheControlPolicy.ts").read_text()
+    dsv4_env = Path("panel/src/shared/dsv4Env.ts").read_text()
+    sessions = Path("panel/src/main/sessions.ts").read_text()
+
+    assert "export function cacheControlUpdatesForDsv4CompositeToggle" in policy
+    assert "['dsv4PrefixCache', enabled]" in policy
+    assert "['enablePrefixCache', enabled]" in policy
+    assert "['usePagedCache', enabled]" in policy
+    assert "['enableBlockDiskCache', enabled]" in policy
+    assert "if (!enabled) updates.splice(1, 0, ['dsv4PoolQuant', false])" in policy
+
+    assert "export function cacheControlUpdatesForDsv4PoolQuantToggle" in policy
+    assert "if (!enabled) return [['dsv4PoolQuant', false]]" in policy
+    assert "['dsv4PrefixCache', true]" in policy
+    assert "['enablePrefixCache', true]" in policy
+    assert "['usePagedCache', true]" in policy
+    assert "['enableBlockDiskCache', true]" in policy
+    assert "['dsv4PoolQuant', true]" in policy
+
+    assert "const prefixEnabled = config.dsv4PrefixCache !== false" in dsv4_env
+    assert "const poolQuantEnabled = prefixEnabled && config.dsv4PoolQuant !== false" in dsv4_env
+    assert "env.DSV4_POOL_QUANT = poolQuantEnabled ? '1' : '0'" in dsv4_env
+    assert "env.VMLX_DSV4_ENABLE_PREFIX_CACHE = '1'" in dsv4_env
+
+    assert "config.dsv4PoolQuant = dsv4PrefixOptIn && config.dsv4PoolQuant !== false" in sessions
+    assert "config.enablePrefixCache = dsv4PrefixOptIn" in sessions
+    assert "config.usePagedCache = dsv4PrefixOptIn" in sessions
+    assert "config.enableBlockDiskCache = dsv4PrefixOptIn" in sessions
+
+
+def test_session_preview_and_real_launch_share_dsv4_and_image_sanitizers():
+    """Preview must sanitize the same stale CLI args as the real launcher."""
+    import re
+    from pathlib import Path
+
+    sessions = Path("panel/src/main/sessions.ts").read_text()
+    settings = Path("panel/src/renderer/src/components/sessions/SessionSettings.tsx").read_text()
+
+    def extract_set(source: str, name: str) -> set[str]:
+        match = re.search(rf"const {name} = new Set\(\[\n(?P<body>.*?)\n\]\)", source, re.S)
+        assert match, f"missing {name}"
+        return set(re.findall(r"'(--[^']+)'", match.group("body")))
+
+    for set_name in (
+        "ADDITIONAL_ARG_VALUE_FLAGS",
+        "IMAGE_ADDITIONAL_ARG_BLOCKLIST",
+        "DSV4_ADDITIONAL_ARG_BLOCKLIST",
+    ):
+        assert extract_set(settings, set_name) == extract_set(sessions, set_name)
+
+    dsv4_blocklist = extract_set(sessions, "DSV4_ADDITIONAL_ARG_BLOCKLIST")
+    for flag in (
+        "--dsv4-enable-prefix-cache",
+        "--disable-prefix-cache",
+        "--use-paged-cache",
+        "--paged-cache-block-size",
+        "--kv-cache-quantization",
+        "--max-tokens",
+        "--max-prompt-tokens",
+        "--native-mtp-depth",
+        "--native-mtp-sampling-policy",
+        "--enable-jit",
+        "--default-temperature",
+        "--default-repetition-penalty",
+        "--tool-call-parser",
+        "--reasoning-parser",
+    ):
+        assert flag in dsv4_blocklist
+
+
 def test_dsv4_block_l2_namespace_includes_paged_block_size():
     """DSV4 L2 namespaces must not mix 64-token and 256-token block records."""
     import inspect
