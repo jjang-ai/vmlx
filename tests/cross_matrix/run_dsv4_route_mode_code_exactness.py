@@ -215,9 +215,11 @@ def case_body(name: str) -> tuple[str, dict[str, Any]]:
         else:
             body["enable_thinking"] = False
             body["chat_template_kwargs"] = {"enable_thinking": False}
+        if name == "chat_off_rep1":
+            body["repetition_penalty"] = 1.0
         return "chat", body
-    if name == "responses_off":
-        return "responses", {
+    if name in {"responses_off", "responses_off_rep1"}:
+        body = {
             "model": "dsv4-route-code-probe",
             "input": [{"role": "user", "content": user}],
             "stream": False,
@@ -228,6 +230,9 @@ def case_body(name: str) -> tuple[str, dict[str, Any]]:
             "chat_template_kwargs": {"enable_thinking": False},
             "skip_prefix_cache": True,
         }
+        if name == "responses_off_rep1":
+            body["repetition_penalty"] = 1.0
+        return "responses", body
     return "completion", {
         "model": "dsv4-route-code-probe",
         "prompt": user + "\n",
@@ -266,7 +271,15 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     try:
         health = wait_health(args.port, proc, args.timeout)
         cases: list[dict[str, Any]] = []
-        for name in ("chat_off", "chat_on", "chat_max", "responses_off", "legacy_completion_raw"):
+        for name in (
+            "chat_off",
+            "chat_off_rep1",
+            "chat_on",
+            "chat_max",
+            "responses_off",
+            "responses_off_rep1",
+            "legacy_completion_raw",
+        ):
             route, body = case_body(name)
             endpoint = {
                 "chat": "/v1/chat/completions",
