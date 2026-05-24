@@ -39,7 +39,9 @@ SOURCE_HASH_FILES = (
     "panel/tests/generation-defaults.test.ts",
     "panel/tests/settings-flow.test.ts",
     "tests/cross_matrix/run_generation_defaults_contract.py",
+    "tests/cross_matrix/run_local_generation_metadata_audit.py",
     "tests/test_generation_defaults_contract.py",
+    "tests/test_local_generation_metadata_audit.py",
 )
 
 REQUIRED_GENERATION_DEFAULT_TEST_MARKERS = (
@@ -65,6 +67,7 @@ REQUIRED_GENERATION_DEFAULT_TEST_MARKERS = (
     "test_effort_does_not_synthesize_max_tokens_when_unset",
     # No hidden sampler/repetition floor in real launch command or preview.
     "test_session_command_preview_mirrors_runtime_default_flags",
+    "test_local_generation_metadata_audit_reports_high_risk_rows",
 )
 
 COMMANDS: dict[str, tuple[Path, list[str]]] = {
@@ -102,6 +105,17 @@ COMMANDS: dict[str, tuple[Path, list[str]]] = {
                 "or omitted_server_max_tokens or effort_does_not_synthesize "
                 "or session_command_preview_mirrors_runtime_default_flags"
             ),
+        ],
+    ),
+    "local_generation_metadata_audit": (
+        Path("."),
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            "-q",
+            "-vv",
+            "tests/test_local_generation_metadata_audit.py",
         ],
     ),
 }
@@ -206,6 +220,10 @@ def build_artifact(root: Path) -> dict[str, Any]:
             not failed
             and "test_effort_does_not_synthesize_max_tokens_when_unset" not in missing_markers
             and "test_session_command_preview_mirrors_runtime_default_flags" not in missing_markers
+        ),
+        "local_high_risk_model_metadata_audit": (
+            not failed
+            and "test_local_generation_metadata_audit_reports_high_risk_rows" not in missing_markers
         ),
         "panel_does_not_emit_default_sampler_cli_flags": (
             not failed
