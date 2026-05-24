@@ -1,5 +1,7 @@
 from tests.cross_matrix.run_dsv4_route_mode_code_exactness import (
+    CASE_NAMES,
     case_body,
+    dry_run,
     prompt_diagnostics,
 )
 
@@ -46,3 +48,27 @@ def test_dsv4_code_exactness_probe_records_prompt_rail_diagnostics():
     assert on_diag["assistant_suffix_kind"] == "thinking_open"
     assert on_diag["enable_thinking"] is True
     assert on_diag["prompt_endswith_assistant_think_open"] is True
+
+
+def test_dsv4_code_exactness_probe_dry_run_records_all_prompt_rails():
+    class Args:
+        python = "/tmp/python"
+        model = "/unused/model"
+        port = 8861
+        timeout = 420
+        max_tokens = 512
+        dry_run = True
+
+    artifact = dry_run(Args())
+
+    assert artifact["status"] == "dry_run"
+    assert artifact["dry_run"] is True
+    assert artifact["case_count"] == len(CASE_NAMES)
+    cases = {case["name"]: case for case in artifact["cases"]}
+    assert set(cases) == set(CASE_NAMES)
+    assert cases["chat_off"]["prompt_diagnostics"]["assistant_suffix_kind"] == "thinking_closed"
+    assert cases["chat_off_rep1"]["request_overrides"]["repetition_penalty"] == 1.0
+    assert cases["responses_off"]["prompt_diagnostics"]["assistant_suffix_kind"] == "thinking_closed"
+    assert cases["responses_off_rep1"]["request_overrides"]["repetition_penalty"] == 1.0
+    assert cases["chat_on"]["prompt_diagnostics"]["assistant_suffix_kind"] == "thinking_open"
+    assert cases["legacy_completion_raw"]["prompt_diagnostics"]["assistant_suffix_kind"] == "none"

@@ -314,7 +314,63 @@ def case_body(name: str) -> tuple[str, dict[str, Any]]:
     }
 
 
+CASE_NAMES = (
+    "chat_off",
+    "chat_off_rep1",
+    "chat_on",
+    "chat_max",
+    "responses_off",
+    "responses_off_rep1",
+    "legacy_completion_raw",
+)
+
+
+def dry_run(args: argparse.Namespace) -> dict[str, Any]:
+    cmd = build_cmd(args)
+    cases: list[dict[str, Any]] = []
+    for name in CASE_NAMES:
+        route, body = case_body(name)
+        cases.append(
+            {
+                "name": name,
+                "route": route,
+                "prompt_diagnostics": prompt_diagnostics(
+                    route,
+                    body,
+                    model_path=args.model,
+                ),
+                "request_overrides": {
+                    key: body[key]
+                    for key in (
+                        "enable_thinking",
+                        "chat_template_kwargs",
+                        "repetition_penalty",
+                        "skip_prefix_cache",
+                        "max_tokens",
+                        "max_output_tokens",
+                        "temperature",
+                        "top_p",
+                    )
+                    if key in body
+                },
+            }
+        )
+    return {
+        "schema": "vmlx-dsv4-route-mode-code-exactness-v1",
+        "created_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+        "status": "dry_run",
+        "dry_run": True,
+        "model": args.model,
+        "cmd": cmd,
+        "case_count": len(cases),
+        "cases": cases,
+    }
+
+
 def run(args: argparse.Namespace) -> dict[str, Any]:
+    if getattr(args, "dry_run", False):
+        return dry_run(args)
+
     cmd = build_cmd(args)
     proc = subprocess.Popen(
         cmd,
@@ -342,15 +398,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     try:
         health = wait_health(args.port, proc, args.timeout)
         cases: list[dict[str, Any]] = []
-        for name in (
-            "chat_off",
-            "chat_off_rep1",
-            "chat_on",
-            "chat_max",
-            "responses_off",
-            "responses_off_rep1",
-            "legacy_completion_raw",
-        ):
+        for name in CASE_NAMES:
             route, body = case_body(name)
             endpoint = {
                 "chat": "/v1/chat/completions",
@@ -418,6 +466,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--timeout", type=int, default=420)
     parser.add_argument("--request-timeout", type=int, default=300)
     parser.add_argument("--max-tokens", type=int, default=512)
+    parser.add_argument("--dry-run", action="store_true", help="Record command/request prompt diagnostics without launching the model")
     parser.add_argument("--out", required=True)
     return parser.parse_args()
 
@@ -429,7 +478,7 @@ def main() -> int:
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(result, indent=2), encoding="utf-8")
     print(f"{out} status={result.get('status')}")
-    return 0 if result.get("status") == "pass" else 1
+    return 0 if result.get("status") in {"pass", "dry_run"} else 1
 
 
 if __name__ == "__main__":
