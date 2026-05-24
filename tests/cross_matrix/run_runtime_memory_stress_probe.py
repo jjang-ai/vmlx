@@ -483,6 +483,12 @@ def _mb_to_gb(value: float | None) -> float | None:
     return round(value / 1024, 3)
 
 
+def _bytes_to_gb(value: float | None) -> float | None:
+    if value is None:
+        return None
+    return round(value / (1024**3), 3)
+
+
 def add_memory_metrics(stage: dict[str, Any]) -> None:
     before = stage.get("before") if isinstance(stage.get("before"), dict) else {}
     after = stage.get("after") if isinstance(stage.get("after"), dict) else {}
@@ -513,6 +519,51 @@ def add_memory_metrics(stage: dict[str, Any]) -> None:
         memory["metal_cache_after_gb"] = _mb_to_gb(cache_after)
     if memory:
         stage["memory"] = memory
+
+
+def extract_block_disk_max_gb(args: list[str]) -> float | None:
+    value: float | None = None
+    for idx, item in enumerate(args):
+        if item == "--block-disk-cache-max-gb" and idx + 1 < len(args):
+            try:
+                value = float(args[idx + 1])
+            except (TypeError, ValueError):
+                value = None
+        elif item.startswith("--block-disk-cache-max-gb="):
+            try:
+                value = float(item.split("=", 1)[1])
+            except (TypeError, ValueError):
+                value = None
+    return value
+
+
+def add_cache_capacity_projection(stage: dict[str, Any], block_disk_max_gb: float | None) -> None:
+    after = stage.get("after") if isinstance(stage.get("after"), dict) else {}
+    cache_stats = after.get("cache_stats") if isinstance(after.get("cache_stats"), dict) else {}
+    body = cache_stats.get("body") if isinstance(cache_stats.get("body"), dict) else {}
+    block_disk = body.get("block_disk_cache") if isinstance(body.get("block_disk_cache"), dict) else {}
+    try:
+        disk_size_bytes = int(block_disk.get("disk_size_bytes") or 0)
+        tokens_on_disk = int(block_disk.get("total_tokens_on_disk") or 0)
+        blocks_on_disk = int(block_disk.get("blocks_on_disk") or 0)
+    except (TypeError, ValueError):
+        return
+    if disk_size_bytes <= 0 or tokens_on_disk <= 0:
+        return
+
+    bytes_per_token = disk_size_bytes / tokens_on_disk
+    projection: dict[str, Any] = {
+        "basis": "observed_block_disk_l2",
+        "tokens_on_disk": tokens_on_disk,
+        "blocks_on_disk": blocks_on_disk,
+        "disk_size_gb": _bytes_to_gb(float(disk_size_bytes)),
+        "bytes_per_token": round(bytes_per_token, 1),
+        "projected_gb_at_1m_tokens": _bytes_to_gb(bytes_per_token * 1_000_000),
+    }
+    if block_disk_max_gb is not None and block_disk_max_gb > 0:
+        projection["projected_tokens_at_l2_max_gb"] = int((block_disk_max_gb * (1024**3)) // bytes_per_token)
+        projection["block_disk_max_gb"] = block_disk_max_gb
+    stage["cache_capacity_projection"] = projection
 
 
 def extract_response_error_code(resp: Any) -> str | None:
@@ -570,6 +621,7 @@ def run_probe(args: argparse.Namespace) -> dict[str, Any]:
     python = Path(args.python).expanduser()
     if not python.is_absolute():
         python = (REPO / python).resolve()
+    block_disk_max_gb = extract_block_disk_max_gb(row.cache_args + args.serve_extra_arg)
     out: dict[str, Any] = {
         "started_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
         "row": row.name,
@@ -585,6 +637,7 @@ def run_probe(args: argparse.Namespace) -> dict[str, Any]:
             "rss_gb": args.abort_rss_gb,
             "metal_active_gb": args.abort_metal_active_gb,
         },
+        "block_disk_max_gb": block_disk_max_gb,
         "results": [],
     }
     if not Path(row.path).is_dir():
@@ -667,6 +720,7 @@ def run_probe(args: argparse.Namespace) -> dict[str, Any]:
                 stage["elapsed_s"] = round(time.time() - started, 3)
             stage["after"] = snapshot(f"after_{target}", args.port, proc)
             add_memory_metrics(stage)
+            add_cache_capacity_projection(stage, block_disk_max_gb)
             reason = threshold_exceeded(stage["after"], args.abort_rss_gb, args.abort_metal_active_gb)
             if reason:
                 stage["abort_reason"] = reason

@@ -4,6 +4,8 @@ from tests.cross_matrix.run_runtime_memory_stress_probe import (
     classify_http_stage_status,
     extract_usage,
     add_memory_metrics,
+    add_cache_capacity_projection,
+    extract_block_disk_max_gb,
     probe_status_from_results,
     redact_large_payloads,
     Row,
@@ -113,6 +115,50 @@ def test_add_memory_metrics_summarizes_process_and_metal_deltas():
         "metal_peak_after_gb": 20.0,
         "metal_cache_after_gb": 0.375,
     }
+
+
+def test_add_cache_capacity_projection_uses_observed_l2_bytes_per_token():
+    stage = {
+        "after": {
+            "cache_stats": {
+                "body": {
+                    "block_disk_cache": {
+                        "disk_size_bytes": 144_837_947,
+                        "total_tokens_on_disk": 5037,
+                        "blocks_on_disk": 20,
+                    }
+                }
+            }
+        }
+    }
+
+    add_cache_capacity_projection(stage, block_disk_max_gb=10.0)
+
+    assert stage["cache_capacity_projection"] == {
+        "basis": "observed_block_disk_l2",
+        "tokens_on_disk": 5037,
+        "blocks_on_disk": 20,
+        "disk_size_gb": 0.135,
+        "bytes_per_token": 28754.8,
+        "projected_tokens_at_l2_max_gb": 373_413,
+        "projected_gb_at_1m_tokens": 26.78,
+        "block_disk_max_gb": 10.0,
+    }
+
+
+def test_extract_block_disk_max_gb_reads_last_cli_value():
+    assert (
+        extract_block_disk_max_gb(
+            [
+                "--block-disk-cache-max-gb",
+                "10",
+                "--other",
+                "--block-disk-cache-max-gb",
+                "6.5",
+            ]
+        )
+        == 6.5
+    )
 
 
 def test_redact_large_payloads_hides_data_urls_and_long_text():
