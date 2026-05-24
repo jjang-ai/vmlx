@@ -22,6 +22,7 @@ from typing import Any
 DEFAULT_OUT = Path("build/current-regression-suite-20260521.json")
 
 EXPECTED_OPEN_REQUIREMENTS = [
+    "Ling/Bailing multilingual output quality is release-cleared",
     "DSV4 long-output/code/file-generation quality is release-cleared",
 ]
 
@@ -166,7 +167,7 @@ def build_suite_artifact(
             sys.executable,
             "tests/cross_matrix/run_packaged_integrity_contract.py",
             "--out",
-            "build/current-packaged-integrity-contract-20260523-post-budget-edge-refreshed.json",
+            "build/current-packaged-integrity-contract-20260524-ling-cjk-open-row.json",
         ],
         "release_regression_manifest": [
             sys.executable,

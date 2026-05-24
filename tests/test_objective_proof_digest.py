@@ -813,7 +813,53 @@ def test_objective_proof_digest_keeps_dsv4_long_quality_open(tmp_path):
     assert rows["DSV4 Flash prefix/paged/L2 cache is enabled by default from app launch"][
         "status"
     ] == "pass"
-    assert sum(item["status"] == "open" for item in digest["requirements"]) == 1
+    assert rows["Ling/Bailing multilingual output quality is release-cleared"][
+        "status"
+    ] == "open"
+    assert sum(item["status"] == "open" for item in digest["requirements"]) == 2
+
+
+def test_objective_proof_digest_tracks_ling_multilingual_cjk_leakage(tmp_path):
+    from tests.cross_matrix.summarize_objective_proof import build_digest
+
+    _write_passing_base_artifacts(tmp_path)
+    _write_json(
+        tmp_path,
+        "build/current-ling-jangtq-strict-russian-nocache-bundled-4850c9c2-20260524.json",
+        {
+            "status": "pass",
+            "requests": [
+                {
+                    "content": "1. 猎人奔跑在森林中追逐目标。",
+                    "counts": {"cjk_chars": 17, "cyrillic_chars": 0, "latin_chars": 0},
+                }
+            ],
+        },
+    )
+    _write_json(
+        tmp_path,
+        "build/current-ling-mxfp4-crack-strict-russian-nocache-bundled-4850c9c2-20260524.json",
+        {
+            "status": "fail",
+            "requests": [
+                {
+                    "content": "- Кабаны появляются как враги; запас弹匣结束。",
+                    "counts": {"cjk_chars": 4, "cyrillic_chars": 31, "latin_chars": 0},
+                }
+            ],
+        },
+    )
+
+    digest = build_digest(tmp_path)
+    rows = {item["requirement"]: item for item in digest["requirements"]}
+
+    ling = rows["Ling/Bailing multilingual output quality is release-cleared"]
+    assert ling["status"] == "open"
+    assert ling["details"]["max_cjk_chars"] == 17
+    assert ling["details"]["artifacts_with_cjk"] == [
+        "build/current-ling-jangtq-strict-russian-nocache-bundled-4850c9c2-20260524.json",
+        "build/current-ling-mxfp4-crack-strict-russian-nocache-bundled-4850c9c2-20260524.json",
+    ]
 
 
 def test_objective_proof_digest_surfaces_current_dsv4_identifier_canary(tmp_path):
@@ -2396,7 +2442,7 @@ def test_objective_proof_digest_accepts_dsv4_quality_clearance_artifact(tmp_path
     quality = rows["DSV4 long-output/code/file-generation quality is release-cleared"]
     assert quality["status"] == "pass"
     assert quality["details"]["clearance_checks"]["identifier_integrity"] is True
-    assert sum(item["status"] == "open" for item in digest["requirements"]) == 0
+    assert sum(item["status"] == "open" for item in digest["requirements"]) == 1
 
 
 def test_objective_proof_digest_rejects_quality_clearance_with_missing_artifacts(tmp_path):

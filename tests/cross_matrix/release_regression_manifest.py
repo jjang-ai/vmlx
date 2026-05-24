@@ -233,15 +233,16 @@ CURRENT_POST_BUDGET_EDGE_ARTIFACTS = {
     "native-mtp-d3-effect-policy": "build/current-native-mtp-contract-20260523-post-budget-edge.json",
     "mcp-policy-ui-gateway": "build/current-mcp-policy-contract-20260523-post-budget-edge.json",
     "vl-media-cache-tool-followup": "build/current-vl-media-cache-contract-20260523-post-budget-edge.json",
-    "packaged-release-integrity": "build/current-packaged-integrity-contract-20260523-v1549-after-bundle-refresh-local-jang.json",
+    "packaged-release-integrity": "build/current-packaged-integrity-contract-20260524-ling-cjk-open-row.json",
     "public-release-surface-preflight": "build/current-release-surface-contract-20260523-post-budget-edge.json",
 }
 
 CURRENT_REGRESSION_SUITE_ARTIFACT = (
-    "build/current-regression-suite-20260523-qwen-norm-kernel-final-strict.json"
+    "build/current-regression-suite-20260524-ling-cjk-open-row-rerun.json"
 )
 
 EXPECTED_CURRENT_OPEN_REQUIREMENTS = [
+    "Ling/Bailing multilingual output quality is release-cleared",
     "DSV4 long-output/code/file-generation quality is release-cleared",
 ]
 
@@ -630,14 +631,14 @@ _ROWS: list[dict[str, Any]] = [
             "verify-bundled checks packaged Python imports, source hash parity, and relocatable console scripts",
             "packaged integrity uses a clean JANG source path for bundled jang_tools source-hash checks",
             "bundled critical jang_tools files match source content and console-script shebangs are relocatable",
-            "dry release gate fails only on the known DSV4 objective row while version, typecheck, bundled import, and digest refresh steps pass",
+            "dry release gate fails only on the known objective rows while version, typecheck, bundled import, and digest refresh steps pass",
         ],
         "commands": [
-            ".venv/bin/python tests/cross_matrix/run_packaged_integrity_contract.py --jang-tools-source /Users/example/jang/jang-tools --out build/current-packaged-integrity-contract-20260523-v1549-after-bundle-refresh-local-jang.json",
+            ".venv/bin/python tests/cross_matrix/run_packaged_integrity_contract.py --jang-tools-source /Users/example/jang/jang-tools --out build/current-packaged-integrity-contract-20260524-ling-cjk-open-row.json",
             ".venv/bin/python tests/cross_matrix/run_packaged_integrity_contract.py --jang-tools-source /Users/example/jang/.worktrees/vmlx-release-clean-b5f66a7/jang-tools --out build/current-packaged-integrity-contract-20260522-recheck-bundled-release-gate.json",
         ],
         "artifacts": [
-            "build/current-packaged-integrity-contract-20260523-v1549-after-bundle-refresh-local-jang.json",
+            "build/current-packaged-integrity-contract-20260524-ling-cjk-open-row.json",
             "build/current-packaged-integrity-contract-20260523-post-budget-edge-refreshed.json",
             "build/current-packaged-integrity-contract-20260522-recheck-bundled-release-gate.json",
             "build/current-packaged-integrity-contract-20260522-objective-gate-enforced.json",
@@ -709,6 +710,28 @@ _ROWS: list[dict[str, Any]] = [
             "build/current-dsv4-jang-thinking-off-logit-probe-20260524.json",
             "build/current-dsv4-jang-live-api-copy-framing-canary-20260524.json",
             "build/current-dsv4-long-output-quality-clearance-20260521.json",
+        ],
+    },
+    {
+        "id": "ling-bailing-multilingual-quality-live",
+        "domain": "reasoning_template",
+        "mode": "live",
+        "heavy": True,
+        "proves": [
+            "Ling/Bailing multilingual output quality is release-cleared only when real Russian/non-CJK prompts do not leak CJK text",
+            "The current open row is based on live artifacts, not a hidden sampler/repetition/default override",
+            "JANGTQ and MXFP4 strict no-cache artifacts are both tracked so the issue cannot be misclassified as DSV4-only, cache-only, or JANGTQ-only",
+            "CJK leakage remains release-visible until a live clearance artifact proves zero CJK characters for the non-CJK prompt set",
+        ],
+        "commands": [
+            ".venv/bin/python tests/cross_matrix/summarize_objective_proof.py --out build/current-objective-proof-audit-20260521.json",
+            "uv run --extra dev python tests/cross_matrix/run_production_family_audit.py --rows ling_flash_tq --live --out build/current-production-family-audit-ling-flash-tq-live-installed149-20260524-codex.json",
+        ],
+        "artifacts": [
+            "build/current-production-family-audit-ling-flash-tq-live-installed149-20260524-codex.json",
+            "build/current-ling-jangtq-strict-russian-nocache-bundled-4850c9c2-20260524.json",
+            "build/current-ling-mxfp4-crack-strict-russian-nocache-bundled-4850c9c2-20260524.json",
+            "build/current-objective-proof-audit-20260521.json",
         ],
     },
     {

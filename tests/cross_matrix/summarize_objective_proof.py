@@ -111,6 +111,15 @@ QWEN_NATIVE_MTP_NORM_SHIFT_CLEARANCE_REL = (
 )
 QWEN_NATIVE_MTP_AB_REL = "build/current-native-mtp-speed-ab-qwen27-jang4m-mtp-20260523/result.json"
 DSV4_DEFAULT_CACHE_TOOL_LOOP_REL = "build/current-dsv4-default-cache-tool-loop/result.json"
+LING_INSTALLED_LIVE_AUDIT_REL = (
+    "build/current-production-family-audit-ling-flash-tq-live-installed149-20260524-codex.json"
+)
+LING_JANGTQ_STRICT_RUSSIAN_NOCACHE_REL = (
+    "build/current-ling-jangtq-strict-russian-nocache-bundled-4850c9c2-20260524.json"
+)
+LING_MXFP4_STRICT_RUSSIAN_NOCACHE_REL = (
+    "build/current-ling-mxfp4-crack-strict-russian-nocache-bundled-4850c9c2-20260524.json"
+)
 DSV4_QUALITY_CLEARANCE_CHECKS = (
     "identifier_integrity",
     "threejs_single_file",
@@ -420,6 +429,120 @@ def _dsv4_quality_clearance(clearance: dict[str, Any], root: Path) -> tuple[bool
         "clearance_artifact_paths_present": artifact_paths_present,
         "missing_clearance_artifacts": missing_artifacts,
         "non_string_clearance_artifacts": non_string_artifacts,
+    }
+
+
+def _cjk_count_from_text(value: str) -> int:
+    return sum(
+        1
+        for char in value
+        if (
+            "\u3400" <= char <= "\u4dbf"
+            or "\u4e00" <= char <= "\u9fff"
+            or "\uf900" <= char <= "\ufaff"
+        )
+    )
+
+
+def _ling_request_rows(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for request in payload.get("requests") or []:
+        if isinstance(request, dict):
+            rows.append(request)
+    for row in payload.get("rows") or []:
+        if not isinstance(row, dict):
+            continue
+        live = row.get("live") or {}
+        if not isinstance(live, dict):
+            continue
+        for request in live.get("requests") or []:
+            if isinstance(request, dict):
+                rows.append(request)
+    return rows
+
+
+def _ling_multilingual_quality_detail(
+    root: Path,
+    installed_live: dict[str, Any],
+    jangtq_strict: dict[str, Any],
+    mxfp4_strict: dict[str, Any],
+) -> tuple[bool, dict[str, Any]]:
+    artifacts = {
+        LING_INSTALLED_LIVE_AUDIT_REL: installed_live,
+        LING_JANGTQ_STRICT_RUSSIAN_NOCACHE_REL: jangtq_strict,
+        LING_MXFP4_STRICT_RUSSIAN_NOCACHE_REL: mxfp4_strict,
+    }
+    artifact_statuses: dict[str, Any] = {}
+    artifacts_with_cjk: list[str] = []
+    request_summaries: list[dict[str, Any]] = []
+    max_cjk_chars = 0
+
+    for rel, payload in artifacts.items():
+        artifact_statuses[rel] = payload.get("status") or (
+            (payload.get("summary") or {}).get("live_status_counts")
+        )
+        artifact_has_cjk = False
+        for index, request in enumerate(_ling_request_rows(payload)):
+            counts = request.get("counts") or request.get("quality") or {}
+            content = str(request.get("content") or request.get("text") or "")
+            try:
+                cjk_chars = int(counts.get("cjk_chars"))
+            except (AttributeError, TypeError, ValueError):
+                cjk_chars = _cjk_count_from_text(content)
+            max_cjk_chars = max(max_cjk_chars, cjk_chars)
+            if cjk_chars:
+                artifact_has_cjk = True
+            request_summaries.append(
+                {
+                    "artifact": rel,
+                    "index": index,
+                    "cjk_chars": cjk_chars,
+                    "content_preview": content[:180],
+                }
+            )
+        if artifact_has_cjk:
+            artifacts_with_cjk.append(rel)
+
+    missing = [
+        rel
+        for rel in artifacts
+        if not _path_present(root, rel)
+    ]
+    installed_failures = []
+    for row in installed_live.get("rows") or []:
+        if not isinstance(row, dict):
+            continue
+        live = row.get("live") or {}
+        if isinstance(live, dict):
+            installed_failures.extend(str(item) for item in live.get("failures") or [])
+
+    failing_statuses = [
+        rel
+        for rel, payload in artifacts.items()
+        if str(payload.get("status") or "").lower() == "fail"
+    ]
+    live_failed = any(
+        isinstance(row, dict)
+        and str(((row.get("live") or {}).get("status") or "")).upper() == "FAIL"
+        for row in installed_live.get("rows") or []
+    )
+    ok = (
+        not missing
+        and not artifacts_with_cjk
+        and not failing_statuses
+        and not live_failed
+        and all(_ling_request_rows(payload) for payload in artifacts.values())
+    )
+    return ok, {
+        "artifacts": list(artifacts),
+        "missing_artifacts": missing,
+        "artifact_statuses": artifact_statuses,
+        "artifacts_with_cjk": artifacts_with_cjk,
+        "max_cjk_chars": max_cjk_chars,
+        "request_summaries": request_summaries,
+        "installed_live_failed": live_failed,
+        "installed_live_failures": installed_failures,
+        "failing_status_artifacts": failing_statuses,
     }
 
 
@@ -1325,6 +1448,9 @@ def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
     qwen_raw_forward_ab_4096 = _load(root, QWEN_RAW_FORWARD_AB_4096_REL)
     qwen_native_mtp_norm_shift_clearance = _load(root, QWEN_NATIVE_MTP_NORM_SHIFT_CLEARANCE_REL)
     qwen_native_mtp_ab = _load(root, QWEN_NATIVE_MTP_AB_REL)
+    ling_installed_live = _load(root, LING_INSTALLED_LIVE_AUDIT_REL)
+    ling_jangtq_strict_russian = _load(root, LING_JANGTQ_STRICT_RUSSIAN_NOCACHE_REL)
+    ling_mxfp4_strict_russian = _load(root, LING_MXFP4_STRICT_RUSSIAN_NOCACHE_REL)
 
     requirements: list[dict[str, Any]] = []
     cache_checks = cache.get("checks") or {}
@@ -1822,6 +1948,28 @@ def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
             "commands": api_cache_contract.get("commands"),
             **api_cache_hash_details,
         },
+    )
+    ling_quality_ok, ling_quality_details = _ling_multilingual_quality_detail(
+        root,
+        ling_installed_live,
+        ling_jangtq_strict_russian,
+        ling_mxfp4_strict_russian,
+    )
+    _add(
+        requirements,
+        "Ling/Bailing multilingual output quality is release-cleared",
+        _status(ling_quality_ok),
+        [
+            LING_INSTALLED_LIVE_AUDIT_REL,
+            LING_JANGTQ_STRICT_RUSSIAN_NOCACHE_REL,
+            LING_MXFP4_STRICT_RUSSIAN_NOCACHE_REL,
+        ],
+        caveat=(
+            None
+            if ling_quality_ok
+            else "Current live artifacts show CJK leakage in Russian/non-CJK prompts or missing clearance evidence. Do not release-claim Ling/Bailing multilingual output quality yet."
+        ),
+        details=ling_quality_details,
     )
     quality_ok, quality_details = _dsv4_quality_clearance(quality_clearance, root)
     quality_details.update(

@@ -533,7 +533,7 @@ def test_release_regression_manifest_rejects_unexpected_current_regression_suite
                 "status": "pass",
                 "failed_steps": ["new_failure"],
                 "open_requirements": [
-                    EXPECTED_CURRENT_OPEN_REQUIREMENTS[0],
+                    *EXPECTED_CURRENT_OPEN_REQUIREMENTS,
                     "Server max output/context wiring regressed",
                 ],
             }
@@ -550,7 +550,7 @@ def test_release_regression_manifest_rejects_unexpected_current_regression_suite
         "status": "pass",
         "failed_steps": ["new_failure"],
         "open_requirements": [
-            EXPECTED_CURRENT_OPEN_REQUIREMENTS[0],
+            *EXPECTED_CURRENT_OPEN_REQUIREMENTS,
             "Server max output/context wiring regressed",
         ],
         "unexpected_open_requirements": ["Server max output/context wiring regressed"],
@@ -637,7 +637,7 @@ def test_release_regression_manifest_rejects_incomplete_current_packaged_integri
                         "checks": checks,
                         "failed": ["bundled_python_verifier"],
                         "known_expected_release_gate_open_requirements": [
-                            EXPECTED_CURRENT_OPEN_REQUIREMENTS[0],
+                            *EXPECTED_CURRENT_OPEN_REQUIREMENTS,
                             "Unexpected release gate blocker",
                         ],
                     }
@@ -2647,11 +2647,11 @@ def test_release_regression_manifest_tracks_current_packaged_integrity_recheck()
     joined = " ".join(row["commands"] + row["artifacts"] + row["proves"])
 
     assert "current-packaged-integrity-contract-20260522-recheck-bundled-release-gate.json" in joined
-    assert "current-packaged-integrity-contract-20260523-v1549-after-bundle-refresh-local-jang.json" in joined
+    assert "current-packaged-integrity-contract-20260524-ling-cjk-open-row.json" in joined
     assert "clean JANG source path" in joined
     assert "bundled critical jang_tools files match source content" in joined
     assert "console-script shebangs are relocatable" in joined
-    assert "fails only on the known DSV4 objective row" in joined
+    assert "fails only on the known objective rows" in joined
 
 
 def test_release_regression_manifest_tracks_public_release_surface_preflight():
@@ -2715,6 +2715,22 @@ def test_release_regression_manifest_tracks_fresh_dsv4_live_failure_artifact():
     assert "current-dsv4-jang-thinking-off-logit-probe-20260524.json" in joined
     assert "current-dsv4-jang-live-api-copy-framing-canary-20260524.json" in joined
     assert "identifier integrity" in joined
+
+
+def test_release_regression_manifest_tracks_ling_multilingual_quality_open_row():
+    manifest = build_manifest()
+    rows = {row["id"]: row for row in manifest["rows"]}
+
+    row = rows["ling-bailing-multilingual-quality-live"]
+    joined = " ".join(row["proves"] + row["commands"] + row["artifacts"])
+
+    assert row["domain"] == "reasoning_template"
+    assert row["mode"] == "live"
+    assert row["heavy"] is True
+    assert "Ling/Bailing multilingual output quality is release-cleared" in joined
+    assert "current-ling-jangtq-strict-russian-nocache-bundled-4850c9c2-20260524.json" in joined
+    assert "current-ling-mxfp4-crack-strict-russian-nocache-bundled-4850c9c2-20260524.json" in joined
+    assert "CJK leakage" in joined
 
 
 def test_release_regression_manifest_live_soak_does_not_overclaim_qwen_mtp():
