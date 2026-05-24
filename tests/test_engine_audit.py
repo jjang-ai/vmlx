@@ -7728,6 +7728,59 @@ class TestTurboQuantKVTelemetry:
         assert "server._default_repetition_penalty = 1.0" not in cli_source
         assert "_default_repetition_penalty = 1.0" not in server_source
 
+    def test_panel_emitted_cli_flags_are_engine_registered_and_dsv4_sanitized(self):
+        sessions_source = Path("./panel/src/main/sessions.ts").read_text()
+        preview_source = Path(
+            "./panel/src/renderer/src/components/sessions/SessionSettings.tsx"
+        ).read_text()
+        cli_source = Path("./vmlx_engine/cli.py").read_text()
+        server_source = Path("./vmlx_engine/server.py").read_text()
+
+        def pushed_flags(source: str, target: str) -> set[str]:
+            return set(
+                re.findall(
+                    rf"{target}\.push\(['\"](--[a-z0-9][a-z0-9-]+)['\"]",
+                    source,
+                )
+            )
+
+        def literal_flags(source: str) -> set[str]:
+            return set(re.findall(r"['\"](--[a-z0-9][a-z0-9-]+)['\"]", source))
+
+        def extract_set(source: str, name: str) -> set[str]:
+            match = re.search(
+                rf"const {name} = new Set\(\[\n(?P<body>.*?)\n\]\)",
+                source,
+                re.S,
+            )
+            assert match, f"missing {name}"
+            return set(re.findall(r"['\"](--[^'\"]+)['\"]", match.group("body")))
+
+        launch_flags = pushed_flags(sessions_source, "args")
+        preview_flags = pushed_flags(preview_source, "parts")
+        engine_flags = literal_flags(cli_source) | literal_flags(server_source)
+
+        assert not (launch_flags - engine_flags), sorted(launch_flags - engine_flags)
+        assert not (preview_flags - engine_flags), sorted(preview_flags - engine_flags)
+
+        sessions_dsv4_blocklist = extract_set(
+            sessions_source, "DSV4_ADDITIONAL_ARG_BLOCKLIST"
+        )
+        preview_dsv4_blocklist = extract_set(
+            preview_source, "DSV4_ADDITIONAL_ARG_BLOCKLIST"
+        )
+        assert sessions_dsv4_blocklist == preview_dsv4_blocklist
+
+        # DSV4 launch policy owns cache/tool/parser/VLM/runtime flags. Stale
+        # additionalArgs must not be able to duplicate or override any flag the
+        # app itself knows how to emit, including block-L2 and image-only flags.
+        assert not (launch_flags - sessions_dsv4_blocklist), sorted(
+            launch_flags - sessions_dsv4_blocklist
+        )
+        assert not (preview_flags - preview_dsv4_blocklist), sorted(
+            preview_flags - preview_dsv4_blocklist
+        )
+
     def test_panel_startup_defaults_sanitize_incompatible_saved_modes(self):
         sessions_source = Path("./panel/src/main/sessions.ts").read_text()
         preview_source = Path(
