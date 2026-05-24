@@ -462,11 +462,12 @@ class DSV4BatchGenerator:
     def _prefill_last_logits(self, token_ids: List[int], cache: List[Any]):
         """DSV4 prefill returning logits for the last prompt token.
 
-        Default behavior is SINGLE-SHOT (one model() call over the full
-        prompt). v1.5.6 verified that chunking corrupts the DSV4
-        compressor + indexer pool state — chunked prefill is therefore
-        opt-in only via DSV4_PREFILL_STEP_SIZE>0. When the env override
-        is set, this loop chunks against the same cache and clears
+        Default behavior is bounded-step prefill. The production default uses
+        a 2048-token step after installed-app cache-hit validation showed it
+        preserves native block/L2 cache hits while avoiding the transient
+        memory spike seen with large single-shot prompts. Operators can still
+        force legacy single-shot with DSV4_PREFILL_STEP_SIZE=0 for diagnostics.
+        Each step runs against the same native composite cache and clears
         transient MLX buffers between chunks.
         """
         if not token_ids:
