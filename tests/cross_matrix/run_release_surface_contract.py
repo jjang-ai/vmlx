@@ -34,6 +34,7 @@ SOURCE_HASH_FILES = (
 )
 
 FetchJson = Callable[[str], dict[str, Any]]
+FetchHeaders = Callable[[str], dict[str, str]]
 
 
 def _sha256(path: Path) -> str:
@@ -60,6 +61,21 @@ def _fetch_json(url: str) -> dict[str, Any]:
     )
     with urllib.request.urlopen(request, timeout=30) as response:
         return json.loads(response.read().decode("utf-8"))
+
+
+def _fetch_headers(url: str) -> dict[str, str]:
+    request = urllib.request.Request(
+        url,
+        method="HEAD",
+        headers={
+            "Accept": "application/json",
+            "Cache-Control": "no-cache",
+            "Pragma": "no-cache",
+            "User-Agent": "vmlx-release-surface-contract",
+        },
+    )
+    with urllib.request.urlopen(request, timeout=30) as response:
+        return {key.lower(): value for key, value in response.headers.items()}
 
 
 def _source_versions(root: Path) -> dict[str, str | None]:
@@ -137,6 +153,7 @@ def _public_release_checks(
     source_version: str,
     latest: dict[str, Any],
     fetch_json: FetchJson,
+    fetch_headers: FetchHeaders,
 ) -> tuple[dict[str, bool], dict[str, Any]]:
     raw_latest_url = "https://raw.githubusercontent.com/jjang-ai/mlxstudio/main/latest.json"
     site_latest_url = "https://mlx.studio/update/latest.json"
@@ -175,6 +192,34 @@ def _public_release_checks(
     except Exception as exc:  # pragma: no cover - exercised by live failures.
         public["site_latest_error"] = repr(exc)
         checks["public_site_updater_matches_local"] = False
+
+    try:
+        site_headers = fetch_headers(site_latest_url)
+        cache_control = site_headers.get("cache-control", "")
+        pragma = site_headers.get("pragma", "")
+        expires = site_headers.get("expires", "")
+        public["site_latest_headers"] = {
+            "cache-control": cache_control,
+            "pragma": pragma,
+            "expires": expires,
+            "cf-cache-status": site_headers.get("cf-cache-status"),
+            "access-control-allow-origin": site_headers.get("access-control-allow-origin"),
+        }
+        cache_directives = {
+            item.strip().lower()
+            for item in cache_control.split(",")
+            if item.strip()
+        }
+        checks["public_site_updater_cache_headers_safe"] = (
+            "no-cache" in cache_directives
+            and "no-store" in cache_directives
+            and "must-revalidate" in cache_directives
+            and pragma.lower() == "no-cache"
+            and expires == "0"
+        )
+    except Exception as exc:  # pragma: no cover - exercised by live failures.
+        public["site_latest_headers_error"] = repr(exc)
+        checks["public_site_updater_cache_headers_safe"] = False
 
     expected_wheel = f"vmlx-{source_version}-py3-none-any.whl"
     expected_sdist = f"vmlx-{source_version}.tar.gz"
@@ -262,6 +307,7 @@ def build_artifact(
     *,
     live_public: bool = False,
     fetch_json: FetchJson = _fetch_json,
+    fetch_headers: FetchHeaders = _fetch_headers,
 ) -> dict[str, Any]:
     versions = _source_versions(root)
     source_version = versions["pyproject"]
@@ -275,7 +321,7 @@ def build_artifact(
     public_surfaces: dict[str, Any] = {}
     if live_public and source_version:
         public_checks, public_surfaces = _public_release_checks(
-            str(source_version), latest, fetch_json
+            str(source_version), latest, fetch_json, fetch_headers
         )
         checks.update(public_checks)
     status_check_names = {
@@ -293,6 +339,7 @@ def build_artifact(
             {
                 "public_raw_updater_matches_local",
                 "public_site_updater_matches_local",
+                "public_site_updater_cache_headers_safe",
                 "public_pypi_has_release_files",
                 "public_github_release_published",
                 "public_github_release_has_updater_asset",

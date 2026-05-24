@@ -2670,6 +2670,7 @@ def test_release_regression_manifest_tracks_public_release_surface_preflight():
     assert "--live-public" in joined
     assert "mlx.studio/update/latest.json" in joined
     assert "PyPI files" in joined
+    assert "no-store/no-cache headers" in joined
 
 
 def test_release_regression_manifest_tracks_current_updater_and_i18n_rechecks():

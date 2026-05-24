@@ -216,6 +216,50 @@ def test_release_surface_live_public_checks_detect_stale_site_updater(tmp_path):
     assert artifact["checks"]["public_site_updater_matches_local"] is False
 
 
+def test_release_surface_live_public_checks_require_site_updater_no_store_headers(tmp_path):
+    from tests.cross_matrix import run_release_surface_contract as gate
+
+    latest = _write_release_root(tmp_path)
+
+    def fetch_json(url: str):
+        if "raw.githubusercontent.com" in url or "mlx.studio/update/latest.json" in url:
+            return latest
+        if "pypi.org" in url:
+            return {
+                "info": {"version": "1.5.48"},
+                "urls": [
+                    {"filename": "vmlx-1.5.48-py3-none-any.whl"},
+                    {"filename": "vmlx-1.5.48.tar.gz"},
+                ],
+            }
+        if "api.github.com" in url:
+            return {
+                "draft": False,
+                "prerelease": False,
+                "assets": [
+                    {
+                        "name": "vMLX-1.5.48-sequoia-arm64.dmg",
+                        "digest": "sha256:" + latest["downloads"]["sequoia"]["sha256"],
+                    },
+                    {
+                        "name": "vMLX-1.5.48-tahoe-arm64.dmg",
+                        "digest": "sha256:" + latest["downloads"]["tahoe"]["sha256"],
+                    },
+                ],
+            }
+        raise AssertionError(url)
+
+    artifact = gate.build_artifact(
+        tmp_path,
+        live_public=True,
+        fetch_json=fetch_json,
+        fetch_headers=lambda url: {"cache-control": "public, max-age=31536000"},
+    )
+
+    assert artifact["status"] == "fail"
+    assert artifact["checks"]["public_site_updater_cache_headers_safe"] is False
+
+
 def test_release_surface_live_public_checks_require_pypi_files(tmp_path):
     from tests.cross_matrix import run_release_surface_contract as gate
 

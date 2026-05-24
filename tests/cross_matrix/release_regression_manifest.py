@@ -655,6 +655,7 @@ _ROWS: list[dict[str, Any]] = [
             "after release, latest.json may equal the source version only when the published updater state is complete",
             "PyPI, GitHub release, and updater feeds remain explicit operator checks before public release",
             "live public release-surface mode checks raw GitHub latest.json, mlx.studio/update/latest.json, PyPI files, and GitHub release DMG asset digest after a release is cut",
+            "live public release-surface mode requires mlx.studio/update/latest.json no-store/no-cache headers so browser and CDN cache cannot hide a newer release",
         ],
         "commands": [
             ".venv/bin/python tests/cross_matrix/run_release_surface_contract.py --out build/current-release-surface-contract-20260522-recheck-updater-i18n.json",
