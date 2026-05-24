@@ -258,7 +258,15 @@ def image_data_url(path: Path) -> str:
     return f"data:{mime};base64," + base64.b64encode(path.read_bytes()).decode("ascii")
 
 
-def build_request(row: Row, prompt: str, max_tokens: int, route: str, image_path: Path | None, retained_image_turns: int) -> dict[str, Any]:
+def build_request(
+    row: Row,
+    prompt: str,
+    max_tokens: int,
+    route: str,
+    image_path: Path | None,
+    retained_image_turns: int,
+    enable_thinking: bool | None = None,
+) -> dict[str, Any]:
     messages: list[dict[str, Any]] = []
     if image_path:
         data_url = image_data_url(image_path)
@@ -275,7 +283,7 @@ def build_request(row: Row, prompt: str, max_tokens: int, route: str, image_path
     else:
         messages.append({"role": "user", "content": prompt})
     if route == "responses":
-        return {
+        request = {
             "model": Path(row.path).name,
             "input": messages,
             "stream": False,
@@ -283,14 +291,19 @@ def build_request(row: Row, prompt: str, max_tokens: int, route: str, image_path
             "temperature": 0,
             "top_p": 1,
         }
-    return {
-        "model": Path(row.path).name,
-        "messages": messages,
-        "stream": False,
-        "max_tokens": max_tokens,
-        "temperature": 0,
-        "top_p": 1,
-    }
+    else:
+        request = {
+            "model": Path(row.path).name,
+            "messages": messages,
+            "stream": False,
+            "max_tokens": max_tokens,
+            "temperature": 0,
+            "top_p": 1,
+        }
+    if enable_thinking is not None:
+        request["enable_thinking"] = enable_thinking
+        request["chat_template_kwargs"] = {"enable_thinking": enable_thinking}
+    return request
 
 
 def redact_large_payloads(value: Any) -> Any:
@@ -539,6 +552,7 @@ def run_probe(args: argparse.Namespace) -> dict[str, Any]:
                 args.route,
                 Path(args.image_path) if args.image_path else None,
                 args.retained_image_turns,
+                args.enable_thinking,
             )
             started = time.time()
             try:
@@ -586,6 +600,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--prompt-tokens", type=lambda s: [int(x) for x in s.split(",") if x], default=[512, 4096])
     parser.add_argument("--max-tokens", type=int, default=64)
     parser.add_argument("--route", choices=("chat", "responses"), default="chat")
+    thinking = parser.add_mutually_exclusive_group()
+    thinking.add_argument("--enable-thinking", dest="enable_thinking", action="store_true")
+    thinking.add_argument("--disable-thinking", dest="enable_thinking", action="store_false")
+    parser.set_defaults(enable_thinking=None)
     parser.add_argument("--image-path")
     parser.add_argument("--retained-image-turns", type=int, default=1)
     parser.add_argument("--abort-rss-gb", type=float, default=0.0)

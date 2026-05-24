@@ -1,8 +1,10 @@
 from tests.cross_matrix.run_runtime_memory_stress_probe import (
     add_speed_metrics,
+    build_request,
     extract_usage,
     probe_status_from_results,
     redact_large_payloads,
+    Row,
 )
 
 
@@ -91,3 +93,31 @@ def test_probe_status_from_results_rejects_http_error_stage():
 
     assert status == "fail"
     assert "http_error" in reason
+
+
+def test_build_request_can_disable_thinking_for_chat_and_responses():
+    row = Row("qwen", "/models/Qwen3.6-27B-MXFP4-MTP")
+
+    chat = build_request(
+        row,
+        "Describe the image.",
+        64,
+        "chat",
+        None,
+        retained_image_turns=1,
+        enable_thinking=False,
+    )
+    responses = build_request(
+        row,
+        "Describe the image.",
+        64,
+        "responses",
+        None,
+        retained_image_turns=1,
+        enable_thinking=False,
+    )
+
+    assert chat["enable_thinking"] is False
+    assert chat["chat_template_kwargs"] == {"enable_thinking": False}
+    assert responses["enable_thinking"] is False
+    assert responses["chat_template_kwargs"] == {"enable_thinking": False}
