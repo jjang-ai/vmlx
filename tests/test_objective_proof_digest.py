@@ -873,32 +873,24 @@ def test_objective_proof_digest_prefers_strict_dsv4_identifier_canary(tmp_path):
     )
     _write_json(
         tmp_path,
-        "build/current-dsv4-jangtq-k-identifier-canary-strict-nocache-bundled-b3345c29-rerun2-20260524.json",
+        "build/current-dsv4-jangtq-k-route-mode-code-exactness-20260524.json",
         {
             "status": "fail",
-            "served_model_name": "dsv4_identifier_canary_strict_20260524",
-            "env": {"DSV4_POOL_QUANT": "0"},
-            "health_after_load": {"model_name": "JANGQ/DeepSeek-V4-Flash-JANGTQ-K"},
-            "failures": [
+            "model": "/models/DeepSeek-V4-Flash-JANGTQ-K",
+            "env_overrides": {"DSV4_POOL_QUANT": "0"},
+            "cases": [
                 {
-                    "probe": "identifier_list",
-                    "reason": "identifier list corruption",
-                    "content": "THREE.PerscpectiveCamera",
-                }
-            ],
-            "probes": [
-                {
-                    "name": "identifier_list",
-                    "code": 200,
+                    "name": "chat_off",
+                    "route": "chat",
+                    "http_code": 200,
                     "finish": "stop",
-                    "elapsed_sec": 2.091,
-                    "usage": {"prompt_tokens": 47, "completion_tokens": 32},
-                    "perf": {"decode_tok_s_wall": 15.304},
-                    "content": "THREE.Scene\nTHREE.PerscpectiveCamera",
-                    "analysis": {
-                        "missing_identifiers": ["THREE.PerspectiveCamera"],
-                        "identifier_counts": {"THREE.PerspectiveCamera": 0},
-                    },
+                    "exact": False,
+                    "corrupt_patterns": ["PPerspectiveCamera"],
+                    "missing": ["THREE.PerspectiveCamera"],
+                    "decode_tps_wall": 15.304,
+                    "prompt_tokens": 47,
+                    "completion_tokens": 32,
+                    "content": "THREE.Scene\nTHREE.PPerspectiveCamera",
                 }
             ],
         },
@@ -910,12 +902,12 @@ def test_objective_proof_digest_prefers_strict_dsv4_identifier_canary(tmp_path):
     quality = rows["DSV4 long-output/code/file-generation quality is release-cleared"]
     canary = quality["details"]["current_installed_identifier_canary"]
     assert quality["status"] == "open"
-    assert canary["artifact"].endswith("rerun2-20260524.json")
+    assert canary["artifact"].endswith("route-mode-code-exactness-20260524.json")
     assert canary["status"] == "fail"
-    assert canary["health_model_name"] == "JANGQ/DeepSeek-V4-Flash-JANGTQ-K"
     assert canary["env"]["DSV4_POOL_QUANT"] == "0"
-    assert canary["probe_summaries"][0]["perf"]["decode_tok_s_wall"] == 15.304
-    assert canary["probe_summaries"][0]["analysis"]["missing_identifiers"] == [
+    assert canary["failed_cases"] == ["chat_off"]
+    assert canary["case_summaries"][0]["decode_tok_s_wall"] == 15.304
+    assert canary["case_summaries"][0]["missing_identifiers"] == [
         "THREE.PerspectiveCamera"
     ]
 

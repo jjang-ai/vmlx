@@ -699,12 +699,12 @@ _ROWS: list[dict[str, Any]] = [
             "This remains open until a source/rebuilt-body or equivalent live proof passes",
         ],
         "commands": [
-            "uv run --extra dev python tests/cross_matrix/run_production_family_audit.py --rows dsv4_jang_local --live --out build/current-production-family-audit-live-dsv4-jang-local-20260522.json",
+            "panel/bundled-python/python/bin/python3 tests/cross_matrix/run_dsv4_route_mode_code_exactness.py --out build/current-dsv4-jangtq-k-route-mode-code-exactness-20260524.json",
         ],
         "artifacts": [
-            "build/current-production-family-audit-live-dsv4-jang-local-20260522-after-stream-cache-detail.json",
-            "build/current-production-family-audit-live-dsv4-jang-local-20260522.json",
-            "build/current-dsv4-identifier-count-ablation-20260521/result.json",
+            "build/current-dsv4-jangtq-k-route-mode-code-exactness-20260524.json",
+            "build/current-dsv4-jang-thinking-off-logit-probe-20260524.json",
+            "build/current-dsv4-jang-live-api-copy-framing-canary-20260524.json",
             "build/current-dsv4-long-output-quality-clearance-20260521.json",
         ],
     },

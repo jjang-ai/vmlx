@@ -2709,7 +2709,9 @@ def test_release_regression_manifest_tracks_fresh_dsv4_live_failure_artifact():
     row = rows["dsv4-long-output-quality-live"]
     joined = " ".join(row["artifacts"] + row["proves"])
 
-    assert "current-production-family-audit-live-dsv4-jang-local-20260522-after-stream-cache-detail.json" in joined
+    assert "current-dsv4-jangtq-k-route-mode-code-exactness-20260524.json" in joined
+    assert "current-dsv4-jang-thinking-off-logit-probe-20260524.json" in joined
+    assert "current-dsv4-jang-live-api-copy-framing-canary-20260524.json" in joined
     assert "identifier integrity" in joined
 
 

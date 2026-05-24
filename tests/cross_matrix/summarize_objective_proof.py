@@ -47,6 +47,9 @@ from tests.cross_matrix.run_vl_media_cache_contract import (
 DEFAULT_OUT = Path("build/current-objective-proof-audit-20260521.json")
 DSV4_QUALITY_CLEARANCE_REL = "build/current-dsv4-long-output-quality-clearance-20260521.json"
 DSV4_CURRENT_IDENTIFIER_CANARY_REL = (
+    "build/current-dsv4-jangtq-k-route-mode-code-exactness-20260524.json"
+)
+DSV4_CURRENT_IDENTIFIER_CANARY_FALLBACK_STRICT_REL = (
     "build/current-dsv4-jangtq-k-identifier-canary-strict-nocache-bundled-b3345c29-rerun2-20260524.json"
 )
 DSV4_CURRENT_IDENTIFIER_CANARY_FALLBACK_REL = "build/current-dsv4-live-identifier-canary-20260523.json"
@@ -410,6 +413,44 @@ def _dsv4_quality_clearance(clearance: dict[str, Any], root: Path) -> tuple[bool
 
 def _dsv4_identifier_canary_detail(canary: dict[str, Any], root: Path, rel: str) -> dict[str, Any]:
     path_present = _path_present(root, rel)
+    if isinstance(canary.get("cases"), list):
+        case_summaries: list[dict[str, Any]] = []
+        failed_cases: list[str] = []
+        for case in canary.get("cases") or []:
+            if not isinstance(case, dict):
+                continue
+            name = str(case.get("name") or "")
+            exact = case.get("exact") is True
+            if not exact and name:
+                failed_cases.append(name)
+            content = case.get("content")
+            if not isinstance(content, str):
+                content = ""
+            case_summaries.append(
+                {
+                    "name": name,
+                    "route": case.get("route"),
+                    "http_code": case.get("http_code"),
+                    "finish_reason": case.get("finish"),
+                    "exact": exact,
+                    "corrupt_patterns": case.get("corrupt_patterns") or [],
+                    "missing_identifiers": case.get("missing") or [],
+                    "decode_tok_s_wall": case.get("decode_tps_wall"),
+                    "completion_tokens": case.get("completion_tokens"),
+                    "prompt_tokens": case.get("prompt_tokens"),
+                    "content": content[:1000],
+                }
+            )
+        return {
+            "artifact": rel,
+            "present": path_present,
+            "status": canary.get("status") if path_present else "missing",
+            "model_path": canary.get("model"),
+            "env": canary.get("env_overrides") or {},
+            "case_count": len(case_summaries),
+            "failed_cases": failed_cases,
+            "case_summaries": case_summaries,
+        }
     if isinstance(canary.get("probes"), list):
         probe_summaries: list[dict[str, Any]] = []
         for probe in canary.get("probes") or []:
@@ -1120,6 +1161,7 @@ def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
         root,
         (
             DSV4_CURRENT_IDENTIFIER_CANARY_REL,
+            DSV4_CURRENT_IDENTIFIER_CANARY_FALLBACK_STRICT_REL,
             DSV4_CURRENT_IDENTIFIER_CANARY_FALLBACK_REL,
         ),
     )

@@ -7770,6 +7770,13 @@ class TestTurboQuantKVTelemetry:
             preview_source, "DSV4_ADDITIONAL_ARG_BLOCKLIST"
         )
         assert sessions_dsv4_blocklist == preview_dsv4_blocklist
+        sessions_value_flags = extract_set(
+            sessions_source, "ADDITIONAL_ARG_VALUE_FLAGS"
+        )
+        preview_value_flags = extract_set(
+            preview_source, "ADDITIONAL_ARG_VALUE_FLAGS"
+        )
+        assert sessions_value_flags == preview_value_flags
 
         # DSV4 launch policy owns cache/tool/parser/VLM/runtime flags. Stale
         # additionalArgs must not be able to duplicate or override any flag the
@@ -7780,6 +7787,21 @@ class TestTurboQuantKVTelemetry:
         assert not (preview_flags - preview_dsv4_blocklist), sorted(
             preview_flags - preview_dsv4_blocklist
         )
+        # Also strip serve-only rollback/tuning flags that the app does not
+        # emit itself but that can break DSV4's app-owned runtime contract when
+        # carried forward in stale Advanced Args.
+        for flag in (
+            "--no-state-machine-stops",
+            "--prefill-keep-alloc",
+            "--uds",
+            "--inference-endpoints",
+            "--wake-timeout",
+        ):
+            assert flag in sessions_dsv4_blocklist
+            assert flag in preview_dsv4_blocklist
+        for flag in ("--uds", "--inference-endpoints", "--wake-timeout"):
+            assert flag in sessions_value_flags
+            assert flag in preview_value_flags
 
     def test_vlm_video_sampling_is_request_scoped_not_restart_required(self):
         sessions_source = Path("./panel/src/main/sessions.ts").read_text()

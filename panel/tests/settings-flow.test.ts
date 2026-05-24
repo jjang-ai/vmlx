@@ -220,11 +220,14 @@ const ADDITIONAL_ARG_VALUE_FLAGS = new Set([
     '--default-min-p',
     '--default-repetition-penalty',
     '--default-enable-thinking',
+    '--inference-endpoints',
     '--log-level',
     '--max-tokens',
     '--max-prompt-tokens',
     '--native-mtp-depth',
     '--native-mtp-sampling-policy',
+    '--uds',
+    '--wake-timeout',
 ])
 
 const IMAGE_ADDITIONAL_ARG_BLOCKLIST = new Set([
@@ -239,6 +242,11 @@ const DSV4_ADDITIONAL_ARG_BLOCKLIST = new Set([
     '--native-mtp-depth',
     '--native-mtp-sampling-policy',
     '--disable-native-mtp',
+    '--uds',
+    '--inference-endpoints',
+    '--wake-timeout',
+    '--prefill-keep-alloc',
+    '--no-state-machine-stops',
     '--default-temperature',
     '--default-top-p',
     '--default-top-k',
