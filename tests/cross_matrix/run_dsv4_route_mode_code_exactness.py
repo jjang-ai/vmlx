@@ -280,16 +280,16 @@ def case_body(name: str) -> tuple[str, dict[str, Any]]:
             "top_p": 1,
             "skip_prefix_cache": True,
         }
-        if name == "chat_on":
+        if name in {"chat_on", "chat_on_rep1"}:
             body["enable_thinking"] = True
             body["chat_template_kwargs"] = {"enable_thinking": True}
         else:
             body["enable_thinking"] = False
             body["chat_template_kwargs"] = {"enable_thinking": False}
-        if name == "chat_off_rep1":
+        if name in {"chat_off_rep1", "chat_on_rep1"}:
             body["repetition_penalty"] = 1.0
         return "chat", body
-    if name in {"responses_off", "responses_off_rep1"}:
+    if name in {"responses_off", "responses_off_rep1", "responses_on", "responses_on_rep1"}:
         body = {
             "model": "dsv4-route-code-probe",
             "input": [{"role": "user", "content": user}],
@@ -297,11 +297,15 @@ def case_body(name: str) -> tuple[str, dict[str, Any]]:
             "max_output_tokens": 512,
             "temperature": 0,
             "top_p": 1,
-            "enable_thinking": False,
-            "chat_template_kwargs": {"enable_thinking": False},
             "skip_prefix_cache": True,
         }
-        if name == "responses_off_rep1":
+        if name in {"responses_on", "responses_on_rep1"}:
+            body["enable_thinking"] = True
+            body["chat_template_kwargs"] = {"enable_thinking": True}
+        else:
+            body["enable_thinking"] = False
+            body["chat_template_kwargs"] = {"enable_thinking": False}
+        if name in {"responses_off_rep1", "responses_on_rep1"}:
             body["repetition_penalty"] = 1.0
         return "responses", body
     return "completion", {
@@ -318,9 +322,12 @@ CASE_NAMES = (
     "chat_off",
     "chat_off_rep1",
     "chat_on",
+    "chat_on_rep1",
     "chat_max",
     "responses_off",
     "responses_off_rep1",
+    "responses_on",
+    "responses_on_rep1",
     "legacy_completion_raw",
 )
 

@@ -70,9 +70,15 @@ DSV4_SOURCE_CACHE_COMPARISON_REL = (
     "build/current-dsv4-live-identifier-cache-source-comparison-20260523.json"
 )
 DSV4_CURRENT_PROMPT_RAIL_EXACTNESS_REL = (
+    "build/current-dsv4-jangtq-k-route-mode-code-exactness-20260524-thinking-on-responses-controls.json"
+)
+DSV4_CURRENT_PROMPT_RAIL_EXACTNESS_FALLBACK_REL = (
     "build/current-dsv4-jangtq-k-route-mode-code-exactness-20260524-promptdiag-bb5cfe0c.json"
 )
 DSV4_CURRENT_ROUTE_MODE_DRYRUN_REL = (
+    "build/current-dsv4-route-mode-code-exactness-dryrun-20260524-thinking-on-responses-controls.json"
+)
+DSV4_CURRENT_ROUTE_MODE_DRYRUN_FALLBACK_REL = (
     "build/current-dsv4-route-mode-code-exactness-dryrun-20260524.json"
 )
 API_CACHE_CONTRACT_REL = "build/current-api-cache-contract-proof-20260521.json"
@@ -510,10 +516,14 @@ def _dsv4_identifier_canary_detail(canary: dict[str, Any], root: Path, rel: str)
 
 
 def _dsv4_prompt_rail_exactness_detail(
-    artifact: dict[str, Any], dry_run: dict[str, Any], root: Path
+    artifact: dict[str, Any],
+    dry_run: dict[str, Any],
+    root: Path,
+    artifact_rel: str,
+    dry_run_rel: str,
 ) -> dict[str, Any]:
-    path_present = _path_present(root, DSV4_CURRENT_PROMPT_RAIL_EXACTNESS_REL)
-    dry_run_present = _path_present(root, DSV4_CURRENT_ROUTE_MODE_DRYRUN_REL)
+    path_present = _path_present(root, artifact_rel)
+    dry_run_present = _path_present(root, dry_run_rel)
     cases = artifact.get("cases") if isinstance(artifact.get("cases"), list) else []
     dry_run_cases = dry_run.get("cases") if isinstance(dry_run.get("cases"), list) else []
     case_summaries: list[dict[str, Any]] = []
@@ -582,7 +592,7 @@ def _dsv4_prompt_rail_exactness_detail(
         dry_run_overrides[name] = case.get("request_overrides") or {}
 
     return {
-        "artifact": DSV4_CURRENT_PROMPT_RAIL_EXACTNESS_REL,
+        "artifact": artifact_rel,
         "present": path_present,
         "status": artifact.get("status") if path_present else "missing",
         "case_count": len(case_summaries),
@@ -592,7 +602,7 @@ def _dsv4_prompt_rail_exactness_detail(
         ),
         "rep1_still_corrupt_patterns": rep1_still_corrupt_patterns,
         "case_summaries": case_summaries,
-        "dry_run_artifact": DSV4_CURRENT_ROUTE_MODE_DRYRUN_REL,
+        "dry_run_artifact": dry_run_rel,
         "dry_run_present": dry_run_present,
         "dry_run_status": dry_run.get("status") if dry_run_present else "missing",
         "dry_run_case_count": dry_run.get("case_count") if dry_run_present else None,
@@ -1271,8 +1281,20 @@ def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
     dsv4_source_nocache_identifier = _load(root, DSV4_SOURCE_NOCACHE_IDENTIFIER_REL)
     dsv4_source_same_prompt_nocache = _load(root, DSV4_SOURCE_SAME_PROMPT_NOCACHE_REL)
     dsv4_source_cache_comparison = _load(root, DSV4_SOURCE_CACHE_COMPARISON_REL)
-    dsv4_prompt_rail_exactness = _load(root, DSV4_CURRENT_PROMPT_RAIL_EXACTNESS_REL)
-    dsv4_route_mode_dryrun = _load(root, DSV4_CURRENT_ROUTE_MODE_DRYRUN_REL)
+    dsv4_prompt_rail_exactness_rel, dsv4_prompt_rail_exactness = _load_first_present(
+        root,
+        (
+            DSV4_CURRENT_PROMPT_RAIL_EXACTNESS_REL,
+            DSV4_CURRENT_PROMPT_RAIL_EXACTNESS_FALLBACK_REL,
+        ),
+    )
+    dsv4_route_mode_dryrun_rel, dsv4_route_mode_dryrun = _load_first_present(
+        root,
+        (
+            DSV4_CURRENT_ROUTE_MODE_DRYRUN_REL,
+            DSV4_CURRENT_ROUTE_MODE_DRYRUN_FALLBACK_REL,
+        ),
+    )
     api_cache_contract = _load(root, API_CACHE_CONTRACT_REL)
     panel_settings_contract = _load(root, PANEL_SETTINGS_CONTRACT_REL)
     max_output_context_contract_rel, max_output_context_contract = _load_first_present(
@@ -1838,6 +1860,8 @@ def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
                     dsv4_prompt_rail_exactness,
                     dsv4_route_mode_dryrun,
                     root,
+                    dsv4_prompt_rail_exactness_rel,
+                    dsv4_route_mode_dryrun_rel,
                 )
             ),
         }

@@ -20,6 +20,29 @@ def test_dsv4_code_exactness_probe_has_explicit_rep1_controls():
     assert responses_body["skip_prefix_cache"] is True
 
 
+def test_dsv4_code_exactness_probe_has_thinking_on_controls_for_chat_and_responses():
+    route, chat_body = case_body("chat_on_rep1")
+    assert route == "chat"
+    assert chat_body["enable_thinking"] is True
+    assert chat_body["chat_template_kwargs"] == {"enable_thinking": True}
+    assert chat_body["repetition_penalty"] == 1.0
+    assert chat_body["skip_prefix_cache"] is True
+
+    route, responses_body = case_body("responses_on")
+    assert route == "responses"
+    assert responses_body["enable_thinking"] is True
+    assert responses_body["chat_template_kwargs"] == {"enable_thinking": True}
+    assert "repetition_penalty" not in responses_body
+    assert responses_body["skip_prefix_cache"] is True
+
+    route, responses_rep_body = case_body("responses_on_rep1")
+    assert route == "responses"
+    assert responses_rep_body["enable_thinking"] is True
+    assert responses_rep_body["chat_template_kwargs"] == {"enable_thinking": True}
+    assert responses_rep_body["repetition_penalty"] == 1.0
+    assert responses_rep_body["skip_prefix_cache"] is True
+
+
 def test_dsv4_code_exactness_probe_records_prompt_rail_diagnostics():
     def fake_renderer(messages, *, enable_thinking, reasoning_effort, model_path):
         assert messages[0]["role"] == "user"
@@ -71,4 +94,9 @@ def test_dsv4_code_exactness_probe_dry_run_records_all_prompt_rails():
     assert cases["responses_off"]["prompt_diagnostics"]["assistant_suffix_kind"] == "thinking_closed"
     assert cases["responses_off_rep1"]["request_overrides"]["repetition_penalty"] == 1.0
     assert cases["chat_on"]["prompt_diagnostics"]["assistant_suffix_kind"] == "thinking_open"
+    assert cases["chat_on_rep1"]["request_overrides"]["repetition_penalty"] == 1.0
+    assert cases["chat_on_rep1"]["prompt_diagnostics"]["assistant_suffix_kind"] == "thinking_open"
+    assert cases["responses_on"]["prompt_diagnostics"]["assistant_suffix_kind"] == "thinking_open"
+    assert cases["responses_on_rep1"]["request_overrides"]["repetition_penalty"] == 1.0
+    assert cases["responses_on_rep1"]["prompt_diagnostics"]["assistant_suffix_kind"] == "thinking_open"
     assert cases["legacy_completion_raw"]["prompt_diagnostics"]["assistant_suffix_kind"] == "none"

@@ -918,7 +918,7 @@ def test_objective_proof_digest_surfaces_dsv4_prompt_rail_exactness_probe(tmp_pa
     _write_passing_base_artifacts(tmp_path)
     _write_json(
         tmp_path,
-        "build/current-dsv4-jangtq-k-route-mode-code-exactness-20260524-promptdiag-bb5cfe0c.json",
+        "build/current-dsv4-jangtq-k-route-mode-code-exactness-20260524-thinking-on-responses-controls.json",
         {
             "status": "fail",
             "cases": [
@@ -960,15 +960,78 @@ def test_objective_proof_digest_surfaces_dsv4_prompt_rail_exactness_probe(tmp_pa
                         "prompt_endswith_assistant_think_close": False,
                     },
                 },
+                {
+                    "name": "chat_on_rep1",
+                    "route": "chat",
+                    "exact": False,
+                    "missing": [],
+                    "corrupt_patterns": [],
+                    "has_markdown_fence": True,
+                    "prompt_diagnostics": {
+                        "assistant_suffix_kind": "thinking_open",
+                        "prompt_endswith_assistant_think_open": True,
+                        "prompt_endswith_assistant_think_close": False,
+                    },
+                },
+                {
+                    "name": "responses_off",
+                    "route": "responses",
+                    "exact": False,
+                    "missing": ["THREE.WebGLRenderer", "THREE.MeshBasicMaterial"],
+                    "corrupt_patterns": ["WebWebGLRenderer", "Three.MeshBasicMaterial"],
+                    "prompt_diagnostics": {
+                        "assistant_suffix_kind": "thinking_closed",
+                        "prompt_endswith_assistant_think_open": False,
+                        "prompt_endswith_assistant_think_close": True,
+                    },
+                },
+                {
+                    "name": "responses_off_rep1",
+                    "route": "responses",
+                    "exact": False,
+                    "missing": ["THREE.WebGLRenderer"],
+                    "corrupt_patterns": ["WebWebGLRenderer"],
+                    "prompt_diagnostics": {
+                        "assistant_suffix_kind": "thinking_closed",
+                        "prompt_endswith_assistant_think_open": False,
+                        "prompt_endswith_assistant_think_close": True,
+                    },
+                },
+                {
+                    "name": "responses_on",
+                    "route": "responses",
+                    "exact": False,
+                    "missing": [],
+                    "corrupt_patterns": [],
+                    "has_markdown_fence": True,
+                    "prompt_diagnostics": {
+                        "assistant_suffix_kind": "thinking_open",
+                        "prompt_endswith_assistant_think_open": True,
+                        "prompt_endswith_assistant_think_close": False,
+                    },
+                },
+                {
+                    "name": "responses_on_rep1",
+                    "route": "responses",
+                    "exact": False,
+                    "missing": [],
+                    "corrupt_patterns": [],
+                    "has_markdown_fence": True,
+                    "prompt_diagnostics": {
+                        "assistant_suffix_kind": "thinking_open",
+                        "prompt_endswith_assistant_think_open": True,
+                        "prompt_endswith_assistant_think_close": False,
+                    },
+                },
             ],
         },
     )
     _write_json(
         tmp_path,
-        "build/current-dsv4-route-mode-code-exactness-dryrun-20260524.json",
+        "build/current-dsv4-route-mode-code-exactness-dryrun-20260524-thinking-on-responses-controls.json",
         {
             "status": "dry_run",
-            "case_count": 3,
+            "case_count": 9,
             "cases": [
                 {
                     "name": "chat_off",
@@ -977,10 +1040,62 @@ def test_objective_proof_digest_surfaces_dsv4_prompt_rail_exactness_probe(tmp_pa
                     "prompt_diagnostics": {"assistant_suffix_kind": "thinking_closed"},
                 },
                 {
+                    "name": "chat_off_rep1",
+                    "route": "chat",
+                    "request_overrides": {
+                        "enable_thinking": False,
+                        "max_tokens": 512,
+                        "repetition_penalty": 1.0,
+                    },
+                    "prompt_diagnostics": {"assistant_suffix_kind": "thinking_closed"},
+                },
+                {
                     "name": "responses_off",
                     "route": "responses",
                     "request_overrides": {"enable_thinking": False, "max_output_tokens": 512},
                     "prompt_diagnostics": {"assistant_suffix_kind": "thinking_closed"},
+                },
+                {
+                    "name": "responses_off_rep1",
+                    "route": "responses",
+                    "request_overrides": {
+                        "enable_thinking": False,
+                        "max_output_tokens": 512,
+                        "repetition_penalty": 1.0,
+                    },
+                    "prompt_diagnostics": {"assistant_suffix_kind": "thinking_closed"},
+                },
+                {
+                    "name": "chat_on",
+                    "route": "chat",
+                    "request_overrides": {"enable_thinking": True, "max_tokens": 512},
+                    "prompt_diagnostics": {"assistant_suffix_kind": "thinking_open"},
+                },
+                {
+                    "name": "chat_on_rep1",
+                    "route": "chat",
+                    "request_overrides": {
+                        "enable_thinking": True,
+                        "max_tokens": 512,
+                        "repetition_penalty": 1.0,
+                    },
+                    "prompt_diagnostics": {"assistant_suffix_kind": "thinking_open"},
+                },
+                {
+                    "name": "responses_on",
+                    "route": "responses",
+                    "request_overrides": {"enable_thinking": True, "max_output_tokens": 512},
+                    "prompt_diagnostics": {"assistant_suffix_kind": "thinking_open"},
+                },
+                {
+                    "name": "responses_on_rep1",
+                    "route": "responses",
+                    "request_overrides": {
+                        "enable_thinking": True,
+                        "max_output_tokens": 512,
+                        "repetition_penalty": 1.0,
+                    },
+                    "prompt_diagnostics": {"assistant_suffix_kind": "thinking_open"},
                 },
                 {
                     "name": "legacy_completion_raw",
@@ -999,14 +1114,27 @@ def test_objective_proof_digest_surfaces_dsv4_prompt_rail_exactness_probe(tmp_pa
     probe = quality["details"]["current_installed_prompt_rail_exactness_probe"]
     assert quality["status"] == "open"
     assert probe["status"] == "fail"
-    assert probe["failed_thinking_closed_cases"] == ["chat_off", "chat_off_rep1"]
+    assert probe["artifact"].endswith("thinking-on-responses-controls.json")
+    assert probe["failed_thinking_closed_cases"] == [
+        "chat_off",
+        "chat_off_rep1",
+        "responses_off",
+        "responses_off_rep1",
+    ]
     assert probe["rep1_still_corrupt_patterns"] == {
-        "chat_off_rep1": ["WebWebGLRenderer"]
+        "chat_off_rep1": ["WebWebGLRenderer"],
+        "responses_off_rep1": ["WebWebGLRenderer"],
     }
-    assert probe["thinking_open_cases_without_identifier_corruption"] == ["chat_on"]
+    assert probe["thinking_open_cases_without_identifier_corruption"] == [
+        "chat_on",
+        "chat_on_rep1",
+        "responses_on",
+        "responses_on_rep1",
+    ]
     assert probe["dry_run_status"] == "dry_run"
-    assert probe["dry_run_case_count"] == 3
+    assert probe["dry_run_case_count"] == 9
     assert probe["dry_run_suffixes"]["legacy_completion_raw"] == "none"
+    assert probe["dry_run_suffixes"]["responses_on"] == "thinking_open"
     assert probe["case_summaries"][0]["assistant_suffix_kind"] == "thinking_closed"
     assert probe["case_summaries"][0]["prompt_tail"].endswith("</think>")
 
@@ -2181,7 +2309,7 @@ def test_objective_proof_digest_accepts_dsv4_quality_clearance_artifact(tmp_path
     )
     _write_json(
         tmp_path,
-        "build/current-dsv4-jangtq-k-route-mode-code-exactness-20260524-promptdiag-bb5cfe0c.json",
+        "build/current-dsv4-jangtq-k-route-mode-code-exactness-20260524-thinking-on-responses-controls.json",
         {
             "status": "pass",
             "cases": [
@@ -2201,7 +2329,7 @@ def test_objective_proof_digest_accepts_dsv4_quality_clearance_artifact(tmp_path
     )
     _write_json(
         tmp_path,
-        "build/current-dsv4-route-mode-code-exactness-dryrun-20260524.json",
+        "build/current-dsv4-route-mode-code-exactness-dryrun-20260524-thinking-on-responses-controls.json",
         {
             "status": "dry_run",
             "case_count": 1,
