@@ -1035,8 +1035,56 @@ class TestIssueGuards:
         image_forward = src[src.index("output = self.model(input_ids, **kwargs)") - 900 :]
 
         assert "_raise_if_image_prefill_exceeds_budget" in image_forward
+        assert "_apply_vlm_image_request_cache_limit" in image_forward
         assert "mx.clear_cache()" in image_forward
         assert "output = self.model(input_ids, **kwargs)" in image_forward
+
+    def test_vmlx156_media_preprocess_tightens_allocator_cache_before_processor(self):
+        """Retained image history must not enter mlx-vlm preprocessing with the
+        text-decode allocator cache limit still active.
+        """
+        import inspect
+        import vmlx_engine.mllm_batch_generator as _m
+
+        src = inspect.getsource(_m.MLLMBatchGenerator._preprocess_request)
+        apply_idx = src.index("_apply_vlm_image_request_cache_limit()")
+        prepare_idx = src.index("prepare_inputs(")
+        direct_idx = src.index("_call_processor_direct(")
+
+        assert apply_idx < prepare_idx
+        assert apply_idx < direct_idx
+
+    def test_vmlx156_image_request_cache_limit_uses_tight_media_headroom(self):
+        from vmlx_engine.mllm_batch_generator import (
+            _vlm_image_request_cache_limit_bytes,
+        )
+
+        gb = 1024**3
+        limit = _vlm_image_request_cache_limit_bytes(
+            active_memory_bytes=int(14.4 * gb),
+            max_working_set_bytes=int(37.4 * gb),
+            max_limit_bytes=1 * gb,
+            free_fraction=0.10,
+            floor_bytes=256 * 1024**2,
+        )
+
+        assert limit == 1 * gb
+
+    def test_vmlx156_image_request_cache_limit_keeps_floor_on_tight_headroom(self):
+        from vmlx_engine.mllm_batch_generator import (
+            _vlm_image_request_cache_limit_bytes,
+        )
+
+        gb = 1024**3
+        limit = _vlm_image_request_cache_limit_bytes(
+            active_memory_bytes=int(36.8 * gb),
+            max_working_set_bytes=int(37.4 * gb),
+            max_limit_bytes=1 * gb,
+            free_fraction=0.10,
+            floor_bytes=256 * 1024**2,
+        )
+
+        assert limit == 256 * 1024**2
 
     def test_vmlx156_simple_mllm_paths_apply_image_prefill_guard(self):
         """SimpleEngine / direct MLXMultimodalLM paths must share the vmlx#156

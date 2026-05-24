@@ -235,6 +235,100 @@ class VLMImagePrefillBudgetDecision:
     detail: str
 
 
+def _vlm_image_request_cache_limit_bytes(
+    *,
+    active_memory_bytes: int,
+    max_working_set_bytes: int,
+    max_limit_bytes: int,
+    free_fraction: float,
+    floor_bytes: int,
+) -> int:
+    """Return a conservative MLX allocator cache limit for media requests.
+
+    The startup cache limit is intentionally generous for text decode, but
+    high-res VLM requests need transient Metal headroom for image preprocessing,
+    vision encoding, one-shot language prefill, and the first decode KV writes.
+    Keep reusable allocator memory small on media requests so cached/free-list
+    blocks do not compete with those transient tensors.
+    """
+    active = max(0, int(active_memory_bytes or 0))
+    max_ws = max(0, int(max_working_set_bytes or 0))
+    max_limit = max(0, int(max_limit_bytes or 0))
+    floor = max(0, int(floor_bytes or 0))
+    fraction = max(0.0, float(free_fraction or 0.0))
+
+    if max_limit <= 0:
+        return 0
+    if max_ws <= 0:
+        return max(floor, max_limit)
+
+    free = max(0, max_ws - active)
+    fractional = int(free * fraction)
+    if fractional <= 0:
+        return floor
+    return max(floor, min(max_limit, fractional))
+
+
+def _apply_vlm_image_request_cache_limit() -> None:
+    """Tighten the Metal reusable cache before VLM media work.
+
+    This is a preflight memory-safety control, not a model behavior change. It
+    leaves text-only requests on the normal scheduler cache policy and only
+    shrinks MLX's allocator free-list ceiling for media requests that otherwise
+    have large transient tensors.
+    """
+    if os.environ.get("VMLX_VLM_IMAGE_CACHE_LIMIT", "1") == "0":
+        return
+    if not mx.metal.is_available():
+        return
+    try:
+        max_limit = int(
+            float(os.environ.get("VMLX_VLM_IMAGE_CACHE_LIMIT_GB", "1.0"))
+            * 1024**3
+        )
+    except (TypeError, ValueError):
+        max_limit = 1024**3
+    try:
+        free_fraction = float(
+            os.environ.get("VMLX_VLM_IMAGE_CACHE_LIMIT_FREE_FRACTION", "0.10")
+        )
+    except (TypeError, ValueError):
+        free_fraction = 0.10
+    try:
+        floor = int(
+            float(os.environ.get("VMLX_VLM_IMAGE_CACHE_LIMIT_FLOOR_GB", "0.25"))
+            * 1024**3
+        )
+    except (TypeError, ValueError):
+        floor = 256 * 1024**2
+
+    if max_limit <= 0:
+        return
+    try:
+        active, max_ws = get_effective_metal_working_set_bytes(mx)
+        limit = _vlm_image_request_cache_limit_bytes(
+            active_memory_bytes=active,
+            max_working_set_bytes=max_ws,
+            max_limit_bytes=max_limit,
+            free_fraction=free_fraction,
+            floor_bytes=floor,
+        )
+        if limit <= 0:
+            return
+        set_cache = getattr(mx, "set_cache_limit", None) or mx.metal.set_cache_limit
+        set_cache(limit)
+        logger.info(
+            "VLM image request Metal cache limit tightened to %.2fGB "
+            "(active=%.1fGB, max_ws=%.1fGB, free_fraction=%.2f)",
+            limit / (1024**3),
+            active / (1024**3),
+            max_ws / (1024**3) if max_ws else 0.0,
+            free_fraction,
+        )
+    except Exception as exc:
+        logger.debug("VLM image request cache limit not applied: %s", exc)
+
+
 def _vlm_image_prefill_budget(
     *,
     has_images: bool,
@@ -3159,6 +3253,10 @@ class MLLMBatchGenerator:
             if request.videos and not video_inputs:
                 raise ValueError("All video inputs failed to process")
 
+        if all_images or video_inputs:
+            _apply_vlm_image_request_cache_limit()
+            mx.clear_cache()
+
         # Check pixel cache first
         media_cache_sources = all_images + video_cache_sources
         _mllm_bypass = bool(getattr(request, "_bypass_prefix_cache", False))
@@ -4041,6 +4139,7 @@ class MLLMBatchGenerator:
             # Image-expanded prompts must use the one-shot VLM wrapper path.
             # Drop allocator free-list memory and reject impossible requests
             # before Metal executes a command buffer that can kill the server.
+            _apply_vlm_image_request_cache_limit()
             mx.clear_cache()
         _raise_if_image_prefill_exceeds_budget(
             has_images=has_images,
