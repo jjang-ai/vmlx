@@ -504,6 +504,10 @@ function getFlagValue(output: string, flag: string): string | undefined {
     return match?.[1]
 }
 
+function countOccurrences(source: string, needle: string): number {
+    return source.split(needle).length - 1
+}
+
 function expectNoInvalidNumericFlagValues(output: string) {
     const normalized = output.replace(/\s*\\\n\s*/g, ' ')
     expect(normalized).not.toMatch(/\s(?:NaN|Infinity|-Infinity)(?:\s|$)/)
@@ -1820,6 +1824,48 @@ describe('No Hardcoded Values', () => {
         expect(hasFlag(out, '--kv-cache-quantization')).toBe(false)
     })
 
+    it('deepseek-v4 cache launch flags are singular and match the native-cache UI switch', () => {
+        const enabled = preview(
+            {
+                dsv4PrefixCache: true,
+                enablePrefixCache: true,
+                usePagedCache: false,
+                enableDiskCache: true,
+                enableBlockDiskCache: true,
+                kvCacheQuantization: 'q4',
+                noMemoryAwareCache: true,
+                prefixCacheSize: 200,
+                cacheMemoryPercent: 25,
+            },
+            { family: 'deepseek-v4', cacheType: 'hybrid', usePagedCache: false },
+        ).replace(/\s*\\\n\s*/g, ' ')
+
+        expect(countOccurrences(enabled, '--dsv4-enable-prefix-cache')).toBe(1)
+        expect(countOccurrences(enabled, '--use-paged-cache')).toBe(1)
+        expect(countOccurrences(enabled, '--enable-block-disk-cache')).toBe(1)
+        expect(getFlagValue(enabled, '--paged-cache-block-size')).toBe('256')
+        expect(hasFlag(enabled, '--enable-disk-cache')).toBe(false)
+        expect(hasFlag(enabled, '--kv-cache-quantization')).toBe(false)
+        expect(hasFlag(enabled, '--no-memory-aware-cache')).toBe(false)
+        expect(hasFlag(enabled, '--prefix-cache-size')).toBe(false)
+        expect(hasFlag(enabled, '--cache-memory-percent')).toBe(false)
+
+        const disabled = preview(
+            {
+                dsv4PrefixCache: false,
+                enablePrefixCache: false,
+                usePagedCache: true,
+                enableBlockDiskCache: true,
+            },
+            { family: 'deepseek-v4', cacheType: 'hybrid', usePagedCache: true },
+        ).replace(/\s*\\\n\s*/g, ' ')
+
+        expect(countOccurrences(disabled, '--dsv4-enable-prefix-cache')).toBe(0)
+        expect(countOccurrences(disabled, '--disable-prefix-cache')).toBe(1)
+        expect(hasFlag(disabled, '--use-paged-cache')).toBe(false)
+        expect(hasFlag(disabled, '--enable-block-disk-cache')).toBe(false)
+    })
+
     it('DSV4 pool quant and native prefix controls stay DSV4-only', () => {
         const staleDsv4Config = {
             dsv4PrefixCache: true,
@@ -2314,6 +2360,24 @@ describe('JIT Toggle', () => {
         expect(sessions).toContain('--dsv4-enable-prefix-cache')
         expect(sessions).toContain('native composite prefix/paged/L2 cache explicitly disabled for this session')
         expect(sessions).not.toContain('const prefixCacheOff = dsv4Active ? false')
+    })
+
+    it('settings form keeps DSV4 native cache controls deduped and names generic controls distinctly', () => {
+        const form = readFileSync(
+            'src/renderer/src/components/sessions/SessionConfigForm.tsx',
+            'utf-8',
+        )
+
+        expect(countOccurrences(form, 'label="DSV4 Native Composite Prefix Cache"')).toBe(1)
+        expect(countOccurrences(form, 'label="DSV4 CSA/HCA Pool Codec"')).toBe(1)
+        expect(countOccurrences(form, 'label={dsv4Active ? "DSV4 Block Disk Cache (L2)" : "Block Disk Cache (L2)"}')).toBe(1)
+        expect(countOccurrences(form, 'label="Use Paged KV Cache"')).toBe(1)
+        expect(form).toContain('{!dsv4Active && <CheckField label="Use Paged KV Cache"')
+        expect(form).toContain('disabled={dsv4CompositeRequiresPaged}')
+        expect(form).toContain('disabled={effectivelyNoBatching || prefixOff || dsv4Active}')
+        expect(form).not.toContain('DSV4 Native Cache')
+        expect(form).not.toContain('DSV4 Composite Prefix Cache')
+        expect(form).not.toContain('DSV4 Pool Quantization')
     })
 
     it('settings form hides generic paged-cache warnings for the DSV4 native cache path', () => {
