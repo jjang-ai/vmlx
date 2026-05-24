@@ -166,7 +166,7 @@ class DSV4BatchGenerator:
             f"DSV4Gen: stop_tokens at construction = {_log_stop_tokens} "
             f"(DSV4_EOS_ID={DSV4_EOS_ID} always-checked separately)"
         )
-        # DSV4 prefill defaults to SINGLE-SHOT.
+        # DSV4 prefill defaults to bounded chunks.
         #
         # v1.5.6 (commit 00a78db4) established that chunking the DSV4
         # prefill corrupts the compressor + indexer pool state mid-decode
@@ -176,18 +176,23 @@ class DSV4BatchGenerator:
         # calls" — this is unverified and contradicted by v1.5.6's
         # empirical 14/14 probe matrix. The jang-tools DSV4 runtime is
         # unchanged between 2.5.18 (v1.5.10 baseline) and 2.5.23 (current),
-        # so the chunking corruption v1.5.6 documented is still latent.
+        # so the chunking corruption v1.5.6 documented stayed latent until the
+        # materialized PoolQuantizedV4Cache path was repaired.
         #
-        # Default: single-shot. Post-warmup the model has all kernels
-        # JIT-compiled so even long prompts complete under the Metal
-        # command-buffer watchdog. Env override DSV4_PREFILL_STEP_SIZE>0
-        # is available for users who hit watchdog-kill on extreme prompts
-        # (very rare; better to raise watchdog timeout instead).
+        # v1.5.49+ live installed-app stress showed single-shot DSV4 prefill can
+        # transiently hit the 128GB machine limit on a ~10k-token prompt, while
+        # the 2048-token step path preserved native block/L2 cache hits and kept
+        # peak memory near the resident model size. Operators can still force
+        # legacy single-shot with DSV4_PREFILL_STEP_SIZE=0 for diagnostics.
         try:
             _dsv4_step_env = os.environ.get("DSV4_PREFILL_STEP_SIZE")
-            _dsv4_step = int(_dsv4_step_env) if _dsv4_step_env else 0
+            _dsv4_step = (
+                int(_dsv4_step_env)
+                if _dsv4_step_env is not None
+                else int(prefill_step_size or 2048)
+            )
         except (TypeError, ValueError):
-            _dsv4_step = 0
+            _dsv4_step = int(prefill_step_size or 2048)
         if _dsv4_step <= 0:
             # Single-shot — set step to a sentinel larger than any real
             # prompt so the chunked loop runs exactly once.

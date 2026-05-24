@@ -1379,11 +1379,11 @@ def test_dsv4_generator_skips_prompt_snapshot_for_short_cache_store_prompt_by_de
     assert prompt_responses[0].prompt_cache_snapshot is None
 
 
-def test_dsv4_long_prefill_guard_describes_single_shot_default():
-    """The DSV4 long-prefill guard must not claim chunked prefill is default.
+def test_dsv4_long_prefill_guard_describes_bounded_chunk_default():
+    """The DSV4 long-prefill guard must describe the current bounded default.
 
-    DSV4BatchGenerator deliberately defaults to single-shot prefill because
-    arbitrary chunking has not been proven safe for SWA+CSA/HCA composite state.
+    Single-shot remains available for diagnostics, but it is no longer the
+    production default after installed-app cache-hit validation.
     """
     import inspect
 
@@ -1391,8 +1391,24 @@ def test_dsv4_long_prefill_guard_describes_single_shot_default():
 
     guard_src = inspect.getsource(scheduler.Scheduler.add_request)
 
-    assert "defaults to single-shot" in guard_src
-    assert "uses chunked prefill" not in guard_src
+    assert "defaults to bounded" in guard_src
+    assert "DSV4_PREFILL_STEP_SIZE=0" in guard_src
+
+
+def test_dsv4_batch_generator_prefill_step_default_and_legacy_override(monkeypatch):
+    from vmlx_engine.utils.dsv4_batch_generator import DSV4BatchGenerator
+
+    monkeypatch.delenv("DSV4_PREFILL_STEP_SIZE", raising=False)
+    gen = DSV4BatchGenerator(object(), prefill_step_size=2048)
+    assert gen.prefill_step_size == 2048
+
+    monkeypatch.setenv("DSV4_PREFILL_STEP_SIZE", "1024")
+    gen = DSV4BatchGenerator(object(), prefill_step_size=2048)
+    assert gen.prefill_step_size == 1024
+
+    monkeypatch.setenv("DSV4_PREFILL_STEP_SIZE", "0")
+    gen = DSV4BatchGenerator(object(), prefill_step_size=2048)
+    assert gen.prefill_step_size == 1 << 30
 
 
 def test_dsv4_prompt_only_prefill_collects_composite_state_without_values_attr():
