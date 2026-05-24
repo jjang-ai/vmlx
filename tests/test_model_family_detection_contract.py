@@ -1,6 +1,8 @@
 import ast
 from pathlib import Path
 
+import pytest
+
 
 def test_family_detection_contract_pins_named_release_rows():
     from tests.cross_matrix import run_model_family_detection_contract as gate
@@ -732,6 +734,10 @@ def test_decode_speed_local_high_risk_rows_match_current_engine_registry():
         "nemotron_mxfp4": ("nemotron_h", "hybrid", None),
     }
 
+    first_row = ROWS[row_names[0]]
+    if not Path(first_row.path).is_dir():
+        pytest.skip("model dirs not available (maintainer-local paths)")
+
     registry = get_model_config_registry()
 
     for row_name in row_names:
@@ -818,6 +824,9 @@ def test_decode_speed_gate_records_registry_cache_metadata_for_existing_rows():
         resolve_row_registry_metadata,
     )
     from vmlx_engine.model_config_registry import get_model_config_registry
+
+    if not any(Path(row.path).exists() for row in ROWS.values()):
+        pytest.skip("no model dirs available (maintainer-local paths)")
 
     registry = get_model_config_registry()
     registry.clear_cache()

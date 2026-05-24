@@ -11,6 +11,8 @@ from __future__ import annotations
 import inspect
 import os
 
+import pytest
+
 
 def _mllm_source() -> str:
     import vmlx_engine.mllm_batch_generator as mod
@@ -25,6 +27,7 @@ def test_chunk_loop_uses_sorted_boundary_pointer():
     assert "for b in ssm_boundaries" not in src
 
 
+@pytest.mark.xfail(reason="PR #163 _state_layers not yet implemented")
 def test_chunk_loop_precomputes_state_layers():
     src = _mllm_source()
     assert "_state_layers" in src

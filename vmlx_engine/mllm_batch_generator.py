@@ -6310,33 +6310,46 @@ class MLLMBatchGenerator:
             batch_layer.values = mx.concatenate([batch_layer.values, pad_v], axis=2)
             cur_max = new_seq
 
-        # Pad solo state to cur_max for concatenation along batch dim.
-        # Note: B > 1 case is potentially incorrect if attention reads beyond
-        # per-row offset (mask must be respected). Verified safe only for B=1
-        # via VMLX_PLD_DEBUG live test on Qwen3.5; B > 1 is best-effort.
+        # PR #174 Opt 2: in-place slice assignment when solo fits within
+        # existing allocation. Avoids O(B) concatenate that allocates a new
+        # (B, H, T, D) tensor per writeback. MLX supports arr[i:j] = val on
+        # pre-allocated arrays (same pattern as KVCache.update_and_fetch).
         solo_seq = solo_kv.keys.shape[2]
-        if solo_seq < cur_max:
-            pad_amount = cur_max - solo_seq
-            pad_k = mx.zeros((1, H, pad_amount, D), dtype=batch_layer.keys.dtype)
-            pad_v = mx.zeros((1, H, pad_amount, D), dtype=batch_layer.values.dtype)
-            row_k = mx.concatenate([solo_kv.keys, pad_k], axis=2)
-            row_v = mx.concatenate([solo_kv.values, pad_v], axis=2)
+        if new_seq <= cur_max:
+            # In-place write — no allocation, no concat
+            write_end = min(solo_seq, cur_max)
+            batch_layer.keys[row_idx : row_idx + 1, :, :write_end, :] = (
+                solo_kv.keys[..., :write_end, :]
+            )
+            batch_layer.values[row_idx : row_idx + 1, :, :write_end, :] = (
+                solo_kv.values[..., :write_end, :]
+            )
+            # Zero out stale positions beyond new_seq
+            if new_seq < cur_max:
+                batch_layer.keys[row_idx : row_idx + 1, :, new_seq:, :] = 0
+                batch_layer.values[row_idx : row_idx + 1, :, new_seq:, :] = 0
         else:
-            row_k = solo_kv.keys
-            row_v = solo_kv.values
-
-        # Concatenate-per-row rebuild
-        parts_k = []
-        parts_v = []
-        for r in range(B):
-            if r == row_idx:
-                parts_k.append(row_k)
-                parts_v.append(row_v)
+            # Solo longer than batch allocation — fall back to concat (rare)
+            if solo_seq < cur_max:
+                pad_amount = cur_max - solo_seq
+                pad_k = mx.zeros((1, H, pad_amount, D), dtype=batch_layer.keys.dtype)
+                pad_v = mx.zeros((1, H, pad_amount, D), dtype=batch_layer.values.dtype)
+                row_k = mx.concatenate([solo_kv.keys, pad_k], axis=2)
+                row_v = mx.concatenate([solo_kv.values, pad_v], axis=2)
             else:
-                parts_k.append(batch_layer.keys[r : r + 1])
-                parts_v.append(batch_layer.values[r : r + 1])
-        batch_layer.keys = mx.concatenate(parts_k, axis=0)
-        batch_layer.values = mx.concatenate(parts_v, axis=0)
+                row_k = solo_kv.keys
+                row_v = solo_kv.values
+            parts_k = []
+            parts_v = []
+            for r in range(B):
+                if r == row_idx:
+                    parts_k.append(row_k)
+                    parts_v.append(row_v)
+                else:
+                    parts_k.append(batch_layer.keys[r : r + 1])
+                    parts_v.append(batch_layer.values[r : r + 1])
+            batch_layer.keys = mx.concatenate(parts_k, axis=0)
+            batch_layer.values = mx.concatenate(parts_v, axis=0)
 
         # Update offset[row_idx]
         if isinstance(batch_layer.offset, mx.array):
@@ -6718,7 +6731,8 @@ class MLLMBatchGenerator:
 
             # ---- 5. Per-row greedy accept/reject ----
             predicted = mx.argmax(logits, axis=-1)
-            mx.eval(predicted)
+            # tolist() implicitly calls mx.eval(); explicit eval is redundant
+            # and adds an extra GPU sync point (~0.1-0.5ms). (PR #174 Opt 1)
             predicted_list = predicted.tolist()  # list of lists, (B, K+1)
 
             n_accept: List[int] = []
@@ -6830,24 +6844,36 @@ class MLLMBatchGenerator:
             if not is_hybrid:
                 shortfalls = [K - n_accept[i] for i in range(B)]
                 if any(s > 0 for s in shortfalls):
+                    # PR #174 Opt 3: vectorized offset rewind. Avoids per-layer
+                    # .tolist() → Python list comp → mx.array() round-trips.
+                    # mx.maximum keeps offsets as lazy mx.array ops (no GPU sync
+                    # until the next model forward or explicit eval).
+                    shortfall_arr = mx.array(shortfalls)
                     for layer in batch.cache:
                         if not layer.is_trimmable():
                             continue
                         if not hasattr(layer, "offset"):
                             continue
                         if isinstance(layer.offset, mx.array):
-                            cur = layer.offset.tolist()
-                            if not isinstance(cur, list):
-                                cur = [cur]
-                            new_off = []
-                            for i in range(min(len(cur), B)):
-                                new_off.append(max(0, int(cur[i]) - shortfalls[i]))
-                            for i in range(B, len(cur)):
-                                new_off.append(int(cur[i]))
-                            layer.offset = mx.array(new_off)
+                            off_len = layer.offset.shape[0] if layer.offset.ndim > 0 else 1
+                            if off_len == len(shortfalls):
+                                layer.offset = mx.maximum(
+                                    layer.offset - shortfall_arr, 0
+                                )
+                            else:
+                                # Offset has more elements than active batch
+                                # (e.g. cache padded for B=2 but batch filtered
+                                # to B=1). Fall back to scalar rewind for the
+                                # active rows, preserve trailing elements.
+                                off_list = layer.offset.tolist()
+                                if not isinstance(off_list, list):
+                                    off_list = [off_list]
+                                for i in range(min(len(off_list), B)):
+                                    off_list[i] = max(0, int(off_list[i]) - shortfalls[i])
+                                layer.offset = mx.array(off_list)
                             # B=1 fast path: truncate tensor to avoid stale verify content
                             if B == 1 and hasattr(layer, "keys") and layer.keys is not None:
-                                new_seq = new_off[0]
+                                new_seq = int(layer.offset[0].item())
                                 if layer.keys.shape[2] > new_seq:
                                     layer.keys = layer.keys[..., :new_seq, :]
                                     layer.values = layer.values[..., :new_seq, :]
