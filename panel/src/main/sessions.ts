@@ -206,6 +206,7 @@ const ADDITIONAL_ARG_VALUE_FLAGS = new Set([
   '--num-draft-tokens',
   '--native-mtp-depth',
   '--native-mtp-sampling-policy',
+  '--omni-backend',
   '--paged-cache-block-size',
   '--pld-summary-interval',
   '--port',
@@ -294,6 +295,7 @@ const DSV4_ADDITIONAL_ARG_BLOCKLIST = new Set([
   '--mcp-disabled-tools',
   '--mcp-enabled-servers',
   '--mcp-enabled-tools',
+  '--omni-backend',
   '--enable-auto-tool-choice',
   '--tool-call-parser',
   '--reasoning-parser',
@@ -1615,6 +1617,7 @@ export class SessionManager extends EventEmitter {
     'servedModelName',
     'speculativeModel', 'numDraftTokens', 'smelt', 'smeltExperts',
     'nativeMtpMode', 'nativeMtpDepth', 'nativeMtpDepthOverride',
+    'omniBackend',
     'flashMoe', 'flashMoeSlotBank', 'flashMoePrefetch', 'flashMoeIoSplit',
     'distributedEnabled', 'distributedMode', 'distributedSecret',
     'embeddingModel', 'additionalArgs', 'mfluxClass',
@@ -2486,6 +2489,7 @@ export class SessionManager extends EventEmitter {
     const detectedFamily = normalizeDetectedFamilyName(detected.family)
     const dsv4Active = detectedFamily === 'deepseek-v4'
     const dsv4PrefixCacheOptIn = dsv4Active && config.dsv4PrefixCache !== false
+    const omniBackendActive = detectedFamily === 'nemotron-h' && detected.isMultimodal === true
 
     // Concurrent processing
     // When value is 0 ("No limit" in UI), omit the flag so backend uses its default.
@@ -2853,7 +2857,7 @@ export class SessionManager extends EventEmitter {
     // stage2 = native MLX RADIO + Parakeet, ~15-21x faster encoders + 82
     // tok/s decode on M4 Max — the JANGQ-AI banner numbers. User flips
     // this from the panel's "Omni Backend" select in the Server tab.
-    if ((config as any).omniBackend && (config as any).omniBackend !== 'stage1') {
+    if (omniBackendActive && (config as any).omniBackend && (config as any).omniBackend !== 'stage1') {
       args.push('--omni-backend', (config as any).omniBackend)
     }
 

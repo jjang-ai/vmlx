@@ -7660,6 +7660,11 @@ class TestTurboQuantKVTelemetry:
         preview_source = Path(
             "./panel/src/renderer/src/components/sessions/SessionSettings.tsx"
         ).read_text()
+        cli_source = Path("./vmlx_engine/cli.py").read_text()
+        server_source = Path("./vmlx_engine/server.py").read_text()
+        form_source = Path(
+            "./panel/src/renderer/src/components/sessions/SessionConfigForm.tsx"
+        ).read_text()
 
         for flag in (
             "--smelt",
@@ -7672,6 +7677,14 @@ class TestTurboQuantKVTelemetry:
         ):
             assert flag in sessions_source
             assert flag in preview_source
+        assert '"--omni-backend"' in cli_source
+        assert '"--omni-backend"' in server_source
+        assert "VMLINUX_OMNI_BACKEND" in cli_source
+        assert "VMLINUX_OMNI_BACKEND" in server_source
+        assert "omniBackendActive" in sessions_source
+        assert "omniBackendActive" in preview_source
+        assert "omniBackendVisible" in form_source
+        assert "'omniBackend'," in sessions_source
         for flag in ("--default-enable-thinking",):
             # The literals may appear in sanitizer/blocklist tables so stale
             # additionalArgs can be stripped. They must not be emitted as
@@ -7712,8 +7725,6 @@ class TestTurboQuantKVTelemetry:
         ]
         assert "canonicalizeToolParserId" in preview_parser_block
 
-        cli_source = Path("./vmlx_engine/cli.py").read_text()
-        server_source = Path("./vmlx_engine/server.py").read_text()
         assert "server._default_repetition_penalty = 1.0" not in cli_source
         assert "_default_repetition_penalty = 1.0" not in server_source
 

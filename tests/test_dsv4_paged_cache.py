@@ -484,6 +484,7 @@ def test_session_preview_and_real_launch_share_dsv4_and_image_sanitizers():
         "--max-prompt-tokens",
         "--native-mtp-depth",
         "--native-mtp-sampling-policy",
+        "--omni-backend",
         "--enable-jit",
         "--default-temperature",
         "--default-repetition-penalty",

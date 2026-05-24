@@ -108,6 +108,7 @@ const ADDITIONAL_ARG_VALUE_FLAGS = new Set([
   '--mflux-class',
   '--native-mtp-depth',
   '--native-mtp-sampling-policy',
+  '--omni-backend',
   '--num-draft-tokens',
   '--paged-cache-block-size',
   '--pld-summary-interval',
@@ -197,6 +198,7 @@ const DSV4_ADDITIONAL_ARG_BLOCKLIST = new Set([
   '--mcp-disabled-tools',
   '--mcp-enabled-servers',
   '--mcp-enabled-tools',
+  '--omni-backend',
   '--enable-auto-tool-choice',
   '--tool-call-parser',
   '--reasoning-parser',
@@ -263,6 +265,7 @@ function buildCommandPreview(
   const detectedFamily = normalizeDetectedFamilyName(detected?.family)
   const dsv4Active = detectedFamily === 'deepseek-v4'
   const dsv4PrefixCacheOptIn = dsv4Active && config.dsv4PrefixCache !== false
+  const omniBackendActive = detectedFamily === 'nemotron-h' && detected?.isMultimodal === true
   const effectiveSmelt = !!(config as any).smelt && !dsv4Active
   const isVLM = dsv4Active || effectiveSmelt || detected?.forceTextOnly ? false
     : detected?.isMultimodal ? true
@@ -488,7 +491,7 @@ function buildCommandPreview(
 
   if (effectiveEnableJit) parts.push('--enable-jit')
 
-  if ((config as any).omniBackend && (config as any).omniBackend !== 'stage1') {
+  if (omniBackendActive && (config as any).omniBackend && (config as any).omniBackend !== 'stage1') {
     parts.push('--omni-backend', (config as any).omniBackend)
   }
 

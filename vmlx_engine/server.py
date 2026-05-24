@@ -14287,6 +14287,14 @@ Examples:
         help="Disable native in-model MTP even when bundle metadata is available.",
     )
     parser.add_argument(
+        "--omni-backend",
+        choices=["stage1", "stage2"],
+        default=None,
+        help="Nemotron-Omni multimodal backend. stage1 is correctness-first "
+        "PyTorch/MPS; stage2 opts into native MLX RADIO + Parakeet via "
+        "VMLINUX_OMNI_BACKEND=stage2.",
+    )
+    parser.add_argument(
         "--default-enable-thinking",
         type=str,
         default=None,
@@ -14361,6 +14369,8 @@ Examples:
             _default_top_k = 0
         if _default_min_p is None:
             _default_min_p = 0.0
+    if getattr(args, "omni_backend", None):
+        os.environ["VMLINUX_OMNI_BACKEND"] = args.omni_backend
     if args.default_enable_thinking is not None:
         _default_enable_thinking = args.default_enable_thinking == "true"
 

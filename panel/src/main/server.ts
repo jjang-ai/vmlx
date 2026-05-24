@@ -84,6 +84,7 @@ export interface ServerConfig {
 
   // Multimodal (VLM)
   isMultimodal?: boolean
+  omniBackend?: 'stage1' | 'stage2'
 
   // Cache TTL
   cacheTtlMinutes?: number

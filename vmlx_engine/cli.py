@@ -552,6 +552,8 @@ def serve_command(args):
                 server._default_top_k = 0
             if server._default_min_p is None:
                 server._default_min_p = 0.0
+    if getattr(args, "omni_backend", None):
+        os.environ["VMLINUX_OMNI_BACKEND"] = args.omni_backend
 
     # Apply default enable_thinking
     _det = getattr(args, 'default_enable_thinking', None)
@@ -2524,6 +2526,14 @@ Examples:
         action="store_true",
         default=False,
         help="Disable native in-model MTP even when the loaded bundle has MTP tensors.",
+    )
+    serve_parser.add_argument(
+        "--omni-backend",
+        choices=["stage1", "stage2"],
+        default=None,
+        help="Nemotron-Omni multimodal backend. stage1 is correctness-first "
+             "PyTorch/MPS; stage2 opts into the native MLX RADIO + Parakeet "
+             "path via VMLX_OMNI_BACKEND=stage2.",
     )
 
     # Prompt Lookup Decoding (PLD)

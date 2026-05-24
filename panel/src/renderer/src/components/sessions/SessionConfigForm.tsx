@@ -343,6 +343,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
   const effectiveCompletionBatchSize = dsv4Active ? 1 : config.completionBatchSize
   const showVideoControls = !dsv4Active && !detectedForceTextOnly && multimodalActive
   const nativeMtpSupported = !!detectedNativeMtp?.supported
+  const omniBackendVisible = normalizedDetectedFamily === 'nemotron-h' && multimodalActive
   const nativeMtpMode = config.nativeMtpMode || DEFAULT_CONFIG.nativeMtpMode || 'deterministic'
   const nativeMtpDepth = config.nativeMtpDepthOverride === true
     ? (config.nativeMtpDepth || detectedNativeMtp?.depth || 3)
@@ -1322,6 +1323,18 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
         )}
         {!dsv4Active && !smeltActive && !detectedForceTextOnly && config.isMultimodal === false && (
           <InfoNote text="VLM mode is off only when the model is not auto-detected as multimodal. Detected VLM bundles launch with image/video support." />
+        )}
+        {omniBackendVisible && (
+          <SelectField
+            label="Omni Backend"
+            tooltip="Nemotron-Omni encoder backend. Stage 1 is the correctness-first PyTorch/MPS bridge. Stage 2 maps to --omni-backend stage2 / VMLX_OMNI_BACKEND=stage2 for native MLX RADIO + Parakeet benchmarking."
+            value={config.omniBackend || 'stage1'}
+            onChange={v => onChange('omniBackend', v as 'stage1' | 'stage2')}
+            options={[
+              { value: 'stage1', label: 'Stage 1 correctness' },
+              { value: 'stage2', label: 'Stage 2 native MLX' },
+            ]}
+          />
         )}
         {/* Video sampling — only relevant for VL models that accept video_url.
             Qwen 3.6 / Qwen3.5-VL both have native video understanding via
