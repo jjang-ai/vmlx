@@ -31,10 +31,12 @@ from tests.cross_matrix.run_production_family_audit import (
     normalize_short_answer,
     family_matches_expected,
     live_loop_probe_name,
+    multilingual_loop_quality_ok,
     production_family_audit_summary,
     sampling_loop_risk_summary,
     simple_loop_score,
     static_audit,
+    text_quality_summary,
 )
 from tests.cross_matrix import run_production_family_audit as audit_harness
 
@@ -1017,6 +1019,45 @@ def test_loop_score_does_not_false_fail_coherent_cyrillic_list():
     )
 
     assert simple_loop_score(text) < 0.25
+
+
+def test_multilingual_loop_gate_rejects_stray_cjk_in_cyrillic_answer():
+    text = (
+        "1. Сцена создаётся с травой и деревьями.\n"
+        "2. Игрок управляется клавиатурой и стреляет.\n"
+        "3. Враги генерируются случайным образом в р的林.\n"
+        "4. Урон отнимает здоровье при попадании.\n"
+        "5. Победа зависит от выживания и счёта."
+    )
+
+    assert text_quality_summary(text)["cjk_chars"] > 0
+    assert not multilingual_loop_quality_ok(text)
+
+
+def test_multilingual_loop_gate_rejects_unrelated_latin_words_in_cyrillic_answer():
+    text = (
+        "1. Сцена создаётся с травой, деревьями и Himmel.\n"
+        "2. Герой двигается по траектории, используя клавиатуру.\n"
+        "3. Оружие визуализируется и стреляет боеприпасами.\n"
+        "4. Враги меняют траекторию и избегают попаданий.\n"
+        "5. Система оценивает очки, здоровье и завершает уровень."
+    )
+
+    assert text_quality_summary(text)["latin_chars"] > 0
+    assert not multilingual_loop_quality_ok(text)
+
+
+def test_multilingual_loop_gate_allows_expected_web_technical_tokens():
+    text = (
+        "1. HTML сцена создаётся с лесом и небом.\n"
+        "2. Three.js управляет камерой и объектами.\n"
+        "3. JavaScript обновляет движение игрока.\n"
+        "4. CSS настраивает размер полотна.\n"
+        "5. WebGL выводит врагов и эффекты."
+    )
+
+    assert text_quality_summary(text)["latin_chars"] > 0
+    assert multilingual_loop_quality_ok(text)
 
 
 def test_loop_sensitive_rows_require_live_loop_probe():

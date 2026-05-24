@@ -2062,6 +2062,26 @@ def text_quality_summary(text: str) -> dict[str, Any]:
     }
 
 
+def multilingual_latin_tokens_ok(text: str) -> bool:
+    allowed = {"html", "three", "js", "javascript", "css", "webgl"}
+    tokens = {token.lower() for token in re.findall(r"[A-Za-z]{2,}", text)}
+    return tokens <= allowed
+
+
+def multilingual_loop_quality_ok(text: str) -> bool:
+    quality = text_quality_summary(text)
+    return (
+        len(text) >= 120
+        and not has_duplicate_block(text)
+        and simple_loop_score(text) < 0.25
+        and text.count("👀") < 8
+        and quality["word_count"] >= 20
+        and quality["digit_line_ratio"] < 0.35
+        and quality["cjk_chars"] == 0
+        and multilingual_latin_tokens_ok(text)
+    )
+
+
 def live_loop_probe_name(row: ModelRow) -> str | None:
     if row.family == "bailing_hybrid":
         return "ling_multilingual_loop_trigger"
@@ -2932,13 +2952,7 @@ def live_audit(row: ModelRow, py: Path, port: int, timeout_load: int, keep_runni
         )
         check(
             loop_probe,
-            code == 200
-            and len(loop_full) >= 120
-            and not has_duplicate_block(loop_full)
-            and loop_score < 0.25
-            and loop_full.count("👀") < 8
-            and loop_quality["word_count"] >= 20
-            and loop_quality["digit_line_ratio"] < 0.35,
+            code == 200 and multilingual_loop_quality_ok(loop_full),
             {
                 "code": code,
                 "finish": loop_finish,

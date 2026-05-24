@@ -23,11 +23,11 @@ def test_cache_architecture_contract_pins_named_cache_edges():
     assert "hybrid_ssm_partial_reuse" in required_api
     assert "turboquant_disk_roundtrip" in required_api
 
-    assert "deepseek-v4 disables composite prefix cache by default even with stale cache config" in required_panel
-    assert "deepseek-v4 diagnostic cache opt-in uses DS4 page-sized blocks" in required_panel
+    assert "deepseek-v4 enables native composite prefix cache by default even with stale cache config" in required_panel
+    assert "deepseek-v4 native cache path uses DS4 page-sized blocks" in required_panel
     assert "DSV4 pool quant and native prefix controls stay DSV4-only" in required_panel
     assert (
-        "enables DSV4 pool quant only when explicit config asks for it"
+        "enables DSV4 pool quant by default only under DSV4 native composite cache"
         in required_panel
     )
     assert "detected Qwen3.6 hybrid cache forces paged cache over stale saved false" in required_panel

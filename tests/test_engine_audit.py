@@ -4925,7 +4925,11 @@ class TestHybridSSMCompanionCacheGating:
         assert "else None" in source
         assert "self._prefix_cache_enabled" in source
         assert "block_aware_cache is not None" in source
-        assert "if self._is_hybrid and self._ssm_companion_enabled:" in source
+        capture_idx = source.index("# Capture SSM state at prompt boundary for hybrid models.")
+        capture_block = source[capture_idx : source.index("if trace is not None:", capture_idx + 1)]
+        assert "self._is_hybrid" in capture_block
+        assert "and self._ssm_companion_enabled" in capture_block
+        assert "_bypass_prefix_cache" in capture_block
 
     def test_mllm_scheduler_threads_prefix_cache_flag_to_batch_generator(self):
         source = Path("./vmlx_engine/mllm_scheduler.py").read_text()
