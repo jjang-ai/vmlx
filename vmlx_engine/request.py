@@ -30,6 +30,8 @@ class RequestStatus(enum.IntEnum):
     FINISHED_LENGTH_CAPPED = enum.auto()
     # Request was aborted by user
     FINISHED_ABORTED = enum.auto()
+    # Request failed before or during generation
+    FINISHED_ERROR = enum.auto()
 
     @staticmethod
     def is_finished(status: "RequestStatus") -> bool:
@@ -45,6 +47,8 @@ class RequestStatus(enum.IntEnum):
             return "length"
         elif status == RequestStatus.FINISHED_ABORTED:
             return "abort"
+        elif status == RequestStatus.FINISHED_ERROR:
+            return "error"
         return None
 
 

@@ -40,6 +40,9 @@ class TestRequestStatus:
     def test_is_finished_aborted(self):
         assert RequestStatus.is_finished(RequestStatus.FINISHED_ABORTED) is True
 
+    def test_is_finished_error(self):
+        assert RequestStatus.is_finished(RequestStatus.FINISHED_ERROR) is True
+
     def test_get_finish_reason_stopped(self):
         assert RequestStatus.get_finish_reason(RequestStatus.FINISHED_STOPPED) == "stop"
 
@@ -53,6 +56,9 @@ class TestRequestStatus:
         assert (
             RequestStatus.get_finish_reason(RequestStatus.FINISHED_ABORTED) == "abort"
         )
+
+    def test_get_finish_reason_error(self):
+        assert RequestStatus.get_finish_reason(RequestStatus.FINISHED_ERROR) == "error"
 
     def test_get_finish_reason_waiting(self):
         assert RequestStatus.get_finish_reason(RequestStatus.WAITING) is None

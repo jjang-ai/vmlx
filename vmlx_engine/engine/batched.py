@@ -33,14 +33,16 @@ logger = logging.getLogger(__name__)
 
 def _raise_prompt_too_long_from_output(output: Any) -> None:
     """Convert structured scheduler prefill errors back into API-level errors."""
-    if getattr(output, "error_code", None) != "prompt_too_long":
-        return
-    raise PromptTooLongError(
-        int(getattr(output, "error_prompt_tokens", 0) or 0),
-        int(getattr(output, "error_max_prompt_tokens", 0) or 0),
-        source=getattr(output, "error_source", None) or "tokenized prompt",
-        request_id=getattr(output, "request_id", None),
-    )
+    if getattr(output, "error_code", None) == "prompt_too_long":
+        raise PromptTooLongError(
+            int(getattr(output, "error_prompt_tokens", 0) or 0),
+            int(getattr(output, "error_max_prompt_tokens", 0) or 0),
+            source=getattr(output, "error_source", None) or "tokenized prompt",
+            request_id=getattr(output, "request_id", None),
+        )
+    error = getattr(output, "error", None)
+    if error:
+        raise RuntimeError(str(error))
 
 
 class MLLMModelWrapper:

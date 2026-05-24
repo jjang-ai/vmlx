@@ -543,6 +543,21 @@ class TestSchedulerBasic:
         assert exc_info.value.max_prompt_tokens == 4096
         assert exc_info.value.request_id == "vl-over-limit"
 
+    def test_mllm_generic_prefill_error_round_trips_to_api_error(self):
+        """Generic scheduler prefill errors must not become successful output."""
+        from vmlx_engine.engine.batched import _raise_prompt_too_long_from_output
+        from vmlx_engine.request import RequestOutput
+
+        output = RequestOutput(
+            request_id="vl-image-oom-guard",
+            finished=True,
+            finish_reason="error",
+            error="RuntimeError: VLM image prefill rejected before Metal forward",
+        )
+
+        with pytest.raises(RuntimeError, match="VLM image prefill rejected"):
+            _raise_prompt_too_long_from_output(output)
+
     def test_memory_cache_exact_hit_with_generation_suffix_refeeds_last_key_token(
         self, mock_model, mock_tokenizer
     ):
