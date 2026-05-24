@@ -56,6 +56,14 @@ export interface ServerConfig {
   blockDiskCacheDir?: string
   blockDiskCacheMaxGb?: number
 
+  // MoE runtime modes
+  smelt?: boolean
+  smeltExperts?: number
+  flashMoe?: boolean
+  flashMoeSlotBank?: number
+  flashMoePrefetch?: 'none' | 'temporal'
+  flashMoeIoSplit?: number
+
   // Performance
   streamInterval: number
   maxTokens?: number
@@ -85,6 +93,8 @@ export interface ServerConfig {
   // Multimodal (VLM)
   isMultimodal?: boolean
   omniBackend?: 'stage1' | 'stage2'
+  videoFps?: number
+  videoMaxFrames?: number
 
   // Cache TTL
   cacheTtlMinutes?: number
@@ -101,6 +111,7 @@ export interface ServerConfig {
   // Generation defaults
   defaultTemperature?: number
   defaultTopP?: number
+  defaultRepetitionPenalty?: number
 
   // Embedding model (separate from main model)
   embeddingModel?: string
@@ -123,6 +134,16 @@ export interface ServerConfig {
 
   // Max context length override (0 = use model default)
   maxContextLength?: number
+
+  // Custom template / distributed / sleep controls
+  chatTemplate?: string
+  distributedEnabled?: boolean
+  distributedMode?: 'pipeline' | 'tensor'
+  distributedSecret?: string
+  distributedNodes?: Array<{ address: string; port: number; hostname?: string }>
+  idleTimeoutSoftMin?: number
+  idleTimeoutHardMin?: number
+  autoSleepEnabled?: boolean
 }
 
 export interface DetectedProcess {

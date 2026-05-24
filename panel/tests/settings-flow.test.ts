@@ -85,6 +85,16 @@ interface SessionConfig {
     logLevel: string
     corsOrigins: string
     maxContextLength: number
+    chatTemplate?: string
+    videoFps?: number
+    videoMaxFrames?: number
+    distributedEnabled?: boolean
+    distributedMode?: 'pipeline' | 'tensor'
+    distributedSecret?: string
+    distributedNodes?: Array<{ address: string; port: number; hostname?: string }>
+    idleTimeoutSoftMin?: number
+    idleTimeoutHardMin?: number
+    autoSleepEnabled?: boolean
 }
 
 const DEFAULT_CONFIG: SessionConfig = {
@@ -2692,6 +2702,9 @@ describe('Settings → CLI Round-Trip Completeness', () => {
         'nativeMtpMode', 'nativeMtpDepth', 'nativeMtpDepthOverride',
         'embeddingModel', 'additionalArgs',
         'enableJit', 'logLevel', 'corsOrigins', 'maxContextLength',
+        'chatTemplate', 'videoFps', 'videoMaxFrames',
+        'distributedEnabled', 'distributedMode', 'distributedSecret', 'distributedNodes',
+        'idleTimeoutSoftMin', 'idleTimeoutHardMin', 'autoSleepEnabled',
     ]
 
     // Collect all config keys that appear in at least one test in this file
@@ -2699,8 +2712,23 @@ describe('Settings → CLI Round-Trip Completeness', () => {
     // This is a structural meta-test: ensure coverage.
     it('every SessionConfig field is listed in the completeness check', () => {
         const interfaceKeys = Object.keys(DEFAULT_CONFIG) as (keyof SessionConfig)[]
-        // Plus enableAutoToolChoice and isMultimodal which are optional (not in defaults)
-        const fullSet = new Set([...interfaceKeys, 'enableAutoToolChoice', 'isMultimodal'])
+        // Plus optional fields that are not in DEFAULT_CONFIG but are still
+        // persisted/session-owned controls.
+        const fullSet = new Set([
+            ...interfaceKeys,
+            'enableAutoToolChoice',
+            'isMultimodal',
+            'chatTemplate',
+            'videoFps',
+            'videoMaxFrames',
+            'distributedEnabled',
+            'distributedMode',
+            'distributedSecret',
+            'distributedNodes',
+            'idleTimeoutSoftMin',
+            'idleTimeoutHardMin',
+            'autoSleepEnabled',
+        ])
         const checkedSet = new Set(ALL_CONFIG_KEYS)
 
         for (const key of fullSet) {

@@ -7802,6 +7802,32 @@ class TestTurboQuantKVTelemetry:
         assert "onChange('videoFps'" in form_source
         assert "onChange('videoMaxFrames'" in form_source
 
+    def test_session_config_schema_covers_runtime_settings(self):
+        server_source = Path("./panel/src/main/server.ts").read_text()
+        settings_flow_source = Path("./panel/tests/settings-flow.test.ts").read_text()
+
+        for field in (
+            "smelt",
+            "smeltExperts",
+            "flashMoe",
+            "flashMoeSlotBank",
+            "flashMoePrefetch",
+            "flashMoeIoSplit",
+            "chatTemplate",
+            "videoFps",
+            "videoMaxFrames",
+            "distributedEnabled",
+            "distributedMode",
+            "distributedSecret",
+            "distributedNodes",
+            "idleTimeoutSoftMin",
+            "idleTimeoutHardMin",
+            "autoSleepEnabled",
+            "defaultRepetitionPenalty",
+        ):
+            assert f"{field}?" in server_source or f"{field}:" in server_source
+            assert f"'{field}'" in settings_flow_source
+
     def test_panel_startup_defaults_sanitize_incompatible_saved_modes(self):
         sessions_source = Path("./panel/src/main/sessions.ts").read_text()
         preview_source = Path(
