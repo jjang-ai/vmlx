@@ -8258,8 +8258,10 @@ class TestSpeculativeDecodingContract:
         from vmlx_engine import cli
         import inspect
         src = inspect.getsource(cli)
-        # Warning text from cli.py ~line 594
-        assert "incompatible with --continuous-batching" in src, (
+        # Warning text from cli.py — wording updated from "incompatible" to
+        # "not yet active" when batched spec was added.
+        assert ("incompatible with --continuous-batching" in src
+                or "not yet active under --continuous-batching" in src), (
             "CLI must warn when speculative + continuous-batching are "
             "combined — see vmlx#44."
         )
