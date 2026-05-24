@@ -89,7 +89,8 @@ def fetch_tokens(port: int, prompt: str, max_tokens: int) -> List[int]:
             "max_tokens": max_tokens,
             "temperature": 0.0,
             "top_p": 1.0,
-            "logprobs": True,
+            # NOTE: MLLM/VLM models reject logprobs=True; comparing decoded
+            # text is sufficient for T=0 byte-equality (deterministic).
         }
     ).encode()
     req = urllib.request.Request(

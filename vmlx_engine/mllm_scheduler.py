@@ -2497,10 +2497,24 @@ class MLLMScheduler:
             # after the loop to stay consistent.
             new_token_ids: List[int] = [response.token]
 
+            # Determine if the PRIMARY token itself is a stop token.
+            # When batched PLD sets finish_reason="stop" because a stop
+            # token appeared in the EXTRAS (accepted drafts), the primary
+            # token is still valid content and must be detokenized. Only
+            # skip detokenization when the primary IS the stop token.
+            primary_is_stop_token = (
+                is_stop
+                and response.token in self.batch_generator.stop_tokens
+            )
+
             if _skip_this_token:
                 # Token consumed by gen-prefix suppression; no delta to emit
                 new_text = ""
-            elif not is_stop:
+            elif primary_is_stop_token:
+                # Primary token is the stop token (e.g. <|im_end|>); don't
+                # decode it into the output text.
+                new_text = ""
+            else:
                 detok.add_token(response.token)
                 new_text = detok.last_segment
 
@@ -2525,8 +2539,6 @@ class MLLMScheduler:
                                 string_stop_truncate = idx
                                 new_text = ""
                                 break
-            else:
-                new_text = ""
 
             # Process speculative-decode extras (PLD / draft-model accepted
             # drafts). Each extra is treated like a fresh decoded token: append
