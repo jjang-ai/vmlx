@@ -46,7 +46,10 @@ from tests.cross_matrix.run_vl_media_cache_contract import (
 
 DEFAULT_OUT = Path("build/current-objective-proof-audit-20260521.json")
 DSV4_QUALITY_CLEARANCE_REL = "build/current-dsv4-long-output-quality-clearance-20260521.json"
-DSV4_CURRENT_IDENTIFIER_CANARY_REL = "build/current-dsv4-live-identifier-canary-20260523.json"
+DSV4_CURRENT_IDENTIFIER_CANARY_REL = (
+    "build/current-dsv4-jangtq-k-identifier-canary-strict-nocache-bundled-b3345c29-rerun2-20260524.json"
+)
+DSV4_CURRENT_IDENTIFIER_CANARY_FALLBACK_REL = "build/current-dsv4-live-identifier-canary-20260523.json"
 DSV4_CURRENT_IDENTIFIER_MATRIX_REL = "build/current-dsv4-live-identifier-matrix-20260523.json"
 DSV4_INSTALLED_TOKENIZER_ROUNDTRIP_REL = "build/current-dsv4-installed-tokenizer-roundtrip-20260523.json"
 DSV4_LIVE_LOGPROBS_COPY_REL = "build/current-dsv4-live-logprobs-copy-20260523.json"
@@ -65,7 +68,10 @@ DSV4_SOURCE_CACHE_COMPARISON_REL = (
 )
 API_CACHE_CONTRACT_REL = "build/current-api-cache-contract-proof-20260521.json"
 PANEL_SETTINGS_CONTRACT_REL = "build/current-panel-settings-contract-proof-20260521.json"
-MAX_OUTPUT_CONTEXT_CONTRACT_REL = "build/current-max-output-context-contract-20260521.json"
+MAX_OUTPUT_CONTEXT_CONTRACT_REL = (
+    "build/current-max-output-context-contract-20260524-after-strict-dsv4-canary.json"
+)
+MAX_OUTPUT_CONTEXT_CONTRACT_FALLBACK_REL = "build/current-max-output-context-contract-20260521.json"
 MODEL_FAMILY_CONTRACT_REL = "build/current-model-family-detection-contract-20260521.json"
 PARSER_REGISTRY_CONTRACT_REL = "build/current-parser-registry-contract-20260521.json"
 MODEL_ARTIFACT_FORMAT_CONTRACT_REL = "build/current-model-artifact-format-contract-20260521.json"
@@ -322,6 +328,14 @@ def _path_present(root: Path, value: str) -> bool:
     return path.is_file() and path.stat().st_size > 0
 
 
+def _load_first_present(root: Path, values: tuple[str, ...]) -> tuple[str, dict[str, Any]]:
+    for value in values:
+        if _path_present(root, value):
+            return value, _load(root, value)
+    first = values[0] if values else ""
+    return first, _load(root, first) if first else {}
+
+
 def _attach_evidence_file_status(requirements: list[dict[str, Any]], root: Path) -> None:
     for item in requirements:
         evidence = item.get("evidence") or []
@@ -394,8 +408,40 @@ def _dsv4_quality_clearance(clearance: dict[str, Any], root: Path) -> tuple[bool
     }
 
 
-def _dsv4_identifier_canary_detail(canary: dict[str, Any], root: Path) -> dict[str, Any]:
-    path_present = _path_present(root, DSV4_CURRENT_IDENTIFIER_CANARY_REL)
+def _dsv4_identifier_canary_detail(canary: dict[str, Any], root: Path, rel: str) -> dict[str, Any]:
+    path_present = _path_present(root, rel)
+    if isinstance(canary.get("probes"), list):
+        probe_summaries: list[dict[str, Any]] = []
+        for probe in canary.get("probes") or []:
+            if not isinstance(probe, dict):
+                continue
+            content = probe.get("content")
+            if not isinstance(content, str):
+                content = ""
+            probe_summaries.append(
+                {
+                    "name": probe.get("name"),
+                    "code": probe.get("code"),
+                    "finish_reason": probe.get("finish"),
+                    "elapsed_sec": probe.get("elapsed_sec"),
+                    "usage": probe.get("usage"),
+                    "perf": probe.get("perf"),
+                    "analysis": probe.get("analysis") or {},
+                    "content": content[:1000],
+                }
+            )
+        return {
+            "artifact": rel,
+            "present": path_present,
+            "status": canary.get("status") if path_present else "missing",
+            "health_model_name": (canary.get("health_after_load") or {}).get("model_name")
+            if isinstance(canary.get("health_after_load"), dict)
+            else None,
+            "served_model_name": canary.get("served_model_name"),
+            "env": canary.get("env") or {},
+            "failures": canary.get("failures") or [],
+            "probe_summaries": probe_summaries,
+        }
     response = canary.get("response") if isinstance(canary.get("response"), dict) else {}
     choices = response.get("choices") if isinstance(response, dict) else []
     first_choice = choices[0] if choices and isinstance(choices[0], dict) else {}
@@ -403,7 +449,7 @@ def _dsv4_identifier_canary_detail(canary: dict[str, Any], root: Path) -> dict[s
     if not isinstance(content, str):
         content = ""
     return {
-        "artifact": DSV4_CURRENT_IDENTIFIER_CANARY_REL,
+        "artifact": rel,
         "present": path_present,
         "status": canary.get("status") if path_present else "missing",
         "elapsed_sec": canary.get("elapsed_sec"),
@@ -1070,7 +1116,13 @@ def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
     static = _load(root, "build/current-static-cache-architecture-audit-full-qwen-hybrid-20260521.json")
     longctx = _load(root, "build/current-dsv4-long-context-proof-digest-20260521.json")
     quality_clearance = _load(root, DSV4_QUALITY_CLEARANCE_REL)
-    dsv4_current_identifier_canary = _load(root, DSV4_CURRENT_IDENTIFIER_CANARY_REL)
+    dsv4_current_identifier_canary_rel, dsv4_current_identifier_canary = _load_first_present(
+        root,
+        (
+            DSV4_CURRENT_IDENTIFIER_CANARY_REL,
+            DSV4_CURRENT_IDENTIFIER_CANARY_FALLBACK_REL,
+        ),
+    )
     dsv4_current_identifier_matrix = _load(root, DSV4_CURRENT_IDENTIFIER_MATRIX_REL)
     dsv4_installed_tokenizer_roundtrip = _load(root, DSV4_INSTALLED_TOKENIZER_ROUNDTRIP_REL)
     dsv4_live_logprobs_copy = _load(root, DSV4_LIVE_LOGPROBS_COPY_REL)
@@ -1081,7 +1133,13 @@ def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
     dsv4_source_cache_comparison = _load(root, DSV4_SOURCE_CACHE_COMPARISON_REL)
     api_cache_contract = _load(root, API_CACHE_CONTRACT_REL)
     panel_settings_contract = _load(root, PANEL_SETTINGS_CONTRACT_REL)
-    max_output_context_contract = _load(root, MAX_OUTPUT_CONTEXT_CONTRACT_REL)
+    max_output_context_contract_rel, max_output_context_contract = _load_first_present(
+        root,
+        (
+            MAX_OUTPUT_CONTEXT_CONTRACT_REL,
+            MAX_OUTPUT_CONTEXT_CONTRACT_FALLBACK_REL,
+        ),
+    )
     model_family_contract = _load(root, MODEL_FAMILY_CONTRACT_REL)
     parser_registry_contract = _load(root, PARSER_REGISTRY_CONTRACT_REL)
     model_artifact_format_contract = _load(root, MODEL_ARTIFACT_FORMAT_CONTRACT_REL)
@@ -1353,7 +1411,7 @@ def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
         ),
         [
             "build/dev-ui-smoke-20260521/summary.json",
-            MAX_OUTPUT_CONTEXT_CONTRACT_REL,
+            max_output_context_contract_rel,
         ],
         details={
             "contract_status": max_output_context_contract.get("status"),
@@ -1606,7 +1664,7 @@ def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
             "long_context_status": longctx.get("status"),
             "long_context_notes": longctx.get("notes"),
             "current_installed_identifier_canary": _dsv4_identifier_canary_detail(
-                dsv4_current_identifier_canary, root
+                dsv4_current_identifier_canary, root, dsv4_current_identifier_canary_rel
             ),
             "current_installed_identifier_matrix": _dsv4_identifier_matrix_detail(
                 dsv4_current_identifier_matrix, root

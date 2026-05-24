@@ -858,6 +858,68 @@ def test_objective_proof_digest_surfaces_current_dsv4_identifier_canary(tmp_path
     assert "THREE.ScScene" in canary["content"]
 
 
+def test_objective_proof_digest_prefers_strict_dsv4_identifier_canary(tmp_path):
+    from tests.cross_matrix.summarize_objective_proof import build_digest
+
+    _write_passing_base_artifacts(tmp_path)
+    _write_json(
+        tmp_path,
+        "build/current-dsv4-live-identifier-canary-20260523.json",
+        {
+            "status": "review",
+            "content": "old stale canary",
+            "response": {"usage": {"completion_tokens": 1}, "choices": [{"finish_reason": "stop"}]},
+        },
+    )
+    _write_json(
+        tmp_path,
+        "build/current-dsv4-jangtq-k-identifier-canary-strict-nocache-bundled-b3345c29-rerun2-20260524.json",
+        {
+            "status": "fail",
+            "served_model_name": "dsv4_identifier_canary_strict_20260524",
+            "env": {"DSV4_POOL_QUANT": "0"},
+            "health_after_load": {"model_name": "JANGQ/DeepSeek-V4-Flash-JANGTQ-K"},
+            "failures": [
+                {
+                    "probe": "identifier_list",
+                    "reason": "identifier list corruption",
+                    "content": "THREE.PerscpectiveCamera",
+                }
+            ],
+            "probes": [
+                {
+                    "name": "identifier_list",
+                    "code": 200,
+                    "finish": "stop",
+                    "elapsed_sec": 2.091,
+                    "usage": {"prompt_tokens": 47, "completion_tokens": 32},
+                    "perf": {"decode_tok_s_wall": 15.304},
+                    "content": "THREE.Scene\nTHREE.PerscpectiveCamera",
+                    "analysis": {
+                        "missing_identifiers": ["THREE.PerspectiveCamera"],
+                        "identifier_counts": {"THREE.PerspectiveCamera": 0},
+                    },
+                }
+            ],
+        },
+    )
+
+    digest = build_digest(tmp_path)
+    rows = {item["requirement"]: item for item in digest["requirements"]}
+
+    quality = rows["DSV4 long-output/code/file-generation quality is release-cleared"]
+    canary = quality["details"]["current_installed_identifier_canary"]
+    assert quality["status"] == "open"
+    assert canary["artifact"].endswith("rerun2-20260524.json")
+    assert canary["status"] == "fail"
+    assert canary["health_model_name"] == "JANGQ/DeepSeek-V4-Flash-JANGTQ-K"
+    assert canary["env"]["DSV4_POOL_QUANT"] == "0"
+    assert canary["probe_summaries"][0]["perf"]["decode_tok_s_wall"] == 15.304
+    assert canary["probe_summaries"][0]["analysis"]["missing_identifiers"] == [
+        "THREE.PerspectiveCamera"
+    ]
+
+
 def test_objective_proof_digest_surfaces_current_dsv4_identifier_matrix(tmp_path):
     from tests.cross_matrix.summarize_objective_proof import build_digest
 
@@ -1438,7 +1500,7 @@ def test_objective_proof_digest_requires_max_output_context_contract_artifact(tm
     row = rows["Server default max output and max context are distinct and map to correct CLI flags"]
     assert row["status"] == "open"
     assert row["details"]["missing_evidence"] == [
-        "build/current-max-output-context-contract-20260521.json"
+        "build/current-max-output-context-contract-20260524-after-strict-dsv4-canary.json"
     ]
 
 
