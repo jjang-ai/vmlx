@@ -1,6 +1,7 @@
 from types import SimpleNamespace
 
 from tests.cross_matrix.run_runtime_memory_stress_probe import (
+    add_response_contract_metrics,
     add_speed_metrics,
     build_request,
     classify_http_stage_status,
@@ -12,6 +13,7 @@ from tests.cross_matrix.run_runtime_memory_stress_probe import (
     redact_large_payloads,
     run_probe,
     Row,
+    summarize_response_rails,
 )
 
 
@@ -202,7 +204,82 @@ def test_redact_large_payloads_hides_data_urls_and_long_text():
     assert "<redacted chars=5001>" in redacted["text"]
 
 
+def test_summarize_response_rails_handles_responses_reasoning_only():
+    summary = summarize_response_rails(
+        {
+            "status": "completed",
+            "output": [
+                {
+                    "type": "reasoning",
+                    "content": [
+                        {"type": "reasoning", "text": "thinking through it"},
+                    ],
+                }
+            ],
+            "usage": {"output_tokens": 16},
+        }
+    )
+
+    assert summary["status"] == "completed"
+    assert summary["has_visible_content"] is False
+    assert summary["has_reasoning_content"] is True
+    assert summary["visible_chars"] == 0
+    assert summary["reasoning_chars"] == len("thinking through it")
+
+
+def test_response_contract_can_fail_ok_http_when_visible_content_is_required():
+    stage = {
+        "status": "ok",
+        "response": {
+            "output": [
+                {
+                    "type": "reasoning",
+                    "content": [{"type": "reasoning", "text": "private thought"}],
+                }
+            ]
+        },
+    }
+
+    add_response_contract_metrics(stage, expect_visible_content=True)
+
+    assert stage["status"] == "response_contract_failed"
+    assert stage["response_contract_failures"] == ["missing_visible_content"]
+    assert stage["response_rails"]["has_reasoning_content"] is True
+
+
+def test_response_contract_accepts_visible_responses_text():
+    stage = {
+        "status": "ok",
+        "response": {
+            "output": [
+                {
+                    "type": "message",
+                    "content": [{"type": "output_text", "text": "final answer"}],
+                }
+            ]
+        },
+    }
+
+    add_response_contract_metrics(stage, expect_visible_content=True)
+
+    assert stage["status"] == "ok"
+    assert "response_contract_failures" not in stage
+    assert stage["response_rails"]["visible_preview"] == "final answer"
+
+
 def test_probe_status_from_results_rejects_http_error_stage():
+    status, reason = probe_status_from_results(
+        [
+            {"status": "ok", "http_code": 200},
+            {"status": "response_contract_failed", "http_code": 200},
+        ]
+    )
+
+    assert status == "fail"
+    assert "response_contract_failed" in reason
+
+
+def test_probe_status_from_results_rejects_response_contract_failure_stage():
     status, reason = probe_status_from_results(
         [
             {"status": "ok", "http_code": 200},

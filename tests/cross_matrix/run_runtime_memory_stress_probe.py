@@ -464,6 +464,86 @@ def add_speed_metrics(stage: dict[str, Any]) -> None:
     }
 
 
+def summarize_response_rails(resp: Any) -> dict[str, Any]:
+    """Summarize visible/reasoning rails without storing another full response copy."""
+    visible_parts: list[str] = []
+    reasoning_parts: list[str] = []
+    status: str | None = None
+    if isinstance(resp, dict):
+        status_value = resp.get("status")
+        if status_value is not None:
+            status = str(status_value)
+        output_text = resp.get("output_text")
+        if isinstance(output_text, str):
+            visible_parts.append(output_text)
+        output = resp.get("output")
+        if isinstance(output, list):
+            for item in output:
+                if not isinstance(item, dict):
+                    continue
+                item_type = item.get("type")
+                content = item.get("content")
+                if isinstance(content, list):
+                    for part in content:
+                        if not isinstance(part, dict):
+                            continue
+                        text = part.get("text")
+                        if not isinstance(text, str):
+                            continue
+                        part_type = str(part.get("type") or "")
+                        if item_type == "reasoning" or part_type == "reasoning":
+                            reasoning_parts.append(text)
+                        elif item_type == "message" or part_type in {"output_text", "text"}:
+                            visible_parts.append(text)
+                text = item.get("text")
+                if isinstance(text, str):
+                    if item_type == "reasoning":
+                        reasoning_parts.append(text)
+                    elif item_type in {"message", "output_text", "text"}:
+                        visible_parts.append(text)
+        choices = resp.get("choices")
+        if isinstance(choices, list) and choices:
+            first = choices[0] if isinstance(choices[0], dict) else {}
+            msg = first.get("message") if isinstance(first.get("message"), dict) else {}
+            content = msg.get("content")
+            if isinstance(content, str):
+                visible_parts.append(content)
+            reasoning = (
+                msg.get("reasoning_content")
+                or msg.get("reasoning")
+                or first.get("reasoning")
+            )
+            if isinstance(reasoning, str):
+                reasoning_parts.append(reasoning)
+    visible = "\n".join(part for part in visible_parts if part)
+    reasoning = "\n".join(part for part in reasoning_parts if part)
+    return {
+        "status": status,
+        "visible_chars": len(visible),
+        "reasoning_chars": len(reasoning),
+        "has_visible_content": bool(visible.strip()),
+        "has_reasoning_content": bool(reasoning.strip()),
+        "visible_preview": visible[:500],
+        "reasoning_preview": reasoning[:500],
+    }
+
+
+def add_response_contract_metrics(
+    stage: dict[str, Any],
+    *,
+    expect_visible_content: bool = False,
+) -> None:
+    summary = summarize_response_rails(stage.get("response"))
+    stage["response_rails"] = summary
+    failures: list[str] = []
+    if expect_visible_content and not summary.get("has_visible_content"):
+        failures.append("missing_visible_content")
+    if failures:
+        stage["response_contract_failures"] = failures
+        if stage.get("status") == "ok":
+            stage["status"] = "response_contract_failed"
+
+
 def _nested_number(value: dict[str, Any], path: tuple[str, ...]) -> float | None:
     cur: Any = value
     for key in path:
@@ -658,6 +738,9 @@ def run_probe(args: argparse.Namespace) -> dict[str, Any]:
             "prefix_paged_l2_bypassed": bool(args.cache_salt or args.skip_prefix_cache),
             "capacity_projection_valid": not bool(args.cache_salt or args.skip_prefix_cache),
         },
+        "response_contract": {
+            "expect_visible_content": bool(getattr(args, "expect_visible_content", False)),
+        },
         "results": [],
     }
     if not Path(row.path).is_dir():
@@ -720,6 +803,7 @@ def run_probe(args: argparse.Namespace) -> dict[str, Any]:
                 args.cache_salt,
                 args.skip_prefix_cache,
             )
+            stage["request"] = redact_large_payloads(body)
             started = time.time()
             try:
                 code, resp = http_json("POST", f"{base_url}{endpoint}", body, timeout=args.request_timeout)
@@ -733,6 +817,10 @@ def run_probe(args: argparse.Namespace) -> dict[str, Any]:
                     resp,
                     args.expect_http_code,
                     args.expect_error_code,
+                )
+                add_response_contract_metrics(
+                    stage,
+                    expect_visible_content=bool(getattr(args, "expect_visible_content", False)),
                 )
             except Exception as exc:  # noqa: BLE001
                 stage["status"] = "request_exception"
@@ -791,6 +879,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--abort-metal-active-gb", type=float, default=0.0)
     parser.add_argument("--expect-http-code", type=int, default=0)
     parser.add_argument("--expect-error-code", default=None)
+    parser.add_argument("--expect-visible-content", action="store_true")
     parser.add_argument("--serve-extra-arg", action="append", default=[])
     parser.add_argument("--serve-env", action="append", default=[])
     parser.add_argument("--out", required=True)
