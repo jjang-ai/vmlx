@@ -314,6 +314,26 @@ class TestHelperFunctions:
         assert response.status_code == 413
         assert b"prompt_too_long" in response.body
 
+    def test_vlm_image_prefill_budget_response_is_client_error(self):
+        """Predictable media-prefill budget rejection is a 413, not 500."""
+        import json
+
+        from vmlx_engine import server
+        from vmlx_engine.errors import VLMImagePrefillBudgetError
+
+        response = server._vlm_image_prefill_budget_response_from_error(
+            VLMImagePrefillBudgetError(
+                "VLM image prefill rejected before Metal forward: predicted "
+                "attention buffer 65.2GB exceeds single-buffer guard 8.0GB",
+                request_id="vl-image-budget",
+            )
+        )
+
+        body = json.loads(response.body)
+        assert response.status_code == 413
+        assert body["error"]["code"] == "vlm_image_prefill_too_large"
+        assert "Reduce image resolution" in body["error"]["message"]
+
     def test_prompt_limit_guard_counts_vlm_media_parts(self, monkeypatch):
         from vmlx_engine import server
         from vmlx_engine.api.models import Message

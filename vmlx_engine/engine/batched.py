@@ -19,7 +19,7 @@ from typing import Any
 
 from ..api.tool_calling import check_and_inject_fallback_tools, convert_tools_for_template
 from ..api.utils import clean_output_text, extract_multimodal_content, is_mllm_model
-from ..errors import PromptTooLongError
+from ..errors import PromptTooLongError, VLMImagePrefillBudgetError
 from ..model_config_registry import get_model_config_registry
 from ..utils.chat_template_kwargs import (
     build_chat_template_kwargs,
@@ -38,6 +38,11 @@ def _raise_prompt_too_long_from_output(output: Any) -> None:
             int(getattr(output, "error_prompt_tokens", 0) or 0),
             int(getattr(output, "error_max_prompt_tokens", 0) or 0),
             source=getattr(output, "error_source", None) or "tokenized prompt",
+            request_id=getattr(output, "request_id", None),
+        )
+    if getattr(output, "error_code", None) == VLMImagePrefillBudgetError.code:
+        raise VLMImagePrefillBudgetError(
+            str(getattr(output, "error", None) or "VLM image prefill too large"),
             request_id=getattr(output, "request_id", None),
         )
     error = getattr(output, "error", None)

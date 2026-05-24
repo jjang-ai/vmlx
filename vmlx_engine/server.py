@@ -125,7 +125,7 @@ from .api.utils import (
     is_mllm_model,  # noqa: F401
 )
 from .engine import BaseEngine, BatchedEngine, GenerationOutput, SimpleEngine
-from .errors import PromptTooLongError
+from .errors import PromptTooLongError, VLMImagePrefillBudgetError
 from .logprobs import (
     format_chat_logprobs as _format_chat_logprobs,
     format_completion_logprobs as _format_completion_logprobs,
@@ -405,6 +405,27 @@ def _prompt_too_long_response_from_error(exc: PromptTooLongError):
         exc.prompt_tokens,
         max_prompt_tokens=exc.max_prompt_tokens,
         source=exc.source,
+    )
+
+
+def _vlm_image_prefill_budget_response_from_error(exc: VLMImagePrefillBudgetError):
+    from starlette.responses import JSONResponse
+
+    detail = str(exc)
+    if "Reduce image resolution" not in detail:
+        detail = (
+            f"{detail}. Reduce image resolution/prompt length, use a smaller "
+            "model, or disable VMLX_VLM_IMAGE_PREFILL_GUARD=0 at OOM risk."
+        )
+    return JSONResponse(
+        status_code=413,
+        content={
+            "error": {
+                "message": detail,
+                "type": "invalid_request_error",
+                "code": VLMImagePrefillBudgetError.code,
+            }
+        },
     )
 
 
@@ -9470,6 +9491,8 @@ async def create_completion(request: CompletionRequest):
             )
         except PromptTooLongError as e:
             return _prompt_too_long_response_from_error(e)
+        except VLMImagePrefillBudgetError as e:
+            return _vlm_image_prefill_budget_response_from_error(e)
         except Exception as e:
             logger.error(f"Completion failed: {e}", exc_info=True)
             raise HTTPException(
@@ -10076,6 +10099,8 @@ async def create_chat_completion(
         )
     except PromptTooLongError as e:
         return _prompt_too_long_response_from_error(e)
+    except VLMImagePrefillBudgetError as e:
+        return _vlm_image_prefill_budget_response_from_error(e)
     except ValueError as e:
         conv1d_detail = _grouped_conv1d_layout_error_detail(e)
         if conv1d_detail:
@@ -11522,6 +11547,8 @@ async def create_response(
         )
     except PromptTooLongError as e:
         return _prompt_too_long_response_from_error(e)
+    except VLMImagePrefillBudgetError as e:
+        return _vlm_image_prefill_budget_response_from_error(e)
     except Exception as e:
         logger.error(f"Response generation failed: {e}", exc_info=True)
         raise HTTPException(
@@ -11949,6 +11976,19 @@ async def stream_completions_multi(
                     "message": str(e),
                     "type": "invalid_request_error",
                     "code": "prompt_too_long",
+                },
+            }
+            yield f"data: {json.dumps(error_data)}\n\n"
+        except VLMImagePrefillBudgetError as e:
+            if hasattr(engine, "abort_request"):
+                await engine.abort_request(prompt_request_id)
+            error_data = {
+                "id": response_id,
+                "object": "text_completion",
+                "error": {
+                    "message": str(e),
+                    "type": "invalid_request_error",
+                    "code": VLMImagePrefillBudgetError.code,
                 },
             }
             yield f"data: {json.dumps(error_data)}\n\n"
@@ -12554,6 +12594,19 @@ async def stream_chat_completion(
                 "message": str(e),
                 "type": "invalid_request_error",
                 "code": "prompt_too_long",
+            },
+        }
+        yield f"data: {json.dumps(error_data)}\n\n"
+    except VLMImagePrefillBudgetError as e:
+        if hasattr(engine, "abort_request"):
+            await engine.abort_request(response_id)
+        error_data = {
+            "id": response_id,
+            "object": "chat.completion.chunk",
+            "error": {
+                "message": str(e),
+                "type": "invalid_request_error",
+                "code": VLMImagePrefillBudgetError.code,
             },
         }
         yield f"data: {json.dumps(error_data)}\n\n"
@@ -13413,6 +13466,20 @@ async def stream_responses_api(
                     "type": "invalid_request_error",
                     "message": str(e),
                     "code": "prompt_too_long",
+                },
+            },
+        )
+    except VLMImagePrefillBudgetError as e:
+        if hasattr(engine, "abort_request"):
+            await engine.abort_request(response_id)
+        yield _sse(
+            "error",
+            {
+                "type": "error",
+                "error": {
+                    "type": "invalid_request_error",
+                    "message": str(e),
+                    "code": VLMImagePrefillBudgetError.code,
                 },
             },
         )

@@ -112,7 +112,7 @@ from typing import Any, Callable, Deque, Dict, List, Optional, Tuple
 import mlx.core as mx
 import mlx.nn as nn
 
-from .errors import PromptTooLongError
+from .errors import PromptTooLongError, VLMImagePrefillBudgetError
 from .vision_embedding_cache import VisionEmbeddingCache
 from .utils.memory_limits import (
     get_effective_metal_working_set_bytes,
@@ -465,7 +465,7 @@ def _raise_if_image_prefill_exceeds_budget(
     )
     if decision.should_reject:
         logger.warning(decision.detail)
-        raise RuntimeError(decision.detail)
+        raise VLMImagePrefillBudgetError(decision.detail)
 
 
 def _infer_attention_heads_for_hybrid_oom_guard(
@@ -5465,6 +5465,11 @@ class MLLMBatchGenerator:
                 # completion" from "prefill crashed".
                 import traceback as _tb
                 _err_detail = f"{type(prefill_err).__name__}: {prefill_err}"
+                _err_code = (
+                    VLMImagePrefillBudgetError.code
+                    if isinstance(prefill_err, VLMImagePrefillBudgetError)
+                    else None
+                )
                 logger.error(
                     f"Prefill failed for {req.request_id}: {_err_detail}\n"
                     f"{_tb.format_exc()}\n"
@@ -5477,6 +5482,7 @@ class MLLMBatchGenerator:
                     logprobs=mx.zeros((1,)),
                     finish_reason="error",
                     error=_err_detail,
+                    error_code=_err_code,
                 ))
 
         # Use only the successfully prefilled requests for the batch

@@ -21,3 +21,14 @@ class PromptTooLongError(ValueError):
             f"prompt_too_long: {source} has {self.prompt_tokens} tokens, "
             f"max prompt/context tokens is {self.max_prompt_tokens}"
         )
+
+
+class VLMImagePrefillBudgetError(RuntimeError):
+    """Raised when media-expanded VLM prefill would exceed a safe Metal budget."""
+
+    code = "vlm_image_prefill_too_large"
+
+    def __init__(self, detail: str, *, request_id: str | None = None):
+        self.detail = str(detail)
+        self.request_id = request_id
+        super().__init__(self.detail)
