@@ -29,6 +29,24 @@ def _should_forward_reasoning_effort(body: dict, req: dict[str, Any]) -> bool:
     return body.get("reasoning_effort") is not None
 
 
+def _normalize_ollama_bool(value: Any) -> bool | None:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"true", "1", "yes", "on"}:
+            return True
+        if normalized in {"false", "0", "no", "off"}:
+            return False
+        return None
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        if value == 1:
+            return True
+        if value == 0:
+            return False
+    return None
+
+
 def _apply_ollama_thinking(body: dict, req: dict[str, Any]) -> None:
     """Normalize Ollama thinking controls into vMLX's canonical field.
 
@@ -36,10 +54,12 @@ def _apply_ollama_thinking(body: dict, req: dict[str, Any]) -> None:
     tokenizer/template/runtime default decides. Native Ollama ``think:false``
     is an explicit opt-out and must not be overwritten.
     """
-    if isinstance(body.get("think"), bool):
-        req["enable_thinking"] = body["think"]
-    elif body.get("enable_thinking") is not None:
-        req["enable_thinking"] = body["enable_thinking"]
+    think = _normalize_ollama_bool(body.get("think"))
+    enable_thinking = _normalize_ollama_bool(body.get("enable_thinking"))
+    if think is not None:
+        req["enable_thinking"] = think
+    elif enable_thinking is not None:
+        req["enable_thinking"] = enable_thinking
     elif isinstance(body.get("chat_template_kwargs"), dict) and (
         body["chat_template_kwargs"].get("enable_thinking") is False
     ):

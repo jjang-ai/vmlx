@@ -906,17 +906,31 @@ export class ApiGateway extends EventEmitter {
     return true;
   }
 
+  private normalizeOllamaBoolean(value: any): boolean | undefined {
+    if (typeof value === "boolean") return value;
+    if (typeof value === "string") {
+      const normalized = value.trim().toLowerCase();
+      if (["true", "1", "yes", "on"].includes(normalized)) return true;
+      if (["false", "0", "no", "off"].includes(normalized)) return false;
+      return undefined;
+    }
+    if (typeof value === "number" && Number.isFinite(value)) {
+      if (value === 1) return true;
+      if (value === 0) return false;
+    }
+    return undefined;
+  }
+
   private applyOllamaThinking(parsed: any, openaiBody: any): void {
     // Omitted thinking controls stay omitted so the model's native
     // tokenizer/template/runtime default decides. Native Ollama `think:false`
     // is an explicit opt-out and must not be overwritten.
-    if (typeof parsed?.think === "boolean") {
-      openaiBody.enable_thinking = parsed.think;
-    } else if (
-      parsed?.enable_thinking !== undefined &&
-      parsed?.enable_thinking !== null
-    ) {
-      openaiBody.enable_thinking = Boolean(parsed.enable_thinking);
+    const think = this.normalizeOllamaBoolean(parsed?.think);
+    const enableThinking = this.normalizeOllamaBoolean(parsed?.enable_thinking);
+    if (think !== undefined) {
+      openaiBody.enable_thinking = think;
+    } else if (enableThinking !== undefined) {
+      openaiBody.enable_thinking = enableThinking;
     } else {
       const ct = parsed?.chat_template_kwargs;
       if (

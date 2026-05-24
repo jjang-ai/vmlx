@@ -322,6 +322,23 @@ def test_parity_ollama_think_omitted_stays_auto_but_false_opts_out():
     assert converted_precedence.get("enable_thinking") is True
 
 
+def test_parity_ollama_string_false_does_not_force_reasoning_on():
+    """String false is accepted as an explicit opt-out, not truthy reasoning."""
+    from vmlx_engine.api.ollama_adapter import ollama_chat_to_openai
+
+    converted = ollama_chat_to_openai(
+        {
+            "model": "test",
+            "messages": [{"role": "user", "content": "hi"}],
+            "enable_thinking": "false",
+            "reasoning_effort": "high",
+        }
+    )
+
+    assert converted.get("enable_thinking") is False
+    assert "reasoning_effort" not in converted
+
+
 def test_parity_anthropic_thinking_omitted_stays_auto_for_vmlx_runtime():
     """Omitted Anthropic thinking controls stay Auto across API surfaces.
 

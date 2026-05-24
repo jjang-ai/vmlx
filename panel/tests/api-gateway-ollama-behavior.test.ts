@@ -250,4 +250,30 @@ describe("Ollama gateway request translation behavior", () => {
     expect(backend.bodies[1]).not.toHaveProperty("max_prompt_tokens");
     expect(backend.bodies[2].max_prompt_tokens).toBe(4096);
   });
+
+  it("does not coerce string false enable_thinking into reasoning on", async () => {
+    backend = await startCaptureBackend();
+    const started = await startGateway(backend.port);
+    gateway = started.gateway;
+
+    await postJson(`http://127.0.0.1:${started.port}/api/chat`, {
+      model: "hy3-model",
+      stream: false,
+      messages: [{ role: "user", content: "off" }],
+      enable_thinking: "false",
+      reasoning_effort: "high",
+    });
+    await postJson(`http://127.0.0.1:${started.port}/api/generate`, {
+      model: "hy3-model",
+      stream: false,
+      prompt: "off",
+      enable_thinking: "false",
+      reasoning_effort: "high",
+    });
+
+    expect(backend.bodies[0].enable_thinking).toBe(false);
+    expect(backend.bodies[0]).not.toHaveProperty("reasoning_effort");
+    expect(backend.bodies[1].enable_thinking).toBe(false);
+    expect(backend.bodies[1]).not.toHaveProperty("reasoning_effort");
+  });
 });
