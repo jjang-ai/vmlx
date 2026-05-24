@@ -211,24 +211,20 @@ const DSV4_PAGED_CACHE_BLOCK_SIZE = 256
 const GENERIC_DEFAULT_TIMEOUT_SECONDS = 300
 const DSV4_DEFAULT_TIMEOUT_SECONDS = 900
 
-const ADDITIONAL_ARG_VALUE_FLAGS = new Set([
-    '--allowed-origins',
-    '--api-key',
-    '--default-temperature',
-    '--default-top-p',
-    '--default-top-k',
-    '--default-min-p',
-    '--default-repetition-penalty',
-    '--default-enable-thinking',
-    '--inference-endpoints',
-    '--log-level',
-    '--max-tokens',
-    '--max-prompt-tokens',
-    '--native-mtp-depth',
-    '--native-mtp-sampling-policy',
-    '--uds',
-    '--wake-timeout',
-])
+function extractFlagSetFromSource(sourceRel: string, constName: string): Set<string> {
+    const source = readFileSync(sourceRel, 'utf8')
+    const start = source.indexOf(`const ${constName}`)
+    if (start === -1) throw new Error(`Missing ${constName} in ${sourceRel}`)
+    const end = source.indexOf('])', start)
+    if (end === -1) throw new Error(`Unterminated ${constName} in ${sourceRel}`)
+    const block = source.slice(start, end)
+    return new Set([...block.matchAll(/['"](--[a-z0-9][a-z0-9-]*)['"]/g)].map(match => match[1]))
+}
+
+const ADDITIONAL_ARG_VALUE_FLAGS = extractFlagSetFromSource(
+    'src/main/sessions.ts',
+    'ADDITIONAL_ARG_VALUE_FLAGS',
+)
 
 const IMAGE_ADDITIONAL_ARG_BLOCKLIST = new Set([
     '--image-mode',
@@ -237,26 +233,10 @@ const IMAGE_ADDITIONAL_ARG_BLOCKLIST = new Set([
     '--mflux-class',
 ])
 
-const DSV4_ADDITIONAL_ARG_BLOCKLIST = new Set([
-    '--dsv4-enable-prefix-cache',
-    '--native-mtp-depth',
-    '--native-mtp-sampling-policy',
-    '--disable-native-mtp',
-    '--uds',
-    '--inference-endpoints',
-    '--wake-timeout',
-    '--prefill-keep-alloc',
-    '--no-state-machine-stops',
-    '--default-temperature',
-    '--default-top-p',
-    '--default-top-k',
-    '--default-min-p',
-    '--default-repetition-penalty',
-    '--default-enable-thinking',
-    '--max-tokens',
-    '--max-prompt-tokens',
-    '--log-level',
-])
+const DSV4_ADDITIONAL_ARG_BLOCKLIST = extractFlagSetFromSource(
+    'src/main/sessions.ts',
+    'DSV4_ADDITIONAL_ARG_BLOCKLIST',
+)
 
 function effectiveSessionTimeoutSeconds(config: Partial<SessionConfig>, family?: string): number {
     const configured = config.timeout
@@ -440,8 +420,10 @@ function buildCommandPreview(
 
     if (config.servedModelName) parts.push('--served-model-name', config.servedModelName)
 
-    // Speculative decoding
-    if (!dsv4Active && config.speculativeModel) {
+    // Speculative decoding mirrors sessions.ts: external draft models are only
+    // compatible with the non-VLM, non-DSV4, non-continuous-batching path.
+    const compatibleExternalSpeculative = !dsv4Active && !isVLM && !cacheStackActive && !!config.speculativeModel
+    if (compatibleExternalSpeculative) {
         parts.push('--speculative-model', config.speculativeModel)
         const numDraftTokens = finitePositiveInteger(config.numDraftTokens)
         if (numDraftTokens != null && numDraftTokens !== 3) {
@@ -1296,7 +1278,7 @@ describe('Served Model Name', () => {
 
 describe('Speculative Decoding', () => {
     it('sets speculative model from config', () => {
-        const out = preview({ speculativeModel: 'mlx-community/Llama-3.2-1B-Instruct-4bit' })
+        const out = preview({ continuousBatching: false, speculativeModel: 'mlx-community/Llama-3.2-1B-Instruct-4bit' })
         expect(getFlagValue(out, '--speculative-model')).toBe('mlx-community/Llama-3.2-1B-Instruct-4bit')
     })
 
@@ -1306,13 +1288,13 @@ describe('Speculative Decoding', () => {
     })
 
     it('omits --num-draft-tokens when default (3)', () => {
-        const out = preview({ speculativeModel: 'draft-model', numDraftTokens: 3 })
+        const out = preview({ continuousBatching: false, speculativeModel: 'draft-model', numDraftTokens: 3 })
         expect(hasFlag(out, '--speculative-model')).toBe(true)
         expect(hasFlag(out, '--num-draft-tokens')).toBe(false)
     })
 
     it('sets --num-draft-tokens when non-default', () => {
-        const out = preview({ speculativeModel: 'draft-model', numDraftTokens: 5 })
+        const out = preview({ continuousBatching: false, speculativeModel: 'draft-model', numDraftTokens: 5 })
         expect(getFlagValue(out, '--num-draft-tokens')).toBe('5')
     })
 
@@ -1322,12 +1304,12 @@ describe('Speculative Decoding', () => {
     })
 
     it('sets --num-draft-tokens=1 (minimum)', () => {
-        const out = preview({ speculativeModel: 'draft-model', numDraftTokens: 1 })
+        const out = preview({ continuousBatching: false, speculativeModel: 'draft-model', numDraftTokens: 1 })
         expect(getFlagValue(out, '--num-draft-tokens')).toBe('1')
     })
 
     it('sets --num-draft-tokens=20 (maximum)', () => {
-        const out = preview({ speculativeModel: 'draft-model', numDraftTokens: 20 })
+        const out = preview({ continuousBatching: false, speculativeModel: 'draft-model', numDraftTokens: 20 })
         expect(getFlagValue(out, '--num-draft-tokens')).toBe('20')
     })
 })
@@ -1924,8 +1906,8 @@ describe('No Hardcoded Values', () => {
     })
 
     it('changing speculativeModel produces different CLI output', () => {
-        const a = preview({ speculativeModel: 'model-a' })
-        const b = preview({ speculativeModel: 'model-b' })
+        const a = preview({ continuousBatching: false, speculativeModel: 'model-a' })
+        const b = preview({ continuousBatching: false, speculativeModel: 'model-b' })
         expect(a).not.toBe(b)
         expect(getFlagValue(a, '--speculative-model')).toBe('model-a')
         expect(getFlagValue(b, '--speculative-model')).toBe('model-b')
@@ -2448,6 +2430,7 @@ describe('Feature Interaction', () => {
 
     it('speculative decoding with all options set', () => {
         const out = preview({
+            continuousBatching: false,
             speculativeModel: 'draft-model',
             numDraftTokens: 7,
             defaultTemperature: 80,
@@ -2556,7 +2539,7 @@ describe('Feature Interaction', () => {
 
     it('numDraftTokens 0 with speculative model omits draft tokens flag', () => {
         // numDraftTokens 0 is falsy → condition fails → flag omitted → Python uses default (3)
-        const out = preview({ speculativeModel: 'draft-model', numDraftTokens: 0 })
+        const out = preview({ continuousBatching: false, speculativeModel: 'draft-model', numDraftTokens: 0 })
         expect(hasFlag(out, '--speculative-model')).toBe(true)
         expect(hasFlag(out, '--num-draft-tokens')).toBe(false)
     })
@@ -2572,18 +2555,18 @@ describe('Feature Interaction', () => {
         expect(hasFlag(out, '--enable-disk-cache')).toBe(false)
     })
 
-    it('VLM + speculative decoding both emit flags (Python gates server-side)', () => {
+    it('VLM suppresses external speculative decoding at launch', () => {
         const out = preview({
             isMultimodal: true,
             speculativeModel: 'draft-model',
             numDraftTokens: 5,
         })
         expect(hasFlag(out, '--is-mllm')).toBe(true)
-        expect(hasFlag(out, '--speculative-model')).toBe(true)
-        expect(getFlagValue(out, '--num-draft-tokens')).toBe('5')
+        expect(hasFlag(out, '--speculative-model')).toBe(false)
+        expect(hasFlag(out, '--num-draft-tokens')).toBe(false)
     })
 
-    it('speculative decoding + continuous batching + embedding model combined', () => {
+    it('continuous batching suppresses external speculative decoding but preserves embedding model', () => {
         const out = preview({
             speculativeModel: 'draft-model',
             numDraftTokens: 4,
@@ -2593,8 +2576,8 @@ describe('Feature Interaction', () => {
             defaultTopP: 90,
         })
         expect(hasFlag(out, '--continuous-batching')).toBe(true)
-        expect(getFlagValue(out, '--speculative-model')).toBe('draft-model')
-        expect(getFlagValue(out, '--num-draft-tokens')).toBe('4')
+        expect(hasFlag(out, '--speculative-model')).toBe(false)
+        expect(hasFlag(out, '--num-draft-tokens')).toBe(false)
         expect(getFlagValue(out, '--embedding-model')).toBe('embed-model')
         expect(hasFlag(out, '--default-temperature')).toBe(false)
         expect(hasFlag(out, '--default-top-p')).toBe(false)

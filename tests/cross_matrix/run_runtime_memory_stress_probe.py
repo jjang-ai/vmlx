@@ -537,7 +537,11 @@ def extract_block_disk_max_gb(args: list[str]) -> float | None:
     return value
 
 
-def add_cache_capacity_projection(stage: dict[str, Any], block_disk_max_gb: float | None) -> None:
+def add_cache_capacity_projection(
+    stage: dict[str, Any],
+    block_disk_max_gb: float | None,
+    cache_bypassed: bool = False,
+) -> None:
     after = stage.get("after") if isinstance(stage.get("after"), dict) else {}
     cache_stats = after.get("cache_stats") if isinstance(after.get("cache_stats"), dict) else {}
     body = cache_stats.get("body") if isinstance(cache_stats.get("body"), dict) else {}
@@ -549,6 +553,16 @@ def add_cache_capacity_projection(stage: dict[str, Any], block_disk_max_gb: floa
     except (TypeError, ValueError):
         return
     if disk_size_bytes <= 0 or tokens_on_disk <= 0:
+        return
+
+    if cache_bypassed:
+        stage["cache_capacity_projection"] = {
+            "basis": "invalid_for_capacity_proof",
+            "reason": "cache_salt_or_skip_prefix_cache_bypasses_prefix_paged_l2",
+            "tokens_on_disk": tokens_on_disk,
+            "blocks_on_disk": blocks_on_disk,
+            "disk_size_gb": _bytes_to_gb(float(disk_size_bytes)),
+        }
         return
 
     bytes_per_token = disk_size_bytes / tokens_on_disk
@@ -638,6 +652,12 @@ def run_probe(args: argparse.Namespace) -> dict[str, Any]:
             "metal_active_gb": args.abort_metal_active_gb,
         },
         "block_disk_max_gb": block_disk_max_gb,
+        "cache_proof_policy": {
+            "cache_salt": args.cache_salt,
+            "skip_prefix_cache": bool(args.skip_prefix_cache),
+            "prefix_paged_l2_bypassed": bool(args.cache_salt or args.skip_prefix_cache),
+            "capacity_projection_valid": not bool(args.cache_salt or args.skip_prefix_cache),
+        },
         "results": [],
     }
     if not Path(row.path).is_dir():
@@ -720,7 +740,11 @@ def run_probe(args: argparse.Namespace) -> dict[str, Any]:
                 stage["elapsed_s"] = round(time.time() - started, 3)
             stage["after"] = snapshot(f"after_{target}", args.port, proc)
             add_memory_metrics(stage)
-            add_cache_capacity_projection(stage, block_disk_max_gb)
+            add_cache_capacity_projection(
+                stage,
+                block_disk_max_gb,
+                cache_bypassed=bool(args.cache_salt or args.skip_prefix_cache),
+            )
             reason = threshold_exceeded(stage["after"], args.abort_rss_gb, args.abort_metal_active_gb)
             if reason:
                 stage["abort_reason"] = reason

@@ -65,6 +65,7 @@ REQUIRED_PANEL_SETTINGS_SOURCE_MARKERS = (
     "DSV4 pool quant and native prefix controls stay DSV4-only",
     "launch memory admission is warning-only for lazy-mmap bundles",
     "test_panel_serve_flags_are_registered_engine_cli_flags",
+    "test_runtime_and_preview_additional_arg_filters_share_blocklists",
 )
 
 COMMANDS: dict[str, list[str]] = {

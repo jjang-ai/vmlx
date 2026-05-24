@@ -1,3 +1,5 @@
+from types import SimpleNamespace
+
 from tests.cross_matrix.run_runtime_memory_stress_probe import (
     add_speed_metrics,
     build_request,
@@ -8,6 +10,7 @@ from tests.cross_matrix.run_runtime_memory_stress_probe import (
     extract_block_disk_max_gb,
     probe_status_from_results,
     redact_large_payloads,
+    run_probe,
     Row,
 )
 
@@ -143,6 +146,32 @@ def test_add_cache_capacity_projection_uses_observed_l2_bytes_per_token():
         "projected_tokens_at_l2_max_gb": 373_413,
         "projected_gb_at_1m_tokens": 26.78,
         "block_disk_max_gb": 10.0,
+    }
+
+
+def test_cache_capacity_projection_marks_bypassed_rows_invalid_for_capacity_proof():
+    stage = {
+        "after": {
+            "cache_stats": {
+                "body": {
+                    "block_disk_cache": {
+                        "disk_size_bytes": 144_837_947,
+                        "total_tokens_on_disk": 5037,
+                        "blocks_on_disk": 20,
+                    }
+                }
+            }
+        }
+    }
+
+    add_cache_capacity_projection(stage, block_disk_max_gb=10.0, cache_bypassed=True)
+
+    assert stage["cache_capacity_projection"] == {
+        "basis": "invalid_for_capacity_proof",
+        "reason": "cache_salt_or_skip_prefix_cache_bypasses_prefix_paged_l2",
+        "tokens_on_disk": 5037,
+        "blocks_on_disk": 20,
+        "disk_size_gb": 0.135,
     }
 
 
@@ -316,3 +345,43 @@ def test_build_request_can_bypass_prefix_cache_for_cold_speed_rows():
     assert chat["skip_prefix_cache"] is True
     assert responses["cache_salt"] == "cold-gemma"
     assert responses["skip_prefix_cache"] is True
+
+
+def test_run_probe_artifact_marks_cache_salt_as_not_capacity_proof(monkeypatch):
+    import tests.cross_matrix.run_runtime_memory_stress_probe as probe
+
+    monkeypatch.setitem(
+        probe.ROWS,
+        "missing_for_policy_test",
+        Row(
+            "missing_for_policy_test",
+            "/definitely/missing/model",
+            cache_args=["--enable-block-disk-cache", "--block-disk-cache-max-gb", "10"],
+        ),
+    )
+
+    result = run_probe(
+        SimpleNamespace(
+            row="missing_for_policy_test",
+            python=".venv/bin/python",
+            route="chat",
+            prompt_tokens=[128],
+            max_tokens=16,
+            max_thinking_tokens=None,
+            image_path=None,
+            retained_image_turns=1,
+            abort_rss_gb=0.0,
+            abort_metal_active_gb=0.0,
+            serve_extra_arg=[],
+            cache_salt="capacity-calibration",
+            skip_prefix_cache=False,
+        )
+    )
+
+    assert result["status"] == "skipped"
+    assert result["cache_proof_policy"] == {
+        "cache_salt": "capacity-calibration",
+        "skip_prefix_cache": False,
+        "prefix_paged_l2_bypassed": True,
+        "capacity_projection_valid": False,
+    }
