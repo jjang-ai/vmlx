@@ -7781,6 +7781,27 @@ class TestTurboQuantKVTelemetry:
             preview_flags - preview_dsv4_blocklist
         )
 
+    def test_vlm_video_sampling_is_request_scoped_not_restart_required(self):
+        sessions_source = Path("./panel/src/main/sessions.ts").read_text()
+        chat_source = Path("./panel/src/main/ipc/chat.ts").read_text()
+        form_source = Path(
+            "./panel/src/renderer/src/components/sessions/SessionConfigForm.tsx"
+        ).read_text()
+
+        restart_block = sessions_source[
+            sessions_source.index("RESTART_REQUIRED_KEYS"):
+            sessions_source.index("async updateSessionConfig")
+        ]
+        restart_keys = set(re.findall(r"'([A-Za-z_][A-Za-z0-9_]*)'", restart_block))
+        assert "videoFps" not in restart_keys
+        assert "videoMaxFrames" not in restart_keys
+        assert "sessionConfig.videoFps" in chat_source
+        assert "sessionConfig.videoMaxFrames" in chat_source
+        assert "video_fps" in chat_source
+        assert "video_max_frames" in chat_source
+        assert "onChange('videoFps'" in form_source
+        assert "onChange('videoMaxFrames'" in form_source
+
     def test_panel_startup_defaults_sanitize_incompatible_saved_modes(self):
         sessions_source = Path("./panel/src/main/sessions.ts").read_text()
         preview_source = Path(
