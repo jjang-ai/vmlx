@@ -20,6 +20,8 @@ def test_generation_defaults_contract_pins_named_default_edges():
     assert "test_max_tokens_resolution_contract_applies_to_every_registered_family" in required
     assert "test_effort_does_not_synthesize_max_tokens_when_unset" in required
     assert "test_session_command_preview_mirrors_runtime_default_flags" in required
+    assert "test_local_generation_metadata_audit_flags_thinking_template_without_budget" in required
+    assert "test_local_generation_metadata_audit_accepts_template_budget_support" in required
 
     panel_command = gate.COMMANDS["panel_generation_defaults"][1]
     engine_command = gate.COMMANDS["engine_generation_defaults"][1]

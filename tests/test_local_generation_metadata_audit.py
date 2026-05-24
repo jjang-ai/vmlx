@@ -42,3 +42,37 @@ def test_local_generation_metadata_audit_artifact_is_json_serializable():
     artifact = build_artifact(("/definitely/missing/model",))
     encoded = json.dumps(artifact)
     assert '"rows": []' in encoded
+
+
+def test_local_generation_metadata_audit_flags_thinking_template_without_budget(tmp_path):
+    from tests.cross_matrix.run_local_generation_metadata_audit import audit_model
+
+    (tmp_path / "config.json").write_text('{"model_type":"gemma4"}\n', encoding="utf-8")
+    (tmp_path / "generation_config.json").write_text("{}\n", encoding="utf-8")
+    (tmp_path / "chat_template.jinja").write_text(
+        "{% if enable_thinking is defined and enable_thinking %}<|think|>{% endif %}",
+        encoding="utf-8",
+    )
+
+    row = audit_model(str(tmp_path))
+
+    assert row["thinking_budget"]["template_mentions_thinking"] is True
+    assert row["thinking_budget"]["template_mentions_budget"] is False
+    assert "thinking_budget_override_forwarded_but_template_does_not_enforce" in row["notes"]
+
+
+def test_local_generation_metadata_audit_accepts_template_budget_support(tmp_path):
+    from tests.cross_matrix.run_local_generation_metadata_audit import audit_model
+
+    (tmp_path / "config.json").write_text('{"model_type":"gemma4"}\n', encoding="utf-8")
+    (tmp_path / "generation_config.json").write_text("{}\n", encoding="utf-8")
+    (tmp_path / "chat_template.jinja").write_text(
+        "{% if enable_thinking %}{{ thinking_budget }}<|think|>{% endif %}",
+        encoding="utf-8",
+    )
+
+    row = audit_model(str(tmp_path))
+
+    assert row["thinking_budget"]["template_mentions_thinking"] is True
+    assert row["thinking_budget"]["template_mentions_budget"] is True
+    assert "thinking_budget_override_forwarded_but_template_does_not_enforce" not in row["notes"]

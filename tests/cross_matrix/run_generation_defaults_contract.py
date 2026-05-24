@@ -68,6 +68,8 @@ REQUIRED_GENERATION_DEFAULT_TEST_MARKERS = (
     # No hidden sampler/repetition floor in real launch command or preview.
     "test_session_command_preview_mirrors_runtime_default_flags",
     "test_local_generation_metadata_audit_reports_high_risk_rows",
+    "test_local_generation_metadata_audit_flags_thinking_template_without_budget",
+    "test_local_generation_metadata_audit_accepts_template_budget_support",
 )
 
 COMMANDS: dict[str, tuple[Path, list[str]]] = {
@@ -224,6 +226,8 @@ def build_artifact(root: Path) -> dict[str, Any]:
         "local_high_risk_model_metadata_audit": (
             not failed
             and "test_local_generation_metadata_audit_reports_high_risk_rows" not in missing_markers
+            and "test_local_generation_metadata_audit_flags_thinking_template_without_budget" not in missing_markers
+            and "test_local_generation_metadata_audit_accepts_template_budget_support" not in missing_markers
         ),
         "panel_does_not_emit_default_sampler_cli_flags": (
             not failed

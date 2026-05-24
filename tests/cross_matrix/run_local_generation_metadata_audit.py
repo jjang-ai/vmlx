@@ -37,6 +37,22 @@ HIGH_RISK_MODEL_CANDIDATES = (
     "/Users/example/models/JANGQ/DeepSeek-V4-Flash-JANG",
 )
 
+THINKING_TEMPLATE_MARKERS = (
+    "enable_thinking",
+    "<think>",
+    "</think>",
+    "<|think|>",
+    "<｜tool▁calls▁begin｜>",
+    "thought\n",
+)
+
+THINKING_BUDGET_MARKERS = (
+    "thinking_budget",
+    "max_thinking_tokens",
+    "reasoning_budget",
+    "budget_tokens",
+)
+
 
 def _read_json(path: Path) -> dict[str, Any]:
     try:
@@ -60,6 +76,55 @@ def _number(data: dict[str, Any], *keys: str) -> float | None:
     if isinstance(val, (int, float)):
         return float(val)
     return None
+
+
+def _read_text(path: Path) -> str:
+    try:
+        return path.read_text(encoding="utf-8")
+    except Exception:
+        return ""
+
+
+def _template_sources(model_path: Path, tokenizer_config: dict[str, Any]) -> dict[str, str]:
+    sources: dict[str, str] = {}
+    for filename in ("chat_template.jinja", "chat_template.txt"):
+        text = _read_text(model_path / filename)
+        if text:
+            sources[filename] = text
+    tokenizer_template = tokenizer_config.get("chat_template")
+    if isinstance(tokenizer_template, str) and tokenizer_template:
+        sources["tokenizer_config.chat_template"] = tokenizer_template
+    return sources
+
+
+def _thinking_budget_metadata_default(gen: dict[str, Any], jang: dict[str, Any]) -> int | float | None:
+    candidates: tuple[Any, ...] = (
+        gen.get("max_thinking_tokens"),
+        gen.get("thinking_budget"),
+        gen.get("reasoning_budget"),
+        _nested(gen, "reasoning", "budget_tokens"),
+        _nested(jang, "chat", "sampling_defaults", "max_thinking_tokens"),
+        _nested(jang, "chat", "sampling_defaults", "thinking_budget"),
+        _nested(jang, "chat", "sampling_defaults", "reasoning_budget"),
+        _nested(jang, "chat", "reasoning", "max_thinking_tokens"),
+        _nested(jang, "chat", "reasoning", "thinking_budget"),
+        _nested(jang, "chat", "reasoning", "budget_tokens"),
+    )
+    for val in candidates:
+        if isinstance(val, (int, float)) and val > 0:
+            return val
+    return None
+
+
+def _thinking_budget_row(model_path: Path, gen: dict[str, Any], jang: dict[str, Any], tokenizer_config: dict[str, Any]) -> dict[str, Any]:
+    sources = _template_sources(model_path, tokenizer_config)
+    template_text = "\n".join(sources.values())
+    return {
+        "metadata_default": _thinking_budget_metadata_default(gen, jang),
+        "template_sources": sorted(sources),
+        "template_mentions_thinking": any(marker in template_text for marker in THINKING_TEMPLATE_MARKERS),
+        "template_mentions_budget": any(marker in template_text for marker in THINKING_BUDGET_MARKERS),
+    }
 
 
 def _sampling_source(jang: dict[str, Any], gen: dict[str, Any], key: str) -> str | None:
@@ -166,6 +231,7 @@ def audit_model(path_text: str) -> dict[str, Any]:
     cfg = _read_json(path / "config.json")
     gen = _read_json(path / "generation_config.json")
     jang = _read_json(path / "jang_config.json")
+    tokenizer_config = _read_json(path / "tokenizer_config.json")
     registry = _registry_row(path)
     family = str(registry.get("family") or "")
     caps = _nested(jang, "capabilities") or {}
@@ -215,6 +281,7 @@ def audit_model(path_text: str) -> dict[str, Any]:
             "repetition_penalty_chat": rep_chat_source,
             "repetition_penalty_thinking": rep_thinking_source,
         },
+        "thinking_budget": _thinking_budget_row(path, gen, jang, tokenizer_config),
     }
     notes: list[str] = []
     if not path.is_dir():
@@ -227,6 +294,11 @@ def audit_model(path_text: str) -> dict[str, Any]:
         notes.append("bundle_declares_no_chat_repetition_penalty_engine_will_not_invent_one")
     if _number(gen, "max_new_tokens") is None and _number(jang, "chat", "sampling_defaults", "max_new_tokens") is None:
         notes.append("bundle_declares_no_max_new_tokens_engine_fallback_applies")
+    if (
+        row["thinking_budget"]["template_mentions_thinking"]
+        and not row["thinking_budget"]["template_mentions_budget"]
+    ):
+        notes.append("thinking_budget_override_forwarded_but_template_does_not_enforce")
     if resolved_chat["max_tokens"] > 8192:
         notes.append("resolved_default_output_cap_above_8192")
     if resolved_chat["top_k"] < 0:
