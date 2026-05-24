@@ -82,6 +82,7 @@ export function ChatSettings({ chatId, session, reasoningParser, onClose, onOver
   const [detectedToolParser, setDetectedToolParser] = useState<string | undefined>(undefined)
   const [detectedReasoningParser, setDetectedReasoningParser] = useState<string | undefined>(undefined)
   const [detectedSupportsThinking, setDetectedSupportsThinking] = useState<boolean | undefined>(undefined)
+  const [thinkingBudgetSupported, setThinkingBudgetSupported] = useState<boolean | undefined>(undefined)
   const [savedChatModelPath, setSavedChatModelPath] = useState<string | undefined>(undefined)
   const [messageCount, setMessageCount] = useState(0)
   const isRemote = session.type === 'remote'
@@ -127,8 +128,13 @@ export function ChatSettings({ chatId, session, reasoningParser, onClose, onOver
             if (gen.repeatPenalty != null) detectedModelDefaults.repeatPenalty = gen.repeatPenalty
             if (gen.maxNewTokens != null) detectedModelDefaults.maxTokens = gen.maxNewTokens
             if (gen.maxThinkingTokens != null) detectedModelDefaults.maxThinkingTokens = gen.maxThinkingTokens
+            setThinkingBudgetSupported(gen.thinkingBudgetSupported)
+          } else {
+            setThinkingBudgetSupported(undefined)
           }
-        } catch (_) {/* no generation_config.json / jang_config sampling defaults */}
+        } catch (_) {
+          setThinkingBudgetSupported(undefined)
+        }
         try {
           const detected = await window.api.models.detectConfig(session.modelPath)
           setDetectedFamily(detected?.family)
@@ -575,7 +581,7 @@ export function ChatSettings({ chatId, session, reasoningParser, onClose, onOver
               placeholder={modelDefaults.maxTokens ? `${modelDefaults.maxTokens} (model default)` : t('chat.settings.maxTokensPlaceholder')}
               help={t('chat.settings.maxTokensHelp')}
             />
-            {thinkingSupported && displayedEnableThinking !== false && (
+            {thinkingSupported && displayedEnableThinking !== false && thinkingBudgetSupported !== false && (
               <NumberField
                 label={t('chat.settings.maxThinkingTokens')}
                 value={overrides.maxThinkingTokens}

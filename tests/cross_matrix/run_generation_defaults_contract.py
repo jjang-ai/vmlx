@@ -70,6 +70,9 @@ REQUIRED_GENERATION_DEFAULT_TEST_MARKERS = (
     "test_local_generation_metadata_audit_reports_high_risk_rows",
     "test_local_generation_metadata_audit_flags_thinking_template_without_budget",
     "test_local_generation_metadata_audit_accepts_template_budget_support",
+    "marks thinking-budget unsupported when the template has thinking but no budget variable",
+    "surfaces maxThinkingTokens only when the template consumes thinking_budget",
+    "chat settings hides max-thinking tokens when template metadata says budget is unsupported",
 )
 
 COMMANDS: dict[str, tuple[Path, list[str]]] = {
@@ -228,6 +231,9 @@ def build_artifact(root: Path) -> dict[str, Any]:
             and "test_local_generation_metadata_audit_reports_high_risk_rows" not in missing_markers
             and "test_local_generation_metadata_audit_flags_thinking_template_without_budget" not in missing_markers
             and "test_local_generation_metadata_audit_accepts_template_budget_support" not in missing_markers
+            and "marks thinking-budget unsupported when the template has thinking but no budget variable" not in missing_markers
+            and "surfaces maxThinkingTokens only when the template consumes thinking_budget" not in missing_markers
+            and "chat settings hides max-thinking tokens when template metadata says budget is unsupported" not in missing_markers
         ),
         "panel_does_not_emit_default_sampler_cli_flags": (
             not failed

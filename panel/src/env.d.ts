@@ -47,6 +47,7 @@ declare global {
           repeatPenalty?: number;
           maxNewTokens?: number;
           maxThinkingTokens?: number;
+          thinkingBudgetSupported?: boolean;
           source?: "jang_config" | "generation_config";
         } | null>;
         searchHF: (

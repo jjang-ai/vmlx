@@ -22,6 +22,9 @@ def test_generation_defaults_contract_pins_named_default_edges():
     assert "test_session_command_preview_mirrors_runtime_default_flags" in required
     assert "test_local_generation_metadata_audit_flags_thinking_template_without_budget" in required
     assert "test_local_generation_metadata_audit_accepts_template_budget_support" in required
+    assert "marks thinking-budget unsupported when the template has thinking but no budget variable" in required
+    assert "surfaces maxThinkingTokens only when the template consumes thinking_budget" in required
+    assert "chat settings hides max-thinking tokens when template metadata says budget is unsupported" in required
 
     panel_command = gate.COMMANDS["panel_generation_defaults"][1]
     engine_command = gate.COMMANDS["engine_generation_defaults"][1]

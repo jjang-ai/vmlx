@@ -124,6 +124,43 @@ describe('readGenerationDefaults generation_config defaults', () => {
 
     await expect(readGenerationDefaults(dir)).resolves.toBeNull()
   })
+
+  it('marks thinking-budget unsupported when the template has thinking but no budget variable', async () => {
+    const dir = makeModelDir({
+      'generation_config.json': {
+        max_thinking_tokens: 4096,
+      },
+    }, 'vmlx-generation-defaults-thinking-budget-unsupported-')
+    writeFileSync(
+      join(dir, 'chat_template.jinja'),
+      '{% if enable_thinking %}<|think|>{% endif %}',
+    )
+
+    await expect(readGenerationDefaults(dir)).resolves.toMatchObject({
+      thinkingBudgetSupported: false,
+      source: 'generation_config',
+    })
+    const defaults = await readGenerationDefaults(dir)
+    expect(defaults?.maxThinkingTokens).toBeUndefined()
+  })
+
+  it('surfaces maxThinkingTokens only when the template consumes thinking_budget', async () => {
+    const dir = makeModelDir({
+      'generation_config.json': {
+        max_thinking_tokens: 4096,
+      },
+    }, 'vmlx-generation-defaults-thinking-budget-supported-')
+    writeFileSync(
+      join(dir, 'chat_template.jinja'),
+      '{% if enable_thinking %}{{ thinking_budget }}<|think|>{% endif %}',
+    )
+
+    await expect(readGenerationDefaults(dir)).resolves.toMatchObject({
+      maxThinkingTokens: 4096,
+      thinkingBudgetSupported: true,
+      source: 'generation_config',
+    })
+  })
 })
 
 describe('readGenerationDefaults JANG sampling defaults', () => {

@@ -5,6 +5,7 @@ import { request as httpsRequest } from "node:https";
 import { request as httpRequest } from "node:http";
 import { db, Chat, Message, Folder } from "../database";
 import { sessionManager, resolveUrl, connectHost } from "../sessions";
+import { readGenerationDefaults } from "./models";
 import {
   BUILTIN_TOOLS,
   isBuiltinTool,
@@ -807,6 +808,7 @@ export function registerChatHandlers(
       let isHarmonyModel = false;
       let chatIsMultimodal = false;
       let chatDetectedFamily: string | undefined;
+      let thinkingBudgetSupported: boolean | undefined;
       // VLM video sampling (Qwen 3.6, Qwen3.5-VL, etc.) — forwarded as
       // video_fps / video_max_frames on the request body when present.
       // Default undefined = engine default (2.0 fps, 8 max frames).
@@ -855,6 +857,12 @@ export function registerChatHandlers(
             }
             // Check if model has a reasoning parser (for enable_thinking default)
             const detected = detectModelConfigFromDir(chat.modelPath);
+            try {
+              const generationDefaults = await readGenerationDefaults(chat.modelPath);
+              thinkingBudgetSupported = generationDefaults?.thinkingBudgetSupported;
+            } catch {
+              thinkingBudgetSupported = undefined;
+            }
             chatDetectedFamily = detected.family;
             timeoutSeconds = effectiveDsv4RequestTimeoutSeconds(
               timeoutSeconds,
@@ -1549,6 +1557,9 @@ export function registerChatHandlers(
               : overrides?.enableThinking;
           const applyLocalThinkingBudget = (obj: Record<string, any>) => {
             if (isRemote || resolvedThinkingBudget == null || obj.enable_thinking === false) {
+              return;
+            }
+            if (thinkingBudgetSupported === false) {
               return;
             }
             if (!sessionHasReasoningParser && chatDetectedFamily !== "deepseek-v4") {

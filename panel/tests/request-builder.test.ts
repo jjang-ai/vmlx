@@ -33,7 +33,8 @@ function buildRequestBody(
     isRemote: boolean,
     sessionHasReasoningParser: boolean,
     tools?: any[],
-    detectedFamily?: string
+    detectedFamily?: string,
+    thinkingBudgetSupported?: boolean,
 ): Record<string, any> {
     const stopSequences = overrides?.stopSequences
         ? overrides.stopSequences.split(',').map(s => s.trim()).filter(Boolean)
@@ -62,6 +63,7 @@ function buildRequestBody(
             : overrides?.enableThinking
     const applyLocalThinkingBudget = (obj: Record<string, any>) => {
         if (isRemote || thinkingBudget == null || obj.enable_thinking === false) return
+        if (thinkingBudgetSupported === false) return
         if (!sessionHasReasoningParser && detectedFamily !== 'deepseek-v4') return
         obj.max_thinking_tokens = thinkingBudget
         obj.chat_template_kwargs = {
@@ -336,6 +338,27 @@ describe('buildRequestBody — Chat Completions API', () => {
         expect(body.max_prompt_tokens).toBeUndefined()
         expect(body.max_context_tokens).toBeUndefined()
         expect(body.max_context).toBeUndefined()
+    })
+
+    it('suppresses maxThinkingTokens when local template metadata says thinking budget is unsupported', () => {
+        const body = buildRequestBody(
+            'completions',
+            'gemma4',
+            messages,
+            { enableThinking: true, maxThinkingTokens: 4096 },
+            false,
+            true,
+            undefined,
+            'gemma4',
+            false,
+        )
+
+        expect(body.enable_thinking).toBe(true)
+        expect(body.chat_template_kwargs).toEqual({ enable_thinking: true })
+        expect(body.max_thinking_tokens).toBeUndefined()
+        expect(body.chat_template_kwargs.thinking_budget).toBeUndefined()
+        expect(body.max_tokens).toBeUndefined()
+        expect(body.max_prompt_tokens).toBeUndefined()
     })
 
     it('switching chats never carries a previous chat maxTokens into Auto Chat Completions', () => {

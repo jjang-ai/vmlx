@@ -144,8 +144,24 @@ export interface GenerationDefaults {
   repeatPenalty?: number;
   maxNewTokens?: number;
   maxThinkingTokens?: number;
+  thinkingBudgetSupported?: boolean;
   source?: "jang_config" | "generation_config";
 }
+
+const THINKING_TEMPLATE_MARKERS = [
+  "enable_thinking",
+  "<think>",
+  "</think>",
+  "<|think|>",
+  "thought\n",
+];
+
+const THINKING_BUDGET_MARKERS = [
+  "thinking_budget",
+  "max_thinking_tokens",
+  "reasoning_budget",
+  "budget_tokens",
+];
 
 function positiveIntegerDefault(...values: unknown[]): number | undefined {
   for (const value of values) {
@@ -156,12 +172,50 @@ function positiveIntegerDefault(...values: unknown[]): number | undefined {
   return undefined;
 }
 
+async function readOptionalText(path: string): Promise<string> {
+  try {
+    return await readFile(path, "utf-8");
+  } catch {
+    return "";
+  }
+}
+
+function templateThinkingBudgetSupport(templateText: string): boolean | undefined {
+  if (THINKING_BUDGET_MARKERS.some((marker) => templateText.includes(marker)))
+    return true;
+  if (THINKING_TEMPLATE_MARKERS.some((marker) => templateText.includes(marker)))
+    return false;
+  return undefined;
+}
+
+async function readThinkingBudgetSupport(modelPath: string): Promise<boolean | undefined> {
+  const texts: string[] = [];
+  const chatTemplate = await readOptionalText(join(modelPath, "chat_template.jinja"));
+  if (chatTemplate) texts.push(chatTemplate);
+  const chatTemplateText = await readOptionalText(join(modelPath, "chat_template.txt"));
+  if (chatTemplateText) texts.push(chatTemplateText);
+  try {
+    const tokenizer = JSON.parse(
+      await readFile(join(modelPath, "tokenizer_config.json"), "utf-8"),
+    );
+    if (typeof tokenizer?.chat_template === "string")
+      texts.push(tokenizer.chat_template);
+  } catch {
+    // tokenizer_config.json is optional.
+  }
+  return templateThinkingBudgetSupport(texts.join("\n"));
+}
+
 /** Read bundle sampling defaults, preferring JANG chat metadata over generation_config. */
 export async function readGenerationDefaults(
   modelPath: string,
 ): Promise<GenerationDefaults | null> {
   try {
     const defaults: GenerationDefaults = {};
+    const thinkingBudgetSupported = await readThinkingBudgetSupport(modelPath);
+    if (thinkingBudgetSupported !== undefined) {
+      defaults.thinkingBudgetSupported = thinkingBudgetSupported;
+    }
 
     const configPath = join(modelPath, "generation_config.json");
     try {
@@ -184,7 +238,8 @@ export async function readGenerationDefaults(
         config.reasoning_budget,
         config.reasoning?.budget_tokens,
       );
-      if (maxThinkingTokens != null) defaults.maxThinkingTokens = maxThinkingTokens;
+      if (maxThinkingTokens != null && defaults.thinkingBudgetSupported !== false)
+        defaults.maxThinkingTokens = maxThinkingTokens;
       if (Object.keys(defaults).length > 0) defaults.source = "generation_config";
     } catch {
       // generation_config.json is optional; JANG metadata below may still exist.
@@ -229,7 +284,8 @@ export async function readGenerationDefaults(
           jang?.chat?.reasoning?.thinking_budget,
           jang?.chat?.reasoning?.budget_tokens,
         );
-        if (maxThinkingTokens != null) defaults.maxThinkingTokens = maxThinkingTokens;
+        if (maxThinkingTokens != null && defaults.thinkingBudgetSupported !== false)
+          defaults.maxThinkingTokens = maxThinkingTokens;
         defaults.source = "jang_config";
       }
     } catch {

@@ -1494,7 +1494,7 @@ describe('Generation Defaults', () => {
         expect(policy).not.toContain("'temperature'")
         expect(policy).not.toContain("'enableThinking'")
         expect(source).not.toContain('enableThinkingFromReasoningMode')
-        expect(source).not.toContain('readGenerationDefaults')
+        expect(createHandler).not.toContain('readGenerationDefaults')
         expect(source).not.toContain('Applied global model settings / generation defaults')
     })
 
@@ -2978,6 +2978,12 @@ describe('Settings → CLI Round-Trip Completeness', () => {
         expect(source).toContain('formatTopK')
         expect(source).toContain("return 'Off'")
         expect(source).toContain('format={formatTopK}')
+    })
+
+    it('chat settings hides max-thinking tokens when template metadata says budget is unsupported', () => {
+        const source = readFileSync('src/renderer/src/components/chat/ChatSettings.tsx', 'utf8')
+        expect(source).toContain('setThinkingBudgetSupported(gen.thinkingBudgetSupported)')
+        expect(source).toContain('thinkingBudgetSupported !== false')
     })
 
     it('JANGTQ acceleration toggle is not exposed as a user setting', () => {
