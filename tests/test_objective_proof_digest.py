@@ -912,6 +912,105 @@ def test_objective_proof_digest_prefers_strict_dsv4_identifier_canary(tmp_path):
     ]
 
 
+def test_objective_proof_digest_surfaces_dsv4_prompt_rail_exactness_probe(tmp_path):
+    from tests.cross_matrix.summarize_objective_proof import build_digest
+
+    _write_passing_base_artifacts(tmp_path)
+    _write_json(
+        tmp_path,
+        "build/current-dsv4-jangtq-k-route-mode-code-exactness-20260524-promptdiag-bb5cfe0c.json",
+        {
+            "status": "fail",
+            "cases": [
+                {
+                    "name": "chat_off",
+                    "route": "chat",
+                    "exact": False,
+                    "missing": ["THREE.WebGLRenderer", "THREE.MeshBasicMaterial"],
+                    "corrupt_patterns": ["WebWebGLRenderer", "Three.MeshBasicMaterial"],
+                    "prompt_diagnostics": {
+                        "assistant_suffix_kind": "thinking_closed",
+                        "prompt_endswith_assistant_think_open": False,
+                        "prompt_endswith_assistant_think_close": True,
+                        "prompt_tail": "renderer.render(scene, camera);<｜Assistant｜></think>",
+                    },
+                },
+                {
+                    "name": "chat_off_rep1",
+                    "route": "chat",
+                    "exact": False,
+                    "missing": ["THREE.WebGLRenderer"],
+                    "corrupt_patterns": ["WebWebGLRenderer"],
+                    "prompt_diagnostics": {
+                        "assistant_suffix_kind": "thinking_closed",
+                        "prompt_endswith_assistant_think_open": False,
+                        "prompt_endswith_assistant_think_close": True,
+                    },
+                },
+                {
+                    "name": "chat_on",
+                    "route": "chat",
+                    "exact": False,
+                    "missing": [],
+                    "corrupt_patterns": [],
+                    "has_markdown_fence": True,
+                    "prompt_diagnostics": {
+                        "assistant_suffix_kind": "thinking_open",
+                        "prompt_endswith_assistant_think_open": True,
+                        "prompt_endswith_assistant_think_close": False,
+                    },
+                },
+            ],
+        },
+    )
+    _write_json(
+        tmp_path,
+        "build/current-dsv4-route-mode-code-exactness-dryrun-20260524.json",
+        {
+            "status": "dry_run",
+            "case_count": 3,
+            "cases": [
+                {
+                    "name": "chat_off",
+                    "route": "chat",
+                    "request_overrides": {"enable_thinking": False, "max_tokens": 512},
+                    "prompt_diagnostics": {"assistant_suffix_kind": "thinking_closed"},
+                },
+                {
+                    "name": "responses_off",
+                    "route": "responses",
+                    "request_overrides": {"enable_thinking": False, "max_output_tokens": 512},
+                    "prompt_diagnostics": {"assistant_suffix_kind": "thinking_closed"},
+                },
+                {
+                    "name": "legacy_completion_raw",
+                    "route": "completion",
+                    "request_overrides": {"max_tokens": 220},
+                    "prompt_diagnostics": {"assistant_suffix_kind": "none"},
+                },
+            ],
+        },
+    )
+
+    digest = build_digest(tmp_path)
+    rows = {item["requirement"]: item for item in digest["requirements"]}
+
+    quality = rows["DSV4 long-output/code/file-generation quality is release-cleared"]
+    probe = quality["details"]["current_installed_prompt_rail_exactness_probe"]
+    assert quality["status"] == "open"
+    assert probe["status"] == "fail"
+    assert probe["failed_thinking_closed_cases"] == ["chat_off", "chat_off_rep1"]
+    assert probe["rep1_still_corrupt_patterns"] == {
+        "chat_off_rep1": ["WebWebGLRenderer"]
+    }
+    assert probe["thinking_open_cases_without_identifier_corruption"] == ["chat_on"]
+    assert probe["dry_run_status"] == "dry_run"
+    assert probe["dry_run_case_count"] == 3
+    assert probe["dry_run_suffixes"]["legacy_completion_raw"] == "none"
+    assert probe["case_summaries"][0]["assistant_suffix_kind"] == "thinking_closed"
+    assert probe["case_summaries"][0]["prompt_tail"].endswith("</think>")
+
+
 def test_objective_proof_digest_surfaces_current_dsv4_identifier_matrix(tmp_path):
     from tests.cross_matrix.summarize_objective_proof import build_digest
 
@@ -2079,6 +2178,42 @@ def test_objective_proof_digest_accepts_dsv4_quality_clearance_artifact(tmp_path
         tmp_path,
         "docs/internal/release-gates/20260520_sisyphus_dsv4_identifier_gate_jang_affine_current/result.json",
         {"ok": True},
+    )
+    _write_json(
+        tmp_path,
+        "build/current-dsv4-jangtq-k-route-mode-code-exactness-20260524-promptdiag-bb5cfe0c.json",
+        {
+            "status": "pass",
+            "cases": [
+                {
+                    "name": "chat_off",
+                    "route": "chat",
+                    "exact": True,
+                    "missing": [],
+                    "corrupt_patterns": [],
+                    "prompt_diagnostics": {
+                        "assistant_suffix_kind": "thinking_closed",
+                        "prompt_endswith_assistant_think_close": True,
+                    },
+                },
+            ],
+        },
+    )
+    _write_json(
+        tmp_path,
+        "build/current-dsv4-route-mode-code-exactness-dryrun-20260524.json",
+        {
+            "status": "dry_run",
+            "case_count": 1,
+            "cases": [
+                {
+                    "name": "chat_off",
+                    "route": "chat",
+                    "request_overrides": {"enable_thinking": False, "max_tokens": 512},
+                    "prompt_diagnostics": {"assistant_suffix_kind": "thinking_closed"},
+                },
+            ],
+        },
     )
     _write_json(
         tmp_path,

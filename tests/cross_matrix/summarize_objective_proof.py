@@ -69,6 +69,12 @@ DSV4_SOURCE_SAME_PROMPT_NOCACHE_REL = (
 DSV4_SOURCE_CACHE_COMPARISON_REL = (
     "build/current-dsv4-live-identifier-cache-source-comparison-20260523.json"
 )
+DSV4_CURRENT_PROMPT_RAIL_EXACTNESS_REL = (
+    "build/current-dsv4-jangtq-k-route-mode-code-exactness-20260524-promptdiag-bb5cfe0c.json"
+)
+DSV4_CURRENT_ROUTE_MODE_DRYRUN_REL = (
+    "build/current-dsv4-route-mode-code-exactness-dryrun-20260524.json"
+)
 API_CACHE_CONTRACT_REL = "build/current-api-cache-contract-proof-20260521.json"
 PANEL_SETTINGS_CONTRACT_REL = "build/current-panel-settings-contract-proof-20260521.json"
 MAX_OUTPUT_CONTEXT_CONTRACT_REL = (
@@ -500,6 +506,98 @@ def _dsv4_identifier_canary_detail(canary: dict[str, Any], root: Path, rel: str)
         "finish_reason": first_choice.get("finish_reason"),
         "usage": response.get("usage") if isinstance(response, dict) else None,
         "content": content[:1000],
+    }
+
+
+def _dsv4_prompt_rail_exactness_detail(
+    artifact: dict[str, Any], dry_run: dict[str, Any], root: Path
+) -> dict[str, Any]:
+    path_present = _path_present(root, DSV4_CURRENT_PROMPT_RAIL_EXACTNESS_REL)
+    dry_run_present = _path_present(root, DSV4_CURRENT_ROUTE_MODE_DRYRUN_REL)
+    cases = artifact.get("cases") if isinstance(artifact.get("cases"), list) else []
+    dry_run_cases = dry_run.get("cases") if isinstance(dry_run.get("cases"), list) else []
+    case_summaries: list[dict[str, Any]] = []
+    failed_thinking_closed_cases: list[str] = []
+    thinking_open_cases_without_identifier_corruption: list[str] = []
+    rep1_still_corrupt_patterns: dict[str, list[str]] = {}
+
+    for case in cases:
+        if not isinstance(case, dict):
+            continue
+        name = str(case.get("name") or "")
+        prompt_diagnostics = (
+            case.get("prompt_diagnostics")
+            if isinstance(case.get("prompt_diagnostics"), dict)
+            else {}
+        )
+        suffix = str(prompt_diagnostics.get("assistant_suffix_kind") or "")
+        corrupt_patterns = [
+            str(pattern) for pattern in (case.get("corrupt_patterns") or [])
+        ]
+        missing = [str(identifier) for identifier in (case.get("missing") or [])]
+        exact = case.get("exact") is True
+        if suffix == "thinking_closed" and not exact and name:
+            failed_thinking_closed_cases.append(name)
+        if suffix == "thinking_open" and not corrupt_patterns and not missing and name:
+            thinking_open_cases_without_identifier_corruption.append(name)
+        if name.endswith("_rep1") and corrupt_patterns:
+            rep1_still_corrupt_patterns[name] = corrupt_patterns
+        prompt_tail = prompt_diagnostics.get("prompt_tail")
+        if not isinstance(prompt_tail, str):
+            prompt_tail = ""
+        case_summaries.append(
+            {
+                "name": name,
+                "route": case.get("route"),
+                "exact": exact,
+                "assistant_suffix_kind": suffix,
+                "prompt_endswith_assistant_think_open": (
+                    prompt_diagnostics.get("prompt_endswith_assistant_think_open")
+                ),
+                "prompt_endswith_assistant_think_close": (
+                    prompt_diagnostics.get("prompt_endswith_assistant_think_close")
+                ),
+                "missing_identifiers": missing,
+                "corrupt_patterns": corrupt_patterns,
+                "has_markdown_fence": case.get("has_markdown_fence"),
+                "finish_reason": case.get("finish") or case.get("finish_reason"),
+                "prompt_tail": prompt_tail[-500:],
+            }
+        )
+
+    dry_run_suffixes: dict[str, str] = {}
+    dry_run_overrides: dict[str, Any] = {}
+    for case in dry_run_cases:
+        if not isinstance(case, dict):
+            continue
+        name = str(case.get("name") or "")
+        if not name:
+            continue
+        diagnostics = (
+            case.get("prompt_diagnostics")
+            if isinstance(case.get("prompt_diagnostics"), dict)
+            else {}
+        )
+        dry_run_suffixes[name] = str(diagnostics.get("assistant_suffix_kind") or "")
+        dry_run_overrides[name] = case.get("request_overrides") or {}
+
+    return {
+        "artifact": DSV4_CURRENT_PROMPT_RAIL_EXACTNESS_REL,
+        "present": path_present,
+        "status": artifact.get("status") if path_present else "missing",
+        "case_count": len(case_summaries),
+        "failed_thinking_closed_cases": failed_thinking_closed_cases,
+        "thinking_open_cases_without_identifier_corruption": (
+            thinking_open_cases_without_identifier_corruption
+        ),
+        "rep1_still_corrupt_patterns": rep1_still_corrupt_patterns,
+        "case_summaries": case_summaries,
+        "dry_run_artifact": DSV4_CURRENT_ROUTE_MODE_DRYRUN_REL,
+        "dry_run_present": dry_run_present,
+        "dry_run_status": dry_run.get("status") if dry_run_present else "missing",
+        "dry_run_case_count": dry_run.get("case_count") if dry_run_present else None,
+        "dry_run_suffixes": dry_run_suffixes,
+        "dry_run_request_overrides": dry_run_overrides,
     }
 
 
@@ -1173,6 +1271,8 @@ def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
     dsv4_source_nocache_identifier = _load(root, DSV4_SOURCE_NOCACHE_IDENTIFIER_REL)
     dsv4_source_same_prompt_nocache = _load(root, DSV4_SOURCE_SAME_PROMPT_NOCACHE_REL)
     dsv4_source_cache_comparison = _load(root, DSV4_SOURCE_CACHE_COMPARISON_REL)
+    dsv4_prompt_rail_exactness = _load(root, DSV4_CURRENT_PROMPT_RAIL_EXACTNESS_REL)
+    dsv4_route_mode_dryrun = _load(root, DSV4_CURRENT_ROUTE_MODE_DRYRUN_REL)
     api_cache_contract = _load(root, API_CACHE_CONTRACT_REL)
     panel_settings_contract = _load(root, PANEL_SETTINGS_CONTRACT_REL)
     max_output_context_contract_rel, max_output_context_contract = _load_first_present(
@@ -1733,6 +1833,13 @@ def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
                     root,
                 )
             ),
+            "current_installed_prompt_rail_exactness_probe": (
+                _dsv4_prompt_rail_exactness_detail(
+                    dsv4_prompt_rail_exactness,
+                    dsv4_route_mode_dryrun,
+                    root,
+                )
+            ),
         }
     )
     _add(
@@ -1751,6 +1858,8 @@ def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
             DSV4_SOURCE_NOCACHE_IDENTIFIER_REL,
             DSV4_SOURCE_SAME_PROMPT_NOCACHE_REL,
             DSV4_SOURCE_CACHE_COMPARISON_REL,
+            DSV4_CURRENT_PROMPT_RAIL_EXACTNESS_REL,
+            DSV4_CURRENT_ROUTE_MODE_DRYRUN_REL,
             "docs/internal/release-gates/20260520_sisyphus_dsv4_identifier_gate_jang_affine_current/result.json",
         ],
         caveat=(
