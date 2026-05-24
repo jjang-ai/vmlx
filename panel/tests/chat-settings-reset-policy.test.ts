@@ -15,6 +15,7 @@ describe('chat settings reset policy', () => {
         minP: 0.5,
         repeatPenalty: 1.3,
         maxTokens: 128,
+        maxThinkingTokens: 4096,
         stopSequences: '<bad>',
         systemPrompt: 'VERY LONG STICKY PROMPT SHOULD NOT SURVIVE RESET',
         wireApi: 'completions',
@@ -69,6 +70,7 @@ describe('chat settings reset policy', () => {
     expect(result.reasoningEffort).toBeUndefined()
     expect(result.minP).toBeUndefined()
     expect(result.maxTokens).toBeUndefined()
+    expect(result.maxThinkingTokens).toBeUndefined()
   })
 
   it('does not turn model max_new_tokens into a sticky per-chat max_tokens override', () => {
@@ -78,6 +80,15 @@ describe('chat settings reset policy', () => {
     )
 
     expect(result.maxTokens).toBeUndefined()
+  })
+
+  it('does not turn model maxThinkingTokens into a sticky per-chat thinking budget override', () => {
+    const result = buildChatSettingsResetOverrides(
+      { maxThinkingTokens: 128 } satisfies ChatSettingsResetOverrides,
+      { maxThinkingTokens: 2048 },
+    )
+
+    expect(result.maxThinkingTokens).toBeUndefined()
   })
 
   it('does not invent tool keys when they were unset', () => {
