@@ -141,3 +141,41 @@ def test_panel_cli_flag_contract_covers_dsv4_cache_and_output_boundaries() -> No
     assert "--max-prompt-tokens" in sessions
     assert "--native-mtp-depth" in sessions
     assert "--native-mtp-sampling-policy" in sessions
+
+
+def test_command_preview_uses_runtime_numeric_sanitizers_for_advanced_modes() -> None:
+    """The visible CLI preview must not round/surface values runtime floors away."""
+
+    preview = (
+        ROOT / "panel" / "src" / "renderer" / "src" / "components" / "sessions" / "SessionSettings.tsx"
+    ).read_text(encoding="utf-8")
+    sessions = (ROOT / "panel" / "src" / "main" / "sessions.ts").read_text(encoding="utf-8")
+
+    preview_native = preview[
+        preview.index("// Native in-model MTP mirrors sessions.ts"):
+        preview.index("// Generation defaults", preview.index("// Native in-model MTP mirrors sessions.ts"))
+    ]
+    runtime_native = sessions[
+        sessions.index("// Native in-model MTP."):
+        sessions.index("// Generation defaults", sessions.index("// Native in-model MTP."))
+    ]
+    preview_advanced = preview[
+        preview.index("// Smelt mode"):
+        preview.index("// Generation defaults", preview.index("// Smelt mode"))
+    ]
+    runtime_advanced = sessions[
+        sessions.index("// Smelt mode"):
+        sessions.index("// Generation defaults", sessions.index("// Smelt mode"))
+    ]
+
+    assert "finitePositiveInteger(configuredDepth)" in runtime_native
+    assert "finitePositiveInteger(configuredDepth)" in preview_native
+    assert "Math.round(Number(configuredDepth" not in preview_native
+    for expression in (
+        "finitePositiveInteger((config as any).smeltExperts)",
+        "finitePositiveInteger((config as any).flashMoeSlotBank)",
+        "finitePositiveInteger((config as any).flashMoeIoSplit)",
+        "finitePositiveInteger(config.numDraftTokens)",
+    ):
+        assert expression in runtime_advanced
+        assert expression in preview_advanced

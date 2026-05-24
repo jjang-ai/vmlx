@@ -431,7 +431,7 @@ function buildCommandPreview(
   // Smelt mode (partial expert loading)
   if (effectiveSmelt) {
     parts.push('--smelt')
-    const pct = (config as any).smeltExperts ?? 50
+    const pct = finitePositiveInteger((config as any).smeltExperts) ?? 50
     if (pct !== 50) {
       parts.push('--smelt-experts', pct.toString())
     }
@@ -440,16 +440,16 @@ function buildCommandPreview(
   // Flash MoE (SSD expert streaming)
   if (effectiveFlashMoe) {
     parts.push('--flash-moe')
-    const slotBank = (config as any).flashMoeSlotBank
-    if (typeof slotBank === 'number' && slotBank > 0) {
+    const slotBank = finitePositiveInteger((config as any).flashMoeSlotBank)
+    if (slotBank != null) {
       parts.push('--flash-moe-slot-bank', slotBank.toString())
     }
     const prefetch = (config as any).flashMoePrefetch
     if (prefetch && prefetch !== 'none') {
       parts.push('--flash-moe-prefetch', prefetch)
     }
-    const ioSplit = (config as any).flashMoeIoSplit
-    if (typeof ioSplit === 'number' && ioSplit > 0) {
+    const ioSplit = finitePositiveInteger((config as any).flashMoeIoSplit)
+    if (ioSplit != null) {
       parts.push('--flash-moe-io-split', ioSplit.toString())
     }
   }
@@ -473,8 +473,9 @@ function buildCommandPreview(
   const compatibleExternalSpeculative = !dsv4Active && !isVLM && !cacheStackActive && !!config.speculativeModel
   if (compatibleExternalSpeculative) {
     parts.push('--speculative-model', config.speculativeModel)
-    if (config.numDraftTokens && config.numDraftTokens !== 3) {
-      parts.push('--num-draft-tokens', config.numDraftTokens.toString())
+    const numDraftTokens = finitePositiveInteger(config.numDraftTokens)
+    if (numDraftTokens != null && numDraftTokens !== 3) {
+      parts.push('--num-draft-tokens', numDraftTokens.toString())
     }
   }
 
@@ -489,7 +490,7 @@ function buildCommandPreview(
       const configuredDepth = (config as any).nativeMtpDepthOverride === true
         ? (config as any).nativeMtpDepth
         : nativeMtp.depth
-      const depth = Math.max(1, Math.min(3, Math.round(Number(configuredDepth || nativeMtp.depth || 3))))
+      const depth = Math.max(1, Math.min(3, finitePositiveInteger(configuredDepth) || finitePositiveInteger(nativeMtp.depth) || 3))
       parts.push('--native-mtp-depth', depth.toString())
       parts.push('--native-mtp-sampling-policy', mode === 'deterministic' ? 'deterministic-defaults' : 'compatible-only')
     }
