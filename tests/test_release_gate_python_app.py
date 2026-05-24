@@ -240,6 +240,18 @@ def test_bundled_verifier_rejects_non_relocatable_console_shebangs():
     assert "non-relocatable console-script shebangs" in verifier
 
 
+def test_bundle_python_relocates_local_source_console_scripts_after_install():
+    bundler = Path("panel/scripts/bundle-python.sh").read_text()
+    local_install_idx = bundler.index('echo "==> Installing vmlx-engine + jang_tools')
+    cleanup_idx = bundler.index("# Clean up to reduce size", local_install_idx)
+    local_install_block = bundler[local_install_idx:cleanup_idx]
+
+    assert 'for SCRIPT in "$BUNDLE_DIR/python/bin/"vmlx* "$BUNDLE_DIR/python/bin/"jang*' in local_install_block
+    assert '\\$(dirname \\"\\$0\\")/python3' in local_install_block
+    assert '-B -s \\"\\$0\\" \\"\\$@\\"' in local_install_block
+    assert '[[ "$FIRST_LINE" == \'#!\'*python* ]]' in local_install_block
+
+
 def test_release_gate_uses_anthropic_native_thinking_disable():
     gate_module = _load_gate_module()
 

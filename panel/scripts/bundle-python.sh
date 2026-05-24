@@ -192,6 +192,27 @@ else
   fi
 fi
 
+# Local source installs generate the vmlx/jang console entrypoints after the
+# dependency install pass. Relocate their shebangs immediately so a later
+# cleanup/import step cannot leave build-machine paths in the packaged app.
+for SCRIPT in "$BUNDLE_DIR/python/bin/"vmlx* "$BUNDLE_DIR/python/bin/"jang*; do
+  if [ ! -f "$SCRIPT" ]; then
+    continue
+  fi
+  FIRST_LINE="$(LC_ALL=C head -n 1 "$SCRIPT" 2>/dev/null || true)"
+  if [[ "$FIRST_LINE" == '#!'*python* ]] && [[ "$FIRST_LINE" != '#!/bin/sh'* ]]; then
+    TMP_SCRIPT="$(mktemp "${SCRIPT}.XXXXXX")"
+    {
+      printf '%s\n' '#!/bin/sh'
+      printf '%s\n' "'''exec' \"\$(dirname \"\$0\")/python3\" -B -s \"\$0\" \"\$@\""
+      printf '%s\n' "' '''"
+      tail -n +2 "$SCRIPT"
+    } > "$TMP_SCRIPT"
+    chmod --reference="$SCRIPT" "$TMP_SCRIPT" 2>/dev/null || chmod +x "$TMP_SCRIPT"
+    mv "$TMP_SCRIPT" "$SCRIPT"
+  fi
+done
+
 # Clean up to reduce size
 echo "==> Cleaning up..."
 SITE="$BUNDLE_DIR/python/lib/python3.12/site-packages"
