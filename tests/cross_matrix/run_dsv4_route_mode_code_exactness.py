@@ -147,6 +147,77 @@ def analyze_content(content: str) -> dict[str, Any]:
     }
 
 
+def _render_dsv4_prompt(
+    messages: list[dict[str, Any]],
+    *,
+    enable_thinking: bool | None,
+    reasoning_effort: str | None,
+    model_path: str,
+) -> str:
+    from vmlx_engine.loaders.dsv4_chat_encoder import apply_chat_template
+
+    return apply_chat_template(
+        messages,
+        enable_thinking=enable_thinking,
+        reasoning_effort=reasoning_effort,
+        model_path=model_path,
+    )
+
+
+def prompt_diagnostics(
+    route: str,
+    body: dict[str, Any],
+    *,
+    model_path: str,
+    renderer: Any | None = None,
+) -> dict[str, Any]:
+    """Record the concrete DSV4 prompt rail used by an exactness case."""
+    if route == "completion":
+        prompt = str(body.get("prompt") or "")
+        enable_thinking = None
+        reasoning_effort = None
+    else:
+        messages = body.get("messages") if route == "chat" else body.get("input")
+        if not isinstance(messages, list):
+            messages = []
+        template_kwargs = body.get("chat_template_kwargs")
+        if not isinstance(template_kwargs, dict):
+            template_kwargs = {}
+        enable_thinking = template_kwargs.get("enable_thinking", body.get("enable_thinking"))
+        reasoning_effort = template_kwargs.get("reasoning_effort", body.get("reasoning_effort"))
+        render = renderer or _render_dsv4_prompt
+        prompt = render(
+            messages,
+            enable_thinking=enable_thinking,
+            reasoning_effort=reasoning_effort,
+            model_path=model_path,
+        )
+
+    assistant_think_open = "<｜Assistant｜><think>"
+    assistant_think_close = "<｜Assistant｜></think>"
+    prompt_tail = prompt[-320:]
+    if prompt.endswith(assistant_think_open):
+        suffix_kind = "thinking_open"
+    elif prompt.endswith(assistant_think_close):
+        suffix_kind = "thinking_closed"
+    elif "<think>" in prompt_tail:
+        suffix_kind = "contains_think_open"
+    elif "</think>" in prompt_tail:
+        suffix_kind = "contains_think_close"
+    else:
+        suffix_kind = "none"
+    return {
+        "route": route,
+        "enable_thinking": enable_thinking,
+        "reasoning_effort": reasoning_effort,
+        "prompt_chars": len(prompt),
+        "prompt_tail": prompt_tail,
+        "assistant_suffix_kind": suffix_kind,
+        "prompt_endswith_assistant_think_open": prompt.endswith(assistant_think_open),
+        "prompt_endswith_assistant_think_close": prompt.endswith(assistant_think_close),
+    }
+
+
 def build_cmd(args: argparse.Namespace) -> list[str]:
     return [
         str(Path(args.python).expanduser().resolve()),
@@ -309,6 +380,11 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                     if elapsed > 0 and completion_tokens
                     else 0.0,
                     "content": content,
+                    "prompt_diagnostics": prompt_diagnostics(
+                        route,
+                        body,
+                        model_path=args.model,
+                    ),
                     **analysis,
                     "raw_keys": sorted(response.keys()) if isinstance(response, dict) else [],
                 }
