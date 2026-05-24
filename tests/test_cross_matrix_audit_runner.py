@@ -1107,6 +1107,19 @@ def test_multilingual_loop_gate_allows_expected_web_technical_tokens():
     assert multilingual_loop_quality_ok(text)
 
 
+def test_multilingual_loop_gate_allows_prompted_wasd_control_acronym():
+    text = (
+        "1. Игрок управляет охотником, который бежит по лесной тропе, используя WASD или стрелки.\n"
+        "2. Дробовик позволяет стрелять по врагам и создавать короткий луч выстрела вперёд.\n"
+        "3. Враги появляются случайно из-за деревьев и движутся к охотнику с разной скоростью.\n"
+        "4. При попадании выстрела враг получает урон, теряет очки здоровья и исчезает.\n"
+        "5. За каждого врага начисляются очки, а игра заканчивается при истощении здоровья."
+    )
+
+    assert text_quality_summary(text)["latin_chars"] == 4
+    assert multilingual_loop_quality_ok(text)
+
+
 def test_loop_sensitive_rows_require_live_loop_probe():
     rows = {row.id: row for row in ROWS}
 

@@ -2124,7 +2124,7 @@ def text_quality_summary(text: str) -> dict[str, Any]:
 
 
 def multilingual_latin_tokens_ok(text: str) -> bool:
-    allowed = {"html", "three", "js", "javascript", "css", "webgl"}
+    allowed = {"html", "three", "js", "javascript", "css", "webgl", "wasd"}
     tokens = {token.lower() for token in re.findall(r"[A-Za-z]{2,}", text)}
     return tokens <= allowed
 
