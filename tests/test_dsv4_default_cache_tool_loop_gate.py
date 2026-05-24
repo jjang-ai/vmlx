@@ -31,6 +31,35 @@ def test_dsv4_default_cache_tool_loop_gate_dry_run_pins_default_cache_flags():
     assert result["env"]["DSV4_POOL_QUANT"] == "0"
 
 
+def test_dsv4_default_cache_tool_loop_gate_dry_run_pins_code_body_tool_probe():
+    from tests.cross_matrix.run_dsv4_default_cache_tool_loop_gate import (
+        EXPECTED_CODE_TOOL_CONTENT,
+        EXPECTED_CODE_TOOL_PATH,
+        run,
+    )
+
+    result = run(
+        Namespace(
+            model="/models/dsv4",
+            python=Path("/python"),
+            port=8899,
+            out=Path("unused.json"),
+            timeout=1,
+            request_timeout=1,
+            min_free_gb=0,
+            dry_run=True,
+            pool_quant=False,
+        )
+    )
+
+    assert result["code_tool_probe"] == {
+        "path": EXPECTED_CODE_TOOL_PATH,
+        "expected_content": EXPECTED_CODE_TOOL_CONTENT,
+    }
+    assert "THREE.WebGLRenderer" in EXPECTED_CODE_TOOL_CONTENT
+    assert "THREE.MeshBasicMaterial" in EXPECTED_CODE_TOOL_CONTENT
+
+
 def test_dsv4_default_cache_tool_loop_gate_memory_preflight_skips_before_spawn(
     monkeypatch,
 ):

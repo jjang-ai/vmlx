@@ -66,6 +66,18 @@ TOOLS: list[dict[str, Any]] = [
     },
 ]
 
+EXPECTED_HTML_TOOL_PATH = "landing-p/proof.html"
+EXPECTED_HTML_TOOL_CONTENT = "<html><body>dsv4-default-cache-tool-ok</body></html>"
+EXPECTED_CODE_TOOL_PATH = "landing-p/scene.js"
+EXPECTED_CODE_TOOL_CONTENT = (
+    "const scene = new THREE.Scene();\n"
+    "const renderer = new THREE.WebGLRenderer();\n"
+    "const camera = new THREE.PerspectiveCamera(75, 1, 0.1, 1000);\n"
+    "const cube = new THREE.Mesh(new THREE.BoxGeometry(), new THREE.MeshBasicMaterial());\n"
+    "scene.add(cube);\n"
+    "renderer.render(scene, camera);"
+)
+
 
 def resolve_default_model() -> str:
     for candidate in DEFAULT_MODEL_CANDIDATES:
@@ -282,6 +294,10 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             "model": args.model,
             "cmd": cmd,
             "env": env_summary,
+            "code_tool_probe": {
+                "path": EXPECTED_CODE_TOOL_PATH,
+                "expected_content": EXPECTED_CODE_TOOL_CONTENT,
+            },
             "telemetry": [resource_snapshot("dry_run")],
         }
 
@@ -310,7 +326,11 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             (workspace / "README.md").write_text("dsv4 default cache tool loop\n", encoding="utf-8")
             prompts = [
                 "Use list_directory for path '.' and do not answer in prose.",
-                "Now use write_file to create landing-p/proof.html with content exactly '<html><body>dsv4-default-cache-tool-ok</body></html>'. Do not answer in prose.",
+                f"Now use write_file to create {EXPECTED_HTML_TOOL_PATH} with content exactly {EXPECTED_HTML_TOOL_CONTENT!r}. Do not answer in prose.",
+                (
+                    f"Use write_file to create {EXPECTED_CODE_TOOL_PATH} with content exactly "
+                    f"{EXPECTED_CODE_TOOL_CONTENT!r}. Preserve identifier spelling and do not answer in prose."
+                ),
                 "No more tools. Reply exactly DONE.",
             ]
             for index, prompt in enumerate(prompts):
@@ -329,7 +349,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                     "enable_thinking": False,
                     "chat_template_kwargs": {"enable_thinking": False},
                 }
-                if index < 2:
+                if index < 3:
                     body["tools"] = TOOLS
                     body["tool_choice"] = "auto"
                 if previous_response_id:
@@ -364,8 +384,12 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 )
                 telemetry.append(resource_snapshot(f"after_round_{index}", proc))
 
-            written = workspace / "landing-p/proof.html"
+            written = workspace / EXPECTED_HTML_TOOL_PATH
             file_content = written.read_text(encoding="utf-8") if written.exists() else None
+            code_written = workspace / EXPECTED_CODE_TOOL_PATH
+            code_file_content = (
+                code_written.read_text(encoding="utf-8") if code_written.exists() else None
+            )
 
         health1 = get_json(f"http://127.0.0.1:{args.port}/health", timeout=10)
         cache_stats = get_json(f"http://127.0.0.1:{args.port}/v1/cache/stats", timeout=10)
@@ -384,10 +408,11 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             for row in rounds
         ]
         checks = {
-            "tool_sequence_ordered": tool_names == ["list_directory", "write_file"],
+            "tool_sequence_ordered": tool_names
+            == ["list_directory", "write_file", "write_file"],
             "final_done": bool(rounds and rounds[-1].get("output_text") == "DONE"),
-            "file_written": file_content
-            == "<html><body>dsv4-default-cache-tool-ok</body></html>",
+            "file_written": file_content == EXPECTED_HTML_TOOL_CONTENT,
+            "code_file_written_exact": code_file_content == EXPECTED_CODE_TOOL_CONTENT,
             "native_cache": native.get("cache_type") == "native_composite",
             "native_prefix": native.get("prefix") is True,
             "native_paged": native.get("paged") is True,
@@ -409,6 +434,11 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             "cache_stats": cache_stats,
             "rounds": rounds,
             "checks": checks,
+            "code_tool_probe": {
+                "path": EXPECTED_CODE_TOOL_PATH,
+                "expected_content": EXPECTED_CODE_TOOL_CONTENT,
+                "actual_content": code_file_content,
+            },
             "telemetry": telemetry,
             "tool_loop_cached_tokens": cached_total,
             "tool_loop_cache_details": details,
