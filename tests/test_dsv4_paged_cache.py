@@ -1433,9 +1433,11 @@ def test_dsv4_generator_skips_prompt_snapshot_when_cache_store_disabled(monkeypa
             return [object()]
 
         def __call__(self, ids, cache=None):
+            model_calls.append(ids.tolist()[0])
             return mx.array([[[0.0, 1.0, 0.0]]], dtype=mx.float32)
 
     calls = []
+    model_calls = []
 
     def _snapshot(_cache):
         calls.append("snapshot")
@@ -1444,13 +1446,14 @@ def test_dsv4_generator_skips_prompt_snapshot_when_cache_store_disabled(monkeypa
     monkeypatch.setattr(DSV4BatchGenerator, "_snapshot_dsv4_cache", staticmethod(_snapshot))
     gen = DSV4BatchGenerator(_Model(), capture_prompt_snapshot=False)
     gen._warmed_up = True
-    gen.insert([[42, 43]], max_tokens=[2])
+    gen.insert([[42, 43, 44]], max_tokens=[2])
 
     prompt_responses, generation_responses = gen.next()
 
     assert prompt_responses
     assert not generation_responses
     assert calls == []
+    assert model_calls == [[42, 43, 44]]
     assert prompt_responses[0].prompt_cache_snapshot is None
 
 

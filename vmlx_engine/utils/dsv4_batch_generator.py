@@ -653,7 +653,13 @@ class DSV4BatchGenerator:
                     # Phase 2: prefill the last token to advance the
                     #          live cache to N (used for first-token
                     #          decode logits).
-                    if len(r.prompt_tokens) >= 2:
+                    should_capture_snapshot = (
+                        self.capture_prompt_snapshot
+                        and len(r.prompt_tokens) >= 2
+                        and len(r.prompt_tokens) - 1 >= self.prompt_snapshot_min_tokens
+                    )
+
+                    if should_capture_snapshot:
                         head_tokens = r.prompt_tokens[:-1]
                         last_token = r.prompt_tokens[-1:]
                         # Phase 1
@@ -665,49 +671,26 @@ class DSV4BatchGenerator:
                             r.uid,
                             tokens=len(head_tokens),
                         )
-                        if (
-                            self.capture_prompt_snapshot
-                            and len(head_tokens) >= self.prompt_snapshot_min_tokens
-                        ):
-                            try:
-                                _t_snapshot = time.perf_counter()
-                                r.prompt_snapshot = self._snapshot_dsv4_cache(r.cache)
-                                self._trace_timing(
-                                    "prompt_snapshot",
-                                    _t_snapshot,
-                                    r.uid,
-                                    layers=len(r.prompt_snapshot or []),
-                                )
-                                if r.prompt_snapshot is not None:
-                                    logger.debug(
-                                        f"DSV4Gen: captured N-1 prompt-boundary "
-                                        f"snapshot ({len(r.prompt_snapshot)} layers, "
-                                        f"N-1={len(head_tokens)} tokens) "
-                                        f"for uid={r.uid}"
-                                    )
-                            except Exception as _snap_err:
-                                logger.warning(
-                                    f"DSV4Gen: snapshot capture failed: {_snap_err}"
-                                )
-                                r.prompt_snapshot = None
-                        elif self.capture_prompt_snapshot:
-                            r.prompt_snapshot = None
-                            _t_snapshot_skip = time.perf_counter()
+                        try:
+                            _t_snapshot = time.perf_counter()
+                            r.prompt_snapshot = self._snapshot_dsv4_cache(r.cache)
                             self._trace_timing(
-                                "prompt_snapshot_skipped",
-                                _t_snapshot_skip,
+                                "prompt_snapshot",
+                                _t_snapshot,
                                 r.uid,
-                                tokens=len(head_tokens),
-                                min_tokens=self.prompt_snapshot_min_tokens,
+                                layers=len(r.prompt_snapshot or []),
                             )
-                            logger.debug(
-                                "DSV4Gen: skipped prompt-boundary snapshot for "
-                                "short prompt (N-1=%d < min_tokens=%d) uid=%s",
-                                len(head_tokens),
-                                self.prompt_snapshot_min_tokens,
-                                r.uid,
+                            if r.prompt_snapshot is not None:
+                                logger.debug(
+                                    f"DSV4Gen: captured N-1 prompt-boundary "
+                                    f"snapshot ({len(r.prompt_snapshot)} layers, "
+                                    f"N-1={len(head_tokens)} tokens) "
+                                    f"for uid={r.uid}"
+                                )
+                        except Exception as _snap_err:
+                            logger.warning(
+                                f"DSV4Gen: snapshot capture failed: {_snap_err}"
                             )
-                        else:
                             r.prompt_snapshot = None
                         # Phase 2 — feed the last token, get its logits
                         _t_prefill_last = time.perf_counter()
@@ -719,16 +702,32 @@ class DSV4BatchGenerator:
                             tokens=len(last_token),
                         )
                     else:
-                        # Trivial 1-token prompt — no N-1 to snapshot.
-                        _t_prefill_last = time.perf_counter()
+                        if self.capture_prompt_snapshot and len(r.prompt_tokens) >= 2:
+                            _t_snapshot_skip = time.perf_counter()
+                            self._trace_timing(
+                                "prompt_snapshot_skipped",
+                                _t_snapshot_skip,
+                                r.uid,
+                                tokens=len(r.prompt_tokens) - 1,
+                                min_tokens=self.prompt_snapshot_min_tokens,
+                            )
+                            logger.debug(
+                                "DSV4Gen: skipped prompt-boundary snapshot for "
+                                "short prompt (N-1=%d < min_tokens=%d) uid=%s",
+                                len(r.prompt_tokens) - 1,
+                                self.prompt_snapshot_min_tokens,
+                                r.uid,
+                            )
+                        else:
+                            r.prompt_snapshot = None
+                        _t_prefill = time.perf_counter()
                         last_logits = self._prefill_last_logits(r.prompt_tokens, r.cache)
                         self._trace_timing(
-                            "prefill_last",
-                            _t_prefill_last,
+                            "prefill_full",
+                            _t_prefill,
                             r.uid,
                             tokens=len(r.prompt_tokens),
                         )
-                        r.prompt_snapshot = None
 
                     _t_sample = time.perf_counter()
                     sampled, logprobs = self._sample(
