@@ -43,6 +43,8 @@ def test_vl_media_cache_contract_pins_named_panel_rows():
     assert "does not route Nemotron-H text extracts through MLLM from stale sidecars" in required
     assert "multimodal/VLM detection suppresses --enable-jit because mlx-vlm streaming is not compile-safe" in required
     assert "VLM with all caching features works together" in required
+    assert "VLM suppresses external speculative decoding at launch" in required
+    assert "VLM suppresses external speculative decoding at launch" in required
 
     for name in (
         "panel_vl_media_followup_contracts",

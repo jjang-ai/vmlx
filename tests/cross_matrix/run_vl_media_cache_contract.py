@@ -162,7 +162,7 @@ REQUIRED_PANEL_VL_MEDIA_TEST_MARKERS = (
     "multimodal/VLM detection suppresses --enable-jit because mlx-vlm streaming is not compile-safe",
     "continuous batching off is a real master switch for VLM cache flags",
     "VLM with all caching features works together",
-    "VLM + speculative decoding both emit flags (Python gates server-side)",
+    "VLM suppresses external speculative decoding at launch",
 )
 
 
