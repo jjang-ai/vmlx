@@ -315,9 +315,12 @@ def test_panel_suppresses_generic_batch_and_chunk_controls_for_dsv4():
     assert "if (!dsv4Active && prefillStepSize != null)" in sessions
     assert "const completionBatchSize = finitePositiveInteger(config.completionBatchSize)" in sessions
     assert "if (!dsv4Active && completionBatchSize != null)" in sessions
-    assert "if (!dsv4Active && config.prefillBatchSize" in settings
-    assert "if (!dsv4Active && config.prefillStepSize" in settings
-    assert "if (!dsv4Active && config.completionBatchSize" in settings
+    assert "const prefillBatchSize = finitePositiveInteger(config.prefillBatchSize)" in settings
+    assert "if (!dsv4Active && prefillBatchSize != null)" in settings
+    assert "const prefillStepSize = finitePositiveInteger(config.prefillStepSize)" in settings
+    assert "if (!dsv4Active && prefillStepSize != null)" in settings
+    assert "const completionBatchSize = finitePositiveInteger(config.completionBatchSize)" in settings
+    assert "if (!dsv4Active && completionBatchSize != null)" in settings
 
 
 def test_dsv4_ui_defaults_composite_cache_on_but_exposes_explicit_disable():

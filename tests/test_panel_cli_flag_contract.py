@@ -179,3 +179,42 @@ def test_command_preview_uses_runtime_numeric_sanitizers_for_advanced_modes() ->
     ):
         assert expression in runtime_advanced
         assert expression in preview_advanced
+
+
+def test_command_preview_uses_runtime_numeric_sanitizers_for_core_flags() -> None:
+    """Core launch knobs must not show CLI values runtime would omit or floor."""
+
+    preview = (
+        ROOT / "panel" / "src" / "renderer" / "src" / "components" / "sessions" / "SessionSettings.tsx"
+    ).read_text(encoding="utf-8")
+    sessions = (ROOT / "panel" / "src" / "main" / "sessions.ts").read_text(encoding="utf-8")
+
+    preview_body = preview[
+        preview.index("function buildCommandPreview("):
+        preview.index("return parts.join", preview.index("function buildCommandPreview("))
+    ]
+    runtime_start = sessions.index("buildArgs(config: ServerConfig): string[]")
+    runtime_body = sessions[
+        runtime_start:
+        sessions.index("findEnginePath()", runtime_start)
+    ]
+
+    for expression in (
+        "finitePositiveInteger(config.rateLimit)",
+        "finitePositiveInteger(config.maxNumSeqs)",
+        "finitePositiveInteger(config.prefillBatchSize)",
+        "finitePositiveInteger(config.prefillStepSize)",
+        "finitePositiveInteger(config.completionBatchSize)",
+        "finitePositiveInteger(config.prefixCacheSize)",
+        "finitePositiveInteger(config.prefixCacheMaxBytes)",
+        "finitePositiveInteger(config.cacheMemoryMb)",
+        "finitePositiveNumber(config.cacheMemoryPercent)",
+        "finitePositiveNumber(config.cacheTtlMinutes)",
+        "finitePositiveInteger(effectivePagedCacheBlockSize)",
+        "finitePositiveInteger(config.maxCacheBlocks)",
+        "finitePositiveInteger(config.kvCacheGroupSize)",
+        "finiteNonNegativeNumber(config.diskCacheMaxGb)",
+        "finiteNonNegativeNumber(config.blockDiskCacheMaxGb)",
+    ):
+        assert expression in runtime_body
+        assert expression in preview_body
