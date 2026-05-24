@@ -560,6 +560,7 @@ def _dsv4_prompt_rail_exactness_detail(
                 "name": name,
                 "route": case.get("route"),
                 "exact": exact,
+                "normalized_exact": case.get("normalized_exact"),
                 "assistant_suffix_kind": suffix,
                 "prompt_endswith_assistant_think_open": (
                     prompt_diagnostics.get("prompt_endswith_assistant_think_open")

@@ -137,14 +137,27 @@ def extract_content(route: str, response: Any) -> tuple[str, str | None, int, in
 
 
 def analyze_content(content: str) -> dict[str, Any]:
+    normalized = normalize_code_content(content)
     missing = [item for item in REQUIRED_IDENTIFIERS if item not in content]
     corrupt = [item for item in CORRUPT_PATTERNS if item in content]
     return {
         "exact": content.strip() == EXACT_CODE.strip(),
+        "normalized_exact": normalized.strip() == EXACT_CODE.strip(),
         "missing": missing,
         "corrupt_patterns": corrupt,
         "has_markdown_fence": "```" in content,
     }
+
+
+def normalize_code_content(content: str) -> str:
+    """Remove one ordinary markdown code fence wrapper for diagnostic analysis."""
+    stripped = content.strip()
+    if not stripped.startswith("```"):
+        return stripped
+    lines = stripped.splitlines()
+    if len(lines) < 3 or not lines[-1].strip().startswith("```"):
+        return stripped
+    return "\n".join(lines[1:-1]).strip()
 
 
 def _render_dsv4_prompt(

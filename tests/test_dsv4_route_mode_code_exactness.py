@@ -1,7 +1,10 @@
 from tests.cross_matrix.run_dsv4_route_mode_code_exactness import (
     CASE_NAMES,
+    EXACT_CODE,
+    analyze_content,
     case_body,
     dry_run,
+    normalize_code_content,
     prompt_diagnostics,
 )
 
@@ -71,6 +74,26 @@ def test_dsv4_code_exactness_probe_records_prompt_rail_diagnostics():
     assert on_diag["assistant_suffix_kind"] == "thinking_open"
     assert on_diag["enable_thinking"] is True
     assert on_diag["prompt_endswith_assistant_think_open"] is True
+
+
+def test_dsv4_code_exactness_probe_separates_fence_from_identifier_corruption():
+    fenced_exact = f"```javascript\n{EXACT_CODE}\n```"
+    fenced_analysis = analyze_content(fenced_exact)
+
+    assert normalize_code_content(fenced_exact) == EXACT_CODE
+    assert fenced_analysis["exact"] is False
+    assert fenced_analysis["normalized_exact"] is True
+    assert fenced_analysis["has_markdown_fence"] is True
+    assert fenced_analysis["missing"] == []
+    assert fenced_analysis["corrupt_patterns"] == []
+
+    corrupt = fenced_exact.replace("WebGLRenderer", "WebWebGLRenderer")
+    corrupt_analysis = analyze_content(corrupt)
+
+    assert corrupt_analysis["exact"] is False
+    assert corrupt_analysis["normalized_exact"] is False
+    assert "THREE.WebGLRenderer" in corrupt_analysis["missing"]
+    assert "WebWebGLRenderer" in corrupt_analysis["corrupt_patterns"]
 
 
 def test_dsv4_code_exactness_probe_dry_run_records_all_prompt_rails():

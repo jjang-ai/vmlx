@@ -951,6 +951,7 @@ def test_objective_proof_digest_surfaces_dsv4_prompt_rail_exactness_probe(tmp_pa
                     "name": "chat_on",
                     "route": "chat",
                     "exact": False,
+                    "normalized_exact": True,
                     "missing": [],
                     "corrupt_patterns": [],
                     "has_markdown_fence": True,
@@ -971,6 +972,19 @@ def test_objective_proof_digest_surfaces_dsv4_prompt_rail_exactness_probe(tmp_pa
                         "assistant_suffix_kind": "thinking_open",
                         "prompt_endswith_assistant_think_open": True,
                         "prompt_endswith_assistant_think_close": False,
+                    },
+                },
+                {
+                    "name": "chat_max",
+                    "route": "chat",
+                    "exact": False,
+                    "missing": ["THREE.WebGLRenderer"],
+                    "corrupt_patterns": ["WebWebGLRenderer"],
+                    "has_markdown_fence": True,
+                    "prompt_diagnostics": {
+                        "assistant_suffix_kind": "thinking_closed",
+                        "prompt_endswith_assistant_think_open": False,
+                        "prompt_endswith_assistant_think_close": True,
                     },
                 },
                 {
@@ -1031,7 +1045,7 @@ def test_objective_proof_digest_surfaces_dsv4_prompt_rail_exactness_probe(tmp_pa
         "build/current-dsv4-route-mode-code-exactness-dryrun-20260524-thinking-on-responses-controls.json",
         {
             "status": "dry_run",
-            "case_count": 9,
+            "case_count": 10,
             "cases": [
                 {
                     "name": "chat_off",
@@ -1062,6 +1076,15 @@ def test_objective_proof_digest_surfaces_dsv4_prompt_rail_exactness_probe(tmp_pa
                         "enable_thinking": False,
                         "max_output_tokens": 512,
                         "repetition_penalty": 1.0,
+                    },
+                    "prompt_diagnostics": {"assistant_suffix_kind": "thinking_closed"},
+                },
+                {
+                    "name": "chat_max",
+                    "route": "chat",
+                    "request_overrides": {
+                        "enable_thinking": False,
+                        "max_tokens": 512,
                     },
                     "prompt_diagnostics": {"assistant_suffix_kind": "thinking_closed"},
                 },
@@ -1118,6 +1141,7 @@ def test_objective_proof_digest_surfaces_dsv4_prompt_rail_exactness_probe(tmp_pa
     assert probe["failed_thinking_closed_cases"] == [
         "chat_off",
         "chat_off_rep1",
+        "chat_max",
         "responses_off",
         "responses_off_rep1",
     ]
@@ -1132,10 +1156,12 @@ def test_objective_proof_digest_surfaces_dsv4_prompt_rail_exactness_probe(tmp_pa
         "responses_on_rep1",
     ]
     assert probe["dry_run_status"] == "dry_run"
-    assert probe["dry_run_case_count"] == 9
+    assert probe["dry_run_case_count"] == 10
+    assert probe["dry_run_suffixes"]["chat_max"] == "thinking_closed"
     assert probe["dry_run_suffixes"]["legacy_completion_raw"] == "none"
     assert probe["dry_run_suffixes"]["responses_on"] == "thinking_open"
     assert probe["case_summaries"][0]["assistant_suffix_kind"] == "thinking_closed"
+    assert probe["case_summaries"][2]["normalized_exact"] is True
     assert probe["case_summaries"][0]["prompt_tail"].endswith("</think>")
 
 
