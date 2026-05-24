@@ -1010,6 +1010,50 @@ def test_minimax_ling_do_not_use_long_repetition_context():
     assert "_rep_context_size = 512 if self._long_repetition_context else 20" in source
 
 
+def test_dsv4_repetition_penalty_uses_generated_only_prompt_context():
+    """DSV4 exact-copy/code prompts must not penalize every prompt token.
+
+    Normal mlx_lm generate_step semantics apply repetition penalty to the final
+    prompt token plus generated tokens. DSV4 still passes the full original
+    prompt into its custom generator for cache-hit parity, so the scheduler must
+    pass a wrapped per-request processor and must not install unwrapped global
+    processors on the DSV4 generator.
+    """
+    import inspect
+    from vmlx_engine.scheduler import Scheduler
+
+    create_src = inspect.getsource(Scheduler._create_batch_generator)
+    dsv4_block = create_src[
+        create_src.index("return DSV4BatchGenerator("):
+        create_src.index("except Exception as _dsv4_err:")
+    ]
+    assert "logits_processors=None" in dsv4_block
+    assert "logits_processors=logits_processors" not in dsv4_block
+
+    schedule_src = inspect.getsource(Scheduler._schedule_waiting)
+    dsv4_insert_block = schedule_src[
+        schedule_src.index('== "DSV4BatchGenerator"'):
+        schedule_src.index("else:", schedule_src.index('== "DSV4BatchGenerator"'))
+    ]
+    assert 'insert_kwargs["all_tokens"] = [request.prompt_token_ids]' in dsv4_insert_block
+    assert "request_processors = self._request_logits_processors(" in dsv4_insert_block
+    assert "request, list(request.prompt_token_ids)" in dsv4_insert_block
+    assert 'insert_kwargs["logits_processors"]' in dsv4_insert_block
+
+    seen = {}
+
+    def processor(tokens, logits):
+        seen["tokens"] = list(tokens)
+        return logits
+
+    wrapped = Scheduler._wrap_generated_only_logits_processor(
+        processor,
+        skip_prefix_tokens=3,
+    )
+    wrapped([10, 11, 12, 13, 14, 15], object())
+    assert seen["tokens"] == [13, 14, 15]
+
+
 def test_hybrid_ssm_rederive_uses_n_minus_one_cache_key():
     """Hybrid SSM companion must align with paged KV's N-1 cache key.
 

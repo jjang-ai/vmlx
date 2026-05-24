@@ -2353,13 +2353,12 @@ class Scheduler:
 
         # Build logits processors (e.g., repetition penalty).
         #
-        # These are only installed globally on the DSV4 custom generator below.
         # mlx_lm.BatchGenerator applies global processors to the entire prompt
         # context, while mlx_lm.generate_step applies repetition penalty from
-        # the final prompt token onward. For normal batched models we install
-        # per-request wrappers in _schedule_waiting() so continuous batching
-        # matches generate_step and does not suppress useful prompt vocabulary
-        # on long non-English/code prompts.
+        # the final prompt token onward. Install per-request wrappers in
+        # _schedule_waiting() so continuous batching and DSV4 custom generation
+        # match generate_step without suppressing useful prompt vocabulary on
+        # long non-English/code prompts.
         logits_processors = None
         if (
             sampling_params.repetition_penalty
@@ -2413,7 +2412,7 @@ class Scheduler:
                     max_tokens=sampling_params.max_tokens,
                     stop_tokens=stop_tokens,
                     sampler=sampler,
-                    logits_processors=logits_processors,
+                    logits_processors=None,
                     prefill_batch_size=1,
                     completion_batch_size=1,
                     prefill_step_size=self.config.prefill_step_size,
@@ -5032,8 +5031,20 @@ class Scheduler:
                         # itself during its pinned-stream decode loop. Pass the
                         # full original prompt so prefix-cache hit paths and
                         # normal prefill paths use the same logits-processor
-                        # context instead of only the re-fed tail token.
+                        # context instead of only the re-fed tail token. The
+                        # processor itself must still use generate_step
+                        # semantics: final prompt token plus generated output,
+                        # not the full user prompt. Exact-copy/code prompts put
+                        # target identifiers in the prompt; penalizing that
+                        # entire prompt corrupts valid repeats.
                         insert_kwargs["all_tokens"] = [request.prompt_token_ids]
+                        request_processors = self._request_logits_processors(
+                            request, list(request.prompt_token_ids)
+                        )
+                        if request_processors is not None:
+                            insert_kwargs["logits_processors"] = [
+                                request_processors
+                            ]
                     else:
                         request_processors = self._request_logits_processors(
                             request, list(tokens_to_process)
@@ -5066,6 +5077,13 @@ class Scheduler:
                             == "DSV4BatchGenerator"
                         ):
                             insert_kwargs["all_tokens"] = [request.prompt_token_ids]
+                            request_processors = self._request_logits_processors(
+                                request, list(request.prompt_token_ids)
+                            )
+                            if request_processors is not None:
+                                insert_kwargs["logits_processors"] = [
+                                    request_processors
+                                ]
                         else:
                             request_processors = self._request_logits_processors(
                                 request, list(tokens_to_process)
