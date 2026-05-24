@@ -267,6 +267,8 @@ def build_request(
     retained_image_turns: int,
     enable_thinking: bool | None = None,
     max_thinking_tokens: int | None = None,
+    cache_salt: str | None = None,
+    skip_prefix_cache: bool = False,
 ) -> dict[str, Any]:
     messages: list[dict[str, Any]] = []
     if image_path:
@@ -308,6 +310,10 @@ def build_request(
     if max_thinking_tokens is not None:
         request["max_thinking_tokens"] = int(max_thinking_tokens)
         template_kwargs["thinking_budget"] = int(max_thinking_tokens)
+    if cache_salt:
+        request["cache_salt"] = cache_salt
+    if skip_prefix_cache:
+        request["skip_prefix_cache"] = True
     if template_kwargs:
         request["chat_template_kwargs"] = template_kwargs
     return request
@@ -458,6 +464,57 @@ def add_speed_metrics(stage: dict[str, Any]) -> None:
     }
 
 
+def _nested_number(value: dict[str, Any], path: tuple[str, ...]) -> float | None:
+    cur: Any = value
+    for key in path:
+        if not isinstance(cur, dict):
+            return None
+        cur = cur.get(key)
+    if isinstance(cur, bool):
+        return None
+    if isinstance(cur, (int, float)):
+        return float(cur)
+    return None
+
+
+def _mb_to_gb(value: float | None) -> float | None:
+    if value is None:
+        return None
+    return round(value / 1024, 3)
+
+
+def add_memory_metrics(stage: dict[str, Any]) -> None:
+    before = stage.get("before") if isinstance(stage.get("before"), dict) else {}
+    after = stage.get("after") if isinstance(stage.get("after"), dict) else {}
+
+    rss_before = _nested_number(before, ("process", "rss_mb"))
+    rss_after = _nested_number(after, ("process", "rss_mb"))
+    active_before = _nested_number(before, ("health", "body", "memory", "active_mb"))
+    active_after = _nested_number(after, ("health", "body", "memory", "active_mb"))
+    peak_after = _nested_number(after, ("health", "body", "memory", "peak_mb"))
+    cache_after = _nested_number(after, ("health", "body", "memory", "cache_mb"))
+
+    memory: dict[str, Any] = {}
+    if rss_before is not None:
+        memory["process_rss_before_gb"] = _mb_to_gb(rss_before)
+    if rss_after is not None:
+        memory["process_rss_after_gb"] = _mb_to_gb(rss_after)
+    if rss_before is not None and rss_after is not None:
+        memory["process_rss_delta_gb"] = _mb_to_gb(rss_after - rss_before)
+    if active_before is not None:
+        memory["metal_active_before_gb"] = _mb_to_gb(active_before)
+    if active_after is not None:
+        memory["metal_active_after_gb"] = _mb_to_gb(active_after)
+    if active_before is not None and active_after is not None:
+        memory["metal_active_delta_gb"] = _mb_to_gb(active_after - active_before)
+    if peak_after is not None:
+        memory["metal_peak_after_gb"] = _mb_to_gb(peak_after)
+    if cache_after is not None:
+        memory["metal_cache_after_gb"] = _mb_to_gb(cache_after)
+    if memory:
+        stage["memory"] = memory
+
+
 def extract_response_error_code(resp: Any) -> str | None:
     if not isinstance(resp, dict):
         return None
@@ -587,6 +644,8 @@ def run_probe(args: argparse.Namespace) -> dict[str, Any]:
                 args.retained_image_turns,
                 args.enable_thinking,
                 args.max_thinking_tokens,
+                args.cache_salt,
+                args.skip_prefix_cache,
             )
             started = time.time()
             try:
@@ -607,6 +666,7 @@ def run_probe(args: argparse.Namespace) -> dict[str, Any]:
                 stage["error"] = repr(exc)
                 stage["elapsed_s"] = round(time.time() - started, 3)
             stage["after"] = snapshot(f"after_{target}", args.port, proc)
+            add_memory_metrics(stage)
             reason = threshold_exceeded(stage["after"], args.abort_rss_gb, args.abort_metal_active_gb)
             if reason:
                 stage["abort_reason"] = reason
@@ -645,6 +705,8 @@ def parse_args() -> argparse.Namespace:
     thinking.add_argument("--disable-thinking", dest="enable_thinking", action="store_false")
     parser.set_defaults(enable_thinking=None)
     parser.add_argument("--max-thinking-tokens", type=int, default=None)
+    parser.add_argument("--cache-salt", default=None)
+    parser.add_argument("--skip-prefix-cache", action="store_true")
     parser.add_argument("--image-path")
     parser.add_argument("--retained-image-turns", type=int, default=1)
     parser.add_argument("--abort-rss-gb", type=float, default=0.0)

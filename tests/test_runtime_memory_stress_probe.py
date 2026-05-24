@@ -3,6 +3,7 @@ from tests.cross_matrix.run_runtime_memory_stress_probe import (
     build_request,
     classify_http_stage_status,
     extract_usage,
+    add_memory_metrics,
     probe_status_from_results,
     redact_large_payloads,
     Row,
@@ -70,6 +71,48 @@ def test_add_speed_metrics_reports_uncached_prompt_rate_for_cache_hits():
     assert stage["speed"]["prompt_tok_s_wall"] == 10065.868
     assert stage["speed"]["uncached_prompt_tok_s_wall"] == 0.998
     assert stage["speed"]["decode_tok_s_wall"] == 15.968
+
+
+def test_add_memory_metrics_summarizes_process_and_metal_deltas():
+    stage = {
+        "before": {
+            "process": {"rss_mb": 8192.0},
+            "health": {
+                "body": {
+                    "memory": {
+                        "active_mb": 16384.0,
+                        "peak_mb": 18432.0,
+                        "cache_mb": 256.0,
+                    }
+                }
+            },
+        },
+        "after": {
+            "process": {"rss_mb": 9216.0},
+            "health": {
+                "body": {
+                    "memory": {
+                        "active_mb": 17408.0,
+                        "peak_mb": 20480.0,
+                        "cache_mb": 384.0,
+                    }
+                }
+            },
+        },
+    }
+
+    add_memory_metrics(stage)
+
+    assert stage["memory"] == {
+        "process_rss_before_gb": 8.0,
+        "process_rss_after_gb": 9.0,
+        "process_rss_delta_gb": 1.0,
+        "metal_active_before_gb": 16.0,
+        "metal_active_after_gb": 17.0,
+        "metal_active_delta_gb": 1.0,
+        "metal_peak_after_gb": 20.0,
+        "metal_cache_after_gb": 0.375,
+    }
 
 
 def test_redact_large_payloads_hides_data_urls_and_long_text():
@@ -197,3 +240,33 @@ def test_build_request_can_set_explicit_max_thinking_tokens_without_changing_out
         "enable_thinking": True,
         "thinking_budget": 16,
     }
+
+
+def test_build_request_can_bypass_prefix_cache_for_cold_speed_rows():
+    row = Row("gemma", "/models/Gemma-4-26B")
+
+    chat = build_request(
+        row,
+        "Cold run.",
+        64,
+        "chat",
+        None,
+        retained_image_turns=1,
+        cache_salt="cold-gemma",
+        skip_prefix_cache=True,
+    )
+    responses = build_request(
+        row,
+        "Cold run.",
+        64,
+        "responses",
+        None,
+        retained_image_turns=1,
+        cache_salt="cold-gemma",
+        skip_prefix_cache=True,
+    )
+
+    assert chat["cache_salt"] == "cold-gemma"
+    assert chat["skip_prefix_cache"] is True
+    assert responses["cache_salt"] == "cold-gemma"
+    assert responses["skip_prefix_cache"] is True
