@@ -1853,41 +1853,40 @@ class MLLMScheduler:
             uses_zaya_cache=self._uses_zaya_cache,
         )
         # Wire PLD speculative decoding into the batch generator (issue #134
-        # follow-up). Activates only on hybrid SSM/ATT models when
-        # --enable-pld is set. The excluded-token set (V0.6 filter) is built
-        # from tokenizer/processor special-token attributes to keep image-pad,
-        # vision markers, pad out of n-gram drafts.
+        # follow-up). Activates when --enable-pld is set. The excluded-token
+        # set (V0.6 filter) is built from tokenizer/processor special-token
+        # attributes to keep image-pad, vision markers, pad out of n-gram
+        # drafts.
         #
-        # SAFETY GATE on hybrid models: Mamba/SSM layers process multi-token
-        # input differently from single-token decode (parallel scan vs
-        # recurrent state). Even with mathematically-equivalent algorithms,
-        # finite-precision differences accumulate after replay-driven rollbacks,
-        # causing token-level output drift on low-acceptance workloads
-        # (observed live on Qwen3.5 hybrid: code generation produced duplicate
-        # tokens like "return        return", "fibonacci fibonacci(n(n"). The
-        # full-accept path is safer (no rollback) but still has the multi-token
-        # vs single-token forward semantics mismatch.
+        # PR #172 FIXES (byte-equality validated on Qwen2-VL-2B, 4/4 PASS):
+        #   1. Sequential K+1 single-token verify forwards — avoids VLM
+        #      multi-token forward logit divergence (smolvlm-specific).
+        #   2. batch.y seed instead of stale req.last_token — prevents KV
+        #      cache corruption after fallback-to-_step transitions.
+        #   3. Scheduler primary-token detokenization when stop is in extras
+        #      — prevents silent token drop on PLD-accepted stop sequences.
         #
-        # Until the cache-state divergence is root-caused and fixed, MLLM
-        # batched PLD is OPT-IN only via VMLX_ENABLE_MLLM_PLD=1.
+        # PURE-ATTENTION MLLM (VLM): default-ON when --enable-pld is set.
+        # Override: VMLX_DISABLE_MLLM_PLD=1 to force off.
         #
-        # LIVE VALIDATION FINDING (post-PR #150): even on pure-attention MLLM
-        # models (smolvlm), T=0 byte-equality FAILS when PLD is enabled.
-        # Output drifts token-level: "TheTheThe number number is is", etc.
-        # Root cause not pinned but suspected: multi-token verify forward
-        # produces different logits than the model's sequential single-token
-        # decode for the same input position. Affects both hybrid (Mamba) and
-        # pure-attention MLLM paths.
-        #
-        # Simple-engine PLD (PR #149's Scheduler path) is unaffected — it
-        # was validated as PR #26's +4-7% baseline before this work.
+        # HYBRID MODELS (SSM/Mamba): OPT-IN via VMLX_ENABLE_MLLM_PLD_HYBRID=1.
+        # Mamba layers use parallel-scan for multi-token input vs recurrent
+        # state for single-token decode; finite-precision differences after
+        # replay rollbacks cause token-level drift on low-acceptance workloads.
+        # Keep opt-in until hybrid cache-state divergence is root-caused.
         config_pld_enabled = bool(getattr(self.config, "pld_enabled", False))
         is_hybrid_model = getattr(self.batch_generator, "_is_hybrid", False)
-        mllm_opt_in = os.getenv("VMLX_ENABLE_MLLM_PLD", "0") == "1"
-        # Backward compat: VMLX_ENABLE_MLLM_PLD_HYBRID=1 also enables (covers
-        # the earlier hybrid-only opt-in).
+        force_disable = os.getenv("VMLX_DISABLE_MLLM_PLD", "0") == "1"
+        # Legacy env vars: VMLX_ENABLE_MLLM_PLD=1 forces on (backward compat).
+        # VMLX_ENABLE_MLLM_PLD_HYBRID=1 enables on hybrid models (opt-in).
+        force_enable = os.getenv("VMLX_ENABLE_MLLM_PLD", "0") == "1"
         hybrid_opt_in = os.getenv("VMLX_ENABLE_MLLM_PLD_HYBRID", "0") == "1"
-        pld_enabled = config_pld_enabled and (mllm_opt_in or hybrid_opt_in)
+        if is_hybrid_model:
+            # Hybrid: still opt-in only
+            pld_enabled = config_pld_enabled and (force_enable or hybrid_opt_in)
+        else:
+            # Pure-attention MLLM: default-ON when --enable-pld is set
+            pld_enabled = config_pld_enabled and not force_disable
         if pld_enabled:
             try:
                 excluded = self._build_pld_excluded_token_ids()
@@ -1896,9 +1895,8 @@ class MLLMScheduler:
                     excluded_token_ids=excluded,
                 )
                 logger.info(
-                    "[PLD] MLLM batched PLD enabled (opt-in) — K=%d, "
-                    "hybrid=%s, excluded_token_ids=%d. "
-                    "WARNING: experimental, may produce non-deterministic output.",
+                    "[PLD] MLLM batched PLD enabled — K=%d, "
+                    "hybrid=%s, excluded_token_ids=%d.",
                     2 if is_hybrid_model else 5,
                     is_hybrid_model,
                     len(excluded) if excluded else 0,
@@ -1908,11 +1906,14 @@ class MLLMScheduler:
                     "[PLD] MLLM PLD wiring failed, falling back to standard "
                     "decode: %s", exc,
                 )
-        elif config_pld_enabled:
+        elif config_pld_enabled and is_hybrid_model:
             logger.info(
-                "[PLD] MLLM batched PLD disabled by default "
-                "(live validation revealed T=0 output divergence). "
-                "Set VMLX_ENABLE_MLLM_PLD=1 to override (experimental)."
+                "[PLD] Hybrid model detected — MLLM PLD disabled by default. "
+                "Set VMLX_ENABLE_MLLM_PLD_HYBRID=1 to enable (experimental)."
+            )
+        elif config_pld_enabled and force_disable:
+            logger.info(
+                "[PLD] MLLM PLD disabled by VMLX_DISABLE_MLLM_PLD=1."
             )
         self._current_sampler_params = new_params
 
