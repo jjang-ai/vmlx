@@ -7705,6 +7705,12 @@ class TestTurboQuantKVTelemetry:
         assert "IMAGE_ADDITIONAL_ARG_BLOCKLIST" in preview_source
         assert "DSV4_ADDITIONAL_ARG_BLOCKLIST" in sessions_source
         assert "DSV4_ADDITIONAL_ARG_BLOCKLIST" in preview_source
+        assert "canonicalizeToolParserId" in sessions_source
+        preview_parser_block = preview_source[
+            preview_source.index("// Parser resolution"):
+            preview_source.index("// Prefix cache", preview_source.index("// Parser resolution"))
+        ]
+        assert "canonicalizeToolParserId" in preview_parser_block
 
         cli_source = Path("./vmlx_engine/cli.py").read_text()
         server_source = Path("./vmlx_engine/server.py").read_text()

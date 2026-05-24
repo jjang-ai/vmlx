@@ -5,6 +5,7 @@ import { useTranslation } from '../../i18n'
 import { resolveCacheLaunchPolicy } from '../../../../shared/cacheControlPolicy'
 import { buildMcpPolicyArgs } from '../../../../shared/mcpPolicy'
 import { canonicalizeReasoningParserForCli } from '../../../../shared/reasoningParserAliases'
+import { canonicalizeToolParserId } from '../../../../shared/toolParserAliases'
 
 interface Session {
   id: string
@@ -300,7 +301,7 @@ function buildCommandPreview(
   // (mirrors buildArgs: user choice wins over detection)
   const effectiveToolParser = config.toolCallParser === ''
     ? undefined
-    : (config.toolCallParser && config.toolCallParser !== 'auto' ? config.toolCallParser
+    : canonicalizeToolParserId(config.toolCallParser && config.toolCallParser !== 'auto' ? config.toolCallParser
       : detected?.toolParser)
   const effectiveAutoTool = config.enableAutoToolChoice ?? detected?.enableAutoToolChoice
   const requestedReasoningParser = config.reasoningParser === ''
