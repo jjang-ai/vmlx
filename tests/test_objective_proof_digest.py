@@ -849,6 +849,25 @@ def test_objective_proof_digest_tracks_ling_multilingual_cjk_leakage(tmp_path):
             ],
         },
     )
+    _write_json(
+        tmp_path,
+        "build/current-ling-jangtq-russian-prompt-variant-probe-20260524.json",
+        {
+            "ready": True,
+            "rows": [
+                {
+                    "name": "exact_game_prompt",
+                    "content": "4.碰撞检测实现目标击中与",
+                    "counts": {"cjk_chars": 10, "cyrillic_chars": 12},
+                },
+                {
+                    "name": "simple_russian_game_no_html",
+                    "content": "Игрок выбирает роль охотника.",
+                    "counts": {"cjk_chars": 0, "cyrillic_chars": 28},
+                },
+            ],
+        },
+    )
 
     digest = build_digest(tmp_path)
     rows = {item["requirement"]: item for item in digest["requirements"]}
@@ -859,6 +878,7 @@ def test_objective_proof_digest_tracks_ling_multilingual_cjk_leakage(tmp_path):
     assert ling["details"]["artifacts_with_cjk"] == [
         "build/current-ling-jangtq-strict-russian-nocache-bundled-4850c9c2-20260524.json",
         "build/current-ling-mxfp4-crack-strict-russian-nocache-bundled-4850c9c2-20260524.json",
+        "build/current-ling-jangtq-russian-prompt-variant-probe-20260524.json",
     ]
 
 

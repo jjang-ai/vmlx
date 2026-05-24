@@ -731,6 +731,7 @@ _ROWS: list[dict[str, Any]] = [
             "build/current-production-family-audit-ling-flash-tq-live-installed149-20260524-codex.json",
             "build/current-ling-jangtq-strict-russian-nocache-bundled-4850c9c2-20260524.json",
             "build/current-ling-mxfp4-crack-strict-russian-nocache-bundled-4850c9c2-20260524.json",
+            "build/current-ling-jangtq-russian-prompt-variant-probe-20260524.json",
             "build/current-objective-proof-audit-20260521.json",
         ],
     },

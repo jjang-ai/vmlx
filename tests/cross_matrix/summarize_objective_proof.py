@@ -120,6 +120,9 @@ LING_JANGTQ_STRICT_RUSSIAN_NOCACHE_REL = (
 LING_MXFP4_STRICT_RUSSIAN_NOCACHE_REL = (
     "build/current-ling-mxfp4-crack-strict-russian-nocache-bundled-4850c9c2-20260524.json"
 )
+LING_JANGTQ_RUSSIAN_PROMPT_VARIANT_REL = (
+    "build/current-ling-jangtq-russian-prompt-variant-probe-20260524.json"
+)
 DSV4_QUALITY_CLEARANCE_CHECKS = (
     "identifier_integrity",
     "threejs_single_file",
@@ -450,6 +453,11 @@ def _ling_request_rows(payload: dict[str, Any]) -> list[dict[str, Any]]:
         if isinstance(request, dict):
             rows.append(request)
     for row in payload.get("rows") or []:
+        if isinstance(row, dict) and (
+            "content" in row or "counts" in row or "quality" in row
+        ):
+            rows.append(row)
+    for row in payload.get("rows") or []:
         if not isinstance(row, dict):
             continue
         live = row.get("live") or {}
@@ -471,6 +479,10 @@ def _ling_multilingual_quality_detail(
         LING_INSTALLED_LIVE_AUDIT_REL: installed_live,
         LING_JANGTQ_STRICT_RUSSIAN_NOCACHE_REL: jangtq_strict,
         LING_MXFP4_STRICT_RUSSIAN_NOCACHE_REL: mxfp4_strict,
+        LING_JANGTQ_RUSSIAN_PROMPT_VARIANT_REL: _load(
+            root,
+            LING_JANGTQ_RUSSIAN_PROMPT_VARIANT_REL,
+        ),
     }
     artifact_statuses: dict[str, Any] = {}
     artifacts_with_cjk: list[str] = []
@@ -1963,6 +1975,7 @@ def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
             LING_INSTALLED_LIVE_AUDIT_REL,
             LING_JANGTQ_STRICT_RUSSIAN_NOCACHE_REL,
             LING_MXFP4_STRICT_RUSSIAN_NOCACHE_REL,
+            LING_JANGTQ_RUSSIAN_PROMPT_VARIANT_REL,
         ],
         caveat=(
             None
