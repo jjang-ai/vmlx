@@ -283,12 +283,19 @@ function buildCommandPreview(
     detected?: DetectedConfig
 ): string {
     const parts = ['vmlx-engine serve', modelPath]
+    const requestedDistributed = !!config.distributedEnabled
+    const requestedFlashMoe = !!config.flashMoe
     const detectedFamily = normalizeDetectedFamilyName(detected?.family)
     const turboQuantActive = !!detected?.isTurboQuant
     const dsv4Active = detectedFamily === 'deepseek-v4'
     const dsv4PrefixCacheOptIn = dsv4Active && config.dsv4PrefixCache !== false
+    const omniBackendActive = detectedFamily === 'nemotron-h' && detected?.isMultimodal === true
     const isVLM = dsv4Active || detected?.forceTextOnly ? false : (!!detected?.isMultimodal || config.isMultimodal === true)
     const zayaCcaActive = isZayaCcaFamily(detectedFamily)
+    const hybridCacheActive = detected?.cacheType === 'hybrid' || detected?.cacheType === 'mamba'
+    const effectiveDistributed = requestedDistributed && !dsv4Active
+    const effectiveFlashMoe = requestedFlashMoe && !effectiveDistributed && !dsv4Active
+    const effectiveEnableJit = !!config.enableJit && !isVLM && !effectiveFlashMoe && !effectiveDistributed && !dsv4Active && !zayaCcaActive && !turboQuantActive && !hybridCacheActive
 
     parts.push('--host', config.host)
     parts.push('--port', config.port.toString())
@@ -418,6 +425,24 @@ function buildCommandPreview(
     if (config.mcpConfig) parts.push('--mcp-config', config.mcpConfig)
     parts.push(...buildMcpPolicyArgs(config))
 
+    // Flash MoE and distributed compute mirror sessions.ts compatibility gates.
+    if (effectiveFlashMoe) {
+        parts.push('--flash-moe')
+        const slotBank = finitePositiveInteger(config.flashMoeSlotBank)
+        if (slotBank != null) parts.push('--flash-moe-slot-bank', slotBank.toString())
+        if (config.flashMoePrefetch && config.flashMoePrefetch !== 'none') {
+            parts.push('--flash-moe-prefetch', config.flashMoePrefetch)
+        }
+        const ioSplit = finitePositiveInteger(config.flashMoeIoSplit)
+        if (ioSplit != null) parts.push('--flash-moe-io-split', ioSplit.toString())
+    }
+
+    if (effectiveDistributed) {
+        parts.push('--distributed')
+        const mode = config.distributedMode || 'pipeline'
+        if (mode !== 'pipeline') parts.push('--distributed-mode', mode)
+    }
+
     if (config.servedModelName) parts.push('--served-model-name', config.servedModelName)
 
     // Speculative decoding mirrors sessions.ts: external draft models are only
@@ -456,9 +481,9 @@ function buildCommandPreview(
     // explicit enable_thinking; startup preview must not emit a server default.
 
     // JIT compilation
-    if (config.enableJit && !isVLM && !dsv4Active && !zayaCcaActive && !turboQuantActive) parts.push('--enable-jit')
+    if (effectiveEnableJit) parts.push('--enable-jit')
 
-    if (config.omniBackend && config.omniBackend !== 'stage1') {
+    if (omniBackendActive && config.omniBackend && config.omniBackend !== 'stage1') {
         parts.push('--omni-backend', config.omniBackend)
     }
 
@@ -2218,6 +2243,30 @@ describe('JIT Toggle', () => {
         expect(hasFlag(out, '--enable-jit')).toBe(false)
     })
 
+    it('hybrid and Mamba cache detection suppresses --enable-jit like the real launcher', () => {
+        const hybrid = preview(
+            { enableJit: true },
+            { family: 'qwen3.5', cacheType: 'hybrid', usePagedCache: true },
+        )
+        const mamba = preview(
+            { enableJit: true },
+            { family: 'ling', cacheType: 'mamba', usePagedCache: true },
+        )
+
+        expect(hasFlag(hybrid, '--enable-jit')).toBe(false)
+        expect(hasFlag(mamba, '--enable-jit')).toBe(false)
+    })
+
+    it('Flash MoE and distributed launch modes suppress --enable-jit in preview and runtime policy', () => {
+        const flash = preview({ enableJit: true, flashMoe: true })
+        const distributed = preview({ enableJit: true, distributedEnabled: true })
+
+        expect(hasFlag(flash, '--flash-moe')).toBe(true)
+        expect(hasFlag(flash, '--enable-jit')).toBe(false)
+        expect(hasFlag(distributed, '--distributed')).toBe(true)
+        expect(hasFlag(distributed, '--enable-jit')).toBe(false)
+    })
+
     it('manual multimodal mode suppresses --enable-jit even without detection', () => {
         const out = preview({ enableJit: true, isMultimodal: true })
 
@@ -2302,6 +2351,16 @@ describe('JIT Toggle', () => {
         expect(form).toContain('ZAYA typed CCA cache')
         expect(settings).toContain('zayaCcaActive')
         expect(sessions).toContain('ZAYA typed CCA cache is path-dependent')
+    })
+
+    it('command preview gates Omni backend to detected Nemotron-H multimodal only', () => {
+        const nonOmni = preview({ omniBackend: 'stage2' }, { family: 'qwen3.5', isMultimodal: true })
+        const textNemotron = preview({ omniBackend: 'stage2' }, { family: 'nemotron-h', isMultimodal: false })
+        const omni = preview({ omniBackend: 'stage2' }, { family: 'nemotron-h', isMultimodal: true })
+
+        expect(hasFlag(nonOmni, '--omni-backend')).toBe(false)
+        expect(hasFlag(textNemotron, '--omni-backend')).toBe(false)
+        expect(getFlagValue(omni, '--omni-backend')).toBe('stage2')
     })
 
     it('settings form and launch code surface ZAYA typed CCA paged-cache requirement', () => {
