@@ -322,6 +322,52 @@ describe('new-chat override inheritance policy', () => {
     expect(performanceLaunchBlock).not.toContain('overrides.maxThinkingTokens')
   })
 
+  it('chat override persistence keeps insert columns, placeholders, and values aligned', () => {
+    const databaseSource = fs.readFileSync(
+      path.resolve(__dirname, '../src/main/database.ts'),
+      'utf8',
+    )
+    const setChatOverridesBlock = databaseSource.slice(
+      databaseSource.indexOf('setChatOverrides(overrides'),
+      databaseSource.indexOf('getChatOverrides(chatId'),
+    )
+    const insertMatch = setChatOverridesBlock.match(
+      /INSERT OR REPLACE INTO chat_overrides\s*\(([\s\S]*?)\)\s*VALUES\s*\(([\s\S]*?)\)/,
+    )
+    expect(insertMatch).not.toBeNull()
+
+    const columns = insertMatch![1]
+      .split(',')
+      .map(column => column.trim())
+      .filter(Boolean)
+    const placeholders = insertMatch![2]
+      .split(',')
+      .map(value => value.trim())
+      .filter(Boolean)
+    const runBlock = setChatOverridesBlock.slice(
+      setChatOverridesBlock.indexOf('stmt.run('),
+      setChatOverridesBlock.indexOf(');', setChatOverridesBlock.indexOf('stmt.run(')),
+    )
+    const runValues = runBlock
+      .replace(/^.*?stmt\.run\(/s, '')
+      .split('\n')
+      .map(line => line.trim().replace(/,$/, ''))
+      .filter(line => line.length > 0)
+
+    expect(columns).toContain('max_tokens')
+    expect(columns).toContain('max_thinking_tokens')
+    expect(columns).toContain('tool_result_max_chars')
+    expect(columns).toContain('git_enabled')
+    expect(columns).toContain('utility_tools_enabled')
+    expect(placeholders).toHaveLength(columns.length)
+    expect(runValues).toHaveLength(columns.length)
+    expect(runValues).toContain('overrides.maxTokens')
+    expect(runValues).toContain('overrides.maxThinkingTokens')
+    expect(runValues).toContain('overrides.toolResultMaxChars || null')
+    expect(runValues).toContain('overrides.gitEnabled === false ? 0 : 1')
+    expect(runValues).toContain('overrides.utilityToolsEnabled === false ? 0 : 1')
+  })
+
   it('server startup maxTokens and chat maxTokens remain independent when both are set', () => {
     expect(sanitizeChatOverrides({ chatId: 'chat', maxTokens: 8192 }).maxTokens).toBe(8192)
 
