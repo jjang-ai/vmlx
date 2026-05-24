@@ -2731,6 +2731,9 @@ def test_release_regression_manifest_tracks_ling_multilingual_quality_open_row()
     assert "current-ling-jangtq-strict-russian-nocache-bundled-4850c9c2-20260524.json" in joined
     assert "current-ling-mxfp4-crack-strict-russian-nocache-bundled-4850c9c2-20260524.json" in joined
     assert "current-ling-jangtq-russian-prompt-variant-probe-20260524.json" in joined
+    assert "current-ling-jangtq-server-repeat-russian-source-prefill-stream-20260524.json" in joined
+    assert "current-ling-jangtq-server-repeat-russian-bundled-prefill-stream-20260524.json" in joined
+    assert "current-ling-jangtq-server-repeat-russian-bundled-native-prefill-stream-20260524.json" in joined
     assert "CJK leakage" in joined
 
 

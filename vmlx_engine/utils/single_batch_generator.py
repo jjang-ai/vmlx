@@ -320,9 +320,10 @@ class SingleBatchGenerator:
         while pos < len(tokens):
             n = min(self.prefill_step_size, len(tokens) - pos)
             chunk = tokens[pos : pos + n]
-            self._model_call(chunk, req)
-            req.context_tokens.extend(chunk)
-            req.token_context.update_and_fetch(mx.array(chunk, dtype=mx.int32))
+            with self._stream_context():
+                self._model_call(chunk, req)
+                req.context_tokens.extend(chunk)
+                req.token_context.update_and_fetch(mx.array(chunk, dtype=mx.int32))
             self._sync()
             if not _prefill_keep_alloc:
                 if hasattr(mx, "clear_cache"):

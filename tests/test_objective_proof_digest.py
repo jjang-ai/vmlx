@@ -868,6 +868,48 @@ def test_objective_proof_digest_tracks_ling_multilingual_cjk_leakage(tmp_path):
             ],
         },
     )
+    _write_json(
+        tmp_path,
+        "build/current-ling-jangtq-server-repeat-russian-source-prefill-stream-20260524.json",
+        {
+            "ready": True,
+            "rows": [
+                {
+                    "mode": "skip_cache",
+                    "content": "Сцена создаётся с травой и деревьями.",
+                    "counts": {"cjk_chars": 0, "cyrillic_chars": 32},
+                }
+            ],
+        },
+    )
+    _write_json(
+        tmp_path,
+        "build/current-ling-jangtq-server-repeat-russian-bundled-prefill-stream-20260524.json",
+        {
+            "ready": True,
+            "rows": [
+                {
+                    "mode": "skip_cache",
+                    "content": "4.碰撞检测实现目标击中与",
+                    "counts": {"cjk_chars": 10, "cyrillic_chars": 0},
+                }
+            ],
+        },
+    )
+    _write_json(
+        tmp_path,
+        "build/current-ling-jangtq-server-repeat-russian-bundled-native-prefill-stream-20260524.json",
+        {
+            "ready": True,
+            "rows": [
+                {
+                    "mode": "skip_cache",
+                    "content": "Система оценивает очки и выживание.",
+                    "counts": {"cjk_chars": 0, "cyrillic_chars": 31},
+                }
+            ],
+        },
+    )
 
     digest = build_digest(tmp_path)
     rows = {item["requirement"]: item for item in digest["requirements"]}
@@ -879,6 +921,7 @@ def test_objective_proof_digest_tracks_ling_multilingual_cjk_leakage(tmp_path):
         "build/current-ling-jangtq-strict-russian-nocache-bundled-4850c9c2-20260524.json",
         "build/current-ling-mxfp4-crack-strict-russian-nocache-bundled-4850c9c2-20260524.json",
         "build/current-ling-jangtq-russian-prompt-variant-probe-20260524.json",
+        "build/current-ling-jangtq-server-repeat-russian-bundled-prefill-stream-20260524.json",
     ]
 
 

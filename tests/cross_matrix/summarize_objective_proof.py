@@ -123,6 +123,15 @@ LING_MXFP4_STRICT_RUSSIAN_NOCACHE_REL = (
 LING_JANGTQ_RUSSIAN_PROMPT_VARIANT_REL = (
     "build/current-ling-jangtq-russian-prompt-variant-probe-20260524.json"
 )
+LING_JANGTQ_SOURCE_PREFILL_STREAM_REL = (
+    "build/current-ling-jangtq-server-repeat-russian-source-prefill-stream-20260524.json"
+)
+LING_JANGTQ_BUNDLED_COMPAT_PREFILL_STREAM_REL = (
+    "build/current-ling-jangtq-server-repeat-russian-bundled-prefill-stream-20260524.json"
+)
+LING_JANGTQ_BUNDLED_NATIVE_PREFILL_STREAM_REL = (
+    "build/current-ling-jangtq-server-repeat-russian-bundled-native-prefill-stream-20260524.json"
+)
 DSV4_QUALITY_CLEARANCE_CHECKS = (
     "identifier_integrity",
     "threejs_single_file",
@@ -482,6 +491,18 @@ def _ling_multilingual_quality_detail(
         LING_JANGTQ_RUSSIAN_PROMPT_VARIANT_REL: _load(
             root,
             LING_JANGTQ_RUSSIAN_PROMPT_VARIANT_REL,
+        ),
+        LING_JANGTQ_SOURCE_PREFILL_STREAM_REL: _load(
+            root,
+            LING_JANGTQ_SOURCE_PREFILL_STREAM_REL,
+        ),
+        LING_JANGTQ_BUNDLED_COMPAT_PREFILL_STREAM_REL: _load(
+            root,
+            LING_JANGTQ_BUNDLED_COMPAT_PREFILL_STREAM_REL,
+        ),
+        LING_JANGTQ_BUNDLED_NATIVE_PREFILL_STREAM_REL: _load(
+            root,
+            LING_JANGTQ_BUNDLED_NATIVE_PREFILL_STREAM_REL,
         ),
     }
     artifact_statuses: dict[str, Any] = {}
@@ -1976,6 +1997,9 @@ def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
             LING_JANGTQ_STRICT_RUSSIAN_NOCACHE_REL,
             LING_MXFP4_STRICT_RUSSIAN_NOCACHE_REL,
             LING_JANGTQ_RUSSIAN_PROMPT_VARIANT_REL,
+            LING_JANGTQ_SOURCE_PREFILL_STREAM_REL,
+            LING_JANGTQ_BUNDLED_COMPAT_PREFILL_STREAM_REL,
+            LING_JANGTQ_BUNDLED_NATIVE_PREFILL_STREAM_REL,
         ],
         caveat=(
             None

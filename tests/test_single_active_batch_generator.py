@@ -182,6 +182,47 @@ class TestSingleActiveBatchGenerator:
 
         assert generator._eval_on_stream(token) == (token,)
 
+    def test_single_active_prefill_runs_model_inside_owned_stream(self, monkeypatch):
+        """Cold prefill must use the same concrete stream as decode.
+
+        The app runs scheduler steps on a worker thread.  If prefill forwards
+        happen on a thread-default stream while decode samples on the owned
+        stream, hybrid/JANGTQ cache state can diverge from the direct
+        mlx-lm generation path.
+        """
+        from vmlx_engine.utils import single_batch_generator as single
+
+        active_stream = {"value": False}
+
+        class FakeStreamContext:
+            def __init__(self, stream):
+                self.stream = stream
+
+            def __enter__(self):
+                active_stream["value"] = True
+
+            def __exit__(self, exc_type, exc, tb):
+                active_stream["value"] = False
+
+        class StreamAssertingModel(_TinyModel):
+            def __call__(self, input_ids, cache):
+                assert active_stream["value"]
+                return super().__call__(input_ids, cache)
+
+        monkeypatch.setattr(single.mx, "stream", lambda stream: FakeStreamContext(stream))
+        monkeypatch.setattr(single.mx, "eval", lambda *values: None)
+        monkeypatch.setattr(single.mx, "synchronize", lambda *args, **kwargs: None)
+        monkeypatch.setattr(single.mx, "clear_cache", lambda: None, raising=False)
+
+        generator = single.SingleBatchGenerator(
+            model=StreamAssertingModel(),
+            stream=object(),
+            prefill_step_size=2,
+        )
+
+        generator.insert([[11, 12, 13]], max_tokens=[1])
+        generator.next()
+
     def test_scheduler_keeps_mlx_lm_batch_generator_for_real_multi_sequence(self):
         scheduler = Scheduler(
             _TinyModel(),
