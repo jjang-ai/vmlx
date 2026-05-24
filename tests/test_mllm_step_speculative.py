@@ -164,6 +164,8 @@ def _make_gen(language_model, pld_enabled=True, is_hybrid=False,
     gen._spec_batched_steps = 0
     gen._spec_batched_tokens = 0
     gen._spec_batched_acceptance_ema = 0.0
+    gen._spec_batched_accept_histogram = {}
+    gen._spec_batched_debug_remaining = 0
     gen._pld_replay_attempts = 0
     gen._pld_replay_emitted = 0
     gen._pld_replay_failures = 0
@@ -407,3 +409,115 @@ def test_acceptance_ema_updates():
     gen._step_speculative(batch, K=2)
     # alpha=0.1; before=0; new = 0.9*0 + 0.1*1.0 = 0.1
     assert abs(gen._spec_batched_acceptance_ema - 0.1) < 1e-6
+
+
+# ---------------------------------------------------------------------------
+# Seed staleness regression (PR #172 bisection finding)
+# ---------------------------------------------------------------------------
+
+
+def test_seed_uses_batch_y_not_last_token():
+    """_step_speculative must use batch.y[i] as the seed, not req.last_token.
+
+    req.last_token is only updated by _step_speculative itself. After a
+    fallback-to-_step (no drafts, cooldown), req.last_token is stale.
+    If _step_speculative reads the stale value, it feeds the WRONG token
+    to the model — corrupting the KV cache and all subsequent output.
+
+    This test sets req.last_token to a DIFFERENT value than batch.y[i]
+    and verifies that the model receives batch.y[i] (correct seed), not
+    req.last_token (stale seed).
+
+    Key: input_ids must contain the seed (batch.y value) in a context
+    where n-gram lookup succeeds. Using batch.y=5 with input_ids
+    containing [10,5,3,4,...,10] → bigram [10,5] matches → drafts [3,4].
+    With the stale req.last_token=99, the bigram [10,99] would NOT match,
+    causing fallback — so if model IS called, we know batch.y was used.
+    """
+    model = _MockLanguageModel(argmax_plan=[[3, 4, 77]])
+    gen = _make_gen(model, pld_enabled=True, is_hybrid=False)
+
+    req = _FakeReq(
+        last_token=99,  # STALE — would fail n-gram match if used as seed
+        num_tokens=1,
+        output_tokens=[],
+        input_ids=mx.array([10, 5, 3, 4, 99, 88, 10]),
+    )
+    # batch.y = 5 → bigram [10, 5] matches → drafts [3, 4]
+    batch = _FakeBatch([req], [_FakeKVLayer([10])], y=mx.array([5]))
+
+    gen._step_speculative(batch, K=2)
+
+    # If stale req.last_token=99 was used as seed, n-gram lookup would
+    # produce bigram [10, 99] → no match → fallback → model never called.
+    # With correct batch.y=5, bigram [10, 5] → drafts [3, 4] → model called.
+    assert len(model.calls) == 3, (
+        f"Expected 3 model calls (K+1 sequential verify), got {len(model.calls)}. "
+        f"If 0, seed was stale req.last_token=99 instead of batch.y=5."
+    )
+    # Verify model received batch.y[i]=5 as the first token
+    first_token_fed = int(model.calls[0][0][0, 0].item())
+    assert first_token_fed == 5, (
+        f"Model received seed={first_token_fed}, expected 5 (batch.y)."
+    )
+
+
+def test_seed_after_cooldown_transition():
+    """After cooldown (standard _step path), re-engaged PLD must use batch.y.
+
+    Simulates the transition: PLD sets req.last_token=P, then cooldown
+    runs standard _step which updates batch.y but NOT req.last_token,
+    then PLD re-engages. The seed must be batch.y (= output from standard
+    _step), not P (stale req.last_token).
+    """
+    model = _MockLanguageModel(argmax_plan=[[3, 4, 77]])
+    gen = _make_gen(model, pld_enabled=True, is_hybrid=False)
+
+    # Simulate: after cooldown, output_tokens grew from standard _step.
+    # Include batch.y value (5) in both prompt and output so n-gram
+    # query [10, 5] can match in the full token sequence.
+    req = _FakeReq(
+        last_token=50,  # Set by a previous PLD step — now STALE
+        num_tokens=10,
+        output_tokens=[10, 3, 4, 99, 88, 10],  # ends with 10
+        input_ids=mx.array([10, 5, 3, 4, 99, 88, 10]),
+    )
+    # batch.y = 5, simulating output from a standard _step during cooldown.
+    # full_tokens = [10,5,3,4,99,88,10] + [10,3,4,99,88,10] + [5]
+    # Last bigram = [10, 5] → matches at position 0 → drafts [3, 4]
+    batch = _FakeBatch([req], [_FakeKVLayer([20])], y=mx.array([5]))
+
+    gen._step_speculative(batch, K=2)
+
+    # The seed for the verify forward must be 5 (batch.y), not 50 (stale)
+    assert len(model.calls) >= 1, (
+        f"No model calls — seed staleness caused n-gram fallback."
+    )
+    first_token_fed = int(model.calls[0][0][0, 0].item())
+    assert first_token_fed == 5, (
+        f"After cooldown transition, seed={first_token_fed}, expected 5 "
+        f"(batch.y). Got stale req.last_token=50."
+    )
+
+
+def test_seed_when_last_token_none():
+    """When req.last_token is None (first PLD step), batch.y is used."""
+    model = _MockLanguageModel(argmax_plan=[[3, 4, 77]])
+    gen = _make_gen(model, pld_enabled=True, is_hybrid=False)
+
+    req = _FakeReq(
+        last_token=None,  # First PLD step — never set
+        num_tokens=1,
+        output_tokens=[],
+        input_ids=mx.array([10, 5, 3, 4, 99, 88, 10]),
+    )
+    # batch.y = 5 → bigram [10, 5] matches → drafts [3, 4]
+    batch = _FakeBatch([req], [_FakeKVLayer([10])], y=mx.array([5]))
+
+    gen._step_speculative(batch, K=2)
+
+    assert len(model.calls) >= 1
+    first_token_fed = int(model.calls[0][0][0, 0].item())
+    assert first_token_fed == 5, (
+        f"First PLD step seed={first_token_fed}, expected 5 (batch.y)."
+    )

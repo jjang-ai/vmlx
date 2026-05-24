@@ -6637,11 +6637,14 @@ class MLLMBatchGenerator:
             if req.num_tokens == 0:
                 return self._step(batch.y[:, None], batch.cache)
 
-            seed_int = (
-                int(req.last_token)
-                if req.last_token is not None
-                else int(batch.y[i].item())
-            )
+            # CRITICAL (PR #172 bisection finding): Always use batch.y[i] as
+            # the seed — it's maintained by BOTH _step() and _step_speculative().
+            # req.last_token is ONLY updated inside _step_speculative (line 6432),
+            # so it becomes stale after any fallback-to-_step (no drafts, cooldown
+            # transition, prompt processing). Using a stale seed feeds the WRONG
+            # token to the model in the verify forward, corrupting the KV cache
+            # and causing all subsequent output to diverge from the PLD-off baseline.
+            seed_int = int(batch.y[i].item())
             seeds.append(seed_int)
 
             if draft_model is not None:
