@@ -44,6 +44,35 @@ def _constant_flag_set(rel: str, const_name: str) -> set[str]:
     return set(re.findall(r'["\'](--[a-z0-9][a-z0-9-]*)["\']', block))
 
 
+def _serve_cli_value_flags() -> set[str]:
+    """Approximate argparse serve flags that consume a following value.
+
+    The additional-args sanitizer must skip the next token for these flags when
+    it strips stale DSV4 launch overrides. Otherwise a blocked flag such as
+    ``--max-tokens 32768`` would leave ``32768`` behind as a positional-looking
+    argument and break the launch command.
+    """
+
+    source = (ROOT / "vmlx_engine" / "cli.py").read_text(encoding="utf-8")
+    serve_block = source[
+        source.index('serve_parser = subparsers.add_parser("serve"'):
+        source.index('bench_parser = subparsers.add_parser("bench"')
+    ]
+    value_flags: set[str] = set()
+    for match in re.finditer(r"serve_parser\.add_argument\((?P<body>.*?)\n    \)", serve_block, re.S):
+        body = match.group("body")
+        flag_match = re.search(r'["\'](--[a-z0-9][a-z0-9-]*)["\']', body)
+        if not flag_match:
+            continue
+        flag = flag_match.group(1)
+        if "action=\"store_true\"" in body or "action='store_true'" in body:
+            continue
+        if "action=\"store_false\"" in body or "action='store_false'" in body:
+            continue
+        value_flags.add(flag)
+    return value_flags
+
+
 def test_panel_serve_flags_are_registered_engine_cli_flags() -> None:
     """The app must not emit or preview serve flags argparse cannot accept."""
 
@@ -81,6 +110,23 @@ def test_runtime_and_preview_additional_arg_filters_share_blocklists() -> None:
     preview_rel = "panel/src/renderer/src/components/sessions/SessionSettings.tsx"
     for name in names:
         assert _constant_flag_set(preview_rel, name) == _constant_flag_set(runtime_rel, name)
+
+
+def test_dsv4_stale_value_flags_strip_their_values_in_preview_and_runtime() -> None:
+    """Blocked DSV4 Advanced Args must not leave orphan values behind."""
+
+    dsv4_blocked = _constant_flag_set(
+        "panel/src/main/sessions.ts",
+        "DSV4_ADDITIONAL_ARG_BLOCKLIST",
+    )
+    serve_value_flags = _serve_cli_value_flags()
+    blocked_value_flags = dsv4_blocked & serve_value_flags
+    expected_value_skip_flags = _constant_flag_set(
+        "panel/src/main/sessions.ts",
+        "ADDITIONAL_ARG_VALUE_FLAGS",
+    )
+
+    assert sorted(blocked_value_flags - expected_value_skip_flags) == []
 
 
 def test_panel_cli_flag_contract_covers_dsv4_cache_and_output_boundaries() -> None:
