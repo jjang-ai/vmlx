@@ -365,7 +365,7 @@ CURRENT_POST_BUDGET_EDGE_ARTIFACTS = {
 }
 
 CURRENT_REGRESSION_SUITE_ARTIFACT = (
-    "build/current-regression-suite-20260531-packaged-pointer-bundle-refresh.json"
+    "build/current-regression-suite-20260531-step37-mixed-swa-runtime.json"
 )
 CURRENT_ISSUE175_179_RELEASE_BOUNDARY_AUDIT_ARTIFACT = (
     "build/current-issue175-179-release-boundary-audit-20260531-post-install-sync.json"
@@ -374,7 +374,7 @@ CURRENT_INSTALLED_APP_RUNTIME_PARITY_AUDIT_ARTIFACT = (
     "build/current-installed-app-runtime-parity-audit-20260531-live-epipe-refresh.json"
 )
 CURRENT_STAGED_APP_RUNTIME_PARITY_AUDIT_ARTIFACT = (
-    "build/current-staged-app-runtime-parity-audit-20260528-staged-runtime-recheck.json"
+    "build/current-staged-app-runtime-parity-audit-20260531-step37-mixed-swa-runtime.json"
 )
 CURRENT_ISSUE175_177_INSTALLED_RUNTIME_AUDIT_ARTIFACT = (
     "build/current-issue175-177-installed-runtime-audit-20260527.json"
