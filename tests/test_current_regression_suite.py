@@ -56,6 +56,15 @@ def test_current_regression_suite_keeps_declared_known_blockers_open(tmp_path, m
     assert artifact["steps"]["release_gate_skip_app"]["returncode"] == 0
 
 
+def test_current_regression_suite_tracks_real_ui_unblocked_non_mimo_open_requirement():
+    from tests.cross_matrix import run_current_regression_suite as suite
+
+    assert (
+        "Real Electron UI unblocked non-MiMo live model matrix is proven"
+        in suite.EXPECTED_OPEN_REQUIREMENTS
+    )
+
+
 def test_current_regression_suite_preserves_expected_open_requirement_details(
     tmp_path,
     monkeypatch,
