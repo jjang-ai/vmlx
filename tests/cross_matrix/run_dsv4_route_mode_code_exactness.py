@@ -28,6 +28,23 @@ DEFAULT_PYTHON = REPO / "panel/bundled-python/python/bin/python3"
 DEFAULT_MODEL = "/Users/example/models/JANGQ/DeepSeek-V4-Flash-JANGTQ-K"
 SAFE_CWD = Path("/tmp")
 DEFAULT_MIN_FREE_GB = 120.0
+TOP_MEMORY_PROCESS_COUNT = 10
+HEAVY_PROCESS_PATTERNS = (
+    "vmlx_engine.cli serve",
+    "mlx_lm.server",
+    "run_runtime_memory_stress_probe",
+    "run_decode_speed_gate",
+    "live-real-ui-model-proof",
+    "run_dsv4_route_mode_code_exactness",
+    "run_dsv4_default_cache_tool_loop_gate",
+)
+TOP_MEMORY_PROCESS_COMMAND = "ps -axo pid,rss,command -r | head -n 11"
+ACTIVE_HEAVY_PROCESS_COMMAND = (
+    "pgrep -af 'vmlx_engine.cli serve|mlx_lm.server|"
+    "run_runtime_memory_stress_probe|run_decode_speed_gate|"
+    "live-real-ui-model-proof|run_dsv4_route_mode_code_exactness|"
+    "run_dsv4_default_cache_tool_loop_gate'"
+)
 
 REQUIRED_IDENTIFIERS = [
     "THREE.Scene",
@@ -108,6 +125,90 @@ def vm_stat_memory_breakdown(vm_stat_text: str | None = None) -> dict[str, Any]:
     }
 
 
+def parse_top_memory_processes(
+    text: str,
+    limit: int = TOP_MEMORY_PROCESS_COUNT,
+) -> list[dict[str, Any]]:
+    processes: list[dict[str, Any]] = []
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("PID "):
+            continue
+        parts = stripped.split(None, 2)
+        if len(parts) < 3:
+            continue
+        try:
+            pid = int(parts[0])
+            rss_kb = int(parts[1])
+        except ValueError:
+            continue
+        processes.append(
+            {
+                "pid": pid,
+                "rss_gb": round(rss_kb / (1024**2), 2),
+                "command": parts[2],
+            }
+        )
+    processes.sort(key=lambda item: item["rss_gb"], reverse=True)
+    return processes[:limit]
+
+
+def parse_active_heavy_processes(
+    text: str,
+    *,
+    ignore_pids: set[int] | None = None,
+) -> list[dict[str, Any]]:
+    ignored = ignore_pids or set()
+    processes: list[dict[str, Any]] = []
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        parts = stripped.split(None, 1)
+        if len(parts) < 2:
+            continue
+        try:
+            pid = int(parts[0])
+        except ValueError:
+            continue
+        if pid in ignored:
+            continue
+        command = parts[1]
+        if "pgrep -af" in command:
+            continue
+        if not any(pattern in command for pattern in HEAVY_PROCESS_PATTERNS):
+            continue
+        processes.append({"pid": pid, "command": command})
+    return processes
+
+
+def process_context_snapshot() -> dict[str, Any]:
+    try:
+        top_processes_text = _run_text(["sh", "-c", TOP_MEMORY_PROCESS_COMMAND])
+    except Exception:
+        top_processes_text = ""
+    try:
+        active_processes_text = _run_text(["sh", "-c", ACTIVE_HEAVY_PROCESS_COMMAND])
+    except subprocess.CalledProcessError:
+        active_processes_text = ""
+    except Exception:
+        active_processes_text = ""
+    active_heavy_processes = parse_active_heavy_processes(
+        active_processes_text,
+        ignore_pids={os.getpid()},
+    )
+    return {
+        "top_memory_processes": parse_top_memory_processes(top_processes_text),
+        "active_heavy_processes": active_heavy_processes,
+        "active_heavy_process_count": len(active_heavy_processes),
+        "commands": {
+            "memory": "vm_stat",
+            "top_memory_processes": TOP_MEMORY_PROCESS_COMMAND,
+            "active_heavy_processes": ACTIVE_HEAVY_PROCESS_COMMAND,
+        },
+    }
+
+
 def resource_snapshot(name: str, proc: subprocess.Popen[str] | None = None) -> dict[str, Any]:
     snap: dict[str, Any] = {
         "name": name,
@@ -158,7 +259,13 @@ def memory_preflight_artifact(
         if isinstance(available, (int, float))
         else None
     )
-    if gate_available is not None and (force_no_launch or gate_available < min_free_gb):
+    process_context = process_context_snapshot()
+    active_heavy_processes = process_context["active_heavy_processes"]
+    if gate_available is not None and (
+        force_no_launch
+        or active_heavy_processes
+        or gate_available < min_free_gb
+    ):
         selected_cases = selected_case_names(args)
         memory_gap_gb = round(max(0.0, min_free_gb - gate_available), 2)
         psutil_available_gap_gb = (
@@ -166,15 +273,31 @@ def memory_preflight_artifact(
             if isinstance(available, (int, float))
             else None
         )
-        status = "ready_to_launch" if gate_available >= min_free_gb else "skipped"
+        status = (
+            "skipped_active_heavy_process"
+            if active_heavy_processes
+            else "ready_to_launch"
+            if gate_available >= min_free_gb
+            else "skipped"
+        )
         used_vm_stat = isinstance(vm_available, (int, float))
-        return {
+        launch_blockers = [
+            blocker
+            for blocker, blocked in (
+                ("active_heavy_process", bool(active_heavy_processes)),
+                ("insufficient_memory", gate_available < min_free_gb),
+            )
+            if blocked
+        ]
+        artifact = {
             "schema": "vmlx-dsv4-route-mode-code-exactness-v1",
             "created_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
             "status": status,
             "reason": (
                 "memory_preflight_floor_met"
                 if status == "ready_to_launch"
+                else "another heavy model/proof process is active; do not launch DSV4 concurrently"
+                if status == "skipped_active_heavy_process"
                 else "insufficient_vm_stat_memory"
                 if used_vm_stat
                 else "insufficient_free_memory"
@@ -204,17 +327,15 @@ def memory_preflight_artifact(
             "launch_decision": (
                 "launch_allowed" if status == "ready_to_launch" else "do_not_launch"
             ),
-            "launch_blockers": [
-                "insufficient_memory"
-            ]
-            if status != "ready_to_launch"
-            else [],
+            "launch_blockers": launch_blockers,
             "model": args.model,
             "cmd": build_cmd(args),
             "selected_cases": list(selected_cases),
             "case_count": len(selected_cases),
             "telemetry": [snap],
         }
+        artifact.update(process_context)
+        return artifact
     return None
 
 

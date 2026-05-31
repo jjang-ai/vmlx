@@ -1510,6 +1510,11 @@ def _dsv4_source_memory_preflight_detail(
         "free_plus_speculative_purgeable_gb": artifact.get(
             "free_plus_speculative_purgeable_gb"
         ),
+        "launch_blockers": artifact.get("launch_blockers"),
+        "active_heavy_processes": artifact.get("active_heavy_processes"),
+        "active_heavy_process_count": artifact.get("active_heavy_process_count"),
+        "top_memory_processes": artifact.get("top_memory_processes"),
+        "commands": artifact.get("commands"),
         "did_not_launch": did_not_launch,
         "launch_decision": launch_decision,
     }

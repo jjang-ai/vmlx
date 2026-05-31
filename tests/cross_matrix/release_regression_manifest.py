@@ -2735,6 +2735,9 @@ def _current_release_blocker_ledger(
                         "preflight_memory_source",
                         "did_not_launch",
                         "launch_decision",
+                        "launch_blockers",
+                        "active_heavy_process_count",
+                        "top_memory_processes",
                         "case_count",
                     )
                     if key in preflight

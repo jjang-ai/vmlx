@@ -3428,6 +3428,15 @@ def test_objective_proof_digest_summarizes_dsv4_exact_code_root_boundary(
             "status": "skipped",
             "reason": "insufficient_free_memory",
             "required_available_gb": 120.0,
+            "launch_blockers": ["insufficient_memory"],
+            "active_heavy_process_count": 0,
+            "top_memory_processes": [
+                {
+                    "pid": 1001,
+                    "rss_gb": 10.0,
+                    "command": "/Applications/vMLX.app/Contents/MacOS/vMLX",
+                }
+            ],
             "model": "/Users/example/models/JANGQ/DeepSeek-V4-Flash-JANGTQ-K",
             "selected_cases": [
                 "chat_off",
@@ -3542,6 +3551,17 @@ def test_objective_proof_digest_summarizes_dsv4_exact_code_root_boundary(
     assert summary["source_full_output_preflight"]["did_not_launch"] is True
     assert summary["source_full_output_preflight"]["launch_decision"] == "do_not_launch"
     assert summary["source_full_output_preflight"]["required_available_gb"] == 120.0
+    assert summary["source_full_output_preflight"]["launch_blockers"] == [
+        "insufficient_memory"
+    ]
+    assert summary["source_full_output_preflight"]["active_heavy_process_count"] == 0
+    assert summary["source_full_output_preflight"]["top_memory_processes"] == [
+        {
+            "pid": 1001,
+            "rss_gb": 10.0,
+            "command": "/Applications/vMLX.app/Contents/MacOS/vMLX",
+        }
+    ]
     assert summary["source_full_output_clearance_missing"] is True
     joined_evidence = "\n".join(quality["evidence"])
     assert (

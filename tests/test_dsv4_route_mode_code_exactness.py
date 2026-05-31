@@ -598,6 +598,91 @@ Pages purgeable:                           25000.
     assert "insufficient_memory" in artifact["launch_blockers"]
 
 
+def test_dsv4_code_exactness_probe_memory_preflight_records_process_context(
+    monkeypatch,
+):
+    import tests.cross_matrix.run_dsv4_route_mode_code_exactness as gate
+
+    class Args:
+        python = "/tmp/python"
+        model = "/unused/model"
+        port = 8861
+        timeout = 420
+        request_timeout = 5
+        max_tokens = 512
+        dry_run = False
+        base_url = None
+        cases = "chat_max"
+        min_free_gb = 120.0
+        memory_preflight_only = True
+
+    vm_stat = """Mach Virtual Memory Statistics: (page size of 16384 bytes)
+Pages free:                               100000.
+Pages active:                                  1.
+Pages inactive:                           200000.
+Pages speculative:                         50000.
+Pages purgeable:                           25000.
+"""
+    top_processes = """  PID      RSS COMMAND
+ 1001 10485760 /Applications/vMLX.app/Contents/MacOS/vMLX
+ 1002  2097152 /usr/bin/python model-worker
+"""
+    active_processes = """1234 .venv/bin/python tests/cross_matrix/run_runtime_memory_stress_probe.py --row gemma4
+5678 .venv/bin/python harmless.py
+"""
+
+    monkeypatch.setattr(
+        gate,
+        "resource_snapshot",
+        lambda name, proc=None: {
+            "name": name,
+            "system_memory": {"available_gb": 130.0, "total_gb": 192.0},
+        },
+        raising=False,
+    )
+
+    def fake_run_text(cmd):
+        joined = " ".join(cmd)
+        if cmd == ["vm_stat"]:
+            return vm_stat
+        if "ps -axo" in joined:
+            return top_processes
+        if "pgrep -af" in joined:
+            return active_processes
+        return ""
+
+    monkeypatch.setattr(gate, "_run_text", fake_run_text, raising=False)
+
+    def fail_popen(*args, **kwargs):
+        raise AssertionError("preflight-only mode must not spawn DSV4")
+
+    monkeypatch.setattr(gate.subprocess, "Popen", fail_popen)
+
+    artifact = run(Args())
+
+    assert artifact["top_memory_processes"][0]["pid"] == 1001
+    assert artifact["top_memory_processes"][0]["rss_gb"] == 10.0
+    assert artifact["top_memory_processes"][0]["command"].endswith("vMLX")
+    assert artifact["active_heavy_process_count"] == 1
+    assert artifact["active_heavy_processes"][0]["pid"] == 1234
+    assert "active_heavy_process" in artifact["launch_blockers"]
+    assert artifact["commands"]["top_memory_processes"].startswith("ps ")
+    assert "pgrep -af" in artifact["commands"]["active_heavy_processes"]
+
+
+def test_dsv4_code_exactness_probe_ignores_own_preflight_process():
+    import tests.cross_matrix.run_dsv4_route_mode_code_exactness as gate
+
+    own_pid = 4321
+    active = f"""{own_pid} .venv/bin/python tests/cross_matrix/run_dsv4_route_mode_code_exactness.py --memory-preflight-only
+5678 .venv/bin/python tests/cross_matrix/run_runtime_memory_stress_probe.py --row gemma4
+"""
+
+    processes = gate.parse_active_heavy_processes(active, ignore_pids={own_pid})
+
+    assert [process["pid"] for process in processes] == [5678]
+
+
 def test_dsv4_code_exactness_probe_main_treats_memory_skip_as_artifact_not_failure(
     monkeypatch,
     tmp_path,

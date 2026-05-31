@@ -1833,6 +1833,15 @@ def _passing_open_requirement_details() -> dict[str, object]:
                     "preflight_memory_source": "psutil_available",
                     "did_not_launch": True,
                     "launch_decision": "do_not_launch",
+                    "launch_blockers": ["insufficient_memory"],
+                    "active_heavy_process_count": 0,
+                    "top_memory_processes": [
+                        {
+                            "pid": 1001,
+                            "rss_gb": 10.0,
+                            "command": "/Applications/vMLX.app/Contents/MacOS/vMLX",
+                        }
+                    ],
                     "case_count": 14,
                     "selected_cases": [
                         "chat_off",
@@ -4897,6 +4906,15 @@ def test_release_regression_manifest_validates_current_proof_sweep_artifacts(tmp
                     "preflight_memory_source": "psutil_available",
                     "did_not_launch": True,
                     "launch_decision": "do_not_launch",
+                    "launch_blockers": ["insufficient_memory"],
+                    "active_heavy_process_count": 0,
+                    "top_memory_processes": [
+                        {
+                            "pid": 1001,
+                            "rss_gb": 10.0,
+                            "command": "/Applications/vMLX.app/Contents/MacOS/vMLX",
+                        }
+                    ],
                     "case_count": 14,
                 },
             },
