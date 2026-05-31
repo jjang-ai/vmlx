@@ -3456,6 +3456,32 @@ def _real_ui_named_tool_result_message_count(proof: dict[str, Any]) -> int:
     return count
 
 
+def _real_ui_named_tool_lifecycle_message_count(proof: dict[str, Any]) -> int:
+    groups = proof.get("persistedToolsByMessage")
+    if not isinstance(groups, list):
+        return 0
+    count = 0
+    for group in groups:
+        if not isinstance(group, list):
+            continue
+        active_names: set[str] = set()
+        result_names: set[str] = set()
+        for item in group:
+            if not isinstance(item, dict):
+                continue
+            tool_name = item.get("toolName")
+            if not isinstance(tool_name, str) or not tool_name.strip():
+                continue
+            phase = item.get("phase")
+            if phase in {"calling", "executing"}:
+                active_names.add(tool_name.strip())
+            elif phase == "result":
+                result_names.add(tool_name.strip())
+        if active_names & result_names:
+            count += 1
+    return count
+
+
 def _real_ui_extensive_tool_churn_ok(proof: dict[str, Any]) -> bool:
     event_counts = (
         proof.get("eventCounts") if isinstance(proof.get("eventCounts"), dict) else {}
@@ -3474,8 +3500,13 @@ def _real_ui_extensive_tool_churn_ok(proof: dict[str, Any]) -> bool:
         return False
     if _real_ui_named_tool_result_count(proof) < MIN_REAL_UI_EXTENSIVE_TOOL_RESULTS:
         return False
-    return (
+    if (
         _real_ui_named_tool_result_message_count(proof)
+        < MIN_REAL_UI_EXTENSIVE_TOOL_RESULT_MESSAGES
+    ):
+        return False
+    return (
+        _real_ui_named_tool_lifecycle_message_count(proof)
         >= MIN_REAL_UI_EXTENSIVE_TOOL_RESULT_MESSAGES
     )
 

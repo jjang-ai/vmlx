@@ -427,12 +427,46 @@ def _write_passing_real_ui_live_model_proof_artifacts(root: Path) -> None:
         proof["persistedToolCount"] = 24
         proof["persistedToolsByMessage"] = [
             [
-                {"phase": "result", "toolName": "run_command"},
-                {"phase": "result", "toolName": "write_file"},
+                *({"phase": "generating", "toolName": ""} for _ in range(9)),
+                {
+                    "phase": "calling",
+                    "toolName": "run_command",
+                    "detail": (
+                        '{"command": "printf %s REAL_UI_LIVE_TOOL_ONE > '
+                        'real_ui_tool_probe_1.txt && cat real_ui_tool_probe_1.txt"}'
+                    ),
+                },
+                {"phase": "executing", "toolName": "run_command"},
+                {
+                    "phase": "result",
+                    "toolName": "run_command",
+                    "detail": (
+                        "$ printf %s REAL_UI_LIVE_TOOL_ONE > "
+                        "real_ui_tool_probe_1.txt && cat real_ui_tool_probe_1.txt\n\n"
+                        "REAL_UI_LIVE_TOOL_ONE"
+                    ),
+                },
             ],
             [
-                {"phase": "result", "toolName": "run_command"},
-                {"phase": "result", "toolName": "write_file"},
+                *({"phase": "generating", "toolName": ""} for _ in range(9)),
+                {
+                    "phase": "calling",
+                    "toolName": "run_command",
+                    "detail": (
+                        '{"command": "printf %s REAL_UI_LIVE_TOOL_TWO > '
+                        'real_ui_tool_probe_2.txt && cat real_ui_tool_probe_2.txt"}'
+                    ),
+                },
+                {"phase": "executing", "toolName": "run_command"},
+                {
+                    "phase": "result",
+                    "toolName": "run_command",
+                    "detail": (
+                        "$ printf %s REAL_UI_LIVE_TOOL_TWO > "
+                        "real_ui_tool_probe_2.txt && cat real_ui_tool_probe_2.txt\n\n"
+                        "REAL_UI_LIVE_TOOL_TWO"
+                    ),
+                },
             ],
         ]
 
@@ -3415,6 +3449,32 @@ def test_release_regression_manifest_current_sweep_requires_lfm_step_extensive_t
         [
             {"phase": "result", "toolName": "run_command"},
         ],
+    ]
+    proof_path.write_text(json.dumps(proof) + "\n", encoding="utf-8")
+
+    result = validate_current_proof_sweep_artifacts(tmp_path)
+
+    assert result["real_ui_live_model_proof"]["status"] == "fail"
+    assert (
+        "extensive_tool_churn_missing:lfm25_moe_a1b_responses"
+        in result["real_ui_live_model_proof"]["failures"]
+    )
+
+
+def test_release_regression_manifest_current_sweep_rejects_result_only_extensive_tool_churn(
+    tmp_path,
+):
+    _write_passing_real_ui_live_model_proof_artifacts(tmp_path)
+    proof_path = (
+        tmp_path
+        / CURRENT_REAL_UI_LIVE_MODEL_PROOF_ARTIFACTS["lfm25_moe_a1b_responses_proof"]
+    )
+    proof = json.loads(proof_path.read_text(encoding="utf-8"))
+    proof.setdefault("eventCounts", {})["tool"] = 24
+    proof["persistedToolCount"] = 24
+    proof["persistedToolsByMessage"] = [
+        [{"phase": "result", "toolName": "run_command"} for _ in range(12)],
+        [{"phase": "result", "toolName": "run_command"} for _ in range(12)],
     ]
     proof_path.write_text(json.dumps(proof) + "\n", encoding="utf-8")
 
