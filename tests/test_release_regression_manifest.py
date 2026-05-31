@@ -2543,6 +2543,20 @@ def test_release_regression_manifest_real_ui_script_records_request_contract():
     assert "cacheExpectRegex" in result_block
 
 
+def test_release_regression_manifest_real_ui_script_waits_for_async_l2_cache_stats():
+    script = Path("panel/scripts/live-real-ui-model-proof.mjs")
+    source = script.read_text(encoding="utf-8")
+
+    assert "function l2DiskStorageSeen(cache)" in source
+    assert "waitForCacheEndpointStorage" in source
+    assert "expected cache endpoint L2 disk storage telemetry" in source
+    renderer_block = source.split("const cacheAfter = await window.api.cache.stats", 1)[1].split(
+        "const messages = await window.api.chat.getMessages",
+        1,
+    )[0]
+    assert "await waitForCacheEndpointStorage(cacheAfter)" in renderer_block
+
+
 def test_release_regression_manifest_real_ui_default_image_fixture_has_valid_png_crc():
     import base64
     import binascii
@@ -3567,6 +3581,75 @@ def test_release_regression_manifest_real_ui_matrix_rejects_cache_hit_telemetry_
     family = matrix["covered_families"]["nemotron_omni"]
     assert "cache_hit_telemetry" not in family["covered_surfaces"]
     assert "cache_hit_telemetry" in family["missing_surfaces"]
+
+
+def test_release_regression_manifest_real_ui_matrix_requires_endpoint_l2_disk_storage_for_native_l2():
+    proof = {
+        "modelName": "Step-3.7-Flash-JANG_2L",
+        "appLogTail": ["start electron app"],
+        "server": {
+            "health": {
+                "status": "healthy",
+                "model_loaded": True,
+                "native_cache": {
+                    "family": "mixed_attention",
+                    "schema": "mixed_swa_kv_v1",
+                    "cache_type": "mixed_swa_kv",
+                    "components": [
+                        "full_attention_kv",
+                        "sliding_window_kv",
+                        "rotating_window_metadata",
+                    ],
+                    "prefix": True,
+                    "paged": True,
+                    "block_disk_l2": True,
+                },
+            }
+        },
+        "chat": {
+            "turns": [{"role": "assistant", "content": "ok"}],
+            "rawParserTagLeak": False,
+            "cjkLeakCount": 0,
+            "koreanLeakCount": 0,
+        },
+        "cache": {
+            "before": {"scheduler_cache": {"hits": 0}},
+            "after": {
+                "scheduler_cache": {"hits": 1},
+                "block_disk_cache": {
+                    "blocks_on_disk": 0,
+                    "total_tokens_on_disk": 0,
+                    "disk_hits": 0,
+                    "disk_writes": 0,
+                },
+                "cache_totals": {"l2_tokens_on_disk": 0},
+            },
+            "cacheHitTokens": 12,
+        },
+        "rendererWireApi": "responses",
+        "eventCounts": {"complete": 2, "tool": 3, "reasoningDone": 1},
+        "persistedToolCount": 1,
+        "persistedToolsByMessage": [
+            [
+                {"phase": "result", "toolName": "run_command"},
+                {"phase": "result", "toolName": "write_file"},
+            ],
+        ],
+        "persistedReasoningCount": 1,
+        "requestedBuiltinTools": True,
+        "chatOverrides": {"builtinToolsEnabled": True},
+        "serverCacheControls": {"verified": True},
+        "media": {"imageVerified": True},
+    }
+
+    matrix = _validate_current_real_ui_live_model_matrix(
+        {"status": "pass", "proofs": {"step37_flash_jang2l": proof}}
+    )
+
+    step37 = matrix["covered_families"]["step37"]
+    assert "l2_disk_storage" in REQUIRED_REAL_UI_LIVE_MODEL_SURFACES_BY_FAMILY["step37"]
+    assert "l2_disk_storage" not in step37["covered_surfaces"]
+    assert "l2_disk_storage" in step37["missing_surfaces"]
 
 
 def test_release_regression_manifest_real_ui_matrix_rejects_hybrid_ssm_full_prefill_fallback():
@@ -5257,6 +5340,13 @@ def test_release_blocker_ledger_splits_real_ui_missing_family_blockers():
             "status": "open",
             "missing_families": ["mimo_v2", "dsv4"],
             "partial_families": ["lfm25"],
+            "covered_families": {
+                "lfm25": {
+                    "status": "partial",
+                    "missing_surfaces": ["l2_disk_storage"],
+                    "artifact": "docs/internal/agent-notes/current-lfm25-proof.json",
+                }
+            },
             "resource_blockers": {
                 "dsv4": {"artifact": CURRENT_REAL_UI_DSV4_MEMORY_PREFLIGHT_ARTIFACT}
             },
@@ -5270,6 +5360,14 @@ def test_release_blocker_ledger_splits_real_ui_missing_family_blockers():
         "partial_families:lfm25"
         in unblocked_partial_ledger["blockers"][-1]["evidence"]
     )
+    assert unblocked_partial_ledger["blockers"][-1]["details"] == {
+        "partial_families": {
+            "lfm25": {
+                "missing_surfaces": ["l2_disk_storage"],
+                "artifact": "docs/internal/agent-notes/current-lfm25-proof.json",
+            }
+        }
+    }
 
     mixed_ledger = _current_release_blocker_ledger(
         regression_suite={"open_requirements": []},

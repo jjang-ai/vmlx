@@ -665,6 +665,7 @@ REQUIRED_REAL_UI_LIVE_MODEL_SURFACES = (
     "cache_hit_telemetry",
     "native_cache_status",
     "cache_endpoint_stats",
+    "l2_disk_storage",
     "settings_persistence",
     "server_cache_controls",
     "vl_image",
@@ -3013,6 +3014,18 @@ def _current_release_blocker_ledger(
                 }
             )
         if unblocked_partial_families:
+            covered_families = real_ui_live_model_matrix.get("covered_families")
+            if not isinstance(covered_families, dict):
+                covered_families = {}
+            partial_details = {}
+            for family in unblocked_partial_families:
+                row = covered_families.get(family)
+                if not isinstance(row, dict):
+                    continue
+                partial_details[family] = {
+                    "missing_surfaces": list(row.get("missing_surfaces") or []),
+                    "artifact": row.get("artifact"),
+                }
             real_ui_subblocker_added = True
             blockers.append(
                 {
@@ -3029,6 +3042,7 @@ def _current_release_blocker_ledger(
                         "required surface passes without parser or tool-result "
                         "semantic leakage."
                     ),
+                    "details": {"partial_families": partial_details},
                 }
             )
         if real_ui_subblocker_added:
@@ -3476,6 +3490,46 @@ def _real_ui_cache_reconstruction_clean(proof: dict[str, Any]) -> bool:
     if saw_hybrid_miss_at >= 0 and saw_hybrid_hit_at < saw_hybrid_miss_at:
         return False
     return True
+
+
+def _real_ui_l2_disk_storage_seen(proof: dict[str, Any]) -> bool:
+    cache = proof.get("cache") if isinstance(proof.get("cache"), dict) else {}
+    cache_after = cache.get("after") if isinstance(cache.get("after"), dict) else {}
+    block_disk = (
+        cache_after.get("block_disk_cache")
+        if isinstance(cache_after.get("block_disk_cache"), dict)
+        else {}
+    )
+    totals = (
+        cache_after.get("cache_totals")
+        if isinstance(cache_after.get("cache_totals"), dict)
+        else {}
+    )
+    for data, keys in (
+        (
+            block_disk,
+            (
+                "blocks_on_disk",
+                "total_tokens_on_disk",
+                "total_cached_tokens",
+                "disk_writes",
+            ),
+        ),
+        (
+            totals,
+            (
+                "l2_tokens_on_disk",
+                "l2_block_tokens_on_disk",
+                "l2_ssm_tokens_on_disk",
+                "l2_tokens_on_disk_store_sum",
+            ),
+        ),
+    ):
+        for key in keys:
+            value = data.get(key)
+            if isinstance(value, (int, float)) and value > 0:
+                return True
+    return False
 
 
 def _real_ui_model_id_matches(row: dict[str, Any], model_id: Any) -> bool:
@@ -4582,6 +4636,8 @@ def _validate_current_real_ui_live_model_matrix(
                 and isinstance(cache_after.get("cache_totals"), dict)
             ):
                 surfaces.add("cache_endpoint_stats")
+            if _real_ui_l2_disk_storage_seen(proof):
+                surfaces.add("l2_disk_storage")
             if (
                 proof.get("rendererWireApi") == "responses"
                 and _json_number(proof, "eventCounts", "complete")

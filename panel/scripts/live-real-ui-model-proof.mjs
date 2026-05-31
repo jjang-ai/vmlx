@@ -544,6 +544,13 @@ function assertResult(result) {
   if ((chat.turns?.length || 0) < 4) failures.push(`expected at least four persisted chat messages, got ${chat.turns?.length || 0}`)
   if (result.sendErrors?.length) failures.push(`renderer send errors: ${result.sendErrors.join('; ')}`)
   if ((result.cache?.cacheHitTokens || 0) <= 0) failures.push('expected real cache-hit token telemetry after repeated UI turns')
+  if (
+    result.requestedServerCacheControls === true
+    && result.server?.health?.native_cache?.block_disk_l2 === true
+    && !l2DiskStorageSeen(result.cache?.after)
+  ) {
+    failures.push('expected cache endpoint L2 disk storage telemetry for native block_disk_l2 cache')
+  }
   if (result.requestedWireApi === 'responses' && !result.provenSurfaces?.includes('responses_api')) {
     failures.push('requested Responses API mode but proof did not record responses_api surface')
   }
@@ -593,6 +600,7 @@ function deriveProvenSurfaces(result) {
   }
   if (hasNativeCacheStatus(health)) surfaces.add('native_cache_status')
   if (hasCacheEndpointStats(result.cache)) surfaces.add('cache_endpoint_stats')
+  if (l2DiskStorageSeen(result.cache?.after)) surfaces.add('l2_disk_storage')
   if (result.rendererWireApi === 'responses' && (result.eventCounts?.complete || 0) > 0) {
     surfaces.add('responses_api')
   }
@@ -651,6 +659,24 @@ function hasCacheEndpointStats(cache) {
     && typeof after.block_disk_cache === 'object'
     && typeof after.cache_totals === 'object'
   )
+}
+
+function l2DiskStorageSeen(cache) {
+  const blockDisk = cache?.block_disk_cache || {}
+  const totals = cache?.cache_totals || {}
+  for (const value of [
+    blockDisk.blocks_on_disk,
+    blockDisk.total_tokens_on_disk,
+    blockDisk.total_cached_tokens,
+    blockDisk.disk_writes,
+    totals.l2_tokens_on_disk,
+    totals.l2_block_tokens_on_disk,
+    totals.l2_ssm_tokens_on_disk,
+    totals.l2_tokens_on_disk_store_sum,
+  ]) {
+    if (typeof value === 'number' && value > 0) return true
+  }
+  return false
 }
 
 function cacheReconstructionClean(result) {
@@ -873,6 +899,20 @@ async function main() {
         const videoExpectRegex = ${JSON.stringify(videoExpectRegex)};
         const workingDirectory = ${JSON.stringify(workingDirectory)};
         const endpoint = { host: '127.0.0.1', port: ${JSON.stringify(serverPort)} };
+        const l2DiskStorageSeen = ${l2DiskStorageSeen.toString()};
+        const waitForCacheEndpointStorage = async (initial) => {
+          if (!${JSON.stringify(checkServerCacheControls)}) return initial;
+          let latest = initial;
+          if (l2DiskStorageSeen(latest)) return latest;
+          const started = Date.now();
+          while (Date.now() - started < 15000) {
+            await new Promise((resolve) => setTimeout(resolve, 250));
+            latest = await window.api.cache.stats(endpoint, remote.session.id)
+              .catch((error) => ({ error: String(error?.message || error) }));
+            if (l2DiskStorageSeen(latest)) return latest;
+          }
+          return latest;
+        };
         await new Promise((resolve, reject) => {
           const started = Date.now();
           const check = () => {
@@ -972,6 +1012,7 @@ async function main() {
             .catch((error) => ({ error: String(error?.message || error) }));
           const cacheAfter = await window.api.cache.stats(endpoint, remote.session.id)
             .catch((error) => ({ error: String(error?.message || error) }));
+          const cacheAfterSettled = await waitForCacheEndpointStorage(cacheAfter);
           const messages = await window.api.chat.getMessages(chat.id);
           const assistants = messages.filter((m) => m.role === 'assistant');
           const first = assistants[0]?.content || '';
@@ -1086,7 +1127,7 @@ async function main() {
             preloadHealthBefore,
             preloadHealthAfter,
             cacheBefore,
-            cacheAfter,
+            cacheAfter: cacheAfterSettled,
             eventCounts: {
               stream: events.stream.length,
               tool: events.tool.length,
