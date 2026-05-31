@@ -2270,6 +2270,7 @@ def validate_current_proof_sweep_artifacts(root: Path) -> dict[str, Any]:
                 "artifact": CURRENT_REAL_UI_DSV4_MEMORY_PREFLIGHT_ARTIFACT,
                 "reason": "insufficient_memory",
                 "model_path": real_ui_dsv4_memory_preflight.get("model_path"),
+                "model_size_gb": real_ui_dsv4_memory_preflight.get("model_size_gb"),
                 "required_available_gb": real_ui_dsv4_memory_preflight.get(
                     "required_available_gb"
                 ),
@@ -2291,6 +2292,15 @@ def validate_current_proof_sweep_artifacts(root: Path) -> dict[str, Any]:
                 ),
                 "inactive_file_cache_gb": real_ui_dsv4_memory_preflight.get(
                     "inactive_file_cache_gb"
+                ),
+                "did_not_launch": real_ui_dsv4_memory_preflight.get(
+                    "did_not_launch"
+                ),
+                "launch_decision": real_ui_dsv4_memory_preflight.get(
+                    "launch_decision"
+                ),
+                "launch_blockers": real_ui_dsv4_memory_preflight.get(
+                    "launch_blockers"
                 ),
             }
         real_ui_live_model_matrix["resource_blockers"] = resource_blockers
@@ -3260,6 +3270,9 @@ def _validate_current_real_ui_dsv4_memory_preflight(root: Path) -> dict[str, Any
                 payload, "memory_pressure_free_percent"
             ),
             "inactive_file_cache_gb": _json_number(payload, "inactive_file_cache_gb"),
+            "did_not_launch": payload.get("did_not_launch"),
+            "launch_decision": payload.get("launch_decision"),
+            "launch_blockers": payload.get("launch_blockers"),
         }
     )
     return result

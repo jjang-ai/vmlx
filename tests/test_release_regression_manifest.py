@@ -3514,6 +3514,7 @@ def test_release_regression_manifest_real_ui_matrix_records_dsv4_memory_blocker(
         "artifact": CURRENT_REAL_UI_DSV4_MEMORY_PREFLIGHT_ARTIFACT,
         "reason": "insufficient_memory",
         "model_path": "/Users/example/models/JANGQ/DeepSeek-V4-Flash-JANGTQ-K",
+        "model_size_gb": 80.0,
         "required_available_gb": 120.0,
         "preflight_memory_source": "vm_stat_free_plus_speculative_purgeable",
         "free_plus_speculative_purgeable_gb": 39.15,
@@ -3522,6 +3523,9 @@ def test_release_regression_manifest_real_ui_matrix_records_dsv4_memory_blocker(
         "psutil_memory_gap_gb": 16.0,
         "memory_pressure_free_percent": 95,
         "inactive_file_cache_gb": 30.0,
+        "did_not_launch": True,
+        "launch_decision": "do_not_launch",
+        "launch_blockers": ["insufficient_memory"],
     }
     assert result["real_ui_live_model_matrix"]["unblocked_non_mimo_status"] == "pass"
     assert (
@@ -5930,6 +5934,7 @@ def test_release_regression_manifest_validates_current_proof_sweep_artifacts(tmp
                     "artifact": CURRENT_REAL_UI_DSV4_MEMORY_PREFLIGHT_ARTIFACT,
                     "reason": "insufficient_memory",
                     "model_path": "/Users/example/models/JANGQ/DeepSeek-V4-Flash-JANGTQ-K",
+                    "model_size_gb": 80.0,
                     "required_available_gb": 120.0,
                     "preflight_memory_source": "vm_stat_free_plus_speculative_purgeable",
                     "free_plus_speculative_purgeable_gb": 39.15,
@@ -5938,6 +5943,9 @@ def test_release_regression_manifest_validates_current_proof_sweep_artifacts(tmp
                     "psutil_memory_gap_gb": 16.0,
                     "memory_pressure_free_percent": 95,
                     "inactive_file_cache_gb": 30.0,
+                    "did_not_launch": True,
+                    "launch_decision": "do_not_launch",
+                    "launch_blockers": ["insufficient_memory"],
                 },
             },
         ],
