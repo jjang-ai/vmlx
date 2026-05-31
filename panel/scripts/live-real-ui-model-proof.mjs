@@ -93,6 +93,20 @@ if (!modelPath) {
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 const execFileAsync = promisify(execFile)
 
+async function removeTemporaryTree(target, { maxRetries = 8 } = {}) {
+  for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
+    try {
+      rmSync(target, { recursive: true, force: true })
+      return
+    } catch (error) {
+      if (!['ENOTEMPTY', 'EBUSY', 'EPERM'].includes(error?.code) || attempt === maxRetries) {
+        throw error
+      }
+      await sleep(50 * (attempt + 1))
+    }
+  }
+}
+
 async function freePort() {
   return await new Promise((resolve, reject) => {
     const server = createServer()
@@ -1397,8 +1411,8 @@ async function main() {
     if (cdp) cdp.close()
     await terminateProcess(app?.proc)
     await terminateProcess(server.proc)
-    rmSync(userDataDir, { recursive: true, force: true })
-    rmSync(runDir, { recursive: true, force: true })
+    await removeTemporaryTree(userDataDir)
+    await removeTemporaryTree(runDir)
   }
 }
 

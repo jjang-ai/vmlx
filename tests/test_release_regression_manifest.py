@@ -2453,8 +2453,10 @@ def test_release_regression_manifest_real_ui_live_model_script_exists_and_uses_r
     assert "childProcessTree" in source
     assert "terminateProcessTree" in source
     assert "process.kill(pid, signal)" in source
-    assert "rmSync(userDataDir" in source
-    assert "rmSync(runDir" in source
+    assert "removeTemporaryTree(userDataDir)" in source
+    assert "removeTemporaryTree(runDir)" in source
+    assert "maxRetries" in source
+    assert "ENOTEMPTY" in source
     assert "rawParserTagLeak" in source
     assert "<\\\\|point_start\\\\|>" in source
     assert "<\\\\|point_end\\\\|>" in source
