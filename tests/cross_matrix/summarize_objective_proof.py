@@ -51,7 +51,7 @@ from tests.cross_matrix.release_regression_manifest import (
 
 DEFAULT_OUT = Path("build/current-objective-proof-audit-20260531-nemotron-exact-finalizer-ledger.json")
 CURRENT_RELEASE_REGRESSION_MANIFEST_REL = (
-    "build/current-release-regression-manifest-20260531-nemotron-exact-finalizer-ledger.json"
+    "build/current-release-regression-manifest-20260531-live-epipe-signing-dsv4-refresh.json"
 )
 DSV4_QUALITY_CLEARANCE_REL = "build/current-dsv4-long-output-quality-clearance-20260521.json"
 DSV4_CURRENT_IDENTIFIER_CANARY_REL = (
@@ -114,7 +114,7 @@ DSV4_CURRENT_SOURCE_BUNDLE_DEFAULTS_DRYRUN_REL = (
     "build/current-dsv4-route-mode-code-exactness-bundle-defaults-dryrun-20260525.json"
 )
 DSV4_CURRENT_SOURCE_MEMORY_PREFLIGHT_REL = (
-    "build/current-dsv4-route-mode-code-exactness-source-memory-preflight-20260531-post-install-sync.json"
+    "build/current-dsv4-route-mode-code-exactness-live-memory-preflight-20260531.json"
 )
 DSV4_CURRENT_JANGTQK_DIRECT_OFF_RECHECK_REL = (
     "build/current-dsv4-route-mode-code-exactness-jangtqk-direct-off-recheck-20260525.json"

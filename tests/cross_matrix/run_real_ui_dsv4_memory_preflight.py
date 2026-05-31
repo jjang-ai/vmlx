@@ -13,7 +13,7 @@ from typing import Any
 
 
 DEFAULT_MODEL_PATH = Path("/Users/example/models/JANGQ/DeepSeek-V4-Flash-JANGTQ-K")
-DEFAULT_OUT = Path("build/current-real-ui-dsv4-memory-preflight-20260531-post-install-sync.json")
+DEFAULT_OUT = Path("build/current-real-ui-dsv4-memory-preflight-20260531-live-refresh.json")
 DEFAULT_REQUIRED_AVAILABLE_GB = 120.0
 DEFAULT_REQUIRED_MODEL_MARGIN_GB = 40.0
 TOP_MEMORY_PROCESS_COUNT = 10

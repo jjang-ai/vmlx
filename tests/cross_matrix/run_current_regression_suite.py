@@ -21,7 +21,7 @@ from typing import Any
 
 
 DEFAULT_OUT = Path(
-    "build/current-regression-suite-20260531-nemotron-exact-finalizer-ledger.json"
+    "build/current-regression-suite-20260531-live-epipe-signing-dsv4-refresh.json"
 )
 
 EXPECTED_OPEN_REQUIREMENTS = [
@@ -428,7 +428,7 @@ CURRENT_SUITE_COMMANDS: dict[str, list[str]] = {
         sys.executable,
         "tests/cross_matrix/run_api_surface_contract.py",
         "--out",
-        "build/current-api-surface-contract-20260531-post-step-lfm-epipe-refresh.json",
+        "build/current-api-surface-contract-20260531-live-epipe-refresh.json",
     ],
     "panel_tool_security_contracts": [
         sys.executable,
@@ -453,13 +453,13 @@ CURRENT_SUITE_COMMANDS: dict[str, list[str]] = {
         "tests/cross_matrix/run_dsv4_route_mode_code_exactness.py",
         "--memory-preflight-only",
         "--out",
-        "build/current-dsv4-route-mode-code-exactness-source-memory-preflight-20260531-post-install-sync.json",
+        "build/current-dsv4-route-mode-code-exactness-live-memory-preflight-20260531.json",
     ],
     "real_ui_dsv4_memory_preflight": [
         sys.executable,
         "tests/cross_matrix/run_real_ui_dsv4_memory_preflight.py",
         "--out",
-        "build/current-real-ui-dsv4-memory-preflight-20260531-post-install-sync.json",
+        "build/current-real-ui-dsv4-memory-preflight-20260531-live-refresh.json",
     ],
     "release_surface_contracts": [
         sys.executable,
@@ -508,13 +508,13 @@ CURRENT_SUITE_COMMANDS: dict[str, list[str]] = {
         sys.executable,
         "tests/cross_matrix/run_packaged_integrity_contract.py",
         "--out",
-        "build/current-packaged-integrity-contract-20260531-post-install-sync.json",
+        "build/current-packaged-integrity-contract-20260531-live-signing-refresh.json",
     ],
     "installed_app_runtime_parity_audit": [
         sys.executable,
         "tests/cross_matrix/run_installed_app_runtime_parity_audit.py",
         "--out",
-        "build/current-installed-app-runtime-parity-audit-20260531-post-install-sync.json",
+        "build/current-installed-app-runtime-parity-audit-20260531-live-epipe-refresh.json",
     ],
     "staged_app_runtime_parity_audit": [
         sys.executable,
@@ -568,7 +568,7 @@ CURRENT_SUITE_COMMANDS: dict[str, list[str]] = {
         "--require-current-proof-sweep",
         "--require-release-ready",
         "--out",
-        "build/current-release-regression-manifest-20260531-nemotron-exact-finalizer-ledger.json",
+        "build/current-release-regression-manifest-20260531-live-epipe-signing-dsv4-refresh.json",
     ],
 }
 
