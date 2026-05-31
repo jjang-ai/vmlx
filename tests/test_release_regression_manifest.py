@@ -5719,6 +5719,39 @@ def test_release_regression_manifest_real_ui_integrated_tool_l2_requires_same_ar
     assert "tool_l2_cache_integrated" in lfm25["missing_surfaces"]
 
 
+def test_release_regression_manifest_real_ui_integrated_tool_l2_requires_same_artifact_delta_streaming():
+    integrated_missing_delta = _lfm_integrated_matrix_proof()
+    integrated_missing_delta.pop("streamTrace")
+
+    delta_only = _lfm_integrated_matrix_proof()
+    delta_only["cache"] = {
+        "before": {"scheduler_cache": {"hits": 0}},
+        "after": {"scheduler_cache": {"hits": 0}},
+        "cacheHitTokens": 0,
+    }
+    delta_only["eventCounts"] = {"complete": 2, "stream": 4, "tool": 0}
+    delta_only["persistedToolCount"] = 0
+    delta_only["persistedToolsByMessage"] = []
+    delta_only["toolProbeFiles"] = {}
+    delta_only["server"]["health"].pop("native_cache")
+    delta_only["server"]["health"].pop("kv_cache_quantization")
+
+    matrix = _validate_current_real_ui_live_model_matrix(
+        {
+            "status": "pass",
+            "proofs": {
+                "lfm25_moe_a1b_responses": integrated_missing_delta,
+                "lfm25_moe_a1b_responses_delta": delta_only,
+            },
+        }
+    )
+
+    lfm25 = matrix["covered_families"]["lfm25"]
+    assert "responses_delta_streaming" in lfm25["covered_surfaces"]
+    assert "tool_l2_cache_integrated" not in lfm25["covered_surfaces"]
+    assert "tool_l2_cache_integrated" in lfm25["missing_surfaces"]
+
+
 def test_release_regression_manifest_real_ui_matrix_requires_lfm_live_speed_floor():
     proof = {
         "modelName": "LFM2.5-8B-A1B-JANG_2L",

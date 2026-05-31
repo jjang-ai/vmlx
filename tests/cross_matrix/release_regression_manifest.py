@@ -5208,6 +5208,7 @@ def _validate_current_real_ui_live_model_matrix(
                 "l2_disk_storage",
                 "long_tool_loop",
                 "responses_cache_detail_usage",
+                "responses_delta_streaming",
                 "server_cache_controls",
                 "live_speed_floor",
             }.issubset(surfaces):
