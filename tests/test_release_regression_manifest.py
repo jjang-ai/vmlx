@@ -373,6 +373,14 @@ def _write_passing_real_ui_live_model_proof_artifacts(root: Path) -> None:
                     "enabled": False,
                     "reason": "not_active",
                 },
+                "storage_quantization": {
+                    "enabled": True,
+                    "mode": "storage_boundary",
+                    "bits": 4,
+                    "group_size": 64,
+                    "applies_to": "full_and_sliding_attention_kv",
+                    "metadata_policy": "preserve_rotating_window_metadata",
+                },
                 "prefix": True,
                 "paged": True,
                 "block_disk_l2": True,
@@ -3876,6 +3884,14 @@ def test_release_regression_manifest_real_ui_matrix_requires_every_family_surfac
             "rotating_window_metadata",
         ],
         "generic_turboquant_kv": {"enabled": False, "reason": "not_active"},
+        "storage_quantization": {
+            "enabled": True,
+            "mode": "storage_boundary",
+            "bits": 4,
+            "group_size": 64,
+            "applies_to": "full_and_sliding_attention_kv",
+            "metadata_policy": "preserve_rotating_window_metadata",
+        },
         "prefix": True,
         "paged": True,
         "block_disk_l2": True,
@@ -4360,6 +4376,67 @@ def test_release_regression_manifest_real_ui_matrix_requires_integrated_tool_l2_
     assert "l2_disk_storage" in step37["covered_surfaces"]
     assert "tool_l2_cache_integrated" not in step37["covered_surfaces"]
     assert "tool_l2_cache_integrated" in step37["missing_surfaces"]
+
+
+def test_release_regression_manifest_real_ui_matrix_requires_step37_mixed_swa_storage_quantization():
+    proof = {
+        "modelName": "Step-3.7-Flash-JANG_2L",
+        "appLogTail": ["start electron app"],
+        "server": {
+            "health": {
+                "status": "healthy",
+                "model_loaded": True,
+                "native_cache": {
+                    "family": "mixed_attention",
+                    "schema": "mixed_swa_kv_v1",
+                    "cache_type": "mixed_swa_kv",
+                    "components": [
+                        "full_attention_kv",
+                        "sliding_window_kv",
+                        "rotating_window_metadata",
+                    ],
+                    "generic_turboquant_kv": {
+                        "enabled": False,
+                        "reason": "mixed_swa_kv",
+                    },
+                    "prefix": True,
+                    "paged": True,
+                    "block_disk_l2": True,
+                },
+                "kv_cache_quantization": {
+                    "enabled": True,
+                    "bits": 4,
+                    "group_size": 64,
+                },
+                "scheduler": {
+                    "last_cache_execution": {
+                        "cache_detail": "paged+mixed_swa",
+                        "cached_tokens": 2612,
+                    }
+                },
+            }
+        },
+        "chat": {
+            "turns": [{"role": "assistant", "content": "ok"}],
+            "rawParserTagLeak": False,
+            "cjkLeakCount": 0,
+            "koreanLeakCount": 0,
+        },
+        "cache": {"cacheHitTokens": 2612},
+        "rendererWireApi": "responses",
+        "eventCounts": {"complete": 2, "stream": 4, "tool": 24},
+        "requestedBuiltinTools": True,
+        "chatOverrides": {"builtinToolsEnabled": True, "maxTokens": 512},
+        "requestContract": {"requestMaxTokens": 512, "wireApi": "responses"},
+    }
+
+    matrix = _validate_current_real_ui_live_model_matrix(
+        {"status": "pass", "proofs": {"step37_flash_jang2l": proof}}
+    )
+
+    step37 = matrix["covered_families"]["step37"]
+    assert "architecture_cache_policy" not in step37["covered_surfaces"]
+    assert "architecture_cache_policy" in step37["missing_surfaces"]
 
 
 def test_release_regression_manifest_real_ui_matrix_rejects_hybrid_ssm_full_prefill_fallback():

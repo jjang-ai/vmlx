@@ -9275,6 +9275,8 @@ class TestTurboQuantKVTelemetry:
             _model_type_for_runtime="gemma4",
             _mixed_attention_cache_model=True,
             _tq_active=False,
+            _kv_cache_bits=4,
+            _kv_cache_group_size=64,
             block_aware_cache=object(),
             paged_cache_manager=SimpleNamespace(_disk_store=object()),
         )
@@ -9288,6 +9290,14 @@ class TestTurboQuantKVTelemetry:
         assert "full_attention_kv" in status["components"]
         assert "rotating_window_metadata" in status["components"]
         assert status["generic_turboquant_kv"]["enabled"] is False
+        assert status["storage_quantization"] == {
+            "enabled": True,
+            "mode": "storage_boundary",
+            "bits": 4,
+            "group_size": 64,
+            "applies_to": "full_and_sliding_attention_kv",
+            "metadata_policy": "preserve_rotating_window_metadata",
+        }
         assert status["paged"] is True
         assert status["block_disk_l2"] is True
 

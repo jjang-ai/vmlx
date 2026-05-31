@@ -3690,6 +3690,44 @@ def _real_ui_ssm_companion_l2_seen(proof: dict[str, Any]) -> bool:
     return False
 
 
+def _real_ui_mixed_swa_storage_quantization_seen(
+    native: dict[str, Any],
+    proof: dict[str, Any],
+) -> bool:
+    storage = (
+        native.get("storage_quantization")
+        if isinstance(native.get("storage_quantization"), dict)
+        else {}
+    )
+    if (
+        storage.get("enabled") is True
+        and storage.get("mode") == "storage_boundary"
+        and storage.get("bits") == 4
+        and storage.get("group_size") == 64
+        and storage.get("applies_to") == "full_and_sliding_attention_kv"
+        and storage.get("metadata_policy") == "preserve_rotating_window_metadata"
+    ):
+        return True
+
+    def walk(value: Any) -> bool:
+        if isinstance(value, dict):
+            cache_detail = str(value.get("cache_detail") or "")
+            if (
+                cache_detail == "paged+mixed_swa"
+                and value.get("reconstructed") is True
+                and value.get("dequantized") is True
+                and value.get("reconstruction_ok") is True
+                and value.get("dequantization_ok") is True
+            ):
+                return True
+            return any(walk(child) for child in value.values())
+        if isinstance(value, list):
+            return any(walk(child) for child in value)
+        return False
+
+    return walk(proof)
+
+
 def _real_ui_architecture_cache_policy_ok(
     family_id: str,
     proof: dict[str, Any],
@@ -3757,6 +3795,7 @@ def _real_ui_architecture_cache_policy_ok(
             and kv_cache_quantization.get("enabled") is True
             and kv_cache_quantization.get("bits") == 4
             and kv_cache_quantization.get("group_size") == 64
+            and _real_ui_mixed_swa_storage_quantization_seen(native, proof)
         )
     return False
 

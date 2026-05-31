@@ -5871,6 +5871,14 @@ def _native_cache_status(scheduler=None, *, family: str | None = None, cfg=None)
         or cache_subtype == "mixed_swa_kv"
     ):
         tq_enabled = bool(getattr(scheduler, "_tq_active", False))
+        try:
+            stored_kv_bits = int(getattr(scheduler, "_kv_cache_bits", 0) or 0)
+        except (TypeError, ValueError):
+            stored_kv_bits = 0
+        try:
+            stored_kv_group = int(getattr(scheduler, "_kv_cache_group_size", 64) or 64)
+        except (TypeError, ValueError):
+            stored_kv_group = 64
         return {
             "family": family_name or scheduler_family or "mixed_attention",
             "schema": "mixed_swa_kv_v1",
@@ -5883,6 +5891,14 @@ def _native_cache_status(scheduler=None, *, family: str | None = None, cfg=None)
             "generic_turboquant_kv": {
                 "enabled": tq_enabled,
                 "reason": "live_tq_kv" if tq_enabled else "not_active",
+            },
+            "storage_quantization": {
+                "enabled": stored_kv_bits > 0,
+                "mode": "storage_boundary",
+                "bits": stored_kv_bits if stored_kv_bits > 0 else None,
+                "group_size": stored_kv_group if stored_kv_bits > 0 else None,
+                "applies_to": "full_and_sliding_attention_kv",
+                "metadata_policy": "preserve_rotating_window_metadata",
             },
             "prefix": bool(block_aware_cache is not None),
             "paged": bool(block_aware_cache is not None and paged_cache_manager is not None),
