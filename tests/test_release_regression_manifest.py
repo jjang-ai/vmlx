@@ -2649,7 +2649,7 @@ def test_release_regression_manifest_current_sweep_rejects_missing_real_ui_live_
         in result["real_ui_live_model_proof"]["missing"]
     )
     assert (
-        "docs/internal/agent-notes/current-real-ui-live-model-zaya-vl-image-20260527-proof.json"
+        "docs/internal/agent-notes/current-real-ui-live-model-zaya-vl-image-current-source-20260531-proof.json"
         in result["real_ui_live_model_proof"]["missing"]
     )
     assert (
@@ -2687,7 +2687,7 @@ def test_release_regression_manifest_real_ui_live_model_rows_include_ling_bailin
     assert rows["zaya_vl_image"]["family"] == "zaya_vl"
     assert (
         rows["zaya_vl_image"]["proof"]
-        == "docs/internal/agent-notes/current-real-ui-live-model-zaya-vl-image-20260527-proof.json"
+        == "docs/internal/agent-notes/current-real-ui-live-model-zaya-vl-image-current-source-20260531-proof.json"
     )
     assert rows["zaya_vl_cachecontrols"]["model_path"] == "/Users/example/models/JANGQ/ZAYA1-VL-8B-JANGTQ4"
     assert rows["zaya_vl_cachecontrols"]["model_name"] == "ZAYA1-VL-8B-JANGTQ4"
@@ -3042,7 +3042,7 @@ def test_release_regression_manifest_current_sweep_rejects_real_ui_proof_without
     result = validate_current_proof_sweep_artifacts(tmp_path)
 
     assert result["real_ui_live_model_proof"]["status"] == "fail"
-    assert "request_contract_missing" in result["real_ui_live_model_proof"]["failures"]
+    assert "request_contract_missing:zaya_text" in result["real_ui_live_model_proof"]["failures"]
 
 
 def test_release_regression_manifest_accepts_structured_electron_dev_launch_when_log_tail_rotates(
@@ -5143,8 +5143,8 @@ def test_release_blocker_ledger_tracks_stale_real_ui_request_contract_proofs():
         real_ui_live_model_proof={
             "status": "fail",
             "failures": [
-                "request_contract_missing",
-                "request_contract_incomplete:enableThinking",
+                "request_contract_missing:gemma4",
+                "request_contract_incomplete:qwen36:enableThinking",
             ],
         },
         real_ui_live_model_matrix={"status": "pass", "missing_families": []},
@@ -5154,7 +5154,7 @@ def test_release_blocker_ledger_tracks_stale_real_ui_request_contract_proofs():
         {
             "id": "real_ui_request_contract_proofs_stale",
             "status": "open",
-            "evidence": "current_proof_sweep.real_ui_live_model_proof.failures:request_contract_incomplete:enableThinking,request_contract_missing",
+            "evidence": "current_proof_sweep.real_ui_live_model_proof.failures:request_contract_incomplete:qwen36:enableThinking,request_contract_missing:gemma4",
             "next_proof": "Rerun real Electron UI model proofs with current live-real-ui-model-proof.mjs so every artifact records its prompts and request knobs.",
         }
     ]

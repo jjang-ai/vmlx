@@ -811,6 +811,16 @@ class BatchedEngine(BaseEngine):
                                     prompt = prompt[:last_think + 7] + "</think>\n"
                     return prompt
 
+                def _inject_processor_tool_fallback(prompt: str, messages_arg) -> str:
+                    return check_and_inject_fallback_tools(
+                        prompt,
+                        messages_arg,
+                        tools,
+                        self._processor,
+                        dict(tpl_kwargs),
+                        tool_parser_id=self._model_tool_parser_name(),
+                    )
+
                 if num_images > 0:
                     # Two-step pipeline:
                     # 1. Build messages with image tokens via mlx_vlm
@@ -834,7 +844,11 @@ class BatchedEngine(BaseEngine):
                         # later receives images with no matching token.
                         direct_messages = _normalize_processor_messages(messages)
                         try:
-                            return _processor_template(direct_messages)
+                            prompt = _processor_template(direct_messages)
+                            return _inject_processor_tool_fallback(
+                                prompt,
+                                direct_messages,
+                            )
                         except Exception as direct_err:
                             raise RuntimeError(
                                 "MLLM chat-template builder failed "
@@ -849,6 +863,7 @@ class BatchedEngine(BaseEngine):
                     # mlx_vlm's get_chat_template doesn't forward enable_thinking,
                     # causing thinking models to always use thinking-OFF format.
                     prompt = _processor_template(built_messages)
+                    prompt = _inject_processor_tool_fallback(prompt, built_messages)
                     return prompt
                 except ValueError as template_err:
                     msg = str(template_err)

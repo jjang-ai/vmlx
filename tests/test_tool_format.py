@@ -1436,6 +1436,362 @@ class TestFallbackToolPromptFormat:
         assert "<parameter=path>\n.\n</parameter>" not in rendered
         assert "list the current directory" not in rendered
 
+    def test_zaya_fallback_preserves_native_tool_scaffold_with_concrete_examples(self):
+        from vmlx_engine.api.tool_calling import check_and_inject_fallback_tools
+
+        class FakeTokenizer:
+            last_kwargs = None
+
+            def apply_chat_template(self, messages, **kwargs):
+                self.last_kwargs = kwargs
+                system = ""
+                body = []
+                for msg in messages:
+                    if msg.get("role") == "system":
+                        system = str(msg.get("content", ""))
+                    else:
+                        body.append(str(msg.get("content", "")))
+                prompt = "<|im_start|>system\n" + system
+                if kwargs.get("tools"):
+                    prompt += (
+                        "\n\n# Tools\n<tools>\n"
+                        "<function><name>write_file</name></function>\n"
+                        "</tools>\n"
+                        "<IMPORTANT>native zaya tool rules</IMPORTANT>\n"
+                        "<zyphra_tool_call>\n"
+                        "<function=example_function_name>\n"
+                        "<parameter=example_parameter_1>\nvalue_1\n</parameter>\n"
+                        "</function>\n</zyphra_tool_call>"
+                    )
+                return prompt + "<|im_end|>\n<|im_start|>user\n" + "\n".join(body)
+
+        tools = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "write_file",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "path": {"type": "string"},
+                            "content": {"type": "string"},
+                        },
+                        "required": ["path", "content"],
+                    },
+                },
+            }
+        ]
+        tokenizer = FakeTokenizer()
+
+        rendered = check_and_inject_fallback_tools(
+            "<|im_start|>system\n# Tools\n<tools>\n"
+            "<function><name>write_file</name></function>\n"
+            "</tools>\n<zyphra_tool_call>\n"
+            "<function=example_function_name>\n"
+            "<parameter=example_parameter_1>\nvalue_1\n</parameter>\n"
+            "</function>\n</zyphra_tool_call><|im_end|>\n"
+            "<|im_start|>user\nUse write_file\n<|im_start|>assistant\n",
+            [
+                {
+                    "role": "user",
+                    "content": (
+                        "Use the write_file tool exactly once with path "
+                        "real_ui_tool_probe_1.txt and content "
+                        "REAL_UI_LIVE_TOOL_ONE."
+                    ),
+                }
+            ],
+            tools,
+            tokenizer,
+            {
+                "tokenize": False,
+                "add_generation_prompt": True,
+                "tools": tools,
+                "enable_thinking": False,
+            },
+            tool_parser_id="zaya_xml",
+        )
+
+        assert tokenizer.last_kwargs["tools"] == tools
+        assert "<tools>" in rendered
+        assert "<IMPORTANT>native zaya tool rules</IMPORTANT>" in rendered
+        assert "<function=write_file>" in rendered
+        assert "<parameter=path>\nreal_ui_tool_probe_1.txt\n</parameter>" in rendered
+        assert "<parameter=content>\nREAL_UI_LIVE_TOOL_ONE\n</parameter>" in rendered
+
+    def test_zaya_vl_processor_template_receives_concrete_tool_fallback(self):
+        from vmlx_engine.engine.batched import BatchedEngine
+
+        class FakeProcessor:
+            def apply_chat_template(self, messages, **kwargs):
+                system = ""
+                body = []
+                for msg in messages:
+                    if msg.get("role") == "system":
+                        system = str(msg.get("content", ""))
+                    else:
+                        body.append(str(msg.get("content", "")))
+                prompt = "<|im_start|>system\n" + system
+                if kwargs.get("tools"):
+                    prompt += (
+                        "\n\n# Tools\n<tools>\n"
+                        "<function><name>write_file</name></function>\n"
+                        "</tools>\n"
+                        "<IMPORTANT>native zaya vl tool rules</IMPORTANT>\n"
+                        "<zyphra_tool_call>\n"
+                        "<function=example_function_name>\n"
+                        "<parameter=example_parameter_1>\nvalue_1\n</parameter>\n"
+                        "</function>\n</zyphra_tool_call>"
+                    )
+                return prompt + "<|im_end|>\n<|im_start|>user\n" + "\n".join(body)
+
+        class FakeModel:
+            config = {"model_type": "zaya1_vl"}
+
+        engine = BatchedEngine.__new__(BatchedEngine)
+        engine._is_mllm = True
+        engine._processor = FakeProcessor()
+        engine._model = FakeModel()
+        engine._model_name = "ZAYA1-VL-8B-JANGTQ4"
+        engine._model_tool_parser_name = lambda: "zaya_xml"
+
+        tools = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "write_file",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "path": {"type": "string"},
+                            "content": {"type": "string"},
+                        },
+                        "required": ["path", "content"],
+                    },
+                },
+            }
+        ]
+
+        rendered = engine._apply_chat_template(
+            [
+                {
+                    "role": "user",
+                    "content": (
+                        "Use the write_file tool exactly once with path "
+                        "real_ui_tool_probe_1.txt and content "
+                        "REAL_UI_LIVE_TOOL_ONE."
+                    ),
+                }
+            ],
+            tools=tools,
+            enable_thinking=False,
+        )
+
+        assert "<tools>" in rendered
+        assert "<IMPORTANT>native zaya vl tool rules</IMPORTANT>" in rendered
+        assert "<function=write_file>" in rendered
+        assert "<parameter=path>\nreal_ui_tool_probe_1.txt\n</parameter>" in rendered
+        assert "<parameter=content>\nREAL_UI_LIVE_TOOL_ONE\n</parameter>" in rendered
+
+    def test_zaya_vl_processor_without_native_scaffold_gets_full_tool_contract(self):
+        from vmlx_engine.engine.batched import BatchedEngine
+
+        class ScaffoldlessZayaVlProcessor:
+            def apply_chat_template(self, messages, **kwargs):
+                rendered = []
+                for msg in messages:
+                    role = msg.get("role")
+                    content = msg.get("content")
+                    if isinstance(content, list):
+                        text = "\n".join(
+                            item.get("text", "")
+                            for item in content
+                            if isinstance(item, dict)
+                        )
+                    else:
+                        text = str(content or "")
+                    rendered.append(f"<|im_start|>{role}\n{text}<|im_end|>")
+                if kwargs.get("add_generation_prompt"):
+                    rendered.append("<|im_start|>assistant\n")
+                return "\n".join(rendered)
+
+        class FakeModel:
+            config = {"model_type": "zaya1_vl"}
+
+        engine = BatchedEngine.__new__(BatchedEngine)
+        engine._is_mllm = True
+        engine._processor = ScaffoldlessZayaVlProcessor()
+        engine._model = FakeModel()
+        engine._model_name = "ZAYA1-VL-8B-JANGTQ4"
+        engine._model_tool_parser_name = lambda: "zaya_xml"
+
+        tools = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "write_file",
+                    "description": "Write a file",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "path": {"type": "string", "description": "Target path"},
+                            "content": {"type": "string"},
+                        },
+                        "required": ["path", "content"],
+                    },
+                },
+            }
+        ]
+
+        rendered = engine._apply_chat_template(
+            [
+                {
+                    "role": "user",
+                    "content": (
+                        "Use the write_file tool exactly once with path "
+                        "real_ui_tool_probe_1.txt and content "
+                        "REAL_UI_LIVE_TOOL_ONE."
+                    ),
+                }
+            ],
+            tools=tools,
+            enable_thinking=False,
+        )
+
+        assert "# Tools" in rendered
+        assert "<tools>" in rendered
+        assert "<function>" in rendered
+        assert "<name>write_file</name>" in rendered
+        assert "<IMPORTANT>" in rendered
+        assert "Function calls MUST follow the specified format" in rendered
+        assert "<function=write_file>" in rendered
+        assert "<parameter=path>\nreal_ui_tool_probe_1.txt\n</parameter>" in rendered
+        assert "<parameter=content>\nREAL_UI_LIVE_TOOL_ONE\n</parameter>" in rendered
+
+    def test_zaya_fallback_skips_concrete_examples_when_request_names_no_tool(self):
+        from vmlx_engine.api.tool_calling import check_and_inject_fallback_tools
+
+        class FakeTokenizer:
+            calls = 0
+
+            def apply_chat_template(self, messages, **kwargs):
+                self.calls += 1
+                return "rerendered <function=write_file>"
+
+        prompt = (
+            "<|im_start|>system\n# Tools\n<tools>\n"
+            "<function><name>write_file</name></function>\n"
+            "</tools>\n"
+            "<zyphra_tool_call>\n"
+            "<function=example_function_name>\n"
+            "<parameter=example_parameter_1>\nvalue_1\n</parameter>\n"
+            "</function>\n</zyphra_tool_call><|im_end|>\n"
+            "<|im_start|>user\nWhat is the dominant color of the attached image?"
+            "<|im_end|>\n<|im_start|>assistant\n"
+        )
+        tools = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "write_file",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "path": {"type": "string"},
+                            "content": {"type": "string"},
+                        },
+                    },
+                },
+            }
+        ]
+
+        rendered = check_and_inject_fallback_tools(
+            prompt,
+            [{"role": "user", "content": "What is the dominant color of the attached image?"}],
+            tools,
+            FakeTokenizer(),
+            {
+                "tokenize": False,
+                "add_generation_prompt": True,
+                "tools": tools,
+                "enable_thinking": False,
+            },
+            tool_parser_id="zaya_xml",
+        )
+
+        assert FakeTokenizer.calls == 0
+        assert rendered == prompt
+
+    def test_zaya_fallback_ignores_stale_prior_tool_requests_for_media_turn(self):
+        from vmlx_engine.api.tool_calling import check_and_inject_fallback_tools
+
+        class FakeTokenizer:
+            calls = 0
+
+            def apply_chat_template(self, messages, **kwargs):
+                self.calls += 1
+                return "rerendered <function=run_command>"
+
+        prompt = (
+            "<|im_start|>system\n# Tools\n<tools>\n"
+            "<function><name>run_command</name></function>\n"
+            "</tools>\n"
+            "<zyphra_tool_call>\n"
+            "<function=example_function_name>\n"
+            "<parameter=example_parameter_1>\nvalue_1\n</parameter>\n"
+            "</function>\n</zyphra_tool_call><|im_end|>\n"
+            "<|im_start|>user\nWhat is the dominant color of the attached image?"
+            "<|im_end|>\n<|im_start|>assistant\n"
+        )
+        tools = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "run_command",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"command": {"type": "string"}},
+                    },
+                },
+            }
+        ]
+
+        rendered = check_and_inject_fallback_tools(
+            prompt,
+            [
+                {
+                    "role": "user",
+                    "content": "Use the run_command tool exactly once to create a file.",
+                },
+                {"role": "assistant", "content": "done"},
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "What is the dominant color of the attached image?",
+                        },
+                        {
+                            "type": "image_url",
+                            "image_url": {"url": "data:image/png;base64,abc"},
+                        },
+                    ],
+                },
+            ],
+            tools,
+            FakeTokenizer(),
+            {
+                "tokenize": False,
+                "add_generation_prompt": True,
+                "tools": tools,
+                "enable_thinking": False,
+            },
+            tool_parser_id="zaya_xml",
+        )
+
+        assert FakeTokenizer.calls == 0
+        assert rendered == prompt
+
     def test_zaya_read_file_prompt_binds_path_from_for_phrase(self):
         from vmlx_engine.api.tool_calling import check_and_inject_fallback_tools
 

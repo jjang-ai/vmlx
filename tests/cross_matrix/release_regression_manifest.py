@@ -427,8 +427,8 @@ CURRENT_REAL_UI_LIVE_MODEL_PROOF_ROWS = {
         "family": "zaya_text",
     },
     "zaya_vl_image": {
-        "proof": "docs/internal/agent-notes/current-real-ui-live-model-zaya-vl-image-20260527-proof.json",
-        "chat_screenshot": "docs/internal/agent-notes/current-real-ui-live-model-zaya-vl-image-20260527-chat.png",
+        "proof": "docs/internal/agent-notes/current-real-ui-live-model-zaya-vl-image-current-source-20260531-proof.json",
+        "chat_screenshot": "docs/internal/agent-notes/current-real-ui-live-model-zaya-vl-image-current-source-20260531-chat.png",
         "model_path": "/Users/example/models/JANGQ/ZAYA1-VL-8B-JANGTQ4",
         "model_name": "ZAYA1-VL-8B-JANGTQ4",
         "family": "zaya_vl",
@@ -2847,6 +2847,7 @@ def _current_release_blocker_ledger(
             failure
             for failure in proof_failures
             if failure == "request_contract_missing"
+            or failure.startswith("request_contract_missing:")
             or failure.startswith("request_contract_incomplete:")
         )
         if request_contract_failures:
@@ -4394,7 +4395,7 @@ def _validate_current_real_ui_live_model_proof_artifacts(
             failures.append("proof_model_name_mismatch")
         request_contract = proof.get("requestContract")
         if not isinstance(request_contract, dict):
-            failures.append("request_contract_missing")
+            failures.append(f"request_contract_missing:{row_id}")
         else:
             missing_contract_fields = [
                 field
@@ -4403,7 +4404,7 @@ def _validate_current_real_ui_live_model_proof_artifacts(
             ]
             if missing_contract_fields:
                 failures.append(
-                    "request_contract_incomplete:"
+                    f"request_contract_incomplete:{row_id}:"
                     + ",".join(missing_contract_fields)
                 )
 

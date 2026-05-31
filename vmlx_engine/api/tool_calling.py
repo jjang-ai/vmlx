@@ -90,7 +90,35 @@ def check_and_inject_fallback_tools(
                             chunks.append(text)
         return "\n".join(chunks)
 
-    request_text = _message_request_text()
+    def _latest_user_request_text() -> str:
+        for msg in reversed(messages):
+            if not isinstance(msg, dict) or msg.get("role") != "user":
+                continue
+            content = msg.get("content")
+            if isinstance(content, str):
+                return content
+            if isinstance(content, list):
+                chunks: list[str] = []
+                for item in content:
+                    if isinstance(item, dict):
+                        text = item.get("text") or item.get("content")
+                        if isinstance(text, str):
+                            chunks.append(text)
+                return "\n".join(chunks)
+        return ""
+
+    request_text = _latest_user_request_text() or _message_request_text()
+
+    def _request_mentions_tool_name(name: str) -> bool:
+        normalized = name.strip()
+        if not normalized or not request_text:
+            return False
+        return bool(
+            re.search(
+                rf"(?<![A-Za-z0-9_]){re.escape(normalized)}(?![A-Za-z0-9_])",
+                request_text,
+            )
+        )
 
     # Some templates need more than tool-name visibility. DSV4 may mention
     # schemas without a parser-matching DSML exemplar. Qwen3.5/3.6 MoE's
@@ -111,6 +139,11 @@ def check_and_inject_fallback_tools(
             and "<tools>" in prompt
         )
     )
+    if (
+        is_zaya_native_tool_prompt
+        and not any(_request_mentions_tool_name(name) for name in tool_names)
+    ):
+        return prompt
     is_lfm2_native_tool_prompt = parser_id in {"lfm2", "liquid"}
     is_step3p5_native_tool_prompt = (
         parser_id in {"step3p5", "step", "stepfun"}
@@ -374,6 +407,88 @@ def check_and_inject_fallback_tools(
             blocks.append("\n".join(lines))
         return "\n\n".join(blocks)
 
+    def _render_zaya_tool_scaffold(tools: list[dict]) -> str:
+        lines = [
+            "# Tools",
+            "",
+            "You have access to the following functions:",
+            "",
+            "<tools>",
+        ]
+        for tool in tools:
+            func = tool.get("function", {}) if isinstance(tool, dict) else {}
+            name = func.get("name", "") or "unknown_tool"
+            desc = func.get("description", "")
+            params = func.get("parameters", {}) or {}
+            props = params.get("properties", {}) if isinstance(params, dict) else {}
+            required = (
+                params.get("required", [])
+                if isinstance(params, dict)
+                and isinstance(params.get("required", []), list)
+                else []
+            )
+            lines.extend(["<function>", f"<name>{name}</name>"])
+            if desc:
+                lines.append(f"<description>{str(desc).strip()}</description>")
+            lines.append("<parameters>")
+            for param_name, param_schema in props.items():
+                p_type = (
+                    param_schema.get("type", "string")
+                    if isinstance(param_schema, dict)
+                    else "string"
+                )
+                p_desc = (
+                    param_schema.get("description", "")
+                    if isinstance(param_schema, dict)
+                    else ""
+                )
+                lines.extend(
+                    [
+                        "<parameter>",
+                        f"<name>{param_name}</name>",
+                        f"<type>{p_type}</type>",
+                    ]
+                )
+                if p_desc:
+                    lines.append(f"<description>{str(p_desc).strip()}</description>")
+                lines.append("</parameter>")
+            if required:
+                lines.append("<required>" + json.dumps(required, ensure_ascii=False) + "</required>")
+            lines.extend(["</parameters>", "</function>"])
+        lines.extend(
+            [
+                "</tools>",
+                "",
+                "If you choose to call a function ONLY reply in the following "
+                "format with NO suffix:",
+                "",
+                "<zyphra_tool_call>",
+                "<function=example_function_name>",
+                "<parameter=example_parameter_1>",
+                "value_1",
+                "</parameter>",
+                "<parameter=example_parameter_2>",
+                "This is the value for the second parameter",
+                "that can span",
+                "multiple lines",
+                "</parameter>",
+                "</function>",
+                "</zyphra_tool_call>",
+                "",
+                "<IMPORTANT>",
+                "Reminder:",
+                "- Function calls MUST follow the specified format: an inner "
+                "<function=...></function> block must be nested within "
+                "<zyphra_tool_call></zyphra_tool_call> XML tags",
+                "- Required parameters MUST be specified",
+                "- You may provide optional reasoning for your function call in "
+                "natural language BEFORE the function call, but NOT after",
+                "- If there is no function call available, answer the user directly",
+                "</IMPORTANT>",
+            ]
+        )
+        return "\n".join(lines)
+
     def _render_lfm2_examples(tools: list[dict]) -> str:
         def _derive_run_command_value() -> str:
             if not request_text:
@@ -481,6 +596,8 @@ def check_and_inject_fallback_tools(
             "call it instead of fabricating a result.",
             "",
         ]
+        if "<tools>" not in instruction_prompt:
+            zaya_lines.extend([_render_zaya_tool_scaffold(zaya_prompt_tools), ""])
         for tool in zaya_prompt_tools:
             func = tool.get("function", {})
             name = func.get("name", "") or "unknown_tool"
@@ -524,6 +641,7 @@ def check_and_inject_fallback_tools(
             "\n".join(zaya_lines).rstrip()
             + "\n\nWhen a tool call is needed, emit ONLY this native Zyphra XML shape. "
             "Do not emit JSON result data, markdown, prose, generic XML tool tags, or a fake directory listing.\n"
+            "If the user explicitly asks to use a tool, emit the tool call first; do not answer as if the tool result already exists.\n"
             "Fill fields from the user's request exactly. "
             "If the user says `with value blue-cat`, put only `blue-cat` in `value`.\n"
             + _render_xml_examples(
@@ -717,9 +835,13 @@ def check_and_inject_fallback_tools(
         messages_copy.insert(0, {"role": "system", "content": tool_prompt})
 
     # Re-apply template with modified messages
-    # Remove tools from kwargs so template doesn't try to format them again
+    # Remove tools from kwargs so generic templates don't try to format them again.
+    # ZAYA is the exception: its native template contains the canonical
+    # <tools> scaffold and IMPORTANT rules, so the fallback must add concrete
+    # examples without replacing that native contract.
     safe_kwargs = dict(template_kwargs)
-    safe_kwargs.pop("tools", None)
+    if not is_zaya_native_tool_prompt:
+        safe_kwargs.pop("tools", None)
 
     try:
         new_prompt = tokenizer.apply_chat_template(messages_copy, **safe_kwargs)
