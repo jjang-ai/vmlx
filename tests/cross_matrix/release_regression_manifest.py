@@ -5203,6 +5203,8 @@ def _validate_current_real_ui_live_model_matrix(
             if {
                 "cache_endpoint_stats",
                 "cache_hit_telemetry",
+                "architecture_cache_policy",
+                "generation_defaults_applied",
                 "l2_disk_storage",
                 "long_tool_loop",
                 "responses_cache_detail_usage",
