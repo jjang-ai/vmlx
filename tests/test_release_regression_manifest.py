@@ -6083,7 +6083,19 @@ def test_release_blocker_ledger_tracks_packaged_signing_blocker():
                 "signature_is_adhoc": True,
                 "team_identifier": "not set",
                 "simple_developer_id_sign_rc": 1,
+                "simple_developer_id_sign_tail": [
+                    "codesign-probe: User interaction is not allowed.",
+                ],
                 "codesign_verify_rc": 1,
+                "keychain_info_statuses": [
+                    {
+                        "keychain": "/Users/example/Library/Keychains/vmlx-build.keychain-db",
+                        "returncode": 36,
+                        "tail": [
+                            "security: SecKeychainCopySettings: User interaction is not allowed.",
+                        ],
+                    },
+                ],
                 "manual_remediation_required": True,
                 "remediation_summary": "Developer ID identities are visible, but codesign cannot use the private key from this non-interactive process.",
                 "remediation_steps": [
@@ -6117,7 +6129,19 @@ def test_release_blocker_ledger_tracks_packaged_signing_blocker():
                     "signature_is_adhoc": True,
                     "team_identifier": "not set",
                     "simple_developer_id_sign_rc": 1,
+                    "simple_developer_id_sign_tail": [
+                        "codesign-probe: User interaction is not allowed.",
+                    ],
                     "codesign_verify_rc": 1,
+                    "keychain_info_statuses": [
+                        {
+                            "keychain": "/Users/example/Library/Keychains/vmlx-build.keychain-db",
+                            "returncode": 36,
+                            "tail": [
+                                "security: SecKeychainCopySettings: User interaction is not allowed.",
+                            ],
+                        },
+                    ],
                     "manual_remediation_required": True,
                     "remediation_summary": "Developer ID identities are visible, but codesign cannot use the private key from this non-interactive process.",
                     "remediation_steps": [
