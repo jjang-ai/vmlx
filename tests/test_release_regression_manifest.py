@@ -2397,7 +2397,8 @@ def test_release_regression_manifest_current_sweep_uses_latest_live_smoke_artifa
     assert "current-regression-suite-20260528-installed-aggregate-stale.json" not in joined
     assert "current-regression-suite-20260528-epipe-aggregate-guard.json" not in joined
     assert "current-regression-suite-20260528-dsv4-continue-refresh.json" not in joined
-    assert "current-regression-suite-20260531-live-chat-tools-proof-refresh.json" in joined
+    assert "current-regression-suite-20260531-two-turn-responses-delta-gate.json" in joined
+    assert "current-regression-suite-20260531-live-chat-tools-proof-refresh.json" not in joined
     assert "current-regression-suite-20260531-live-epipe-signing-dsv4-refresh.json" not in joined
     assert "current-regression-suite-20260531-childstream-epipe-guard.json" not in joined
     assert "current-regression-suite-20260530-bundled-sync-step37-projector-rerun.json" not in joined
@@ -3812,7 +3813,13 @@ def test_release_regression_manifest_real_ui_matrix_requires_every_family_surfac
                     "count": 4,
                     "firstFullContent": "o",
                     "lastFullContent": "ok streamed",
-                }
+                },
+                {
+                    "messageId": f"{family}-stream-second",
+                    "count": 4,
+                    "firstFullContent": "s",
+                    "lastFullContent": "second ok streamed",
+                },
             ],
             "persistedToolCount": 1,
             "persistedToolsByMessage": [
@@ -3931,7 +3938,13 @@ def test_release_regression_manifest_real_ui_matrix_uses_family_specific_media_r
                     "count": 4,
                     "firstFullContent": "o",
                     "lastFullContent": "ok streamed",
-                }
+                },
+                {
+                    "messageId": "media-proof-stream-second",
+                    "count": 4,
+                    "firstFullContent": "s",
+                    "lastFullContent": "second ok streamed",
+                },
             ],
             "persistedToolCount": 1,
             "persistedToolsByMessage": [
@@ -4645,6 +4658,59 @@ def test_release_regression_manifest_real_ui_matrix_requires_responses_delta_str
                 "count": 1,
                 "firstFullContent": "complete only",
                 "lastFullContent": "complete only",
+            }
+        ],
+    }
+
+    matrix = _validate_current_real_ui_live_model_matrix(
+        {"status": "pass", "proofs": {"lfm25_moe_a1b_responses": proof}}
+    )
+
+    lfm25 = matrix["covered_families"]["lfm25"]
+    assert "responses_delta_streaming" not in lfm25["covered_surfaces"]
+    assert "responses_delta_streaming" in lfm25["missing_surfaces"]
+
+
+def test_release_regression_manifest_real_ui_matrix_requires_two_turn_responses_delta_streaming():
+    proof = {
+        "modelName": "LFM2.5-8B-A1B-JANG_2L",
+        "appLogTail": ["start electron app"],
+        "server": {
+            "health": {
+                "status": "healthy",
+                "model_loaded": True,
+                "native_cache": {
+                    "family": "lfm2_moe",
+                    "schema": "hybrid_ssm_v1",
+                    "cache_type": "hybrid_ssm_typed",
+                    "components": ["attention_kv", "ssm_companion_state"],
+                    "prefix": True,
+                    "paged": True,
+                    "block_disk_l2": True,
+                },
+            }
+        },
+        "cache": {"cacheHitTokens": 64},
+        "chat": {
+            "turns": [
+                {"role": "user", "content": "first"},
+                {"role": "assistant", "content": "first streamed"},
+                {"role": "user", "content": "second"},
+                {"role": "assistant", "content": "second complete"},
+            ],
+            "rawParserTagLeak": False,
+            "cjkLeakCount": 0,
+            "koreanLeakCount": 0,
+        },
+        "reasoningRawParserLeak": False,
+        "rendererWireApi": "responses",
+        "eventCounts": {"complete": 2, "stream": 4},
+        "streamTrace": [
+            {
+                "messageId": "first-only",
+                "count": 4,
+                "firstFullContent": "f",
+                "lastFullContent": "first streamed",
             }
         ],
     }
@@ -8514,7 +8580,7 @@ def test_release_regression_manifest_runner_default_out_tracks_current_release_p
     from tests.cross_matrix import run_release_regression_manifest as runner
 
     assert runner.DEFAULT_OUT == Path(
-        "build/current-release-regression-manifest-20260531-local-release-decision-refresh.json"
+        "build/current-release-regression-manifest-20260531-two-turn-responses-delta-gate.json"
     )
 
 

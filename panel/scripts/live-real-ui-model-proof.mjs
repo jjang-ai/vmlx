@@ -803,16 +803,27 @@ function responsesDeltaStreamingSeen(result) {
   const traces = Array.isArray(result.streamTrace)
     ? result.streamTrace
     : (Array.isArray(result.streamTraceByMessage) ? result.streamTraceByMessage : [])
-  return traces.some((trace) =>
-    trace
-    && typeof trace === 'object'
-    && (trace.count || 0) >= 2
-    && typeof trace.firstFullContent === 'string'
-    && typeof trace.lastFullContent === 'string'
-    && trace.firstFullContent.length > 0
-    && trace.lastFullContent.length > 0
-    && trace.firstFullContent !== trace.lastFullContent
-  )
+  const qualifyingTraceIds = new Set()
+  let qualifyingTraceCount = 0
+  for (const trace of traces) {
+    if (
+      trace
+      && typeof trace === 'object'
+      && (trace.count || 0) >= 2
+      && typeof trace.firstFullContent === 'string'
+      && typeof trace.lastFullContent === 'string'
+      && trace.firstFullContent.length > 0
+      && trace.lastFullContent.length > 0
+      && trace.firstFullContent !== trace.lastFullContent
+    ) {
+      if (typeof trace.messageId === 'string' && trace.messageId) {
+        qualifyingTraceIds.add(trace.messageId)
+      } else {
+        qualifyingTraceCount += 1
+      }
+    }
+  }
+  return qualifyingTraceIds.size + qualifyingTraceCount >= 2
 }
 
 function generationDefaultsAppliedSeen(result) {

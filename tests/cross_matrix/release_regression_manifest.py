@@ -363,7 +363,7 @@ CURRENT_POST_BUDGET_EDGE_ARTIFACTS = {
 }
 
 CURRENT_REGRESSION_SUITE_ARTIFACT = (
-    "build/current-regression-suite-20260531-live-chat-tools-proof-refresh.json"
+    "build/current-regression-suite-20260531-two-turn-responses-delta-gate.json"
 )
 CURRENT_ISSUE175_179_RELEASE_BOUNDARY_AUDIT_ARTIFACT = (
     "build/current-issue175-179-release-boundary-audit-20260531-post-install-sync.json"
@@ -3483,6 +3483,8 @@ def _real_ui_responses_delta_streaming_ok(proof: dict[str, Any]) -> bool:
         traces = proof.get("streamTraceByMessage")
     if not isinstance(traces, list):
         return False
+    qualifying_trace_ids: set[str] = set()
+    qualifying_trace_count = 0
     for trace in traces:
         if not isinstance(trace, dict):
             continue
@@ -3496,8 +3498,12 @@ def _real_ui_responses_delta_streaming_ok(proof: dict[str, Any]) -> bool:
             and first != last
             and (trace.get("count") or 0) >= 2
         ):
-            return True
-    return False
+            trace_id = trace.get("messageId")
+            if isinstance(trace_id, str) and trace_id:
+                qualifying_trace_ids.add(trace_id)
+            else:
+                qualifying_trace_count += 1
+    return (len(qualifying_trace_ids) + qualifying_trace_count) >= 2
 
 
 def _real_ui_responses_cache_detail_usage_ok(proof: dict[str, Any]) -> bool:
