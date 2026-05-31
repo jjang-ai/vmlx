@@ -6183,6 +6183,7 @@ def test_release_blocker_ledger_preserves_dsv4_exactness_memory_pressure_diagnos
                             "memory_gap_gb": 61.74,
                             "strict_vm_stat_memory_gap_gb": 61.74,
                             "psutil_available_gap_gb": 12.37,
+                            "free_plus_speculative_purgeable_gb": 58.26,
                             "memory_pressure_free_percent": 94,
                             "preflight_memory_source": "vm_stat_free_plus_speculative_purgeable",
                             "did_not_launch": True,
@@ -6207,6 +6208,7 @@ def test_release_blocker_ledger_preserves_dsv4_exactness_memory_pressure_diagnos
 
     blocker = ledger["blockers"][0]
     assert blocker["id"] == "dsv4_long_output_code_exactness_open"
+    assert blocker["details"]["free_plus_speculative_purgeable_gb"] == 58.26
     assert blocker["details"]["memory_pressure_free_percent"] == 94
 
 

@@ -2788,6 +2788,7 @@ def _current_release_blocker_ledger(
                         "memory_gap_gb",
                         "strict_vm_stat_memory_gap_gb",
                         "psutil_available_gap_gb",
+                        "free_plus_speculative_purgeable_gb",
                         "memory_pressure_free_percent",
                         "memory_pressure_error",
                         "preflight_memory_source",
