@@ -380,6 +380,25 @@ def _write_passing_real_ui_live_model_proof_artifacts(root: Path) -> None:
             },
         ]
 
+    def add_generation_defaults_applied(proof: dict[str, object]) -> None:
+        chat_overrides = proof.setdefault("chatOverrides", {})
+        for sampler_field in ("temperature", "topP", "topK", "minP", "repeatPenalty"):
+            chat_overrides.setdefault(sampler_field, None)
+        request_contract = proof.get("requestContract")
+        if isinstance(request_contract, dict):
+            chat_overrides.setdefault("maxTokens", request_contract["requestMaxTokens"])
+        route = (
+            "/v1/responses"
+            if proof.get("rendererWireApi") == "responses"
+            else "/v1/chat/completions"
+        )
+        proof["serverLogTail"] = [
+            "INFO:vmlx_engine.server:Resolved sampling kwargs "
+            f"route={route} model={proof['modelPath']} "
+            "kwargs={'temperature': 0.0, 'top_p': 1.0, 'max_tokens': "
+            f"{chat_overrides.get('maxTokens', 512)}}}"
+        ]
+
     for row in CURRENT_REAL_UI_LIVE_MODEL_PROOF_ROWS.values():
         screenshot = root / row["chat_screenshot"]
         screenshot.parent.mkdir(parents=True, exist_ok=True)
@@ -909,6 +928,7 @@ def _write_passing_real_ui_live_model_proof_artifacts(root: Path) -> None:
                 ]
         if proof.get("rendererWireApi") == "responses":
             add_responses_delta_streaming(proof)
+        add_generation_defaults_applied(proof)
         proof_path.write_text(json.dumps(proof) + "\n", encoding="utf-8")
     _write_expected_issue175_179_release_boundary_audit(root)
     _write_expected_issue179_minimax_k_root_cause_audit(root)
@@ -3569,6 +3589,11 @@ def test_release_regression_manifest_real_ui_matrix_requires_every_family_surfac
             "persistedReasoningCount": 1,
             "requestedBuiltinTools": True,
             "chatOverrides": {"builtinToolsEnabled": True},
+            "serverLogTail": [
+                "INFO:vmlx_engine.server:Resolved sampling kwargs "
+                "route=/v1/responses model=family-model "
+                "kwargs={'temperature': 0.0, 'top_p': 1.0, 'max_tokens': 512}"
+            ],
             "serverCacheControls": {"verified": True},
             "media": {"imageVerified": True, "videoVerified": True},
         }
@@ -3648,6 +3673,11 @@ def test_release_regression_manifest_real_ui_matrix_uses_family_specific_media_r
             "persistedReasoningCount": 1,
             "requestedBuiltinTools": True,
             "chatOverrides": {"builtinToolsEnabled": True},
+            "serverLogTail": [
+                "INFO:vmlx_engine.server:Resolved sampling kwargs "
+                "route=/v1/responses model=architecture-aware-model "
+                "kwargs={'temperature': 0.0, 'top_p': 1.0, 'max_tokens': 512}"
+            ],
             "serverCacheControls": {"verified": True},
             "media": {"imageVerified": image, "videoVerified": video},
         }
@@ -4356,6 +4386,66 @@ def test_release_regression_manifest_real_ui_matrix_requires_responses_delta_str
     lfm25 = matrix["covered_families"]["lfm25"]
     assert "responses_delta_streaming" not in lfm25["covered_surfaces"]
     assert "responses_delta_streaming" in lfm25["missing_surfaces"]
+
+
+def test_release_regression_manifest_real_ui_matrix_requires_generation_defaults_proof():
+    proof = {
+        "modelName": "LFM2.5-8B-A1B-JANG_2L",
+        "appLogTail": ["start electron app"],
+        "server": {
+            "health": {
+                "status": "healthy",
+                "model_loaded": True,
+                "native_cache": {
+                    "family": "lfm2_moe",
+                    "schema": "hybrid_ssm_v1",
+                    "cache_type": "hybrid_ssm_typed",
+                    "components": ["attention_kv", "ssm_companion_state"],
+                    "prefix": True,
+                    "paged": True,
+                    "block_disk_l2": True,
+                },
+            }
+        },
+        "cache": {"cacheHitTokens": 64},
+        "chat": {
+            "turns": [
+                {"role": "user", "content": "hello"},
+                {"role": "assistant", "content": "hello"},
+            ],
+            "rawParserTagLeak": False,
+            "cjkLeakCount": 0,
+            "koreanLeakCount": 0,
+        },
+        "reasoningRawParserLeak": False,
+        "rendererWireApi": "responses",
+        "eventCounts": {"complete": 1, "stream": 4},
+        "streamTrace": [
+            {
+                "messageId": "m1",
+                "count": 4,
+                "firstFullContent": "h",
+                "lastFullContent": "hello",
+            }
+        ],
+        "chatOverrides": {
+            "temperature": None,
+            "topP": None,
+            "topK": None,
+            "minP": None,
+            "repeatPenalty": None,
+            "maxTokens": 128,
+        },
+        "serverLogTail": [],
+    }
+
+    matrix = _validate_current_real_ui_live_model_matrix(
+        {"status": "pass", "proofs": {"lfm25_moe_a1b_responses": proof}}
+    )
+
+    lfm25 = matrix["covered_families"]["lfm25"]
+    assert "generation_defaults_applied" not in lfm25["covered_surfaces"]
+    assert "generation_defaults_applied" in lfm25["missing_surfaces"]
 
 
 def test_release_regression_manifest_real_ui_matrix_rejects_empty_tool_status_spam():

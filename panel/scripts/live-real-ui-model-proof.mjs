@@ -607,6 +607,9 @@ function deriveProvenSurfaces(result) {
   if (responsesDeltaStreamingSeen(result)) {
     surfaces.add('responses_delta_streaming')
   }
+  if (generationDefaultsAppliedSeen(result)) {
+    surfaces.add('generation_defaults_applied')
+  }
   if (
     (result.eventCounts?.tool || 0) >= 3
     && namedToolResultCount(result) >= 2
@@ -698,6 +701,32 @@ function responsesDeltaStreamingSeen(result) {
     && trace.lastFullContent.length > 0
     && trace.firstFullContent !== trace.lastFullContent
   )
+}
+
+function generationDefaultsAppliedSeen(result) {
+  const chatOverrides = result?.chatOverrides && typeof result.chatOverrides === 'object'
+    ? result.chatOverrides
+    : {}
+  for (const field of ['temperature', 'topP', 'topK', 'minP', 'repeatPenalty']) {
+    if (chatOverrides[field] != null) return false
+  }
+  const requestMaxTokens = result?.requestContract?.requestMaxTokens
+  const overrideMaxTokens = chatOverrides.maxTokens
+  if (
+    typeof requestMaxTokens === 'number'
+    && typeof overrideMaxTokens === 'number'
+    && requestMaxTokens !== overrideMaxTokens
+  ) {
+    return false
+  }
+  const logText = Array.isArray(result?.serverLogTail)
+    ? result.serverLogTail.map((line) => String(line)).join('\n')
+    : ''
+  if (!logText.includes('Resolved sampling kwargs route=')) return false
+  if (!logText.includes('kwargs=') || !logText.includes('max_tokens')) return false
+  if (result?.rendererWireApi === 'responses') return logText.includes('/v1/responses')
+  if (result?.rendererWireApi === 'chat') return logText.includes('/v1/chat/completions')
+  return Boolean(result?.rendererWireApi)
 }
 
 function cacheReconstructionClean(result) {

@@ -684,6 +684,7 @@ REQUIRED_REAL_UI_LIVE_MODEL_SURFACES = (
     "chat_completions",
     "responses_api",
     "responses_delta_streaming",
+    "generation_defaults_applied",
     "long_tool_loop",
     "reasoning_display",
     "parser_leak_check",
@@ -3428,6 +3429,46 @@ def _real_ui_responses_delta_streaming_ok(proof: dict[str, Any]) -> bool:
     return False
 
 
+def _real_ui_generation_defaults_applied_ok(proof: dict[str, Any]) -> bool:
+    chat_overrides = (
+        proof.get("chatOverrides")
+        if isinstance(proof.get("chatOverrides"), dict)
+        else {}
+    )
+    for sampler_field in ("temperature", "topP", "topK", "minP", "repeatPenalty"):
+        if chat_overrides.get(sampler_field) is not None:
+            return False
+    request_contract = (
+        proof.get("requestContract")
+        if isinstance(proof.get("requestContract"), dict)
+        else {}
+    )
+    request_max_tokens = request_contract.get("requestMaxTokens")
+    override_max_tokens = chat_overrides.get("maxTokens")
+    if (
+        isinstance(request_max_tokens, (int, float))
+        and isinstance(override_max_tokens, (int, float))
+        and int(request_max_tokens) != int(override_max_tokens)
+    ):
+        return False
+    server_log_tail = proof.get("serverLogTail")
+    log_text = (
+        "\n".join(str(line) for line in server_log_tail)
+        if isinstance(server_log_tail, list)
+        else ""
+    )
+    if "Resolved sampling kwargs route=" not in log_text:
+        return False
+    if "kwargs=" not in log_text or "max_tokens" not in log_text:
+        return False
+    renderer_wire_api = proof.get("rendererWireApi")
+    if renderer_wire_api == "responses":
+        return "/v1/responses" in log_text
+    if renderer_wire_api == "chat":
+        return "/v1/chat/completions" in log_text
+    return bool(renderer_wire_api)
+
+
 REAL_UI_TOOL_ONE_TOKEN_RE = (
     r"real[\s_\\-]*ui[\s_\\-]*live[\s_\\-]*tool[\s_\\-]*one"
 )
@@ -4832,6 +4873,8 @@ def _validate_current_real_ui_live_model_matrix(
                 surfaces.add("responses_api")
             if _real_ui_responses_delta_streaming_ok(proof):
                 surfaces.add("responses_delta_streaming")
+            if _real_ui_generation_defaults_applied_ok(proof):
+                surfaces.add("generation_defaults_applied")
             if (
                 (event_counts.get("tool") or 0) >= 3
                 and _real_ui_named_tool_result_count(proof) >= 2
