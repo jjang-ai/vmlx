@@ -25,6 +25,7 @@ DEFAULT_OUT = Path(
 )
 
 EXPECTED_OPEN_REQUIREMENTS = [
+    "Real Electron UI unblocked non-MiMo live model matrix is proven",
     "Real Electron UI cross-family live model matrix is release-cleared",
     "DSV4 long-output/code/file-generation quality is release-cleared",
 ]
@@ -320,6 +321,7 @@ def _release_manifest_failure_is_expected(step: dict[str, Any], root: Path) -> b
         "real_ui_dsv4_memory_blocked",
         "real_ui_step37_vlm_runtime_missing",
         "real_ui_unblocked_non_mimo_missing",
+        "real_ui_unblocked_non_mimo_partial",
     }
     return (
         manifest.get("release_ready") is False

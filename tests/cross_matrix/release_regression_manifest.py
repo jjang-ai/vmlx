@@ -2894,6 +2894,17 @@ def _current_release_blocker_ledger(
                 *{str(key) for key in resource_blockers},
             }
         )
+        unblocked_partial_families = sorted(
+            str(item)
+            for item in real_ui_live_model_matrix.get("partial_families", [])
+            if str(item)
+            not in {
+                "mimo_v2",
+                *runtime_blocked_families,
+                *{str(key) for key in resource_blockers},
+                *mixed_model_identity_families,
+            }
+        )
         if unblocked_missing_families:
             real_ui_subblocker_added = True
             blockers.append(
@@ -2909,6 +2920,25 @@ def _current_release_blocker_ledger(
                         "Run real Electron UI proofs for the missing "
                         "non-MiMo, non-resource-blocked families on this "
                         "laptop before release."
+                    ),
+                }
+            )
+        if unblocked_partial_families:
+            real_ui_subblocker_added = True
+            blockers.append(
+                {
+                    "id": "real_ui_unblocked_non_mimo_partial",
+                    "status": "open",
+                    "evidence": (
+                        "current_proof_sweep.real_ui_live_model_matrix."
+                        "partial_families:"
+                        + ",".join(unblocked_partial_families)
+                    ),
+                    "next_proof": (
+                        "Rerun real Electron UI proofs for the partial "
+                        "non-MiMo, non-resource-blocked families until every "
+                        "required surface passes without parser or tool-result "
+                        "semantic leakage."
                     ),
                 }
             )
@@ -3192,6 +3222,33 @@ def _real_ui_named_tool_error_count(proof: dict[str, Any]) -> int:
     return count
 
 
+REAL_UI_TOOL_ONE_TOKEN_RE = (
+    r"real[\s_\\-]*ui[\s_\\-]*live[\s_\\-]*tool[\s_\\-]*one"
+)
+REAL_UI_TOOL_PROBE_2_RE = (
+    r"real[\s_\\-]*ui[\s_\\-]*tool[\s_\\-]*probe[\s_\\-]*2\.txt"
+)
+REAL_UI_SECOND_FILE_RE = r"second\s+(?:ui\s+)?(?:output\s+)?file"
+REAL_UI_TOOL_TWO_VISIBLE_CONTRADICTION_RE = re.compile(
+    rf"(?:{REAL_UI_TOOL_PROBE_2_RE}|{REAL_UI_SECOND_FILE_RE})"
+    rf".{{0,180}}(?:contains?|content|with|has|holds?|is|:)"
+    rf".{{0,100}}{REAL_UI_TOOL_ONE_TOKEN_RE}",
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+def _real_ui_named_tool_probe_visible_semantics_ok(proof: dict[str, Any]) -> bool:
+    chat = proof.get("chat") if isinstance(proof.get("chat"), dict) else {}
+    turns = chat.get("turns") if isinstance(chat.get("turns"), list) else []
+    for turn in turns:
+        if not isinstance(turn, dict) or turn.get("role") != "assistant":
+            continue
+        content = str(turn.get("content", ""))
+        if REAL_UI_TOOL_TWO_VISIBLE_CONTRADICTION_RE.search(content):
+            return False
+    return True
+
+
 def _real_ui_named_tool_probe_semantics_ok(proof: dict[str, Any]) -> bool:
     chat = proof.get("chat") if isinstance(proof.get("chat"), dict) else {}
     turns = chat.get("turns") if isinstance(chat.get("turns"), list) else []
@@ -3247,7 +3304,11 @@ def _real_ui_named_tool_probe_semantics_ok(proof: dict[str, Any]) -> bool:
         or "REAL_UI_LIVE_TOOL_TWO" in detail
         for detail in result_details
     )
-    return command_semantics_ok and file_semantics_ok
+    return (
+        command_semantics_ok
+        and file_semantics_ok
+        and _real_ui_named_tool_probe_visible_semantics_ok(proof)
+    )
 
 
 def _real_ui_cache_reconstruction_clean(proof: dict[str, Any]) -> bool:

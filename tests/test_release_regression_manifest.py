@@ -3526,6 +3526,46 @@ def test_release_regression_manifest_real_ui_named_tool_probe_accepts_split_file
     assert _real_ui_named_tool_probe_semantics_ok(proof)
 
 
+def test_release_regression_manifest_real_ui_named_tool_probe_rejects_visible_file_semantic_contradiction():
+    proof = {
+        "chat": {
+            "turns": [
+                {"role": "assistant", "content": "REAL_UI_LIVE_TOOL_ONE"},
+                {
+                    "role": "assistant",
+                    "content": (
+                        "REAL_UI_LIVE_TOOL_TWO\n\n"
+                        "The file real_ui_tool_probe_2.txt contains the string "
+                        '"Real_UI_Live_Tool_One".'
+                    ),
+                },
+            ]
+        },
+        "persistedToolsByMessage": [
+            [
+                {
+                    "phase": "result",
+                    "toolName": "run_command",
+                    "detail": "$ printf %s REAL_UI_LIVE_TOOL_ONE > real_ui_tool_probe_1.txt",
+                }
+            ],
+            [
+                {
+                    "phase": "result",
+                    "toolName": "run_command",
+                    "detail": "$ printf %s REAL_UI_LIVE_TOOL_TWO > real_ui_tool_probe_2.txt",
+                }
+            ],
+        ],
+        "toolProbeFiles": {
+            "real_ui_tool_probe_1.txt": "REAL_UI_LIVE_TOOL_ONE",
+            "real_ui_tool_probe_2.txt": "REAL_UI_LIVE_TOOL_TWO",
+        },
+    }
+
+    assert not _real_ui_named_tool_probe_semantics_ok(proof)
+
+
 def test_release_regression_manifest_real_ui_matrix_rejects_forged_tool_reasoning_surfaces():
     proof = {
         "modelName": "ZAYA1-8B-MXFP4",
@@ -4751,6 +4791,33 @@ def test_release_blocker_ledger_splits_real_ui_missing_family_blockers():
     assert (
         "missing_families:lfm25,step37"
         in unblocked_missing_ledger["blockers"][-1]["evidence"]
+    )
+
+    unblocked_partial_ledger = _current_release_blocker_ledger(
+        regression_suite={"open_requirements": []},
+        live_smoke_summaries={"status": "pass", "missing": [], "not_pass": []},
+        live_tool_smoke_summaries={"status": "pass", "missing": [], "not_pass": []},
+        mimo_v2_jang2l_sink_ab={"status": "pass"},
+        mimo_v2_jang2l_root_cause={"remote_evidence_only": False},
+        issue175_179_release_boundary_audit={"status": "pass", "issues": {}},
+        installed_app_runtime_parity_audit={"status": "pass"},
+        issue179_minimax_k_root_cause_audit={"status": "pass"},
+        real_ui_live_model_matrix={
+            "status": "open",
+            "missing_families": ["mimo_v2", "dsv4"],
+            "partial_families": ["lfm25"],
+            "resource_blockers": {
+                "dsv4": {"artifact": CURRENT_REAL_UI_DSV4_MEMORY_PREFLIGHT_ARTIFACT}
+            },
+        },
+    )
+    assert [blocker["id"] for blocker in unblocked_partial_ledger["blockers"]] == [
+        "real_ui_dsv4_memory_blocked",
+        "real_ui_unblocked_non_mimo_partial",
+    ]
+    assert (
+        "partial_families:lfm25"
+        in unblocked_partial_ledger["blockers"][-1]["evidence"]
     )
 
     mixed_ledger = _current_release_blocker_ledger(

@@ -28,6 +28,7 @@ DEFAULT_OUT = Path(
     "build/current-packaged-integrity-contract-20260531-post-install-sync.json"
 )
 EXPECTED_OPEN_REQUIREMENTS = [
+    "Real Electron UI unblocked non-MiMo live model matrix is proven",
     "Real Electron UI cross-family live model matrix is release-cleared",
     "DSV4 long-output/code/file-generation quality is release-cleared",
 ]

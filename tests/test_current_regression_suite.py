@@ -937,6 +937,7 @@ def test_current_regression_suite_allows_release_manifest_not_ready_for_known_op
                     {"id": "installed_app_runtime_parity_audit"},
                     {"id": "real_ui_dsv4_memory_blocked"},
                     {"id": "real_ui_step37_vlm_runtime_missing"},
+                    {"id": "real_ui_unblocked_non_mimo_partial"},
                     {"id": "packaged_app_developer_id_signing_blocked"},
                 ],
             },
