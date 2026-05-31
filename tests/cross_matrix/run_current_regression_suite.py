@@ -452,13 +452,13 @@ CURRENT_SUITE_COMMANDS: dict[str, list[str]] = {
         "tests/cross_matrix/run_dsv4_route_mode_code_exactness.py",
         "--memory-preflight-only",
         "--out",
-        "build/current-dsv4-route-mode-code-exactness-source-memory-preflight-20260530-local-refresh.json",
+        "build/current-dsv4-route-mode-code-exactness-source-memory-preflight-20260531-post-install-sync.json",
     ],
     "real_ui_dsv4_memory_preflight": [
         sys.executable,
         "tests/cross_matrix/run_real_ui_dsv4_memory_preflight.py",
         "--out",
-        "build/current-real-ui-dsv4-memory-preflight-20260530-after-step37-source-surface.json",
+        "build/current-real-ui-dsv4-memory-preflight-20260531-post-install-sync.json",
     ],
     "release_surface_contracts": [
         sys.executable,
@@ -507,7 +507,7 @@ CURRENT_SUITE_COMMANDS: dict[str, list[str]] = {
         sys.executable,
         "tests/cross_matrix/run_packaged_integrity_contract.py",
         "--out",
-        "build/current-packaged-integrity-contract-20260531-after-native-bundle-refresh.json",
+        "build/current-packaged-integrity-contract-20260531-post-install-sync.json",
     ],
     "installed_app_runtime_parity_audit": [
         sys.executable,

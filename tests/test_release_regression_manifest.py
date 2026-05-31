@@ -2212,7 +2212,7 @@ def test_release_regression_manifest_current_sweep_uses_latest_live_smoke_artifa
     assert "current-regression-suite-20260528-dsv4-preflight-refresh.json" not in joined
     assert "current-regression-suite-20260528-admin-sleep-sourcehash.json" not in joined
     assert "current-regression-suite-20260528-issue179-econnreset-boundary.json" not in joined
-    assert "current-real-ui-dsv4-memory-preflight-20260530-after-step37-source-surface.json" in joined
+    assert "current-real-ui-dsv4-memory-preflight-20260531-post-install-sync.json" in joined
     assert "current-real-ui-dsv4-memory-preflight-20260530-local-refresh.json" not in joined
     assert "current-real-ui-dsv4-memory-preflight-20260528-continue-refresh.json" not in joined
     assert "current-real-ui-dsv4-memory-preflight-20260528-epipe-install.json" not in joined
@@ -2263,7 +2263,7 @@ def test_release_regression_manifest_current_sweep_uses_latest_live_smoke_artifa
     assert "current-api-surface-contract-20260527-cache-endpoint-autoswitch-proof.json" not in joined
     assert "current-api-surface-contract-20260526-single-model-auto-switch-review.json" not in joined
     assert "current-api-surface-contract-20260525-single-model-responses-deltas.json" not in joined
-    assert "current-packaged-integrity-contract-20260531-after-native-bundle-refresh.json" in joined
+    assert "current-packaged-integrity-contract-20260531-post-install-sync.json" in joined
     assert "current-packaged-integrity-contract-20260530-bundled-sync-after-step37-projector.json" not in joined
     assert "current-packaged-integrity-contract-20260529-step37-text-bridge.json" not in joined
     assert "current-packaged-integrity-contract-20260528-installed-aggregate-stale.json" not in joined
@@ -9494,7 +9494,7 @@ def test_release_regression_manifest_tracks_packaged_integrity_with_runner_artif
     joined = " ".join(row["commands"] + row["artifacts"] + row["proves"])
 
     assert "run_packaged_integrity_contract.py" in joined
-    assert "current-packaged-integrity-contract-20260531-after-native-bundle-refresh.json" in joined
+    assert "current-packaged-integrity-contract-20260531-post-install-sync.json" in joined
     assert "current-packaged-integrity-contract-20260530-bundled-sync-after-step37-projector.json" not in joined
     assert "current-packaged-integrity-contract-20260521.json" not in joined
     assert "Version triples" in joined
@@ -9608,7 +9608,7 @@ def test_release_regression_manifest_tracks_fresh_dsv4_live_failure_artifact():
     assert "current-dsv4-jang-batch-generator-isolated-identifier-logits-after-full-prefill-fix-20260524.json" in joined
     assert "current-dsv4-jang-thinking-off-logit-probe-20260524.json" in joined
     assert "current-dsv4-jang-live-api-copy-framing-canary-20260524.json" in joined
-    assert "current-dsv4-route-mode-code-exactness-source-memory-preflight-20260530-local-refresh.json" in joined
+    assert "current-dsv4-route-mode-code-exactness-source-memory-preflight-20260531-post-install-sync.json" in joined
     assert "current-dsv4-route-mode-code-exactness-source-memory-preflight-20260528-post-install-sync.json" not in joined
     assert "current-dsv4-route-mode-code-exactness-source-memory-preflight-20260528-continue-refresh.json" not in joined
     assert "current-dsv4-route-mode-code-exactness-source-memory-preflight-20260528-0625.json" not in joined

@@ -114,7 +114,7 @@ DSV4_CURRENT_SOURCE_BUNDLE_DEFAULTS_DRYRUN_REL = (
     "build/current-dsv4-route-mode-code-exactness-bundle-defaults-dryrun-20260525.json"
 )
 DSV4_CURRENT_SOURCE_MEMORY_PREFLIGHT_REL = (
-    "build/current-dsv4-route-mode-code-exactness-source-memory-preflight-20260530-local-refresh.json"
+    "build/current-dsv4-route-mode-code-exactness-source-memory-preflight-20260531-post-install-sync.json"
 )
 DSV4_CURRENT_JANGTQK_DIRECT_OFF_RECHECK_REL = (
     "build/current-dsv4-route-mode-code-exactness-jangtqk-direct-off-recheck-20260525.json"

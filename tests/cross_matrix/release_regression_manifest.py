@@ -324,7 +324,7 @@ CURRENT_POST_BUDGET_EDGE_ARTIFACTS = {
     "native-mtp-d3-effect-policy": "build/current-native-mtp-contract-20260531-post-step-lfm-refresh.json",
     "mcp-policy-ui-gateway": "build/current-mcp-policy-contract-20260531-post-step-lfm-refresh.json",
     "vl-media-cache-tool-followup": "build/current-vl-media-cache-contract-20260531-post-step-lfm-refresh.json",
-    "packaged-release-integrity": "build/current-packaged-integrity-contract-20260531-after-native-bundle-refresh.json",
+    "packaged-release-integrity": "build/current-packaged-integrity-contract-20260531-post-install-sync.json",
     "public-release-surface-preflight": "build/current-release-surface-contract-20260528-release-surface-matrix.json",
 }
 
@@ -359,7 +359,7 @@ CURRENT_REAL_UI_LIVE_MODEL_PROOF_ARTIFACTS = {
     "chat_screenshot": "docs/internal/agent-notes/current-real-ui-live-model-zaya-text-20260526-chat.png",
 }
 CURRENT_REAL_UI_DSV4_MEMORY_PREFLIGHT_ARTIFACT = (
-    "build/current-real-ui-dsv4-memory-preflight-20260530-after-step37-source-surface.json"
+    "build/current-real-ui-dsv4-memory-preflight-20260531-post-install-sync.json"
 )
 CURRENT_STEP37_VLM_RUNTIME_AUDIT_ARTIFACT = (
     "build/current-step37-vlm-runtime-audit-20260530-source-runtime-route.json"
@@ -368,7 +368,7 @@ DEFERRED_RELEASE_FAMILIES = {
     "mimo_v2": "deferred_out_of_release_scope",
 }
 CURRENT_DSV4_SOURCE_MEMORY_PREFLIGHT_ARTIFACT = (
-    "build/current-dsv4-route-mode-code-exactness-source-memory-preflight-20260530-local-refresh.json"
+    "build/current-dsv4-route-mode-code-exactness-source-memory-preflight-20260531-post-install-sync.json"
 )
 EXPECTED_DSV4_SOURCE_PREFLIGHT_CASES = (
     "chat_off",
@@ -1539,13 +1539,13 @@ _ROWS: list[dict[str, Any]] = [
             "packaged Python has no __pycache__/*.pyc files that would invalidate the signed app seal",
         ],
         "commands": [
-            ".venv/bin/python tests/cross_matrix/run_packaged_integrity_contract.py --out build/current-packaged-integrity-contract-20260531-after-native-bundle-refresh.json",
+            ".venv/bin/python tests/cross_matrix/run_packaged_integrity_contract.py --out build/current-packaged-integrity-contract-20260531-post-install-sync.json",
             ".venv/bin/python tests/cross_matrix/run_packaged_integrity_contract.py --jang-tools-source /Users/example/jang/jang-tools --out build/current-packaged-integrity-contract-20260524-pycache-seal-check.json",
             ".venv/bin/python tests/cross_matrix/run_packaged_integrity_contract.py --jang-tools-source /Users/example/jang/.worktrees/vmlx-release-clean-b5f66a7/jang-tools --out build/current-packaged-integrity-contract-20260522-recheck-bundled-release-gate.json",
         ],
         "artifacts": [
             "build/current-objective-proof-audit-20260531-step37-reasoning-ledger.json",
-            "build/current-packaged-integrity-contract-20260531-after-native-bundle-refresh.json",
+            "build/current-packaged-integrity-contract-20260531-post-install-sync.json",
             "build/current-packaged-integrity-contract-20260528-prepackage-gate.json",
             "build/current-packaged-integrity-contract-20260528-release-ready-dmg-gate.json",
             "build/current-packaged-integrity-contract-20260528-release-ready-gate.json",
