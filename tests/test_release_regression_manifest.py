@@ -418,7 +418,10 @@ def _write_passing_real_ui_live_model_proof_artifacts(root: Path) -> None:
                         ),
                     },
                 }
-        if row["proof"].endswith("zaya-text-cachecontrols-20260527-proof.json"):
+        if (
+            "cachecontrols" in row["proof"]
+            or "filesemantic" in row["proof"]
+        ):
             proof["serverCacheControls"] = {
                 "requested": True,
                 "verified": True,
@@ -2308,7 +2311,7 @@ def test_release_regression_manifest_current_sweep_uses_latest_live_smoke_artifa
     assert "current-api-surface-contract-20260527-cache-endpoint-autoswitch-proof.json" not in joined
     assert "current-api-surface-contract-20260526-single-model-auto-switch-review.json" not in joined
     assert "current-api-surface-contract-20260525-single-model-responses-deltas.json" not in joined
-    assert "current-packaged-integrity-contract-20260531-live-signing-refresh.json" in joined
+    assert "current-packaged-integrity-contract-20260531-gemma4-l2-rotating-kv-fix.json" in joined
     assert "current-packaged-integrity-contract-20260531-childstream-epipe-refresh.json" not in joined
     assert "current-packaged-integrity-contract-20260530-bundled-sync-after-step37-projector.json" not in joined
     assert "current-packaged-integrity-contract-20260529-step37-text-bridge.json" not in joined
@@ -2554,7 +2557,9 @@ def test_release_regression_manifest_real_ui_script_waits_for_async_l2_cache_sta
         "const messages = await window.api.chat.getMessages",
         1,
     )[0]
-    assert "await waitForCacheEndpointStorage(cacheAfter)" in renderer_block
+    assert "const waitForCacheEndpointStorage = async (initial, sessionId)" in source
+    assert "window.api.cache.stats(endpoint, sessionId)" in source
+    assert "await waitForCacheEndpointStorage(cacheAfter, remote.session.id)" in renderer_block
 
 
 def test_release_regression_manifest_real_ui_default_image_fixture_has_valid_png_crc():
@@ -2770,7 +2775,7 @@ def test_release_regression_manifest_real_ui_live_model_rows_include_ling_bailin
     assert rows["gemma4_cachecontrols"]["family"] == "gemma4"
     assert (
         rows["gemma4_cachecontrols"]["proof"]
-        == "docs/internal/agent-notes/current-real-ui-live-model-gemma4-cachecontrols-20260527-proof.json"
+        == "docs/internal/agent-notes/current-real-ui-live-model-gemma4-cachecontrols-l2storage-20260531-proof.json"
     )
     assert (
         rows["qwen36_mxfp4_crack"]["model_path"]
@@ -10115,7 +10120,7 @@ def test_release_regression_manifest_tracks_packaged_integrity_with_runner_artif
     joined = " ".join(row["commands"] + row["artifacts"] + row["proves"])
 
     assert "run_packaged_integrity_contract.py" in joined
-    assert "current-packaged-integrity-contract-20260531-live-signing-refresh.json" in joined
+    assert "current-packaged-integrity-contract-20260531-gemma4-l2-rotating-kv-fix.json" in joined
     assert "current-packaged-integrity-contract-20260531-childstream-epipe-refresh.json" not in joined
     assert "current-packaged-integrity-contract-20260530-bundled-sync-after-step37-projector.json" not in joined
     assert "current-packaged-integrity-contract-20260521.json" not in joined

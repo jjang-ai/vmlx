@@ -768,7 +768,7 @@ def test_current_regression_suite_refreshes_release_regression_manifest(monkeypa
     )
     assert any(
         name == "release_regression_manifest"
-        and "build/current-release-regression-manifest-20260531-live-epipe-signing-dsv4-refresh.json"
+        and "build/current-release-regression-manifest-20260531-gemma4-l2-rotating-kv-fix.json"
         in cmd
         for name, cmd in seen_steps
     )

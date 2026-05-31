@@ -900,14 +900,14 @@ async function main() {
         const workingDirectory = ${JSON.stringify(workingDirectory)};
         const endpoint = { host: '127.0.0.1', port: ${JSON.stringify(serverPort)} };
         const l2DiskStorageSeen = ${l2DiskStorageSeen.toString()};
-        const waitForCacheEndpointStorage = async (initial) => {
+        const waitForCacheEndpointStorage = async (initial, sessionId) => {
           if (!${JSON.stringify(checkServerCacheControls)}) return initial;
           let latest = initial;
           if (l2DiskStorageSeen(latest)) return latest;
           const started = Date.now();
           while (Date.now() - started < 15000) {
             await new Promise((resolve) => setTimeout(resolve, 250));
-            latest = await window.api.cache.stats(endpoint, remote.session.id)
+            latest = await window.api.cache.stats(endpoint, sessionId)
               .catch((error) => ({ error: String(error?.message || error) }));
             if (l2DiskStorageSeen(latest)) return latest;
           }
@@ -1012,7 +1012,7 @@ async function main() {
             .catch((error) => ({ error: String(error?.message || error) }));
           const cacheAfter = await window.api.cache.stats(endpoint, remote.session.id)
             .catch((error) => ({ error: String(error?.message || error) }));
-          const cacheAfterSettled = await waitForCacheEndpointStorage(cacheAfter);
+          const cacheAfterSettled = await waitForCacheEndpointStorage(cacheAfter, remote.session.id);
           const messages = await window.api.chat.getMessages(chat.id);
           const assistants = messages.filter((m) => m.role === 'assistant');
           const first = assistants[0]?.content || '';

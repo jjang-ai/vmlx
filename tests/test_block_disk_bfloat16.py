@@ -58,6 +58,13 @@ def _make_numpy_kv_block(seq_len=64, n_heads=2, head_dim=256):
     return cache_data
 
 
+def _make_numpy_rotating_kv_block(seq_len=8, n_heads=2, head_dim=16):
+    """Create Gemma4-style rotating KV slices with absolute offset metadata."""
+    keys = np.random.randn(1, n_heads, seq_len, head_dim).astype(np.float16)
+    values = np.random.randn(1, n_heads, seq_len, head_dim).astype(np.float16)
+    return [("rotating_kv", keys, values, 4096, 0, 20, 8)]
+
+
 class TestSerializeBlock:
     """Test _serialize_block handles various tensor types."""
 
@@ -65,7 +72,7 @@ class TestSerializeBlock:
         from vmlx_engine.block_disk_store import _serialize_block
         cache_data = _make_kv_block(dtype=mx.bfloat16)
         tensors, dtype, num_layers = _serialize_block(cache_data)
-        assert num_layers == 10
+        assert num_layers == 40
         assert isinstance(tensors["layer_3_keys"], mx.array)
         assert tensors["layer_3_keys"].dtype == mx.bfloat16
 
@@ -73,21 +80,38 @@ class TestSerializeBlock:
         from vmlx_engine.block_disk_store import _serialize_block
         cache_data = _make_kv_block(dtype=mx.float16)
         tensors, dtype, num_layers = _serialize_block(cache_data)
-        assert num_layers == 10
+        assert num_layers == 40
         assert tensors["layer_3_keys"].dtype == mx.float16
 
     def test_numpy_kv_block(self):
         from vmlx_engine.block_disk_store import _serialize_block
         cache_data = _make_numpy_kv_block()
         tensors, dtype, num_layers = _serialize_block(cache_data)
-        assert num_layers == 10
+        assert num_layers == 40
         assert isinstance(tensors["layer_3_keys"], np.ndarray)
+
+    def test_numpy_rotating_kv_block_preserves_absolute_window_state(self):
+        from vmlx_engine.block_disk_store import _deserialize_block, _serialize_block
+
+        cache_data = _make_numpy_rotating_kv_block()
+        tensors, dtype, num_layers = _serialize_block(cache_data)
+
+        assert num_layers == 1
+        assert dtype == "rotating_kv"
+        assert isinstance(tensors["layer_0_keys"], np.ndarray)
+        assert int(tensors["layer_0_max_size"].item()) == 4096
+        assert int(tensors["layer_0_keep"].item()) == 0
+        assert int(tensors["layer_0_offset"].item()) == 20
+        assert int(tensors["layer_0_idx"].item()) == 8
+
+        restored = _deserialize_block(dict(tensors), dtype)
+        assert restored[0][0] == "rotating_kv"
+        assert restored[0][3:] == (4096, 0, 20, 8)
 
 
 class TestEndToEndRoundTrip:
     """Test full write -> read round-trips through the disk store."""
 
-    @pytest.mark.xfail(reason="mx.load() fails on __metadata__ tensor key — pre-existing upstream issue")
     def test_roundtrip_bfloat16(self, disk_store):
         """bfloat16 data should survive write_block_async -> read_block."""
         import time
@@ -115,7 +139,6 @@ class TestEndToEndRoundTrip:
         )
         assert restored_keys.shape == original_keys.shape
 
-    @pytest.mark.xfail(reason="mx.load() fails on __metadata__ tensor key — pre-existing upstream issue")
     def test_roundtrip_numpy(self, disk_store):
         """numpy KV data should survive write -> read round-trip."""
         import time
@@ -154,6 +177,23 @@ class TestWriteBlockAsync:
         time.sleep(1.0)
         file_path = disk_store._hash_to_path(block_hash.hex())
         assert file_path.exists(), "Block file not written"
+
+    def test_numpy_rotating_kv_block_writes_and_counts_l2_tokens(self, disk_store):
+        """Mixed-SWA rotating KV write-through must reach endpoint-visible stats."""
+        import time
+
+        cache_data = _make_numpy_rotating_kv_block(seq_len=8)
+        block_hash = b"\x03" * 16
+        disk_store.write_block_async(block_hash, cache_data, 8)
+        time.sleep(1.0)
+
+        file_path = disk_store._hash_to_path(block_hash.hex())
+        stats = disk_store.get_stats()
+
+        assert file_path.exists(), "Rotating KV block file not written"
+        assert stats["blocks_on_disk"] == 1
+        assert stats["total_tokens_on_disk"] == 8
+        assert stats["disk_writes"] == 1
 
     def test_stats_include_persistent_token_count(self, disk_store):
         """Block L2 stats must report tokens persisted on disk, not only blocks."""

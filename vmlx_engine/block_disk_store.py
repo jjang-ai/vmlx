@@ -24,7 +24,8 @@ Integration points:
 Supported cache_data tuple types (from prefix_cache.py):
 - ("kv", keys_slice, values_slice) — standard KVCache
 - ("quantized_kv", keys_tuple, values_tuple, meta) — QuantizedKVCache
-- ("rotating_kv", keys_slice, values_slice, max_size, keep) — RotatingKVCache
+- ("rotating_kv", keys_slice, values_slice, max_size, keep[, offset, idx])
+  — RotatingKVCache
 - ("cumulative", state_list, meta, class_name) — MambaCache/ArraysCache
 - ("deepseek_v4", state_tree, meta, class_name, cache_meta) — DSV4
   composite cache (SWA local + CSA/HCA compressor/indexer pools)
@@ -792,7 +793,8 @@ def _serialize_block(
       layer_{i}_no_state                           — explicit no-state layer
 
     Returns:
-        (tensor_dict, dtype_string, num_layers_with_data)
+        (tensor_dict, dtype_string, total_cache_layers). The total layer
+        count includes skip entries so L2 records remain model-shape scoped.
     """
     if not HAS_MLX:
         return {}, "unknown", 0
@@ -841,11 +843,17 @@ def _serialize_block(
                 meta[str(i)] = {"quant_meta": layer_meta}
 
         elif tag == "rotating_kv":
-            _, keys, values, max_size, keep = layer_data
+            _, keys, values, max_size, keep, *window_state = layer_data
             tensors[f"layer_{i}_keys"] = keys
             tensors[f"layer_{i}_values"] = values
             tensors[f"layer_{i}_max_size"] = mx.array([max_size], dtype=mx.int32)
             tensors[f"layer_{i}_keep"] = mx.array([keep], dtype=mx.int32)
+            offset = window_state[0] if len(window_state) >= 1 else None
+            idx_state = window_state[1] if len(window_state) >= 2 else None
+            if offset is not None:
+                tensors[f"layer_{i}_offset"] = mx.array([offset], dtype=mx.int32)
+            if idx_state is not None:
+                tensors[f"layer_{i}_idx"] = mx.array([idx_state], dtype=mx.int32)
             if hasattr(keys, "dtype"):
                 meta.setdefault("__orig_dtypes__", {})[str(i)] = str(keys.dtype)
 
@@ -1096,6 +1104,8 @@ def _deserialize_block(
             values = data.get(f"layer_{i}_values")
             max_size_arr = data.get(f"layer_{i}_max_size")
             keep_arr = data.get(f"layer_{i}_keep")
+            offset_arr = data.get(f"layer_{i}_offset")
+            idx_arr = data.get(f"layer_{i}_idx")
             if keys is not None and values is not None:
                 orig_dt = orig_dtypes.get(str(i))
                 if HAS_MLX and orig_dt and orig_dt != str(keys.dtype):
@@ -1105,7 +1115,11 @@ def _deserialize_block(
                         values = values.astype(target)
                 max_size = int(max_size_arr.item()) if max_size_arr is not None else 0
                 keep = int(keep_arr.item()) if keep_arr is not None else 0
-                cache_data.append(("rotating_kv", keys, values, max_size, keep))
+                offset = int(offset_arr.item()) if offset_arr is not None else None
+                idx_state = int(idx_arr.item()) if idx_arr is not None else None
+                cache_data.append(
+                    ("rotating_kv", keys, values, max_size, keep, offset, idx_state)
+                )
             else:
                 cache_data.append(("skip",))
 

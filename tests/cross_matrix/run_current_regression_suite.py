@@ -575,7 +575,7 @@ CURRENT_SUITE_COMMANDS: dict[str, list[str]] = {
         "--require-current-proof-sweep",
         "--require-release-ready",
         "--out",
-        "build/current-release-regression-manifest-20260531-live-epipe-signing-dsv4-refresh.json",
+        "build/current-release-regression-manifest-20260531-gemma4-l2-rotating-kv-fix.json",
     ],
 }
 
