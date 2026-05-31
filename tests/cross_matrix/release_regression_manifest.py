@@ -174,6 +174,7 @@ EXPECTED_CURRENT_API_SURFACE_CHECKS = (
     "panel_gateway_streaming_disconnect_epipe_guard",
     "panel_gateway_ollama_proxy_response_error_guard",
     "panel_ipc_backend_request_epipe_guard",
+    "panel_child_process_stdio_epipe_guard",
     "all_required_panel_api_markers_present",
 )
 

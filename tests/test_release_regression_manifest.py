@@ -10306,6 +10306,10 @@ def test_release_regression_manifest_rejects_incomplete_current_api_surface_matr
     ]
 
 
+def test_release_regression_manifest_api_surface_requires_child_process_stdio_epipe_guard():
+    assert "panel_child_process_stdio_epipe_guard" in EXPECTED_CURRENT_API_SURFACE_CHECKS
+
+
 def test_release_regression_manifest_rejects_incomplete_current_reasoning_template_matrix(tmp_path):
     reasoning_artifact = CURRENT_POST_BUDGET_EDGE_ARTIFACTS["reasoning-template-no-think-tag-leak"]
     for artifact in CURRENT_POST_BUDGET_EDGE_ARTIFACTS.values():
