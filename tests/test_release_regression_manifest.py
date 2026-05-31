@@ -2492,6 +2492,25 @@ def test_release_regression_manifest_real_ui_script_records_stream_text_trace():
     assert "streamTrace: rendererResult.streamTraceByMessage" in source
 
 
+def test_release_regression_manifest_real_ui_script_records_request_contract():
+    script = Path("panel/scripts/live-real-ui-model-proof.mjs")
+    source = script.read_text(encoding="utf-8")
+
+    result_block = source.split("const result = {", 2)[2].split(
+        "result.visibleAssistantTurnsComplete",
+        1,
+    )[0]
+    assert "requestContract" in result_block
+    assert "promptOne" in result_block
+    assert "promptTwo" in result_block
+    assert "requestMaxTokens" in result_block
+    assert "maxToolIterations" in result_block
+    assert "toolResultMaxChars" in result_block
+    assert "imageExpectRegex" in result_block
+    assert "videoExpectRegex" in result_block
+    assert "cacheExpectRegex" in result_block
+
+
 def test_release_regression_manifest_real_ui_script_rejects_reasoning_only_visible_turns():
     script = Path("panel/scripts/live-real-ui-model-proof.mjs")
     source = script.read_text(encoding="utf-8")
