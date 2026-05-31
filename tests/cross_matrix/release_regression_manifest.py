@@ -2286,6 +2286,9 @@ def validate_current_proof_sweep_artifacts(root: Path) -> dict[str, Any]:
                 "psutil_memory_gap_gb": real_ui_dsv4_memory_preflight.get(
                     "psutil_memory_gap_gb"
                 ),
+                "memory_pressure_free_percent": real_ui_dsv4_memory_preflight.get(
+                    "memory_pressure_free_percent"
+                ),
                 "inactive_file_cache_gb": real_ui_dsv4_memory_preflight.get(
                     "inactive_file_cache_gb"
                 ),
@@ -2785,6 +2788,8 @@ def _current_release_blocker_ledger(
                         "memory_gap_gb",
                         "strict_vm_stat_memory_gap_gb",
                         "psutil_available_gap_gb",
+                        "memory_pressure_free_percent",
+                        "memory_pressure_error",
                         "preflight_memory_source",
                         "did_not_launch",
                         "launch_decision",
@@ -3248,6 +3253,9 @@ def _validate_current_real_ui_dsv4_memory_preflight(root: Path) -> dict[str, Any
             "preflight_memory_source": payload.get("preflight_memory_source"),
             "psutil_available_gb": _json_number(payload, "psutil_available_gb"),
             "psutil_memory_gap_gb": _json_number(payload, "psutil_memory_gap_gb"),
+            "memory_pressure_free_percent": _json_number(
+                payload, "memory_pressure_free_percent"
+            ),
             "inactive_file_cache_gb": _json_number(payload, "inactive_file_cache_gb"),
         }
     )

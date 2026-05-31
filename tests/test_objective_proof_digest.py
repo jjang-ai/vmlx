@@ -1198,6 +1198,7 @@ def test_objective_proof_digest_tracks_ling_multilingual_cjk_leakage(tmp_path):
                 "legacy_completion_raw",
             ],
             "case_count": 14,
+            "memory_pressure_free_percent": 94,
             "telemetry": [
                 {
                     "name": "preflight",
@@ -3455,6 +3456,7 @@ def test_objective_proof_digest_summarizes_dsv4_exact_code_root_boundary(
                 "legacy_completion_raw",
             ],
             "case_count": 14,
+            "memory_pressure_free_percent": 94,
             "telemetry": [
                 {
                     "name": "preflight",
@@ -3548,6 +3550,9 @@ def test_objective_proof_digest_summarizes_dsv4_exact_code_root_boundary(
     assert summary["source_full_output_preflight"]["reason"] == "insufficient_free_memory"
     assert summary["source_full_output_preflight"]["available_gb"] == 105.89
     assert summary["source_full_output_preflight"]["memory_gap_gb"] == 14.11
+    assert (
+        summary["source_full_output_preflight"]["memory_pressure_free_percent"] == 94
+    )
     assert summary["source_full_output_preflight"]["did_not_launch"] is True
     assert summary["source_full_output_preflight"]["launch_decision"] == "do_not_launch"
     assert summary["source_full_output_preflight"]["required_available_gb"] == 120.0

@@ -1657,6 +1657,7 @@ def _write_passing_real_ui_dsv4_memory_preflight_artifact(root: Path) -> None:
                 "memory_gap_gb": 80.85,
                 "psutil_available_gb": 104.0,
                 "psutil_memory_gap_gb": 16.0,
+                "memory_pressure_free_percent": 95,
                 "inactive_file_cache_gb": 30.0,
                 "launch_decision": "do_not_launch",
                 "top_memory_processes": [
@@ -2023,6 +2024,7 @@ def _passing_open_requirement_details() -> dict[str, object]:
                     "memory_gap_gb": 16.13,
                     "strict_vm_stat_memory_gap_gb": 16.13,
                     "psutil_available_gap_gb": 16.13,
+                    "memory_pressure_free_percent": 94,
                     "preflight_memory_source": "psutil_available",
                     "did_not_launch": True,
                     "launch_decision": "do_not_launch",
@@ -3489,6 +3491,7 @@ def test_release_regression_manifest_real_ui_matrix_records_dsv4_memory_blocker(
                 "memory_gap_gb": 80.85,
                 "psutil_available_gb": 104.0,
                 "psutil_memory_gap_gb": 16.0,
+                "memory_pressure_free_percent": 95,
                 "inactive_file_cache_gb": 30.0,
                 "launch_decision": "do_not_launch",
                 "top_memory_processes": [
@@ -3517,6 +3520,7 @@ def test_release_regression_manifest_real_ui_matrix_records_dsv4_memory_blocker(
         "memory_gap_gb": 80.85,
         "psutil_available_gb": 104.0,
         "psutil_memory_gap_gb": 16.0,
+        "memory_pressure_free_percent": 95,
         "inactive_file_cache_gb": 30.0,
     }
     assert result["real_ui_live_model_matrix"]["unblocked_non_mimo_status"] == "pass"
@@ -5901,6 +5905,7 @@ def test_release_regression_manifest_validates_current_proof_sweep_artifacts(tmp
                     "memory_gap_gb": 16.13,
                     "strict_vm_stat_memory_gap_gb": 16.13,
                     "psutil_available_gap_gb": 16.13,
+                    "memory_pressure_free_percent": 94,
                     "preflight_memory_source": "psutil_available",
                     "did_not_launch": True,
                     "launch_decision": "do_not_launch",
@@ -5931,6 +5936,7 @@ def test_release_regression_manifest_validates_current_proof_sweep_artifacts(tmp
                     "memory_gap_gb": 80.85,
                     "psutil_available_gb": 104.0,
                     "psutil_memory_gap_gb": 16.0,
+                    "memory_pressure_free_percent": 95,
                     "inactive_file_cache_gb": 30.0,
                 },
             },
@@ -6160,6 +6166,48 @@ def test_release_blocker_ledger_tracks_dsv4_exactness_open_requirement():
             {"family": "mimo_v2", "reason": "deferred_out_of_release_scope"}
         ],
     }
+
+
+def test_release_blocker_ledger_preserves_dsv4_exactness_memory_pressure_diagnostic():
+    ledger = _current_release_blocker_ledger(
+        regression_suite={
+            "open_requirements": [
+                "DSV4 long-output/code/file-generation quality is release-cleared"
+            ],
+            "open_requirement_details": {
+                "DSV4 long-output/code/file-generation quality is release-cleared": {
+                    "details": {
+                        "current_source_full_output_preflight": {
+                            "available_gb": 107.63,
+                            "required_available_gb": 120.0,
+                            "memory_gap_gb": 61.74,
+                            "strict_vm_stat_memory_gap_gb": 61.74,
+                            "psutil_available_gap_gb": 12.37,
+                            "memory_pressure_free_percent": 94,
+                            "preflight_memory_source": "vm_stat_free_plus_speculative_purgeable",
+                            "did_not_launch": True,
+                            "launch_decision": "do_not_launch",
+                            "launch_blockers": ["insufficient_memory"],
+                            "active_heavy_process_count": 0,
+                            "case_count": 14,
+                        }
+                    }
+                }
+            },
+        },
+        live_smoke_summaries={"status": "pass", "missing": [], "not_pass": []},
+        live_tool_smoke_summaries={"status": "pass", "missing": [], "not_pass": []},
+        mimo_v2_jang2l_sink_ab={"status": "pass"},
+        mimo_v2_jang2l_root_cause={"remote_evidence_only": False},
+        issue175_179_release_boundary_audit={"status": "pass", "issues": {}},
+        installed_app_runtime_parity_audit={"status": "pass"},
+        issue179_minimax_k_root_cause_audit={"status": "pass"},
+        real_ui_live_model_matrix={"status": "pass", "missing_families": []},
+    )
+
+    blocker = ledger["blockers"][0]
+    assert blocker["id"] == "dsv4_long_output_code_exactness_open"
+    assert blocker["details"]["memory_pressure_free_percent"] == 94
 
 
 def test_release_blocker_ledger_tracks_stale_real_ui_request_contract_proofs():

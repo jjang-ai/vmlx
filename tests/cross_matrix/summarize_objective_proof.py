@@ -1506,6 +1506,10 @@ def _dsv4_source_memory_preflight_detail(
             "strict_vm_stat_memory_gap_gb"
         ),
         "psutil_available_gap_gb": artifact.get("psutil_available_gap_gb"),
+        "memory_pressure_free_percent": artifact.get(
+            "memory_pressure_free_percent"
+        ),
+        "memory_pressure_error": artifact.get("memory_pressure_error"),
         "preflight_memory_source": artifact.get("preflight_memory_source"),
         "free_plus_speculative_purgeable_gb": artifact.get(
             "free_plus_speculative_purgeable_gb"
