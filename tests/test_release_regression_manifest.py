@@ -1420,6 +1420,8 @@ def _write_expected_installed_app_runtime_parity_audit(root: Path) -> None:
                     "installed_panel_gateway_epipe_aggregate_guard": True,
                     "installed_panel_chat_ipc_epipe_aggregate_guard": True,
                     "installed_panel_image_ipc_epipe_aggregate_guard": True,
+                    "installed_panel_child_process_stdio_epipe_guard": True,
+                    "installed_panel_child_process_stdio_epipe_aggregate_guard": True,
                     "installed_panel_gateway_guarded_proxy_forwarding": True,
                     "installed_panel_gateway_write_once_behavior_marker": True,
                     "installed_panel_gateway_response_socket_destroyed_guard": True,
@@ -1466,6 +1468,8 @@ def _write_expected_staged_app_runtime_parity_audit(root: Path) -> None:
                     "installed_panel_gateway_epipe_aggregate_guard": True,
                     "installed_panel_chat_ipc_epipe_aggregate_guard": True,
                     "installed_panel_image_ipc_epipe_aggregate_guard": True,
+                    "installed_panel_child_process_stdio_epipe_guard": True,
+                    "installed_panel_child_process_stdio_epipe_aggregate_guard": True,
                     "installed_panel_gateway_guarded_proxy_forwarding": True,
                     "installed_panel_gateway_write_once_behavior_marker": True,
                     "installed_panel_gateway_response_socket_destroyed_guard": True,
@@ -1574,6 +1578,30 @@ def test_current_proof_sweep_rejects_installed_app_missing_ipc_epipe_aggregate_g
     )
     assert (
         "missing_check:installed_panel_image_ipc_epipe_aggregate_guard"
+        in result["failures"]
+    )
+
+
+def test_current_proof_sweep_rejects_installed_app_missing_child_stdio_epipe_guard(
+    tmp_path,
+):
+    _write_expected_installed_app_runtime_parity_audit(tmp_path)
+    path = tmp_path / CURRENT_INSTALLED_APP_RUNTIME_PARITY_AUDIT_ARTIFACT
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["checks"].pop("installed_panel_child_process_stdio_epipe_guard")
+    payload["checks"].pop("installed_panel_child_process_stdio_epipe_aggregate_guard")
+    path.write_text(json.dumps(payload) + "\n", encoding="utf-8")
+
+    result = validate_current_proof_sweep_artifacts(tmp_path)[
+        "installed_app_runtime_parity_audit"
+    ]
+
+    assert (
+        "missing_check:installed_panel_child_process_stdio_epipe_guard"
+        in result["failures"]
+    )
+    assert (
+        "missing_check:installed_panel_child_process_stdio_epipe_aggregate_guard"
         in result["failures"]
     )
 

@@ -4531,6 +4531,8 @@ def _validate_app_runtime_parity_audit(
         "installed_panel_gateway_epipe_aggregate_guard",
         "installed_panel_chat_ipc_epipe_aggregate_guard",
         "installed_panel_image_ipc_epipe_aggregate_guard",
+        "installed_panel_child_process_stdio_epipe_guard",
+        "installed_panel_child_process_stdio_epipe_aggregate_guard",
         "installed_panel_gateway_guarded_proxy_forwarding",
         "installed_panel_gateway_write_once_behavior_marker",
         "installed_panel_gateway_response_socket_destroyed_guard",
