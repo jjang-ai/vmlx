@@ -693,6 +693,14 @@ function deriveProvenSurfaces(result) {
   if (result.serverCacheControls?.verified === true) {
     surfaces.add('server_cache_controls')
   }
+  if (
+    surfaces.has('cache_hit_telemetry')
+    && surfaces.has('l2_disk_storage')
+    && surfaces.has('long_tool_loop')
+    && surfaces.has('server_cache_controls')
+  ) {
+    surfaces.add('tool_l2_cache_integrated')
+  }
   if (result.media?.imageVerified === true) {
     surfaces.add('vl_image')
   }

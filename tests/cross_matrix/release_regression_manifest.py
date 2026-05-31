@@ -363,7 +363,7 @@ CURRENT_POST_BUDGET_EDGE_ARTIFACTS = {
 }
 
 CURRENT_REGRESSION_SUITE_ARTIFACT = (
-    "build/current-regression-suite-20260531-two-turn-responses-delta-gate.json"
+    "build/current-regression-suite-20260531-step37-integrated-tool-l2-proof.json"
 )
 CURRENT_ISSUE175_179_RELEASE_BOUNDARY_AUDIT_ARTIFACT = (
     "build/current-issue175-179-release-boundary-audit-20260531-post-install-sync.json"
@@ -638,6 +638,13 @@ CURRENT_REAL_UI_LIVE_MODEL_PROOF_ROWS = {
         "model_name": "Step-3.7-Flash-JANG_2L",
         "family": "step37",
     },
+    "step37_flash_jang2l_tool_l2storage": {
+        "proof": "docs/internal/agent-notes/current-real-ui-live-model-step37-jang2l-responses-tools-l2storage-integrated-20260531-proof.json",
+        "chat_screenshot": "docs/internal/agent-notes/current-real-ui-live-model-step37-jang2l-responses-tools-l2storage-integrated-20260531-chat.png",
+        "model_path": "/Users/example/.mlxstudio/models/JANGQ-AI/Step-3.7-Flash-JANG_2L",
+        "model_name": "Step-3.7-Flash-JANG_2L",
+        "family": "step37",
+    },
     "lfm25_moe_a1b": {
         "proof": "docs/internal/agent-notes/current-real-ui-live-model-lfm25-moe-a1b-jang2l-stricttools-chat-20260530-proof.json",
         "chat_screenshot": "docs/internal/agent-notes/current-real-ui-live-model-lfm25-moe-a1b-jang2l-stricttools-chat-20260530-chat.png",
@@ -706,6 +713,7 @@ REQUIRED_REAL_UI_LIVE_MODEL_SURFACES = (
     "vl_image",
     "video_where_supported",
 )
+REAL_UI_INTEGRATED_TOOL_L2_CACHE_SURFACE = "tool_l2_cache_integrated"
 _REQUIRED_REAL_UI_LIVE_MODEL_GENERIC_SURFACES = tuple(
     surface
     for surface in REQUIRED_REAL_UI_LIVE_MODEL_SURFACES
@@ -739,7 +747,8 @@ REQUIRED_REAL_UI_LIVE_MODEL_SURFACES_BY_FAMILY = {
         surface
         for surface in REQUIRED_REAL_UI_LIVE_MODEL_SURFACES
         if surface != "video_where_supported"
-    ),
+    )
+    + (REAL_UI_INTEGRATED_TOOL_L2_CACHE_SURFACE,),
     "lfm25": tuple(
         surface
         for surface in REQUIRED_REAL_UI_LIVE_MODEL_SURFACES
@@ -749,7 +758,8 @@ REQUIRED_REAL_UI_LIVE_MODEL_SURFACES_BY_FAMILY = {
             "vl_image",
             "video_where_supported",
         }
-    ),
+    )
+    + (REAL_UI_INTEGRATED_TOOL_L2_CACHE_SURFACE,),
     "zaya_vl": (
         *_REQUIRED_REAL_UI_LIVE_MODEL_NON_REASONING_TEXT_SURFACES,
         "vl_image",
@@ -5151,6 +5161,13 @@ def _validate_current_real_ui_live_model_matrix(
             )
             if server_cache_controls.get("verified") is True:
                 surfaces.add("server_cache_controls")
+            if {
+                "cache_hit_telemetry",
+                "l2_disk_storage",
+                "long_tool_loop",
+                "server_cache_controls",
+            }.issubset(surfaces):
+                surfaces.add(REAL_UI_INTEGRATED_TOOL_L2_CACHE_SURFACE)
             media = proof.get("media") if isinstance(proof.get("media"), dict) else {}
             if media.get("imageVerified") is True:
                 surfaces.add("vl_image")

@@ -661,6 +661,7 @@ def _write_passing_real_ui_live_model_proof_artifacts(root: Path) -> None:
                 "zaya-text-responses-stricttools-cachecontrols-20260530-proof.json",
                 "zaya-vl-responses-stricttools-cachecontrols-20260530-proof.json",
                 "step37-jang2l-responses-tools-image-cachecontrols-after-direct-media-tool-filter-20260531-proof.json",
+                "step37-jang2l-responses-tools-l2storage-integrated-20260531-proof.json",
                 "lfm25-moe-a1b-jang2l-stricttools-chat-20260530-proof.json",
                 "lfm25-moe-a1b-jang2l-stricttools-responses-filesemantic-20260530-proof.json",
                 "lfm25-moe-a1b-jang2l-stricttools-responses-post-epipe-20260531-proof.json",
@@ -711,6 +712,10 @@ def _write_passing_real_ui_live_model_proof_artifacts(root: Path) -> None:
             proof["media"] = {"imageVerified": True}
             proof["requestedBuiltinTools"] = True
             proof["chatOverrides"] = {"builtinToolsEnabled": True}
+            add_extensive_tool_churn(proof)
+        if row["proof"].endswith(
+            "step37-jang2l-responses-tools-l2storage-integrated-20260531-proof.json"
+        ):
             add_extensive_tool_churn(proof)
         if row["proof"].endswith(
             (
@@ -2397,7 +2402,8 @@ def test_release_regression_manifest_current_sweep_uses_latest_live_smoke_artifa
     assert "current-regression-suite-20260528-installed-aggregate-stale.json" not in joined
     assert "current-regression-suite-20260528-epipe-aggregate-guard.json" not in joined
     assert "current-regression-suite-20260528-dsv4-continue-refresh.json" not in joined
-    assert "current-regression-suite-20260531-two-turn-responses-delta-gate.json" in joined
+    assert "current-regression-suite-20260531-step37-integrated-tool-l2-proof.json" in joined
+    assert "current-regression-suite-20260531-two-turn-responses-delta-gate.json" not in joined
     assert "current-regression-suite-20260531-live-chat-tools-proof-refresh.json" not in joined
     assert "current-regression-suite-20260531-live-epipe-signing-dsv4-refresh.json" not in joined
     assert "current-regression-suite-20260531-childstream-epipe-guard.json" not in joined
@@ -3231,6 +3237,15 @@ def test_release_regression_manifest_real_ui_live_model_rows_include_ling_bailin
         rows["step37_flash_jang2l_l2storage"]["proof"]
         == "docs/internal/agent-notes/current-real-ui-live-model-step37-jang2l-cachecontrols-l2storage-20260531-proof.json"
     )
+    assert rows["step37_flash_jang2l_tool_l2storage"]["model_path"] == (
+        "/Users/example/.mlxstudio/models/JANGQ-AI/Step-3.7-Flash-JANG_2L"
+    )
+    assert rows["step37_flash_jang2l_tool_l2storage"]["model_name"] == "Step-3.7-Flash-JANG_2L"
+    assert rows["step37_flash_jang2l_tool_l2storage"]["family"] == "step37"
+    assert (
+        rows["step37_flash_jang2l_tool_l2storage"]["proof"]
+        == "docs/internal/agent-notes/current-real-ui-live-model-step37-jang2l-responses-tools-l2storage-integrated-20260531-proof.json"
+    )
     assert rows["lfm25_moe_a1b"]["model_path"] == (
         "/Users/example/.mlxstudio/models/JANGQ-AI/LFM2.5-8B-A1B-JANG_2L"
     )
@@ -3260,6 +3275,7 @@ def test_release_regression_manifest_real_ui_requires_step37_and_lfm25():
             for surface in REQUIRED_REAL_UI_LIVE_MODEL_SURFACES
             if surface != "video_where_supported"
         ),
+        "tool_l2_cache_integrated",
     )
     assert REQUIRED_REAL_UI_LIVE_MODEL_SURFACES_BY_FAMILY["lfm25"] == tuple(
         surface
@@ -3270,7 +3286,7 @@ def test_release_regression_manifest_real_ui_requires_step37_and_lfm25():
             "vl_image",
             "video_where_supported",
         }
-    )
+    ) + ("tool_l2_cache_integrated",)
 
 
 def test_release_regression_manifest_real_ui_artifact_inventory_covers_every_row():
@@ -4116,6 +4132,127 @@ def test_release_regression_manifest_real_ui_matrix_requires_endpoint_l2_disk_st
     assert "l2_disk_storage" in REQUIRED_REAL_UI_LIVE_MODEL_SURFACES_BY_FAMILY["step37"]
     assert "l2_disk_storage" not in step37["covered_surfaces"]
     assert "l2_disk_storage" in step37["missing_surfaces"]
+
+
+def test_release_regression_manifest_real_ui_matrix_requires_integrated_tool_l2_cache_proof():
+    base = {
+        "modelName": "Step-3.7-Flash-JANG_2L",
+        "appLogTail": ["start electron app"],
+        "server": {
+            "health": {
+                "status": "healthy",
+                "model_loaded": True,
+                "native_cache": {
+                    "family": "mixed_attention",
+                    "schema": "mixed_swa_kv_v1",
+                    "cache_type": "mixed_swa_kv",
+                    "components": [
+                        "full_attention_kv",
+                        "sliding_window_kv",
+                        "rotating_window_metadata",
+                    ],
+                    "prefix": True,
+                    "paged": True,
+                    "block_disk_l2": True,
+                },
+            }
+        },
+        "chat": {
+            "turns": [{"role": "assistant", "content": "ok"}],
+            "rawParserTagLeak": False,
+            "cjkLeakCount": 0,
+            "koreanLeakCount": 0,
+        },
+        "rendererWireApi": "responses",
+        "eventCounts": {"complete": 2, "stream": 4},
+        "streamTrace": [
+            {
+                "messageId": "step-stream-1",
+                "count": 4,
+                "firstFullContent": "o",
+                "lastFullContent": "ok streamed",
+            },
+            {
+                "messageId": "step-stream-2",
+                "count": 4,
+                "firstFullContent": "s",
+                "lastFullContent": "second ok streamed",
+            },
+        ],
+        "requestedBuiltinTools": True,
+        "chatOverrides": {"builtinToolsEnabled": True},
+        "serverCacheControls": {"verified": True},
+        "serverLogTail": [
+            "INFO:vmlx_engine.server:Resolved sampling kwargs "
+            "route=/v1/responses model=step37 "
+            "kwargs={'temperature': 0.0, 'top_p': 1.0, 'max_tokens': 512}"
+        ],
+        "media": {"imageVerified": True},
+    }
+    tool_only = {
+        **base,
+        "eventCounts": {"complete": 2, "stream": 4, "tool": 24},
+        "cache": {
+            "before": {"scheduler_cache": {"hits": 0}},
+            "after": {
+                "scheduler_cache": {"hits": 1},
+                "block_disk_cache": {
+                    "blocks_on_disk": 0,
+                    "total_tokens_on_disk": 0,
+                    "disk_writes": 0,
+                },
+                "cache_totals": {"l2_tokens_on_disk": 0},
+            },
+            "cacheHitTokens": 12,
+        },
+        "persistedToolCount": 24,
+        "persistedToolsByMessage": [
+            [
+                {"phase": "result", "toolName": "run_command"},
+                {"phase": "result", "toolName": "write_file"},
+            ],
+            [
+                {"phase": "result", "toolName": "run_command"},
+                {"phase": "result", "toolName": "write_file"},
+            ],
+        ],
+    }
+    l2_only = {
+        **base,
+        "eventCounts": {"complete": 2, "stream": 4, "tool": 0},
+        "cache": {
+            "before": {"scheduler_cache": {"hits": 0}},
+            "after": {
+                "scheduler_cache": {"hits": 1},
+                "block_disk_cache": {
+                    "blocks_on_disk": 2,
+                    "total_tokens_on_disk": 128,
+                    "disk_writes": 2,
+                },
+                "cache_totals": {"l2_tokens_on_disk": 128},
+            },
+            "cacheHitTokens": 12,
+        },
+        "persistedToolCount": 0,
+        "persistedToolsByMessage": [],
+    }
+
+    matrix = _validate_current_real_ui_live_model_matrix(
+        {
+            "status": "pass",
+            "proofs": {
+                "step37_flash_jang2l": tool_only,
+                "step37_flash_jang2l_l2storage": l2_only,
+            },
+        }
+    )
+
+    step37 = matrix["covered_families"]["step37"]
+    assert "tool_l2_cache_integrated" in REQUIRED_REAL_UI_LIVE_MODEL_SURFACES_BY_FAMILY["step37"]
+    assert "long_tool_loop" in step37["covered_surfaces"]
+    assert "l2_disk_storage" in step37["covered_surfaces"]
+    assert "tool_l2_cache_integrated" not in step37["covered_surfaces"]
+    assert "tool_l2_cache_integrated" in step37["missing_surfaces"]
 
 
 def test_release_regression_manifest_real_ui_matrix_rejects_hybrid_ssm_full_prefill_fallback():
@@ -8580,7 +8717,7 @@ def test_release_regression_manifest_runner_default_out_tracks_current_release_p
     from tests.cross_matrix import run_release_regression_manifest as runner
 
     assert runner.DEFAULT_OUT == Path(
-        "build/current-release-regression-manifest-20260531-two-turn-responses-delta-gate.json"
+        "build/current-release-regression-manifest-20260531-step37-integrated-tool-l2-proof.json"
     )
 
 
