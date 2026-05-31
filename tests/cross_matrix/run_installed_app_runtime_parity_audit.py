@@ -18,7 +18,7 @@ from typing import Any
 
 
 DEFAULT_OUT = Path(
-    "build/current-installed-app-runtime-parity-audit-20260531-post-step-lfm-refresh.json"
+    "build/current-installed-app-runtime-parity-audit-20260531-post-install-sync.json"
 )
 INSTALLED_PYTHON = Path(
     "/Applications/vMLX.app/Contents/Resources/bundled-python/python/bin/python3"
