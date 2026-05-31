@@ -531,6 +531,8 @@ def test_packaged_bundled_hash_gate_covers_runtime_files_changed_for_release():
         "mllm_scheduler.py",
         "model_configs.py",
         "model_config_registry.py",
+        "models/mllm.py",
+        "models/step3p7_mlx_vlm.py",
         "omni_multimodal.py",
         "paged_cache.py",
         "prefix_cache.py",
@@ -679,6 +681,8 @@ def test_verify_bundled_python_hash_gate_covers_release_runtime_files():
         "mllm_scheduler.py",
         "model_configs.py",
         "model_config_registry.py",
+        "models/mllm.py",
+        "models/step3p7_mlx_vlm.py",
         "omni_multimodal.py",
         "paged_cache.py",
         "prefix_cache.py",
@@ -739,7 +743,12 @@ def test_verify_bundled_python_import_gate_covers_step37_source_runtime():
     verifier = Path("panel/scripts/verify-bundled-python.sh").read_text()
 
     assert '("jang_tools.step37.step3p7_mlx", "jang_tools.step37.step3p7_mlx"' in verifier
+    assert '("vmlx_engine.models.step3p7_mlx_vlm", "vmlx_engine Step3p7 VLM runtime"' in verifier
+    assert "_register_step3p7_mlx_vlm_runtime()" in verifier
+    assert '"mlx_vlm.models.step3p7"' in verifier
+    assert '"mlx_vlm.models.step3p7.processing_step3"' in verifier
     assert "Step3p7 source VLM runtime missing" in verifier
+    assert "Step3p7 mlx-vlm registration missing" in verifier
 
 
 def test_nemotron_omni_media_dependency_timm_is_packaged_and_verified():

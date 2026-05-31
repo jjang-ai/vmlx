@@ -5352,6 +5352,8 @@ class TestStartupCompatibilityGuards:
             "loaders/load_jangtq_dsv4.py",
             "mllm_batch_generator.py",
             "mllm_scheduler.py",
+            "models/mllm.py",
+            "models/step3p7_mlx_vlm.py",
             "omni_multimodal.py",
             "prefix_cache.py",
             "runtime_patches/gemma4_processing.py",
@@ -5410,7 +5412,12 @@ class TestStartupCompatibilityGuards:
         verify_script = Path("./panel/scripts/verify-bundled-python.sh").read_text()
 
         assert '("jang_tools.step37.step3p7_mlx", "jang_tools.step37.step3p7_mlx"' in verify_script
+        assert '("vmlx_engine.models.step3p7_mlx_vlm", "vmlx_engine Step3p7 VLM runtime"' in verify_script
+        assert "_register_step3p7_mlx_vlm_runtime()" in verify_script
+        assert '"mlx_vlm.models.step3p7"' in verify_script
+        assert '"mlx_vlm.models.step3p7.processing_step3"' in verify_script
         assert "Step3p7 source VLM runtime missing" in verify_script
+        assert "Step3p7 mlx-vlm registration missing" in verify_script
 
     def test_jang_loader_registers_hy3_and_ling_before_mlx_lm_resolution(
         self, monkeypatch

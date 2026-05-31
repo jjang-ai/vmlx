@@ -112,6 +112,7 @@ HASH_GATED_ENGINE_FILES=(
   "model_configs.py"
   "model_config_registry.py"
   "models/mllm.py"
+  "models/step3p7_mlx_vlm.py"
   "omni_multimodal.py"
   "paged_cache.py"
   "prefix_cache.py"
@@ -254,6 +255,7 @@ REQUIRED = [
     ("jang_tools.load_jangtq_kimi_vlm", "jang_tools.load_jangtq_kimi_vlm", "Kimi VL loader missing (kimi_k25 remap + wired_limit + command-buffer split)"),
     ("jang_tools.kimi_prune.generate_vl", "jang_tools.kimi_prune.generate_vl", "Kimi chunked VL generate path missing — required by vmlx_engine.vlm.generate_vl"),
     ("vmlx_engine", "vmlx_engine", "bundled vmlx_engine missing"),
+    ("vmlx_engine.models.step3p7_mlx_vlm", "vmlx_engine Step3p7 VLM runtime", "Step3p7 source VLM runtime missing from bundled vmlx_engine"),
     ("vmlx_engine.utils.jang_loader", "vmlx_engine jang_loader", "bundled jang_loader missing"),
     ("vmlx_engine.api.ollama_adapter", "vmlx_engine ollama_adapter", "bundled ollama_adapter missing"),
     # Doc §1.3 + §1.4 import paths — shipping these means the Kimi integration
@@ -279,6 +281,26 @@ if failures:
     print("RELEASE BLOCKED — bundled-python is missing critical modules:")
     for mod, label, hint, e in failures:
         print(f"  - {label}: {hint}")
+    sys.exit(1)
+
+# Step-3.7 VLM registration is source-owned until mlx-vlm ships native support.
+# Importing the runtime module alone is insufficient; the app loader must be
+# able to register both the mlx_vlm model package and processor submodule.
+try:
+    import importlib.util
+    from vmlx_engine.models.mllm import _register_step3p7_mlx_vlm_runtime
+
+    _register_step3p7_mlx_vlm_runtime()
+    for _name in (
+        "mlx_vlm.models.step3p7",
+        "mlx_vlm.models.step3p7.processing_step3",
+    ):
+        if importlib.util.find_spec(_name) is None:
+            print(f"  FAIL Step3p7 mlx-vlm registration missing: {_name}")
+            sys.exit(1)
+    print("  ok   Step3p7 mlx-vlm registration")
+except Exception as e:
+    print(f"  FAIL Step3p7 mlx-vlm registration check: {type(e).__name__}: {e}")
     sys.exit(1)
 
 # Extra spot-check: load the gemma4 Model class (catches broken relative

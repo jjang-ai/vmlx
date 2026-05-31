@@ -434,6 +434,8 @@ BUNDLED_SOURCE_HASH_PATHS = (
     "mllm_scheduler.py",
     "model_configs.py",
     "model_config_registry.py",
+    "models/mllm.py",
+    "models/step3p7_mlx_vlm.py",
     "omni_multimodal.py",
     "paged_cache.py",
     "prefix_cache.py",
