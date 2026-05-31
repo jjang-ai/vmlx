@@ -2752,6 +2752,33 @@ def test_release_regression_manifest_real_ui_script_records_request_contract():
     assert "cacheExpectRegex" in result_block
 
 
+def test_release_regression_manifest_real_ui_script_records_request_contract_on_failure():
+    script = Path("panel/scripts/live-real-ui-model-proof.mjs")
+    source = script.read_text(encoding="utf-8")
+
+    failure_block = source.split("const result = {", 2)[1].split(
+        "result.visibleAssistantTurnsComplete",
+        1,
+    )[0]
+    assert "failureStage: 'renderer_real_ui_chat'" in failure_block
+    assert "requestContract" in failure_block
+    assert "promptOne" in failure_block
+    assert "promptTwo" in failure_block
+    assert "requestMaxTokens" in failure_block
+    assert "maxToolIterations" in failure_block
+    assert "toolResultMaxChars" in failure_block
+    assert "wireApi" in failure_block
+    assert "builtinToolsEnabled" in failure_block
+    assert "enableThinking: enableThinkingOverride ?? null" in failure_block
+    assert "checkServerCacheControls" in failure_block
+    assert "checkMedia" in failure_block
+    assert "checkVideo" in failure_block
+    assert "expectPagedCacheLocked" in failure_block
+    assert "imageExpectRegex" in failure_block
+    assert "videoExpectRegex" in failure_block
+    assert "cacheExpectRegex" in failure_block
+
+
 def test_release_regression_manifest_real_ui_script_waits_for_async_l2_cache_stats():
     script = Path("panel/scripts/live-real-ui-model-proof.mjs")
     source = script.read_text(encoding="utf-8")
