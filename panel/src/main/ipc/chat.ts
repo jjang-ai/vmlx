@@ -1238,6 +1238,13 @@ export function registerChatHandlers(
 
       // Add system prompt from overrides if available, or agentic prompt when built-in tools enabled
       const hasSystemPrompt = !!overrides?.systemPrompt;
+      const latestUserText = [...messages]
+        .reverse()
+        .find((m: any) => m?.role === "user" && typeof m.content === "string")
+        ?.content || "";
+      const suppressAgenticToolPromptForExactOutput =
+        overrides?.builtinToolsEnabled === true &&
+        /\breply exactly\s*:/i.test(latestUserText);
       const directMediaAttachmentRule =
         hasMediaAttachments && overrides?.builtinToolsEnabled
           ? DIRECT_MEDIA_ATTACHMENT_TOOL_RULE
@@ -1247,17 +1254,25 @@ export function registerChatHandlers(
           "\n\nIMPORTANT: After using any tools, provide a final response. If the user explicitly requested exact final wording or a strict output format, follow that format exactly; otherwise provide a substantive response explaining what you found or did. Never stop after just executing tools.";
         requestMessages.push({
           role: "system",
-          content: overrides!.systemPrompt! + toolRule + directMediaAttachmentRule,
+          content:
+            overrides!.systemPrompt! +
+            (suppressAgenticToolPromptForExactOutput ? "" : toolRule) +
+            directMediaAttachmentRule,
         });
       } else if (hasSystemPrompt) {
         requestMessages.push({
           role: "system",
           content: overrides!.systemPrompt!,
         });
-      } else if (overrides?.builtinToolsEnabled) {
+      } else if (overrides?.builtinToolsEnabled && !suppressAgenticToolPromptForExactOutput) {
         requestMessages.push({
           role: "system",
           content: AGENTIC_SYSTEM_PROMPT + directMediaAttachmentRule,
+        });
+      } else if (directMediaAttachmentRule) {
+        requestMessages.push({
+          role: "system",
+          content: directMediaAttachmentRule.trim(),
         });
       }
       // No default system prompt injected — let the model's native template handle defaults.

@@ -777,6 +777,45 @@ def _finalize_visible_text_for_request(text: str, request: Any) -> str:
     return text
 
 
+_RESPONSES_EXACT_REPLY_RE = re.compile(
+    r"reply exactly:\s*[\"'“”`]?([A-Za-z0-9_=-]+)[\"'“”`]?",
+    re.IGNORECASE,
+)
+
+
+def _responses_exact_reply_target(request: Any) -> str | None:
+    text = "\n".join(_request_text_fragments(request))
+    matches = list(_RESPONSES_EXACT_REPLY_RE.finditer(text))
+    if not matches:
+        return None
+    return matches[-1].group(1)
+
+
+def _responses_messages_have_tool_result_after_latest_user(messages: list[dict]) -> bool:
+    for message in reversed(messages or []):
+        if not isinstance(message, dict):
+            continue
+        if message.get("role") == "user":
+            return False
+        if message.get("role") == "tool":
+            return True
+        if message.get("type") == "function_call_output":
+            return True
+    return False
+
+
+def _responses_fast_path_visible_text(output: Any, request: Any) -> str:
+    text = getattr(output, "raw_text", "") or getattr(output, "text", "") or ""
+    if getattr(request, "enable_thinking", None) is False and "</think>" in text:
+        text = text.rsplit("</think>", 1)[1]
+    else:
+        text = getattr(output, "text", "") or text
+    return _finalize_visible_text_for_request(
+        clean_output_text(text),
+        request,
+    )
+
+
 def _visible_text_for_dsv4_completion(output: Any, engine: Any, request: Any) -> str:
     """Return the visible DSV4 completion text from chat-rail output."""
     raw_text = getattr(output, "raw_text", "") or getattr(output, "text", "") or ""
@@ -3561,6 +3600,8 @@ async def _await_chat_with_disconnect_abort(
     with no consumer. Pass the public response id through as the scheduler
     request id and abort it if the client disappears or the timeout fires.
     """
+    chat_kwargs = dict(chat_kwargs)
+    chat_kwargs.pop("request_id", None)
     task = asyncio.create_task(
         engine.chat(messages=messages, request_id=request_id, **chat_kwargs)
     )
@@ -13664,6 +13705,156 @@ async def stream_responses_api(
     _stream_timeout = (
         request.timeout if request.timeout is not None else _default_timeout
     )
+
+    if (
+        _responses_exact_reply_target(request)
+        and _responses_messages_have_tool_result_after_latest_user(messages)
+    ):
+        try:
+            output = await _await_chat_with_disconnect_abort(
+                engine,
+                messages=messages,
+                chat_kwargs=kwargs,
+                timeout=_stream_timeout,
+                fastapi_request=fastapi_request,
+                request_id=response_id,
+                endpoint="Responses API streaming exact-reply finalization",
+            )
+        except PromptTooLongError as e:
+            if hasattr(engine, "abort_request"):
+                await engine.abort_request(response_id)
+            yield _sse(
+                "error",
+                {
+                    "type": "error",
+                    "error": {
+                        "type": "invalid_request_error",
+                        "message": str(e),
+                        "code": "prompt_too_long",
+                    },
+                },
+            )
+            return
+        except VLMImagePrefillBudgetError as e:
+            if hasattr(engine, "abort_request"):
+                await engine.abort_request(response_id)
+            yield _sse(
+                "error",
+                {
+                    "type": "error",
+                    "error": {
+                        "type": "invalid_request_error",
+                        "message": str(e),
+                        "code": VLMImagePrefillBudgetError.code,
+                    },
+                },
+            )
+            return
+        except Exception as e:
+            logger.error(
+                "Responses API streaming exact-reply finalization failed: %s",
+                e,
+                exc_info=True,
+            )
+            if hasattr(engine, "abort_request"):
+                await engine.abort_request(response_id)
+            yield _sse(
+                "error",
+                {
+                    "type": "error",
+                    "error": {
+                        "type": "server_error",
+                        "message": f"Generation failed: {type(e).__name__}: {e}",
+                        "code": "internal_error",
+                    },
+                },
+            )
+            return
+
+        display_text = _responses_fast_path_visible_text(output, request)
+        if display_text:
+            yield _sse(
+                "response.output_text.delta",
+                {
+                    "type": "response.output_text.delta",
+                    "item_id": msg_id,
+                    "output_index": 0,
+                    "content_index": 0,
+                    "delta": display_text,
+                },
+            )
+        yield _sse(
+            "response.output_text.done",
+            {
+                "type": "response.output_text.done",
+                "item_id": msg_id,
+                "output_index": 0,
+                "content_index": 0,
+                "text": display_text,
+            },
+        )
+        yield _sse(
+            "response.content_part.done",
+            {
+                "type": "response.content_part.done",
+                "item_id": msg_id,
+                "output_index": 0,
+                "content_index": 0,
+                "part": {
+                    "type": "output_text",
+                    "text": display_text,
+                    "annotations": [],
+                },
+            },
+        )
+        output_item = {
+            "id": msg_id,
+            "type": "message",
+            "status": "completed",
+            "role": "assistant",
+            "content": [
+                {"type": "output_text", "text": display_text, "annotations": []}
+            ],
+        }
+        yield _sse(
+            "response.output_item.done",
+            {
+                "type": "response.output_item.done",
+                "output_index": 0,
+                "item": output_item,
+            },
+        )
+        _resp_finish = getattr(output, "finish_reason", None)
+        _resp_status = "incomplete" if _resp_finish == "length" else "completed"
+        _resp_extra: dict = {}
+        if _resp_status == "incomplete":
+            _resp_extra["incomplete_details"] = {"reason": "max_output_tokens"}
+        all_output_items = [output_item] if display_text else []
+        usage_obj = _get_responses_usage(output).model_dump(exclude_none=True)
+        completed_response = {
+            "id": response_id,
+            "object": "response",
+            "created_at": created_at,
+            "status": _resp_status,
+            "model": request.model,
+            "output_text": display_text,
+            "output": all_output_items,
+            **_resp_extra,
+            "usage": usage_obj,
+        }
+        _responses_store_history(
+            response_id,
+            messages + _responses_output_to_assistant_messages(all_output_items),
+            reasoning_only=False,
+        )
+        yield _sse(
+            "response.completed",
+            {
+                "type": "response.completed",
+                "response": completed_response,
+            },
+        )
+        return
 
     try:
         async for output in _stream_with_keepalive(

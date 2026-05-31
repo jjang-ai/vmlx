@@ -4555,6 +4555,70 @@ class TestV4bToolChoiceRequired:
         )
 
 
+class TestResponsesStreamingExactToolResult:
+    """Responses streaming must not drift from non-stream exact tool finalization."""
+
+    def test_responses_streaming_exact_reply_uses_nonstream_finalizer(self):
+        import inspect
+        from vmlx_engine.server import stream_responses_api
+        source = inspect.getsource(stream_responses_api)
+        assert "_responses_exact_reply_target(request)" in source
+        assert "_responses_messages_have_tool_result_after_latest_user(messages)" in source
+        assert "_await_chat_with_disconnect_abort(" in source
+        assert "chat_kwargs=kwargs" in source
+        assert "response.output_text.delta" in source
+
+    def test_exact_reply_finalizer_only_triggers_after_current_turn_tool_result(self):
+        from vmlx_engine.server import (
+            _responses_messages_have_tool_result_after_latest_user,
+        )
+
+        assert _responses_messages_have_tool_result_after_latest_user(
+            [
+                {"role": "user", "content": "use tool then reply exactly: A"},
+                {"role": "assistant", "tool_calls": [{"id": "call_1"}]},
+                {"role": "tool", "tool_call_id": "call_1", "content": "A"},
+            ]
+        )
+        assert not _responses_messages_have_tool_result_after_latest_user(
+            [
+                {"role": "user", "content": "use tool then reply exactly: A"},
+                {"role": "assistant", "tool_calls": [{"id": "call_1"}]},
+                {"role": "tool", "tool_call_id": "call_1", "content": "A"},
+                {"role": "assistant", "content": "A"},
+                {"role": "user", "content": "use tool then reply exactly: B"},
+            ]
+        )
+
+    def test_exact_reply_fast_path_uses_visible_post_think_text(self):
+        from types import SimpleNamespace
+        from vmlx_engine.server import _responses_fast_path_visible_text
+
+        output = SimpleNamespace(
+            raw_text=(
+                'The command succeeded and produced "REAL_UI_LIVE_TOOL_TWO".\n'
+                "</think>\n"
+                "REAL_UI_LIVE_TOOL_TWO"
+            ),
+            text=(
+                'The command succeeded and produced "REAL_UI_LIVE_TOOL_TWO".\n'
+                "</think>\n"
+                "REAL_UI_LIVE_TOOL_TWO"
+            ),
+        )
+        request = SimpleNamespace(
+            enable_thinking=False,
+            input=[
+                {
+                    "role": "user",
+                    "content": "After the tool result, reply exactly: REAL_UI_LIVE_TOOL_TWO",
+                }
+            ],
+        )
+
+        assert _responses_fast_path_visible_text(output, request) == "REAL_UI_LIVE_TOOL_TWO"
+
+
 class TestNonStreamingDisconnectAbort:
     """Non-streaming API requests must abort scheduler work on disconnect."""
 
@@ -4631,6 +4695,43 @@ class TestNonStreamingDisconnectAbort:
             assert output.completion_tokens == 1
             assert engine.kwargs["request_id"] == "chatcmpl_public_id"
             assert engine.kwargs["messages"] == [{"role": "user", "content": "hi"}]
+
+        asyncio.run(run())
+
+    def test_helper_normalizes_duplicate_request_id_from_streaming_kwargs(self):
+        import asyncio
+        from vmlx_engine.server import _await_chat_with_disconnect_abort
+
+        class FakeOutput:
+            completion_tokens = 1
+
+        class FakeEngine:
+            def __init__(self):
+                self.kwargs = None
+
+            async def chat(self, **kwargs):
+                self.kwargs = kwargs
+                return FakeOutput()
+
+        class FakeRequest:
+            async def is_disconnected(self):
+                return False
+
+        async def run():
+            engine = FakeEngine()
+            output = await _await_chat_with_disconnect_abort(
+                engine,
+                messages=[],
+                chat_kwargs={"request_id": "stale_internal_id", "max_tokens": 1},
+                timeout=30,
+                fastapi_request=FakeRequest(),
+                request_id="resp_public_id",
+                endpoint="test",
+                poll_interval=0.001,
+            )
+            assert output.completion_tokens == 1
+            assert engine.kwargs["request_id"] == "resp_public_id"
+            assert engine.kwargs["max_tokens"] == 1
 
         asyncio.run(run())
 
