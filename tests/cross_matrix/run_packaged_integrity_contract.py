@@ -363,13 +363,20 @@ def _package_signing_preflight(root: Path) -> dict[str, Any]:
             "verify_tail": verify.stdout.splitlines()[-40:],
         }
     )
-    if developer_id_signed and hardened_runtime_enabled and verify.returncode == 0:
-        result["status"] = "pass"
-        result["signing_blocker_reason"] = None
-    elif simple_sign.returncode != 0 and any(
+    keychain_user_interaction_blocked = any(
         "User interaction is not allowed" in line
         for status in keychain_statuses
         for line in status.get("tail", [])
+    )
+    codesign_user_interaction_blocked = any(
+        "User interaction is not allowed" in line
+        for line in result["simple_developer_id_sign_tail"]
+    )
+    if developer_id_signed and hardened_runtime_enabled and verify.returncode == 0:
+        result["status"] = "pass"
+        result["signing_blocker_reason"] = None
+    elif simple_sign.returncode != 0 and (
+        keychain_user_interaction_blocked or codesign_user_interaction_blocked
     ):
         result["signing_blocker_reason"] = (
             "developer_id_keychain_user_interaction_not_allowed"

@@ -508,6 +508,49 @@ def test_package_signing_preflight_records_keychain_private_key_failure(
     ]
 
 
+def test_package_signing_preflight_classifies_codesign_user_interaction_failure(
+    monkeypatch, tmp_path
+):
+    app = tmp_path / runner.PACKAGED_APP
+    app.mkdir(parents=True)
+
+    def fake_run(cmd, **_kwargs):
+        command = " ".join(str(part) for part in cmd)
+        if cmd[:3] == ["codesign", "-dv", "--verbose=4"]:
+            return runner.subprocess.CompletedProcess(
+                cmd,
+                0,
+                "Signature=adhoc\nTeamIdentifier=not set\n",
+            )
+        if cmd[:2] == ["codesign", "--verify"]:
+            return runner.subprocess.CompletedProcess(cmd, 1, "adhoc verify failed\n")
+        if cmd[:3] == ["security", "find-identity", "-v"]:
+            return runner.subprocess.CompletedProcess(
+                cmd,
+                0,
+                '  1) D4DBBCB52F666D03F0A5154BFFEA2227BEE8FC7C "Developer ID Application: ShieldStack LLC (55KGF2S5AY)"\n',
+            )
+        if cmd[:2] == ["security", "show-keychain-info"]:
+            return runner.subprocess.CompletedProcess(cmd, 0, "no-timeout\n")
+        if "codesign --force --sign" in command:
+            return runner.subprocess.CompletedProcess(
+                cmd,
+                1,
+                "codesign-probe: User interaction is not allowed.\n",
+            )
+        raise AssertionError(command)
+
+    monkeypatch.setattr(runner.subprocess, "run", fake_run)
+
+    preflight = runner._package_signing_preflight(tmp_path)
+
+    assert (
+        preflight["signing_blocker_reason"]
+        == "developer_id_keychain_user_interaction_not_allowed"
+    )
+    assert preflight["manual_remediation_required"] is True
+
+
 def test_package_signing_preflight_rejects_developer_id_without_hardened_runtime(
     monkeypatch, tmp_path
 ):
