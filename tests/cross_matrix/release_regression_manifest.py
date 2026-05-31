@@ -5214,7 +5214,7 @@ def _validate_current_real_ui_live_model_matrix(
                 "responses_delta_streaming",
                 "server_cache_controls",
                 "live_speed_floor",
-            }.issubset(surfaces):
+            }.issubset(surfaces) and _real_ui_extensive_tool_churn_ok(proof):
                 surfaces.add(REAL_UI_INTEGRATED_TOOL_L2_CACHE_SURFACE)
             media = proof.get("media") if isinstance(proof.get("media"), dict) else {}
             if media.get("imageVerified") is True:

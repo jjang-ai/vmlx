@@ -3913,7 +3913,7 @@ def test_release_regression_manifest_real_ui_matrix_requires_every_family_surfac
             "eventCounts": {
                 "complete": 2,
                 "stream": 4,
-                "tool": 3,
+                "tool": 24,
                 "reasoningDone": 1,
             },
             "streamTrace": [
@@ -3930,7 +3930,7 @@ def test_release_regression_manifest_real_ui_matrix_requires_every_family_surfac
                     "lastFullContent": "second ok streamed",
                 },
             ],
-            "persistedToolCount": 6,
+            "persistedToolCount": 24,
             "persistedToolsByMessage": [
                 [
                     {"phase": "calling", "toolName": "run_command"},
@@ -5765,6 +5765,26 @@ def test_release_regression_manifest_real_ui_integrated_tool_l2_requires_same_ar
 
     lfm25 = matrix["covered_families"]["lfm25"]
     assert "responses_delta_streaming" in lfm25["covered_surfaces"]
+    assert "tool_l2_cache_integrated" not in lfm25["covered_surfaces"]
+    assert "tool_l2_cache_integrated" in lfm25["missing_surfaces"]
+
+
+def test_release_regression_manifest_real_ui_integrated_tool_l2_requires_same_artifact_extensive_tool_churn():
+    minimal_tool_churn = _lfm_integrated_matrix_proof()
+    minimal_tool_churn["eventCounts"]["tool"] = 3
+    minimal_tool_churn["persistedToolCount"] = 3
+
+    matrix = _validate_current_real_ui_live_model_matrix(
+        {
+            "status": "pass",
+            "proofs": {
+                "lfm25_moe_a1b_responses_delta": minimal_tool_churn,
+            },
+        }
+    )
+
+    lfm25 = matrix["covered_families"]["lfm25"]
+    assert "long_tool_loop" in lfm25["covered_surfaces"]
     assert "tool_l2_cache_integrated" not in lfm25["covered_surfaces"]
     assert "tool_l2_cache_integrated" in lfm25["missing_surfaces"]
 
