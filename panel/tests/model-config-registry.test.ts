@@ -752,7 +752,7 @@ describe('detectModelConfigFromDir JANG multimodal detection', () => {
     expect(detectModelConfigFromDir(dir).isMultimodal).toBe(true)
   })
 
-  it('routes Step3.7 JANG text bridge as text-only until a VLM runtime exists', () => {
+  it('routes Step3.7 JANG bridge through the source VLM runtime when available', () => {
     const dir = makeModelDir(
       {
         model_type: 'step3p7',
@@ -778,7 +778,16 @@ describe('detectModelConfigFromDir JANG multimodal detection', () => {
     expect(detected.family).toBe('step-3.7-flash')
     expect(detected.toolParser).toBe('step3p5')
     expect(detected.reasoningParser).toBe('qwen3')
-    expect(detected.isMultimodal).toBe(false)
+    expect(detected.cacheSubtype).toBe('step3p7_full_sliding_kv')
+    expect(detected.usePagedCache).toBe(true)
+    expect(detected.isMultimodal).toBe(true)
+    expect(detected.forceTextOnly).toBeUndefined()
+    expect(detected.architectureHints).toMatchObject({
+      runtimeScope: 'source_vlm_needs_live_proof',
+      vlRuntimeAvailable: true,
+      textBridgeRuntimeScope: 'text_bridge_ignored_for_source_vlm',
+      slidingWindow: 512,
+    })
   })
 
   it('falls back to config.json vision_config when jang_config has no vision stamp', () => {
@@ -1127,6 +1136,7 @@ describe('detectModelConfigFromDir backend parity coverage', () => {
     modelType: string
     family: string
     cacheType: string
+    cacheSubtype?: string
     toolParser?: string
     reasoningParser?: string
     isMultimodal?: boolean
@@ -1146,7 +1156,7 @@ describe('detectModelConfigFromDir backend parity coverage', () => {
     { modelType: 'mimo_v2', family: 'mimo_v2', cacheType: 'kv', toolParser: 'xml_function', reasoningParser: 'think_xml', isMultimodal: true },
     { modelType: 'nemotron_h_v2', family: 'nemotron-h', cacheType: 'hybrid', toolParser: 'nemotron', reasoningParser: 'deepseek_r1', cacheSubtype: 'nemotron_h_ssm_attention' },
     { modelType: 'rwkv7', family: 'rwkv', cacheType: 'mamba' },
-    { modelType: 'step3p7', family: 'step-3.7-flash', cacheType: 'kv', toolParser: 'step3p5', reasoningParser: 'qwen3', isMultimodal: true },
+    { modelType: 'step3p7', family: 'step-3.7-flash', cacheType: 'kv', cacheSubtype: 'step3p7_full_sliding_kv', toolParser: 'step3p5', reasoningParser: 'qwen3', isMultimodal: true },
   ]
 
   for (const row of cases) {

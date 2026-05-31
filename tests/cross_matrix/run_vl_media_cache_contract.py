@@ -109,7 +109,7 @@ COMMANDS: dict[str, tuple[Path, list[str]]] = {
             "tests/model-config-registry.test.ts",
             "--reporter=verbose",
             "--testNamePattern",
-            "ZAYA1-VL|Qwen.*VLM|Qwen.*video|indexed MTP|mxfp4 Qwen|mxfp8 Qwen|Nemotron-H",
+            "ZAYA1-VL|Qwen.*VLM|Qwen.*video|indexed MTP|mxfp4 Qwen|mxfp8 Qwen|Nemotron-H|Step3\\.7",
         ],
     ),
 }
@@ -159,6 +159,7 @@ REQUIRED_PANEL_VL_MEDIA_TEST_MARKERS = (
     "keeps mxfp8 Qwen hybrid VLM multimodal",
     "marks non-JANG Qwen 3.6 MoE bundles with vision/video metadata as multimodal",
     "does not route Nemotron-H text extracts through MLLM from stale sidecars",
+    "routes Step3.7 JANG bridge through the source VLM runtime when available",
     "multimodal/VLM detection suppresses --enable-jit because mlx-vlm streaming is not compile-safe",
     "continuous batching off is a real master switch for VLM cache flags",
     "VLM with all caching features works together",

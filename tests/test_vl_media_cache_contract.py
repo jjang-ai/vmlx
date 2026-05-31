@@ -55,6 +55,7 @@ def test_vl_media_cache_contract_pins_named_panel_rows():
     assert "multimodal/VLM detection suppresses --enable-jit because mlx-vlm streaming is not compile-safe" in required
     assert "VLM with all caching features works together" in required
     assert "VLM suppresses external speculative decoding at launch" in required
+    assert "routes Step3.7 JANG bridge through the source VLM runtime when available" in required
     assert "VLM suppresses external speculative decoding at launch" in required
 
     for name in (

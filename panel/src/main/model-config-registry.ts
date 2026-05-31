@@ -214,7 +214,7 @@ registerFamily('hy3', { cacheType: 'kv', toolParser: 'hunyuan', reasoningParser:
 
 // StepFun
 registerFamily('step-vl', { cacheType: 'kv', toolParser: 'step3p5', reasoningParser: 'qwen3', enableAutoToolChoice: true, isMultimodal: true, description: 'StepFun Step-1V Vision-Language', priority: 3 })
-registerFamily('step-3.7-flash', { cacheType: 'kv', toolParser: 'step3p5', reasoningParser: 'qwen3', enableAutoToolChoice: true, isMultimodal: true, description: 'StepFun Step-3.7-Flash JANG/VL', priority: 4 })
+registerFamily('step-3.7-flash', { cacheType: 'kv', cacheSubtype: 'step3p7_full_sliding_kv', architectureHints: { textModelType: 'step3p5', attentionArch: 'full_and_sliding_kv', slidingWindow: 512 }, toolParser: 'step3p5', reasoningParser: 'qwen3', enableAutoToolChoice: true, isMultimodal: true, usePagedCache: true, description: 'StepFun Step-3.7-Flash JANG/VL', priority: 4 })
 registerFamily('step-3.5-flash', { cacheType: 'kv', toolParser: 'step3p5', reasoningParser: 'qwen3', enableAutoToolChoice: true, description: 'StepFun Step-3.5-Flash (MoE)', priority: 5 })
 registerFamily('step', { cacheType: 'kv', toolParser: 'step3p5', reasoningParser: 'qwen3', enableAutoToolChoice: true, description: 'StepFun Step models', priority: 30 })
 
@@ -905,10 +905,6 @@ function resolveJangMultimodal(jangCfg: any, parsedConfig: any): boolean {
     return true
   }
 
-  if (isStep37TextBridge(parsedConfig)) {
-    return false
-  }
-
   if (isAffineJangQwenHybridVlm(parsedConfig, jangCfg)) {
     return false
   }
@@ -1004,11 +1000,15 @@ export function detectModelConfigFromDir(modelPath: string): DetectedConfig {
                 detected.forceTextOnly = true
               }
               if (isStep37TextBridge(parsed)) {
-                detected.forceTextOnly = true
+                delete detected.forceTextOnly
+                detected.cacheSubtype = 'step3p7_full_sliding_kv'
+                detected.usePagedCache = true
                 detected.architectureHints = {
                   ...(detected.architectureHints ?? {}),
-                  runtimeScope: 'text_bridge_no_vlm',
-                  vlRuntimeAvailable: false,
+                  runtimeScope: 'source_vlm_needs_live_proof',
+                  vlRuntimeAvailable: true,
+                  textBridgeRuntimeScope: 'text_bridge_ignored_for_source_vlm',
+                  slidingWindow: 512,
                 }
               }
               detected.isMultimodal = resolveJangMultimodal(jangCfg, parsed)
