@@ -9301,6 +9301,36 @@ class TestTurboQuantKVTelemetry:
         assert status["paged"] is True
         assert status["block_disk_l2"] is True
 
+    def test_native_cache_status_reports_step37_full_sliding_kv_from_registry_subtype(self):
+        from types import SimpleNamespace
+        from vmlx_engine.server import _native_cache_status
+
+        cfg = SimpleNamespace(cache_subtype="step3p7_full_sliding_kv")
+        scheduler = SimpleNamespace(
+            _model_type_for_runtime="step3p7",
+            _tq_active=False,
+            _kv_cache_bits=4,
+            _kv_cache_group_size=64,
+            block_aware_cache=object(),
+            paged_cache_manager=SimpleNamespace(_disk_store=object()),
+        )
+
+        status = _native_cache_status(
+            scheduler,
+            family="step-3.7-flash",
+            cfg=cfg,
+        )
+
+        assert status["family"] == "step-3.7-flash"
+        assert status["schema"] == "mixed_swa_kv_v1"
+        assert status["cache_type"] == "mixed_swa_kv"
+        assert status["storage_quantization"]["applies_to"] == (
+            "full_and_sliding_attention_kv"
+        )
+        assert status["storage_quantization"]["metadata_policy"] == (
+            "preserve_rotating_window_metadata"
+        )
+
     def test_native_cache_status_reports_plain_attention_kv(self):
         from types import SimpleNamespace
         from vmlx_engine.server import _native_cache_status

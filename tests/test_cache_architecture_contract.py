@@ -173,6 +173,10 @@ def test_cache_architecture_contract_publishes_structured_family_matrix():
     step37 = gate.REQUIRED_CACHE_FAMILY_MATRIX["step37_full_sliding_kv_registry"]
     assert "named_family_registry_cache_parser_contracts" in step37["checks"]
     assert "test_step37_flash_jang_config" in step37["markers"]
+    assert (
+        "test_native_cache_status_reports_step37_full_sliding_kv_from_registry_subtype"
+        in step37["markers"]
+    )
 
     lfm25 = gate.REQUIRED_CACHE_FAMILY_MATRIX["lfm25_moe_hybrid_registry"]
     assert "named_family_registry_cache_parser_contracts" in lfm25["checks"]

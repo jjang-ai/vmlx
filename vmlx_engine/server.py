@@ -5673,6 +5673,19 @@ def _turboquant_kv_cache_status(engine=None, scheduler=None) -> dict:
     return {"enabled": False}
 
 
+def _current_model_config():
+    """Return the loaded model registry config for status endpoints."""
+    model_key = _model_path or _model_name or ""
+    if not model_key:
+        return None
+    try:
+        from .model_config_registry import get_model_config_registry
+
+        return get_model_config_registry().lookup(model_key)
+    except Exception:
+        return None
+
+
 def _native_cache_status(scheduler=None, *, family: str | None = None, cfg=None) -> dict:
     """Report architecture-native cache contracts separately from generic TQ-KV."""
     if scheduler is None:
@@ -5868,7 +5881,7 @@ def _native_cache_status(scheduler=None, *, family: str | None = None, cfg=None)
 
     if (
         getattr(scheduler, "_mixed_attention_cache_model", False)
-        or cache_subtype == "mixed_swa_kv"
+        or cache_subtype in {"mixed_swa_kv", "step3p7_full_sliding_kv"}
     ):
         tq_enabled = bool(getattr(scheduler, "_tq_active", False))
         try:
@@ -5883,6 +5896,7 @@ def _native_cache_status(scheduler=None, *, family: str | None = None, cfg=None)
             "family": family_name or scheduler_family or "mixed_attention",
             "schema": "mixed_swa_kv_v1",
             "cache_type": "mixed_swa_kv",
+            "cache_subtype": cache_subtype or "mixed_swa_kv",
             "components": [
                 "full_attention_kv",
                 "sliding_window_kv",
@@ -6321,7 +6335,12 @@ async def health():
         result["turboquant_kv_cache"] = _turboquant_kv_cache_status(
             _engine, scheduler
         )
-        native_cache = _native_cache_status(scheduler)
+        _mc = _current_model_config()
+        native_cache = _native_cache_status(
+            scheduler,
+            family=getattr(_mc, "family_name", None),
+            cfg=_mc,
+        )
         if native_cache:
             result["native_cache"] = native_cache
 
@@ -6681,7 +6700,12 @@ async def cache_stats():
         result["turboquant_kv_cache"] = _turboquant_kv_cache_status(
             _engine, scheduler
         )
-        native_cache = _native_cache_status(scheduler)
+        _mc = _current_model_config()
+        native_cache = _native_cache_status(
+            scheduler,
+            family=getattr(_mc, "family_name", None),
+            cfg=_mc,
+        )
         if native_cache:
             result["native_cache"] = native_cache
 
