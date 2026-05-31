@@ -565,6 +565,9 @@ def test_packaged_bundled_hash_gate_covers_critical_jang_tools_files():
         "kimi_prune/generate_vl.py",
         "kimi_prune/runtime_patch.py",
         "mimo_v2/mlx_model.py",
+        "step37/__init__.py",
+        "step37/nvfp4_codec.py",
+        "step37/step3p7_mlx.py",
         "topk_override.py",
         "turboquant/fused_gate_up_kernel.py",
         "turboquant/gather_tq_kernel.py",
@@ -700,6 +703,9 @@ def test_verify_bundled_python_hash_gate_covers_release_runtime_files():
         "hy3/runtime.py",
         "kimi_prune/generate_vl.py",
         "kimi_prune/runtime_patch.py",
+        "step37/__init__.py",
+        "step37/nvfp4_codec.py",
+        "step37/step3p7_mlx.py",
         "topk_override.py",
         "turboquant/fused_gate_up_kernel.py",
         "turboquant/gather_tq_kernel.py",
@@ -727,6 +733,13 @@ def test_verify_bundled_python_import_gate_covers_hy3_jangtq_runtime_modules():
     ):
         assert f'("{mod}",' in verifier
     assert '("mlx_lm.models.mimo_v2",' in verifier
+
+
+def test_verify_bundled_python_import_gate_covers_step37_source_runtime():
+    verifier = Path("panel/scripts/verify-bundled-python.sh").read_text()
+
+    assert '("jang_tools.step37.step3p7_mlx", "jang_tools.step37.step3p7_mlx"' in verifier
+    assert "Step3p7 source VLM runtime missing" in verifier
 
 
 def test_nemotron_omni_media_dependency_timm_is_packaged_and_verified():

@@ -5376,6 +5376,9 @@ class TestStartupCompatibilityGuards:
             "kimi_prune/generate_vl.py",
             "kimi_prune/runtime_patch.py",
             "mimo_v2/mlx_model.py",
+            "step37/__init__.py",
+            "step37/nvfp4_codec.py",
+            "step37/step3p7_mlx.py",
             "topk_override.py",
             "turboquant/fused_gate_up_kernel.py",
             "turboquant/gather_tq_kernel.py",
@@ -5402,6 +5405,12 @@ class TestStartupCompatibilityGuards:
         assert "Hy3 model-family mlx-lm registration missing" in verify_script
         assert "Ling/Bailing hybrid mlx-lm runtime missing" in verify_script
         assert "MiMo-V2.5 mlx-lm registration missing" in verify_script
+
+    def test_bundled_python_import_gate_covers_step37_source_runtime(self):
+        verify_script = Path("./panel/scripts/verify-bundled-python.sh").read_text()
+
+        assert '("jang_tools.step37.step3p7_mlx", "jang_tools.step37.step3p7_mlx"' in verify_script
+        assert "Step3p7 source VLM runtime missing" in verify_script
 
     def test_jang_loader_registers_hy3_and_ling_before_mlx_lm_resolution(
         self, monkeypatch

@@ -167,6 +167,9 @@ HASH_GATED_JANG_TOOLS_FILES=(
   "kimi_prune/generate_vl.py"
   "kimi_prune/runtime_patch.py"
   "mimo_v2/mlx_model.py"
+  "step37/__init__.py"
+  "step37/nvfp4_codec.py"
+  "step37/step3p7_mlx.py"
   "topk_override.py"
   "turboquant/fused_gate_up_kernel.py"
   "turboquant/gather_tq_kernel.py"
@@ -239,6 +242,7 @@ REQUIRED = [
     ("jang_tools.hy3.runtime", "jang_tools.hy3.runtime", "Hy3 runtime loader missing from bundled jang-tools"),
     ("jang_tools.mimo_v2.mlx_register", "jang_tools.mimo_v2.mlx_register", "MiMo-V2.5 runtime registration missing from bundled jang-tools"),
     ("mlx_lm.models.mimo_v2", "mlx_lm.models.mimo_v2", "MiMo-V2.5 mlx-lm registration missing after importing jang_tools.mimo_v2.mlx_register"),
+    ("jang_tools.step37.step3p7_mlx", "jang_tools.step37.step3p7_mlx", "Step3p7 source VLM runtime missing from bundled jang-tools"),
     ("jang_tools.load_jangtq", "jang_tools.load_jangtq", "JANGTQ fast-path loader missing from bundled jang-tools"),
     ("jang_tools.topk_override", "jang_tools.topk_override", "JANGTQ top-k runtime override helper missing from bundled jang-tools"),
     ("jang_tools.turboquant.tq_kernel", "jang_tools.turboquant.tq_kernel", "TQ Metal kernel runtime missing from bundled jang-tools"),
