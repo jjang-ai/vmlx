@@ -21,17 +21,16 @@ from typing import Any
 
 
 DEFAULT_OUT = Path(
-    "build/current-regression-suite-20260531-step37-reasoning-ledger.json"
+    "build/current-regression-suite-20260531-nemotron-exact-finalizer-ledger.json"
 )
 
 EXPECTED_OPEN_REQUIREMENTS = [
-    "Real Electron UI unblocked non-MiMo live model matrix is proven",
     "Real Electron UI cross-family live model matrix is release-cleared",
     "DSV4 long-output/code/file-generation quality is release-cleared",
 ]
 
 CURRENT_OBJECTIVE_DIGEST_ARTIFACT = (
-    "build/current-objective-proof-audit-20260531-step37-reasoning-ledger.json"
+    "build/current-objective-proof-audit-20260531-nemotron-exact-finalizer-ledger.json"
 )
 
 CURRENT_SUITE_SOURCE_HASH_FILES = (
@@ -569,7 +568,7 @@ CURRENT_SUITE_COMMANDS: dict[str, list[str]] = {
         "--require-current-proof-sweep",
         "--require-release-ready",
         "--out",
-        "build/current-release-regression-manifest-20260531-step37-reasoning-ledger.json",
+        "build/current-release-regression-manifest-20260531-nemotron-exact-finalizer-ledger.json",
     ],
 }
 

@@ -329,7 +329,7 @@ CURRENT_POST_BUDGET_EDGE_ARTIFACTS = {
 }
 
 CURRENT_REGRESSION_SUITE_ARTIFACT = (
-    "build/current-regression-suite-20260531-step37-reasoning-ledger.json"
+    "build/current-regression-suite-20260531-nemotron-exact-finalizer-ledger.json"
 )
 CURRENT_ISSUE175_179_RELEASE_BOUNDARY_AUDIT_ARTIFACT = (
     "build/current-issue175-179-release-boundary-audit-20260531-post-install-sync.json"
@@ -535,8 +535,8 @@ CURRENT_REAL_UI_LIVE_MODEL_PROOF_ROWS = {
         "family": "nemotron_omni",
     },
     "nemotron_omni_nano_responses_tools_filesemantic": {
-        "proof": "docs/internal/agent-notes/current-real-ui-live-model-nemotron-omni-nano-responses-stricttools-cachecontrols-20260530-proof.json",
-        "chat_screenshot": "docs/internal/agent-notes/current-real-ui-live-model-nemotron-omni-nano-responses-stricttools-cachecontrols-20260530-chat.png",
+        "proof": "docs/internal/agent-notes/current-real-ui-live-model-nemotron-omni-nano-responses-stricttools-cachecontrols-exact-finalizer-20260531-proof.json",
+        "chat_screenshot": "docs/internal/agent-notes/current-real-ui-live-model-nemotron-omni-nano-responses-stricttools-cachecontrols-exact-finalizer-20260531-chat.png",
         "model_path": "/Users/example/models/dealign.ai/Nemotron-Omni-Nano-JANGTQ-CRACK",
         "model_name": "Nemotron-Omni-Nano-JANGTQ-CRACK",
         "family": "nemotron_omni",
@@ -1544,7 +1544,7 @@ _ROWS: list[dict[str, Any]] = [
             ".venv/bin/python tests/cross_matrix/run_packaged_integrity_contract.py --jang-tools-source /Users/example/jang/.worktrees/vmlx-release-clean-b5f66a7/jang-tools --out build/current-packaged-integrity-contract-20260522-recheck-bundled-release-gate.json",
         ],
         "artifacts": [
-            "build/current-objective-proof-audit-20260531-step37-reasoning-ledger.json",
+            "build/current-objective-proof-audit-20260531-nemotron-exact-finalizer-ledger.json",
             "build/current-packaged-integrity-contract-20260531-post-install-sync.json",
             "build/current-packaged-integrity-contract-20260528-prepackage-gate.json",
             "build/current-packaged-integrity-contract-20260528-release-ready-dmg-gate.json",
@@ -1706,7 +1706,7 @@ _ROWS: list[dict[str, Any]] = [
             "The clearance boundary is based on live artifacts, not a hidden sampler/repetition/default override",
         ],
         "commands": [
-            ".venv/bin/python tests/cross_matrix/summarize_objective_proof.py --out build/current-objective-proof-audit-20260531-step37-reasoning-ledger.json",
+            ".venv/bin/python tests/cross_matrix/summarize_objective_proof.py --out build/current-objective-proof-audit-20260531-nemotron-exact-finalizer-ledger.json",
             "uv run --extra dev python tests/cross_matrix/run_production_family_audit.py --rows ling_flash_tq --live --out build/current-production-family-audit-ling-flash-tq-live-installed149-20260524-codex.json",
         ],
         "artifacts": [
@@ -1724,7 +1724,7 @@ _ROWS: list[dict[str, Any]] = [
             "build/current-ling-jangtq-continuous-control-bundled-after-mpp-fix-20260524.json",
             "build/current-production-family-live-ling-bundled-after-mpp-fix-20260524.json",
             "build/current-production-family-live-ling-bundled-after-topk-policy-20260524.json",
-            "build/current-objective-proof-audit-20260531-step37-reasoning-ledger.json",
+            "build/current-objective-proof-audit-20260531-nemotron-exact-finalizer-ledger.json",
         ],
     },
     {
@@ -1946,7 +1946,7 @@ _ROWS: list[dict[str, Any]] = [
             "VMLINUX_REAL_UI_MODEL_PATH=/Users/example/.mlxstudio/models/JANGQ-AI/MiMo-V2.5-JANG_2L VMLINUX_REAL_UI_PROOF_BASENAME=current-real-ui-live-model-mimo-v2-jang2l-20260527 VMLINUX_REAL_UI_IS_MLLM=1 VMLINUX_REAL_UI_MAX_TOKENS=96 node panel/scripts/live-real-ui-model-proof.mjs",
             "VMLINUX_REAL_UI_MODEL_PATH=/Users/example/models/dealign.ai/Nemotron-Omni-Nano-JANGTQ-CRACK VMLINUX_REAL_UI_PROOF_BASENAME=current-real-ui-live-model-nemotron-omni-nano-jangtq-20260527 VMLINUX_REAL_UI_MAX_TOKENS=96 node panel/scripts/live-real-ui-model-proof.mjs",
             "VMLINUX_REAL_UI_MODEL_PATH=/Users/example/models/dealign.ai/Nemotron-Omni-Nano-JANGTQ-CRACK VMLINUX_REAL_UI_SERVED_MODEL=Nemotron-Omni-Nano-JANGTQ-CRACK VMLINUX_REAL_UI_PROOF_BASENAME=current-real-ui-live-model-nemotron-omni-nano-responses-tools-reasoning-cachecontrols-localonly-20260527 VMLINUX_REAL_UI_WIRE_API=responses VMLINUX_REAL_UI_BUILTIN_TOOLS=1 VMLINUX_REAL_UI_ENABLE_THINKING=1 VMLINUX_REAL_UI_MAX_TOKENS=512 VMLINUX_REAL_UI_MAX_TOOL_ITERATIONS=8 VMLINUX_REAL_UI_CHECK_SERVER_CACHE_CONTROLS=1 node panel/scripts/live-real-ui-model-proof.mjs",
-            "VMLINUX_REAL_UI_MODEL_PATH=/Users/example/models/dealign.ai/Nemotron-Omni-Nano-JANGTQ-CRACK VMLINUX_REAL_UI_SERVED_MODEL=Nemotron-Omni-Nano-JANGTQ-CRACK VMLINUX_REAL_UI_PROOF_BASENAME=current-real-ui-live-model-nemotron-omni-nano-responses-stricttools-cachecontrols-20260530 VMLINUX_REAL_UI_WIRE_API=responses VMLINUX_REAL_UI_BUILTIN_TOOLS=1 VMLINUX_REAL_UI_ENABLE_THINKING=0 VMLINUX_REAL_UI_MAX_TOKENS=512 VMLINUX_REAL_UI_MAX_TOOL_ITERATIONS=8 VMLINUX_REAL_UI_CHECK_SERVER_CACHE_CONTROLS=1 node panel/scripts/live-real-ui-model-proof.mjs",
+            "VMLINUX_REAL_UI_MODEL_PATH=/Users/example/models/dealign.ai/Nemotron-Omni-Nano-JANGTQ-CRACK VMLINUX_REAL_UI_SERVED_MODEL=Nemotron-Omni-Nano-JANGTQ-CRACK VMLINUX_REAL_UI_PROOF_BASENAME=current-real-ui-live-model-nemotron-omni-nano-responses-stricttools-cachecontrols-exact-finalizer-20260531 VMLINUX_REAL_UI_WIRE_API=responses VMLINUX_REAL_UI_BUILTIN_TOOLS=1 VMLINUX_REAL_UI_ENABLE_THINKING=0 VMLINUX_REAL_UI_MAX_TOKENS=512 VMLINUX_REAL_UI_MAX_TOOL_ITERATIONS=8 VMLINUX_REAL_UI_CHECK_SERVER_CACHE_CONTROLS=1 node panel/scripts/live-real-ui-model-proof.mjs",
             "VMLINUX_REAL_UI_MODEL_PATH=/Users/example/models/JANGQ/Hy3-preview-JANGTQ2 VMLINUX_REAL_UI_PROOF_BASENAME=current-real-ui-live-model-hy3-jangtq2-20260526 node panel/scripts/live-real-ui-model-proof.mjs",
             "VMLINUX_REAL_UI_MODEL_PATH=/Users/example/models/JANGQ/Hy3-preview-JANGTQ2 VMLINUX_REAL_UI_SERVED_MODEL=Hy3-preview-JANGTQ2 VMLINUX_REAL_UI_WIRE_API=responses VMLINUX_REAL_UI_ENABLE_THINKING=1 VMLINUX_REAL_UI_MAX_TOKENS=192 VMLINUX_REAL_UI_PROOF_BASENAME=current-real-ui-live-model-hy3-jangtq2-responses-reasoning-20260527 node panel/scripts/live-real-ui-model-proof.mjs",
             "VMLINUX_REAL_UI_MODEL_PATH=/Users/example/models/JANGQ/Hy3-preview-JANGTQ2 VMLINUX_REAL_UI_SERVED_MODEL=Hy3-preview-JANGTQ2 VMLINUX_REAL_UI_WIRE_API=responses VMLINUX_REAL_UI_BUILTIN_TOOLS=1 VMLINUX_REAL_UI_ENABLE_THINKING=0 VMLINUX_REAL_UI_MAX_TOKENS=384 VMLINUX_REAL_UI_MAX_TOOL_ITERATIONS=8 VMLINUX_REAL_UI_PROOF_BASENAME=current-real-ui-live-model-hy3-jangtq2-responses-tools-thinkingoff-toolforced-20260527 node panel/scripts/live-real-ui-model-proof.mjs",
@@ -2005,8 +2005,8 @@ _ROWS: list[dict[str, Any]] = [
             "docs/internal/agent-notes/current-real-ui-live-model-nemotron-omni-nano-jangtq-20260527-chat.png",
             "docs/internal/agent-notes/current-real-ui-live-model-nemotron-omni-nano-responses-tools-reasoning-cachecontrols-localonly-20260527-proof.json",
             "docs/internal/agent-notes/current-real-ui-live-model-nemotron-omni-nano-responses-tools-reasoning-cachecontrols-localonly-20260527-chat.png",
-            "docs/internal/agent-notes/current-real-ui-live-model-nemotron-omni-nano-responses-stricttools-cachecontrols-20260530-proof.json",
-            "docs/internal/agent-notes/current-real-ui-live-model-nemotron-omni-nano-responses-stricttools-cachecontrols-20260530-chat.png",
+            "docs/internal/agent-notes/current-real-ui-live-model-nemotron-omni-nano-responses-stricttools-cachecontrols-exact-finalizer-20260531-proof.json",
+            "docs/internal/agent-notes/current-real-ui-live-model-nemotron-omni-nano-responses-stricttools-cachecontrols-exact-finalizer-20260531-chat.png",
             "docs/internal/agent-notes/current-real-ui-live-model-hy3-jangtq2-20260526-proof.json",
             "docs/internal/agent-notes/current-real-ui-live-model-hy3-jangtq2-20260526-chat.png",
             "docs/internal/agent-notes/current-real-ui-live-model-hy3-jangtq2-responses-reasoning-20260527-proof.json",

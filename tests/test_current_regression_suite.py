@@ -754,7 +754,7 @@ def test_current_regression_suite_refreshes_release_regression_manifest(monkeypa
     )
     assert any(
         name == "release_regression_manifest"
-        and "build/current-release-regression-manifest-20260531-step37-reasoning-ledger.json"
+        and "build/current-release-regression-manifest-20260531-nemotron-exact-finalizer-ledger.json"
         in cmd
         for name, cmd in seen_steps
     )
@@ -1132,7 +1132,7 @@ def test_current_regression_suite_refreshes_current_objective_digest_artifact(
 
     assert artifact["status"] == "open"
     assert suite.CURRENT_OBJECTIVE_DIGEST_ARTIFACT == (
-        "build/current-objective-proof-audit-20260531-step37-reasoning-ledger.json"
+        "build/current-objective-proof-audit-20260531-nemotron-exact-finalizer-ledger.json"
     )
     assert any(
         name == "objective_digest"

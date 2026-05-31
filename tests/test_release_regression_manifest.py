@@ -127,7 +127,7 @@ def _write_current_objective_digest(
     open_requirements: list[str] | None = None,
     missing_evidence: list[str] | None = None,
 ) -> None:
-    artifact = root / "build/current-objective-proof-audit-20260531-step37-reasoning-ledger.json"
+    artifact = root / "build/current-objective-proof-audit-20260531-nemotron-exact-finalizer-ledger.json"
     artifact.parent.mkdir(parents=True, exist_ok=True)
     open_rows = (
         EXPECTED_CURRENT_OPEN_REQUIREMENTS
@@ -569,7 +569,7 @@ def _write_passing_real_ui_live_model_proof_artifacts(root: Path) -> None:
                 ],
             }
         if row["proof"].endswith(
-            "nemotron-omni-nano-responses-stricttools-cachecontrols-20260530-proof.json"
+            "nemotron-omni-nano-responses-stricttools-cachecontrols-exact-finalizer-20260531-proof.json"
         ):
             proof["rendererWireApi"] = "responses"
             proof["eventCounts"] = {"complete": 2, "tool": 4}
@@ -2154,7 +2154,7 @@ def test_release_regression_manifest_current_sweep_uses_latest_live_smoke_artifa
     assert "current-regression-suite-20260528-installed-aggregate-stale.json" not in joined
     assert "current-regression-suite-20260528-epipe-aggregate-guard.json" not in joined
     assert "current-regression-suite-20260528-dsv4-continue-refresh.json" not in joined
-    assert "current-regression-suite-20260531-step37-reasoning-ledger.json" in joined
+    assert "current-regression-suite-20260531-nemotron-exact-finalizer-ledger.json" in joined
     assert "current-regression-suite-20260530-bundled-sync-step37-projector-rerun.json" not in joined
     assert "current-regression-suite-20260530-bundled-sync-step37-projector.json" not in joined
     assert "current-regression-suite-20260529-step37-text-bridge.json" not in joined
@@ -9740,7 +9740,7 @@ def test_release_regression_manifest_tracks_packaged_integrity_with_runner_artif
     assert "Version triples" in joined
     assert "bundled Python hash parity" in joined
     assert "objective proof digest" in joined
-    assert "current-objective-proof-audit-20260531-step37-reasoning-ledger.json" in joined
+    assert "current-objective-proof-audit-20260531-nemotron-exact-finalizer-ledger.json" in joined
     assert "objective-gate-enforced" in joined
     assert "verify-bundled" in joined
 
@@ -9806,7 +9806,7 @@ def test_release_regression_manifest_tracks_current_updater_and_i18n_rechecks():
 
     ling = rows["ling-bailing-multilingual-quality-live"]
     ling_joined = " ".join(ling["commands"] + ling["artifacts"] + ling["proves"])
-    assert "current-objective-proof-audit-20260531-step37-reasoning-ledger.json" in ling_joined
+    assert "current-objective-proof-audit-20260531-nemotron-exact-finalizer-ledger.json" in ling_joined
 
 
 def test_release_regression_manifest_tracks_live_only_boundaries():

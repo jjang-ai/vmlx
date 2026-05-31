@@ -685,7 +685,7 @@ def check_objective_proof_digest(
 ) -> None:
     """Refresh and enforce the objective proof digest before release checks pass."""
     digest_path = digest_path or (
-        ROOT / "build/current-objective-proof-audit-20260531-step37-reasoning-ledger.json"
+        ROOT / "build/current-objective-proof-audit-20260531-nemotron-exact-finalizer-ledger.json"
     )
     proc = gate.run(
         "objective proof digest refresh",
