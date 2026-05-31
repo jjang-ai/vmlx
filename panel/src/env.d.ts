@@ -28,6 +28,7 @@ declare global {
           supportsThinking?: boolean;
           thinkInTemplate?: boolean;
           cacheType: string;
+          cacheSubtype?: string;
           usePagedCache: boolean;
           enableAutoToolChoice: boolean;
           isMultimodal: boolean;

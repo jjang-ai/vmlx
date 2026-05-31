@@ -53,6 +53,7 @@ export function CreateSession({ initialModelPath, onBack, onCreated, filterType:
   const [modelFilter, setModelFilter] = useState('')
   const [config, setConfig] = useState<SessionConfig>(DEFAULT_CONFIG)
   const [detectedCacheType, setDetectedCacheType] = useState<string | undefined>()
+  const [detectedCacheSubtype, setDetectedCacheSubtype] = useState<string | undefined>()
   const [detectedFamily, setDetectedFamily] = useState<string | undefined>()
   const [detectedIsTurboQuant, setDetectedIsTurboQuant] = useState<boolean>(false)
   const [detectedIsMultimodal, setDetectedIsMultimodal] = useState<boolean>(false)
@@ -99,6 +100,7 @@ export function CreateSession({ initialModelPath, onBack, onCreated, filterType:
     })
     if (detected?.cacheType) setDetectedCacheType(detected.cacheType)
     else setDetectedCacheType('kv')
+    setDetectedCacheSubtype(detected?.cacheSubtype)
     if (detected?.family && detected.family !== 'unknown') setDetectedFamily(detected.family)
     else setDetectedFamily(undefined)
     setDetectedIsTurboQuant(!!detected?.isTurboQuant)
@@ -202,12 +204,14 @@ export function CreateSession({ initialModelPath, onBack, onCreated, filterType:
             base.usePagedCache = detected.usePagedCache
           }
           setDetectedFamily(detected.family)
+          setDetectedCacheSubtype(detected.cacheSubtype)
           setDetectedIsTurboQuant(!!detected.isTurboQuant)
           setDetectedIsMultimodal(!!detected.isMultimodal)
           setDetectedForceTextOnly(!!detected.forceTextOnly)
           setDetectedNativeMtp(detected.nativeMtp)
         } else {
           setDetectedFamily(undefined)
+          setDetectedCacheSubtype(undefined)
           setDetectedIsTurboQuant(false)
           setDetectedIsMultimodal(false)
           setDetectedForceTextOnly(false)
@@ -216,6 +220,7 @@ export function CreateSession({ initialModelPath, onBack, onCreated, filterType:
         Object.assign(base, applyGenerationDefaultsToConfig(base, gen))
       } catch (_) {
         setDetectedFamily(undefined)
+        setDetectedCacheSubtype(undefined)
         setDetectedIsTurboQuant(false)
         setDetectedIsMultimodal(false)
         setDetectedForceTextOnly(false)
@@ -587,6 +592,7 @@ export function CreateSession({ initialModelPath, onBack, onCreated, filterType:
                               try {
                                 const det = await window.api.models.detectConfig(model.path) as any
                                 if (det?.cacheType) setDetectedCacheType(det.cacheType)
+                                setDetectedCacheSubtype(det?.cacheSubtype)
                                 if (det?.family && det.family !== 'unknown') setDetectedFamily(det.family)
                                 else setDetectedFamily(undefined)
                                 setDetectedIsTurboQuant(!!det?.isTurboQuant)
@@ -823,7 +829,7 @@ export function CreateSession({ initialModelPath, onBack, onCreated, filterType:
             </p>
           </div>
         ) : (
-          <SessionConfigForm config={config} onChange={handleChange} onReset={handleReset} detectedCacheType={detectedCacheType} detectedFamily={detectedFamily} detectedIsTurboQuant={detectedIsTurboQuant} detectedIsMultimodal={detectedIsMultimodal} detectedForceTextOnly={detectedForceTextOnly} detectedMaxContext={detectedMaxContext} detectedNativeMtp={detectedNativeMtp} />
+          <SessionConfigForm config={config} onChange={handleChange} onReset={handleReset} detectedCacheType={detectedCacheType} detectedCacheSubtype={detectedCacheSubtype} detectedFamily={detectedFamily} detectedIsTurboQuant={detectedIsTurboQuant} detectedIsMultimodal={detectedIsMultimodal} detectedForceTextOnly={detectedForceTextOnly} detectedMaxContext={detectedMaxContext} detectedNativeMtp={detectedNativeMtp} />
         )}
 
         {/* Launch */}

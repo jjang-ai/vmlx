@@ -704,7 +704,7 @@ def _write_passing_real_ui_live_model_proof_artifacts(root: Path) -> None:
                 "zaya-text-responses-stricttools-cachecontrols-20260530-proof.json",
                 "zaya-vl-responses-stricttools-cachecontrols-20260530-proof.json",
                 "step37-jang2l-devbuild-tools-image-cache-templateclean-20260531-proof.json",
-                "step37-jang2l-responses-tools-l2storage-integrated-20260531-proof.json",
+                "step37-jang2l-responses-tools-l2storage-pagedlocked-after-subtype-ui-fix-20260531-proof.json",
                 "lfm25-moe-a1b-jang2l-stricttools-chat-20260530-proof.json",
                 "lfm25-moe-a1b-jang2l-stricttools-responses-filesemantic-20260530-proof.json",
                 "lfm25-moe-a1b-jang2l-stricttools-responses-post-epipe-20260531-proof.json",
@@ -757,7 +757,7 @@ def _write_passing_real_ui_live_model_proof_artifacts(root: Path) -> None:
             proof["chatOverrides"] = {"builtinToolsEnabled": True}
             add_extensive_tool_churn(proof)
         if row["proof"].endswith(
-            "step37-jang2l-responses-tools-l2storage-integrated-20260531-proof.json"
+            "step37-jang2l-responses-tools-l2storage-pagedlocked-after-subtype-ui-fix-20260531-proof.json"
         ):
             add_extensive_tool_churn(proof)
         if row["proof"].endswith(
@@ -2476,7 +2476,8 @@ def test_release_regression_manifest_current_sweep_uses_latest_live_smoke_artifa
     assert "current-regression-suite-20260528-installed-aggregate-stale.json" not in joined
     assert "current-regression-suite-20260528-epipe-aggregate-guard.json" not in joined
     assert "current-regression-suite-20260528-dsv4-continue-refresh.json" not in joined
-    assert "current-regression-suite-20260531-step37-mixed-swa-runtime.json" in joined
+    assert "current-regression-suite-20260531-step37-ui-pagedlock.json" in joined
+    assert "current-regression-suite-20260531-step37-mixed-swa-runtime.json" not in joined
     assert "current-regression-suite-20260531-packaged-pointer-bundle-refresh.json" not in joined
     assert "current-regression-suite-20260531-step37-integrated-tool-l2-proof.json" not in joined
     assert "current-regression-suite-20260531-two-turn-responses-delta-gate.json" not in joined
@@ -3324,7 +3325,7 @@ def test_release_regression_manifest_real_ui_live_model_rows_include_ling_bailin
     assert rows["step37_flash_jang2l_tool_l2storage"]["family"] == "step37"
     assert (
         rows["step37_flash_jang2l_tool_l2storage"]["proof"]
-        == "docs/internal/agent-notes/current-real-ui-live-model-step37-jang2l-responses-tools-l2storage-integrated-20260531-proof.json"
+        == "docs/internal/agent-notes/current-real-ui-live-model-step37-jang2l-responses-tools-l2storage-pagedlocked-after-subtype-ui-fix-20260531-proof.json"
     )
     assert rows["lfm25_moe_a1b"]["model_path"] == (
         "/Users/example/.mlxstudio/models/JANGQ-AI/LFM2.5-8B-A1B-JANG_2L"

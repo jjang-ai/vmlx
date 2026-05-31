@@ -365,7 +365,7 @@ CURRENT_POST_BUDGET_EDGE_ARTIFACTS = {
 }
 
 CURRENT_REGRESSION_SUITE_ARTIFACT = (
-    "build/current-regression-suite-20260531-step37-mixed-swa-runtime.json"
+    "build/current-regression-suite-20260531-step37-ui-pagedlock.json"
 )
 CURRENT_ISSUE175_179_RELEASE_BOUNDARY_AUDIT_ARTIFACT = (
     "build/current-issue175-179-release-boundary-audit-20260531-post-install-sync.json"
@@ -641,8 +641,8 @@ CURRENT_REAL_UI_LIVE_MODEL_PROOF_ROWS = {
         "family": "step37",
     },
     "step37_flash_jang2l_tool_l2storage": {
-        "proof": "docs/internal/agent-notes/current-real-ui-live-model-step37-jang2l-responses-tools-l2storage-integrated-20260531-proof.json",
-        "chat_screenshot": "docs/internal/agent-notes/current-real-ui-live-model-step37-jang2l-responses-tools-l2storage-integrated-20260531-chat.png",
+        "proof": "docs/internal/agent-notes/current-real-ui-live-model-step37-jang2l-responses-tools-l2storage-pagedlocked-after-subtype-ui-fix-20260531-proof.json",
+        "chat_screenshot": "docs/internal/agent-notes/current-real-ui-live-model-step37-jang2l-responses-tools-l2storage-pagedlocked-after-subtype-ui-fix-20260531-chat.png",
         "model_path": "/Users/example/.mlxstudio/models/JANGQ-AI/Step-3.7-Flash-JANG_2L",
         "model_name": "Step-3.7-Flash-JANG_2L",
         "family": "step37",

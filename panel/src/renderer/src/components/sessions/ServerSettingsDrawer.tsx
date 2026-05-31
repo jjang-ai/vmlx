@@ -31,6 +31,7 @@ export function ServerSettingsDrawer({ session, isRemote, onClose, onSessionUpda
   const [restarting, setRestarting] = useState(false)
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
   const [detectedCacheType, setDetectedCacheType] = useState<string>('kv')
+  const [detectedCacheSubtype, setDetectedCacheSubtype] = useState<string | undefined>()
   const [detectedFamily, setDetectedFamily] = useState<string | undefined>()
   const [detectedIsTurboQuant, setDetectedIsTurboQuant] = useState<boolean>(false)
   const [detectedIsMultimodal, setDetectedIsMultimodal] = useState<boolean>(false)
@@ -56,6 +57,7 @@ export function ServerSettingsDrawer({ session, isRemote, onClose, onSessionUpda
       window.api.models.detectConfig(session.modelPath)
         .then((det: any) => {
           if (det?.cacheType) setDetectedCacheType(det.cacheType)
+          setDetectedCacheSubtype(det?.cacheSubtype)
           if (det?.family && det.family !== 'unknown') setDetectedFamily(det.family)
           else setDetectedFamily(undefined)
           setDetectedIsTurboQuant(!!det?.isTurboQuant)
@@ -199,17 +201,20 @@ export function ServerSettingsDrawer({ session, isRemote, onClose, onSessionUpda
             base.usePagedCache = detected.usePagedCache
           }
           setDetectedFamily(detected.family)
+          setDetectedCacheSubtype(detected.cacheSubtype)
           setDetectedIsTurboQuant(!!detected.isTurboQuant)
           setDetectedIsMultimodal(!!detected.isMultimodal)
           setDetectedForceTextOnly(!!detected.forceTextOnly)
         } else {
           setDetectedFamily(undefined)
+          setDetectedCacheSubtype(undefined)
           setDetectedIsTurboQuant(false)
           setDetectedIsMultimodal(false)
           setDetectedForceTextOnly(false)
         }
       } catch (_) {
         setDetectedFamily(undefined)
+        setDetectedCacheSubtype(undefined)
         setDetectedIsTurboQuant(false)
         setDetectedIsMultimodal(false)
         setDetectedForceTextOnly(false)
@@ -302,7 +307,7 @@ export function ServerSettingsDrawer({ session, isRemote, onClose, onSessionUpda
             />
           </div>
         ) : (
-          <SessionConfigForm config={config} onChange={handleChange} detectedCacheType={detectedCacheType} detectedFamily={detectedFamily} detectedIsTurboQuant={detectedIsTurboQuant} detectedIsMultimodal={detectedIsMultimodal} detectedForceTextOnly={detectedForceTextOnly} detectedMaxContext={detectedMaxContext} detectedNativeMtp={detectedNativeMtp} modelType={(() => { try { return JSON.parse(session.config || '{}').modelType } catch { return undefined } })()} imageMode={(() => { try { return JSON.parse(session.config || '{}').imageMode } catch { return undefined } })()} sessionId={session.id} />
+          <SessionConfigForm config={config} onChange={handleChange} detectedCacheType={detectedCacheType} detectedCacheSubtype={detectedCacheSubtype} detectedFamily={detectedFamily} detectedIsTurboQuant={detectedIsTurboQuant} detectedIsMultimodal={detectedIsMultimodal} detectedForceTextOnly={detectedForceTextOnly} detectedMaxContext={detectedMaxContext} detectedNativeMtp={detectedNativeMtp} modelType={(() => { try { return JSON.parse(session.config || '{}').modelType } catch { return undefined } })()} imageMode={(() => { try { return JSON.parse(session.config || '{}').imageMode } catch { return undefined } })()} sessionId={session.id} />
         )}
       </div>
 

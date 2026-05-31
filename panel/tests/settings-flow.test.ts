@@ -2636,6 +2636,15 @@ describe('JIT Toggle', () => {
             'utf-8',
         )
         const sessions = fs.readFileSync('src/main/sessions.ts', 'utf-8')
+        const createSession = fs.readFileSync(
+            'src/renderer/src/components/sessions/CreateSession.tsx',
+            'utf-8',
+        )
+        const settingsDrawer = fs.readFileSync(
+            'src/renderer/src/components/sessions/ServerSettingsDrawer.tsx',
+            'utf-8',
+        )
+        const envTypes = fs.readFileSync('src/env.d.ts', 'utf-8')
 
         expect(form).toContain('detectedCacheSubtype')
         expect(form).toContain("detectedCacheSubtype === 'step3p7_full_sliding_kv'")
@@ -2643,6 +2652,11 @@ describe('JIT Toggle', () => {
         expect(settings).toContain('cacheSubtypeRequiresPaged')
         expect(sessions).toContain('cacheSubtypeRequiresPaged')
         expect(sessions).toContain('freshConfig.cacheSubtype')
+        expect(createSession).toContain('setDetectedCacheSubtype(detected?.cacheSubtype)')
+        expect(createSession).toContain('detectedCacheSubtype={detectedCacheSubtype}')
+        expect(settingsDrawer).toContain('setDetectedCacheSubtype(det?.cacheSubtype)')
+        expect(settingsDrawer).toContain('detectedCacheSubtype={detectedCacheSubtype}')
+        expect(envTypes).toContain('cacheSubtype?: string')
     })
 
     it('settings form and launch code surface one DSV4 native composite cache switch', () => {
