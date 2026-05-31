@@ -384,9 +384,9 @@ CURRENT_ISSUE179_MINIMAX_K_ROOT_CAUSE_AUDIT_ARTIFACT = (
     "build/current-issue179-minimax-k-root-cause-audit-20260527.json"
 )
 CURRENT_DEV_UI_PROOF_ARTIFACTS = {
-    "proof": "docs/internal/agent-notes/2026-05-26-live-chat-tools-reasoning-proof.json",
-    "chat_settings_screenshot": "docs/internal/agent-notes/2026-05-26-live-chat-tools-reasoning-chat-settings.png",
-    "server_cache_screenshot": "docs/internal/agent-notes/2026-05-26-live-chat-tools-reasoning-server-cache-settings.png",
+    "proof": "docs/internal/agent-notes/2026-05-31-live-chat-tools-reasoning-proof.json",
+    "chat_settings_screenshot": "docs/internal/agent-notes/2026-05-31-live-chat-tools-reasoning-chat-settings.png",
+    "server_cache_screenshot": "docs/internal/agent-notes/2026-05-31-live-chat-tools-reasoning-server-cache-settings.png",
 }
 CURRENT_REAL_UI_LIVE_MODEL_PROOF_ARTIFACTS = {
     "proof": "docs/internal/agent-notes/current-real-ui-live-model-zaya-text-20260526-proof.json",
@@ -1959,12 +1959,12 @@ _ROWS: list[dict[str, Any]] = [
             "This is mock-server UI wiring proof only; it does not clear live-model language quality, cache reuse, speed, VL/video semantics, or DSV4 exact-code quality",
         ],
         "commands": [
-            "VMLINUX_LIVE_PROOF_BASENAME=2026-05-26-live-chat-tools-reasoning node panel/scripts/live-chat-tools-reasoning-proof.mjs",
+            "VMLX_LIVE_PROOF_BASENAME=2026-05-31-live-chat-tools-reasoning node panel/scripts/live-chat-tools-reasoning-proof.mjs",
         ],
         "artifacts": [
-            "docs/internal/agent-notes/2026-05-26-live-chat-tools-reasoning-proof.json",
-            "docs/internal/agent-notes/2026-05-26-live-chat-tools-reasoning-chat-settings.png",
-            "docs/internal/agent-notes/2026-05-26-live-chat-tools-reasoning-server-cache-settings.png",
+            "docs/internal/agent-notes/2026-05-31-live-chat-tools-reasoning-proof.json",
+            "docs/internal/agent-notes/2026-05-31-live-chat-tools-reasoning-chat-settings.png",
+            "docs/internal/agent-notes/2026-05-31-live-chat-tools-reasoning-server-cache-settings.png",
         ],
     },
     {
