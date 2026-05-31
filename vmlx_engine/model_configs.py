@@ -1093,8 +1093,15 @@ def register_all(registry=None):
             family_name="lfm2",
             model_types=["lfm2", "lfm2_moe"],
             cache_type="hybrid",
+            cache_subtype="lfm2_moe_hybrid_ssm",
             tool_parser="lfm2",
             reasoning_parser="qwen3",
+            architecture_hints={
+                "attention_arch": "hybrid_ssm_attention",
+                "cache_schema": "hybrid_ssm_v1",
+                "ssm_companion_cache": True,
+                "attention_kv_storage_quantization": True,
+            },
             priority=10,
         )
     )

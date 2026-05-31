@@ -1000,8 +1000,13 @@ class TestModelConfigs:
             "cache_type defaults to kv (wrong — LFM2-MoE is hybrid SSM+attention)"
         )
         assert config.cache_type == "hybrid"
+        assert config.cache_subtype == "lfm2_moe_hybrid_ssm"
         assert config.tool_parser == "lfm2"
         assert config.reasoning_parser == "qwen3"
+        assert config.architecture_hints["attention_arch"] == "hybrid_ssm_attention"
+        assert config.architecture_hints["cache_schema"] == "hybrid_ssm_v1"
+        assert config.architecture_hints["ssm_companion_cache"] is True
+        assert config.architecture_hints["attention_kv_storage_quantization"] is True
 
     def test_falcon_h1_config(self, registry):
         """Falcon H1 is hybrid SSM+attention (CacheList[ArraysCache, KVCache])."""

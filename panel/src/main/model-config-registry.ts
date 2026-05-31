@@ -237,7 +237,7 @@ registerFamily('exaone', { cacheType: 'kv', description: 'EXAONE', priority: 20 
 registerFamily('olmo', { cacheType: 'kv', description: 'OLMo', priority: 20 })
 
 // Liquid / hybrid SSM
-registerFamily('lfm2', { cacheType: 'hybrid', toolParser: 'lfm2', reasoningParser: 'qwen3', usePagedCache: true, enableAutoToolChoice: true, description: 'Liquid LFM2 / LFM2-MoE hybrid', priority: 10 })
+registerFamily('lfm2', { cacheType: 'hybrid', cacheSubtype: 'lfm2_moe_hybrid_ssm', architectureHints: { attentionArch: 'hybrid_ssm_attention', cacheSchema: 'hybrid_ssm_v1', ssmCompanionCache: true, attentionKvStorageQuantization: true }, toolParser: 'lfm2', reasoningParser: 'qwen3', usePagedCache: true, enableAutoToolChoice: true, description: 'Liquid LFM2 / LFM2-MoE hybrid', priority: 10 })
 
 // StarCoder / StableLM / Baichuan
 registerFamily('starcoder', { cacheType: 'kv', description: 'StarCoder', priority: 30 })

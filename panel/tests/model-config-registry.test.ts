@@ -1148,8 +1148,8 @@ describe('detectModelConfigFromDir backend parity coverage', () => {
     { modelType: 'granitemoehybrid', family: 'granitemoehybrid', cacheType: 'hybrid', toolParser: 'granite' },
     { modelType: 'kimi_k25', family: 'kimi-k25', cacheType: 'kv', toolParser: 'kimi', reasoningParser: 'deepseek_r1', isMultimodal: true },
     { modelType: 'laguna', family: 'laguna', cacheType: 'kv', toolParser: 'qwen', reasoningParser: 'qwen3' },
-    { modelType: 'lfm2', family: 'lfm2', cacheType: 'hybrid', toolParser: 'lfm2', reasoningParser: 'qwen3' },
-    { modelType: 'lfm2_moe', family: 'lfm2', cacheType: 'hybrid', toolParser: 'lfm2', reasoningParser: 'qwen3' },
+    { modelType: 'lfm2', family: 'lfm2', cacheType: 'hybrid', cacheSubtype: 'lfm2_moe_hybrid_ssm', toolParser: 'lfm2', reasoningParser: 'qwen3' },
+    { modelType: 'lfm2_moe', family: 'lfm2', cacheType: 'hybrid', cacheSubtype: 'lfm2_moe_hybrid_ssm', toolParser: 'lfm2', reasoningParser: 'qwen3' },
     { modelType: 'ministral3', family: 'ministral3', cacheType: 'kv', toolParser: 'mistral' },
     { modelType: 'mistral3', family: 'mistral3', cacheType: 'kv', toolParser: 'mistral', isMultimodal: true },
     { modelType: 'mistral4', family: 'mistral4', cacheType: 'kv', toolParser: 'mistral', reasoningParser: 'mistral' },
@@ -1171,6 +1171,14 @@ describe('detectModelConfigFromDir backend parity coverage', () => {
       if (row.toolParser !== undefined) expect(detected.toolParser).toBe(row.toolParser)
       if (row.reasoningParser !== undefined) expect(detected.reasoningParser).toBe(row.reasoningParser)
       if (row.isMultimodal !== undefined) expect(detected.isMultimodal).toBe(row.isMultimodal)
+      if (row.modelType === 'lfm2_moe') {
+        expect(detected.architectureHints).toMatchObject({
+          attentionArch: 'hybrid_ssm_attention',
+          cacheSchema: 'hybrid_ssm_v1',
+          ssmCompanionCache: true,
+          attentionKvStorageQuantization: true,
+        })
+      }
     })
   }
 
