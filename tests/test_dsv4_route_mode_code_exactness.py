@@ -598,6 +598,73 @@ Pages purgeable:                           25000.
     assert "insufficient_memory" in artifact["launch_blockers"]
 
 
+def test_dsv4_code_exactness_probe_marks_under_margin_floor_invalid(
+    monkeypatch,
+    tmp_path,
+):
+    import tests.cross_matrix.run_dsv4_route_mode_code_exactness as gate
+
+    model = tmp_path / "DeepSeek-V4-Flash-JANGTQ-K"
+    model.mkdir()
+    (model / "weights.bin").write_bytes(b"x" * 1024 * 1024 * 80)
+
+    class Args:
+        python = "/tmp/python"
+        model = ""
+        port = 8861
+        timeout = 420
+        request_timeout = 5
+        max_tokens = 512
+        dry_run = False
+        base_url = None
+        cases = "chat_max"
+        min_free_gb = 0.08
+        memory_preflight_only = True
+
+    Args.model = str(model)
+
+    vm_stat = """Mach Virtual Memory Statistics: (page size of 16384 bytes)
+Pages free:                               100000.
+Pages active:                                  1.
+Pages inactive:                           200000.
+Pages speculative:                         50000.
+Pages purgeable:                           25000.
+"""
+
+    monkeypatch.setattr(
+        gate,
+        "resource_snapshot",
+        lambda name, proc=None: {
+            "name": name,
+            "system_memory": {"available_gb": 130.0, "total_gb": 192.0},
+        },
+        raising=False,
+    )
+
+    def fake_run_text(cmd):
+        joined = " ".join(cmd)
+        if cmd == ["vm_stat"]:
+            return vm_stat
+        if "ps -axo" in joined or "pgrep -af" in joined:
+            return ""
+        return ""
+
+    monkeypatch.setattr(gate, "_run_text", fake_run_text, raising=False)
+
+    def fail_popen(*args, **kwargs):
+        raise AssertionError("invalid preflight floor must not spawn DSV4")
+
+    monkeypatch.setattr(gate.subprocess, "Popen", fail_popen)
+
+    artifact = run(Args())
+
+    assert artifact["status"] == "invalid_preflight_floor"
+    assert artifact["launch_decision"] == "do_not_launch"
+    assert artifact["safety_margin_gb"] < 40.0
+    assert artifact["floor_valid"] is False
+    assert "invalid_preflight_floor" in artifact["launch_blockers"]
+
+
 def test_dsv4_code_exactness_probe_records_memory_pressure_diagnostic(
     monkeypatch,
 ):

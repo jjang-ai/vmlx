@@ -28,6 +28,7 @@ DEFAULT_PYTHON = REPO / "panel/bundled-python/python/bin/python3"
 DEFAULT_MODEL = "/Users/example/models/JANGQ/DeepSeek-V4-Flash-JANGTQ-K"
 SAFE_CWD = Path("/tmp")
 DEFAULT_MIN_FREE_GB = 120.0
+DEFAULT_REQUIRED_MODEL_MARGIN_GB = 40.0
 TOP_MEMORY_PROCESS_COUNT = 10
 HEAVY_PROCESS_PATTERNS = (
     "vmlx_engine.cli serve",
@@ -123,6 +124,16 @@ def vm_stat_memory_breakdown(vm_stat_text: str | None = None) -> dict[str, Any]:
             2,
         ),
     }
+
+
+def model_size_gb(model_path: Path) -> float | None:
+    if not model_path.exists():
+        return None
+    total = 0
+    for path in model_path.rglob("*"):
+        if path.is_file():
+            total += path.stat().st_size
+    return round(total / (1024**3), 2)
 
 
 def memory_pressure_snapshot() -> dict[str, Any]:
@@ -274,8 +285,17 @@ def memory_preflight_artifact(
     )
     process_context = process_context_snapshot()
     active_heavy_processes = process_context["active_heavy_processes"]
+    size_gb = model_size_gb(Path(str(args.model)))
+    safety_margin_gb = (
+        round(min_free_gb - size_gb, 2) if size_gb is not None else None
+    )
+    floor_valid = (
+        safety_margin_gb is None
+        or safety_margin_gb >= DEFAULT_REQUIRED_MODEL_MARGIN_GB
+    )
     if gate_available is not None and (
         force_no_launch
+        or not floor_valid
         or active_heavy_processes
         or gate_available < min_free_gb
     ):
@@ -287,7 +307,9 @@ def memory_preflight_artifact(
             else None
         )
         status = (
-            "skipped_active_heavy_process"
+            "invalid_preflight_floor"
+            if not floor_valid
+            else "skipped_active_heavy_process"
             if active_heavy_processes
             else "ready_to_launch"
             if gate_available >= min_free_gb
@@ -297,6 +319,7 @@ def memory_preflight_artifact(
         launch_blockers = [
             blocker
             for blocker, blocked in (
+                ("invalid_preflight_floor", not floor_valid),
                 ("active_heavy_process", bool(active_heavy_processes)),
                 ("insufficient_memory", gate_available < min_free_gb),
             )
@@ -309,6 +332,8 @@ def memory_preflight_artifact(
             "reason": (
                 "memory_preflight_floor_met"
                 if status == "ready_to_launch"
+                else "DSV4 preflight floor is below model-size plus safety headroom; do not use this artifact as a launch/skip decision"
+                if status == "invalid_preflight_floor"
                 else "another heavy model/proof process is active; do not launch DSV4 concurrently"
                 if status == "skipped_active_heavy_process"
                 else "insufficient_vm_stat_memory"
@@ -316,6 +341,10 @@ def memory_preflight_artifact(
                 else "insufficient_free_memory"
             ),
             "required_available_gb": min_free_gb,
+            "required_model_margin_gb": DEFAULT_REQUIRED_MODEL_MARGIN_GB,
+            "model_size_gb": size_gb,
+            "safety_margin_gb": safety_margin_gb,
+            "floor_valid": floor_valid,
             "available_gb": round(float(available), 2)
             if isinstance(available, (int, float))
             else None,
