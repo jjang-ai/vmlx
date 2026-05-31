@@ -14,6 +14,43 @@ const proofBasename = process.env.VMLX_LIVE_PROOF_BASENAME
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
+function isSocketDisconnectError(error) {
+  const code = String(error?.code || '')
+  const message = String(error?.message || error || '')
+  const cause = error?.cause
+  const nestedErrors = Array.isArray(error?.errors) ? error.errors : []
+  return (
+    code === 'EPIPE'
+    || code === 'ECONNRESET'
+    || code === 'ERR_STREAM_DESTROYED'
+    || code === 'ERR_STREAM_WRITE_AFTER_END'
+    || /EPIPE|write EPIPE|broken pipe|socket hang up|connection reset|premature close|stream.*destroyed|write after end/i.test(message)
+    || (cause ? isSocketDisconnectError(cause) : false)
+    || nestedErrors.some((nested) => isSocketDisconnectError(nested))
+  )
+}
+
+function safeHttpWrite(res, chunk) {
+  if (res.destroyed || res.writableEnded) return false
+  try {
+    return res.write(chunk)
+  } catch (error) {
+    if (isSocketDisconnectError(error)) return false
+    throw error
+  }
+}
+
+function safeHttpEnd(res, chunk) {
+  if (res.destroyed || res.writableEnded) return false
+  try {
+    res.end(chunk)
+    return true
+  } catch (error) {
+    if (isSocketDisconnectError(error)) return false
+    throw error
+  }
+}
+
 async function freePort() {
   return await new Promise((resolve, reject) => {
     const server = createServer()
@@ -55,8 +92,8 @@ function collectRequestBody(req) {
 }
 
 function writeSseEvent(res, event, data) {
-  if (event) res.write(`event: ${event}\n`)
-  res.write(`data: ${JSON.stringify(data)}\n\n`)
+  if (event && !safeHttpWrite(res, `event: ${event}\n`)) return false
+  return safeHttpWrite(res, `data: ${JSON.stringify(data)}\n\n`)
 }
 
 async function startMockServer(workDir) {
@@ -67,7 +104,7 @@ async function startMockServer(workDir) {
     try {
       if (req.method === 'GET' && req.url === '/v1/models') {
         res.writeHead(200, { 'content-type': 'application/json' })
-        res.end(JSON.stringify({ object: 'list', data: [{ id: 'vmlx-live-mock', object: 'model' }] }))
+        safeHttpEnd(res, JSON.stringify({ object: 'list', data: [{ id: 'vmlx-live-mock', object: 'model' }] }))
         return
       }
       if (req.method === 'POST' && req.url === '/v1/responses') {
@@ -120,8 +157,8 @@ async function startMockServer(workDir) {
               usage: { input_tokens: 42, output_tokens: 5 },
             },
           })
-          res.write('data: [DONE]\n\n')
-          res.end()
+          safeHttpWrite(res, 'data: [DONE]\n\n')
+          safeHttpEnd(res)
           return
         }
 
@@ -150,16 +187,20 @@ async function startMockServer(workDir) {
             usage: { input_tokens: 64, output_tokens: 9 },
           },
         })
-        res.write('data: [DONE]\n\n')
-        res.end()
+        safeHttpWrite(res, 'data: [DONE]\n\n')
+        safeHttpEnd(res)
         return
       }
 
       res.writeHead(404, { 'content-type': 'application/json' })
-      res.end(JSON.stringify({ error: `Unhandled ${req.method} ${req.url}` }))
+      safeHttpEnd(res, JSON.stringify({ error: `Unhandled ${req.method} ${req.url}` }))
     } catch (error) {
+      if (isSocketDisconnectError(error)) {
+        safeHttpEnd(res)
+        return
+      }
       res.writeHead(500, { 'content-type': 'application/json' })
-      res.end(JSON.stringify({ error: error.message }))
+      safeHttpEnd(res, JSON.stringify({ error: error.message }))
     }
   })
 
@@ -180,10 +221,19 @@ class CdpSocket {
     this.buffer = Buffer.alloc(0)
     this.nextId = 1
     this.pending = new Map()
+    this.closed = false
     socket.on('data', (chunk) => this.onData(chunk))
     socket.on('error', (error) => {
-      for (const { reject } of this.pending.values()) reject(error)
-      this.pending.clear()
+      if (isSocketDisconnectError(error)) this.closed = true
+      this.rejectPending(error)
+    })
+    socket.on('close', () => {
+      this.closed = true
+      this.rejectPending(new Error('CDP socket closed before response'))
+    })
+    socket.on('end', () => {
+      this.closed = true
+      this.rejectPending(new Error('CDP socket ended before response'))
     })
   }
 
@@ -195,15 +245,20 @@ class CdpSocket {
       socket.once('connect', resolve)
       socket.once('error', reject)
     })
-    socket.write([
-      `GET ${url.pathname}${url.search} HTTP/1.1`,
-      `Host: ${url.host}`,
-      'Upgrade: websocket',
-      'Connection: Upgrade',
-      `Sec-WebSocket-Key: ${key}`,
-      'Sec-WebSocket-Version: 13',
-      '\r\n',
-    ].join('\r\n'))
+    try {
+      socket.write([
+        `GET ${url.pathname}${url.search} HTTP/1.1`,
+        `Host: ${url.host}`,
+        'Upgrade: websocket',
+        'Connection: Upgrade',
+        `Sec-WebSocket-Key: ${key}`,
+        'Sec-WebSocket-Version: 13',
+        '\r\n',
+      ].join('\r\n'))
+    } catch (error) {
+      try { socket.destroy() } catch {}
+      throw error
+    }
     let handshake = Buffer.alloc(0)
     const connected = await new Promise((resolve, reject) => {
       const onData = (chunk) => {
@@ -227,23 +282,59 @@ class CdpSocket {
     return connected
   }
 
-  send(method, params = {}) {
+  send(method, params = {}, timeoutMs = 30_000) {
     const id = this.nextId++
     const payload = JSON.stringify({ id, method, params })
-    this.socket.write(encodeClientFrame(payload))
     return new Promise((resolve, reject) => {
-      this.pending.set(id, { resolve, reject })
-      setTimeout(() => {
+      const timer = setTimeout(() => {
         if (this.pending.has(id)) {
           this.pending.delete(id)
           reject(new Error(`CDP timeout: ${method}`))
         }
-      }, 30_000)
+      }, timeoutMs)
+      this.pending.set(id, { resolve, reject, timer })
+      try {
+        this.writeClientFrame(payload)
+      } catch (error) {
+        clearTimeout(timer)
+        this.pending.delete(id)
+        reject(error)
+      }
     })
   }
 
   close() {
+    this.closed = true
     try { this.socket.end() } catch {}
+    try { this.socket.destroy() } catch {}
+  }
+
+  rejectPending(error) {
+    for (const { reject, timer } of this.pending.values()) {
+      clearTimeout(timer)
+      reject(error)
+    }
+    this.pending.clear()
+  }
+
+  writeClientFrame(payload) {
+    if (this.socket.destroyed || this.closed) {
+      const error = new Error('CDP socket closed before write')
+      error.code = 'ERR_STREAM_DESTROYED'
+      this.rejectPending(error)
+      return false
+    }
+    try {
+      this.socket.write(encodeClientFrame(payload))
+      return true
+    } catch (error) {
+      if (isSocketDisconnectError(error)) {
+        this.closed = true
+        this.rejectPending(error)
+        return false
+      }
+      throw error
+    }
   }
 
   onData(chunk) {
@@ -271,8 +362,9 @@ class CdpSocket {
       if (opcode === 1) {
         const msg = JSON.parse(payload.toString('utf8'))
         if (msg.id && this.pending.has(msg.id)) {
-          const { resolve, reject } = this.pending.get(msg.id)
+          const { resolve, reject, timer } = this.pending.get(msg.id)
           this.pending.delete(msg.id)
+          clearTimeout(timer)
           if (msg.error) reject(new Error(JSON.stringify(msg.error)))
           else resolve(msg.result)
         }

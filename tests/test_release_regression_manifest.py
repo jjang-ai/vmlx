@@ -2698,6 +2698,20 @@ def test_release_regression_manifest_real_ui_live_model_cdp_write_guards_epipe()
     assert "this.rejectPending(error)" in source
 
 
+def test_release_regression_manifest_live_chat_tools_proof_guards_epipe_writes():
+    script = Path("panel/scripts/live-chat-tools-reasoning-proof.mjs")
+    source = script.read_text(encoding="utf-8")
+
+    assert "function isSocketDisconnectError" in source
+    assert "write EPIPE" in source
+    assert "ERR_STREAM_DESTROYED" in source
+    assert "function safeHttpWrite" in source
+    assert "safeHttpWrite(res, 'data: [DONE]\\n\\n')" in source
+    assert "writeClientFrame(payload)" in source
+    assert "if (this.socket.destroyed || this.closed)" in source
+    assert "this.rejectPending(error)" in source
+
+
 def test_release_regression_manifest_real_ui_cache_checker_is_model_specific():
     script = Path("panel/scripts/live-real-ui-model-proof.mjs")
     source = script.read_text(encoding="utf-8")
