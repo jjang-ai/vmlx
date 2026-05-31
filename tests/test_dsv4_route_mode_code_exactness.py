@@ -598,6 +598,69 @@ Pages purgeable:                           25000.
     assert "insufficient_memory" in artifact["launch_blockers"]
 
 
+def test_dsv4_code_exactness_probe_records_memory_pressure_diagnostic(
+    monkeypatch,
+):
+    import tests.cross_matrix.run_dsv4_route_mode_code_exactness as gate
+
+    class Args:
+        python = "/tmp/python"
+        model = "/unused/model"
+        port = 8861
+        timeout = 420
+        request_timeout = 5
+        max_tokens = 512
+        dry_run = False
+        base_url = None
+        cases = "chat_max"
+        min_free_gb = 120.0
+        memory_preflight_only = True
+
+    vm_stat = """Mach Virtual Memory Statistics: (page size of 16384 bytes)
+Pages free:                               100000.
+Pages active:                                  1.
+Pages inactive:                           200000.
+Pages speculative:                         50000.
+Pages purgeable:                           25000.
+"""
+    memory_pressure = """The system has 137438953472 (8388608 pages with a page size of 16384).
+
+System-wide memory free percentage: 95%
+"""
+
+    monkeypatch.setattr(
+        gate,
+        "resource_snapshot",
+        lambda name, proc=None: {
+            "name": name,
+            "system_memory": {"available_gb": 130.0, "total_gb": 192.0},
+        },
+        raising=False,
+    )
+
+    def fake_run_text(cmd):
+        joined = " ".join(cmd)
+        if cmd == ["vm_stat"]:
+            return vm_stat
+        if cmd == ["memory_pressure"]:
+            return memory_pressure
+        if "ps -axo" in joined or "pgrep -af" in joined:
+            return ""
+        return ""
+
+    monkeypatch.setattr(gate, "_run_text", fake_run_text, raising=False)
+
+    def fail_popen(*args, **kwargs):
+        raise AssertionError("preflight-only mode must not spawn DSV4")
+
+    monkeypatch.setattr(gate.subprocess, "Popen", fail_popen)
+
+    artifact = run(Args())
+
+    assert artifact["memory_pressure_free_percent"] == 95
+    assert artifact["commands"]["memory_pressure"] == "memory_pressure"
+
+
 def test_dsv4_code_exactness_probe_memory_preflight_records_process_context(
     monkeypatch,
 ):

@@ -75,6 +75,33 @@ Pages purgeable:                           25000.
     assert payload["inactive_file_cache_gb"] > 0
 
 
+def test_dsv4_memory_preflight_records_memory_pressure_as_diagnostic(tmp_path):
+    model = tmp_path / "DeepSeek-V4-Flash-JANGTQ-K"
+    model.mkdir()
+    (model / "weights.bin").write_bytes(b"x" * 1024)
+    vm_stat = """Mach Virtual Memory Statistics: (page size of 16384 bytes)
+Pages free:                               100000.
+Pages active:                                  1.
+Pages inactive:                           200000.
+Pages speculative:                         50000.
+Pages purgeable:                           25000.
+"""
+    memory_pressure = """The system has 137438953472 (8388608 pages with a page size of 16384).
+
+System-wide memory free percentage: 95%
+"""
+
+    payload = gate.build_preflight(
+        model_path=model,
+        required_available_gb=120.0,
+        vm_stat_text=vm_stat,
+        memory_pressure_text=memory_pressure,
+    )
+
+    assert payload["memory_pressure_free_percent"] == 95
+    assert payload["commands"]["memory_pressure"] == "memory_pressure"
+
+
 def test_dsv4_memory_preflight_refuses_to_skip_when_floor_is_met(tmp_path):
     model = tmp_path / "DeepSeek-V4-Flash-JANGTQ-K"
     model.mkdir()

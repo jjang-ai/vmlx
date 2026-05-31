@@ -49,6 +49,14 @@ def gb_from_pages(count: int, page_size: int) -> float:
     return round((count * page_size) / (1024**3), 2)
 
 
+def parse_memory_pressure(text: str) -> dict[str, Any]:
+    match = re.search(r"System-wide memory free percentage:\s*([0-9]+)%", text)
+    return {
+        "free_percent": int(match.group(1)) if match else None,
+        "raw_tail": text.splitlines()[-20:],
+    }
+
+
 def psutil_memory_snapshot() -> dict[str, Any]:
     try:
         import psutil
@@ -125,6 +133,7 @@ def build_preflight(
     model_path: Path,
     required_available_gb: float,
     vm_stat_text: str | None = None,
+    memory_pressure_text: str | None = None,
     top_processes_text: str | None = None,
     active_processes_text: str | None = None,
 ) -> dict[str, Any]:
@@ -137,6 +146,13 @@ def build_preflight(
     inactive_gb = gb_from_pages(int(pages.get("inactive", 0)), page_size)
     free_plus_speculative_purgeable = round(free_gb + speculative_gb + purgeable_gb, 2)
     psutil_snapshot = psutil_memory_snapshot()
+    memory_pressure_command = "memory_pressure"
+    if memory_pressure_text is None:
+        try:
+            memory_pressure_text = _run_text([memory_pressure_command])
+        except Exception:
+            memory_pressure_text = ""
+    memory_pressure_snapshot = parse_memory_pressure(memory_pressure_text)
     psutil_available_gb = psutil_snapshot.get("available_gb")
     psutil_memory_gap_gb = (
         round(max(0.0, required_available_gb - float(psutil_available_gb)), 2)
@@ -209,6 +225,8 @@ def build_preflight(
         "psutil_total_gb": psutil_snapshot.get("total_gb"),
         "psutil_memory_percent": psutil_snapshot.get("percent"),
         "psutil_memory_gap_gb": psutil_memory_gap_gb,
+        "memory_pressure_free_percent": memory_pressure_snapshot.get("free_percent"),
+        "memory_pressure_raw_tail": memory_pressure_snapshot.get("raw_tail"),
         "top_memory_processes": parse_top_memory_processes(top_processes_text),
         "active_heavy_processes": active_heavy_processes,
         "active_heavy_process_count": len(active_heavy_processes),
@@ -229,6 +247,7 @@ def build_preflight(
         },
         "commands": {
             "memory": "vm_stat",
+            "memory_pressure": memory_pressure_command,
             "model_size": f"walk {model_path}",
             "top_memory_processes": top_process_command,
             "active_heavy_processes": active_process_command,

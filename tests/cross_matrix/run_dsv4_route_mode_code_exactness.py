@@ -125,6 +125,18 @@ def vm_stat_memory_breakdown(vm_stat_text: str | None = None) -> dict[str, Any]:
     }
 
 
+def memory_pressure_snapshot() -> dict[str, Any]:
+    try:
+        text = _run_text(["memory_pressure"])
+    except Exception as exc:  # noqa: BLE001 - diagnostic helper
+        return {"free_percent": None, "error": f"{type(exc).__name__}: {exc}"}
+    match = re.search(r"System-wide memory free percentage:\s*([0-9]+)%", text)
+    return {
+        "free_percent": int(match.group(1)) if match else None,
+        "raw_tail": text.splitlines()[-20:],
+    }
+
+
 def parse_top_memory_processes(
     text: str,
     limit: int = TOP_MEMORY_PROCESS_COUNT,
@@ -251,6 +263,7 @@ def memory_preflight_artifact(
         vm_breakdown = vm_stat_memory_breakdown()
     except Exception as exc:  # noqa: BLE001 - keep psutil-only fallback diagnostic
         vm_breakdown = {"error": f"{type(exc).__name__}: {exc}"}
+    pressure_snapshot = memory_pressure_snapshot()
     vm_available = vm_breakdown.get("free_plus_speculative_purgeable")
     gate_available = (
         float(vm_available)
@@ -317,6 +330,9 @@ def memory_preflight_artifact(
             "free_plus_speculative_purgeable_gb": round(float(vm_available), 2)
             if isinstance(vm_available, (int, float))
             else None,
+            "memory_pressure_free_percent": pressure_snapshot.get("free_percent"),
+            "memory_pressure_raw_tail": pressure_snapshot.get("raw_tail"),
+            "memory_pressure_error": pressure_snapshot.get("error"),
             "memory_breakdown_gb": {
                 key: vm_breakdown.get(key)
                 for key in ("free", "speculative", "purgeable", "inactive")
@@ -335,6 +351,7 @@ def memory_preflight_artifact(
             "telemetry": [snap],
         }
         artifact.update(process_context)
+        artifact["commands"]["memory_pressure"] = "memory_pressure"
         return artifact
     return None
 
