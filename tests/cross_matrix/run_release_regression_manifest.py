@@ -25,7 +25,7 @@ from tests.cross_matrix.release_regression_manifest import (
 
 
 DEFAULT_OUT = Path(
-    "build/current-release-regression-manifest-20260531-step37-integrated-tool-l2-proof.json"
+    "build/current-release-regression-manifest-20260531-release-decision-refresh.json"
 )
 PREPACKAGE_ALLOWED_BLOCKERS = {
     "packaged_app_developer_id_signing_blocked",
