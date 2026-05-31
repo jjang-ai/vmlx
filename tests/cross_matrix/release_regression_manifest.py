@@ -691,6 +691,7 @@ REQUIRED_REAL_UI_LIVE_MODEL_SURFACES = (
     "language_leak_check",
     "cache_hit_telemetry",
     "native_cache_status",
+    "architecture_cache_policy",
     "cache_endpoint_stats",
     "l2_disk_storage",
     "settings_persistence",
@@ -698,9 +699,14 @@ REQUIRED_REAL_UI_LIVE_MODEL_SURFACES = (
     "vl_image",
     "video_where_supported",
 )
-_REQUIRED_REAL_UI_LIVE_MODEL_NON_MEDIA_SURFACES = tuple(
+_REQUIRED_REAL_UI_LIVE_MODEL_GENERIC_SURFACES = tuple(
     surface
     for surface in REQUIRED_REAL_UI_LIVE_MODEL_SURFACES
+    if surface != "architecture_cache_policy"
+)
+_REQUIRED_REAL_UI_LIVE_MODEL_NON_MEDIA_SURFACES = tuple(
+    surface
+    for surface in _REQUIRED_REAL_UI_LIVE_MODEL_GENERIC_SURFACES
     if surface not in {"vl_image", "video_where_supported"}
 )
 _REQUIRED_REAL_UI_LIVE_MODEL_NON_REASONING_TEXT_SURFACES = tuple(
@@ -720,11 +726,21 @@ REQUIRED_REAL_UI_LIVE_MODEL_SURFACES_BY_FAMILY = {
     ),
     "nemotron_omni": _REQUIRED_REAL_UI_LIVE_MODEL_NON_MEDIA_SURFACES,
     "dsv4": _REQUIRED_REAL_UI_LIVE_MODEL_NON_MEDIA_SURFACES,
-    "step37": (
-        *_REQUIRED_REAL_UI_LIVE_MODEL_NON_MEDIA_SURFACES,
-        "vl_image",
+    "step37": tuple(
+        surface
+        for surface in REQUIRED_REAL_UI_LIVE_MODEL_SURFACES
+        if surface != "video_where_supported"
     ),
-    "lfm25": _REQUIRED_REAL_UI_LIVE_MODEL_NON_REASONING_TEXT_SURFACES,
+    "lfm25": tuple(
+        surface
+        for surface in REQUIRED_REAL_UI_LIVE_MODEL_SURFACES
+        if surface
+        not in {
+            "reasoning_display",
+            "vl_image",
+            "video_where_supported",
+        }
+    ),
     "zaya_vl": (
         *_REQUIRED_REAL_UI_LIVE_MODEL_NON_REASONING_TEXT_SURFACES,
         "vl_image",
@@ -3469,6 +3485,103 @@ def _real_ui_generation_defaults_applied_ok(proof: dict[str, Any]) -> bool:
     return bool(renderer_wire_api)
 
 
+def _real_ui_ssm_companion_l2_seen(proof: dict[str, Any]) -> bool:
+    cache = proof.get("cache") if isinstance(proof.get("cache"), dict) else {}
+    cache_after = cache.get("after") if isinstance(cache.get("after"), dict) else {}
+    companion = (
+        cache_after.get("ssm_companion")
+        if isinstance(cache_after.get("ssm_companion"), dict)
+        else {}
+    )
+    disk = companion.get("disk") if isinstance(companion.get("disk"), dict) else {}
+    totals = (
+        cache_after.get("cache_totals")
+        if isinstance(cache_after.get("cache_totals"), dict)
+        else {}
+    )
+    if disk.get("enabled") is True:
+        for key in ("entries", "total_tokens_on_disk", "total_cached_tokens", "stores"):
+            value = disk.get(key)
+            if isinstance(value, (int, float)) and value > 0:
+                return True
+    for key in ("l2_ssm_tokens_on_disk", "ssm_tokens_on_disk"):
+        value = totals.get(key)
+        if isinstance(value, (int, float)) and value > 0:
+            return True
+    return False
+
+
+def _real_ui_architecture_cache_policy_ok(
+    family_id: str,
+    proof: dict[str, Any],
+) -> bool:
+    server = proof.get("server") if isinstance(proof.get("server"), dict) else {}
+    health = server.get("health") if isinstance(server.get("health"), dict) else {}
+    native = (
+        health.get("native_cache")
+        if isinstance(health.get("native_cache"), dict)
+        else {}
+    )
+    kv_cache_quantization = (
+        health.get("kv_cache_quantization")
+        if isinstance(health.get("kv_cache_quantization"), dict)
+        else {}
+    )
+    components = {
+        str(component)
+        for component in native.get("components", [])
+        if isinstance(component, str)
+    }
+    generic_tq = (
+        native.get("generic_turboquant_kv")
+        if isinstance(native.get("generic_turboquant_kv"), dict)
+        else {}
+    )
+    if family_id == "lfm25":
+        attention_storage = (
+            native.get("attention_kv_storage_quantization")
+            if isinstance(native.get("attention_kv_storage_quantization"), dict)
+            else {}
+        )
+        return (
+            native.get("family") == "lfm2_moe"
+            and native.get("schema") == "hybrid_ssm_v1"
+            and native.get("cache_type") == "hybrid_ssm_typed"
+            and {"attention_kv", "ssm_companion_state", "async_rederive"}
+            <= components
+            and generic_tq.get("enabled") is False
+            and generic_tq.get("reason") == "hybrid_ssm_state"
+            and attention_storage.get("enabled") is True
+            and attention_storage.get("mode") == "storage_boundary"
+            and attention_storage.get("bits") == 4
+            and attention_storage.get("group_size") == 64
+            and attention_storage.get("applies_to") == "attention_kv_layers_only"
+            and "native" in str(attention_storage.get("ssm_policy") or "")
+            and kv_cache_quantization.get("enabled") is True
+            and kv_cache_quantization.get("bits") == 4
+            and kv_cache_quantization.get("group_size") == 64
+            and _real_ui_ssm_companion_l2_seen(proof)
+        )
+    if family_id == "step37":
+        return (
+            native.get("family") == "mixed_attention"
+            and native.get("schema") == "mixed_swa_kv_v1"
+            and native.get("cache_type") == "mixed_swa_kv"
+            and {
+                "full_attention_kv",
+                "sliding_window_kv",
+                "rotating_window_metadata",
+            }
+            <= components
+            and generic_tq.get("enabled") is False
+            and generic_tq.get("reason") in {"not_active", "mixed_swa_kv"}
+            and kv_cache_quantization.get("enabled") is True
+            and kv_cache_quantization.get("bits") == 4
+            and kv_cache_quantization.get("group_size") == 64
+        )
+    return False
+
+
 REAL_UI_TOOL_ONE_TOKEN_RE = (
     r"real[\s_\\-]*ui[\s_\\-]*live[\s_\\-]*tool[\s_\\-]*one"
 )
@@ -4908,6 +5021,8 @@ def _validate_current_real_ui_live_model_matrix(
 
             row = CURRENT_REAL_UI_LIVE_MODEL_PROOF_ROWS.get(row_id, {})
             family_id = str(row.get("family") or row_id)
+            if _real_ui_architecture_cache_policy_ok(family_id, proof):
+                surfaces.add("architecture_cache_policy")
             current_model_name = str(proof.get("modelName") or row.get("model_name") or "")
             current_model_path = str(proof.get("modelPath") or row.get("model_path") or "")
             existing = covered_families.get(family_id)

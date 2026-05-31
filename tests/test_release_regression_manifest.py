@@ -323,7 +323,60 @@ def _write_passing_dev_ui_proof_artifacts(root: Path) -> None:
 
 
 def _write_passing_real_ui_live_model_proof_artifacts(root: Path) -> None:
-    def native_cache_health() -> dict[str, object]:
+    def native_cache_health(family: str | None = None) -> dict[str, object]:
+        if family == "lfm25":
+            return {
+                "family": "lfm2_moe",
+                "schema": "hybrid_ssm_v1",
+                "cache_type": "hybrid_ssm_typed",
+                "components": [
+                    "attention_kv",
+                    "ssm_companion_state",
+                    "async_rederive",
+                ],
+                "generic_turboquant_kv": {
+                    "enabled": False,
+                    "reason": "hybrid_ssm_state",
+                },
+                "live_attention_tq_kv": {
+                    "enabled": False,
+                    "mode": None,
+                    "applies_to": "attention_kv_layers_only",
+                    "ssm_policy": "native_full_precision_companion_state",
+                },
+                "attention_kv_storage_quantization": {
+                    "enabled": True,
+                    "mode": "storage_boundary",
+                    "bits": 4,
+                    "group_size": 64,
+                    "applies_to": "attention_kv_layers_only",
+                    "ssm_policy": "native_companion_state",
+                    "rederive": "async_clean_prefill_on_miss_or_warm_pass",
+                },
+                "prefix": True,
+                "paged": True,
+                "block_disk_l2": True,
+                "ssm_entries": 5,
+                "kv_layer_indices": [2, 6, 10, 14, 18, 21],
+            }
+        if family == "step37":
+            return {
+                "family": "mixed_attention",
+                "schema": "mixed_swa_kv_v1",
+                "cache_type": "mixed_swa_kv",
+                "components": [
+                    "full_attention_kv",
+                    "sliding_window_kv",
+                    "rotating_window_metadata",
+                ],
+                "generic_turboquant_kv": {
+                    "enabled": False,
+                    "reason": "not_active",
+                },
+                "prefix": True,
+                "paged": True,
+                "block_disk_l2": True,
+            }
         return {
             "family": "plain_kv",
             "schema": "plain_kv_v1",
@@ -335,8 +388,8 @@ def _write_passing_real_ui_live_model_proof_artifacts(root: Path) -> None:
             "block_disk_l2": True,
         }
 
-    def cache_endpoint_stats() -> dict[str, object]:
-        return {
+    def cache_endpoint_stats(family: str | None = None) -> dict[str, object]:
+        stats = {
             "before": {
                 "scheduler_cache": {"hits": 0, "misses": 0},
             },
@@ -347,6 +400,27 @@ def _write_passing_real_ui_live_model_proof_artifacts(root: Path) -> None:
             },
             "cacheHitTokens": 12,
         }
+        if family == "lfm25":
+            stats["after"]["cache_totals"].update(
+                {
+                    "l2_ssm_tokens_on_disk": 64,
+                    "ssm_tokens_on_disk": 64,
+                    "l2_tokens_on_disk": 76,
+                    "l2_tokens_on_disk_store_sum": 76,
+                }
+            )
+            stats["after"]["ssm_companion"] = {
+                "entries": 2,
+                "disk_enabled": True,
+                "disk": {
+                    "enabled": True,
+                    "entries": 2,
+                    "total_tokens_on_disk": 64,
+                    "total_cached_tokens": 64,
+                    "stores": 2,
+                },
+            }
+        return stats
 
     def add_extensive_tool_churn(proof: dict[str, object]) -> None:
         proof["eventCounts"] = {"complete": 2, "tool": 24}
@@ -416,7 +490,12 @@ def _write_passing_real_ui_live_model_proof_artifacts(root: Path) -> None:
                         "health": {
                             "status": "healthy",
                             "model_loaded": True,
-                            "native_cache": native_cache_health(),
+                            "native_cache": native_cache_health(row.get("family")),
+                            "kv_cache_quantization": {
+                                "enabled": True,
+                                "bits": 4,
+                                "group_size": 64,
+                            },
                         },
                         "models": {"data": [{"id": row["model_name"]}]},
                     },
@@ -442,7 +521,7 @@ def _write_passing_real_ui_live_model_proof_artifacts(root: Path) -> None:
                         "reasoningKoreanLeakCount": 0,
                         "reasoningNumericRunCount": 0,
                     },
-                    "cache": cache_endpoint_stats(),
+                    "cache": cache_endpoint_stats(row.get("family")),
                     "requestContract": {
                         "promptOne": "Say READY in English.",
                         "promptTwo": "Repeat READY once.",
@@ -3546,6 +3625,41 @@ def test_release_regression_manifest_real_ui_matrix_requires_every_family_surfac
         },
         "cacheHitTokens": 12,
     }
+    lfm_native_cache = {
+        "family": "lfm2_moe",
+        "schema": "hybrid_ssm_v1",
+        "cache_type": "hybrid_ssm_typed",
+        "components": ["attention_kv", "ssm_companion_state", "async_rederive"],
+        "generic_turboquant_kv": {
+            "enabled": False,
+            "reason": "hybrid_ssm_state",
+        },
+        "attention_kv_storage_quantization": {
+            "enabled": True,
+            "mode": "storage_boundary",
+            "bits": 4,
+            "group_size": 64,
+            "applies_to": "attention_kv_layers_only",
+            "ssm_policy": "native_companion_state",
+        },
+        "prefix": True,
+        "paged": True,
+        "block_disk_l2": True,
+    }
+    step_native_cache = {
+        "family": "mixed_attention",
+        "schema": "mixed_swa_kv_v1",
+        "cache_type": "mixed_swa_kv",
+        "components": [
+            "full_attention_kv",
+            "sliding_window_kv",
+            "rotating_window_metadata",
+        ],
+        "generic_turboquant_kv": {"enabled": False, "reason": "not_active"},
+        "prefix": True,
+        "paged": True,
+        "block_disk_l2": True,
+    }
     proofs = {
         family: {
             "modelName": f"{family}-model",
@@ -3555,6 +3669,11 @@ def test_release_regression_manifest_real_ui_matrix_requires_every_family_surfac
                     "status": "healthy",
                     "model_loaded": True,
                     "native_cache": native_cache,
+                    "kv_cache_quantization": {
+                        "enabled": True,
+                        "bits": 4,
+                        "group_size": 64,
+                    },
                 }
             },
             "chat": {
@@ -3599,6 +3718,23 @@ def test_release_regression_manifest_real_ui_matrix_requires_every_family_surfac
         }
         for family in REQUIRED_REAL_UI_LIVE_MODEL_FAMILIES
     }
+    proofs["lfm25"]["server"]["health"]["native_cache"] = lfm_native_cache
+    proofs["lfm25"]["cache"]["after"]["ssm_companion"] = {
+        "disk": {
+            "enabled": True,
+            "entries": 1,
+            "total_tokens_on_disk": 64,
+            "total_cached_tokens": 64,
+            "stores": 1,
+        }
+    }
+    proofs["lfm25"]["cache"]["after"]["cache_totals"].update(
+        {
+            "l2_ssm_tokens_on_disk": 64,
+            "ssm_tokens_on_disk": 64,
+        }
+    )
+    proofs["step37"]["server"]["health"]["native_cache"] = step_native_cache
     proofs["gemma4"]["persistedToolCount"] = 0
     proofs["gemma4"]["persistedToolsByMessage"] = []
 
@@ -4446,6 +4582,107 @@ def test_release_regression_manifest_real_ui_matrix_requires_generation_defaults
     lfm25 = matrix["covered_families"]["lfm25"]
     assert "generation_defaults_applied" not in lfm25["covered_surfaces"]
     assert "generation_defaults_applied" in lfm25["missing_surfaces"]
+
+
+def test_release_regression_manifest_real_ui_matrix_requires_lfm_architecture_cache_policy():
+    proof = {
+        "modelName": "LFM2.5-8B-A1B-JANG_2L",
+        "appLogTail": ["start electron app"],
+        "server": {
+            "health": {
+                "status": "healthy",
+                "model_loaded": True,
+                "native_cache": {
+                    "family": "plain_kv",
+                    "schema": "plain_kv_v1",
+                    "cache_type": "paged_kv",
+                    "components": ["attention_kv"],
+                    "prefix": True,
+                    "paged": True,
+                    "block_disk_l2": True,
+                    "generic_turboquant_kv": {
+                        "enabled": True,
+                        "reason": "plain_attention",
+                    },
+                },
+                "kv_cache_quantization": {
+                    "enabled": True,
+                    "bits": 4,
+                    "group_size": 64,
+                },
+            }
+        },
+        "chat": {
+            "turns": [{"role": "assistant", "content": "ok"}],
+            "rawParserTagLeak": False,
+            "cjkLeakCount": 0,
+            "koreanLeakCount": 0,
+        },
+        "cache": {
+            "before": {"scheduler_cache": {"hits": 0}},
+            "after": {
+                "scheduler_cache": {"hits": 1},
+                "block_disk_cache": {
+                    "blocks_on_disk": 1,
+                    "total_tokens_on_disk": 12,
+                    "disk_hits": 1,
+                    "disk_writes": 1,
+                },
+                "cache_totals": {"l2_tokens_on_disk": 12},
+            },
+            "cacheHitTokens": 12,
+        },
+        "rendererWireApi": "responses",
+        "eventCounts": {
+            "complete": 2,
+            "stream": 4,
+            "tool": 24,
+        },
+        "streamTrace": [
+            {
+                "messageId": "lfm-stream",
+                "count": 4,
+                "firstFullContent": "o",
+                "lastFullContent": "ok streamed",
+            }
+        ],
+        "persistedToolCount": 24,
+        "persistedToolsByMessage": [
+            [
+                {"phase": "result", "toolName": "run_command"},
+                {"phase": "result", "toolName": "write_file"},
+            ],
+            [
+                {"phase": "result", "toolName": "run_command"},
+                {"phase": "result", "toolName": "write_file"},
+            ],
+        ],
+        "requestedBuiltinTools": True,
+        "chatOverrides": {"builtinToolsEnabled": True, "maxTokens": 512},
+        "serverCacheControls": {"verified": True},
+        "serverLogTail": [
+            "INFO:vmlx_engine.server:Resolved sampling kwargs "
+            "route=/v1/responses model=lfm "
+            "kwargs={'temperature': 0.0, 'top_p': 1.0, 'max_tokens': 512}"
+        ],
+        "requestContract": {
+            "requestMaxTokens": 512,
+            "wireApi": "responses",
+            "builtinToolsEnabled": True,
+        },
+    }
+
+    matrix = _validate_current_real_ui_live_model_matrix(
+        {"status": "pass", "proofs": {"lfm25_moe_a1b_responses_delta": proof}}
+    )
+
+    lfm25 = matrix["covered_families"]["lfm25"]
+    assert (
+        "architecture_cache_policy"
+        in REQUIRED_REAL_UI_LIVE_MODEL_SURFACES_BY_FAMILY["lfm25"]
+    )
+    assert "architecture_cache_policy" not in lfm25["covered_surfaces"]
+    assert "architecture_cache_policy" in lfm25["missing_surfaces"]
 
 
 def test_release_regression_manifest_real_ui_matrix_rejects_empty_tool_status_spam():
