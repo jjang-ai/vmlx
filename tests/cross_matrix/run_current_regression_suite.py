@@ -21,10 +21,11 @@ from typing import Any
 
 
 DEFAULT_OUT = Path(
-    "build/current-regression-suite-20260531-childstream-epipe-guard.json"
+    "build/current-regression-suite-20260531-live-epipe-signing-dsv4-refresh.json"
 )
 
 EXPECTED_OPEN_REQUIREMENTS = [
+    "Real Electron UI unblocked non-MiMo live model matrix is proven",
     "Real Electron UI cross-family live model matrix is release-cleared",
     "DSV4 long-output/code/file-generation quality is release-cleared",
 ]
@@ -514,13 +515,13 @@ CURRENT_SUITE_COMMANDS: dict[str, list[str]] = {
         sys.executable,
         "tests/cross_matrix/run_packaged_integrity_contract.py",
         "--out",
-        "build/current-packaged-integrity-contract-20260531-childstream-epipe-refresh.json",
+        "build/current-packaged-integrity-contract-20260531-live-signing-refresh.json",
     ],
     "installed_app_runtime_parity_audit": [
         sys.executable,
         "tests/cross_matrix/run_installed_app_runtime_parity_audit.py",
         "--out",
-        "build/current-installed-app-runtime-parity-audit-20260531-childstream-epipe-installed-sync.json",
+        "build/current-installed-app-runtime-parity-audit-20260531-live-epipe-refresh.json",
     ],
     "staged_app_runtime_parity_audit": [
         sys.executable,
@@ -574,7 +575,7 @@ CURRENT_SUITE_COMMANDS: dict[str, list[str]] = {
         "--require-current-proof-sweep",
         "--require-release-ready",
         "--out",
-        "build/current-release-regression-manifest-20260531-childstream-epipe-guard.json",
+        "build/current-release-regression-manifest-20260531-live-epipe-signing-dsv4-refresh.json",
     ],
 }
 

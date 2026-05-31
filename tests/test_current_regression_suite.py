@@ -56,12 +56,12 @@ def test_current_regression_suite_keeps_declared_known_blockers_open(tmp_path, m
     assert artifact["steps"]["release_gate_skip_app"]["returncode"] == 0
 
 
-def test_current_regression_suite_does_not_keep_unblocked_non_mimo_open_after_live_pass():
+def test_current_regression_suite_keeps_unblocked_non_mimo_open_when_live_matrix_regresses():
     from tests.cross_matrix import run_current_regression_suite as suite
 
     assert (
         "Real Electron UI unblocked non-MiMo live model matrix is proven"
-        not in suite.EXPECTED_OPEN_REQUIREMENTS
+        in suite.EXPECTED_OPEN_REQUIREMENTS
     )
 
 
@@ -768,7 +768,7 @@ def test_current_regression_suite_refreshes_release_regression_manifest(monkeypa
     )
     assert any(
         name == "release_regression_manifest"
-        and "build/current-release-regression-manifest-20260531-childstream-epipe-guard.json"
+        and "build/current-release-regression-manifest-20260531-live-epipe-signing-dsv4-refresh.json"
         in cmd
         for name, cmd in seen_steps
     )
@@ -1032,7 +1032,7 @@ def test_current_regression_suite_refreshes_current_packaged_integrity_artifact(
     assert artifact["status"] == "open"
     assert any(
         name == "packaged_integrity_contracts"
-        and "build/current-packaged-integrity-contract-20260531-childstream-epipe-refresh.json"
+        and "build/current-packaged-integrity-contract-20260531-live-signing-refresh.json"
         in cmd
         for name, cmd in seen_steps
     )

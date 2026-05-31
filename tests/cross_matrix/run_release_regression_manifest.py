@@ -25,7 +25,7 @@ from tests.cross_matrix.release_regression_manifest import (
 
 
 DEFAULT_OUT = Path(
-    "build/current-release-regression-manifest-20260531-childstream-epipe-guard.json"
+    "build/current-release-regression-manifest-20260531-live-epipe-signing-dsv4-refresh.json"
 )
 PREPACKAGE_ALLOWED_BLOCKERS = {
     "packaged_app_developer_id_signing_blocked",

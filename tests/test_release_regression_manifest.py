@@ -2187,7 +2187,8 @@ def test_release_regression_manifest_current_sweep_uses_latest_live_smoke_artifa
     assert "current-regression-suite-20260528-installed-aggregate-stale.json" not in joined
     assert "current-regression-suite-20260528-epipe-aggregate-guard.json" not in joined
     assert "current-regression-suite-20260528-dsv4-continue-refresh.json" not in joined
-    assert "current-regression-suite-20260531-childstream-epipe-guard.json" in joined
+    assert "current-regression-suite-20260531-live-epipe-signing-dsv4-refresh.json" in joined
+    assert "current-regression-suite-20260531-childstream-epipe-guard.json" not in joined
     assert "current-regression-suite-20260530-bundled-sync-step37-projector-rerun.json" not in joined
     assert "current-regression-suite-20260530-bundled-sync-step37-projector.json" not in joined
     assert "current-regression-suite-20260529-step37-text-bridge.json" not in joined
@@ -2197,8 +2198,10 @@ def test_release_regression_manifest_current_sweep_uses_latest_live_smoke_artifa
     assert "current-regression-suite-20260528-release-ready-top-level.json" not in joined
     assert "current-regression-suite-20260528-dsv4-memory-refresh.json" not in joined
     assert "current-regression-suite-20260528-signing-detail-ledger.json" not in joined
-    assert "current-installed-app-runtime-parity-audit-20260531-childstream-epipe-installed-sync.json" in joined
-    assert "current-installed-app-runtime-parity-audit-20260531-childstream-epipe-installed-sync.json" in row_text
+    assert "current-installed-app-runtime-parity-audit-20260531-live-epipe-refresh.json" in joined
+    assert "current-installed-app-runtime-parity-audit-20260531-live-epipe-refresh.json" in row_text
+    assert "current-installed-app-runtime-parity-audit-20260531-childstream-epipe-installed-sync.json" not in joined
+    assert "current-installed-app-runtime-parity-audit-20260531-childstream-epipe-installed-sync.json" not in row_text
     assert "current-installed-app-runtime-parity-audit-20260528-epipe-aggregate-guard.json" not in joined
     assert "current-installed-app-runtime-parity-audit-20260528-epipe-aggregate-guard.json" not in row_text
     assert "current-staged-app-runtime-parity-audit-20260528-staged-runtime-recheck.json" in joined
@@ -2296,7 +2299,8 @@ def test_release_regression_manifest_current_sweep_uses_latest_live_smoke_artifa
     assert "current-api-surface-contract-20260527-cache-endpoint-autoswitch-proof.json" not in joined
     assert "current-api-surface-contract-20260526-single-model-auto-switch-review.json" not in joined
     assert "current-api-surface-contract-20260525-single-model-responses-deltas.json" not in joined
-    assert "current-packaged-integrity-contract-20260531-childstream-epipe-refresh.json" in joined
+    assert "current-packaged-integrity-contract-20260531-live-signing-refresh.json" in joined
+    assert "current-packaged-integrity-contract-20260531-childstream-epipe-refresh.json" not in joined
     assert "current-packaged-integrity-contract-20260530-bundled-sync-after-step37-projector.json" not in joined
     assert "current-packaged-integrity-contract-20260529-step37-text-bridge.json" not in joined
     assert "current-packaged-integrity-contract-20260528-installed-aggregate-stale.json" not in joined
@@ -7291,7 +7295,7 @@ def test_release_regression_manifest_runner_default_out_tracks_current_release_p
     from tests.cross_matrix import run_release_regression_manifest as runner
 
     assert runner.DEFAULT_OUT == Path(
-        "build/current-release-regression-manifest-20260531-childstream-epipe-guard.json"
+        "build/current-release-regression-manifest-20260531-live-epipe-signing-dsv4-refresh.json"
     )
 
 
@@ -9983,7 +9987,8 @@ def test_release_regression_manifest_tracks_packaged_integrity_with_runner_artif
     joined = " ".join(row["commands"] + row["artifacts"] + row["proves"])
 
     assert "run_packaged_integrity_contract.py" in joined
-    assert "current-packaged-integrity-contract-20260531-childstream-epipe-refresh.json" in joined
+    assert "current-packaged-integrity-contract-20260531-live-signing-refresh.json" in joined
+    assert "current-packaged-integrity-contract-20260531-childstream-epipe-refresh.json" not in joined
     assert "current-packaged-integrity-contract-20260530-bundled-sync-after-step37-projector.json" not in joined
     assert "current-packaged-integrity-contract-20260521.json" not in joined
     assert "Version triples" in joined
