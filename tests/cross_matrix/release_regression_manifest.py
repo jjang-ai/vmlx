@@ -59,6 +59,16 @@ REQUIRED_REAL_UI_REQUEST_CONTRACT_FIELDS = (
     "videoExpectRegex",
     "cacheExpectRegex",
 )
+REQUIRED_REAL_UI_EXTENSIVE_TOOL_ROWS = frozenset(
+    {
+        "step37_flash_jang2l",
+        "lfm25_moe_a1b",
+        "lfm25_moe_a1b_responses",
+    }
+)
+MIN_REAL_UI_EXTENSIVE_TOOL_EVENTS = 20
+MIN_REAL_UI_EXTENSIVE_TOOL_RESULTS = 2
+MIN_REAL_UI_EXTENSIVE_TOOL_RESULT_MESSAGES = 2
 
 EXPECTED_CURRENT_CACHE_ARCHITECTURE_CHECKS = (
     "dsv4_native_composite_cache_status",
@@ -3336,6 +3346,49 @@ def _real_ui_named_tool_error_count(proof: dict[str, Any]) -> int:
     return count
 
 
+def _real_ui_named_tool_result_message_count(proof: dict[str, Any]) -> int:
+    groups = proof.get("persistedToolsByMessage")
+    if not isinstance(groups, list):
+        return 0
+    count = 0
+    for group in groups:
+        if not isinstance(group, list):
+            continue
+        if any(
+            isinstance(item, dict)
+            and item.get("phase") == "result"
+            and isinstance(item.get("toolName"), str)
+            and item.get("toolName", "").strip()
+            for item in group
+        ):
+            count += 1
+    return count
+
+
+def _real_ui_extensive_tool_churn_ok(proof: dict[str, Any]) -> bool:
+    event_counts = (
+        proof.get("eventCounts") if isinstance(proof.get("eventCounts"), dict) else {}
+    )
+    tool_events = event_counts.get("tool")
+    if (
+        not isinstance(tool_events, int | float)
+        or tool_events < MIN_REAL_UI_EXTENSIVE_TOOL_EVENTS
+    ):
+        return False
+    persisted_tool_count = proof.get("persistedToolCount")
+    if (
+        not isinstance(persisted_tool_count, int | float)
+        or persisted_tool_count < MIN_REAL_UI_EXTENSIVE_TOOL_EVENTS
+    ):
+        return False
+    if _real_ui_named_tool_result_count(proof) < MIN_REAL_UI_EXTENSIVE_TOOL_RESULTS:
+        return False
+    return (
+        _real_ui_named_tool_result_message_count(proof)
+        >= MIN_REAL_UI_EXTENSIVE_TOOL_RESULT_MESSAGES
+    )
+
+
 REAL_UI_TOOL_ONE_TOKEN_RE = (
     r"real[\s_\\-]*ui[\s_\\-]*live[\s_\\-]*tool[\s_\\-]*one"
 )
@@ -4565,6 +4618,11 @@ def _validate_current_real_ui_live_model_proof_artifacts(
             failures.extend(
                 _validate_real_ui_request_contract(row_id, proof, request_contract)
             )
+        if (
+            row_id in REQUIRED_REAL_UI_EXTENSIVE_TOOL_ROWS
+            and not _real_ui_extensive_tool_churn_ok(proof)
+        ):
+            failures.append(f"extensive_tool_churn_missing:{row_id}")
 
         installed_app_ui = _real_ui_proof_is_installed_app(proof)
         if not installed_app_ui:

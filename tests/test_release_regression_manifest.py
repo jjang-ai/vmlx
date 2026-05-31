@@ -348,6 +348,20 @@ def _write_passing_real_ui_live_model_proof_artifacts(root: Path) -> None:
             "cacheHitTokens": 12,
         }
 
+    def add_extensive_tool_churn(proof: dict[str, object]) -> None:
+        proof["eventCounts"] = {"complete": 2, "tool": 24}
+        proof["persistedToolCount"] = 24
+        proof["persistedToolsByMessage"] = [
+            [
+                {"phase": "result", "toolName": "run_command"},
+                {"phase": "result", "toolName": "write_file"},
+            ],
+            [
+                {"phase": "result", "toolName": "run_command"},
+                {"phase": "result", "toolName": "write_file"},
+            ],
+        ]
+
     for row in CURRENT_REAL_UI_LIVE_MODEL_PROOF_ROWS.values():
         screenshot = root / row["chat_screenshot"]
         screenshot.parent.mkdir(parents=True, exist_ok=True)
@@ -500,6 +514,7 @@ def _write_passing_real_ui_live_model_proof_artifacts(root: Path) -> None:
                 "step37-jang2l-responses-tools-image-cachecontrols-after-direct-media-tool-filter-20260531-proof.json",
                 "lfm25-moe-a1b-jang2l-stricttools-chat-20260530-proof.json",
                 "lfm25-moe-a1b-jang2l-stricttools-responses-filesemantic-20260530-proof.json",
+                "lfm25-moe-a1b-jang2l-stricttools-responses-post-epipe-20260531-proof.json",
             )
         ):
             proof["rendererWireApi"] = "responses"
@@ -546,12 +561,14 @@ def _write_passing_real_ui_live_model_proof_artifacts(root: Path) -> None:
             proof["media"] = {"imageVerified": True}
             proof["requestedBuiltinTools"] = True
             proof["chatOverrides"] = {"builtinToolsEnabled": True}
-            proof["persistedToolsByMessage"] = [
-                [
-                    {"phase": "result", "toolName": "run_command"},
-                    {"phase": "result", "toolName": "write_file"},
-                ],
-            ]
+            add_extensive_tool_churn(proof)
+        if row["proof"].endswith(
+            (
+                "lfm25-moe-a1b-jang2l-stricttools-chat-20260530-proof.json",
+                "lfm25-moe-a1b-jang2l-stricttools-responses-post-epipe-20260531-proof.json",
+            )
+        ):
+            add_extensive_tool_churn(proof)
         if row["proof"].endswith(
             "step37-jang2l-responses-reasoning-max768-20260531-proof.json"
         ):
@@ -3133,6 +3150,36 @@ def test_release_regression_manifest_current_sweep_rejects_real_ui_request_contr
     assert result["real_ui_live_model_proof"]["status"] == "fail"
     assert (
         "request_contract_mismatch:zaya_text:maxTokens"
+        in result["real_ui_live_model_proof"]["failures"]
+    )
+
+
+def test_release_regression_manifest_current_sweep_requires_lfm_step_extensive_tool_churn(
+    tmp_path,
+):
+    _write_passing_real_ui_live_model_proof_artifacts(tmp_path)
+    proof_path = (
+        tmp_path
+        / CURRENT_REAL_UI_LIVE_MODEL_PROOF_ARTIFACTS["lfm25_moe_a1b_responses_proof"]
+    )
+    proof = json.loads(proof_path.read_text(encoding="utf-8"))
+    proof.setdefault("eventCounts", {})["tool"] = 3
+    proof["persistedToolCount"] = 3
+    proof["persistedToolsByMessage"] = [
+        [
+            {"phase": "result", "toolName": "run_command"},
+        ],
+        [
+            {"phase": "result", "toolName": "run_command"},
+        ],
+    ]
+    proof_path.write_text(json.dumps(proof) + "\n", encoding="utf-8")
+
+    result = validate_current_proof_sweep_artifacts(tmp_path)
+
+    assert result["real_ui_live_model_proof"]["status"] == "fail"
+    assert (
+        "extensive_tool_churn_missing:lfm25_moe_a1b_responses"
         in result["real_ui_live_model_proof"]["failures"]
     )
 
