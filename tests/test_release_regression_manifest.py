@@ -2890,6 +2890,18 @@ def test_release_regression_manifest_real_ui_live_model_rows_include_ling_bailin
         rows["nemotron_omni_nano_responses_tools_reasoning_cachecontrols"]["proof"]
         == "docs/internal/agent-notes/current-real-ui-live-model-nemotron-omni-nano-responses-tools-reasoning-cachecontrols-localonly-20260527-proof.json"
     )
+    assert rows["nemotron_omni_nano_responses_reasoning"]["model_path"] == (
+        "/Users/example/models/dealign.ai/Nemotron-Omni-Nano-JANGTQ-CRACK"
+    )
+    assert (
+        rows["nemotron_omni_nano_responses_reasoning"]["model_name"]
+        == "Nemotron-Omni-Nano-JANGTQ-CRACK"
+    )
+    assert rows["nemotron_omni_nano_responses_reasoning"]["family"] == "nemotron_omni"
+    assert (
+        rows["nemotron_omni_nano_responses_reasoning"]["proof"]
+        == "docs/internal/agent-notes/diagnostic-real-ui-live-model-nemotron-omni-nano-responses-reasoning-20260531-proof.json"
+    )
     assert rows["hy3_jangtq2"]["model_path"] == "/Users/example/models/JANGQ/Hy3-preview-JANGTQ2"
     assert rows["hy3_jangtq2"]["model_name"] == "Hy3-preview-JANGTQ2"
     assert rows["hy3_jangtq2"]["family"] == "hy3"
