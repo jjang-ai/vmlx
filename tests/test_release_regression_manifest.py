@@ -2030,6 +2030,7 @@ def _passing_open_requirement_details() -> dict[str, object]:
                     "launch_decision": "do_not_launch",
                     "launch_blockers": ["insufficient_memory"],
                     "active_heavy_process_count": 0,
+                    "active_heavy_processes": [],
                     "top_memory_processes": [
                         {
                             "pid": 1001,
@@ -5920,12 +5921,29 @@ def test_release_regression_manifest_validates_current_proof_sweep_artifacts(tmp
                     "launch_decision": "do_not_launch",
                     "launch_blockers": ["insufficient_memory"],
                     "active_heavy_process_count": 0,
+                    "active_heavy_processes": [],
                     "top_memory_processes": [
                         {
                             "pid": 1001,
                             "rss_gb": 10.0,
                             "command": "/Applications/vMLX.app/Contents/MacOS/vMLX",
                         }
+                    ],
+                    "selected_cases": [
+                        "chat_off",
+                        "chat_off_rep1",
+                        "chat_off_no_punct_rep1",
+                        "chat_off_bundle_defaults",
+                        "chat_on",
+                        "chat_on_rep1",
+                        "chat_max",
+                        "responses_off",
+                        "responses_off_rep1",
+                        "responses_off_no_punct_rep1",
+                        "responses_off_bundle_defaults",
+                        "responses_on",
+                        "responses_on_rep1",
+                        "legacy_completion_raw",
                     ],
                     "case_count": 14,
                 },
@@ -6232,6 +6250,8 @@ def test_release_blocker_ledger_preserves_dsv4_exactness_memory_pressure_diagnos
                             "launch_decision": "do_not_launch",
                             "launch_blockers": ["insufficient_memory"],
                             "active_heavy_process_count": 0,
+                            "active_heavy_processes": [],
+                            "selected_cases": ["chat_max", "responses_on"],
                             "case_count": 14,
                         }
                     }
@@ -6252,6 +6272,8 @@ def test_release_blocker_ledger_preserves_dsv4_exactness_memory_pressure_diagnos
     assert blocker["id"] == "dsv4_long_output_code_exactness_open"
     assert blocker["details"]["free_plus_speculative_purgeable_gb"] == 58.26
     assert blocker["details"]["memory_pressure_free_percent"] == 94
+    assert blocker["details"]["active_heavy_processes"] == []
+    assert blocker["details"]["selected_cases"] == ["chat_max", "responses_on"]
 
 
 def test_release_blocker_ledger_tracks_stale_real_ui_request_contract_proofs():
