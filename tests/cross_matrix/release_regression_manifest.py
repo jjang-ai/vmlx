@@ -5162,9 +5162,11 @@ def _validate_current_real_ui_live_model_matrix(
             if server_cache_controls.get("verified") is True:
                 surfaces.add("server_cache_controls")
             if {
+                "cache_endpoint_stats",
                 "cache_hit_telemetry",
                 "l2_disk_storage",
                 "long_tool_loop",
+                "responses_cache_detail_usage",
                 "server_cache_controls",
             }.issubset(surfaces):
                 surfaces.add(REAL_UI_INTEGRATED_TOOL_L2_CACHE_SURFACE)

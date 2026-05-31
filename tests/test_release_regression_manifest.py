@@ -5150,6 +5150,152 @@ def test_release_regression_manifest_real_ui_matrix_requires_lfm_responses_cache
     assert "responses_cache_detail_usage" in lfm25["missing_surfaces"]
 
 
+def test_release_regression_manifest_real_ui_integrated_tool_l2_requires_responses_cache_detail():
+    proof = {
+        "modelName": "LFM2.5-8B-A1B-JANG_2L",
+        "appLogTail": [
+            "start electron app",
+            "[CHAT] Response complete: 134 tokens in 1.1s "
+            "(356.4 t/s, live=228.3 t/s, TTFT: 0.07s, pp: 725 tokens "
+            "(618 cached), 10984.8 pp/s, usage=server)",
+            "[CHAT] Response complete: 136 tokens in 1.1s "
+            "(353.2 t/s, live=228.3 t/s, TTFT: 0.07s, pp: 1024 tokens "
+            "(917 cached), 14027.4 pp/s, usage=server)",
+        ],
+        "server": {
+            "health": {
+                "status": "healthy",
+                "model_loaded": True,
+                "native_cache": {
+                    "family": "lfm2_moe",
+                    "schema": "hybrid_ssm_v1",
+                    "cache_type": "hybrid_ssm_typed",
+                    "components": [
+                        "attention_kv",
+                        "ssm_companion_state",
+                        "async_rederive",
+                    ],
+                    "generic_turboquant_kv": {
+                        "enabled": False,
+                        "reason": "hybrid_ssm_state",
+                    },
+                    "attention_kv_storage_quantization": {
+                        "enabled": True,
+                        "mode": "storage_boundary",
+                        "bits": 4,
+                        "group_size": 64,
+                        "applies_to": "attention_kv_layers_only",
+                        "ssm_policy": "native_companion_state",
+                    },
+                    "prefix": True,
+                    "paged": True,
+                    "block_disk_l2": True,
+                },
+                "kv_cache_quantization": {
+                    "enabled": True,
+                    "bits": 4,
+                    "group_size": 64,
+                },
+            }
+        },
+        "chat": {
+            "turns": [
+                {"role": "assistant", "content": "REAL_UI_LIVE_TOOL_ONE"},
+                {"role": "assistant", "content": "REAL_UI_LIVE_TOOL_TWO"},
+            ],
+            "rawParserTagLeak": False,
+            "cjkLeakCount": 0,
+            "koreanLeakCount": 0,
+        },
+        "cache": {
+            "before": {"scheduler_cache": {"hits": 0}},
+            "after": {
+                "scheduler_cache": {"hits": 3},
+                "block_disk_cache": {
+                    "blocks_on_disk": 24,
+                    "total_tokens_on_disk": 1420,
+                    "disk_hits": 31,
+                    "disk_writes": 24,
+                },
+                "cache_totals": {
+                    "l2_tokens_on_disk": 5080,
+                    "l2_block_tokens_on_disk": 1420,
+                    "l2_ssm_tokens_on_disk": 3660,
+                    "l2_tokens_on_disk_store_sum": 5080,
+                },
+                "ssm_companion": {
+                    "disk": {
+                        "enabled": True,
+                        "entries": 5,
+                        "total_tokens_on_disk": 3660,
+                        "total_cached_tokens": 3660,
+                        "stores": 5,
+                    }
+                },
+            },
+            "cacheHitTokens": 1919,
+        },
+        "rendererWireApi": "responses",
+        "eventCounts": {"complete": 2, "stream": 4, "tool": 24},
+        "streamTrace": [
+            {
+                "messageId": "lfm-stream-1",
+                "count": 2,
+                "firstFullContent": "o",
+                "lastFullContent": "ok streamed one",
+            },
+            {
+                "messageId": "lfm-stream-2",
+                "count": 2,
+                "firstFullContent": "t",
+                "lastFullContent": "ok streamed two",
+            },
+        ],
+        "persistedToolCount": 24,
+        "persistedToolsByMessage": [
+            [
+                {
+                    "phase": "result",
+                    "toolName": "run_command",
+                    "detail": "real_ui_tool_probe_1.txt REAL_UI_LIVE_TOOL_ONE",
+                },
+            ],
+            [
+                {
+                    "phase": "result",
+                    "toolName": "run_command",
+                    "detail": "real_ui_tool_probe_2.txt REAL_UI_LIVE_TOOL_TWO",
+                },
+            ],
+        ],
+        "toolProbeFiles": {
+            "real_ui_tool_probe_1.txt": "REAL_UI_LIVE_TOOL_ONE",
+            "real_ui_tool_probe_2.txt": "REAL_UI_LIVE_TOOL_TWO",
+        },
+        "requestedBuiltinTools": True,
+        "chatOverrides": {"builtinToolsEnabled": True, "maxTokens": 512},
+        "serverCacheControls": {"verified": True},
+        "serverLogTail": [
+            "INFO:vmlx_engine.server:Resolved sampling kwargs "
+            "route=/v1/responses model=lfm "
+            "kwargs={'temperature': 0.0, 'top_p': 1.0, 'max_tokens': 512}"
+        ],
+        "requestContract": {
+            "requestMaxTokens": 512,
+            "wireApi": "responses",
+            "builtinToolsEnabled": True,
+        },
+    }
+
+    matrix = _validate_current_real_ui_live_model_matrix(
+        {"status": "pass", "proofs": {"lfm25_moe_a1b_responses_delta": proof}}
+    )
+
+    lfm25 = matrix["covered_families"]["lfm25"]
+    assert "tool_l2_cache_integrated" not in lfm25["covered_surfaces"]
+    assert "tool_l2_cache_integrated" in lfm25["missing_surfaces"]
+
+
 def test_release_regression_manifest_real_ui_matrix_requires_lfm_live_speed_floor():
     proof = {
         "modelName": "LFM2.5-8B-A1B-JANG_2L",
