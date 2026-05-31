@@ -8,8 +8,13 @@ from tests.cross_matrix import run_step37_vlm_runtime_audit as audit
 
 
 def test_step37_vlm_runtime_audit_default_out_tracks_current_release_artifact():
+    from tests.cross_matrix import release_regression_manifest
+
     assert audit.DEFAULT_OUT == Path(
-        "build/current-step37-vlm-runtime-audit-20260530-source-surface.json"
+        "build/current-step37-vlm-runtime-audit-20260530-source-runtime-route.json"
+    )
+    assert audit.DEFAULT_OUT == Path(
+        release_regression_manifest.CURRENT_STEP37_VLM_RUNTIME_AUDIT_ARTIFACT
     )
 
 

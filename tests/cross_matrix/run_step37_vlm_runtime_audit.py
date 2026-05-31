@@ -15,7 +15,7 @@ from typing import Any
 DEFAULT_MODEL_PATH = Path(
     "/Users/example/.mlxstudio/models/JANGQ-AI/Step-3.7-Flash-JANG_2L"
 )
-DEFAULT_OUT = Path("build/current-step37-vlm-runtime-audit-20260530-source-surface.json")
+DEFAULT_OUT = Path("build/current-step37-vlm-runtime-audit-20260530-source-runtime-route.json")
 JANG_RUNTIME_NOTE = Path(
     "/Users/example/jang/docs/runtime/2026-05-29-step37-lfm25-source-and-quant-status.md"
 )
