@@ -183,9 +183,9 @@ def check_and_inject_fallback_tools(
             name, props = _tool_props(tool)
             normalized_name = name.strip().lower()
             normalized_props = {prop.strip().lower() for prop in props}
-            if normalized_name in {"list_directory", "read_directory"}:
+            if normalized_name in {"list_directory", "read_directory", "list_files"}:
                 return True
-            if normalized_name in {"list_files", "read_file", "write_file"} and (
+            if normalized_name in {"list_files"} and (
                 "path" in normalized_props
                 or "dir" in normalized_props
                 or "directory" in normalized_props
@@ -302,15 +302,34 @@ def check_and_inject_fallback_tools(
             return ""
 
         def _request_param_value(tool_name: str, param: str) -> str:
+            normalized_tool = tool_name.strip().lower()
+            normalized_param = param.strip().lower()
             if (
-                tool_name.strip().lower() == "run_command"
-                and param.strip().lower() == "command"
+                normalized_tool == "run_command"
+                and normalized_param == "command"
             ):
                 command = _derive_run_command_value()
                 if command:
                     return command
             if not request_text:
                 return ""
+            if normalized_param in {"path", "file", "filename"}:
+                if normalized_tool == "read_file":
+                    read_file = re.search(
+                        r"\bread_file\b[^\n.]{0,120}?\bfor\s+([A-Za-z0-9_.:/-]{1,120})",
+                        request_text,
+                        flags=re.IGNORECASE,
+                    )
+                    if read_file:
+                        return read_file.group(1).rstrip(".,;:!?`'\"")
+                if normalized_tool == "write_file":
+                    write_file = re.search(
+                        r"\bwrite_file\b[^\n.]{0,120}?\bpath\s+([A-Za-z0-9_.:/-]{1,120})",
+                        request_text,
+                        flags=re.IGNORECASE,
+                    )
+                    if write_file:
+                        return write_file.group(1).rstrip(".,;:!?`'\"")
             for obj_match in re.finditer(r"\{[^{}]{1,400}\}", request_text):
                 try:
                     obj = json.loads(obj_match.group(0))
@@ -322,6 +341,7 @@ def check_and_inject_fallback_tools(
             name = re.escape(param)
             patterns = (
                 rf"\b{name}\s+parameter(?:\s+content)?\s+must\s+be\s+[`'\"]?([A-Za-z0-9][A-Za-z0-9_.:-]{{0,79}})",
+                rf"\b{name}\s+[`'\"]?([A-Za-z0-9][A-Za-z0-9_.:-]{{0,119}})",
                 rf"\b{name}\s*(?:=|:|to|is)\s*[`'\"]?([A-Za-z0-9][A-Za-z0-9_.:-]{{0,79}})",
                 rf"\bwith\s+{name}\s+[`'\"]?([A-Za-z0-9][A-Za-z0-9_.:-]{{0,79}})",
             )
@@ -334,7 +354,12 @@ def check_and_inject_fallback_tools(
         def _example_value(tool_name: str, param: str) -> str:
             normalized = param.strip().lower()
             if normalized in {"path", "dir", "directory"} or normalized.endswith("_path"):
-                return "."
+                requested = _request_param_value(tool_name, param)
+                if requested:
+                    return requested
+                if tool_name.strip().lower() in {"list_directory", "read_directory"}:
+                    return "."
+                return ""
             return _request_param_value(tool_name, param)
 
         blocks: list[str] = []

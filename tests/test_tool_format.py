@@ -1388,6 +1388,97 @@ class TestFallbackToolPromptFormat:
         )
         assert "Do not use REAL_UI_LIVE_TOOL_TWO itself as a shell command" in rendered
 
+    def test_zaya_file_tool_prompt_binds_exact_path_and_content_from_request(self):
+        from vmlx_engine.api.tool_calling import check_and_inject_fallback_tools
+
+        class FakeTokenizer:
+            def apply_chat_template(self, messages, **kwargs):
+                return "\n".join(str(m.get("content", "")) for m in messages)
+
+        tools = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "write_file",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "path": {"type": "string"},
+                            "content": {"type": "string"},
+                        },
+                        "required": ["path", "content"],
+                    },
+                },
+            }
+        ]
+
+        rendered = check_and_inject_fallback_tools(
+            "user: write file\nassistant:",
+            [
+                {
+                    "role": "user",
+                    "content": (
+                        "Use the write_file tool exactly once with path "
+                        "real_ui_tool_probe_1.txt and content "
+                        "REAL_UI_LIVE_TOOL_ONE."
+                    ),
+                }
+            ],
+            tools,
+            FakeTokenizer(),
+            {"tokenize": False, "add_generation_prompt": True, "tools": tools},
+            tool_parser_id="zaya_xml",
+        )
+
+        assert "<function=write_file>" in rendered
+        assert "<parameter=path>\nreal_ui_tool_probe_1.txt\n</parameter>" in rendered
+        assert "<parameter=content>\nREAL_UI_LIVE_TOOL_ONE\n</parameter>" in rendered
+        assert "<parameter=path>\n.\n</parameter>" not in rendered
+        assert "list the current directory" not in rendered
+
+    def test_zaya_read_file_prompt_binds_path_from_for_phrase(self):
+        from vmlx_engine.api.tool_calling import check_and_inject_fallback_tools
+
+        class FakeTokenizer:
+            def apply_chat_template(self, messages, **kwargs):
+                return "\n".join(str(m.get("content", "")) for m in messages)
+
+        tools = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "read_file",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"path": {"type": "string"}},
+                        "required": ["path"],
+                    },
+                },
+            }
+        ]
+
+        rendered = check_and_inject_fallback_tools(
+            "user: read file\nassistant:",
+            [
+                {
+                    "role": "user",
+                    "content": (
+                        "Use the read_file tool exactly once for "
+                        "real_ui_tool_probe_1.txt."
+                    ),
+                }
+            ],
+            tools,
+            FakeTokenizer(),
+            {"tokenize": False, "add_generation_prompt": True, "tools": tools},
+            tool_parser_id="zaya_xml",
+        )
+
+        assert "<function=read_file>" in rendered
+        assert "<parameter=path>\nreal_ui_tool_probe_1.txt\n</parameter>" in rendered
+        assert "<parameter=path>\n.\n</parameter>" not in rendered
+        assert "list the current directory" not in rendered
+
     def test_zaya_fallback_scopes_examples_to_multiple_requested_tool_names(self):
         from vmlx_engine.api.tool_calling import check_and_inject_fallback_tools
 
