@@ -2510,7 +2510,8 @@ def test_release_regression_manifest_current_sweep_uses_latest_live_smoke_artifa
     assert "current-api-surface-contract-20260527-cache-endpoint-autoswitch-proof.json" not in joined
     assert "current-api-surface-contract-20260526-single-model-auto-switch-review.json" not in joined
     assert "current-api-surface-contract-20260525-single-model-responses-deltas.json" not in joined
-    assert "current-packaged-integrity-contract-20260531-live-signing-refresh.json" in joined
+    assert "current-packaged-integrity-contract-20260531-local-release-decision-refresh.json" in joined
+    assert "current-packaged-integrity-contract-20260531-live-signing-refresh.json" not in joined
     assert "current-packaged-integrity-contract-20260531-gemma4-l2-rotating-kv-fix.json" not in joined
     assert "current-packaged-integrity-contract-20260531-childstream-epipe-refresh.json" not in joined
     assert "current-packaged-integrity-contract-20260530-bundled-sync-after-step37-projector.json" not in joined
@@ -8513,7 +8514,7 @@ def test_release_regression_manifest_runner_default_out_tracks_current_release_p
     from tests.cross_matrix import run_release_regression_manifest as runner
 
     assert runner.DEFAULT_OUT == Path(
-        "build/current-release-regression-manifest-20260531-live-epipe-signing-dsv4-refresh.json"
+        "build/current-release-regression-manifest-20260531-local-release-decision-refresh.json"
     )
 
 
@@ -11205,7 +11206,7 @@ def test_release_regression_manifest_tracks_packaged_integrity_with_runner_artif
     joined = " ".join(row["commands"] + row["artifacts"] + row["proves"])
 
     assert "run_packaged_integrity_contract.py" in joined
-    assert "current-packaged-integrity-contract-20260531-live-signing-refresh.json" in joined
+    assert "current-packaged-integrity-contract-20260531-local-release-decision-refresh.json" in joined
     assert "current-packaged-integrity-contract-20260531-gemma4-l2-rotating-kv-fix.json" not in joined
     assert "current-packaged-integrity-contract-20260531-childstream-epipe-refresh.json" not in joined
     assert "current-packaged-integrity-contract-20260530-bundled-sync-after-step37-projector.json" not in joined
