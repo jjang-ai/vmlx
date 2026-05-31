@@ -3781,7 +3781,7 @@ def _real_ui_architecture_cache_policy_ok(
         )
     if family_id == "step37":
         return (
-            native.get("family") == "mixed_attention"
+            native.get("family") in {"mixed_attention", "step3p7", "step-3.7-flash"}
             and native.get("schema") == "mixed_swa_kv_v1"
             and native.get("cache_type") == "mixed_swa_kv"
             and {

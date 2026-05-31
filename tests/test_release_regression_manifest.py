@@ -4441,6 +4441,53 @@ def test_release_regression_manifest_real_ui_matrix_requires_step37_mixed_swa_st
     assert "architecture_cache_policy" in step37["missing_surfaces"]
 
 
+def test_release_regression_manifest_real_ui_matrix_accepts_step37_family_alias_for_mixed_swa_policy():
+    proof = {
+        "modelName": "Step-3.7-Flash-JANG_2L",
+        "server": {
+            "health": {
+                "native_cache": {
+                    "family": "step3p7",
+                    "schema": "mixed_swa_kv_v1",
+                    "cache_type": "mixed_swa_kv",
+                    "cache_subtype": "step3p7_full_sliding_kv",
+                    "components": [
+                        "full_attention_kv",
+                        "sliding_window_kv",
+                        "rotating_window_metadata",
+                    ],
+                    "generic_turboquant_kv": {
+                        "enabled": False,
+                        "reason": "not_active",
+                    },
+                    "storage_quantization": {
+                        "enabled": True,
+                        "mode": "storage_boundary",
+                        "bits": 4,
+                        "group_size": 64,
+                        "applies_to": "full_and_sliding_attention_kv",
+                        "metadata_policy": "preserve_rotating_window_metadata",
+                    },
+                    "prefix": True,
+                    "paged": True,
+                    "block_disk_l2": True,
+                },
+                "kv_cache_quantization": {
+                    "enabled": True,
+                    "bits": 4,
+                    "group_size": 64,
+                },
+            }
+        },
+        "cache": {
+            "cacheHitTokens": 64,
+            "after": {"cache_totals": {"l2_tokens_on_disk": 64}},
+        },
+    }
+
+    assert _real_ui_architecture_cache_policy_ok("step37", proof) is True
+
+
 def test_release_regression_manifest_real_ui_matrix_rejects_hybrid_ssm_full_prefill_fallback():
     proof = {
         "modelName": "LFM2.5-8B-A1B-JANG_2L",
