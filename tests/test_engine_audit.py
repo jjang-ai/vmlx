@@ -5207,6 +5207,12 @@ class TestHybridSSMCompanionCacheGating:
         assert "queued deferred" in store_block
         assert "is_complete=False" in store_block
 
+    def test_lfm2_base_model_type_uses_hybrid_ssm_companion_cache(self):
+        from vmlx_engine.utils.ssm_companion_cache import is_hybrid_ssm_config
+
+        assert is_hybrid_ssm_config({"model_type": "lfm2"}) is True
+        assert is_hybrid_ssm_config({"text_config": {"model_type": "lfm2"}}) is True
+
 
 class TestStartupCompatibilityGuards:
     def test_cli_checks_mlx_wheel_macos_tag_before_import(self):

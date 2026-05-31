@@ -1008,6 +1008,20 @@ class TestModelConfigs:
         assert config.architecture_hints["ssm_companion_cache"] is True
         assert config.architecture_hints["attention_kv_storage_quantization"] is True
 
+    def test_lfm2_base_config(self, registry):
+        config = self._lookup(registry, "LiquidAI/LFM2-1.2B", "lfm2")
+        assert config.family_name != "unknown", (
+            "lfm2 fell through to unknown — base LFM2 uses the same hybrid "
+            "SSM+attention cache contract as LFM2-MoE and must not collapse "
+            "to plain KV/TurboQuant."
+        )
+        assert config.family_name == "lfm2"
+        assert config.cache_type == "hybrid"
+        assert config.cache_subtype == "lfm2_moe_hybrid_ssm"
+        assert config.tool_parser == "lfm2"
+        assert config.architecture_hints["cache_schema"] == "hybrid_ssm_v1"
+        assert config.architecture_hints["ssm_companion_cache"] is True
+
     def test_falcon_h1_config(self, registry):
         """Falcon H1 is hybrid SSM+attention (CacheList[ArraysCache, KVCache])."""
         config = self._lookup(registry, "tiiuae/Falcon-H1-7B", "falcon_h1")

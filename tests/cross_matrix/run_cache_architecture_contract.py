@@ -103,6 +103,8 @@ REQUIRED_CACHE_TEST_MARKERS = (
     "test_paged_cache_mixed_swa_reconstruct_preserves_full_kv_length",
     "test_paged_cache_mixed_swa_frugal_keeps_resident_blocks_for_immediate_hit",
     "test_step37_flash_jang_config",
+    "test_lfm2_base_config",
+    "test_lfm2_base_model_type_uses_hybrid_ssm_companion_cache",
     "test_lfm2_moe_config",
     # Named-family registry rows protect real model routing from silently
     # collapsing into a generic cache/parser family.
@@ -301,7 +303,11 @@ REQUIRED_CACHE_FAMILY_MATRIX: dict[str, dict[str, tuple[str, ...]]] = {
     },
     "lfm25_moe_hybrid_registry": {
         "checks": ("named_family_registry_cache_parser_contracts",),
-        "markers": ("test_lfm2_moe_config",),
+        "markers": (
+            "test_lfm2_moe_config",
+            "test_lfm2_base_config",
+            "test_lfm2_base_model_type_uses_hybrid_ssm_companion_cache",
+        ),
         "api_checks": (),
         "api_command_markers": (),
         "panel_markers": (),

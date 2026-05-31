@@ -691,6 +691,7 @@ _HYBRID_MODEL_TYPES = frozenset({
     # attention. layer_types use "full_attention" / "conv" strings that
     # do NOT match _HYBRID_LAYER_TYPE_MARKERS, so model_type is the only
     # reliable detection path here.
+    "lfm2",
     "lfm2_moe",
     # Falcon H1 (mlx_lm/falcon_h1.py) — CacheList[ArraysCache, KVCache]
     # hybrid. No layer_types declarations in the model module, so the

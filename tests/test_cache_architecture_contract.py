@@ -181,6 +181,8 @@ def test_cache_architecture_contract_publishes_structured_family_matrix():
     lfm25 = gate.REQUIRED_CACHE_FAMILY_MATRIX["lfm25_moe_hybrid_registry"]
     assert "named_family_registry_cache_parser_contracts" in lfm25["checks"]
     assert "test_lfm2_moe_config" in lfm25["markers"]
+    assert "test_lfm2_base_config" in lfm25["markers"]
+    assert "test_lfm2_base_model_type_uses_hybrid_ssm_companion_cache" in lfm25["markers"]
 
     ling = gate.REQUIRED_CACHE_FAMILY_MATRIX["ling_bailing_hybrid_registry"]
     assert "named_family_registry_cache_parser_contracts" in ling["checks"]
