@@ -18,7 +18,7 @@ DEFAULT_OUT = Path(
     "build/current-issue175-179-release-boundary-audit-20260531-post-install-sync.json"
 )
 INSTALLED_APP_RUNTIME_PARITY_AUDIT_ARTIFACT = Path(
-    "build/current-installed-app-runtime-parity-audit-20260531-childstream-epipe-source-drift.json"
+    "build/current-installed-app-runtime-parity-audit-20260531-childstream-epipe-installed-sync.json"
 )
 ISSUE175_177_INSTALLED_RUNTIME_AUDIT_ARTIFACT = Path(
     "build/current-issue175-177-installed-runtime-audit-20260527.json"

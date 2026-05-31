@@ -20,6 +20,7 @@ def test_installed_app_runtime_parity_records_known_stale_surface():
     assert "installed_panel_chat_ipc_epipe_aggregate_guard" in audit["checks"]
     assert "installed_panel_image_ipc_epipe_aggregate_guard" in audit["checks"]
     assert "installed_panel_child_process_stdio_epipe_guard" in audit["checks"]
+    assert "installed_panel_child_process_stdio_epipe_aggregate_guard" in audit["checks"]
     assert "installed_panel_gateway_guarded_proxy_forwarding" in audit["checks"]
     assert "installed_panel_gateway_write_once_behavior_marker" in audit["checks"]
     assert "installed_panel_gateway_response_socket_destroyed_guard" in audit["checks"]
@@ -46,6 +47,48 @@ def test_installed_app_runtime_parity_default_out_tracks_manifest():
     assert str(gate.DEFAULT_OUT) == (
         manifest.CURRENT_INSTALLED_APP_RUNTIME_PARITY_AUDIT_ARTIFACT
     )
+
+
+def test_installed_app_runtime_parity_scopes_child_stdio_aggregate_guard():
+    from tests.cross_matrix import run_installed_app_runtime_parity_audit as gate
+
+    old_child_guard_with_unrelated_nested_guard = """
+function isExpectedChildProcessStreamDisconnectError$4(err) {
+  const code = err?.code;
+  const message = String(err?.message || "").toLowerCase();
+  return code === "EPIPE" || message.includes("write EPIPE");
+}
+function isExpectedChatBackendDisconnectError(err) {
+  const nestedErrors = Array.isArray(err?.errors) ? err.errors : [];
+  return nestedErrors.some((nested) => isExpectedChatBackendDisconnectError(nested));
+}
+"""
+    compiled_child_guard = """
+function isExpectedChildProcessStreamDisconnectError$4(err) {
+  const code = err?.code;
+  const message = String(err?.message || "").toLowerCase();
+  const cause = err?.cause;
+  const nestedErrors = Array.isArray(err?.errors) ? err.errors : [];
+  return code === "EPIPE" || message.includes("write EPIPE") ||
+    (cause ? isExpectedChildProcessStreamDisconnectError$4(cause) : false) ||
+    nestedErrors.some((nested) => isExpectedChildProcessStreamDisconnectError$4(nested));
+}
+"""
+    source_child_guard = """
+function isExpectedChildProcessStreamDisconnectError(err: unknown): boolean {
+  const code = (err as NodeJS.ErrnoException)?.code
+  const message = String((err as Error)?.message || '').toLowerCase()
+  const cause = (err as any)?.cause
+  const nestedErrors = Array.isArray((err as any)?.errors) ? (err as any).errors : []
+  return nestedErrors.some((nested) => isExpectedChildProcessStreamDisconnectError(nested))
+}
+"""
+
+    assert not gate._has_child_stdio_aggregate_disconnect_guard(
+        old_child_guard_with_unrelated_nested_guard
+    )
+    assert gate._has_child_stdio_aggregate_disconnect_guard(compiled_child_guard)
+    assert gate._has_child_stdio_aggregate_disconnect_guard(source_child_guard)
 
 
 def test_installed_app_runtime_parity_writes_json_artifact(tmp_path):

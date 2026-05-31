@@ -518,7 +518,7 @@ CURRENT_SUITE_COMMANDS: dict[str, list[str]] = {
         sys.executable,
         "tests/cross_matrix/run_installed_app_runtime_parity_audit.py",
         "--out",
-        "build/current-installed-app-runtime-parity-audit-20260531-childstream-epipe-source-drift.json",
+        "build/current-installed-app-runtime-parity-audit-20260531-childstream-epipe-installed-sync.json",
     ],
     "staged_app_runtime_parity_audit": [
         sys.executable,

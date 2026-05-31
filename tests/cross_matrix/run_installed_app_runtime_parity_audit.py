@@ -18,7 +18,7 @@ from typing import Any
 
 
 DEFAULT_OUT = Path(
-    "build/current-installed-app-runtime-parity-audit-20260531-childstream-epipe-source-drift.json"
+    "build/current-installed-app-runtime-parity-audit-20260531-childstream-epipe-installed-sync.json"
 )
 INSTALLED_PYTHON = Path(
     "/Applications/vMLX.app/Contents/Resources/bundled-python/python/bin/python3"
@@ -29,6 +29,13 @@ INSTALLED_APP_DIAGNOSTIC_REPORTS = Path.home() / "Library/Logs/DiagnosticReports
 DISCONNECT_ERROR_RE = re.compile(
     r"\b(?:EPIPE|ECONNRESET|ERR_STREAM_DESTROYED|write EPIPE)\b",
     re.IGNORECASE,
+)
+CHILD_STDIO_GUARD_RE = re.compile(
+    r"function\s+isExpectedChildProcessStreamDisconnectError(?:\$\d+)?\s*\([^)]*\)"
+    r"(?:\s*:\s*[^{]+)?\s*\{"
+    r"(?P<body>.*?)"
+    r"\n\}",
+    re.DOTALL,
 )
 
 
@@ -88,6 +95,23 @@ def _read_installed_panel_main(
     app_asar: Path = INSTALLED_APP_ASAR,
 ) -> dict[str, Any]:
     return _read_installed_asar_file(root, "dist/main/index.mjs", app_asar=app_asar)
+
+
+def _has_child_stdio_aggregate_disconnect_guard(panel_main: str) -> bool:
+    for match in CHILD_STDIO_GUARD_RE.finditer(panel_main):
+        body = match.group("body")
+        if (
+            "cause" in body
+            and "nestedErrors" in body
+            and "Array.isArray" in body
+            and re.search(
+                r"nestedErrors\.some\(\s*\(?nested\)?\s*=>\s*"
+                r"isExpectedChildProcessStreamDisconnectError(?:\$\d+)?\(nested\)",
+                body,
+            )
+        ):
+            return True
+    return False
 
 
 def _read_installed_asar_file(
@@ -375,6 +399,9 @@ def build_audit(
         for handler in installed_ollama_proxy_handlers
         if 'proxyRes.on("error"' in handler
     ]
+    installed_child_stdio_aggregate_guard = _has_child_stdio_aggregate_disconnect_guard(
+        panel_main
+    )
 
     checks = {
         "installed_python_exists": python_path.exists(),
@@ -449,6 +476,10 @@ def build_audit(
             and "write EPIPE" in panel_main
             and "[DOWNLOADS] stdout stream error" in panel_main
             and "Stdout stream error" in panel_main
+        ),
+        "installed_panel_child_process_stdio_epipe_aggregate_guard": (
+            panel_result["returncode"] == 0
+            and installed_child_stdio_aggregate_guard
         ),
         "installed_panel_gateway_guarded_proxy_forwarding": (
             panel_result["returncode"] == 0
@@ -585,6 +616,9 @@ def build_audit(
             "has_child_stdio_disconnect_guard": (
                 "isExpectedChildProcessStreamDisconnectError" in panel_main
                 and "attachChildProcessStreamErrorGuard" in panel_main
+            ),
+            "has_child_stdio_aggregate_disconnect_guard": (
+                installed_child_stdio_aggregate_guard
             ),
             "has_download_stdio_guard": "[DOWNLOADS] stdout stream error"
             in panel_main,
