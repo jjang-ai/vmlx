@@ -39,7 +39,11 @@ function isZayaCcaFamily(family?: string): boolean {
 }
 
 function cacheTypeRequiresPaged(cacheType?: string): boolean {
-  return cacheType === 'hybrid' || cacheType === 'mamba'
+  return cacheType === 'hybrid' || cacheType === 'mamba' || cacheType === 'rotating_kv'
+}
+
+function cacheSubtypeRequiresPaged(cacheSubtype?: string): boolean {
+  return cacheSubtype === 'step3p7_full_sliding_kv' || cacheSubtype === 'mixed_swa_kv'
 }
 
 const DSV4_PAGED_CACHE_BLOCK_SIZE = 256
@@ -356,7 +360,7 @@ async function applyBundleGenerationDefaults(config: SessionConfig, modelPath: s
 function buildCommandPreview(
   modelPath: string,
   config: SessionConfig,
-  detected?: { toolParser?: string; reasoningParser?: string; isMultimodal?: boolean; forceTextOnly?: boolean; isTurboQuant?: boolean; usePagedCache?: boolean; enableAutoToolChoice?: boolean; cacheType?: string; family?: string; nativeMtp?: { supported?: boolean; depth?: number; depthSource?: string } } | null
+  detected?: { toolParser?: string; reasoningParser?: string; isMultimodal?: boolean; forceTextOnly?: boolean; isTurboQuant?: boolean; usePagedCache?: boolean; enableAutoToolChoice?: boolean; cacheType?: string; cacheSubtype?: string; family?: string; nativeMtp?: { supported?: boolean; depth?: number; depthSource?: string } } | null
 ): string {
   const parts = ['vmlx-engine serve', modelPath]
   const requestedDistributed = !!(config as any).distributedEnabled
@@ -373,7 +377,8 @@ function buildCommandPreview(
           : false
   const zayaCcaActive = isZayaCcaFamily(detectedFamily)
   const turboQuantActive = !!detected?.isTurboQuant
-  const hybridCacheActive = detected?.cacheType === 'hybrid' || detected?.cacheType === 'mamba'
+  const hybridCacheActive = cacheTypeRequiresPaged(detected?.cacheType)
+  const subtypePagedCacheActive = cacheSubtypeRequiresPaged(detected?.cacheSubtype)
   const effectiveDistributed = requestedDistributed && !dsv4Active
   const effectiveFlashMoe = requestedFlashMoe && !effectiveDistributed && !dsv4Active
   const effectiveEnableJit = !!config.enableJit && !isVLM && !effectiveFlashMoe && !effectiveDistributed && !dsv4Active && !zayaCcaActive && !turboQuantActive && !hybridCacheActive
@@ -425,7 +430,7 @@ function buildCommandPreview(
   const architectureRequiresPagedCache =
     zayaTypedCacheRequiresPaged ||
     dsv4PrefixCacheOptIn ||
-    (cacheTypeRequiresPaged(detected?.cacheType) && detected?.usePagedCache === true)
+    ((cacheTypeRequiresPaged(detected?.cacheType) || subtypePagedCacheActive) && detected?.usePagedCache === true)
   const cacheLaunchPolicy = resolveCacheLaunchPolicy({
     continuousBatching: cacheStackActive,
     enablePrefixCache: dsv4Active
@@ -636,7 +641,7 @@ export function SessionSettings({ sessionId, onBack }: SessionSettingsProps) {
   const [restarting, setRestarting] = useState(false)
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
   const [showPreview, setShowPreview] = useState(false)
-  const [detectedConfig, setDetectedConfig] = useState<{ toolParser?: string; reasoningParser?: string; cacheType?: string; isMultimodal?: boolean; forceTextOnly?: boolean; isTurboQuant?: boolean; usePagedCache?: boolean; enableAutoToolChoice?: boolean; family?: string; maxContextLength?: number; nativeMtp?: { supported?: boolean; depth?: number; depthSource?: string } } | null>(null)
+  const [detectedConfig, setDetectedConfig] = useState<{ toolParser?: string; reasoningParser?: string; cacheType?: string; cacheSubtype?: string; isMultimodal?: boolean; forceTextOnly?: boolean; isTurboQuant?: boolean; usePagedCache?: boolean; enableAutoToolChoice?: boolean; family?: string; maxContextLength?: number; nativeMtp?: { supported?: boolean; depth?: number; depthSource?: string } } | null>(null)
 
   useEffect(() => {
     const load = async () => {
@@ -861,7 +866,7 @@ export function SessionSettings({ sessionId, onBack }: SessionSettingsProps) {
         )}
 
         {/* Config Form */}
-        <SessionConfigForm config={config} onChange={handleChange} onReset={handleReset} detectedCacheType={detectedConfig?.cacheType} detectedFamily={detectedConfig?.family} detectedIsTurboQuant={detectedConfig?.isTurboQuant} detectedIsMultimodal={detectedConfig?.isMultimodal} detectedForceTextOnly={detectedConfig?.forceTextOnly} detectedMaxContext={detectedConfig?.maxContextLength} detectedNativeMtp={(detectedConfig as any)?.nativeMtp} modelType={(() => { try { return JSON.parse(session.config || '{}').modelType } catch { return undefined } })()} sessionId={sessionId} />
+        <SessionConfigForm config={config} onChange={handleChange} onReset={handleReset} detectedCacheType={detectedConfig?.cacheType} detectedCacheSubtype={detectedConfig?.cacheSubtype} detectedFamily={detectedConfig?.family} detectedIsTurboQuant={detectedConfig?.isTurboQuant} detectedIsMultimodal={detectedConfig?.isMultimodal} detectedForceTextOnly={detectedConfig?.forceTextOnly} detectedMaxContext={detectedConfig?.maxContextLength} detectedNativeMtp={(detectedConfig as any)?.nativeMtp} modelType={(() => { try { return JSON.parse(session.config || '{}').modelType } catch { return undefined } })()} sessionId={sessionId} />
 
         {/* Command Preview */}
         <div className="mt-4">

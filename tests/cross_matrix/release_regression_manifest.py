@@ -353,14 +353,14 @@ CURRENT_POST_BUDGET_EDGE_ARTIFACTS = {
     "tool-call-loop-parser-cleanup": "build/current-tool-call-contract-20260528-tool-parser-loop-matrix.json",
     "panel-tool-security-loop-boundary": "build/current-panel-tool-security-contract-20260528-tool-loop-security-matrix.json",
     "api-chat-responses-anthropic-ollama-parity": "build/current-api-surface-contract-20260531-nested-epipe-childstream-refresh.json",
-    "cache-architecture-family-classification": "build/current-cache-architecture-contract-20260530-lfm2-tool-parser-local.json",
+    "cache-architecture-family-classification": "build/current-cache-architecture-contract-20260531-step37-mixed-swa-runtime.json",
     "jang-model-compat-runtime-boundary": "build/current-jang-model-compat-contract-20260528-pr155-runtime-boundary.json",
     "model-artifact-format-detection": "build/current-model-artifact-format-contract-20260531-post-step-lfm-refresh.json",
     "model-family-detection-noheavy": "build/current-model-family-detection-contract-20260531-post-step-lfm-refresh.json",
     "native-mtp-d3-effect-policy": "build/current-native-mtp-contract-20260531-post-step-lfm-refresh.json",
     "mcp-policy-ui-gateway": "build/current-mcp-policy-contract-20260531-post-step-lfm-refresh.json",
     "vl-media-cache-tool-followup": "build/current-vl-media-cache-contract-20260531-post-step-lfm-refresh.json",
-    "packaged-release-integrity": "build/current-packaged-integrity-contract-20260531-after-adhoc-reseal.json",
+    "packaged-release-integrity": "build/current-packaged-integrity-contract-20260531-step37-mixed-swa-runtime.json",
     "public-release-surface-preflight": "build/current-release-surface-contract-20260528-release-surface-matrix.json",
 }
 
@@ -1424,9 +1424,10 @@ _ROWS: list[dict[str, Any]] = [
             "Panel session launch builder preserves DSV4 default-on native prefix-cache policy, DSV4-only native cache controls, Qwen3.6 hybrid and Mamba paged-cache forcing, and regular KV stale saved false semantics",
         ],
         "commands": [
-            ".venv/bin/python tests/cross_matrix/run_cache_architecture_contract.py --out build/current-cache-architecture-contract-20260530-lfm2-tool-parser-local.json",
+            ".venv/bin/python tests/cross_matrix/run_cache_architecture_contract.py --out build/current-cache-architecture-contract-20260531-step37-mixed-swa-runtime.json",
         ],
         "artifacts": [
+            "build/current-cache-architecture-contract-20260531-step37-mixed-swa-runtime.json",
             "build/current-cache-architecture-contract-20260530-lfm2-tool-parser-local.json",
             "build/current-cache-architecture-contract-20260528-gemma4-mixed-swa-row.json",
             "build/current-cache-architecture-contract-20260527-cache-family-matrix.json",
@@ -1636,12 +1637,13 @@ _ROWS: list[dict[str, Any]] = [
             "packaged Python has no __pycache__/*.pyc files that would invalidate the signed app seal",
         ],
         "commands": [
-            ".venv/bin/python tests/cross_matrix/run_packaged_integrity_contract.py --out build/current-packaged-integrity-contract-20260531-after-adhoc-reseal.json",
+            ".venv/bin/python tests/cross_matrix/run_packaged_integrity_contract.py --out build/current-packaged-integrity-contract-20260531-step37-mixed-swa-runtime.json",
             ".venv/bin/python tests/cross_matrix/run_packaged_integrity_contract.py --jang-tools-source /Users/example/jang/jang-tools --out build/current-packaged-integrity-contract-20260524-pycache-seal-check.json",
             ".venv/bin/python tests/cross_matrix/run_packaged_integrity_contract.py --jang-tools-source /Users/example/jang/.worktrees/vmlx-release-clean-b5f66a7/jang-tools --out build/current-packaged-integrity-contract-20260522-recheck-bundled-release-gate.json",
         ],
         "artifacts": [
             "build/current-objective-proof-audit-20260531-nemotron-exact-finalizer-ledger.json",
+            "build/current-packaged-integrity-contract-20260531-step37-mixed-swa-runtime.json",
             "build/current-packaged-integrity-contract-20260531-after-adhoc-reseal.json",
             "build/current-packaged-integrity-contract-20260528-prepackage-gate.json",
             "build/current-packaged-integrity-contract-20260528-release-ready-dmg-gate.json",

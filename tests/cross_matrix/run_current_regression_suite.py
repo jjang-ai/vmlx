@@ -398,7 +398,7 @@ CURRENT_SUITE_COMMANDS: dict[str, list[str]] = {
         sys.executable,
         "tests/cross_matrix/run_cache_architecture_contract.py",
         "--out",
-        "build/current-cache-architecture-contract-20260530-lfm2-tool-parser-local.json",
+        "build/current-cache-architecture-contract-20260531-step37-mixed-swa-runtime.json",
     ],
     "noheavy_panel_settings_contract": [
         sys.executable,
@@ -514,7 +514,7 @@ CURRENT_SUITE_COMMANDS: dict[str, list[str]] = {
         sys.executable,
         "tests/cross_matrix/run_packaged_integrity_contract.py",
         "--out",
-        "build/current-packaged-integrity-contract-20260531-after-adhoc-reseal.json",
+        "build/current-packaged-integrity-contract-20260531-step37-mixed-swa-runtime.json",
     ],
     "installed_app_runtime_parity_audit": [
         sys.executable,

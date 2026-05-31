@@ -1499,16 +1499,37 @@ class MLLMScheduler:
         the config has at least two distinct attention modes. For everything
         else we return False and the normal prefix-cache pipeline runs.
         """
+        def _cfg_value(cfg, key):
+            if isinstance(cfg, dict):
+                return cfg.get(key)
+            return getattr(cfg, key, None)
+
         candidates = []
         for attr in ('args', 'config'):
             cfg = getattr(lang_model, attr, None)
             if cfg is not None:
                 candidates.append(cfg)
-                tc = getattr(cfg, 'text_config', None)
+                tc = _cfg_value(cfg, 'text_config')
                 if tc is not None:
                     candidates.append(tc)
         for cfg in candidates:
-            layer_types = getattr(cfg, 'layer_types', None)
+            cache_subtype = str(_cfg_value(cfg, "cache_subtype") or "").lower()
+            model_type = str(_cfg_value(cfg, "model_type") or "").lower()
+            text_cfg = _cfg_value(cfg, "text_config")
+            text_model_type = str(_cfg_value(text_cfg, "model_type") or "").lower()
+            sliding_window = _cfg_value(cfg, "sliding_window")
+            if sliding_window is None:
+                sliding_window = _cfg_value(text_cfg, "sliding_window")
+            if (
+                cache_subtype in {"mixed_swa_kv", "step3p7_full_sliding_kv"}
+                or (
+                    model_type == "step3p7"
+                    and text_model_type == "step3p5"
+                    and sliding_window is not None
+                )
+            ):
+                return True
+            layer_types = _cfg_value(cfg, 'layer_types')
             if layer_types and isinstance(layer_types, (list, tuple)):
                 kinds = {str(k).lower() for k in layer_types}
                 if len(kinds) >= 2 and any('sliding' in k for k in kinds):

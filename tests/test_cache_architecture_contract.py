@@ -5,7 +5,7 @@ def test_cache_architecture_contract_default_out_tracks_current_release_proof_ar
     from tests.cross_matrix import run_cache_architecture_contract as gate
 
     assert gate.DEFAULT_OUT == Path(
-        "build/current-cache-architecture-contract-20260530-lfm2-tool-parser-local.json"
+        "build/current-cache-architecture-contract-20260531-step37-mixed-swa-runtime.json"
     )
 
 
@@ -169,12 +169,20 @@ def test_cache_architecture_contract_publishes_structured_family_matrix():
         "test_paged_cache_mixed_swa_reconstruct_preserves_full_kv_length"
         in gemma4["markers"]
     )
+    assert (
+        "test_step37_registry_subtype_marks_scheduler_mixed_attention"
+        in gate.REQUIRED_CACHE_TEST_MARKERS
+    )
 
     step37 = gate.REQUIRED_CACHE_FAMILY_MATRIX["step37_full_sliding_kv_registry"]
     assert "named_family_registry_cache_parser_contracts" in step37["checks"]
     assert "test_step37_flash_jang_config" in step37["markers"]
     assert (
         "test_native_cache_status_reports_step37_full_sliding_kv_from_registry_subtype"
+        in step37["markers"]
+    )
+    assert (
+        "test_step37_registry_subtype_marks_scheduler_mixed_attention"
         in step37["markers"]
     )
 

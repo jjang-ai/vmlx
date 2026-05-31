@@ -76,6 +76,10 @@ function cacheTypeRequiresPaged(cacheType?: string): boolean {
   return cacheType === 'hybrid' || cacheType === 'mamba' || cacheType === 'rotating_kv'
 }
 
+function cacheSubtypeRequiresPaged(cacheSubtype?: string): boolean {
+  return cacheSubtype === 'step3p7_full_sliding_kv' || cacheSubtype === 'mixed_swa_kv'
+}
+
 const DSV4_PAGED_CACHE_BLOCK_SIZE = 256
 const GENERIC_DEFAULT_TIMEOUT_SECONDS = 300
 const DSV4_DEFAULT_TIMEOUT_SECONDS = 900
@@ -1289,13 +1293,13 @@ export class SessionManager extends EventEmitter {
           }
           if (
             freshConfig.usePagedCache === true &&
-            cacheTypeRequiresPaged(freshConfig.cacheType) &&
+            (cacheTypeRequiresPaged(freshConfig.cacheType) || cacheSubtypeRequiresPaged(freshConfig.cacheSubtype)) &&
             config.continuousBatching !== false &&
             config.enablePrefixCache !== false &&
             config.usePagedCache === false
           ) {
             config.usePagedCache = true
-            this.pushLog(sessionId, `[INFO] ${freshConfig.family} ${freshConfig.cacheType} cache requires paged cache; stale saved Use Paged Cache=false was reset to auto-safe true`)
+            this.pushLog(sessionId, `[INFO] ${freshConfig.family} ${freshConfig.cacheSubtype || freshConfig.cacheType} cache requires paged cache; stale saved Use Paged Cache=false was reset to auto-safe true`)
           }
           // Log if model type changed
           if (oldFamily && oldFamily !== 'auto' && freshConfig.toolParser && oldFamily !== freshConfig.toolParser) {
@@ -2702,10 +2706,11 @@ export class SessionManager extends EventEmitter {
     // stay an opt-out; do not silently re-enable cache because tools are present.
     const zayaCcaActive = isZayaCcaFamily(detectedFamily)
     const hybridCacheActive = cacheTypeRequiresPaged(detected.cacheType)
+    const subtypePagedCacheActive = cacheSubtypeRequiresPaged(detected.cacheSubtype)
     const architectureRequiresPagedCache =
       zayaCcaActive ||
       dsv4PrefixCacheOptIn ||
-      (hybridCacheActive && detected.usePagedCache === true)
+      ((hybridCacheActive || subtypePagedCacheActive) && detected.usePagedCache === true)
     const cacheLaunchPolicy = resolveCacheLaunchPolicy({
       continuousBatching: cacheStackActive,
       enablePrefixCache: dsv4Active

@@ -22,7 +22,7 @@ from typing import Any
 
 
 DEFAULT_OUT = Path(
-    "build/current-cache-architecture-contract-20260530-lfm2-tool-parser-local.json"
+    "build/current-cache-architecture-contract-20260531-step37-mixed-swa-runtime.json"
 )
 API_CACHE_CONTRACT_ARTIFACT = Path(
     "build/current-api-cache-contract-cache-architecture-check-20260528-named-family-registry-matrix.json"
@@ -102,6 +102,7 @@ REQUIRED_CACHE_TEST_MARKERS = (
     "test_mllm_ensure_batch_cache_preserves_rotating_cache_type",
     "test_paged_cache_mixed_swa_reconstruct_preserves_full_kv_length",
     "test_paged_cache_mixed_swa_frugal_keeps_resident_blocks_for_immediate_hit",
+    "test_step37_registry_subtype_marks_scheduler_mixed_attention",
     "test_step37_flash_jang_config",
     "test_lfm2_base_config",
     "test_lfm2_base_model_type_uses_hybrid_ssm_companion_cache",
@@ -296,6 +297,7 @@ REQUIRED_CACHE_FAMILY_MATRIX: dict[str, dict[str, tuple[str, ...]]] = {
         "markers": (
             "test_step37_flash_jang_config",
             "test_native_cache_status_reports_step37_full_sliding_kv_from_registry_subtype",
+            "test_step37_registry_subtype_marks_scheduler_mixed_attention",
         ),
         "api_checks": (),
         "api_command_markers": (),
@@ -608,6 +610,7 @@ def build_artifact(root: Path) -> dict[str, Any]:
             and "test_mllm_ensure_batch_cache_preserves_rotating_cache_type" not in missing_markers
             and "test_paged_cache_mixed_swa_reconstruct_preserves_full_kv_length" not in missing_markers
             and "test_paged_cache_mixed_swa_frugal_keeps_resident_blocks_for_immediate_hit" not in missing_markers
+            and "test_step37_registry_subtype_marks_scheduler_mixed_attention" not in missing_markers
         ),
         "dsv4_terminal_composite_contracts": (
             not failed

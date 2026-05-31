@@ -179,6 +179,7 @@ type DetectedConfig = {
     enableAutoToolChoice?: boolean
     defaultEnableThinking?: boolean
     cacheType?: string
+    cacheSubtype?: string
     family?: string
     isTurboQuant?: boolean
     nativeMtp?: {
@@ -205,6 +206,10 @@ function isZayaCcaFamily(family?: string): boolean {
 
 function cacheTypeRequiresPaged(cacheType?: string): boolean {
     return cacheType === 'hybrid' || cacheType === 'mamba' || cacheType === 'rotating_kv'
+}
+
+function cacheSubtypeRequiresPaged(cacheSubtype?: string): boolean {
+    return cacheSubtype === 'step3p7_full_sliding_kv' || cacheSubtype === 'mixed_swa_kv'
 }
 
 const DSV4_PAGED_CACHE_BLOCK_SIZE = 256
@@ -373,7 +378,7 @@ function buildCommandPreview(
         architectureRequiresPagedCache:
             zayaCcaActive ||
             dsv4PrefixCacheOptIn ||
-            (cacheTypeRequiresPaged(detected?.cacheType) && detected?.usePagedCache === true),
+            ((cacheTypeRequiresPaged(detected?.cacheType) || cacheSubtypeRequiresPaged(detected?.cacheSubtype)) && detected?.usePagedCache === true),
     })
     const prefixCacheOff = cacheLaunchPolicy.prefixCacheOff
     const usePagedCache = cacheLaunchPolicy.effectiveUsePagedCache
@@ -1998,6 +2003,38 @@ describe('No Hardcoded Values', () => {
         expect(hasFlag(out, '--enable-block-disk-cache')).toBe(true)
     })
 
+    it('Step3.7 full/sliding KV cache subtype forces paged cache over stale saved false', () => {
+        const out = preview(
+            {
+                enablePrefixCache: true,
+                continuousBatching: true,
+                usePagedCache: false,
+                enableDiskCache: true,
+                enableBlockDiskCache: true,
+                kvCacheQuantization: 'q4',
+                toolCallParser: 'auto',
+                reasoningParser: 'auto',
+            },
+            {
+                family: 'step-3.7-flash',
+                cacheType: 'kv',
+                cacheSubtype: 'step3p7_full_sliding_kv',
+                usePagedCache: true,
+                isMultimodal: true,
+                toolParser: 'step3p5',
+                reasoningParser: 'qwen3',
+            },
+        )
+
+        expect(hasFlag(out, '--is-mllm')).toBe(true)
+        expect(hasFlag(out, '--use-paged-cache')).toBe(true)
+        expect(hasFlag(out, '--enable-disk-cache')).toBe(false)
+        expect(hasFlag(out, '--enable-block-disk-cache')).toBe(true)
+        expect(getFlagValue(out, '--kv-cache-quantization')).toBe('q4')
+        expect(getFlagValue(out, '--tool-call-parser')).toBe('step3p5')
+        expect(getFlagValue(out, '--reasoning-parser')).toBe('qwen3')
+    })
+
     it('deepseek-v4 respects explicit prefix cache disable and suppresses dependent caches', () => {
         const out = preview(
             {
@@ -2586,6 +2623,26 @@ describe('JIT Toggle', () => {
 
         expect(form).toContain("detectedCacheType === 'rotating_kv'")
         expect(form).toContain('nativeCacheRequiresPaged')
+    })
+
+    it('settings form and launch code treat Step3.7 full/sliding KV subtype as architecture-paged cache', () => {
+        const fs = require('fs')
+        const form = fs.readFileSync(
+            'src/renderer/src/components/sessions/SessionConfigForm.tsx',
+            'utf-8',
+        )
+        const settings = fs.readFileSync(
+            'src/renderer/src/components/sessions/SessionSettings.tsx',
+            'utf-8',
+        )
+        const sessions = fs.readFileSync('src/main/sessions.ts', 'utf-8')
+
+        expect(form).toContain('detectedCacheSubtype')
+        expect(form).toContain("detectedCacheSubtype === 'step3p7_full_sliding_kv'")
+        expect(settings).toContain('detectedCacheSubtype={detectedConfig?.cacheSubtype}')
+        expect(settings).toContain('cacheSubtypeRequiresPaged')
+        expect(sessions).toContain('cacheSubtypeRequiresPaged')
+        expect(sessions).toContain('freshConfig.cacheSubtype')
     })
 
     it('settings form and launch code surface one DSV4 native composite cache switch', () => {

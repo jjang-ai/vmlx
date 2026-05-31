@@ -7643,6 +7643,36 @@ class TestTurboQuantKVTelemetry:
         assert _is_kv_like(KVCache()) is True
         assert _is_kv_like(RotatingKVCache(max_size=4096)) is True
 
+    def test_step37_registry_subtype_marks_scheduler_mixed_attention(self):
+        """Step3.7 may lack layer_types but still needs mixed full/sliding KV handling."""
+        from vmlx_engine.mllm_scheduler import MLLMScheduler
+        from vmlx_engine.scheduler import Scheduler
+
+        for cfg in (
+            SimpleNamespace(
+                model_type="step3p7",
+                cache_subtype="step3p7_full_sliding_kv",
+                text_config=SimpleNamespace(
+                    model_type="step3p5",
+                    sliding_window=512,
+                ),
+            ),
+            SimpleNamespace(
+                model_type="step3p7",
+                text_config=SimpleNamespace(
+                    model_type="step3p5",
+                    sliding_window=512,
+                ),
+            ),
+        ):
+            model = SimpleNamespace(config=cfg)
+
+            assert Scheduler._model_has_mixed_attention(model) is True
+            assert MLLMScheduler._model_has_mixed_attention(
+                object.__new__(MLLMScheduler),
+                model,
+            ) is True
+
     def test_mllm_ensure_batch_cache_preserves_rotating_cache_type(self):
         """Gemma4 decode must keep sliding-window layers on BatchRotatingKVCache."""
         from mlx_lm.models.cache import KVCache, RotatingKVCache

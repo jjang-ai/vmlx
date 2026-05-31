@@ -246,6 +246,8 @@ interface SessionConfigFormProps {
   onReset?: () => void
   /** Detected model cache type ('kv', 'mamba', etc.) for feature gating */
   detectedCacheType?: string
+  /** Detected architecture cache subtype for KV models with typed native cache contracts */
+  detectedCacheSubtype?: string
   /** Detected model family for feature gating where cache type alone is ambiguous */
   detectedFamily?: string
   /** True for JANGTQ/MXTQ models whose live TurboQuant KV cache cannot be mx.compile traced */
@@ -272,7 +274,7 @@ interface SessionConfigFormProps {
   sessionId?: string
 }
 
-export function SessionConfigForm({ config, onChange, onReset, detectedCacheType, detectedFamily, detectedIsTurboQuant, detectedIsMultimodal, detectedForceTextOnly, detectedMaxContext, detectedNativeMtp, modelType, imageMode, sessionId }: SessionConfigFormProps) {
+export function SessionConfigForm({ config, onChange, onReset, detectedCacheType, detectedCacheSubtype, detectedFamily, detectedIsTurboQuant, detectedIsMultimodal, detectedForceTextOnly, detectedMaxContext, detectedNativeMtp, modelType, imageMode, sessionId }: SessionConfigFormProps) {
   const { t } = useTranslation()
   const isImage = modelType === 'image'
   const isImageEdit = isImage && (imageMode === 'edit' || config.imageMode === 'edit')
@@ -325,10 +327,13 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
     detectedCacheType === 'mamba' ||
     detectedCacheType === 'hybrid' ||
     detectedCacheType === 'rotating_kv'
-  const architectureRequiresPagedCache = zayaCcaActive || dsv4CompositeCacheOptIn || isMambaCache
+  const subtypeRequiresPagedCache =
+    detectedCacheSubtype === 'step3p7_full_sliding_kv' ||
+    detectedCacheSubtype === 'mixed_swa_kv'
+  const architectureRequiresPagedCache = zayaCcaActive || dsv4CompositeCacheOptIn || isMambaCache || subtypeRequiresPagedCache
   const zayaTypedCacheRequiresPaged = zayaCcaActive && !batchingOff && !prefixOff
   const dsv4CompositeRequiresPaged = dsv4CompositeCacheOptIn && !batchingOff && !prefixOff
-  const nativeCacheRequiresPaged = isMambaCache && !batchingOff && !prefixOff
+  const nativeCacheRequiresPaged = (isMambaCache || subtypeRequiresPagedCache) && !batchingOff && !prefixOff
   const cacheControlState = {
     continuousBatching: effectiveContinuousBatching,
     enablePrefixCache: effectivePrefixCacheEnabled,
