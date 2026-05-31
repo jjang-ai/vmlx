@@ -1244,7 +1244,7 @@ export function registerChatHandlers(
           : "";
       if (hasSystemPrompt && overrides?.builtinToolsEnabled) {
         const toolRule =
-          "\n\nIMPORTANT: After using any tools, you MUST always provide a substantive response explaining what you found or did. Never stop after just executing tools.";
+          "\n\nIMPORTANT: After using any tools, provide a final response. If the user explicitly requested exact final wording or a strict output format, follow that format exactly; otherwise provide a substantive response explaining what you found or did. Never stop after just executing tools.";
         requestMessages.push({
           role: "system",
           content: overrides!.systemPrompt! + toolRule + directMediaAttachmentRule,

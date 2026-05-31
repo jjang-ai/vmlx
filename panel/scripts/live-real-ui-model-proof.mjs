@@ -722,7 +722,27 @@ function namedToolProbeSemanticsOk(result) {
     }
     return true
   })()
-  return commandSemanticsOk && fileSemanticsOk && visibleToolSemanticsOk
+  const strictExactReplyOk = (() => {
+    const turns = Array.isArray(result.chat?.turns) ? result.chat.turns : []
+    const exactReplyRe = /reply exactly:\s*["'“”`]?([A-Za-z0-9_=-]+)["'“”`]?/i
+    for (let i = 0; i < turns.length; i += 1) {
+      const turn = turns[i]
+      if (!turn || turn.role !== 'user') continue
+      const match = String(turn.content || '').match(exactReplyRe)
+      if (!match) continue
+      const expected = match[1]
+      const nextAssistant = turns.slice(i + 1).find((candidate) => candidate?.role === 'assistant')
+      const actual = String(nextAssistant?.content || '').trim()
+      if (actual !== expected) return false
+    }
+    return true
+  })()
+  return (
+    commandSemanticsOk
+    && fileSemanticsOk
+    && visibleToolSemanticsOk
+    && strictExactReplyOk
+  )
 }
 
 function countMatches(text, regex) {

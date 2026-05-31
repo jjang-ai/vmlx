@@ -5,6 +5,7 @@
  * and that remote-only gating (chat_template_kwargs exclusion) works correctly.
  */
 import { describe, it, expect } from 'vitest'
+import { readFileSync } from 'node:fs'
 import { dsv4OutputBudget } from '../src/shared/dsv4RequestBudget'
 
 // ─── buildRequestBody logic (extracted from chat.ts) ─────────────────────────
@@ -722,7 +723,7 @@ describe('buildRequestBody — Tool format', () => {
 
     it('Responses API preserves the augmented custom system prompt when built-in tools are enabled', () => {
         const augmentedSystemPrompt =
-            'Custom coding instructions\n\nIMPORTANT: After using any tools, you MUST always provide a substantive response explaining what you found or did. Never stop after just executing tools.'
+            'Custom coding instructions\n\nIMPORTANT: After using any tools, provide a final response. If the user explicitly requested exact final wording or a strict output format, follow that format exactly; otherwise provide a substantive response explaining what you found or did. Never stop after just executing tools.'
         const body = buildRequestBody(
             'responses',
             'model',
@@ -739,6 +740,15 @@ describe('buildRequestBody — Tool format', () => {
         expect(body.instructions).toBe(augmentedSystemPrompt)
         expect(body.input).toEqual([{ role: 'user', content: 'Create index.html' }])
         expect(body.tools[0].name).toBe('read_file')
+    })
+
+    it('agentic tool prompts do not override explicit exact-output user formats', () => {
+        const registry = readFileSync('src/main/tools/registry.ts', 'utf8')
+        const chat = readFileSync('src/main/ipc/chat.ts', 'utf8')
+
+        expect(registry).toContain('If the user explicitly requested exact final wording or a strict output format, follow that format exactly')
+        expect(registry).not.toContain('MUST ALWAYS provide a substantive response')
+        expect(chat).toContain('If the user explicitly requested exact final wording or a strict output format, follow that format exactly')
     })
 })
 

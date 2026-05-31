@@ -591,8 +591,8 @@ CURRENT_REAL_UI_LIVE_MODEL_PROOF_ROWS = {
         "family": "lfm25",
     },
     "lfm25_moe_a1b_responses": {
-        "proof": "docs/internal/agent-notes/current-real-ui-live-model-lfm25-moe-a1b-jang2l-stricttools-responses-streamtrace-20260530-proof.json",
-        "chat_screenshot": "docs/internal/agent-notes/current-real-ui-live-model-lfm25-moe-a1b-jang2l-stricttools-responses-streamtrace-20260530-chat.png",
+        "proof": "docs/internal/agent-notes/current-real-ui-live-model-lfm25-moe-a1b-jang2l-stricttools-responses-exactcontract-20260531-proof.json",
+        "chat_screenshot": "docs/internal/agent-notes/current-real-ui-live-model-lfm25-moe-a1b-jang2l-stricttools-responses-exactcontract-20260531-chat.png",
         "model_path": "/Users/example/.mlxstudio/models/JANGQ-AI/LFM2.5-8B-A1B-JANG_2L",
         "model_name": "LFM2.5-8B-A1B-JANG_2L",
         "family": "lfm25",
@@ -3241,6 +3241,10 @@ REAL_UI_TOOL_TWO_MALFORMED_TOKEN_RE = re.compile(
     r"\bre\s*:\s*al[\s_\\-]*ui[\s_\\-]*live[\s_\\-]*tool[\s_\\-]*two\b",
     re.IGNORECASE,
 )
+REAL_UI_EXACT_REPLY_RE = re.compile(
+    r"reply exactly:\s*[\"'“”`]?([A-Za-z0-9_=-]+)[\"'“”`]?",
+    re.IGNORECASE,
+)
 
 
 def _real_ui_named_tool_probe_visible_semantics_ok(proof: dict[str, Any]) -> bool:
@@ -3254,6 +3258,26 @@ def _real_ui_named_tool_probe_visible_semantics_ok(proof: dict[str, Any]) -> boo
             REAL_UI_TOOL_TWO_VISIBLE_CONTRADICTION_RE.search(content)
             or REAL_UI_TOOL_TWO_MALFORMED_TOKEN_RE.search(content)
         ):
+            return False
+    return True
+
+
+def _real_ui_named_tool_probe_exact_reply_ok(proof: dict[str, Any]) -> bool:
+    chat = proof.get("chat") if isinstance(proof.get("chat"), dict) else {}
+    turns = chat.get("turns") if isinstance(chat.get("turns"), list) else []
+    for index, turn in enumerate(turns):
+        if not isinstance(turn, dict) or turn.get("role") != "user":
+            continue
+        match = REAL_UI_EXACT_REPLY_RE.search(str(turn.get("content", "")))
+        if not match:
+            continue
+        expected = match.group(1)
+        actual = ""
+        for candidate in turns[index + 1 :]:
+            if isinstance(candidate, dict) and candidate.get("role") == "assistant":
+                actual = str(candidate.get("content", "")).strip()
+                break
+        if actual != expected:
             return False
     return True
 
@@ -3317,6 +3341,7 @@ def _real_ui_named_tool_probe_semantics_ok(proof: dict[str, Any]) -> bool:
         command_semantics_ok
         and file_semantics_ok
         and _real_ui_named_tool_probe_visible_semantics_ok(proof)
+        and _real_ui_named_tool_probe_exact_reply_ok(proof)
     )
 
 

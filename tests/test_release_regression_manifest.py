@@ -2488,7 +2488,10 @@ def test_release_regression_manifest_real_ui_script_rejects_visible_tool_probe_c
     assert "real_ui_tool_probe_2.txt" in semantics_block
     assert "REAL_UI_LIVE_TOOL_ONE" in semantics_block
     assert "RE:AL_UI_LIVE_TOOL_TWO" in semantics_block
+    assert "strictExactReplyOk" in semantics_block
+    assert "reply exactly:" in semantics_block
     assert "&& visibleToolSemanticsOk" in semantics_block
+    assert "&& strictExactReplyOk" in semantics_block
 
 
 def test_release_regression_manifest_current_sweep_rejects_missing_dev_ui_proof(tmp_path):
@@ -2814,7 +2817,7 @@ def test_release_regression_manifest_real_ui_live_model_rows_include_ling_bailin
     )
     assert (
         rows["lfm25_moe_a1b_responses"]["proof"]
-        == "docs/internal/agent-notes/current-real-ui-live-model-lfm25-moe-a1b-jang2l-stricttools-responses-streamtrace-20260530-proof.json"
+        == "docs/internal/agent-notes/current-real-ui-live-model-lfm25-moe-a1b-jang2l-stricttools-responses-exactcontract-20260531-proof.json"
     )
 
 
@@ -3642,6 +3645,98 @@ def test_release_regression_manifest_real_ui_named_tool_probe_rejects_malformed_
     }
 
     assert not _real_ui_named_tool_probe_semantics_ok(proof)
+
+
+def test_release_regression_manifest_real_ui_named_tool_probe_rejects_explanatory_exact_reply():
+    proof = {
+        "chat": {
+            "turns": [
+                {
+                    "role": "user",
+                    "content": (
+                        "Use the run_command tool exactly once. "
+                        "After the tool result, reply exactly: REAL_UI_LIVE_TOOL_TWO"
+                    ),
+                },
+                {
+                    "role": "assistant",
+                    "content": (
+                        "The command has been executed as requested.\n\n"
+                        "REAL_UI_LIVE_TOOL_TWO"
+                    ),
+                },
+            ]
+        },
+        "persistedToolsByMessage": [
+            [
+                {
+                    "phase": "result",
+                    "toolName": "run_command",
+                    "detail": (
+                        "$ printf %s REAL_UI_LIVE_TOOL_TWO > "
+                        "real_ui_tool_probe_2.txt && cat real_ui_tool_probe_2.txt\n\n"
+                        "REAL_UI_LIVE_TOOL_TWO"
+                    ),
+                }
+            ],
+            [
+                {
+                    "phase": "result",
+                    "toolName": "run_command",
+                    "detail": "$ printf %s REAL_UI_LIVE_TOOL_ONE > real_ui_tool_probe_1.txt",
+                }
+            ],
+        ],
+        "toolProbeFiles": {
+            "real_ui_tool_probe_1.txt": "REAL_UI_LIVE_TOOL_ONE",
+            "real_ui_tool_probe_2.txt": "REAL_UI_LIVE_TOOL_TWO",
+        },
+    }
+
+    assert not _real_ui_named_tool_probe_semantics_ok(proof)
+
+
+def test_release_regression_manifest_real_ui_named_tool_probe_accepts_exact_reply_contract():
+    proof = {
+        "chat": {
+            "turns": [
+                {
+                    "role": "user",
+                    "content": (
+                        "Use the run_command tool exactly once. "
+                        "After the tool result, reply exactly: REAL_UI_LIVE_TOOL_TWO"
+                    ),
+                },
+                {"role": "assistant", "content": "REAL_UI_LIVE_TOOL_TWO"},
+            ]
+        },
+        "persistedToolsByMessage": [
+            [
+                {
+                    "phase": "result",
+                    "toolName": "run_command",
+                    "detail": "$ printf %s REAL_UI_LIVE_TOOL_ONE > real_ui_tool_probe_1.txt",
+                }
+            ],
+            [
+                {
+                    "phase": "result",
+                    "toolName": "run_command",
+                    "detail": (
+                        "$ printf %s REAL_UI_LIVE_TOOL_TWO > "
+                        "real_ui_tool_probe_2.txt && cat real_ui_tool_probe_2.txt\n\n"
+                        "REAL_UI_LIVE_TOOL_TWO"
+                    ),
+                }
+            ],
+        ],
+        "toolProbeFiles": {
+            "real_ui_tool_probe_1.txt": "REAL_UI_LIVE_TOOL_ONE",
+            "real_ui_tool_probe_2.txt": "REAL_UI_LIVE_TOOL_TWO",
+        },
+    }
+
+    assert _real_ui_named_tool_probe_semantics_ok(proof)
 
 
 def test_release_regression_manifest_real_ui_matrix_rejects_forged_tool_reasoning_surfaces():
