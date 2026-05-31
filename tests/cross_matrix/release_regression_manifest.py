@@ -591,8 +591,8 @@ CURRENT_REAL_UI_LIVE_MODEL_PROOF_ROWS = {
         "family": "lfm25",
     },
     "lfm25_moe_a1b_responses": {
-        "proof": "docs/internal/agent-notes/current-real-ui-live-model-lfm25-moe-a1b-jang2l-stricttools-responses-filesemantic-20260530-proof.json",
-        "chat_screenshot": "docs/internal/agent-notes/current-real-ui-live-model-lfm25-moe-a1b-jang2l-stricttools-responses-filesemantic-20260530-chat.png",
+        "proof": "docs/internal/agent-notes/current-real-ui-live-model-lfm25-moe-a1b-jang2l-stricttools-responses-stdoutverified-20260530-proof.json",
+        "chat_screenshot": "docs/internal/agent-notes/current-real-ui-live-model-lfm25-moe-a1b-jang2l-stricttools-responses-stdoutverified-20260530-chat.png",
         "model_path": "/Users/example/.mlxstudio/models/JANGQ-AI/LFM2.5-8B-A1B-JANG_2L",
         "model_name": "LFM2.5-8B-A1B-JANG_2L",
         "family": "lfm25",
@@ -3235,6 +3235,10 @@ REAL_UI_TOOL_TWO_VISIBLE_CONTRADICTION_RE = re.compile(
     rf".{{0,100}}{REAL_UI_TOOL_ONE_TOKEN_RE}",
     re.IGNORECASE | re.DOTALL,
 )
+REAL_UI_TOOL_TWO_MALFORMED_TOKEN_RE = re.compile(
+    r"\bre\s*:\s*al[\s_\\-]*ui[\s_\\-]*live[\s_\\-]*tool[\s_\\-]*two\b",
+    re.IGNORECASE,
+)
 
 
 def _real_ui_named_tool_probe_visible_semantics_ok(proof: dict[str, Any]) -> bool:
@@ -3244,7 +3248,10 @@ def _real_ui_named_tool_probe_visible_semantics_ok(proof: dict[str, Any]) -> boo
         if not isinstance(turn, dict) or turn.get("role") != "assistant":
             continue
         content = str(turn.get("content", ""))
-        if REAL_UI_TOOL_TWO_VISIBLE_CONTRADICTION_RE.search(content):
+        if (
+            REAL_UI_TOOL_TWO_VISIBLE_CONTRADICTION_RE.search(content)
+            or REAL_UI_TOOL_TWO_MALFORMED_TOKEN_RE.search(content)
+        ):
             return False
     return True
 

@@ -2785,6 +2785,10 @@ def test_release_regression_manifest_real_ui_live_model_rows_include_ling_bailin
         rows["lfm25_moe_a1b"]["proof"]
         == "docs/internal/agent-notes/current-real-ui-live-model-lfm25-moe-a1b-jang2l-stricttools-chat-20260530-proof.json"
     )
+    assert (
+        rows["lfm25_moe_a1b_responses"]["proof"]
+        == "docs/internal/agent-notes/current-real-ui-live-model-lfm25-moe-a1b-jang2l-stricttools-responses-stdoutverified-20260530-proof.json"
+    )
 
 
 def test_release_regression_manifest_real_ui_requires_step37_and_lfm25():
@@ -3554,6 +3558,53 @@ def test_release_regression_manifest_real_ui_named_tool_probe_rejects_visible_fi
                     "phase": "result",
                     "toolName": "run_command",
                     "detail": "$ printf %s REAL_UI_LIVE_TOOL_TWO > real_ui_tool_probe_2.txt",
+                }
+            ],
+        ],
+        "toolProbeFiles": {
+            "real_ui_tool_probe_1.txt": "REAL_UI_LIVE_TOOL_ONE",
+            "real_ui_tool_probe_2.txt": "REAL_UI_LIVE_TOOL_TWO",
+        },
+    }
+
+    assert not _real_ui_named_tool_probe_semantics_ok(proof)
+
+
+def test_release_regression_manifest_real_ui_named_tool_probe_rejects_malformed_visible_tool_sentinel():
+    proof = {
+        "chat": {
+            "turns": [
+                {"role": "assistant", "content": "REAL_UI_LIVE_TOOL_ONE"},
+                {
+                    "role": "assistant",
+                    "content": (
+                        "The content of real_ui_tool_probe_2.txt is "
+                        "REAL_UI_LIVE_TOOL_TWO.\n\nRE:AL_UI_LIVE_TOOL_TWO"
+                    ),
+                },
+            ]
+        },
+        "persistedToolsByMessage": [
+            [
+                {
+                    "phase": "result",
+                    "toolName": "run_command",
+                    "detail": (
+                        "$ printf %s REAL_UI_LIVE_TOOL_ONE > "
+                        "real_ui_tool_probe_1.txt && cat real_ui_tool_probe_1.txt\n\n"
+                        "REAL_UI_LIVE_TOOL_ONE"
+                    ),
+                }
+            ],
+            [
+                {
+                    "phase": "result",
+                    "toolName": "run_command",
+                    "detail": (
+                        "$ printf %s REAL_UI_LIVE_TOOL_TWO > "
+                        "real_ui_tool_probe_2.txt && cat real_ui_tool_probe_2.txt\n\n"
+                        "REAL_UI_LIVE_TOOL_TWO"
+                    ),
                 }
             ],
         ],
