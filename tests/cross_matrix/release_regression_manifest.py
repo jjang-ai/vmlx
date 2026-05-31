@@ -3485,12 +3485,38 @@ def _real_ui_live_speed_floor_ok(family_id: str, proof: dict[str, Any]) -> bool:
     floor = floors.get(family_id)
     if floor is None:
         return False
+    samples = []
+    structured_samples = proof.get("liveSpeedSamples")
+    if isinstance(structured_samples, list):
+        for sample in structured_samples:
+            if not isinstance(sample, dict):
+                continue
+            samples.append(
+                {
+                    "tokens": sample.get("tokens"),
+                    "live_tps": sample.get("liveTokensPerSecond"),
+                    "ttft": sample.get("ttftSeconds"),
+                }
+            )
     lines: list[str] = []
     for key in ("appLogTail", "serverLogTail"):
         values = proof.get(key)
         if isinstance(values, list):
             lines.extend(str(value) for value in values)
     passing_samples = 0
+    for sample in samples:
+        tokens = sample.get("tokens")
+        live_tps = sample.get("live_tps")
+        ttft = sample.get("ttft")
+        if (
+            isinstance(tokens, (int, float))
+            and isinstance(live_tps, (int, float))
+            and isinstance(ttft, (int, float))
+            and tokens > 0
+            and live_tps >= floor
+            and 0.0 < ttft <= 5.0
+        ):
+            passing_samples += 1
     for line in lines:
         match = REAL_UI_RESPONSE_COMPLETE_SPEED_RE.search(line)
         if not match:

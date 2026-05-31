@@ -610,6 +610,9 @@ function deriveProvenSurfaces(result) {
   if (generationDefaultsAppliedSeen(result)) {
     surfaces.add('generation_defaults_applied')
   }
+  if (liveSpeedFloorSeen(result)) {
+    surfaces.add('live_speed_floor')
+  }
   if (
     (result.eventCounts?.tool || 0) >= 3
     && namedToolResultCount(result) >= 2
@@ -637,6 +640,55 @@ function deriveProvenSurfaces(result) {
     surfaces.add('video_where_supported')
   }
   return [...surfaces].sort()
+}
+
+function extractLiveSpeedSamples(result) {
+  const samples = []
+  const lines = []
+  for (const key of ['appLogTail', 'serverLogTail']) {
+    if (Array.isArray(result?.[key])) {
+      lines.push(...result[key].map((line) => String(line)))
+    }
+  }
+  const speedRe = /Response complete:\s+(\d+)\s+tokens.*?live=(\d+(?:\.\d+)?)\s+t\/s,\s+TTFT:\s+(\d+(?:\.\d+)?)s.*?usage=server/
+  for (const line of lines) {
+    const match = line.match(speedRe)
+    if (!match) continue
+    samples.push({
+      tokens: Number(match[1]),
+      liveTokensPerSecond: Number(match[2]),
+      ttftSeconds: Number(match[3]),
+      line,
+    })
+  }
+  return samples
+}
+
+function liveSpeedFloorForResult(result) {
+  const identity = `${result?.modelName || ''} ${result?.modelPath || ''}`.toLowerCase()
+  if (identity.includes('lfm2.5') || identity.includes('lfm25')) return 100
+  if (identity.includes('step-3.7') || identity.includes('step37')) return 45
+  return null
+}
+
+function liveSpeedFloorSeen(result) {
+  const floor = liveSpeedFloorForResult(result)
+  if (!floor) return false
+  const samples = Array.isArray(result?.liveSpeedSamples)
+    ? result.liveSpeedSamples
+    : extractLiveSpeedSamples(result)
+  let passing = 0
+  for (const sample of samples) {
+    if (
+      Number(sample?.tokens || 0) > 0
+      && Number(sample?.liveTokensPerSecond || 0) >= floor
+      && Number(sample?.ttftSeconds || 0) > 0
+      && Number(sample?.ttftSeconds || 0) <= 5
+    ) {
+      passing += 1
+    }
+  }
+  return passing >= 2
 }
 
 function hasNativeCacheStatus(health) {
@@ -1254,6 +1306,7 @@ async function main() {
         serverLogTail: server.logs.slice(-160),
       }
       result.visibleAssistantTurnsComplete = visibleAssistantAfterEachUser(result.chat?.turns || [])
+      result.liveSpeedSamples = extractLiveSpeedSamples(result)
       result.provenSurfaces = deriveProvenSurfaces(result)
       writeFileSync(
         path.join(proofDir, `${proofBasename}-proof.json`),
@@ -1482,6 +1535,7 @@ async function main() {
       serverLogTail: server.logs.slice(-120),
     }
     result.visibleAssistantTurnsComplete = visibleAssistantAfterEachUser(result.chat?.turns || [])
+    result.liveSpeedSamples = extractLiveSpeedSamples(result)
     result.provenSurfaces = deriveProvenSurfaces(result)
     writeFileSync(
       path.join(proofDir, `${proofBasename}-proof.json`),

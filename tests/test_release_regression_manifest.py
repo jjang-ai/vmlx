@@ -2627,6 +2627,9 @@ def test_release_regression_manifest_real_ui_live_model_script_exists_and_uses_r
     assert "videoVerified" in source
     assert "imageSemanticVerified" in source
     assert "videoSemanticVerified" in source
+    assert "extractLiveSpeedSamples" in source
+    assert "liveSpeedSamples" in source
+    assert "live_speed_floor" in source
     assert "sendErrors" in source
     assert "rendererFailureStage" in source
     assert "status: rendererResult.rendererFailureStage ? 'fail' : undefined" in source
@@ -4952,6 +4955,79 @@ def test_release_regression_manifest_real_ui_matrix_requires_lfm_live_speed_floo
     )
     assert "live_speed_floor" not in lfm25["covered_surfaces"]
     assert "live_speed_floor" in lfm25["missing_surfaces"]
+
+
+def test_release_regression_manifest_real_ui_matrix_accepts_structured_live_speed_samples():
+    proof = {
+        "modelName": "Step-3.7-Flash-JANG_2L",
+        "appLogTail": ["start electron app"],
+        "server": {
+            "health": {
+                "status": "healthy",
+                "model_loaded": True,
+                "native_cache": {
+                    "family": "mixed_attention",
+                    "schema": "mixed_swa_kv_v1",
+                    "cache_type": "mixed_swa_kv",
+                    "components": [
+                        "full_attention_kv",
+                        "sliding_window_kv",
+                        "rotating_window_metadata",
+                    ],
+                    "generic_turboquant_kv": {
+                        "enabled": False,
+                        "reason": "not_active",
+                    },
+                    "prefix": True,
+                    "paged": True,
+                    "block_disk_l2": True,
+                },
+                "kv_cache_quantization": {
+                    "enabled": True,
+                    "bits": 4,
+                    "group_size": 64,
+                },
+                "scheduler": {
+                    "last_cache_execution": {
+                        "cache_detail": "paged+mixed_swa",
+                        "cached_tokens": 2612,
+                    }
+                },
+            }
+        },
+        "chat": {
+            "turns": [{"role": "assistant", "content": "ok"}],
+            "rawParserTagLeak": False,
+            "cjkLeakCount": 0,
+            "koreanLeakCount": 0,
+        },
+        "cache": {"cacheHitTokens": 2612},
+        "rendererWireApi": "responses",
+        "eventCounts": {"complete": 2, "stream": 4, "tool": 24},
+        "streamTrace": [
+            {
+                "messageId": "step-stream",
+                "count": 4,
+                "firstFullContent": "o",
+                "lastFullContent": "ok streamed",
+            }
+        ],
+        "liveSpeedSamples": [
+            {"tokens": 78, "liveTokensPerSecond": 50.2, "ttftSeconds": 0.43},
+            {"tokens": 86, "liveTokensPerSecond": 49.9, "ttftSeconds": 0.44},
+        ],
+        "requestedBuiltinTools": True,
+        "chatOverrides": {"builtinToolsEnabled": True, "maxTokens": 512},
+        "requestContract": {"requestMaxTokens": 512, "wireApi": "responses"},
+    }
+
+    matrix = _validate_current_real_ui_live_model_matrix(
+        {"status": "pass", "proofs": {"step37_flash_jang2l": proof}}
+    )
+
+    step37 = matrix["covered_families"]["step37"]
+    assert "live_speed_floor" in step37["covered_surfaces"]
+    assert "live_speed_floor" not in step37["missing_surfaces"]
 
 
 def test_release_regression_manifest_real_ui_matrix_rejects_empty_tool_status_spam():
