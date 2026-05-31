@@ -56,12 +56,12 @@ def test_current_regression_suite_keeps_declared_known_blockers_open(tmp_path, m
     assert artifact["steps"]["release_gate_skip_app"]["returncode"] == 0
 
 
-def test_current_regression_suite_tracks_unblocked_non_mimo_l2_storage_gap():
+def test_current_regression_suite_does_not_keep_cleared_unblocked_non_mimo_gap_open():
     from tests.cross_matrix import run_current_regression_suite as suite
 
     assert (
         "Real Electron UI unblocked non-MiMo live model matrix is proven"
-        in suite.EXPECTED_OPEN_REQUIREMENTS
+        not in suite.EXPECTED_OPEN_REQUIREMENTS
     )
 
 
@@ -768,7 +768,7 @@ def test_current_regression_suite_refreshes_release_regression_manifest(monkeypa
     )
     assert any(
         name == "release_regression_manifest"
-        and "build/current-release-regression-manifest-20260531-gemma4-l2-rotating-kv-fix.json"
+        and "build/current-release-regression-manifest-20260531-step37-l2-rotating-kv-fix.json"
         in cmd
         for name, cmd in seen_steps
     )

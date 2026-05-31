@@ -25,7 +25,6 @@ DEFAULT_OUT = Path(
 )
 
 EXPECTED_OPEN_REQUIREMENTS = [
-    "Real Electron UI unblocked non-MiMo live model matrix is proven",
     "Real Electron UI cross-family live model matrix is release-cleared",
     "DSV4 long-output/code/file-generation quality is release-cleared",
 ]
@@ -575,7 +574,7 @@ CURRENT_SUITE_COMMANDS: dict[str, list[str]] = {
         "--require-current-proof-sweep",
         "--require-release-ready",
         "--out",
-        "build/current-release-regression-manifest-20260531-gemma4-l2-rotating-kv-fix.json",
+        "build/current-release-regression-manifest-20260531-step37-l2-rotating-kv-fix.json",
     ],
 }
 

@@ -2311,7 +2311,8 @@ def test_release_regression_manifest_current_sweep_uses_latest_live_smoke_artifa
     assert "current-api-surface-contract-20260527-cache-endpoint-autoswitch-proof.json" not in joined
     assert "current-api-surface-contract-20260526-single-model-auto-switch-review.json" not in joined
     assert "current-api-surface-contract-20260525-single-model-responses-deltas.json" not in joined
-    assert "current-packaged-integrity-contract-20260531-gemma4-l2-rotating-kv-fix.json" in joined
+    assert "current-packaged-integrity-contract-20260531-live-signing-refresh.json" in joined
+    assert "current-packaged-integrity-contract-20260531-gemma4-l2-rotating-kv-fix.json" not in joined
     assert "current-packaged-integrity-contract-20260531-childstream-epipe-refresh.json" not in joined
     assert "current-packaged-integrity-contract-20260530-bundled-sync-after-step37-projector.json" not in joined
     assert "current-packaged-integrity-contract-20260529-step37-text-bridge.json" not in joined
@@ -2963,6 +2964,15 @@ def test_release_regression_manifest_real_ui_live_model_rows_include_ling_bailin
     assert (
         rows["step37_flash_jang2l_reasoning"]["proof"]
         == "docs/internal/agent-notes/current-real-ui-live-model-step37-jang2l-responses-reasoning-max768-20260531-proof.json"
+    )
+    assert rows["step37_flash_jang2l_l2storage"]["model_path"] == (
+        "/Users/example/.mlxstudio/models/JANGQ-AI/Step-3.7-Flash-JANG_2L"
+    )
+    assert rows["step37_flash_jang2l_l2storage"]["model_name"] == "Step-3.7-Flash-JANG_2L"
+    assert rows["step37_flash_jang2l_l2storage"]["family"] == "step37"
+    assert (
+        rows["step37_flash_jang2l_l2storage"]["proof"]
+        == "docs/internal/agent-notes/current-real-ui-live-model-step37-jang2l-cachecontrols-l2storage-20260531-proof.json"
     )
     assert rows["lfm25_moe_a1b"]["model_path"] == (
         "/Users/example/.mlxstudio/models/JANGQ-AI/LFM2.5-8B-A1B-JANG_2L"
@@ -10120,7 +10130,8 @@ def test_release_regression_manifest_tracks_packaged_integrity_with_runner_artif
     joined = " ".join(row["commands"] + row["artifacts"] + row["proves"])
 
     assert "run_packaged_integrity_contract.py" in joined
-    assert "current-packaged-integrity-contract-20260531-gemma4-l2-rotating-kv-fix.json" in joined
+    assert "current-packaged-integrity-contract-20260531-live-signing-refresh.json" in joined
+    assert "current-packaged-integrity-contract-20260531-gemma4-l2-rotating-kv-fix.json" not in joined
     assert "current-packaged-integrity-contract-20260531-childstream-epipe-refresh.json" not in joined
     assert "current-packaged-integrity-contract-20260530-bundled-sync-after-step37-projector.json" not in joined
     assert "current-packaged-integrity-contract-20260521.json" not in joined
