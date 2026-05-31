@@ -67,6 +67,31 @@ function isHfAuthStatus(status: number): boolean {
   return status === 401 || status === 403;
 }
 
+function isExpectedChildProcessStreamDisconnectError(err: unknown): boolean {
+  const code = (err as NodeJS.ErrnoException)?.code;
+  const message = String((err as Error)?.message || "").toLowerCase();
+  return (
+    code === "EPIPE" ||
+    code === "ECONNRESET" ||
+    code === "ERR_STREAM_DESTROYED" ||
+    code === "ERR_STREAM_WRITE_AFTER_END" ||
+    message.includes("write EPIPE".toLowerCase()) ||
+    message.includes("broken pipe") ||
+    message.includes("stream has been destroyed") ||
+    message.includes("write after end")
+  );
+}
+
+function attachChildProcessStreamErrorGuard(
+  stream: NodeJS.ReadableStream | null | undefined,
+  onUnexpected: (err: Error) => void,
+): void {
+  stream?.on("error", (err: Error) => {
+    if (isExpectedChildProcessStreamDisconnectError(err)) return;
+    onUnexpected(err);
+  });
+}
+
 async function fetchHfPath(
   path: string,
   init: RequestInit = {},
@@ -269,8 +294,21 @@ export async function readGenerationDefaults(
           typeof sampling.repetition_penalty === "number"
             ? sampling.repetition_penalty
             : undefined;
+        let modelType: string | undefined;
+        try {
+          const configRaw = await readFile(join(modelPath, "config.json"), "utf-8");
+          const config = JSON.parse(configRaw);
+          modelType =
+            typeof config?.model_type === "string" ? config.model_type : undefined;
+        } catch {
+          // config.json is optional for generation defaults.
+        }
         const rep =
-          defaultMode === "thinking"
+          modelType === "deepseek_v4"
+            ? defaultMode === "thinking"
+              ? (repThinking ?? repScalar ?? repChat)
+              : (repScalar ?? repChat ?? repThinking)
+            : defaultMode === "thinking"
             ? (repThinking ?? repChat ?? repScalar)
             : (repChat ?? repThinking ?? repScalar);
         if (typeof rep === "number") defaults.repeatPenalty = rep;
@@ -1556,6 +1594,12 @@ export function registerModelHandlers(): void {
       // Log stderr but don't parse — our progress comes from structured stdout
       const chunk = data.toString().trim();
       if (chunk) console.log(`[DOWNLOADS] stderr: ${chunk.slice(0, 200)}`);
+    });
+    attachChildProcessStreamErrorGuard(proc.stdout, (err) => {
+      console.warn(`[DOWNLOADS] stdout stream error: ${err.message}`);
+    });
+    attachChildProcessStreamErrorGuard(proc.stderr, (err) => {
+      console.warn(`[DOWNLOADS] stderr stream error: ${err.message}`);
     });
 
     proc.on("close", async (code: number | null) => {

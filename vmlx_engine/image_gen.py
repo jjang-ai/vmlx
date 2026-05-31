@@ -19,11 +19,14 @@ Usage:
 
 import asyncio
 import base64
+import inspect
 import io
 import logging
 import time
 from dataclasses import dataclass
 from pathlib import Path
+
+from .mlx_memory import clear_mlx_memory_cache
 
 logger = logging.getLogger(__name__)
 
@@ -338,6 +341,8 @@ class ImageGenEngine:
         self._model_path: str | None = None
         self._mflux_class: str | None = None
         self._quantize: int | None = None
+        self._lora_paths: list[str] | None = None
+        self._lora_scales: list[float] | None = None
         self._loaded = False
         # vmlx#100 / mlxstudio#100 — cooperative cancellation. mflux's
         # `generate_image` is synchronous and not preemptible from outside,
@@ -384,6 +389,8 @@ class ImageGenEngine:
         model_path: str | None = None,
         mflux_class: str | None = None,
         mflux_name: str | None = None,
+        lora_paths: list[str] | None = None,
+        lora_scales: list[float] | None = None,
     ) -> None:
         """Load any image model (generation or editing).
 
@@ -395,6 +402,8 @@ class ImageGenEngine:
                          If not provided, falls back to name-based lookup.
             mflux_name: Canonical mflux model name for ModelConfig.from_name().
                         If not provided, resolved from model_name.
+            lora_paths: Optional local LoRA adapter paths to pass to mflux when supported.
+            lora_scales: Optional LoRA scales, matching lora_paths order when provided.
         """
         # mlxstudio#82: resolve canonical mflux name via unconditional
         # normalization. Prior behaviour skipped the normalization block
@@ -523,20 +532,46 @@ class ImageGenEngine:
 
         # Load from local path (NEVER silently download from HuggingFace)
         logger.info(f"Loading {resolved_class} from local path: {model_path}")
+        requested_lora = bool(lora_paths) or lora_scales is not None
+        if lora_scales is not None and not lora_paths:
+            raise ValueError("--lora-scales requires --lora-paths")
+        if lora_paths is not None and lora_scales is not None and len(lora_paths) != len(lora_scales):
+            raise ValueError("--lora-scales must have the same length as --lora-paths")
+
+        model_kwargs = {
+            "model_config": model_config,
+            "quantize": quantize,
+            "model_path": model_path,
+        }
+
         try:
-            self._model = ModelClass(
-                model_config=model_config,
-                quantize=quantize,
-                model_path=model_path,
-                lora_paths=[],
+            signature = inspect.signature(ModelClass)
+            params = signature.parameters
+            accepts_kwargs = any(
+                param.kind == inspect.Parameter.VAR_KEYWORD
+                for param in params.values()
             )
-        except TypeError:
-            # Some classes (SeedVR2) don't accept lora_paths
-            self._model = ModelClass(
-                model_config=model_config,
-                quantize=quantize,
-                model_path=model_path,
-            )
+            accepts_lora_paths = accepts_kwargs or "lora_paths" in params
+            accepts_lora_scales = accepts_kwargs or "lora_scales" in params
+            if requested_lora and not accepts_lora_paths:
+                raise ValueError(
+                    f"{resolved_class} does not support LoRA constructor argument "
+                    "'lora_paths'; use a LoRA-capable mflux model class."
+                )
+            if lora_scales is not None and not accepts_lora_scales:
+                raise ValueError(
+                    f"{resolved_class} does not support LoRA constructor argument "
+                    "'lora_scales'; omit --lora-scales or use a compatible mflux model class."
+                )
+            if accepts_lora_paths:
+                model_kwargs["lora_paths"] = list(lora_paths or [])
+            if lora_scales is not None and accepts_lora_scales:
+                model_kwargs["lora_scales"] = list(lora_scales)
+        except (TypeError, ValueError):
+            if requested_lora:
+                raise
+
+        self._model = ModelClass(**model_kwargs)
 
         # Fix quantized embeddings with non-uint32 weights (mflux bug)
         if quantize and self._model is not None:
@@ -549,6 +584,8 @@ class ImageGenEngine:
         self._model_path = model_path
         self._mflux_class = resolved_class
         self._quantize = quantize
+        self._lora_paths = list(lora_paths) if lora_paths is not None else None
+        self._lora_scales = list(lora_scales) if lora_scales is not None else None
         self._loaded = True
         logger.info(f"Image model loaded in {elapsed:.1f}s: {resolved_name} ({resolved_class})")
 
@@ -560,9 +597,19 @@ class ImageGenEngine:
         model_path: str | None = None,
         mflux_class: str | None = None,
         mflux_name: str | None = None,
+        lora_paths: list[str] | None = None,
+        lora_scales: list[float] | None = None,
     ) -> None:
         """Load an image editing model. Delegates to load()."""
-        self.load(model_name, quantize, model_path, mflux_class, mflux_name)
+        self.load(
+            model_name,
+            quantize,
+            model_path,
+            mflux_class,
+            mflux_name,
+            lora_paths=lora_paths,
+            lora_scales=lora_scales,
+        )
 
     def unload(self) -> None:
         """Unload the current model to free memory.
@@ -572,12 +619,7 @@ class ImageGenEngine:
             self._model = None
             self._loaded = False
             # Keep metadata for wake/reload: _model_name, _mflux_class, _quantize, _model_path
-            try:
-                import mlx.core as mx
-                if hasattr(mx, 'clear_memory_cache'):
-                    mx.clear_memory_cache()
-            except Exception:
-                pass
+            clear_mlx_memory_cache(log=logger)
             logger.info("Image model unloaded")
 
     def generate(

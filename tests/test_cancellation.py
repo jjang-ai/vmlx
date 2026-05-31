@@ -35,6 +35,24 @@ def client():
         yield TestClient(app, raise_server_exceptions=False)
 
 
+@pytest.fixture
+def successful_cancel_client():
+    """Create a TestClient with a mock engine that accepts aborts."""
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from vmlx_engine.server import app
+
+    mock_engine = MagicMock()
+    mock_engine.abort_request = AsyncMock(return_value=True)
+    mock_engine.get_stats.return_value = {"engine_type": "simple"}
+    mock_engine.is_mllm = False
+
+    with patch("vmlx_engine.server._engine", mock_engine), \
+         patch("vmlx_engine.server._api_key", None):
+        from starlette.testclient import TestClient
+        yield TestClient(app, raise_server_exceptions=False), mock_engine
+
+
 class TestCancellationEndpoints:
     """Tests for /v1/.../cancel routes."""
 
@@ -56,6 +74,27 @@ class TestCancellationEndpoints:
         """Verify the responses cancel route is registered."""
         resp = client.post("/v1/responses/test-resp-id/cancel")
         assert resp.status_code in (404, 200)
+
+    def test_cancel_responses_endpoint_calls_engine_with_response_id(
+        self, successful_cancel_client
+    ):
+        """Responses cancel must route to engine abort, not disappear as a 404."""
+        client, engine = successful_cancel_client
+
+        resp = client.post("/v1/responses/resp_issue179_cancel_probe/cancel")
+
+        assert resp.status_code == 200
+        assert resp.json()["success"] is True
+        engine.abort_request.assert_awaited_once_with("resp_issue179_cancel_probe")
+
+    def test_cancel_responses_inactive_id_returns_404_after_engine_lookup(
+        self, client
+    ):
+        """Responses cancel 404 can mean inactive/already-finished, not missing route."""
+        resp = client.post("/v1/responses/resp_issue179_finished/cancel")
+
+        assert resp.status_code == 404
+        assert "not found or already finished" in resp.json()["detail"]
 
     def test_cancel_completions_endpoint_exists(self, client):
         """Verify the completions cancel route is registered."""

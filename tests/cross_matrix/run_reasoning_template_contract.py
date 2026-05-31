@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Any
 
 
-DEFAULT_OUT = Path("build/current-reasoning-template-contract-20260521.json")
+DEFAULT_OUT = Path("build/current-reasoning-template-contract-20260526-settings-audit.json")
 
 SOURCE_HASH_FILES = (
     "vmlx_engine/server.py",
@@ -41,9 +41,9 @@ SOURCE_HASH_FILES = (
 )
 
 REQUIRED_REASONING_TEMPLATE_TEST_MARKERS = (
-    # Public API rails. These prevent hidden forced-behavior fixes: DSV4 must
-    # preserve requested reasoning rails and only apply bundle defaults when a
-    # request omits values.
+    # Public API rails. These prevent unsafe hidden downgrades: DSV4 must
+    # preserve requested reasoning-on/effort rails, and must use its audited
+    # quality-safe rail when direct/off is known to corrupt identifiers.
     "test_dsv4_reasoning_effort_preserves_requested_rails",
     "test_dsv4_thinking_policy_does_not_force_tool_calls_to_direct_rail",
     "test_dsv4_bundle_defaults_apply_only_when_request_omits_values",

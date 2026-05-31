@@ -15,7 +15,31 @@
  * NOTE: Edit vs generation model detection is done via config.imageMode (set at server
  * start time and stored in session config). There is NO regex-based model name detection.
  */
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { describe, it, expect } from 'vitest'
+
+const imageIpcSource = readFileSync(
+  resolve(process.cwd(), 'src/main/ipc/image.ts'),
+  'utf8',
+)
+
+describe('image IPC backend request disconnect guards', () => {
+  it('routes local image server request writes through EPIPE-aware helpers', () => {
+    expect(imageIpcSource).toContain('function writeImageServerRequestBody')
+    expect(imageIpcSource).toContain('function endImageServerRequest')
+    expect(imageIpcSource).toContain("code === 'EPIPE'")
+    expect(imageIpcSource).toContain("code === 'ERR_STREAM_DESTROYED'")
+    expect(imageIpcSource).toContain("code === 'ERR_STREAM_WRITE_AFTER_END'")
+    expect(imageIpcSource).toContain('broken pipe')
+    expect(imageIpcSource).toContain('const cause = (err as any)?.cause')
+    expect(imageIpcSource).toContain("const nestedErrors = Array.isArray((err as any)?.errors)")
+    expect(imageIpcSource).toContain('nestedErrors.some((nested) => isExpectedImageServerDisconnectError(nested))')
+    expect(imageIpcSource).toContain('!req.closed')
+    expect(imageIpcSource).not.toContain('req.write(bodyStr)\n    req.end()')
+    expect(imageIpcSource).not.toContain('req.write(bodyStr)\n          req.end()')
+  })
+})
 
 // =============================================================================
 // 1. getDefaultSteps (from src/renderer/src/components/image/ImageTab.tsx)

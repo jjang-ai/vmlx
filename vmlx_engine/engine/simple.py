@@ -16,6 +16,7 @@ from typing import Any
 from ..api.tool_calling import check_and_inject_fallback_tools, convert_tools_for_template
 from ..api.utils import clean_output_text, is_mllm_model
 from ..errors import PromptTooLongError
+from ..mlx_memory import clear_mlx_memory_cache
 from ..model_config_registry import get_model_config_registry
 from ..utils.chat_template_kwargs import (
     build_chat_template_kwargs,
@@ -597,7 +598,7 @@ class SimpleEngine(BaseEngine):
                         tool_parser_id=self._model_tool_parser_name(),
                     )
 
-                    if thinking_enabled is False and not template_tools:
+                    if thinking_enabled is False:
                         prompt = ensure_thinking_off_sentinel(
                             prompt,
                             family_name=self._model_family_name(),
@@ -746,11 +747,7 @@ class SimpleEngine(BaseEngine):
                     )
                 except Exception as e:
                     logger.error(f"MLLM stream_chat failed to start: {type(e).__name__}: {e}")
-                    try:
-                        import mlx.core as mx
-                        mx.clear_memory_cache()
-                    except Exception:
-                        pass
+                    clear_mlx_memory_cache(log=logger)
                     raise
 
                 # Per-token iteration: offload each next() to thread pool
@@ -766,11 +763,7 @@ class SimpleEngine(BaseEngine):
                         chunk = await self._run_model_call(_next)
                     except Exception as e:
                         logger.error(f"MLLM generation error: {type(e).__name__}: {e}")
-                        try:
-                            import mlx.core as mx
-                            mx.clear_memory_cache()
-                        except Exception:
-                            pass
+                        clear_mlx_memory_cache(log=logger)
                         raise
 
                     if chunk is _sentinel:
@@ -907,7 +900,7 @@ class SimpleEngine(BaseEngine):
                 tool_parser_id=self._model_tool_parser_name(),
             )
 
-            if thinking_enabled is False and not template_tools:
+            if thinking_enabled is False:
                 prompt = ensure_thinking_off_sentinel(
                     prompt,
                     family_name=self._model_family_name(),

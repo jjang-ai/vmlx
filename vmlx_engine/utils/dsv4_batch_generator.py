@@ -459,7 +459,17 @@ class DSV4BatchGenerator:
         sampled = sample_fn(logprobs)
         return sampled, logprobs
 
-    def _prefill_last_logits(self, token_ids: List[int], cache: List[Any]):
+    @staticmethod
+    def _realize_last_logits(last_logits: Any) -> None:
+        mx.eval(last_logits)
+
+    def _prefill_last_logits(
+        self,
+        token_ids: List[int],
+        cache: List[Any],
+        *,
+        realize_before_clear: bool = True,
+    ):
         """DSV4 prefill returning logits for the last prompt token.
 
         Default behavior is bounded-step prefill. The production default uses
@@ -480,6 +490,11 @@ class DSV4BatchGenerator:
             chunk = all_ids[:, off:min(off + step, total)]
             logits = self.model(chunk, cache=cache)
             last_logits = logits[:, -1, :]
+            # Force the logits graph and cache side effects to materialize
+            # before clearing transient allocator buffers. A stream sync alone
+            # does not schedule lazy MLX work.
+            if realize_before_clear:
+                self._realize_last_logits(last_logits)
             if hasattr(mx, "synchronize"):
                 self._sync()
             else:
@@ -623,6 +638,7 @@ class DSV4BatchGenerator:
                     _warm_cache = self._make_new_cache()
                     _warm_ids = mx.array([[0]], dtype=mx.int32)
                     _ = self.model(_warm_ids, cache=_warm_cache)
+                    mx.eval(_)
                     self._sync()
                     logger.info("DSV4Gen: kernel warmup done")
                 except Exception as _wexc:
@@ -766,7 +782,11 @@ class DSV4BatchGenerator:
                         r.prompt_processed = True
                         continue
                     _t_prefill_tail = time.perf_counter()
-                    last_logits = self._prefill_last_logits(r.prompt_tokens, r.cache)
+                    last_logits = self._prefill_last_logits(
+                        r.prompt_tokens,
+                        r.cache,
+                        realize_before_clear=False,
+                    )
                     self._trace_timing(
                         "cache_hit_tail_prefill",
                         _t_prefill_tail,

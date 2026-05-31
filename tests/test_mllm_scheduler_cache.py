@@ -543,6 +543,45 @@ class TestBatchGeneratorCacheParams:
         assert pos.shape == (3, 1, 4)
         assert pos[0, 0].tolist() == [627, 628, 629, 630]
 
+    def test_lm_supports_position_ids_uses_call_signature(self):
+        from vmlx_engine.mllm_batch_generator import _lm_supports_position_ids
+
+        class StepLikeLM:
+            def __call__(self, inputs, cache=None):
+                return inputs
+
+        class QwenLikeLM:
+            def __call__(self, inputs, cache=None, position_ids=None):
+                return inputs
+
+        assert _lm_supports_position_ids(StepLikeLM()) is False
+        assert _lm_supports_position_ids(QwenLikeLM()) is True
+
+        class StepLikeLMWithKwargs:
+            def __call__(self, inputs, cache=None, **kwargs):
+                return inputs
+
+        assert _lm_supports_position_ids(StepLikeLMWithKwargs()) is True
+
+    def test_lm_supports_return_logits_uses_var_kwargs(self):
+        from vmlx_engine.mllm_batch_generator import _lm_supports_return_logits
+
+        class StepLikeLM:
+            def __call__(self, inputs, cache=None):
+                return inputs
+
+        class QwenLikeLM:
+            def __call__(self, inputs, cache=None, return_logits=True):
+                return inputs
+
+        class StepLikeLMWithKwargs:
+            def __call__(self, inputs, cache=None, **kwargs):
+                return inputs
+
+        assert _lm_supports_return_logits(StepLikeLM()) is False
+        assert _lm_supports_return_logits(QwenLikeLM()) is True
+        assert _lm_supports_return_logits(StepLikeLMWithKwargs()) is True
+
     def test_init_signature(self):
         """Verify constructor accepts all cache params."""
         import inspect
@@ -747,6 +786,85 @@ class TestCleanupFinishedCacheStore:
 
         source = inspect.getsource(MLLMScheduler._cleanup_finished)
         assert "disk_cache" in source
+
+    def test_scheduler_trace_logs_cleanup_subsegments(self, monkeypatch, caplog):
+        import logging
+
+        scheduler = MLLMScheduler.__new__(MLLMScheduler)
+        request = SimpleNamespace(
+            num_output_tokens=1,
+            _bypass_prefix_cache=True,
+            _extracted_cache=None,
+            _added_stop_tokens=set(),
+        )
+        scheduler.running = {"trace-cleanup": request}
+        scheduler.block_aware_cache = None
+        scheduler.memory_aware_cache = None
+        scheduler.prefix_cache = None
+        scheduler.batch_generator = None
+        scheduler.stop_tokens = set()
+        scheduler.request_id_to_uid = {}
+        scheduler.uid_to_request_id = {}
+        scheduler.paged_cache_manager = None
+        scheduler.requests = {"trace-cleanup": request}
+        scheduler.finished_req_ids = set()
+        scheduler._cleanup_detokenizer = MagicMock()
+
+        monkeypatch.setenv("VMLINUX_MLLM_SCHEDULER_TRACE", "1")
+
+        with patch("vmlx_engine.mllm_scheduler.clear_mlx_memory_cache") as clear_memory, caplog.at_level(
+            logging.INFO, logger="vmlx_engine.mllm_scheduler"
+        ):
+            scheduler._cleanup_finished({"trace-cleanup"})
+
+        clear_memory.assert_called_once()
+        assert "VMLINUX_MLLM_CLEANUP_TRACE finished=1" in caplog.text
+        assert "cache_store_ms=" in caplog.text
+        assert "bookkeeping_ms=" in caplog.text
+        assert "clear_memory_ms=" in caplog.text
+
+    def test_mixed_swa_full_prefix_hit_skips_redundant_clean_store(self):
+        scheduler = MLLMScheduler.__new__(MLLMScheduler)
+        request = SimpleNamespace(
+            num_output_tokens=32,
+            _bypass_prefix_cache=False,
+            _cached_tokens=4,
+            _extracted_cache=lambda: ["dirty-live-cache"],
+            _extracted_tokens=[10, 11, 12, 13, 14],
+            _added_stop_tokens=set(),
+        )
+
+        scheduler.running = {"req-hit": request}
+        scheduler.block_aware_cache = MagicMock()
+        scheduler.memory_aware_cache = None
+        scheduler.prefix_cache = None
+        scheduler.disk_cache = None
+        scheduler._is_hybrid = False
+        scheduler._kv_cache_bits = 0
+        scheduler._uses_zaya_cache = False
+        scheduler._mixed_attention_cache_model = True
+        scheduler._mllm_request_has_media_cache_context = MagicMock(return_value=False)
+        scheduler._mllm_media_prefix_cache_allowed = MagicMock(return_value=False)
+        scheduler._truncate_hybrid_cache = MagicMock(return_value=["prompt-cache"])
+        scheduler._validate_cache = MagicMock(return_value=True)
+        scheduler._extract_cache_states = MagicMock(return_value=["state"])
+        scheduler.batch_generator = SimpleNamespace(
+            _prefill_for_clean_path_dependent_cache=MagicMock(
+                return_value=["clean-cache"]
+            )
+        )
+        scheduler.stop_tokens = set()
+        scheduler.request_id_to_uid = {}
+        scheduler.uid_to_request_id = {}
+        scheduler.paged_cache_manager = MagicMock()
+        scheduler.requests = {"req-hit": request}
+        scheduler.finished_req_ids = set()
+        scheduler._cleanup_detokenizer = MagicMock()
+
+        scheduler._cleanup_finished({"req-hit"})
+
+        scheduler.batch_generator._prefill_for_clean_path_dependent_cache.assert_not_called()
+        scheduler.block_aware_cache.store_cache.assert_not_called()
 
     def test_media_request_skips_memory_aware_token_only_store(self):
         """Image/video VLM requests must not be stored under text-only keys."""
@@ -1043,7 +1161,7 @@ class TestMetalGCTimer:
         from vmlx_engine.mllm_scheduler import MLLMScheduler
 
         source = inspect.getsource(MLLMScheduler.step)
-        assert "clear_memory_cache" in source
+        assert "clear_mlx_memory_cache" in source
         assert "_metal_gc_interval" in source
 
     def test_cleanup_has_idle_gc(self):
@@ -1052,7 +1170,7 @@ class TestMetalGCTimer:
         from vmlx_engine.mllm_scheduler import MLLMScheduler
 
         source = inspect.getsource(MLLMScheduler._cleanup_finished)
-        assert "clear_memory_cache" in source
+        assert "clear_mlx_memory_cache" in source
 
 
 # ============================================================

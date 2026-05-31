@@ -8,6 +8,7 @@ This helper intentionally does not load models. It runs focused tests that pin:
 - Anthropic and Ollama adapter surfaces;
 - DSV4 native SWA+CSA/HCA cache status separate from generic TurboQuant KV;
 - ZAYA typed CCA status;
+- plain attention/KV native cache status;
 - hybrid SSM partial reuse and cache-detail telemetry;
 - TurboQuant KV runtime and disk-cache serialization contracts.
 """
@@ -25,7 +26,7 @@ from pathlib import Path
 from typing import Any
 
 
-DEFAULT_OUT = Path("build/current-api-cache-contract-proof-20260521.json")
+DEFAULT_OUT = Path("build/current-api-cache-contract-proof-20260531-post-step-lfm-refresh.json")
 SOURCE_HASH_FILES = (
     "vmlx_engine/server.py",
     "vmlx_engine/tool_parsers/dsml_tool_parser.py",
@@ -61,8 +62,13 @@ REQUIRED_NOHEAVY_API_CACHE_TEST_MARKERS = (
     "test_responses_stream_tracks_cache_detail_alongside_cached",
     "test_responses_stream_finish_emits_cache_detail",
     "test_cache_stats_endpoint_projects_cache_reuse_skip_telemetry",
+    "test_cache_entries_endpoint_lists_paged_prefix_blocks",
+    "test_cache_warm_endpoint_prefills_and_stores_block_cache",
+    "test_clear_cache_prefix_clears_prefix_l2_without_multimodal",
     "test_native_cache_status_reports_dsv4_separately_from_tq_kv",
     "test_native_cache_status_reports_zaya_typed_cca",
+    "test_native_cache_status_reports_plain_attention_kv",
+    "test_acceleration_status_reports_internal_jangtq_acceleration_when_enabled",
     "test_dsml_issue_165_server_tool_call_arguments_are_not_empty_or_raw",
     "test_dsv4_encoder_keeps_function_arguments_as_dsml_params",
     "test_dsv4_encoder_preserves_code_identifiers_on_direct_chat_rail",
@@ -112,8 +118,13 @@ COMMANDS: dict[str, list[str]] = {
             "or generic_turboquant_patcher_skips_hybrid_ssm "
             "or ollama_streaming_suppresses_duplicate_done_chunks "
             "or cache_stats_endpoint_projects_cache_reuse_skip_telemetry "
+            "or cache_entries_endpoint_lists_paged_prefix_blocks "
+            "or cache_warm_endpoint_prefills_and_stores_block_cache "
+            "or clear_cache_prefix_clears_prefix_l2_without_multimodal "
             "or native_cache_status_reports_dsv4_separately_from_tq_kv "
-            "or native_cache_status_reports_zaya_typed_cca"
+            "or native_cache_status_reports_zaya_typed_cca "
+            "or native_cache_status_reports_plain_attention_kv "
+            "or acceleration_status_reports_internal_jangtq_acceleration_when_enabled"
         ),
     ],
     "scheduler_cache_contracts": [
@@ -271,6 +282,12 @@ def build_artifact(root: Path) -> dict[str, Any]:
             and "test_responses_stream_tracks_cache_detail_alongside_cached" not in missing_markers
             and "test_responses_stream_finish_emits_cache_detail" not in missing_markers
         ),
+        "cache_reuse_endpoints": (
+            api_ok
+            and "test_cache_entries_endpoint_lists_paged_prefix_blocks" not in missing_markers
+            and "test_cache_warm_endpoint_prefills_and_stores_block_cache" not in missing_markers
+            and "test_clear_cache_prefix_clears_prefix_l2_without_multimodal" not in missing_markers
+        ),
         "dsv4_native_cache_status": (
             api_ok and scheduler_ok and "test_native_cache_status_reports_dsv4_separately_from_tq_kv" not in missing_markers
         ),
@@ -285,6 +302,14 @@ def build_artifact(root: Path) -> dict[str, Any]:
         ),
         "zaya_typed_cca_status": (
             api_ok and "test_native_cache_status_reports_zaya_typed_cca" not in missing_markers
+        ),
+        "plain_attention_kv_status": (
+            api_ok and "test_native_cache_status_reports_plain_attention_kv" not in missing_markers
+        ),
+        "jangtq_mpp_nax_health_kernel_name": (
+            api_ok
+            and "test_acceleration_status_reports_internal_jangtq_acceleration_when_enabled"
+            not in missing_markers
         ),
         "hybrid_ssm_partial_reuse": (
             scheduler_ok

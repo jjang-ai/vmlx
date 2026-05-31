@@ -8,7 +8,9 @@ for the vLLM-style continuous batching implementation.
 
 import asyncio
 import inspect
+import time
 import pytest
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 from vmlx_engine.request import (
@@ -731,6 +733,59 @@ class TestSchedulerBasic:
         assert stats["last_cache_reuse_skip"] is None
         assert stats["last_cache_reuse_partial"] is None
 
+    def test_get_stats_exposes_request_lifecycle_without_prompts(
+        self, mock_model, mock_tokenizer
+    ):
+        """Health diagnostics need enough state to debug stuck running rows."""
+        scheduler = Scheduler(
+            model=mock_model,
+            tokenizer=mock_tokenizer,
+        )
+        request = Request(
+            request_id="req-live-debug",
+            prompt="secret user prompt must not appear in health",
+            sampling_params=SamplingParams(max_tokens=17),
+        )
+        request.status = RequestStatus.RUNNING
+        request.prompt_token_ids = [1, 2, 3, 4]
+        request.num_prompt_tokens = 4
+        request.output_token_ids = [9, 10]
+        request.cached_tokens = 3
+        request.batch_uid = 42
+        request._schedule_time = time.perf_counter() - 2.0
+        scheduler.running[request.request_id] = request
+        scheduler.requests[request.request_id] = request
+        scheduler.request_id_to_uid[request.request_id] = 42
+        scheduler.uid_to_request_id[42] = request.request_id
+
+        waiting = Request(
+            request_id="req-waiting-debug",
+            prompt="another secret prompt",
+            sampling_params=SamplingParams(max_tokens=5),
+        )
+        scheduler.waiting.append(waiting)
+        scheduler.requests[waiting.request_id] = waiting
+        scheduler._pending_aborts.add("req-live-debug")
+
+        stats = scheduler.get_stats()
+
+        assert stats["num_running"] == 1
+        assert stats["num_waiting"] == 1
+        assert stats["running_request_ids"] == ["req-live-debug"]
+        assert stats["waiting_request_ids"] == ["req-waiting-debug"]
+        assert stats["pending_abort_request_ids"] == ["req-live-debug"]
+        [detail] = stats["running_requests"]
+        assert detail["request_id"] == "req-live-debug"
+        assert detail["status"] == "RUNNING"
+        assert detail["batch_uid"] == 42
+        assert detail["prompt_tokens"] == 4
+        assert detail["output_tokens"] == 2
+        assert detail["cached_tokens"] == 3
+        assert detail["max_tokens"] == 17
+        assert detail["age_seconds"] >= 0
+        assert detail["scheduled_age_seconds"] >= 0
+        assert "secret" not in repr(stats)
+
     def test_memory_pressure_partially_reuses_paged_cache(
         self, mock_model, mock_tokenizer, monkeypatch
     ):
@@ -952,6 +1007,87 @@ class TestSchedulerBasic:
         stats = scheduler.get_stats()
         assert stats["cache_reuse_skips"] == 0
         assert stats["cache_hit_tokens"] == 999
+
+    def test_worker_paged_tq_cache_hit_records_reconstruction_and_dequant_timing(
+        self,
+        mock_model,
+        mock_tokenizer,
+        monkeypatch,
+    ):
+        """#177 diagnostics need timing, not only selected path/token counts."""
+        scheduler = Scheduler(model=mock_model, tokenizer=mock_tokenizer)
+        scheduler._kv_cache_bits = 4
+        scheduler._validate_cache = lambda cache: True
+
+        class _BlockAwareCache:
+            def reconstruct_cache(self, block_table):
+                assert block_table.num_tokens == 128
+                return ["quantized-cache"]
+
+            def get_stats(self):
+                return {}
+
+        class _BatchGenerator:
+            stop_tokens = set()
+
+            def insert(self, tokens, max_tokens, caches=None, **_kwargs):
+                self.tokens = tokens
+                self.caches = caches
+                return [7]
+
+        monkeypatch.setattr(
+            scheduler,
+            "_dequantize_cache_for_use",
+            lambda cache: ["dequantized-cache"],
+        )
+
+        sampling = SamplingParams(max_tokens=4)
+        request = Request("req-cache-timing", "x", sampling)
+        request.prompt_token_ids = list(range(160))
+        request.num_prompt_tokens = 160
+        request.block_table = BlockTable("req-cache-timing", [1, 2], 128)
+        request.cached_tokens = 128
+        request.remaining_tokens = request.prompt_token_ids[128:]
+        request._cache_detail = "paged+disk+tq"
+        request._cache_selection = {
+            "selected": "paged",
+            "reason": "paged_hot_advantage_sufficient",
+        }
+        request._paged_block_table_needs_worker_reconstruct = True
+        request._prompt_cache_needs_worker_dequant = True
+
+        batch_generator = _BatchGenerator()
+        scheduler.block_aware_cache = _BlockAwareCache()
+        scheduler.batch_generator = batch_generator
+        scheduler._current_sampler_params = (
+            sampling.temperature,
+            sampling.top_p,
+            sampling.min_p,
+            sampling.top_k,
+            sampling.repetition_penalty,
+        )
+        scheduler.waiting.append(request)
+        scheduler.requests[request.request_id] = request
+
+        scheduled = scheduler._schedule_waiting()
+
+        assert scheduled == [request]
+        assert batch_generator.tokens == [[128, 129, 130, 131, 132, 133, 134, 135,
+                                           136, 137, 138, 139, 140, 141, 142, 143,
+                                           144, 145, 146, 147, 148, 149, 150, 151,
+                                           152, 153, 154, 155, 156, 157, 158, 159]]
+        assert batch_generator.caches == [["dequantized-cache"]]
+        execution = scheduler.get_stats()["last_cache_execution"]
+        assert execution["request_id"] == "req-cache-timing"
+        assert execution["cache_detail"] == "paged+disk+tq"
+        assert execution["cached_tokens"] == 128
+        assert execution["blocks"] == 2
+        assert execution["selection"]["selected"] == "paged"
+        assert execution["reconstructed"] is True
+        assert execution["dequantized"] is True
+        assert execution["reconstruction_seconds"] >= 0
+        assert execution["dequantization_seconds"] >= 0
+        assert execution["total_worker_cache_seconds"] >= execution["reconstruction_seconds"]
 
     def test_memory_pressure_partial_reuse_preserves_generation_prompt_suffix(
         self, mock_model, mock_tokenizer
@@ -1256,6 +1392,126 @@ class TestSchedulerBasic:
         assert request.remaining_tokens == [256]
         assert request._paged_block_table_needs_worker_reconstruct is True
         assert request._cache_detail == "paged+disk+tq"
+
+    def test_cold_paged_hit_can_yield_to_warm_prefix_cache(
+        self, mock_model, mock_tokenizer
+    ):
+        """Cold paged/TQ reconstruction cost can outweigh extra cached tokens."""
+        scheduler = Scheduler(model=mock_model, tokenizer=mock_tokenizer)
+        scheduler._tq_active = True
+
+        class _Block:
+            def __init__(self, token_count):
+                self.token_count = token_count
+                self.cache_data_from_disk = True
+
+        class _PagedCache:
+            def __init__(self):
+                self.allocated_blocks = {
+                    1: _Block(64),
+                    2: _Block(64),
+                    3: _Block(64),
+                    4: _Block(64),
+                }
+                self.released = []
+                self.detached = []
+                self.stats = SimpleNamespace(disk_hits=0)
+
+            def release_request_refs(self, block_table):
+                self.released.append(block_table)
+
+            def detach_request(self, request_id):
+                self.detached.append(request_id)
+
+        class _BlockAwareCache:
+            def __init__(self):
+                self.paged_cache = _PagedCache()
+
+            def fetch_cache(self, request_id, tokens):
+                self.paged_cache.stats.disk_hits += 4
+                return BlockTable(request_id, [1, 2, 3, 4], 256), list(tokens[256:])
+
+            def get_stats(self):
+                return {}
+
+        class _WarmPrefixCache:
+            def fetch_cache(self, tokens):
+                return ["warm-prefix-cache"], list(tokens[128:])
+
+        scheduler.block_aware_cache = _BlockAwareCache()
+        scheduler.prefix_cache = _WarmPrefixCache()
+
+        request = Request("req-cost", "x", SamplingParams())
+        request.prompt_token_ids = list(range(320))
+
+        scheduler.add_request(request)
+
+        assert request.prompt_cache == ["warm-prefix-cache"]
+        assert request.block_table is None
+        assert request.cached_tokens == 128
+        assert request.remaining_tokens == request.prompt_token_ids[128:]
+        assert request._cache_detail == "prefix"
+        assert request._cache_selection["selected"] == "prefix"
+        assert request._cache_selection["rejected"] == "paged"
+        assert scheduler.block_aware_cache.paged_cache.released
+        assert scheduler.block_aware_cache.paged_cache.detached == ["req-cost"]
+
+    def test_cold_paged_hit_without_warm_prefix_reports_no_alternative(
+        self, mock_model, mock_tokenizer
+    ):
+        """Cold paged/TQ hits are still valid when no warm cache exists."""
+        scheduler = Scheduler(model=mock_model, tokenizer=mock_tokenizer)
+        scheduler._tq_active = True
+
+        class _Block:
+            def __init__(self, token_count):
+                self.token_count = token_count
+                self.cache_data_from_disk = True
+
+        class _PagedCache:
+            def __init__(self):
+                self.allocated_blocks = {
+                    1: _Block(64),
+                    2: _Block(64),
+                }
+                self.released = []
+                self.detached = []
+                self.stats = SimpleNamespace(disk_hits=0)
+
+            def release_request_refs(self, block_table):
+                self.released.append(block_table)
+
+            def detach_request(self, request_id):
+                self.detached.append(request_id)
+
+        class _BlockAwareCache:
+            def __init__(self):
+                self.paged_cache = _PagedCache()
+
+            def fetch_cache(self, request_id, tokens):
+                self.paged_cache.stats.disk_hits += 2
+                return BlockTable(request_id, [1, 2], 128), list(tokens[128:])
+
+            def get_stats(self):
+                return {}
+
+        scheduler.block_aware_cache = _BlockAwareCache()
+        scheduler.prefix_cache = None
+        scheduler.memory_aware_cache = None
+
+        request = Request("req-cold-only", "x", SamplingParams())
+        request.prompt_token_ids = list(range(192))
+
+        scheduler.add_request(request)
+
+        assert request.block_table is not None
+        assert request.cached_tokens == 128
+        assert request._cache_selection["selected"] == "paged"
+        assert request._cache_selection["rejected"] is None
+        assert request._cache_selection["paged_cold_tokens"] == 128
+        assert request._cache_selection["reason"] == "no_warm_prefix_alternative"
+        assert scheduler.block_aware_cache.paged_cache.released == []
+        assert scheduler.block_aware_cache.paged_cache.detached == []
 
     def test_paged_quantized_kv_hit_defers_worker_dequant_for_batch_generator(
         self, mock_model, mock_tokenizer
@@ -1605,6 +1861,75 @@ class TestSchedulerCacheResilience:
         assert stats["cache_hit_requests"] == 1
         assert stats["cache_hit_tokens"] == 12
         assert stats["cache_hit_tokens_by_detail"] == {"paged+dsv4": 12}
+
+    def test_dsv4_cache_hit_repetition_processor_sees_generated_context_only(
+        self, mock_model, mock_tokenizer, monkeypatch
+    ):
+        """DSV4 cache hits need full prompt parity without prompt-wide penalty."""
+        scheduler = Scheduler(model=mock_model, tokenizer=mock_tokenizer)
+        scheduler._validate_cache = lambda cache: True
+
+        seen_contexts = []
+
+        def processor(tokens, logits):
+            seen_contexts.append(list(tokens))
+            return logits
+
+        import mlx_lm.sample_utils as sample_utils
+
+        monkeypatch.setattr(
+            sample_utils,
+            "make_logits_processors",
+            lambda **_kwargs: [processor],
+        )
+
+        class DSV4BatchGenerator:
+            stop_tokens = set()
+
+            def insert(self, tokens, max_tokens, caches=None, **kwargs):
+                self.last_insert = {
+                    "tokens": tokens,
+                    "max_tokens": max_tokens,
+                    "caches": caches,
+                    "kwargs": kwargs,
+                }
+                return [404]
+
+        sampling = SamplingParams(max_tokens=4, repetition_penalty=1.15)
+        request = Request(
+            request_id="dsv4-cache-hit-repeat-context",
+            prompt="copy THREE.PerspectiveCamera",
+            prompt_token_ids=[10, 11, 12, 13, 14],
+            sampling_params=sampling,
+        )
+        request.num_prompt_tokens = len(request.prompt_token_ids)
+        request.prompt_cache = [object()]
+        request.cached_tokens = len(request.prompt_token_ids) - 1
+        request.remaining_tokens = [request.prompt_token_ids[-1]]
+
+        scheduler.batch_generator = DSV4BatchGenerator()
+        scheduler._current_sampler_params = (
+            sampling.temperature,
+            sampling.top_p,
+            sampling.min_p,
+            sampling.top_k,
+            sampling.repetition_penalty,
+        )
+        scheduler.requests[request.request_id] = request
+        scheduler.waiting.append(request)
+
+        scheduled = scheduler._schedule_waiting()
+
+        assert scheduled == [request]
+        inserted = scheduler.batch_generator.last_insert
+        assert inserted["tokens"] == [[14]]
+        assert inserted["caches"] == [request.prompt_cache]
+        assert inserted["kwargs"]["all_tokens"] == [request.prompt_token_ids]
+        wrapped_processors = inserted["kwargs"]["logits_processors"][0]
+
+        wrapped_processors[0]([10, 11, 12, 13, 14, 20, 21], "logits")
+
+        assert seen_contexts == [[14, 20, 21]]
 
 
 # Integration tests require actual MLX model

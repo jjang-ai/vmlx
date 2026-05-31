@@ -1,9 +1,21 @@
+from pathlib import Path
+
+
+def test_mcp_policy_contract_default_out_tracks_current_release_proof_artifact():
+    from tests.cross_matrix import run_mcp_policy_contract as gate
+
+    assert gate.DEFAULT_OUT == Path(
+        "build/current-mcp-policy-contract-20260531-post-step-lfm-refresh.json"
+    )
+
+
 def test_mcp_policy_contract_has_required_marker_gate():
     from tests.cross_matrix import run_mcp_policy_contract as gate
 
     required = gate.REQUIRED_MCP_POLICY_TEST_MARKERS
     assert "test_server_discovers_cwd_mcp_json_without_env_or_cli" in required
     assert "routes MCP list and execute calls by explicit model alias" in required
+    assert "auto-switches MCP tools and execute by explicit model in single-model mode" in required
     assert "keeps built-in Electron tools separate from MCP execution and request policy" in required
 
 

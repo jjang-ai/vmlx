@@ -3,6 +3,7 @@ import { ipcMain, BrowserWindow, net } from "electron";
 import { v4 as uuidv4 } from "uuid";
 import { request as httpsRequest } from "node:https";
 import { request as httpRequest } from "node:http";
+import type { ClientRequest } from "node:http";
 import { db, Chat, Message, Folder } from "../database";
 import { sessionManager, resolveUrl, connectHost } from "../sessions";
 import { readGenerationDefaults } from "./models";
@@ -61,6 +62,62 @@ function shouldForwardReasoningEffort(
   if (enableThinking === false) return false;
   if (detectedFamily === "hy3" && enableThinking !== true) return false;
   return sessionHasReasoningParser || detectedFamily === "deepseek-v4";
+}
+
+function isExpectedChatBackendDisconnectError(error: unknown): boolean {
+  const err = error as NodeJS.ErrnoException | undefined;
+  const code = String(err?.code || "");
+  const message = String(err?.message || error || "");
+  const cause = (err as any)?.cause;
+  const nestedErrors = Array.isArray((err as any)?.errors)
+    ? (err as any).errors
+    : [];
+  return (
+    code === "EPIPE" ||
+    code === "ECONNRESET" ||
+    code === "ERR_STREAM_DESTROYED" ||
+    code === "ERR_STREAM_WRITE_AFTER_END" ||
+    /EPIPE|write EPIPE|broken pipe|socket hang up|connection reset|premature close|stream.*destroyed|write after end/i.test(message) ||
+    (cause ? isExpectedChatBackendDisconnectError(cause) : false) ||
+    nestedErrors.some((nested) => isExpectedChatBackendDisconnectError(nested))
+  );
+}
+
+function chatBackendRequestWritable(req: ClientRequest): boolean {
+  const anyReq = req as ClientRequest & {
+    closed?: boolean;
+    writableDestroyed?: boolean;
+    socket?: { destroyed?: boolean } | null;
+  };
+  return (
+    !anyReq.closed &&
+    !anyReq.destroyed &&
+    !anyReq.writableEnded &&
+    !anyReq.writableDestroyed &&
+    !anyReq.socket?.destroyed
+  );
+}
+
+function endChatBackendRequest(
+  req: ClientRequest,
+  bodyBuf: Buffer,
+  reject: (reason?: unknown) => void,
+): void {
+  if (!chatBackendRequestWritable(req)) {
+    const error = new Error("Backend connection closed before request completed.") as NodeJS.ErrnoException;
+    error.code = "EPIPE";
+    reject(error);
+    return;
+  }
+  try {
+    req.end(bodyBuf);
+  } catch (error) {
+    if (isExpectedChatBackendDisconnectError(error)) {
+      reject(error);
+      return;
+    }
+    throw error;
+  }
 }
 
 type ComposerAttachment = {
@@ -284,6 +341,12 @@ async function streamingFetch(
               } catch (_) {}
             });
             res.on("error", (err) => {
+              if (isExpectedChatBackendDisconnectError(err)) {
+                try {
+                  controller.error(err);
+                } catch (_) {}
+                return;
+              }
               console.error(
                 `[streamingFetch] stream error: message="${(err as any)?.message}" code="${(err as any)?.code}"`,
               );
@@ -340,7 +403,7 @@ async function streamingFetch(
       init.signal.addEventListener("abort", onAbort, { once: true });
     }
 
-    req.end(bodyBuf);
+    endChatBackendRequest(req, bodyBuf, reject);
   });
 }
 
@@ -382,6 +445,9 @@ const TEMPLATE_TOKEN_REGEX = new RegExp(
  */
 const remoteFetch: typeof globalThis.fetch = (input, init?) =>
   net.fetch(input as any, init as any);
+
+const DIRECT_MEDIA_ATTACHMENT_TOOL_RULE =
+  "\n\nIMPORTANT: The current user message includes media attachments as chat content. Inspect attached images, video, or audio directly through the model's multimodal input. Do not call read_image, read_video, or list_directory to find attached media unless the user explicitly gives a local filesystem path.";
 
 // Tool category definitions for per-category filtering
 const FILE_TOOLS = new Set([
@@ -456,8 +522,15 @@ function getDisabledTools(overrides: any): Set<string> {
 }
 
 /** Filter BUILTIN_TOOLS based on per-category toggle overrides */
-function filterTools(overrides: any): any[] {
+function filterTools(
+  overrides: any,
+  context: { hasDirectMediaAttachments?: boolean } = {},
+): any[] {
   const disabled = getDisabledTools(overrides);
+  if (context.hasDirectMediaAttachments) {
+    disabled.add("read_image");
+    disabled.add("read_video");
+  }
   if (disabled.size === 0) return BUILTIN_TOOLS;
   return BUILTIN_TOOLS.filter((t: any) => !disabled.has(t.function.name));
 }
@@ -1165,12 +1238,16 @@ export function registerChatHandlers(
 
       // Add system prompt from overrides if available, or agentic prompt when built-in tools enabled
       const hasSystemPrompt = !!overrides?.systemPrompt;
+      const directMediaAttachmentRule =
+        hasMediaAttachments && overrides?.builtinToolsEnabled
+          ? DIRECT_MEDIA_ATTACHMENT_TOOL_RULE
+          : "";
       if (hasSystemPrompt && overrides?.builtinToolsEnabled) {
         const toolRule =
           "\n\nIMPORTANT: After using any tools, you MUST always provide a substantive response explaining what you found or did. Never stop after just executing tools.";
         requestMessages.push({
           role: "system",
-          content: overrides!.systemPrompt! + toolRule,
+          content: overrides!.systemPrompt! + toolRule + directMediaAttachmentRule,
         });
       } else if (hasSystemPrompt) {
         requestMessages.push({
@@ -1180,7 +1257,7 @@ export function registerChatHandlers(
       } else if (overrides?.builtinToolsEnabled) {
         requestMessages.push({
           role: "system",
-          content: AGENTIC_SYSTEM_PROMPT,
+          content: AGENTIC_SYSTEM_PROMPT + directMediaAttachmentRule,
         });
       }
       // No default system prompt injected — let the model's native template handle defaults.
@@ -1612,7 +1689,9 @@ export function registerChatHandlers(
             if (overrides?.repeatPenalty != null)
               obj.repetition_penalty = overrides.repeatPenalty;
             if (overrides?.builtinToolsEnabled) {
-              obj.tools = filterTools(overrides).map((t) => ({
+              obj.tools = filterTools(overrides, {
+                hasDirectMediaAttachments: hasMediaAttachments,
+              }).map((t) => ({
                 type: "function",
                 name: t.function.name,
                 description: t.function.description,
@@ -1686,7 +1765,9 @@ export function registerChatHandlers(
             if (overrides?.builtinToolsEnabled) {
               // Chat Completions API: tools must be in OpenAI format with "function" wrapper
               // e.g. {"type": "function", "function": {"name": ..., "parameters": ...}}
-              obj.tools = filterTools(overrides);
+              obj.tools = filterTools(overrides, {
+                hasDirectMediaAttachments: hasMediaAttachments,
+              });
             }
             // enable_thinking: explicit user override sent to both local and remote.
             // When undefined (auto), local omits the field so the native
@@ -3743,8 +3824,12 @@ export function registerChatHandlers(
           errMsg.includes("ECONNRESET") ||
           errCode === "ECONNRESET" ||
           errCode === "ECONNREFUSED" ||
+          errCode === "EPIPE" ||
+          errCode === "ERR_STREAM_DESTROYED" ||
+          errMsg.includes("write EPIPE") ||
           errMsg.includes("Connection closed before response completed") ||
-          errMsg.includes("socket hang up")
+          errMsg.includes("socket hang up") ||
+          isExpectedChatBackendDisconnectError(error)
         ) {
           throw new Error(
             `Server connection lost. The model server may have crashed or stopped. Try restarting the session.`,

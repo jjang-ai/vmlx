@@ -95,6 +95,13 @@ ROWS: dict[str, Row] = {
         cache_args=COMMON_PAGED_CACHE
         + ["--native-mtp-depth", "3", "--native-mtp-sampling-policy", "deterministic-defaults"],
     ),
+    "minimax_m27_small_jangtq": Row(
+        "minimax_m27_small_jangtq",
+        "/Users/example/models/JANGQ/MiniMax-M2.7-Small-JANGTQ",
+        tool_parser="minimax",
+        reasoning_parser="minimax_m2",
+        cache_args=COMMON_PAGED_CACHE,
+    ),
 }
 
 
@@ -121,21 +128,131 @@ def parse_env_overrides(items: list[str]) -> dict[str, str]:
     return env
 
 
-def http_json(method: str, url: str, body: dict[str, Any] | None = None, timeout: float = 10.0) -> tuple[int, Any]:
+def _round_http_seconds(value: float) -> float:
+    return round(max(value, 0.0), 6)
+
+
+def http_json_timed(
+    method: str,
+    url: str,
+    body: dict[str, Any] | None = None,
+    timeout: float = 10.0,
+) -> tuple[int, Any, dict[str, float]]:
     data = None if body is None else json.dumps(body).encode("utf-8")
     req = urllib.request.Request(url, data=data, method=method)
     req.add_header("Content-Type", "application/json")
+    started = time.perf_counter()
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
-            raw = resp.read().decode("utf-8", errors="replace")
-            return resp.status, json.loads(raw) if raw else None
+            opened = time.perf_counter()
+            raw_bytes = resp.read()
+            read_done = time.perf_counter()
+            raw = raw_bytes.decode("utf-8", errors="replace")
+            parsed = json.loads(raw) if raw else None
+            parsed_done = time.perf_counter()
+            return resp.status, parsed, {
+                "open_seconds": _round_http_seconds(opened - started),
+                "read_seconds": _round_http_seconds(read_done - opened),
+                "json_seconds": _round_http_seconds(parsed_done - read_done),
+                "total_seconds": _round_http_seconds(parsed_done - started),
+            }
     except urllib.error.HTTPError as exc:
+        opened = time.perf_counter()
         raw = exc.read().decode("utf-8", errors="replace")
+        read_done = time.perf_counter()
         try:
             parsed = json.loads(raw)
         except json.JSONDecodeError:
             parsed = raw
-        return exc.code, parsed
+        parsed_done = time.perf_counter()
+        return exc.code, parsed, {
+            "open_seconds": _round_http_seconds(opened - started),
+            "read_seconds": _round_http_seconds(read_done - opened),
+            "json_seconds": _round_http_seconds(parsed_done - read_done),
+            "total_seconds": _round_http_seconds(parsed_done - started),
+        }
+
+
+def _merge_stream_chunk(target: dict[str, Any], chunk: dict[str, Any]) -> bool:
+    text_delta = ""
+    choices = chunk.get("choices") if isinstance(chunk.get("choices"), list) else []
+    if choices:
+        first = choices[0] if isinstance(choices[0], dict) else {}
+        delta = first.get("delta") if isinstance(first.get("delta"), dict) else {}
+        content = delta.get("content")
+        if isinstance(content, str):
+            text_delta += content
+    if text_delta:
+        target.setdefault("choices", [{"message": {"content": ""}}])
+        message = target["choices"][0].setdefault("message", {})
+        message["content"] = str(message.get("content") or "") + text_delta
+    output_text = chunk.get("output_text")
+    if isinstance(output_text, str):
+        target["output_text"] = str(target.get("output_text") or "") + output_text
+        text_delta += output_text
+    output = chunk.get("output")
+    if isinstance(output, list):
+        target.setdefault("output", [])
+        target["output"].extend(output)
+    usage = chunk.get("usage")
+    if isinstance(usage, dict):
+        target["usage"] = usage
+    return bool(text_delta)
+
+
+def http_json_stream_timed(
+    method: str,
+    url: str,
+    body: dict[str, Any] | None = None,
+    timeout: float = 10.0,
+) -> tuple[int, Any, dict[str, float | int]]:
+    data = None if body is None else json.dumps(body).encode("utf-8")
+    req = urllib.request.Request(url, data=data, method=method)
+    req.add_header("Content-Type", "application/json")
+    started = time.perf_counter()
+    parsed: dict[str, Any] = {}
+    first_token_time: float | None = None
+    last_event_time: float | None = None
+    chunk_count = 0
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        opened = time.perf_counter()
+        for raw_line in resp:
+            now = time.perf_counter()
+            line = raw_line.decode("utf-8", errors="replace").strip()
+            if not line or not line.startswith("data:"):
+                continue
+            payload = line[5:].strip()
+            if payload == "[DONE]":
+                last_event_time = now
+                break
+            try:
+                chunk = json.loads(payload)
+            except json.JSONDecodeError:
+                continue
+            had_text = _merge_stream_chunk(parsed, chunk)
+            if had_text:
+                chunk_count += 1
+                if first_token_time is None:
+                    first_token_time = now
+            last_event_time = now
+        done = time.perf_counter()
+    if first_token_time is None:
+        first_token_time = done
+    if last_event_time is None:
+        last_event_time = done
+    return resp.status, parsed, {
+        "open_seconds": _round_http_seconds(opened - started),
+        "ttft_seconds": _round_http_seconds(first_token_time - started),
+        "stream_read_seconds": _round_http_seconds(done - opened),
+        "post_first_token_seconds": _round_http_seconds(done - first_token_time),
+        "total_seconds": _round_http_seconds(done - started),
+        "chunk_count": chunk_count,
+    }
+
+
+def http_json(method: str, url: str, body: dict[str, Any] | None = None, timeout: float = 10.0) -> tuple[int, Any]:
+    code, parsed, _timing = http_json_timed(method, url, body, timeout)
+    return code, parsed
 
 
 def wait_health(port: int, proc: subprocess.Popen[str], timeout_s: int) -> dict[str, Any]:
@@ -239,7 +356,26 @@ def vm_stat_snapshot() -> dict[str, Any]:
     return out
 
 
-def make_prompt(approx_tokens: int) -> str:
+def make_prompt(
+    approx_tokens: int,
+    *,
+    mode: str = "default",
+    max_tokens: int = 0,
+) -> str:
+    if mode == "speed_floor":
+        target = max(int(max_tokens or 0), 64)
+        seed = (
+            f"Write exactly {target} numbered audit lines. Do not stop early. "
+            "Each line must be concise English and must include one of these "
+            "exact identifiers without changing spelling: DSV4CacheBudget, "
+            "qwen_mtp_media_history, GemmaCacheProbe. Continue until the token "
+            "budget stops you. "
+        )
+        words = seed.split()
+        repeated: list[str] = []
+        while len(repeated) < approx_tokens:
+            repeated.extend(words)
+        return " ".join(repeated[:approx_tokens])
     seed = (
         "Audit this runtime memory test. Preserve exact identifiers like "
         "DSV4CacheBudget, qwen_mtp_media_history, and GemmaCacheProbe. "
@@ -269,6 +405,7 @@ def build_request(
     max_thinking_tokens: int | None = None,
     cache_salt: str | None = None,
     skip_prefix_cache: bool = False,
+    stream: bool = False,
 ) -> dict[str, Any]:
     messages: list[dict[str, Any]] = []
     if image_path:
@@ -289,7 +426,7 @@ def build_request(
         request = {
             "model": Path(row.path).name,
             "input": messages,
-            "stream": False,
+            "stream": stream,
             "max_output_tokens": max_tokens,
             "temperature": 0,
             "top_p": 1,
@@ -298,11 +435,13 @@ def build_request(
         request = {
             "model": Path(row.path).name,
             "messages": messages,
-            "stream": False,
+            "stream": stream,
             "max_tokens": max_tokens,
             "temperature": 0,
             "top_p": 1,
         }
+    if stream:
+        request["stream_options"] = {"include_usage": True}
     template_kwargs: dict[str, Any] = {}
     if enable_thinking is not None:
         request["enable_thinking"] = enable_thinking
@@ -461,6 +600,27 @@ def add_speed_metrics(stage: dict[str, Any]) -> None:
         "decode_tok_s_wall": round(completion_tokens / elapsed, 3) if completion_tokens else 0.0,
         "cached_tokens": cached_tokens,
         "cache_detail": usage.get("cache_detail"),
+    }
+
+
+def add_stream_speed_metrics(stage: dict[str, Any]) -> None:
+    timing = stage.get("http_timing") if isinstance(stage.get("http_timing"), dict) else {}
+    post_first = float(timing.get("post_first_token_seconds") or 0.0)
+    if post_first <= 0:
+        return
+    usage = extract_usage(stage.get("response"))
+    completion_tokens = int(usage.get("completion_tokens") or 0)
+    cached_tokens = int(usage.get("cached_tokens") or 0)
+    if completion_tokens <= 1:
+        decode_tps = 0.0
+    else:
+        decode_tps = round((completion_tokens - 1) / post_first, 3)
+    stage["stream_speed"] = {
+        "ttft_seconds": timing.get("ttft_seconds"),
+        "post_first_token_seconds": timing.get("post_first_token_seconds"),
+        "decode_tok_s_stream": decode_tps,
+        "completion_tokens": completion_tokens,
+        "cached_tokens": cached_tokens,
     }
 
 
@@ -793,7 +953,11 @@ def run_probe(args: argparse.Namespace) -> dict[str, Any]:
                 break
             body = build_request(
                 row,
-                make_prompt(target),
+                make_prompt(
+                    target,
+                    mode=args.prompt_mode,
+                    max_tokens=args.max_tokens,
+                ),
                 args.max_tokens,
                 args.route,
                 Path(args.image_path) if args.image_path else None,
@@ -802,15 +966,26 @@ def run_probe(args: argparse.Namespace) -> dict[str, Any]:
                 args.max_thinking_tokens,
                 args.cache_salt,
                 args.skip_prefix_cache,
+                args.stream,
             )
             stage["request"] = redact_large_payloads(body)
             started = time.time()
             try:
-                code, resp = http_json("POST", f"{base_url}{endpoint}", body, timeout=args.request_timeout)
+                if args.stream:
+                    code, resp, http_timing = http_json_stream_timed(
+                        "POST", f"{base_url}{endpoint}", body, timeout=args.request_timeout
+                    )
+                else:
+                    code, resp, http_timing = http_json_timed(
+                        "POST", f"{base_url}{endpoint}", body, timeout=args.request_timeout
+                    )
                 stage["http_code"] = code
                 stage["response"] = redact_large_payloads(resp)
+                stage["http_timing"] = http_timing
                 stage["elapsed_s"] = round(time.time() - started, 3)
                 add_speed_metrics(stage)
+                if args.stream:
+                    add_stream_speed_metrics(stage)
                 stage["error_code"] = extract_response_error_code(resp)
                 stage["status"] = classify_http_stage_status(
                     code,
@@ -864,8 +1039,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--timeout", type=int, default=420)
     parser.add_argument("--request-timeout", type=int, default=300)
     parser.add_argument("--prompt-tokens", type=lambda s: [int(x) for x in s.split(",") if x], default=[512, 4096])
+    parser.add_argument("--prompt-mode", choices=("default", "speed_floor"), default="default")
     parser.add_argument("--max-tokens", type=int, default=64)
     parser.add_argument("--route", choices=("chat", "responses"), default="chat")
+    parser.add_argument("--stream", action="store_true")
     thinking = parser.add_mutually_exclusive_group()
     thinking.add_argument("--enable-thinking", dest="enable_thinking", action="store_true")
     thinking.add_argument("--disable-thinking", dest="enable_thinking", action="store_false")

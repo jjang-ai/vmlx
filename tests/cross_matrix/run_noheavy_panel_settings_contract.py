@@ -31,7 +31,7 @@ from pathlib import Path
 from typing import Any
 
 
-DEFAULT_OUT = Path("build/current-panel-settings-contract-proof-20260521.json")
+DEFAULT_OUT = Path("build/current-panel-settings-contract-proof-20260528-cache-ui-matrix.json")
 SOURCE_HASH_FILES = (
     "panel/src/main/sessions.ts",
     "panel/src/main/memory-enforcer.ts",

@@ -52,6 +52,7 @@ function resolveHuggingFaceRepoToLocalPath(repoId: string): string | null {
 interface ModelConfig {
   familyName: string
   cacheType: 'kv' | 'mamba' | 'hybrid' | 'rotating_kv'
+  cacheSubtype?: string
   toolParser?: string
   reasoningParser?: string
   supportsThinking?: boolean
@@ -60,6 +61,7 @@ interface ModelConfig {
   usePagedCache?: boolean
   enableAutoToolChoice?: boolean
   isMultimodal?: boolean
+  architectureHints?: Record<string, string | number | boolean>
   description: string
   priority: number
 }
@@ -72,6 +74,8 @@ export interface DetectedConfig {
   thinkInTemplate?: boolean
   defaultEnableThinking?: boolean
   cacheType: string
+  cacheSubtype?: string
+  architectureHints?: Record<string, string | number | boolean>
   usePagedCache: boolean
   enableAutoToolChoice: boolean
   isMultimodal: boolean
@@ -116,6 +120,9 @@ registerFamily('qwen3', { cacheType: 'kv', toolParser: 'qwen', reasoningParser: 
 registerFamily('qwen2-vl', { cacheType: 'kv', toolParser: 'qwen', enableAutoToolChoice: true, isMultimodal: true, description: 'Qwen 2 Vision-Language', priority: 10 })
 registerFamily('qwen2', { cacheType: 'kv', toolParser: 'qwen', enableAutoToolChoice: true, description: 'Qwen 2', priority: 20 })
 registerFamily('qwen-mamba', { cacheType: 'mamba', toolParser: 'qwen', usePagedCache: true, description: 'Qwen Mamba', priority: 5 })
+// MiMo-V2.5 JANG_2L keeps multimodal assets. Its template emits generic XML
+// function calls and <think> reasoning, not Qwen tool JSON.
+registerFamily('mimo_v2', { cacheType: 'kv', toolParser: 'xml_function', reasoningParser: 'think_xml', supportsThinking: true, thinkInTemplate: false, enableAutoToolChoice: true, isMultimodal: true, description: 'MiMo V2.5 multimodal MoE', priority: 4 })
 
 // Llama
 registerFamily('llama4', { cacheType: 'kv', toolParser: 'llama', enableAutoToolChoice: true, description: 'Llama 4', priority: 5 })
@@ -171,7 +178,7 @@ registerFamily('hermes', { cacheType: 'kv', toolParser: 'hermes', enableAutoTool
 
 // Nemotron
 registerFamily('nemotron', { cacheType: 'kv', toolParser: 'nemotron', reasoningParser: 'deepseek_r1', description: 'Nemotron', priority: 10 })
-registerFamily('nemotron-h', { cacheType: 'hybrid', toolParser: 'nemotron', reasoningParser: 'deepseek_r1', usePagedCache: true, description: 'Nemotron Hybrid', priority: 10 })
+registerFamily('nemotron-h', { cacheType: 'hybrid', cacheSubtype: 'nemotron_h_ssm_attention', architectureHints: { attentionArch: 'hybrid_ssm_attention' }, toolParser: 'nemotron', reasoningParser: 'deepseek_r1', usePagedCache: true, description: 'Nemotron Hybrid', priority: 10 })
 
 // Poolside / Laguna
 registerFamily('laguna', { cacheType: 'kv', toolParser: 'qwen', reasoningParser: 'qwen3', supportsThinking: true, thinkInTemplate: true, enableAutoToolChoice: true, description: 'Laguna / Poolside coding model', priority: 10 })
@@ -207,6 +214,7 @@ registerFamily('hy3', { cacheType: 'kv', toolParser: 'hunyuan', reasoningParser:
 
 // StepFun
 registerFamily('step-vl', { cacheType: 'kv', toolParser: 'step3p5', reasoningParser: 'qwen3', enableAutoToolChoice: true, isMultimodal: true, description: 'StepFun Step-1V Vision-Language', priority: 3 })
+registerFamily('step-3.7-flash', { cacheType: 'kv', toolParser: 'step3p5', reasoningParser: 'qwen3', enableAutoToolChoice: true, isMultimodal: true, description: 'StepFun Step-3.7-Flash JANG/VL', priority: 4 })
 registerFamily('step-3.5-flash', { cacheType: 'kv', toolParser: 'step3p5', reasoningParser: 'qwen3', enableAutoToolChoice: true, description: 'StepFun Step-3.5-Flash (MoE)', priority: 5 })
 registerFamily('step', { cacheType: 'kv', toolParser: 'step3p5', reasoningParser: 'qwen3', enableAutoToolChoice: true, description: 'StepFun Step models', priority: 30 })
 
@@ -229,7 +237,7 @@ registerFamily('exaone', { cacheType: 'kv', description: 'EXAONE', priority: 20 
 registerFamily('olmo', { cacheType: 'kv', description: 'OLMo', priority: 20 })
 
 // Liquid / hybrid SSM
-registerFamily('lfm2', { cacheType: 'hybrid', usePagedCache: true, description: 'Liquid LFM2 / LFM2-MoE hybrid', priority: 10 })
+registerFamily('lfm2', { cacheType: 'hybrid', toolParser: 'lfm2', reasoningParser: 'qwen3', usePagedCache: true, enableAutoToolChoice: true, description: 'Liquid LFM2 / LFM2-MoE hybrid', priority: 10 })
 
 // StarCoder / StableLM / Baichuan
 registerFamily('starcoder', { cacheType: 'kv', description: 'StarCoder', priority: 30 })
@@ -285,6 +293,7 @@ const MODEL_TYPE_TO_FAMILY: Record<string, string> = {
   'qwen2_5_vl': 'qwen2-vl',
   'qwen': 'qwen2',
   'qwen_mamba': 'qwen-mamba',
+  'mimo_v2': 'mimo_v2',
   // ── Llama family ──
   'llama': 'llama3',
   'llama4': 'llama4',
@@ -330,6 +339,7 @@ const MODEL_TYPE_TO_FAMILY: Record<string, string> = {
   'gpt_oss': 'gpt-oss',
   // ── StepFun ──
   'step1v': 'step-vl',
+  'step3p7': 'step-3.7-flash',
   'step3p5': 'step-3.5-flash',
   'step': 'step',
   // ── Gemma family ──
@@ -723,6 +733,26 @@ function configDeclaresLinearAttention(config: any): boolean {
   return false
 }
 
+function configDeclaresMixedSwaAttention(config: any): boolean {
+  if (!config || typeof config !== 'object') return false
+  const containers = [config]
+  if (config.text_config && typeof config.text_config === 'object') {
+    containers.push(config.text_config)
+  }
+  for (const container of containers) {
+    const value = container.layer_types ?? container.layer_type
+    const values = Array.isArray(value) ? value : [value]
+    const normalized = values.map(v => String(v || '').toLowerCase())
+    if (
+      normalized.some(v => v === 'sliding_attention') &&
+      normalized.some(v => v === 'full_attention')
+    ) {
+      return true
+    }
+  }
+  return false
+}
+
 function applyConfigMetadataOverrides(
   detected: DetectedConfig,
   parsedConfig: any,
@@ -739,7 +769,31 @@ function applyConfigMetadataOverrides(
   if (next.family === 'nemotron-h' && !configDeclaresMedia(parsedConfig)) {
     next.isMultimodal = false
   }
+  if (
+    next.family === 'nemotron-h' &&
+    typeof parsedConfig?.hybrid_override_pattern === 'string' &&
+    parsedConfig.hybrid_override_pattern.length > 0
+  ) {
+    next.architectureHints = {
+      ...(next.architectureHints ?? {}),
+      hybridOverridePattern: parsedConfig.hybrid_override_pattern,
+    }
+  }
+  if (
+    (next.family === 'gemma4' || next.family === 'gemma4-text') &&
+    configDeclaresMixedSwaAttention(parsedConfig)
+  ) {
+    next.cacheType = 'rotating_kv'
+    next.usePagedCache = true
+  }
   return next
+}
+
+function isStep37TextBridge(parsedConfig: any): boolean {
+  const modelType = String(parsedConfig?.model_type ?? '').toLowerCase()
+  const modelFile = String(parsedConfig?.model_file ?? '').split('/').pop()?.toLowerCase()
+  const textModelType = String(parsedConfig?.text_config?.model_type ?? '').toLowerCase()
+  return modelType === 'step3p7' && modelFile === 'step3p7_mlx.py' && textModelType === 'step3p5'
 }
 
 function configToDetected(family: string, config: Omit<ModelConfig, 'pattern' | 'familyName'>): DetectedConfig {
@@ -751,6 +805,8 @@ function configToDetected(family: string, config: Omit<ModelConfig, 'pattern' | 
     thinkInTemplate: config.thinkInTemplate,
     defaultEnableThinking: config.defaultEnableThinking,
     cacheType: config.cacheType,
+    cacheSubtype: config.cacheSubtype,
+    architectureHints: config.architectureHints,
     usePagedCache: config.usePagedCache ?? true,
     enableAutoToolChoice: config.enableAutoToolChoice ?? false,
     isMultimodal: config.isMultimodal ?? false,
@@ -770,7 +826,10 @@ function applyJangCapabilities(
   }
   if (!caps || typeof caps !== 'object') return next
 
-  if (typeof caps.tool_parser === 'string') {
+  if (next.family === 'mimo_v2') {
+    next.toolParser = 'xml_function'
+    next.enableAutoToolChoice = caps.supports_tools !== false
+  } else if (typeof caps.tool_parser === 'string') {
     next.toolParser = caps.tool_parser === 'none' ? undefined : caps.tool_parser
     if (next.toolParser && caps.supports_tools !== false) {
       next.enableAutoToolChoice = true
@@ -787,6 +846,10 @@ function applyJangCapabilities(
     next.thinkInTemplate = false
   } else if (next.family === 'minimax') {
     next.reasoningParser = 'minimax_m2'
+  } else if (next.family === 'mimo_v2') {
+    next.reasoningParser = 'think_xml'
+    next.supportsThinking = true
+    next.thinkInTemplate = false
   } else if (next.family === 'ling') {
     next.reasoningParser = undefined
     next.supportsThinking = false
@@ -803,6 +866,7 @@ function applyJangCapabilities(
     next.family !== 'zaya' &&
     next.family !== 'zaya1-vl' &&
     next.family !== 'hy3' &&
+    next.family !== 'mimo_v2' &&
     next.family !== 'ling'
   ) {
     if (typeof caps.supports_thinking === 'boolean') {
@@ -821,6 +885,9 @@ function applyJangCapabilities(
       }
     }
   }
+  if (typeof caps.cache_subtype === 'string' && caps.cache_subtype.length > 0) {
+    next.cacheSubtype = caps.cache_subtype
+  }
   if (zayaTypedCca) {
     next.usePagedCache = true
   }
@@ -836,6 +903,10 @@ function resolveJangMultimodal(jangCfg: any, parsedConfig: any): boolean {
 
   if (parsedConfig?.model_type === 'zaya1_vl' && hasMediaConfig) {
     return true
+  }
+
+  if (isStep37TextBridge(parsedConfig)) {
+    return false
   }
 
   if (isAffineJangQwenHybridVlm(parsedConfig, jangCfg)) {
@@ -931,6 +1002,14 @@ export function detectModelConfigFromDir(modelPath: string): DetectedConfig {
               const nativeMtpVlReady = qwenNativeMtpVlArtifactReady(parsed, jangCfg, modelPath)
               if (isAffineJangQwenHybridVlm(parsed, jangCfg) && !nativeMtpVlReady) {
                 detected.forceTextOnly = true
+              }
+              if (isStep37TextBridge(parsed)) {
+                detected.forceTextOnly = true
+                detected.architectureHints = {
+                  ...(detected.architectureHints ?? {}),
+                  runtimeScope: 'text_bridge_no_vlm',
+                  vlRuntimeAvailable: false,
+                }
               }
               detected.isMultimodal = resolveJangMultimodal(jangCfg, parsed)
             } catch {

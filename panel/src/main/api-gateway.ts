@@ -9,8 +9,10 @@
 //   Ollama /api/* endpoints translated to OpenAI format before forwarding.
 
 import {
+  ClientRequest,
   createServer,
   IncomingMessage,
+  OutgoingHttpHeaders,
   ServerResponse,
   request as httpRequest,
   Server,
@@ -41,6 +43,11 @@ interface ResolvedSession {
   embeddingModel?: string;
 }
 
+type PreparedSession =
+  | { status: "ready"; session: ResolvedSession }
+  | { status: "unload_failed"; session: ResolvedSession }
+  | { status: "load_failed"; session: ResolvedSession };
+
 function parsePositiveTimeoutSeconds(value: unknown): number | undefined {
   if (typeof value === "number" && Number.isFinite(value)) return value;
   if (typeof value === "string" && value.trim()) {
@@ -61,6 +68,8 @@ export class ApiGateway extends EventEmitter {
   private _running = false;
   /** Track in-flight JIT loads to prevent duplicate starts */
   private jitPending = new Map<string, Promise<boolean>>();
+  /** Serialize cross-model transitions when single-model mode is enabled. */
+  private singleModelTransitionPending: Promise<void> = Promise.resolve();
 
   get running(): boolean {
     return this._running;
@@ -173,16 +182,9 @@ export class ApiGateway extends EventEmitter {
   private _tryListen(port: number): Promise<void> {
     return new Promise((resolve, reject) => {
       this.server = createServer((req, res) => {
+        this.attachResponseErrorGuard(res);
         this.handleRequest(req, res).catch((err) => {
-          console.error("[gateway] Unhandled request error:", err);
-          if (!res.headersSent) {
-            this.sendJson(res, 500, {
-              error: {
-                message: "Internal gateway error",
-                type: "server_error",
-              },
-            });
-          }
+          this.handleRequestError(err, res);
         });
       });
 
@@ -198,6 +200,151 @@ export class ApiGateway extends EventEmitter {
         this.emit("started", port);
         resolve();
       });
+    });
+  }
+
+  private isClientDisconnectError(err: unknown): boolean {
+    const anyErr = err as NodeJS.ErrnoException | undefined;
+    const code = String(anyErr?.code || "");
+    const message = String(anyErr?.message || "");
+    const cause = (anyErr as any)?.cause;
+    const nestedErrors = Array.isArray((anyErr as any)?.errors)
+      ? (anyErr as any).errors
+      : [];
+    return (
+      code === "EPIPE" ||
+      code === "ECONNRESET" ||
+      code === "ERR_STREAM_DESTROYED" ||
+      code === "ERR_STREAM_WRITE_AFTER_END" ||
+      /EPIPE|write EPIPE|broken pipe|socket hang up|connection reset|premature close|stream.*destroyed|write after end/i.test(message) ||
+      (cause ? this.isClientDisconnectError(cause) : false) ||
+      nestedErrors.some((nested) => this.isClientDisconnectError(nested))
+    );
+  }
+
+  private attachResponseErrorGuard(res: ServerResponse): void {
+    res.on("error", (err) => {
+      if (this.isClientDisconnectError(err)) {
+        return;
+      }
+      console.error("[gateway] Response stream error:", err);
+    });
+  }
+
+  private handleRequestError(err: unknown, res: ServerResponse): boolean {
+    if (this.isClientDisconnectError(err)) {
+      return false;
+    }
+    console.error("[gateway] Unhandled request error:", err);
+    if (!res.headersSent) {
+      this.sendJson(res, 500, {
+        error: {
+          message: "Internal gateway error",
+          type: "server_error",
+        },
+      });
+    }
+    return true;
+  }
+
+  private responseWritable(res: ServerResponse): boolean {
+    const anyRes = res as ServerResponse & {
+      closed?: boolean;
+      writableDestroyed?: boolean;
+      socket?: { destroyed?: boolean } | null;
+    };
+    return (
+      !anyRes.closed &&
+      !anyRes.destroyed &&
+      !anyRes.writableEnded &&
+      !anyRes.writableDestroyed &&
+      !anyRes.socket?.destroyed
+    );
+  }
+
+  private requestWritable(req: ClientRequest): boolean {
+    const anyReq = req as ClientRequest & {
+      closed?: boolean;
+      writableDestroyed?: boolean;
+      socket?: { destroyed?: boolean } | null;
+    };
+    return (
+      !anyReq.closed &&
+      !anyReq.destroyed &&
+      !anyReq.writableEnded &&
+      !anyReq.writableDestroyed &&
+      !anyReq.socket?.destroyed
+    );
+  }
+
+  private writeProxyBody(req: ClientRequest, chunk: string | Buffer): boolean {
+    if (!this.requestWritable(req)) return false;
+    try {
+      req.write(chunk);
+      return true;
+    } catch (err) {
+      if (this.isClientDisconnectError(err)) return false;
+      throw err;
+    }
+  }
+
+  private endProxyRequest(req: ClientRequest): boolean {
+    if (!this.requestWritable(req)) return false;
+    try {
+      req.end();
+      return true;
+    } catch (err) {
+      if (this.isClientDisconnectError(err)) return false;
+      throw err;
+    }
+  }
+
+  private writeResponse(res: ServerResponse, chunk: string | Buffer): boolean {
+    if (!this.responseWritable(res)) return false;
+    try {
+      res.write(chunk);
+      return true;
+    } catch (err) {
+      if (this.isClientDisconnectError(err)) return false;
+      throw err;
+    }
+  }
+
+  private writeHeadResponse(
+    res: ServerResponse,
+    status: number,
+    headers?: OutgoingHttpHeaders,
+  ): boolean {
+    if (!this.responseWritable(res)) return false;
+    try {
+      res.writeHead(status, headers);
+      return true;
+    } catch (err) {
+      if (this.isClientDisconnectError(err)) return false;
+      throw err;
+    }
+  }
+
+  private endResponse(res: ServerResponse, chunk?: string | Buffer): void {
+    if (!this.responseWritable(res)) return;
+    try {
+      if (chunk !== undefined) res.end(chunk);
+      else res.end();
+    } catch (err) {
+      if (!this.isClientDisconnectError(err)) throw err;
+    }
+  }
+
+  private writeJsonLine(res: ServerResponse, payload: any): boolean {
+    return this.writeResponse(res, JSON.stringify(payload) + "\n");
+  }
+
+  private abortProxyResponseOnClientClose(
+    res: ServerResponse,
+    proxyRes: IncomingMessage,
+  ): void {
+    res.on("close", () => {
+      if (!proxyRes.destroyed) proxyRes.destroy();
     });
   }
 
@@ -248,22 +395,30 @@ export class ApiGateway extends EventEmitter {
 
     // ── CORS preflight (Open WebUI, browser clients) ──
     if (method === "OPTIONS") {
-      res.writeHead(204, {
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS, HEAD",
-        "Access-Control-Allow-Headers":
-          "Content-Type, Authorization, X-Requested-With",
-        "Access-Control-Max-Age": "86400",
-      });
-      res.end();
+      if (
+        !this.writeHeadResponse(res, 204, {
+          "Access-Control-Allow-Origin": "*",
+          "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS, HEAD",
+          "Access-Control-Allow-Headers":
+            "Content-Type, Authorization, X-Requested-With",
+          "Access-Control-Max-Age": "86400",
+        })
+      )
+        return;
+      this.endResponse(res);
       return;
     }
 
     // ── Ollama liveness check (HEAD / or GET /) ──
     if (url === "/" && (method === "HEAD" || method === "GET")) {
-      res.writeHead(200, { "Content-Type": "text/plain" });
-      if (method === "GET") res.write("vMLX Gateway is running");
-      res.end();
+      if (!this.writeHeadResponse(res, 200, { "Content-Type": "text/plain" }))
+        return;
+      if (
+        method === "GET" &&
+        !this.writeResponse(res, "vMLX Gateway is running")
+      )
+        return;
+      this.endResponse(res);
       return;
     }
 
@@ -347,8 +502,13 @@ export class ApiGateway extends EventEmitter {
               cancelReq.destroy();
               resolve(500);
             });
-            if (body.length > 0) cancelReq.write(body);
-            cancelReq.end();
+            if (body.length > 0 && !this.writeProxyBody(cancelReq, body)) {
+              resolve(500);
+              return;
+            }
+            if (!this.endProxyRequest(cancelReq)) {
+              resolve(500);
+            }
           });
           if (cancelRes >= 200 && cancelRes < 300) accepted = true;
         } catch {}
@@ -374,34 +534,33 @@ export class ApiGateway extends EventEmitter {
       });
     }
 
-    await this.enforceSingleModelMode(session.id);
-
-    // JIT auto-load if not running
-    if (session.status !== "running") {
-      const ok = await this.jitLoad(session.id);
-      if (!ok) {
-        return this.sendJson(res, 503, {
-          error: {
-            message: `Model '${session.modelName}' failed to load within ${JIT_TIMEOUT_MS / 1000}s`,
-            type: "server_error",
-            code: "model_load_timeout",
-          },
-          retry_after: 30,
-        });
-      }
-      // Re-read session to get updated port (may have changed on restart)
-      const fresh = db.getSession(session.id);
-      if (fresh) {
-        session.port = fresh.port;
-        session.host = fresh.host === "0.0.0.0" ? "127.0.0.1" : fresh.host;
-        session.status = fresh.status;
-      }
+    const prepared = await this.prepareSessionForRouting(session);
+    if (prepared.status === "unload_failed") {
+      return this.sendJson(res, 503, {
+        error: {
+          message: `Model '${session.modelName}' cannot be routed because another local model could not be unloaded`,
+          type: "server_error",
+          code: "single_model_unload_failed",
+        },
+        retry_after: 30,
+      });
     }
+    if (prepared.status === "load_failed") {
+      return this.sendJson(res, 503, {
+        error: {
+          message: `Model '${session.modelName}' failed to load within ${JIT_TIMEOUT_MS / 1000}s`,
+          type: "server_error",
+          code: "model_load_timeout",
+        },
+        retry_after: 30,
+      });
+    }
+    const routedSession = prepared.session;
 
     // Touch session to prevent idle sleep
-    sessionManager.touchSession(session.id);
+    sessionManager.touchSession(routedSession.id);
 
-    return this.proxyRequest(req, res, session, body);
+    return this.proxyRequest(req, res, routedSession, body);
   }
 
   // ═══════════════════════════════════════════════════════════════
@@ -504,6 +663,26 @@ export class ApiGateway extends EventEmitter {
     return undefined;
   }
 
+  private getResolvedSessionById(sessionId: string): ResolvedSession | undefined {
+    const s = db.getSession(sessionId);
+    if (!s) return undefined;
+    let config: any = {};
+    try {
+      config = JSON.parse(s.config || "{}");
+    } catch (_) {}
+    return {
+      id: s.id,
+      host: s.host === "0.0.0.0" ? "127.0.0.1" : s.host,
+      port: s.port,
+      status: s.status,
+      modelName: s.modelName || s.modelPath.split("/").pop() || "",
+      modelPath: s.modelPath,
+      config: s.config,
+      servedModelName: config.servedModelName || undefined,
+      embeddingModel: config.embeddingModel || undefined,
+    };
+  }
+
   private getAvailableModelNames(): string[] {
     const sessions = db.getSessions();
     const names: string[] = [];
@@ -525,13 +704,14 @@ export class ApiGateway extends EventEmitter {
     return names;
   }
 
-  private async enforceSingleModelMode(targetSessionId: string): Promise<void> {
-    if (!this.singleModelMode) return;
+  private async enforceSingleModelMode(targetSessionId: string): Promise<boolean> {
+    if (!this.singleModelMode) return true;
     const sessions = db.getSessions().filter((s: any) => {
       if (s.id === targetSessionId) return false;
       if (s.type === "remote") return false;
       return ["running", "loading", "standby"].includes(s.status);
     });
+    let ok = true;
     for (const s of sessions) {
       try {
         console.log(
@@ -539,11 +719,54 @@ export class ApiGateway extends EventEmitter {
         );
         await sessionManager.stopSession(s.id);
       } catch (err) {
+        ok = false;
         console.warn(
           `[gateway] single-model mode: failed to stop session ${s.id}: ${err}`,
         );
       }
     }
+    return ok;
+  }
+
+  private async withSingleModelTransition<T>(fn: () => Promise<T>): Promise<T> {
+    if (!this.singleModelMode) return fn();
+
+    const previous = this.singleModelTransitionPending.catch(() => {});
+    let release: () => void = () => {};
+    const current = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    this.singleModelTransitionPending = previous.then(() => current);
+
+    await previous;
+    try {
+      return await fn();
+    } finally {
+      release();
+    }
+  }
+
+  private async prepareSessionForRouting(
+    session: ResolvedSession,
+  ): Promise<PreparedSession> {
+    return this.withSingleModelTransition(async () => {
+      const target = this.getResolvedSessionById(session.id) || session;
+      const singleModelReady = await this.enforceSingleModelMode(target.id);
+      if (!singleModelReady) return { status: "unload_failed", session: target };
+
+      const latest = this.getResolvedSessionById(target.id) || target;
+      if (latest.status === "running") {
+        return { status: "ready", session: latest };
+      }
+
+      const ok = await this.jitLoad(latest.id);
+      if (!ok) return { status: "load_failed", session: latest };
+
+      return {
+        status: "ready",
+        session: this.getResolvedSessionById(latest.id) || latest,
+      };
+    });
   }
 
   // ═══════════════════════════════════════════════════════════════
@@ -623,12 +846,48 @@ export class ApiGateway extends EventEmitter {
 
     const proxyReq = httpRequest(options, (proxyRes) => {
       // Forward status + headers verbatim (preserves SSE Content-Type)
-      clientRes.writeHead(proxyRes.statusCode || 502, proxyRes.headers);
-      // Pipe response directly — works for SSE streaming and regular JSON
-      proxyRes.pipe(clientRes);
+      if (
+        !this.writeHeadResponse(
+          clientRes,
+          proxyRes.statusCode || 502,
+          proxyRes.headers,
+        )
+      ) {
+        proxyRes.destroy();
+        return;
+      }
+      proxyRes.on("error", (err) => {
+        if (this.isClientDisconnectError(err)) return;
+        console.error(
+          `[gateway] Proxy response error → ${session.host}:${session.port}${clientReq.url}: ${err.message}`,
+        );
+      });
+      this.abortProxyResponseOnClientClose(clientRes, proxyRes);
+      // Forward bytes manually so client disconnects go through the guarded writer.
+      // This preserves SSE Content-Type while avoiding noisy write EPIPE crashes.
+      proxyRes.on("data", (chunk: Buffer) => {
+        if (!this.writeResponse(clientRes, chunk)) {
+          proxyRes.destroy();
+        }
+      });
+      proxyRes.on("end", () => {
+        this.endResponse(clientRes);
+      });
     });
 
     proxyReq.on("error", (err) => {
+      if (this.isClientDisconnectError(err)) {
+        if (!this.responseWritable(clientRes)) return;
+        if (!clientRes.headersSent) {
+          this.sendJson(clientRes, 502, {
+            error: {
+              message: "Backend connection closed while receiving request",
+              type: "server_error",
+            },
+          });
+        }
+        return;
+      }
       console.error(
         `[gateway] Proxy error → ${session.host}:${session.port}${clientReq.url}: ${err.message}`,
       );
@@ -651,8 +910,8 @@ export class ApiGateway extends EventEmitter {
       }
     });
 
-    if (body.length > 0) proxyReq.write(body);
-    proxyReq.end();
+    if (body.length > 0 && !this.writeProxyBody(proxyReq, body)) return;
+    if (!this.endProxyRequest(proxyReq)) return;
 
     // Abort backend inference when client disconnects mid-stream
     clientReq.on("close", () => {
@@ -761,8 +1020,9 @@ export class ApiGateway extends EventEmitter {
     // GET endpoints (no body)
     if (method === "GET") {
       if (url === "/") {
-        res.writeHead(200, { "Content-Type": "text/plain" });
-        res.end("Ollama is running\n");
+        if (!this.writeHeadResponse(res, 200, { "Content-Type": "text/plain" }))
+          return;
+        this.endResponse(res, "Ollama is running\n");
         return;
       }
       if (url === "/api/tags") return this.handleOllamaTags(res);
@@ -797,8 +1057,8 @@ export class ApiGateway extends EventEmitter {
 
     // HEAD for health/version checks from Ollama-compatible clients.
     if (method === "HEAD" && (url === "/" || url === "/api/version")) {
-      res.writeHead(200);
-      res.end();
+      if (!this.writeHeadResponse(res, 200)) return;
+      this.endResponse(res);
       return;
     }
 
@@ -1019,25 +1279,24 @@ export class ApiGateway extends EventEmitter {
       });
     }
 
-    await this.enforceSingleModelMode(session.id);
-
-    if (session.status !== "running") {
-      const ok = await this.jitLoad(session.id);
-      if (!ok)
-        return this.sendJson(res, 503, { error: "Model failed to load" });
-      const fresh = db.getSession(session.id);
-      if (fresh) {
-        session.port = fresh.port;
-        session.host = fresh.host === "0.0.0.0" ? "127.0.0.1" : fresh.host;
-      }
+    const prepared = await this.prepareSessionForRouting(session);
+    if (prepared.status === "unload_failed") {
+      return this.sendJson(res, 503, {
+        error: "Another local model could not be unloaded",
+        code: "single_model_unload_failed",
+      });
     }
+    if (prepared.status === "load_failed") {
+      return this.sendJson(res, 503, { error: "Model failed to load" });
+    }
+    const routedSession = prepared.session;
 
-    sessionManager.touchSession(session.id);
+    sessionManager.touchSession(routedSession.id);
 
     // Translate Ollama → OpenAI
     const opts = parsed.options || {};
     const openaiBody: any = {
-      model: parsed.model || session.modelName,
+      model: parsed.model || routedSession.modelName,
       messages: this.translateOllamaMessages(parsed.messages || []),
       stream: parsed.stream !== false,
       stream_options: { include_usage: true },
@@ -1069,18 +1328,25 @@ export class ApiGateway extends EventEmitter {
     if (responseFormat) openaiBody.response_format = responseFormat;
 
     const isStreaming = parsed.stream !== false;
-    const modelForResponse = parsed.model || session.modelName;
+    const modelForResponse = parsed.model || routedSession.modelName;
 
     const proxyOpts = {
-      hostname: session.host,
-      port: session.port,
+      hostname: routedSession.host,
+      port: routedSession.port,
       path: "/v1/chat/completions",
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      timeout: this.effectiveGatewayProxyTimeoutMs(session, parsed),
+      timeout: this.effectiveGatewayProxyTimeoutMs(routedSession, parsed),
     };
 
     const proxyReq = httpRequest(proxyOpts, (proxyRes) => {
+      this.abortProxyResponseOnClientClose(res, proxyRes);
+      proxyRes.on("error", (err) => {
+        if (this.isClientDisconnectError(err)) return;
+        console.error(
+          `[gateway] Ollama chat proxy response error → ${routedSession.host}:${routedSession.port}: ${err.message}`,
+        );
+      });
       if (!isStreaming) {
         // Non-streaming: buffer, translate, send
         let data = "";
@@ -1134,10 +1400,15 @@ export class ApiGateway extends EventEmitter {
           return;
         }
         // Streaming: SSE → NDJSON
-        res.writeHead(200, {
-          "Content-Type": "application/x-ndjson",
-          "Transfer-Encoding": "chunked",
-        });
+        if (
+          !this.writeHeadResponse(res, 200, {
+            "Content-Type": "application/x-ndjson",
+            "Transfer-Encoding": "chunked",
+          })
+        ) {
+          proxyRes.destroy();
+          return;
+        }
 
         let buffer = "";
         let content = "";
@@ -1228,7 +1499,7 @@ export class ApiGateway extends EventEmitter {
                 const ollamaMsg: any = {
                   model: modelForResponse,
                   created_at: new Date().toISOString(),
-                  message: { role: "assistant", content },
+                  message: { role: "assistant", content: "" },
                   done: true,
                   done_reason:
                     doneReason === "tool_calls"
@@ -1246,9 +1517,28 @@ export class ApiGateway extends EventEmitter {
                   ollamaMsg.eval_count = usage.completion_tokens;
                   ollamaMsg.prompt_eval_count = usage.prompt_tokens;
                 }
-                res.write(JSON.stringify(ollamaMsg) + "\n");
-                res.end();
+                if (!this.writeJsonLine(res, ollamaMsg)) {
+                  proxyRes.destroy();
+                  return;
+                }
+                this.endResponse(res);
                 return;
+              }
+              if (delta?.content || reasoningDelta) {
+                const ollamaMsg: any = {
+                  model: modelForResponse,
+                  created_at: new Date().toISOString(),
+                  message: {
+                    role: "assistant",
+                    content: delta?.content || "",
+                  },
+                  done: false,
+                };
+                if (reasoningDelta) ollamaMsg.message.thinking = reasoningDelta;
+                if (!this.writeJsonLine(res, ollamaMsg)) {
+                  proxyRes.destroy();
+                  return;
+                }
               }
             } catch (_) {
               /* skip malformed chunks */
@@ -1257,9 +1547,9 @@ export class ApiGateway extends EventEmitter {
         });
 
         proxyRes.on("end", () => {
-          if (!res.writableEnded && !done) {
-            res.write(
-              JSON.stringify({
+          if (this.responseWritable(res) && !done) {
+            if (
+              !this.writeJsonLine(res, {
                 model: modelForResponse,
                 created_at: new Date().toISOString(),
                 message: {
@@ -1269,15 +1559,24 @@ export class ApiGateway extends EventEmitter {
                 },
                 done: true,
                 done_reason: doneReason || "stop",
-              }) + "\n",
-            );
-            res.end();
+              })
+            )
+              return;
+            this.endResponse(res);
           }
         });
       }
     });
 
     proxyReq.on("error", (err) => {
+      if (this.isClientDisconnectError(err)) {
+        if (!this.responseWritable(res)) return;
+        if (!res.headersSent)
+          this.sendJson(res, 502, {
+            error: "Backend connection closed while receiving request",
+          });
+        return;
+      }
       if (!res.headersSent)
         this.sendJson(res, 502, {
           error: `Backend unavailable: ${err.message}`,
@@ -1288,8 +1587,8 @@ export class ApiGateway extends EventEmitter {
       if (!res.headersSent)
         this.sendJson(res, 504, { error: "Request timed out" });
     });
-    proxyReq.write(JSON.stringify(openaiBody));
-    proxyReq.end();
+    if (!this.writeProxyBody(proxyReq, JSON.stringify(openaiBody))) return;
+    if (!this.endProxyRequest(proxyReq)) return;
     req.on("close", () => {
       if (!proxyReq.destroyed) proxyReq.destroy();
     });
@@ -1318,32 +1617,31 @@ export class ApiGateway extends EventEmitter {
         error: `model '${parsed.model || "unknown"}' not found`,
       });
 
-    await this.enforceSingleModelMode(session.id);
-
-    if (session.status !== "running") {
-      const ok = await this.jitLoad(session.id);
-      if (!ok)
-        return this.sendJson(res, 503, { error: "Model failed to load" });
-      const fresh = db.getSession(session.id);
-      if (fresh) {
-        session.port = fresh.port;
-        session.host = fresh.host === "0.0.0.0" ? "127.0.0.1" : fresh.host;
-      }
+    const prepared = await this.prepareSessionForRouting(session);
+    if (prepared.status === "unload_failed") {
+      return this.sendJson(res, 503, {
+        error: "Another local model could not be unloaded",
+        code: "single_model_unload_failed",
+      });
     }
+    if (prepared.status === "load_failed") {
+      return this.sendJson(res, 503, { error: "Model failed to load" });
+    }
+    const routedSession = prepared.session;
 
-    sessionManager.touchSession(session.id);
+    sessionManager.touchSession(routedSession.id);
 
     const opts = parsed.options || {};
     const isStreaming = parsed.stream !== false;
     const useRawCompletion = parsed.raw === true;
     const openaiBody: any = useRawCompletion
       ? {
-          model: parsed.model || session.modelName,
+          model: parsed.model || routedSession.modelName,
           prompt: parsed.prompt || "",
           stream: isStreaming,
         }
       : {
-          model: parsed.model || session.modelName,
+          model: parsed.model || routedSession.modelName,
           messages: [
             ...(typeof parsed.system === "string" && parsed.system
               ? [{ role: "system", content: parsed.system }]
@@ -1378,21 +1676,28 @@ export class ApiGateway extends EventEmitter {
     const responseFormat = this.ollamaResponseFormat(parsed.format);
     if (responseFormat) openaiBody.response_format = responseFormat;
 
-    const modelForResponse = parsed.model || session.modelName;
+    const modelForResponse = parsed.model || routedSession.modelName;
     const backendPath = useRawCompletion
       ? "/v1/completions"
       : "/v1/chat/completions";
 
     const proxyOpts = {
-      hostname: session.host,
-      port: session.port,
+      hostname: routedSession.host,
+      port: routedSession.port,
       path: backendPath,
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      timeout: this.effectiveGatewayProxyTimeoutMs(session, parsed),
+      timeout: this.effectiveGatewayProxyTimeoutMs(routedSession, parsed),
     };
 
     const proxyReq = httpRequest(proxyOpts, (proxyRes) => {
+      this.abortProxyResponseOnClientClose(res, proxyRes);
+      proxyRes.on("error", (err) => {
+        if (this.isClientDisconnectError(err)) return;
+        console.error(
+          `[gateway] Ollama generate proxy response error → ${routedSession.host}:${routedSession.port}: ${err.message}`,
+        );
+      });
       if (!isStreaming) {
         // Non-streaming: buffer, translate, send
         let data = "";
@@ -1440,10 +1745,15 @@ export class ApiGateway extends EventEmitter {
           return;
         }
         // Streaming: SSE → NDJSON (same pattern as handleOllamaChat)
-        res.writeHead(200, {
-          "Content-Type": "application/x-ndjson",
-          "Transfer-Encoding": "chunked",
-        });
+        if (
+          !this.writeHeadResponse(res, 200, {
+            "Content-Type": "application/x-ndjson",
+            "Transfer-Encoding": "chunked",
+          })
+        ) {
+          proxyRes.destroy();
+          return;
+        }
 
         let buffer = "";
         proxyRes.on("data", (chunk: Buffer) => {
@@ -1457,16 +1767,19 @@ export class ApiGateway extends EventEmitter {
             const payload = trimmed.slice(6);
 
             if (payload === "[DONE]") {
-              res.write(
-                JSON.stringify({
+              if (
+                !this.writeJsonLine(res, {
                   model: modelForResponse,
                   created_at: new Date().toISOString(),
                   response: "",
                   done: true,
                   done_reason: "stop",
-                }) + "\n",
-              );
-              res.end();
+                })
+              ) {
+                proxyRes.destroy();
+                return;
+              }
+              this.endResponse(res);
               return;
             }
 
@@ -1497,9 +1810,12 @@ export class ApiGateway extends EventEmitter {
                     chunk.usage.prompt_tokens || 0;
                 }
               }
-              res.write(JSON.stringify(ollamaChunk) + "\n");
+              if (!this.writeJsonLine(res, ollamaChunk)) {
+                proxyRes.destroy();
+                return;
+              }
               if (done) {
-                res.end();
+                this.endResponse(res);
                 return;
               }
             } catch (_) {
@@ -1509,23 +1825,32 @@ export class ApiGateway extends EventEmitter {
         });
 
         proxyRes.on("end", () => {
-          if (!res.writableEnded) {
-            res.write(
-              JSON.stringify({
+          if (this.responseWritable(res)) {
+            if (
+              !this.writeJsonLine(res, {
                 model: modelForResponse,
                 created_at: new Date().toISOString(),
                 response: "",
                 done: true,
                 done_reason: "stop",
-              }) + "\n",
-            );
-            res.end();
+              })
+            )
+              return;
+            this.endResponse(res);
           }
         });
       }
     });
 
     proxyReq.on("error", (err) => {
+      if (this.isClientDisconnectError(err)) {
+        if (!this.responseWritable(res)) return;
+        if (!res.headersSent)
+          this.sendJson(res, 502, {
+            error: "Backend connection closed while receiving request",
+          });
+        return;
+      }
       if (!res.headersSent)
         this.sendJson(res, 502, {
           error: `Backend unavailable: ${err.message}`,
@@ -1535,8 +1860,8 @@ export class ApiGateway extends EventEmitter {
       proxyReq.destroy();
       if (!res.headersSent) this.sendJson(res, 504, { error: "Timed out" });
     });
-    proxyReq.write(JSON.stringify(openaiBody));
-    proxyReq.end();
+    if (!this.writeProxyBody(proxyReq, JSON.stringify(openaiBody))) return;
+    if (!this.endProxyRequest(proxyReq)) return;
     req.on("close", () => {
       if (!proxyReq.destroyed) proxyReq.destroy();
     });
@@ -1625,20 +1950,19 @@ export class ApiGateway extends EventEmitter {
     const session = this.resolveSession(parsed.model);
     if (!session) return this.sendJson(res, 404, { error: "model not found" });
 
-    await this.enforceSingleModelMode(session.id);
-
-    if (session.status !== "running") {
-      const ok = await this.jitLoad(session.id);
-      if (!ok)
-        return this.sendJson(res, 503, { error: "Model failed to load" });
-      const fresh = db.getSession(session.id);
-      if (fresh) {
-        session.port = fresh.port;
-        session.host = fresh.host === "0.0.0.0" ? "127.0.0.1" : fresh.host;
-      }
+    const prepared = await this.prepareSessionForRouting(session);
+    if (prepared.status === "unload_failed") {
+      return this.sendJson(res, 503, {
+        error: "Another local model could not be unloaded",
+        code: "single_model_unload_failed",
+      });
     }
+    if (prepared.status === "load_failed") {
+      return this.sendJson(res, 503, { error: "Model failed to load" });
+    }
+    const routedSession = prepared.session;
 
-    sessionManager.touchSession(session.id);
+    sessionManager.touchSession(routedSession.id);
 
     // Translate Ollama embeddings → OpenAI
     const openaiBody = JSON.stringify({
@@ -1647,14 +1971,22 @@ export class ApiGateway extends EventEmitter {
     });
 
     const proxyOpts = {
-      hostname: session.host,
-      port: session.port,
+      hostname: routedSession.host,
+      port: routedSession.port,
       path: "/v1/embeddings",
       method: "POST",
       headers: { "Content-Type": "application/json" },
+      timeout: this.effectiveGatewayProxyTimeoutMs(routedSession, parsed),
     };
 
     const proxyReq = httpRequest(proxyOpts, (proxyRes) => {
+      this.abortProxyResponseOnClientClose(res, proxyRes);
+      proxyRes.on("error", (err) => {
+        if (this.isClientDisconnectError(err)) return;
+        console.error(
+          `[gateway] Ollama embeddings proxy response error → ${routedSession.host}:${routedSession.port}: ${err.message}`,
+        );
+      });
       let data = "";
       proxyRes.on("data", (chunk: Buffer) => {
         data += chunk.toString();
@@ -1677,12 +2009,24 @@ export class ApiGateway extends EventEmitter {
       });
     });
 
-    proxyReq.on("error", () => {
+    proxyReq.on("error", (err) => {
+      if (this.isClientDisconnectError(err)) {
+        if (!this.responseWritable(res)) return;
+        if (!res.headersSent)
+          this.sendJson(res, 502, {
+            error: "Backend connection closed while receiving request",
+          });
+        return;
+      }
       if (!res.headersSent)
         this.sendJson(res, 502, { error: "Backend unavailable" });
     });
-    proxyReq.write(openaiBody);
-    proxyReq.end();
+    proxyReq.on("timeout", () => {
+      proxyReq.destroy();
+      if (!res.headersSent) this.sendJson(res, 504, { error: "Timed out" });
+    });
+    if (!this.writeProxyBody(proxyReq, openaiBody)) return;
+    if (!this.endProxyRequest(proxyReq)) return;
     req.on("close", () => {
       if (!proxyReq.destroyed) proxyReq.destroy();
     });
@@ -1703,12 +2047,20 @@ export class ApiGateway extends EventEmitter {
 
   private sendJson(res: ServerResponse, status: number, data: any): void {
     const json = JSON.stringify(data);
-    res.writeHead(status, {
-      "Content-Type": "application/json",
-      "Content-Length": Buffer.byteLength(json),
-      "Access-Control-Allow-Origin": "*",
-    });
-    res.end(json);
+    if (!this.responseWritable(res)) return;
+    try {
+      if (
+        !this.writeHeadResponse(res, status, {
+          "Content-Type": "application/json",
+          "Content-Length": Buffer.byteLength(json),
+          "Access-Control-Allow-Origin": "*",
+        })
+      )
+        return;
+      this.endResponse(res, json);
+    } catch (err) {
+      if (!this.isClientDisconnectError(err)) throw err;
+    }
   }
 
   private sendOllamaBackendError(

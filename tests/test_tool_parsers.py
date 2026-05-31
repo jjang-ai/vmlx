@@ -9,8 +9,12 @@ from vmlx_engine.tool_parsers import (
     AutoToolParser,
     DeepSeekToolParser,
     FunctionaryToolParser,
+    Gemma3ToolParser,
+    Gemma4ToolParser,
+    Glm47ToolParser,
     GraniteToolParser,
     HermesToolParser,
+    HunyuanToolParser,
     KimiToolParser,
     LlamaToolParser,
     MiniMaxToolParser,
@@ -18,7 +22,9 @@ from vmlx_engine.tool_parsers import (
     NemotronToolParser,
     QwenToolParser,
     ToolParserManager,
+    XMLFunctionToolParser,
     xLAMToolParser,
+    ZayaToolParser,
 )
 
 
@@ -41,6 +47,11 @@ class TestToolParserManager:
             "xlam",
             "functionary",
             "minimax",
+            "gemma3",
+            "gemma4",
+            "glm47",
+            "hunyuan",
+            "xml_function",
         ]
         for p in expected:
             assert p in parsers, f"Parser '{p}' not found"
@@ -72,6 +83,16 @@ class TestToolParserManager:
             ("nous", HermesToolParser),
             ("minimax", MiniMaxToolParser),
             ("minimax_m2", MiniMaxToolParser),
+            ("gemma3", Gemma3ToolParser),
+            ("gemma3n", Gemma3ToolParser),
+            ("gemma4", Gemma4ToolParser),
+            ("glm47", Glm47ToolParser),
+            ("glm4", Glm47ToolParser),
+            ("hunyuan", HunyuanToolParser),
+            ("hy_v3", HunyuanToolParser),
+            ("tencent", HunyuanToolParser),
+            ("xml_function", XMLFunctionToolParser),
+            ("mimo_xml_function", XMLFunctionToolParser),
         ]
         for name, expected_cls in test_cases:
             parser_cls = ToolParserManager.get_tool_parser(name)
@@ -97,6 +118,11 @@ class TestToolParserManager:
             "xlam",
             "functionary",
             "minimax",
+            "gemma3",
+            "gemma4",
+            "glm47",
+            "hunyuan",
+            "xml_function",
         ]:
             parser_cls = ToolParserManager.get_tool_parser(name)
             parser = parser_cls()  # Should not raise
@@ -369,6 +395,57 @@ class TestKimiToolParser:
         assert not result.tools_called
 
 
+class TestLfm2ToolParser:
+    """Test the Liquid LFM2 Python-call-list tool parser."""
+
+    def test_lfm2_python_call_list(self):
+        from vmlx_engine.tool_parsers import ToolParserManager
+
+        parser = ToolParserManager.get_tool_parser("lfm2")()
+        text = (
+            "I will check that."
+            "<|tool_call_start|>[get_weather(city='Paris', units='celsius'), "
+            "search(query='local MLX cache')]<|tool_call_end|>"
+        )
+        result = parser.extract_tool_calls(text)
+
+        assert result.tools_called
+        assert result.content == "I will check that."
+        assert [call["name"] for call in result.tool_calls] == [
+            "get_weather",
+            "search",
+        ]
+        assert result.tool_calls[0]["arguments"] == (
+            '{"city": "Paris", "units": "celsius"}'
+        )
+        assert result.tool_calls[1]["arguments"] == '{"query": "local MLX cache"}'
+
+    def test_lfm2_strips_reasoning_before_tools(self):
+        from vmlx_engine.tool_parsers import ToolParserManager
+
+        parser = ToolParserManager.get_tool_parser("liquid")()
+        result = parser.extract_tool_calls(
+            "<think>use tool</think><|tool_call_start|>[calc(x=2)]<|tool_call_end|>"
+        )
+
+        assert result.tools_called
+        assert result.content is None
+        assert result.tool_calls[0]["name"] == "calc"
+        assert result.tool_calls[0]["arguments"] == '{"x": 2}'
+
+    def test_lfm2_strips_malformed_control_markers_from_visible_content(self):
+        from vmlx_engine.tool_parsers import ToolParserManager
+
+        parser = ToolParserManager.get_tool_parser("lfm2")()
+        result = parser.extract_tool_calls(
+            "<|tool_call_start|>\n\nFile created successfully. REAL_UI_LIVE_TOOL_ONE"
+        )
+
+        assert not result.tools_called
+        assert result.content == "File created successfully. REAL_UI_LIVE_TOOL_ONE"
+        assert "<|tool_call_start|>" not in result.content
+
+
 class TestGraniteToolParser:
     """Test the Granite tool parser."""
 
@@ -473,6 +550,34 @@ class TestNemotronToolParser:
         result = parser.extract_tool_calls(text)
 
         assert not result.tools_called
+
+class TestZayaToolParser:
+    """Test ZAYA/Zyphra XML tool-call parser."""
+
+    @pytest.fixture
+    def parser(self):
+        return ZayaToolParser()
+
+    def test_nested_parameter_start_repairs_missing_parameter_close(self, parser):
+        """Live ZAYA-VL can start the next parameter before closing the first."""
+        text = (
+            "<zyphra_tool_call>\n"
+            "<function=write_file>\n"
+            "<parameter=path>real_ui_tool_probe_1.txt\n"
+            "<parameter=content>REAL_UI_LIVE_TOOL_ONE</parameter>\n"
+            "</function>\n"
+            "</zyphra_tool_call>"
+        )
+
+        result = parser.extract_tool_calls(text)
+
+        assert result.tools_called
+        assert result.tool_calls[0]["name"] == "write_file"
+        args = json.loads(result.tool_calls[0]["arguments"])
+        assert args == {
+            "path": "real_ui_tool_probe_1.txt",
+            "content": "REAL_UI_LIVE_TOOL_ONE",
+        }
 
 
 class TestXLAMToolParser:

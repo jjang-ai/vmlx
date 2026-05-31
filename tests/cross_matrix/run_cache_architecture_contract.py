@@ -21,20 +21,31 @@ from pathlib import Path
 from typing import Any
 
 
-DEFAULT_OUT = Path("build/current-cache-architecture-contract-20260521.json")
+DEFAULT_OUT = Path(
+    "build/current-cache-architecture-contract-20260530-lfm2-tool-parser-local.json"
+)
+API_CACHE_CONTRACT_ARTIFACT = Path(
+    "build/current-api-cache-contract-cache-architecture-check-20260528-named-family-registry-matrix.json"
+)
 
 CACHE_PATTERN = (
     "dsv4 or hybrid_ssm or cache_detail or MLA or mla or TurboQuant "
     "or turboquant or TQ or zaya or media_salt or cache_profile "
-    "or prompt_disk_l2 or mllm_stats_include_cache"
+    "or prompt_disk_l2 or mllm_stats_include_cache or mixed_swa "
+    "or RotatingKVCache or jang_stamp_model_type_alias or ling or bailing "
+    "or nemotron or minimax or qwen36 or qwen3_5 or hy_v3 "
+    "or step3p7 or step37 or lfm2 or ssm_l2 or companion_l2 or block_disk"
 )
 
 SOURCE_HASH_FILES = (
     "vmlx_engine/server.py",
     "vmlx_engine/scheduler.py",
     "vmlx_engine/prefix_cache.py",
+    "vmlx_engine/paged_cache.py",
+    "vmlx_engine/block_disk_store.py",
     "vmlx_engine/mllm_batch_generator.py",
     "vmlx_engine/mllm_scheduler.py",
+    "vmlx_engine/model_config_registry.py",
     "vmlx_engine/tq_disk_cache.py",
     "tests/cross_matrix/run_noheavy_api_cache_contract.py",
     "tests/cross_matrix/run_cache_architecture_contract.py",
@@ -47,6 +58,7 @@ SOURCE_HASH_FILES = (
     "tests/test_mllm_scheduler_cache.py",
     "tests/test_turboquant_cache_contract.py",
     "tests/test_tq_disk_cache.py",
+    "tests/test_model_config_registry.py",
     "tests/test_cache_architecture_contract.py",
     "panel/src/main/sessions.ts",
     "panel/src/shared/dsv4Env.ts",
@@ -69,6 +81,8 @@ REQUIRED_CACHE_TEST_MARKERS = (
     "test_memory_pressure_partially_reuses_hybrid_ssm_with_aligned_checkpoint",
     "test_hybrid_ssm_checkpoint_alignment_falls_back_to_exact_aligned_state",
     "test_hybrid_ssm_auto_mode_disables_live_tq_but_keeps_stored_kv_q4",
+    "test_accepts_scheduler_owned_ssm_l2_store",
+    "test_scheduler_creates_matching_ssm_companion_l2_for_block_disk",
     # L2/block-disk must backfill paged cache for later partial reuse.
     "test_prompt_disk_l2_hit_backfills_paged_cache_for_partial_reuse",
     # Qwen hybrid rows keep selective live TQ only where the runtime supports it.
@@ -79,11 +93,34 @@ REQUIRED_CACHE_TEST_MARKERS = (
     "test_tq_tensors_roundtrip_via_safetensors",
     # MLLM/cache telemetry must keep cache modes visible to the UI/API.
     "test_mllm_stats_include_cache_fields",
+    # Gemma4/mixed-SWA must stay on typed KV/RotatingKV cache paths instead of
+    # being collapsed into generic SSM or plain attention labels.
+    "test_native_cache_status_reports_mixed_swa_kv",
+    "test_mllm_mixed_swa_cache_detail_does_not_report_ssm",
+    "test_mllm_rotating_kv_cache_is_kv_like_for_mixed_swa",
+    "test_mllm_ensure_batch_cache_preserves_rotating_cache_type",
+    "test_paged_cache_mixed_swa_reconstruct_preserves_full_kv_length",
+    "test_paged_cache_mixed_swa_frugal_keeps_resident_blocks_for_immediate_hit",
+    "test_step37_flash_jang_config",
+    "test_lfm2_moe_config",
+    # Named-family registry rows protect real model routing from silently
+    # collapsing into a generic cache/parser family.
+    "test_jang_stamp_model_type_alias_preserves_registered_family_fields",
+    "test_nemotron_h_config",
+    "test_nemotron_h_v2_config",
+    "test_nemotron_h_stale_omni_stamp_without_media_stays_text_hybrid",
+    "test_qwen36_release_rows_intentionally_use_qwen3_5_family_alias",
+    "test_qwen3_5_linear_attention_config_uses_hybrid_cache",
+    "test_zaya1_vl_registered_with_full_contract",
+    "test_hy_v3_provisional_contract",
+    "test_minimax_config",
+    "test_minimax_eos_includes_role_boundary_marker",
 )
 
 REQUIRED_API_CACHE_CHECKS = (
     "dsv4_native_cache_status",
     "zaya_typed_cca_status",
+    "plain_attention_kv_status",
     "hybrid_ssm_partial_reuse",
     "turboquant_kv_runtime_contract",
     "turboquant_disk_roundtrip",
@@ -93,6 +130,7 @@ REQUIRED_API_CACHE_CHECKS = (
 REQUIRED_API_CACHE_COMMAND_MARKERS = (
     "native_cache_status_reports_dsv4_separately_from_tq_kv",
     "native_cache_status_reports_zaya_typed_cca",
+    "native_cache_status_reports_plain_attention_kv",
     "request_output_caps_override_server_default_without_touching_context_cap",
     "generic_turboquant_patcher_skips_hybrid_ssm",
 )
@@ -116,6 +154,199 @@ REQUIRED_PANEL_CACHE_MARKERS = (
     "prefix cache disabled suppresses all cache sub-flags",
 )
 
+REQUIRED_CACHE_FAMILY_MATRIX: dict[str, dict[str, tuple[str, ...]]] = {
+    "dsv4_native_composite": {
+        "checks": (
+            "dsv4_native_composite_cache_status",
+            "dsv4_terminal_composite_contracts",
+        ),
+        "markers": (
+            "test_memory_pressure_reuses_shorter_dsv4_terminal_composite_prefix",
+            "test_memory_pressure_refuses_dsv4_partial_without_terminal_composite",
+            "test_dsv4_pool_quant_appends_only_new_pool_rows",
+            "test_dsv4_pool_quant_reuses_materialized_pool_between_appends",
+        ),
+        "api_checks": ("dsv4_native_cache_status",),
+        "api_command_markers": (
+            "native_cache_status_reports_dsv4_separately_from_tq_kv",
+        ),
+        "panel_markers": (
+            "deepseek-v4 enables native composite prefix cache by default even with stale cache config",
+            "DSV4 pool quant and native prefix controls stay DSV4-only",
+        ),
+    },
+    "dsv4_swa_hca_csa_components": {
+        "checks": ("dsv4_swa_hca_csa_component_contracts",),
+        "markers": (
+            "test_memory_pressure_reuses_shorter_dsv4_terminal_composite_prefix",
+            "test_memory_pressure_refuses_dsv4_partial_without_terminal_composite",
+        ),
+        "api_checks": ("dsv4_native_cache_status",),
+        "api_command_markers": (
+            "native_cache_status_reports_dsv4_separately_from_tq_kv",
+        ),
+        "panel_markers": (
+            "deepseek-v4 native cache path uses DS4 page-sized blocks",
+            "DSV4 pool quant and native prefix controls stay DSV4-only",
+        ),
+    },
+    "zaya_typed_cca": {
+        "checks": ("zaya_typed_cca_status",),
+        "markers": (),
+        "api_checks": ("zaya_typed_cca_status",),
+        "api_command_markers": ("native_cache_status_reports_zaya_typed_cca",),
+        "panel_markers": (),
+    },
+    "zaya_vl_hybrid_registry": {
+        "checks": ("named_family_registry_cache_parser_contracts",),
+        "markers": ("test_zaya1_vl_registered_with_full_contract",),
+        "api_checks": (),
+        "api_command_markers": (),
+        "panel_markers": (),
+    },
+    "plain_attention_kv": {
+        "checks": ("plain_attention_kv_status",),
+        "markers": (),
+        "api_checks": ("plain_attention_kv_status",),
+        "api_command_markers": ("native_cache_status_reports_plain_attention_kv",),
+        "panel_markers": (),
+    },
+    "hybrid_ssm": {
+        "checks": (
+            "hybrid_ssm_partial_reuse",
+            "hybrid_ssm_companion_l2_contracts",
+            "generic_tq_not_applied_to_hybrid_ssm",
+        ),
+        "markers": (
+            "test_memory_pressure_partially_reuses_hybrid_ssm_with_aligned_checkpoint",
+            "test_hybrid_ssm_checkpoint_alignment_falls_back_to_exact_aligned_state",
+            "test_hybrid_ssm_auto_mode_disables_live_tq_but_keeps_stored_kv_q4",
+            "test_accepts_scheduler_owned_ssm_l2_store",
+            "test_scheduler_creates_matching_ssm_companion_l2_for_block_disk",
+        ),
+        "api_checks": (
+            "hybrid_ssm_partial_reuse",
+            "no_generic_tq_on_hybrid_ssm",
+        ),
+        "api_command_markers": ("generic_turboquant_patcher_skips_hybrid_ssm",),
+        "panel_markers": (
+            "detected Mamba cache forces paged cache while regular KV respects saved false",
+        ),
+    },
+    "ling_bailing_hybrid_registry": {
+        "checks": ("named_family_registry_cache_parser_contracts",),
+        "markers": (
+            "test_jang_stamp_model_type_alias_preserves_registered_family_fields",
+        ),
+        "api_checks": (),
+        "api_command_markers": (),
+        "panel_markers": (),
+    },
+    "nemotron_h_hybrid_registry": {
+        "checks": ("named_family_registry_cache_parser_contracts",),
+        "markers": (
+            "test_nemotron_h_config",
+            "test_nemotron_h_v2_config",
+            "test_nemotron_h_stale_omni_stamp_without_media_stays_text_hybrid",
+        ),
+        "api_checks": (),
+        "api_command_markers": (),
+        "panel_markers": (),
+    },
+    "qwen36_hybrid_tq": {
+        "checks": ("turboquant_kv_runtime_contract",),
+        "markers": (
+            "test_qwen3_5_moe_linear_attention_keeps_selective_live_tq_and_stored_kv_q4",
+        ),
+        "api_checks": ("turboquant_kv_runtime_contract",),
+        "api_command_markers": (),
+        "panel_markers": (
+            "detected Qwen3.6 hybrid cache forces paged cache over stale saved false",
+        ),
+    },
+    "qwen36_registry_hybrid_parser": {
+        "checks": ("named_family_registry_cache_parser_contracts",),
+        "markers": (
+            "test_qwen36_release_rows_intentionally_use_qwen3_5_family_alias",
+            "test_qwen3_5_linear_attention_config_uses_hybrid_cache",
+        ),
+        "api_checks": (),
+        "api_command_markers": (),
+        "panel_markers": (),
+    },
+    "gemma4_mixed_swa_kv": {
+        "checks": ("gemma4_mixed_swa_kv_status",),
+        "markers": (
+            "test_native_cache_status_reports_mixed_swa_kv",
+            "test_mllm_mixed_swa_cache_detail_does_not_report_ssm",
+            "test_mllm_rotating_kv_cache_is_kv_like_for_mixed_swa",
+            "test_mllm_ensure_batch_cache_preserves_rotating_cache_type",
+            "test_paged_cache_mixed_swa_reconstruct_preserves_full_kv_length",
+            "test_paged_cache_mixed_swa_frugal_keeps_resident_blocks_for_immediate_hit",
+        ),
+        "api_checks": (),
+        "api_command_markers": (),
+        "panel_markers": (),
+    },
+    "step37_full_sliding_kv_registry": {
+        "checks": ("named_family_registry_cache_parser_contracts",),
+        "markers": ("test_step37_flash_jang_config",),
+        "api_checks": (),
+        "api_command_markers": (),
+        "panel_markers": (),
+    },
+    "lfm25_moe_hybrid_registry": {
+        "checks": ("named_family_registry_cache_parser_contracts",),
+        "markers": ("test_lfm2_moe_config",),
+        "api_checks": (),
+        "api_command_markers": (),
+        "panel_markers": (),
+    },
+    "hy_v3_kv_registry": {
+        "checks": ("named_family_registry_cache_parser_contracts",),
+        "markers": ("test_hy_v3_provisional_contract",),
+        "api_checks": (),
+        "api_command_markers": (),
+        "panel_markers": (),
+    },
+    "minimax_parser_boundary_registry": {
+        "checks": ("named_family_registry_cache_parser_contracts",),
+        "markers": (
+            "test_minimax_config",
+            "test_minimax_eos_includes_role_boundary_marker",
+        ),
+        "api_checks": (),
+        "api_command_markers": (),
+        "panel_markers": (),
+    },
+    "prompt_disk_l2": {
+        "checks": ("prompt_disk_l2_backfill_contracts",),
+        "markers": (
+            "test_prompt_disk_l2_hit_backfills_paged_cache_for_partial_reuse",
+        ),
+        "api_checks": (),
+        "api_command_markers": (),
+        "panel_markers": (),
+    },
+    "turboquant_disk": {
+        "checks": ("turboquant_disk_roundtrip",),
+        "markers": (
+            "test_serialize_tq_cache_mixed_hybrid",
+            "test_tq_tensors_roundtrip_via_safetensors",
+        ),
+        "api_checks": ("turboquant_disk_roundtrip",),
+        "api_command_markers": (),
+        "panel_markers": (),
+    },
+    "mllm_media_cache": {
+        "checks": ("cache_detail_telemetry_contracts",),
+        "markers": ("test_mllm_stats_include_cache_fields",),
+        "api_checks": (),
+        "api_command_markers": (),
+        "panel_markers": (),
+    },
+}
+
 
 @dataclass(frozen=True)
 class CommandSpec:
@@ -128,7 +359,7 @@ COMMANDS: dict[str, CommandSpec] = {
         sys.executable,
         "tests/cross_matrix/run_noheavy_api_cache_contract.py",
         "--out",
-        "build/current-api-cache-contract-cache-architecture-check-20260521.json",
+        str(API_CACHE_CONTRACT_ARTIFACT),
     ]),
     "cache_family_pytest": CommandSpec([
         sys.executable,
@@ -144,6 +375,8 @@ COMMANDS: dict[str, CommandSpec] = {
         "tests/test_mllm_scheduler_cache.py",
         "tests/test_turboquant_cache_contract.py",
         "tests/test_tq_disk_cache.py",
+        "tests/test_engine_audit.py",
+        "tests/test_model_config_registry.py",
         "-k",
         CACHE_PATTERN,
     ]),
@@ -219,10 +452,67 @@ def _run(root: Path, name: str, spec: CommandSpec) -> dict[str, Any]:
 
 
 def _load_api_cache_artifact(root: Path) -> dict[str, Any]:
-    path = root / "build/current-api-cache-contract-cache-architecture-check-20260521.json"
+    path = root / API_CACHE_CONTRACT_ARTIFACT
     if not path.exists():
         return {}
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _build_cache_family_matrix(
+    checks: dict[str, bool],
+    missing_markers: list[str],
+    missing_api_checks: list[str],
+    missing_api_command_markers: list[str],
+    missing_panel_markers: list[str],
+) -> dict[str, dict[str, Any]]:
+    matrix = {}
+    for row_id, requirement in REQUIRED_CACHE_FAMILY_MATRIX.items():
+        row_checks = {
+            name: checks.get(name) is True for name in requirement["checks"]
+        }
+        row_missing_markers = [
+            marker
+            for marker in requirement["markers"]
+            if marker in missing_markers
+        ]
+        row_missing_api_checks = [
+            check
+            for check in requirement["api_checks"]
+            if check in missing_api_checks
+        ]
+        row_missing_api_command_markers = [
+            marker
+            for marker in requirement["api_command_markers"]
+            if marker in missing_api_command_markers
+        ]
+        row_missing_panel_markers = [
+            marker
+            for marker in requirement["panel_markers"]
+            if marker in missing_panel_markers
+        ]
+        matrix[row_id] = {
+            "status": (
+                "pass"
+                if (
+                    all(row_checks.values())
+                    and not row_missing_markers
+                    and not row_missing_api_checks
+                    and not row_missing_api_command_markers
+                    and not row_missing_panel_markers
+                )
+                else "fail"
+            ),
+            "checks": row_checks,
+            "required_markers": list(requirement["markers"]),
+            "missing_markers": row_missing_markers,
+            "required_api_checks": list(requirement["api_checks"]),
+            "missing_api_checks": row_missing_api_checks,
+            "required_api_command_markers": list(requirement["api_command_markers"]),
+            "missing_api_command_markers": row_missing_api_command_markers,
+            "required_panel_markers": list(requirement["panel_markers"]),
+            "missing_panel_markers": row_missing_panel_markers,
+        }
+    return matrix
 
 
 def build_artifact(root: Path) -> dict[str, Any]:
@@ -267,11 +557,21 @@ def build_artifact(root: Path) -> dict[str, Any]:
             and "zaya_typed_cca_status" not in missing_api_checks
             and "native_cache_status_reports_zaya_typed_cca" not in missing_api_command_markers
         ),
+        "plain_attention_kv_status": (
+            not failed
+            and "plain_attention_kv_status" not in missing_api_checks
+            and "native_cache_status_reports_plain_attention_kv" not in missing_api_command_markers
+        ),
         "hybrid_ssm_partial_reuse": (
             not failed
             and "hybrid_ssm_partial_reuse" not in missing_api_checks
             and "test_memory_pressure_partially_reuses_hybrid_ssm_with_aligned_checkpoint" not in missing_markers
             and "test_hybrid_ssm_checkpoint_alignment_falls_back_to_exact_aligned_state" not in missing_markers
+        ),
+        "hybrid_ssm_companion_l2_contracts": (
+            not failed
+            and "test_accepts_scheduler_owned_ssm_l2_store" not in missing_markers
+            and "test_scheduler_creates_matching_ssm_companion_l2_for_block_disk" not in missing_markers
         ),
         "generic_tq_not_applied_to_hybrid_ssm": (
             not failed
@@ -290,8 +590,26 @@ def build_artifact(root: Path) -> dict[str, Any]:
             and "test_serialize_tq_cache_mixed_hybrid" not in missing_markers
             and "test_tq_tensors_roundtrip_via_safetensors" not in missing_markers
         ),
+        "gemma4_mixed_swa_kv_status": (
+            not failed
+            and "test_native_cache_status_reports_mixed_swa_kv" not in missing_markers
+            and "test_mllm_mixed_swa_cache_detail_does_not_report_ssm" not in missing_markers
+            and "test_mllm_rotating_kv_cache_is_kv_like_for_mixed_swa" not in missing_markers
+            and "test_mllm_ensure_batch_cache_preserves_rotating_cache_type" not in missing_markers
+            and "test_paged_cache_mixed_swa_reconstruct_preserves_full_kv_length" not in missing_markers
+            and "test_paged_cache_mixed_swa_frugal_keeps_resident_blocks_for_immediate_hit" not in missing_markers
+        ),
         "dsv4_terminal_composite_contracts": (
             not failed
+            and "test_memory_pressure_reuses_shorter_dsv4_terminal_composite_prefix" not in missing_markers
+            and "test_memory_pressure_refuses_dsv4_partial_without_terminal_composite" not in missing_markers
+        ),
+        "dsv4_swa_hca_csa_component_contracts": (
+            not failed
+            and "dsv4_native_cache_status" not in missing_api_checks
+            and "native_cache_status_reports_dsv4_separately_from_tq_kv" not in missing_api_command_markers
+            and "deepseek-v4 native cache path uses DS4 page-sized blocks" not in missing_panel_markers
+            and "DSV4 pool quant and native prefix controls stay DSV4-only" not in missing_panel_markers
             and "test_memory_pressure_reuses_shorter_dsv4_terminal_composite_prefix" not in missing_markers
             and "test_memory_pressure_refuses_dsv4_partial_without_terminal_composite" not in missing_markers
         ),
@@ -303,6 +621,18 @@ def build_artifact(root: Path) -> dict[str, Any]:
             not failed
             and "test_mllm_stats_include_cache_fields" not in missing_markers
         ),
+        "named_family_registry_cache_parser_contracts": (
+            not failed
+            and "test_jang_stamp_model_type_alias_preserves_registered_family_fields" not in missing_markers
+            and "test_nemotron_h_config" not in missing_markers
+            and "test_nemotron_h_v2_config" not in missing_markers
+            and "test_qwen36_release_rows_intentionally_use_qwen3_5_family_alias" not in missing_markers
+            and "test_qwen3_5_linear_attention_config_uses_hybrid_cache" not in missing_markers
+            and "test_zaya1_vl_registered_with_full_contract" not in missing_markers
+            and "test_hy_v3_provisional_contract" not in missing_markers
+            and "test_minimax_config" not in missing_markers
+            and "test_minimax_eos_includes_role_boundary_marker" not in missing_markers
+        ),
         "panel_cache_launch_policy": (
             not failed
             and not missing_panel_markers
@@ -310,10 +640,21 @@ def build_artifact(root: Path) -> dict[str, Any]:
         ),
         "legacy_count_floor_still_nontrivial": not failed and cache_passed >= 55,
     }
+    cache_family_matrix = _build_cache_family_matrix(
+        checks=checks,
+        missing_markers=missing_markers,
+        missing_api_checks=missing_api_checks,
+        missing_api_command_markers=missing_api_command_markers,
+        missing_panel_markers=missing_panel_markers,
+    )
+    checks["cache_family_matrix_complete"] = all(
+        row["status"] == "pass" for row in cache_family_matrix.values()
+    )
     return {
         "created_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
         "status": "pass" if all(checks.values()) else "fail",
         "checks": checks,
+        "cache_family_matrix": cache_family_matrix,
         "failed": failed,
         "missing_markers": missing_markers,
         "missing_api_checks": missing_api_checks,

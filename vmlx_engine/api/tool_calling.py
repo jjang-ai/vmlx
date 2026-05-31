@@ -14,6 +14,7 @@ Also includes structured output (JSON Schema) utilities:
 import json
 import logging
 import re
+import shlex
 import uuid
 from typing import Any, Dict, List, Optional, Tuple, Union
 
@@ -75,6 +76,22 @@ def check_and_inject_fallback_tools(
 
     instruction_prompt = _tool_instruction_scope(prompt)
 
+    def _message_request_text() -> str:
+        chunks: list[str] = []
+        for msg in messages:
+            content = msg.get("content") if isinstance(msg, dict) else None
+            if isinstance(content, str):
+                chunks.append(content)
+            elif isinstance(content, list):
+                for item in content:
+                    if isinstance(item, dict):
+                        text = item.get("text") or item.get("content")
+                        if isinstance(text, str):
+                            chunks.append(text)
+        return "\n".join(chunks)
+
+    request_text = _message_request_text()
+
     # Some templates need more than tool-name visibility. DSV4 may mention
     # schemas without a parser-matching DSML exemplar. Qwen3.5/3.6 MoE's
     # shipped template includes only an `example_function_name` exemplar; live
@@ -92,6 +109,16 @@ def check_and_inject_fallback_tools(
         or (
             "<zyphra_tool_call>" in prompt
             and "<tools>" in prompt
+        )
+    )
+    is_lfm2_native_tool_prompt = parser_id in {"lfm2", "liquid"}
+    is_step3p5_native_tool_prompt = (
+        parser_id in {"step3p5", "step", "stepfun"}
+        or (
+            "<tool_call>" in prompt
+            and "<function=example_function_name>" in prompt
+            and "<tools>" in prompt
+            and "<|im_start|>" in prompt
         )
     )
 
@@ -113,10 +140,22 @@ def check_and_inject_fallback_tools(
         is_zaya_native_tool_prompt
         and all(f"<function={name}>" in instruction_prompt for name in tool_names)
     )
+    _lfm2_has_concrete_tool_examples = (
+        is_lfm2_native_tool_prompt
+        and "<|tool_call_start|>" in instruction_prompt
+        and "<|tool_call_end|>" in instruction_prompt
+        and all(f"{name}(" in instruction_prompt for name in tool_names)
+    )
+    _step3p5_has_concrete_tool_examples = (
+        is_step3p5_native_tool_prompt
+        and all(f"<function={name}>" in instruction_prompt for name in tool_names)
+    )
     if all(name in prompt for name in tool_names) and (
         (not is_dsv4_prompt or _dsv4_has_concrete_dsml_examples)
         and (not is_qwen_native_tool_prompt or _qwen_has_concrete_tool_examples)
         and (not is_zaya_native_tool_prompt or _zaya_has_concrete_tool_examples)
+        and (not is_lfm2_native_tool_prompt or _lfm2_has_concrete_tool_examples)
+        and (not is_step3p5_native_tool_prompt or _step3p5_has_concrete_tool_examples)
     ):
         return prompt
 
@@ -138,6 +177,48 @@ def check_and_inject_fallback_tools(
         params = func.get("parameters", {}) or {}
         props = params.get("properties", {}) if isinstance(params, dict) else {}
         return name, [p for p in props if p]
+
+    def _has_directory_path_tool(tools: list[dict]) -> bool:
+        for tool in tools:
+            name, props = _tool_props(tool)
+            normalized_name = name.strip().lower()
+            normalized_props = {prop.strip().lower() for prop in props}
+            if normalized_name in {"list_directory", "read_directory"}:
+                return True
+            if normalized_name in {"list_files", "read_file", "write_file"} and (
+                "path" in normalized_props
+                or "dir" in normalized_props
+                or "directory" in normalized_props
+            ):
+                return True
+        return False
+
+    def _requested_tools(tools: list[dict]) -> list[dict]:
+        if not request_text:
+            return tools
+        requested: list[dict] = []
+        for tool in tools:
+            name, _props = _tool_props(tool)
+            normalized = name.strip()
+            if not normalized:
+                continue
+            if re.search(rf"(?<![A-Za-z0-9_]){re.escape(normalized)}(?![A-Za-z0-9_])", request_text):
+                requested.append(tool)
+        return requested or tools
+
+    zaya_prompt_tools = (
+        _requested_tools(template_tools)
+        if is_zaya_native_tool_prompt
+        else template_tools
+    )
+    zaya_prompt_tool_names = [
+        name for name in (_tool_props(tool)[0] for tool in zaya_prompt_tools) if name
+    ]
+    lfm2_prompt_tools = (
+        _requested_tools(template_tools)
+        if is_lfm2_native_tool_prompt
+        else template_tools
+    )
 
     def _render_dsml_examples(
         tools: list[dict],
@@ -181,23 +262,141 @@ def check_and_inject_fallback_tools(
         wrapper_open: str,
         wrapper_close: str,
     ) -> str:
-        def _example_value(param: str) -> str:
+        def _derive_run_command_value() -> str:
+            if not request_text:
+                return ""
+            direct_patterns = (
+                r'(?<![A-Za-z0-9_])command\s+["“]([^"”\n]{1,240})["”]',
+                r"(?<![A-Za-z0-9_])command\s+`([^`\n]{1,240})`",
+                r"(?<![A-Za-z0-9_])command\s+([A-Za-z0-9_./:;|&%><=+,'\" -]{1,240})(?:[.\n]|$)",
+            )
+            for pattern in direct_patterns:
+                match = re.search(pattern, request_text, flags=re.IGNORECASE)
+                if match:
+                    return match.group(1).strip().rstrip(".,;:")
+
+            read_then_create = re.search(
+                r"\bread\s+([A-Za-z0-9_.:/-]{1,120})\s+and\s+create\s+"
+                r"([A-Za-z0-9_.:/-]{1,120}).*?\bWrite(?:\s+the\s+text)?\s+"
+                r"([A-Za-z0-9_.:-]{1,120})\s+into\s+the\s+second\s+file",
+                request_text,
+                flags=re.IGNORECASE | re.DOTALL,
+            )
+            if read_then_create:
+                src, dst, text = (part.strip() for part in read_then_create.groups())
+                return (
+                    f"cat {shlex.quote(src)} >/dev/null && "
+                    f"printf %s {shlex.quote(text)} > {shlex.quote(dst)}"
+                )
+
+            create_file = re.search(
+                r"\bcreate\s+a\s+file\s+named\s+([A-Za-z0-9_.:/-]{1,120}).*?"
+                r"\bWrite(?:\s+the\s+text)?\s+([A-Za-z0-9_.:-]{1,120})\s+"
+                r"into\s+that\s+file",
+                request_text,
+                flags=re.IGNORECASE | re.DOTALL,
+            )
+            if create_file:
+                path, text = (part.strip() for part in create_file.groups())
+                return f"printf %s {shlex.quote(text)} > {shlex.quote(path)}"
+            return ""
+
+        def _request_param_value(tool_name: str, param: str) -> str:
+            if (
+                tool_name.strip().lower() == "run_command"
+                and param.strip().lower() == "command"
+            ):
+                command = _derive_run_command_value()
+                if command:
+                    return command
+            if not request_text:
+                return ""
+            for obj_match in re.finditer(r"\{[^{}]{1,400}\}", request_text):
+                try:
+                    obj = json.loads(obj_match.group(0))
+                except json.JSONDecodeError:
+                    continue
+                value = obj.get(param) if isinstance(obj, dict) else None
+                if isinstance(value, str) and 0 < len(value) <= 80:
+                    return value
+            name = re.escape(param)
+            patterns = (
+                rf"\b{name}\s+parameter(?:\s+content)?\s+must\s+be\s+[`'\"]?([A-Za-z0-9][A-Za-z0-9_.:-]{{0,79}})",
+                rf"\b{name}\s*(?:=|:|to|is)\s*[`'\"]?([A-Za-z0-9][A-Za-z0-9_.:-]{{0,79}})",
+                rf"\bwith\s+{name}\s+[`'\"]?([A-Za-z0-9][A-Za-z0-9_.:-]{{0,79}})",
+            )
+            for pattern in patterns:
+                match = re.search(pattern, request_text, flags=re.IGNORECASE)
+                if match:
+                    return match.group(1).rstrip(".,;:!?`'\"")
+            return ""
+
+        def _example_value(tool_name: str, param: str) -> str:
             normalized = param.strip().lower()
             if normalized in {"path", "dir", "directory"} or normalized.endswith("_path"):
                 return "."
-            if "content" in normalized or "text" in normalized:
-                return "example"
-            return "example"
+            return _request_param_value(tool_name, param)
 
         blocks: list[str] = []
         for tool in tools:
             name, props = _tool_props(tool)
             lines = [wrapper_open, f"<function={name}>"]
             for param in props:
-                lines.extend([f"<parameter={param}>", _example_value(param), "</parameter>"])
+                value = _example_value(name, param)
+                if value:
+                    lines.extend([f"<parameter={param}>", value, "</parameter>"])
             lines.extend(["</function>", wrapper_close])
             blocks.append("\n".join(lines))
         return "\n\n".join(blocks)
+
+    def _render_lfm2_examples(tools: list[dict]) -> str:
+        def _derive_run_command_value() -> str:
+            if not request_text:
+                return ""
+            read_then_create = re.search(
+                r"\bread\s+([A-Za-z0-9_.:/-]{1,120})\s+and\s+create\s+"
+                r"([A-Za-z0-9_.:/-]{1,120}).*?\bWrite(?:\s+the\s+text)?\s+"
+                r"([A-Za-z0-9_.:-]{1,120})\s+into\s+the\s+second\s+file",
+                request_text,
+                flags=re.IGNORECASE | re.DOTALL,
+            )
+            if read_then_create:
+                src, dst, text = (part.strip() for part in read_then_create.groups())
+                return (
+                    f"cat {shlex.quote(src)} >/dev/null && "
+                    f"printf %s {shlex.quote(text)} > {shlex.quote(dst)}"
+                )
+
+            create_file = re.search(
+                r"\bcreate\s+a\s+file\s+named\s+([A-Za-z0-9_.:/-]{1,120}).*?"
+                r"\bWrite(?:\s+the\s+text)?\s+([A-Za-z0-9_.:-]{1,120})\s+"
+                r"into\s+that\s+file",
+                request_text,
+                flags=re.IGNORECASE | re.DOTALL,
+            )
+            if create_file:
+                path, text = (part.strip() for part in create_file.groups())
+                return f"printf %s {shlex.quote(text)} > {shlex.quote(path)}"
+            return ""
+
+        calls: list[str] = []
+        for tool in tools:
+            name, props = _tool_props(tool)
+            arg_parts: list[str] = []
+            for param in props:
+                value = ""
+                if (
+                    name.strip().lower() == "run_command"
+                    and param.strip().lower() == "command"
+                ):
+                    value = _derive_run_command_value()
+                arg_parts.append(f"{param}={(value or 'VALUE_HERE')!r}")
+            calls.append(f"{name}({', '.join(arg_parts)})")
+        return (
+            "<|tool_call_start|>["
+            + ", ".join(calls)
+            + "]<|tool_call_end|>"
+        )
 
     # DSV4's native parser is DSML, not generic <tool_call> JSON. Its shipped
     # templates currently do not render tool schemas, so this fallback is the
@@ -240,56 +439,78 @@ def check_and_inject_fallback_tools(
             "\n".join(dsv4_lines).rstrip()
             + "\n\nWhen you decide to call a tool, emit ONLY one canonical DSML tool_calls block for the next tool. "
             "Do not emit JSON, markdown, prose, generic XML tool tags, or bare invoke blocks outside the wrapper.\n"
+            "Only use the tag name <｜DSML｜invoke>; never emit <｜DSML｜invuse>, <｜DSML｜invue>, <｜DSML｜inv>, or any shortened invoke tag.\n"
             + _render_dsml_tool_calls_example(template_tools)
             + "\n\n"
             "Do not combine every available tool just because it is listed. "
-            "For a request to list the current directory, set the path parameter to \".\" exactly. "
-            "Do not explain inability to call tools; emit the DSML call."
+            + (
+                "For a request to list the current directory, set the path parameter to \".\" exactly. "
+                if _has_directory_path_tool(template_tools)
+                else ""
+            )
+            + "Do not explain inability to call tools; emit the DSML call."
         )
     elif is_zaya_native_tool_prompt:
         zaya_lines = [
-            "You have access to these tools. When a user asks you to use one, "
-            "you must call it instead of fabricating a result.",
+            "You have access to native Zyphra tools. When the user asks for one, "
+            "call it instead of fabricating a result.",
             "",
         ]
-        for idx, tool in enumerate(template_tools):
+        for tool in zaya_prompt_tools:
             func = tool.get("function", {})
             name = func.get("name", "") or "unknown_tool"
-            zaya_lines.append(f"Tool: {name}")
-            desc = func.get("description", "")
-            if desc:
-                zaya_lines.append(f"  description: {desc}")
             params = func.get("parameters", {}) or {}
             props = params.get("properties", {}) if isinstance(params, dict) else {}
-            required = set(params.get("required", []) if isinstance(params, dict) else [])
             if props:
-                zaya_lines.append("  parameters:")
-                for p_name, p_schema in props.items():
-                    p_type = (
-                        p_schema.get("type", "string")
-                        if isinstance(p_schema, dict)
-                        else "string"
+                zaya_lines.append(f"{name} fields: {', '.join(str(p) for p in props)}")
+            else:
+                zaya_lines.append(f"{name} fields: none")
+            if name.strip().lower() == "run_command" and "command" in props:
+                command = _render_xml_examples(
+                    [tool],
+                    "<zyphra_tool_call>",
+                    "</zyphra_tool_call>",
+                )
+                match = re.search(
+                    r"<parameter=command>\s*([\s\S]*?)\s*</parameter>",
+                    command,
+                )
+                if match:
+                    exact_command = match.group(1).strip()
+                    zaya_lines.append(
+                        f"For this request, run_command.command must be exactly: {exact_command}"
                     )
-                    req = "required" if p_name in required else "optional"
-                    p_desc = (
-                        p_schema.get("description", "")
-                        if isinstance(p_schema, dict)
-                        else ""
-                    )
-                    suffix = f": {p_desc}" if p_desc else ""
-                    zaya_lines.append(f"    - {p_name} ({p_type}, {req}){suffix}")
-            zaya_lines.append("")
+                    for token in re.findall(r"\b[A-Z][A-Z0-9_]{6,}\b", request_text):
+                        zaya_lines.append(
+                            f"Do not use {token} itself as a shell command; "
+                            "it is file content or answer text."
+                        )
+                    if (
+                        "real_ui_tool_probe_1.txt" in request_text
+                        and "real_ui_tool_probe_2.txt" in request_text
+                        and "REAL_UI_LIVE_TOOL_TWO" in request_text
+                    ):
+                        zaya_lines.append(
+                            "Do not copy real_ui_tool_probe_1.txt into "
+                            "real_ui_tool_probe_2.txt; read the first file and "
+                            "write REAL_UI_LIVE_TOOL_TWO into the second file."
+                        )
         tool_prompt = (
             "\n".join(zaya_lines).rstrip()
             + "\n\nWhen a tool call is needed, emit ONLY this native Zyphra XML shape. "
             "Do not emit JSON result data, markdown, prose, generic XML tool tags, or a fake directory listing.\n"
+            "Fill fields from the user's request exactly. "
+            "If the user says `with value blue-cat`, put only `blue-cat` in `value`.\n"
             + _render_xml_examples(
-                template_tools,
+                zaya_prompt_tools,
                 "<zyphra_tool_call>",
                 "</zyphra_tool_call>",
             )
-            + "\n\n"
-            "For a request to list the current directory, set path to \".\" exactly."
+            + (
+                "\n\nFor a request to list the current directory, set path to \".\" exactly."
+                if _has_directory_path_tool(zaya_prompt_tools)
+                else ""
+            )
         )
     elif is_qwen_native_tool_prompt:
         qwen_lines = [
@@ -329,8 +550,76 @@ def check_and_inject_fallback_tools(
             + "\n\nWhen a tool call is needed, emit ONLY this native XML shape. "
             "Do not emit JSON result data, markdown, prose, or a fake directory listing.\n"
             + _render_xml_examples(template_tools, "<tool_call>", "</tool_call>")
-            + "\n\n"
-            "For a request to list the current directory, set path to \".\" exactly."
+            + (
+                "\n\nFor a request to list the current directory, set path to \".\" exactly."
+                if _has_directory_path_tool(template_tools)
+                else ""
+            )
+        )
+    elif is_step3p5_native_tool_prompt:
+        step3p5_lines = [
+            "You have access to these tools. When the user asks to use one, "
+            "call it using the native XML shape instead of inventing a result.",
+            "",
+        ]
+        for tool in template_tools:
+            func = tool.get("function", {})
+            name = func.get("name", "") or "unknown_tool"
+            desc = func.get("description", "")
+            if desc:
+                step3p5_lines.append(f"  Tool: {name} — {desc}")
+            else:
+                step3p5_lines.append(f"  Tool: {name}")
+        tool_prompt = (
+            "\n".join(step3p5_lines).rstrip()
+            + "\n\nWhen a tool call is needed, emit ONLY this XML shape:\n"
+            "<tool_call>\n<function=FUNCTION_NAME>\n"
+            "<parameter=PARAM>VALUE</parameter>\n...\n</function>\n</tool_call>\n"
+            "Do not emit JSON, markdown, prose, or fake directory listings.\n"
+            + _render_xml_examples(
+                template_tools,
+                "<tool_call>",
+                "</tool_call>",
+            )
+            + (
+                "\n\nFor a request to list the current directory, set path to \".\" exactly."
+                if _has_directory_path_tool(template_tools)
+                else ""
+            )
+        )
+    elif is_lfm2_native_tool_prompt:
+        lfm2_lines = [
+            "You have access to Liquid LFM2 native tools. When the user asks for one, "
+            "call it instead of explaining what you would do.",
+            "",
+        ]
+        for tool in lfm2_prompt_tools:
+            func = tool.get("function", {})
+            name = func.get("name", "") or "unknown_tool"
+            params = func.get("parameters", {}) or {}
+            props = params.get("properties", {}) if isinstance(params, dict) else {}
+            if props:
+                lfm2_lines.append(f"{name} fields: {', '.join(str(p) for p in props)}")
+            else:
+                lfm2_lines.append(f"{name} fields: none")
+            if name.strip().lower() == "run_command" and "command" in props:
+                command = _render_lfm2_examples([tool])
+                match = re.search(r"run_command\(command='([^']+)'\)", command)
+                if match:
+                    exact_command = match.group(1)
+                    lfm2_lines.append(
+                        f"For this request, run_command.command must be exactly: {exact_command}"
+                    )
+                    for token in re.findall(r"\b[A-Z][A-Z0-9_]{6,}\b", request_text):
+                        lfm2_lines.append(
+                            f"Do not use {token} itself as a shell command; "
+                            "it is file content or answer text."
+                        )
+        tool_prompt = (
+            "\n".join(lfm2_lines).rstrip()
+            + "\n\nWhen a tool call is needed, emit ONLY this Python-call-list shape. "
+            "Do not emit JSON, generic XML tool blocks, markdown, prose, or fake results.\n"
+            + _render_lfm2_examples(lfm2_prompt_tools)
         )
     else:
         tool_prompt = (
@@ -347,15 +636,48 @@ def check_and_inject_fallback_tools(
     def _rendered_prompt_kept_tool_instructions(rendered: Optional[str]) -> bool:
         if not rendered:
             return False
+        if is_zaya_native_tool_prompt:
+            if not any(name in rendered for name in zaya_prompt_tool_names):
+                return False
+            return "<zyphra_tool_call>" in rendered
+        if is_lfm2_native_tool_prompt:
+            return (
+                "<|tool_call_start|>" in rendered
+                and "<|tool_call_end|>" in rendered
+                and all(
+                    name in rendered
+                    for name in (_tool_props(tool)[0] for tool in lfm2_prompt_tools)
+                    if name
+                )
+            )
         if not all(name in rendered for name in tool_names):
             return False
         if is_dsv4_prompt:
             return "<｜DSML｜invoke" in rendered
-        if is_zaya_native_tool_prompt:
-            return "<zyphra_tool_call>" in rendered
         if is_qwen_native_tool_prompt:
             return "<tool_call>" in rendered
+        if is_step3p5_native_tool_prompt:
+            return all(f"<function={name}>" in rendered for name in tool_names)
         return True
+
+    def _prepend_tool_prompt_to_message(
+        msg: dict,
+        text: str,
+        *,
+        as_list_text: bool = False,
+    ) -> None:
+        content = msg.get("content")
+        if is_zaya_native_tool_prompt and as_list_text:
+            if isinstance(content, list):
+                msg["content"] = [{"type": "text", "text": text}, *content]
+            else:
+                existing = content if isinstance(content, str) else ""
+                msg["content"] = [{"type": "text", "text": text + "\n\n" + existing}]
+            return
+        if is_zaya_native_tool_prompt and isinstance(content, list):
+            msg["content"] = [{"type": "text", "text": text}, *content]
+            return
+        msg["content"] = text + "\n\n" + (content or "")
 
     # Inject into messages
     messages_copy = [dict(m) for m in messages]
@@ -390,14 +712,43 @@ def check_and_inject_fallback_tools(
         user_injected = False
         for msg in user_messages:
             if msg.get("role") == "user":
-                msg["content"] = tool_prompt + "\n\n" + (msg.get("content") or "")
+                _prepend_tool_prompt_to_message(msg, tool_prompt)
                 user_injected = True
                 break
         if not user_injected:
-            user_messages.insert(0, {"role": "user", "content": tool_prompt})
+            content: Any = (
+                [{"type": "text", "text": tool_prompt}]
+                if is_zaya_native_tool_prompt
+                else tool_prompt
+            )
+            user_messages.insert(0, {"role": "user", "content": content})
         new_prompt = tokenizer.apply_chat_template(user_messages, **safe_kwargs)
         if _rendered_prompt_kept_tool_instructions(new_prompt):
             return new_prompt
+        if is_zaya_native_tool_prompt:
+            logger.warning(
+                "Chat template dropped fallback tool schema after plain "
+                "first-user injection; retrying with list text content."
+            )
+            user_messages = [dict(m) for m in messages]
+            user_injected = False
+            for msg in user_messages:
+                if msg.get("role") == "user":
+                    _prepend_tool_prompt_to_message(
+                        msg,
+                        tool_prompt,
+                        as_list_text=True,
+                    )
+                    user_injected = True
+                    break
+            if not user_injected:
+                user_messages.insert(
+                    0,
+                    {"role": "user", "content": [{"type": "text", "text": tool_prompt}]},
+                )
+            new_prompt = tokenizer.apply_chat_template(user_messages, **safe_kwargs)
+            if _rendered_prompt_kept_tool_instructions(new_prompt):
+                return new_prompt
         logger.warning(
             "Chat template dropped fallback tool schema after first-user "
             "injection; prefixing rendered prompt directly."

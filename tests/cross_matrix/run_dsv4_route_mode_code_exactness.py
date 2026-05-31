@@ -9,8 +9,10 @@ required Three.js identifiers survive without corrupt repeated subpieces.
 from __future__ import annotations
 
 import argparse
+import difflib
 import json
 import os
+import re
 import signal
 import subprocess
 import threading
@@ -25,6 +27,7 @@ REPO = Path(__file__).resolve().parents[2]
 DEFAULT_PYTHON = REPO / "panel/bundled-python/python/bin/python3"
 DEFAULT_MODEL = "/Users/example/models/JANGQ/DeepSeek-V4-Flash-JANGTQ-K"
 SAFE_CWD = Path("/tmp")
+DEFAULT_MIN_FREE_GB = 120.0
 
 REQUIRED_IDENTIFIERS = [
     "THREE.Scene",
@@ -63,6 +66,153 @@ def clean_env(extra: dict[str, str] | None = None) -> dict[str, str]:
     if extra:
         env.update(extra)
     return env
+
+
+def _run_text(cmd: list[str]) -> str:
+    return subprocess.check_output(cmd, text=True, stderr=subprocess.STDOUT)
+
+
+def parse_vm_stat(text: str) -> dict[str, Any]:
+    page_size_match = re.search(r"page size of (\d+) bytes", text)
+    page_size = int(page_size_match.group(1)) if page_size_match else 16384
+    pages: dict[str, int] = {}
+    for line in text.splitlines():
+        match = re.match(r"Pages ([^:]+):\s+([0-9]+)\.", line.strip())
+        if not match:
+            continue
+        pages[match.group(1).strip().replace(" ", "_")] = int(match.group(2))
+    return {"page_size": page_size, "pages": pages}
+
+
+def gb_from_pages(count: int, page_size: int) -> float:
+    return round((count * page_size) / (1024**3), 2)
+
+
+def vm_stat_memory_breakdown(vm_stat_text: str | None = None) -> dict[str, Any]:
+    vm = parse_vm_stat(vm_stat_text if vm_stat_text is not None else _run_text(["vm_stat"]))
+    page_size = int(vm["page_size"])
+    pages = vm["pages"]
+    free_gb = gb_from_pages(int(pages.get("free", 0)), page_size)
+    speculative_gb = gb_from_pages(int(pages.get("speculative", 0)), page_size)
+    purgeable_gb = gb_from_pages(int(pages.get("purgeable", 0)), page_size)
+    inactive_gb = gb_from_pages(int(pages.get("inactive", 0)), page_size)
+    return {
+        "free": free_gb,
+        "speculative": speculative_gb,
+        "purgeable": purgeable_gb,
+        "inactive": inactive_gb,
+        "free_plus_speculative_purgeable": round(
+            free_gb + speculative_gb + purgeable_gb,
+            2,
+        ),
+    }
+
+
+def resource_snapshot(name: str, proc: subprocess.Popen[str] | None = None) -> dict[str, Any]:
+    snap: dict[str, Any] = {
+        "name": name,
+        "time": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+    }
+    try:
+        import psutil
+
+        vm = psutil.virtual_memory()
+        snap["system_memory"] = {
+            "total_gb": round(vm.total / (1024**3), 2),
+            "available_gb": round(vm.available / (1024**3), 2),
+            "percent": vm.percent,
+        }
+        if proc is not None and proc.poll() is None:
+            p = psutil.Process(proc.pid)
+            mem = p.memory_info()
+            snap["process"] = {
+                "pid": proc.pid,
+                "rss_gb": round(mem.rss / (1024**3), 3),
+                "num_threads": p.num_threads(),
+                "status": p.status(),
+            }
+    except Exception as exc:  # noqa: BLE001 - diagnostic helper
+        snap["error"] = f"{type(exc).__name__}: {exc}"
+    return snap
+
+
+def memory_preflight_artifact(
+    args: argparse.Namespace,
+    *,
+    force_no_launch: bool = False,
+) -> dict[str, Any] | None:
+    min_free_gb = float(getattr(args, "min_free_gb", 0.0) or 0.0)
+    if min_free_gb <= 0:
+        return None
+    snap = resource_snapshot("preflight")
+    available = (snap.get("system_memory") or {}).get("available_gb")
+    try:
+        vm_breakdown = vm_stat_memory_breakdown()
+    except Exception as exc:  # noqa: BLE001 - keep psutil-only fallback diagnostic
+        vm_breakdown = {"error": f"{type(exc).__name__}: {exc}"}
+    vm_available = vm_breakdown.get("free_plus_speculative_purgeable")
+    gate_available = (
+        float(vm_available)
+        if isinstance(vm_available, (int, float))
+        else float(available)
+        if isinstance(available, (int, float))
+        else None
+    )
+    if gate_available is not None and (force_no_launch or gate_available < min_free_gb):
+        selected_cases = selected_case_names(args)
+        memory_gap_gb = round(max(0.0, min_free_gb - gate_available), 2)
+        status = "ready_to_launch" if gate_available >= min_free_gb else "skipped"
+        used_vm_stat = isinstance(vm_available, (int, float))
+        return {
+            "schema": "vmlx-dsv4-route-mode-code-exactness-v1",
+            "created_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+            "status": status,
+            "reason": (
+                "memory_preflight_floor_met"
+                if status == "ready_to_launch"
+                else "insufficient_vm_stat_memory"
+                if used_vm_stat
+                else "insufficient_free_memory"
+            ),
+            "required_available_gb": min_free_gb,
+            "available_gb": round(float(available), 2)
+            if isinstance(available, (int, float))
+            else None,
+            "preflight_available_gb": round(gate_available, 2),
+            "preflight_memory_source": (
+                "vm_stat_free_plus_speculative_purgeable"
+                if used_vm_stat
+                else "psutil_available"
+            ),
+            "free_plus_speculative_purgeable_gb": round(float(vm_available), 2)
+            if isinstance(vm_available, (int, float))
+            else None,
+            "memory_breakdown_gb": {
+                key: vm_breakdown.get(key)
+                for key in ("free", "speculative", "purgeable", "inactive")
+                if key in vm_breakdown
+            },
+            "memory_gap_gb": memory_gap_gb,
+            "did_not_launch": True,
+            "launch_decision": (
+                "launch_allowed" if status == "ready_to_launch" else "do_not_launch"
+            ),
+            "launch_blockers": [
+                "insufficient_memory"
+            ]
+            if status != "ready_to_launch"
+            else [],
+            "model": args.model,
+            "cmd": build_cmd(args),
+            "selected_cases": list(selected_cases),
+            "case_count": len(selected_cases),
+            "telemetry": [snap],
+        }
+    return None
+
+
+def blocked_by_memory_preflight(args: argparse.Namespace) -> dict[str, Any] | None:
+    return memory_preflight_artifact(args, force_no_launch=False)
 
 
 def http_json(method: str, url: str, body: dict[str, Any] | None = None, timeout: float = 30.0) -> tuple[int, Any]:
@@ -145,8 +295,36 @@ def analyze_content(content: str) -> dict[str, Any]:
         "normalized_exact": normalized.strip() == EXACT_CODE.strip(),
         "missing": missing,
         "corrupt_patterns": corrupt,
+        "identifier_corruption_candidates": identifier_corruption_candidates(
+            content,
+            missing,
+        ),
         "has_markdown_fence": "```" in content,
     }
+
+
+def identifier_corruption_candidates(
+    content: str,
+    missing_identifiers: list[str],
+) -> list[dict[str, str]]:
+    """Record near-miss Three.js identifiers for root-cause artifacts."""
+    seen = set(re.findall(r"\bTHREE\.[A-Za-z_][A-Za-z0-9_]*", content))
+    seen.update(re.findall(r"\b[A-Z][A-Za-z0-9_]*(?:Renderer|Camera|Geometry|Material|Scene)\b", content))
+    candidates: list[dict[str, str]] = []
+    for required in missing_identifiers:
+        required_tail = required.rsplit(".", 1)[-1]
+        for candidate in sorted(seen):
+            candidate_tail = candidate.rsplit(".", 1)[-1]
+            if candidate == required or candidate_tail == required_tail:
+                continue
+            ratio = difflib.SequenceMatcher(
+                None,
+                required_tail.lower(),
+                candidate_tail.lower(),
+            ).ratio()
+            if ratio >= 0.72:
+                candidates.append({"required": required, "candidate": candidate})
+    return candidates
 
 
 def normalize_code_content(content: str) -> str:
@@ -177,12 +355,70 @@ def _render_dsv4_prompt(
     )
 
 
+def _encode_prompt_token_ids(
+    prompt: str,
+    *,
+    model_path: str,
+    tokenizer: Any | None = None,
+) -> list[int]:
+    tok = tokenizer
+    if tok is None:
+        tok_file = Path(model_path).expanduser() / "tokenizer.json"
+        if not tok_file.exists():
+            return []
+        from tokenizers import Tokenizer
+
+        tok = Tokenizer.from_file(str(tok_file))
+    try:
+        encoded = tok.encode(prompt, add_special_tokens=False)
+    except TypeError:
+        encoded = tok.encode(prompt)
+    if hasattr(encoded, "ids"):
+        encoded = encoded.ids
+    if hasattr(encoded, "tolist"):
+        encoded = encoded.tolist()
+    return [int(token_id) for token_id in encoded]
+
+
+def prompt_token_diagnostics(
+    prompt: str,
+    *,
+    model_path: str,
+    tokenizer: Any | None = None,
+) -> dict[str, Any]:
+    try:
+        ids = _encode_prompt_token_ids(
+            prompt,
+            model_path=model_path,
+            tokenizer=tokenizer,
+        )
+    except Exception as exc:  # noqa: BLE001 - diagnostic artifact only
+        return {
+            "available": False,
+            "error": f"{type(exc).__name__}: {exc}",
+        }
+    if not ids:
+        return {"available": False, "reason": "tokenizer_unavailable_or_empty"}
+    tail = ids[-24:]
+    return {
+        "available": True,
+        "token_count": len(ids),
+        "tail_ids": tail,
+        "tail_contains_assistant_id": 128804 in tail,
+        "tail_contains_think_open_id": 128821 in tail,
+        "tail_contains_think_close_id": 128822 in tail,
+        "endswith_think_open_id": ids[-1] == 128821,
+        "endswith_think_close_id": ids[-1] == 128822,
+    }
+
+
 def prompt_diagnostics(
     route: str,
     body: dict[str, Any],
     *,
     model_path: str,
     renderer: Any | None = None,
+    tokenizer: Any | None = None,
 ) -> dict[str, Any]:
     """Record the concrete DSV4 prompt rail used by an exactness case."""
     if route == "completion":
@@ -228,12 +464,133 @@ def prompt_diagnostics(
         "assistant_suffix_kind": suffix_kind,
         "prompt_endswith_assistant_think_open": prompt.endswith(assistant_think_open),
         "prompt_endswith_assistant_think_close": prompt.endswith(assistant_think_close),
+        "token_diagnostics": prompt_token_diagnostics(
+            prompt,
+            model_path=model_path,
+            tokenizer=tokenizer,
+        ),
     }
+
+
+def effective_prompt_diagnostics(
+    route: str,
+    body: dict[str, Any],
+    *,
+    model_path: str,
+    renderer: Any | None = None,
+) -> dict[str, Any]:
+    """Record the DSV4 prompt rail after server-side policy resolution."""
+    if route == "completion":
+        from vmlx_engine.server import _resolve_dsv4_thinking_policy
+
+        decision = _resolve_dsv4_thinking_policy(
+            requested_enable_thinking=None,
+            effort_requested=False,
+            tools_present=False,
+            tool_choice=None,
+        )
+        prompt = str(body.get("prompt") or "")
+        render = renderer or _render_dsv4_prompt
+        rendered = render(
+            [{"role": "user", "content": prompt}],
+            enable_thinking=decision.enable_thinking,
+            reasoning_effort=None,
+            model_path=model_path,
+        )
+        assistant_think_open = "<｜Assistant｜><think>"
+        assistant_think_close = "<｜Assistant｜></think>"
+        prompt_tail = rendered[-320:]
+        if rendered.endswith(assistant_think_open):
+            suffix_kind = "thinking_open"
+        elif rendered.endswith(assistant_think_close):
+            suffix_kind = "thinking_closed"
+        elif "<think>" in prompt_tail:
+            suffix_kind = "contains_think_open"
+        elif "</think>" in prompt_tail:
+            suffix_kind = "contains_think_close"
+        else:
+            suffix_kind = "none"
+        diag = {
+            "route": route,
+            "enable_thinking": decision.enable_thinking,
+            "reasoning_effort": None,
+            "prompt_chars": len(rendered),
+            "prompt_tail": prompt_tail,
+            "assistant_suffix_kind": suffix_kind,
+            "prompt_endswith_assistant_think_open": rendered.endswith(
+                assistant_think_open
+            ),
+            "prompt_endswith_assistant_think_close": rendered.endswith(
+                assistant_think_close
+            ),
+            "requested_enable_thinking": None,
+            "requested_reasoning_effort": None,
+        }
+        diag["dsv4_policy_reason"] = decision.reason
+        diag["dsv4_reasoning_effort_allowed"] = decision.reasoning_effort_allowed
+        return diag
+
+    template_kwargs = body.get("chat_template_kwargs")
+    if not isinstance(template_kwargs, dict):
+        template_kwargs = {}
+    requested_enable = body.get("enable_thinking")
+    if requested_enable is None and "enable_thinking" in template_kwargs:
+        requested_enable = template_kwargs.get("enable_thinking")
+    requested_effort = template_kwargs.get("reasoning_effort", body.get("reasoning_effort"))
+
+    from vmlx_engine.server import (
+        _normalize_dsv4_reasoning_effort,
+        _resolve_dsv4_thinking_policy,
+    )
+
+    decision = _resolve_dsv4_thinking_policy(
+        requested_enable_thinking=requested_enable,
+        effort_requested=bool(requested_effort),
+        tools_present=bool(body.get("tools")),
+        tool_choice=body.get("tool_choice"),
+    )
+    effective_effort = (
+        _normalize_dsv4_reasoning_effort(requested_effort)
+        if decision.reasoning_effort_allowed
+        else None
+    )
+
+    effective_body = dict(body)
+    effective_kwargs = dict(template_kwargs)
+    effective_kwargs["enable_thinking"] = decision.enable_thinking
+    if effective_effort:
+        effective_kwargs["reasoning_effort"] = effective_effort
+        effective_body["reasoning_effort"] = effective_effort
+    else:
+        effective_kwargs.pop("reasoning_effort", None)
+        effective_body.pop("reasoning_effort", None)
+    effective_body["enable_thinking"] = decision.enable_thinking
+    effective_body["chat_template_kwargs"] = effective_kwargs
+
+    diag = prompt_diagnostics(
+        route,
+        effective_body,
+        model_path=model_path,
+        renderer=renderer,
+    )
+    diag["requested_enable_thinking"] = requested_enable
+    diag["requested_reasoning_effort"] = requested_effort
+    diag["dsv4_policy_reason"] = decision.reason
+    diag["dsv4_reasoning_effort_allowed"] = decision.reasoning_effort_allowed
+    return diag
+
+
+def normalize_python_executable(value: str | Path, cwd: Path | None = None) -> Path:
+    """Return an absolute Python path without resolving venv symlinks."""
+    path = Path(value).expanduser()
+    if path.is_absolute():
+        return path
+    return (cwd or REPO) / path
 
 
 def build_cmd(args: argparse.Namespace) -> list[str]:
     return [
-        str(Path(args.python).expanduser().resolve()),
+        str(normalize_python_executable(args.python)),
         "-B",
         "-s",
         "-P",
@@ -272,11 +629,20 @@ def build_cmd(args: argparse.Namespace) -> list[str]:
     ]
 
 
-def case_body(name: str) -> tuple[str, dict[str, Any]]:
-    user = (
+def _exact_code_user_prompt(name: str) -> str:
+    if name in {"chat_off_no_punct_rep1", "responses_off_no_punct_rep1"}:
+        return (
+            "Return exactly this JavaScript code and no markdown fences\n"
+            f"{EXACT_CODE}"
+        )
+    return (
         "Return exactly this JavaScript code and no markdown fences:\n"
         f"{EXACT_CODE}"
     )
+
+
+def case_body(name: str) -> tuple[str, dict[str, Any]]:
+    user = _exact_code_user_prompt(name)
     if name == "chat_max":
         user = (
             "Copy the following JavaScript exactly. Preserve identifier spelling. "
@@ -299,10 +665,14 @@ def case_body(name: str) -> tuple[str, dict[str, Any]]:
         else:
             body["enable_thinking"] = False
             body["chat_template_kwargs"] = {"enable_thinking": False}
-        if name in {"chat_off_rep1", "chat_on_rep1"}:
+        if name in {"chat_off_rep1", "chat_on_rep1", "chat_off_no_punct_rep1"}:
             body["repetition_penalty"] = 1.0
+        if name == "chat_off_bundle_defaults":
+            body.pop("temperature", None)
+            body.pop("top_p", None)
+            body.pop("repetition_penalty", None)
         return "chat", body
-    if name in {"responses_off", "responses_off_rep1", "responses_on", "responses_on_rep1"}:
+    if name in {"responses_off", "responses_off_rep1", "responses_off_no_punct_rep1", "responses_on", "responses_on_rep1", "responses_off_bundle_defaults"}:
         body = {
             "model": "dsv4-route-code-probe",
             "input": [{"role": "user", "content": user}],
@@ -318,8 +688,12 @@ def case_body(name: str) -> tuple[str, dict[str, Any]]:
         else:
             body["enable_thinking"] = False
             body["chat_template_kwargs"] = {"enable_thinking": False}
-        if name in {"responses_off_rep1", "responses_on_rep1"}:
+        if name in {"responses_off_rep1", "responses_on_rep1", "responses_off_no_punct_rep1"}:
             body["repetition_penalty"] = 1.0
+        if name == "responses_off_bundle_defaults":
+            body.pop("temperature", None)
+            body.pop("top_p", None)
+            body.pop("repetition_penalty", None)
         return "responses", body
     return "completion", {
         "model": "dsv4-route-code-probe",
@@ -334,31 +708,55 @@ def case_body(name: str) -> tuple[str, dict[str, Any]]:
 CASE_NAMES = (
     "chat_off",
     "chat_off_rep1",
+    "chat_off_no_punct_rep1",
+    "chat_off_bundle_defaults",
     "chat_on",
     "chat_on_rep1",
     "chat_max",
     "responses_off",
     "responses_off_rep1",
+    "responses_off_no_punct_rep1",
+    "responses_off_bundle_defaults",
     "responses_on",
     "responses_on_rep1",
     "legacy_completion_raw",
 )
 
 
+def selected_case_names(args: argparse.Namespace) -> tuple[str, ...]:
+    raw = str(getattr(args, "cases", "") or "").strip()
+    if not raw:
+        return CASE_NAMES
+    names = tuple(name.strip() for name in raw.split(",") if name.strip())
+    unknown = sorted(set(names) - set(CASE_NAMES))
+    if unknown:
+        raise ValueError(f"Unknown case names: {', '.join(unknown)}")
+    return names
+
+
 def dry_run(args: argparse.Namespace) -> dict[str, Any]:
     cmd = build_cmd(args)
     cases: list[dict[str, Any]] = []
-    for name in CASE_NAMES:
+    selected_cases = selected_case_names(args)
+    for name in selected_cases:
         route, body = case_body(name)
+        requested_diag = prompt_diagnostics(
+            route,
+            body,
+            model_path=args.model,
+        )
+        effective_diag = effective_prompt_diagnostics(
+            route,
+            body,
+            model_path=args.model,
+        )
         cases.append(
             {
                 "name": name,
                 "route": route,
-                "prompt_diagnostics": prompt_diagnostics(
-                    route,
-                    body,
-                    model_path=args.model,
-                ),
+                "prompt_diagnostics": requested_diag,
+                "requested_prompt_diagnostics": requested_diag,
+                "effective_prompt_diagnostics": effective_diag,
                 "request_overrides": {
                     key: body[key]
                     for key in (
@@ -382,16 +780,109 @@ def dry_run(args: argparse.Namespace) -> dict[str, Any]:
         "dry_run": True,
         "model": args.model,
         "cmd": cmd,
+        "base_url": getattr(args, "base_url", None),
+        "case_count": len(cases),
+        "selected_cases": list(selected_cases),
+        "cases": cases,
+    }
+
+
+def run_cases_against_base_url(args: argparse.Namespace, base_url: str) -> dict[str, Any]:
+    cases: list[dict[str, Any]] = []
+    selected_cases = selected_case_names(args)
+    health_code, health = http_json("GET", f"{base_url.rstrip('/')}/health", timeout=5)
+    for name in selected_cases:
+        route, body = case_body(name)
+        endpoint = {
+            "chat": "/v1/chat/completions",
+            "responses": "/v1/responses",
+            "completion": "/v1/completions",
+        }[route]
+        started = time.time()
+        code, response = http_json(
+            "POST",
+            f"{base_url.rstrip('/')}{endpoint}",
+            body,
+            timeout=args.request_timeout,
+        )
+        elapsed = time.time() - started
+        content, finish, prompt_tokens, completion_tokens = extract_content(route, response)
+        analysis = analyze_content(content)
+        requested_diag = prompt_diagnostics(
+            route,
+            body,
+            model_path=args.model,
+        )
+        effective_diag = effective_prompt_diagnostics(
+            route,
+            body,
+            model_path=args.model,
+        )
+        cases.append(
+            {
+                "name": name,
+                "route": route,
+                "http_code": code,
+                "finish": finish,
+                "elapsed_sec": round(elapsed, 3),
+                "prompt_tokens": prompt_tokens,
+                "completion_tokens": completion_tokens,
+                "decode_tps_wall": round(completion_tokens / elapsed, 3)
+                if elapsed > 0 and completion_tokens
+                else 0.0,
+                "content": content,
+                "prompt_diagnostics": requested_diag,
+                "requested_prompt_diagnostics": requested_diag,
+                "effective_prompt_diagnostics": effective_diag,
+                **analysis,
+                "raw_keys": sorted(response.keys()) if isinstance(response, dict) else [],
+            }
+        )
+    return {
+        "schema": "vmlx-dsv4-route-mode-code-exactness-v1",
+        "created_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+        "model": args.model,
+        "base_url": base_url,
+        "health_code": health_code,
+        "health0": health,
+        "selected_cases": list(selected_cases),
         "case_count": len(cases),
         "cases": cases,
+        "status": "pass" if all(case.get("exact") is True for case in cases) else "fail",
     }
 
 
 def run(args: argparse.Namespace) -> dict[str, Any]:
     if getattr(args, "dry_run", False):
         return dry_run(args)
+    if getattr(args, "base_url", None):
+        return run_cases_against_base_url(args, args.base_url)
+    if getattr(args, "memory_preflight_only", False):
+        preflight = memory_preflight_artifact(args, force_no_launch=True)
+        if preflight is None:
+            selected_cases = selected_case_names(args)
+            return {
+                "schema": "vmlx-dsv4-route-mode-code-exactness-v1",
+                "created_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+                "status": "preflight_disabled",
+                "reason": "min_free_gb_not_positive",
+                "required_available_gb": float(
+                    getattr(args, "min_free_gb", 0.0) or 0.0
+                ),
+                "did_not_launch": True,
+                "launch_decision": "do_not_launch",
+                "model": args.model,
+                "cmd": build_cmd(args),
+                "selected_cases": list(selected_cases),
+                "case_count": len(selected_cases),
+            }
+        return preflight
 
     cmd = build_cmd(args)
+    preflight_block = blocked_by_memory_preflight(args)
+    if preflight_block is not None:
+        return preflight_block
+
     proc = subprocess.Popen(
         cmd,
         cwd=str(SAFE_CWD),
@@ -418,7 +909,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     try:
         health = wait_health(args.port, proc, args.timeout)
         cases: list[dict[str, Any]] = []
-        for name in CASE_NAMES:
+        selected_cases = selected_case_names(args)
+        for name in selected_cases:
             route, body = case_body(name)
             endpoint = {
                 "chat": "/v1/chat/completions",
@@ -435,6 +927,16 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             elapsed = time.time() - started
             content, finish, prompt_tokens, completion_tokens = extract_content(route, response)
             analysis = analyze_content(content)
+            requested_diag = prompt_diagnostics(
+                route,
+                body,
+                model_path=args.model,
+            )
+            effective_diag = effective_prompt_diagnostics(
+                route,
+                body,
+                model_path=args.model,
+            )
             cases.append(
                 {
                     "name": name,
@@ -448,11 +950,9 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                     if elapsed > 0 and completion_tokens
                     else 0.0,
                     "content": content,
-                    "prompt_diagnostics": prompt_diagnostics(
-                        route,
-                        body,
-                        model_path=args.model,
-                    ),
+                    "prompt_diagnostics": requested_diag,
+                    "requested_prompt_diagnostics": requested_diag,
+                    "effective_prompt_diagnostics": effective_diag,
                     **analysis,
                     "raw_keys": sorted(response.keys()) if isinstance(response, dict) else [],
                 }
@@ -470,6 +970,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 "PYTHONNOUSERSITE": "1",
             },
             "health0": health,
+            "selected_cases": list(selected_cases),
+            "case_count": len(cases),
             "cases": cases,
             "status": "pass" if all(case.get("exact") is True for case in cases) else "fail",
             "log_tail": log_lines[-240:],
@@ -486,6 +988,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--timeout", type=int, default=420)
     parser.add_argument("--request-timeout", type=int, default=300)
     parser.add_argument("--max-tokens", type=int, default=512)
+    parser.add_argument("--base-url", help="Reuse an already-running server instead of launching one")
+    parser.add_argument("--cases", help="Comma-separated subset of cases to run")
+    parser.add_argument("--min-free-gb", type=float, default=DEFAULT_MIN_FREE_GB)
+    parser.add_argument(
+        "--memory-preflight-only",
+        action="store_true",
+        help="Refresh memory/case inventory without launching DSV4 even when the memory floor is met.",
+    )
     parser.add_argument("--dry-run", action="store_true", help="Record command/request prompt diagnostics without launching the model")
     parser.add_argument("--out", required=True)
     return parser.parse_args()
@@ -498,7 +1008,7 @@ def main() -> int:
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(result, indent=2), encoding="utf-8")
     print(f"{out} status={result.get('status')}")
-    return 0 if result.get("status") in {"pass", "dry_run"} else 1
+    return 0 if result.get("status") in {"pass", "dry_run", "skipped", "ready_to_launch"} else 1
 
 
 if __name__ == "__main__":

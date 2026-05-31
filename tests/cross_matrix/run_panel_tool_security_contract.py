@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any
 
 
-DEFAULT_OUT = Path("build/current-panel-tool-security-contract-20260521.json")
+DEFAULT_OUT = Path("build/current-panel-tool-security-contract-20260528-tool-loop-security-matrix.json")
 
 
 def run_contract(root: Path) -> dict[str, Any]:

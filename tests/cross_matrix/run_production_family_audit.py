@@ -1676,9 +1676,9 @@ def dsv4_long_prompt_specs() -> list[dict[str, Any]]:
 
     These are production gates, not generic "think as much as possible" rows.
     The VC planning prompt benefits from DSV4's reasoning rail and has live
-    evidence that 2500 tokens can reach a stop. The game/code prompt should use
-    the direct rail because forcing thinking-on can spend the entire budget in
-    internal planning before producing visible code.
+    evidence that 2500 tokens can reach a stop. The game/code prompt now also
+    uses the audited DSV4 quality rail because live identifier probes showed
+    the direct rail corrupts exact Three.js API names.
     """
     return [
         {
@@ -1720,7 +1720,7 @@ def dsv4_long_prompt_specs() -> list[dict[str, Any]]:
                 "with </html>; no markdown fence, no explanation, no TODO, no "
                 "omitted sections."
             ),
-            "enable_thinking": False,
+            "enable_thinking": True,
             "max_tokens": 2600,
             "temperature": 0.0,
             "top_p": 1.0,

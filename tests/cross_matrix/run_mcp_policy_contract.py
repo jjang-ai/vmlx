@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any
 
 
-DEFAULT_OUT = Path("build/current-mcp-policy-contract-20260521.json")
+DEFAULT_OUT = Path("build/current-mcp-policy-contract-20260531-post-step-lfm-refresh.json")
 
 SOURCE_HASH_FILES = (
     "vmlx_engine/server.py",
@@ -74,6 +74,7 @@ REQUIRED_MCP_POLICY_TEST_MARKERS = (
     "wires MCP policy flags through session launch and command preview",
     "copies a validated mcp.json/jsonc into a managed store without leaking secrets in metadata",
     "routes MCP list and execute calls by explicit model alias",
+    "auto-switches MCP tools and execute by explicit model in single-model mode",
     "rejects ambiguous multi-session MCP requests without a model",
     "keeps built-in Electron tools separate from MCP execution and request policy",
 )
@@ -144,11 +145,11 @@ def build_artifact(root: Path) -> dict[str, Any]:
         "mcp_disabled_tool_execution_rejected_server_side": not failed and engine_passed >= 76,
         "mcp_status_redacts_urls_headers_env": not failed and engine_passed >= 76,
         "mcp_command_security_blocks_injection": not failed and engine_passed >= 76,
-        "panel_mcp_policy_flags_and_preview_wired": not failed and panel_passed >= 13,
-        "panel_mcp_config_import_redacts_metadata": not failed and panel_passed >= 13,
-        "mcp_gateway_routes_by_explicit_model": not failed and panel_passed >= 13,
-        "mcp_gateway_rejects_ambiguous_multi_session_requests": not failed and panel_passed >= 13,
-        "builtin_electron_tools_separate_from_mcp_execution": not failed and panel_passed >= 13,
+        "panel_mcp_policy_flags_and_preview_wired": not failed and panel_passed >= 14,
+        "panel_mcp_config_import_redacts_metadata": not failed and panel_passed >= 14,
+        "mcp_gateway_routes_by_explicit_model": not failed and panel_passed >= 14,
+        "mcp_gateway_rejects_ambiguous_multi_session_requests": not failed and panel_passed >= 14,
+        "builtin_electron_tools_separate_from_mcp_execution": not failed and panel_passed >= 14,
         "all_required_mcp_policy_markers_present": not failed and not missing_markers,
     }
     return {

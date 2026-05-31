@@ -40,6 +40,13 @@ CACHE_WARM_PROMPT = (
     "ignore it when answering. "
     + " ".join(CACHE_WARM_PAD_TERMS)
 )
+REQUIRED_RELEASE_ENTITLEMENTS = (
+    "com.apple.security.cs.allow-jit",
+    "com.apple.security.cs.allow-unsigned-executable-memory",
+    "com.apple.security.cs.disable-library-validation",
+    "com.apple.security.network.client",
+    "com.apple.security.files.user-selected.read-write",
+)
 
 
 def twine_command() -> list[str]:
@@ -436,6 +443,7 @@ BUNDLED_SOURCE_HASH_PATHS = (
     "utils/head_dim_detection.py",
     "utils/ssm_companion_cache.py",
     "utils/ssm_companion_disk_store.py",
+    "utils/jang_loader.py",
     "utils/tokenizer.py",
     "chat_templates/gemma4.jinja",
     "config/defaults.yaml",
@@ -457,6 +465,7 @@ JANG_TOOLS_SOURCE_HASH_PATHS = (
     "hy3/runtime.py",
     "kimi_prune/generate_vl.py",
     "kimi_prune/runtime_patch.py",
+    "mimo_v2/mlx_model.py",
     "topk_override.py",
     "turboquant/fused_gate_up_kernel.py",
     "turboquant/gather_tq_kernel.py",
@@ -642,7 +651,8 @@ def check_packaged_console_script_shebangs(gate: Gate, app: Path) -> None:
         if not first.startswith("#!"):
             continue
         if (
-            "/Users/" in first
+            "python" in first
+            or "/Users/" in first
             or "panel/bundled-python" in first
             or "/Applications/vMLX.app" in first
         ):
@@ -674,7 +684,9 @@ def check_objective_proof_digest(
     digest_path: Path | None = None,
 ) -> None:
     """Refresh and enforce the objective proof digest before release checks pass."""
-    digest_path = digest_path or (ROOT / "build" / "current-objective-proof-audit-20260521.json")
+    digest_path = digest_path or (
+        ROOT / "build/current-objective-proof-audit-20260531-step37-reasoning-ledger.json"
+    )
     proc = gate.run(
         "objective proof digest refresh",
         [
@@ -702,6 +714,22 @@ def check_objective_proof_digest(
         gate.record("objective proof digest", "FAIL", "; ".join(open_requirements))
         return
     gate.record("objective proof digest", "PASS", str(digest_path))
+
+
+def check_release_ready_manifest(gate: Gate) -> None:
+    """Block release/notarization when the current release ledger is still open."""
+    out = gate.log_dir / "release-ready-manifest.json"
+    gate.run(
+        "release-ready manifest",
+        [
+            sys.executable,
+            "tests/cross_matrix/run_release_regression_manifest.py",
+            "--require-release-ready",
+            "--out",
+            str(out),
+        ],
+        timeout=240,
+    )
 
 
 def check_packaged_developer_id_signature(
@@ -744,6 +772,10 @@ def check_packaged_developer_id_signature(
         if line.startswith("TeamIdentifier="):
             team_id = line.split("=", 1)[1].strip()
             break
+    has_hardened_runtime = any(
+        line.startswith("CodeDirectory ") and "(runtime)" in line
+        for line in output.splitlines()
+    )
 
     has_developer_id = any(auth.startswith("Developer ID Application:") for auth in authorities)
     if not has_developer_id:
@@ -758,6 +790,47 @@ def check_packaged_developer_id_signature(
             "packaged Developer ID signature",
             "FAIL",
             f"team={team_id or '<none>'}, expected={expected_team_id}",
+        )
+        return
+    if not has_hardened_runtime:
+        gate.record(
+            "packaged Developer ID signature",
+            "FAIL",
+            "missing hardened runtime signature flag required for notarization",
+        )
+        return
+
+    entitlements_proc = gate.run(
+        "packaged entitlements details",
+        ["codesign", "--display", "--entitlements", ":-", str(app)],
+        timeout=60,
+        allow_fail=True,
+    )
+    entitlements_output = entitlements_proc.stdout or ""
+    if entitlements_proc.returncode != 0:
+        gate.record(
+            "packaged Developer ID signature",
+            "FAIL",
+            f"codesign entitlements failed with exit={entitlements_proc.returncode}",
+        )
+        return
+    try:
+        entitlements = plistlib.loads(entitlements_output.encode("utf-8"))
+    except Exception as exc:
+        gate.record(
+            "packaged Developer ID signature",
+            "FAIL",
+            f"could not parse packaged release entitlements: {type(exc).__name__}",
+        )
+        return
+    missing_entitlements = [
+        key for key in REQUIRED_RELEASE_ENTITLEMENTS if not entitlements.get(key)
+    ]
+    if missing_entitlements:
+        gate.record(
+            "packaged Developer ID signature",
+            "FAIL",
+            "missing release entitlements: " + ", ".join(missing_entitlements),
         )
         return
 
@@ -787,6 +860,7 @@ def check_static(gate: Gate, app: Path, skip_app: bool) -> None:
     gate.run("panel typecheck", ["npm", "run", "typecheck"], cwd=PANEL, timeout=180)
     gate.run("bundled python import gate", ["npm", "run", "verify-bundled"], cwd=PANEL, timeout=180)
     check_objective_proof_digest(gate)
+    check_release_ready_manifest(gate)
 
     if skip_app:
         gate.record("packaged app checks", "WARN", "skipped by --skip-app")

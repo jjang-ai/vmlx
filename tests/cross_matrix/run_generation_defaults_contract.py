@@ -21,7 +21,7 @@ from pathlib import Path
 from typing import Any
 
 
-DEFAULT_OUT = Path("build/current-generation-defaults-contract-20260521.json")
+DEFAULT_OUT = Path("build/current-generation-defaults-contract-20260531-post-step-lfm-refresh.json")
 
 SOURCE_HASH_FILES = (
     "vmlx_engine/server.py",
@@ -50,12 +50,17 @@ REQUIRED_GENERATION_DEFAULT_TEST_MARKERS = (
     "lets JANG chat sampling metadata override generation_config.json",
     "normalizes disabled top_k sentinels to Off/0 for UI and requests",
     "uses chat repetition penalty when bundle default reasoning mode is not thinking",
+    "uses neutral generic repetition penalty for DSV4 direct chat defaults",
     # Panel/session must not copy metadata defaults into sticky hidden startup
     # flags or stale DB config.
     "does not synthesize server --default sampling flags from UI/session config",
     "does not copy model max_new_tokens into hidden startup maxTokens config",
     "database clears legacy session maxTokens before settings UI or launch can reuse them",
     "server startup generation defaults are model-owned and not editable sliders",
+    "text additional args cannot override app-owned generation, parser, cache, or MTP flags",
+    "text additional args cannot override app-owned server, template, model-name, or MCP flags",
+    "DSV4 additional args cannot reenable native MTP or deterministic sampling policy",
+    "DSV4 additional args strips blocked equals-form serve overrides",
     # Engine/API precedence and max-output/context separation.
     "test_chat_and_responses_log_and_forward_supported_sampling_kwargs",
     "test_request_output_caps_override_server_default_without_touching_context_cap",
@@ -65,6 +70,7 @@ REQUIRED_GENERATION_DEFAULT_TEST_MARKERS = (
     "test_omitted_server_max_tokens_without_bundle_default_is_bounded",
     "test_max_tokens_resolution_contract_applies_to_every_registered_family",
     "test_effort_does_not_synthesize_max_tokens_when_unset",
+    "surfaces Max Output Tokens separately from Max Context Tokens",
     # No hidden sampler/repetition floor in real launch command or preview.
     "test_session_command_preview_mirrors_runtime_default_flags",
     "test_local_generation_metadata_audit_reports_high_risk_rows",
@@ -74,6 +80,84 @@ REQUIRED_GENERATION_DEFAULT_TEST_MARKERS = (
     "surfaces maxThinkingTokens only when the template consumes thinking_budget",
     "chat settings hides max-thinking tokens when template metadata says budget is unsupported",
 )
+
+REQUIRED_GENERATION_DEFAULT_FAMILY_MATRIX: dict[str, dict[str, tuple[str, ...]]] = {
+    "standard_mlx_generation_config": {
+        "checks": ("generation_config_defaults_are_surfaced",),
+        "markers": (
+            "uses standard MLX generation_config.json for non-JANG and VLM bundles",
+        ),
+    },
+    "jang_chat_sampling_overrides": {
+        "checks": (
+            "jang_config_sampling_defaults_override_generation_config",
+            "mode_specific_jang_repetition_penalty_is_metadata_owned",
+        ),
+        "markers": (
+            "lets JANG chat sampling metadata override generation_config.json",
+            "uses chat repetition penalty when bundle default reasoning mode is not thinking",
+        ),
+    },
+    "disabled_top_k_sentinel": {
+        "checks": ("disabled_top_k_sentinels_normalize_to_off",),
+        "markers": (
+            "normalizes disabled top_k sentinels to Off/0 for UI and requests",
+        ),
+    },
+    "dsv4_direct_chat_repetition_policy": {
+        "checks": (
+            "mode_specific_jang_repetition_penalty_is_metadata_owned",
+            "no_hidden_sampler_forcing_or_repetition_floor",
+            "additional_args_cannot_override_app_owned_cli_flags",
+        ),
+        "markers": (
+            "uses neutral generic repetition penalty for DSV4 direct chat defaults",
+            "DSV4 additional args cannot reenable native MTP or deterministic sampling policy",
+            "DSV4 additional args strips blocked equals-form serve overrides",
+        ),
+    },
+    "max_output_context_separation": {
+        "checks": (
+            "request_api_overrides_win_over_startup_defaults",
+            "server_default_output_cap_is_not_request_ceiling",
+            "bundle_max_new_tokens_preserved_when_omitted",
+            "panel_max_output_context_labels_are_separated",
+        ),
+        "markers": (
+            "test_request_output_caps_override_server_default_without_touching_context_cap",
+            "test_request_output_caps_can_go_below_or_above_startup_default",
+            "test_reasoning_effort_preserves_bundle_max_new_tokens",
+            "surfaces Max Output Tokens separately from Max Context Tokens",
+        ),
+    },
+    "thinking_budget_template_support": {
+        "checks": ("local_high_risk_model_metadata_audit",),
+        "markers": (
+            "test_local_generation_metadata_audit_flags_thinking_template_without_budget",
+            "test_local_generation_metadata_audit_accepts_template_budget_support",
+            "surfaces maxThinkingTokens only when the template consumes thinking_budget",
+            "chat settings hides max-thinking tokens when template metadata says budget is unsupported",
+        ),
+    },
+    "additional_args_no_override": {
+        "checks": (
+            "additional_args_cannot_override_app_owned_cli_flags",
+            "panel_does_not_emit_default_sampler_cli_flags",
+        ),
+        "markers": (
+            "text additional args cannot override app-owned generation, parser, cache, or MTP flags",
+            "text additional args cannot override app-owned server, template, model-name, or MCP flags",
+            "does not synthesize server --default sampling flags from UI/session config",
+        ),
+    },
+    "registered_family_max_token_contract": {
+        "checks": ("omitted_max_tokens_without_bundle_default_is_bounded",),
+        "markers": (
+            "test_max_tokens_resolution_contract_applies_to_every_registered_family",
+            "test_omitted_server_max_tokens_without_bundle_default_is_bounded",
+        ),
+    },
+}
 
 COMMANDS: dict[str, tuple[Path, list[str]]] = {
     "panel_generation_defaults": (
@@ -89,7 +173,8 @@ COMMANDS: dict[str, tuple[Path, list[str]]] = {
                 "generation_config|JANG chat sampling|disabled top_k|"
                 "repetition penalty|server --default sampling|"
                 "max_new_tokens|legacy session maxTokens|"
-                "model-owned|runtime default flags"
+                "Max Output Tokens|Max Context Tokens|"
+                "model-owned|runtime default flags|additional args"
             ),
             "--reporter=verbose",
         ],
@@ -171,6 +256,30 @@ def _run(root: Path, name: str, cwd_rel: Path, cmd: list[str]) -> dict[str, Any]
     }
 
 
+def _build_generation_defaults_family_matrix(
+    checks: dict[str, bool],
+    missing_markers: list[str],
+) -> dict[str, dict[str, Any]]:
+    matrix = {}
+    for row_id, requirement in REQUIRED_GENERATION_DEFAULT_FAMILY_MATRIX.items():
+        row_checks = {
+            name: checks.get(name) is True for name in requirement["checks"]
+        }
+        row_missing_markers = [
+            marker for marker in requirement["markers"] if marker in missing_markers
+        ]
+        matrix[row_id] = {
+            "status": (
+                "pass"
+                if all(row_checks.values()) and not row_missing_markers
+                else "fail"
+            ),
+            "checks": row_checks,
+            "missing_markers": row_missing_markers,
+        }
+    return matrix
+
+
 def build_artifact(root: Path) -> dict[str, Any]:
     results = {
         name: _run(root, name, cwd_rel, cmd)
@@ -206,6 +315,7 @@ def build_artifact(root: Path) -> dict[str, Any]:
             not failed
             and "test_chat_and_responses_log_and_forward_supported_sampling_kwargs" not in missing_markers
             and "test_request_output_caps_override_server_default_without_touching_context_cap" not in missing_markers
+            and "surfaces Max Output Tokens separately from Max Context Tokens" not in missing_markers
         ),
         "bundle_max_new_tokens_preserved_when_omitted": (
             not failed
@@ -221,10 +331,24 @@ def build_artifact(root: Path) -> dict[str, Any]:
             not failed
             and "test_request_output_caps_can_go_below_or_above_startup_default" not in missing_markers
         ),
+        "panel_max_output_context_labels_are_separated": (
+            not failed
+            and panel_passed >= 23
+            and "surfaces Max Output Tokens separately from Max Context Tokens" not in missing_markers
+        ),
         "no_hidden_sampler_forcing_or_repetition_floor": (
             not failed
             and "test_effort_does_not_synthesize_max_tokens_when_unset" not in missing_markers
             and "test_session_command_preview_mirrors_runtime_default_flags" not in missing_markers
+            and "text additional args cannot override app-owned generation, parser, cache, or MTP flags" not in missing_markers
+            and "DSV4 additional args cannot reenable native MTP or deterministic sampling policy" not in missing_markers
+        ),
+        "additional_args_cannot_override_app_owned_cli_flags": (
+            not failed
+            and "text additional args cannot override app-owned generation, parser, cache, or MTP flags" not in missing_markers
+            and "text additional args cannot override app-owned server, template, model-name, or MCP flags" not in missing_markers
+            and "DSV4 additional args cannot reenable native MTP or deterministic sampling policy" not in missing_markers
+            and "DSV4 additional args strips blocked equals-form serve overrides" not in missing_markers
         ),
         "local_high_risk_model_metadata_audit": (
             not failed
@@ -246,10 +370,18 @@ def build_artifact(root: Path) -> dict[str, Any]:
             not failed and panel_passed >= 10 and engine_passed >= 25
         ),
     }
+    generation_defaults_family_matrix = _build_generation_defaults_family_matrix(
+        checks=checks,
+        missing_markers=missing_markers,
+    )
+    checks["generation_defaults_family_matrix_complete"] = all(
+        row["status"] == "pass" for row in generation_defaults_family_matrix.values()
+    )
     return {
         "created_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
         "status": "pass" if all(checks.values()) else "fail",
         "checks": checks,
+        "generation_defaults_family_matrix": generation_defaults_family_matrix,
         "failed": failed,
         "missing_markers": missing_markers,
         "source_hashes": {

@@ -31,7 +31,7 @@ def test_local_generation_metadata_audit_reports_high_risk_rows(tmp_path):
         assert minimax["resolved_chat"]["max_tokens"] == 4096
     if "DeepSeek-V4-Flash-JANGTQ-K" in rows:
         dsv4 = rows["DeepSeek-V4-Flash-JANGTQ-K"]
-        assert dsv4["resolved_chat"]["repetition_penalty"] == 1.05
+        assert dsv4["resolved_chat"]["repetition_penalty"] == 1.0
         assert dsv4["resolved_thinking"]["repetition_penalty"] == 1.0
         assert dsv4["resolved_chat"]["max_tokens"] == 4096
 

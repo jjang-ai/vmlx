@@ -1,18 +1,22 @@
 from types import SimpleNamespace
 
 from tests.cross_matrix.run_runtime_memory_stress_probe import (
+    ROWS,
     add_response_contract_metrics,
     add_speed_metrics,
+    add_stream_speed_metrics,
     build_request,
     classify_http_stage_status,
     extract_usage,
     add_memory_metrics,
     add_cache_capacity_projection,
     extract_block_disk_max_gb,
+    make_prompt,
     probe_status_from_results,
     redact_large_payloads,
     run_probe,
     Row,
+    http_json_stream_timed,
     summarize_response_rails,
 )
 
@@ -78,6 +82,130 @@ def test_add_speed_metrics_reports_uncached_prompt_rate_for_cache_hits():
     assert stage["speed"]["prompt_tok_s_wall"] == 10065.868
     assert stage["speed"]["uncached_prompt_tok_s_wall"] == 0.998
     assert stage["speed"]["decode_tok_s_wall"] == 15.968
+
+
+def test_make_prompt_speed_floor_asks_for_sustained_decode_and_identifiers():
+    prompt = make_prompt(64, mode="speed_floor", max_tokens=192)
+
+    assert "exactly 192 numbered audit lines" in prompt
+    assert "Do not stop early" in prompt
+    assert "DSV4CacheBudget" in prompt
+    assert "qwen_mtp_media_history" in prompt
+    assert "GemmaCacheProbe" in prompt
+
+
+def test_runtime_memory_probe_includes_minimax_small_jangtq_row():
+    row = ROWS["minimax_m27_small_jangtq"]
+
+    assert row.path == "/Users/example/models/JANGQ/MiniMax-M2.7-Small-JANGTQ"
+    assert row.tool_parser == "minimax"
+    assert row.reasoning_parser == "minimax_m2"
+    assert "--use-paged-cache" in row.cache_args
+    assert "--enable-block-disk-cache" in row.cache_args
+
+
+def test_http_json_timed_splits_open_body_and_parse_time(monkeypatch):
+    import tests.cross_matrix.run_runtime_memory_stress_probe as probe
+
+    class FakeResponse:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def read(self):
+            return b'{"ok": true}'
+
+    ticks = iter([10.0, 10.25, 10.75, 10.8])
+
+    monkeypatch.setattr(probe.time, "perf_counter", lambda: next(ticks))
+    monkeypatch.setattr(probe.urllib.request, "urlopen", lambda req, timeout=0: FakeResponse())
+
+    code, body, timing = probe.http_json_timed("POST", "http://127.0.0.1/test", {"x": 1})
+
+    assert code == 200
+    assert body == {"ok": True}
+    assert timing == {
+        "open_seconds": 0.25,
+        "read_seconds": 0.5,
+        "json_seconds": 0.05,
+        "total_seconds": 0.8,
+    }
+
+
+def test_http_json_stream_timed_records_ttft_and_usage(monkeypatch):
+    import tests.cross_matrix.run_runtime_memory_stress_probe as probe
+
+    class FakeStreamResponse:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def __iter__(self):
+            return iter(
+                [
+                    b'data: {"choices":[{"delta":{"content":"A"}}],"usage":{"prompt_tokens":10,"completion_tokens":1}}\n',
+                    b"\n",
+                    b'data: {"choices":[{"delta":{"content":"B"}}],"usage":{"prompt_tokens":10,"completion_tokens":2}}\n',
+                    b"data: [DONE]\n",
+                ]
+            )
+
+    ticks = iter([10.0, 10.1, 10.4, 10.5, 10.6, 10.7, 10.7])
+
+    monkeypatch.setattr(probe.time, "perf_counter", lambda: next(ticks))
+    monkeypatch.setattr(probe.urllib.request, "urlopen", lambda req, timeout=0: FakeStreamResponse())
+
+    code, body, timing = http_json_stream_timed(
+        "POST",
+        "http://127.0.0.1/v1/chat/completions",
+        {"stream": True},
+    )
+
+    assert code == 200
+    assert body["choices"][0]["message"]["content"] == "AB"
+    assert body["usage"] == {"prompt_tokens": 10, "completion_tokens": 2}
+    assert timing == {
+        "open_seconds": 0.1,
+        "ttft_seconds": 0.4,
+        "stream_read_seconds": 0.6,
+        "post_first_token_seconds": 0.3,
+        "total_seconds": 0.7,
+        "chunk_count": 2,
+    }
+
+
+def test_add_stream_speed_metrics_uses_post_first_token_time():
+    stage = {
+        "http_timing": {
+            "ttft_seconds": 0.6,
+            "post_first_token_seconds": 2.5,
+        },
+        "response": {
+            "usage": {
+                "prompt_tokens": 1000,
+                "completion_tokens": 251,
+                "prompt_tokens_details": {"cached_tokens": 0},
+            }
+        },
+    }
+
+    add_stream_speed_metrics(stage)
+
+    assert stage["stream_speed"] == {
+        "ttft_seconds": 0.6,
+        "post_first_token_seconds": 2.5,
+        "decode_tok_s_stream": 100.0,
+        "completion_tokens": 251,
+        "cached_tokens": 0,
+    }
 
 
 def test_add_memory_metrics_summarizes_process_and_metal_deltas():
@@ -422,6 +550,34 @@ def test_build_request_can_bypass_prefix_cache_for_cold_speed_rows():
     assert chat["skip_prefix_cache"] is True
     assert responses["cache_salt"] == "cold-gemma"
     assert responses["skip_prefix_cache"] is True
+
+
+def test_build_request_can_enable_streaming_usage_for_app_style_timing():
+    row = Row("gemma", "/models/Gemma-4-26B")
+
+    chat = build_request(
+        row,
+        "Stream this.",
+        64,
+        "chat",
+        None,
+        retained_image_turns=1,
+        stream=True,
+    )
+    responses = build_request(
+        row,
+        "Stream this.",
+        64,
+        "responses",
+        None,
+        retained_image_turns=1,
+        stream=True,
+    )
+
+    assert chat["stream"] is True
+    assert chat["stream_options"] == {"include_usage": True}
+    assert responses["stream"] is True
+    assert responses["stream_options"] == {"include_usage": True}
 
 
 def test_run_probe_artifact_marks_cache_salt_as_not_capacity_proof(monkeypatch):

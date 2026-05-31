@@ -1,3 +1,14 @@
+from pathlib import Path
+
+
+def test_max_output_context_contract_default_out_tracks_current_release_proof_artifact():
+    from tests.cross_matrix import run_max_output_context_contract as gate
+
+    assert gate.DEFAULT_OUT == Path(
+        "build/current-max-output-context-contract-20260531-post-step-lfm-refresh.json"
+    )
+
+
 def test_max_output_context_contract_covers_all_public_api_surfaces():
     from tests.cross_matrix import run_max_output_context_contract as gate
 

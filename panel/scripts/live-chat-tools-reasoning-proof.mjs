@@ -9,6 +9,8 @@ import path from 'node:path'
 
 const panelDir = path.resolve(new URL('..', import.meta.url).pathname)
 const repoDir = path.resolve(panelDir, '..')
+const proofBasename = process.env.VMLX_LIVE_PROOF_BASENAME
+  || `${new Date().toISOString().slice(0, 10)}-live-chat-tools-reasoning`
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
@@ -699,7 +701,7 @@ async function main() {
     `)
     const chatSettingsScreenshot = await capturePng(
       cdp,
-      path.join(proofDir, '2026-05-19-live-chat-tools-reasoning-chat-settings.png'),
+      path.join(proofDir, `${proofBasename}-chat-settings.png`),
     )
     const serverCacheUi = await evaluate(cdp, `
       (async () => {
@@ -781,7 +783,7 @@ async function main() {
     `)
     const serverCacheScreenshot = await capturePng(
       cdp,
-      path.join(proofDir, '2026-05-19-live-chat-tools-reasoning-server-cache-settings.png'),
+      path.join(proofDir, `${proofBasename}-server-cache-settings.png`),
     )
     const firstBody = mock.requests[0]?.body || {}
     const secondBody = mock.requests[1]?.body || {}
@@ -820,7 +822,7 @@ async function main() {
       appLogTail: appLogs.slice(-80),
     }
     writeFileSync(
-      path.join(proofDir, '2026-05-19-live-chat-tools-reasoning-proof.json'),
+      path.join(proofDir, `${proofBasename}-proof.json`),
       JSON.stringify(result, null, 2),
     )
     if (process.env.VMLX_LIVE_PROOF_ALLOW_FAIL === '1') {

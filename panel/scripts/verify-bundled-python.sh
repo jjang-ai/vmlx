@@ -19,12 +19,17 @@ if [ ! -x "$PY" ]; then
   exit 1
 fi
 
+run_bundled_python() {
+  cd /tmp
+  PYTHONDONTWRITEBYTECODE=1 PYTHONNOUSERSITE=1 PYTHONPATH= "$PY" -B -s "$@"
+}
+
 # Hard guard against the 1.5.9→1.5.12 ship-stale-engine class of bug:
 # if package.json bumps but bundle-python.sh wasn't re-run, the bundled
 # vmlx_engine still reports the old version. Refuse to package the .app
 # in that case so no DMG ever ships an installer/runtime version mismatch.
 PKG_VERSION="$(node -p "require('$PANEL/package.json').version")"
-BUNDLED_VERSION="$(PYTHONDONTWRITEBYTECODE=1 PYTHONNOUSERSITE=1 PYTHONPATH= "$PY" -B -s -c 'import vmlx_engine; print(vmlx_engine.__version__)' 2>/dev/null || echo "MISSING")"
+BUNDLED_VERSION="$(run_bundled_python -c 'import vmlx_engine; print(vmlx_engine.__version__)' 2>/dev/null || echo "MISSING")"
 if [ "$PKG_VERSION" != "$BUNDLED_VERSION" ]; then
   echo "❌ RELEASE BLOCKED — bundled-python vmlx_engine version drift"
   echo "   package.json version : $PKG_VERSION"
@@ -40,7 +45,7 @@ echo "  ok   bundled vmlx_engine version matches package.json ($PKG_VERSION)"
 # current __version__ string while still shipping old runtime code. Block the
 # removed DSV4 force-flip env vars explicitly so direct/off rails cannot be
 # silently flipped back on in a packaged build.
-BUNDLED_ENGINE_DIR="$(PYTHONDONTWRITEBYTECODE=1 PYTHONNOUSERSITE=1 PYTHONPATH= "$PY" -B -s -c 'import pathlib, vmlx_engine; print(pathlib.Path(vmlx_engine.__file__).resolve().parent)' 2>/dev/null || true)"
+BUNDLED_ENGINE_DIR="$(run_bundled_python -c 'import pathlib, vmlx_engine; print(pathlib.Path(vmlx_engine.__file__).resolve().parent)' 2>/dev/null || true)"
 if [ -z "$BUNDLED_ENGINE_DIR" ] || [ ! -d "$BUNDLED_ENGINE_DIR" ]; then
   echo "❌ RELEASE BLOCKED — cannot locate bundled vmlx_engine package"
   echo "   resolved path: ${BUNDLED_ENGINE_DIR:-<empty>}"
@@ -69,7 +74,8 @@ check_console_script_shebangs() {
     find "$bin_dir" -maxdepth 1 -type f -perm -111 -print 2>/dev/null \
       | while read -r script; do
           first_line="$(LC_ALL=C head -n 1 "$script" 2>/dev/null || true)"
-          if [[ "$first_line" == *"$PANEL/bundled-python"* ]] \
+          if [[ "$first_line" == '#!'*python* ]] \
+            || [[ "$first_line" == *"$PANEL/bundled-python"* ]] \
             || [[ "$first_line" == *"/Users/"* ]] \
             || [[ "$first_line" == *"/Applications/vMLX.app"* ]]; then
             printf '%s: %s\n' "$script" "$first_line"
@@ -92,6 +98,7 @@ check_console_script_shebangs "$PANEL/bundled-python/python/bin" "bundled-python
 SOURCE_ENGINE_DIR="$PANEL/../vmlx_engine"
 HASH_GATED_ENGINE_FILES=(
   "server.py"
+  "api/tool_calling.py"
   "api/anthropic_adapter.py"
   "api/ollama_adapter.py"
   "block_disk_store.py"
@@ -110,10 +117,12 @@ HASH_GATED_ENGINE_FILES=(
   "prefix_cache.py"
   "runtime_patches/gemma4_processing.py"
   "scheduler.py"
+  "tool_parsers/dsml_tool_parser.py"
   "utils/single_batch_generator.py"
   "utils/head_dim_detection.py"
   "utils/ssm_companion_cache.py"
   "utils/ssm_companion_disk_store.py"
+  "utils/jang_loader.py"
   "utils/tokenizer.py"
   "chat_templates/gemma4.jinja"
   "config/defaults.yaml"
@@ -140,7 +149,7 @@ for rel in "${HASH_GATED_ENGINE_FILES[@]}"; do
 done
 echo "  ok   bundled critical vmlx_engine files match source content"
 
-BUNDLED_JANG_TOOLS_DIR="$(PYTHONDONTWRITEBYTECODE=1 PYTHONNOUSERSITE=1 PYTHONPATH= "$PY" -B -s -c 'import pathlib, jang_tools; print(pathlib.Path(jang_tools.__file__).resolve().parent)' 2>/dev/null || true)"
+BUNDLED_JANG_TOOLS_DIR="$(run_bundled_python -c 'import pathlib, jang_tools; print(pathlib.Path(jang_tools.__file__).resolve().parent)' 2>/dev/null || true)"
 JANG_TOOLS_SOURCE_DIR="${VMLX_JANG_TOOLS_SOURCE:-${VMLINUX_JANG_TOOLS_SOURCE:-$HOME/jang/jang-tools}}/jang_tools"
 HASH_GATED_JANG_TOOLS_FILES=(
   "capabilities.py"
@@ -157,6 +166,7 @@ HASH_GATED_JANG_TOOLS_FILES=(
   "hy3/runtime.py"
   "kimi_prune/generate_vl.py"
   "kimi_prune/runtime_patch.py"
+  "mimo_v2/mlx_model.py"
   "topk_override.py"
   "turboquant/fused_gate_up_kernel.py"
   "turboquant/gather_tq_kernel.py"
@@ -204,7 +214,7 @@ fi
 
 # Isolated imports — no user site, no PYTHONPATH leakage (same env as the
 # running engine). -s suppresses user site-packages the way sessions.ts does.
-PYTHONDONTWRITEBYTECODE=1 PYTHONNOUSERSITE=1 PYTHONPATH= "$PY" -B -s - <<'PYEOF'
+run_bundled_python - <<'PYEOF'
 import sys
 
 REQUIRED = [
@@ -227,6 +237,8 @@ REQUIRED = [
     ("mlx_lm.models.hy_v3", "mlx_lm.models.hy_v3", "Hy3 model-family mlx-lm registration missing after importing jang_tools.hy3"),
     ("mlx_lm.models.bailing_hybrid", "mlx_lm.models.bailing_hybrid", "Ling/Bailing hybrid mlx-lm runtime missing — bundle-python.sh must install bailing_hybrid.patched.py"),
     ("jang_tools.hy3.runtime", "jang_tools.hy3.runtime", "Hy3 runtime loader missing from bundled jang-tools"),
+    ("jang_tools.mimo_v2.mlx_register", "jang_tools.mimo_v2.mlx_register", "MiMo-V2.5 runtime registration missing from bundled jang-tools"),
+    ("mlx_lm.models.mimo_v2", "mlx_lm.models.mimo_v2", "MiMo-V2.5 mlx-lm registration missing after importing jang_tools.mimo_v2.mlx_register"),
     ("jang_tools.load_jangtq", "jang_tools.load_jangtq", "JANGTQ fast-path loader missing from bundled jang-tools"),
     ("jang_tools.topk_override", "jang_tools.topk_override", "JANGTQ top-k runtime override helper missing from bundled jang-tools"),
     ("jang_tools.turboquant.tq_kernel", "jang_tools.turboquant.tq_kernel", "TQ Metal kernel runtime missing from bundled jang-tools"),

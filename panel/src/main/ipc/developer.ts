@@ -7,6 +7,31 @@ let activeProcess: ChildProcess | null = null
 let cancelled = false
 let bufferedLogLines: string[] = []  // Persists across component mounts for reconnection
 
+function isExpectedChildProcessStreamDisconnectError(err: unknown): boolean {
+  const code = (err as NodeJS.ErrnoException)?.code
+  const message = String((err as Error)?.message || '').toLowerCase()
+  return (
+    code === "EPIPE" ||
+    code === "ECONNRESET" ||
+    code === "ERR_STREAM_DESTROYED" ||
+    code === "ERR_STREAM_WRITE_AFTER_END" ||
+    message.includes("write EPIPE".toLowerCase()) ||
+    message.includes("broken pipe") ||
+    message.includes("stream has been destroyed") ||
+    message.includes("write after end")
+  )
+}
+
+function attachChildProcessStreamErrorGuard(
+  stream: NodeJS.ReadableStream | null | undefined,
+  onUnexpected: (err: Error) => void,
+): void {
+  stream?.on('error', (err: Error) => {
+    if (isExpectedChildProcessStreamDisconnectError(err)) return
+    onUnexpected(err)
+  })
+}
+
 function buildCliEnv(): Record<string, string | undefined> {
   const env: Record<string, string | undefined> = {
     ...process.env,
@@ -75,6 +100,12 @@ async function runQuickCommand(subcommand: string, args: string[]): Promise<{ su
 
     proc.stdout?.on('data', (d) => { stdout += d.toString() })
     proc.stderr?.on('data', (d) => { stderr += d.toString() })
+    attachChildProcessStreamErrorGuard(proc.stdout, (err) => {
+      stderr += `\nstdout stream error: ${err.message}`
+    })
+    attachChildProcessStreamErrorGuard(proc.stderr, (err) => {
+      stderr += `\nstderr stream error: ${err.message}`
+    })
 
     const timer = setTimeout(() => {
       if (!resolved) {
@@ -135,6 +166,12 @@ async function runStreamingCommand(
     }
     proc.stdout?.on('data', (data) => bufferAndEmit(data.toString()))
     proc.stderr?.on('data', (data) => bufferAndEmit(data.toString()))
+    attachChildProcessStreamErrorGuard(proc.stdout, (err) => {
+      bufferAndEmit(`stdout stream error: ${err.message}\n`)
+    })
+    attachChildProcessStreamErrorGuard(proc.stderr, (err) => {
+      bufferAndEmit(`stderr stream error: ${err.message}\n`)
+    })
 
     proc.on('close', (code) => {
       activeProcess = null

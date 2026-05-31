@@ -13,6 +13,7 @@ Verifies:
 import pytest
 
 from vmlx_engine.paged_cache import (
+    BlockTable,
     BlockHash,
     CacheBlock,
     FreeKVCacheBlockQueue,
@@ -150,6 +151,32 @@ class TestPagedCacheManager:
         # The partial block (block 2, tokens [9, 10]) should NOT have been cached
         # because it's not a full block
         # (cache_full_blocks only caches up to num_full_blocks)
+
+    def test_reconstruct_releases_l2_promoted_block_tensor_mirrors(self, monkeypatch):
+        """L2-promoted block tensor mirrors should not pin parent buffers after reconstruction."""
+        import vmlx_engine.prefix_cache as prefix_cache_module
+        from vmlx_engine.prefix_cache import BlockAwarePrefixCache
+
+        monkeypatch.setattr(prefix_cache_module, "HAS_MLX", True)
+
+        mgr = PagedCacheManager(block_size=4, max_blocks=4, enable_caching=True)
+        prefix_cache = BlockAwarePrefixCache(model=None, paged_cache_manager=mgr)
+        block = mgr.allocate_block()
+        block.block_hash = BlockHash(b"a" * 32)
+        block.token_count = 4
+        block.cache_data = [[{"type": "unsupported_test_cache"}]]
+        block.cache_data_from_disk = True
+        table = BlockTable(
+            request_id="req",
+            block_ids=[block.block_id],
+            num_tokens=4,
+        )
+
+        assert prefix_cache.reconstruct_cache(table) is None
+        assert block.block_hash == BlockHash(b"a" * 32)
+        assert block.token_count == 4
+        assert block.cache_data is None
+        assert block.cache_data_from_disk is False
 
 
 class TestFreeKVCacheBlockQueue:

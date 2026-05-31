@@ -81,10 +81,12 @@ def _register_builtin_parsers():
     from .minimax_m2_parser import MiniMaxM2ReasoningParser
     from .mistral_parser import MistralReasoningParser
     from .qwen3_parser import Qwen3ReasoningParser
+    from .think_xml_parser import ThinkXmlReasoningParser
 
     register_parser("qwen3", Qwen3ReasoningParser)
     register_parser("deepseek_r1", DeepSeekR1ReasoningParser)
     register_parser("minimax_m2", MiniMaxM2ReasoningParser)
+    register_parser("think_xml", ThinkXmlReasoningParser)
     # GPT-OSS / GLM-4.7-Flash / Harmony protocol (<|channel|>analysis/final)
     register_parser("openai_gptoss", GptOssReasoningParser)
     # Mistral 4 uses [THINK]...[/THINK] tokens for reasoning

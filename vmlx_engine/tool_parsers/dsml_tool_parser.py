@@ -109,8 +109,13 @@ class DSMLToolParser(ToolParser):
         rf'<{re.escape(DSML_PREFIX)}parameter\s+name="([^"]+)"[^>]*>(.*?)</{re.escape(DSML_PREFIX)}>',
         re.DOTALL,
     )
+    _SELF_CLOSING_PARAM_RE = re.compile(
+        rf'<{re.escape(DSML_PREFIX)}parameter\s+name="([^"]+)"[^>]*\s+'
+        rf'(?:string|value)="([^"]*)"[^>]*/>',
+        re.DOTALL,
+    )
     _DEGRADED_INVOKE_START_RE = re.compile(
-        rf'(?:<{re.escape(DSML_PREFIX)}invoke|<invoke)\s+name=["\']([^"\']+)["\']\s*>',
+        rf'(?:<{re.escape(DSML_PREFIX)}inv(?:oke|use|ue)|<invoke)\s+name=["\']([^"\']+)["\']\s*>',
         re.DOTALL,
     )
     _DEGRADED_NAMED_INV_RE = re.compile(
@@ -118,7 +123,7 @@ class DSMLToolParser(ToolParser):
         re.DOTALL,
     )
     _DEGRADED_INVOKE_CLOSE_RE = re.compile(
-        rf'</(?:{re.escape(DSML_PREFIX)})?inv(?:oke)?>',
+        rf'</(?:{re.escape(DSML_PREFIX)})?inv(?:oke|ue)?>',
         re.DOTALL,
     )
     _WRAPPER_RESIDUE_RE = re.compile(
@@ -194,6 +199,13 @@ class DSMLToolParser(ToolParser):
         for m in self._SHORT_DSML_PARAM_RE.finditer(body):
             name, raw = m.group(1), m.group(2)
             if name not in props or name in args:
+                continue
+            value = self._coerce_plain_param_value(raw, props.get(name))
+            if value != "":
+                args[name] = value
+        for m in self._SELF_CLOSING_PARAM_RE.finditer(body):
+            name, raw = m.group(1), m.group(2)
+            if name not in props or name in args or raw in {"true", "false"}:
                 continue
             value = self._coerce_plain_param_value(raw, props.get(name))
             if value != "":
@@ -526,6 +538,11 @@ class DSMLToolParser(ToolParser):
             return False
         if not isinstance(decoded, dict):
             return False
+        if any(
+            isinstance(value, str) and value.strip().rstrip("=") == "string"
+            for value in decoded.values()
+        ):
+            return False
         return self._required_satisfied(decoded, schema)
 
     def _try_encoding_dsv4_parse(self, model_output: str, request: Any | None = None):
@@ -633,6 +650,10 @@ class DSMLToolParser(ToolParser):
                 plain_args = self._parse_plain_params(body, schema)
                 if plain_args and self._required_satisfied(plain_args, schema):
                     args = plain_args
+            elif args and schema and not self._required_satisfied(args, schema):
+                plain_args = self._parse_plain_params(body, schema)
+                if plain_args and self._required_satisfied(plain_args, schema):
+                    args.update(plain_args)
             tool_calls.append(
                 self._make_tool_call(
                     name=name,

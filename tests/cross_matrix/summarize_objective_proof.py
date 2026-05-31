@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import re
 import sys
 import time
 from pathlib import Path
@@ -31,6 +32,7 @@ from tests.cross_matrix.run_model_family_detection_contract import (
     SOURCE_HASH_FILES as MODEL_FAMILY_SOURCE_HASH_FILES,
 )
 from tests.cross_matrix.run_generation_defaults_contract import (
+    REQUIRED_GENERATION_DEFAULT_FAMILY_MATRIX,
     SOURCE_HASH_FILES as GENERATION_DEFAULTS_SOURCE_HASH_FILES,
 )
 from tests.cross_matrix.run_native_mtp_contract import (
@@ -42,9 +44,15 @@ from tests.cross_matrix.run_parser_registry_contract import (
 from tests.cross_matrix.run_vl_media_cache_contract import (
     SOURCE_HASH_FILES as VL_MEDIA_SOURCE_HASH_FILES,
 )
+from tests.cross_matrix.release_regression_manifest import (
+    CURRENT_REAL_UI_DSV4_MEMORY_PREFLIGHT_ARTIFACT,
+)
 
 
-DEFAULT_OUT = Path("build/current-objective-proof-audit-20260521.json")
+DEFAULT_OUT = Path("build/current-objective-proof-audit-20260531-step37-reasoning-ledger.json")
+CURRENT_RELEASE_REGRESSION_MANIFEST_REL = (
+    "build/current-release-regression-manifest-20260531-step37-reasoning-ledger.json"
+)
 DSV4_QUALITY_CLEARANCE_REL = "build/current-dsv4-long-output-quality-clearance-20260521.json"
 DSV4_CURRENT_IDENTIFIER_CANARY_REL = (
     "build/current-dsv4-jangtq-k-route-mode-code-exactness-20260524.json"
@@ -70,29 +78,114 @@ DSV4_SOURCE_CACHE_COMPARISON_REL = (
     "build/current-dsv4-live-identifier-cache-source-comparison-20260523.json"
 )
 DSV4_CURRENT_PROMPT_RAIL_EXACTNESS_REL = (
-    "build/current-dsv4-jangtq-k-route-mode-code-exactness-20260524-thinking-on-responses-controls.json"
+    "build/current-dsv4-route-mode-code-exactness-source-explicit-off-subset-20260524-1418.json"
+)
+DSV4_CURRENT_PROMPT_RAIL_EXACTNESS_FALLBACK_PRE_FORCE_OFF_REL = (
+    "build/current-dsv4-route-mode-code-exactness-source-after-completion-trim-budget-liveapi-20260524-1248.json"
 )
 DSV4_CURRENT_PROMPT_RAIL_EXACTNESS_FALLBACK_REL = (
+    "build/current-dsv4-jangtq-k-route-mode-code-exactness-20260524-thinking-on-responses-controls.json"
+)
+DSV4_CURRENT_PROMPT_RAIL_EXACTNESS_LEGACY_FALLBACK_REL = (
     "build/current-dsv4-jangtq-k-route-mode-code-exactness-20260524-promptdiag-bb5cfe0c.json"
 )
+DSV4_CURRENT_GENERATED_ONLY_DIRECT_RAIL_EXACTNESS_REL = (
+    "build/current-dsv4-route-mode-code-exactness-current-generated-only-subset-20260524.json"
+)
+DSV4_CURRENT_REQUESTED_THINKING_EXACTNESS_REL = (
+    "build/current-dsv4-route-mode-code-exactness-current-thinking-on-subset-20260524.json"
+)
+DSV4_CURRENT_REP1_RAIL_EXACTNESS_REL = (
+    "build/current-dsv4-route-mode-code-exactness-current-rep1-controls-20260524-2104.json"
+)
+DSV4_CURRENT_SOURCE_REP1_RAIL_EXACTNESS_REL = (
+    "build/current-dsv4-route-mode-code-exactness-source-thinking-ab-prefill-logits-eval-20260525.json"
+)
+DSV4_CURRENT_SOURCE_TOKEN_TAIL_AB_EXACTNESS_REL = (
+    "build/current-dsv4-route-mode-code-exactness-token-tail-source-ab-20260525.json"
+)
+DSV4_CURRENT_SOURCE_REP1_DIRECT_ONLY_REL = (
+    "build/current-dsv4-route-mode-code-exactness-source-rep1-prefill-logits-eval-20260525.json"
+)
+DSV4_CURRENT_SOURCE_BUNDLE_DEFAULTS_EXACTNESS_REL = (
+    "build/current-dsv4-route-mode-code-exactness-bundle-defaults-source-20260525.json"
+)
+DSV4_CURRENT_SOURCE_BUNDLE_DEFAULTS_DRYRUN_REL = (
+    "build/current-dsv4-route-mode-code-exactness-bundle-defaults-dryrun-20260525.json"
+)
+DSV4_CURRENT_SOURCE_MEMORY_PREFLIGHT_REL = (
+    "build/current-dsv4-route-mode-code-exactness-source-memory-preflight-20260530-local-refresh.json"
+)
+DSV4_CURRENT_JANGTQK_DIRECT_OFF_RECHECK_REL = (
+    "build/current-dsv4-route-mode-code-exactness-jangtqk-direct-off-recheck-20260525.json"
+)
 DSV4_CURRENT_ROUTE_MODE_DRYRUN_REL = (
-    "build/current-dsv4-route-mode-code-exactness-dryrun-20260524-thinking-on-responses-controls.json"
+    "build/current-dsv4-route-mode-code-exactness-dryrun-20260526-root-trace.json"
 )
 DSV4_CURRENT_ROUTE_MODE_DRYRUN_FALLBACK_REL = (
-    "build/current-dsv4-route-mode-code-exactness-dryrun-20260524.json"
+    "build/current-dsv4-route-mode-code-exactness-dryrun-20260524-thinking-on-responses-controls.json"
 )
-API_CACHE_CONTRACT_REL = "build/current-api-cache-contract-proof-20260521.json"
-PANEL_SETTINGS_CONTRACT_REL = "build/current-panel-settings-contract-proof-20260521.json"
-MAX_OUTPUT_CONTEXT_CONTRACT_REL = (
-    "build/current-max-output-context-contract-20260524-after-strict-dsv4-canary.json"
+DSV4_CURRENT_ROUTE_MODE_DRYRUN_IDENTIFIER_CANDIDATES_REL = (
+    "build/current-dsv4-route-mode-code-exactness-dryrun-20260528-identifier-candidates.json"
 )
+DSV4_CURRENT_ROUTE_MODE_DRYRUN_COHESIVE_AUDIT_REL = (
+    "build/current-dsv4-route-mode-code-exactness-dryrun-20260528-current-cohesive-audit.json"
+)
+DSV4_CHATMAX_PROMPT_TRIGGER_REL = (
+    "build/current-dsv4-chatmax-prompt-trigger-hypothesis-live-20260524-1258.json"
+)
+DSV4_CHATMAX_BUDGET_STOP_RAIL_REL = (
+    "build/current-dsv4-chatmax-budget-stop-rail-live-20260524-1309.json"
+)
+DSV4_PROMPT_BOUNDARY_BISECTION_REL = (
+    "build/current-dsv4-prompt-boundary-bisection-live-20260524-1317.json"
+)
+DSV4_COLON_PERIOD_LOGPROB_TRACE_REL = (
+    "build/current-dsv4-colon-vs-period-logprob-trace-live-20260524-1320.json"
+)
+DSV4_COLON_PERIOD_VISIBLE_LOGPROB_TRACE_REL = (
+    "build/current-dsv4-colon-vs-period-visible-logprob-trace-live-20260524-1322.json"
+)
+DSV4_SCENE_TOKEN_RANK_CONTRAST_REL = (
+    "build/current-dsv4-scene-token-rank-contrast-live-20260524-1324.json"
+)
+DSV4_DIRECT_VS_THINKING_WEBGL_LOGIT_PROBE_REL = (
+    "build/current-dsv4-direct-vs-thinking-webgl-logit-probe-20260524.json"
+)
+DSV4_HIDDEN_REASONING_CONTROL_REL = (
+    "build/current-dsv4-hidden-reasoning-control-live-20260524-1335.json"
+)
+DSV4_TEMPLATE_PARITY_DIAGNOSTIC_REL = (
+    "build/current-dsv4-template-parity-diagnostic-20260524-1343.json"
+)
+DSV4_PREFILL_EXECUTION_VARIANT_LOGITS_REL = (
+    "build/current-dsv4-jang-prefill-execution-variant-logits-20260524.json"
+)
+DSV4_PROMPT_VARIANT_LOGIT_PROBE_REL = (
+    "build/current-dsv4-jang-prompt-variant-logit-probe-20260524.json"
+)
+DSV4_REASONING_POLICY_LIVE_REL = (
+    "build/current-dsv4-reasoning-policy-live-20260524-1408.json"
+)
+DSV4_CACHE_VS_FULL_LOGIT_ISOLATION_REL = (
+    "build/current-dsv4-jang-cache-vs-full-logit-isolation-threejs-20260524.json"
+)
+DSV4_BATCH_GENERATOR_LOGIT_TRACE_REL = (
+    "build/current-dsv4-jang-batch-generator-isolated-identifier-logits-after-full-prefill-fix-20260524.json"
+)
+DSV4_BATCH_GENERATOR_WARMUP_ABLATION_REL = (
+    "build/current-dsv4-jang-batch-generator-warmup-ablation-20260524.json"
+)
+API_CACHE_CONTRACT_REL = "build/current-api-cache-contract-proof-20260531-post-step-lfm-refresh.json"
+PANEL_SETTINGS_CONTRACT_REL = "build/current-panel-settings-contract-proof-20260528-cache-ui-matrix.json"
+MAX_OUTPUT_CONTEXT_CONTRACT_REL = "build/current-max-output-context-contract-20260531-post-step-lfm-refresh.json"
 MAX_OUTPUT_CONTEXT_CONTRACT_FALLBACK_REL = "build/current-max-output-context-contract-20260521.json"
-MODEL_FAMILY_CONTRACT_REL = "build/current-model-family-detection-contract-20260521.json"
-PARSER_REGISTRY_CONTRACT_REL = "build/current-parser-registry-contract-20260521.json"
-MODEL_ARTIFACT_FORMAT_CONTRACT_REL = "build/current-model-artifact-format-contract-20260521.json"
-GENERATION_DEFAULTS_CONTRACT_REL = "build/current-generation-defaults-contract-20260521.json"
-NATIVE_MTP_CONTRACT_REL = "build/current-native-mtp-contract-20260521.json"
-VL_MEDIA_CONTRACT_REL = "build/current-vl-media-cache-contract-20260521.json"
+MODEL_FAMILY_CONTRACT_REL = "build/current-model-family-detection-contract-20260531-post-step-lfm-refresh.json"
+PARSER_REGISTRY_CONTRACT_REL = "build/current-parser-registry-contract-20260531-post-step-lfm-refresh.json"
+MODEL_ARTIFACT_FORMAT_CONTRACT_REL = "build/current-model-artifact-format-contract-20260531-post-step-lfm-refresh.json"
+GENERATION_DEFAULTS_CONTRACT_REL = "build/current-generation-defaults-contract-20260531-post-step-lfm-refresh.json"
+NATIVE_MTP_CONTRACT_REL = "build/current-native-mtp-contract-20260531-post-step-lfm-refresh.json"
+VL_MEDIA_CONTRACT_REL = "build/current-vl-media-cache-contract-20260531-post-step-lfm-refresh.json"
 QWEN_JANG_SOURCE_SPEED_REL = "build/current-decode-speed-live-qwen27-jang4m-source-keepalloc-20260522.json"
 QWEN_JANG_PACKAGED_SPEED_REL = "build/current-decode-speed-live-qwen27-jang4m-packaged-tahoe-dmg-20260522.json"
 QWEN_NATIVE_MTP_SPEED_REL = "build/current-decode-speed-live-qwen27-jang4m-mtp-20260523.json"
@@ -111,6 +204,27 @@ QWEN_NATIVE_MTP_NORM_SHIFT_CLEARANCE_REL = (
 )
 QWEN_NATIVE_MTP_AB_REL = "build/current-native-mtp-speed-ab-qwen27-jang4m-mtp-20260523/result.json"
 DSV4_DEFAULT_CACHE_TOOL_LOOP_REL = "build/current-dsv4-default-cache-tool-loop/result.json"
+DSV4_DEFAULT_CACHE_TOOL_LOOP_THINKING_ON_REL = (
+    "build/current-dsv4-default-cache-tool-loop-thinking-on-20260525.json"
+)
+DSV4_DEFAULT_CACHE_TOOL_LOOP_NOCACHE_AB_REL = (
+    "build/current-dsv4-default-cache-tool-loop-nocache-ab-20260525.json"
+)
+DSV4_DEFAULT_CACHE_TOOL_LOOP_PROMPT_GUARD_REL = (
+    "build/current-dsv4-default-cache-tool-loop-after-invoke-prompt-guard-20260525.json"
+)
+DSV4_DEFAULT_CACHE_TOOL_LOOP_COPY_BLOCK_REL = (
+    "build/current-dsv4-default-cache-tool-loop-copy-block-prompt-20260525.json"
+)
+DSV4_DEFAULT_CACHE_TOOL_LOOP_THINKING_COPY_BLOCK_REL = (
+    "build/current-dsv4-default-cache-tool-loop-thinking-on-copy-block-768-20260525.json"
+)
+DSV4_DEFAULT_CACHE_TOOL_LOOP_THINKING_COPY_BLOCK_DRYRUN_REL = (
+    "build/current-dsv4-default-cache-tool-loop-thinking-on-copy-block-768-dryrun-20260525.json"
+)
+DSV4_DEFAULT_CACHE_TOOL_LOOP_DRYRUN_CONTROLS_REL = (
+    "build/current-dsv4-default-cache-tool-loop-dryrun-controls-20260525.json"
+)
 LING_INSTALLED_LIVE_AUDIT_REL = (
     "build/current-production-family-audit-ling-flash-tq-live-installed149-20260524-codex.json"
 )
@@ -132,6 +246,148 @@ LING_JANGTQ_BUNDLED_COMPAT_PREFILL_STREAM_REL = (
 LING_JANGTQ_BUNDLED_NATIVE_PREFILL_STREAM_REL = (
     "build/current-ling-jangtq-server-repeat-russian-bundled-native-prefill-stream-20260524.json"
 )
+LING_BUNDLED_NATIVE_LIVE_RERUN_REL = (
+    "build/current-production-family-live-ling-bundled-native-rerun-20260524.json"
+)
+LING_JANGTQ_COLD_SKIPCACHE_REPEAT_REL = (
+    "build/current-ling-jangtq-cold-skipcache-repeat-bundled-native-20260524.json"
+)
+LING_JANGTQ_BATCHGEN_TEMP0_REPEAT_REL = (
+    "build/current-ling-jangtq-batchgen-temp0-repeat-bundled-native-20260524.json"
+)
+LING_SIMPLE_AFTER_MPP_FIX_REL = (
+    "build/current-ling-jangtq-simple-engine-control-bundled-after-mpp-fix-20260524.json"
+)
+LING_CONTINUOUS_AFTER_MPP_FIX_REL = (
+    "build/current-ling-jangtq-continuous-control-bundled-after-mpp-fix-20260524.json"
+)
+LING_BUNDLED_AFTER_MPP_FIX_LIVE_REL = (
+    "build/current-production-family-live-ling-bundled-after-mpp-fix-20260524.json"
+)
+LING_BUNDLED_AFTER_TOPK_POLICY_LIVE_REL = (
+    "build/current-production-family-live-ling-bundled-after-topk-policy-20260524.json"
+)
+GEMMA4_RESPONSES_VISIBLE_CONTRACT_REL = (
+    "build/current-runtime-memory-stress-gemma4-26b-jang4m-responses-thinkingon-app-visible-512-nocache-20260524.json"
+)
+GEMMA4_RESPONSES_UNSUPPORTED_THINKING_BUDGET_REL = (
+    "build/current-runtime-memory-stress-gemma4-26b-jang4m-responses-thinkingbudget16-visible-contract-20260524.json"
+)
+GEMMA4_RESPONSES_VISIBLE_NOCACHE_REL = (
+    "build/current-runtime-memory-stress-gemma4-26b-jang4m-responses-thinkingbudget16-visible-nocache-20260524.json"
+)
+GEMMA4_RESPONSES_VISIBLE_512_NOCACHE_REL = (
+    "build/current-runtime-memory-stress-gemma4-26b-jang4m-responses-thinkingbudget16-visible-512-nocache-20260524.json"
+)
+GEMMA4_RESPONSES_THINKING_OFF_NOCACHE_REL = (
+    "build/current-runtime-memory-stress-gemma4-26b-jang4m-responses-thinkingoff-visible-nocache-20260524.json"
+)
+GEMMA4_CHAT_VISIBLE_NOCACHE_REL = (
+    "build/current-runtime-memory-stress-gemma4-26b-jang4m-chat-thinkingbudget16-visible-nocache-20260524.json"
+)
+GEMMA4_LOCAL_METADATA_AUDIT_REL = (
+    "build/current-local-generation-metadata-audit-20260524-gemma4-visible-budget.json"
+)
+ALL_LOCAL_MODEL_SMOKE_ZAYA_TEXT_REL = (
+    "build/current-all-local-model-smoke-zaya-text-bundled-20260524/summary.json"
+)
+ALL_LOCAL_MODEL_SMOKE_ZAYA_VL_REL = (
+    "build/current-all-local-model-smoke-zaya-vl-bundled-20260524/summary.json"
+)
+ALL_LOCAL_MODEL_SMOKE_ZAYA_VL_JANGTQ4_REL = (
+    "build/current-all-local-model-smoke-zaya-vl-jangtq4-true-bundled-toolprobe-media-sentinel-20260525/summary.json"
+)
+ALL_LOCAL_MODEL_SMOKE_NEMOTRON_OMNI_JANGTQ_REL = (
+    "build/current-all-local-model-smoke-nemotron-omni-jangtq-video-bundled-20260526-rerun/summary.json"
+)
+ALL_LOCAL_MODEL_SMOKE_GEMMA4_26B_CRACK_REL = (
+    "build/current-all-local-model-smoke-gemma4-26b-jang4m-crack-video-capfix-bundled-20260526/summary.json"
+)
+ALL_LOCAL_MODEL_SMOKE_LING_BAILING_JANGTQ_REL = (
+    "build/current-all-local-model-smoke-ling-bailing-jangtq-bundled-20260525-rerun/summary.json"
+)
+ALL_LOCAL_MODEL_SMOKE_QWEN36_MXFP4_CRACK_REL = (
+    "build/current-all-local-model-smoke-qwen36-mxfp4-crack-bundled-20260525-rerun/summary.json"
+)
+ALL_LOCAL_MODEL_SMOKE_HY3_JANGTQ2_REL = (
+    "build/current-all-local-model-smoke-hy3-jangtq2-bundled-toolprobe-20260525/summary.json"
+)
+ALL_LOCAL_MODEL_SMOKE_MINIMAX_SMALL_JANGTQ_REL = (
+    "build/current-all-local-model-smoke-minimax-small-jangtq-bundled-20260525-rerun/summary.json"
+)
+ALL_LOCAL_MODEL_SMOKE_MIMO_V2_JANG2L_REL = (
+    "build/current-all-local-model-smoke-mimo-v2-jang2l-bundled-20260527/summary.json"
+)
+ALL_LOCAL_MODEL_SMOKE_DSV4_JANGTQ_K_REL = (
+    "build/current-all-local-model-smoke-dsv4-jangtq-k-bundled-cachehit-20260524/summary.json"
+)
+NEMOTRON_OMNI_NO_MEDIA_DIAGNOSTIC_REL = (
+    "build/current-nemotron-omni-no-media-carryover-diagnostic-20260524b/result.json"
+)
+NEMOTRON_OMNI_NO_MEDIA_PROMPT_VARIANTS_REL = (
+    "build/current-nemotron-omni-no-media-prompt-variants-20260524/result.json"
+)
+NEMOTRON_OMNI_NO_MEDIA_SYSTEM_PROMPT_REL = (
+    "build/current-nemotron-omni-no-media-system-prompt-diagnostic-20260524/result.json"
+)
+NEMOTRON_OMNI_NO_MEDIA_SYSTEM_NEGATIVE_REL = (
+    "build/current-nemotron-omni-no-media-system-negative-diagnostic-20260524/result.json"
+)
+ZAYA_VL_JANGTQ4_ACK_DIAGNOSTIC_REL = (
+    "build/current-zaya-vl-jangtq4-ack-diagnostic-20260524/external_probe.json"
+)
+ZAYA_VL_JANGTQ4_RENDERED_PROMPT_COMPARE_REL = (
+    "build/current-zaya-vl-jangtq4-ack-diagnostic-20260524/rendered_prompt_compare.json"
+)
+ALL_LOCAL_MODEL_SMOKE_REQUIRED_FAMILIES = (
+    "dsv4",
+    "gemma4",
+    "hy3",
+    "ling_bailing",
+    "minimax",
+    "mimo_v2",
+    "nemotron",
+    "qwen36",
+    "zaya_text",
+    "zaya_vl",
+)
+ALL_LOCAL_MODEL_SMOKE_ARTIFACTS_BY_FAMILY = {
+    "dsv4": [ALL_LOCAL_MODEL_SMOKE_DSV4_JANGTQ_K_REL],
+    "gemma4": [ALL_LOCAL_MODEL_SMOKE_GEMMA4_26B_CRACK_REL],
+    "hy3": [ALL_LOCAL_MODEL_SMOKE_HY3_JANGTQ2_REL],
+    "ling_bailing": [ALL_LOCAL_MODEL_SMOKE_LING_BAILING_JANGTQ_REL],
+    "minimax": [ALL_LOCAL_MODEL_SMOKE_MINIMAX_SMALL_JANGTQ_REL],
+    "mimo_v2": [ALL_LOCAL_MODEL_SMOKE_MIMO_V2_JANG2L_REL],
+    "nemotron": [ALL_LOCAL_MODEL_SMOKE_NEMOTRON_OMNI_JANGTQ_REL],
+    "qwen36": [ALL_LOCAL_MODEL_SMOKE_QWEN36_MXFP4_CRACK_REL],
+    "zaya_text": [ALL_LOCAL_MODEL_SMOKE_ZAYA_TEXT_REL],
+    "zaya_vl": [ALL_LOCAL_MODEL_SMOKE_ZAYA_VL_JANGTQ4_REL],
+}
+GEMMA4_MIXED_SWA_SPEED_FLOOR_TOK_S = 80.0
+GEMMA4_MIXED_SWA_STREAMING_MIN_COMPLETION_TOKENS = 256
+GEMMA4_MIXED_SWA_STREAMING_MIN_TURNS = 2
+GEMMA4_MIXED_SWA_SPEED_ARTIFACT_RELS = (
+    "build/current-runtime-memory-stress-gemma4-26b-jang4m-chat-thinkingoff-cachehit-256-source-skip-redundant-store-notrace-20260525.json",
+    "build/current-runtime-memory-stress-gemma4-26b-jang4m-chat-thinkingoff-cachehit-256-installed-app-skip-redundant-store-20260525.json",
+    "build/current-runtime-memory-stress-gemma4-26b-jang4m-chat-thinkingoff-speed-floor-installed-app-nocache-20260525.json",
+    "build/current-runtime-memory-stress-gemma4-26b-jang4m-chat-thinkingoff-speed-floor-prompt-cachehit-512-installed-app-repeat-20260525.json",
+    "build/current-runtime-memory-stress-gemma4-26b-jang4m-chat-thinkingoff-speed-floor-prompt-cachehit-512-installed-app-trace-20260525.json",
+)
+GEMMA4_MIXED_SWA_SUSTAINED_CACHEHIT_DIAGNOSTIC_REL = (
+    "build/current-runtime-memory-stress-gemma4-26b-jang4m-chat-thinkingoff-speed-floor-installed-app-triple-cachehit-trace-20260525.json"
+)
+GEMMA4_MIXED_SWA_SHORT_NOCACHE_REPEAT_DIAGNOSTIC_REL = (
+    "build/current-runtime-memory-stress-gemma4-26b-jang4m-chat-thinkingoff-speed-floor-installed-app-triple-nocache-256-trace-20260525.json"
+)
+GEMMA4_MIXED_SWA_SHORT_NOCACHE_SCHEDULER_TRACE_REL = (
+    "build/current-runtime-memory-stress-gemma4-26b-jang4m-chat-thinkingoff-speed-floor-installed-app-triple-nocache-256-scheduler-trace-20260525.json"
+)
+GEMMA4_MIXED_SWA_SHORT_NOCACHE_SYNC_EVAL_AB_REL = (
+    "build/current-runtime-memory-stress-gemma4-26b-jang4m-chat-thinkingoff-speed-floor-source-triple-nocache-256-sync-eval-ab-20260525.json"
+)
+GEMMA4_MIXED_SWA_SHORT_NOCACHE_STREAMING_REL = (
+    "build/current-runtime-memory-stress-gemma4-26b-jang4m-chat-thinkingoff-speed-floor-installed-app-triple-nocache-256-streaming-20260525.json"
+)
 DSV4_QUALITY_CLEARANCE_CHECKS = (
     "identifier_integrity",
     "threejs_single_file",
@@ -140,6 +396,31 @@ DSV4_QUALITY_CLEARANCE_CHECKS = (
     "non_length_stop",
     "source_or_rebuilt_body_clearance",
     "cached_vs_no_cache_semantic_equivalence",
+)
+DSV4_LEGACY_CLEARANCE_ARTIFACT_PATHS = frozenset(
+    {
+        "build/dsv4-source-identifier/result.json",
+        "build/dsv4-source-full-output/result.json",
+        "build/dsv4-chat-prompt-ablation-20260520101331/result.json",
+    }
+)
+DSV4_THREEJS_IDENTIFIERS = (
+    "THREE.Scene",
+    "THREE.WebGLRenderer",
+    "THREE.PerspectiveCamera",
+    "THREE.Mesh",
+    "THREE.BoxGeometry",
+    "THREE.MeshBasicMaterial",
+)
+DSV4_THREEJS_CORRUPT_PATTERNS = (
+    "THREE.WebRenderer",
+    "THREE.WebWebGLRenderer",
+    "THREE.WebScriptRenderer",
+    "THREE.PPerspectiveCamera",
+    "THREE.PersPerspectiveCamera",
+    "THREE.BBoxGeometry",
+    "THREE.MMeshBasicMaterial",
+    "Three.MeshBasicMaterial",
 )
 API_CACHE_CONTRACT_CHECKS = (
     "openai_chat_sampling_kwargs",
@@ -230,7 +511,11 @@ GENERATION_DEFAULTS_CONTRACT_CHECKS = (
     "omitted_max_tokens_without_bundle_default_is_bounded",
     "server_default_output_cap_is_not_request_ceiling",
     "no_hidden_sampler_forcing_or_repetition_floor",
+    "additional_args_cannot_override_app_owned_cli_flags",
+    "local_high_risk_model_metadata_audit",
     "panel_does_not_emit_default_sampler_cli_flags",
+    "legacy_count_floor_still_nontrivial",
+    "generation_defaults_family_matrix_complete",
 )
 NATIVE_MTP_CONTRACT_CHECKS = (
     "native_mtp_d3_default_policy",
@@ -343,6 +628,21 @@ def _cache_detail_from_payload(payload: dict[str, Any]) -> str:
     return str(_usage_details(payload).get("cache_detail") or "")
 
 
+def _present_patterns(text: str | None, patterns: tuple[str, ...]) -> list[str]:
+    if not isinstance(text, str):
+        return []
+    return [pattern for pattern in patterns if pattern in text]
+
+
+def _known_corrupt_identifier_patterns(value: Any, text: str | None = None) -> list[str]:
+    known = set(DSV4_THREEJS_CORRUPT_PATTERNS)
+    patterns: list[str] = []
+    if isinstance(value, list):
+        patterns.extend(str(item) for item in value if item in known)
+    patterns.extend(_present_patterns(text, DSV4_THREEJS_CORRUPT_PATTERNS))
+    return list(dict.fromkeys(patterns))
+
+
 def _command_tokens(payload: dict[str, Any]) -> list[str]:
     cmd = payload.get("cmd") or payload.get("command") or payload.get("server_args") or []
     if isinstance(cmd, str):
@@ -370,6 +670,52 @@ def _load_first_present(root: Path, values: tuple[str, ...]) -> tuple[str, dict[
             return value, _load(root, value)
     first = values[0] if values else ""
     return first, _load(root, first) if first else {}
+
+
+def _current_real_ui_live_model_matrix(root: Path) -> dict[str, Any]:
+    manifest = _load(root, CURRENT_RELEASE_REGRESSION_MANIFEST_REL)
+    sweep = manifest.get("current_proof_sweep")
+    if not isinstance(sweep, dict):
+        return {}
+    matrix = sweep.get("real_ui_live_model_matrix")
+    if not isinstance(matrix, dict):
+        return {}
+    preflight = _load(root, CURRENT_REAL_UI_DSV4_MEMORY_PREFLIGHT_ARTIFACT)
+    if (
+        "dsv4" in {str(item) for item in matrix.get("missing_families", [])}
+        and preflight.get("status") == "skipped_insufficient_memory"
+        and preflight.get("launch_decision") == "do_not_launch"
+    ):
+        resource_blockers = dict(matrix.get("resource_blockers") or {})
+        resource_blockers["dsv4"] = {
+            "artifact": CURRENT_REAL_UI_DSV4_MEMORY_PREFLIGHT_ARTIFACT,
+            "reason": "insufficient_memory",
+            "model_path": preflight.get("model_path"),
+            "required_available_gb": preflight.get("required_available_gb"),
+            "free_plus_speculative_purgeable_gb": preflight.get(
+                "free_plus_speculative_purgeable_gb"
+            ),
+            "memory_gap_gb": preflight.get("memory_gap_gb"),
+        }
+        matrix["resource_blockers"] = resource_blockers
+    return matrix
+
+
+def _real_ui_blocking_family_artifacts(matrix: dict[str, Any]) -> dict[str, list[str]]:
+    missing = [str(item) for item in matrix.get("missing_families", [])]
+    resource_blockers = matrix.get("resource_blockers")
+    if not isinstance(resource_blockers, dict):
+        resource_blockers = {}
+    blocking: dict[str, list[str]] = {}
+    for family in missing:
+        artifacts: list[str] = []
+        blocker = resource_blockers.get(family)
+        if isinstance(blocker, dict) and blocker.get("artifact"):
+            artifacts.append(str(blocker["artifact"]))
+        else:
+            artifacts.extend(ALL_LOCAL_MODEL_SMOKE_ARTIFACTS_BY_FAMILY.get(family, []))
+        blocking[family] = sorted(set(artifacts))
+    return blocking
 
 
 def _attach_evidence_file_status(requirements: list[dict[str, Any]], root: Path) -> None:
@@ -403,6 +749,7 @@ def _dsv4_quality_clearance(clearance: dict[str, Any], root: Path) -> tuple[bool
     artifacts = clearance.get("artifacts") or {}
     required_artifacts = ("identifier_gate", "full_output_gate")
     artifact_paths_present: dict[str, bool] = {}
+    legacy_artifacts: dict[str, str] = {}
     missing_artifacts: list[str] = []
     non_string_artifacts: list[str] = []
 
@@ -417,6 +764,10 @@ def _dsv4_quality_clearance(clearance: dict[str, Any], root: Path) -> tuple[bool
         if not isinstance(value, str) or not value:
             if key not in non_string_artifacts:
                 non_string_artifacts.append(str(key))
+            artifact_paths_present[str(key)] = False
+            continue
+        if value in DSV4_LEGACY_CLEARANCE_ARTIFACT_PATHS:
+            legacy_artifacts[str(key)] = value
             artifact_paths_present[str(key)] = False
             continue
         present = _path_present(root, value)
@@ -439,6 +790,12 @@ def _dsv4_quality_clearance(clearance: dict[str, Any], root: Path) -> tuple[bool
         "clearance_checks": required,
         "clearance_artifacts": artifacts,
         "clearance_artifact_paths_present": artifact_paths_present,
+        "legacy_clearance_artifacts": legacy_artifacts,
+        "non_current_clearance_reason": (
+            "Legacy DSV4 clearance artifacts are not accepted as current release evidence."
+            if legacy_artifacts
+            else None
+        ),
         "missing_clearance_artifacts": missing_artifacts,
         "non_string_clearance_artifacts": non_string_artifacts,
     }
@@ -458,6 +815,8 @@ def _cjk_count_from_text(value: str) -> int:
 
 def _ling_request_rows(payload: dict[str, Any]) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
+    if "content" in payload or "counts" in payload or "quality" in payload:
+        rows.append(payload)
     for request in payload.get("requests") or []:
         if isinstance(request, dict):
             rows.append(request)
@@ -504,9 +863,43 @@ def _ling_multilingual_quality_detail(
             root,
             LING_JANGTQ_BUNDLED_NATIVE_PREFILL_STREAM_REL,
         ),
+        LING_BUNDLED_NATIVE_LIVE_RERUN_REL: _load(
+            root,
+            LING_BUNDLED_NATIVE_LIVE_RERUN_REL,
+        ),
+        LING_JANGTQ_COLD_SKIPCACHE_REPEAT_REL: _load(
+            root,
+            LING_JANGTQ_COLD_SKIPCACHE_REPEAT_REL,
+        ),
+        LING_JANGTQ_BATCHGEN_TEMP0_REPEAT_REL: _load(
+            root,
+            LING_JANGTQ_BATCHGEN_TEMP0_REPEAT_REL,
+        ),
+        LING_SIMPLE_AFTER_MPP_FIX_REL: _load(
+            root,
+            LING_SIMPLE_AFTER_MPP_FIX_REL,
+        ),
+        LING_CONTINUOUS_AFTER_MPP_FIX_REL: _load(
+            root,
+            LING_CONTINUOUS_AFTER_MPP_FIX_REL,
+        ),
+        LING_BUNDLED_AFTER_MPP_FIX_LIVE_REL: _load(
+            root,
+            LING_BUNDLED_AFTER_MPP_FIX_LIVE_REL,
+        ),
+        LING_BUNDLED_AFTER_TOPK_POLICY_LIVE_REL: _load(
+            root,
+            LING_BUNDLED_AFTER_TOPK_POLICY_LIVE_REL,
+        ),
+    }
+    clearance_artifacts = {
+        LING_SIMPLE_AFTER_MPP_FIX_REL,
+        LING_CONTINUOUS_AFTER_MPP_FIX_REL,
+        LING_BUNDLED_AFTER_TOPK_POLICY_LIVE_REL,
     }
     artifact_statuses: dict[str, Any] = {}
     artifacts_with_cjk: list[str] = []
+    clearance_artifacts_with_cjk: list[str] = []
     request_summaries: list[dict[str, Any]] = []
     max_cjk_chars = 0
 
@@ -535,10 +928,17 @@ def _ling_multilingual_quality_detail(
             )
         if artifact_has_cjk:
             artifacts_with_cjk.append(rel)
+            if rel in clearance_artifacts:
+                clearance_artifacts_with_cjk.append(rel)
 
     missing = [
         rel
         for rel in artifacts
+        if not _path_present(root, rel)
+    ]
+    missing_clearance = [
+        rel
+        for rel in clearance_artifacts
         if not _path_present(root, rel)
     ]
     installed_failures = []
@@ -554,28 +954,36 @@ def _ling_multilingual_quality_detail(
         for rel, payload in artifacts.items()
         if str(payload.get("status") or "").lower() == "fail"
     ]
+    failing_clearance_statuses = [
+        rel
+        for rel in clearance_artifacts
+        if str((artifacts.get(rel) or {}).get("status") or "").lower() == "fail"
+    ]
     live_failed = any(
         isinstance(row, dict)
         and str(((row.get("live") or {}).get("status") or "")).upper() == "FAIL"
         for row in installed_live.get("rows") or []
     )
     ok = (
-        not missing
-        and not artifacts_with_cjk
-        and not failing_statuses
-        and not live_failed
-        and all(_ling_request_rows(payload) for payload in artifacts.values())
+        not missing_clearance
+        and not clearance_artifacts_with_cjk
+        and not failing_clearance_statuses
+        and all(_ling_request_rows(artifacts[rel]) for rel in clearance_artifacts)
     )
     return ok, {
         "artifacts": list(artifacts),
         "missing_artifacts": missing,
+        "clearance_artifacts": sorted(clearance_artifacts),
+        "missing_clearance_artifacts": missing_clearance,
         "artifact_statuses": artifact_statuses,
         "artifacts_with_cjk": artifacts_with_cjk,
+        "clearance_artifacts_with_cjk": clearance_artifacts_with_cjk,
         "max_cjk_chars": max_cjk_chars,
         "request_summaries": request_summaries,
         "installed_live_failed": live_failed,
         "installed_live_failures": installed_failures,
         "failing_status_artifacts": failing_statuses,
+        "failing_clearance_status_artifacts": failing_clearance_statuses,
     }
 
 
@@ -683,34 +1091,64 @@ def _dsv4_prompt_rail_exactness_detail(
     cases = artifact.get("cases") if isinstance(artifact.get("cases"), list) else []
     dry_run_cases = dry_run.get("cases") if isinstance(dry_run.get("cases"), list) else []
     case_summaries: list[dict[str, Any]] = []
+    failed_cases: list[str] = []
     failed_thinking_closed_cases: list[str] = []
     thinking_open_cases_without_identifier_corruption: list[str] = []
+    requested_thinking_closed_but_effective_open_cases: list[str] = []
     rep1_still_corrupt_patterns: dict[str, list[str]] = {}
 
     for case in cases:
         if not isinstance(case, dict):
             continue
         name = str(case.get("name") or "")
-        prompt_diagnostics = (
-            case.get("prompt_diagnostics")
+        requested_prompt_diagnostics = (
+            case.get("requested_prompt_diagnostics")
+            if isinstance(case.get("requested_prompt_diagnostics"), dict)
+            else case.get("prompt_diagnostics")
             if isinstance(case.get("prompt_diagnostics"), dict)
             else {}
         )
-        suffix = str(prompt_diagnostics.get("assistant_suffix_kind") or "")
+        effective_prompt_diagnostics = (
+            case.get("effective_prompt_diagnostics")
+            if isinstance(case.get("effective_prompt_diagnostics"), dict)
+            else case.get("prompt_diagnostics")
+            if isinstance(case.get("prompt_diagnostics"), dict)
+            else {}
+        )
+        requested_suffix = str(
+            requested_prompt_diagnostics.get("assistant_suffix_kind") or ""
+        )
+        suffix = str(effective_prompt_diagnostics.get("assistant_suffix_kind") or "")
         corrupt_patterns = [
             str(pattern) for pattern in (case.get("corrupt_patterns") or [])
         ]
         missing = [str(identifier) for identifier in (case.get("missing") or [])]
         exact = case.get("exact") is True
+        if not exact and name:
+            failed_cases.append(name)
         if suffix == "thinking_closed" and not exact and name:
             failed_thinking_closed_cases.append(name)
+        if (
+            requested_suffix == "thinking_closed"
+            and suffix == "thinking_open"
+            and name
+        ):
+            requested_thinking_closed_but_effective_open_cases.append(name)
         if suffix == "thinking_open" and not corrupt_patterns and not missing and name:
             thinking_open_cases_without_identifier_corruption.append(name)
         if name.endswith("_rep1") and corrupt_patterns:
             rep1_still_corrupt_patterns[name] = corrupt_patterns
-        prompt_tail = prompt_diagnostics.get("prompt_tail")
+        prompt_tail = effective_prompt_diagnostics.get("prompt_tail")
         if not isinstance(prompt_tail, str):
             prompt_tail = ""
+        content = case.get("content")
+        if not isinstance(content, str):
+            content = ""
+        token_diagnostics = (
+            effective_prompt_diagnostics.get("token_diagnostics")
+            if isinstance(effective_prompt_diagnostics.get("token_diagnostics"), dict)
+            else {}
+        )
         case_summaries.append(
             {
                 "name": name,
@@ -718,21 +1156,34 @@ def _dsv4_prompt_rail_exactness_detail(
                 "exact": exact,
                 "normalized_exact": case.get("normalized_exact"),
                 "assistant_suffix_kind": suffix,
+                "requested_assistant_suffix_kind": requested_suffix,
+                "dsv4_policy_reason": effective_prompt_diagnostics.get(
+                    "dsv4_policy_reason"
+                ),
                 "prompt_endswith_assistant_think_open": (
-                    prompt_diagnostics.get("prompt_endswith_assistant_think_open")
+                    effective_prompt_diagnostics.get(
+                        "prompt_endswith_assistant_think_open"
+                    )
                 ),
                 "prompt_endswith_assistant_think_close": (
-                    prompt_diagnostics.get("prompt_endswith_assistant_think_close")
+                    effective_prompt_diagnostics.get(
+                        "prompt_endswith_assistant_think_close"
+                    )
                 ),
                 "missing_identifiers": missing,
                 "corrupt_patterns": corrupt_patterns,
                 "has_markdown_fence": case.get("has_markdown_fence"),
                 "finish_reason": case.get("finish") or case.get("finish_reason"),
                 "prompt_tail": prompt_tail[-500:],
+                "content": content[:1000],
+                "token_tail_ids": token_diagnostics.get("tail_ids"),
+                "token_count": token_diagnostics.get("token_count"),
             }
         )
 
     dry_run_suffixes: dict[str, str] = {}
+    dry_run_requested_suffixes: dict[str, str] = {}
+    dry_run_effective_suffixes: dict[str, str] = {}
     dry_run_overrides: dict[str, Any] = {}
     for case in dry_run_cases:
         if not isinstance(case, dict):
@@ -740,12 +1191,29 @@ def _dsv4_prompt_rail_exactness_detail(
         name = str(case.get("name") or "")
         if not name:
             continue
-        diagnostics = (
-            case.get("prompt_diagnostics")
+        requested_diagnostics = (
+            case.get("requested_prompt_diagnostics")
+            if isinstance(case.get("requested_prompt_diagnostics"), dict)
+            else case.get("prompt_diagnostics")
             if isinstance(case.get("prompt_diagnostics"), dict)
             else {}
         )
-        dry_run_suffixes[name] = str(diagnostics.get("assistant_suffix_kind") or "")
+        effective_diagnostics = (
+            case.get("effective_prompt_diagnostics")
+            if isinstance(case.get("effective_prompt_diagnostics"), dict)
+            else case.get("prompt_diagnostics")
+            if isinstance(case.get("prompt_diagnostics"), dict)
+            else {}
+        )
+        requested_suffix = str(
+            requested_diagnostics.get("assistant_suffix_kind") or ""
+        )
+        effective_suffix = str(
+            effective_diagnostics.get("assistant_suffix_kind") or ""
+        )
+        dry_run_suffixes[name] = effective_suffix
+        dry_run_requested_suffixes[name] = requested_suffix
+        dry_run_effective_suffixes[name] = effective_suffix
         dry_run_overrides[name] = case.get("request_overrides") or {}
 
     return {
@@ -753,7 +1221,11 @@ def _dsv4_prompt_rail_exactness_detail(
         "present": path_present,
         "status": artifact.get("status") if path_present else "missing",
         "case_count": len(case_summaries),
+        "failed_cases": failed_cases,
         "failed_thinking_closed_cases": failed_thinking_closed_cases,
+        "requested_thinking_closed_but_effective_open_cases": (
+            requested_thinking_closed_but_effective_open_cases
+        ),
         "thinking_open_cases_without_identifier_corruption": (
             thinking_open_cases_without_identifier_corruption
         ),
@@ -764,7 +1236,1581 @@ def _dsv4_prompt_rail_exactness_detail(
         "dry_run_status": dry_run.get("status") if dry_run_present else "missing",
         "dry_run_case_count": dry_run.get("case_count") if dry_run_present else None,
         "dry_run_suffixes": dry_run_suffixes,
+        "dry_run_requested_suffixes": dry_run_requested_suffixes,
+        "dry_run_effective_suffixes": dry_run_effective_suffixes,
         "dry_run_request_overrides": dry_run_overrides,
+        "env_overrides": (
+            artifact.get("env_overrides")
+            if isinstance(artifact.get("env_overrides"), dict)
+            else {}
+        ),
+    }
+
+
+def _dsv4_failed_quality_gates(details: dict[str, Any]) -> list[dict[str, Any]]:
+    failed: list[dict[str, Any]] = []
+    for gate, required in (
+        ("current_installed_prompt_rail_exactness_probe", True),
+        ("current_generated_only_direct_rail_exactness_subset", True),
+        ("current_rep1_direct_vs_requested_thinking_exactness_subset", True),
+        ("current_source_rep1_direct_vs_requested_thinking_exactness_subset", True),
+        (
+            "current_source_token_tail_direct_vs_requested_thinking_exactness_subset",
+            True,
+        ),
+        ("current_source_rep1_direct_only_exactness_subset", True),
+        ("current_source_bundle_defaults_exactness_subset", True),
+        ("current_jangtqk_direct_off_recheck", False),
+    ):
+        detail = details.get(gate)
+        if not isinstance(detail, dict):
+            continue
+        status = detail.get("status")
+        if not required and status == "missing" and detail.get("present") is False:
+            continue
+        if status == "pass":
+            continue
+        if status is None and detail.get("present") is True:
+            continue
+        failed_cases = [
+            str(case) for case in detail.get("failed_cases", []) if str(case)
+        ]
+        item: dict[str, Any] = {
+            "gate": gate,
+            "artifact": detail.get("artifact"),
+            "status": status,
+        }
+        if failed_cases:
+            item["failed_cases"] = failed_cases
+        failed.append(item)
+    long_context_status = details.get("long_context_status")
+    if long_context_status not in (None, "pass"):
+        failed.append(
+            {
+                "gate": "long_context",
+                "status": long_context_status,
+            }
+        )
+    batch_divergence = details.get("current_batch_generator_logit_divergence")
+    if isinstance(batch_divergence, dict) and (
+        batch_divergence.get("direct_vs_batch_THREE_P_diverges") is True
+        or batch_divergence.get("batch_decoded_contains_corrupt_pertive") is True
+    ):
+        failed.append(
+            {
+                "gate": "current_batch_generator_logit_divergence",
+                "artifact": batch_divergence.get("batch_artifact"),
+                "status": "fail",
+            }
+        )
+    return failed
+
+
+def _dsv4_direct_off_exactness_boundary(details: dict[str, Any]) -> dict[str, Any]:
+    token_tail = details.get(
+        "current_source_token_tail_direct_vs_requested_thinking_exactness_subset"
+    )
+    if not isinstance(token_tail, dict):
+        return {
+            "present": False,
+            "root_boundary": (
+                "Current direct/off versus requested-thinking DSV4 exactness "
+                "boundary is missing."
+            ),
+        }
+
+    direct_off_gate_names = (
+        "current_installed_prompt_rail_exactness_probe",
+        "current_generated_only_direct_rail_exactness_subset",
+        "current_rep1_direct_vs_requested_thinking_exactness_subset",
+        "current_source_rep1_direct_vs_requested_thinking_exactness_subset",
+        "current_source_token_tail_direct_vs_requested_thinking_exactness_subset",
+        "current_source_rep1_direct_only_exactness_subset",
+        "current_source_bundle_defaults_exactness_subset",
+        "current_jangtqk_direct_off_recheck",
+    )
+    requested_thinking_gate_names = (
+        "current_requested_thinking_exactness_subset",
+        "current_rep1_direct_vs_requested_thinking_exactness_subset",
+        "current_source_rep1_direct_vs_requested_thinking_exactness_subset",
+        "current_source_token_tail_direct_vs_requested_thinking_exactness_subset",
+    )
+    direct_off_failed_routes: set[str] = set()
+    direct_off_failed_cases_all: list[str] = []
+    direct_off_failure_artifacts: list[str] = []
+    requested_thinking_exact_routes: set[str] = set()
+    requested_thinking_exact_cases_all: list[str] = []
+
+    for gate_name in direct_off_gate_names:
+        gate = details.get(gate_name)
+        if not isinstance(gate, dict):
+            continue
+        gate_failed = False
+        for item in gate.get("case_summaries", []):
+            if not isinstance(item, dict):
+                continue
+            suffix = item.get("assistant_suffix_kind")
+            exact = item.get("exact") is True
+            route = item.get("route")
+            name = item.get("name")
+            if suffix == "thinking_closed" and not exact:
+                if isinstance(route, str) and route:
+                    direct_off_failed_routes.add(route)
+                if isinstance(name, str) and name:
+                    direct_off_failed_cases_all.append(name)
+                gate_failed = True
+        artifact = gate.get("artifact")
+        if gate_failed and isinstance(artifact, str) and artifact:
+            direct_off_failure_artifacts.append(artifact)
+
+    for gate_name in requested_thinking_gate_names:
+        gate = details.get(gate_name)
+        if not isinstance(gate, dict):
+            continue
+        for item in gate.get("case_summaries", []):
+            if not isinstance(item, dict):
+                continue
+            suffix = item.get("assistant_suffix_kind")
+            exact = item.get("exact") is True
+            route = item.get("route")
+            name = item.get("name")
+            missing = item.get("missing_identifiers") or []
+            corrupt = item.get("corrupt_patterns") or []
+            if suffix == "thinking_open" and exact and not missing and not corrupt:
+                if isinstance(route, str) and route:
+                    requested_thinking_exact_routes.add(route)
+                if isinstance(name, str) and name:
+                    requested_thinking_exact_cases_all.append(name)
+
+    case_summaries = [
+        item for item in token_tail.get("case_summaries", []) if isinstance(item, dict)
+    ]
+    direct_off_failing = [
+        str(item.get("name"))
+        for item in case_summaries
+        if item.get("assistant_suffix_kind") == "thinking_closed"
+        and item.get("exact") is False
+    ]
+    requested_thinking_exact = [
+        str(item.get("name"))
+        for item in case_summaries
+        if item.get("assistant_suffix_kind") == "thinking_open"
+        and item.get("exact") is True
+        and not item.get("corrupt_patterns")
+        and not item.get("missing_identifiers")
+    ]
+    direct_suffixes = {
+        str(item.get("assistant_suffix_kind"))
+        for item in case_summaries
+        if str(item.get("name", "")).endswith("_off_rep1")
+    }
+    thinking_suffixes = {
+        str(item.get("assistant_suffix_kind"))
+        for item in case_summaries
+        if str(item.get("name", "")).endswith("_on_rep1")
+    }
+    direct_off_blocker_active = bool(direct_off_failed_routes)
+    requested_thinking_success_seen = bool(requested_thinking_exact_routes)
+
+    return {
+        "present": bool(case_summaries),
+        "artifact": token_tail.get("artifact"),
+        "direct_off_failing_cases": direct_off_failing,
+        "requested_thinking_exact_cases": requested_thinking_exact,
+        "direct_off_suffix_kind": (
+            next(iter(direct_suffixes)) if len(direct_suffixes) == 1 else None
+        ),
+        "requested_thinking_suffix_kind": (
+            next(iter(thinking_suffixes)) if len(thinking_suffixes) == 1 else None
+        ),
+        "all_direct_off_failed_cases": sorted(set(direct_off_failed_cases_all)),
+        "all_direct_off_failed_routes": sorted(direct_off_failed_routes),
+        "direct_off_failure_artifacts": sorted(set(direct_off_failure_artifacts)),
+        "all_requested_thinking_exact_cases": sorted(
+            set(requested_thinking_exact_cases_all)
+        ),
+        "requested_thinking_exact_routes": sorted(requested_thinking_exact_routes),
+        "direct_off_failure_spans_chat_responses_and_completion": {
+            "chat",
+            "responses",
+            "completion",
+        }.issubset(direct_off_failed_routes),
+        "requested_thinking_exact_spans_chat_and_responses": {
+            "chat",
+            "responses",
+        }.issubset(requested_thinking_exact_routes),
+        "direct_off_release_blocker_active": direct_off_blocker_active,
+        "requested_thinking_success_clears_direct_off": False,
+        "requested_thinking_success_is_diagnostic_only": (
+            direct_off_blocker_active and requested_thinking_success_seen
+        ),
+        "hidden_force_on_would_be_false_clearance": bool(
+            direct_off_failing and requested_thinking_exact
+        ),
+        "root_boundary": (
+            "Direct/off DSV4 exact-code generation fails under thinking_closed while "
+            "requested-thinking exactness passes under thinking_open; hidden force-on "
+            "does not clear explicit direct/off quality."
+        ),
+    }
+
+
+def _dsv4_source_memory_preflight_detail(
+    artifact: dict[str, Any],
+    root: Path,
+) -> dict[str, Any]:
+    telemetry = artifact.get("telemetry")
+    if not isinstance(telemetry, list):
+        telemetry = []
+    memory: dict[str, Any] = {}
+    for item in telemetry:
+        if not isinstance(item, dict):
+            continue
+        if item.get("name") != "preflight":
+            continue
+        system_memory = item.get("system_memory")
+        if isinstance(system_memory, dict):
+            memory = system_memory
+        break
+    available_gb = memory.get("available_gb")
+    required_available_gb = artifact.get("required_available_gb")
+    memory_gap_gb = artifact.get("memory_gap_gb")
+    if (
+        memory_gap_gb is None
+        and isinstance(available_gb, (int, float))
+        and isinstance(required_available_gb, (int, float))
+    ):
+        memory_gap_gb = round(max(0.0, required_available_gb - available_gb), 2)
+    did_not_launch = artifact.get("did_not_launch")
+    if did_not_launch is None and artifact.get("status") == "skipped":
+        did_not_launch = artifact.get("reason") == "insufficient_free_memory"
+    launch_decision = artifact.get("launch_decision")
+    if launch_decision is None and did_not_launch is True:
+        launch_decision = "do_not_launch"
+    return {
+        "artifact": DSV4_CURRENT_SOURCE_MEMORY_PREFLIGHT_REL,
+        "artifact_present": _path_present(
+            root,
+            DSV4_CURRENT_SOURCE_MEMORY_PREFLIGHT_REL,
+        ),
+        "status": artifact.get("status"),
+        "reason": artifact.get("reason"),
+        "model": artifact.get("model"),
+        "selected_cases": artifact.get("selected_cases"),
+        "case_count": artifact.get("case_count"),
+        "available_gb": available_gb,
+        "total_gb": memory.get("total_gb"),
+        "required_available_gb": required_available_gb,
+        "memory_gap_gb": memory_gap_gb,
+        "did_not_launch": did_not_launch,
+        "launch_decision": launch_decision,
+    }
+
+
+def _dsv4_exact_code_root_boundary(details: dict[str, Any]) -> dict[str, Any]:
+    direct = details.get("direct_off_exactness_boundary")
+    if not isinstance(direct, dict):
+        direct = {}
+    template = details.get("current_template_parity_diagnostic")
+    if not isinstance(template, dict):
+        template = {}
+    hidden = details.get("current_hidden_reasoning_control_probe")
+    if not isinstance(hidden, dict):
+        hidden = {}
+    prefill = details.get("current_prefill_execution_variant_logits")
+    if not isinstance(prefill, dict):
+        prefill = {}
+    prompt_variant = details.get("current_prompt_variant_logit_probe")
+    if not isinstance(prompt_variant, dict):
+        prompt_variant = {}
+    prompt_boundary = details.get("current_prompt_boundary_bisection_probe")
+    if not isinstance(prompt_boundary, dict):
+        prompt_boundary = {}
+    webgl_logit = details.get("current_direct_vs_thinking_webgl_logit_probe")
+    if not isinstance(webgl_logit, dict):
+        webgl_logit = {}
+    batch = details.get("current_batch_generator_logit_divergence")
+    if not isinstance(batch, dict):
+        batch = {}
+    source_rep1 = details.get("current_source_rep1_direct_only_exactness_subset")
+    if not isinstance(source_rep1, dict):
+        source_rep1 = {}
+    bundle_defaults = details.get("current_source_bundle_defaults_exactness_subset")
+    if not isinstance(bundle_defaults, dict):
+        bundle_defaults = {}
+    source_preflight = details.get("current_source_full_output_preflight")
+    if not isinstance(source_preflight, dict):
+        source_preflight = {}
+    jangtqk_direct_off = details.get("current_jangtqk_direct_off_recheck")
+    if not isinstance(jangtqk_direct_off, dict):
+        jangtqk_direct_off = {}
+
+    failed_rep1_cases = [
+        str(name)
+        for name in source_rep1.get("failed_thinking_closed_cases", [])
+        if isinstance(name, str)
+    ]
+    dry_run_overrides = source_rep1.get("dry_run_request_overrides")
+    if not isinstance(dry_run_overrides, dict):
+        dry_run_overrides = {}
+
+    def _failed_rep1_overrides_match(expected: dict[str, Any]) -> bool:
+        if not failed_rep1_cases:
+            return False
+        for name in failed_rep1_cases:
+            overrides = dry_run_overrides.get(name)
+            if not isinstance(overrides, dict):
+                return False
+            for key, value in expected.items():
+                if overrides.get(key) != value:
+                    return False
+        return True
+
+    direct_off_route_wide_failure = (
+        direct.get("direct_off_failure_spans_chat_responses_and_completion") is True
+    )
+    requested_thinking_is_diagnostic_only = (
+        direct.get("requested_thinking_success_is_diagnostic_only") is True
+        and direct.get("requested_thinking_success_clears_direct_off") is False
+    )
+    template_mismatch_ruled_out = template.get("template_mismatch_ruled_out") is True
+    hidden_reasoning_not_sufficient = (
+        hidden.get("hidden_reasoning_not_sufficient_root_cause") is True
+    )
+    prefix_cache_not_sufficient = _failed_rep1_overrides_match(
+        {"skip_prefix_cache": True}
+    )
+    forced_sampler_not_sufficient = _failed_rep1_overrides_match(
+        {
+            "temperature": 0,
+            "top_p": 1,
+            "repetition_penalty": 1.0,
+        }
+    )
+    bundle_defaults_do_not_clear = (
+        bundle_defaults.get("status") == "fail"
+        and bool(bundle_defaults.get("failed_thinking_closed_cases"))
+    )
+    jangtqk_direct_off_still_fails = (
+        jangtqk_direct_off.get("status") == "fail"
+        and sorted(jangtqk_direct_off.get("failed_thinking_closed_cases") or [])
+        == ["chat_off_rep1", "responses_off_rep1"]
+    )
+    batch_intrinsic_failure_not_proven = (
+        batch.get("batch_generator_intrinsic_failure_not_proven") is True
+    )
+    stream_warmup_ruled_out = (
+        prefill.get("stream_warmup_state_ruled_out_for_isolated_prefix") is True
+    )
+    prompt_wording_changes_logits = (
+        prompt_variant.get("prompt_wording_changes_identifier_logits") is True
+    )
+    direct_after_three_dot_web_rank = webgl_logit.get(
+        "direct_after_three_dot_web_rank"
+    )
+    thinking_after_three_dot_web_rank = webgl_logit.get(
+        "thinking_after_three_dot_web_rank"
+    )
+    direct_off_three_dot_identifier_boundary = (
+        isinstance(direct_after_three_dot_web_rank, int)
+        and isinstance(thinking_after_three_dot_web_rank, int)
+        and direct_after_three_dot_web_rank != 1
+        and thinking_after_three_dot_web_rank == 1
+    )
+    direct_off_identifier_logit_divergence = {
+        "webweb_not_explained_by_after_web_rank": webgl_logit.get(
+            "webweb_not_explained_by_after_web_rank"
+        ),
+        "direct_after_three_dot_web_rank": direct_after_three_dot_web_rank,
+        "thinking_after_three_dot_web_rank": thinking_after_three_dot_web_rank,
+        "direct_after_three_dot_top_token": webgl_logit.get(
+            "direct_after_three_dot_top_token"
+        ),
+        "thinking_after_three_dot_top_token": webgl_logit.get(
+            "thinking_after_three_dot_top_token"
+        ),
+        "direct_after_camera_p_top_token": webgl_logit.get(
+            "direct_after_camera_p_top_token"
+        ),
+        "thinking_after_camera_p_top_token": webgl_logit.get(
+            "thinking_after_camera_p_top_token"
+        ),
+    }
+    direct_off_prompt_boundary_is_wording_sensitive = (
+        prompt_boundary.get("canonical_colon_passes") is True
+        and prompt_boundary.get("no_punct_after_fences_still_passes") is True
+        and prompt_boundary.get("period_after_fences_breaks_exactness") is True
+        and prompt_boundary.get("same_effective_rail") is True
+    )
+    prompt_boundary_bisection = {
+        "canonical_colon_passes": prompt_boundary.get("canonical_colon_passes"),
+        "no_punct_after_fences_still_passes": prompt_boundary.get(
+            "no_punct_after_fences_still_passes"
+        ),
+        "period_after_fences_breaks_exactness": prompt_boundary.get(
+            "period_after_fences_breaks_exactness"
+        ),
+        "same_effective_rail": prompt_boundary.get("same_effective_rail"),
+        "passing_cases": prompt_boundary.get("passing_cases"),
+        "failed_cases": prompt_boundary.get("failed_cases"),
+        "effective_rails": prompt_boundary.get("effective_rails"),
+        "all_effective_policy_reasons": prompt_boundary.get(
+            "all_effective_policy_reasons"
+        ),
+    }
+    prompt_boundary_passes_are_effective_thinking_open = (
+        prompt_boundary.get("passing_cases_effective_thinking_open") is True
+    )
+    prompt_boundary_requested_off_but_effective_force_on = (
+        prompt_boundary.get("passing_cases_requested_off_but_effective_force_on")
+        is True
+    )
+    prompt_boundary_passes_clear_direct_off = (
+        prompt_boundary_passes_are_effective_thinking_open is False
+        and direct_off_route_wide_failure is False
+    )
+
+    ruled_out = []
+    if template_mismatch_ruled_out:
+        ruled_out.append("template_mismatch")
+    if hidden_reasoning_not_sufficient:
+        ruled_out.append("hidden_reasoning_corruption")
+    if prefix_cache_not_sufficient:
+        ruled_out.append("prefix_cache")
+    if forced_sampler_not_sufficient:
+        ruled_out.append("forced_sampling_controls")
+    if bundle_defaults_do_not_clear:
+        ruled_out.append("bundle_defaults")
+    if jangtqk_direct_off_still_fails:
+        ruled_out.append("true_bundled_jangtqk_direct_off_recheck")
+    if stream_warmup_ruled_out:
+        ruled_out.append("stream_warmup_state")
+    if batch_intrinsic_failure_not_proven:
+        ruled_out.append("batch_generator_warmup_intrinsic")
+
+    current_primary_failure = (
+        "direct_off_exact_code_generation"
+        if direct_off_route_wide_failure
+        else "insufficient_evidence"
+    )
+
+    return {
+        "present": bool(direct) or bool(template) or bool(hidden),
+        "direct_off_route_wide_failure": direct_off_route_wide_failure,
+        "requested_thinking_is_diagnostic_only": requested_thinking_is_diagnostic_only,
+        "template_mismatch_ruled_out": template_mismatch_ruled_out,
+        "hidden_reasoning_not_sufficient_root_cause": (
+            hidden_reasoning_not_sufficient
+        ),
+        "prefix_cache_not_sufficient_root_cause": prefix_cache_not_sufficient,
+        "forced_sampler_controls_not_sufficient_root_cause": (
+            forced_sampler_not_sufficient
+        ),
+        "bundle_defaults_do_not_clear_direct_off": bundle_defaults_do_not_clear,
+        "true_bundled_jangtqk_direct_off_still_fails": (
+            jangtqk_direct_off_still_fails
+        ),
+        "true_bundled_jangtqk_direct_off_recheck": jangtqk_direct_off,
+        "batch_generator_intrinsic_failure_not_proven": (
+            batch_intrinsic_failure_not_proven
+        ),
+        "stream_warmup_state_ruled_out_for_isolated_prefix": stream_warmup_ruled_out,
+        "prompt_wording_changes_identifier_logits": prompt_wording_changes_logits,
+        "direct_off_identifier_logit_divergence": (
+            direct_off_identifier_logit_divergence
+        ),
+        "direct_off_three_dot_identifier_boundary": (
+            direct_off_three_dot_identifier_boundary
+        ),
+        "prompt_boundary_bisection": prompt_boundary_bisection,
+        "direct_off_prompt_boundary_is_wording_sensitive": (
+            direct_off_prompt_boundary_is_wording_sensitive
+        ),
+        "prompt_boundary_passes_are_effective_thinking_open": (
+            prompt_boundary_passes_are_effective_thinking_open
+        ),
+        "prompt_boundary_requested_off_but_effective_force_on": (
+            prompt_boundary_requested_off_but_effective_force_on
+        ),
+        "prompt_boundary_passes_clear_direct_off": (
+            prompt_boundary_passes_clear_direct_off
+        ),
+        "ruled_out_root_causes": ruled_out,
+        "current_primary_failure": current_primary_failure,
+        "source_full_output_preflight": source_preflight,
+        "source_full_output_clearance_missing": (
+            source_preflight.get("status") != "pass"
+        ),
+        "root_boundary": (
+            "Current DSV4 exact-code evidence points at explicit direct/off "
+            "rail exact-code generation, not template mismatch, hidden "
+            "reasoning leakage, prefix cache, forced sampling controls, or "
+            "bundle defaults. Requested-thinking success is diagnostic only; "
+            "the current logit boundary is at THREE. / identifier continuation, "
+            "and live prompt-boundary bisection is same-rail wording-sensitive "
+            "but its passing rows are not direct/off clearance when they run "
+            "on the effective thinking-open rail."
+        ),
+    }
+
+
+def _dsv4_chatmax_prompt_trigger_detail(
+    artifact: dict[str, Any],
+    root: Path,
+) -> dict[str, Any]:
+    path_present = _path_present(root, DSV4_CHATMAX_PROMPT_TRIGGER_REL)
+    cases = artifact.get("cases") if isinstance(artifact.get("cases"), list) else []
+    case_summaries: list[dict[str, Any]] = []
+    canonical_exact_cases: list[str] = []
+    failed_cases: list[str] = []
+    blank_visible_cases: list[str] = []
+    effective_suffixes: set[str] = set()
+    effective_reasons: set[str] = set()
+    corrupt_patterns_by_case: dict[str, list[str]] = {}
+
+    for case in cases:
+        if not isinstance(case, dict):
+            continue
+        name = str(case.get("name") or "")
+        content = case.get("content")
+        if not isinstance(content, str):
+            content = ""
+        effective_prompt_diagnostics = (
+            case.get("effective_prompt_diagnostics")
+            if isinstance(case.get("effective_prompt_diagnostics"), dict)
+            else {}
+        )
+        suffix = str(effective_prompt_diagnostics.get("assistant_suffix_kind") or "")
+        reason = str(effective_prompt_diagnostics.get("dsv4_policy_reason") or "")
+        if suffix:
+            effective_suffixes.add(suffix)
+        if reason:
+            effective_reasons.add(reason)
+
+        missing = [str(item) for item in (case.get("missing") or [])]
+        corrupt_patterns = [
+            str(item) for item in (case.get("corrupt_patterns") or [])
+        ]
+        exact = case.get("exact") is True
+        if exact and name:
+            canonical_exact_cases.append(name)
+        elif name:
+            failed_cases.append(name)
+        if name and not content:
+            blank_visible_cases.append(name)
+        if name and corrupt_patterns:
+            corrupt_patterns_by_case[name] = corrupt_patterns
+
+        prompt_tail = effective_prompt_diagnostics.get("prompt_tail")
+        if not isinstance(prompt_tail, str):
+            prompt_tail = ""
+        case_summaries.append(
+            {
+                "name": name,
+                "exact": exact,
+                "normalized_exact": case.get("normalized_exact"),
+                "assistant_suffix_kind": suffix,
+                "dsv4_policy_reason": reason,
+                "missing_identifiers": missing,
+                "corrupt_patterns": corrupt_patterns,
+                "has_markdown_fence": case.get("has_markdown_fence"),
+                "prompt_tokens": case.get("prompt_tokens"),
+                "completion_tokens": case.get("completion_tokens"),
+                "blank_visible_content": not content,
+                "content": content[:500],
+                "prompt_tail": prompt_tail[-500:],
+            }
+        )
+
+    return {
+        "artifact": DSV4_CHATMAX_PROMPT_TRIGGER_REL,
+        "present": path_present,
+        "status": artifact.get("status") if path_present else "missing",
+        "case_count": len(case_summaries),
+        "canonical_exact_cases": canonical_exact_cases,
+        "failed_cases": failed_cases,
+        "blank_visible_cases": blank_visible_cases,
+        "same_effective_rail": len(effective_suffixes) == 1 and bool(effective_suffixes),
+        "effective_rails": sorted(effective_suffixes),
+        "all_effective_policy_reasons": sorted(effective_reasons),
+        "corrupt_patterns_by_case": corrupt_patterns_by_case,
+        "case_summaries": case_summaries,
+    }
+
+
+def _dsv4_chatmax_budget_stop_rail_detail(
+    artifact: dict[str, Any],
+    root: Path,
+) -> dict[str, Any]:
+    path_present = _path_present(root, DSV4_CHATMAX_BUDGET_STOP_RAIL_REL)
+    cases = artifact.get("cases") if isinstance(artifact.get("cases"), list) else []
+    case_summaries: list[dict[str, Any]] = []
+    failed_cases: list[str] = []
+    completion_tokens_for_failed: set[int] = set()
+    effective_rails: set[str] = set()
+    effective_reasons: set[str] = set()
+
+    for case in cases:
+        if not isinstance(case, dict):
+            continue
+        name = str(case.get("name") or "")
+        route = str(case.get("route") or "")
+        exact = case.get("exact") is True
+        completion_tokens = case.get("completion_tokens")
+        if not exact and name:
+            failed_cases.append(name)
+            if isinstance(completion_tokens, int):
+                completion_tokens_for_failed.add(completion_tokens)
+
+        diagnostics = (
+            case.get("effective_prompt_diagnostics")
+            if isinstance(case.get("effective_prompt_diagnostics"), dict)
+            else {}
+        )
+        suffix = str(diagnostics.get("assistant_suffix_kind") or "")
+        reason = str(diagnostics.get("dsv4_policy_reason") or "")
+        if suffix:
+            effective_rails.add(suffix)
+        if reason:
+            effective_reasons.add(reason)
+
+        content = case.get("content")
+        if not isinstance(content, str):
+            content = ""
+        case_summaries.append(
+            {
+                "name": name,
+                "route": route,
+                "exact": exact,
+                "normalized_exact": case.get("normalized_exact"),
+                "finish_reason": case.get("finish_reason") or case.get("finish"),
+                "completion_tokens": completion_tokens,
+                "missing_identifiers": case.get("missing") or [],
+                "corrupt_patterns": case.get("corrupt_patterns") or [],
+                "assistant_suffix_kind": suffix,
+                "dsv4_policy_reason": reason,
+                "content": content[:500],
+            }
+        )
+
+    return {
+        "artifact": DSV4_CHATMAX_BUDGET_STOP_RAIL_REL,
+        "present": path_present,
+        "status": artifact.get("status") if path_present else "missing",
+        "case_count": len(case_summaries),
+        "failed_cases": failed_cases,
+        "all_failed_cases_same_completion_tokens": (
+            len(completion_tokens_for_failed) == 1
+            and bool(completion_tokens_for_failed)
+        ),
+        "failed_completion_tokens": sorted(completion_tokens_for_failed),
+        "larger_budget_ruled_out": "chatmax_1024_budget" in failed_cases,
+        "role_stops_ruled_out": "chatmax_1024_stop_roles" in failed_cases,
+        "thinking_on_ruled_out": "chatmax_1024_thinking_on" in failed_cases,
+        "effort_low_ruled_out": "chatmax_1024_effort_low" in failed_cases,
+        "responses_route_also_fails": "responses_chatmax_1024" in failed_cases,
+        "completion_route_also_fails": "completion_chatmax_512" in failed_cases,
+        "effective_rails": sorted(effective_rails),
+        "all_effective_policy_reasons": sorted(effective_reasons),
+        "case_summaries": case_summaries,
+    }
+
+
+def _dsv4_prompt_boundary_bisection_detail(
+    artifact: dict[str, Any],
+    root: Path,
+) -> dict[str, Any]:
+    path_present = _path_present(root, DSV4_PROMPT_BOUNDARY_BISECTION_REL)
+    cases = artifact.get("cases") if isinstance(artifact.get("cases"), list) else []
+    passing_cases: list[str] = []
+    failed_cases: list[str] = []
+    length_failed_cases: list[str] = []
+    blank_visible_cases: list[str] = []
+    effective_rails: set[str] = set()
+    effective_reasons: set[str] = set()
+    passing_effective_rails: set[str] = set()
+    passing_effective_reasons: set[str] = set()
+    passing_requested_enable_thinking: set[bool] = set()
+    case_summaries: list[dict[str, Any]] = []
+
+    for case in cases:
+        if not isinstance(case, dict):
+            continue
+        name = str(case.get("name") or "")
+        exact = case.get("exact") is True
+        if exact and name:
+            passing_cases.append(name)
+        elif name:
+            failed_cases.append(name)
+
+        finish_reason = str(case.get("finish_reason") or case.get("finish") or "")
+        if name and not exact and finish_reason == "length":
+            length_failed_cases.append(name)
+
+        diagnostics = (
+            case.get("effective_prompt_diagnostics")
+            if isinstance(case.get("effective_prompt_diagnostics"), dict)
+            else {}
+        )
+        requested_diagnostics = (
+            case.get("requested_prompt_diagnostics")
+            if isinstance(case.get("requested_prompt_diagnostics"), dict)
+            else {}
+        )
+        suffix = str(diagnostics.get("assistant_suffix_kind") or "")
+        reason = str(diagnostics.get("dsv4_policy_reason") or "")
+        if suffix:
+            effective_rails.add(suffix)
+        if reason:
+            effective_reasons.add(reason)
+        if exact and suffix:
+            passing_effective_rails.add(suffix)
+        if exact and reason:
+            passing_effective_reasons.add(reason)
+        requested_enable = requested_diagnostics.get("enable_thinking")
+        if exact and isinstance(requested_enable, bool):
+            passing_requested_enable_thinking.add(requested_enable)
+
+        content = case.get("content")
+        if not isinstance(content, str):
+            content = ""
+        if name and not content:
+            blank_visible_cases.append(name)
+
+        case_summaries.append(
+            {
+                "name": name,
+                "exact": exact,
+                "normalized_exact": case.get("normalized_exact"),
+                "finish_reason": finish_reason,
+                "completion_tokens": case.get("completion_tokens"),
+                "missing_identifiers": case.get("missing") or [],
+                "corrupt_patterns": case.get("corrupt_patterns") or [],
+                "assistant_suffix_kind": suffix,
+                "dsv4_policy_reason": reason,
+                "requested_enable_thinking": requested_enable,
+                "requested_assistant_suffix_kind": requested_diagnostics.get(
+                    "assistant_suffix_kind"
+                ),
+                "blank_visible_content": not content,
+                "content": content[:500],
+            }
+        )
+
+    passing_cases_effective_thinking_open = bool(passing_cases) and (
+        passing_effective_rails == {"thinking_open"}
+    )
+    passing_cases_requested_thinking_disabled = bool(passing_cases) and (
+        passing_requested_enable_thinking == {False}
+    )
+    return {
+        "artifact": DSV4_PROMPT_BOUNDARY_BISECTION_REL,
+        "present": path_present,
+        "status": artifact.get("status") if path_present else "missing",
+        "case_count": len(case_summaries),
+        "passing_cases": passing_cases,
+        "failed_cases": failed_cases,
+        "length_failed_cases": length_failed_cases,
+        "blank_visible_cases": blank_visible_cases,
+        "period_after_fences_breaks_exactness": "return_fences_period" in failed_cases,
+        "no_punct_after_fences_still_passes": "return_fences_no_punct" in passing_cases,
+        "canonical_colon_passes": "canonical_return_fences_colon" in passing_cases,
+        "same_effective_rail": len(effective_rails) == 1 and bool(effective_rails),
+        "effective_rails": sorted(effective_rails),
+        "all_effective_policy_reasons": sorted(effective_reasons),
+        "passing_effective_rails": sorted(passing_effective_rails),
+        "passing_effective_policy_reasons": sorted(passing_effective_reasons),
+        "passing_requested_enable_thinking": sorted(
+            passing_requested_enable_thinking
+        ),
+        "passing_cases_effective_thinking_open": (
+            passing_cases_effective_thinking_open
+        ),
+        "passing_cases_requested_thinking_disabled": (
+            passing_cases_requested_thinking_disabled
+        ),
+        "passing_cases_requested_off_but_effective_force_on": (
+            passing_cases_effective_thinking_open
+            and passing_cases_requested_thinking_disabled
+            and "dsv4_direct_rail_identifier_unsafe" in passing_effective_reasons
+        ),
+        "case_summaries": case_summaries,
+    }
+
+
+def _dsv4_colon_period_logprob_trace_detail(
+    raw_artifact: dict[str, Any],
+    visible_artifact: dict[str, Any],
+    root: Path,
+) -> dict[str, Any]:
+    raw_present = _path_present(root, DSV4_COLON_PERIOD_LOGPROB_TRACE_REL)
+    visible_present = _path_present(
+        root, DSV4_COLON_PERIOD_VISIBLE_LOGPROB_TRACE_REL
+    )
+
+    def _cases_by_name(payload: dict[str, Any]) -> dict[str, dict[str, Any]]:
+        cases = payload.get("cases") if isinstance(payload.get("cases"), list) else []
+        return {
+            str(case.get("name") or ""): case
+            for case in cases
+            if isinstance(case, dict) and case.get("name")
+        }
+
+    raw_cases = _cases_by_name(raw_artifact)
+    visible_cases = _cases_by_name(visible_artifact)
+    colon_visible = visible_cases.get("colon_pass", {})
+    period_visible = visible_cases.get("period_fail", {})
+    colon_raw = raw_cases.get("colon_pass", {})
+    period_raw = raw_cases.get("period_fail", {})
+
+    prompt_tokens = [
+        case.get("prompt_tokens")
+        for case in (colon_visible, period_visible)
+        if isinstance(case.get("prompt_tokens"), int)
+    ]
+    completion_tokens = [
+        case.get("completion_tokens")
+        for case in (colon_visible, period_visible)
+        if isinstance(case.get("completion_tokens"), int)
+    ]
+    logprob_entry_counts = [
+        case.get("logprob_entry_count")
+        for case in (colon_visible, period_visible)
+        if isinstance(case.get("logprob_entry_count"), int)
+    ]
+
+    cache_hit_values: list[int] = []
+    for payload in (raw_artifact, visible_artifact):
+        for key in ("health_before", "health_after"):
+            health = payload.get(key) if isinstance(payload.get(key), dict) else {}
+            scheduler = (
+                health.get("scheduler") if isinstance(health.get("scheduler"), dict) else {}
+            )
+            value = scheduler.get("cache_hit_tokens")
+            if isinstance(value, int):
+                cache_hit_values.append(value)
+
+    colon_joined = str(colon_visible.get("joined_logprob_text_prefix") or "")
+    period_context = (
+        period_visible.get("visible_diff_token_context")
+        if isinstance(period_visible.get("visible_diff_token_context"), list)
+        else []
+    )
+    period_context_summary = []
+    for entry in period_context[:5]:
+        if not isinstance(entry, dict):
+            continue
+        top_logprobs = (
+            entry.get("top_logprobs")
+            if isinstance(entry.get("top_logprobs"), list)
+            else []
+        )
+        period_context_summary.append(
+            {
+                "index": entry.get("index"),
+                "token": entry.get("token"),
+                "logprob": entry.get("logprob"),
+                "top_tokens": [
+                    item.get("token")
+                    for item in top_logprobs[:5]
+                    if isinstance(item, dict)
+                ],
+            }
+        )
+
+    return {
+        "raw_artifact": DSV4_COLON_PERIOD_LOGPROB_TRACE_REL,
+        "raw_present": raw_present,
+        "raw_status": raw_artifact.get("status") if raw_present else "missing",
+        "visible_artifact": DSV4_COLON_PERIOD_VISIBLE_LOGPROB_TRACE_REL,
+        "visible_present": visible_present,
+        "visible_status": (
+            visible_artifact.get("status") if visible_present else "missing"
+        ),
+        "same_prompt_tokens": len(set(prompt_tokens)) == 1 and bool(prompt_tokens),
+        "same_completion_tokens": (
+            len(set(completion_tokens)) == 1 and bool(completion_tokens)
+        ),
+        "same_logprob_entry_count": (
+            len(set(logprob_entry_counts)) == 1 and bool(logprob_entry_counts)
+        ),
+        "prompt_tokens": sorted(set(prompt_tokens)),
+        "completion_tokens": sorted(set(completion_tokens)),
+        "logprob_entry_counts": sorted(set(logprob_entry_counts)),
+        "cache_hit_tokens_zero": bool(cache_hit_values)
+        and all(value == 0 for value in cache_hit_values),
+        "colon_exact": colon_visible.get("exact") is True,
+        "period_exact": period_visible.get("exact") is True,
+        "period_first_char_diff_index": period_raw.get("first_char_diff_index"),
+        "period_first_visible_diff_index": period_visible.get(
+            "first_visible_diff_index"
+        ),
+        "period_visible_diff_token_index": period_visible.get(
+            "visible_diff_token_index"
+        ),
+        "period_corrupt_patterns": [
+            str(item) for item in (period_visible.get("corrupt_patterns") or [])
+        ],
+        "period_missing_identifiers": [
+            str(item) for item in (period_visible.get("missing") or [])
+        ],
+        "colon_hidden_thinking_contains_corruption": any(
+            marker in colon_joined
+            for marker in (
+                "WebWebGLRenderer",
+                "PPerspectiveCamera",
+                "BBoxGeometry",
+                "MMeshBasicMaterial",
+            )
+        ),
+        "period_visible_diff_token_context": period_context_summary,
+    }
+
+
+def _rank_of_token(top_logprobs: list[Any], token: str) -> int | None:
+    for index, item in enumerate(top_logprobs, start=1):
+        if isinstance(item, dict) and item.get("token") == token:
+            return index
+    return None
+
+
+def _scene_token_entry(case: dict[str, Any], offset: int = 0) -> dict[str, Any]:
+    context = (
+        case.get("scene_token_context")
+        if isinstance(case.get("scene_token_context"), list)
+        else []
+    )
+    target_index = case.get("scene_token_index")
+    if isinstance(target_index, int):
+        target_index += offset
+    for entry in context:
+        if isinstance(entry, dict) and entry.get("index") == target_index:
+            return entry
+    return {}
+
+
+def _dsv4_scene_token_rank_contrast_detail(
+    artifact: dict[str, Any],
+    root: Path,
+) -> dict[str, Any]:
+    path_present = _path_present(root, DSV4_SCENE_TOKEN_RANK_CONTRAST_REL)
+    cases = artifact.get("cases") if isinstance(artifact.get("cases"), list) else []
+    by_name = {
+        str(case.get("name") or ""): case
+        for case in cases
+        if isinstance(case, dict) and case.get("name")
+    }
+    colon = by_name.get("colon_pass", {})
+    period = by_name.get("period_fail", {})
+    colon_entry = _scene_token_entry(colon, offset=1)
+    period_entry = _scene_token_entry(period, offset=1)
+    colon_top = (
+        colon_entry.get("top_logprobs")
+        if isinstance(colon_entry.get("top_logprobs"), list)
+        else []
+    )
+    period_top = (
+        period_entry.get("top_logprobs")
+        if isinstance(period_entry.get("top_logprobs"), list)
+        else []
+    )
+
+    prompt_tokens = [
+        case.get("prompt_tokens")
+        for case in (colon, period)
+        if isinstance(case.get("prompt_tokens"), int)
+    ]
+    completion_tokens = [
+        case.get("completion_tokens")
+        for case in (colon, period)
+        if isinstance(case.get("completion_tokens"), int)
+    ]
+    cache_hit_values: list[int] = []
+    for key in ("health_before", "health_after"):
+        health = artifact.get(key) if isinstance(artifact.get(key), dict) else {}
+        scheduler = (
+            health.get("scheduler") if isinstance(health.get("scheduler"), dict) else {}
+        )
+        value = scheduler.get("cache_hit_tokens")
+        if isinstance(value, int):
+            cache_hit_values.append(value)
+
+    return {
+        "artifact": DSV4_SCENE_TOKEN_RANK_CONTRAST_REL,
+        "present": path_present,
+        "status": artifact.get("status") if path_present else "missing",
+        "same_prompt_tokens": len(set(prompt_tokens)) == 1 and bool(prompt_tokens),
+        "same_completion_tokens": (
+            len(set(completion_tokens)) == 1 and bool(completion_tokens)
+        ),
+        "prompt_tokens": sorted(set(prompt_tokens)),
+        "completion_tokens": sorted(set(completion_tokens)),
+        "cache_hit_tokens_zero": bool(cache_hit_values)
+        and all(value == 0 for value in cache_hit_values),
+        "scene_token_index": colon.get("scene_token_index")
+        if colon.get("scene_token_index") == period.get("scene_token_index")
+        else None,
+        "rank_contrast_token_index": colon_entry.get("index")
+        if colon_entry.get("index") == period_entry.get("index")
+        else None,
+        "scene_token_abs_index": colon.get("scene_token_abs_index")
+        if colon.get("scene_token_abs_index") == period.get("scene_token_abs_index")
+        else None,
+        "colon_exact": colon.get("exact") is True,
+        "period_exact": period.get("exact") is True,
+        "colon_selected_token": colon_entry.get("token"),
+        "period_selected_token": period_entry.get("token"),
+        "colon_selected_logprob": colon_entry.get("logprob"),
+        "period_selected_logprob": period_entry.get("logprob"),
+        "colon_correct_ene_rank": _rank_of_token(colon_top, "ene"),
+        "colon_wrong_close_rank": _rank_of_token(colon_top, "();\n"),
+        "period_correct_ene_rank": _rank_of_token(period_top, "ene"),
+        "period_wrong_close_rank": _rank_of_token(period_top, "();\n"),
+        "colon_top_tokens": [
+            item.get("token") for item in colon_top[:5] if isinstance(item, dict)
+        ],
+        "period_top_tokens": [
+            item.get("token") for item in period_top[:5] if isinstance(item, dict)
+        ],
+        "period_corrupt_patterns": [
+            str(item) for item in (period.get("corrupt_patterns") or [])
+        ],
+        "period_missing_identifiers": [
+            str(item) for item in (period.get("missing") or [])
+        ],
+    }
+
+
+def _dsv4_direct_vs_thinking_webgl_logit_detail(
+    artifact: dict[str, Any],
+    root: Path,
+) -> dict[str, Any]:
+    path_present = _path_present(root, DSV4_DIRECT_VS_THINKING_WEBGL_LOGIT_PROBE_REL)
+    cases = artifact.get("cases") if isinstance(artifact.get("cases"), list) else []
+    by_key = {
+        (str(case.get("rail") or ""), str(case.get("prefix_name") or "")): case
+        for case in cases
+        if isinstance(case, dict)
+    }
+
+    def rank(rail: str, prefix: str, token: str) -> int | None:
+        ranks = by_key.get((rail, prefix), {}).get("ranks")
+        if not isinstance(ranks, dict):
+            return None
+        value = ranks.get(token)
+        return value if isinstance(value, int) else None
+
+    def top_token(rail: str, prefix: str) -> str | None:
+        top = by_key.get((rail, prefix), {}).get("top")
+        if not isinstance(top, list) or not top or not isinstance(top[0], dict):
+            return None
+        value = top[0].get("token")
+        return str(value) if value is not None else None
+
+    direct_after_web_gl = rank("direct_off", "after_const_renderer_web", "GL")
+    thinking_after_web_gl = rank(
+        "requested_thinking", "after_const_renderer_web", "GL"
+    )
+    direct_after_three_dot_web = rank(
+        "direct_off", "after_const_renderer_three_dot", "Web"
+    )
+    thinking_after_three_dot_web = rank(
+        "requested_thinking", "after_const_renderer_three_dot", "Web"
+    )
+    direct_after_camera_p_pers = rank("direct_off", "after_camera_p", "Pers")
+    direct_after_camera_p_ers = rank("direct_off", "after_camera_p", "ers")
+    thinking_after_camera_p_pers = rank(
+        "requested_thinking", "after_camera_p", "Pers"
+    )
+    thinking_after_camera_p_ers = rank(
+        "requested_thinking", "after_camera_p", "ers"
+    )
+
+    return {
+        "artifact": DSV4_DIRECT_VS_THINKING_WEBGL_LOGIT_PROBE_REL,
+        "present": path_present,
+        "schema": artifact.get("schema") if path_present else None,
+        "case_count": len(by_key),
+        "direct_after_web_gl_rank": direct_after_web_gl,
+        "direct_after_web_web_rank": rank(
+            "direct_off", "after_const_renderer_web", "Web"
+        ),
+        "thinking_after_web_gl_rank": thinking_after_web_gl,
+        "thinking_after_web_web_rank": rank(
+            "requested_thinking", "after_const_renderer_web", "Web"
+        ),
+        "webweb_not_explained_by_after_web_rank": (
+            direct_after_web_gl == 1 and thinking_after_web_gl == 1
+        ),
+        "direct_after_three_dot_web_rank": direct_after_three_dot_web,
+        "thinking_after_three_dot_web_rank": thinking_after_three_dot_web,
+        "direct_after_three_dot_top_token": top_token(
+            "direct_off", "after_const_renderer_three_dot"
+        ),
+        "thinking_after_three_dot_top_token": top_token(
+            "requested_thinking", "after_const_renderer_three_dot"
+        ),
+        "direct_after_camera_p_pers_rank": direct_after_camera_p_pers,
+        "direct_after_camera_p_ers_rank": direct_after_camera_p_ers,
+        "thinking_after_camera_p_pers_rank": thinking_after_camera_p_pers,
+        "thinking_after_camera_p_ers_rank": thinking_after_camera_p_ers,
+        "direct_after_camera_p_top_token": top_token(
+            "direct_off", "after_camera_p"
+        ),
+        "thinking_after_camera_p_top_token": top_token(
+            "requested_thinking", "after_camera_p"
+        ),
+        "direct_camera_p_prefers_suffix_over_whole_token": (
+            direct_after_camera_p_ers == 1 and direct_after_camera_p_pers == 2
+        ),
+        "thinking_camera_p_prefers_whole_token": (
+            thinking_after_camera_p_pers == 1 and thinking_after_camera_p_ers == 2
+        ),
+    }
+
+
+def _dsv4_hidden_reasoning_control_detail(
+    artifact: dict[str, Any],
+    root: Path,
+) -> dict[str, Any]:
+    path_present = _path_present(root, DSV4_HIDDEN_REASONING_CONTROL_REL)
+    cases = artifact.get("cases") if isinstance(artifact.get("cases"), list) else []
+    case_rows = [case for case in cases if isinstance(case, dict)]
+    by_name = {
+        str(case.get("name") or ""): case
+        for case in case_rows
+        if case.get("name")
+    }
+    summary = (
+        artifact.get("diagnostic_summary")
+        if isinstance(artifact.get("diagnostic_summary"), dict)
+        else {}
+    )
+    failed_cases = [
+        str(case.get("name"))
+        for case in case_rows
+        if case.get("exact") is not True and isinstance(case.get("name"), str)
+    ]
+    no_draft = by_name.get("period_no_reasoning_code_draft_system", {})
+    system_controls = [
+        by_name.get("period_no_reasoning_code_draft_system", {}),
+        by_name.get("period_verify_identifiers_system", {}),
+    ]
+    cache_hit_values: list[int] = []
+    for key in ("health_before", "health_after"):
+        health = artifact.get(key) if isinstance(artifact.get(key), dict) else {}
+        scheduler = (
+            health.get("scheduler") if isinstance(health.get("scheduler"), dict) else {}
+        )
+        value = scheduler.get("cache_hit_tokens")
+        if isinstance(value, int):
+            cache_hit_values.append(value)
+
+    return {
+        "artifact": DSV4_HIDDEN_REASONING_CONTROL_REL,
+        "present": path_present,
+        "status": artifact.get("status") if path_present else "missing",
+        "colon_control_exact": summary.get("colon_control_exact")
+        if "colon_control_exact" in summary
+        else by_name.get("colon_known_pass_control", {}).get("exact") is True,
+        "period_control_exact": summary.get("period_control_exact")
+        if "period_control_exact" in summary
+        else by_name.get("period_known_fail_control", {}).get("exact") is True,
+        "system_no_draft_exact": summary.get("system_no_draft_exact")
+        if "system_no_draft_exact" in summary
+        else no_draft.get("exact") is True,
+        "system_verify_exact": summary.get("system_verify_exact")
+        if "system_verify_exact" in summary
+        else by_name.get("period_verify_identifiers_system", {}).get("exact") is True,
+        "failed_cases": failed_cases,
+        "system_controls_still_fail": bool(system_controls)
+        and all(case.get("exact") is not True for case in system_controls),
+        "no_draft_hidden_corruption_removed_but_visible_still_failed": (
+            no_draft.get("hidden_contains_corruption") is False
+            and no_draft.get("exact") is not True
+        ),
+        "hidden_reasoning_not_sufficient_root_cause": (
+            no_draft.get("hidden_contains_corruption") is False
+            and no_draft.get("exact") is not True
+        ),
+        "cache_hit_tokens_zero": bool(cache_hit_values)
+        and all(value == 0 for value in cache_hit_values),
+        "case_summaries": [
+            {
+                "name": case.get("name"),
+                "exact": case.get("exact"),
+                "finish_reason": case.get("finish_reason"),
+                "prompt_tokens": case.get("prompt_tokens"),
+                "completion_tokens": case.get("completion_tokens"),
+                "hidden_contains_corruption": case.get("hidden_contains_corruption"),
+                "corrupt_patterns": [
+                    str(item) for item in (case.get("corrupt_patterns") or [])
+                ],
+                "missing": [str(item) for item in (case.get("missing") or [])],
+            }
+            for case in case_rows
+        ],
+    }
+
+def _template_parity_boundary_token(case: dict[str, Any]) -> str | None:
+    tokens = case.get("boundary_tokens_tail")
+    if not isinstance(tokens, list):
+        return None
+    for token in reversed(tokens):
+        if isinstance(token, str) and token.endswith("Ċ"):
+            return token
+    return None
+
+
+def _dsv4_template_parity_diagnostic_detail(
+    artifact: dict[str, Any],
+    root: Path,
+) -> dict[str, Any]:
+    path_present = _path_present(root, DSV4_TEMPLATE_PARITY_DIAGNOSTIC_REL)
+    cases = artifact.get("cases") if isinstance(artifact.get("cases"), list) else []
+    case_rows = [case for case in cases if isinstance(case, dict)]
+    mismatches = [
+        case
+        for case in case_rows
+        if case.get("sidecar_equals_tokenizer_template") is not True
+    ]
+    normal_cases = [
+        case
+        for case in case_rows
+        if case.get("enable_thinking") is False
+        and case.get("reasoning_effort") is None
+        and case.get("assistant_suffix") == "thinking_closed"
+    ]
+    period = next(
+        (case for case in normal_cases if case.get("name") == "period_exact_code"),
+        {},
+    )
+    colon = next(
+        (case for case in normal_cases if case.get("name") == "colon_exact_code"),
+        {},
+    )
+    period_tokens = period.get("prompt_tokens")
+    colon_tokens = colon.get("prompt_tokens")
+
+    return {
+        "artifact": DSV4_TEMPLATE_PARITY_DIAGNOSTIC_REL,
+        "present": path_present,
+        "all_sidecar_equals_tokenizer_template": artifact.get(
+            "all_sidecar_equals_tokenizer_template"
+        )
+        is True,
+        "case_count": len(case_rows),
+        "mismatch_count": len(mismatches),
+        "mismatched_cases": [
+            str(case.get("name"))
+            for case in mismatches
+            if isinstance(case.get("name"), str)
+        ],
+        "normal_colon_period_prompt_tokens_equal": (
+            isinstance(period_tokens, int)
+            and isinstance(colon_tokens, int)
+            and period_tokens == colon_tokens
+        ),
+        "period_prompt_tokens": period_tokens,
+        "colon_prompt_tokens": colon_tokens,
+        "period_boundary_token": _template_parity_boundary_token(period),
+        "colon_boundary_token": _template_parity_boundary_token(colon),
+        "template_mismatch_ruled_out": (
+            path_present
+            and artifact.get("all_sidecar_equals_tokenizer_template") is True
+            and len(mismatches) == 0
+            and isinstance(period_tokens, int)
+            and period_tokens == colon_tokens
+            and _template_parity_boundary_token(period) == ".Ċ"
+            and _template_parity_boundary_token(colon) == ":Ċ"
+        ),
+    }
+
+
+def _dsv4_prefill_execution_variant_logits_detail(
+    artifact: dict[str, Any],
+    root: Path,
+) -> dict[str, Any]:
+    path_present = _path_present(root, DSV4_PREFILL_EXECUTION_VARIANT_LOGITS_REL)
+    variants = artifact.get("variants") if isinstance(artifact.get("variants"), list) else []
+    variant_rows = [variant for variant in variants if isinstance(variant, dict)]
+    top_tokens_by_variant: dict[str, list[str]] = {}
+    selected_tokens: list[str | None] = []
+    pers_ranks: dict[str, int | None] = {}
+    for variant in variant_rows:
+        name = str(variant.get("name") or "")
+        top = variant.get("top") if isinstance(variant.get("top"), list) else []
+        tokens = [
+            str(item.get("token"))
+            for item in top
+            if isinstance(item, dict) and item.get("token") is not None
+        ]
+        top_tokens_by_variant[name] = tokens[:8]
+        selected_tokens.append(tokens[0] if tokens else None)
+        pers_ranks[name] = _rank_of_token(top, "Pers")
+    non_empty_sequences = [tuple(tokens) for tokens in top_tokens_by_variant.values() if tokens]
+    all_same_top_tokens = bool(non_empty_sequences) and len(set(non_empty_sequences)) == 1
+
+    return {
+        "artifact": DSV4_PREFILL_EXECUTION_VARIANT_LOGITS_REL,
+        "present": path_present,
+        "schema": artifact.get("schema") if path_present else None,
+        "target_context": artifact.get("target_context"),
+        "variant_count": len(variant_rows),
+        "variant_names": [
+            str(variant.get("name"))
+            for variant in variant_rows
+            if variant.get("name") is not None
+        ],
+        "top_tokens_by_variant": top_tokens_by_variant,
+        "selected_tokens": selected_tokens,
+        "all_variants_same_top_tokens": all_same_top_tokens,
+        "all_variants_select_correct_ers": bool(selected_tokens)
+        and all(token == "ers" for token in selected_tokens),
+        "whole_pers_ranks": pers_ranks,
+        "whole_pers_never_top": bool(pers_ranks)
+        and all(rank is None or rank > 1 for rank in pers_ranks.values()),
+        "stream_warmup_state_ruled_out_for_isolated_prefix": (
+            path_present
+            and all_same_top_tokens
+            and bool(selected_tokens)
+            and all(token == "ers" for token in selected_tokens)
+            and bool(pers_ranks)
+            and all(rank is None or rank > 1 for rank in pers_ranks.values())
+        ),
+    }
+
+
+def _candidate_logprob(case: dict[str, Any], label: str) -> float | None:
+    candidates = case.get("candidates")
+    if not isinstance(candidates, list):
+        return None
+    for candidate in candidates:
+        if isinstance(candidate, dict) and candidate.get("label") == label:
+            value = candidate.get("first_token_logprob")
+            return value if isinstance(value, int | float) else None
+    return None
+
+
+def _dsv4_prompt_variant_logit_probe_detail(
+    artifact: dict[str, Any],
+    root: Path,
+) -> dict[str, Any]:
+    path_present = _path_present(root, DSV4_PROMPT_VARIANT_LOGIT_PROBE_REL)
+    cases = artifact.get("cases") if isinstance(artifact.get("cases"), list) else []
+    case_rows = [case for case in cases if isinstance(case, dict)]
+    by_name = {
+        str(case.get("name")): case
+        for case in case_rows
+        if case.get("name") is not None
+    }
+    original_list = by_name.get("original_list_fourth_after_TH", {})
+    copy_list = by_name.get("copy_block_list_fourth_after_TH", {})
+    original_camera = by_name.get("original_snippet_camera_after_THREE_dot_P", {})
+    copy_camera = by_name.get("copy_block_snippet_camera_after_THREE_dot_P", {})
+    original_box = by_name.get("original_snippet_box_after_THREE_dot_B", {})
+
+    original_list_corrupt = _candidate_logprob(original_list, "corrupt_IVE")
+    copy_list_corrupt = _candidate_logprob(copy_list, "corrupt_IVE")
+    original_list_top = original_list.get("top") if isinstance(original_list.get("top"), list) else []
+    copy_list_top = copy_list.get("top") if isinstance(copy_list.get("top"), list) else []
+    original_camera_top = (
+        original_camera.get("top") if isinstance(original_camera.get("top"), list) else []
+    )
+    copy_camera_top = (
+        copy_camera.get("top") if isinstance(copy_camera.get("top"), list) else []
+    )
+    original_box_top = original_box.get("top") if isinstance(original_box.get("top"), list) else []
+    original_camera_ers_rank = _rank_of_token(original_camera_top, "ers")
+    copy_camera_ers_rank = _rank_of_token(copy_camera_top, "ers")
+    original_camera_pers_rank = _rank_of_token(original_camera_top, "Pers")
+    copy_camera_pers_rank = _rank_of_token(copy_camera_top, "Pers")
+    original_camera_ers = _candidate_logprob(original_camera, "correct_ers")
+    copy_camera_ers = _candidate_logprob(copy_camera, "correct_ers")
+    original_camera_pers = _candidate_logprob(original_camera, "whole_Pers")
+    copy_camera_pers = _candidate_logprob(copy_camera, "whole_Pers")
+    camera_ers_improves = (
+        isinstance(original_camera_ers, int | float)
+        and isinstance(copy_camera_ers, int | float)
+        and copy_camera_ers > original_camera_ers
+    )
+    camera_pers_reduces = (
+        isinstance(original_camera_pers, int | float)
+        and isinstance(copy_camera_pers, int | float)
+        and copy_camera_pers < original_camera_pers
+    )
+
+    return {
+        "artifact": DSV4_PROMPT_VARIANT_LOGIT_PROBE_REL,
+        "present": path_present,
+        "schema": artifact.get("schema") if path_present else None,
+        "case_count": len(case_rows),
+        "case_names": [
+            str(case.get("name"))
+            for case in case_rows
+            if case.get("name") is not None
+        ],
+        "original_list_correct_REE_rank": _rank_of_token(original_list_top, "REE"),
+        "copy_block_list_correct_REE_rank": _rank_of_token(copy_list_top, "REE"),
+        "original_list_corrupt_IVE_logprob": original_list_corrupt,
+        "copy_block_list_corrupt_IVE_logprob": copy_list_corrupt,
+        "copy_block_reduces_list_corrupt_IVE_logprob": (
+            isinstance(original_list_corrupt, int | float)
+            and isinstance(copy_list_corrupt, int | float)
+            and copy_list_corrupt < original_list_corrupt
+        ),
+        "original_camera_whole_Pers_rank": original_camera_pers_rank,
+        "original_camera_correct_ers_rank": original_camera_ers_rank,
+        "original_camera_correct_ers_logprob": original_camera_ers,
+        "copy_block_camera_correct_ers_logprob": copy_camera_ers,
+        "copy_block_improves_camera_correct_ers_logprob": camera_ers_improves,
+        "original_camera_whole_Pers_logprob": original_camera_pers,
+        "copy_block_camera_whole_Pers_logprob": copy_camera_pers,
+        "copy_block_reduces_camera_whole_Pers_logprob": camera_pers_reduces,
+        "copy_block_camera_correct_ers_rank": copy_camera_ers_rank,
+        "copy_block_camera_whole_Pers_rank": copy_camera_pers_rank,
+        "original_box_whole_Box_rank": _rank_of_token(original_box_top, "Box"),
+        "original_box_correct_ox_rank": _rank_of_token(original_box_top, "ox"),
+        "prompt_wording_changes_identifier_logits": (
+            path_present
+            and camera_ers_improves
+            and camera_pers_reduces
+            and original_camera_pers_rank == 1
+            ),
+    }
+
+
+def _dsv4_reasoning_policy_live_detail(
+    artifact: dict[str, Any],
+    root: Path,
+) -> dict[str, Any]:
+    path_present = _path_present(root, DSV4_REASONING_POLICY_LIVE_REL)
+    cases = artifact.get("cases") if isinstance(artifact.get("cases"), list) else []
+    case_rows = [case for case in cases if isinstance(case, dict)]
+    by_name = {
+        str(case.get("name")): case
+        for case in case_rows
+        if case.get("name") is not None
+    }
+    explicit_off = by_name.get("short_chat_explicit_off", {})
+    one_token_off = by_name.get("one_token_chat_explicit_off", {})
+    requested_on = by_name.get("short_chat_requested_on", {})
+
+    def _visible_no_reasoning(case: dict[str, Any]) -> bool:
+        return (
+            case.get("content_is_null") is False
+            and int(case.get("reasoning_chars") or 0) == 0
+        )
+
+    return {
+        "artifact": DSV4_REASONING_POLICY_LIVE_REL,
+        "present": path_present,
+        "status": artifact.get("status") if path_present else "missing",
+        "case_count": len(case_rows),
+        "case_names": [
+            str(case.get("name"))
+            for case in case_rows
+            if case.get("name") is not None
+        ],
+        "explicit_off_visible_no_reasoning": _visible_no_reasoning(explicit_off),
+        "one_token_off_visible_no_reasoning": _visible_no_reasoning(one_token_off),
+        "requested_on_reasoning_observed": int(
+            requested_on.get("reasoning_chars") or 0
+        )
+        > 0,
+        "requested_on_content_is_null": requested_on.get("content_is_null") is True,
+        "health_after": artifact.get("health_after") if path_present else None,
+    }
+
+
+def _selected_token(top: Any) -> str | None:
+    if not isinstance(top, list) or not top:
+        return None
+    first = top[0]
+    if not isinstance(first, dict):
+        return None
+    token = first.get("token")
+    return str(token) if token is not None else None
+
+
+def _dsv4_batch_generator_logit_divergence_detail(
+    direct_artifact: dict[str, Any],
+    batch_artifact: dict[str, Any],
+    warmup_ablation_artifact: dict[str, Any],
+    root: Path,
+) -> dict[str, Any]:
+    direct_present = _path_present(root, DSV4_CACHE_VS_FULL_LOGIT_ISOLATION_REL)
+    batch_present = _path_present(root, DSV4_BATCH_GENERATOR_LOGIT_TRACE_REL)
+    warmup_ablation_present = _path_present(
+        root, DSV4_BATCH_GENERATOR_WARMUP_ABLATION_REL
+    )
+    checks = (
+        direct_artifact.get("checks")
+        if isinstance(direct_artifact.get("checks"), list)
+        else []
+    )
+    direct_case = next(
+        (
+            check
+            for check in checks
+            if isinstance(check, dict)
+            and check.get("name") == "isolated_after_THREE_dot_P"
+        ),
+        {},
+    )
+    events = (
+        batch_artifact.get("events")
+        if isinstance(batch_artifact.get("events"), list)
+        else []
+    )
+    batch_event = next(
+        (
+            event
+            for event in events
+            if isinstance(event, dict)
+            and event.get("generated_so_far_text") == "THREE.P"
+        ),
+        {},
+    )
+    direct_full_selected = _selected_token(direct_case.get("full_top"))
+    direct_incremental_selected = _selected_token(direct_case.get("incremental_top"))
+    batch_selected = _selected_token(batch_event.get("top"))
+    decoded = str(batch_artifact.get("decoded") or "")
+    warmup_runs = (
+        warmup_ablation_artifact.get("runs")
+        if isinstance(warmup_ablation_artifact.get("runs"), list)
+        else []
+    )
+    exact_warmup_labels = [
+        str(run.get("label"))
+        for run in warmup_runs
+        if isinstance(run, dict)
+        and str(run.get("decoded") or "").startswith("THREE.PerspectiveCamera")
+    ]
+
+    return {
+        "direct_artifact": DSV4_CACHE_VS_FULL_LOGIT_ISOLATION_REL,
+        "batch_artifact": DSV4_BATCH_GENERATOR_LOGIT_TRACE_REL,
+        "warmup_ablation_artifact": DSV4_BATCH_GENERATOR_WARMUP_ABLATION_REL,
+        "direct_artifact_present": direct_present,
+        "batch_artifact_present": batch_present,
+        "warmup_ablation_artifact_present": warmup_ablation_present,
+        "direct_full_THREE_P_selected": direct_full_selected,
+        "direct_incremental_THREE_P_selected": direct_incremental_selected,
+        "batch_THREE_P_selected": batch_selected,
+        "batch_decoded": decoded,
+        "batch_decoded_contains_corrupt_pertive": "PertiveCamera" in decoded,
+        "warmup_ablation_exact_runs": exact_warmup_labels,
+        "batch_generator_intrinsic_failure_not_proven": (
+            warmup_ablation_present and bool(exact_warmup_labels)
+        ),
+        "direct_vs_batch_THREE_P_diverges": (
+            direct_present
+            and batch_present
+            and direct_full_selected == "ers"
+            and direct_incremental_selected == "ers"
+            and batch_selected == "ert"
+        ),
     }
 
 
@@ -1159,12 +3205,34 @@ def _contract_detail(
     checks_ok, required = _contract_checks(payload, required_checks)
     hashes_ok, hash_details = _source_hash_status(root, payload, required_files)
     missing_rows = payload.get("missing_rows") or []
+    family_matrix_required = "generation_defaults_family_matrix_complete" in required_checks
+    family_matrix = payload.get("generation_defaults_family_matrix") or {}
+    missing_family_rows = (
+        [
+            row
+            for row in REQUIRED_GENERATION_DEFAULT_FAMILY_MATRIX
+            if row not in family_matrix
+        ]
+        if family_matrix_required
+        else []
+    )
+    failed_family_rows = (
+        [
+            row
+            for row in REQUIRED_GENERATION_DEFAULT_FAMILY_MATRIX
+            if family_matrix.get(row, {}).get("status") != "pass"
+        ]
+        if family_matrix_required
+        else []
+    )
     missing_markers = payload.get("missing_markers") or []
     failed = payload.get("failed") or []
     ok = (
         checks_ok
         and hashes_ok
         and not missing_rows
+        and not missing_family_rows
+        and not failed_family_rows
         and not missing_markers
         and not failed
     )
@@ -1172,6 +3240,8 @@ def _contract_detail(
         "status": payload.get("status"),
         "failed": failed,
         "missing_rows": missing_rows,
+        "missing_family_rows": missing_family_rows,
+        "failed_family_rows": failed_family_rows,
         "missing_markers": missing_markers,
         "contract_checks": required,
         **hash_details,
@@ -1372,6 +3442,1407 @@ def _qwen_raw_forward_ab_detail(payloads: list[dict[str, Any]]) -> dict[str, Any
     }
 
 
+def _first_result_rails(payload: dict[str, Any]) -> dict[str, Any]:
+    results = payload.get("results")
+    if not isinstance(results, list):
+        return {}
+    for item in results:
+        if not isinstance(item, dict):
+            continue
+        rails = item.get("response_rails")
+        if isinstance(rails, dict):
+            return rails
+    return {}
+
+
+def _gemma4_visible_diag(payload: dict[str, Any]) -> dict[str, Any]:
+    rails = _first_result_rails(payload)
+    return {
+        "status": payload.get("status"),
+        "reason": payload.get("reason"),
+        "request_route": payload.get("request_route"),
+        "max_tokens": payload.get("max_tokens"),
+        "max_thinking_tokens": payload.get("max_thinking_tokens"),
+        "visible_chars": rails.get("visible_chars"),
+        "reasoning_chars": rails.get("reasoning_chars"),
+    }
+
+
+def _gemma4_metadata_budget_unsupported(payload: dict[str, Any]) -> bool:
+    notes = payload.get("review_notes")
+    if not isinstance(notes, dict):
+        return False
+    row_notes = notes.get("Gemma-4-26B-A4B-it-JANG_4M-CRACK")
+    if not isinstance(row_notes, list):
+        return False
+    return "thinking_budget_override_forwarded_but_template_does_not_enforce" in row_notes
+
+
+def _gemma4_visible_content_detail(
+    payload: dict[str, Any],
+    root: Path,
+    responses_nocache_payload: dict[str, Any] | None = None,
+    responses_512_payload: dict[str, Any] | None = None,
+    thinking_off_payload: dict[str, Any] | None = None,
+    chat_nocache_payload: dict[str, Any] | None = None,
+    metadata_payload: dict[str, Any] | None = None,
+    unsupported_budget_payload: dict[str, Any] | None = None,
+) -> tuple[bool, dict[str, Any]]:
+    path_present = _path_present(root, GEMMA4_RESPONSES_VISIBLE_CONTRACT_REL)
+    contract = payload.get("response_contract")
+    if not isinstance(contract, dict):
+        contract = {}
+    results = payload.get("results")
+    if not isinstance(results, list):
+        results = []
+    stage_statuses = [
+        item.get("status")
+        for item in results
+        if isinstance(item, dict) and item.get("status") is not None
+    ]
+    responses_nocache_payload = responses_nocache_payload or {}
+    responses_512_payload = responses_512_payload or {}
+    thinking_off_payload = thinking_off_payload or {}
+    chat_nocache_payload = chat_nocache_payload or {}
+    metadata_payload = metadata_payload or {}
+    unsupported_budget_payload = unsupported_budget_payload or {}
+    primary_visible = _gemma4_visible_diag(payload)
+    unsupported_budget = _gemma4_visible_diag(unsupported_budget_payload)
+    responses_nocache = _gemma4_visible_diag(responses_nocache_payload)
+    responses_512 = _gemma4_visible_diag(responses_512_payload)
+    thinking_off = _gemma4_visible_diag(thinking_off_payload)
+    chat_nocache = _gemma4_visible_diag(chat_nocache_payload)
+    metadata_budget_unsupported = _gemma4_metadata_budget_unsupported(metadata_payload)
+    primary_visible_ok = (
+        payload.get("status") == "pass"
+        and int(primary_visible.get("visible_chars") or 0) > 0
+        and int(primary_visible.get("reasoning_chars") or 0) > 0
+    )
+    cache_bypass_reproduces_missing_visible = (
+        responses_nocache.get("status") == "fail"
+        and int(responses_nocache.get("visible_chars") or 0) == 0
+        and int(responses_nocache.get("reasoning_chars") or 0) > 0
+    )
+    higher_output_cap_restores_visible = (
+        responses_512.get("status") == "pass"
+        and int(responses_512.get("visible_chars") or 0) > 0
+        and int(responses_512.get("reasoning_chars") or 0) > 0
+    )
+    thinking_off_restores_visible = (
+        thinking_off.get("status") == "pass"
+        and int(thinking_off.get("visible_chars") or 0) > 0
+        and int(thinking_off.get("reasoning_chars") or 0) == 0
+    )
+    chat_route_reproduces_missing_visible = (
+        chat_nocache.get("status") == "fail"
+        and int(chat_nocache.get("visible_chars") or 0) == 0
+        and int(chat_nocache.get("reasoning_chars") or 0) > 0
+    )
+    root_cause_summary = None
+    if (
+        cache_bypass_reproduces_missing_visible
+        and higher_output_cap_restores_visible
+        and thinking_off_restores_visible
+        and chat_route_reproduces_missing_visible
+        and metadata_budget_unsupported
+    ):
+        root_cause_summary = (
+            "Gemma4 thinking_budget is forwarded but the local template does not "
+            "consume it; thinking-on can exhaust a low max_tokens cap before "
+            "visible content."
+        )
+    ok = (
+        path_present
+        and payload.get("status") == "pass"
+        and contract.get("expect_visible_content") is True
+        and all(status == "ok" for status in stage_statuses)
+        and primary_visible_ok
+    )
+    return ok, {
+        "artifact": GEMMA4_RESPONSES_VISIBLE_CONTRACT_REL,
+        "artifact_present": path_present,
+        "artifact_status": payload.get("status"),
+        "reason": payload.get("reason"),
+        "row": payload.get("row"),
+        "request_route": payload.get("request_route"),
+        "expect_visible_content": contract.get("expect_visible_content"),
+        "stage_statuses": stage_statuses,
+        "max_thinking_tokens": payload.get("max_thinking_tokens"),
+        "model_path": payload.get("model_path"),
+        "root_cause_summary": root_cause_summary,
+        "cache_bypass_reproduces_missing_visible": cache_bypass_reproduces_missing_visible,
+        "higher_output_cap_restores_visible": higher_output_cap_restores_visible,
+        "thinking_off_restores_visible": thinking_off_restores_visible,
+        "chat_route_reproduces_missing_visible": chat_route_reproduces_missing_visible,
+        "metadata_budget_unsupported": metadata_budget_unsupported,
+        "primary_visible_ok": primary_visible_ok,
+        "diagnostic_artifacts": {
+            "primary_app_visible": primary_visible,
+            "unsupported_budget_contract": unsupported_budget,
+            "responses_128_nocache": responses_nocache,
+            "responses_512_nocache": responses_512,
+            "responses_thinking_off_nocache": thinking_off,
+            "chat_128_nocache": chat_nocache,
+            "local_metadata": {
+                "status": metadata_payload.get("status"),
+                "budget_unsupported": metadata_budget_unsupported,
+            },
+        },
+    }
+
+
+def _find_native_cache_schema(value: Any) -> str | None:
+    if isinstance(value, dict):
+        native = value.get("native_cache")
+        if isinstance(native, dict):
+            schema = native.get("schema") or native.get("cache_type")
+            if isinstance(schema, str):
+                return schema
+        for key in ("body", "health", "after", "before", "health_ready"):
+            found = _find_native_cache_schema(value.get(key))
+            if found:
+                return found
+        for child in value.values():
+            found = _find_native_cache_schema(child)
+            if found:
+                return found
+    elif isinstance(value, list):
+        for child in value:
+            found = _find_native_cache_schema(child)
+            if found:
+                return found
+    return None
+
+
+def _find_native_cache_generic_tq_enabled(value: Any) -> bool | None:
+    if isinstance(value, dict):
+        native = value.get("native_cache")
+        if isinstance(native, dict):
+            generic = native.get("generic_turboquant_kv")
+            if isinstance(generic, dict) and isinstance(generic.get("enabled"), bool):
+                return bool(generic["enabled"])
+        for key in ("body", "health", "after", "before", "health_ready"):
+            found = _find_native_cache_generic_tq_enabled(value.get(key))
+            if found is not None:
+                return found
+        for child in value.values():
+            found = _find_native_cache_generic_tq_enabled(child)
+            if found is not None:
+                return found
+    elif isinstance(value, list):
+        for child in value:
+            found = _find_native_cache_generic_tq_enabled(child)
+            if found is not None:
+                return found
+    return None
+
+
+def _collect_decode_speeds(value: Any) -> list[float]:
+    speeds: list[float] = []
+    if isinstance(value, dict):
+        speed = value.get("speed")
+        if isinstance(speed, dict):
+            decoded = _float_or_none(speed.get("decode_tok_s_wall"))
+            if decoded is not None:
+                speeds.append(decoded)
+        decoded = _float_or_none(value.get("decode_tok_s_wall"))
+        if decoded is not None:
+            speeds.append(decoded)
+        log_tail = value.get("log_tail")
+        if isinstance(log_tail, list):
+            for line in log_tail:
+                if not isinstance(line, str):
+                    continue
+                for match in re.finditer(r"\(([0-9]+(?:\.[0-9]+)?) tok/s\)", line):
+                    speeds.append(float(match.group(1)))
+        for child in value.values():
+            speeds.extend(_collect_decode_speeds(child))
+    elif isinstance(value, list):
+        for child in value:
+            speeds.extend(_collect_decode_speeds(child))
+    return speeds
+
+
+def _collect_structured_decode_speeds(value: Any) -> list[float]:
+    speeds: list[float] = []
+    if isinstance(value, dict):
+        speed = value.get("speed")
+        if isinstance(speed, dict):
+            decoded = _float_or_none(speed.get("decode_tok_s_wall"))
+            if decoded is not None:
+                speeds.append(decoded)
+        decoded = _float_or_none(value.get("decode_tok_s_wall"))
+        if decoded is not None:
+            speeds.append(decoded)
+        for child in value.values():
+            speeds.extend(_collect_structured_decode_speeds(child))
+    elif isinstance(value, list):
+        for child in value:
+            speeds.extend(_collect_structured_decode_speeds(child))
+    return speeds
+
+
+def _collect_internal_generation_tps(value: Any) -> list[float]:
+    speeds: list[float] = []
+    if isinstance(value, dict):
+        batch_generator = value.get("batch_generator")
+        if isinstance(batch_generator, dict):
+            decoded = _float_or_none(batch_generator.get("generation_tps"))
+            if decoded is not None:
+                speeds.append(decoded)
+        decoded = _float_or_none(value.get("generation_tps"))
+        if decoded is not None and "generation_tps" in value:
+            speeds.append(decoded)
+        for child in value.values():
+            speeds.extend(_collect_internal_generation_tps(child))
+    elif isinstance(value, list):
+        for child in value:
+            speeds.extend(_collect_internal_generation_tps(child))
+    return list(dict.fromkeys(speeds))
+
+
+def _batch_generation_counters(value: Any) -> tuple[float | None, float | None]:
+    if not isinstance(value, dict):
+        return None, None
+    after = value.get("after")
+    if isinstance(after, dict):
+        health = after.get("health")
+        if isinstance(health, dict):
+            body = health.get("body")
+            if isinstance(body, dict):
+                scheduler = body.get("scheduler")
+                if isinstance(scheduler, dict):
+                    batch_generator = scheduler.get("batch_generator")
+                    if isinstance(batch_generator, dict):
+                        tokens = _float_or_none(batch_generator.get("generation_tokens"))
+                        seconds = _float_or_none(batch_generator.get("generation_time"))
+                        if tokens is not None and seconds is not None:
+                            return tokens, seconds
+    return None, None
+
+
+def _batch_prompt_seconds(value: Any) -> float | None:
+    if not isinstance(value, dict):
+        return None
+    after = value.get("after")
+    if isinstance(after, dict):
+        health = after.get("health")
+        if isinstance(health, dict):
+            body = health.get("body")
+            if isinstance(body, dict):
+                scheduler = body.get("scheduler")
+                if isinstance(scheduler, dict):
+                    batch_generator = scheduler.get("batch_generator")
+                    if isinstance(batch_generator, dict):
+                        return _float_or_none(batch_generator.get("prompt_time"))
+    return None
+
+
+def _collect_per_request_internal_generation_tps(payload: Any) -> list[float]:
+    if not isinstance(payload, dict):
+        return []
+    results = payload.get("results")
+    if not isinstance(results, list):
+        return []
+    speeds: list[float] = []
+    previous_tokens = 0.0
+    previous_seconds = 0.0
+    for result in results:
+        tokens, seconds = _batch_generation_counters(result)
+        if tokens is None or seconds is None:
+            continue
+        delta_tokens = tokens - previous_tokens
+        delta_seconds = seconds - previous_seconds
+        if delta_tokens > 0 and delta_seconds > 0:
+            speeds.append(round(delta_tokens / delta_seconds, 3))
+        previous_tokens = tokens
+        previous_seconds = seconds
+    return speeds
+
+
+def _collect_wall_vs_generation_time(payload: Any) -> list[dict[str, float]]:
+    if not isinstance(payload, dict):
+        return []
+    results = payload.get("results")
+    if not isinstance(results, list):
+        return []
+    details: list[dict[str, float]] = []
+    previous_tokens = 0.0
+    previous_seconds = 0.0
+    previous_prompt_seconds = 0.0
+    for result in results:
+        if not isinstance(result, dict):
+            continue
+        tokens, seconds = _batch_generation_counters(result)
+        if tokens is None or seconds is None:
+            continue
+        delta_tokens = tokens - previous_tokens
+        delta_seconds = seconds - previous_seconds
+        previous_tokens = tokens
+        previous_seconds = seconds
+        prompt_seconds = _batch_prompt_seconds(result)
+        delta_prompt_seconds = None
+        if prompt_seconds is not None:
+            delta_prompt_seconds = prompt_seconds - previous_prompt_seconds
+            previous_prompt_seconds = prompt_seconds
+        if delta_tokens <= 0 or delta_seconds <= 0:
+            continue
+        speed = result.get("speed")
+        if not isinstance(speed, dict):
+            continue
+        wall_seconds = _float_or_none(speed.get("wall_seconds"))
+        if wall_seconds is None or wall_seconds <= 0:
+            continue
+        wall_decode = _float_or_none(speed.get("decode_tok_s_wall"))
+        internal_tps = delta_tokens / delta_seconds
+        overhead_seconds = max(0.0, wall_seconds - delta_seconds)
+        item = {
+            "completion_tokens": int(delta_tokens),
+            "wall_seconds": round(wall_seconds, 3),
+            "internal_generation_seconds": round(delta_seconds, 3),
+            "overhead_seconds": round(overhead_seconds, 3),
+            "wall_decode_tok_s": round(wall_decode, 3) if wall_decode is not None else 0.0,
+            "internal_generation_tok_s": round(internal_tps, 3),
+        }
+        if delta_prompt_seconds is not None:
+            scheduler_prompt_seconds = max(0.0, delta_prompt_seconds)
+            item["scheduler_prompt_seconds"] = round(scheduler_prompt_seconds, 3)
+            item["residual_overhead_seconds"] = round(
+                max(0.0, overhead_seconds - scheduler_prompt_seconds),
+                3,
+            )
+        details.append(item)
+    return details
+
+
+def _collect_cache_details(value: Any) -> list[str]:
+    details: list[str] = []
+    if isinstance(value, dict):
+        speed = value.get("speed")
+        if isinstance(speed, dict):
+            detail = speed.get("cache_detail")
+            if isinstance(detail, str) and detail:
+                details.append(detail)
+        usage_summary = value.get("usage_summary")
+        if isinstance(usage_summary, dict):
+            detail = usage_summary.get("cache_detail")
+            if isinstance(detail, str) and detail:
+                details.append(detail)
+        usage = value.get("usage")
+        if isinstance(usage, dict):
+            prompt_details = usage.get("prompt_tokens_details") or usage.get(
+                "input_tokens_details"
+            )
+            if isinstance(prompt_details, dict):
+                detail = prompt_details.get("cache_detail")
+                if isinstance(detail, str) and detail:
+                    details.append(detail)
+        for child in value.values():
+            details.extend(_collect_cache_details(child))
+    elif isinstance(value, list):
+        for child in value:
+            details.extend(_collect_cache_details(child))
+    return list(dict.fromkeys(details))
+
+
+def _gemma4_sustained_cachehit_diagnostic(
+    payload: dict[str, Any],
+    root: Path,
+) -> dict[str, Any]:
+    results = payload.get("results") if isinstance(payload.get("results"), list) else []
+    cold_speeds: list[float] = []
+    cachehit_speeds: list[float] = []
+    cachehit_details: list[str] = []
+    cachehit_cached_tokens: list[int] = []
+    for item in results:
+        if not isinstance(item, dict):
+            continue
+        speed = item.get("speed") if isinstance(item.get("speed"), dict) else {}
+        usage = (
+            item.get("usage_summary")
+            if isinstance(item.get("usage_summary"), dict)
+            else {}
+        )
+        decoded = _float_or_none(speed.get("decode_tok_s_wall"))
+        cached_tokens = _float_or_none(
+            speed.get("cached_tokens", usage.get("cached_tokens"))
+        )
+        cache_detail = speed.get("cache_detail") or usage.get("cache_detail")
+        if decoded is None:
+            continue
+        if cached_tokens is not None and cached_tokens > 0:
+            cachehit_speeds.append(decoded)
+            cachehit_cached_tokens.append(int(cached_tokens))
+            if isinstance(cache_detail, str) and cache_detail:
+                cachehit_details.append(cache_detail)
+        else:
+            cold_speeds.append(decoded)
+
+    min_cachehit = min(cachehit_speeds) if cachehit_speeds else None
+    cold = cold_speeds[0] if cold_speeds else None
+    per_request_internal_generation_tps = _collect_per_request_internal_generation_tps(
+        payload
+    )
+    wall_vs_generation_time = _collect_wall_vs_generation_time(payload)
+    return {
+        "artifact": GEMMA4_MIXED_SWA_SUSTAINED_CACHEHIT_DIAGNOSTIC_REL,
+        "artifact_present": _path_present(
+            root, GEMMA4_MIXED_SWA_SUSTAINED_CACHEHIT_DIAGNOSTIC_REL
+        ),
+        "artifact_status": payload.get("status"),
+        "python": payload.get("python"),
+        "native_cache_schema": _find_native_cache_schema(payload),
+        "native_cache_generic_tq_enabled": _find_native_cache_generic_tq_enabled(
+            payload
+        ),
+        "cold_decode_tok_s_wall": cold,
+        "cold_turn_clears_floor": (
+            cold is not None and cold >= GEMMA4_MIXED_SWA_SPEED_FLOOR_TOK_S
+        ),
+        "cachehit_decode_tok_s_wall": cachehit_speeds,
+        "cachehit_cached_tokens": cachehit_cached_tokens,
+        "cachehit_cache_details": list(dict.fromkeys(cachehit_details)),
+        "per_request_internal_generation_tps": per_request_internal_generation_tps,
+        "min_internal_generation_tok_s": (
+            min(per_request_internal_generation_tps)
+            if per_request_internal_generation_tps
+            else None
+        ),
+        "wall_vs_generation_time": wall_vs_generation_time,
+        "max_overhead_seconds": (
+            max(item["overhead_seconds"] for item in wall_vs_generation_time)
+            if wall_vs_generation_time
+            else None
+        ),
+        "min_cachehit_decode_tok_s_wall": min_cachehit,
+        "cachehit_turns_clear_floor": bool(
+            cachehit_speeds
+            and min_cachehit is not None
+            and min_cachehit >= GEMMA4_MIXED_SWA_SPEED_FLOOR_TOK_S
+        ),
+    }
+
+
+def _gemma4_short_nocache_repeat_diagnostic(
+    payload: dict[str, Any],
+    root: Path,
+) -> dict[str, Any]:
+    results = payload.get("results") if isinstance(payload.get("results"), list) else []
+    speeds: list[float] = []
+    completion_tokens: list[int] = []
+    cached_tokens_seen: list[int] = []
+    for item in results:
+        if not isinstance(item, dict):
+            continue
+        speed = item.get("speed") if isinstance(item.get("speed"), dict) else {}
+        usage = (
+            item.get("usage_summary")
+            if isinstance(item.get("usage_summary"), dict)
+            else {}
+        )
+        decoded = _float_or_none(speed.get("decode_tok_s_wall"))
+        cached_tokens = _float_or_none(
+            speed.get("cached_tokens", usage.get("cached_tokens"))
+        )
+        if decoded is None:
+            continue
+        if cached_tokens is not None and cached_tokens > 0:
+            continue
+        speeds.append(decoded)
+        cached_tokens_seen.append(int(cached_tokens or 0))
+        token_count = _float_or_none(usage.get("completion_tokens"))
+        if token_count is not None:
+            completion_tokens.append(int(token_count))
+    minimum = min(speeds) if speeds else None
+    per_request_internal_generation_tps = _collect_per_request_internal_generation_tps(
+        payload
+    )
+    wall_vs_generation_time = _collect_wall_vs_generation_time(payload)
+    return {
+        "artifact": GEMMA4_MIXED_SWA_SHORT_NOCACHE_REPEAT_DIAGNOSTIC_REL,
+        "artifact_present": _path_present(
+            root, GEMMA4_MIXED_SWA_SHORT_NOCACHE_REPEAT_DIAGNOSTIC_REL
+        ),
+        "artifact_status": payload.get("status"),
+        "python": payload.get("python"),
+        "decode_tok_s_wall": speeds,
+        "completion_tokens": completion_tokens,
+        "cached_tokens": cached_tokens_seen,
+        "per_request_internal_generation_tps": per_request_internal_generation_tps,
+        "min_internal_generation_tok_s": (
+            min(per_request_internal_generation_tps)
+            if per_request_internal_generation_tps
+            else None
+        ),
+        "wall_vs_generation_time": wall_vs_generation_time,
+        "max_overhead_seconds": (
+            max(item["overhead_seconds"] for item in wall_vs_generation_time)
+            if wall_vs_generation_time
+            else None
+        ),
+        "min_decode_tok_s_wall": minimum,
+        "turns_clear_floor": bool(
+            speeds
+            and minimum is not None
+            and minimum >= GEMMA4_MIXED_SWA_SPEED_FLOOR_TOK_S
+        ),
+    }
+
+
+def _gemma4_short_nocache_scheduler_trace_diagnostic(
+    payload: dict[str, Any],
+    root: Path,
+    artifact_rel: str = GEMMA4_MIXED_SWA_SHORT_NOCACHE_SCHEDULER_TRACE_REL,
+) -> dict[str, Any]:
+    results = payload.get("results") if isinstance(payload.get("results"), list) else []
+    speeds: list[float] = []
+    completion_tokens: list[int] = []
+    cached_tokens_seen: list[int] = []
+    for item in results:
+        if not isinstance(item, dict):
+            continue
+        speed = item.get("speed") if isinstance(item.get("speed"), dict) else {}
+        usage = (
+            item.get("usage_summary")
+            if isinstance(item.get("usage_summary"), dict)
+            else {}
+        )
+        decoded = _float_or_none(speed.get("decode_tok_s_wall"))
+        cached_tokens = _float_or_none(
+            speed.get("cached_tokens", usage.get("cached_tokens"))
+        )
+        if decoded is None or (cached_tokens is not None and cached_tokens > 0):
+            continue
+        speeds.append(decoded)
+        cached_tokens_seen.append(int(cached_tokens or 0))
+        token_count = _float_or_none(usage.get("completion_tokens"))
+        if token_count is not None:
+            completion_tokens.append(int(token_count))
+
+    log_tail = payload.get("log_tail") if isinstance(payload.get("log_tail"), list) else []
+    prefill_total_ms: list[float] = []
+    scheduler_batch_next_ms: list[float] = []
+    scheduler_process_cleanup_ms: list[float] = []
+    scheduler_cleanup_finished_ms: list[float] = []
+    decode_next_last_total_ms: list[float] = []
+    decode_next_last_step_ms: list[float] = []
+    decode_next_last_async_ms: list[float] = []
+    decode_next_last_materialize_ms: list[float] = []
+    for line_obj in log_tail:
+        line = str(line_obj)
+        if "VMLINUX_MLLM_PREFILL_TRACE" in line:
+            match = re.search(r"\btotal_ms=([0-9.]+)", line)
+            if match:
+                prefill_total_ms.append(round(float(match.group(1)), 3))
+        if "VMLINUX_MLLM_SCHEDULER_TRACE" in line:
+            for key, target in (
+                ("batch_next_ms", scheduler_batch_next_ms),
+                ("process_cleanup_ms", scheduler_process_cleanup_ms),
+                ("cleanup_finished_ms", scheduler_cleanup_finished_ms),
+            ):
+                match = re.search(rf"\b{key}=([0-9.]+)", line)
+                if match:
+                    target.append(round(float(match.group(1)), 3))
+        if "VMLINUX_DECODE_TRACE_NEXT" in line:
+            for key, target in (
+                ("last_total_ms", decode_next_last_total_ms),
+                ("last_step_ms", decode_next_last_step_ms),
+                ("last_async_ms", decode_next_last_async_ms),
+                ("last_materialize_ms", decode_next_last_materialize_ms),
+            ):
+                match = re.search(rf"\b{key}=([0-9.]+)", line)
+                if match:
+                    target.append(round(float(match.group(1)), 3))
+
+    max_async_ms = (
+        max(decode_next_last_async_ms) if decode_next_last_async_ms else None
+    )
+    max_total_ms = (
+        max(decode_next_last_total_ms) if decode_next_last_total_ms else None
+    )
+    async_decode_wait_dominates = bool(
+        max_async_ms is not None
+        and max_total_ms is not None
+        and max_total_ms > 0
+        and (max_async_ms / max_total_ms) >= 0.5
+    )
+    return {
+        "artifact": artifact_rel,
+        "artifact_present": _path_present(root, artifact_rel),
+        "artifact_status": payload.get("status"),
+        "python": payload.get("python"),
+        "decode_tok_s_wall": speeds,
+        "completion_tokens": completion_tokens,
+        "cached_tokens": cached_tokens_seen,
+        "min_decode_tok_s_wall": min(speeds) if speeds else None,
+        "turns_clear_floor": bool(
+            speeds
+            and min(speeds) >= GEMMA4_MIXED_SWA_SPEED_FLOOR_TOK_S
+        ),
+        "prefill_total_ms": prefill_total_ms,
+        "scheduler_batch_next_ms": scheduler_batch_next_ms,
+        "scheduler_process_cleanup_ms": scheduler_process_cleanup_ms,
+        "scheduler_cleanup_finished_ms": scheduler_cleanup_finished_ms,
+        "decode_next_last_total_ms": decode_next_last_total_ms,
+        "decode_next_last_step_ms": decode_next_last_step_ms,
+        "decode_next_last_async_ms": decode_next_last_async_ms,
+        "decode_next_last_materialize_ms": decode_next_last_materialize_ms,
+        "max_decode_next_last_async_ms": max_async_ms,
+        "async_decode_wait_dominates": async_decode_wait_dominates,
+    }
+
+
+def _gemma4_short_nocache_streaming_diagnostic(
+    payload: dict[str, Any],
+    root: Path,
+) -> dict[str, Any]:
+    results = payload.get("results") if isinstance(payload.get("results"), list) else []
+    wall_speeds: list[float] = []
+    stream_speeds: list[float] = []
+    ttft_seconds: list[float] = []
+    post_first_token_seconds: list[float] = []
+    cached_tokens_seen: list[int] = []
+    completion_tokens_seen: list[int] = []
+    for item in results:
+        if not isinstance(item, dict):
+            continue
+        speed = item.get("speed") if isinstance(item.get("speed"), dict) else {}
+        stream_speed = (
+            item.get("stream_speed")
+            if isinstance(item.get("stream_speed"), dict)
+            else {}
+        )
+        usage = (
+            item.get("usage_summary")
+            if isinstance(item.get("usage_summary"), dict)
+            else {}
+        )
+        cached_tokens = _float_or_none(
+            stream_speed.get(
+                "cached_tokens",
+                speed.get("cached_tokens", usage.get("cached_tokens")),
+            )
+        )
+        if cached_tokens is not None and cached_tokens > 0:
+            continue
+        completion_tokens = _float_or_none(
+            stream_speed.get("completion_tokens", usage.get("completion_tokens"))
+        )
+        wall = _float_or_none(speed.get("decode_tok_s_wall"))
+        stream = _float_or_none(stream_speed.get("decode_tok_s_stream"))
+        ttft = _float_or_none(stream_speed.get("ttft_seconds"))
+        post_first = _float_or_none(stream_speed.get("post_first_token_seconds"))
+        if wall is not None:
+            wall_speeds.append(wall)
+        if stream is not None:
+            stream_speeds.append(stream)
+        if ttft is not None:
+            ttft_seconds.append(ttft)
+        if post_first is not None:
+            post_first_token_seconds.append(post_first)
+        cached_tokens_seen.append(int(cached_tokens or 0))
+        if completion_tokens is not None:
+            completion_tokens_seen.append(int(completion_tokens))
+    min_wall = min(wall_speeds) if wall_speeds else None
+    min_stream = min(stream_speeds) if stream_speeds else None
+    min_completion_tokens = (
+        min(completion_tokens_seen) if completion_tokens_seen else None
+    )
+    installed_app_python = "/Applications/vMLX.app/" in str(payload.get("python") or "")
+    all_uncached = bool(cached_tokens_seen) and all(value == 0 for value in cached_tokens_seen)
+    sustained_completion = bool(
+        len(completion_tokens_seen) >= GEMMA4_MIXED_SWA_STREAMING_MIN_TURNS
+        and min_completion_tokens is not None
+        and min_completion_tokens >= GEMMA4_MIXED_SWA_STREAMING_MIN_COMPLETION_TOKENS
+    )
+    return {
+        "artifact": GEMMA4_MIXED_SWA_SHORT_NOCACHE_STREAMING_REL,
+        "artifact_present": _path_present(
+            root, GEMMA4_MIXED_SWA_SHORT_NOCACHE_STREAMING_REL
+        ),
+        "artifact_status": payload.get("status"),
+        "python": payload.get("python"),
+        "request_route": payload.get("request_route"),
+        "installed_app_python": installed_app_python,
+        "chat_route": payload.get("request_route") == "chat",
+        "decode_tok_s_wall": wall_speeds,
+        "decode_tok_s_stream": stream_speeds,
+        "ttft_seconds": ttft_seconds,
+        "post_first_token_seconds": post_first_token_seconds,
+        "cached_tokens": cached_tokens_seen,
+        "completion_tokens": completion_tokens_seen,
+        "all_uncached": all_uncached,
+        "min_completion_tokens": min_completion_tokens,
+        "min_required_completion_tokens": (
+            GEMMA4_MIXED_SWA_STREAMING_MIN_COMPLETION_TOKENS
+        ),
+        "min_required_turns": GEMMA4_MIXED_SWA_STREAMING_MIN_TURNS,
+        "sustained_completion": sustained_completion,
+        "min_decode_tok_s_wall": min_wall,
+        "min_decode_tok_s_stream": min_stream,
+        "wall_turns_clear_floor": bool(
+            wall_speeds
+            and min_wall is not None
+            and min_wall >= GEMMA4_MIXED_SWA_SPEED_FLOOR_TOK_S
+        ),
+        "stream_turns_clear_floor": bool(
+            stream_speeds
+            and min_stream is not None
+            and min_stream >= GEMMA4_MIXED_SWA_SPEED_FLOOR_TOK_S
+            and sustained_completion
+        ),
+    }
+
+
+def _gemma4_mixed_swa_speed_floor_detail(
+    payloads: list[tuple[str, dict[str, Any]]],
+    root: Path,
+    sustained_cachehit_payload: dict[str, Any] | None = None,
+    short_nocache_repeat_payload: dict[str, Any] | None = None,
+    short_nocache_scheduler_trace_payload: dict[str, Any] | None = None,
+    short_nocache_sync_eval_ab_payload: dict[str, Any] | None = None,
+    short_nocache_streaming_payload: dict[str, Any] | None = None,
+) -> tuple[bool, dict[str, Any]]:
+    artifact_details: list[dict[str, Any]] = []
+    all_speeds: list[float] = []
+    all_structured_speeds: list[float] = []
+    for rel, payload in payloads:
+        present = _path_present(root, rel)
+        speeds = _collect_decode_speeds(payload)
+        structured_speeds = _collect_structured_decode_speeds(payload)
+        internal_generation_tps = _collect_internal_generation_tps(payload)
+        per_request_internal_generation_tps = (
+            _collect_per_request_internal_generation_tps(payload)
+        )
+        wall_vs_generation_time = _collect_wall_vs_generation_time(payload)
+        cache_details = _collect_cache_details(payload)
+        all_speeds.extend(speeds)
+        all_structured_speeds.extend(structured_speeds)
+        schema = _find_native_cache_schema(payload)
+        generic_tq_enabled = _find_native_cache_generic_tq_enabled(payload)
+        mixed_swa_runtime_contract = (
+            schema == "mixed_swa_kv_v1" and generic_tq_enabled is not True
+        )
+        min_decode_tok_s = min(speeds) if speeds else None
+        min_internal_generation_tok_s = (
+            min(per_request_internal_generation_tps)
+            if per_request_internal_generation_tps
+            else None
+        )
+        clears_speed_floor = bool(
+            speeds and min_decode_tok_s >= GEMMA4_MIXED_SWA_SPEED_FLOOR_TOK_S
+        )
+        clears_internal_generation_floor = bool(
+            per_request_internal_generation_tps
+            and min_internal_generation_tok_s >= GEMMA4_MIXED_SWA_SPEED_FLOOR_TOK_S
+        )
+        artifact_details.append(
+            {
+                "artifact": rel,
+                "artifact_present": present,
+                "artifact_status": payload.get("status"),
+                "row": payload.get("row"),
+                "request_route": payload.get("request_route"),
+                "native_cache_schema": schema,
+                "native_cache_generic_tq_enabled": generic_tq_enabled,
+                "mixed_swa_runtime_contract": mixed_swa_runtime_contract,
+                "cache_details": cache_details,
+                "decode_tok_s_wall": speeds,
+                "structured_decode_tok_s_wall": structured_speeds,
+                "internal_generation_tps": internal_generation_tps,
+                "per_request_internal_generation_tps": per_request_internal_generation_tps,
+                "wall_vs_generation_time": wall_vs_generation_time,
+                "max_overhead_seconds": (
+                    max(
+                        item["overhead_seconds"]
+                        for item in wall_vs_generation_time
+                    )
+                    if wall_vs_generation_time
+                    else None
+                ),
+                "min_decode_tok_s": min_decode_tok_s,
+                "min_internal_generation_tok_s": min_internal_generation_tok_s,
+                "clears_speed_floor": clears_speed_floor,
+                "clears_internal_generation_floor": clears_internal_generation_floor,
+                "has_structured_speed": bool(structured_speeds),
+            }
+        )
+    all_required_artifacts_present = all(
+        item["artifact_present"] for item in artifact_details
+    )
+    all_required_artifacts_pass = all(
+        item["artifact_status"] == "pass" for item in artifact_details
+    )
+    all_required_artifacts_mixed_swa = all(
+        item["mixed_swa_runtime_contract"]
+        for item in artifact_details
+    )
+    all_decode_speeds_clear_floor = all(
+        bool(item["decode_tok_s_wall"]) and item["clears_speed_floor"]
+        for item in artifact_details
+    )
+    all_required_artifacts_have_structured_speed = all(
+        item["has_structured_speed"] for item in artifact_details
+    )
+    all_internal_generation_speeds_clear_floor = all(
+        bool(item["internal_generation_tps"])
+        and item["clears_internal_generation_floor"]
+        for item in artifact_details
+    )
+    sustained_cachehit_diagnostic = _gemma4_sustained_cachehit_diagnostic(
+        sustained_cachehit_payload or {},
+        root,
+    )
+    sustained_cachehit_blocks_clearance = bool(
+        sustained_cachehit_diagnostic["artifact_present"]
+        and sustained_cachehit_diagnostic["artifact_status"] == "pass"
+        and (
+            sustained_cachehit_diagnostic["cold_turn_clears_floor"] is False
+            or sustained_cachehit_diagnostic["cachehit_turns_clear_floor"] is False
+        )
+    )
+    short_nocache_repeat_diagnostic = _gemma4_short_nocache_repeat_diagnostic(
+        short_nocache_repeat_payload or {},
+        root,
+    )
+    short_nocache_repeat_blocks_clearance = bool(
+        short_nocache_repeat_diagnostic["artifact_present"]
+        and short_nocache_repeat_diagnostic["artifact_status"] == "pass"
+        and short_nocache_repeat_diagnostic["turns_clear_floor"] is False
+    )
+    short_nocache_scheduler_trace = (
+        _gemma4_short_nocache_scheduler_trace_diagnostic(
+            short_nocache_scheduler_trace_payload or {},
+            root,
+        )
+    )
+    short_nocache_sync_eval_ab = (
+        _gemma4_short_nocache_scheduler_trace_diagnostic(
+            short_nocache_sync_eval_ab_payload or {},
+            root,
+            GEMMA4_MIXED_SWA_SHORT_NOCACHE_SYNC_EVAL_AB_REL,
+        )
+    )
+    short_nocache_streaming_diagnostic = (
+        _gemma4_short_nocache_streaming_diagnostic(
+            short_nocache_streaming_payload or {},
+            root,
+        )
+    )
+    legacy_wall_speed_ok = (
+        all_required_artifacts_present
+        and all_required_artifacts_pass
+        and all_required_artifacts_mixed_swa
+        and all_decode_speeds_clear_floor
+        and all_internal_generation_speeds_clear_floor
+        and all_required_artifacts_have_structured_speed
+        and not sustained_cachehit_blocks_clearance
+        and not short_nocache_repeat_blocks_clearance
+    )
+    app_streaming_speed_floor_clears = bool(
+        short_nocache_streaming_diagnostic["artifact_present"]
+        and short_nocache_streaming_diagnostic["artifact_status"] == "pass"
+        and short_nocache_streaming_diagnostic["installed_app_python"] is True
+        and short_nocache_streaming_diagnostic["chat_route"] is True
+        and short_nocache_streaming_diagnostic["all_uncached"] is True
+        and short_nocache_streaming_diagnostic["stream_turns_clear_floor"] is True
+    )
+    ok = (
+        all_required_artifacts_present
+        and all_required_artifacts_pass
+        and all_required_artifacts_mixed_swa
+        and all_required_artifacts_have_structured_speed
+        and (legacy_wall_speed_ok or app_streaming_speed_floor_clears)
+    )
+    failed_speed_floor_artifacts: list[dict[str, Any]] = []
+    for item in artifact_details:
+        failed_metrics: list[str] = []
+        if not item["clears_speed_floor"]:
+            failed_metrics.append("wall_decode")
+        if item["per_request_internal_generation_tps"] and not item[
+            "clears_internal_generation_floor"
+        ]:
+            failed_metrics.append("internal_generation")
+        if failed_metrics:
+            failed_speed_floor_artifacts.append(
+                {
+                    "artifact": item["artifact"],
+                    "min_decode_tok_s": item["min_decode_tok_s"],
+                    "min_internal_generation_tok_s": item[
+                        "min_internal_generation_tok_s"
+                    ],
+                    "failed_metrics": failed_metrics,
+                }
+            )
+    return ok, {
+        "speed_floor_tok_s": GEMMA4_MIXED_SWA_SPEED_FLOOR_TOK_S,
+        "artifacts": artifact_details,
+        "sustained_cachehit_diagnostic": sustained_cachehit_diagnostic,
+        "sustained_cachehit_blocks_clearance": sustained_cachehit_blocks_clearance,
+        "short_nocache_repeat_diagnostic": short_nocache_repeat_diagnostic,
+        "short_nocache_repeat_blocks_clearance": short_nocache_repeat_blocks_clearance,
+        "short_nocache_scheduler_trace": short_nocache_scheduler_trace,
+        "short_nocache_sync_eval_ab": short_nocache_sync_eval_ab,
+        "short_nocache_streaming_diagnostic": short_nocache_streaming_diagnostic,
+        "legacy_wall_speed_ok": legacy_wall_speed_ok,
+        "app_streaming_speed_floor_clears": app_streaming_speed_floor_clears,
+        "all_required_artifacts_present": all_required_artifacts_present,
+        "all_required_artifacts_pass": all_required_artifacts_pass,
+        "all_required_artifacts_mixed_swa": all_required_artifacts_mixed_swa,
+        "all_decode_speeds_clear_floor": all_decode_speeds_clear_floor,
+        "all_internal_generation_speeds_clear_floor": all_internal_generation_speeds_clear_floor,
+        "all_required_artifacts_have_structured_speed": all_required_artifacts_have_structured_speed,
+        "failed_speed_floor_artifacts": failed_speed_floor_artifacts,
+        "max_wall_generation_overhead_seconds": (
+            max(
+                item["max_overhead_seconds"]
+                for item in artifact_details
+                if item["max_overhead_seconds"] is not None
+            )
+            if any(
+                item["max_overhead_seconds"] is not None
+                for item in artifact_details
+            )
+            else None
+        ),
+        "min_decode_tok_s": min(all_speeds) if all_speeds else None,
+        "max_decode_tok_s": max(all_speeds) if all_speeds else None,
+        "min_structured_decode_tok_s": (
+            min(all_structured_speeds) if all_structured_speeds else None
+        ),
+    }
+
+
+def _smoke_family_key(row: dict[str, Any]) -> str | None:
+    name = str(row.get("name") or "").lower()
+    model_type = str(row.get("model_type") or "").lower()
+    path = str(row.get("path") or "").lower()
+    blob = " ".join((name, model_type, path))
+    if "deepseek-v4" in blob or "deepseek_v4" in blob or "dsv4" in blob:
+        return "dsv4"
+    if "gemma" in blob:
+        return "gemma4"
+    if "hy3" in blob or "hy_v3" in blob:
+        return "hy3"
+    if "ling" in blob or "bailing" in blob:
+        return "ling_bailing"
+    if "minimax" in blob:
+        return "minimax"
+    if "mimo" in blob or model_type == "mimo_v2":
+        return "mimo_v2"
+    if "nemotron" in blob:
+        return "nemotron"
+    if "qwen3.6" in blob or "qwen3_5" in blob or "qwen36" in blob:
+        return "qwen36"
+    if "zaya1-vl" in blob or model_type == "zaya1_vl":
+        return "zaya_vl"
+    if "zaya" in blob:
+        return "zaya_text"
+    return None
+
+
+def _effective_smoke_supports_video(result: dict[str, Any]) -> bool:
+    capabilities = result.get("capabilities")
+    if isinstance(capabilities, dict):
+        body = capabilities.get("body")
+        if isinstance(body, dict):
+            modalities = body.get("modalities")
+            if isinstance(modalities, list):
+                return any(str(item).lower() == "video" for item in modalities)
+
+    row = result.get("row")
+    return isinstance(row, dict) and row.get("supports_video") is True
+
+
+SMOKE_REQUIRED_REQUEST_LABELS_BY_FAMILY = {
+    "dsv4": ("reasoning_on",),
+    "gemma4": ("reasoning_on",),
+    "hy3": ("reasoning_on",),
+    "minimax": ("reasoning_on",),
+    "mimo_v2": ("reasoning_on",),
+    "qwen36": ("reasoning_on",),
+}
+SMOKE_REQUIRED_CACHE_HIT_FAMILIES = set(ALL_LOCAL_MODEL_SMOKE_REQUIRED_FAMILIES)
+SMOKE_UNEXPECTED_CJK_RE = re.compile(
+    r"[\u1100-\u11ff\u3040-\u309f\u30a0-\u30ff\u3130-\u318f"
+    r"\u3400-\u4dbf\u4e00-\u9fff\ua960-\ua97f\uac00-\ud7af"
+    r"\ud7b0-\ud7ff\uf900-\ufaff\uff66-\uff9f"
+    r"\U00020000-\U0002a6df\U0002a700-\U0002b73f"
+    r"\U0002b740-\U0002b81f\U0002b820-\U0002ceaf"
+    r"\U0002ceb0-\U0002ebef\U0002f800-\U0002fa1f"
+    r"\U00030000-\U0003134f]"
+)
+SMOKE_MAX_REASONING_ON_CHARS = 4096
+
+
+def _smoke_semantic_failures_from_request(request: dict[str, Any]) -> list[dict[str, Any]]:
+    label = str(request.get("label") or "unknown")
+    content = str(request.get("content") or "")
+    failures: list[dict[str, Any]] = []
+    cjk_chars = len(SMOKE_UNEXPECTED_CJK_RE.findall(content))
+    if cjk_chars:
+        failures.append(
+            {
+                "label": label,
+                "reason": "unexpected_cjk_visible_text",
+                "cjk_chars": cjk_chars,
+            }
+        )
+    if label == "reasoning_on":
+        try:
+            reasoning_chars = int(request.get("reasoning_chars") or 0)
+        except (TypeError, ValueError):
+            reasoning_chars = 0
+        if reasoning_chars > SMOKE_MAX_REASONING_ON_CHARS:
+            failures.append(
+                {
+                    "label": label,
+                    "reason": "reasoning_loop_too_long",
+                    "reasoning_chars": reasoning_chars,
+                    "max_reasoning_chars": SMOKE_MAX_REASONING_ON_CHARS,
+                }
+            )
+    return failures
+
+
+def _all_local_model_smoke_detail(
+    payloads: list[tuple[str, dict[str, Any]]],
+    root: Path,
+    diagnostics: dict[str, dict[str, Any]] | None = None,
+) -> tuple[bool, dict[str, Any]]:
+    diagnostics = diagnostics or {}
+    artifact_details: list[dict[str, Any]] = []
+    covered: set[str] = set()
+    for rel, payload in payloads:
+        present = _path_present(root, rel)
+        results = payload.get("results")
+        if not isinstance(results, list):
+            results = []
+        statuses = [
+            str(item.get("status"))
+            for item in results
+            if isinstance(item, dict) and item.get("status") is not None
+        ]
+        validation_failures: list[dict[str, Any]] = []
+        labels: list[str] = []
+        cache_hit_observed = False
+        family_keys: set[str] = set()
+        required_labels_by_family: dict[str, set[str]] = {}
+        for item in results:
+            if not isinstance(item, dict):
+                continue
+            row = item.get("row")
+            if isinstance(row, dict):
+                key = _smoke_family_key(row)
+                if key:
+                    family_keys.add(key)
+                    required = required_labels_by_family.setdefault(
+                        key,
+                        set(SMOKE_REQUIRED_REQUEST_LABELS_BY_FAMILY.get(key, ())),
+                    )
+                    if _effective_smoke_supports_video(item):
+                        required.update(("text_no_media_after_video", "vl_blue_video"))
+            for request in item.get("requests") or []:
+                if not isinstance(request, dict):
+                    continue
+                label = request.get("label")
+                if isinstance(label, str):
+                    labels.append(label)
+                failures = request.get("validation_failures")
+                if isinstance(failures, list):
+                    validation_failures.extend(
+                        failure for failure in failures if isinstance(failure, dict)
+                    )
+                for failure in _smoke_semantic_failures_from_request(request):
+                    if failure not in validation_failures:
+                        validation_failures.append(failure)
+                cache_summary = request.get("cache_summary")
+                if isinstance(cache_summary, dict) and cache_summary.get("has_cache_hit") is True:
+                    cache_hit_observed = True
+        missing_required_labels = sorted(
+            {
+                label
+                for family, required_labels in required_labels_by_family.items()
+                for label in required_labels
+                if label not in labels
+            }
+        )
+        missing_cache_hit_family_keys = sorted(
+            family
+            for family in family_keys
+            if family in SMOKE_REQUIRED_CACHE_HIT_FAMILIES and not cache_hit_observed
+        )
+        artifact_pass = (
+            present
+            and payload.get("completed") == payload.get("row_count")
+            and statuses
+            and all(status == "pass" for status in statuses)
+            and not validation_failures
+            and not missing_required_labels
+            and not missing_cache_hit_family_keys
+        )
+        if artifact_pass:
+            covered.update(family_keys)
+        detail = {
+            "artifact": rel,
+            "artifact_present": present,
+            "status": "pass" if artifact_pass else payload.get("status") or "open",
+            "completed": payload.get("completed"),
+            "row_count": payload.get("row_count"),
+            "family_keys": sorted(family_keys),
+            "request_labels": sorted(set(labels)),
+            "missing_required_labels": missing_required_labels,
+            "missing_cache_hit_family_keys": missing_cache_hit_family_keys,
+            "cache_hit_observed": cache_hit_observed,
+            "validation_failures": validation_failures,
+        }
+        if rel in diagnostics:
+            detail["diagnostics"] = diagnostics[rel]
+        artifact_details.append(detail)
+    missing = [
+        family
+        for family in ALL_LOCAL_MODEL_SMOKE_REQUIRED_FAMILIES
+        if family not in covered
+    ]
+    missing_cache_hit = sorted(
+        {
+            family
+            for item in artifact_details
+            for family in item["missing_cache_hit_family_keys"]
+        }
+    )
+    non_mimo_missing = [family for family in missing if family != "mimo_v2"]
+    non_mimo_not_pass = [
+        item["artifact"]
+        for item in artifact_details
+        if any(family != "mimo_v2" for family in item["family_keys"])
+        and item["status"] != "pass"
+    ]
+    not_pass_required_family_artifacts: dict[str, list[str]] = {}
+    for item in artifact_details:
+        if item["status"] == "pass":
+            continue
+        artifact = str(item["artifact"])
+        for family in item["family_keys"]:
+            if family in ALL_LOCAL_MODEL_SMOKE_REQUIRED_FAMILIES:
+                not_pass_required_family_artifacts.setdefault(family, []).append(artifact)
+    expected_artifact_by_family: dict[str, list[str]] = {}
+    for item in artifact_details:
+        artifact = str(item["artifact"])
+        for family in item["family_keys"]:
+            if family in ALL_LOCAL_MODEL_SMOKE_REQUIRED_FAMILIES:
+                expected_artifact_by_family.setdefault(family, []).append(artifact)
+    ok = not missing and all(item["status"] == "pass" for item in artifact_details)
+    only_mimo_open = (
+        not ok
+        and not non_mimo_missing
+        and not non_mimo_not_pass
+        and set(missing).issubset({"mimo_v2"})
+        and set(not_pass_required_family_artifacts).issubset({"mimo_v2"})
+    )
+    release_boundary = (
+        "global_matrix_all_families_pass"
+        if ok
+        else (
+            "non_mimo_live_smoke_clear_mimo_v2_deferred"
+            if only_mimo_open
+            else "global_matrix_requires_all_families"
+        )
+    )
+    return ok, {
+        "required_family_keys": list(ALL_LOCAL_MODEL_SMOKE_REQUIRED_FAMILIES),
+        "required_cache_hit_family_keys": sorted(SMOKE_REQUIRED_CACHE_HIT_FAMILIES),
+        "covered_family_keys": sorted(covered),
+        "missing_required_family_keys": missing,
+        "missing_cache_hit_family_keys": missing_cache_hit,
+        "non_mimo_status": (
+            "pass" if not non_mimo_missing and not non_mimo_not_pass else "open"
+        ),
+        "non_mimo_missing_required_family_keys": non_mimo_missing,
+        "non_mimo_not_pass_artifacts": non_mimo_not_pass,
+        "not_pass_required_family_artifacts": {
+            family: sorted(set(artifacts))
+            for family, artifacts in sorted(
+                not_pass_required_family_artifacts.items()
+            )
+        },
+        "blocking_required_family_artifacts": {
+            family: sorted(
+                set(
+                    expected_artifact_by_family.get(family)
+                    or ALL_LOCAL_MODEL_SMOKE_ARTIFACTS_BY_FAMILY.get(family, [])
+                )
+            )
+            for family in missing
+        },
+        "release_boundary": release_boundary,
+        "mimo_v2_deferred": only_mimo_open,
+        "artifacts": artifact_details,
+    }
+
+
+def _zaya_vl_jangtq4_diagnostics(
+    root: Path,
+    external_ack_probe: dict[str, Any],
+    rendered_prompt_compare: dict[str, Any],
+) -> dict[str, Any]:
+    ack_results = {
+        str(item.get("label")): item
+        for item in external_ack_probe.get("results") or []
+        if isinstance(item, dict) and item.get("label")
+    }
+    rendered_rows = {
+        str(item.get("name")): item
+        for item in rendered_prompt_compare.get("rows") or []
+        if isinstance(item, dict) and item.get("name")
+    }
+
+    def _rendered_detail(name: str) -> dict[str, Any]:
+        row = rendered_rows.get(name) or {}
+        rendered = row.get("rendered")
+        return {
+            "rendered_head": rendered[:160] if isinstance(rendered, str) else None,
+            "token_count": row.get("token_count"),
+        }
+
+    return {
+        "external_ack_probe": {
+            "artifact_present": _path_present(root, ZAYA_VL_JANGTQ4_ACK_DIAGNOSTIC_REL),
+            "short_exact_ack_content": (ack_results.get("short_exact_ack") or {}).get("content"),
+            "json_ack_content": (ack_results.get("json_ack") or {}).get("content"),
+            "system_cache_repeat_1_content": (
+                ack_results.get("system_cache_repeat_1") or {}
+            ).get("content"),
+            "system_cache_repeat_2_content": (
+                ack_results.get("system_cache_repeat_2") or {}
+            ).get("content"),
+            "system_cache_repeat_2_usage": (
+                ack_results.get("system_cache_repeat_2") or {}
+            ).get("usage"),
+            "user_strong_cache_repeat_2_content": (
+                ack_results.get("user_strong_cache_repeat_2") or {}
+            ).get("content"),
+        },
+        "rendered_prompt_compare": {
+            "artifact_present": _path_present(root, ZAYA_VL_JANGTQ4_RENDERED_PROMPT_COMPARE_REL),
+            "zaya_vl_jangtq4": _rendered_detail("zaya_vl_jangtq4"),
+            "zaya_text_mxfp4": _rendered_detail("zaya_text_mxfp4"),
+        },
+    }
+
+
+def _nemotron_omni_no_media_diagnostics(
+    root: Path,
+    carryover_probe: dict[str, Any],
+    prompt_variants_probe: dict[str, Any],
+    system_prompt_probe: dict[str, Any],
+    system_negative_probe: dict[str, Any],
+) -> dict[str, Any]:
+    results = {
+        str(item.get("label")): item
+        for item in carryover_probe.get("results") or []
+        if isinstance(item, dict) and item.get("label")
+    }
+    variant_results = {
+        str(item.get("label")): item
+        for item in prompt_variants_probe.get("results") or []
+        if isinstance(item, dict) and item.get("label")
+    }
+    system_results = {
+        str(item.get("label")): item
+        for item in system_prompt_probe.get("results") or []
+        if isinstance(item, dict) and item.get("label")
+    }
+    system_negative_results = {
+        str(item.get("label")): item
+        for item in system_negative_probe.get("variants") or []
+        if isinstance(item, dict) and item.get("label")
+    }
+
+    def _content(label: str) -> str | None:
+        value = (results.get(label) or {}).get("content")
+        return value if isinstance(value, str) else None
+
+    def _variant_content(label: str) -> str | None:
+        value = (variant_results.get(label) or {}).get("content")
+        return value if isinstance(value, str) else None
+
+    def _system_content(label: str) -> str | None:
+        value = (system_results.get(label) or {}).get("content")
+        return value if isinstance(value, str) else None
+
+    def _system_negative_content(label: str) -> str | None:
+        value = (system_negative_results.get(label) or {}).get("content")
+        return value if isinstance(value, str) else None
+
+    return {
+        "artifact_present": _path_present(root, NEMOTRON_OMNI_NO_MEDIA_DIAGNOSTIC_REL),
+        "text_no_media_before_any_image": _content("text_no_media_before_any_image"),
+        "text_no_media_before_any_image_repeat": _content(
+            "text_no_media_before_any_image_repeat"
+        ),
+        "text_no_media_after_image": _content("text_no_media_after_image"),
+        "text_no_media_after_red_image": _content("text_no_media_after_red_image"),
+        "vl_blue_image": _content("vl_blue_image"),
+        "vl_red_image": _content("vl_red_image"),
+        "prompt_variants_artifact_present": _path_present(
+            root, NEMOTRON_OMNI_NO_MEDIA_PROMPT_VARIANTS_REL
+        ),
+        "prompt_variant_ambiguous_before": _variant_content("ambiguous_before"),
+        "prompt_variant_negative_control_before": _variant_content(
+            "negative_control_before"
+        ),
+        "prompt_variant_attachment_none_before": _variant_content(
+            "attachment_none_before"
+        ),
+        "prompt_variant_count_before": _variant_content("count_before"),
+        "prompt_variant_attachment_none_after": _variant_content(
+            "attachment_none_after"
+        ),
+        "prompt_variant_count_after": _variant_content("count_after"),
+        "prompt_variant_attachment_none_after_red": _variant_content(
+            "attachment_none_after_red"
+        ),
+        "system_prompt_artifact_present": _path_present(
+            root, NEMOTRON_OMNI_NO_MEDIA_SYSTEM_PROMPT_REL
+        ),
+        "system_prompt_user_only_none_before": _system_content(
+            "user_only_none_before"
+        ),
+        "system_prompt_fact_none_before": _system_content(
+            "system_fact_none_before"
+        ),
+        "system_prompt_exact_none_before": _system_content(
+            "system_exact_none_before"
+        ),
+        "system_prompt_fact_none_after": _system_content("system_fact_none_after"),
+        "system_prompt_exact_none_after": _system_content(
+            "system_exact_none_after"
+        ),
+        "system_negative_artifact_present": _path_present(
+            root, NEMOTRON_OMNI_NO_MEDIA_SYSTEM_NEGATIVE_REL
+        ),
+        "system_negative_before_any_image": _system_negative_content(
+            "system_no_media_before_any_image"
+        ),
+        "system_negative_count_before_any_image": _system_negative_content(
+            "count_zero_before_any_image"
+        ),
+        "system_negative_after_blue_image": _system_negative_content(
+            "system_no_media_after_blue_image"
+        ),
+        "system_negative_count_after_blue_image": _system_negative_content(
+            "count_zero_after_blue_image"
+        ),
+        "system_negative_after_red_image": _system_negative_content(
+            "system_no_media_after_red_image"
+        ),
+        "system_negative_count_after_red_image": _system_negative_content(
+            "count_zero_after_red_image"
+        ),
+    }
+
+
 def _prompt_processing_speed_detail(
     text_payload: dict[str, Any],
     mtp_prefill_payload: dict[str, Any],
@@ -1417,6 +4888,27 @@ def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
         root, "build/v1546-current-bundled-dsv4-two-tool-proof-20260521001426/result.json"
     )
     default_cache_tool_loop = _load(root, DSV4_DEFAULT_CACHE_TOOL_LOOP_REL)
+    default_cache_tool_loop_thinking_on = _load(
+        root, DSV4_DEFAULT_CACHE_TOOL_LOOP_THINKING_ON_REL
+    )
+    default_cache_tool_loop_nocache_ab = _load(
+        root, DSV4_DEFAULT_CACHE_TOOL_LOOP_NOCACHE_AB_REL
+    )
+    default_cache_tool_loop_prompt_guard = _load(
+        root, DSV4_DEFAULT_CACHE_TOOL_LOOP_PROMPT_GUARD_REL
+    )
+    default_cache_tool_loop_copy_block = _load(
+        root, DSV4_DEFAULT_CACHE_TOOL_LOOP_COPY_BLOCK_REL
+    )
+    default_cache_tool_loop_thinking_copy_block = _load(
+        root, DSV4_DEFAULT_CACHE_TOOL_LOOP_THINKING_COPY_BLOCK_REL
+    )
+    default_cache_tool_loop_thinking_copy_block_dryrun = _load(
+        root, DSV4_DEFAULT_CACHE_TOOL_LOOP_THINKING_COPY_BLOCK_DRYRUN_REL
+    )
+    default_cache_tool_loop_dryrun_controls = _load(
+        root, DSV4_DEFAULT_CACHE_TOOL_LOOP_DRYRUN_CONTROLS_REL
+    )
     cap = _load(root, "build/v1546-dsv4-app-tool-cap-nocache-proof-20260521090706/summary.json")
     ui = _load(root, "build/dev-ui-smoke-20260521/summary.json")
     static = _load(root, "build/current-static-cache-architecture-audit-full-qwen-hybrid-20260521.json")
@@ -1442,7 +4934,9 @@ def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
         root,
         (
             DSV4_CURRENT_PROMPT_RAIL_EXACTNESS_REL,
+            DSV4_CURRENT_PROMPT_RAIL_EXACTNESS_FALLBACK_PRE_FORCE_OFF_REL,
             DSV4_CURRENT_PROMPT_RAIL_EXACTNESS_FALLBACK_REL,
+            DSV4_CURRENT_PROMPT_RAIL_EXACTNESS_LEGACY_FALLBACK_REL,
         ),
     )
     dsv4_route_mode_dryrun_rel, dsv4_route_mode_dryrun = _load_first_present(
@@ -1451,6 +4945,77 @@ def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
             DSV4_CURRENT_ROUTE_MODE_DRYRUN_REL,
             DSV4_CURRENT_ROUTE_MODE_DRYRUN_FALLBACK_REL,
         ),
+    )
+    dsv4_current_generated_only_direct_rail_exactness = _load(
+        root, DSV4_CURRENT_GENERATED_ONLY_DIRECT_RAIL_EXACTNESS_REL
+    )
+    dsv4_current_requested_thinking_exactness = _load(
+        root, DSV4_CURRENT_REQUESTED_THINKING_EXACTNESS_REL
+    )
+    dsv4_current_rep1_rail_exactness = _load(
+        root, DSV4_CURRENT_REP1_RAIL_EXACTNESS_REL
+    )
+    dsv4_current_source_rep1_rail_exactness = _load(
+        root, DSV4_CURRENT_SOURCE_REP1_RAIL_EXACTNESS_REL
+    )
+    dsv4_current_source_token_tail_ab_exactness = _load(
+        root, DSV4_CURRENT_SOURCE_TOKEN_TAIL_AB_EXACTNESS_REL
+    )
+    dsv4_current_source_rep1_direct_only = _load(
+        root, DSV4_CURRENT_SOURCE_REP1_DIRECT_ONLY_REL
+    )
+    dsv4_current_source_bundle_defaults_exactness = _load(
+        root, DSV4_CURRENT_SOURCE_BUNDLE_DEFAULTS_EXACTNESS_REL
+    )
+    dsv4_current_source_bundle_defaults_dryrun = _load(
+        root, DSV4_CURRENT_SOURCE_BUNDLE_DEFAULTS_DRYRUN_REL
+    )
+    dsv4_current_source_memory_preflight = _load(
+        root, DSV4_CURRENT_SOURCE_MEMORY_PREFLIGHT_REL
+    )
+    dsv4_current_jangtqk_direct_off_recheck = _load(
+        root, DSV4_CURRENT_JANGTQK_DIRECT_OFF_RECHECK_REL
+    )
+    dsv4_chatmax_prompt_trigger = _load(root, DSV4_CHATMAX_PROMPT_TRIGGER_REL)
+    dsv4_chatmax_budget_stop_rail = _load(
+        root, DSV4_CHATMAX_BUDGET_STOP_RAIL_REL
+    )
+    dsv4_prompt_boundary_bisection = _load(
+        root, DSV4_PROMPT_BOUNDARY_BISECTION_REL
+    )
+    dsv4_colon_period_logprob_trace = _load(
+        root, DSV4_COLON_PERIOD_LOGPROB_TRACE_REL
+    )
+    dsv4_colon_period_visible_logprob_trace = _load(
+        root, DSV4_COLON_PERIOD_VISIBLE_LOGPROB_TRACE_REL
+    )
+    dsv4_scene_token_rank_contrast = _load(
+        root, DSV4_SCENE_TOKEN_RANK_CONTRAST_REL
+    )
+    dsv4_direct_vs_thinking_webgl_logit = _load(
+        root, DSV4_DIRECT_VS_THINKING_WEBGL_LOGIT_PROBE_REL
+    )
+    dsv4_hidden_reasoning_control = _load(
+        root, DSV4_HIDDEN_REASONING_CONTROL_REL
+    )
+    dsv4_template_parity_diagnostic = _load(
+        root, DSV4_TEMPLATE_PARITY_DIAGNOSTIC_REL
+    )
+    dsv4_prefill_execution_variant_logits = _load(
+        root, DSV4_PREFILL_EXECUTION_VARIANT_LOGITS_REL
+    )
+    dsv4_prompt_variant_logit_probe = _load(
+        root, DSV4_PROMPT_VARIANT_LOGIT_PROBE_REL
+    )
+    dsv4_reasoning_policy_live = _load(root, DSV4_REASONING_POLICY_LIVE_REL)
+    dsv4_cache_vs_full_logit_isolation = _load(
+        root, DSV4_CACHE_VS_FULL_LOGIT_ISOLATION_REL
+    )
+    dsv4_batch_generator_logit_trace = _load(
+        root, DSV4_BATCH_GENERATOR_LOGIT_TRACE_REL
+    )
+    dsv4_batch_generator_warmup_ablation = _load(
+        root, DSV4_BATCH_GENERATOR_WARMUP_ABLATION_REL
     )
     api_cache_contract = _load(root, API_CACHE_CONTRACT_REL)
     panel_settings_contract = _load(root, PANEL_SETTINGS_CONTRACT_REL)
@@ -1481,9 +5046,98 @@ def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
     qwen_raw_forward_ab_4096 = _load(root, QWEN_RAW_FORWARD_AB_4096_REL)
     qwen_native_mtp_norm_shift_clearance = _load(root, QWEN_NATIVE_MTP_NORM_SHIFT_CLEARANCE_REL)
     qwen_native_mtp_ab = _load(root, QWEN_NATIVE_MTP_AB_REL)
+    real_ui_live_model_matrix = _current_real_ui_live_model_matrix(root)
     ling_installed_live = _load(root, LING_INSTALLED_LIVE_AUDIT_REL)
     ling_jangtq_strict_russian = _load(root, LING_JANGTQ_STRICT_RUSSIAN_NOCACHE_REL)
     ling_mxfp4_strict_russian = _load(root, LING_MXFP4_STRICT_RUSSIAN_NOCACHE_REL)
+    gemma4_responses_visible_contract = _load(root, GEMMA4_RESPONSES_VISIBLE_CONTRACT_REL)
+    gemma4_responses_unsupported_thinking_budget = _load(
+        root, GEMMA4_RESPONSES_UNSUPPORTED_THINKING_BUDGET_REL
+    )
+    gemma4_responses_visible_nocache = _load(root, GEMMA4_RESPONSES_VISIBLE_NOCACHE_REL)
+    gemma4_responses_visible_512_nocache = _load(root, GEMMA4_RESPONSES_VISIBLE_512_NOCACHE_REL)
+    gemma4_responses_thinking_off_nocache = _load(root, GEMMA4_RESPONSES_THINKING_OFF_NOCACHE_REL)
+    gemma4_chat_visible_nocache = _load(root, GEMMA4_CHAT_VISIBLE_NOCACHE_REL)
+    gemma4_local_metadata_audit = _load(root, GEMMA4_LOCAL_METADATA_AUDIT_REL)
+    all_local_model_smoke_payloads = [
+        (ALL_LOCAL_MODEL_SMOKE_ZAYA_TEXT_REL, _load(root, ALL_LOCAL_MODEL_SMOKE_ZAYA_TEXT_REL)),
+        (
+            ALL_LOCAL_MODEL_SMOKE_ZAYA_VL_JANGTQ4_REL,
+            _load(root, ALL_LOCAL_MODEL_SMOKE_ZAYA_VL_JANGTQ4_REL),
+        ),
+        (
+            ALL_LOCAL_MODEL_SMOKE_NEMOTRON_OMNI_JANGTQ_REL,
+            _load(root, ALL_LOCAL_MODEL_SMOKE_NEMOTRON_OMNI_JANGTQ_REL),
+        ),
+        (
+            ALL_LOCAL_MODEL_SMOKE_GEMMA4_26B_CRACK_REL,
+            _load(root, ALL_LOCAL_MODEL_SMOKE_GEMMA4_26B_CRACK_REL),
+        ),
+        (
+            ALL_LOCAL_MODEL_SMOKE_LING_BAILING_JANGTQ_REL,
+            _load(root, ALL_LOCAL_MODEL_SMOKE_LING_BAILING_JANGTQ_REL),
+        ),
+        (
+            ALL_LOCAL_MODEL_SMOKE_QWEN36_MXFP4_CRACK_REL,
+            _load(root, ALL_LOCAL_MODEL_SMOKE_QWEN36_MXFP4_CRACK_REL),
+        ),
+        (
+            ALL_LOCAL_MODEL_SMOKE_HY3_JANGTQ2_REL,
+            _load(root, ALL_LOCAL_MODEL_SMOKE_HY3_JANGTQ2_REL),
+        ),
+        (
+            ALL_LOCAL_MODEL_SMOKE_MINIMAX_SMALL_JANGTQ_REL,
+            _load(root, ALL_LOCAL_MODEL_SMOKE_MINIMAX_SMALL_JANGTQ_REL),
+        ),
+        (
+            ALL_LOCAL_MODEL_SMOKE_MIMO_V2_JANG2L_REL,
+            _load(root, ALL_LOCAL_MODEL_SMOKE_MIMO_V2_JANG2L_REL),
+        ),
+        (
+            ALL_LOCAL_MODEL_SMOKE_DSV4_JANGTQ_K_REL,
+            _load(root, ALL_LOCAL_MODEL_SMOKE_DSV4_JANGTQ_K_REL),
+        ),
+    ]
+    zaya_vl_jangtq4_ack_diagnostic = _load(root, ZAYA_VL_JANGTQ4_ACK_DIAGNOSTIC_REL)
+    zaya_vl_jangtq4_rendered_prompt_compare = _load(
+        root, ZAYA_VL_JANGTQ4_RENDERED_PROMPT_COMPARE_REL
+    )
+    nemotron_omni_no_media_diagnostic = _load(
+        root, NEMOTRON_OMNI_NO_MEDIA_DIAGNOSTIC_REL
+    )
+    nemotron_omni_no_media_prompt_variants = _load(
+        root, NEMOTRON_OMNI_NO_MEDIA_PROMPT_VARIANTS_REL
+    )
+    nemotron_omni_no_media_system_prompt = _load(
+        root, NEMOTRON_OMNI_NO_MEDIA_SYSTEM_PROMPT_REL
+    )
+    nemotron_omni_no_media_system_negative = _load(
+        root, NEMOTRON_OMNI_NO_MEDIA_SYSTEM_NEGATIVE_REL
+    )
+    gemma4_mixed_swa_speed_payloads = [
+        (rel, _load(root, rel))
+        for rel in GEMMA4_MIXED_SWA_SPEED_ARTIFACT_RELS
+    ]
+    gemma4_mixed_swa_sustained_cachehit = _load(
+        root,
+        GEMMA4_MIXED_SWA_SUSTAINED_CACHEHIT_DIAGNOSTIC_REL,
+    )
+    gemma4_mixed_swa_short_nocache_repeat = _load(
+        root,
+        GEMMA4_MIXED_SWA_SHORT_NOCACHE_REPEAT_DIAGNOSTIC_REL,
+    )
+    gemma4_mixed_swa_short_nocache_scheduler_trace = _load(
+        root,
+        GEMMA4_MIXED_SWA_SHORT_NOCACHE_SCHEDULER_TRACE_REL,
+    )
+    gemma4_mixed_swa_short_nocache_sync_eval_ab = _load(
+        root,
+        GEMMA4_MIXED_SWA_SHORT_NOCACHE_SYNC_EVAL_AB_REL,
+    )
+    gemma4_mixed_swa_short_nocache_streaming = _load(
+        root,
+        GEMMA4_MIXED_SWA_SHORT_NOCACHE_STREAMING_REL,
+    )
 
     requirements: list[dict[str, Any]] = []
     cache_checks = cache.get("checks") or {}
@@ -1532,6 +5186,68 @@ def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
     default_tool_cache_detail_has_dsv4 = any(
         "dsv4" in detail for detail in default_tool_cache_details
     )
+    code_tool_probe = default_cache_tool_loop.get("code_tool_probe") or {}
+    code_tool_expected = code_tool_probe.get("expected_content")
+    code_tool_actual = code_tool_probe.get("actual_content")
+    code_tool_missing_identifiers = code_tool_probe.get("missing_expected_fragments")
+    if not isinstance(code_tool_missing_identifiers, list):
+        code_tool_missing_identifiers = [
+            item
+            for item in _present_patterns(
+                code_tool_expected,
+                DSV4_THREEJS_IDENTIFIERS,
+            )
+            if item not in _present_patterns(
+                code_tool_actual,
+                DSV4_THREEJS_IDENTIFIERS,
+            )
+        ]
+    code_tool_corrupt_identifier_patterns = code_tool_probe.get(
+        "corrupt_identifier_patterns"
+    )
+    if isinstance(code_tool_corrupt_identifier_patterns, list):
+        code_tool_corrupt_identifier_patterns = _known_corrupt_identifier_patterns(
+            code_tool_corrupt_identifier_patterns,
+            code_tool_actual,
+        )
+    else:
+        code_tool_corrupt_identifier_patterns = _present_patterns(
+            code_tool_actual,
+            DSV4_THREEJS_CORRUPT_PATTERNS,
+        )
+    default_tool_checks = (
+        default_cache_tool_loop.get("checks")
+        if isinstance(default_cache_tool_loop.get("checks"), dict)
+        else {}
+    )
+    required_default_tool_checks = (
+        "tool_sequence_ordered",
+        "final_done",
+        "file_written",
+        "native_cache",
+        "native_prefix",
+        "native_paged",
+        "native_l2",
+        "generic_tq_kv_off",
+        "cached_tokens_seen",
+        "dsv4_cache_detail_seen",
+    )
+    default_tool_detail_checks = (
+        *required_default_tool_checks,
+        "code_file_written_exact",
+    )
+    failed_required_default_tool_checks = [
+        key
+        for key in required_default_tool_checks
+        if default_tool_checks.get(key) is not True
+    ]
+    default_tool_required_checks_ok = all(
+        default_tool_checks.get(key) is True for key in required_default_tool_checks
+    )
+    default_tool_parser_ok = "--tool-call-parser" in default_tool_cmd and "dsml" in default_tool_cmd
+    default_reasoning_parser_ok = (
+        "--reasoning-parser" in default_tool_cmd and "deepseek_r1" in default_tool_cmd
+    )
     default_tool_cache_ok = (
         "--disable-prefix-cache" not in default_tool_cmd
         and "--dsv4-enable-prefix-cache" in default_tool_cmd
@@ -1545,7 +5261,287 @@ def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
         is False
         and default_tool_cached_tokens > 0
         and default_tool_cache_detail_has_dsv4
+        and default_tool_parser_ok
+        and default_reasoning_parser_ok
+        and default_tool_required_checks_ok
     )
+    thinking_tool_rounds = default_cache_tool_loop_thinking_on.get("rounds") or []
+    thinking_tool_executed = [
+        tool
+        for round_item in thinking_tool_rounds
+        for tool in (round_item.get("executed_tools") or [])
+        if isinstance(tool, dict)
+    ]
+    thinking_tool_checks = (
+        default_cache_tool_loop_thinking_on.get("checks")
+        if isinstance(default_cache_tool_loop_thinking_on.get("checks"), dict)
+        else {}
+    )
+    thinking_tool_probe = default_cache_tool_loop_thinking_on.get("code_tool_probe") or {}
+    thinking_tool_diagnostic = {
+        "artifact": DSV4_DEFAULT_CACHE_TOOL_LOOP_THINKING_ON_REL,
+        "artifact_status": default_cache_tool_loop_thinking_on.get("status"),
+        "request_thinking_mode": default_cache_tool_loop_thinking_on.get(
+            "request_thinking_mode"
+        ),
+        "executed_tool_names": [
+            tool.get("name") for tool in thinking_tool_executed
+        ],
+        "final_text": (
+            thinking_tool_rounds[-1].get("output_text") if thinking_tool_rounds else None
+        ),
+        "tool_loop_checks": {
+            key: thinking_tool_checks.get(key)
+            for key in default_tool_detail_checks
+        },
+        "tool_loop_cached_tokens": default_cache_tool_loop_thinking_on.get(
+            "tool_loop_cached_tokens"
+        ),
+        "tool_loop_cache_details": default_cache_tool_loop_thinking_on.get(
+            "tool_loop_cache_details"
+        ),
+        "code_tool_expected_content": thinking_tool_probe.get("expected_content"),
+        "code_tool_actual_content": thinking_tool_probe.get("actual_content"),
+    }
+    nocache_tool_checks = (
+        default_cache_tool_loop_nocache_ab.get("checks")
+        if isinstance(default_cache_tool_loop_nocache_ab.get("checks"), dict)
+        else {}
+    )
+    nocache_tool_probe = default_cache_tool_loop_nocache_ab.get("code_tool_probe") or {}
+    no_cache_tool_diagnostic = {
+        "artifact": DSV4_DEFAULT_CACHE_TOOL_LOOP_NOCACHE_AB_REL,
+        "artifact_present": _path_present(
+            root, DSV4_DEFAULT_CACHE_TOOL_LOOP_NOCACHE_AB_REL
+        ),
+        "artifact_status": default_cache_tool_loop_nocache_ab.get("status"),
+        "diagnostic_cache_mode": default_cache_tool_loop_nocache_ab.get(
+            "diagnostic_cache_mode"
+        ),
+        "code_round_request_controls": default_cache_tool_loop_nocache_ab.get(
+            "code_round_request_controls"
+        ),
+        "tool_loop_checks": {
+            key: nocache_tool_checks.get(key)
+            for key in default_tool_detail_checks
+        },
+        "tool_loop_cached_tokens": default_cache_tool_loop_nocache_ab.get(
+            "tool_loop_cached_tokens"
+        ),
+        "tool_loop_cache_details": default_cache_tool_loop_nocache_ab.get(
+            "tool_loop_cache_details"
+        ),
+        "code_tool_first_difference": nocache_tool_probe.get("first_difference"),
+        "code_tool_missing_identifiers": nocache_tool_probe.get(
+            "missing_expected_fragments"
+        ),
+        "code_tool_corrupt_identifier_patterns": _known_corrupt_identifier_patterns(
+            nocache_tool_probe.get("corrupt_identifier_patterns"),
+            nocache_tool_probe.get("actual_content"),
+        ),
+    }
+    prompt_guard_tool_checks = (
+        default_cache_tool_loop_prompt_guard.get("checks")
+        if isinstance(default_cache_tool_loop_prompt_guard.get("checks"), dict)
+        else {}
+    )
+    prompt_guard_tool_probe = (
+        default_cache_tool_loop_prompt_guard.get("code_tool_probe") or {}
+    )
+    prompt_guard_tool_diagnostic = {
+        "artifact": DSV4_DEFAULT_CACHE_TOOL_LOOP_PROMPT_GUARD_REL,
+        "artifact_present": _path_present(
+            root, DSV4_DEFAULT_CACHE_TOOL_LOOP_PROMPT_GUARD_REL
+        ),
+        "artifact_status": default_cache_tool_loop_prompt_guard.get("status"),
+        "tool_loop_checks": {
+            key: prompt_guard_tool_checks.get(key)
+            for key in default_tool_detail_checks
+        },
+        "tool_loop_cached_tokens": default_cache_tool_loop_prompt_guard.get(
+            "tool_loop_cached_tokens"
+        ),
+        "tool_loop_cache_details": default_cache_tool_loop_prompt_guard.get(
+            "tool_loop_cache_details"
+        ),
+        "code_tool_first_difference": prompt_guard_tool_probe.get("first_difference"),
+        "code_tool_missing_identifiers": prompt_guard_tool_probe.get(
+            "missing_expected_fragments"
+        ),
+        "code_tool_corrupt_identifier_patterns": _known_corrupt_identifier_patterns(
+            prompt_guard_tool_probe.get("corrupt_identifier_patterns"),
+            prompt_guard_tool_probe.get("actual_content"),
+        ),
+    }
+    copy_block_tool_checks = (
+        default_cache_tool_loop_copy_block.get("checks")
+        if isinstance(default_cache_tool_loop_copy_block.get("checks"), dict)
+        else {}
+    )
+    copy_block_tool_probe = (
+        default_cache_tool_loop_copy_block.get("code_tool_probe") or {}
+    )
+    copy_block_tool_diagnostic = {
+        "artifact": DSV4_DEFAULT_CACHE_TOOL_LOOP_COPY_BLOCK_REL,
+        "artifact_present": _path_present(
+            root, DSV4_DEFAULT_CACHE_TOOL_LOOP_COPY_BLOCK_REL
+        ),
+        "artifact_status": default_cache_tool_loop_copy_block.get("status"),
+        "diagnostic_code_prompt_variant": default_cache_tool_loop_copy_block.get(
+            "diagnostic_code_prompt_variant"
+        ),
+        "tool_loop_checks": {
+            key: copy_block_tool_checks.get(key)
+            for key in default_tool_detail_checks
+        },
+        "tool_loop_cached_tokens": default_cache_tool_loop_copy_block.get(
+            "tool_loop_cached_tokens"
+        ),
+        "tool_loop_cache_details": default_cache_tool_loop_copy_block.get(
+            "tool_loop_cache_details"
+        ),
+        "code_tool_first_difference": copy_block_tool_probe.get("first_difference"),
+        "code_tool_missing_identifiers": copy_block_tool_probe.get(
+            "missing_expected_fragments"
+        ),
+        "code_tool_corrupt_identifier_patterns": _known_corrupt_identifier_patterns(
+            copy_block_tool_probe.get("corrupt_identifier_patterns"),
+            copy_block_tool_probe.get("actual_content"),
+        ),
+    }
+    thinking_copy_block_telemetry = (
+        default_cache_tool_loop_thinking_copy_block.get("telemetry")
+        if isinstance(
+            default_cache_tool_loop_thinking_copy_block.get("telemetry"), list
+        )
+        else []
+    )
+    thinking_copy_block_memory = (
+        thinking_copy_block_telemetry[0].get("system_memory")
+        if thinking_copy_block_telemetry
+        and isinstance(thinking_copy_block_telemetry[0], dict)
+        and isinstance(thinking_copy_block_telemetry[0].get("system_memory"), dict)
+        else {}
+    )
+    thinking_copy_block_diagnostic = {
+        "artifact": DSV4_DEFAULT_CACHE_TOOL_LOOP_THINKING_COPY_BLOCK_REL,
+        "artifact_present": _path_present(
+            root, DSV4_DEFAULT_CACHE_TOOL_LOOP_THINKING_COPY_BLOCK_REL
+        ),
+        "artifact_status": default_cache_tool_loop_thinking_copy_block.get(
+            "status"
+        ),
+        "artifact_reason": default_cache_tool_loop_thinking_copy_block.get(
+            "reason"
+        ),
+        "required_available_gb": default_cache_tool_loop_thinking_copy_block.get(
+            "required_available_gb"
+        ),
+        "available_gb": thinking_copy_block_memory.get("available_gb"),
+        "dry_run_artifact": (
+            DSV4_DEFAULT_CACHE_TOOL_LOOP_THINKING_COPY_BLOCK_DRYRUN_REL
+        ),
+        "dry_run_present": _path_present(
+            root, DSV4_DEFAULT_CACHE_TOOL_LOOP_THINKING_COPY_BLOCK_DRYRUN_REL
+        ),
+        "dry_run_status": default_cache_tool_loop_thinking_copy_block_dryrun.get(
+            "status"
+        ),
+        "dry_run_cache_mode": (
+            default_cache_tool_loop_thinking_copy_block_dryrun.get(
+                "diagnostic_cache_mode"
+            )
+        ),
+        "dry_run_code_prompt_variant": (
+            default_cache_tool_loop_thinking_copy_block_dryrun.get(
+                "diagnostic_code_prompt_variant"
+            )
+        ),
+        "dry_run_request_max_output_tokens": (
+            default_cache_tool_loop_thinking_copy_block_dryrun.get(
+                "request_max_output_tokens"
+            )
+        ),
+        "dry_run_request_thinking_mode": (
+            default_cache_tool_loop_thinking_copy_block_dryrun.get(
+                "request_thinking_mode"
+            )
+        ),
+        "dry_run_code_round_request_controls": (
+            default_cache_tool_loop_thinking_copy_block_dryrun.get(
+                "code_round_request_controls"
+            )
+        ),
+    }
+    dryrun_controls_probe = default_cache_tool_loop_dryrun_controls.get(
+        "code_tool_probe"
+    )
+    if not isinstance(dryrun_controls_probe, dict):
+        dryrun_controls_probe = {}
+    dryrun_controls_diagnostic = {
+        "artifact": DSV4_DEFAULT_CACHE_TOOL_LOOP_DRYRUN_CONTROLS_REL,
+        "artifact_present": _path_present(
+            root, DSV4_DEFAULT_CACHE_TOOL_LOOP_DRYRUN_CONTROLS_REL
+        ),
+        "artifact_status": default_cache_tool_loop_dryrun_controls.get("status"),
+        "code_round_request_controls": default_cache_tool_loop_dryrun_controls.get(
+            "code_round_request_controls"
+        ),
+        "code_tool_probe": {
+            "exact": dryrun_controls_probe.get("exact"),
+            "first_difference": dryrun_controls_probe.get("first_difference"),
+            "missing_expected_fragments": dryrun_controls_probe.get(
+                "missing_expected_fragments"
+            ),
+            "corrupt_identifier_patterns": _known_corrupt_identifier_patterns(
+                dryrun_controls_probe.get("corrupt_identifier_patterns"),
+                dryrun_controls_probe.get("actual_content"),
+            ),
+        },
+    }
+    code_round_controls = default_cache_tool_loop.get("code_round_request_controls")
+    if not isinstance(code_round_controls, dict):
+        code_round_controls = {}
+    no_cache_code_round_controls = no_cache_tool_diagnostic.get(
+        "code_round_request_controls"
+    )
+    if not isinstance(no_cache_code_round_controls, dict):
+        no_cache_code_round_controls = {}
+    effective_code_round_controls = code_round_controls or no_cache_code_round_controls
+    no_cache_exact_code_also_failed = (
+        no_cache_tool_diagnostic.get("artifact_present") is True
+        and no_cache_tool_diagnostic.get("tool_loop_checks", {}).get(
+            "code_file_written_exact"
+        )
+        is False
+        and no_cache_tool_diagnostic.get("diagnostic_cache_mode") == "disabled"
+    )
+    default_cache_tool_loop_root_cause = {
+        "tool_parser_and_cache_path_proven": (
+            default_tool_names == ["list_directory", "write_file", "write_file"]
+            and default_tool_final_text == "DONE"
+            and default_tool_parser_ok
+            and default_reasoning_parser_ok
+            and default_tool_cache_detail_has_dsv4
+            and default_tool_cached_tokens > 0
+        ),
+        "default_cache_exact_code_failed": (
+            default_tool_checks.get("code_file_written_exact") is False
+        ),
+        "no_cache_exact_code_also_failed": no_cache_exact_code_also_failed,
+        "cache_not_sufficient_root_cause": no_cache_exact_code_also_failed,
+        "request_controls_rule_out_forced_sampling_fix": (
+            effective_code_round_controls.get("temperature") == 0.0
+            and effective_code_round_controls.get("top_p") == 1.0
+            and effective_code_round_controls.get("top_k") == 0
+            and effective_code_round_controls.get("repetition_penalty") == 1.0
+        ),
+        "current_primary_failure": (
+            "exact_code_generation"
+            if default_tool_checks.get("code_file_written_exact") is False
+            else None
+        ),
+    }
     cap_checks = cap.get("checks") or {}
     ui_visible = ui.get("visible_assertions") or {}
     ui_cli = ui.get("cli_preview_assertions") or {}
@@ -1654,16 +5650,21 @@ def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
     )
     _add(
         requirements,
-        "DSV4 default-cache multi-tool agent loop is proven",
-        _status(
-            default_tool_names == ["list_directory", "write_file"]
-            and default_tool_final_text == "DONE"
-            and default_tool_cache_ok
-        ),
+            "DSV4 default-cache multi-tool agent loop is proven",
+            _status(
+                default_tool_names == ["list_directory", "write_file", "write_file"]
+                and default_tool_final_text == "DONE"
+                and default_tool_cache_ok
+            ),
         [DSV4_DEFAULT_CACHE_TOOL_LOOP_REL],
         caveat=(
             None
             if default_tool_cache_ok
+            else (
+                "Existing multi-tool proof failed required check(s): "
+                + ", ".join(failed_required_default_tool_checks)
+            )
+            if failed_required_default_tool_checks
             else "Existing multi-tool proof does not prove the default DSV4 native prefix/paged/L2 cache path."
         ),
         details={
@@ -1682,9 +5683,41 @@ def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
             "native_cache_paged": default_tool_native.get("paged"),
             "native_cache_block_disk_l2": default_tool_native.get("block_disk_l2"),
             "generic_turboquant_kv": default_tool_native.get("generic_turboquant_kv"),
+            "tool_parser_dsml": default_tool_parser_ok,
+            "reasoning_parser_deepseek_r1": default_reasoning_parser_ok,
+            "tool_loop_checks": {
+                key: default_tool_checks.get(key)
+                for key in default_tool_detail_checks
+            },
+            "failed_required_tool_loop_checks": failed_required_default_tool_checks,
             "tool_loop_cached_tokens": default_tool_cached_tokens,
             "tool_loop_cache_details": default_tool_cache_details,
             "tool_loop_cache_detail_has_dsv4": default_tool_cache_detail_has_dsv4,
+            "tool_loop_round_outputs": [
+                row.get("output_text") for row in default_tool_rounds
+            ],
+            "tool_loop_round_response_diagnostics": [
+                row.get("response_diagnostics") for row in default_tool_rounds
+            ],
+            "explicit_thinking_tool_loop_diagnostic": thinking_tool_diagnostic,
+            "no_cache_tool_loop_diagnostic": no_cache_tool_diagnostic,
+            "prompt_guard_tool_loop_diagnostic": prompt_guard_tool_diagnostic,
+            "copy_block_tool_loop_diagnostic": copy_block_tool_diagnostic,
+            "thinking_copy_block_tool_loop_diagnostic": (
+                thinking_copy_block_diagnostic
+            ),
+            "default_cache_tool_loop_dry_run_controls": dryrun_controls_diagnostic,
+            "default_cache_tool_loop_root_cause": (
+                default_cache_tool_loop_root_cause
+            ),
+            "code_round_request_controls": default_cache_tool_loop.get(
+                "code_round_request_controls"
+            ),
+            "code_tool_expected_content": code_tool_expected,
+            "code_tool_actual_content": code_tool_actual,
+            "code_tool_first_difference": code_tool_probe.get("first_difference"),
+            "code_tool_missing_identifiers": code_tool_missing_identifiers,
+            "code_tool_corrupt_identifier_patterns": code_tool_corrupt_identifier_patterns,
         },
     )
     _add(
@@ -2000,6 +6033,13 @@ def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
             LING_JANGTQ_SOURCE_PREFILL_STREAM_REL,
             LING_JANGTQ_BUNDLED_COMPAT_PREFILL_STREAM_REL,
             LING_JANGTQ_BUNDLED_NATIVE_PREFILL_STREAM_REL,
+            LING_BUNDLED_NATIVE_LIVE_RERUN_REL,
+            LING_JANGTQ_COLD_SKIPCACHE_REPEAT_REL,
+            LING_JANGTQ_BATCHGEN_TEMP0_REPEAT_REL,
+            LING_SIMPLE_AFTER_MPP_FIX_REL,
+            LING_CONTINUOUS_AFTER_MPP_FIX_REL,
+            LING_BUNDLED_AFTER_MPP_FIX_LIVE_REL,
+            LING_BUNDLED_AFTER_TOPK_POLICY_LIVE_REL,
         ],
         caveat=(
             None
@@ -2008,7 +6048,287 @@ def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
         ),
         details=ling_quality_details,
     )
+    gemma4_visible_ok, gemma4_visible_details = _gemma4_visible_content_detail(
+        gemma4_responses_visible_contract,
+        root,
+        gemma4_responses_visible_nocache,
+        gemma4_responses_visible_512_nocache,
+        gemma4_responses_thinking_off_nocache,
+        gemma4_chat_visible_nocache,
+        gemma4_local_metadata_audit,
+        gemma4_responses_unsupported_thinking_budget,
+    )
+    _add(
+        requirements,
+        "Gemma4 26B CRACK Responses visible-content and language quality is release-cleared",
+        _status(gemma4_visible_ok),
+        [
+            GEMMA4_RESPONSES_VISIBLE_CONTRACT_REL,
+            GEMMA4_RESPONSES_UNSUPPORTED_THINKING_BUDGET_REL,
+            GEMMA4_RESPONSES_VISIBLE_NOCACHE_REL,
+            GEMMA4_RESPONSES_VISIBLE_512_NOCACHE_REL,
+            GEMMA4_RESPONSES_THINKING_OFF_NOCACHE_REL,
+            GEMMA4_CHAT_VISIBLE_NOCACHE_REL,
+            GEMMA4_LOCAL_METADATA_AUDIT_REL,
+        ],
+        caveat=(
+            None
+            if gemma4_visible_ok
+            else "Current Gemma4 Responses thinking-budget artifact lacks visible assistant content or is missing. Do not treat HTTP 200, import success, or production-family PASS as Gemma4 visible quality clearance."
+        ),
+        details=gemma4_visible_details,
+    )
+    gemma4_speed_ok, gemma4_speed_details = _gemma4_mixed_swa_speed_floor_detail(
+        gemma4_mixed_swa_speed_payloads,
+        root,
+        gemma4_mixed_swa_sustained_cachehit,
+        gemma4_mixed_swa_short_nocache_repeat,
+        gemma4_mixed_swa_short_nocache_scheduler_trace,
+        gemma4_mixed_swa_short_nocache_sync_eval_ab,
+        gemma4_mixed_swa_short_nocache_streaming,
+    )
+    _add(
+        requirements,
+        "Gemma4 26B CRACK mixed-SWA app-engine speed floor is release-cleared",
+        _status(gemma4_speed_ok),
+        list(GEMMA4_MIXED_SWA_SPEED_ARTIFACT_RELS),
+        caveat=(
+            None
+            if gemma4_speed_ok
+            else "Current Gemma4 mixed-SWA bundled/app-engine artifacts do not all meet the 80 tok/s decode floor. Do not claim Gemma4 heterogeneous SWA speed clearance from one cold sample."
+        ),
+        details=gemma4_speed_details,
+    )
+    all_local_smoke_ok, all_local_smoke_details = _all_local_model_smoke_detail(
+        all_local_model_smoke_payloads,
+        root,
+        diagnostics={
+            ALL_LOCAL_MODEL_SMOKE_ZAYA_VL_JANGTQ4_REL: _zaya_vl_jangtq4_diagnostics(
+                root,
+                zaya_vl_jangtq4_ack_diagnostic,
+                zaya_vl_jangtq4_rendered_prompt_compare,
+            ),
+            ALL_LOCAL_MODEL_SMOKE_NEMOTRON_OMNI_JANGTQ_REL: _nemotron_omni_no_media_diagnostics(
+                root,
+                nemotron_omni_no_media_diagnostic,
+                nemotron_omni_no_media_prompt_variants,
+                nemotron_omni_no_media_system_prompt,
+                nemotron_omni_no_media_system_negative,
+            ),
+        },
+    )
+    all_local_smoke_release_ok = all_local_smoke_ok or bool(
+        all_local_smoke_details.get("mimo_v2_deferred")
+        and all_local_smoke_details.get("non_mimo_status") == "pass"
+    )
+    _add(
+        requirements,
+        "Cross-family live multi-turn smoke matrix is release-cleared",
+        _status(all_local_smoke_release_ok),
+        [
+            ALL_LOCAL_MODEL_SMOKE_ZAYA_TEXT_REL,
+            ALL_LOCAL_MODEL_SMOKE_ZAYA_VL_JANGTQ4_REL,
+            ALL_LOCAL_MODEL_SMOKE_NEMOTRON_OMNI_JANGTQ_REL,
+            ALL_LOCAL_MODEL_SMOKE_GEMMA4_26B_CRACK_REL,
+            ALL_LOCAL_MODEL_SMOKE_LING_BAILING_JANGTQ_REL,
+            ALL_LOCAL_MODEL_SMOKE_QWEN36_MXFP4_CRACK_REL,
+            ALL_LOCAL_MODEL_SMOKE_HY3_JANGTQ2_REL,
+            ALL_LOCAL_MODEL_SMOKE_MINIMAX_SMALL_JANGTQ_REL,
+            ALL_LOCAL_MODEL_SMOKE_MIMO_V2_JANG2L_REL,
+            ALL_LOCAL_MODEL_SMOKE_DSV4_JANGTQ_K_REL,
+        ],
+        caveat=(
+            None
+            if all_local_smoke_ok
+            else (
+                "Current non-MiMo live all-local smoke coverage is clear; MiMo-V2 remains deferred and must not be claimed fixed from this row."
+                if all_local_smoke_release_ok
+                else "Current live all-local smoke coverage is incomplete. Do not claim broad family support until DSV4, Gemma4, Hy3, Ling/Bailing, MiniMax, MiMo-V2, Nemotron, Qwen3.6, ZAYA text, and ZAYA-VL live rows pass cache, recall, visible-output, and gibberish checks."
+            )
+        ),
+        details=all_local_smoke_details,
+    )
+    if real_ui_live_model_matrix:
+        real_ui_unblocked_non_mimo_ok = (
+            real_ui_live_model_matrix.get("unblocked_non_mimo_status") == "pass"
+            and not real_ui_live_model_matrix.get(
+                "unblocked_non_mimo_missing_families"
+            )
+            and not real_ui_live_model_matrix.get(
+                "unblocked_non_mimo_partial_families"
+            )
+        )
+        real_ui_covered_families = real_ui_live_model_matrix.get("covered_families")
+        if not isinstance(real_ui_covered_families, dict):
+            real_ui_covered_families = {}
+        real_ui_excluded_families = [
+            str(item)
+            for item in real_ui_live_model_matrix.get(
+                "unblocked_non_mimo_excluded_families", []
+            )
+        ]
+        real_ui_excluded_family_set = set(real_ui_excluded_families)
+        real_ui_unblocked_non_mimo_evidence = [
+            str(row.get("artifact"))
+            for family, row in sorted(real_ui_covered_families.items())
+            if family not in real_ui_excluded_family_set
+            and isinstance(row, dict)
+            and row.get("artifact")
+        ]
+        _add(
+            requirements,
+            "Real Electron UI unblocked non-MiMo live model matrix is proven",
+            _status(real_ui_unblocked_non_mimo_ok),
+            [
+                CURRENT_RELEASE_REGRESSION_MANIFEST_REL,
+                *real_ui_unblocked_non_mimo_evidence,
+            ],
+            caveat=(
+                None
+                if real_ui_unblocked_non_mimo_ok
+                else "Current real-UI proof is still missing or partial for at least one unblocked non-MiMo family."
+            ),
+            details={
+                "status": real_ui_live_model_matrix.get("unblocked_non_mimo_status")
+                or "open",
+                "release_boundary": (
+                    "unblocked_non_mimo_real_ui_matrix_proven_with_explicit_exclusions"
+                ),
+                "missing_family_keys": [
+                    str(item)
+                    for item in real_ui_live_model_matrix.get(
+                        "unblocked_non_mimo_missing_families", []
+                    )
+                ],
+                "partial_family_keys": [
+                    str(item)
+                    for item in real_ui_live_model_matrix.get(
+                        "unblocked_non_mimo_partial_families", []
+                    )
+                ],
+                "excluded_families": sorted(real_ui_excluded_families),
+                "covered_family_keys": sorted(
+                    str(family)
+                    for family, row in real_ui_covered_families.items()
+                    if family not in real_ui_excluded_family_set
+                    and isinstance(row, dict)
+                    and row.get("status") == "pass"
+                ),
+                "real_ui_live_model_matrix": real_ui_live_model_matrix,
+            },
+        )
+    _add(
+        requirements,
+        "Real Electron UI cross-family live model matrix is release-cleared",
+        "open",
+        [
+            CURRENT_RELEASE_REGRESSION_MANIFEST_REL,
+            "docs/internal/agent-notes/2026-05-26-live-chat-tools-reasoning-proof.json",
+            "docs/internal/agent-notes/2026-05-26-live-chat-tools-reasoning-chat-settings.png",
+            "docs/internal/agent-notes/2026-05-26-live-chat-tools-reasoning-server-cache-settings.png",
+            ALL_LOCAL_MODEL_SMOKE_ZAYA_TEXT_REL,
+            ALL_LOCAL_MODEL_SMOKE_ZAYA_VL_JANGTQ4_REL,
+            ALL_LOCAL_MODEL_SMOKE_NEMOTRON_OMNI_JANGTQ_REL,
+            ALL_LOCAL_MODEL_SMOKE_GEMMA4_26B_CRACK_REL,
+            ALL_LOCAL_MODEL_SMOKE_LING_BAILING_JANGTQ_REL,
+            ALL_LOCAL_MODEL_SMOKE_QWEN36_MXFP4_CRACK_REL,
+            ALL_LOCAL_MODEL_SMOKE_HY3_JANGTQ2_REL,
+            ALL_LOCAL_MODEL_SMOKE_MINIMAX_SMALL_JANGTQ_REL,
+            ALL_LOCAL_MODEL_SMOKE_MIMO_V2_JANG2L_REL,
+            ALL_LOCAL_MODEL_SMOKE_DSV4_JANGTQ_K_REL,
+        ],
+        caveat=(
+            "Current proof separates mock Electron-dev UI wiring from bundled/API "
+            "live-model smokes. Do not claim the real UI cross-family matrix is "
+            "release-cleared until each target family is exercised through the "
+            "current dev app UI with a real loaded model, real chat settings, "
+            "tool/reasoning display, cache reuse, and no parser leakage."
+        ),
+        details={
+            "status": "open",
+            "real_ui_live_model_matrix": real_ui_live_model_matrix,
+            "mock_ui_wiring_artifacts": [
+                "docs/internal/agent-notes/2026-05-26-live-chat-tools-reasoning-proof.json",
+                "docs/internal/agent-notes/2026-05-26-live-chat-tools-reasoning-chat-settings.png",
+                "docs/internal/agent-notes/2026-05-26-live-chat-tools-reasoning-server-cache-settings.png",
+            ],
+            "server_live_smoke_matrix_status": (
+                "pass" if all_local_smoke_ok else "open"
+            ),
+            "required_family_keys": all_local_smoke_details.get(
+                "required_family_keys", []
+            ),
+            "covered_family_keys": all_local_smoke_details.get(
+                "covered_family_keys", []
+            ),
+            "missing_required_family_keys": all_local_smoke_details.get(
+                "missing_required_family_keys", []
+            ),
+            "real_ui_missing_required_family_keys": [
+                str(item)
+                for item in real_ui_live_model_matrix.get("missing_families", [])
+            ],
+            "real_ui_partial_family_keys": [
+                str(item)
+                for item in real_ui_live_model_matrix.get("partial_families", [])
+            ],
+            "real_ui_blocking_required_family_artifacts": (
+                _real_ui_blocking_family_artifacts(real_ui_live_model_matrix)
+            ),
+            "release_boundary": (
+                "current_real_ui_matrix_is_authoritative_for_unblocked_non_mimo"
+                if real_ui_live_model_matrix
+                else "mock_ui_plus_server_smoke_is_not_real_ui_live_model_clearance"
+            ),
+            "required_real_ui_surfaces": [
+                "current Electron dev build",
+                "real loaded model per target family",
+                "chat settings persistence and non-sticky defaults",
+                "server cache setting controls",
+                "Responses and Chat Completions paths",
+                "long multi-turn tool calls",
+                "reasoning/tool parser display",
+                "prefix/cache hit telemetry",
+                "image/video follow-up where supported",
+                "no raw parser or reasoning tag leakage",
+            ],
+        },
+    )
     quality_ok, quality_details = _dsv4_quality_clearance(quality_clearance, root)
+    dsv4_prompt_rail_exactness_detail = _dsv4_prompt_rail_exactness_detail(
+        dsv4_prompt_rail_exactness,
+        dsv4_route_mode_dryrun,
+        root,
+        dsv4_prompt_rail_exactness_rel,
+        dsv4_route_mode_dryrun_rel,
+    )
+    quality_ok = (
+        quality_ok
+        and dsv4_prompt_rail_exactness_detail.get("status") == "pass"
+    )
+    dsv4_source_bundle_defaults_detail = _dsv4_prompt_rail_exactness_detail(
+        dsv4_current_source_bundle_defaults_exactness,
+        dsv4_current_source_bundle_defaults_dryrun,
+        root,
+        DSV4_CURRENT_SOURCE_BUNDLE_DEFAULTS_EXACTNESS_REL,
+        DSV4_CURRENT_SOURCE_BUNDLE_DEFAULTS_DRYRUN_REL,
+    )
+    quality_ok = (
+        quality_ok
+        and dsv4_source_bundle_defaults_detail.get("status") == "pass"
+    )
+    dsv4_current_jangtqk_direct_off_detail = _dsv4_prompt_rail_exactness_detail(
+        dsv4_current_jangtqk_direct_off_recheck,
+        {},
+        root,
+        DSV4_CURRENT_JANGTQK_DIRECT_OFF_RECHECK_REL,
+        "",
+    )
+    if dsv4_current_jangtqk_direct_off_detail.get("present") is True:
+        quality_ok = (
+            quality_ok
+            and dsv4_current_jangtqk_direct_off_detail.get("status") == "pass"
+        )
     quality_details.update(
         {
             "long_context_status": longctx.get("status"),
@@ -2042,15 +6362,159 @@ def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
                 )
             ),
             "current_installed_prompt_rail_exactness_probe": (
+                dsv4_prompt_rail_exactness_detail
+            ),
+            "current_generated_only_direct_rail_exactness_subset": (
                 _dsv4_prompt_rail_exactness_detail(
-                    dsv4_prompt_rail_exactness,
+                    dsv4_current_generated_only_direct_rail_exactness,
+                    {},
+                    root,
+                    DSV4_CURRENT_GENERATED_ONLY_DIRECT_RAIL_EXACTNESS_REL,
+                    "",
+                )
+            ),
+            "current_requested_thinking_exactness_subset": (
+                _dsv4_prompt_rail_exactness_detail(
+                    dsv4_current_requested_thinking_exactness,
+                    {},
+                    root,
+                    DSV4_CURRENT_REQUESTED_THINKING_EXACTNESS_REL,
+                    "",
+                )
+            ),
+            "current_rep1_direct_vs_requested_thinking_exactness_subset": (
+                _dsv4_prompt_rail_exactness_detail(
+                    dsv4_current_rep1_rail_exactness,
+                    {},
+                    root,
+                    DSV4_CURRENT_REP1_RAIL_EXACTNESS_REL,
+                    "",
+                )
+            ),
+            "current_source_rep1_direct_vs_requested_thinking_exactness_subset": (
+                _dsv4_prompt_rail_exactness_detail(
+                    dsv4_current_source_rep1_rail_exactness,
                     dsv4_route_mode_dryrun,
                     root,
-                    dsv4_prompt_rail_exactness_rel,
+                    DSV4_CURRENT_SOURCE_REP1_RAIL_EXACTNESS_REL,
                     dsv4_route_mode_dryrun_rel,
                 )
             ),
+            "current_source_token_tail_direct_vs_requested_thinking_exactness_subset": (
+                _dsv4_prompt_rail_exactness_detail(
+                    dsv4_current_source_token_tail_ab_exactness,
+                    {},
+                    root,
+                    DSV4_CURRENT_SOURCE_TOKEN_TAIL_AB_EXACTNESS_REL,
+                    "",
+                )
+            ),
+            "current_source_rep1_direct_only_exactness_subset": (
+                _dsv4_prompt_rail_exactness_detail(
+                    dsv4_current_source_rep1_direct_only,
+                    dsv4_route_mode_dryrun,
+                    root,
+                    DSV4_CURRENT_SOURCE_REP1_DIRECT_ONLY_REL,
+                    dsv4_route_mode_dryrun_rel,
+                )
+            ),
+            "current_source_bundle_defaults_exactness_subset": (
+                dsv4_source_bundle_defaults_detail
+            ),
+            "current_source_full_output_preflight": (
+                _dsv4_source_memory_preflight_detail(
+                    dsv4_current_source_memory_preflight,
+                    root,
+                )
+            ),
+            "current_jangtqk_direct_off_recheck": (
+                dsv4_current_jangtqk_direct_off_detail
+            ),
+            "current_chatmax_prompt_trigger_probe": (
+                _dsv4_chatmax_prompt_trigger_detail(
+                    dsv4_chatmax_prompt_trigger,
+                    root,
+                )
+            ),
+            "current_chatmax_budget_stop_rail_probe": (
+                _dsv4_chatmax_budget_stop_rail_detail(
+                    dsv4_chatmax_budget_stop_rail,
+                    root,
+                )
+            ),
+            "current_prompt_boundary_bisection_probe": (
+                _dsv4_prompt_boundary_bisection_detail(
+                    dsv4_prompt_boundary_bisection,
+                    root,
+                )
+            ),
+            "current_colon_period_logprob_trace": (
+                _dsv4_colon_period_logprob_trace_detail(
+                    dsv4_colon_period_logprob_trace,
+                    dsv4_colon_period_visible_logprob_trace,
+                    root,
+                )
+            ),
+            "current_scene_token_rank_contrast": (
+                _dsv4_scene_token_rank_contrast_detail(
+                    dsv4_scene_token_rank_contrast,
+                    root,
+                )
+            ),
+            "current_direct_vs_thinking_webgl_logit_probe": (
+                _dsv4_direct_vs_thinking_webgl_logit_detail(
+                    dsv4_direct_vs_thinking_webgl_logit,
+                    root,
+                )
+            ),
+            "current_hidden_reasoning_control_probe": (
+                _dsv4_hidden_reasoning_control_detail(
+                    dsv4_hidden_reasoning_control,
+                    root,
+                )
+            ),
+            "current_template_parity_diagnostic": (
+                _dsv4_template_parity_diagnostic_detail(
+                    dsv4_template_parity_diagnostic,
+                    root,
+                )
+            ),
+            "current_prefill_execution_variant_logits": (
+                _dsv4_prefill_execution_variant_logits_detail(
+                    dsv4_prefill_execution_variant_logits,
+                    root,
+                )
+            ),
+            "current_prompt_variant_logit_probe": (
+                _dsv4_prompt_variant_logit_probe_detail(
+                    dsv4_prompt_variant_logit_probe,
+                    root,
+                )
+            ),
+            "current_reasoning_policy_live": (
+                _dsv4_reasoning_policy_live_detail(
+                    dsv4_reasoning_policy_live,
+                    root,
+                )
+            ),
+            "current_batch_generator_logit_divergence": (
+                _dsv4_batch_generator_logit_divergence_detail(
+                    dsv4_cache_vs_full_logit_isolation,
+                    dsv4_batch_generator_logit_trace,
+                    dsv4_batch_generator_warmup_ablation,
+                    root,
+                )
+            ),
         }
+    )
+    quality_details["direct_off_exactness_boundary"] = (
+        _dsv4_direct_off_exactness_boundary(quality_details)
+    )
+    quality_details["exact_code_root_boundary"] = (
+        _dsv4_exact_code_root_boundary(quality_details)
+    )
+    quality_details["failed_quality_gates"] = _dsv4_failed_quality_gates(
+        quality_details
     )
     _add(
         requirements,
@@ -2069,8 +6533,31 @@ def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
             DSV4_SOURCE_SAME_PROMPT_NOCACHE_REL,
             DSV4_SOURCE_CACHE_COMPARISON_REL,
             DSV4_CURRENT_PROMPT_RAIL_EXACTNESS_REL,
+            DSV4_CURRENT_GENERATED_ONLY_DIRECT_RAIL_EXACTNESS_REL,
+            DSV4_CURRENT_REQUESTED_THINKING_EXACTNESS_REL,
+            DSV4_CURRENT_REP1_RAIL_EXACTNESS_REL,
+            DSV4_CURRENT_SOURCE_REP1_RAIL_EXACTNESS_REL,
+            DSV4_CURRENT_SOURCE_TOKEN_TAIL_AB_EXACTNESS_REL,
+            DSV4_CURRENT_SOURCE_REP1_DIRECT_ONLY_REL,
+            DSV4_CURRENT_SOURCE_MEMORY_PREFLIGHT_REL,
             DSV4_CURRENT_ROUTE_MODE_DRYRUN_REL,
-            "docs/internal/release-gates/20260520_sisyphus_dsv4_identifier_gate_jang_affine_current/result.json",
+            DSV4_CURRENT_ROUTE_MODE_DRYRUN_IDENTIFIER_CANDIDATES_REL,
+            DSV4_CURRENT_ROUTE_MODE_DRYRUN_COHESIVE_AUDIT_REL,
+            DSV4_CHATMAX_PROMPT_TRIGGER_REL,
+            DSV4_CHATMAX_BUDGET_STOP_RAIL_REL,
+            DSV4_PROMPT_BOUNDARY_BISECTION_REL,
+            DSV4_COLON_PERIOD_LOGPROB_TRACE_REL,
+            DSV4_COLON_PERIOD_VISIBLE_LOGPROB_TRACE_REL,
+            DSV4_SCENE_TOKEN_RANK_CONTRAST_REL,
+            DSV4_DIRECT_VS_THINKING_WEBGL_LOGIT_PROBE_REL,
+            DSV4_HIDDEN_REASONING_CONTROL_REL,
+            DSV4_TEMPLATE_PARITY_DIAGNOSTIC_REL,
+            DSV4_PREFILL_EXECUTION_VARIANT_LOGITS_REL,
+            DSV4_PROMPT_VARIANT_LOGIT_PROBE_REL,
+            DSV4_REASONING_POLICY_LIVE_REL,
+            DSV4_CACHE_VS_FULL_LOGIT_ISOLATION_REL,
+            DSV4_BATCH_GENERATOR_LOGIT_TRACE_REL,
+            DSV4_BATCH_GENERATOR_WARMUP_ABLATION_REL,
         ],
         caveat=(
             None

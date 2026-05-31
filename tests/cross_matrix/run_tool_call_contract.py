@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Any
 
 
-DEFAULT_OUT = Path("build/current-tool-call-contract-20260521.json")
+DEFAULT_OUT = Path("build/current-tool-call-contract-20260528-tool-parser-loop-matrix.json")
 
 DSML_PATTERN = (
     "visible_text_around_invoke_preserved_no_dsml_leak "
@@ -61,6 +61,16 @@ REQUIRED_TOOL_CALL_TEST_MARKERS = (
     "resets text-chat tool streaming state before chained follow-up requests",
     "panel max tool iterations caps tool loops",
     "Responses API preserves the augmented custom system prompt when built-in tools are enabled",
+    "TestToolParserManager::test_get_tool_parser_by_name",
+    "TestGemma3ToolParser::test_tools_called_implies_no_markdown_in_content",
+    "TestGemma4ToolParser::test_tools_called_implies_no_marker_in_content",
+    "TestGlm47ToolParser::test_tools_called_implies_no_envelope_in_content",
+    "TestGraniteToolParser::test_tools_called_implies_content_is_none",
+    "TestHunyuanToolParser::test_visible_text_before_and_after_tool_calls_preserved",
+    "TestMiniMaxToolParser::test_content_before_tool_call",
+    "TestZayaToolParser::test_nested_parameter_start_repairs_missing_parameter_close",
+    "TestXMLFunctionToolParser::test_visible_text_around_tool_call_has_no_xml_function_leak",
+    "TestXMLFunctionToolParser::test_registry_aliases_resolve",
 )
 
 SOURCE_HASH_FILES = (
@@ -68,6 +78,13 @@ SOURCE_HASH_FILES = (
     "vmlx_engine/tool_parsers/dsml_tool_parser.py",
     "tests/test_dsml_tool_parser.py",
     "tests/test_tool_format.py",
+    "tests/test_tool_parsers.py",
+    "tests/test_gemma3_tool_parser.py",
+    "tests/test_gemma4_tool_parser.py",
+    "tests/test_glm47_tool_parser.py",
+    "tests/test_granite_tool_parser.py",
+    "tests/test_hunyuan_tool_parser.py",
+    "tests/test_xml_function_tool_parser.py",
     "tests/test_engine_audit.py",
     "panel/src/main/ipc/coding-tools.ts",
     "panel/src/main/tools/executor.ts",
@@ -103,6 +120,23 @@ COMMANDS: dict[str, tuple[Path, list[str]]] = {
             "tests/tool-auto-continue.test.ts",
             "tests/request-builder.test.ts",
             "--reporter=verbose",
+        ],
+    ),
+    "engine_family_tool_parser_matrix": (
+        Path("."),
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            "-q",
+            "-vv",
+            "tests/test_tool_parsers.py",
+            "tests/test_gemma3_tool_parser.py",
+            "tests/test_gemma4_tool_parser.py",
+            "tests/test_glm47_tool_parser.py",
+            "tests/test_granite_tool_parser.py",
+            "tests/test_hunyuan_tool_parser.py",
+            "tests/test_xml_function_tool_parser.py",
         ],
     ),
 }
@@ -167,6 +201,7 @@ def build_artifact(root: Path) -> dict[str, Any]:
     ]
     engine_passed = results["engine_dsv4_dsml_tool_contracts"]["counts"]["passed"] or 0
     panel_passed = results["panel_tool_loop_security"]["counts"]["passed"] or 0
+    family_passed = results["engine_family_tool_parser_matrix"]["counts"]["passed"] or 0
     live_default_cache_artifact = root / "build/current-dsv4-default-cache-tool-loop/result.json"
     checks = {
         "tool_parser_residue_rejected_instead_of_executed": not failed and engine_passed >= 21,
@@ -176,6 +211,9 @@ def build_artifact(root: Path) -> dict[str, Any]:
         "tool_choice_none_does_not_fallback_to_raw_dsml": not failed and engine_passed >= 21,
         "panel_tool_executor_blocks_unsafe_paths_and_commands": not failed and panel_passed >= 10,
         "panel_max_tool_iterations_caps_tool_loops": not failed and panel_passed >= 10,
+        "family_tool_parser_matrix_covers_no_leak_and_alias_edges": (
+            not failed and family_passed >= 125
+        ),
         "live_default_cache_dsv4_tool_loop_artifact_present": live_default_cache_artifact.exists(),
         "all_required_tool_call_markers_present": not failed and not missing_markers,
     }

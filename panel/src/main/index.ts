@@ -72,8 +72,28 @@ function broadcastGatewaySingleModelMode(): void {
   } catch (_) {}
 }
 
+function isExpectedClientDisconnectError(error: unknown): boolean {
+  const err = error as NodeJS.ErrnoException | undefined
+  const code = String(err?.code || '')
+  const message = String(err?.message || error || '')
+  const cause = (err as any)?.cause
+  const nestedErrors = Array.isArray((err as any)?.errors) ? (err as any).errors : []
+  return (
+    code === 'EPIPE' ||
+    code === 'ECONNRESET' ||
+    code === 'ERR_STREAM_DESTROYED' ||
+    code === 'ERR_STREAM_WRITE_AFTER_END' ||
+    /EPIPE|write EPIPE|broken pipe|socket hang up|connection reset|premature close|stream.*destroyed|write after end/i.test(message) ||
+    (cause ? isExpectedClientDisconnectError(cause) : false) ||
+    nestedErrors.some((nested) => isExpectedClientDisconnectError(nested))
+  )
+}
+
 // Global crash handlers — prevent unhandled errors from silently crashing the app
 process.on('uncaughtException', (error) => {
+  if (isExpectedClientDisconnectError(error)) {
+    return
+  }
   console.error('[CRASH] Uncaught exception:', error)
   // Kill all Python processes to prevent orphans
   try { sessionManager.stopAll().catch(() => { }) } catch (_) { }
@@ -89,6 +109,9 @@ process.on('uncaughtException', (error) => {
 })
 
 process.on('unhandledRejection', (reason) => {
+  if (isExpectedClientDisconnectError(reason)) {
+    return
+  }
   console.error('[CRASH] Unhandled promise rejection:', reason)
 })
 

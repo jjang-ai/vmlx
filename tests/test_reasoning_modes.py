@@ -202,7 +202,7 @@ def test_display_cleanup_removes_residual_think_markup_without_reopening():
 
 
 def test_dsv4_thinking_policy_defaults_to_direct_rail_when_not_requested(monkeypatch):
-    """DSV4 stays on direct rail only when the request did not ask to think."""
+    """DSV4 Auto must not secretly enable hidden reasoning."""
     from vmlx_engine import server
 
     decision = server._resolve_dsv4_thinking_policy(
@@ -280,18 +280,26 @@ def test_dsv4_thinking_policy_does_not_force_tool_calls_to_direct_rail(monkeypat
 
 
 def test_dsv4_thinking_policy_explicit_false_stays_direct(monkeypatch):
-    """Caller passing enable_thinking=False explicitly must NOT be force-flipped.
-
-    The earlier (now-removed) behaviour force-set thinking unless the caller
-    sent ``is True``; the current policy honours an explicit False the same as
-    a missing value. Without this regression pin, a return to the old
-    ``is not True`` semantics would silently re-enable thinking on instruct
-    requests.
-    """
+    """Caller passing enable_thinking=False explicitly must not be force-flipped."""
     from vmlx_engine import server
 
     decision = server._resolve_dsv4_thinking_policy(
         requested_enable_thinking=False,
+        effort_requested=False,
+        tools_present=False,
+        tool_choice=None,
+    )
+
+    assert decision.enable_thinking is False
+    assert decision.reasoning_effort_allowed is False
+    assert decision.reason == "thinking_disabled"
+
+
+def test_dsv4_thinking_policy_omitted_does_not_force_reasoning(monkeypatch):
+    from vmlx_engine import server
+
+    decision = server._resolve_dsv4_thinking_policy(
+        requested_enable_thinking=None,
         effort_requested=False,
         tools_present=False,
         tool_choice=None,
@@ -372,6 +380,7 @@ def test_dsv4_jang_chat_defaults_override_generation_config_when_cli_unset(
                 "temperature": 0.6,
                 "top_p": 0.95,
                 "top_k": 0,
+                "repetition_penalty": 1.0,
                 "repetition_penalty_thinking": 1.0,
                 "repetition_penalty_chat": 1.05,
                 "max_new_tokens": 4096,
@@ -399,7 +408,7 @@ def test_dsv4_jang_chat_defaults_override_generation_config_when_cli_unset(
             str(tmp_path),
             enable_thinking=False,
         )
-        == 1.05
+        == 1.0
     )
     assert (
         server._resolve_repetition_penalty(
@@ -934,6 +943,46 @@ def test_template_starts_reasoning_is_request_dependent_for_zaya_style_template(
     ) is False
 
 
+def test_known_lfm2_config_disables_tokenizer_vocab_thinking_seed():
+    """A known non-template-thinking family must not be flipped by vocab alone."""
+    from vmlx_engine import server
+
+    class LfmStyleTokenizer:
+        has_thinking = True
+
+    cfg = SimpleNamespace(family_name="lfm2", think_in_template=False)
+
+    assert (
+        server._apply_tokenizer_thinking_vocab_fallback(
+            False,
+            reasoning_parser=object(),
+            tokenizer=LfmStyleTokenizer(),
+            model_config=cfg,
+        )
+        is False
+    )
+
+
+def test_unknown_config_can_fall_back_to_tokenizer_vocab_thinking_seed():
+    """Unknown models keep the conservative tokenizer-vocab fallback."""
+    from vmlx_engine import server
+
+    class UnknownTokenizer:
+        has_thinking = True
+
+    cfg = SimpleNamespace(family_name="unknown", think_in_template=False)
+
+    assert (
+        server._apply_tokenizer_thinking_vocab_fallback(
+            False,
+            reasoning_parser=object(),
+            tokenizer=UnknownTokenizer(),
+            model_config=cfg,
+        )
+        is True
+    )
+
+
 def test_zaya_vl_mllm_thinking_on_synthesizes_open_think_for_plain_template(
     tmp_path, monkeypatch
 ):
@@ -981,6 +1030,65 @@ def test_zaya_vl_mllm_thinking_on_synthesizes_open_think_for_plain_template(
         "assistant: <think>\n"
     )
     assert "<think>" not in lm._apply_chat_template(messages, enable_thinking=False)
+
+
+def test_step37_mllm_thinking_off_closes_forced_processor_think(
+    tmp_path, monkeypatch
+):
+    """Step3.7's VLM wrapper must honor thinking-off after processor render.
+
+    The local Step3.7 template always appends an open ``<think>`` generation
+    prompt, even when ``enable_thinking=False``. The MLLM wrapper is the prompt
+    renderer used by the live app/server path, so it must close that rail before
+    generation instead of leaving the model to spend the whole visible budget in
+    hidden-thought punctuation.
+    """
+    from vmlx_engine.models.mllm import MLXMultimodalLM
+
+    bundle = tmp_path / "Step-3.7-Flash-JANG_2L"
+    bundle.mkdir()
+    (bundle / "config.json").write_text(json.dumps({"model_type": "step3p7"}))
+
+    pkg = types.ModuleType("mlx_vlm")
+    pkg.__path__ = []
+    prompt_utils = types.ModuleType("mlx_vlm.prompt_utils")
+
+    def fake_template(_processor, _messages, add_generation_prompt=True, **kwargs):
+        assert kwargs["enable_thinking"] is False
+        assert kwargs["tools"][0]["function"]["name"] == "run_command"
+        return (
+            "<|im_start|>system\n# Tools<|im_end|>\n"
+            "<|im_start|>user\nUse run_command once.<|im_end|>\n"
+            "<|im_start|>assistant\n<think>\n"
+        )
+
+    prompt_utils.get_chat_template = fake_template
+    monkeypatch.setitem(sys.modules, "mlx_vlm", pkg)
+    monkeypatch.setitem(sys.modules, "mlx_vlm.prompt_utils", prompt_utils)
+
+    lm = object.__new__(MLXMultimodalLM)
+    lm.processor = object()
+    lm.config = {"model_type": "step3p7"}
+    lm.model_name = str(bundle)
+
+    rendered = lm._apply_chat_template(
+        [{"role": "user", "content": "Use run_command once."}],
+        enable_thinking=False,
+        tools=[
+            {
+                "type": "function",
+                "function": {
+                    "name": "run_command",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"command": {"type": "string"}},
+                    },
+                },
+            }
+        ],
+    )
+
+    assert rendered.endswith("<think>\n</think>\n\n")
 
 
 def test_zaya_vl_synthetic_mllm_think_prompt_seed_is_request_dependent(
@@ -1051,6 +1159,33 @@ def test_hy_v3_qwen3_reasoning_parser_low_high_routes_reasoning_only():
     assert content == "The answer is 4."
     assert "<think>" not in content
     assert "</think>" not in content
+
+
+def test_think_xml_reasoning_parser_is_registered_for_mimo_v2():
+    """MiMo's registry id must resolve to a real parser, not stale qwen3."""
+    from vmlx_engine.reasoning import get_parser
+
+    parser_cls = get_parser("think_xml")
+    parser = parser_cls()
+
+    assert parser_cls.__name__ == "ThinkXmlReasoningParser"
+    reasoning, content = parser.extract_reasoning(
+        "<think>Use the tool result.</think>FINAL=OK"
+    )
+    assert reasoning == "Use the tool result."
+    assert content == "FINAL=OK"
+
+
+def test_think_xml_reasoning_parser_no_tags_remains_visible_content():
+    """MiMo normal chat text must not be hidden as reasoning without tags."""
+    from vmlx_engine.reasoning import get_parser
+
+    parser = get_parser("think_xml")()
+
+    reasoning, content = parser.extract_reasoning("FINAL=OK")
+
+    assert reasoning is None
+    assert content == "FINAL=OK"
 
 
 def test_deepseek_r1_reasoning_parser_no_think_does_not_leak_tags():

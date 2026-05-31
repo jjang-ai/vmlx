@@ -309,7 +309,10 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
   const zayaCcaActive = isZayaCcaFamily(normalizedDetectedFamily)
   const turboQuantActive = !!detectedIsTurboQuant
   const multimodalActive = !dsv4Active && !detectedForceTextOnly && (!!detectedIsMultimodal || config.isMultimodal === true)
-  const hybridCacheActive = detectedCacheType === 'hybrid' || detectedCacheType === 'mamba'
+  const hybridCacheActive =
+    detectedCacheType === 'hybrid' ||
+    detectedCacheType === 'mamba' ||
+    detectedCacheType === 'rotating_kv'
   const dsv4CompositeCacheOptIn = dsv4Active && config.dsv4PrefixCache !== false
   const effectiveContinuousBatching = dsv4Active ? true : config.continuousBatching
   const batchingOff = !effectiveContinuousBatching
@@ -318,7 +321,10 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
     ? dsv4CompositeCacheOptIn && config.enablePrefixCache !== false
     : config.enablePrefixCache
   const prefixOff = !effectivePrefixCacheEnabled
-  const isMambaCache = detectedCacheType === 'mamba' || detectedCacheType === 'hybrid'
+  const isMambaCache =
+    detectedCacheType === 'mamba' ||
+    detectedCacheType === 'hybrid' ||
+    detectedCacheType === 'rotating_kv'
   const architectureRequiresPagedCache = zayaCcaActive || dsv4CompositeCacheOptIn || isMambaCache
   const zayaTypedCacheRequiresPaged = zayaCcaActive && !batchingOff && !prefixOff
   const dsv4CompositeRequiresPaged = dsv4CompositeCacheOptIn && !batchingOff && !prefixOff
@@ -1694,6 +1700,12 @@ const TOOL_PARSER_OPTIONS: ParserOption[] = [
     ]
   },
   {
+    value: 'xml_function', label: 'MiMo / generic XML function', format: '<tool_call><function=fn><parameter=arg>val</parameter></function></tool_call>', models: [
+      'MiMo-V2.5 JANG bundles',
+      'Generic XML function-call templates with <parameter=...> values',
+    ]
+  },
+  {
     value: 'nemotron', label: 'Nemotron — Nemotron / Qwen3-Next', format: '<tool_call><function=fn><parameter=p>val</parameter></function></tool_call>', models: [
       'Nemotron-H (8B/47B/56B)', 'Nemotron-4 Nano/Super/Ultra',
       'Qwen3-Next / Qwen3-Coder-Next (hybrid Mamba)',
@@ -1731,6 +1743,11 @@ const TOOL_PARSER_OPTIONS: ParserOption[] = [
     ]
   },
   {
+    value: 'lfm2', label: 'Liquid LFM2 — Liquid AI LFM2 / LFM2-MoE', format: '<|tool_call_start|>[fn(arg=val)]<|tool_call_end|>', models: [
+      'LFM2.5-8B-A1B', 'LFM2-MoE',
+    ]
+  },
+  {
     value: 'step3p5', label: 'StepFun — Step-3.5 Flash / Step-3.5', format: '<tool_call><function=fn><parameter=arg>val</parameter></function></tool_call>', models: [
       'Step-3.5 Flash (8B MoE)', 'Step-3.5',
     ]
@@ -1750,7 +1767,7 @@ const REASONING_PARSER_OPTIONS: ParserOption[] = [
     value: 'qwen3', label: 'Qwen3 — Qwen / QwQ / StepFun', format: '<think>...reasoning...</think>content  (strict: both tags required)', models: [
       'Qwen3.5-VL (0.8B\u2013122B MoE, vision+reasoning)', 'Qwen3 (0.6B\u2013235B, all sizes)',
       'Qwen3-Coder (all sizes)', 'Qwen3-MoE (22B/57B)', 'QwQ-32B',
-      'StepFun Step-3.5 Flash (8B MoE)', 'StepFun Step-3.5', 'StepFun Step-1V (vision)',
+      'StepFun Step-3.7 Flash JANG/VL', 'StepFun Step-3.5 Flash (8B MoE)', 'StepFun Step-3.5', 'StepFun Step-1V (vision)',
     ]
   },
   {
@@ -1786,6 +1803,12 @@ const REASONING_PARSER_OPTIONS: ParserOption[] = [
       'Gemma 4 27B-A4B (text+vision, MoE)',
       'Gemma 4 31B (text+vision, dense)',
       'Any Gemma 4 model with <|channel>thought protocol',
+    ]
+  },
+  {
+    value: 'think_xml', label: 'Think XML — MiMo XML reasoning', format: '<think>...reasoning...</think>content  (XML reasoning blocks)', models: [
+      'MiMo V2.5 JANG 2L',
+      'Use only when model metadata selects think_xml; MiMo generation quality remains separately gated.',
     ]
   },
 ]

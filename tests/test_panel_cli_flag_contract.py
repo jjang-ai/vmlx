@@ -36,12 +36,19 @@ def _panel_source_flags() -> dict[str, set[str]]:
     }
 
 
-def _constant_flag_set(rel: str, const_name: str) -> set[str]:
+def _constant_flag_set(rel: str, const_name: str, _seen: set[str] | None = None) -> set[str]:
+    _seen = set(_seen or ())
+    if const_name in _seen:
+        return set()
+    _seen.add(const_name)
     source = (ROOT / rel).read_text(encoding="utf-8")
     start = source.index(f"const {const_name}")
     end = source.index("])", start)
     block = source[start:end]
-    return set(re.findall(r'["\'](--[a-z0-9][a-z0-9-]*)["\']', block))
+    flags = set(re.findall(r'["\'](--[a-z0-9][a-z0-9-]*)["\']', block))
+    for spread in re.findall(r"\.\.\.([A-Z0-9_]+)", block):
+        flags.update(_constant_flag_set(rel, spread, _seen))
+    return flags
 
 
 def _serve_cli_value_flags() -> set[str]:
@@ -104,6 +111,7 @@ def test_runtime_and_preview_additional_arg_filters_share_blocklists() -> None:
     names = (
         "ADDITIONAL_ARG_VALUE_FLAGS",
         "IMAGE_ADDITIONAL_ARG_BLOCKLIST",
+        "TEXT_ADDITIONAL_ARG_BLOCKLIST",
         "DSV4_ADDITIONAL_ARG_BLOCKLIST",
     )
     runtime_rel = "panel/src/main/sessions.ts"
@@ -129,6 +137,53 @@ def test_dsv4_stale_value_flags_strip_their_values_in_preview_and_runtime() -> N
     assert sorted(blocked_value_flags - expected_value_skip_flags) == []
 
 
+def test_text_stale_value_flags_strip_their_values_in_preview_and_runtime() -> None:
+    """Non-DSV4 sessions must not let stale Advanced Args override UI/autodetect."""
+
+    text_blocked = _constant_flag_set(
+        "panel/src/main/sessions.ts",
+        "TEXT_ADDITIONAL_ARG_BLOCKLIST",
+    )
+    serve_value_flags = _serve_cli_value_flags()
+    blocked_value_flags = text_blocked & serve_value_flags
+    expected_value_skip_flags = _constant_flag_set(
+        "panel/src/main/sessions.ts",
+        "ADDITIONAL_ARG_VALUE_FLAGS",
+    )
+
+    assert sorted(blocked_value_flags - expected_value_skip_flags) == []
+    for flag in (
+        "--max-tokens",
+        "--max-prompt-tokens",
+        "--default-enable-thinking",
+        "--default-repetition-penalty",
+        "--reasoning-parser",
+        "--tool-call-parser",
+        "--enable-auto-tool-choice",
+        "--host",
+        "--port",
+        "--timeout",
+        "--rate-limit",
+        "--log-level",
+        "--allowed-origins",
+        "--served-model-name",
+        "--chat-template",
+        "--chat-template-kwargs",
+        "--mcp-config",
+        "--mcp-enabled-servers",
+        "--mcp-disabled-tools",
+        "--api-key",
+        "--uds",
+        "--wake-timeout",
+        "--inference-endpoints",
+        "--native-mtp-depth",
+        "--native-mtp-sampling-policy",
+        "--use-paged-cache",
+        "--kv-cache-quantization",
+    ):
+        assert flag in text_blocked
+
+
 def test_panel_cli_flag_contract_covers_dsv4_cache_and_output_boundaries() -> None:
     """Pin the risky rows Eric called out so this file stays purpose-built."""
 
@@ -141,6 +196,20 @@ def test_panel_cli_flag_contract_covers_dsv4_cache_and_output_boundaries() -> No
     assert "--max-prompt-tokens" in sessions
     assert "--native-mtp-depth" in sessions
     assert "--native-mtp-sampling-policy" in sessions
+
+
+def test_serve_cli_exposes_image_lora_flags_and_startup_passes_them_through() -> None:
+    """vmlx serve must make image LoRA lower-stack support reachable."""
+
+    cli_source = (ROOT / "vmlx_engine" / "cli.py").read_text(encoding="utf-8")
+    serve_flags = _serve_cli_flags()
+
+    assert "--lora-paths" in serve_flags
+    assert "--lora-scales" in serve_flags
+    assert "server._image_lora_paths = _split_cli_values(getattr(args, \"lora_paths\", None))" in cli_source
+    assert "server._image_lora_scales = _parse_lora_scales(" in cli_source
+    assert "lora_paths=server._image_lora_paths" in cli_source
+    assert "lora_scales=server._image_lora_scales" in cli_source
 
 
 def test_command_preview_uses_runtime_numeric_sanitizers_for_advanced_modes() -> None:

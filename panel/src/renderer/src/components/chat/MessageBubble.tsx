@@ -107,6 +107,17 @@ function groupToolStatuses(statuses: any[]): { groups: InlineToolGroup[]; hasOff
   return { groups, hasOffsets, processingStatus }
 }
 
+function stripStructuredToolMarkup(content: string): string {
+  return content
+    .replace(/<tool_call\b[^>]*>[\s\S]*?<\/tool_call>/gi, '')
+    .replace(/<zyphra_tool_call\b[^>]*>[\s\S]*?<\/zyphra_tool_call>/gi, '')
+    .replace(/<minimax:tool_call\b[^>]*>[\s\S]*?<\/minimax:tool_call>/gi, '')
+    .replace(/<function(?:=[^>\s]+|\b[^>]*)>[\s\S]*?<\/function>/gi, '')
+    .replace(/<invoke\b[^>]*>[\s\S]*?<\/invoke>/gi, '')
+    .replace(/<(?:read_file|write_file|run_command|search_files|edit_file|list_directory|execute_command|bash)\b[^>]*>[\s\S]*?<\/(?:read_file|write_file|run_command|search_files|edit_file|list_directory|execute_command|bash)>/gi, '')
+    .replace(/(?:^|\n)\s*\[Calling tool:[^\n]*(?=\n|$)/gi, '\n')
+}
+
 /** Prose classes for rendered markdown */
 const proseClasses = 'prose prose-invert max-w-none break-words overflow-x-auto [&_pre]:overflow-x-auto [&_code]:break-all [&_p]:my-2 [&_ul]:my-2 [&_ol]:my-2 [&_li]:my-0.5 [&_h1]:text-lg [&_h2]:text-base [&_h3]:text-sm [&_pre]:my-2 [&_blockquote]:border-l-2 [&_blockquote]:border-primary/30 [&_blockquote]:pl-4 [&_blockquote]:italic [&_blockquote]:text-muted-foreground [&_table]:text-sm [&_th]:text-left [&_th]:font-medium [&_th]:px-3 [&_th]:py-1.5 [&_td]:px-3 [&_td]:py-1.5'
 
@@ -291,7 +302,9 @@ export const MessageBubble = memo(function MessageBubble({ message, isStreaming,
   const renderInlineContent = () => {
     if (!message.content && (!toolGroups || toolGroups.groups.length === 0)) return null
 
-    const content = displayedContent || ''
+    const content = toolGroups
+      ? stripStructuredToolMarkup(displayedContent || '')
+      : displayedContent || ''
 
     if (toolGroups && toolGroups.hasOffsets && toolGroups.groups.length > 0) {
       const elements: JSX.Element[] = []

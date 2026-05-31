@@ -204,7 +204,7 @@ function isZayaCcaFamily(family?: string): boolean {
 }
 
 function cacheTypeRequiresPaged(cacheType?: string): boolean {
-    return cacheType === 'hybrid' || cacheType === 'mamba'
+    return cacheType === 'hybrid' || cacheType === 'mamba' || cacheType === 'rotating_kv'
 }
 
 const DSV4_PAGED_CACHE_BLOCK_SIZE = 256
@@ -227,11 +227,36 @@ const ADDITIONAL_ARG_VALUE_FLAGS = extractFlagSetFromSource(
 )
 
 const IMAGE_ADDITIONAL_ARG_BLOCKLIST = new Set([
+    '--host',
+    '--port',
+    '--uds',
+    '--api-key',
+    '--rate-limit',
+    '--timeout',
+    '--inference-endpoints',
+    '--wake-timeout',
+    '--log-level',
+    '--allowed-origins',
     '--image-mode',
     '--image-quantize',
     '--served-model-name',
     '--mflux-class',
+    '--mcp-config',
+    '--mcp-disabled-servers',
+    '--mcp-disabled-tools',
+    '--mcp-enabled-servers',
+    '--mcp-enabled-tools',
 ])
+
+const TEXT_ADDITIONAL_ARG_BLOCKLIST = new Set(
+    [
+        ...IMAGE_ADDITIONAL_ARG_BLOCKLIST,
+        ...extractFlagSetFromSource(
+            'src/main/sessions.ts',
+            'TEXT_ADDITIONAL_ARG_BLOCKLIST',
+        ),
+    ],
+)
 
 const DSV4_ADDITIONAL_ARG_BLOCKLIST = extractFlagSetFromSource(
     'src/main/sessions.ts',
@@ -484,6 +509,8 @@ function buildCommandPreview(
     // Embedding model
     if (config.embeddingModel) parts.push('--embedding-model', config.embeddingModel)
 
+    if (config.chatTemplate) parts.push('--chat-template', '"..."')
+
     // Thinking defaults are engine/model-owned. Chat/API requests carry
     // explicit enable_thinking; startup preview must not emit a server default.
 
@@ -506,7 +533,7 @@ function buildCommandPreview(
     if (config.additionalArgs?.trim()) {
         const filtered = filterAdditionalArgs(
             config.additionalArgs,
-            dsv4Active ? DSV4_ADDITIONAL_ARG_BLOCKLIST : IMAGE_ADDITIONAL_ARG_BLOCKLIST,
+            dsv4Active ? DSV4_ADDITIONAL_ARG_BLOCKLIST : TEXT_ADDITIONAL_ARG_BLOCKLIST,
         )
         parts.push(...filtered)
     }
@@ -1185,6 +1212,13 @@ describe('Tool Integration', () => {
         expect(reasoningTooltip).not.toContain('Gemma 3')
     })
 
+    it('tool parser dropdown exposes Liquid LFM2 parser', () => {
+        const formSource = readFileSync('src/renderer/src/components/sessions/SessionConfigForm.tsx', 'utf8')
+        expect(formSource).toContain("value: 'lfm2'")
+        expect(formSource).toContain('Liquid LFM2')
+        expect(formSource).toContain('<|tool_call_start|>')
+    })
+
     it('tool parser dropdown covers every parser the panel registry can emit', () => {
         const registrySource = readFileSync('src/main/model-config-registry.ts', 'utf8')
         const formSource = readFileSync('src/renderer/src/components/sessions/SessionConfigForm.tsx', 'utf8')
@@ -1600,8 +1634,126 @@ describe('Embedding Model', () => {
 
 describe('Additional Arguments', () => {
     it('appends additional args to command', () => {
-        const out = preview({ additionalArgs: '--log-level DEBUG' })
-        expect(hasFlag(out, '--log-level DEBUG')).toBe(true)
+        const out = preview({ additionalArgs: '--allowed-custom-flag yes' })
+        expect(hasFlag(out, '--allowed-custom-flag yes')).toBe(true)
+    })
+
+    it('text additional args cannot override app-owned generation, parser, cache, or MTP flags', () => {
+        const out = preview(
+            {
+                maxTokens: 123,
+                maxContextLength: 456,
+                additionalArgs: [
+                    '--max-tokens 32768',
+                    '--max-prompt-tokens=999999',
+                    '--default-enable-thinking true',
+                    '--default-repetition-penalty 1.2',
+                    '--default-temperature=0',
+                    '--reasoning-parser qwen3',
+                    '--tool-call-parser qwen',
+                    '--enable-auto-tool-choice',
+                    '--native-mtp-depth 3',
+                    '--native-mtp-sampling-policy deterministic-defaults',
+                    '--disable-native-mtp',
+                    '--use-paged-cache',
+                    '--paged-cache-block-size 1',
+                    '--kv-cache-quantization q4',
+                    '--kv-cache-group-size 32',
+                    '--speculative-model /tmp/draft',
+                    '--num-draft-tokens 8',
+                    '--allowed-custom-flag=yes',
+                ].join(' '),
+            },
+            {
+                family: 'ling',
+                toolParser: undefined,
+                reasoningParser: undefined,
+                usePagedCache: false,
+                nativeMtp: { supported: false },
+            },
+        )
+        const normalized = out.replace(/\s*\\\n\s*/g, ' ')
+
+        expect(getFlagValue(normalized, '--max-tokens')).toBe('123')
+        expect(getFlagValue(normalized, '--max-prompt-tokens')).toBe('456')
+        expect((normalized.match(/--max-tokens/g) || []).length).toBe(1)
+        expect((normalized.match(/--max-prompt-tokens/g) || []).length).toBe(1)
+        expect(normalized).not.toContain('--default-enable-thinking')
+        expect(normalized).not.toContain('--default-repetition-penalty')
+        expect(normalized).not.toContain('--default-temperature')
+        expect(normalized).not.toContain('--reasoning-parser')
+        expect(normalized).not.toContain('--tool-call-parser')
+        expect(normalized).not.toContain('--enable-auto-tool-choice')
+        expect(normalized).not.toContain('--native-mtp-depth')
+        expect(normalized).not.toContain('--native-mtp-sampling-policy')
+        expect(normalized).not.toContain('--disable-native-mtp')
+        expect(normalized).not.toContain('--paged-cache-block-size 1')
+        expect(normalized).not.toContain('--kv-cache-quantization')
+        expect(normalized).not.toContain('--kv-cache-group-size')
+        expect(normalized).not.toContain('--speculative-model')
+        expect(normalized).not.toContain('--num-draft-tokens')
+        expect(normalized).toContain('--allowed-custom-flag=yes')
+    })
+
+    it('text additional args cannot override app-owned server, template, model-name, or MCP flags', () => {
+        const out = preview({
+            host: '127.0.0.1',
+            port: 8000,
+            timeout: 300,
+            rateLimit: 2,
+            logLevel: 'WARN',
+            corsOrigins: 'https://app.example',
+            servedModelName: 'ui-name',
+            chatTemplate: 'ui-template',
+            mcpConfig: '/ui/mcp.json',
+            additionalArgs: [
+                '--host 0.0.0.0',
+                '--port=9999',
+                '--timeout 1',
+                '--rate-limit=99',
+                '--log-level DEBUG',
+                '--allowed-origins=*',
+                '--served-model-name raw-name',
+                '--chat-template raw-template',
+                '--chat-template-kwargs {"enable_thinking":true}',
+                '--mcp-config /tmp/raw-mcp.json',
+                '--mcp-enabled-servers raw',
+                '--mcp-disabled-tools raw-tool',
+                '--api-key raw-secret',
+                '--uds=/tmp/raw.sock',
+                '--wake-timeout 1',
+                '--inference-endpoints http://127.0.0.1:9999',
+                '--allowed-custom-flag yes',
+            ].join(' '),
+        })
+        const normalized = out.replace(/\s*\\\n\s*/g, ' ')
+
+        expect(getFlagValue(normalized, '--host')).toBe('127.0.0.1')
+        expect(getFlagValue(normalized, '--port')).toBe('8000')
+        expect(getFlagValue(normalized, '--timeout')).toBe('300')
+        expect(getFlagValue(normalized, '--rate-limit')).toBe('2')
+        expect(getFlagValue(normalized, '--log-level')).toBe('WARN')
+        expect(getFlagValue(normalized, '--allowed-origins')).toBe('https://app.example')
+        expect(getFlagValue(normalized, '--served-model-name')).toBe('ui-name')
+        expect(getFlagValue(normalized, '--chat-template')).toBe('"..."')
+        expect(getFlagValue(normalized, '--mcp-config')).toBe('/ui/mcp.json')
+        expect(normalized).not.toContain('0.0.0.0')
+        expect(normalized).not.toContain('9999')
+        expect(normalized).not.toContain('--timeout 1')
+        expect(normalized).not.toContain('--rate-limit=99')
+        expect(normalized).not.toContain('DEBUG')
+        expect(normalized).not.toContain('--allowed-origins=*')
+        expect(normalized).not.toContain('raw-name')
+        expect(normalized).not.toContain('raw-template')
+        expect(normalized).not.toContain('/tmp/raw-mcp.json')
+        expect(normalized).not.toContain('--chat-template-kwargs')
+        expect(normalized).not.toContain('--mcp-enabled-servers')
+        expect(normalized).not.toContain('--mcp-disabled-tools')
+        expect(normalized).not.toContain('--api-key')
+        expect(normalized).not.toContain('--uds')
+        expect(normalized).not.toContain('--wake-timeout')
+        expect(normalized).not.toContain('--inference-endpoints')
+        expect(normalized).toContain('--allowed-custom-flag yes')
     })
 
     it('DSV4 additional args cannot reenable native MTP or deterministic sampling policy', () => {
@@ -1980,6 +2132,32 @@ describe('No Hardcoded Values', () => {
 
         expect(hasFlag(mambaOut, '--use-paged-cache')).toBe(true)
         expect(hasFlag(kvOut, '--use-paged-cache')).toBe(false)
+    })
+
+    it('detected Gemma4 mixed-SWA rotating KV forces paged cache over stale saved false', () => {
+        const out = preview(
+            {
+                enablePrefixCache: true,
+                usePagedCache: false,
+                enableDiskCache: true,
+                enableBlockDiskCache: true,
+                cacheMemoryPercent: 15,
+            },
+            {
+                family: 'gemma4',
+                cacheType: 'rotating_kv',
+                usePagedCache: true,
+                isMultimodal: true,
+                toolParser: 'gemma4',
+                reasoningParser: 'gemma4',
+            },
+        )
+
+        expect(hasFlag(out, '--is-mllm')).toBe(true)
+        expect(hasFlag(out, '--use-paged-cache')).toBe(true)
+        expect(hasFlag(out, '--enable-disk-cache')).toBe(false)
+        expect(hasFlag(out, '--enable-block-disk-cache')).toBe(true)
+        expect(hasFlag(out, '--cache-memory-percent')).toBe(false)
     })
 
     it('changing maxCacheBlocks produces different CLI output', () => {
@@ -2397,6 +2575,17 @@ describe('JIT Toggle', () => {
         expect(sessions).toContain('resolveCacheLaunchPolicy')
         expect(sessions).toContain('architectureRequiresPagedCache')
         expect(sessions).toContain('zayaCcaActive ||')
+    })
+
+    it('settings form treats Gemma4 mixed-SWA rotating KV as architecture-paged cache', () => {
+        const fs = require('fs')
+        const form = fs.readFileSync(
+            'src/renderer/src/components/sessions/SessionConfigForm.tsx',
+            'utf-8',
+        )
+
+        expect(form).toContain("detectedCacheType === 'rotating_kv'")
+        expect(form).toContain('nativeCacheRequiresPaged')
     })
 
     it('settings form and launch code surface one DSV4 native composite cache switch', () => {

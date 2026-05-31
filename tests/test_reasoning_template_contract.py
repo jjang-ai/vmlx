@@ -1,3 +1,14 @@
+from pathlib import Path
+
+
+def test_reasoning_template_contract_default_out_tracks_current_release_proof_artifact():
+    from tests.cross_matrix import run_reasoning_template_contract as gate
+
+    assert gate.DEFAULT_OUT == Path(
+        "build/current-reasoning-template-contract-20260526-settings-audit.json"
+    )
+
+
 def test_reasoning_template_contract_pins_named_reasoning_edges():
     from tests.cross_matrix import run_reasoning_template_contract as gate
 

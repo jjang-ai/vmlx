@@ -318,6 +318,38 @@ def register_all(registry=None):
         )
     )
 
+    # MiMo-V2.5 JANG_2L: multimodal artifact with text-first runtime.
+    #
+    # Source contract imported from test-host.local:~/jang on 2026-05-27:
+    # full attention layers use 4 KV heads, SWA layers use 8 KV heads, V states
+    # are scaled by 0.707. The current target bundle removes MTP tensors and
+    # keeps base decode autoregressive. MiMo's template emits generic XML
+    # function calls, not Qwen tools; think_xml extracts <think> blocks.
+    _register(
+        ModelConfig(
+            family_name="mimo_v2",
+            model_types=["mimo_v2"],
+            cache_type="kv",
+            cache_subtype="mimo_v2_asymmetric_swa",
+            eos_tokens=["<|im_end|>"],
+            tool_parser="xml_function",
+            reasoning_parser="think_xml",
+            think_in_template=False,
+            supports_thinking=True,
+            supports_native_tools=True,
+            is_mllm=True,
+            architecture_hints={
+                "runtime_mtp_mode": "absent",
+                "full_attention_kv_heads": 4,
+                "swa_attention_kv_heads": 8,
+                "attention_value_scale": 0.707,
+                "swa_window": 128,
+                "swa_attention_sink_bias": True,
+            },
+            priority=4,
+        )
+    )
+
     # ── Llama family ──
 
     _register(
@@ -767,6 +799,31 @@ def register_all(registry=None):
         )
     )
 
+    # Step-3.7 Flash VLM wrapper. The top-level model_type is step3p7 and the
+    # text decoder is step3p5 with alternating full/sliding KV attention
+    # (`sliding_window=512`). Keep this as KV, not hybrid SSM: every layer is an
+    # attention cache variant and the runtime must preserve full-vs-sliding
+    # layer cache classes instead of routing it through SSM companion state.
+    _register(
+        ModelConfig(
+            family_name="step3p7",
+            model_types=["step3p7"],
+            cache_type="kv",
+            cache_subtype="step3p7_full_sliding_kv",
+            tool_parser="step3p5",
+            reasoning_parser="qwen3",
+            think_in_template=True,
+            supports_thinking=True,
+            is_mllm=True,
+            architecture_hints={
+                "text_model_type": "step3p5",
+                "attention_arch": "full_and_sliding_kv",
+                "sliding_window": 512,
+            },
+            priority=4,
+        )
+    )
+
     # ── Gemma family ──
 
     _register(
@@ -982,12 +1039,14 @@ def register_all(registry=None):
             # alias; same hybrid SSM+attention architecture as nemotron_h.
             model_types=["nemotron_h", "nemotron_h_v2"],
             cache_type="hybrid",
+            cache_subtype="nemotron_h_ssm_attention",
             eos_tokens=["<|im_end|>"],
             tool_parser="nemotron",
             reasoning_parser="deepseek_r1",
             think_in_template=True,
             supports_thinking=True,
             tokenizer_fallback=True,
+            architecture_hints={"attention_arch": "hybrid_ssm_attention"},
             priority=10,
         )
     )
@@ -1028,13 +1087,14 @@ def register_all(registry=None):
     )
 
     # Liquid AI LFM2 (Conv1d-SSM + attention hybrid). LFM2-MoE is the MoE
-    # variant. Both fall to hybrid cache. No model-specific tool parser
-    # contract today; users opt in to a parser explicitly if needed.
+    # variant. The chat template emits Liquid Python-call-list tool calls.
     _register(
         ModelConfig(
             family_name="lfm2",
             model_types=["lfm2", "lfm2_moe"],
             cache_type="hybrid",
+            tool_parser="lfm2",
+            reasoning_parser="qwen3",
             priority=10,
         )
     )

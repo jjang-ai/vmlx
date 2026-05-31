@@ -24,6 +24,31 @@ export interface AvailableInstaller {
   label: string
 }
 
+function isExpectedChildProcessStreamDisconnectError(err: unknown): boolean {
+  const code = (err as NodeJS.ErrnoException)?.code
+  const message = String((err as Error)?.message || '').toLowerCase()
+  return (
+    code === "EPIPE" ||
+    code === "ECONNRESET" ||
+    code === "ERR_STREAM_DESTROYED" ||
+    code === "ERR_STREAM_WRITE_AFTER_END" ||
+    message.includes("write EPIPE".toLowerCase()) ||
+    message.includes("broken pipe") ||
+    message.includes("stream has been destroyed") ||
+    message.includes("write after end")
+  )
+}
+
+function attachChildProcessStreamErrorGuard(
+  stream: NodeJS.ReadableStream | null | undefined,
+  onUnexpected: (err: Error) => void,
+): void {
+  stream?.on('error', (err: Error) => {
+    if (isExpectedChildProcessStreamDisconnectError(err)) return
+    onUnexpected(err)
+  })
+}
+
 // Common installation paths — uv first (recommended), then pip/brew/conda
 // vmlx ships THREE entry-point names — vmlx, vmlx-serve, vmlx-engine — all
 // pointing at the same cli:main. Pre-2026-04-30 detection only looked for
@@ -474,6 +499,16 @@ export function installEngineStreaming(
   })
   proc.stderr?.on('data', (data: Buffer) => {
     onLog(data.toString())
+  })
+  attachChildProcessStreamErrorGuard(proc.stdout, (err) => {
+    const msg = `[Engine Manager] install stdout stream error: ${err.message}`
+    console.warn(msg)
+    onLog(`${msg}\n`)
+  })
+  attachChildProcessStreamErrorGuard(proc.stderr, (err) => {
+    const msg = `[Engine Manager] install stderr stream error: ${err.message}`
+    console.warn(msg)
+    onLog(`${msg}\n`)
   })
 
   proc.on('exit', (code) => {

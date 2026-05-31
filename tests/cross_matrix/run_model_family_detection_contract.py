@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Any
 
 
-DEFAULT_OUT = Path("build/current-model-family-detection-contract-20260522.json")
+DEFAULT_OUT = Path("build/current-model-family-detection-contract-20260531-post-step-lfm-refresh.json")
 
 SOURCE_HASH_FILES = (
     "vmlx_engine/model_config_registry.py",
@@ -41,11 +41,11 @@ SOURCE_HASH_FILES = (
 
 ENGINE_PATTERN = (
     "deepseek_v4 or zaya or ling or bailing or nemotron or qwen3_5 "
-    "or minimax or hy_v3 or decode_speed"
+    "or minimax or hy_v3 or step3p7 or step37 or lfm2 or decode_speed"
 )
 PANEL_PATTERN = (
     "ZAYA|zaya|Ling|Bailing|bailing|Nemotron|Qwen|MXFP|mxfp|JANGTQ|"
-    "MTP|MiniMax|minimax|Hy3|backend-covered|TurboQuant|local high-risk"
+    "MTP|MiniMax|minimax|Hy3|Step|step3p7|LFM|lfm2|backend-covered|TurboQuant|local high-risk"
 )
 
 COMMANDS: dict[str, tuple[Path, list[str]]] = {
@@ -118,6 +118,8 @@ REQUIRED_ROWS = (
     "minimax_m2_parser_alias",
     "hy3_jangtq_hunyuan_qwen3",
     "hy3_jangtq_k_reasoning_policy",
+    "step37_flash_vlm_full_sliding_kv",
+    "lfm25_moe_hybrid_registry",
     "decode_speed_dsv4_minimax_canonical_parsers",
     "decode_speed_no_legacy_32k_startup_cap",
     "decode_speed_qwen36_mxfp8_native_mtp_rows",
@@ -172,6 +174,7 @@ ROW_MARKERS: dict[str, tuple[str, ...]] = {
     "nemotron_h_registry_hybrid_cache": (
         "test_nemotron_hybrid_cache",
         "test_nemotron_h_v2_config",
+        "test_nemotron_h_stale_omni_stamp_without_media_stays_text_hybrid",
     ),
     "qwen36_dense_linear_attention_hybrid_cache": (
         "test_qwen3_5_linear_attention_config_uses_hybrid_cache",
@@ -208,6 +211,14 @@ ROW_MARKERS: dict[str, tuple[str, ...]] = {
     ),
     "hy3_jangtq_k_reasoning_policy": (
         "keeps Hy3 JANGTQ_K Low/High reasoning contract",
+    ),
+    "step37_flash_vlm_full_sliding_kv": (
+        "test_step37_flash_jang_config",
+        "detects backend-covered model_type=step3p7",
+    ),
+    "lfm25_moe_hybrid_registry": (
+        "test_lfm2_moe_config",
+        "detects backend-covered model_type=lfm2_moe",
     ),
     "decode_speed_dsv4_minimax_canonical_parsers": (
         "test_decode_speed_gate_uses_canonical_release_parsers_for_dsv4_and_minimax",

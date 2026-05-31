@@ -76,13 +76,13 @@ def ensure_thinking_off_sentinel(
     on exact-answer prompts. The stable prompt contract is an explicit empty
     thought sentinel: ``<think>\n</think>\n\n``.
 
-    Do not add it for tool requests: tool selection often needs the model's
-    planning rail, and existing server paths suppress reasoning in the stream
-    instead of suppressing tool decisions in the prompt.
+    Do not add it for most tool requests: tool selection often needs the
+    model's planning rail, and existing server paths suppress reasoning in the
+    stream instead of suppressing tool decisions in the prompt. LFM2 is the
+    exception: its native tool format follows the assistant prefix directly,
+    and live JANG_2L runs otherwise stay in an explicit ``<think>`` block until
+    the token cap instead of reaching the tool marker.
     """
-
-    if tools_present:
-        return prompt
 
     last_open = prompt.rfind("<think>")
     if last_open >= 0:
@@ -93,7 +93,11 @@ def ensure_thinking_off_sentinel(
 
     fam = (family_name or "").lower()
     name = (model_name or "").lower()
-    needs_empty_think = fam == "minimax" or "minimax" in name
+    is_lfm2 = fam in {"lfm2", "lfm2_moe"} or "lfm2" in name
+    if tools_present and not is_lfm2:
+        return prompt
+
+    needs_empty_think = fam == "minimax" or "minimax" in name or is_lfm2
     if not needs_empty_think:
         return prompt
 

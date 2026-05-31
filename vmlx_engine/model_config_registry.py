@@ -184,6 +184,43 @@ def _is_affine_jang_qwen_hybrid_vlm(
     return not _is_mxtq_jang_config(jang_config)
 
 
+def _is_step3p7_text_bridge(model_config: dict[str, Any]) -> bool:
+    """Return true for Step3.7 JANG bundles exposing only Step3p5 text runtime."""
+    if not isinstance(model_config, dict):
+        return False
+    model_type = str(model_config.get("model_type") or "").lower()
+    model_file = str(model_config.get("model_file") or "").split("/")[-1].lower()
+    text_model_type = str(
+        (model_config.get("text_config") or {}).get("model_type") or ""
+    ).lower()
+    return (
+        model_type == "step3p7"
+        and model_file == "step3p7_mlx.py"
+        and text_model_type == "step3p5"
+    )
+
+
+def _source_step3p7_vlm_runtime_available() -> bool:
+    """Return true when vMLX ships the source-owned Step3.7 VLM runtime surface."""
+    try:
+        from .models import step3p7_mlx_vlm as runtime
+    except Exception:
+        return False
+    return all(
+        hasattr(runtime, name)
+        for name in (
+            "Model",
+            "ModelConfig",
+            "TextConfig",
+            "VisionConfig",
+            "LanguageModel",
+            "VisionModel",
+            "Step3VLProcessor",
+            "Step3VisionProcessor",
+        )
+    )
+
+
 def _is_native_mtp_qwen_vl_artifact_ready(model_path: str | None) -> bool:
     """Return true when Qwen affine-JANG has real native-MTP VL tensors.
 
@@ -223,11 +260,26 @@ def _with_linear_attention_cache_override(
     return config
 
 
+def _with_hybrid_override_pattern_hint(
+    config: ModelConfig,
+    model_config: dict[str, Any],
+) -> ModelConfig:
+    if not isinstance(model_config, dict):
+        return config
+    pattern = model_config.get("hybrid_override_pattern")
+    if not isinstance(pattern, str) or not pattern:
+        return config
+    hints = dict(getattr(config, "architecture_hints", None) or {})
+    hints["hybrid_override_pattern"] = pattern
+    return replace(config, architecture_hints=hints)
+
+
 def _with_config_metadata_overrides(
     config: ModelConfig,
     model_config: dict[str, Any],
 ) -> ModelConfig:
     config = _with_linear_attention_cache_override(config, model_config)
+    config = _with_hybrid_override_pattern_hint(config, model_config)
     if config.family_name in {"qwen3_5", "qwen3_5_moe"} and _config_declares_media(
         model_config
     ):
@@ -426,6 +478,7 @@ class ModelConfigRegistry:
             is_zaya_family = base.family_name in {"zaya", "zaya1_vl"}
             is_hy3_family = base.family_name == "hy_v3"
             is_minimax_family = base.family_name == "minimax"
+            is_mimo_v2_family = base.family_name == "mimo_v2"
             preserve_template_metadata_when_no_thinking = False
 
             if is_zaya_family:
@@ -463,6 +516,15 @@ class ModelConfigRegistry:
                 # accepts registered parser ids. Keep the family parser
                 # canonical here so source, packaged app, and CLI agree.
                 updates["reasoning_parser"] = "minimax_m2"
+            elif is_mimo_v2_family:
+                # MiMo-V2.5 uses generic XML function calls and <think> blocks.
+                # Do not let stale sidecars promote it to unrelated Qwen/JSON
+                # tool formats or qwen3-specific reasoning extraction.
+                updates["reasoning_parser"] = "think_xml"
+                updates["tool_parser"] = "xml_function"
+                updates["supports_native_tools"] = True
+                updates["supports_thinking"] = True
+                updates["think_in_template"] = False
             elif base_supports_thinking is False:
                 updates["supports_thinking"] = False
             elif isinstance(sth, bool):
@@ -474,11 +536,12 @@ class ModelConfigRegistry:
                     or is_ling_family
                     or is_hy3_family
                     or is_minimax_family
+                    or is_mimo_v2_family
                 )
                 and base_supports_thinking is not False
             ):
                 updates["reasoning_parser"] = rp if rp != "none" else None
-            if tp is not None:
+            if tp is not None and not is_mimo_v2_family:
                 updates["tool_parser"] = tp if tp != "none" else None
             if isinstance(tin, bool) and not (is_zaya_family or is_ling_family or is_hy3_family) and (
                 base_supports_thinking is not False or preserve_template_metadata_when_no_thinking
@@ -488,14 +551,28 @@ class ModelConfigRegistry:
                 updates["cache_type"] = ct
             if cst:
                 updates["cache_subtype"] = str(cst)
-            if _is_affine_jang_qwen_hybrid_vlm(local_model_config, jcfg):
+            if _is_step3p7_text_bridge(local_model_config):
+                hints = dict(getattr(base, "architecture_hints", None) or {})
+                if _source_step3p7_vlm_runtime_available():
+                    hints["runtime_scope"] = "source_vlm_needs_live_proof"
+                    hints["vl_runtime_available"] = True
+                    hints["text_bridge_runtime_scope"] = (
+                        "text_bridge_ignored_for_source_vlm"
+                    )
+                    updates["is_mllm"] = True
+                else:
+                    hints["runtime_scope"] = "text_bridge_no_vlm"
+                    hints["vl_runtime_available"] = False
+                    updates["is_mllm"] = False
+                updates["architecture_hints"] = hints
+            elif _is_affine_jang_qwen_hybrid_vlm(local_model_config, jcfg):
                 # Qwen3.6 affine-JANG carries real VL/video metadata, but the
                 # current mlx_vlm qwen3_5 language path corrupts text logits
                 # through the M-RoPE fallback. Keep plain affine-JANG in
                 # text-loader mode, but allow indexed native-MTP VL artifacts
                 # that have a dedicated VLM route.
                 updates["is_mllm"] = _is_native_mtp_qwen_vl_artifact_ready(model_name)
-            elif mod == "vision" or (mod == "omni" and has_config_media):
+            elif mod == "vision" or mod == "multimodal" or (mod == "omni" and has_config_media):
                 # `omni` only becomes MLLM when config.json carries real
                 # media metadata. Some Nemotron-H text extracts keep stale
                 # Omni stamps or preprocessor_config.json sidecars but do not
@@ -513,6 +590,7 @@ class ModelConfigRegistry:
                     updates["is_mllm"] = False
             if updates:
                 base = replace(base, **updates)
+            base = _with_hybrid_override_pattern_hint(base, local_model_config)
             return base
         except Exception as e:
             logger.debug(f"_try_jang_stamp failed for {model_name}: {e}")

@@ -667,6 +667,31 @@ class TestServerForwarding:
         finally:
             store2.shutdown()
 
+    def test_block_disk_round_trip_preserves_trailing_skip_cache_slots(self):
+        """Hybrid L2 blocks must not drop trailing no-state/skip cache slots."""
+        mx = pytest.importorskip("mlx.core")
+        from vmlx_engine.block_disk_store import _deserialize_block, _serialize_block
+
+        cache_data = [
+            (
+                "kv",
+                mx.array([[1.0, 2.0], [3.0, 4.0]]),
+                mx.array([[5.0, 6.0], [7.0, 8.0]]),
+            ),
+            ("skip",),
+            ("skip",),
+        ]
+
+        tensors, dtype, num_layers = _serialize_block(cache_data)
+        assert num_layers == 3
+
+        restored = _deserialize_block(dict(tensors), dtype)
+
+        assert len(restored) == 3
+        assert restored[0][0] == "kv"
+        assert restored[1] == ("skip",)
+        assert restored[2] == ("skip",)
+
     def test_ssm_companion_record_rejects_runtime_fingerprint_drift(
         self, monkeypatch, tmp_path
     ):

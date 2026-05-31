@@ -20,7 +20,9 @@ from pathlib import Path
 from typing import Any
 
 
-DEFAULT_OUT = Path("build/current-max-output-context-contract-20260521.json")
+DEFAULT_OUT = Path(
+    "build/current-max-output-context-contract-20260531-post-step-lfm-refresh.json"
+)
 
 SOURCE_HASH_FILES = (
     "vmlx_engine/server.py",

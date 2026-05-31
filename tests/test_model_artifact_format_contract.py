@@ -1,3 +1,14 @@
+from pathlib import Path
+
+
+def test_model_artifact_format_contract_default_out_tracks_current_release_proof_artifact():
+    from tests.cross_matrix import run_model_artifact_format_contract as gate
+
+    assert gate.DEFAULT_OUT == Path(
+        "build/current-model-artifact-format-contract-20260531-post-step-lfm-refresh.json"
+    )
+
+
 def test_model_artifact_format_contract_pins_named_artifact_edges():
     from tests.cross_matrix import run_model_artifact_format_contract as gate
 

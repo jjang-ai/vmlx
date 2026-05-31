@@ -30,6 +30,17 @@ describe('tool media follow-up routing', () => {
     expect(helper).toContain("type: 'video_url'")
   })
 
+  it('keeps filesystem media-reader tools out of direct attachment requests', () => {
+    const chat = readFileSync(`${repoRoot}/src/main/ipc/chat.ts`, 'utf8')
+
+    expect(chat).toContain('DIRECT_MEDIA_ATTACHMENT_TOOL_RULE')
+    expect(chat).toContain('hasDirectMediaAttachments?: boolean')
+    expect(chat).toContain('context.hasDirectMediaAttachments')
+    expect(chat).toContain('disabled.add("read_image")')
+    expect(chat).toContain('disabled.add("read_video")')
+    expect(chat).toContain('hasDirectMediaAttachments: hasMediaAttachments')
+  })
+
   it('builds real multimodal follow-up content in text-image-video order', () => {
     const content = buildToolMediaFollowupContent(
       ['data:image/png;base64,AAAA'],

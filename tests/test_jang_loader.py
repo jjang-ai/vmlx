@@ -1,4 +1,5 @@
 """Tests for JANG model loading — param count, tree_flatten, detection, MCP config."""
+import json
 import pytest
 from pathlib import Path
 
@@ -53,6 +54,129 @@ class TestJangDetection:
 
         assert jang_loader.load_jang_model(tmp_path, skip_eval=True) is expected
 
+    def test_normalize_step3p5_alias_for_step3p7_model_type(self):
+        from vmlx_engine.utils.jang_loader import _normalize_step3p7_model_type
+
+        config = {"model_type": "step3p7", "text_config": {"model_type": "step3p7"}}
+        _normalize_step3p7_model_type(config)
+        assert config["model_type"] == "step3p5"
+        assert config["text_config"]["model_type"] == "step3p5"
+
+    def test_step3p7_moe_weights_remap_to_step3p5_module_paths(self):
+        from vmlx_engine.utils.jang_loader import _remap_step3p7_moe_weights
+
+        marker = object()
+        weights = {
+            "model.layers.10.moe.gate.weight": marker,
+            "model.layers.10.moe.gate.scales": marker,
+            "model.layers.10.moe.router_bias": marker,
+            "model.layers.10.moe.up_proj.weight": marker,
+            "model.layers.10.moe.gate_proj.weight": marker,
+            "model.layers.10.moe.down_proj.weight": marker,
+            "model.layers.10.share_expert.up_proj.weight": marker,
+            "model.layers.10.share_expert.gate_proj.weight": marker,
+            "model.layers.10.share_expert.down_proj.weight": marker,
+            "model.layers.10.self_attn.q_proj.weight": marker,
+        }
+
+        remapped = _remap_step3p7_moe_weights(
+            weights,
+            {"model_type": "step3p5"},
+            {"architecture": {"type": "step3p7"}},
+        )
+
+        assert set(remapped) == {
+            "model.layers.10.mlp.gate.gate.weight",
+            "model.layers.10.mlp.gate.gate.scales",
+            "model.layers.10.mlp.gate.router_bias",
+            "model.layers.10.mlp.switch_mlp.up_proj.weight",
+            "model.layers.10.mlp.switch_mlp.gate_proj.weight",
+            "model.layers.10.mlp.switch_mlp.down_proj.weight",
+            "model.layers.10.mlp.share_expert.up_proj.weight",
+            "model.layers.10.mlp.share_expert.gate_proj.weight",
+            "model.layers.10.mlp.share_expert.down_proj.weight",
+            "model.layers.10.self_attn.q_proj.weight",
+        }
+
+    def test_step3p7_dense_shard_norm_weights_get_zero_centered_offset(self):
+        import mlx.core as mx
+
+        from vmlx_engine.utils.jang_loader import _fix_step3p7_zero_centered_norm_weights
+
+        raw_norm = mx.array([-0.25, 0.125], dtype=mx.float16)
+        raw_attn = mx.array([0.5], dtype=mx.float16)
+        weights = {
+            "model.layers.0.input_layernorm.weight": raw_norm,
+            "model.layers.0.self_attn.q_norm.weight": raw_attn,
+            "model.layers.0.self_attn.q_proj.weight": mx.array([1.0], dtype=mx.float16),
+        }
+
+        fixed = _fix_step3p7_zero_centered_norm_weights(
+            weights,
+            {"model_type": "step3p5"},
+            {"architecture": {"type": "step3p7"}},
+            shard_had_vanilla_moe_keys=False,
+        )
+
+        assert fixed["model.layers.0.input_layernorm.weight"].tolist() == [0.75, 1.125]
+        assert fixed["model.layers.0.self_attn.q_norm.weight"].tolist() == [1.5]
+        assert fixed["model.layers.0.self_attn.q_proj.weight"].tolist() == [1.0]
+
+    def test_step3p7_vlm_loader_registers_source_runtime_before_mlx_vlm_resolution(
+        self,
+        tmp_path,
+        monkeypatch,
+    ):
+        import sys
+
+        import mlx_vlm.utils as vlm_utils
+
+        from vmlx_engine.utils import jang_loader
+
+        config = {
+            "model_type": "step3p7",
+            "text_config": {"model_type": "step3p5"},
+            "vision_config": {"model_type": "perception_encoder"},
+            "quantization": {"bits": 4, "group_size": 64},
+        }
+        (tmp_path / "config.json").write_text(json.dumps(config), encoding="utf-8")
+
+        for name in (
+            "mlx_vlm.models.step3p7",
+            "mlx_vlm.models.step3p7.processing_step3",
+        ):
+            sys.modules.pop(name, None)
+
+        monkeypatch.setattr(jang_loader, "_ensure_zaya_runtime_supported", lambda *a, **k: None)
+        monkeypatch.setattr(
+            jang_loader,
+            "_ensure_jang_family_runtime_supported",
+            lambda *a, **k: None,
+        )
+        monkeypatch.setattr(vlm_utils, "load_config", lambda path: dict(config))
+        monkeypatch.setattr(
+            jang_loader,
+            "_prepare_runtime_weight_quantization",
+            lambda *a, **k: (dict(config), 4, 64),
+        )
+
+        def fake_get_model_and_args(*, config):
+            assert "mlx_vlm.models.step3p7" in sys.modules
+            assert "mlx_vlm.models.step3p7.processing_step3" in sys.modules
+            raise RuntimeError("registered-step3p7")
+
+        monkeypatch.setattr(vlm_utils, "get_model_and_args", fake_get_model_and_args)
+
+        with pytest.raises(RuntimeError, match="registered-step3p7"):
+            jang_loader._load_jang_v2_vlm(
+                tmp_path,
+                {"format": "jang", "quantization": {}},
+                skip_eval=True,
+            )
+
+        sys.modules.pop("mlx_vlm.models.step3p7.processing_step3", None)
+        sys.modules.pop("mlx_vlm.models.step3p7", None)
+
     def test_jang_routed_group_size_reads_nested_mixed_affine_metadata(self):
         from vmlx_engine.utils.jang_loader import _jang_routed_expert_group_size
 
@@ -69,6 +193,123 @@ class TestJangDetection:
             )
             == 128
         )
+
+    def test_step37_moe_num_experts_triggers_gate_dequant(self):
+        from vmlx_engine.utils.jang_loader import _moe_expert_count
+
+        config = {
+            "model_type": "step3p7",
+            "text_config": {
+                "model_type": "step3p5",
+                "hidden_size": 4096,
+                "moe_num_experts": 288,
+            },
+        }
+
+        assert _moe_expert_count(config) == 288
+
+    def test_step37_quantized_gate_key_is_not_dequantized_after_quantize(self):
+        import mlx.nn as nn
+        from vmlx_engine.utils.jang_loader import _should_dequantize_vlm_gate_weight
+
+        class _Gate(nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.gate = nn.QuantizedLinear(
+                    input_dims=4096,
+                    output_dims=288,
+                    bias=False,
+                    group_size=64,
+                    bits=8,
+                )
+
+        class _MLP(nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.gate = _Gate()
+
+        class _Layer(nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.mlp = _MLP()
+
+        class _Inner(nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.layers = [_Layer()]
+
+        class _LanguageModel(nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.model = _Inner()
+
+        class _VLM(nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.language_model = _LanguageModel()
+
+        model = _VLM()
+
+        assert _should_dequantize_vlm_gate_weight(
+            model,
+            "language_model.model.layers.0.mlp.gate.gate.weight",
+        ) is False
+
+    def test_step37_text_loader_preserves_quantized_gate_sidecars(self):
+        import mlx.core as mx
+        import mlx.nn as nn
+
+        from vmlx_engine.utils.jang_loader import _prepare_gate_dequant_weights
+
+        class _Gate(nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.gate = nn.QuantizedLinear(
+                    input_dims=4096,
+                    output_dims=288,
+                    bias=False,
+                    group_size=64,
+                    bits=8,
+                )
+
+        class _MLP(nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.gate = _Gate()
+
+        class _Layer(nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.mlp = _MLP()
+
+        class _Inner(nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.layers = [_Layer()]
+
+        model = nn.Module()
+        model.model = _Inner()
+
+        weights = {
+            "model.layers.0.mlp.gate.gate.weight": mx.zeros(
+                (288, 1024),
+                dtype=mx.uint32,
+            ),
+            "model.layers.0.mlp.gate.gate.scales": mx.zeros(
+                (288, 64),
+                dtype=mx.float16,
+            ),
+            "model.layers.0.mlp.gate.gate.biases": mx.zeros(
+                (288, 64),
+                dtype=mx.float16,
+            ),
+        }
+
+        prepared = _prepare_gate_dequant_weights(model, weights)
+
+        assert prepared["model.layers.0.mlp.gate.gate.weight"].dtype == mx.uint32
+        assert "model.layers.0.mlp.gate.gate.scales" in prepared
+        assert "model.layers.0.mlp.gate.gate.biases" in prepared
 
 
 def test_fix_quantized_bits_uses_embedding_logical_dims_for_ambiguous_affine_shape():

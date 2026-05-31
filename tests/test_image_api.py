@@ -356,6 +356,68 @@ class TestImageGenRequestValidation:
         assert engine.load_calls[-1]["model_name"] == "z-image-turbo"
         assert engine.load_calls[-1].get("mflux_class") is None
 
+    @pytest.mark.anyio
+    async def test_generation_lazy_load_passes_configured_lora(
+        self, client, monkeypatch, tmp_path
+    ):
+        """LoRA paths configured by `vmlx serve` must reach lazy image loads."""
+        import vmlx_engine.image_gen as image_gen_mod
+        import vmlx_engine.server as srv
+
+        class LoraImageEngine:
+            def __init__(self):
+                self._loaded = False
+                self.model_name = None
+                self.load_calls = []
+
+            @property
+            def is_loaded(self):
+                return self._loaded
+
+            def load(self, model_name, **kwargs):
+                self.load_calls.append({"model_name": model_name, **kwargs})
+                self.model_name = model_name
+                self._loaded = True
+
+            def generate(self, **kwargs):
+                return SimpleNamespace(
+                    b64_json="AAAA",
+                    seed=kwargs.get("seed") or 123,
+                )
+
+        engine_holder = {}
+
+        def make_engine():
+            engine = LoraImageEngine()
+            engine_holder["engine"] = engine
+            return engine
+
+        monkeypatch.setattr(srv, "_image_gen", None)
+        monkeypatch.setattr(srv, "_image_gen_lock", None)
+        monkeypatch.setattr(srv, "_standby_state", None)
+        monkeypatch.setattr(srv, "_model_name", "schnell")
+        monkeypatch.setattr(srv, "_served_model_name", None)
+        monkeypatch.setattr(srv, "_model_path", str(tmp_path))
+        monkeypatch.setattr(srv, "_image_lora_paths", ["/tmp/style.safetensors"], raising=False)
+        monkeypatch.setattr(srv, "_image_lora_scales", [0.7], raising=False)
+        monkeypatch.setattr(image_gen_mod, "ImageGenEngine", make_engine)
+
+        resp = await client.post(
+            "/v1/images/generations",
+            json={
+                "model": "dev",
+                "prompt": "lora wiring proof",
+                "size": "64x64",
+                "steps": 1,
+                "seed": 7,
+            },
+        )
+
+        assert resp.status_code == 200, resp.text
+        load_call = engine_holder["engine"].load_calls[-1]
+        assert load_call["lora_paths"] == ["/tmp/style.safetensors"]
+        assert load_call["lora_scales"] == [0.7]
+
 
 # ---------------------------------------------------------------------------
 # 3. Image edit request body validation
@@ -833,6 +895,30 @@ class TestImageGenWorkerExecutor:
         source = inspect.getsource(cli.serve_command)
         assert "server._run_image_gen_call_sync(" in source
         assert "server._image_gen.load" in source
+
+    def test_cli_startup_image_load_wires_lora_flags(self):
+        import vmlx_engine.cli as cli
+
+        parser_source = inspect.getsource(cli.main)
+        serve_source = inspect.getsource(cli.serve_command)
+
+        assert "--lora-paths" in parser_source
+        assert "--lora-scales" in parser_source
+        assert "server._image_lora_paths" in serve_source
+        assert "lora_paths=server._image_lora_paths" in serve_source
+        assert "lora_scales=server._image_lora_scales" in serve_source
+
+    def test_cli_lora_flags_fail_clearly_for_text_models(self):
+        import vmlx_engine.cli as cli
+
+        args = SimpleNamespace(
+            model="/tmp/text-model",
+            lora_paths=["/tmp/style.safetensors"],
+            lora_scales=None,
+        )
+
+        with pytest.raises(SystemExit, match="--lora-paths"):
+            cli._validate_lora_args_for_model_type(args, is_image=False)
 
     def test_cli_image_mode_suppresses_resource_tracker_shutdown_noise(self):
         import vmlx_engine.cli as cli

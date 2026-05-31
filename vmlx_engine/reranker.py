@@ -21,6 +21,8 @@ import os
 from dataclasses import dataclass
 from typing import Optional
 
+from .mlx_memory import clear_mlx_memory_cache
+
 logger = logging.getLogger(__name__)
 
 
@@ -484,9 +486,4 @@ class Reranker:
         self._tokenizer = None
         self._projector = None
         self._backend = None
-        try:
-            import mlx.core as mx
-            if hasattr(mx, "clear_memory_cache"):
-                mx.clear_memory_cache()
-        except Exception:
-            pass
+        clear_mlx_memory_cache(log=logger)

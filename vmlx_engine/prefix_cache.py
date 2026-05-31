@@ -49,7 +49,14 @@ logger = logging.getLogger(__name__)
 # forcing a clean rebuild on next run. DSV4 specifically also gets a new
 # v7 schema tag below to invalidate v6 entries that were stored before
 # the guard landed.
-PAGED_CACHE_SCHEMA_VERSION = "paged_n1_keys_v3"
+# 2026-05-25 v4 bump: Gemma4/mixed-SWA block records now preserve
+# RotatingKVCache tags and meta_state through paged/L2 reconstruction.
+# Older v3 records can restore sliding-window layers as plain KVCache,
+# causing slow and semantically wrong cache-hit decode.
+# 2026-05-25 v5 bump: mixed-SWA same-process cache hits keep resident
+# rotating/full-attention block data so immediate repeats cannot hit
+# partially written or stale disk-only blocks with crossed layer shapes.
+PAGED_CACHE_SCHEMA_VERSION = "paged_n1_keys_v5"
 
 
 def runtime_cache_fingerprint() -> str:
@@ -783,6 +790,19 @@ def _cache_data_has_zaya_cca(cache_data) -> bool:
     return False
 
 
+def _cache_data_has_rotating_kv(cache_data) -> bool:
+    """Return True when extracted cache states include rotating-window KV."""
+    try:
+        for layer_state in cache_data or []:
+            if not isinstance(layer_state, dict):
+                continue
+            if "Rotating" in str(layer_state.get("class_name", "")):
+                return True
+    except Exception:
+        return False
+    return False
+
+
 def _dsv4_cache_meta(layer_state: Dict[str, Any]) -> Dict[str, Any]:
     meta: Dict[str, Any] = {}
     cr = layer_state.get("compress_ratio")
@@ -809,8 +829,32 @@ def _dsv4_cache_meta(layer_state: Dict[str, Any]) -> Dict[str, Any]:
     return meta
 
 
+def _positional_layer_slice_bounds(
+    layer_state, class_name, start_idx, end_idx, seq_len, existing_tokens=0,
+):
+    """Map global token positions to a layer-local KV slice range."""
+    layer_offset = 0
+    if seq_len > 0 and "Rotating" in str(class_name):
+        meta = layer_state.get("meta_state", ()) if isinstance(layer_state, dict) else ()
+        if meta and len(meta) >= 3:
+            try:
+                absolute_offset = int(meta[2])
+            except (TypeError, ValueError):
+                absolute_offset = 0
+            if absolute_offset > seq_len:
+                layer_offset = absolute_offset - seq_len
+    elif seq_len > 0 and existing_tokens > seq_len:
+        layer_offset = existing_tokens
+
+    local_start = start_idx - layer_offset
+    local_end = end_idx - layer_offset
+    actual_end = min(local_end, seq_len)
+    slice_start = max(local_start, 0)
+    return slice_start, actual_end
+
+
 def _numpy_block_slice(
-    cache_data, np_sources, start_idx, end_idx, is_last_block,
+    cache_data, np_sources, start_idx, end_idx, is_last_block, existing_tokens=0,
 ):
     """Create per-block cache_data using numpy slicing (no MLX/Metal ops).
 
@@ -921,17 +965,48 @@ def _numpy_block_slice(
             else:
                 block_slices.append(("skip",))
                 continue
-            actual_end = min(end_idx, seq_len)
-            if start_idx >= actual_end:
+            slice_start, actual_end = _positional_layer_slice_bounds(
+                layer_state, cls, start_idx, end_idx, seq_len, existing_tokens,
+            )
+            if actual_end <= 0 or slice_start >= actual_end:
                 block_slices.append(("skip",))
                 continue
             if ndim == 4:
-                ks = np_k[:, :, start_idx:actual_end, :]
-                vs = np_v[:, :, start_idx:actual_end, :]
+                ks = np_k[:, :, slice_start:actual_end, :]
+                vs = np_v[:, :, slice_start:actual_end, :]
             else:
-                ks = np_k[:, start_idx:actual_end, :]
-                vs = np_v[:, start_idx:actual_end, :]
-            block_slices.append(("kv", ks, vs))
+                ks = np_k[:, slice_start:actual_end, :]
+                vs = np_v[:, slice_start:actual_end, :]
+            if "Rotating" in cls:
+                meta = layer_state.get("meta_state", ())
+                max_size = seq_len
+                keep = 0
+                offset = None
+                idx_state = None
+                if meta and len(meta) >= 2:
+                    try:
+                        keep = int(meta[0])
+                        max_size = int(meta[1])
+                        if len(meta) >= 3:
+                            offset = int(meta[2])
+                        if len(meta) >= 4:
+                            idx_state = int(meta[3])
+                    except (ValueError, TypeError):
+                        max_size = seq_len
+                        keep = 0
+                        offset = None
+                        idx_state = None
+                block_slices.append((
+                    "rotating_kv",
+                    mx.array(ks),
+                    mx.array(vs),
+                    max_size,
+                    keep,
+                    offset,
+                    idx_state,
+                ))
+            else:
+                block_slices.append(("kv", ks, vs))
         else:
             # Cumulative / non-positional layer
             state = layer_state.get("state")
@@ -1577,6 +1652,9 @@ class BlockAwarePrefixCache:
         has_zaya_cca_cache_data = (
             _cache_data_has_zaya_cca(cache_data) if is_tensor_data else False
         )
+        has_rotating_kv_cache_data = (
+            _cache_data_has_rotating_kv(cache_data) if is_tensor_data else False
+        )
 
         # Get or create block table
         block_table = self.paged_cache.get_block_table(request_id)
@@ -1758,34 +1836,6 @@ class BlockAwarePrefixCache:
                 f"(out of {len(cache_data)} total)"
             )
 
-        # Detect cache_data position offset for cache-hit requests.
-        # After a cache hit, the BatchGenerator's raw cache may only contain
-        # newly-processed tokens (remaining + generated), not the full prompt
-        # history.  Block extraction uses global positions (relative to the
-        # start of the full token sequence), but the cache_data KV arrays may
-        # start at a later position.  Compute the offset to map global → local.
-        cache_pos_offset = 0
-        if is_tensor_data and existing_tokens > 0:
-            for _ls in cache_data:
-                _st = _ls.get("state")
-                _cls = _ls.get("class_name", "")
-                if _st and self._is_positional_cache(_st, _cls):
-                    try:
-                        _k, _ = _st
-                        if not isinstance(_k, (tuple, list)) and hasattr(_k, 'shape'):
-                            _kv_seq_len = _k.shape[2] if len(_k.shape) == 4 else (
-                                _k.shape[1] if len(_k.shape) == 3 else 0
-                            )
-                            if _kv_seq_len > 0 and existing_tokens > _kv_seq_len:
-                                cache_pos_offset = existing_tokens
-                                logger.debug(
-                                    f"Cache position offset: {cache_pos_offset} "
-                                    f"(KV seq_len={_kv_seq_len}, existing={existing_tokens})"
-                                )
-                    except Exception:
-                        pass
-                    break  # Only need to check one KV layer
-
         pending_disk_writes: list = []
 
         for i in range(num_new_blocks):
@@ -1948,25 +1998,30 @@ class BlockAwarePrefixCache:
             # Extract and store actual tensor slices for this block
             if is_tensor_data and HAS_MLX:
                 # is_last already computed above (for cumulative state checks)
-                # Use local positions when cache_data doesn't cover the full
-                # token history (cache-hit requests where raw_cache only has
-                # newly-processed tokens).
-                local_start = global_start - cache_pos_offset
-                local_end = global_end - cache_pos_offset
                 block_kv_data = self._extract_block_tensor_slice(
-                    cache_data, local_start, local_end, is_last_block=is_last,
+                    cache_data,
+                    global_start,
+                    global_end,
+                    is_last_block=is_last,
                     np_sources=np_sources if np_sources else None,
+                    existing_tokens=existing_tokens,
                 )
                 if block_kv_data:
-                    # DSV4 and ZAYA CCA are not normal per-block KV payloads.
+                    # DSV4, ZAYA CCA, and mixed-SWA rotating KV are not normal
+                    # per-block KV payloads.
                     # DSV4 terminal blocks carry SWA+CSA/HCA composite state;
                     # ZAYA terminal blocks carry CCA conv_state + prev_hs.
+                    # Mixed-SWA carries per-layer rotating-window metadata.
                     # If frugal mode drops those in-RAM records, an immediate
                     # same-process repeat can hit the block table before the
                     # async L2 write is readable and reconstruct as None. Keep
                     # native path-dependent records resident; L2 still gets the
                     # write-through copy for restart restore.
-                    keep_in_ram = has_dsv4_cache_data or has_zaya_cca_cache_data
+                    keep_in_ram = (
+                        has_dsv4_cache_data
+                        or has_zaya_cca_cache_data
+                        or has_rotating_kv_cache_data
+                    )
                     if _paged_frugal and not keep_in_ram:
                         # Disk has it — skip the in-RAM duplicate. L1 lookup
                         # will fall through to L2 disk + _promote_from_disk
@@ -1980,6 +2035,7 @@ class BlockAwarePrefixCache:
                         )
                     else:
                         block.cache_data = block_kv_data
+                        block.cache_data_from_disk = False
                         logger.debug(
                             f"Stored tensor slice for block {block.block_id}: "
                             f"tokens [{global_start}:{global_end}], {len(block_kv_data)} layers"
@@ -1990,7 +2046,7 @@ class BlockAwarePrefixCache:
                     if disk_store is not None:
                         np_block = _numpy_block_slice(
                             cache_data, np_sources or {},
-                            local_start, local_end, is_last,
+                            global_start, global_end, is_last, existing_tokens,
                         )
                         if np_block:
                             # Count non-skip entries. DSV4 intentionally logs
@@ -2026,7 +2082,7 @@ class BlockAwarePrefixCache:
                             logger.warning(
                                 f"Block disk: _numpy_block_slice returned empty "
                                 f"for block {block.block_id} "
-                                f"(local [{local_start}:{local_end}], is_last={is_last})"
+                                f"(global [{global_start}:{global_end}], is_last={is_last})"
                             )
 
             # Register in hash caches under lock (both chain hash and legacy)
@@ -2154,6 +2210,7 @@ class BlockAwarePrefixCache:
         end_idx: int,
         is_last_block: bool = False,
         np_sources: Optional[dict] = None,
+        existing_tokens: int = 0,
     ) -> Optional[List[Tuple]]:
         """
         Extract tensor slices for a single block from cache data.
@@ -2378,8 +2435,15 @@ class BlockAwarePrefixCache:
                         continue
 
                     seq_len = keys.shape[seq_dim]
-                    actual_end = min(end_idx, seq_len)
-                    if start_idx >= actual_end:
+                    slice_start, actual_end = _positional_layer_slice_bounds(
+                        layer_state,
+                        class_name,
+                        start_idx,
+                        end_idx,
+                        seq_len,
+                        existing_tokens,
+                    )
+                    if actual_end <= 0 or slice_start >= actual_end:
                         block_slices.append(("skip",))
                         continue
 
@@ -2390,38 +2454,55 @@ class BlockAwarePrefixCache:
                     if np_sources is not None and layer_idx in np_sources:
                         np_k, np_v, orig_dtype = np_sources[layer_idx]
                         if ndim == 4:
-                            ks = mx.array(np_k[:, :, start_idx:actual_end, :])
-                            vs = mx.array(np_v[:, :, start_idx:actual_end, :])
+                            ks = mx.array(np_k[:, :, slice_start:actual_end, :])
+                            vs = mx.array(np_v[:, :, slice_start:actual_end, :])
                         else:
-                            ks = mx.array(np_k[:, start_idx:actual_end, :])
-                            vs = mx.array(np_v[:, start_idx:actual_end, :])
+                            ks = mx.array(np_k[:, slice_start:actual_end, :])
+                            vs = mx.array(np_v[:, slice_start:actual_end, :])
                         # Restore original dtype (e.g. bfloat16 → float16 → bfloat16)
                         if ks.dtype != orig_dtype:
                             ks = ks.astype(orig_dtype)
                             vs = vs.astype(orig_dtype)
                     elif ndim == 4:
-                        ks = keys[:, :, start_idx:actual_end, :]
-                        vs = values[:, :, start_idx:actual_end, :]
+                        ks = keys[:, :, slice_start:actual_end, :]
+                        vs = values[:, :, slice_start:actual_end, :]
                     else:  # ndim == 3
-                        ks = keys[:, start_idx:actual_end, :]
-                        vs = values[:, start_idx:actual_end, :]
+                        ks = keys[:, slice_start:actual_end, :]
+                        vs = values[:, slice_start:actual_end, :]
 
                     # Use rotating_kv tag for RotatingKVCache to preserve params
                     if "Rotating" in class_name:
                         # Extract max_size/keep from meta_state tuple
-                        # RotatingKVCache.meta_state returns (keep, max_size, ...)
+                        # RotatingKVCache.meta_state returns
+                        # (keep, max_size, offset, _idx).
                         meta = layer_state.get("meta_state", ())
+                        offset = None
+                        idx_state = None
                         if meta and len(meta) >= 2:
                             try:
                                 keep = int(meta[0])
                                 max_size = int(meta[1])
+                                if len(meta) >= 3:
+                                    offset = int(meta[2])
+                                if len(meta) >= 4:
+                                    idx_state = int(meta[3])
                             except (ValueError, TypeError):
                                 max_size = seq_len
                                 keep = 0
+                                offset = None
+                                idx_state = None
                         else:
                             max_size = layer_state.get("max_size", seq_len)
                             keep = layer_state.get("keep", 0)
-                        block_slices.append(("rotating_kv", ks, vs, max_size, keep))
+                        block_slices.append((
+                            "rotating_kv",
+                            ks,
+                            vs,
+                            max_size,
+                            keep,
+                            offset,
+                            idx_state,
+                        ))
                     else:
                         block_slices.append(("kv", ks, vs))
                 except Exception as e:
@@ -2743,6 +2824,8 @@ class BlockAwarePrefixCache:
             logger.warning("Cannot reconstruct cache: MLX not available")
             return None
 
+        disk_backed_block_ids: set[int] = set()
+        l2_readable_block_ids: set[int] = set()
         try:
             # Collect cache data from all blocks
             all_block_data = []
@@ -2770,6 +2853,7 @@ class BlockAwarePrefixCache:
                             _disk_data = None
                         if _disk_data is not None:
                             block.cache_data = _disk_data
+                            block.cache_data_from_disk = True
                             logger.debug(
                                 f"Block {block_id} rehydrated from L2 disk "
                                 f"(hash={block.block_hash.hex()[:12] if hasattr(block.block_hash, 'hex') else block.block_hash})"
@@ -2778,6 +2862,20 @@ class BlockAwarePrefixCache:
                         logger.debug(f"Block {block_id} has no tensor data stored")
                         return None
 
+                if getattr(block, "cache_data_from_disk", False):
+                    disk_backed_block_ids.add(block_id)
+                elif block.block_hash is not None:
+                    disk_store = getattr(self.paged_cache, "_disk_store", None)
+                    if disk_store is not None:
+                        try:
+                            has_block = getattr(disk_store, "has_block", None)
+                            if callable(has_block):
+                                if has_block(block.block_hash):
+                                    l2_readable_block_ids.add(block_id)
+                            elif disk_store.read_block(block.block_hash) is not None:
+                                l2_readable_block_ids.add(block_id)
+                        except Exception:
+                            pass
                 all_block_data.append(block.cache_data)
 
             if not all_block_data:
@@ -2813,18 +2911,16 @@ class BlockAwarePrefixCache:
 
             # Import cache classes
             try:
-                from mlx_lm.models.cache import KVCache, MambaCache, RotatingKVCache
-                has_mamba = True
-                has_rotating = True
+                from mlx_lm.models.cache import KVCache, RotatingKVCache
             except ImportError:
-                try:
-                    from mlx_lm.models.cache import KVCache, MambaCache
-                    has_mamba = True
-                    has_rotating = False
-                except ImportError:
-                    from mlx_lm.models.cache import KVCache
-                    has_mamba = False
-                    has_rotating = False
+                from mlx_lm.models.cache import KVCache
+                RotatingKVCache = None
+            try:
+                from mlx_lm.models.cache import MambaCache
+                has_mamba = True
+            except ImportError:
+                has_mamba = False
+            has_rotating = RotatingKVCache is not None
 
             # Reconstruct each layer
             reconstructed_caches = []
@@ -2850,7 +2946,7 @@ class BlockAwarePrefixCache:
                 kv_slices_values = []
                 rotating_kv_slices_keys = []
                 rotating_kv_slices_values = []
-                rotating_params = None  # (max_size, keep)
+                rotating_params = None  # (max_size, keep, offset, _idx)
                 quantized_kv_slices_keys = []  # list of tuples of (data, scales, zeros)
                 quantized_kv_slices_values = []
                 quantized_meta = None
@@ -2874,7 +2970,12 @@ class BlockAwarePrefixCache:
                         rotating_kv_slices_keys.append(entry[1])
                         rotating_kv_slices_values.append(entry[2])
                         if len(entry) > 3 and rotating_params is None:
-                            rotating_params = (entry[3], entry[4] if len(entry) > 4 else 0)
+                            rotating_params = (
+                                entry[3],
+                                entry[4] if len(entry) > 4 else 0,
+                                entry[5] if len(entry) > 5 else None,
+                                entry[6] if len(entry) > 6 else None,
+                            )
                     elif tag == "cumulative":
                         best_cumulative = entry  # Last cumulative entry wins
                     elif tag == "deepseek_v4":
@@ -3156,14 +3257,27 @@ class BlockAwarePrefixCache:
                     mx.eval(concat_keys, concat_values)
 
                     if has_rotating and rotating_params:
-                        max_size, keep = rotating_params
+                        max_size, keep, original_offset, original_idx = rotating_params
                         cache = RotatingKVCache(max_size=max_size, keep=keep)
                     else:
                         # Fallback to standard KVCache
                         cache = KVCache()
                     cache.keys = concat_keys
                     cache.values = concat_values
-                    cache.offset = concat_keys.shape[seq_axis]
+                    restored_len = concat_keys.shape[seq_axis]
+                    target_tokens = int(getattr(block_table, "num_tokens", 0) or 0)
+                    if has_rotating and rotating_params:
+                        if original_offset is not None and int(original_offset) == target_tokens:
+                            cache.offset = int(original_offset)
+                            if original_idx is not None:
+                                cache._idx = int(original_idx)
+                            else:
+                                cache._idx = restored_len
+                        else:
+                            cache.offset = max(restored_len, target_tokens)
+                            cache._idx = restored_len
+                    else:
+                        cache.offset = restored_len
                     reconstructed_caches.append(cache)
                     reconstructed_indices.add(layer_idx)
                     kv_count += 1
@@ -3486,6 +3600,12 @@ class BlockAwarePrefixCache:
             import traceback
             logger.debug(traceback.format_exc())
             return None
+        finally:
+            for block_id in disk_backed_block_ids | l2_readable_block_ids:
+                block = self.paged_cache.allocated_blocks.get(block_id)
+                if block is not None:
+                    block.cache_data = None
+                    block.cache_data_from_disk = False
 
     def _find_best_prefix_match(
         self,

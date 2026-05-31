@@ -863,9 +863,15 @@ _TQ_CLASS_NAME = "TurboQuantKVCache"
 
 
 def _is_kv_like(c) -> bool:
-    """Check if cache is KVCache-compatible (KVCache or TurboQuantKVCache)."""
-    from mlx_lm.models.cache import KVCache
-    return isinstance(c, KVCache) or type(c).__name__ == _TQ_CLASS_NAME
+    """Check if cache is attention-KV compatible.
+
+    Gemma4 mixed-SWA uses RotatingKVCache for sliding-window attention layers
+    and KVCache for full-attention layers. Both are attention cache slots; they
+    must not be mistaken for SSM/ArraysCache hybrid state.
+    """
+    from mlx_lm.models.cache import KVCache, RotatingKVCache
+
+    return isinstance(c, (KVCache, RotatingKVCache)) or type(c).__name__ == _TQ_CLASS_NAME
 
 
 def _is_tq_batch_api(c) -> bool:
@@ -878,6 +884,39 @@ def _is_tq_batch_api(c) -> bool:
         callable(getattr(c, name, None))
         for name in ("extend", "filter", "extract", "prepare", "finalize")
     )
+
+
+def _paged_hybrid_cache_detail(*, disk_hit: bool, mixed_attention: bool) -> str:
+    base = "paged+mixed_swa" if mixed_attention else "paged+ssm"
+    return f"{base}+disk" if disk_hit else base
+
+
+def _paged_attention_cache_detail(*, disk_hit: bool, mixed_attention: bool) -> str:
+    base = "paged+mixed_swa" if mixed_attention else "paged"
+    return f"{base}+disk" if disk_hit else base
+
+
+def _cache_layer_debug_summary(cache: Optional[List[Any]], limit: int = 8) -> str:
+    if not cache:
+        return ""
+    parts: List[str] = []
+    for i, layer in enumerate(cache[:limit]):
+        cls_name = type(layer).__name__
+        details = [f"L{i}:{cls_name}"]
+        for attr in ("offset", "_idx", "max_size", "keep"):
+            if hasattr(layer, attr):
+                try:
+                    value = getattr(layer, attr)
+                    if isinstance(value, mx.array):
+                        value = value.tolist()
+                    details.append(f"{attr}={value}")
+                except Exception:
+                    pass
+        keys = getattr(layer, "keys", None)
+        if keys is not None and hasattr(keys, "shape"):
+            details.append(f"keys={tuple(keys.shape)}")
+        parts.append(":".join(details))
+    return ";".join(parts)
 
 
 def _model_uses_zaya_cache_contract(model: Any) -> bool:
@@ -1417,6 +1456,22 @@ def _native_mtp_async_eval(*arrays: Any) -> None:
         mx.eval(*arrays)
 
 
+def _mllm_decode_sync_eval_enabled() -> bool:
+    return os.environ.get("VMLINUX_MLLM_DECODE_SYNC_EVAL", "").lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
+def _submit_decode_token_eval(value: Any) -> None:
+    if _mllm_decode_sync_eval_enabled():
+        mx.eval(value)
+    else:
+        mx.async_eval(value)
+
+
 def _mllm_prefill_trace_enabled() -> bool:
     return os.environ.get("VMLINUX_MLLM_PREFILL_TRACE", "").lower() in {
         "1",
@@ -1461,6 +1516,8 @@ class _MLLMPrefillTrace:
         self.supports_return_logits = bool(supports_return_logits)
         self.cached_tokens = 0
         self.cache_detail = "none"
+        self.cache_before_forward = ""
+        self.cache_after_forward = ""
         self._segments: Dict[str, float] = {}
         self._open: Dict[str, float] = {}
         self._start = 0.0
@@ -1496,6 +1553,10 @@ class _MLLMPrefillTrace:
             self.cache_detail = str(values["cache_detail"] or "none")
         if "has_images" in values:
             self.has_images = bool(values["has_images"])
+        if "cache_before_forward" in values:
+            self.cache_before_forward = str(values["cache_before_forward"] or "")
+        if "cache_after_forward" in values:
+            self.cache_after_forward = str(values["cache_after_forward"] or "")
 
     @staticmethod
     def _ms(value: float) -> float:
@@ -1515,6 +1576,10 @@ class _MLLMPrefillTrace:
             "force_text_rope_1d": self.force_text_rope_1d,
             "supports_return_logits": self.supports_return_logits,
         }
+        if self.cache_before_forward:
+            data["cache_before_forward"] = self.cache_before_forward
+        if self.cache_after_forward:
+            data["cache_after_forward"] = self.cache_after_forward
         if self.enabled:
             for name, value in self._segments.items():
                 data[f"{name}_ms"] = self._ms(value)
@@ -1551,6 +1616,8 @@ class _MLLMPrefillTrace:
             "token_item_ms",
             "ssm_capture_ms",
             "cache_merge_ms",
+            "cache_before_forward",
+            "cache_after_forward",
         ]
         parts = [f"{key}={data[key]}" for key in ordered if key in data]
         logger.info("VMLINUX_MLLM_PREFILL_TRACE %s", " ".join(parts))
@@ -1575,7 +1642,25 @@ def _lm_supports_return_logits(lm: Any) -> bool:
         sig = inspect.signature(lm.__call__)
     except (TypeError, ValueError):
         return False
+    if any(
+        parameter.kind == inspect.Parameter.VAR_KEYWORD
+        for parameter in sig.parameters.values()
+    ):
+        return True
     return "return_logits" in sig.parameters
+
+
+def _lm_supports_position_ids(lm: Any) -> bool:
+    try:
+        sig = inspect.signature(lm.__call__)
+    except (TypeError, ValueError):
+        return False
+    if any(
+        parameter.kind == inspect.Parameter.VAR_KEYWORD
+        for parameter in sig.parameters.values()
+    ):
+        return True
+    return "position_ids" in sig.parameters
 
 
 def _call_lm_prefix_without_logits(
@@ -2393,6 +2478,7 @@ class MLLMBatchStats:
         self.hybrid_kv_without_ssm_hits: int = 0
         self.hybrid_kv_without_ssm_tokens: int = 0
         self.last_hybrid_kv_without_ssm: Optional[Dict[str, Any]] = None
+        self.last_cache_execution: Optional[Dict[str, Any]] = None
         self.last_native_mtp: Optional[Dict[str, Any]] = None
         self.last_prefill_trace: Optional[Dict[str, Any]] = None
 
@@ -2438,6 +2524,7 @@ class MLLMBatchStats:
             "hybrid_kv_without_ssm_hits": self.hybrid_kv_without_ssm_hits,
             "hybrid_kv_without_ssm_tokens": self.hybrid_kv_without_ssm_tokens,
             "last_hybrid_kv_without_ssm": self.last_hybrid_kv_without_ssm,
+            "last_cache_execution": self.last_cache_execution,
             "last_native_mtp": self.last_native_mtp,
             "last_prefill_trace": self.last_prefill_trace,
         }
@@ -2596,6 +2683,11 @@ def _ensure_batch_cache(cache: List[Any]) -> List[Any]:
                 converted.append(BatchKVCache.merge([KVCache()]))
         elif _is_tq_batch_api(c):
             converted.append(c)
+        elif RotatingKVCache is not None and isinstance(c, RotatingKVCache):
+            if BatchRotatingKVCache is not None:
+                converted.append(BatchRotatingKVCache.merge([c]))
+            else:
+                converted.append(BatchKVCache.merge([c]))
         elif _is_kv_like(c):
             # TQ: convert via .state to avoid over-allocated buffer
             if type(c).__name__ == _TQ_CLASS_NAME:
@@ -2606,11 +2698,6 @@ def _ensure_batch_cache(cache: List[Any]) -> List[Any]:
                     kv.values = v
                     kv.offset = c.offset
                 converted.append(BatchKVCache.merge([kv]))
-            else:
-                converted.append(BatchKVCache.merge([c]))
-        elif RotatingKVCache is not None and isinstance(c, RotatingKVCache):
-            if BatchRotatingKVCache is not None:
-                converted.append(BatchRotatingKVCache.merge([c]))
             else:
                 converted.append(BatchKVCache.merge([c]))
         elif isinstance(c, ArraysCache):
@@ -2788,6 +2875,7 @@ class MLLMBatchGenerator:
         ssm_state_cache_model_key: str = "",
         enable_prefix_cache: bool = True,
         uses_zaya_cache: Optional[bool] = None,
+        mixed_attention_cache_model: bool = False,
     ):
         """
         Initialize MLLM batch generator.
@@ -2826,6 +2914,9 @@ class MLLMBatchGenerator:
             uses_zaya_cache: True when the model uses ZAYA's typed CCA cache
                 contract. ZAYA is hybrid-shaped but must use zaya_cca_v1
                 paged blocks, not the generic SSM companion cache.
+            mixed_attention_cache_model: True for Gemma-style mixed sliding
+                window/full attention cache layouts. These use rotating-window
+                metadata, not SSM state, and must not report paged+ssm telemetry.
         """
         self.model = model
         self.processor = processor
@@ -2843,6 +2934,7 @@ class MLLMBatchGenerator:
                 getattr(model, "language_model", model)
             )
         )
+        self._mixed_attention_cache_model = bool(mixed_attention_cache_model)
 
         self._prefix_cache_enabled = bool(enable_prefix_cache)
         self._ssm_companion_enabled = bool(
@@ -3871,9 +3963,10 @@ class MLLMBatchGenerator:
         if not has_images and (not _hybrid_blocks_chunk or _native_mtp_hybrid_text_split):
             lm = self.language_model
             if lm is not None and cache is not None:
+                _supports_position_ids = _lm_supports_position_ids(lm)
                 _abs_position_ids = _absolute_text_position_ids(
                     input_ids, cache, lm
-                )
+                ) if _supports_position_ids else None
                 if _abs_position_ids is not None:
                     _seed_text_rope_delta_for_decode(lm, input_ids)
 
@@ -3960,9 +4053,10 @@ class MLLMBatchGenerator:
             # Use language_model directly for chunked text prefill
             lm = self.language_model
             if lm is not None and cache is not None:
+                _supports_position_ids = _lm_supports_position_ids(lm)
                 _abs_position_ids = _absolute_text_position_ids(
                     input_ids, cache, lm
-                )
+                ) if _supports_position_ids else None
                 if _abs_position_ids is not None:
                     _seed_text_rope_delta_for_decode(lm, input_ids)
 
@@ -4089,9 +4183,10 @@ class MLLMBatchGenerator:
                 lm_kwargs = {}
                 if cache is not None:
                     lm_kwargs["cache"] = cache
+                _supports_position_ids = _lm_supports_position_ids(lm)
                 _abs_position_ids = _absolute_text_position_ids(
                     input_ids, cache, lm
-                ) if cache is not None else None
+                ) if cache is not None and _supports_position_ids else None
                 if _abs_position_ids is not None:
                     _seed_text_rope_delta_for_decode(lm, input_ids)
 
@@ -4574,9 +4669,35 @@ class MLLMBatchGenerator:
                                             continue  # Skip reconstruction
 
                                 # Either non-hybrid OR hybrid with SSM state — reconstruct
+                                _cache_execution = {
+                                    "request_id": req.request_id,
+                                    "cache_detail": None,
+                                    "cached_tokens": int(getattr(block_table, "num_tokens", 0) or 0),
+                                    "blocks": len(getattr(block_table, "blocks", []) or []),
+                                    "selection": "paged",
+                                    "disk_hit": bool(_paged_disk_hit),
+                                    "reconstructed": False,
+                                    "dequantized": False,
+                                    "reconstruction_seconds": 0.0,
+                                    "dequantization_seconds": 0.0,
+                                    "total_worker_cache_seconds": 0.0,
+                                }
+                                _cache_execution_started = time.perf_counter()
+                                _reconstruct_started = time.perf_counter()
                                 reconstructed = self.block_aware_cache.reconstruct_cache(block_table)
+                                _cache_execution["reconstruction_seconds"] = round(
+                                    max(0.0, time.perf_counter() - _reconstruct_started), 6
+                                )
+                                _cache_execution["reconstructed"] = reconstructed is not None
+                                _cache_execution["reconstruction_ok"] = reconstructed is not None
                                 if reconstructed is not None:
+                                    _dequant_started = time.perf_counter()
                                     reconstructed = _dequantize_cache(reconstructed)
+                                    _cache_execution["dequantization_seconds"] = round(
+                                        max(0.0, time.perf_counter() - _dequant_started), 6
+                                    )
+                                    _cache_execution["dequantized"] = reconstructed is not None
+                                    _cache_execution["dequantization_ok"] = reconstructed is not None
                                     if reconstructed is None:
                                         # Dequantize failed — release block refs to prevent leak
                                         self.block_aware_cache.release_cache(req.request_id)
@@ -4611,9 +4732,17 @@ class MLLMBatchGenerator:
                                     # TQ recompress safe: blocks now store original float16
                                     req.prompt_cache = full_cache
                                     req._cached_tokens = block_table.num_tokens
-                                    req._cache_detail = (
-                                        "paged+ssm+disk" if _paged_disk_hit else "paged+ssm"
+                                    req._cache_detail = _paged_hybrid_cache_detail(
+                                        disk_hit=_paged_disk_hit,
+                                        mixed_attention=self._mixed_attention_cache_model,
                                     )
+                                    _cache_execution["cache_detail"] = req._cache_detail
+                                    _cache_execution["total_worker_cache_seconds"] = round(
+                                        max(0.0, time.perf_counter() - _cache_execution_started),
+                                        6,
+                                    )
+                                    req._cache_execution = dict(_cache_execution)
+                                    self._stats.last_cache_execution = dict(_cache_execution)
                                     # Re-attach the gen-prompt suffix: fetch key was
                                     # gpl-stripped but the model MUST see the template
                                     # suffix (<|im_start|>assistant\n<think>\n) to enter
@@ -4652,9 +4781,17 @@ class MLLMBatchGenerator:
                                     if self._uses_zaya_cache:
                                         req._cache_detail = "paged+zaya_cca"
                                     else:
-                                        req._cache_detail = (
-                                            "paged+disk" if _paged_disk_hit else "paged"
+                                        req._cache_detail = _paged_attention_cache_detail(
+                                            disk_hit=_paged_disk_hit,
+                                            mixed_attention=self._mixed_attention_cache_model,
                                         )
+                                    _cache_execution["cache_detail"] = req._cache_detail
+                                    _cache_execution["total_worker_cache_seconds"] = round(
+                                        max(0.0, time.perf_counter() - _cache_execution_started),
+                                        6,
+                                    )
+                                    req._cache_execution = dict(_cache_execution)
+                                    self._stats.last_cache_execution = dict(_cache_execution)
                                     # Re-attach gen-prompt suffix (see hybrid branch above
                                     # for full rationale — same correctness requirement
                                     # for attention-only thinking VLMs).
@@ -4967,12 +5104,20 @@ class MLLMBatchGenerator:
                         cached_tokens=getattr(req, "_cached_tokens", 0),
                         cache_detail=getattr(req, "_cache_detail", "none"),
                     )
+                    if self._decode_trace:
+                        trace.set(
+                            cache_before_forward=_cache_layer_debug_summary(req_cache)
+                        )
                 try:
                     if trace is not None:
                         trace.start("forward")
                     logits = self._run_vision_encoding(req, cache=req_cache)
                     if trace is not None:
                         trace.stop("forward")
+                        if self._decode_trace:
+                            trace.set(
+                                cache_after_forward=_cache_layer_debug_summary(req_cache)
+                            )
                 except ValueError as ve:
                     if trace is not None:
                         trace.stop("forward")
@@ -6147,6 +6292,10 @@ class MLLMBatchGenerator:
         mtp_state = None
         if len(batch.requests) == 1:
             mtp_state = getattr(batch.requests[0], "_native_mtp_state", None)
+        _next_trace = bool(getattr(self, "_decode_trace", False) and mtp_state is None)
+        _step_s = 0.0
+        _async_s = 0.0
+        _materialize_t0 = time.perf_counter() if _next_trace else 0.0
         if mtp_state is not None:
             try:
                 token, lp = self._next_native_mtp_token(
@@ -6172,7 +6321,7 @@ class MLLMBatchGenerator:
                             f"native MTP AR fallback unsafe: {fallback_reason}"
                         )
                     batch.y, batch.logprobs = self._step(batch.y[:, None], batch.cache)
-                    mx.async_eval(batch.y)
+                    _submit_decode_token_eval(batch.y)
                     _native_mtp_log_stats(
                         batch.requests[0].request_id,
                         mtp_state.stats,
@@ -6225,12 +6374,37 @@ class MLLMBatchGenerator:
                 ]
         else:
             y, logprobs = batch.y, batch.logprobs
+            _step_t0 = time.perf_counter() if _next_trace else 0.0
             batch.y, batch.logprobs = self._step(y[:, None], batch.cache)
-            mx.async_eval(batch.y)
+            _step_s = time.perf_counter() - _step_t0 if _next_trace else 0.0
+            _async_t0 = time.perf_counter() if _next_trace else 0.0
+            _submit_decode_token_eval(batch.y)
+            _async_s = time.perf_counter() - _async_t0 if _next_trace else 0.0
+            _materialize_t0 = time.perf_counter() if _next_trace else 0.0
 
         if hasattr(y, "tolist"):
             y = y.tolist()
         toc = time.perf_counter()
+        if _next_trace:
+            try:
+                materialize_s = toc - _materialize_t0
+                total_s = toc - tic
+                if self._decode_trace_count % self._decode_trace_every == 0:
+                    logger.info(
+                        "VMLINUX_DECODE_TRACE_NEXT mllm steps=%d "
+                        "last_total_ms=%.2f last_step_ms=%.2f "
+                        "last_async_ms=%.2f last_materialize_ms=%.2f "
+                        "prompt_processing=%s batch=%d",
+                        self._decode_trace_count,
+                        total_s * 1000.0,
+                        _step_s * 1000.0,
+                        _async_s * 1000.0,
+                        materialize_s * 1000.0,
+                        bool(prompt_processing),
+                        len(batch.requests),
+                    )
+            except Exception:
+                pass
 
         # Note: prompt_time is already counted in _process_prompts().
         # Only count the first decode step after prompt processing as generation time.

@@ -21,6 +21,8 @@ Available parsers:
 - glm47/glm4: GLM-4.7 and GLM-4.7-Flash models
 - minimax/minimax_m2: MiniMax M2/M2.5 models (XML invoke/parameter format)
 - zaya_xml/zaya/zyphra: ZAYA/Zyphra XML tool-call format
+- xml_function: Generic <tool_call><function=...><parameter=...> format
+- lfm2/liquid: Liquid LFM2 Python-call-list format
 
 Usage:
     from vmlx_engine.tool_parsers import ToolParserManager
@@ -53,6 +55,7 @@ from .functionary_tool_parser import FunctionaryToolParser
 from .granite_tool_parser import GraniteToolParser
 from .hermes_tool_parser import HermesToolParser
 from .kimi_tool_parser import KimiToolParser
+from .lfm2_tool_parser import Lfm2ToolParser
 from .llama_tool_parser import LlamaToolParser
 from .mistral_tool_parser import MistralToolParser
 from .nemotron_tool_parser import NemotronToolParser
@@ -65,6 +68,7 @@ from .gemma4_tool_parser import Gemma4ToolParser
 from .gemma3_tool_parser import Gemma3ToolParser
 from .zaya_tool_parser import ZayaToolParser
 from .hunyuan_tool_parser import HunyuanToolParser  # Hy3 / hy_v3
+from .xml_function_tool_parser import XMLFunctionToolParser
 
 __all__ = [
     # Base classes
@@ -79,6 +83,7 @@ __all__ = [
     "HermesToolParser",
     "DeepSeekToolParser",
     "KimiToolParser",
+    "Lfm2ToolParser",
     "GraniteToolParser",
     "NemotronToolParser",
     "xLAMToolParser",
@@ -90,4 +95,5 @@ __all__ = [
     "Gemma3ToolParser",
     "ZayaToolParser",
     "HunyuanToolParser",
+    "XMLFunctionToolParser",
 ]

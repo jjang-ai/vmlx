@@ -123,14 +123,14 @@ async function startGateway(sessions: any[]): Promise<{ gateway: any; port: numb
   return { gateway, port };
 }
 
-function session(id: string, port: number, alias: string) {
+function session(id: string, port: number, alias: string, status = "running") {
   return {
     id,
     modelPath: `/models/${alias}`,
     modelName: alias,
     host: "127.0.0.1",
     port,
-    status: "running",
+    status,
     type: "local",
     config: JSON.stringify({ servedModelName: alias }),
     createdAt: Date.now(),
@@ -189,6 +189,56 @@ describe("MCP gateway routing", () => {
     expect(b.requests).toContain("POST /v1/mcp/execute");
     expect(sessionManagerMock.touchSession).toHaveBeenCalledWith("a");
     expect(sessionManagerMock.touchSession).toHaveBeenCalledWith("b");
+  });
+
+  it("auto-switches MCP tools and execute by explicit model in single-model mode", async () => {
+    const alpha = await startMcpBackend("alpha", "alpha_smoke__echo");
+    const beta = await startMcpBackend("beta", "beta_smoke__echo");
+    backends.push(alpha, beta);
+    const sessions = [
+      session("alpha", alpha.port, "alpha-model", "running"),
+      session("beta", beta.port, "beta-model", "standby"),
+    ];
+    const started = await startGateway(sessions);
+    gateway = started.gateway;
+    dbMock.getSetting.mockImplementation((key: string) =>
+      key === "gateway_single_model_mode" ? "true" : undefined,
+    );
+    sessionManagerMock.stopSession.mockImplementation(async (id: string) => {
+      const found = sessions.find((s) => s.id === id);
+      if (found) found.status = "stopped";
+    });
+    sessionManagerMock.wakeSession.mockImplementation(async (id: string) => {
+      const found = sessions.find((s) => s.id === id);
+      if (found) found.status = "running";
+      return { success: true };
+    });
+
+    const toolsResponse = await fetch(
+      `http://127.0.0.1:${started.port}/v1/mcp/tools?model=beta-model`,
+    );
+    const tools = await toolsResponse.json();
+    const executeResponse = await fetch(`http://127.0.0.1:${started.port}/v1/mcp/execute`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: "beta-model",
+        tool_name: "beta_smoke__echo",
+        arguments: { text: "single-model-ok" },
+      }),
+    });
+    const executed = await executeResponse.json();
+
+    expect(toolsResponse.status).toBe(200);
+    expect(executeResponse.status).toBe(200);
+    expect(tools.tools[0].name).toBe("beta_smoke__echo");
+    expect(executed.content).toBe("beta:single-model-ok");
+    expect(sessionManagerMock.stopSession).toHaveBeenCalledWith("alpha");
+    expect(sessionManagerMock.wakeSession).toHaveBeenCalledWith("beta");
+    expect(sessionManagerMock.touchSession).toHaveBeenCalledWith("beta");
+    expect(alpha.requests).toEqual([]);
+    expect(beta.requests).toContain("GET /v1/mcp/tools?model=beta-model");
+    expect(beta.requests).toContain("POST /v1/mcp/execute");
   });
 
   it("rejects ambiguous multi-session MCP requests without a model", async () => {

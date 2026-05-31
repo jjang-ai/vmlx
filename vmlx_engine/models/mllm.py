@@ -15,12 +15,16 @@ Features:
 
 import atexit
 import base64
+import importlib
+import importlib.machinery
 import json
 import logging
 import math
 import os
+import sys
 import tempfile
 import threading
+import types
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterator
@@ -29,6 +33,7 @@ from urllib.parse import urlparse
 import numpy as np
 import requests
 
+from vmlx_engine.mlx_memory import clear_mlx_memory_cache
 from vmlx_engine.mllm_cache import MLLMPrefixCacheManager
 
 logger = logging.getLogger(__name__)
@@ -60,6 +65,189 @@ def _register_local_mlx_vlm_runtime_if_needed(model_path: str | Path) -> None:
         from ..models.zaya1_vl import register_mlx_vlm_zaya1_vl
 
         register_mlx_vlm_zaya1_vl()
+    if model_type == "step3p7":
+        _register_step3p7_mlx_vlm_runtime()
+    if model_type == "mimo_v2":
+        _register_mimo_v2_mlx_vlm_runtime()
+
+
+def _register_step3p7_mlx_vlm_runtime() -> None:
+    module_name = "mlx_vlm.models.step3p7"
+    processor_module_name = f"{module_name}.processing_step3"
+    if module_name in sys.modules and processor_module_name in sys.modules:
+        return
+
+    source_runtime = importlib.import_module("vmlx_engine.models.step3p7_mlx_vlm")
+    module = types.ModuleType(module_name)
+    for name in (
+        "Model",
+        "ModelConfig",
+        "TextConfig",
+        "VisionConfig",
+        "ProjectorConfig",
+        "LanguageModel",
+        "VisionModel",
+        "Step3p7Projector",
+        "Step3VisionProcessor",
+        "Step3VLProcessor",
+    ):
+        setattr(module, name, getattr(source_runtime, name))
+    module.__file__ = getattr(source_runtime, "__file__", module_name)
+    module.__package__ = module_name
+    module.__path__ = []
+    module.__spec__ = importlib.machinery.ModuleSpec(
+        module_name,
+        loader=None,
+        origin=module.__file__,
+        is_package=True,
+    )
+    sys.modules[module_name] = module
+
+    processor_module = types.ModuleType(processor_module_name)
+    processor_module.Step3VisionProcessor = source_runtime.Step3VisionProcessor
+    processor_module.Step3VLProcessor = source_runtime.Step3VLProcessor
+    processor_module.__file__ = getattr(source_runtime, "__file__", processor_module_name)
+    processor_module.__package__ = module_name
+    processor_module.__spec__ = importlib.machinery.ModuleSpec(
+        processor_module_name,
+        loader=None,
+        origin=processor_module.__file__,
+        is_package=False,
+    )
+    sys.modules[processor_module_name] = processor_module
+
+
+def _register_mimo_v2_mlx_vlm_runtime() -> None:
+    module_name = "mlx_vlm.models.mimo_v2"
+    if module_name in sys.modules:
+        return
+
+    text_runtime = importlib.import_module("jang_tools.mimo_v2.mlx_model")
+
+    import mlx.nn as nn
+
+    TextConfig = getattr(text_runtime, "ModelArgs")
+    TextModel = getattr(text_runtime, "Model")
+
+    class VisionConfig:
+        @classmethod
+        def from_dict(cls, params):
+            return cls()
+
+    class AudioConfig:
+        @classmethod
+        def from_dict(cls, params):
+            return cls()
+
+    class ModelConfig:
+        def __init__(
+            self,
+            text_config=None,
+            vision_config=None,
+            audio_config=None,
+            model_type: str = "mimo_v2",
+            eos_token_id=None,
+            **kwargs,
+        ):
+            self.model_type = model_type
+            self.text_config = text_config
+            self.vision_config = vision_config or VisionConfig()
+            self.audio_config = audio_config or AudioConfig()
+            self.eos_token_id = eos_token_id
+
+        @classmethod
+        def from_dict(cls, params):
+            merged_text = dict(params)
+            if isinstance(params.get("text_config"), dict):
+                merged_text.update(params["text_config"])
+            params["text_config"] = merged_text
+            quantization = params.get("quantization")
+            if isinstance(quantization, dict):
+                for key, value in list(quantization.items()):
+                    if (
+                        isinstance(value, dict)
+                        and key.startswith(("model.", "lm_head"))
+                        and not key.startswith("language_model.")
+                    ):
+                        quantization.setdefault(f"language_model.{key}", value)
+            return cls(
+                text_config=TextConfig.from_dict(merged_text),
+                vision_config=VisionConfig.from_dict(params.get("vision_config") or {}),
+                audio_config=AudioConfig.from_dict(params.get("audio_config") or {}),
+                model_type=str(params.get("model_type") or "mimo_v2"),
+                eos_token_id=params.get("eos_token_id"),
+            )
+
+    class VisionModel(nn.Module):
+        def __init__(self, config=None):
+            super().__init__()
+
+        def sanitize(self, weights):
+            return {
+                key: value
+                for key, value in weights.items()
+                if not (
+                    key.startswith("visual.")
+                    or key.startswith("vision_tower.")
+                    or key.startswith("audio_encoder.")
+                    or key.startswith("speech_embeddings.")
+                )
+            }
+
+    class AudioModel(VisionModel):
+        pass
+
+    class Model(nn.Module):
+        def __init__(self, config: ModelConfig):
+            super().__init__()
+            self.config = config
+            self.language_model = TextModel(config.text_config)
+
+        @property
+        def layers(self):
+            return self.language_model.layers
+
+        def get_input_embeddings(self, input_ids=None, pixel_values=None, **kwargs):
+            from mlx_vlm.models.base import InputEmbeddingsFeatures
+
+            if pixel_values is not None:
+                raise ValueError(
+                    "MiMo-V2.5 JANG_2L vision weights are preserved, but the "
+                    "current Python runtime only wires the text decode path."
+                )
+            return InputEmbeddingsFeatures(
+                inputs_embeds=self.language_model.model.embed_tokens(input_ids)
+            )
+
+        def __call__(self, input_ids, pixel_values=None, mask=None, cache=None, **kwargs):
+            if pixel_values is not None:
+                raise ValueError(
+                    "MiMo-V2.5 JANG_2L vision input is not wired in this Python runtime."
+                )
+            return self.language_model(input_ids, cache=cache, mask=mask)
+
+        def load_weights(self, weights, strict=True):
+            filtered = []
+            for key, value in weights:
+                if key.startswith(("visual.", "audio_encoder.", "speech_embeddings.", "model.mtp.")):
+                    continue
+                filtered.append((key, value))
+            return self.language_model.load_weights(filtered, strict=strict)
+
+        def sanitize(self, weights):
+            return self.language_model.sanitize(weights)
+
+    module = types.ModuleType(module_name)
+    module.Model = Model
+    module.ModelConfig = ModelConfig
+    module.TextConfig = TextConfig
+    module.VisionConfig = VisionConfig
+    module.AudioConfig = AudioConfig
+    module.LanguageModel = TextModel
+    module.VisionModel = VisionModel
+    module.AudioModel = AudioModel
+    module.__file__ = getattr(text_runtime, "__file__", module_name)
+    sys.modules[module_name] = module
 
 
 def _vlm_stream():
@@ -1609,6 +1797,25 @@ class MLXMultimodalLM:
                 else:
                     formatted_prompt = stripped + "\n<think>\n"
 
+        if enable_thinking is False and formatted_prompt:
+            try:
+                from ..utils.chat_template_kwargs import ensure_thinking_off_sentinel
+
+                formatted_prompt = ensure_thinking_off_sentinel(
+                    formatted_prompt,
+                    family_name=str((self.config or {}).get("model_type", ""))
+                    if isinstance(self.config, dict)
+                    else None,
+                    model_name=self.model_name,
+                    tools_present=bool(tools),
+                )
+            except Exception as exc:
+                logger.debug(
+                    "MLLM thinking-off prompt sentinel skipped for %s: %s",
+                    self.model_name,
+                    exc,
+                )
+
         if formatted_prompt is None:
             # Fallback to last user message if template fails
             last_user_msg = ""
@@ -2549,11 +2756,7 @@ class MLXMultimodalLM:
                         completion_tokens=token_count,
                     )
         except Exception as e:
-            try:
-                import mlx.core as mx
-                mx.clear_memory_cache()
-            except Exception:
-                pass
+            clear_mlx_memory_cache(log=logger)
             logger.error(f"VLM stream_generate error: {type(e).__name__}: {e}")
             raise
 

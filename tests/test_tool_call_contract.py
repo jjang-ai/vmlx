@@ -1,3 +1,14 @@
+from pathlib import Path
+
+
+def test_tool_call_contract_default_out_tracks_current_release_proof_artifact():
+    from tests.cross_matrix import run_tool_call_contract as gate
+
+    assert gate.DEFAULT_OUT == Path(
+        "build/current-tool-call-contract-20260528-tool-parser-loop-matrix.json"
+    )
+
+
 def test_tool_call_contract_has_required_marker_gate():
     from tests.cross_matrix import run_tool_call_contract as gate
 
@@ -5,6 +16,11 @@ def test_tool_call_contract_has_required_marker_gate():
     assert "responses_extracts_suppressed_reasoning_tool_calls_before_finalize" in required
     assert "resets text-chat tool streaming state before chained follow-up requests" in required
     assert "panel max tool iterations caps tool loops" in required
+    assert "TestGemma4ToolParser::test_tools_called_implies_no_marker_in_content" in required
+    assert "TestHunyuanToolParser::test_visible_text_before_and_after_tool_calls_preserved" in required
+    assert "TestXMLFunctionToolParser::test_visible_text_around_tool_call_has_no_xml_function_leak" in required
+    assert "TestXMLFunctionToolParser::test_registry_aliases_resolve" in required
+    assert "engine_family_tool_parser_matrix" in gate.COMMANDS
 
 
 def test_tool_call_contract_fails_when_required_marker_missing(monkeypatch, tmp_path):

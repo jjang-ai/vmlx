@@ -54,6 +54,43 @@ def _uvicorn_bind_kwargs(args, log_level: str) -> dict:
     return kwargs
 
 
+def _split_cli_values(values: list[str] | None) -> list[str]:
+    if not values:
+        return []
+    out: list[str] = []
+    for value in values:
+        for item in str(value).split(","):
+            item = item.strip()
+            if item:
+                out.append(item)
+    return out
+
+
+def _parse_lora_scales(values: list[str] | None) -> list[float]:
+    scales = []
+    for value in _split_cli_values(values):
+        try:
+            scales.append(float(value))
+        except ValueError:
+            raise SystemExit(f"Error: --lora-scales values must be floats, got {value!r}")
+    return scales
+
+
+def _validate_lora_args_for_model_type(args, *, is_image: bool) -> None:
+    """Reject LoRA flags on serve paths that cannot consume them."""
+
+    lora_paths = _split_cli_values(getattr(args, "lora_paths", None))
+    lora_scale_values = _split_cli_values(getattr(args, "lora_scales", None))
+    if lora_scale_values and not lora_paths:
+        raise SystemExit("Error: --lora-scales requires --lora-paths")
+    if (lora_paths or lora_scale_values) and not is_image:
+        raise SystemExit(
+            "Error: --lora-paths/--lora-scales are only supported for image "
+            "models through vmlx serve. Text-model LoRA loading is not wired "
+            "in this runtime path."
+        )
+
+
 def _speculative_incompatibility_reason(args) -> str | None:
     if not getattr(args, "speculative_model", None):
         return None
@@ -82,6 +119,22 @@ def _apply_jangtq_mpp_nax_policy(args, logger):
     if mode not in ("off", "auto", "on"):
         logger.warning("Invalid JANGTQ_MPP_NAX=%r; using auto", raw_mode)
         mode = "auto"
+    if mode == "auto":
+        try:
+            from .model_config_registry import get_model_config_registry
+
+            model_key = getattr(args, "model", "") or ""
+            family = get_model_config_registry().lookup(model_key).family_name
+        except Exception:
+            family = ""
+        if family == "ling":
+            mode = "off"
+            logger.info(
+                "Ling/Bailing detected — disabling JANGTQ_MPP_NAX auto lane. "
+                "Live bundled greedy Russian probes showed CJK leakage with "
+                "JANGTQ_MPP_NAX=auto; set JANGTQ_MPP_NAX=on only for explicit "
+                "kernel diagnostics."
+            )
     os.environ["JANGTQ_MPP_NAX"] = "1" if mode == "on" else mode
     if os.environ.pop("JANGTQ_TOPK_OVERRIDE", None) is not None:
         logger.info(
@@ -491,6 +544,8 @@ def serve_command(args):
     elif (model_dir / "transformer").is_dir() and (model_dir / "vae").is_dir():
         # Diffusion model with transformer + vae subdirs
         _is_image = True
+
+    _validate_lora_args_for_model_type(args, is_image=_is_image)
 
     # Configure tool calling
     _user_disabled_tool_parser = getattr(args, "tool_call_parser", None) == "none"
@@ -1283,6 +1338,19 @@ def serve_command(args):
                     break
         # Store globally so /v1/images/edits can use it for lazy model loading
         server._image_quantize = _image_quantize
+        server._image_lora_paths = _split_cli_values(getattr(args, "lora_paths", None))
+        server._image_lora_scales = _parse_lora_scales(
+            getattr(args, "lora_scales", None)
+        )
+        if (
+            server._image_lora_scales
+            and len(server._image_lora_scales) != len(server._image_lora_paths)
+        ):
+            print(
+                "Error: --lora-scales must have the same number of values as "
+                "--lora-paths"
+            )
+            sys.exit(1)
 
         try:
             server._image_gen = ImageGenEngine()
@@ -1299,6 +1367,8 @@ def serve_command(args):
                 quantize=_image_quantize,
                 mflux_class=_mflux_class,
                 mflux_name=server._model_name,
+                lora_paths=server._image_lora_paths,
+                lora_scales=server._image_lora_scales,
             )
         except Exception as e:
             print(f"Error: Failed to load image model: {e}")
@@ -1894,6 +1964,20 @@ Examples:
              "If not set, falls back to name-based lookup.",
     )
     serve_parser.add_argument(
+        "--lora-paths",
+        nargs="*",
+        default=None,
+        help="Optional local LoRA adapter path(s) for image models. "
+             "Accepts space-separated values or a comma-separated list.",
+    )
+    serve_parser.add_argument(
+        "--lora-scales",
+        nargs="*",
+        default=None,
+        help="Optional LoRA scale(s) matching --lora-paths order. "
+             "Accepts space-separated values or a comma-separated list.",
+    )
+    serve_parser.add_argument(
         "--host", type=str, default="127.0.0.1",
         help="Network interface to bind. '0.0.0.0' = all interfaces (LAN access). "
              "'127.0.0.1' = localhost only (default: 127.0.0.1)",
@@ -2337,6 +2421,7 @@ Examples:
             "hermes",
             "deepseek",
             "kimi",
+            "lfm2",
             "granite",
             "nemotron",
             "minimax",
@@ -2346,6 +2431,7 @@ Examples:
             "step3p5",
             "gemma3",
             "gemma3n",
+            "xml_function",
             # DeepSeek V4 DSML format (<｜DSML｜invoke name="…">)
             "dsml",
             "deepseek_v4",
@@ -2362,6 +2448,7 @@ Examples:
             "deepseek_r1",
             "kimi_k2",
             "moonshot",
+            "liquid",
             "granite3",
             "nemotron3",
             "minimax_m2",

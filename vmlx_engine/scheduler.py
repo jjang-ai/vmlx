@@ -30,6 +30,7 @@ from .sampling import make_sampler
 from .block_disk_store import BlockDiskStore
 from .disk_cache import DiskCacheManager
 from .memory_cache import MemoryAwarePrefixCache, MemoryCacheConfig
+from .mlx_memory import clear_mlx_memory_cache
 from .paged_cache import PagedCacheManager
 from .prefix_cache import (
     BlockAwarePrefixCache,
@@ -1022,10 +1023,12 @@ class Scheduler:
         self._cache_reuse_partial_downgrades = 0
         self._cache_reuse_partial_tokens = 0
         self._last_cache_reuse_partial: Optional[Dict[str, Any]] = None
+        self._last_cache_selection: Optional[Dict[str, Any]] = None
+        self._last_cache_execution: Optional[Dict[str, Any]] = None
 
         # Periodic Metal memory cache cleanup timer.
         # During sustained multi-request traffic, self.running is never empty
-        # so _cleanup_finished's mx.clear_memory_cache() never triggers.
+        # so _cleanup_finished's clear_mlx_memory_cache() never triggers.
         # This timer ensures Metal's internal allocator cache gets flushed
         # periodically (every 60s) even during continuous load.
         self._last_metal_gc_time = time.monotonic()
@@ -2669,6 +2672,75 @@ class Scheduler:
             cached_tokens = max(len(key_tokens) - len(cache_remaining), 0)
         return cache_remaining + suffix, cached_tokens
 
+    def _cache_selection_hot_advantage_threshold(self) -> int:
+        raw = os.environ.get("VMLINUX_CACHE_SELECTION_HOT_ADVANTAGE_TOKENS", "64")
+        try:
+            return max(0, int(raw))
+        except (TypeError, ValueError):
+            return 64
+
+    def _paged_cold_block_tokens(self, block_table: Any) -> int:
+        if self.block_aware_cache is None or not block_table:
+            return 0
+        paged_cache = getattr(self.block_aware_cache, "paged_cache", None)
+        blocks = getattr(paged_cache, "allocated_blocks", {}) or {}
+        total = 0
+        for block_id in getattr(block_table, "block_ids", []) or []:
+            block = blocks.get(block_id)
+            if block is not None and getattr(block, "cache_data_from_disk", False):
+                total += max(0, int(getattr(block, "token_count", 0) or 0))
+        return total
+
+    def _warm_prefix_alternative(
+        self,
+        fetch_tokens: List[int],
+        gen_prompt_suffix: List[int],
+    ) -> Tuple[Any | None, List[int], int, str | None]:
+        cache = None
+        remaining: List[int] = []
+        detail: str | None = None
+        if self.memory_aware_cache is not None:
+            cache, raw_remaining = self.memory_aware_cache.fetch(fetch_tokens)
+            if cache:
+                remaining, cached_tokens = self._prefix_hit_tail_and_cached_tokens(
+                    fetch_tokens=fetch_tokens,
+                    remaining=raw_remaining or [],
+                    gen_prompt_suffix=gen_prompt_suffix,
+                )
+                return cache, remaining, cached_tokens, "memory"
+        if self.prefix_cache is not None:
+            cache, raw_remaining = self.prefix_cache.fetch_cache(fetch_tokens)
+            if cache:
+                remaining, cached_tokens = self._prefix_hit_tail_and_cached_tokens(
+                    fetch_tokens=fetch_tokens,
+                    remaining=raw_remaining or [],
+                    gen_prompt_suffix=gen_prompt_suffix,
+                )
+                return cache, remaining, cached_tokens, "prefix"
+        return None, [], 0, detail
+
+    def _should_prefer_warm_prefix_over_paged(
+        self,
+        *,
+        paged_cached_tokens: int,
+        paged_cold_tokens: int,
+        warm_cached_tokens: int,
+    ) -> Tuple[bool, Dict[str, Any]]:
+        threshold = self._cache_selection_hot_advantage_threshold()
+        hot_advantage = (
+            max(0, int(paged_cached_tokens or 0))
+            - max(0, int(paged_cold_tokens or 0))
+            - max(0, int(warm_cached_tokens or 0))
+        )
+        decision = {
+            "paged_cached_tokens": max(0, int(paged_cached_tokens or 0)),
+            "paged_cold_tokens": max(0, int(paged_cold_tokens or 0)),
+            "warm_cached_tokens": max(0, int(warm_cached_tokens or 0)),
+            "hot_advantage_tokens": hot_advantage,
+            "hot_advantage_threshold_tokens": threshold,
+        }
+        return warm_cached_tokens > 0 and hot_advantage < threshold, decision
+
     def _remaining_tokens_after_cached_prefix(
         self,
         request: Request,
@@ -3085,6 +3157,13 @@ class Scheduler:
         if cached_tokens <= 0:
             return
         detail = str(getattr(request, "_cache_detail", "") or "unknown")
+        if detail != "unknown" and getattr(self, "_tq_active", False) and "+tq" not in detail:
+            detail = f"{detail}+tq"
+            request._cache_detail = detail
+        execution = getattr(request, "_cache_execution", None)
+        if isinstance(execution, dict):
+            execution["cache_detail"] = detail
+            self._last_cache_execution = dict(execution)
         self._cache_hit_requests += 1
         self._cache_hit_tokens += cached_tokens
         self._cache_hit_tokens_by_detail[detail] = (
@@ -4014,6 +4093,15 @@ class Scheduler:
                     failed += 1
             except Exception as e:
                 logger.warning(f"Failed to extract state from layer {i}: {e}")
+                cls_name = type(layer_cache).__name__
+                class_counts[cls_name] = class_counts.get(cls_name, 0) + 1
+                extracted.append(
+                    {
+                        "state": None,
+                        "meta_state": None,
+                        "class_name": cls_name,
+                    }
+                )
                 failed += 1
 
         if failed > 0:
@@ -4178,43 +4266,125 @@ class Scheduler:
             if _gpl_suffix_tokens:
                 remaining = list(remaining or []) + list(_gpl_suffix_tokens)
             if block_table and block_table.num_tokens > 0:
-                # Defer reconstruction to the scheduler llm-worker. Both
-                # in-RAM block tensors and SSM companion tensors are MLX arrays
-                # created on that worker stream; reconstructing them in
-                # add_request() on the API thread causes fake misses or stream
-                # errors. L2 disk promotion also creates MLX arrays, so keeping
-                # one reconstruction path avoids thread-dependent behavior.
-                request.block_table = block_table
-                request.cached_tokens = block_table.num_tokens
-                request.shared_prefix_blocks = len(block_table.block_ids)
-                request.remaining_tokens = remaining
-                request._paged_block_table_needs_worker_reconstruct = True
+                paged_cold_tokens = self._paged_cold_block_tokens(block_table)
+                warm_cache = None
+                warm_remaining: List[int] = []
+                warm_cached_tokens = 0
+                warm_detail: str | None = None
+                # Paged/TurboQuant hits with cold/disk-promoted blocks can have
+                # worse TTFT than a smaller hot prefix hit. Compare a conservative
+                # hot-token advantage before committing to reconstruction.
                 if (
-                    self._is_hybrid
+                    (paged_cold_tokens > 0 or getattr(self, "_tq_active", False))
                     and not self._uses_dsv4_cache
                     and not self._uses_zaya_cache
                 ):
-                    request._hybrid_prompt_cache_needs_worker_ssm = True
-                    request._hybrid_ssm_fetch_tokens = list(_fetch_tokens)
-                if getattr(self, "_kv_cache_bits", 0):
-                    request._prompt_cache_needs_worker_dequant = True
-                if self._uses_dsv4_cache:
-                    request._cache_detail = "paged+dsv4"
-                elif self._uses_zaya_cache:
-                    request._cache_detail = "paged+zaya_cca"
-                else:
-                    request._cache_detail = (
-                        "paged+disk"
-                        if getattr(request, "_paged_disk_hit", False)
-                        else "paged"
+                    (
+                        warm_cache,
+                        warm_remaining,
+                        warm_cached_tokens,
+                        warm_detail,
+                    ) = self._warm_prefix_alternative(
+                        _fetch_tokens,
+                        _gpl_suffix_tokens,
                     )
-                logger.info(
-                    f"Request {request.request_id}: paged cache hit, "
-                    f"{request.cached_tokens} tokens in "
-                    f"{request.shared_prefix_blocks} blocks, "
-                    f"{len(remaining)} remaining to process "
-                    f"(worker reconstruct pending)"
+                prefer_warm, selection = self._should_prefer_warm_prefix_over_paged(
+                    paged_cached_tokens=int(getattr(block_table, "num_tokens", 0) or 0),
+                    paged_cold_tokens=paged_cold_tokens,
+                    warm_cached_tokens=warm_cached_tokens,
                 )
+                if prefer_warm and warm_cache is not None and warm_detail is not None:
+                    try:
+                        self.block_aware_cache.paged_cache.release_request_refs(
+                            block_table
+                        )
+                        self.block_aware_cache.paged_cache.detach_request(
+                            request.request_id
+                        )
+                    except Exception:
+                        pass
+                    request.prompt_cache = warm_cache
+                    request.cached_tokens = warm_cached_tokens
+                    request.remaining_tokens = warm_remaining
+                    request._cache_detail = warm_detail
+                    request.block_table = None
+                    request.shared_prefix_blocks = 0
+                    request._paged_block_table_needs_worker_reconstruct = False
+                    if getattr(self, "_kv_cache_bits", 0):
+                        request._prompt_cache_needs_worker_dequant = True
+                    selection.update(
+                        {
+                            "selected": warm_detail,
+                            "rejected": "paged",
+                            "reason": "cold_paged_reconstruction_cost",
+                        }
+                    )
+                    request._cache_selection = selection
+                    self._last_cache_selection = selection
+                    logger.info(
+                        "Request %s: selected %s cache over paged hit "
+                        "(paged_cached=%d, cold_paged=%d, warm_cached=%d, "
+                        "hot_advantage=%d < threshold=%d)",
+                        request.request_id,
+                        warm_detail,
+                        selection["paged_cached_tokens"],
+                        selection["paged_cold_tokens"],
+                        selection["warm_cached_tokens"],
+                        selection["hot_advantage_tokens"],
+                        selection["hot_advantage_threshold_tokens"],
+                    )
+                else:
+                    paged_selection_reason = (
+                        "paged_hot_advantage_sufficient"
+                        if warm_detail is not None
+                        else "no_warm_prefix_alternative"
+                    )
+                    selection.update(
+                        {
+                            "selected": "paged",
+                            "rejected": warm_detail,
+                            "reason": paged_selection_reason,
+                        }
+                    )
+                    request._cache_selection = selection
+                    self._last_cache_selection = selection
+                    # Defer reconstruction to the scheduler llm-worker. Both
+                    # in-RAM block tensors and SSM companion tensors are MLX arrays
+                    # created on that worker stream; reconstructing them in
+                    # add_request() on the API thread causes fake misses or stream
+                    # errors. L2 disk promotion also creates MLX arrays, so keeping
+                    # one reconstruction path avoids thread-dependent behavior.
+                    request.block_table = block_table
+                    request.cached_tokens = block_table.num_tokens
+                    request.shared_prefix_blocks = len(block_table.block_ids)
+                    request.remaining_tokens = remaining
+                    request._paged_block_table_needs_worker_reconstruct = True
+                    if (
+                        self._is_hybrid
+                        and not self._uses_dsv4_cache
+                        and not self._uses_zaya_cache
+                    ):
+                        request._hybrid_prompt_cache_needs_worker_ssm = True
+                        request._hybrid_ssm_fetch_tokens = list(_fetch_tokens)
+                    if getattr(self, "_kv_cache_bits", 0):
+                        request._prompt_cache_needs_worker_dequant = True
+                    if self._uses_dsv4_cache:
+                        request._cache_detail = "paged+dsv4"
+                    elif self._uses_zaya_cache:
+                        request._cache_detail = "paged+zaya_cca"
+                    else:
+                        request._cache_detail = (
+                            "paged+disk"
+                            if getattr(request, "_paged_disk_hit", False)
+                            else "paged"
+                        )
+                    logger.info(
+                        f"Request {request.request_id}: paged cache hit, "
+                        f"{request.cached_tokens} tokens in "
+                        f"{request.shared_prefix_blocks} blocks, "
+                        f"{len(remaining)} remaining to process "
+                        f"(worker reconstruct pending)"
+                    )
             else:
                 request.remaining_tokens = request.prompt_token_ids
                 logger.info(
@@ -4545,12 +4715,7 @@ class Scheduler:
 
         # Clear Metal memory cache if no other requests are running
         if not self.running:
-            try:
-                import mlx.core as mx
-
-                mx.clear_memory_cache()
-            except Exception:
-                pass
+            clear_mlx_memory_cache(log=logger)
 
         logger.debug(f"Aborted request {request_id}")
         return True
@@ -4730,7 +4895,91 @@ class Scheduler:
                         ck_len,
                     )
 
+        if not ssm_states and fetch_num > 0 and len(ssm_tokens) >= fetch_num:
+            boundary_tokens = list(ssm_tokens[:fetch_num])
+            try:
+                clean_cache = self._prefill_for_prompt_only_cache(boundary_tokens)
+                if clean_cache is not None:
+                    kv_set = set(self._hybrid_kv_positions or [])
+                    derived_states = []
+                    for layer_idx, c in enumerate(clean_cache):
+                        if layer_idx in kv_set:
+                            continue
+                        if hasattr(c, "cache") and isinstance(c.cache, list):
+                            from copy import deepcopy
+                            import mlx.core as mx
+
+                            cloned = deepcopy(c)
+                            cloned.cache = [
+                                mx.contiguous(mx.array(a))
+                                if a is not None
+                                else None
+                                for a in c.cache
+                            ]
+                            derived_states.append(cloned)
+                        else:
+                            derived_states.append(c)
+                    if derived_states:
+                        ssm_states = derived_states
+                        try:
+                            self._ssm_state_cache.store(
+                                boundary_tokens,
+                                fetch_num,
+                                derived_states,
+                            )
+                        except Exception:
+                            pass
+                        logger.info(
+                            "Request %s: synchronously derived SSM companion "
+                            "for block-aligned paged hit (%d tokens, %d layers)",
+                            request.request_id,
+                            fetch_num,
+                            len(derived_states),
+                        )
+                    del clean_cache
+                    clear_mlx_memory_cache(log=logger)
+            except Exception as e:
+                logger.info(
+                    "Request %s: synchronous SSM companion derive failed for "
+                    "%d-token paged hit: %s",
+                    request.request_id,
+                    fetch_num,
+                    e,
+                )
+
         if not ssm_states:
+            try:
+                boundary_tokens = list(ssm_tokens[:fetch_num])
+                if (
+                    boundary_tokens
+                    and self._ssm_state_cache is not None
+                    and len(getattr(self._ssm_state_cache, "_store", {}))
+                    < self._ssm_state_cache.max_entries
+                ):
+                    if not hasattr(self, "_ssm_rederive_queue"):
+                        self._ssm_rederive_queue = []
+                    if (
+                        (boundary_tokens, fetch_num, request.request_id)
+                        not in self._ssm_rederive_queue
+                    ):
+                        if len(self._ssm_rederive_queue) >= SSM_REDERIVE_QUEUE_CAP:
+                            self._ssm_rederive_queue.pop(0)
+                        self._ssm_rederive_queue.append(
+                            (boundary_tokens, fetch_num, request.request_id)
+                        )
+                        logger.info(
+                            "SSM companion: queued block-boundary re-derive "
+                            "for %s (%d cache-key tokens after hybrid miss)",
+                            request.request_id,
+                            fetch_num,
+                        )
+            except Exception as e:
+                logger.debug(
+                    "SSM companion: failed to queue block-boundary re-derive "
+                    "for %s: %s",
+                    request.request_id,
+                    e,
+                )
             logger.info(
                 f"Request {request.request_id}: hybrid paged MISS — "
                 f"{fetch_num} KV tokens cached but no usable SSM companion, "
@@ -4862,6 +5111,29 @@ class Scheduler:
             else:
                 tokens_to_process = request.prompt_token_ids
             cache_to_use = request.prompt_cache  # May be None
+            cache_execution: Optional[Dict[str, Any]] = None
+            if (
+                getattr(request, "cached_tokens", 0)
+                or getattr(request, "_cache_detail", None)
+                or getattr(request, "_paged_block_table_needs_worker_reconstruct", False)
+                or getattr(request, "_prompt_cache_needs_worker_dequant", False)
+            ):
+                _block_table_for_stats = getattr(request, "block_table", None)
+                cache_execution = {
+                    "request_id": request.request_id,
+                    "cache_detail": getattr(request, "_cache_detail", None),
+                    "cached_tokens": int(getattr(request, "cached_tokens", 0) or 0),
+                    "blocks": len(getattr(_block_table_for_stats, "block_ids", []) or []),
+                    "selection": getattr(request, "_cache_selection", None),
+                    "reconstructed": False,
+                    "dequantized": False,
+                    "reconstruction_seconds": 0.0,
+                    "dequantization_seconds": 0.0,
+                    "total_worker_cache_seconds": 0.0,
+                }
+                _cache_worker_start = time.perf_counter()
+            else:
+                _cache_worker_start = 0.0
 
             if getattr(request, "_paged_block_table_needs_worker_reconstruct", False):
                 block_table = getattr(request, "block_table", None)
@@ -4879,6 +5151,13 @@ class Scheduler:
                     blocks=len(getattr(block_table, "block_ids", []) or []) if block_table else 0,
                     ok=cache_to_use is not None,
                 )
+                if cache_execution is not None:
+                    cache_execution["reconstruction_seconds"] = round(
+                        time.perf_counter() - _t_reconstruct,
+                        6,
+                    )
+                    cache_execution["reconstructed"] = cache_to_use is not None
+                    cache_execution["reconstruction_ok"] = cache_to_use is not None
                 request._paged_block_table_needs_worker_reconstruct = False
                 if cache_to_use is None:
                     # mlxstudio#73: a failed reconstruct follows a fetch that
@@ -4913,7 +5192,15 @@ class Scheduler:
                 cache_to_use is not None
                 and getattr(request, "_prompt_cache_needs_worker_dequant", False)
             ):
+                _t_dequant = time.perf_counter()
                 cache_to_use = self._dequantize_cache_for_use(cache_to_use)
+                if cache_execution is not None:
+                    cache_execution["dequantization_seconds"] = round(
+                        time.perf_counter() - _t_dequant,
+                        6,
+                    )
+                    cache_execution["dequantized"] = cache_to_use is not None
+                    cache_execution["dequantization_ok"] = cache_to_use is not None
                 if cache_to_use is None:
                     logger.info(
                         f"Request {request.request_id}: worker-side DSV4 cache "
@@ -5117,6 +5404,17 @@ class Scheduler:
                 if request.sampling_params.logprobs:
                     register_generation_logprobs(self.model, uid)
                 request.status = RequestStatus.RUNNING
+                if cache_execution is not None and request.cached_tokens > 0:
+                    cache_execution["total_worker_cache_seconds"] = round(
+                        max(0.0, time.perf_counter() - _cache_worker_start),
+                        6,
+                    )
+                    request._cache_execution = {
+                        key: value
+                        for key, value in cache_execution.items()
+                        if value is not None
+                    }
+                    self._last_cache_execution = dict(request._cache_execution)
                 self.running[request.request_id] = request
                 scheduled.append(request)
 
@@ -5346,6 +5644,11 @@ class Scheduler:
             # Annotate TQ if active (skip if already annotated, e.g. "disk+tq")
             if _detail and getattr(self, "_tq_active", False) and "+tq" not in _detail:
                 _detail += "+tq"
+            execution = getattr(request, "_cache_execution", None)
+            if isinstance(execution, dict) and _detail:
+                execution["cache_detail"] = _detail
+                request._cache_execution = dict(execution)
+                self._last_cache_execution = dict(request._cache_execution)
             output = RequestOutput(
                 request_id=request_id,
                 new_token_ids=[response.token] + spec_tokens,
@@ -6411,15 +6714,10 @@ class Scheduler:
             self.finished_req_ids.add(request_id)
 
         # Only clear Metal memory cache when no other requests are actively
-        # running. Calling mx.clear_memory_cache() during an active prefill
+        # running. Calling Metal cache cleanup during an active prefill
         # can interfere with in-flight GPU operations and cause crashes.
         if finished_ids and not self.running:
-            try:
-                import mlx.core as mx
-
-                mx.clear_memory_cache()
-            except Exception:
-                pass
+            clear_mlx_memory_cache(log=logger)
 
     def _is_cache_corruption_error(self, error: Exception) -> bool:
         """Check if an error indicates cache corruption."""
@@ -7207,18 +7505,13 @@ class Scheduler:
 
         # Periodic Metal memory cache cleanup during sustained traffic.
         # When requests are always running, _cleanup_finished never calls
-        # mx.clear_memory_cache(). This timer ensures periodic cleanup
+        # idle cleanup never triggers. This timer ensures periodic cleanup
         # to prevent Metal's internal allocator cache from growing unbounded.
         now = time.monotonic()
         if now - self._last_metal_gc_time > self._metal_gc_interval:
             self._last_metal_gc_time = now
-            try:
-                import mlx.core as mx
-
-                mx.clear_memory_cache()
+            if clear_mlx_memory_cache(log=logger):
                 logger.debug("Periodic Metal memory cache cleanup")
-            except Exception:
-                pass
 
         # ── Deferred SSM re-derive (idle-time processing) ── vmlx#103
         # For thinking models (gen_prompt_len > 0), the SSM companion store
@@ -7282,12 +7575,7 @@ class Scheduler:
                             f"{prompt_len}-token key (next fetch will hit)"
                         )
                     del clean_cache
-                    try:
-                        import mlx.core as mx
-
-                        mx.clear_memory_cache()
-                    except Exception:
-                        pass
+                    clear_mlx_memory_cache(log=logger)
             except Exception as e:
                 logger.warning(f"SSM re-derive failed for {orig_request_id}: {e}")
 
@@ -7316,9 +7604,42 @@ class Scheduler:
             generator_path = "batched"
         else:
             generator_path = "none" if generator_cls is None else "custom"
+        now = time.time()
+
+        def _request_lifecycle_detail(request: Request) -> Dict[str, Any]:
+            schedule_time = getattr(request, "_schedule_time", None)
+            detail = {
+                "request_id": request.request_id,
+                "status": getattr(request.status, "name", str(request.status)),
+                "age_seconds": round(max(0.0, now - request.arrival_time), 3),
+                "scheduled_age_seconds": (
+                    round(max(0.0, time.perf_counter() - schedule_time), 3)
+                    if isinstance(schedule_time, (int, float))
+                    else None
+                ),
+                "prompt_tokens": int(getattr(request, "num_prompt_tokens", 0) or 0),
+                "output_tokens": int(getattr(request, "num_output_tokens", 0) or 0),
+                "cached_tokens": int(getattr(request, "cached_tokens", 0) or 0),
+                "max_tokens": int(getattr(request, "max_tokens", 0) or 0),
+                "batch_uid": getattr(request, "batch_uid", None),
+                "cache_detail": getattr(request, "_cache_detail", None),
+                "cache_execution": getattr(request, "_cache_execution", None),
+                "finish_reason": getattr(request, "finish_reason", None),
+            }
+            return {k: v for k, v in detail.items() if v is not None}
+
+        running_ids = list(self.running)
+        waiting_ids = [request.request_id for request in self.waiting]
         stats = {
             "num_waiting": len(self.waiting),
             "num_running": len(self.running),
+            "waiting_request_ids": waiting_ids,
+            "running_request_ids": running_ids,
+            "pending_abort_request_ids": sorted(self._pending_aborts),
+            "running_requests": [
+                _request_lifecycle_detail(request)
+                for request in self.running.values()
+            ],
             "num_requests_processed": self.num_requests_processed,
             "total_prompt_tokens": self.total_prompt_tokens,
             "total_completion_tokens": self.total_completion_tokens,
@@ -7332,6 +7653,8 @@ class Scheduler:
             "cache_reuse_partial_downgrades": self._cache_reuse_partial_downgrades,
             "cache_reuse_partial_tokens": self._cache_reuse_partial_tokens,
             "last_cache_reuse_partial": self._last_cache_reuse_partial,
+            "last_cache_selection": self._last_cache_selection,
+            "last_cache_execution": self._last_cache_execution,
             "engine_path": generator_path,
             "batch_generator": {
                 "class": generator_cls,

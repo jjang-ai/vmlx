@@ -2,6 +2,14 @@ import json
 from pathlib import Path
 
 
+def test_release_surface_contract_default_out_tracks_current_release_proof_artifact():
+    from tests.cross_matrix import run_release_surface_contract as gate
+
+    assert gate.DEFAULT_OUT == Path(
+        "build/current-release-surface-contract-20260528-release-surface-matrix.json"
+    )
+
+
 def _write_release_root(tmp_path: Path, version: str = "1.5.48") -> dict[str, str]:
     (tmp_path / "pyproject.toml").write_text(
         f'version = "{version}"\n', encoding="utf-8"

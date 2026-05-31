@@ -2,6 +2,14 @@ import ast
 from pathlib import Path
 
 
+def test_family_detection_contract_default_out_tracks_current_release_proof_artifact():
+    from tests.cross_matrix import run_model_family_detection_contract as gate
+
+    assert gate.DEFAULT_OUT == Path(
+        "build/current-model-family-detection-contract-20260531-post-step-lfm-refresh.json"
+    )
+
+
 def test_family_detection_contract_pins_named_release_rows():
     from tests.cross_matrix import run_model_family_detection_contract as gate
 
@@ -26,6 +34,8 @@ def test_family_detection_contract_pins_named_release_rows():
         "minimax_m2_parser_alias",
         "hy3_jangtq_hunyuan_qwen3",
         "hy3_jangtq_k_reasoning_policy",
+        "step37_flash_vlm_full_sliding_kv",
+        "lfm25_moe_hybrid_registry",
         "decode_speed_dsv4_minimax_canonical_parsers",
         "decode_speed_no_legacy_32k_startup_cap",
         "decode_speed_qwen36_mxfp8_native_mtp_rows",
@@ -727,9 +737,9 @@ def test_decode_speed_local_high_risk_rows_match_current_engine_registry():
         "qwen35_4bit": ("qwen3_5_moe", "hybrid", None),
         "qwen35_mxfp8_mtp": ("qwen3_5_moe", "hybrid", None),
         "hy3": ("hy_v3", "kv", "kv"),
-        "nemotron_jangtq": ("nemotron_h", "hybrid", None),
-        "nemotron_omni_nano_jangtq4": ("nemotron_h", "hybrid", None),
-        "nemotron_mxfp4": ("nemotron_h", "hybrid", None),
+        "nemotron_jangtq": ("nemotron_h", "hybrid", "nemotron_h_ssm_attention"),
+        "nemotron_omni_nano_jangtq4": ("nemotron_h", "hybrid", "nemotron_h_ssm_attention"),
+        "nemotron_mxfp4": ("nemotron_h", "hybrid", "nemotron_h_ssm_attention"),
     }
 
     registry = get_model_config_registry()

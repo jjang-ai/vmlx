@@ -93,9 +93,9 @@ METAL GPU MEMORY MANAGEMENT
 - Metal allocator cache limit: 25% of max working set (floor 512MB).
   Prevents Metal from hoarding freed memory in its allocator free-list,
   leaving more memory available for prefix cache and OS.
-- Periodic GC: ``mx.clear_memory_cache()`` every 60s during sustained traffic
+- Periodic GC: ``clear_mlx_memory_cache()`` every 60s during sustained traffic
   (via ``_last_metal_gc_time`` timer in ``step()``)
-- Idle GC: ``mx.clear_memory_cache()`` when all requests finish
+- Idle GC: ``clear_mlx_memory_cache()`` when all requests finish
   (in ``_cleanup_finished`` when ``self.running`` is empty)
 - Wired limit: set to ``max_recommended_working_set_size`` at init
 - ``mx.async_eval()`` in prefill loop for GPU/CPU overlap
@@ -164,6 +164,7 @@ from .mllm_batch_generator import (
     _model_uses_zaya_cache_contract,
 )
 from .errors import PromptTooLongError
+from .mlx_memory import clear_mlx_memory_cache
 from .request import RequestOutput, RequestStatus, SamplingParams
 from .utils.head_dim_detection import (
     choose_supported_kv_group_size,
@@ -178,6 +179,15 @@ from .utils.memory_limits import (
 from .prefix_cache import runtime_cache_fingerprint
 
 logger = logging.getLogger(__name__)
+
+
+def _mllm_scheduler_trace_enabled() -> bool:
+    return os.environ.get("VMLINUX_MLLM_SCHEDULER_TRACE", "").lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
 
 
 @dataclass
@@ -320,6 +330,8 @@ class MLLMSchedulerOutput:
     outputs: List[RequestOutput] = field(default_factory=list)
     # Whether any work was done
     has_work: bool = False
+    # Optional gated diagnostic timings from scheduler.step().
+    trace_timings: Dict[str, float] = field(default_factory=dict)
 
 
 class MLLMScheduler:
@@ -774,6 +786,7 @@ class MLLMScheduler:
 
         # Output queues for async streaming
         self.output_queues: Dict[str, asyncio.Queue] = {}
+        self._scheduler_trace_timings: Dict[str, Dict[str, float]] = {}
 
         # Streaming detokenizer pool for correct multi-byte character handling
         self._detokenizer_pool: Dict[str, Any] = {}
@@ -792,7 +805,7 @@ class MLLMScheduler:
 
         # Periodic Metal memory cache cleanup timer (matches LLM scheduler).
         # During sustained MLLM traffic, self.running is never empty so
-        # _cleanup_finished's mx.clear_memory_cache() never triggers.
+        # _cleanup_finished's clear_mlx_memory_cache() never triggers.
         self._last_metal_gc_time = time.monotonic()
         self._metal_gc_interval = 60.0  # seconds
 
@@ -1844,6 +1857,7 @@ class MLLMScheduler:
             ssm_state_cache_model_key=self._ssm_companion_model_key,
             enable_prefix_cache=self.config.enable_prefix_cache,
             uses_zaya_cache=self._uses_zaya_cache,
+            mixed_attention_cache_model=self._mixed_attention_cache_model,
         )
         self._current_sampler_params = new_params
 
@@ -2026,11 +2040,7 @@ class MLLMScheduler:
 
         # Free Metal memory when all requests done
         if not self.running:
-            try:
-                import mlx.core as mx
-                mx.clear_memory_cache()
-            except Exception:
-                pass
+            clear_mlx_memory_cache(log=logger)
 
         logger.debug(f"Aborted request {request_id}")
         return True
@@ -2495,6 +2505,7 @@ class MLLMScheduler:
             cached_tokens = int(getattr(response, "cached_tokens", 0) or 0)
         except Exception:
             cached_tokens = 0
+        request._cached_tokens = cached_tokens
         if cached_tokens <= 0:
             request._cache_hit_recorded = True
             return
@@ -2508,6 +2519,15 @@ class MLLMScheduler:
         self._cache_hit_tokens_by_detail[detail] = (
             self._cache_hit_tokens_by_detail.get(detail, 0) + cached_tokens
         )
+        execution = getattr(request, "_cache_execution", None)
+        if isinstance(execution, dict):
+            execution["cache_detail"] = detail
+        batch_stats = getattr(getattr(self, "batch_generator", None), "_stats", None)
+        batch_execution = getattr(batch_stats, "last_cache_execution", None)
+        if isinstance(batch_execution, dict):
+            batch_execution["cache_detail"] = detail
+            if batch_stats is not None:
+                batch_stats.last_cache_execution = dict(batch_execution)
         request._cache_hit_recorded = True
 
     def _cleanup_finished(self, finished_ids: Set[str]) -> None:
@@ -2519,18 +2539,33 @@ class MLLMScheduler:
         2. Cleans up the streaming detokenizer.
         3. Removes from running dict, UID mappings, paged cache tracking.
         4. Removes from master requests dict to free output_tokens/cache refs.
-        5. Triggers Metal GC (mx.clear_memory_cache) when all requests done.
+        5. Triggers Metal GC when all requests done.
 
         The _extracted_cache and _extracted_tokens attributes are set on the
         MLLMRequest by _process_batch_responses() during step(). They are always
         set to None in a finally block after store to prevent memory leaks.
         """
+        trace_enabled = _mllm_scheduler_trace_enabled()
+        trace_last = time.perf_counter() if trace_enabled else 0.0
+        cleanup_trace: Dict[str, float] = {}
+
+        def _trace_mark(name: str) -> None:
+            nonlocal trace_last
+            if not trace_enabled:
+                return
+            now = time.perf_counter()
+            cleanup_trace[name] = cleanup_trace.get(name, 0.0) + max(
+                now - trace_last, 0.0
+            )
+            trace_last = now
+
         # Snapshot stop tokens from requests that will survive this cleanup.
         # This prevents reading from self.running during the loop (it's mutated per iteration).
         _surviving_stops = set()
         for rid, req in self.running.items():
             if rid not in finished_ids:
                 _surviving_stops.update(getattr(req, '_added_stop_tokens', set()))
+        _trace_mark("snapshot_s")
 
         for request_id in finished_ids:
             request = self.running.get(request_id)
@@ -2580,54 +2615,80 @@ class MLLMScheduler:
                                     request_id,
                                 )
                                 request._extracted_cache = None
-                            raw = request._extracted_cache
                             prompt_len = len(token_list)
                             truncated_tokens = (
                                 token_list[: prompt_len - 1]
                                 if prompt_len > 1
                                 else list(token_list)
                             )
+                            cached_tokens = int(
+                                getattr(request, "_cached_tokens", 0) or 0
+                            )
                             _uses_zaya_cache = bool(
                                 getattr(self, "_uses_zaya_cache", False)
                             )
-                            if raw is None:
-                                cache_blocks = None
-                            elif _uses_zaya_cache:
-                                # ZAYA CCA is path-dependent: the post-decode
-                                # cache has already absorbed generated tokens
-                                # into conv_state/prev_hs. Re-prefill exactly
-                                # the N-1 cache key and store that clean typed
-                                # state. If the clean prefill is unavailable,
-                                # skip the store instead of writing a
-                                # contaminated "hit" that later hurts
-                                # coherence.
-                                cache_blocks = None
-                                prefill_fn = getattr(
-                                    self.batch_generator,
-                                    "_prefill_for_clean_path_dependent_cache",
-                                    None,
+                            _uses_mixed_attention_cache = bool(
+                                getattr(self, "_mixed_attention_cache_model", False)
+                            )
+                            if truncated_tokens and cached_tokens >= len(truncated_tokens):
+                                logger.debug(
+                                    "Skipping VLM paged cache store for %s: "
+                                    "cached prefix already covers %d/%d cache-key tokens",
+                                    request_id,
+                                    cached_tokens,
+                                    len(truncated_tokens),
                                 )
-                                if not callable(prefill_fn):
+                                cache_blocks = None
+                                request._extracted_cache = None
+                            else:
+                                raw = request._extracted_cache
+                                if raw is None:
+                                    cache_blocks = None
+                                elif _uses_zaya_cache or _uses_mixed_attention_cache:
+                                    # ZAYA CCA and Gemma-style mixed-SWA caches are
+                                    # path-dependent. ZAYA conv_state/prev_hs and
+                                    # RotatingKVCache windows cannot be recovered
+                                    # safely from post-generation state. Re-prefill
+                                    # exactly the N-1 cache key and store that clean
+                                    # typed state. If the clean prefill is
+                                    # unavailable, skip the store instead of writing
+                                    # a contaminated hit that later hurts coherence
+                                    # or speed.
+                                    cache_blocks = None
                                     prefill_fn = getattr(
                                         self.batch_generator,
-                                        "_prefill_for_clean_ssm",
+                                        "_prefill_for_clean_path_dependent_cache",
                                         None,
                                     )
-                                if truncated_tokens and callable(prefill_fn):
-                                    cache_blocks = prefill_fn(truncated_tokens)
-                                if cache_blocks is None:
-                                    logger.info(
-                                        "Skipping ZAYA VLM paged cache store "
-                                        "for %s: clean zaya_cca_v1 prompt "
-                                        "prefill unavailable",
-                                        request_id,
-                                    )
-                            else:
-                                cache_blocks = raw() if callable(raw) else raw
+                                    if not callable(prefill_fn):
+                                        prefill_fn = getattr(
+                                            self.batch_generator,
+                                            "_prefill_for_clean_ssm",
+                                            None,
+                                        )
+                                    if truncated_tokens and callable(prefill_fn):
+                                        cache_blocks = prefill_fn(truncated_tokens)
+                                    if cache_blocks is None:
+                                        if _uses_zaya_cache:
+                                            logger.info(
+                                                "Skipping ZAYA VLM paged cache store "
+                                                "for %s: clean zaya_cca_v1 prompt "
+                                                "prefill unavailable",
+                                                request_id,
+                                            )
+                                        else:
+                                            logger.info(
+                                                "Skipping mixed-SWA VLM paged cache store "
+                                                "for %s: clean mixed_swa_kv_v1 prompt "
+                                                "prefill unavailable",
+                                                request_id,
+                                            )
+                                else:
+                                    cache_blocks = raw() if callable(raw) else raw
                             if cache_blocks is None:
                                 logger.debug(f"No cache blocks to store for {request_id}")
                             else:
-                                if _uses_zaya_cache:
+                                if _uses_zaya_cache or _uses_mixed_attention_cache:
                                     cache_blocks = list(cache_blocks)
                                 else:
                                     cache_blocks = self._truncate_hybrid_cache(
@@ -2832,6 +2893,7 @@ class MLLMScheduler:
                     finally:
                         if request is not None:
                             request._extracted_cache = None
+            _trace_mark("cache_store_s")
 
             # Remove per-request stop tokens from batch generator.
             # Use _surviving_stops snapshot (captured before cleanup loop) to avoid
@@ -2869,14 +2931,22 @@ class MLLMScheduler:
 
             # Track as finished
             self.finished_req_ids.add(request_id)
+            _trace_mark("bookkeeping_s")
 
         # Clear Metal memory cache when all requests done (vision tensors are large)
         if finished_ids and not self.running:
-            try:
-                import mlx.core as mx
-                mx.clear_memory_cache()
-            except Exception:
-                pass
+            clear_mlx_memory_cache(log=logger)
+        _trace_mark("clear_memory_s")
+        if trace_enabled and finished_ids:
+            logger.info(
+                "VMLINUX_MLLM_CLEANUP_TRACE finished=%d snapshot_ms=%.3f "
+                "cache_store_ms=%.3f bookkeeping_ms=%.3f clear_memory_ms=%.3f",
+                len(finished_ids),
+                cleanup_trace.get("snapshot_s", 0.0) * 1000.0,
+                cleanup_trace.get("cache_store_s", 0.0) * 1000.0,
+                cleanup_trace.get("bookkeeping_s", 0.0) * 1000.0,
+                cleanup_trace.get("clear_memory_s", 0.0) * 1000.0,
+            )
 
     def step(self) -> MLLMSchedulerOutput:
         """Execute one scheduling step -- the core generation loop tick.
@@ -2897,6 +2967,19 @@ class MLLMScheduler:
             MLLMSchedulerOutput with results of this step
         """
         output = MLLMSchedulerOutput()
+        trace_enabled = _mllm_scheduler_trace_enabled()
+        step_t0 = time.perf_counter() if trace_enabled else 0.0
+        trace_last = step_t0
+
+        def _trace_mark(name: str) -> None:
+            nonlocal trace_last
+            if not trace_enabled:
+                return
+            now = time.perf_counter()
+            output.trace_timings[name] = output.trace_timings.get(name, 0.0) + max(
+                now - trace_last, 0.0
+            )
+            trace_last = now
 
         # Process deferred aborts — safe now because previous step's
         # Metal computation has completed. Hold _queue_lock to prevent
@@ -2918,6 +3001,7 @@ class MLLMScheduler:
                     with self._queue_lock:
                         self.uid_to_request_id.pop(uid, None)
                 logger.debug(f"Processed deferred abort for {rid}")
+        _trace_mark("abort_s")
 
         # Schedule waiting requests
         with self._queue_lock:
@@ -2927,6 +3011,7 @@ class MLLMScheduler:
 
             # Identify if we have running requests before releasing lock
             has_running = self.batch_generator is not None and len(self.running) > 0
+        _trace_mark("schedule_s")
 
         # Run generation step if we have running requests (OUTSIDE QUEUE LOCK)
         if has_running:
@@ -2941,6 +3026,7 @@ class MLLMScheduler:
                         responses = next_fn()
                     else:
                         responses = self.batch_generator.next()
+                _trace_mark("batch_next_s")
             except Exception as step_err:
                 # Cache corruption or GPU error — recover by clearing state
                 # and rescheduling (matching LLM scheduler pattern).
@@ -3016,13 +3102,26 @@ class MLLMScheduler:
             if responses:
                 with self._queue_lock:
                     outputs, finished_ids = self._process_batch_responses(responses)
+                    _trace_mark("process_responses_s")
                     output.outputs = outputs
                     output.finished_request_ids = finished_ids
                     self._cleanup_finished(finished_ids)
+                    _trace_mark("cleanup_finished_s")
+                _trace_mark("process_cleanup_s")
+            else:
+                _trace_mark("process_responses_s")
+                _trace_mark("cleanup_finished_s")
+                _trace_mark("process_cleanup_s")
+        else:
+            _trace_mark("batch_next_s")
+            _trace_mark("process_responses_s")
+            _trace_mark("cleanup_finished_s")
+            _trace_mark("process_cleanup_s")
 
         with self._queue_lock:
             # Clear finished tracking for next step
             self.finished_req_ids = set()
+        _trace_mark("finish_tracking_s")
 
         # Periodic Metal memory cache cleanup during sustained traffic.
         # Vision models hold large pixel_value tensors and cross-attention states
@@ -3030,12 +3129,9 @@ class MLLMScheduler:
         _now = time.monotonic()
         if _now - self._last_metal_gc_time > self._metal_gc_interval:
             self._last_metal_gc_time = _now
-            try:
-                import mlx.core as mx
-                mx.clear_memory_cache()
+            if clear_mlx_memory_cache(log=logger):
                 logger.debug("VLM periodic Metal memory cache cleanup")
-            except Exception:
-                pass
+        _trace_mark("metal_gc_s")
 
         # Async SSM rederive for hybrid thinking MLLM models. When idle (no
         # active requests), pop one task from the batch generator's rederive
@@ -3054,6 +3150,9 @@ class MLLMScheduler:
                     self.batch_generator.run_idle_rederive()
             except Exception as _rd_err:
                 logger.debug(f"MLLM idle rederive tick failed: {_rd_err}")
+        _trace_mark("idle_rederive_s")
+        if trace_enabled:
+            output.trace_timings["total_s"] = max(time.perf_counter() - step_t0, 0.0)
 
         return output
 
@@ -3222,11 +3321,26 @@ class MLLMScheduler:
                     # See `_step_executor` field comment for the JANGTQ
                     # Metal kernel stream-isolation rationale.
                     loop = asyncio.get_running_loop()
+                    trace_enabled = _mllm_scheduler_trace_enabled()
+                    executor_t0 = time.perf_counter() if trace_enabled else 0.0
                     step_output = await loop.run_in_executor(
                         self._step_executor, self.step
                     )
+                    executor_s = (
+                        time.perf_counter() - executor_t0 if trace_enabled else 0.0
+                    )
                     # Dispatch outputs on the event loop (asyncio.Queue is not thread-safe)
+                    dispatch_t0 = time.perf_counter() if trace_enabled else 0.0
                     self._dispatch_outputs(step_output)
+                    dispatch_s = (
+                        time.perf_counter() - dispatch_t0 if trace_enabled else 0.0
+                    )
+                    if trace_enabled and step_output.outputs:
+                        self._record_scheduler_trace(
+                            step_output,
+                            executor_s=executor_s,
+                            dispatch_s=dispatch_s,
+                        )
                 else:
                     # No work, wait a bit
                     await asyncio.sleep(0.01)
@@ -3239,6 +3353,73 @@ class MLLMScheduler:
                 # Fail all waiting+running requests so callers don't hang forever
                 self._fail_all_requests(str(e))
                 await asyncio.sleep(0.1)
+
+    def _record_scheduler_trace(
+        self,
+        step_output: MLLMSchedulerOutput,
+        *,
+        executor_s: float,
+        dispatch_s: float,
+    ) -> None:
+        for req_output in step_output.outputs:
+            request_id = req_output.request_id
+            timing = self._scheduler_trace_timings.setdefault(
+                request_id,
+                {
+                    "steps": 0.0,
+                    "executor_s": 0.0,
+                    "dispatch_s": 0.0,
+                    "output_items": 0.0,
+                    "output_tokens": 0.0,
+                    "step_total_s": 0.0,
+                    "schedule_s": 0.0,
+                    "batch_next_s": 0.0,
+                    "process_cleanup_s": 0.0,
+                    "process_responses_s": 0.0,
+                    "cleanup_finished_s": 0.0,
+                    "metal_gc_s": 0.0,
+                },
+            )
+            timing["steps"] += 1.0
+            timing["executor_s"] += max(executor_s, 0.0)
+            timing["dispatch_s"] += max(dispatch_s, 0.0)
+            timing["output_items"] += 1.0
+            timing["output_tokens"] += float(len(req_output.new_token_ids or []))
+            trace_timings = step_output.trace_timings or {}
+            for key in (
+                "total_s",
+                "schedule_s",
+                "batch_next_s",
+                "process_cleanup_s",
+                "process_responses_s",
+                "cleanup_finished_s",
+                "metal_gc_s",
+            ):
+                target = "step_total_s" if key == "total_s" else key
+                timing[target] += max(float(trace_timings.get(key, 0.0) or 0.0), 0.0)
+            if req_output.finished:
+                logger.info(
+                    "VMLINUX_MLLM_SCHEDULER_TRACE request_id=%s steps=%d "
+                    "output_items=%d output_tokens=%d executor_ms=%.3f "
+                    "dispatch_ms=%.3f step_ms=%.3f schedule_ms=%.3f "
+                    "batch_next_ms=%.3f process_cleanup_ms=%.3f "
+                    "process_responses_ms=%.3f cleanup_finished_ms=%.3f "
+                    "metal_gc_ms=%.3f",
+                    request_id,
+                    int(timing["steps"]),
+                    int(timing["output_items"]),
+                    int(timing["output_tokens"]),
+                    timing["executor_s"] * 1000.0,
+                    timing["dispatch_s"] * 1000.0,
+                    timing["step_total_s"] * 1000.0,
+                    timing["schedule_s"] * 1000.0,
+                    timing["batch_next_s"] * 1000.0,
+                    timing["process_cleanup_s"] * 1000.0,
+                    timing["process_responses_s"] * 1000.0,
+                    timing["cleanup_finished_s"] * 1000.0,
+                    timing["metal_gc_s"] * 1000.0,
+                )
+                self._scheduler_trace_timings.pop(request_id, None)
 
     async def add_request_async(
         self,
@@ -3384,7 +3565,11 @@ class MLLMScheduler:
 
             if self.batch_generator is not None:
                 batch_stats = self.batch_generator.stats()
-                stats["batch_generator"] = batch_stats.to_dict()
+                batch_stats_dict = batch_stats.to_dict()
+                stats["batch_generator"] = batch_stats_dict
+                stats["last_cache_execution"] = batch_stats_dict.get(
+                    "last_cache_execution"
+                )
                 stats["vision_cache"] = self.batch_generator.get_vision_cache_stats()
 
             # Cache stats for all cache modes
@@ -3495,11 +3680,7 @@ class MLLMScheduler:
             self._current_sampler_params = ()
 
         # Single Metal GC after everything is cleaned up
-        try:
-            import mlx.core as mx
-            mx.clear_memory_cache()
-        except Exception:
-            pass
+        clear_mlx_memory_cache(log=logger)
 
     def deep_reset(self) -> None:
         """Deep reset: clear ALL state including cache tiers.
@@ -3527,8 +3708,4 @@ class MLLMScheduler:
                 if hasattr(layer, 'self_attn') and hasattr(layer.self_attn, 'cache'):
                     layer.self_attn.cache = None
 
-        try:
-            import mlx.core as mx
-            mx.clear_memory_cache()
-        except Exception:
-            pass
+        clear_mlx_memory_cache(log=logger)

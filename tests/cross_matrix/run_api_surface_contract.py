@@ -21,21 +21,36 @@ from pathlib import Path
 from typing import Any
 
 
-DEFAULT_OUT = Path("build/current-api-surface-contract-20260521.json")
-NESTED_OUT = Path("build/current-api-cache-contract-api-surface-check-20260521.json")
+DEFAULT_OUT = Path(
+    "build/current-api-surface-contract-20260531-post-step-lfm-epipe-refresh.json"
+)
+NESTED_OUT = Path(
+    "build/current-api-cache-contract-api-surface-check-20260528-epipe-aggregate-guard.json"
+)
 
 SOURCE_HASH_FILES = (
     "vmlx_engine/server.py",
     "tests/cross_matrix/run_noheavy_api_cache_contract.py",
     "tests/test_engine_audit.py",
     "panel/src/main/ipc/chat.ts",
+    "panel/src/main/ipc/image.ts",
+    "panel/src/main/ipc/imageGenerationState.ts",
+    "panel/src/main/ipc/developer.ts",
+    "panel/src/main/ipc/models.ts",
     "panel/src/main/sessions.ts",
-    "panel/src/main/server/api-gateway.ts",
+    "panel/src/main/server.ts",
     "panel/src/main/api-gateway.ts",
+    "panel/src/main/engine-manager.ts",
+    "panel/src/main/process-manager.ts",
+    "panel/src/main/tools/executor.ts",
     "panel/src/shared/sessionConfigMigrations.ts",
     "panel/tests/request-builder.test.ts",
+    "panel/tests/api-gateway-ollama.test.ts",
     "panel/tests/api-gateway-ollama-behavior.test.ts",
+    "panel/tests/api-gateway-single-model.behavior.test.ts",
     "panel/tests/chat-override-policy.test.ts",
+    "panel/tests/image-generation-state.test.ts",
+    "panel/tests/image-system.test.ts",
     "tests/cross_matrix/run_api_surface_contract.py",
     "tests/test_api_surface_contract.py",
 )
@@ -49,11 +64,13 @@ REQUIRED_NESTED_API_CHECKS = (
     "anthropic_bundle_defaults",
     "ollama_adapter_surface",
     "streaming_cache_detail_usage",
+    "cache_reuse_endpoints",
     "dsv4_native_cache_status",
     "dsv4_dsml_parser_residue_rejection",
     "dsv4_dsml_valid_tool_call_preserved",
     "dsv4_suppressed_tool_markup_not_stored",
     "zaya_typed_cca_status",
+    "jangtq_mpp_nax_health_kernel_name",
     "hybrid_ssm_partial_reuse",
     "turboquant_kv_runtime_contract",
     "turboquant_disk_roundtrip",
@@ -73,9 +90,41 @@ REQUIRED_PANEL_API_TEST_MARKERS = (
     "omits malformed Ollama context values instead of poisoning max_prompt_tokens",
     "omits unset and disabled sampling sentinels without dropping explicit overrides",
     "omits malformed Ollama num_predict values instead of poisoning max_tokens",
+    "applies gateway timeout handling to Ollama embeddings proxy requests",
+    "auto-switches by model id in single-model mode before preserving streaming deltas",
+    "refuses auto-switch when previous local model cannot unload before starting target",
+    "refuses single-model Ollama routes when previous local model cannot unload",
+    "auto-switches single-model Ollama chat while emitting incremental content chunks",
+    "auto-switches single-model Ollama generate while emitting incremental response chunks",
+    "auto-switches single-model Ollama embeddings before proxying embedding data",
+    "auto-switches direct OpenAI streaming by model id without mutating payload or deltas",
+    "serializes concurrent single-model switches before starting a second target",
+    "auto-switches to a standby model by waking it before direct OpenAI streaming",
+    "auto-switches Responses API streaming by model id while preserving output text deltas",
+    "auto-switches model capability requests by path model before proxying",
+    "auto-switches cache endpoints by query model before proxying cache stats",
+    "auto-switches cache entries and clear endpoints by query model before proxying cache endpoints",
+    "auto-switches cache warm by body model before proxying warm prompts",
     "chat:setOverrides treats maxTokens 0 or lower as Auto instead of a one-token cap",
     "chat:setOverrides rejects non-finite or non-numeric maxTokens instead of poisoning server defaults",
     "Auto chat maxTokens omits per-request output caps so server default can apply",
+    "guards gateway streaming writes against client disconnect EPIPE errors",
+    "guards every Ollama backend response stream error as a disconnect boundary",
+    "aborts Ollama backend response streams when the client response closes",
+    "writes each streamed gateway response chunk once and treats EPIPE as disconnect",
+    "does not write gateway response chunks after the client socket is destroyed",
+    "does not write gateway response chunks after Node marks the response closed",
+    "does not write proxied request bodies after the backend socket is destroyed",
+    "does not write proxied request bodies after Node marks the request closed",
+    "treats top-level request handler EPIPE failures as client disconnects",
+    "treats nested broken-pipe stream errors as client disconnects",
+    "guards child process stdio stream EPIPE across app-managed process lanes",
+    "does not end proxied requests after the backend socket is destroyed",
+    "does not end proxied requests after Node marks the request closed",
+    "does not leave raw backend request end calls unguarded after disconnect",
+    "does not leave raw chat IPC backend request finalization unguarded",
+    "routes local image server request writes through EPIPE-aware helpers",
+    "image requests disable connection reuse and normalize reset-like socket errors",
 )
 
 COMMANDS: dict[str, tuple[Path, list[str]]] = {
@@ -95,8 +144,12 @@ COMMANDS: dict[str, tuple[Path, list[str]]] = {
             "vitest",
             "run",
             "tests/request-builder.test.ts",
+            "tests/api-gateway-ollama.test.ts",
             "tests/api-gateway-ollama-behavior.test.ts",
+            "tests/api-gateway-single-model.behavior.test.ts",
             "tests/chat-override-policy.test.ts",
+            "tests/image-generation-state.test.ts",
+            "tests/image-system.test.ts",
             "--reporter=verbose",
         ],
     ),
@@ -222,11 +275,65 @@ def build_artifact(root: Path) -> dict[str, Any]:
             and "omits malformed Ollama context values instead of poisoning max_prompt_tokens" not in missing_panel_markers
             and panel_passed >= 53
         ),
+        "panel_gateway_single_model_auto_switch_streaming": (
+            not failed
+            and "auto-switches by model id in single-model mode before preserving streaming deltas" not in missing_panel_markers
+            and "refuses auto-switch when previous local model cannot unload before starting target" not in missing_panel_markers
+            and "auto-switches single-model Ollama chat while emitting incremental content chunks" not in missing_panel_markers
+            and "auto-switches single-model Ollama generate while emitting incremental response chunks" not in missing_panel_markers
+            and "auto-switches single-model Ollama embeddings before proxying embedding data" not in missing_panel_markers
+            and "auto-switches direct OpenAI streaming by model id without mutating payload or deltas" not in missing_panel_markers
+            and "serializes concurrent single-model switches before starting a second target" not in missing_panel_markers
+            and "auto-switches to a standby model by waking it before direct OpenAI streaming" not in missing_panel_markers
+            and "auto-switches Responses API streaming by model id while preserving output text deltas" not in missing_panel_markers
+            and "auto-switches model capability requests by path model before proxying" not in missing_panel_markers
+            and panel_passed >= 53
+        ),
+        "panel_gateway_single_model_auto_switch_cache_endpoints": (
+            not failed
+            and "auto-switches cache endpoints by query model before proxying cache stats" not in missing_panel_markers
+            and "auto-switches cache entries and clear endpoints by query model before proxying cache endpoints" not in missing_panel_markers
+            and "auto-switches cache warm by body model before proxying warm prompts" not in missing_panel_markers
+            and panel_passed >= 53
+        ),
         "panel_chat_override_policy_preserves_explicit_values": (
             not failed
             and "chat:setOverrides treats maxTokens 0 or lower as Auto instead of a one-token cap" not in missing_panel_markers
             and "chat:setOverrides rejects non-finite or non-numeric maxTokens instead of poisoning server defaults" not in missing_panel_markers
             and panel_passed >= 53
+        ),
+        "panel_gateway_streaming_disconnect_epipe_guard": (
+            not failed
+            and "guards gateway streaming writes against client disconnect EPIPE errors" not in missing_panel_markers
+            and "writes each streamed gateway response chunk once and treats EPIPE as disconnect" not in missing_panel_markers
+            and "does not write gateway response chunks after the client socket is destroyed" not in missing_panel_markers
+            and "does not write gateway response chunks after Node marks the response closed" not in missing_panel_markers
+            and "does not write proxied request bodies after the backend socket is destroyed" not in missing_panel_markers
+            and "does not write proxied request bodies after Node marks the request closed" not in missing_panel_markers
+            and "treats top-level request handler EPIPE failures as client disconnects" not in missing_panel_markers
+            and "treats nested broken-pipe stream errors as client disconnects" not in missing_panel_markers
+            and "does not end proxied requests after the backend socket is destroyed" not in missing_panel_markers
+            and "does not end proxied requests after Node marks the request closed" not in missing_panel_markers
+            and "does not leave raw backend request end calls unguarded after disconnect" not in missing_panel_markers
+            and panel_passed >= 63
+        ),
+        "panel_child_process_stdio_epipe_guard": (
+            not failed
+            and "guards child process stdio stream EPIPE across app-managed process lanes" not in missing_panel_markers
+            and panel_passed >= 64
+        ),
+        "panel_gateway_ollama_proxy_response_error_guard": (
+            not failed
+            and "guards every Ollama backend response stream error as a disconnect boundary" not in missing_panel_markers
+            and "aborts Ollama backend response streams when the client response closes" not in missing_panel_markers
+            and panel_passed >= 61
+        ),
+        "panel_ipc_backend_request_epipe_guard": (
+            not failed
+            and "does not leave raw chat IPC backend request finalization unguarded" not in missing_panel_markers
+            and "routes local image server request writes through EPIPE-aware helpers" not in missing_panel_markers
+            and "image requests disable connection reuse and normalize reset-like socket errors" not in missing_panel_markers
+            and panel_passed >= 73
         ),
         "all_required_panel_api_markers_present": not failed and not missing_panel_markers,
     }

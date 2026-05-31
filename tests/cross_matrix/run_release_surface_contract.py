@@ -22,7 +22,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 
-DEFAULT_OUT = Path("build/current-release-surface-contract-20260521.json")
+DEFAULT_OUT = Path("build/current-release-surface-contract-20260528-release-surface-matrix.json")
 
 SOURCE_HASH_FILES = (
     "latest.json",

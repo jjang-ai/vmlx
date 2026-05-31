@@ -1065,3 +1065,86 @@ class TestLoadMethod:
         MockFlux1.assert_called_once()
         MockZImage.assert_not_called()
         assert engine._model_name == "dev"
+
+    def test_load_passes_lora_paths_and_scales_when_supported(self, tmp_path):
+        """vmlx serve LoRA flags must reach mflux model constructors."""
+        (tmp_path / "transformer").mkdir()
+        (tmp_path / "transformer" / "0.safetensors").write_bytes(b"fake")
+        (tmp_path / "text_encoder_2").mkdir()
+        (tmp_path / "text_encoder_2" / "0.safetensors").write_bytes(b"fake")
+
+        mocks = _mock_mflux_modules()
+        mock_config = MagicMock()
+        mocks["mflux.models.common.config.model_config"].ModelConfig = mock_config
+
+        class MockFlux1:
+            def __init__(
+                self,
+                *,
+                model_config,
+                quantize,
+                model_path,
+                lora_paths,
+                lora_scales,
+            ):
+                self.kwargs = {
+                    "model_config": model_config,
+                    "quantize": quantize,
+                    "model_path": model_path,
+                    "lora_paths": lora_paths,
+                    "lora_scales": lora_scales,
+                }
+
+        mocks["mflux.models.flux.variants.txt2img.flux"].Flux1 = MockFlux1
+
+        with patch.dict(sys.modules, mocks):
+            from vmlx_engine.image_gen import ImageGenEngine
+
+            engine = ImageGenEngine()
+            engine.load(
+                "dev",
+                model_path=str(tmp_path),
+                lora_paths=["/tmp/style.safetensors"],
+                lora_scales=[0.7],
+            )
+
+        assert engine._model.kwargs["lora_paths"] == ["/tmp/style.safetensors"]
+        assert engine._model.kwargs["lora_scales"] == [0.7]
+
+    def test_load_uses_signature_not_broad_typeerror_fallback(self):
+        """Unsupported LoRA kwargs should be filtered before constructor call."""
+        source = Path("vmlx_engine/image_gen.py").read_text()
+        source = source.split("def load(")[1].split("\n    # Keep backward compat")[0]
+
+        assert "inspect.signature" in source
+        assert "except TypeError" not in source
+
+    def test_load_rejects_requested_lora_when_constructor_does_not_support_it(self, tmp_path):
+        """Requested LoRA must not be silently discarded for unsupported classes."""
+        (tmp_path / "transformer").mkdir()
+        (tmp_path / "transformer" / "0.safetensors").write_bytes(b"fake")
+        (tmp_path / "text_encoder_2").mkdir()
+        (tmp_path / "text_encoder_2" / "0.safetensors").write_bytes(b"fake")
+
+        mocks = _mock_mflux_modules()
+        mocks["mlx_lm"] = MagicMock()
+        mocks["mlx_lm.models"] = MagicMock()
+        mocks["mlx_lm.models.base"] = MagicMock()
+        mocks["mlx_lm.models.cache"] = MagicMock()
+
+        class MockFlux1:
+            def __init__(self, *, model_config, quantize, model_path):
+                pass
+
+        mocks["mflux.models.flux.variants.txt2img.flux"].Flux1 = MockFlux1
+
+        with patch.dict(sys.modules, mocks):
+            from vmlx_engine.image_gen import ImageGenEngine
+
+            engine = ImageGenEngine()
+            with pytest.raises(ValueError, match="does not support LoRA"):
+                engine.load(
+                    "dev",
+                    model_path=str(tmp_path),
+                    lora_paths=["/tmp/style.safetensors"],
+                )

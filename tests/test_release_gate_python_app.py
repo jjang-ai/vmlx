@@ -53,6 +53,55 @@ class _FakeGate:
         self.records.append((name, status, detail))
 
 
+class _SequenceGate:
+    def __init__(self, stdout_by_name: dict[str, str]):
+        self.stdout_by_name = stdout_by_name
+        self.records = []
+        self.run_calls = []
+        self.log_dir = Path("/isolated-release-gate")
+
+    def run(self, name, cmd, **kwargs):
+        self.run_calls.append((name, cmd, kwargs))
+        self.records.append((name, "RUN", kwargs))
+        return subprocess.CompletedProcess(cmd, 0, self.stdout_by_name.get(name, ""), "")
+
+    def record(self, name, status, detail=""):
+        self.records.append((name, status, detail))
+
+
+def _developer_id_signature_stdout() -> str:
+    return "\n".join(
+        [
+            "Executable=/tmp/vMLX.app/Contents/MacOS/vMLX",
+            "CodeDirectory v=20500 size=325 flags=0x10000(runtime) hashes=4+3 location=embedded",
+            "Authority=Developer ID Application: ShieldStack LLC (55KGF2S5AY)",
+            "Authority=Developer ID Certification Authority",
+            "Authority=Apple Root CA",
+            "TeamIdentifier=55KGF2S5AY",
+        ]
+    )
+
+
+def _release_entitlements_stdout(*, missing: str | None = None) -> str:
+    keys = [
+        "com.apple.security.cs.allow-jit",
+        "com.apple.security.cs.allow-unsigned-executable-memory",
+        "com.apple.security.cs.disable-library-validation",
+        "com.apple.security.network.client",
+        "com.apple.security.files.user-selected.read-write",
+    ]
+    keys = [key for key in keys if key != missing]
+    lines = [
+        '<?xml version="1.0" encoding="UTF-8"?>',
+        '<plist version="1.0">',
+        "<dict>",
+    ]
+    for key in keys:
+        lines.extend([f"<key>{key}</key>", "<true/>"])
+    lines.extend(["</dict>", "</plist>"])
+    return "\n".join(lines)
+
+
 def test_packaged_bundled_version_parity_passes_when_import_version_matches():
     gate_module = _load_gate_module()
     gate = _FakeGate("import ok\n1.5.25\n")
@@ -97,6 +146,21 @@ def test_release_gate_jang_source_keeps_legacy_env_fallback(monkeypatch):
     monkeypatch.setenv("VMLINUX_JANG_TOOLS_SOURCE", "/legacy")
 
     assert gate_module.jang_tools_source_root() == Path("/legacy")
+
+
+def test_release_gate_objective_digest_default_tracks_current_release_matrix():
+    gate_module = _load_gate_module()
+    gate = _FakeGate('{"requirements":[]}\n')
+
+    gate_module.check_objective_proof_digest(gate)
+
+    assert gate.run_cmd[-2:] == [
+        "--out",
+        str(
+            Path.cwd()
+            / "build/current-objective-proof-audit-20260531-step37-reasoning-ledger.json"
+        ),
+    ]
 
 
 def test_live_engine_gate_uses_packaged_python_with_isolated_cwd():
@@ -162,6 +226,35 @@ def test_packaged_console_script_shebang_gate_rejects_dev_paths(tmp_path):
     assert "vmlx-engine" in gate.records[-1][2]
 
 
+def test_packaged_console_script_shebang_gate_rejects_any_absolute_python_path(
+    tmp_path,
+):
+    gate_module = _load_gate_module()
+    gate = _FakeGate("")
+    bin_dir = (
+        tmp_path
+        / "vMLX.app"
+        / "Contents"
+        / "Resources"
+        / "bundled-python"
+        / "python"
+        / "bin"
+    )
+    bin_dir.mkdir(parents=True)
+    script = bin_dir / "vmlx-engine"
+    script.write_text(
+        "#!/private/var/folders/build/bundled-python/python/bin/python3\n"
+        "import sys\n"
+    )
+    script.chmod(0o755)
+
+    gate_module.check_packaged_console_script_shebangs(gate, tmp_path / "vMLX.app")
+
+    assert gate.records[-1][0] == "packaged console-script shebangs"
+    assert gate.records[-1][1] == "FAIL"
+    assert "vmlx-engine" in gate.records[-1][2]
+
+
 def test_packaged_console_script_shebang_gate_accepts_relocatable_trampoline(tmp_path):
     gate_module = _load_gate_module()
     gate = _FakeGate("")
@@ -207,10 +300,57 @@ def test_packaged_signature_gate_rejects_ad_hoc_signature():
 
 def test_packaged_signature_gate_accepts_expected_developer_id():
     gate_module = _load_gate_module()
+    gate = _SequenceGate(
+        {
+            "packaged signature details": _developer_id_signature_stdout(),
+            "packaged entitlements details": _release_entitlements_stdout(),
+        }
+    )
+
+    gate_module.check_packaged_developer_id_signature(
+        gate,
+        Path("/tmp/vMLX.app"),
+        expected_team_id="55KGF2S5AY",
+    )
+
+    assert gate.records[-1] == (
+        "packaged Developer ID signature",
+        "PASS",
+        "team=55KGF2S5AY",
+    )
+    assert gate.run_calls[-1][0] == "packaged entitlements details"
+
+
+def test_packaged_signature_gate_rejects_missing_release_entitlements():
+    gate_module = _load_gate_module()
+    gate = _SequenceGate(
+        {
+            "packaged signature details": _developer_id_signature_stdout(),
+            "packaged entitlements details": _release_entitlements_stdout(
+                missing="com.apple.security.cs.allow-jit"
+            ),
+        }
+    )
+
+    gate_module.check_packaged_developer_id_signature(
+        gate,
+        Path("/tmp/vMLX.app"),
+        expected_team_id="55KGF2S5AY",
+    )
+
+    assert gate.records[-1][0] == "packaged Developer ID signature"
+    assert gate.records[-1][1] == "FAIL"
+    assert "missing release entitlements" in gate.records[-1][2]
+    assert "com.apple.security.cs.allow-jit" in gate.records[-1][2]
+
+
+def test_packaged_signature_gate_rejects_developer_id_without_hardened_runtime():
+    gate_module = _load_gate_module()
     gate = _FakeGate(
         "\n".join(
             [
                 "Executable=/tmp/vMLX.app/Contents/MacOS/vMLX",
+                "CodeDirectory v=20500 size=325 flags=0x0(none) hashes=4+3 location=embedded",
                 "Authority=Developer ID Application: ShieldStack LLC (55KGF2S5AY)",
                 "Authority=Developer ID Certification Authority",
                 "Authority=Apple Root CA",
@@ -225,17 +365,29 @@ def test_packaged_signature_gate_accepts_expected_developer_id():
         expected_team_id="55KGF2S5AY",
     )
 
-    assert gate.records[-1] == (
-        "packaged Developer ID signature",
-        "PASS",
-        "team=55KGF2S5AY",
-    )
+    assert gate.records[-1][0] == "packaged Developer ID signature"
+    assert gate.records[-1][1] == "FAIL"
+    assert "hardened runtime" in gate.records[-1][2]
+
+
+def test_release_dmg_final_sign_preserves_hardened_runtime_entitlements():
+    script = Path("panel/scripts/build-release-dmgs.sh").read_text()
+
+    final_sign_block = script[
+        script.index("finalize_release_app_signature()") : script.index("find_staged_app()")
+    ]
+
+    assert "--options" in final_sign_block
+    assert "runtime" in final_sign_block
+    assert "--entitlements" in final_sign_block
+    assert "build/entitlements.mac.plist" in final_sign_block
 
 
 def test_bundled_verifier_rejects_non_relocatable_console_shebangs():
     verifier = Path("panel/scripts/verify-bundled-python.sh").read_text()
 
     assert "check_console_script_shebangs" in verifier
+    assert '[[ "$first_line" == \'#!\'*python* ]]' in verifier
     assert "/Applications/vMLX.app" in verifier
     assert "non-relocatable console-script shebangs" in verifier
 
@@ -388,6 +540,7 @@ def test_packaged_bundled_hash_gate_covers_runtime_files_changed_for_release():
         "utils/head_dim_detection.py",
         "utils/ssm_companion_cache.py",
         "utils/ssm_companion_disk_store.py",
+        "utils/jang_loader.py",
         "utils/tokenizer.py",
     }
 
@@ -411,6 +564,7 @@ def test_packaged_bundled_hash_gate_covers_critical_jang_tools_files():
         "hy3/runtime.py",
         "kimi_prune/generate_vl.py",
         "kimi_prune/runtime_patch.py",
+        "mimo_v2/mlx_model.py",
         "topk_override.py",
         "turboquant/fused_gate_up_kernel.py",
         "turboquant/gather_tq_kernel.py",
@@ -451,6 +605,15 @@ def test_release_gate_static_runs_objective_digest_gate():
 
     assert "def check_objective_proof_digest" in src
     assert "check_objective_proof_digest(gate)" in src
+
+
+def test_release_gate_static_requires_release_ready_manifest():
+    src = Path("panel/scripts/release-gate-python-app.py").read_text()
+
+    assert "def check_release_ready_manifest" in src
+    assert "check_release_ready_manifest(gate)" in src
+    assert "--require-release-ready" in src
+    assert "run_release_regression_manifest.py" in src
 
 
 def test_packaged_bundled_package_hash_gate_fails_on_content_drift(tmp_path):
@@ -522,6 +685,7 @@ def test_verify_bundled_python_hash_gate_covers_release_runtime_files():
         "utils/head_dim_detection.py",
         "utils/ssm_companion_cache.py",
         "utils/ssm_companion_disk_store.py",
+        "utils/jang_loader.py",
         "utils/tokenizer.py",
     }
     expected_jang_tools_files = {
@@ -547,6 +711,9 @@ def test_verify_bundled_python_hash_gate_covers_release_runtime_files():
     for rel in expected_engine_files | expected_jang_tools_files:
         assert f'"{rel}"' in verifier
 
+    assert "cd /tmp" in verifier
+    assert "PYTHONPATH=" in verifier
+
 
 def test_verify_bundled_python_import_gate_covers_hy3_jangtq_runtime_modules():
     verifier = Path("panel/scripts/verify-bundled-python.sh").read_text()
@@ -554,10 +721,12 @@ def test_verify_bundled_python_import_gate_covers_hy3_jangtq_runtime_modules():
     for mod in (
         "jang_tools.hy3",
         "jang_tools.hy3.runtime",
+        "jang_tools.mimo_v2.mlx_register",
         "jang_tools.topk_override",
         "jang_tools.capabilities",
     ):
         assert f'("{mod}",' in verifier
+    assert '("mlx_lm.models.mimo_v2",' in verifier
 
 
 def test_nemotron_omni_media_dependency_timm_is_packaged_and_verified():

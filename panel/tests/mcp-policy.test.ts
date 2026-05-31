@@ -151,7 +151,7 @@ describe('MCP policy shared helpers', () => {
     expect(registrySource).toContain('export function isBuiltinTool')
     expect(registrySource).toContain('Injected into request.tools when builtinToolsEnabled = true')
     expect(chatSource).toContain('if (overrides?.builtinToolsEnabled)')
-    expect(chatSource).toContain('obj.tools = filterTools(overrides)')
+    expect(chatSource).toContain('obj.tools = filterTools(overrides,')
     expect(builtinBranch).toBeGreaterThan(-1)
     expect(remoteMcpBranch).toBeGreaterThan(builtinBranch)
     expect(mcpExecuteBranch).toBeGreaterThan(remoteMcpBranch)

@@ -201,13 +201,242 @@ def _vlm_quant_module_path_candidates(module_path: str, model_type: str = "") ->
             suffix = module_path[len("vision_tower") :]
             candidates.add(f"model.visual{suffix}")
             candidates.add(f"model.vision_tower{suffix}")
+    if str(model_type or "").lower() == "step3p7":
+        if module_path.startswith("language_model.model."):
+            text_backbone_path = module_path.replace(
+                "language_model.model.", "model.", 1
+            )
+            candidates.add(text_backbone_path)
+            raw = module_path.replace(
+                "language_model.model.", "model.language_model.", 1
+            )
+            remappings = (
+                (".mlp.switch_mlp.gate_proj", ".moe.gate_proj"),
+                (".mlp.switch_mlp.up_proj", ".moe.up_proj"),
+                (".mlp.switch_mlp.down_proj", ".moe.down_proj"),
+                (".mlp.gate.gate", ".moe.gate"),
+                (".mlp.gate.router_bias", ".moe.router_bias"),
+                (".mlp.share_expert.", ".share_expert."),
+            )
+            for src, dst in remappings:
+                if src in text_backbone_path:
+                    candidates.add(text_backbone_path.replace(src, dst, 1))
+                if src in raw:
+                    candidates.add(raw.replace(src, dst, 1))
     return candidates
+
+
+def _should_dequantize_vlm_gate_weight(model: Any, weight_key: str) -> bool:
+    """Return false when a gate weight targets an already-quantized module."""
+    if not weight_key.endswith(".weight"):
+        return True
+    module_path = weight_key[: -len(".weight")]
+    try:
+        modules = dict(model.named_modules())
+    except Exception:
+        return True
+    module = modules.get(module_path)
+    if module is None:
+        return True
+    return not (hasattr(module, "bits") and hasattr(module, "group_size"))
+
+
+def _prepare_gate_dequant_weights(
+    model: Any,
+    weights: dict[str, Any],
+    *,
+    renames: dict[str, str] | None = None,
+) -> dict[str, Any]:
+    """Dequantize raw MoE gate weights only for non-quantized gate modules.
+
+    Step3.7 and newer Step3p5 text bridges quantize ``mlp.gate.gate`` as a
+    real ``QuantizedLinear``. In that case the loader must preserve the uint32
+    weight plus ``.scales/.biases`` sidecars. Older/custom MoEGate modules still
+    need the sidecars consumed and the gate dequantized to a float weight.
+    """
+    renamed: dict[str, Any] = {}
+    gate_parts: dict[str, dict[str, Any]] = {}
+    rename_items = tuple((renames or {}).items())
+
+    for key, value in weights.items():
+        new_key = key
+        for old, new in rename_items:
+            if old in new_key:
+                new_key = new_key.replace(old, new)
+                break
+
+        if ".gate." in new_key and (
+            new_key.endswith(".scales") or new_key.endswith(".biases")
+        ):
+            prefix = new_key.rsplit(".", 1)[0]
+            weight_key = f"{prefix}.weight"
+            if _should_dequantize_vlm_gate_weight(model, weight_key):
+                gate_parts.setdefault(prefix, {})[new_key.rsplit(".", 1)[1]] = value
+                continue
+
+        renamed[new_key] = value
+
+    for prefix, parts in gate_parts.items():
+        weight_key = f"{prefix}.weight"
+        if weight_key not in renamed or "scales" not in parts:
+            continue
+        if not _should_dequantize_vlm_gate_weight(model, weight_key):
+            continue
+
+        quantized_weight = renamed[weight_key]
+        scales = parts["scales"]
+        biases = parts.get("biases", mx.zeros_like(scales))
+        for bits in [8, 6, 4, 3, 2]:
+            elem_per_u32 = 32 // bits
+            real_cols = quantized_weight.shape[-1] * elem_per_u32
+            group_size = real_cols // scales.shape[-1] if scales.shape[-1] > 0 else 0
+            if group_size <= 0 or group_size * scales.shape[-1] != real_cols:
+                continue
+            try:
+                dequantized = mx.dequantize(
+                    quantized_weight,
+                    scales,
+                    biases,
+                    group_size,
+                    bits,
+                )
+                mx.eval(dequantized)
+                renamed[weight_key] = dequantized.astype(mx.bfloat16)
+                logger.info(
+                    "  Dequantized gate: %s bits=%s gs=%s -> %s",
+                    weight_key,
+                    bits,
+                    group_size,
+                    dequantized.shape,
+                )
+                break
+            except Exception:
+                continue
+
+    return renamed
 
 
 def _vlm_model_type_from_config(config) -> str:
     if isinstance(config, dict):
         return str(config.get("model_type", "")).lower()
     return str(getattr(config, "model_type", "") or "").lower()
+
+
+def _normalize_step3p7_model_type(config: dict) -> None:
+    """Map Step-3.7 aliases to Step-3.5 for text-runtime dispatch."""
+    if not isinstance(config, dict):
+        return
+
+    model_type = str(config.get("model_type", "")).lower()
+    text_config = config.get("text_config") or {}
+    if not isinstance(text_config, dict):
+        text_config = {}
+
+    text_model_type = str(text_config.get("model_type", "")).lower()
+    if model_type == "step3p7":
+        config["model_type"] = "step3p5"
+        logger.info(
+            "Step-3.7 model family detected; normalizing text-runtime dispatch "
+            "to step3p5."
+        )
+    if text_model_type == "step3p7":
+        text_config["model_type"] = "step3p5"
+        config["text_config"] = text_config
+        logger.info(
+            "Step-3.7 nested text_config.model_type detected; normalizing "
+            "text-runtime dispatch to step3p5."
+        )
+
+
+def _remap_step3p7_moe_weights(
+    weights: dict[str, Any],
+    config: dict,
+    jang_cfg: dict | None = None,
+) -> dict[str, Any]:
+    """Map Step-3.7 wrapper MoE keys onto mlx-lm's Step3p5 module tree."""
+    arch = (jang_cfg or {}).get("architecture") or {}
+    is_step3p7_bundle = (
+        str(arch.get("type", "")).lower() == "step3p7"
+        or str(arch.get("text_model_type", "")).lower() == "step3p5"
+    )
+    if not is_step3p7_bundle or str(config.get("model_type", "")).lower() != "step3p5":
+        return weights
+
+    remapped: dict[str, Any] = {}
+    changed = False
+    for key, value in weights.items():
+        new_key = key
+        if ".moe.router_bias" in new_key:
+            new_key = new_key.replace(".moe.router_bias", ".mlp.gate.router_bias")
+        elif ".moe.gate." in new_key:
+            new_key = new_key.replace(".moe.gate.", ".mlp.gate.gate.")
+        elif ".moe." in new_key:
+            new_key = new_key.replace(".moe.", ".mlp.switch_mlp.")
+        elif ".share_expert." in new_key:
+            new_key = new_key.replace(".share_expert.", ".mlp.share_expert.")
+        changed = changed or new_key != key
+        remapped[new_key] = value
+    return remapped if changed else weights
+
+
+def _fix_step3p7_zero_centered_norm_weights(
+    weights: dict[str, Any],
+    config: dict,
+    jang_cfg: dict | None = None,
+    *,
+    shard_had_vanilla_moe_keys: bool,
+) -> dict[str, Any]:
+    """Apply Step-3.7 zero-centered RMSNorm offset when sanitize will not."""
+    arch = (jang_cfg or {}).get("architecture") or {}
+    is_step3p7_bundle = (
+        str(arch.get("type", "")).lower() == "step3p7"
+        or str(arch.get("text_model_type", "")).lower() == "step3p5"
+    )
+    if (
+        not is_step3p7_bundle
+        or str(config.get("model_type", "")).lower() != "step3p5"
+        or shard_had_vanilla_moe_keys
+    ):
+        return weights
+
+    norm_suffixes = (
+        ".input_layernorm.weight",
+        ".post_attention_layernorm.weight",
+        ".q_norm.weight",
+        ".k_norm.weight",
+        "model.norm.weight",
+    )
+    fixed: dict[str, Any] = {}
+    changed = False
+    for key, value in weights.items():
+        if any(key.endswith(suffix) for suffix in norm_suffixes):
+            value = value + 1.0
+            changed = True
+        fixed[key] = value
+    return fixed if changed else weights
+
+
+def _moe_expert_count(config: dict) -> int:
+    """Return routed-expert count across naming variants used by model families."""
+    if not isinstance(config, dict):
+        return 0
+    text_config = config.get("text_config", config)
+    if not isinstance(text_config, dict):
+        text_config = config
+    for source in (config, text_config):
+        for key in (
+            "n_routed_experts",
+            "num_experts",
+            "num_local_experts",
+            "moe_num_experts",
+        ):
+            value = source.get(key)
+            if value:
+                try:
+                    return int(value)
+                except (TypeError, ValueError):
+                    continue
+    return 0
 
 
 def _mistral4_attention_uses_split_mla(model) -> bool:
@@ -268,11 +497,87 @@ def _resolve_vlm_processor_eos_token_ids(path: Path, model) -> list[int]:
     return resolved
 
 
+def _load_chat_template_text(path: Path) -> str | None:
+    chat_template_jinja = path / "chat_template.jinja"
+    if chat_template_jinja.is_file():
+        return chat_template_jinja.read_text()
+
+    chat_template_json = path / "chat_template.json"
+    if chat_template_json.is_file():
+        try:
+            data = json.loads(chat_template_json.read_text())
+            template = data.get("chat_template")
+            if template:
+                return template
+        except Exception:
+            pass
+
+    tok_config_path = path / "tokenizer_config.json"
+    if tok_config_path.is_file():
+        try:
+            template = json.loads(tok_config_path.read_text()).get("chat_template")
+            if template:
+                return template
+        except Exception:
+            pass
+
+    return None
+
+
+def _attach_vlm_detokenizer_and_stopping(processor, model_path: Path, eos_token_id=None):
+    from mlx_vlm.tokenizer_utils import load_tokenizer as vlm_load_tokenizer
+    from mlx_vlm.utils import StoppingCriteria
+
+    detokenizer_class = vlm_load_tokenizer(model_path, return_tokenizer=False)
+    tokenizer_obj = (
+        processor.tokenizer if hasattr(processor, "tokenizer") else processor
+    )
+    processor.detokenizer = detokenizer_class(tokenizer_obj)
+
+    final_eos = (
+        eos_token_id
+        if eos_token_id is not None
+        else getattr(tokenizer_obj, "eos_token_ids", None)
+    )
+    criteria = StoppingCriteria(final_eos, tokenizer_obj)
+    if hasattr(processor, "tokenizer"):
+        processor.tokenizer.stopping_criteria = criteria
+    else:
+        processor.stopping_criteria = criteria
+    return processor
+
+
+def _build_step3p7_vlm_processor(model_path: Path, eos_token_id=None):
+    """Build the source-owned Step3.7 processor instead of tokenizer fallback.
+
+    mlx-vlm does not ship Step3.7, and AutoProcessor can fall back to a plain
+    tokenizer in non-interactive local loads. A tokenizer accepts `images=`
+    without producing `pixel_values`, making the runtime count media but drop
+    the actual image.
+    """
+    from transformers import AutoTokenizer
+
+    from ..models.step3p7_mlx_vlm import Step3VLProcessor
+
+    chat_template = _load_chat_template_text(model_path)
+    tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
+    if chat_template is not None:
+        try:
+            tokenizer.chat_template = chat_template
+        except Exception:
+            pass
+    processor = Step3VLProcessor(tokenizer=tokenizer, chat_template=chat_template)
+    return _attach_vlm_detokenizer_and_stopping(
+        processor,
+        model_path,
+        eos_token_id=eos_token_id,
+    )
+
+
 def _load_jang_vlm_processor(path: Path, model):
     """Load a VLM processor while preserving local model-family overrides."""
     from mlx_vlm.utils import load_image_processor, load_processor
 
-    image_processor = load_image_processor(path)
     eos_token_ids = _resolve_vlm_processor_eos_token_ids(path, model)
     eos_token_id = (
         eos_token_ids
@@ -282,6 +587,11 @@ def _load_jang_vlm_processor(path: Path, model):
         else getattr(model.config, "eos_token_id", None)
     )
     model_type = _vlm_model_type_from_config(getattr(model, "config", None))
+
+    if model_type == "step3p7":
+        return _build_step3p7_vlm_processor(path, eos_token_id=eos_token_id)
+
+    image_processor = load_image_processor(path)
 
     if model_type == "zaya1_vl":
         processor = _build_vlm_processor(path, eos_token_id)
@@ -598,6 +908,27 @@ def _ensure_jang_family_runtime_supported(path: Path, config: dict | None) -> No
             ),
         )
 
+    if "mimo_v2" in model_types:
+        _import_required_jang_runtime(
+            "jang_tools.mimo_v2.mlx_register",
+            path=path,
+            family="MiMo-V2.5/mimo_v2",
+            remediation=(
+                "Install or bundle the current ~/jang/jang-tools checkout with "
+                "the MiMo-V2.5 runtime registration module"
+            ),
+        )
+        _import_required_jang_runtime(
+            "mlx_lm.models.mimo_v2",
+            path=path,
+            family="MiMo-V2.5/mimo_v2",
+            remediation=(
+                "Importing jang_tools.mimo_v2.mlx_register must register "
+                "mlx_lm.models.mimo_v2; do not strip the MiMo runtime from "
+                "the bundled jang_tools package"
+            ),
+        )
+
     if "bailing_hybrid" in model_types:
         try:
             _import_required_jang_runtime(
@@ -657,6 +988,28 @@ def _patch_turboquant_make_cache(model, jang_cfg: dict, model_config: dict):
     if is_mla_model(model_config):
         logger.info(
             "  TurboQuant skipped: MLA model uses CacheList (incompatible with TQ flat cache)"
+        )
+        return
+
+    def _has_mixed_attention_layout(cfg: dict) -> bool:
+        candidates = [cfg]
+        text_cfg = cfg.get("text_config") if isinstance(cfg.get("text_config"), dict) else None
+        if text_cfg is not None:
+            candidates.append(text_cfg)
+        for candidate in candidates:
+            layer_types = candidate.get("layer_types")
+            if not isinstance(layer_types, list):
+                continue
+            kinds = {str(item).lower() for item in layer_types}
+            if len(kinds) >= 2 and any("sliding" in item for item in kinds):
+                return True
+        return False
+
+    if _has_mixed_attention_layout(model_config):
+        logger.info(
+            "  TurboQuant KV skipped: mixed sliding/full attention model uses "
+            "native RotatingKVCache metadata; flat generic TQ-KV would violate "
+            "the mixed_swa_kv_v1 cache contract."
         )
         return
 
@@ -1186,6 +1539,7 @@ def _load_jang_v2(
     start = time.perf_counter()
     config = load_config(path)
     _ensure_jang_family_runtime_supported(path, config)
+    _normalize_step3p7_model_type(config)
 
     try:
         from ..native_mtp import maybe_apply_native_mtp
@@ -1505,9 +1859,7 @@ def _load_jang_v2(
     # Applies to: nemotron_h, nemotron, mistral4, deepseek_v3, deepseek_v2, etc.
     # Check both top-level and text_config for n_routed_experts (VLM wrappers nest it)
     _text_cfg = config.get("text_config", config)
-    _n_experts = config.get("n_routed_experts", 0) or _text_cfg.get(
-        "n_routed_experts", 0
-    )
+    _n_experts = _moe_expert_count(config)
     _needs_gate_dequant = _needs_fc_rename or _n_experts > 0
 
     # Nemotron-H gate: MoEGate is a custom nn.Module (not nn.Linear), so
@@ -1814,56 +2166,34 @@ def _load_jang_v2(
                     )
                 )
 
+        step3p7_shard_had_vanilla_moe_keys = False
         if weights and hasattr(model, "sanitize"):
+            step3p7_shard_had_vanilla_moe_keys = any(
+                (
+                    (".moe." in key or ".share_expert." in key)
+                    and ".mlp." not in key
+                )
+                for key in weights
+            )
             weights = model.sanitize(weights)
+        weights = _fix_step3p7_zero_centered_norm_weights(
+            weights,
+            config,
+            jang_cfg,
+            shard_had_vanilla_moe_keys=step3p7_shard_had_vanilla_moe_keys,
+        )
+        weights = _remap_step3p7_moe_weights(weights, config, jang_cfg)
         if _is_dsv4_model:
             weights = _sanitize_deepseek_v4_regular_layout(weights)
         else:
             weights = _sanitize_qwen3_next_conv1d_layout(weights)
         # MoE gate dequant + optional Nemotron fc rename
         if _needs_gate_dequant:
-            renamed = {}
-            gate_parts = {}  # prefix -> {scales, biases}
-            for k, v in weights.items():
-                new_k = k
-                # Collect gate scales/biases for dequantization
-                if ".gate." in k and (k.endswith(".scales") or k.endswith(".biases")):
-                    prefix = k.rsplit(".", 1)[0]
-                    gate_parts.setdefault(prefix, {})[k.rsplit(".", 1)[1]] = v
-                    continue
-                # Apply fc1/fc2 rename (Nemotron only)
-                if _needs_fc_rename:
-                    for old, new in _nemotron_renames.items():
-                        if old in k:
-                            new_k = k.replace(old, new)
-                            break
-                renamed[new_k] = v
-            # Dequantize gate weights (uint32 packed → float for MoEGate)
-            # Gate is 8-bit quantized — try bits high-to-low to find correct shape
-            for prefix, parts in gate_parts.items():
-                wkey = f"{prefix}.weight"
-                if wkey in renamed and "scales" in parts:
-                    qw = renamed[wkey]
-                    scales = parts["scales"]
-                    biases = parts.get("biases", mx.zeros_like(scales))
-                    for bits in [8, 6, 4, 3, 2]:
-                        elem_per_u32 = 32 // bits
-                        real_cols = qw.shape[-1] * elem_per_u32
-                        gs = (
-                            real_cols // scales.shape[-1] if scales.shape[-1] > 0 else 0
-                        )
-                        if gs > 0 and gs * scales.shape[-1] == real_cols:
-                            try:
-                                dq = mx.dequantize(qw, scales, biases, gs, bits)
-                                mx.eval(dq)
-                                renamed[wkey] = dq.astype(mx.bfloat16)
-                                logger.info(
-                                    f"  Dequantized gate: {wkey} bits={bits} gs={gs} -> {dq.shape}"
-                                )
-                                break
-                            except Exception:
-                                continue
-            weights = renamed
+            weights = _prepare_gate_dequant_weights(
+                model,
+                weights,
+                renames=_nemotron_renames if _needs_fc_rename else None,
+            )
 
         # Mistral4 MLA: split kv_b_proj → embed_q + unembed_out.
         # CRITICAL REGRESSION FIX (2026-04-11): the v2 LLM loader was missing
@@ -2076,6 +2406,17 @@ def _load_jang_v2_vlm(
     )
     config["quantization"].setdefault("mode", _jang_quant_mode(jang_cfg, config))
     quant_mode = str(config["quantization"].get("mode") or "affine")
+
+    try:
+        from ..models.mllm import _register_local_mlx_vlm_runtime_if_needed
+
+        _register_local_mlx_vlm_runtime_if_needed(path)
+    except Exception as _runtime_reg_err:
+        logger.debug(
+            "Local mlx-vlm runtime registration skipped for %s: %s",
+            path,
+            _runtime_reg_err,
+        )
 
     _native_mtp_vl_ready = False
     try:
@@ -2773,7 +3114,7 @@ def _load_jang_v2_vlm(
         # MoE gate dequant: MoEGate is nn.Module (not nn.Linear), so nn.quantize
         # skips it. But JANG still quantizes the raw gate weight. Dequantize here
         # so MoEGate.__call__ can do float matmul (x @ self.weight.T).
-        _n_exp = config.get("text_config", config).get("n_routed_experts", 0)
+        _n_exp = _moe_expert_count(config)
         if _n_exp > 0:
             _gate_parts = {}
             _gate_keys_to_remove = []
@@ -2782,11 +3123,11 @@ def _load_jang_v2_vlm(
                     prefix = k.rsplit(".", 1)[0]
                     _gate_parts.setdefault(prefix, {})[k.rsplit(".", 1)[1]] = v
                     _gate_keys_to_remove.append(k)
-            for k in _gate_keys_to_remove:
-                del shard_weights[k]
             for prefix, parts in _gate_parts.items():
                 wkey = f"{prefix}.weight"
                 if wkey in shard_weights and "scales" in parts:
+                    if not _should_dequantize_vlm_gate_weight(model, wkey):
+                        continue
                     qw = shard_weights[wkey]
                     scales = parts["scales"]
                     biases = parts.get("biases", mx.zeros_like(scales))
@@ -2804,6 +3145,9 @@ def _load_jang_v2_vlm(
                                 logger.debug(
                                     f"  Dequantized gate: {wkey} bits={bits} gs={gs}"
                                 )
+                                for sidecar in ("scales", "biases"):
+                                    sidecar_key = f"{prefix}.{sidecar}"
+                                    shard_weights.pop(sidecar_key, None)
                                 break
                             except Exception:
                                 continue

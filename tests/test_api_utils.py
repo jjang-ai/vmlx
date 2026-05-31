@@ -7,6 +7,7 @@ from vmlx_engine/api/utils.py. No MLX dependency.
 """
 
 from vmlx_engine.api.utils import (
+    _IS_MLLM_CACHE,
     clean_output_text,
     extract_multimodal_content,
     is_mllm_model,
@@ -180,6 +181,34 @@ class TestIsMllmModel:
         """Malformed config.json should fall through gracefully."""
         (tmp_path / "config.json").write_text("not valid json")
         assert is_mllm_model(str(tmp_path)) is False
+
+    def test_step37_jang_2l_routes_multimodal_after_source_runtime_port(self, tmp_path):
+        """Step3.7 JANG_2L has a source-owned VLM route and must honor vision metadata."""
+        import json
+
+        _IS_MLLM_CACHE.clear()
+        (tmp_path / "config.json").write_text(
+            json.dumps(
+                {
+                    "model_type": "step3p7",
+                    "model_file": "step3p7_mlx.py",
+                    "text_config": {"model_type": "step3p5"},
+                    "vision_config": {"hidden_size": 1152},
+                    "image_token_id": 151655,
+                }
+            )
+        )
+        (tmp_path / "jang_config.json").write_text(
+            json.dumps(
+                {
+                    "format": "jang",
+                    "architecture": {"has_vision": True, "text_model_type": "step3p5"},
+                    "capabilities": {"family": "step3p7", "modality": "vision"},
+                }
+            )
+        )
+        assert is_mllm_model(str(tmp_path)) is True
+        assert is_mllm_model(str(tmp_path), force_mllm=True) is True
 
 
 class TestExtractMultimodalContent:

@@ -65,6 +65,65 @@ function getImageFetchHeaders(): Record<string, string> {
   return headers
 }
 
+function isExpectedImageServerDisconnectError(error: unknown): boolean {
+  const err = error as NodeJS.ErrnoException | undefined
+  const code = String(err?.code || '')
+  const message = String(err?.message || error || '')
+  const cause = (err as any)?.cause
+  const nestedErrors = Array.isArray((err as any)?.errors) ? (err as any).errors : []
+  return (
+    code === 'EPIPE' ||
+    code === 'ECONNRESET' ||
+    code === 'ERR_STREAM_DESTROYED' ||
+    code === 'ERR_STREAM_WRITE_AFTER_END' ||
+    /EPIPE|write EPIPE|broken pipe|socket hang up|connection reset|premature close|stream.*destroyed|write after end/i.test(message) ||
+    (cause ? isExpectedImageServerDisconnectError(cause) : false) ||
+    nestedErrors.some((nested) => isExpectedImageServerDisconnectError(nested))
+  )
+}
+
+function imageServerRequestWritable(req: any): boolean {
+  return (
+    !req.closed &&
+    !req.destroyed &&
+    !req.writableEnded &&
+    !req.writableDestroyed &&
+    !req.socket?.destroyed
+  )
+}
+
+function writeImageServerRequestBody(req: any, bodyStr: string): boolean {
+  if (!imageServerRequestWritable(req)) return false
+  try {
+    req.write(bodyStr)
+    return true
+  } catch (error) {
+    if (isExpectedImageServerDisconnectError(error)) return false
+    throw error
+  }
+}
+
+function endImageServerRequest(req: any): boolean {
+  if (!imageServerRequestWritable(req)) return false
+  try {
+    req.end()
+    return true
+  } catch (error) {
+    if (isExpectedImageServerDisconnectError(error)) return false
+    throw error
+  }
+}
+
+function writeAndEndImageServerRequest(req: any, bodyStr: string): boolean {
+  return writeImageServerRequestBody(req, bodyStr) && endImageServerRequest(req)
+}
+
+function imageServerDisconnectedError(): Error {
+  const error = new Error('Image server connection lost before request completed.') as NodeJS.ErrnoException
+  error.code = 'EPIPE'
+  return error
+}
+
 function requestImageServerCancel(): void {
   if (!activeImageSessionId) return
   const session = db.getSession(activeImageSessionId)
@@ -84,8 +143,7 @@ function requestImageServerCancel(): void {
     })
     req.on('error', () => {})
     req.on('timeout', () => req.destroy())
-    req.write(bodyStr)
-    req.end()
+    writeAndEndImageServerRequest(req, bodyStr)
   } catch {
     // Best-effort cancel; local abort still clears the UI immediately.
   }
@@ -282,8 +340,13 @@ export function registerImageHandlers(): void {
             req.destroy()
             reject(new Error('ImageGenerationAborted'))
           })
-          req.write(bodyStr)
-          req.end()
+          try {
+            if (!writeAndEndImageServerRequest(req, bodyStr)) {
+              reject(imageServerDisconnectedError())
+            }
+          } catch (error) {
+            reject(error)
+          }
         })
       } finally {
         clearTimeout(timeoutId)
@@ -441,8 +504,13 @@ export function registerImageHandlers(): void {
             req.destroy()
             reject(new Error('ImageGenerationAborted'))
           })
-          req.write(bodyStr)
-          req.end()
+          try {
+            if (!writeAndEndImageServerRequest(req, bodyStr)) {
+              reject(imageServerDisconnectedError())
+            }
+          } catch (error) {
+            reject(error)
+          }
         })
       } finally {
         clearTimeout(timeoutId)

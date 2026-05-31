@@ -266,6 +266,27 @@ class BlockDiskStore:
         shard_dir.mkdir(exist_ok=True)
         return shard_dir / f"{hash_hex}.safetensors"
 
+    def has_block(self, block_hash: bytes) -> bool:
+        """Return whether a block hash has a readable finalized L2 entry."""
+        hash_hex = block_hash.hex()
+        try:
+            row = self._read_conn.execute(
+                "SELECT file_name FROM blocks WHERE block_hash = ?",
+                (hash_hex,),
+            ).fetchone()
+        except sqlite3.OperationalError:
+            self._thread_local.read_conn = sqlite3.connect(
+                str(self._db_path),
+                timeout=1.0,
+            )
+            row = self._read_conn.execute(
+                "SELECT file_name FROM blocks WHERE block_hash = ?",
+                (hash_hex,),
+            ).fetchone()
+        if row is None:
+            return False
+        return (self.cache_dir / row[0]).exists()
+
     # =========================================================================
     # Read
     # =========================================================================
@@ -777,9 +798,12 @@ def _serialize_block(
         return {}, "unknown", 0
 
     tensors: Dict[str, Any] = {}
-    num_layers = 0
+    num_layers_with_data = 0
     # Per-layer metadata including type tags for mixed-type block support
-    meta: Dict[str, Any] = {"__layer_types__": {}}
+    meta: Dict[str, Any] = {
+        "__layer_types__": {},
+        "__num_cache_layers__": len(cache_data),
+    }
     try:
         from .prefix_cache import runtime_cache_fingerprint
 
@@ -793,7 +817,7 @@ def _serialize_block(
         if tag == "skip":
             continue
 
-        num_layers += 1
+        num_layers_with_data += 1
         meta["__layer_types__"][str(i)] = tag
 
         if tag == "kv":
@@ -946,6 +970,7 @@ def _serialize_block(
             list(meta_bytes), dtype=mx.uint8
         )
 
+    num_layers = len(cache_data) if num_layers_with_data else 0
     return tensors, dtype, num_layers
 
 
@@ -1011,13 +1036,20 @@ def _deserialize_block(
             except ValueError:
                 continue
 
+    declared_num_layers = meta.get("__num_cache_layers__")
+    try:
+        declared_num_layers = int(declared_num_layers)
+    except (TypeError, ValueError):
+        declared_num_layers = 0
+
     if not layer_indices:
         return []
 
     max_layer = max(layer_indices.keys())
+    num_cache_layers = max(max_layer + 1, declared_num_layers)
     cache_data: List[Tuple] = []
 
-    for i in range(max_layer + 1):
+    for i in range(num_cache_layers):
         if i not in layer_indices:
             cache_data.append(("skip",))
             continue

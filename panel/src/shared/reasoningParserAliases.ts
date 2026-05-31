@@ -5,6 +5,7 @@ export const REASONING_PARSERS_FOR_CLI = new Set([
   'openai_gptoss',
   'mistral',
   'gemma4',
+  'think_xml',
 ])
 
 export function canonicalizeReasoningParserForCli(parser?: string): string | undefined {

@@ -36,10 +36,12 @@ describe("Ollama gateway parity contracts", () => {
   });
 
   it("forwards thinking kwargs through app gateway Ollama routes", () => {
-    expect(source).toContain("parsed.enable_thinking");
+    expect(source).toContain("parsed?.enable_thinking");
     expect(source).toContain("private applyOllamaThinking");
-    expect(source).toContain('typeof parsed?.think === "boolean"');
-    expect(source).toContain("openaiBody.enable_thinking = parsed.think");
+    expect(source).toContain("private normalizeOllamaBoolean");
+    expect(source).toContain("const think = this.normalizeOllamaBoolean(parsed?.think)");
+    expect(source).toContain("const enableThinking = this.normalizeOllamaBoolean(parsed?.enable_thinking)");
+    expect(source).toContain("openaiBody.enable_thinking = think");
     expect(source).toContain("private shouldForwardOllamaReasoningEffort");
     expect(source).toContain("openaiBody?.enable_thinking === false");
     expect(source).toContain("openaiBody.reasoning_effort = parsed.reasoning_effort");
@@ -81,7 +83,7 @@ describe("Ollama gateway parity contracts", () => {
     expect(source).toContain("opts?.num_ctx");
     expect(source).toContain("opts?.max_prompt_tokens");
     expect(source).toContain("parsed?.max_context_tokens");
-    const forwards = source.match(/openaiBody\.max_prompt_tokens = value/g) || [];
+    const forwards = source.match(/openaiBody\.max_prompt_tokens = Math\.floor\(parsedValue\)/g) || [];
     expect(forwards.length).toBeGreaterThanOrEqual(1);
     const calls = source.match(/this\.applyOllamaPromptContextLimit\(parsed, opts, openaiBody\)/g) || [];
     expect(calls.length).toBeGreaterThanOrEqual(2);
@@ -97,8 +99,19 @@ describe("Ollama gateway parity contracts", () => {
     expect(source).toContain("error?.code");
   });
 
+  it("applies gateway timeout handling to Ollama embeddings proxy requests", () => {
+    const start = source.indexOf("private async handleOllamaEmbed");
+    const end = source.indexOf("// ═══════════════════════════════════════════════════════════════", start);
+    const embedSource = source.slice(start, end);
+
+    expect(embedSource).toContain('path: "/v1/embeddings"');
+    expect(embedSource).toContain("timeout: this.effectiveGatewayProxyTimeoutMs(routedSession, parsed)");
+    expect(embedSource).toContain('proxyReq.on("timeout"');
+    expect(embedSource).toContain('this.sendJson(res, 504, { error: "Timed out" })');
+  });
+
   it("implements Ollama HEAD/root and version probes for strict clients", () => {
-    expect(source).toContain('res.end("Ollama is running\\n")');
+    expect(source).toContain('this.endResponse(res, "Ollama is running\\n")');
     expect(source).toContain('url === "/api/version"');
     expect(source).toContain('version: "0.12.6"');
     expect(source).toContain('method === "HEAD"');
@@ -116,6 +129,104 @@ describe("Ollama gateway parity contracts", () => {
     );
     expect(mainSource).not.toContain(
       "return { running: true, port, host: apiGateway.activeHost }",
+    );
+  });
+
+  it("does not turn client disconnect EPIPE into the unexpected-error crash dialog", () => {
+    const mainSource = readFileSync(
+      resolve(process.cwd(), "src/main/index.ts"),
+      "utf8",
+    );
+    expect(mainSource).toContain("function isExpectedClientDisconnectError");
+    expect(mainSource).toContain("code === 'EPIPE'");
+    expect(mainSource).toContain("code === 'ERR_STREAM_WRITE_AFTER_END'");
+    expect(mainSource).toContain("write EPIPE");
+    expect(mainSource).toContain("broken pipe");
+    expect(mainSource).toContain("const cause = (err as any)?.cause");
+    expect(mainSource).toContain("const nestedErrors = Array.isArray((err as any)?.errors)");
+    expect(mainSource).toContain("nestedErrors.some((nested) => isExpectedClientDisconnectError(nested))");
+    expect(mainSource).toContain("if (isExpectedClientDisconnectError(error))");
+    expect(mainSource).toContain("if (isExpectedClientDisconnectError(reason))");
+  });
+
+  it("guards child process stdio stream EPIPE across app-managed process lanes", () => {
+    const processManagerSource = readFileSync(
+      resolve(process.cwd(), "src/main/process-manager.ts"),
+      "utf8",
+    );
+    const engineManagerSource = readFileSync(
+      resolve(process.cwd(), "src/main/engine-manager.ts"),
+      "utf8",
+    );
+    const developerSource = readFileSync(
+      resolve(process.cwd(), "src/main/ipc/developer.ts"),
+      "utf8",
+    );
+    const modelsSource = readFileSync(
+      resolve(process.cwd(), "src/main/ipc/models.ts"),
+      "utf8",
+    );
+    const toolsExecutorSource = readFileSync(
+      resolve(process.cwd(), "src/main/tools/executor.ts"),
+      "utf8",
+    );
+
+    for (const sourceText of [
+      processManagerSource,
+      engineManagerSource,
+      developerSource,
+      modelsSource,
+      toolsExecutorSource,
+    ]) {
+      expect(sourceText).toContain("isExpectedChildProcessStreamDisconnectError");
+      expect(sourceText).toContain('code === "EPIPE"');
+      expect(sourceText).toContain('code === "ECONNRESET"');
+      expect(sourceText).toContain('code === "ERR_STREAM_DESTROYED"');
+      expect(sourceText).toContain('code === "ERR_STREAM_WRITE_AFTER_END"');
+      expect(sourceText).toContain("write EPIPE");
+      expect(sourceText).toContain("broken pipe");
+      expect(sourceText).toContain("attachChildProcessStreamErrorGuard");
+      expect(sourceText).toContain(".stdout,");
+      expect(sourceText).toContain(".stderr,");
+    }
+  });
+
+  it("does not leave raw chat IPC backend request finalization unguarded", () => {
+    const chatSource = readFileSync(
+      resolve(process.cwd(), "src/main/ipc/chat.ts"),
+      "utf8",
+    );
+    expect(chatSource).toContain("function endChatBackendRequest");
+    expect(chatSource).toContain("closed?: boolean");
+    expect(chatSource).toContain("!anyReq.closed");
+    expect(chatSource).toContain('code === "EPIPE"');
+    expect(chatSource).toContain('code === "ERR_STREAM_DESTROYED"');
+    expect(chatSource).toContain('code === "ERR_STREAM_WRITE_AFTER_END"');
+    expect(chatSource).toContain("broken pipe");
+    expect(chatSource).toContain("const cause = (err as any)?.cause");
+    expect(chatSource).toContain("const nestedErrors = Array.isArray((err as any)?.errors)");
+    expect(chatSource).toContain("nestedErrors.some((nested) => isExpectedChatBackendDisconnectError(nested))");
+    const rawEnds = chatSource.match(/req\.end\(bodyBuf\);/g) || [];
+    expect(rawEnds.length).toBe(1);
+    expect(chatSource).toContain("endChatBackendRequest(req, bodyBuf, reject);");
+    expect(chatSource).toContain("isExpectedChatBackendDisconnectError(error)");
+    expect(chatSource).toContain('errCode === "EPIPE"');
+    expect(chatSource).toContain('errCode === "ERR_STREAM_DESTROYED"');
+    expect(chatSource).toContain('errMsg.includes("write EPIPE")');
+    expect(chatSource).toContain(
+      'if (isExpectedChatBackendDisconnectError(err)) {',
+    );
+  });
+
+  it("aborts Ollama backend response streams when the client response closes", () => {
+    expect(source).toContain("private abortProxyResponseOnClientClose");
+    expect(source).toContain('res.on("close", () => {');
+    expect(source).toContain("proxyRes.destroy();");
+    const ollamaAbortCalls =
+      source.match(/this\.abortProxyResponseOnClientClose\(res, proxyRes\);/g) || [];
+    expect(ollamaAbortCalls.length).toBeGreaterThanOrEqual(3);
+    expect(source).toContain(
+      "this.abortProxyResponseOnClientClose(clientRes, proxyRes);",
     );
   });
 
@@ -208,17 +319,72 @@ describe("Ollama gateway parity contracts", () => {
 
 describe("Gateway passthrough contracts for non-Ollama APIs", () => {
   it("proxies OpenAI, Anthropic, Responses, cache, audio, and MCP paths verbatim", () => {
-    expect(source).toContain("return this.proxyRequest(req, res, session, body)");
+    expect(source).toMatch(
+      /return\s+this\.proxyRequest\(req,\s*res,\s*routedSession,\s*body\);?/,
+    );
     expect(source).toContain("path: clientReq.url");
     expect(source).toContain("method: clientReq.method");
     expect(source).toContain("...clientReq.headers");
-    expect(source).toContain("if (body.length > 0) proxyReq.write(body)");
+    expect(source).toContain("if (body.length > 0 && !this.writeProxyBody(proxyReq, body))");
   });
 
   it("preserves backend status, headers, and streaming response bytes", () => {
-    expect(source).toContain("clientRes.writeHead(proxyRes.statusCode || 502, proxyRes.headers)");
-    expect(source).toContain("proxyRes.pipe(clientRes)");
+    expect(source).toContain("this.writeHeadResponse(");
+    expect(source).toContain("proxyRes.statusCode || 502");
+    expect(source).toContain("proxyRes.headers");
+    expect(source).toContain("proxyRes.on(\"data\"");
+    expect(source).toContain("this.writeResponse(clientRes");
+    expect(source).not.toContain("proxyRes.pipe(clientRes)");
     expect(source).toContain("preserves SSE Content-Type");
+  });
+
+  it("guards gateway streaming writes against client disconnect EPIPE errors", () => {
+    expect(source).toContain("private attachResponseErrorGuard");
+    expect(source).toContain('code === "EPIPE"');
+    expect(source).toContain("write EPIPE");
+    expect(source).toContain("this.attachResponseErrorGuard(res)");
+    expect(source).toContain("private writeHeadResponse");
+    expect(source).toContain("private writeProxyBody");
+    expect(source).toContain("private endProxyRequest");
+    expect(source).toContain("private writeJsonLine");
+    expect(source).toContain("if (!this.writeJsonLine(res, ollamaMsg))");
+    expect(source).toContain("if (this.isClientDisconnectError(err)) return;");
+    expect(source).toContain("closed?: boolean");
+    expect(source).toContain("!anyRes.closed");
+    expect(source).toContain("!anyReq.closed");
+    expect(source).toContain("if (body.length > 0 && !this.writeProxyBody(proxyReq, body))");
+    expect(source).toContain("if (!this.endProxyRequest(proxyReq)) return;");
+    expect(source).toContain("if (!this.writeProxyBody(proxyReq, JSON.stringify(openaiBody)))");
+    expect(source).toContain("proxyRes.destroy()");
+  });
+
+  it("does not leave raw backend request end calls unguarded after disconnect", () => {
+    expect(source).not.toContain("proxyReq.end()");
+    expect(source).not.toContain("cancelReq.end()");
+    expect(source).toContain("this.endProxyRequest(cancelReq)");
+    expect(source).toContain("this.endProxyRequest(proxyReq)");
+  });
+
+  it("does not leave unguarded Ollama streaming json writes alive after disconnect", () => {
+    const rawJsonLineWrites = source.match(/this\.writeJsonLine\(\s*res,/g) || [];
+    const guardedJsonLineWrites =
+      source.match(/if\s*\(\s*!this\.writeJsonLine\(\s*res,/g) || [];
+
+    expect(rawJsonLineWrites.length).toBeGreaterThan(0);
+    expect(guardedJsonLineWrites.length).toBe(rawJsonLineWrites.length);
+  });
+
+  it("guards every Ollama backend response stream error as a disconnect boundary", () => {
+    const ollamaProxyHandlers =
+      source.match(
+        /const proxyReq = httpRequest\(proxyOpts, \(proxyRes\) => \{[\s\S]*?proxyReq\.on\("error"/g,
+      ) || [];
+    const guardedOllamaProxyHandlers = ollamaProxyHandlers.filter((handler) =>
+      handler.includes('proxyRes.on("error"'),
+    );
+
+    expect(ollamaProxyHandlers.length).toBeGreaterThanOrEqual(3);
+    expect(guardedOllamaProxyHandlers.length).toBe(ollamaProxyHandlers.length);
   });
 
   it("resolves target sessions from POST body, capabilities URL, or query model", () => {

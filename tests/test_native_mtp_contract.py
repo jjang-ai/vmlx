@@ -1,3 +1,14 @@
+from pathlib import Path
+
+
+def test_native_mtp_contract_default_out_tracks_current_release_proof_artifact():
+    from tests.cross_matrix import run_native_mtp_contract as gate
+
+    assert gate.DEFAULT_OUT == Path(
+        "build/current-native-mtp-contract-20260531-post-step-lfm-refresh.json"
+    )
+
+
 def test_native_mtp_contract_pins_named_policy_and_panel_edges():
     from tests.cross_matrix import run_native_mtp_contract as gate
 

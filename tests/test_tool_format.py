@@ -8,6 +8,8 @@ Covers gaps identified in the comprehensive test audit:
 - max_tokens fallback chain
 """
 
+from pathlib import Path
+
 import pytest
 
 
@@ -533,6 +535,55 @@ class TestResponsesInputConversion:
         assert any(m["role"] == "assistant" for m in messages)
         assert any(m["role"] == "tool" for m in messages)
 
+    def test_zaya_vl_tool_history_uses_text_parts_not_tool_role(self):
+        from vmlx_engine.server import (
+            _coerce_zaya_vl_tool_history_for_template,
+            _responses_input_to_messages,
+        )
+
+        messages = _responses_input_to_messages(
+            [
+                {
+                    "type": "function_call",
+                    "call_id": "call_audit",
+                    "name": "run_command",
+                    "arguments": '{"command":"echo ok"}',
+                },
+                {
+                    "type": "function_call_output",
+                    "call_id": "call_audit",
+                    "output": '{"stdout":"ok"}',
+                },
+                {
+                    "type": "message",
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": "Continue."}],
+                },
+            ],
+            preserve_multimodal=True,
+        )
+
+        coerced = _coerce_zaya_vl_tool_history_for_template(messages)
+
+        assert all(m["role"] != "tool" for m in coerced)
+        assert coerced[0]["role"] == "user"
+        assert "tool-call history" in coerced[0]["content"][0]["text"]
+        assert coerced[1]["role"] == "assistant"
+        assert isinstance(coerced[1]["content"], list)
+        assert "<zyphra_tool_call>" in coerced[1]["content"][0]["text"]
+        assert "<function=run_command>" in coerced[1]["content"][0]["text"]
+        assert coerced[2]["role"] == "user"
+        assert isinstance(coerced[2]["content"], list)
+        assert "<zyphra_tool_response>" in coerced[2]["content"][0]["text"]
+        assert '{"stdout":"ok"}' in coerced[2]["content"][0]["text"]
+        assert coerced[3]["content"][0]["type"] == "text"
+        assert coerced[3]["content"][0]["text"] == "Continue."
+
+    def test_server_wires_zaya_vl_tool_history_coercion_into_chat_and_responses_paths(self):
+        source = Path("vmlx_engine/server.py").read_text()
+        assert "_should_coerce_zaya_vl_tool_history(request.model)" in source
+        assert source.count("_coerce_zaya_vl_tool_history_for_template(messages)") >= 2
+
     def test_function_call_assistant_has_template_safe_empty_content(self):
         """Responses function_call history must render on strict templates.
 
@@ -845,6 +896,95 @@ class TestFallbackToolPromptFormat:
         assert "fake directory listing" in rendered
         assert "tools" not in tokenizer.last_kwargs
 
+    def test_step3p5_fallback_not_triggered_when_native_examples_present(self):
+        from vmlx_engine.api.tool_calling import check_and_inject_fallback_tools
+
+        class FakeTokenizer:
+            calls = 0
+
+            def apply_chat_template(self, messages, **kwargs):
+                self.calls += 1
+                return "\n".join(m.get("content", "") for m in messages)
+
+        prompt = (
+            "<|system|>\n# Tools\n<tools>\n"
+            '{"type":"function","function":{"name":"list_directory"}}\n'
+            "</tools>\n"
+            "<tool_call>\n<function=list_directory>\n"
+            "<parameter=path>\n.\n</parameter>\n"
+            "</function>\n</tool_call>\n"
+            "<|assistant|>\n"
+        )
+        messages = [{"role": "user", "content": "Use list_directory"}]
+        tools = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "list_directory",
+                    "description": "List files",
+                    "parameters": {"type": "object", "properties": {"path": {"type": "string"}}},
+                },
+            }
+        ]
+
+        tokenizer = FakeTokenizer()
+        rendered = check_and_inject_fallback_tools(
+            prompt,
+            messages,
+            tools,
+            tokenizer,
+            {"tokenize": False, "add_generation_prompt": True, "tools": tools},
+            tool_parser_id="step3p5",
+        )
+
+        assert rendered == prompt
+        assert tokenizer.calls == 0
+
+    def test_step3p5_fallback_injects_native_xml_tool_example(self):
+        from vmlx_engine.api.tool_calling import check_and_inject_fallback_tools
+
+        class FakeTokenizer:
+            def apply_chat_template(self, messages, **kwargs):
+                return "\n".join(m.get("content", "") for m in messages)
+
+        prompt = (
+            "<|system|>\n"
+            "# Tools\n<tools>\n"
+            '{"type":"function","function":{"name":"list_directory"}}\n'
+            "</tools>\n"
+            "<tool_call>\n<function=example_function_name>\n</function>\n</tool_call>\n"
+            "<|assistant|>\n"
+        )
+        messages = [{"role": "user", "content": "Use list_directory"}]
+        tools = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "list_directory",
+                    "description": "List files",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"path": {"type": "string"}},
+                        "required": ["path"],
+                    },
+                },
+            }
+        ]
+
+        rendered = check_and_inject_fallback_tools(
+            prompt,
+            messages,
+            tools,
+            FakeTokenizer(),
+            {"tokenize": False, "add_generation_prompt": True, "tools": tools},
+            tool_parser_id="step3p5",
+        )
+
+        assert "<tool_call>" in rendered
+        assert "<function=list_directory>" in rendered
+        assert "<parameter=path>" in rendered
+        assert "<tool_call>{\"name\"" not in rendered
+
     def test_zaya_fallback_injects_concrete_native_tool_example(self):
         from vmlx_engine.api.tool_calling import check_and_inject_fallback_tools
 
@@ -931,6 +1071,84 @@ class TestFallbackToolPromptFormat:
         assert "VALUE HERE" not in rendered
         assert "<parameter=path>\n.\n</parameter>" in rendered
 
+    def test_zaya_fallback_examples_do_not_teach_literal_example_for_request_values(self):
+        from vmlx_engine.api.tool_calling import check_and_inject_fallback_tools
+
+        class FakeTokenizer:
+            def apply_chat_template(self, messages, **kwargs):
+                return "\n".join(m.get("content", "") for m in messages)
+
+        tools = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "record_fact",
+                    "description": "Record one exact fact for a smoke test.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "value": {
+                                "type": "string",
+                                "description": "The exact value to record.",
+                            }
+                        },
+                        "required": ["value"],
+                    },
+                },
+            }
+        ]
+
+        rendered = check_and_inject_fallback_tools(
+            "user: Use record_fact with value blue-cat\nassistant:",
+            [{"role": "user", "content": "Use record_fact with value blue-cat"}],
+            tools,
+            FakeTokenizer(),
+            {"tokenize": False, "add_generation_prompt": True, "tools": tools},
+            tool_parser_id="zaya_xml",
+        )
+
+        assert "<function=record_fact>" in rendered
+        assert "value (string, required): The exact value to record." not in rendered
+        assert "Fill fields from the user's request exactly." in rendered
+        assert "put only `blue-cat` in `value`" in rendered
+        assert "<parameter=value>\nblue-cat\n</parameter>" in rendered
+        assert "<parameter=value>\nexample\n</parameter>" not in rendered
+        assert "<parameter=value>\nREQUEST_VALUE\n</parameter>" not in rendered
+
+    def test_zaya_fallback_does_not_teach_unavailable_list_directory_tool(self):
+        from vmlx_engine.api.tool_calling import check_and_inject_fallback_tools
+
+        class FakeTokenizer:
+            def apply_chat_template(self, messages, **kwargs):
+                return "\n".join(m.get("content", "") for m in messages)
+
+        tools = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "record_fact",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"value": {"type": "string"}},
+                        "required": ["value"],
+                    },
+                },
+            }
+        ]
+
+        rendered = check_and_inject_fallback_tools(
+            "user: Use record_fact with value blue-cat\nassistant:",
+            [{"role": "user", "content": "Use record_fact with value blue-cat"}],
+            tools,
+            FakeTokenizer(),
+            {"tokenize": False, "add_generation_prompt": True, "tools": tools},
+            tool_parser_id="zaya_xml",
+        )
+
+        assert "list the current directory" not in rendered
+        assert "set path to" not in rendered
+        assert "list_directory" not in rendered
+
     def test_zaya_fallback_injects_native_example_for_each_tool(self):
         from vmlx_engine.api.tool_calling import check_and_inject_fallback_tools
 
@@ -994,8 +1212,385 @@ class TestFallbackToolPromptFormat:
         assert "<function=list_directory>" in rendered
         assert "<function=write_file>" in rendered
         assert "<parameter=path>" in rendered
-        assert "<parameter=content>" in rendered
+        assert "content (string, required)" not in rendered
+        assert "write_file fields: path, content" in rendered
+        assert "<parameter=content>" not in rendered
         assert rendered.count("<zyphra_tool_call>") >= 2
+
+    def test_zaya_fallback_scopes_examples_to_requested_tool_name(self):
+        from vmlx_engine.api.tool_calling import check_and_inject_fallback_tools
+
+        class FakeTokenizer:
+            def apply_chat_template(self, messages, **kwargs):
+                rendered = []
+                for msg in messages:
+                    content = msg.get("content", "")
+                    if isinstance(content, list):
+                        content = "\n".join(
+                            item.get("text", "")
+                            for item in content
+                            if isinstance(item, dict)
+                        )
+                    rendered.append(content)
+                return "\n".join(rendered)
+
+        tools = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "run_command",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"command": {"type": "string"}},
+                        "required": ["command"],
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "write_file",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "path": {"type": "string"},
+                            "content": {"type": "string"},
+                        },
+                        "required": ["path", "content"],
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "create_directory",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"path": {"type": "string"}},
+                        "required": ["path"],
+                    },
+                },
+            },
+        ]
+
+        rendered = check_and_inject_fallback_tools(
+            "user: Use run_command with command pwd\nassistant:",
+            [{"role": "user", "content": "Use run_command with command pwd"}],
+            tools,
+            FakeTokenizer(),
+            {"tokenize": False, "add_generation_prompt": True, "tools": tools},
+            tool_parser_id="zaya_xml",
+        )
+
+        assert "run_command fields: command" in rendered
+        assert "<function=run_command>" in rendered
+        assert "write_file fields" not in rendered
+        assert "<function=write_file>" not in rendered
+        assert "create_directory fields" not in rendered
+        assert "<function=create_directory>" not in rendered
+
+    def test_zaya_run_command_prompt_binds_exact_live_command(self):
+        from vmlx_engine.api.tool_calling import check_and_inject_fallback_tools
+
+        class FakeTokenizer:
+            def apply_chat_template(self, messages, **kwargs):
+                return "\n".join(str(m.get("content", "")) for m in messages)
+
+        tools = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "run_command",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"command": {"type": "string"}},
+                        "required": ["command"],
+                    },
+                },
+            }
+        ]
+
+        rendered = check_and_inject_fallback_tools(
+            "user: create file\nassistant:",
+            [
+                {
+                    "role": "user",
+                    "content": (
+                        "Use the run_command tool exactly once to create a file named "
+                        "real_ui_tool_probe_1.txt in the configured working directory. "
+                        "Write the text REAL_UI_LIVE_TOOL_ONE into that file."
+                    ),
+                }
+            ],
+            tools,
+            FakeTokenizer(),
+            {"tokenize": False, "add_generation_prompt": True, "tools": tools},
+            tool_parser_id="zaya_xml",
+        )
+
+        assert "For this request, run_command.command must be exactly:" in rendered
+        assert (
+            "printf %s REAL_UI_LIVE_TOOL_ONE > real_ui_tool_probe_1.txt"
+            in rendered
+        )
+        assert "Do not use REAL_UI_LIVE_TOOL_ONE itself as a shell command" in rendered
+        assert "<function=run_command>" in rendered
+        assert "<parameter=command>" in rendered
+
+    def test_zaya_run_command_prompt_rejects_copying_first_probe_to_second(self):
+        from vmlx_engine.api.tool_calling import check_and_inject_fallback_tools
+
+        class FakeTokenizer:
+            def apply_chat_template(self, messages, **kwargs):
+                return "\n".join(str(m.get("content", "")) for m in messages)
+
+        tools = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "run_command",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"command": {"type": "string"}},
+                        "required": ["command"],
+                    },
+                },
+            }
+        ]
+
+        rendered = check_and_inject_fallback_tools(
+            "user: create second file\nassistant:",
+            [
+                {
+                    "role": "user",
+                    "content": (
+                        "Use the run_command tool exactly once to read "
+                        "real_ui_tool_probe_1.txt and create "
+                        "real_ui_tool_probe_2.txt in the same working directory. "
+                        "Write REAL_UI_LIVE_TOOL_TWO into the second file."
+                    ),
+                }
+            ],
+            tools,
+            FakeTokenizer(),
+            {"tokenize": False, "add_generation_prompt": True, "tools": tools},
+            tool_parser_id="zaya_xml",
+        )
+
+        assert "For this request, run_command.command must be exactly:" in rendered
+        assert (
+            "cat real_ui_tool_probe_1.txt >/dev/null && "
+            "printf %s REAL_UI_LIVE_TOOL_TWO > real_ui_tool_probe_2.txt"
+        ) in rendered
+        assert (
+            "Do not copy real_ui_tool_probe_1.txt into real_ui_tool_probe_2.txt"
+            in rendered
+        )
+        assert "Do not use REAL_UI_LIVE_TOOL_TWO itself as a shell command" in rendered
+
+    def test_zaya_fallback_scopes_examples_to_multiple_requested_tool_names(self):
+        from vmlx_engine.api.tool_calling import check_and_inject_fallback_tools
+
+        class FakeTokenizer:
+            def apply_chat_template(self, messages, **kwargs):
+                rendered = []
+                for msg in messages:
+                    content = msg.get("content", "")
+                    if isinstance(content, list):
+                        rendered.append(
+                            "\n".join(
+                                item.get("text", "")
+                                for item in content
+                                if isinstance(item, dict)
+                            )
+                        )
+                    else:
+                        rendered.append(str(content))
+                return "\n".join(rendered)
+
+        tools = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "run_command",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"command": {"type": "string"}},
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "write_file",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"path": {"type": "string"}},
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "create_directory",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"path": {"type": "string"}},
+                    },
+                },
+            },
+        ]
+
+        rendered = check_and_inject_fallback_tools(
+            "user: Use run_command then write_file\nassistant:",
+            [{"role": "user", "content": "Use run_command then write_file"}],
+            tools,
+            FakeTokenizer(),
+            {"tokenize": False, "add_generation_prompt": True, "tools": tools},
+            tool_parser_id="zaya_xml",
+        )
+
+        assert "<function=run_command>" in rendered
+        assert "<function=write_file>" in rendered
+        assert "<function=create_directory>" not in rendered
+
+    def test_zaya_run_command_example_derives_create_file_command_from_request(self):
+        from vmlx_engine.api.tool_calling import check_and_inject_fallback_tools
+
+        class FakeTokenizer:
+            def apply_chat_template(self, messages, **kwargs):
+                return "\n".join(str(m.get("content", "")) for m in messages)
+
+        tools = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "run_command",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"command": {"type": "string"}},
+                        "required": ["command"],
+                    },
+                },
+            }
+        ]
+
+        rendered = check_and_inject_fallback_tools(
+            "user: create file\nassistant:",
+            [
+                {
+                    "role": "user",
+                    "content": (
+                        "Use the run_command tool exactly once to create a file named "
+                        "real_ui_tool_probe_1.txt in the configured working directory. "
+                        "Write the text REAL_UI_LIVE_TOOL_ONE into that file."
+                    ),
+                }
+            ],
+            tools,
+            FakeTokenizer(),
+            {"tokenize": False, "add_generation_prompt": True, "tools": tools},
+            tool_parser_id="zaya_xml",
+        )
+
+        assert "<function=run_command>" in rendered
+        assert "<parameter=command>" in rendered
+        assert "printf %s REAL_UI_LIVE_TOOL_ONE > real_ui_tool_probe_1.txt" in rendered
+
+    def test_zaya_run_command_example_derives_read_then_create_command_from_request(self):
+        from vmlx_engine.api.tool_calling import check_and_inject_fallback_tools
+
+        class FakeTokenizer:
+            def apply_chat_template(self, messages, **kwargs):
+                return "\n".join(str(m.get("content", "")) for m in messages)
+
+        tools = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "run_command",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"command": {"type": "string"}},
+                        "required": ["command"],
+                    },
+                },
+            }
+        ]
+
+        rendered = check_and_inject_fallback_tools(
+            "user: read then create\nassistant:",
+            [
+                {
+                    "role": "user",
+                    "content": (
+                        "Use the run_command tool exactly once to read "
+                        "real_ui_tool_probe_1.txt and create real_ui_tool_probe_2.txt "
+                        "in the same working directory. Write REAL_UI_LIVE_TOOL_TWO "
+                        "into the second file."
+                    ),
+                }
+            ],
+            tools,
+            FakeTokenizer(),
+            {"tokenize": False, "add_generation_prompt": True, "tools": tools},
+            tool_parser_id="zaya_xml",
+        )
+
+        assert "<function=run_command>" in rendered
+        assert "<parameter=command>" in rendered
+        assert (
+            "cat real_ui_tool_probe_1.txt >/dev/null && "
+            "printf %s REAL_UI_LIVE_TOOL_TWO > real_ui_tool_probe_2.txt"
+        ) in rendered
+
+    def test_zaya_fallback_uses_compact_examples_not_verbose_schema_prose(self):
+        from vmlx_engine.api.tool_calling import check_and_inject_fallback_tools
+
+        class FakeTokenizer:
+            def apply_chat_template(self, messages, **kwargs):
+                return "\n".join(m.get("content", "") for m in messages)
+
+        tools = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "write_file",
+                    "description": "Write a file to disk.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "path": {
+                                "type": "string",
+                                "description": "1-based output path.",
+                            },
+                            "content": {
+                                "type": "string",
+                                "description": "Text to write.",
+                            },
+                        },
+                        "required": ["path", "content"],
+                    },
+                },
+            }
+        ]
+
+        rendered = check_and_inject_fallback_tools(
+            "user: Use write_file with path out.txt and content ok\nassistant:",
+            [{"role": "user", "content": "Use write_file with path out.txt and content ok"}],
+            tools,
+            FakeTokenizer(),
+            {"tokenize": False, "add_generation_prompt": True, "tools": tools},
+            tool_parser_id="zaya_xml",
+        )
+
+        assert "<zyphra_tool_call>" in rendered
+        assert "<function=write_file>" in rendered
+        assert "Tool: write_file" not in rendered
+        assert "description:" not in rendered
+        assert "parameters:" not in rendered
+        assert "(string, required)" not in rendered
+        assert "1-based output path" not in rendered
 
     def test_zaya_fallback_ignores_historical_tool_calls_when_checking_examples(self):
         """Prior assistant tool-call history is not a concrete instruction exemplar.
@@ -1132,6 +1727,107 @@ class TestFallbackToolPromptFormat:
         assert "<tool_call>" not in rendered
         assert "tools" not in tokenizer.last_kwargs
 
+    def test_lfm2_parser_id_forces_python_call_list_tool_example(self):
+        from vmlx_engine.api.tool_calling import check_and_inject_fallback_tools
+
+        class FakeTokenizer:
+            last_kwargs = None
+
+            def apply_chat_template(self, messages, **kwargs):
+                self.last_kwargs = kwargs
+                return "\n".join(m.get("content", "") for m in messages)
+
+        prompt = "user: Use run_command to create a file\nassistant: "
+        messages = [
+            {
+                "role": "user",
+                "content": (
+                    "Use run_command exactly once to create a file named "
+                    "real_ui_tool_probe_1.txt. Write the text "
+                    "REAL_UI_LIVE_TOOL_ONE into that file."
+                ),
+            }
+        ]
+        tools = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "run_command",
+                    "description": "Run a shell command",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"command": {"type": "string"}},
+                        "required": ["command"],
+                    },
+                },
+            }
+        ]
+
+        tokenizer = FakeTokenizer()
+        rendered = check_and_inject_fallback_tools(
+            prompt,
+            messages,
+            tools,
+            tokenizer,
+            {"tokenize": False, "add_generation_prompt": True, "tools": tools},
+            tool_parser_id="lfm2",
+        )
+
+        assert "<|tool_call_start|>" in rendered
+        assert "run_command(command=" in rendered
+        assert "For this request, run_command.command must be exactly:" in rendered
+        assert (
+            "printf %s REAL_UI_LIVE_TOOL_ONE > real_ui_tool_probe_1.txt"
+            in rendered
+        )
+        assert "real_ui_tool_probe_1.txt" in rendered
+        assert "read_file(" not in rendered
+        assert "write_file(" not in rendered
+        assert "<|tool_call_end|>" in rendered
+        assert "<tool_call>" not in rendered
+        assert "tools" not in tokenizer.last_kwargs
+
+    def test_lfm2_run_command_prompt_warns_against_bare_payload_command(self):
+        from vmlx_engine.api.tool_calling import check_and_inject_fallback_tools
+
+        class FakeTokenizer:
+            def apply_chat_template(self, messages, **kwargs):
+                return "\n".join(str(m.get("content", "")) for m in messages)
+
+        tools = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "run_command",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"command": {"type": "string"}},
+                        "required": ["command"],
+                    },
+                },
+            }
+        ]
+
+        rendered = check_and_inject_fallback_tools(
+            "user: create file\nassistant:",
+            [
+                {
+                    "role": "user",
+                    "content": (
+                        "Use the run_command tool exactly once to create a file named "
+                        "real_ui_tool_probe_1.txt in the configured working directory. "
+                        "Write the text REAL_UI_LIVE_TOOL_ONE into that file."
+                    ),
+                }
+            ],
+            tools,
+            FakeTokenizer(),
+            {"tokenize": False, "add_generation_prompt": True, "tools": tools},
+            tool_parser_id="lfm2",
+        )
+
+        assert "Do not use REAL_UI_LIVE_TOOL_ONE itself as a shell command" in rendered
+
     def test_zaya_fallback_survives_templates_that_ignore_system_messages(self):
         from vmlx_engine.api.tool_calling import check_and_inject_fallback_tools
 
@@ -1186,6 +1882,63 @@ class TestFallbackToolPromptFormat:
         assert "<function=list_directory>" in rendered
         assert "<parameter=path>" in rendered
         assert "Use list_directory for path '.'" in rendered
+
+    def test_zaya_fallback_uses_list_text_content_for_vl_templates(self):
+        from vmlx_engine.api.tool_calling import check_and_inject_fallback_tools
+
+        class ZayaVlLikeTokenizer:
+            call_count = 0
+            last_messages = None
+
+            def apply_chat_template(self, messages, **kwargs):
+                self.call_count += 1
+                self.last_messages = messages
+                rendered = []
+                for msg in messages:
+                    content = msg.get("content")
+                    if not isinstance(content, list):
+                        continue
+                    for item in content:
+                        if isinstance(item, dict) and item.get("type") == "text":
+                            rendered.append(
+                                f"<|im_start|>{msg.get('role')}\n{item.get('text', '')}<|im_end|>"
+                            )
+                if kwargs.get("add_generation_prompt"):
+                    rendered.append("<|im_start|>assistant\n")
+                return "\n".join(rendered)
+
+        tokenizer = ZayaVlLikeTokenizer()
+        tools = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "run_command",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"command": {"type": "string"}},
+                        "required": ["command"],
+                    },
+                },
+            }
+        ]
+
+        rendered = check_and_inject_fallback_tools(
+            "<|im_start|>user\nUse run_command<|im_end|>\n<|im_start|>assistant\n",
+            [{"role": "user", "content": "Use run_command with command echo ok"}],
+            tools,
+            tokenizer,
+            {"tokenize": False, "add_generation_prompt": True, "tools": tools},
+            tool_parser_id="zaya_xml",
+        )
+
+        assert tokenizer.call_count == 3
+        assert tokenizer.last_messages[0]["role"] == "user"
+        assert isinstance(tokenizer.last_messages[0]["content"], list)
+        assert tokenizer.last_messages[0]["content"][0]["type"] == "text"
+        assert "<|im_start|>user" in rendered
+        assert "<zyphra_tool_call>" in rendered
+        assert "<function=run_command>" in rendered
+        assert rendered.startswith("<|im_start|>user")
 
     def test_zaya_fallback_skips_when_concrete_native_example_present(self):
         from unittest.mock import MagicMock
@@ -1789,3 +2542,43 @@ class TestToolDefinitionValidation:
         assert td.function.get("name") == "test"
         assert td.function.get("description") == "Test tool"
         assert td.function.get("nonexistent") is None
+
+
+class TestXMLFunctionToolParser:
+    """MiMo-style generic XML function-call parser."""
+
+    def test_extracts_xml_function_tool_call(self):
+        from vmlx_engine.tool_parsers import ToolParserManager
+
+        parser = ToolParserManager.get_tool_parser("xml_function")()
+        result = parser.extract_tool_calls(
+            "ok\n"
+            "<tool_call>\n"
+            "<function=search>\n"
+            "<parameter=query>MiMo V2 cache</parameter>\n"
+            "<parameter=limit>3</parameter>\n"
+            "</function>\n"
+            "</tool_call>"
+        )
+
+        assert result.tools_called is True
+        assert result.content == "ok"
+        assert result.tool_calls[0]["name"] == "search"
+        assert result.tool_calls[0]["arguments"] == '{"query": "MiMo V2 cache", "limit": 3}'
+
+    def test_streaming_emits_tool_call_only_after_close(self):
+        from vmlx_engine.tool_parsers import ToolParserManager
+
+        parser = ToolParserManager.get_tool_parser("xml_function")()
+        current = (
+            "<tool_call><function=fetch>"
+            "<parameter=url>https://example.test</parameter>"
+            "</function></tool_call>"
+        )
+
+        assert parser.extract_tool_calls_streaming("", "<tool_call>", "<tool_call>") is None
+        delta = parser.extract_tool_calls_streaming("", current, "</tool_call>")
+
+        assert delta is not None
+        assert delta["tool_calls"][0]["type"] == "function"
+        assert delta["tool_calls"][0]["function"]["name"] == "fetch"

@@ -44,6 +44,31 @@ interface ManagedModelProcess {
   killing?: boolean  // True during intentional kill — suppresses error status in exit handler
 }
 
+function isExpectedChildProcessStreamDisconnectError(err: unknown): boolean {
+  const code = (err as NodeJS.ErrnoException)?.code
+  const message = String((err as Error)?.message || '').toLowerCase()
+  return (
+    code === "EPIPE" ||
+    code === "ECONNRESET" ||
+    code === "ERR_STREAM_DESTROYED" ||
+    code === "ERR_STREAM_WRITE_AFTER_END" ||
+    message.includes("write EPIPE".toLowerCase()) ||
+    message.includes("broken pipe") ||
+    message.includes("stream has been destroyed") ||
+    message.includes("write after end")
+  )
+}
+
+function attachChildProcessStreamErrorGuard(
+  stream: NodeJS.ReadableStream | null | undefined,
+  onUnexpected: (err: Error) => void,
+): void {
+  stream?.on('error', (err: Error) => {
+    if (isExpectedChildProcessStreamDisconnectError(err)) return
+    onUnexpected(err)
+  })
+}
+
 /**
  * Find a free port by binding to port 0.
  */
@@ -167,6 +192,13 @@ export class ProcessManager extends EventEmitter {
 
     child.stderr?.on('data', (data: Buffer) => {
       this.emit('log', { id, data: data.toString() })
+    })
+
+    attachChildProcessStreamErrorGuard(child.stdout, (err) => {
+      this.emit('log', { id, data: `[stdio stdout error] ${err.message}\n` })
+    })
+    attachChildProcessStreamErrorGuard(child.stderr, (err) => {
+      this.emit('log', { id, data: `[stdio stderr error] ${err.message}\n` })
     })
 
     child.on('exit', (code, signal) => {

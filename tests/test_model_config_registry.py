@@ -980,6 +980,8 @@ class TestModelConfigs:
             "missing the newer Nemotron-H v2 model_type alias"
         )
         assert config.cache_type == "hybrid"
+        assert config.cache_subtype == "nemotron_h_ssm_attention"
+        assert config.architecture_hints["attention_arch"] == "hybrid_ssm_attention"
 
     def test_granitemoehybrid_config(self, registry):
         config = self._lookup(registry, "ibm-granite/granite-4.0-tiny-base", "granitemoehybrid")
@@ -998,6 +1000,8 @@ class TestModelConfigs:
             "cache_type defaults to kv (wrong — LFM2-MoE is hybrid SSM+attention)"
         )
         assert config.cache_type == "hybrid"
+        assert config.tool_parser == "lfm2"
+        assert config.reasoning_parser == "qwen3"
 
     def test_falcon_h1_config(self, registry):
         """Falcon H1 is hybrid SSM+attention (CacheList[ArraysCache, KVCache])."""
@@ -1070,6 +1074,74 @@ class TestModelConfigs:
         assert config.family_name == "step"
         assert config.tool_parser == "step3p5"
         assert config.reasoning_parser == "qwen3"
+
+    def test_step37_flash_jang_config(self, registry):
+        config = self._lookup(
+            registry,
+            "/Users/example/.mlxstudio/models/JANGQ-AI/Step-3.7-Flash-JANG_2L",
+            "step3p7",
+        )
+        assert config.family_name == "step3p7"
+        assert config.cache_type == "kv"
+        assert config.cache_subtype == "step3p7_full_sliding_kv"
+        assert config.tool_parser == "step3p5"
+        assert config.reasoning_parser == "qwen3"
+        assert config.think_in_template is True
+        assert config.supports_thinking is True
+        assert config.is_mllm is True
+        assert config.architecture_hints["runtime_scope"] == "source_vlm_needs_live_proof"
+        assert config.architecture_hints["vl_runtime_available"] is True
+        assert (
+            config.architecture_hints["text_bridge_runtime_scope"]
+            == "text_bridge_ignored_for_source_vlm"
+        )
+        assert config.architecture_hints["sliding_window"] == 512
+
+    def test_step37_flash_jang_text_bridge_routes_to_source_vlm_runtime_when_available(
+        self, registry, tmp_path
+    ):
+        (tmp_path / "config.json").write_text(
+            json.dumps(
+                {
+                    "model_type": "step3p7",
+                    "model_file": "step3p7_mlx.py",
+                    "text_config": {"model_type": "step3p5"},
+                    "vision_config": {"hidden_size": 1152},
+                    "image_token_id": 151655,
+                }
+            )
+        )
+        (tmp_path / "jang_config.json").write_text(
+            json.dumps(
+                {
+                    "format": "jang",
+                    "architecture": {"has_vision": True, "text_model_type": "step3p5"},
+                    "capabilities": {
+                        "family": "step3p7",
+                        "modality": "vision",
+                        "cache_type": "kv",
+                        "cache_subtype": "step3p7_full_sliding_kv",
+                        "reasoning_parser": "qwen3",
+                        "tool_parser": "step3p5",
+                        "think_in_template": True,
+                        "supports_thinking": True,
+                    },
+                }
+            )
+        )
+
+        config = registry.lookup(str(tmp_path))
+
+        assert config.family_name == "step3p7"
+        assert config.tool_parser == "step3p5"
+        assert config.reasoning_parser == "qwen3"
+        assert config.is_mllm is True
+        assert config.architecture_hints["runtime_scope"] == "source_vlm_needs_live_proof"
+        assert config.architecture_hints["vl_runtime_available"] is True
+        assert (
+            config.architecture_hints["text_bridge_runtime_scope"]
+            == "text_bridge_ignored_for_source_vlm"
+        )
 
     def test_step_vl_config(self, registry):
         config = self._lookup(registry, "stepfun/Step-1V-8B", "step1v")
@@ -1541,11 +1613,13 @@ class TestModelConfigs:
     def test_nemotron_h_stale_omni_stamp_without_media_stays_text_hybrid(
         self, registry, tmp_path
     ):
+        hybrid_pattern = "MEMEM*EMEMEM*EMEMEM*EMEMEM*EMEMEM*EMEMEMEM*EMEMEMEME"
         (tmp_path / "config.json").write_text(
             json.dumps(
                 {
                     "model_type": "nemotron_h_v2",
                     "architectures": ["NemotronHForCausalLM"],
+                    "hybrid_override_pattern": hybrid_pattern,
                     "text_config": {"layer_types": ["mamba", "full_attention"]},
                 }
             )
@@ -1572,6 +1646,9 @@ class TestModelConfigs:
         assert config.tool_parser == "nemotron"
         assert config.reasoning_parser == "deepseek_r1"
         assert config.is_mllm is False
+        assert config.cache_subtype == "nemotron_h_ssm_attention"
+        assert config.architecture_hints["attention_arch"] == "hybrid_ssm_attention"
+        assert config.architecture_hints["hybrid_override_pattern"] == hybrid_pattern
 
     # ── MiniMax coverage ──
 
@@ -1580,6 +1657,22 @@ class TestModelConfigs:
         assert config.tool_parser == "minimax"
         assert config.reasoning_parser == "minimax_m2"
         assert config.think_in_template is True
+
+    def test_mimo_v2_jang2l_registry_contract(self, registry):
+        config = self._lookup(registry, "JANGQ-AI/MiMo-V2.5-JANG_2L", "mimo_v2")
+
+        assert config.family_name == "mimo_v2"
+        assert config.cache_type == "kv"
+        assert config.cache_subtype == "mimo_v2_asymmetric_swa"
+        assert config.reasoning_parser == "think_xml"
+        assert config.tool_parser == "xml_function"
+        assert config.supports_thinking is True
+        assert config.supports_native_tools is True
+        assert config.is_mllm is True
+        assert config.architecture_hints["runtime_mtp_mode"] == "absent"
+        assert config.architecture_hints["full_attention_kv_heads"] == 4
+        assert config.architecture_hints["swa_attention_kv_heads"] == 8
+        assert config.architecture_hints["attention_value_scale"] == 0.707
 
     # ── Kimi coverage ──
 
@@ -1658,11 +1751,12 @@ class TestModelConfigComprehensiveChecks:
         "mistral",
         "gemma4",
         "minimax_m2",
+        "think_xml",
     }
     VALID_TOOL_PARSERS = {
         None, "qwen", "llama", "mistral", "deepseek", "hermes",
         "granite", "glm47", "step3p5", "nemotron", "minimax", "kimi",
-        "dsml", "zaya_xml",
+        "dsml", "zaya_xml", "xml_function",
         # Gemma family: commit 3294a2da added `gemma3` for Google's
         # documented ``` ```tool_code\\nname(k=v)\\n``` ``` format, and
         # `gemma3n` for Gemma 3n (same parser, separate registry entry).
@@ -1675,6 +1769,9 @@ class TestModelConfigComprehensiveChecks:
         # contract reference at
         # ~/jang/jang-tools/examples/hy3/python_runtime/hy3_parser_contract.py
         "hunyuan",
+        # Liquid LFM2 emits Python-call-list tool calls between
+        # <|tool_call_start|> and <|tool_call_end|>.
+        "lfm2",
     }
     VALID_CACHE_TYPES = {"kv", "mamba", "hybrid"}
 
@@ -1907,12 +2004,115 @@ class TestModelConfigComprehensiveChecks:
             "ZAYA1-VL uses qwen3-style <think> blocks in output, so the qwen3 "
             "reasoning parser is the authoritative extractor."
         )
+
+    def test_mimo_v2_registered_with_jang2l_contract(self, registry):
+        """MiMo-V2.5 JANG_2L is a new multimodal KV family.
+
+        The 2026-05-27 JANG source contract says think_xml reasoning extraction
+        is valid, the current target bundle has no MTP tensors, and tools use
+        the generic XML function format rather than Qwen-like JSON.
+        """
+        registry.clear_cache()
+        with patch("vmlx_engine.model_config_registry.load_config", _mock_load_config("mimo_v2")):
+            config = registry.lookup("JANGQ-AI/MiMo-V2.5-JANG_2L")
+
+        assert config.family_name == "mimo_v2"
+        assert config.cache_type == "kv"
+        assert config.reasoning_parser == "think_xml"
+        assert config.supports_thinking is True
+        assert config.think_in_template is False
+        assert config.tool_parser == "xml_function"
+        assert config.supports_native_tools is True
+        assert config.is_mllm is True
+
+    def test_mimo_v2_jang_stamp_enables_xml_function_tools_only(self, registry, tmp_path):
+        import json
+
+        (tmp_path / "config.json").write_text(
+            json.dumps(
+                {
+                    "model_type": "mimo_v2",
+                    "vision_config": {"hidden_size": 1280},
+                    "audio_config": {"hidden_size": 1024},
+                    "max_position_embeddings": 1048576,
+                }
+            )
+        )
+        (tmp_path / "jang_config.json").write_text(
+            json.dumps(
+                {
+                    "version": 2,
+                    "weight_format": "jang",
+                    "runtime": {
+                        "bundle_has_mtp": False,
+                        "mtp_mode": "absent",
+                    },
+                    "capabilities": {
+                        "family": "mimo_v2",
+                        "modality": "multimodal",
+                        "cache_type": "kv",
+                        "reasoning_parser": "think_xml",
+                        "tool_parser": "xml_function",
+                        "supports_tools": True,
+                        "supports_thinking": True,
+                        "think_in_template": False,
+                    },
+                }
+            )
+        )
+
+        registry.clear_cache()
+        config = registry.lookup(str(tmp_path))
+
+        assert config.family_name == "mimo_v2"
+        assert config.cache_type == "kv"
+        assert config.reasoning_parser == "think_xml"
+        assert config.tool_parser == "xml_function"
+        assert config.supports_native_tools is True
+        assert config.supports_thinking is True
+        assert config.think_in_template is False
+        assert config.is_mllm is True
         assert config.think_in_template is False, (
             "With enable_thinking=False the prompt contains a closed empty "
             "<think> block (not auto-opened), so think_in_template stays "
             "False. The parser must not treat the prompt as starting inside "
             "reasoning."
         )
+
+    def test_mimo_v2_jang_stamp_rejects_stale_non_xml_tool_parser_claim(self, registry, tmp_path):
+        import json
+
+        (tmp_path / "config.json").write_text(
+            json.dumps(
+                {
+                    "model_type": "mimo_v2",
+                    "vision_config": {"hidden_size": 1280},
+                }
+            )
+        )
+        (tmp_path / "jang_config.json").write_text(
+            json.dumps(
+                {
+                    "weight_format": "jang",
+                    "capabilities": {
+                        "family": "mimo_v2",
+                        "cache_type": "kv",
+                        "reasoning_parser": "qwen3",
+                        "tool_parser": "qwen",
+                        "supports_tools": True,
+                        "supports_thinking": True,
+                    },
+                }
+            )
+        )
+
+        registry.clear_cache()
+        config = registry.lookup(str(tmp_path))
+
+        assert config.family_name == "mimo_v2"
+        assert config.reasoning_parser == "think_xml"
+        assert config.tool_parser == "xml_function"
+        assert config.supports_native_tools is True
 
     def test_zaya_stale_stamp_cannot_disable_reasoning_or_reenable_think_seed(
         self, registry, tmp_path

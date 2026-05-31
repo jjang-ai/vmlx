@@ -41,7 +41,7 @@ class ZayaToolParser(ToolParser):
         re.DOTALL,
     )
     PARAM_PATTERN = re.compile(
-        r"<parameter=([^>]+)>\s*(.*?)\s*</parameter>",
+        r"<parameter=([^>]+)>\s*([\s\S]*?)(?=(?:</parameter>)?\s*<parameter=|</function>|$)",
         re.DOTALL,
     )
     VALUE_WRAPPER_PATTERN = re.compile(
@@ -52,6 +52,7 @@ class ZayaToolParser(ToolParser):
     @classmethod
     def _clean_parameter_value(cls, value: str) -> str:
         value = value.strip()
+        value = re.sub(r"\s*</parameter>\s*$", "", value, flags=re.DOTALL).strip()
         wrapped = cls.VALUE_WRAPPER_PATTERN.match(value)
         if wrapped:
             value = wrapped.group(1).strip()

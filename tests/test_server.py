@@ -423,6 +423,47 @@ class TestHelperFunctions:
         }))
         assert not is_mllm_model(str(llm_dir))
 
+    def test_step37_source_vlm_runtime_does_not_launch_text_only(self, tmp_path):
+        """Step3.7 JANG_2L text bridge must not override the source VLM runtime."""
+        import json
+
+        from vmlx_engine.api import utils as api_utils
+        from vmlx_engine.engine.batched import BatchedEngine
+
+        step_dir = tmp_path / "Step-3.7-Flash-JANG_2L"
+        step_dir.mkdir()
+        (step_dir / "config.json").write_text(
+            json.dumps(
+                {
+                    "model_type": "step3p7",
+                    "model_file": "step3p7_mlx.py",
+                    "text_config": {"model_type": "step3p5"},
+                    "vision_config": {"hidden_size": 1024},
+                    "image_token_id": 151655,
+                }
+            )
+        )
+        (step_dir / "jang_config.json").write_text(
+            json.dumps(
+                {
+                    "format": "jang",
+                    "architecture": {
+                        "family": "step3p7",
+                        "has_vision": True,
+                    },
+                }
+            )
+        )
+        (step_dir / "step3p7_mlx.py").write_text("# local text bridge marker\n")
+
+        api_utils.resolve_to_local_path.cache_clear()
+        api_utils._IS_MLLM_CACHE.clear()
+
+        assert api_utils.is_mllm_model(str(step_dir), force_mllm=False) is True
+        assert api_utils.is_mllm_model(str(step_dir), force_mllm=True) is True
+        engine = BatchedEngine(str(step_dir), force_mllm=True)
+        assert engine.is_mllm is True
+
 
 class TestOllamaCompatibilityProbe:
     """Ollama-compatible clients probe these before sending real requests."""
@@ -927,6 +968,217 @@ class TestOpenAILogprobsFormatting:
             "top_logprobs": [{" hello": -0.1, "world": -2.0}],
             "text_offset": [0],
         }
+
+    @pytest.mark.asyncio
+    async def test_dsv4_completion_endpoint_uses_chat_rail(self, monkeypatch, tmp_path):
+        import json
+
+        import vmlx_engine.server as server
+        from vmlx_engine.api.models import CompletionRequest
+        from vmlx_engine.engine.base import GenerationOutput
+
+        (tmp_path / "config.json").write_text(
+            json.dumps({"model_type": "deepseek_v4"}),
+            encoding="utf-8",
+        )
+
+        class _Engine:
+            is_mllm = False
+            preserve_native_tool_format = False
+            tokenizer = self._Tokenizer()
+
+            def __init__(self):
+                self.chat_calls = []
+                self.generate_calls = []
+
+            async def generate(self, **kwargs):
+                self.generate_calls.append(kwargs)
+                raise AssertionError("DSV4 completions must not use raw generate")
+
+            async def chat(self, messages, **kwargs):
+                self.chat_calls.append({"messages": messages, "kwargs": kwargs})
+                return GenerationOutput(
+                    text="const camera = new THREE.PerspectiveCamera();",
+                    prompt_tokens=7,
+                    completion_tokens=8,
+                    finish_reason="stop",
+                )
+
+        engine = _Engine()
+        monkeypatch.setattr(server, "_engine", engine)
+        monkeypatch.setattr(server, "_model_path", str(tmp_path))
+        monkeypatch.setattr(server, "_model_name", "dsv4-route-code-probe")
+        monkeypatch.setattr(server, "_served_model_name", "dsv4-route-code-probe")
+        monkeypatch.setattr(server, "_default_timeout", 60)
+        monkeypatch.setattr(server, "_default_max_tokens", 512)
+        monkeypatch.setattr(server, "_default_temperature", None)
+        monkeypatch.setattr(server, "_default_top_p", None)
+        monkeypatch.setattr(server, "_default_repetition_penalty", None)
+        server._jang_sampling_defaults_cache.clear()
+
+        response = await server.create_completion(
+            CompletionRequest(
+                model="dsv4-route-code-probe",
+                prompt="Return exactly this JavaScript code:\nconst camera = new THREE.PerspectiveCamera();",
+                max_tokens=64,
+                temperature=0,
+                top_p=1,
+            )
+        )
+
+        assert engine.generate_calls == []
+        assert len(engine.chat_calls) == 1
+        call = engine.chat_calls[0]
+        assert call["messages"] == [
+            {
+                "role": "user",
+                "content": "Return exactly this JavaScript code:\nconst camera = new THREE.PerspectiveCamera();",
+            }
+        ]
+        assert call["kwargs"]["enable_thinking"] is True
+        assert call["kwargs"]["max_tokens"] == 64
+        assert call["kwargs"]["temperature"] == 0
+        assert call["kwargs"]["top_p"] == 1
+        assert response.choices[0].text == "const camera = new THREE.PerspectiveCamera();"
+
+    @pytest.mark.asyncio
+    async def test_dsv4_completion_exact_no_markdown_returns_visible_unfenced_code(
+        self, monkeypatch, tmp_path
+    ):
+        import json
+
+        import vmlx_engine.server as server
+        from vmlx_engine.api.models import CompletionRequest
+        from vmlx_engine.engine.base import GenerationOutput
+        from vmlx_engine.reasoning.deepseek_r1_parser import DeepSeekR1ReasoningParser
+
+        (tmp_path / "config.json").write_text(
+            json.dumps({"model_type": "deepseek_v4"}),
+            encoding="utf-8",
+        )
+
+        class _Engine:
+            is_mllm = False
+            preserve_native_tool_format = False
+            tokenizer = self._Tokenizer()
+
+            async def generate(self, **kwargs):
+                raise AssertionError("DSV4 completions must not use raw generate")
+
+            async def chat(self, messages, **kwargs):
+                text = (
+                    "I should answer with only the copied code.</think>"
+                    "```javascript\n"
+                    "const camera = new THREE.PerspectiveCamera();\n"
+                    "```"
+                )
+                return GenerationOutput(
+                    text=text,
+                    raw_text=text,
+                    prompt_tokens=7,
+                    completion_tokens=18,
+                    finish_reason="stop",
+                )
+
+        monkeypatch.setattr(server, "_engine", _Engine())
+        monkeypatch.setattr(server, "_model_path", str(tmp_path))
+        monkeypatch.setattr(server, "_model_name", "dsv4-route-code-probe")
+        monkeypatch.setattr(server, "_served_model_name", "dsv4-route-code-probe")
+        monkeypatch.setattr(server, "_reasoning_parser", DeepSeekR1ReasoningParser())
+        monkeypatch.setattr(server, "_default_timeout", 60)
+        monkeypatch.setattr(server, "_default_max_tokens", 512)
+        monkeypatch.setattr(server, "_default_temperature", None)
+        monkeypatch.setattr(server, "_default_top_p", None)
+        monkeypatch.setattr(server, "_default_repetition_penalty", None)
+        server._jang_sampling_defaults_cache.clear()
+
+        response = await server.create_completion(
+            CompletionRequest(
+                model="dsv4-route-code-probe",
+                prompt=(
+                    "Return exactly this JavaScript code and no markdown fences:\n"
+                    "const camera = new THREE.PerspectiveCamera();"
+                ),
+                max_tokens=64,
+                temperature=0,
+                top_p=1,
+            )
+        )
+
+        assert response.choices[0].text == "const camera = new THREE.PerspectiveCamera();"
+
+    @pytest.mark.asyncio
+    async def test_dsv4_completion_exact_no_markdown_trims_trailing_prompt_space(
+        self, monkeypatch, tmp_path
+    ):
+        import json
+
+        import vmlx_engine.server as server
+        from vmlx_engine.api.models import CompletionRequest
+        from vmlx_engine.engine.base import GenerationOutput
+
+        (tmp_path / "config.json").write_text(
+            json.dumps({"model_type": "deepseek_v4"}),
+            encoding="utf-8",
+        )
+
+        class _Engine:
+            is_mllm = False
+            preserve_native_tool_format = False
+            tokenizer = self._Tokenizer()
+
+            def __init__(self):
+                self.messages = None
+                self.kwargs = None
+
+            async def generate(self, **kwargs):
+                raise AssertionError("DSV4 completions must not use raw generate")
+
+            async def chat(self, messages, **kwargs):
+                self.messages = messages
+                self.kwargs = kwargs
+                return GenerationOutput(
+                    text="const renderer = new THREE.WebGLRenderer();",
+                    prompt_tokens=7,
+                    completion_tokens=8,
+                    finish_reason="stop",
+                )
+
+        engine = _Engine()
+        monkeypatch.setattr(server, "_engine", engine)
+        monkeypatch.setattr(server, "_model_path", str(tmp_path))
+        monkeypatch.setattr(server, "_model_name", "dsv4-route-code-probe")
+        monkeypatch.setattr(server, "_served_model_name", "dsv4-route-code-probe")
+        monkeypatch.setattr(server, "_default_timeout", 60)
+        monkeypatch.setattr(server, "_default_max_tokens", 512)
+        monkeypatch.setattr(server, "_default_temperature", None)
+        monkeypatch.setattr(server, "_default_top_p", None)
+        monkeypatch.setattr(server, "_default_repetition_penalty", None)
+        server._jang_sampling_defaults_cache.clear()
+
+        await server.create_completion(
+            CompletionRequest(
+                model="dsv4-route-code-probe",
+                prompt=(
+                    "Return exactly this JavaScript code and no markdown fences:\n"
+                    "const renderer = new THREE.WebGLRenderer();\n\n"
+                ),
+                max_tokens=220,
+                temperature=0,
+                top_p=1,
+            )
+        )
+
+        assert engine.messages == [
+            {
+                "role": "user",
+                "content": (
+                    "Return exactly this JavaScript code and no markdown fences:\n"
+                    "const renderer = new THREE.WebGLRenderer();"
+                ),
+            }
+        ]
+        assert engine.kwargs["max_tokens"] == 512
 
     @pytest.mark.asyncio
     async def test_chat_endpoint_passes_logprobs_to_text_engine(self, monkeypatch):
@@ -1469,6 +1721,149 @@ class TestOpenAILogprobsFormatting:
         )
         assert visible == "2 < 3"
 
+    @pytest.mark.asyncio
+    async def test_streaming_chat_hides_zaya_visual_grounding_markup(self, monkeypatch):
+        """ZAYA-VL point spans are control markup, not visible assistant text."""
+        import json
+        from types import SimpleNamespace
+
+        import vmlx_engine.server as server
+        from vmlx_engine.api.models import ChatCompletionRequest, Message
+        from vmlx_engine.engine.base import GenerationOutput
+
+        class _Engine:
+            tokenizer = SimpleNamespace(has_thinking=False)
+
+            async def stream_chat(self, *, messages, **kwargs):
+                chunks = (
+                    ("Answer ", "Answer ", False, None),
+                    ("Answer <|point_start|>tool", "<|point_start|>tool", False, None),
+                    (
+                        "Answer <|point_start|>tool<|point_end|> done",
+                        "<|point_end|> done",
+                        True,
+                        "stop",
+                    ),
+                )
+                for text, new_text, finished, reason in chunks:
+                    yield GenerationOutput(
+                        text=text,
+                        new_text=new_text,
+                        tokens=[],
+                        prompt_tokens=3,
+                        completion_tokens=1,
+                        finished=finished,
+                        finish_reason=reason,
+                    )
+
+        monkeypatch.setattr(server, "_default_timeout", 5.0)
+        monkeypatch.setattr(server, "_model_name", "zaya-vl-test")
+        monkeypatch.setattr(server, "_model_path", None)
+        monkeypatch.setattr(server, "_reasoning_parser", None)
+        monkeypatch.setattr(server, "_tool_call_parser", "zaya_xml")
+
+        request = ChatCompletionRequest(
+            model="zaya-vl-test",
+            messages=[Message(role="user", content="use tools then answer")],
+            stream=True,
+        )
+
+        chunks = []
+        async for line in server.stream_chat_completion(
+            _Engine(),
+            [m.model_dump(exclude_none=True) for m in request.messages],
+            request,
+            fastapi_request=None,
+        ):
+            if line.startswith("data: ") and line.strip() != "data: [DONE]":
+                chunks.append(json.loads(line.removeprefix("data: ")))
+
+        visible = "".join(
+            choice.get("delta", {}).get("content") or ""
+            for chunk in chunks
+            for choice in chunk.get("choices", [])
+        )
+        assert "<|point_start|>" not in visible
+        assert "<|point_end|>" not in visible
+        assert visible == "Answer  done"
+
+    @pytest.mark.asyncio
+    async def test_streaming_responses_hides_zaya_visual_grounding_markup(
+        self, monkeypatch
+    ):
+        """Responses API must keep the same point-span display hygiene."""
+        import json
+        from types import SimpleNamespace
+
+        import vmlx_engine.server as server
+        from vmlx_engine.api.models import ResponsesRequest
+        from vmlx_engine.engine.base import GenerationOutput
+
+        class _Engine:
+            tokenizer = SimpleNamespace(has_thinking=False)
+
+            async def stream_chat(self, *, messages, **kwargs):
+                chunks = (
+                    ("Answer ", "Answer ", False, None),
+                    ("Answer <|point_start|>tool", "<|point_start|>tool", False, None),
+                    (
+                        "Answer <|point_start|>tool<|point_end|> done",
+                        "<|point_end|> done",
+                        True,
+                        "stop",
+                    ),
+                )
+                for text, new_text, finished, reason in chunks:
+                    yield GenerationOutput(
+                        text=text,
+                        new_text=new_text,
+                        tokens=[],
+                        prompt_tokens=3,
+                        completion_tokens=1,
+                        finished=finished,
+                        finish_reason=reason,
+                    )
+
+        monkeypatch.setattr(server, "_default_timeout", 5.0)
+        monkeypatch.setattr(server, "_model_name", "zaya-vl-test")
+        monkeypatch.setattr(server, "_model_path", None)
+        monkeypatch.setattr(server, "_reasoning_parser", None)
+        monkeypatch.setattr(server, "_tool_call_parser", "zaya_xml")
+
+        request = ResponsesRequest(
+            model="zaya-vl-test",
+            input="use tools then answer",
+            stream=True,
+        )
+
+        events = []
+        async for chunk in server.stream_responses_api(
+            _Engine(),
+            [{"role": "user", "content": "use tools then answer"}],
+            request,
+            fastapi_request=None,
+        ):
+            for line in chunk.splitlines():
+                if line.startswith("data: "):
+                    events.append(json.loads(line.removeprefix("data: ")))
+
+        visible = "".join(
+            event.get("delta", "")
+            for event in events
+            if event.get("type") == "response.output_text.delta"
+        )
+        done_text = "".join(
+            event.get("text", "")
+            for event in events
+            if event.get("type") == "response.output_text.done"
+        )
+        assert "<|point_start|>" not in visible
+        assert "<|point_end|>" not in visible
+        assert "<|point_start|>" not in done_text
+        assert "<|point_end|>" not in done_text
+        assert visible == "Answer  done"
+        assert done_text == "Answer  done"
+
 
 class TestAPIKeyVerification:
     """Test API key verification with timing attack prevention."""
@@ -1705,8 +2100,9 @@ class TestDSV4RepetitionPenaltyDefaults:
         )
         assert result == 1.0
 
-    def test_chat_mode_uses_bundle_chat_penalty(self, monkeypatch, tmp_path):
+    def test_dsv4_direct_chat_prefers_neutral_generic_penalty(self, monkeypatch, tmp_path):
         srv = self._set_dsv4_path(monkeypatch, tmp_path, {
+            "repetition_penalty": 1.0,
             "repetition_penalty_chat": 1.05,
             "repetition_penalty_thinking": 1.0,
         })
@@ -1715,14 +2111,15 @@ class TestDSV4RepetitionPenaltyDefaults:
             str(tmp_path),
             enable_thinking=False,
         )
-        assert result == 1.05
+        assert result == 1.0
 
     def test_generation_kwargs_recomputed_after_mode_resolution(self, monkeypatch, tmp_path):
         srv = self._set_dsv4_path(monkeypatch, tmp_path, {
+            "repetition_penalty": 1.0,
             "repetition_penalty_chat": 1.05,
             "repetition_penalty_thinking": 1.0,
         })
-        kwargs = {"repetition_penalty": 1.0}
+        kwargs = {"repetition_penalty": 1.05}
 
         srv._set_resolved_repetition_penalty(
             kwargs,
@@ -1731,7 +2128,7 @@ class TestDSV4RepetitionPenaltyDefaults:
             enable_thinking=False,
         )
 
-        assert kwargs["repetition_penalty"] == 1.05
+        assert kwargs["repetition_penalty"] == 1.0
 
     def test_explicit_per_request_repetition_penalty_is_honored(self, monkeypatch, tmp_path):
         srv = self._set_dsv4_path(monkeypatch, tmp_path, {

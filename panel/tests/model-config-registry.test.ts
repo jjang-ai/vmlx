@@ -719,6 +719,30 @@ describe('detectModelConfigFromDir JANG multimodal detection', () => {
     expect(detected.isMultimodal).toBe(true)
   })
 
+  it('marks Gemma 4 mixed-SWA wrappers as rotating KV so cache UI cannot treat them as plain KV', () => {
+    const dir = makeModelDir(
+      {
+        model_type: 'gemma4',
+        text_config: {
+          model_type: 'gemma4_text',
+          layer_types: [
+            'sliding_attention',
+            'sliding_attention',
+            'full_attention',
+          ],
+        },
+        vision_config: { hidden_size: 1152 },
+      },
+      {},
+    )
+
+    const detected = detectModelConfigFromDir(dir)
+
+    expect(detected.family).toBe('gemma4')
+    expect(detected.cacheType).toBe('rotating_kv')
+    expect(detected.usePagedCache).toBe(true)
+  })
+
   it('keeps JANG VLM enabled from capabilities.modality=vision when architecture.has_vision is absent', () => {
     const dir = makeModelDir(
       { model_type: 'qwen3_5', vision_config: { hidden_size: 1024 } },
@@ -726,6 +750,35 @@ describe('detectModelConfigFromDir JANG multimodal detection', () => {
     )
 
     expect(detectModelConfigFromDir(dir).isMultimodal).toBe(true)
+  })
+
+  it('routes Step3.7 JANG text bridge as text-only until a VLM runtime exists', () => {
+    const dir = makeModelDir(
+      {
+        model_type: 'step3p7',
+        model_file: 'step3p7_mlx.py',
+        text_config: { model_type: 'step3p5' },
+        vision_config: { hidden_size: 1152 },
+        image_token_id: 151655,
+      },
+      {
+        format: 'jang',
+        architecture: { has_vision: true, text_model_type: 'step3p5' },
+        capabilities: {
+          family: 'step3p7',
+          modality: 'vision',
+          tool_parser: 'step3p5',
+          reasoning_parser: 'qwen3',
+        },
+      },
+    )
+
+    const detected = detectModelConfigFromDir(dir)
+
+    expect(detected.family).toBe('step-3.7-flash')
+    expect(detected.toolParser).toBe('step3p5')
+    expect(detected.reasoningParser).toBe('qwen3')
+    expect(detected.isMultimodal).toBe(false)
   })
 
   it('falls back to config.json vision_config when jang_config has no vision stamp', () => {
@@ -908,10 +961,12 @@ describe('detectModelConfigFromDir JANG multimodal detection', () => {
   })
 
   it('does not route Nemotron-H text extracts through MLLM from stale sidecars', () => {
+    const hybridPattern = 'MEMEM*EMEMEM*EMEMEM*EMEMEM*EMEMEM*EMEMEMEM*EMEMEMEME'
     const dir = makeModelDir(
       {
         model_type: 'nemotron_h',
         architectures: ['NemotronHForCausalLM'],
+        hybrid_override_pattern: hybridPattern,
         text_config: {
           layer_types: ['mamba', 'full_attention'],
         },
@@ -929,6 +984,9 @@ describe('detectModelConfigFromDir JANG multimodal detection', () => {
     const detected = detectModelConfigFromDir(dir)
     expect(detected.family).toBe('nemotron-h')
     expect(detected.cacheType).toBe('hybrid')
+    expect(detected.cacheSubtype).toBe('nemotron_h_ssm_attention')
+    expect(detected.architectureHints?.attentionArch).toBe('hybrid_ssm_attention')
+    expect(detected.architectureHints?.hybridOverridePattern).toBe(hybridPattern)
     expect(detected.isMultimodal).toBe(false)
   })
 
@@ -1080,13 +1138,15 @@ describe('detectModelConfigFromDir backend parity coverage', () => {
     { modelType: 'granitemoehybrid', family: 'granitemoehybrid', cacheType: 'hybrid', toolParser: 'granite' },
     { modelType: 'kimi_k25', family: 'kimi-k25', cacheType: 'kv', toolParser: 'kimi', reasoningParser: 'deepseek_r1', isMultimodal: true },
     { modelType: 'laguna', family: 'laguna', cacheType: 'kv', toolParser: 'qwen', reasoningParser: 'qwen3' },
-    { modelType: 'lfm2', family: 'lfm2', cacheType: 'hybrid' },
-    { modelType: 'lfm2_moe', family: 'lfm2', cacheType: 'hybrid' },
+    { modelType: 'lfm2', family: 'lfm2', cacheType: 'hybrid', toolParser: 'lfm2', reasoningParser: 'qwen3' },
+    { modelType: 'lfm2_moe', family: 'lfm2', cacheType: 'hybrid', toolParser: 'lfm2', reasoningParser: 'qwen3' },
     { modelType: 'ministral3', family: 'ministral3', cacheType: 'kv', toolParser: 'mistral' },
     { modelType: 'mistral3', family: 'mistral3', cacheType: 'kv', toolParser: 'mistral', isMultimodal: true },
     { modelType: 'mistral4', family: 'mistral4', cacheType: 'kv', toolParser: 'mistral', reasoningParser: 'mistral' },
-    { modelType: 'nemotron_h_v2', family: 'nemotron-h', cacheType: 'hybrid', toolParser: 'nemotron', reasoningParser: 'deepseek_r1' },
+    { modelType: 'mimo_v2', family: 'mimo_v2', cacheType: 'kv', toolParser: 'xml_function', reasoningParser: 'think_xml', isMultimodal: true },
+    { modelType: 'nemotron_h_v2', family: 'nemotron-h', cacheType: 'hybrid', toolParser: 'nemotron', reasoningParser: 'deepseek_r1', cacheSubtype: 'nemotron_h_ssm_attention' },
     { modelType: 'rwkv7', family: 'rwkv', cacheType: 'mamba' },
+    { modelType: 'step3p7', family: 'step-3.7-flash', cacheType: 'kv', toolParser: 'step3p5', reasoningParser: 'qwen3', isMultimodal: true },
   ]
 
   for (const row of cases) {
@@ -1097,11 +1157,74 @@ describe('detectModelConfigFromDir backend parity coverage', () => {
 
       expect(detected.family).toBe(row.family)
       expect(detected.cacheType).toBe(row.cacheType)
+      if ('cacheSubtype' in row) expect(detected.cacheSubtype).toBe(row.cacheSubtype)
       if (row.toolParser !== undefined) expect(detected.toolParser).toBe(row.toolParser)
       if (row.reasoningParser !== undefined) expect(detected.reasoningParser).toBe(row.reasoningParser)
       if (row.isMultimodal !== undefined) expect(detected.isMultimodal).toBe(row.isMultimodal)
     })
   }
+
+  it('enables MiMo-V2 JANG_2L xml_function tools from verified capability stamps', () => {
+    const dir = makeModelDir(
+      {
+        model_type: 'mimo_v2',
+        vision_config: { hidden_size: 1280 },
+        audio_config: { hidden_size: 1024 },
+        max_position_embeddings: 1048576,
+      },
+      {
+        weight_format: 'jang',
+        runtime: { bundle_has_mtp: false, mtp_mode: 'absent' },
+        capabilities: {
+          family: 'mimo_v2',
+          modality: 'multimodal',
+          cache_type: 'kv',
+          reasoning_parser: 'think_xml',
+          tool_parser: 'xml_function',
+          supports_tools: true,
+          supports_thinking: true,
+          think_in_template: false,
+        },
+      },
+    )
+
+    const detected = detectModelConfigFromDir(dir)
+    expect(detected.family).toBe('mimo_v2')
+    expect(detected.cacheType).toBe('kv')
+    expect(detected.reasoningParser).toBe('think_xml')
+    expect(detected.supportsThinking).toBe(true)
+    expect(detected.thinkInTemplate).toBe(false)
+    expect(detected.toolParser).toBe('xml_function')
+    expect(detected.enableAutoToolChoice).toBe(true)
+    expect(detected.isMultimodal).toBe(true)
+  })
+
+  it('rejects stale MiMo-V2 non-xml tool parser claims', () => {
+    const dir = makeModelDir(
+      {
+        model_type: 'mimo_v2',
+        vision_config: { hidden_size: 1280 },
+      },
+      {
+        weight_format: 'jang',
+        capabilities: {
+          family: 'mimo_v2',
+          cache_type: 'kv',
+          reasoning_parser: 'qwen3',
+          tool_parser: 'qwen',
+          supports_tools: true,
+          supports_thinking: true,
+        },
+      },
+    )
+
+    const detected = detectModelConfigFromDir(dir)
+
+    expect(detected.family).toBe('mimo_v2')
+    expect(detected.reasoningParser).toBe('think_xml')
+    expect(detected.toolParser).toBe('xml_function')
+    expect(detected.enableAutoToolChoice).toBe(true)
+  })
 })
 
 describe('detectModelConfigFromDir local high-risk artifact parity', () => {

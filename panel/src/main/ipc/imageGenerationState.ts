@@ -41,12 +41,19 @@ export function classifyImageGenerationError(
   const err = error as any
   const msg = String(err?.message || error)
   const code = String(err?.code || '')
+  const cause = err?.cause
   const reason = controller ? abortReasons.get(controller) : undefined
 
   if (reason === 'cancel') return 'Image generation cancelled.'
   if (reason === 'timeout') return 'Image generation timed out after 30 minutes.'
 
-  const resetLike = code === 'ECONNRESET' || /socket hang up|ECONNRESET/i.test(msg)
+  const resetLike =
+    code === 'ECONNRESET' ||
+    code === 'EPIPE' ||
+    code === 'ERR_STREAM_DESTROYED' ||
+    code === 'ERR_STREAM_WRITE_AFTER_END' ||
+    /EPIPE|socket hang up|ECONNRESET|write EPIPE|broken pipe|premature close|stream.*destroyed|write after end/i.test(msg) ||
+    (cause ? classifyImageGenerationError(cause, controller).startsWith('Image server connection lost') : false)
   return resetLike
     ? 'Image server connection lost. The model may have crashed, been stopped, or hit memory pressure. Check Logs and restart the image server.'
     : msg

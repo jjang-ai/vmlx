@@ -14,9 +14,11 @@ These are unit tests that do NOT require model loading.
 """
 
 import hashlib
+import importlib
 import json
 import os
 import re
+import sys
 import tempfile
 from pathlib import Path
 from types import SimpleNamespace
@@ -121,6 +123,12 @@ class TestGLM47ToolParser:
         parsers = ToolParserManager.list_registered()
         assert "step3p5" in parsers
 
+    def test_lfm2_registered(self):
+        from vmlx_engine.tool_parsers import ToolParserManager
+        parsers = ToolParserManager.list_registered()
+        assert "lfm2" in parsers
+        assert "liquid" in parsers
+
 
 class TestToolParserModelMapping:
     """Tests that model configs map to correct tool parsers."""
@@ -141,6 +149,7 @@ class TestToolParserModelMapping:
             "deepseek": "deepseek",
             "glm47-flash": "glm47",
             "llama4": "llama",
+            "lfm2": "lfm2",
         }
 
         for family_name, expected_tool_parser in expected_mappings.items():
@@ -1953,6 +1962,39 @@ class TestServerSamplingResolution:
 
         assert server._resolve_max_tokens(None, "bundle-model") == 4096
 
+    def test_ling_bailing_omitted_top_k_uses_audited_family_cap(
+        self,
+        tmp_path,
+        monkeypatch,
+    ):
+        """Ling/Bailing needs a bounded stochastic sampler when metadata is absent.
+
+        The live multilingual audit reproduces CJK leakage with temperature/top_p
+        sampling when the bundle omits top_k. Keep the policy at request
+        resolution, with request/CLI/bundle values still taking precedence, so
+        it is visible in resolved kwargs instead of hidden inside the sampler.
+        """
+        import vmlx_engine.server as server
+
+        (tmp_path / "config.json").write_text(json.dumps({"model_type": "bailing_hybrid"}))
+        (tmp_path / "generation_config.json").write_text(json.dumps({}))
+        monkeypatch.setattr(server, "_model_path", str(tmp_path))
+        monkeypatch.setattr(server, "_default_top_k", None)
+        server._jang_sampling_defaults_cache.clear()
+        server._generation_defaults_cache.clear()
+
+        assert server._resolve_top_k(None, str(tmp_path)) == 20
+        assert server._resolve_top_k(0, str(tmp_path)) == 0
+        assert server._resolve_top_k(7, str(tmp_path)) == 7
+
+        monkeypatch.setattr(server, "_default_top_k", 11)
+        assert server._resolve_top_k(None, str(tmp_path)) == 11
+
+        monkeypatch.setattr(server, "_default_top_k", None)
+        (tmp_path / "generation_config.json").write_text(json.dumps({"top_k": 33}))
+        server._generation_defaults_cache.clear()
+        assert server._resolve_top_k(None, str(tmp_path)) == 33
+
     def test_max_tokens_resolution_contract_applies_to_every_registered_family(
         self,
         tmp_path,
@@ -2683,6 +2725,11 @@ class TestToolParserConcurrency:
         assert "VALUE HERE" not in rendered
         assert "string=" not in rendered.split("<｜User｜>", 1)[0]
         assert "<｜DSML｜parameter" not in rendered.split("<｜User｜>", 1)[0]
+        assert "Only use the tag name <｜DSML｜invoke" in rendered
+        assert "never emit <｜DSML｜invuse>" in rendered
+        example_scope = rendered.split("Only use the tag name", 1)[-1]
+        assert '<｜DSML｜invuse name="' not in example_scope
+        assert '<｜DSML｜invue name="' not in example_scope
         instruction_scope = rendered.split("<｜User｜>", 1)[0]
         assert "<｜DSML｜tool_calls>" in rendered
         assert "</｜DSML｜tool_calls>" in rendered
@@ -2777,6 +2824,8 @@ class TestToolParserConcurrency:
         assert "<tool_sep>" in _TOOL_CALL_MARKERS
         assert "<function" in _TOOL_CALL_MARKERS
         assert "<zyphra_tool_call" in _TOOL_CALL_MARKERS
+        assert "<|tool_call_start|>" in _TOOL_CALL_MARKERS
+        assert "<|tool_call_end|>" in _TOOL_CALL_MARKERS
         assert "not emit_content.strip()" in source
         assert "not content.strip()" in source
         assert "tool_call_generating=True" in source
@@ -2791,6 +2840,8 @@ class TestToolParserConcurrency:
             "minimax": "Before <minimax:tool_call> after",
             "kimi": "Before <|tool_calls_section_begin|> after",
             "gemma": "Before <|tool_call> after",
+            "lfm2_start": "Before <|tool_call_start|> after",
+            "lfm2_end": "Before <|tool_call_end|> after",
             "llama": "Before <function=read_file> after",
             "deepseek_glm": "Before <｜tool▁call▁begin｜> after",
             "dsv4": "Before <｜DSML｜tool after",
@@ -2805,6 +2856,88 @@ class TestToolParserConcurrency:
             assert "<" not in cleaned, (family, cleaned)
             assert "[TOOL_CALLS]" not in cleaned, (family, cleaned)
             assert "```tool_code" not in cleaned, (family, cleaned)
+
+    def test_visual_grounding_markup_is_not_visible_chat_text(self):
+        """ZAYA-VL point/box control spans must not leak into UI text."""
+        from vmlx_engine.server import (
+            _strip_visual_grounding_markup_for_display,
+            _visual_grounding_display_delta,
+        )
+
+        assert (
+            _strip_visual_grounding_markup_for_display(
+                "Before <|point_start|>(40, 100)<|point_end|> after"
+            )
+            == "Before  after"
+        )
+        assert (
+            _strip_visual_grounding_markup_for_display(
+                "<|box_start|>[1,2,3,4]<|box_end|> answer"
+            )
+            == " answer"
+        )
+        assert (
+            _visual_grounding_display_delta(
+                "Answer <|point_start|>tool",
+                "",
+            )
+            == "Answer "
+        )
+        assert (
+            _visual_grounding_display_delta(
+                "Answer <|point_start|>tool<|point_end|> done",
+                "Answer ",
+            )
+            == " done"
+        )
+
+    def test_zaya_create_file_alias_maps_to_available_write_file_tool(self, monkeypatch):
+        """ZAYA may call create_file; vMLX's builtin equivalent is write_file."""
+        import vmlx_engine.server as server
+        from vmlx_engine.api.models import ChatCompletionRequest, Message
+
+        monkeypatch.setattr(server, "_tool_call_parser", "zaya_xml")
+        request = ChatCompletionRequest(
+            model="zaya-vl-test",
+            messages=[Message(role="user", content="create a file")],
+            tools=[
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "write_file",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "path": {"type": "string"},
+                                "content": {"type": "string"},
+                            },
+                            "required": ["path", "content"],
+                        },
+                    },
+                }
+            ],
+        )
+
+        _, calls = server._parse_tool_calls_with_parser(
+            "\n".join(
+                [
+                    "<zyphra_tool_call>",
+                    "<function=create_file>",
+                    "<parameter=filename>real_ui_tool_probe_1.txt</parameter>",
+                    "<parameter=text>REAL_UI_LIVE_TOOL_ONE</parameter>",
+                    "</function>",
+                    "</zyphra_tool_call>",
+                ]
+            ),
+            request,
+        )
+
+        assert calls is not None
+        assert calls[0].function.name == "write_file"
+        assert json.loads(calls[0].function.arguments) == {
+            "path": "real_ui_tool_probe_1.txt",
+            "content": "REAL_UI_LIVE_TOOL_ONE",
+        }
 
     def test_tool_markup_residue_strips_interrupted_non_dsml_fragments(self):
         """Interrupted marker fragments must not leak attribute/code tails."""
@@ -3568,6 +3701,28 @@ class TestMediaDiagnostics:
         monkeypatch.setattr(server, "_loaded_omni_modalities", lambda: None)
 
         assert server._loaded_runtime_modalities() == ["text", "vision", "video"]
+
+    def test_gemma4_runtime_modalities_do_not_infer_video_from_token_only_config(
+        self, monkeypatch, tmp_path
+    ):
+        import vmlx_engine.server as server
+
+        (tmp_path / "config.json").write_text(
+            json.dumps(
+                {
+                    "model_type": "gemma4",
+                    "vision_config": {"model_type": "siglip"},
+                    "text_config": {"video_token_id": 262145},
+                }
+            )
+        )
+
+        monkeypatch.setattr(server, "_engine", SimpleNamespace(is_mllm=True))
+        monkeypatch.setattr(server, "_model_path", str(tmp_path))
+        monkeypatch.setattr(server, "_model_name", "gemma4-video-token-only-test")
+        monkeypatch.setattr(server, "_loaded_omni_modalities", lambda: None)
+
+        assert server._loaded_runtime_modalities() == ["text", "vision"]
 
     def test_video_request_on_image_only_mllm_rejects_instead_of_crashing(
         self, monkeypatch, tmp_path
@@ -5046,9 +5201,25 @@ class TestStartupCompatibilityGuards:
         assert "Rewriting console-script shebangs to relocatable bundled Python" in bundle_script
         assert "\\$(dirname " in bundle_script
         assert "/python3\\\" -B -s" in bundle_script
+        assert '[[ "$FIRST_LINE" == \'#!\'*python* ]]' in bundle_script
         assert "check_console_script_shebangs" in verify_script
+        assert '[[ "$first_line" == \'#!\'*python* ]]' in verify_script
         assert "check_packaged_console_script_shebangs" in release_gate
         assert "/Applications/vMLX.app" in release_gate
+
+    def test_bundled_python_restores_launcher_and_libpython_after_dependency_install(self):
+        bundle_script = Path("./panel/scripts/bundle-python.sh").read_text()
+        dependency_install_idx = bundle_script.index('echo "==> Installing dependencies..."')
+        local_install_idx = bundle_script.index('echo "==> Installing mlx-audio')
+        dependency_block = bundle_script[dependency_install_idx:local_install_idx]
+
+        assert "restore_python_runtime_files" in bundle_script
+        assert 'STANDALONE_TARBALL="$(mktemp' in bundle_script
+        assert 'trap \'rm -f "$STANDALONE_TARBALL"\'' in bundle_script
+        assert "tar xzf \"$STANDALONE_TARBALL\"" in bundle_script
+        assert "python/bin/python3.12" in bundle_script
+        assert "python/lib/libpython3.12.dylib" in bundle_script
+        assert "restore_python_runtime_files" in dependency_block
 
     def test_local_installer_installs_node_deps_before_typecheck(self):
         install_script = Path("./panel/scripts/build-and-install.sh").read_text()
@@ -5084,6 +5255,7 @@ class TestStartupCompatibilityGuards:
             "prefix_cache.py",
             "runtime_patches/gemma4_processing.py",
             "scheduler.py",
+            "tool_parsers/dsml_tool_parser.py",
         ):
             assert f'"{rel}"' in verify_script
 
@@ -5102,6 +5274,7 @@ class TestStartupCompatibilityGuards:
             "hy3/runtime.py",
             "kimi_prune/generate_vl.py",
             "kimi_prune/runtime_patch.py",
+            "mimo_v2/mlx_model.py",
             "topk_override.py",
             "turboquant/fused_gate_up_kernel.py",
             "turboquant/gather_tq_kernel.py",
@@ -5123,8 +5296,11 @@ class TestStartupCompatibilityGuards:
         assert '("jang_tools.hy3", "jang_tools.hy3"' in verify_script
         assert '"mlx_lm.models.hy_v3"' in verify_script
         assert '"mlx_lm.models.bailing_hybrid"' in verify_script
+        assert '("jang_tools.mimo_v2.mlx_register", "jang_tools.mimo_v2.mlx_register"' in verify_script
+        assert '"mlx_lm.models.mimo_v2"' in verify_script
         assert "Hy3 model-family mlx-lm registration missing" in verify_script
         assert "Ling/Bailing hybrid mlx-lm runtime missing" in verify_script
+        assert "MiMo-V2.5 mlx-lm registration missing" in verify_script
 
     def test_jang_loader_registers_hy3_and_ling_before_mlx_lm_resolution(
         self, monkeypatch
@@ -5150,6 +5326,117 @@ class TestStartupCompatibilityGuards:
             {"model_type": "bailing_hybrid"},
         )
         assert seen == ["mlx_lm.models.bailing_hybrid"]
+
+    def test_jang_loader_registers_mimo_v2_before_mlx_lm_resolution(
+        self, monkeypatch
+    ):
+        from vmlx_engine.utils import jang_loader
+
+        seen = []
+
+        def fake_import_module(name):
+            seen.append(name)
+            return SimpleNamespace()
+
+        monkeypatch.setattr(jang_loader.importlib, "import_module", fake_import_module)
+
+        jang_loader._ensure_jang_family_runtime_supported(
+            Path("/models/MiMo-V2.5-JANG_2L"), {"model_type": "mimo_v2"}
+        )
+
+        assert seen == ["jang_tools.mimo_v2.mlx_register", "mlx_lm.models.mimo_v2"]
+
+    def test_mllm_registers_mimo_v2_before_mlx_vlm_resolution(
+        self, tmp_path, monkeypatch
+    ):
+        from vmlx_engine.models import mllm
+
+        model_dir = tmp_path / "MiMo-V2.5-JANG_2L"
+        model_dir.mkdir()
+        (model_dir / "config.json").write_text(
+            '{"model_type":"mimo_v2","vision_config":{},"audio_config":{}}',
+            encoding="utf-8",
+        )
+
+        seen = []
+
+        class FakeModelArgs:
+            model_type = "mimo_v2"
+
+            @classmethod
+            def from_dict(cls, params):
+                return SimpleNamespace(**params)
+
+        def fake_import_module(name):
+            seen.append(name)
+            return SimpleNamespace(
+                Model=object,
+                ModelArgs=FakeModelArgs,
+            )
+
+        monkeypatch.setattr(mllm.importlib, "import_module", fake_import_module)
+
+        mllm._register_local_mlx_vlm_runtime_if_needed(model_dir)
+
+        assert seen == ["jang_tools.mimo_v2.mlx_model"]
+        assert "mlx_vlm.models.mimo_v2" in sys.modules
+        module = sys.modules["mlx_vlm.models.mimo_v2"]
+        assert hasattr(module, "ModelConfig")
+        assert hasattr(module, "LanguageModel")
+        config = {
+            "model_type": "mimo_v2",
+            "hidden_size": 16,
+            "quantization": {
+                "bits": 8,
+                "group_size": 64,
+                "model.layers.0.self_attn.qkv_proj": {"bits": 8, "group_size": 64},
+            },
+        }
+        module.ModelConfig.from_dict(config)
+        assert config["quantization"]["language_model.model.layers.0.self_attn.qkv_proj"] == {
+            "bits": 8,
+            "group_size": 64,
+        }
+        sys.modules.pop("mlx_vlm.models.mimo_v2", None)
+
+    def test_mllm_registers_step3p7_source_runtime_before_mlx_vlm_resolution(
+        self, tmp_path
+    ):
+        from vmlx_engine.models import mllm
+
+        model_dir = tmp_path / "Step-3.7-Flash-JANG_2L"
+        model_dir.mkdir()
+        (model_dir / "config.json").write_text(
+            '{"model_type":"step3p7","text_config":{"model_type":"step3p5"},'
+            '"vision_config":{"model_type":"perception_encoder"}}',
+            encoding="utf-8",
+        )
+
+        for name in (
+            "mlx_vlm.models.step3p7",
+            "mlx_vlm.models.step3p7.processing_step3",
+        ):
+            sys.modules.pop(name, None)
+
+        mllm._register_local_mlx_vlm_runtime_if_needed(model_dir)
+
+        module = sys.modules["mlx_vlm.models.step3p7"]
+        assert hasattr(module, "Model")
+        assert hasattr(module, "ModelConfig")
+        assert hasattr(module, "VisionModel")
+        assert hasattr(module, "LanguageModel")
+        assert hasattr(module, "Step3VLProcessor")
+        assert hasattr(module.Model, "load_weights")
+        assert hasattr(module.Model, "parameters")
+        assert hasattr(module.Model, "eval")
+        assert importlib.util.find_spec("mlx_vlm.models.step3p7") is not None
+        assert (
+            importlib.util.find_spec("mlx_vlm.models.step3p7.processing_step3")
+            is not None
+        )
+
+        sys.modules.pop("mlx_vlm.models.step3p7.processing_step3", None)
+        sys.modules.pop("mlx_vlm.models.step3p7", None)
 
     def test_jang_loader_failure_message_names_required_runtime_floor(
         self, monkeypatch
@@ -5219,9 +5506,29 @@ class TestStartupCompatibilityGuards:
         assert 'VMLX_BUNDLE_MLX_PLATFORM="$platform"' in source
         assert 'vMLX-\\${version}-${flavor}-\\${arch}.\\${ext}' in source
         assert "electron-builder --mac" in source
+        assert "run_release_regression_manifest.py" in source
+        assert "--require-prepackage-ready" in source
+        assert 'cd "$ROOT_DIR"' in source
         assert "gh release" not in source
         assert "latest.json" not in source
         assert panel_package["build"]["dmg"]["sign"] is True
+        assert "--require-release-ready" in panel_package["scripts"]["release:ready"]
+        assert "--require-prepackage-ready" in panel_package["scripts"]["release:prepackage"]
+        assert panel_package["scripts"]["dist"].startswith("npm run release:prepackage && ")
+
+    def test_release_build_signs_bundled_python_before_dmg_signing(self):
+        """Release DMG builds must not leave bundled Python dylibs unsigned."""
+        source = Path("./panel/scripts/build-release-dmgs.sh").read_text()
+
+        assert "sign_bundled_python_native_files()" in source
+        assert 'find "$bundled_python" -type f' in source
+        assert '-name "*.dylib" -o -name "*.so" -o -perm +111' in source
+        assert 'codesign --force --sign "$identity" "$native_file"' in source
+        assert "finalize_release_app_signature" in source
+        assert 'codesign --force --deep --sign "$identity" "$app_path"' in source
+        assert 'codesign --verify --deep --strict --verbose=2 "$app_path"' in source
+        assert 'finalize_release_app_signature "$app_path"' in source
+        assert '--prepackaged "$app_path"' in source
 
     def test_macos_compat_error_points_to_sequoia_dmg_for_tahoe_wheels(self):
         """Wrong-DMG installs should fail before MLX import with actionable text."""
@@ -5314,6 +5621,42 @@ class TestStartupCompatibilityGuards:
         _apply_turboquant_to_model(model, str(tmp_path))
 
         assert model.make_cache() == ["native"] * 32
+
+    def test_jang_loader_skips_turboquant_for_gemma4_mixed_attention(self, monkeypatch):
+        """Gemma4 sliding/full attention must keep native RotatingKVCache layout."""
+        from vmlx_engine.utils.jang_loader import _patch_turboquant_make_cache
+
+        class FakeCache:
+            pass
+
+        class FakeModel:
+            layers = [object()] * 30
+
+            def make_cache(self):
+                return [FakeCache()] * 30
+
+        model = FakeModel()
+        monkeypatch.setenv("VMLINUX_FORCE_TQ_AUTO", "1")
+        monkeypatch.delenv("VMLINUX_DISABLE_TQ_KV", raising=False)
+
+        _patch_turboquant_make_cache(
+            model,
+            {},
+            {
+                "model_type": "gemma4",
+                "text_config": {
+                    "model_type": "gemma4_text",
+                    "num_hidden_layers": 30,
+                    "layer_types": ["sliding_attention", "full_attention"],
+                    "head_dim": 256,
+                    "num_attention_heads": 16,
+                    "num_key_value_heads": 8,
+                },
+            },
+        )
+
+        assert model.make_cache.__func__ is FakeModel.make_cache
+        assert [type(c).__name__ for c in model.make_cache()] == ["FakeCache"] * 30
 
     def test_vmlx_env_prefix_is_canonical_for_ssm_cache_budget(self):
         """New cache env knobs should use VMLX_, with typo fallback only."""
@@ -6645,6 +6988,19 @@ class TestJangTqMppNaxCliPolicy:
 
         assert os.environ["JANGTQ_MPP_NAX"] == "off"
 
+    def test_jangtq_mpp_nax_cli_policy_disables_auto_for_ling(self, monkeypatch):
+        from vmlx_engine.cli import _apply_jangtq_mpp_nax_policy
+
+        monkeypatch.delenv("JANGTQ_MPP_NAX", raising=False)
+        args = SimpleNamespace(model="/Users/example/models/JANGQ/Ling-2.6-flash-JANGTQ")
+        logger = MagicMock()
+
+        mode = _apply_jangtq_mpp_nax_policy(args, logger)
+
+        assert mode == "off"
+        assert os.environ["JANGTQ_MPP_NAX"] == "off"
+        logger.info.assert_called_once()
+
     def test_jangtq_mpp_nax_cli_policy_can_force_on(self, monkeypatch):
         from vmlx_engine.cli import _apply_jangtq_mpp_nax_policy
 
@@ -7048,6 +7404,20 @@ class TestTurboQuantKVTelemetry:
         scheduler.memory_aware_cache = None
         scheduler.prefix_cache = None
         scheduler.disk_cache = None
+        batch_stats = SimpleNamespace(
+            last_cache_execution={
+                "cache_detail": "paged+ssm",
+                "cached_tokens": 34,
+            },
+            to_dict=lambda: {
+                "last_cache_execution": batch_stats.last_cache_execution,
+            },
+        )
+        scheduler.batch_generator = SimpleNamespace(
+            _stats=batch_stats,
+            stats=lambda: batch_stats,
+            get_vision_cache_stats=lambda: {},
+        )
 
         request = SimpleNamespace(_cache_detail="request-legacy-detail")
         response = SimpleNamespace(cached_tokens=34, cache_detail="paged+ssm+disk")
@@ -7059,6 +7429,52 @@ class TestTurboQuantKVTelemetry:
         assert stats["cache_hit_requests"] == 1
         assert stats["cache_hit_tokens"] == 34
         assert stats["cache_hit_tokens_by_detail"] == {"paged+ssm+disk": 34}
+        assert (
+            scheduler.batch_generator._stats.last_cache_execution["cache_detail"]
+            == "paged+ssm+disk"
+        )
+
+    def test_mllm_scheduler_projects_batch_generator_cache_execution_stats(self):
+        import threading
+        from types import SimpleNamespace
+
+        from vmlx_engine.mllm_scheduler import MLLMScheduler
+
+        execution = {
+            "request_id": "req-cache",
+            "cache_detail": "paged+disk+tq",
+            "cached_tokens": 1536,
+            "reconstruction_seconds": 0.01,
+            "dequantization_seconds": 0.02,
+            "total_worker_cache_seconds": 0.03,
+        }
+
+        class _BatchStats:
+            def to_dict(self):
+                return {"last_cache_execution": execution}
+
+        scheduler = MLLMScheduler.__new__(MLLMScheduler)
+        scheduler._cache_hit_requests = 0
+        scheduler._cache_hit_tokens = 0
+        scheduler._cache_hit_tokens_by_detail = {}
+        scheduler._queue_lock = threading.RLock()
+        scheduler.waiting = []
+        scheduler.running = {}
+        scheduler.finished_req_ids = set()
+        scheduler.num_requests_processed = 0
+        scheduler.total_prompt_tokens = 0
+        scheduler.total_completion_tokens = 0
+        scheduler.batch_generator = SimpleNamespace(
+            stats=lambda: _BatchStats(),
+            get_vision_cache_stats=lambda: {},
+        )
+        scheduler.block_aware_cache = None
+        scheduler.paged_cache_manager = None
+        scheduler.memory_aware_cache = None
+        scheduler.prefix_cache = None
+        scheduler.disk_cache = None
+
+        assert scheduler.get_stats()["last_cache_execution"] == execution
 
     def test_mllm_paged_cache_hits_have_source_detail_labels(self):
         source = Path("./vmlx_engine/mllm_batch_generator.py").read_text()
@@ -7067,8 +7483,275 @@ class TestTurboQuantKVTelemetry:
         assert "_paged_disk_hit" in source
         assert "cache_detail: str = \"\"" in source
         assert "cache_detail=getattr(req, '_cache_detail', \"\") or \"\"" in source
-        assert '"paged+ssm+disk" if _paged_disk_hit else "paged+ssm"' in source
-        assert '"paged+disk" if _paged_disk_hit else "paged"' in source
+        assert "_paged_hybrid_cache_detail(" in source
+        assert "_paged_attention_cache_detail(" in source
+        assert "return f\"{base}+disk\" if disk_hit else base" in source
+
+    def test_mllm_mixed_swa_cache_detail_does_not_report_ssm(self):
+        from vmlx_engine.mllm_batch_generator import _paged_hybrid_cache_detail
+
+        assert _paged_hybrid_cache_detail(disk_hit=False, mixed_attention=True) == (
+            "paged+mixed_swa"
+        )
+        assert _paged_hybrid_cache_detail(disk_hit=True, mixed_attention=True) == (
+            "paged+mixed_swa+disk"
+        )
+        assert _paged_hybrid_cache_detail(disk_hit=False, mixed_attention=False) == (
+            "paged+ssm"
+        )
+        assert _paged_hybrid_cache_detail(disk_hit=True, mixed_attention=False) == (
+            "paged+ssm+disk"
+        )
+
+    def test_mllm_non_hybrid_mixed_swa_cache_detail_is_labeled(self):
+        source = Path("./vmlx_engine/mllm_batch_generator.py").read_text()
+
+        non_hybrid_idx = source.index("elif not is_hybrid and reconstructed is not None:")
+        non_hybrid_block = source[non_hybrid_idx: source.index("# Re-attach gen-prompt suffix", non_hybrid_idx)]
+
+        assert "_paged_attention_cache_detail(" in non_hybrid_block
+        assert "mixed_attention=self._mixed_attention_cache_model" in non_hybrid_block
+
+    def test_mllm_rotating_kv_cache_is_kv_like_for_mixed_swa(self):
+        """Gemma4 RotatingKVCache layers must not enter the SSM hybrid path."""
+        from mlx_lm.models.cache import KVCache, RotatingKVCache
+        from vmlx_engine.mllm_batch_generator import _is_kv_like
+
+        assert _is_kv_like(KVCache()) is True
+        assert _is_kv_like(RotatingKVCache(max_size=4096)) is True
+
+    def test_mllm_ensure_batch_cache_preserves_rotating_cache_type(self):
+        """Gemma4 decode must keep sliding-window layers on BatchRotatingKVCache."""
+        from mlx_lm.models.cache import KVCache, RotatingKVCache
+        from mlx_lm.generate import BatchRotatingKVCache
+        from vmlx_engine.mllm_batch_generator import _ensure_batch_cache
+
+        converted = _ensure_batch_cache([RotatingKVCache(max_size=4096), KVCache()])
+
+        assert isinstance(converted[0], BatchRotatingKVCache)
+
+    def test_paged_cache_reconstruct_preserves_rotating_absolute_offset(self):
+        """Gemma4 sliding-window cache restore must keep absolute offset/_idx."""
+        import mlx.core as mx
+        from mlx_lm.models.cache import RotatingKVCache
+        from vmlx_engine.paged_cache import PagedCacheManager
+        from vmlx_engine.prefix_cache import BlockAwarePrefixCache
+
+        cache = RotatingKVCache(max_size=8, keep=0)
+        cache.keys = mx.ones((1, 2, 8, 4), dtype=mx.float16)
+        cache.values = mx.ones((1, 2, 8, 4), dtype=mx.float16)
+        cache.offset = 20
+        cache._idx = 8
+        cache_data = [{
+            "state": cache.state,
+            "meta_state": cache.meta_state,
+            "class_name": "RotatingKVCache",
+        }]
+        manager = PagedCacheManager(block_size=4, max_blocks=16)
+        prefix = BlockAwarePrefixCache(object(), manager)
+
+        table = prefix.store_cache("req", list(range(20)), cache_data)
+        restored = prefix.reconstruct_cache(table)
+
+        assert restored is not None
+        assert isinstance(restored[0], RotatingKVCache)
+        assert restored[0].offset == 20
+        assert restored[0]._idx == 8
+
+    def test_paged_cache_mixed_swa_reconstruct_preserves_full_kv_length(self):
+        """Rotating-window offsets must not truncate full-attention KV layers."""
+        import mlx.core as mx
+        from mlx_lm.models.cache import KVCache, RotatingKVCache
+        from vmlx_engine.paged_cache import PagedCacheManager
+        from vmlx_engine.prefix_cache import BlockAwarePrefixCache
+
+        rotating = RotatingKVCache(max_size=8, keep=0)
+        rotating.keys = mx.ones((1, 2, 8, 4), dtype=mx.float16)
+        rotating.values = mx.ones((1, 2, 8, 4), dtype=mx.float16)
+        rotating.offset = 20
+        rotating._idx = 8
+        full = KVCache()
+        full.keys = mx.ones((1, 1, 20, 4), dtype=mx.float16)
+        full.values = mx.ones((1, 1, 20, 4), dtype=mx.float16)
+        full.offset = 20
+        cache_data = [
+            {
+                "state": rotating.state,
+                "meta_state": rotating.meta_state,
+                "class_name": "RotatingKVCache",
+            },
+            {
+                "state": full.state,
+                "meta_state": full.meta_state,
+                "class_name": "KVCache",
+            },
+        ]
+        manager = PagedCacheManager(block_size=4, max_blocks=16)
+        prefix = BlockAwarePrefixCache(object(), manager)
+
+        table = prefix.store_cache("req", list(range(20)), cache_data)
+        restored = prefix.reconstruct_cache(table)
+
+        assert restored is not None
+        assert isinstance(restored[0], RotatingKVCache)
+        assert isinstance(restored[1], KVCache)
+        assert restored[0].offset == 20
+        assert restored[1].offset == 20
+
+    def test_paged_cache_mixed_swa_frugal_keeps_resident_blocks_for_immediate_hit(
+        self,
+        monkeypatch,
+    ):
+        """Mixed-SWA block-table hits must not wait for async L2 disk writes."""
+        import mlx.core as mx
+        from mlx_lm.models.cache import KVCache, RotatingKVCache
+        from vmlx_engine.paged_cache import PagedCacheManager
+        from vmlx_engine.prefix_cache import BlockAwarePrefixCache
+
+        class FakeDiskStore:
+            def write_block_async(self, *_args, **_kwargs):
+                pass
+
+            def read_block(self, *_args, **_kwargs):
+                return None
+
+        monkeypatch.delenv("VMLX_PAGED_FRUGAL", raising=False)
+
+        rotating = RotatingKVCache(max_size=8, keep=0)
+        rotating.keys = mx.ones((1, 2, 8, 4), dtype=mx.float16)
+        rotating.values = mx.ones((1, 2, 8, 4), dtype=mx.float16)
+        rotating.offset = 20
+        rotating._idx = 8
+        full = KVCache()
+        full.keys = mx.ones((1, 1, 20, 4), dtype=mx.float16)
+        full.values = mx.ones((1, 1, 20, 4), dtype=mx.float16)
+        full.offset = 20
+        cache_data = [
+            {
+                "state": rotating.state,
+                "meta_state": rotating.meta_state,
+                "class_name": "RotatingKVCache",
+            },
+            {
+                "state": full.state,
+                "meta_state": full.meta_state,
+                "class_name": "KVCache",
+            },
+        ]
+        manager = PagedCacheManager(
+            block_size=4,
+            max_blocks=16,
+            disk_store=FakeDiskStore(),
+        )
+        prefix = BlockAwarePrefixCache(object(), manager)
+        tokens = list(range(20))
+
+        stored = prefix.store_cache("seed", tokens, cache_data)
+        hit, remaining = prefix.fetch_cache("hit", tokens + [999])
+        restored = prefix.reconstruct_cache(hit)
+
+        assert stored is not None
+        assert remaining == [999]
+        assert all(
+            manager.allocated_blocks[bid].cache_data is not None
+            for bid in stored.block_ids
+        )
+        assert restored is not None
+        assert isinstance(restored[0], RotatingKVCache)
+        assert isinstance(restored[1], KVCache)
+        assert restored[0].offset == 20
+        assert restored[1].offset == 20
+
+    def test_paged_cache_reconstruct_drops_promoted_disk_block_mirror(self):
+        """Disk-promoted block payloads must not stay pinned in L1 RAM."""
+        import mlx.core as mx
+        from mlx_lm.models.cache import KVCache
+        from vmlx_engine.paged_cache import PagedCacheManager, BlockTable
+        from vmlx_engine.prefix_cache import BlockAwarePrefixCache
+
+        manager = PagedCacheManager(block_size=4, max_blocks=4)
+        prefix = BlockAwarePrefixCache(object(), manager)
+        keys = mx.ones((1, 1, 4, 2), dtype=mx.float16)
+        values = mx.ones((1, 1, 4, 2), dtype=mx.float16)
+        block = manager._promote_from_disk(b"disk-promoted-block-hash-000000", [("kv", keys, values)], 4)
+        assert block is not None
+        assert block.cache_data is not None
+        assert block.cache_data_from_disk is True
+
+        table = BlockTable(
+            request_id="hit",
+            block_ids=[block.block_id],
+            num_tokens=4,
+        )
+        restored = prefix.reconstruct_cache(table)
+
+        assert restored is not None
+        assert isinstance(restored[0], KVCache)
+        assert restored[0].offset == 4
+        assert block.cache_data is None
+        assert block.cache_data_from_disk is False
+
+    def test_paged_cache_reconstruct_drops_readable_l2_write_through_mirror(
+        self,
+        monkeypatch,
+    ):
+        """Readable L2 write-through blocks should not pin parent KV slices."""
+        import mlx.core as mx
+        from mlx_lm.models.cache import KVCache
+        from vmlx_engine.paged_cache import PagedCacheManager
+        from vmlx_engine.prefix_cache import BlockAwarePrefixCache
+
+        class FakeDiskStore:
+            def __init__(self):
+                self.blocks = {}
+
+            def write_block_async(self, block_hash, cache_data, token_count):
+                self.blocks[block_hash] = cache_data
+
+            def read_block(self, block_hash):
+                return self.blocks.get(block_hash)
+
+        monkeypatch.setenv("VMLX_PAGED_FRUGAL", "0")
+
+        disk = FakeDiskStore()
+        manager = PagedCacheManager(
+            block_size=4,
+            max_blocks=4,
+            disk_store=disk,
+        )
+        prefix = BlockAwarePrefixCache(object(), manager)
+        cache = KVCache()
+        cache.keys = mx.ones((1, 1, 4, 2), dtype=mx.float16)
+        cache.values = mx.ones((1, 1, 4, 2), dtype=mx.float16)
+        cache.offset = 4
+        cache_data = [{
+            "state": cache.state,
+            "meta_state": cache.meta_state,
+            "class_name": "KVCache",
+        }]
+
+        table = prefix.store_cache("seed", list(range(4)), cache_data)
+        assert table is not None
+        [block_id] = table.block_ids
+        block = manager.allocated_blocks[block_id]
+        assert block.cache_data is not None
+        assert block.cache_data_from_disk is False
+
+        restored = prefix.reconstruct_cache(table)
+
+        assert restored is not None
+        assert isinstance(restored[0], KVCache)
+        assert restored[0].offset == 4
+        assert block.cache_data is None
+        assert block.cache_data_from_disk is False
+
+    def test_mllm_mixed_swa_store_uses_clean_prefill_not_post_generation_truncate(self):
+        """Gemma4 rotating windows must store a clean N-1 prefix cache."""
+        source = Path("./vmlx_engine/mllm_scheduler.py").read_text()
+
+        assert "_uses_mixed_attention_cache" in source
+        assert "_uses_zaya_cache or _uses_mixed_attention_cache" in source
+        assert "Skipping mixed-SWA VLM paged cache store" in source
 
     def test_llm_cache_detail_uses_canonical_plus_grammar(self):
         source = Path("./vmlx_engine/scheduler.py").read_text()
@@ -7136,6 +7819,46 @@ class TestTurboQuantKVTelemetry:
 
         assert request2._cache_detail == "paged+ssm"
 
+    def test_llm_hybrid_ssm_miss_queues_block_boundary_rederive(self):
+        import vmlx_engine.scheduler as scheduler_mod
+
+        detached = []
+        scheduler = scheduler_mod.Scheduler.__new__(scheduler_mod.Scheduler)
+        scheduler._is_hybrid = True
+        scheduler._uses_dsv4_cache = False
+        scheduler._uses_zaya_cache = False
+        scheduler._ssm_state_cache = SimpleNamespace(
+            fetch=lambda tokens, fetch_num: None,
+            fetch_longest_prefix=lambda tokens, max_len: None,
+            _store={},
+            max_entries=8,
+        )
+        scheduler.block_aware_cache = SimpleNamespace(
+            block_size=64,
+            detach_request=lambda request_id: detached.append(request_id),
+        )
+        scheduler._ssm_rederive_queue = []
+
+        request = SimpleNamespace(
+            request_id="req-lfm",
+            block_table=SimpleNamespace(num_tokens=448),
+            prompt_token_ids=list(range(700)),
+            _hybrid_ssm_fetch_tokens=list(range(700)),
+        )
+
+        result = scheduler._finalize_hybrid_paged_cache_on_worker(
+            request,
+            ["kv"],
+        )
+
+        assert result is None
+        assert detached == ["req-lfm"]
+        assert scheduler._ssm_rederive_queue == [
+            (list(range(448)), 448, "req-lfm")
+        ]
+        assert request.cached_tokens == 0
+        assert request.remaining_tokens == request.prompt_token_ids
+
     @pytest.mark.asyncio
     async def test_cache_stats_endpoint_projects_cache_reuse_skip_telemetry(
         self, monkeypatch
@@ -7197,6 +7920,16 @@ class TestTurboQuantKVTelemetry:
                         "tail_tokens": 6144,
                         "cache_format": "full_precision_kv",
                     },
+                    "last_cache_selection": {
+                        "selected": "prefix",
+                        "rejected": "paged",
+                        "reason": "cold_paged_reconstruction_cost",
+                        "paged_cached_tokens": 5500,
+                        "paged_cold_tokens": 2400,
+                        "warm_cached_tokens": 3037,
+                        "hot_advantage_tokens": 63,
+                        "hot_advantage_threshold_tokens": 512,
+                    },
                 }
 
         monkeypatch.setattr(server, "_engine", _Engine())
@@ -7235,6 +7968,140 @@ class TestTurboQuantKVTelemetry:
         assert scheduler_stats["last_cache_reuse_partial"]["cache_format"] == (
             "full_precision_kv"
         )
+        assert scheduler_stats["last_cache_selection"]["selected"] == "prefix"
+        assert scheduler_stats["last_cache_selection"]["reason"] == (
+            "cold_paged_reconstruction_cost"
+        )
+        assert scheduler_stats["last_cache_selection"]["paged_cold_tokens"] == 2400
+
+    @pytest.mark.asyncio
+    async def test_cache_entries_endpoint_lists_paged_prefix_blocks(
+        self, monkeypatch
+    ):
+        import vmlx_engine.server as server
+
+        class _Block:
+            token_count = 128
+            ref_count = 3
+            cache_data = object()
+
+        class _PagedCache:
+            allocated_blocks = {"block-a": _Block()}
+
+        class _BlockAwareCache:
+            paged_cache = _PagedCache()
+
+        scheduler = SimpleNamespace(block_aware_cache=_BlockAwareCache())
+
+        monkeypatch.setattr(server, "_get_scheduler", lambda: scheduler)
+
+        payload = await server.cache_entries()
+
+        assert payload["cache_type"] == "paged"
+        assert payload["count"] == 1
+        assert payload["entries"] == [
+            {
+                "block_id": "block-a",
+                "tokens_count": 128,
+                "ref_count": 3,
+                "has_data": True,
+                "cache_type": "paged",
+            }
+        ]
+
+    @pytest.mark.asyncio
+    async def test_cache_warm_endpoint_prefills_and_stores_block_cache(
+        self, monkeypatch
+    ):
+        import vmlx_engine.server as server
+
+        stored: list[tuple[str, list[int], list[str]]] = []
+
+        class _Tokenizer:
+            def encode(self, prompt):
+                assert prompt == "system prompt"
+                return [11, 12, 13, 14]
+
+        class _BlockAwareCache:
+            def store_cache(self, cache_id, tokens, extracted):
+                stored.append((cache_id, tokens, extracted))
+                return SimpleNamespace(block_ids=["warm-block"])
+
+        class _Scheduler:
+            tokenizer = _Tokenizer()
+            block_aware_cache = _BlockAwareCache()
+
+            def _prefill_for_prompt_only_cache(self, tokens):
+                assert tokens == [11, 12, 13]
+                return ["prefilled-cache"]
+
+            def _extract_cache_states(self, cache):
+                assert cache == ["prefilled-cache"]
+                return ["kv-state"]
+
+        monkeypatch.setattr(server, "_get_scheduler", lambda: _Scheduler())
+
+        payload = await server.cache_warm({"prompts": ["system prompt"]})
+
+        assert payload == {
+            "warmed": 1,
+            "token_counts": [4],
+            "errors": None,
+        }
+        [(cache_id, tokens, extracted)] = stored
+        assert cache_id.startswith("warm-0-")
+        assert tokens == [11, 12, 13, 14]
+        assert extracted == ["kv-state"]
+
+    @pytest.mark.asyncio
+    async def test_clear_cache_prefix_clears_prefix_l2_without_multimodal(
+        self, monkeypatch
+    ):
+        import vmlx_engine.server as server
+
+        cleared: list[str] = []
+
+        class _Clearable:
+            def __init__(self, name):
+                self.name = name
+
+            def clear(self):
+                cleared.append(self.name)
+
+        class _PagedManager:
+            _disk_store = _Clearable("block_disk_store")
+
+        scheduler = SimpleNamespace(
+            memory_aware_cache=_Clearable("memory_aware_prefix"),
+            block_aware_cache=_Clearable("paged_prefix"),
+            prefix_cache=_Clearable("legacy_prefix"),
+            disk_cache=_Clearable("disk_cache"),
+            paged_cache_manager=_PagedManager(),
+        )
+
+        monkeypatch.setattr(server, "_get_scheduler", lambda: scheduler)
+        monkeypatch.setattr(server, "clear_mlx_memory_cache", lambda log=None: False)
+
+        payload = await server.clear_cache("prefix")
+
+        assert payload["status"] == "cleared"
+        assert payload["cache_type"] == "prefix"
+        assert payload["caches"] == [
+            "memory_aware_prefix",
+            "paged_prefix",
+            "legacy_prefix",
+            "disk_cache",
+            "block_disk_store",
+        ]
+        assert cleared == [
+            "memory_aware_prefix",
+            "paged_prefix",
+            "legacy_prefix",
+            "disk_cache",
+            "block_disk_store",
+        ]
+        assert "multimodal_kv" not in payload["caches"]
+        assert "pixel_values" not in payload["caches"]
 
     @pytest.mark.asyncio
     async def test_cache_stats_projects_ssm_companion_disk_state(self, monkeypatch):
@@ -7342,6 +8209,14 @@ class TestTurboQuantKVTelemetry:
                         "reason": "insufficient_memory_for_full_cache_merge",
                         "used_cached_tokens": 4096,
                     },
+                    "last_cache_selection": {
+                        "selected": "paged",
+                        "reason": "paged_hot_advantage_sufficient",
+                    },
+                    "last_cache_execution": {
+                        "cache_detail": "paged+disk+tq",
+                        "total_worker_cache_seconds": 0.03,
+                    },
                 }
 
         monkeypatch.setattr(server, "_engine", _Engine())
@@ -7370,6 +8245,8 @@ class TestTurboQuantKVTelemetry:
         assert scheduler["cache_reuse_partial_downgrades"] == 3
         assert scheduler["cache_reuse_partial_tokens"] == 12000
         assert scheduler["last_cache_reuse_partial"]["used_cached_tokens"] == 4096
+        assert scheduler["last_cache_selection"]["selected"] == "paged"
+        assert scheduler["last_cache_execution"]["cache_detail"] == "paged+disk+tq"
 
     @pytest.mark.asyncio
     async def test_health_endpoint_projects_cache_telemetry_snapshot(
@@ -8313,6 +9190,38 @@ class TestTurboQuantKVTelemetry:
         assert status["paged"] is True
         assert status["block_disk_l2"] is True
 
+    def test_native_cache_status_reports_plain_attention_kv(self):
+        from types import SimpleNamespace
+        from vmlx_engine.server import _native_cache_status
+
+        scheduler = SimpleNamespace(
+            _model_type_for_runtime="minimax",
+            _tq_active=True,
+            _kv_cache_bits=3,
+            _kv_cache_group_size=64,
+            block_aware_cache=object(),
+            paged_cache_manager=SimpleNamespace(_disk_store=object()),
+        )
+
+        status = _native_cache_status(scheduler)
+
+        assert status["family"] == "minimax"
+        assert status["schema"] == "plain_kv_v1"
+        assert status["cache_type"] == "paged_kv"
+        assert status["components"] == ["attention_kv"]
+        assert status["generic_turboquant_kv"] == {
+            "enabled": True,
+            "reason": "plain_attention_kv",
+        }
+        assert status["storage_quantization"] == {
+            "enabled": True,
+            "bits": 3,
+            "group_size": 64,
+        }
+        assert status["prefix"] is True
+        assert status["paged"] is True
+        assert status["block_disk_l2"] is True
+
     def test_native_cache_status_reports_hybrid_ssm(self):
         from types import SimpleNamespace
         from vmlx_engine.server import _native_cache_status
@@ -8372,6 +9281,41 @@ class TestTurboQuantKVTelemetry:
             "reason": "hybrid_ssm_state",
         }
         assert status["live_attention_tq_kv"]["enabled"] is False
+
+    def test_scheduler_cache_extraction_preserves_failed_hybrid_layer_index(self):
+        """Failed SSM state extraction must not shrink the cache layer list."""
+        from types import SimpleNamespace
+        from vmlx_engine.scheduler import Scheduler
+
+        class _BadArraysCache:
+            cache = []
+            meta_state = ()
+
+            @property
+            def state(self):
+                raise RuntimeError("state unavailable")
+
+        class _KVCache:
+            state = ("keys", "values")
+            meta_state = ("4",)
+
+        scheduler = Scheduler.__new__(Scheduler)
+        scheduler.model = SimpleNamespace(
+            args=SimpleNamespace(num_key_value_heads=0, kv_lora_rank=0)
+        )
+
+        extracted = scheduler._extract_cache_states([
+            _BadArraysCache(),
+            _KVCache(),
+        ])
+
+        assert len(extracted) == 2
+        assert extracted[0] == {
+            "state": None,
+            "meta_state": None,
+            "class_name": "_BadArraysCache",
+        }
+        assert extracted[1]["class_name"] == "_KVCache"
 
     def test_quantization_status_detects_jangtq_sidecar_and_bits(self, tmp_path):
         from vmlx_engine.server import _model_quantization_status
@@ -9193,7 +10137,7 @@ class TestTurboQuantKVTelemetry:
 
         status = server._model_acceleration_status(str(tmp_path))
 
-        assert status["kernel_type"] == "turboquant_codebook_accelerated"
+        assert status["kernel_type"] == "turboquant_codebook_mpp_nax"
         assert status["metal_na_capable"] is True
         assert status["metal_na_active_on_host"] is True
         assert status["reason"] is None

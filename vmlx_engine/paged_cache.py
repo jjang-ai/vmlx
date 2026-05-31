@@ -137,6 +137,7 @@ class CacheBlock:
     # Actual tensor data for this block
     # List of (keys, values) per layer, shape: (1, n_kv_heads, block_tokens, head_dim)
     cache_data: Optional[List[Tuple[Any, Any]]] = None
+    cache_data_from_disk: bool = False
 
     # Metadata
     token_count: int = 0
@@ -155,6 +156,7 @@ class CacheBlock:
         """Reset block hash when evicted from cache."""
         self.block_hash = None
         self.hash_value = None
+        self.cache_data_from_disk = False
 
     def touch(self) -> None:
         """Update last access time."""
@@ -669,6 +671,7 @@ class PagedCacheManager:
 
             block.reset_hash()
             block.cache_data = None  # Free tensor memory
+            block.cache_data_from_disk = False
             self.stats.evictions += 1
             return True
 
@@ -1055,12 +1058,14 @@ class PagedCacheManager:
                     del self.hash_to_block[block.hash_value]
             block.reset_hash()
             block.cache_data = None
+            block.cache_data_from_disk = False
             self.stats.evictions += 1
 
         # Populate
         block.ref_count = 1
         block.block_hash = block_hash
         block.cache_data = cache_data
+        block.cache_data_from_disk = True
         block.token_count = token_count
         block.touch()
         self.allocated_blocks[block.block_id] = block
@@ -1322,6 +1327,7 @@ class PagedCacheManager:
 
         new_block.token_count = source_block.token_count
         new_block.cache_data = source_block.cache_data
+        new_block.cache_data_from_disk = source_block.cache_data_from_disk
 
         source_block.ref_count -= 1
         if source_block.ref_count == 1:
@@ -1464,6 +1470,7 @@ class PagedCacheManager:
             for block in self.blocks:
                 block.reset_hash()
                 block.cache_data = None
+                block.cache_data_from_disk = False
 
             self.stats.evictions = 0
             self.stats.cache_hits = 0

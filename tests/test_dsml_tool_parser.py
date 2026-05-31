@@ -61,6 +61,52 @@ class TestDSMLToolParser:
         assert out.content is None or DSML_PREFIX not in out.content
         assert out.content is None or "<" + DSML_PREFIX not in out.content
 
+    def test_string_param_preserves_exact_threejs_code_argument(self, parser):
+        """Exact code fidelity must be owned by generation, not changed by DSML parsing."""
+        expected_code = (
+            "const scene = new THREE.Scene();\n"
+            "const renderer = new THREE.WebGLRenderer();\n"
+            "const camera = new THREE.PerspectiveCamera(75, 1, 0.1, 1000);\n"
+            "const cube = new THREE.Mesh(new THREE.BoxGeometry(), new THREE.MeshBasicMaterial());\n"
+            "scene.add(cube);\n"
+            "renderer.render(scene, camera);"
+        )
+        text = (
+            f'<{DSML_PREFIX}invoke name="write_file">\n'
+            f'<{DSML_PREFIX}parameter name="path" string="true">landing-p/scene.js</{DSML_PREFIX}parameter>\n'
+            f'<{DSML_PREFIX}parameter name="content" string="true">{expected_code}</{DSML_PREFIX}parameter>\n'
+            f'</{DSML_PREFIX}invoke>'
+        )
+
+        out = parser.extract_tool_calls(
+            text,
+            request={
+                "tools": [
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": "write_file",
+                            "parameters": {
+                                "type": "object",
+                                "properties": {
+                                    "path": {"type": "string"},
+                                    "content": {"type": "string"},
+                                },
+                                "required": ["path", "content"],
+                            },
+                        },
+                    }
+                ]
+            },
+        )
+
+        assert out.tools_called is True
+        args = json.loads(out.tool_calls[0]["arguments"])
+        assert args["path"] == "landing-p/scene.js"
+        assert args["content"] == expected_code
+        assert "THREE.WebGLRenderer" in args["content"]
+        assert args["content"].endswith("renderer.render(scene, camera);")
+
     def test_invoke_with_typed_params_string_false_decodes_json(self, parser):
         """string="false" parameters parse as JSON (numbers, bools, arrays)."""
         text = (
@@ -200,6 +246,184 @@ class TestDSMLToolParser:
             "path": "docs/vendor_memo.md"
         }
         assert out.content is None
+
+    def test_repairs_self_closing_dsml_parameter_with_value_in_string_attr(
+        self, parser
+    ):
+        """Live JANGTQ-K can put the value in string="." on a self-closing tag."""
+        text = (
+            f'<{DSML_PREFIX}tool_calls>\n'
+            f'<{DSML_PREFIX}invoke name="list_directory">\n'
+            f'<{DSML_PREFIX}parameter name="path" string="." />\n'
+            f'</{DSML_PREFIX}{DSML_PREFIX}parameter>\n'
+            f'</{DSML_PREFIX}invoke>\n'
+            f'</{DSML_PREFIX}tool_calls>'
+        )
+        request = {
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "list_directory",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {"path": {"type": "string"}},
+                            "required": ["path"],
+                        },
+                    },
+                }
+            ]
+        }
+
+        out = parser.extract_tool_calls(text, request=request)
+
+        assert out.tools_called is True
+        assert out.tool_calls[0]["name"] == "list_directory"
+        assert json.loads(out.tool_calls[0]["arguments"]) == {"path": "."}
+        assert out.content is None
+
+    def test_repairs_dsml_invuse_typo_with_complete_parameters(self, parser):
+        """Live JANGTQ-K can typo invoke as invuse while keeping parameters."""
+        text = (
+            f'<{DSML_PREFIX}tool_calls>\n'
+            f'<{DSML_PREFIX}invuse name="write_file">\n'
+            f'<{DSML_PREFIX}parameter name="path" string="true">landing-p/scene.js</{DSML_PREFIX}parameter>\n'
+            f'<{DSML_PREFIX}parameter name="content" string="true">const camera = new THREE.PersPerspectiveCamera();</{DSML_PREFIX}parameter>\n'
+            f'</{DSML_PREFIX}invoke>\n'
+            f'</{DSML_PREFIX}tool_calls>'
+        )
+        request = {
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "write_file",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "path": {"type": "string"},
+                                "content": {"type": "string"},
+                            },
+                            "required": ["path", "content"],
+                        },
+                    },
+                }
+            ]
+        }
+
+        out = parser.extract_tool_calls(text, request=request)
+
+        assert out.tools_called is True
+        assert out.tool_calls[0]["name"] == "write_file"
+        assert json.loads(out.tool_calls[0]["arguments"]) == {
+            "path": "landing-p/scene.js",
+            "content": "const camera = new THREE.PersPerspectiveCamera();",
+        }
+        assert out.content is None
+
+    def test_repairs_dsml_invue_typo_with_complete_parameters(self, parser):
+        """Live JANGTQ-K can typo invoke as invue while keeping parameters."""
+        text = (
+            f'<{DSML_PREFIX}tool_calls>\n'
+            f'<{DSML_PREFIX}invue name="write_file">\n'
+            f'<{DSML_PREFIX}parameter name="path" string="true">landing-p/scene.js</{DSML_PREFIX}parameter>\n'
+            f'<{DSML_PREFIX}parameter name="content" string="true">const renderer = new THREE.WebGLRenderer();</{DSML_PREFIX}parameter>\n'
+            f'</{DSML_PREFIX}invue>\n'
+            f'</{DSML_PREFIX}tool_calls>'
+        )
+        request = {
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "write_file",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "path": {"type": "string"},
+                                "content": {"type": "string"},
+                            },
+                            "required": ["path", "content"],
+                        },
+                    },
+                }
+            ]
+        }
+
+        out = parser.extract_tool_calls(text, request=request)
+
+        assert out.tools_called is True
+        assert out.tool_calls[0]["name"] == "write_file"
+        assert json.loads(out.tool_calls[0]["arguments"]) == {
+            "path": "landing-p/scene.js",
+            "content": "const renderer = new THREE.WebGLRenderer();",
+        }
+        assert out.content is None
+
+    def test_rejects_canonical_string_equals_args_and_repairs_raw_dsml(
+        self, parser, monkeypatch
+    ):
+        """Canonical parser can recover a name but bogus string= arguments."""
+        from vmlx_engine.loaders import dsv4_chat_encoder
+
+        text = (
+            f'<{DSML_PREFIX}tool_calls>\n'
+            f'<{DSML_PREFIX}invuse name="write_file">\n'
+            f'<{DSML_PREFIX}parameter name="path" string="true">landing-p/scene.js</{DSML_PREFIX}parameter>\n'
+            f'<{DSML_PREFIX}parameter name="content" string="true">const camera = new THREE.PersPerspectiveCamera();</{DSML_PREFIX}parameter>\n'
+            f'</{DSML_PREFIX}invoke>\n'
+            f'</{DSML_PREFIX}tool_calls>'
+        )
+
+        class FakeEncoding:
+            @staticmethod
+            def parse_message_from_completion_text(_text):
+                return {
+                    "tool_calls": [
+                        {
+                            "function": {
+                                "name": "write_file",
+                                "arguments": {
+                                    "path": " string=",
+                                    "content": " string=",
+                                },
+                            }
+                        }
+                    ]
+                }
+
+        monkeypatch.setattr(
+            dsv4_chat_encoder,
+            "_load_encoding_dsv4_module",
+            lambda model_path=None: FakeEncoding,
+        )
+        request = {
+            "model_path": "/models/dsv4",
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "write_file",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "path": {"type": "string"},
+                                "content": {"type": "string"},
+                            },
+                            "required": ["path", "content"],
+                        },
+                    },
+                }
+            ],
+        }
+
+        out = parser.extract_tool_calls(text, request=request)
+
+        assert out.tools_called is True
+        assert json.loads(out.tool_calls[0]["arguments"]) == {
+            "path": "landing-p/scene.js",
+            "content": "const camera = new THREE.PersPerspectiveCamera();",
+        }
 
     def test_repairs_dsml_tool_calls_wrapper_with_truncated_plain_param_invokes(
         self, parser

@@ -609,6 +609,23 @@ class TestCachedTokensZeroOnFailure:
             raise AssertionError("Could not find reconstruction failure path")
 
 
+class TestHybridPagedSSMReuse:
+    """Tests for hybrid paged KV hits when SSM companion state is missing."""
+
+    def test_scheduler_derives_block_aligned_ssm_before_hybrid_paged_miss_fallback(self):
+        """Hybrid paged hits must try block-aligned SSM derive before full prefill."""
+        from vmlx_engine.scheduler import Scheduler
+        import inspect
+
+        source = inspect.getsource(Scheduler._finalize_hybrid_paged_cache_on_worker)
+        derive_idx = source.index("_prefill_for_prompt_only_cache(boundary_tokens)")
+        miss_idx = source.index("hybrid paged MISS")
+
+        assert derive_idx < miss_idx
+        assert "synchronously derived SSM companion" in source
+        assert "self._ssm_state_cache.store(" in source
+
+
 class TestMLLMCacheStatsCompleteness:
     """Tests for MLLM cache stats including hits/misses/hit_rate."""
 

@@ -216,6 +216,35 @@ describe('readGenerationDefaults JANG sampling defaults', () => {
     })
   })
 
+  it('uses neutral generic repetition penalty for DSV4 direct chat defaults', async () => {
+    const dir = makeModelDir({
+      'config.json': {
+        model_type: 'deepseek_v4',
+      },
+      'jang_config.json': {
+        chat: {
+          reasoning: { default_mode: 'chat' },
+          sampling_defaults: {
+            temperature: 0.6,
+            top_p: 0.95,
+            repetition_penalty: 1.0,
+            repetition_penalty_thinking: 1.0,
+            repetition_penalty_chat: 1.05,
+            max_new_tokens: 4096,
+          },
+        },
+      },
+    }, 'vmlx-generation-defaults-dsv4-')
+
+    await expect(readGenerationDefaults(dir)).resolves.toMatchObject({
+      temperature: 0.6,
+      topP: 0.95,
+      repeatPenalty: 1.0,
+      maxNewTokens: 4096,
+      source: 'jang_config',
+    })
+  })
+
   it('uses thinking repetition penalty when bundle default reasoning mode is thinking', async () => {
     const dir = makeModelDir({
       'jang_config.json': {

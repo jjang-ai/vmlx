@@ -36,6 +36,34 @@ pytestmark = pytest.mark.skipif(not HAS_MLX, reason="MLX not available")
 TEST_IMAGE_B64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
 
 
+def test_decode_token_eval_uses_async_by_default(monkeypatch):
+    from vmlx_engine import mllm_batch_generator as mod
+
+    calls = []
+    monkeypatch.delenv("VMLINUX_MLLM_DECODE_SYNC_EVAL", raising=False)
+    monkeypatch.setattr(mod.mx, "async_eval", lambda *values: calls.append(("async", values)))
+    monkeypatch.setattr(mod.mx, "eval", lambda *values: calls.append(("eval", values)))
+
+    token = object()
+    mod._submit_decode_token_eval(token)
+
+    assert calls == [("async", (token,))]
+
+
+def test_decode_token_eval_can_use_explicit_sync_diagnostic(monkeypatch):
+    from vmlx_engine import mllm_batch_generator as mod
+
+    calls = []
+    monkeypatch.setenv("VMLINUX_MLLM_DECODE_SYNC_EVAL", "1")
+    monkeypatch.setattr(mod.mx, "async_eval", lambda *values: calls.append(("async", values)))
+    monkeypatch.setattr(mod.mx, "eval", lambda *values: calls.append(("eval", values)))
+
+    token = object()
+    mod._submit_decode_token_eval(token)
+
+    assert calls == [("eval", (token,))]
+
+
 def create_test_image(path: str, size: tuple = (32, 32)) -> str:
     """Create a test image file."""
     try:
@@ -289,6 +317,25 @@ class TestMLLMBatchStats:
 
         assert stats.prompt_tps == 0
         assert stats.generation_tps == 0
+
+    def test_cache_execution_timing_surfaces_in_stats(self):
+        """MLLM cache-hit diagnostics must preserve reconstruction/dequant timing."""
+        from vmlx_engine.mllm_batch_generator import MLLMBatchStats
+
+        stats = MLLMBatchStats()
+        execution = {
+            "request_id": "req-cache",
+            "cache_detail": "paged+disk+tq",
+            "cached_tokens": 128,
+            "reconstructed": True,
+            "dequantized": True,
+            "reconstruction_seconds": 0.01,
+            "dequantization_seconds": 0.02,
+            "total_worker_cache_seconds": 0.03,
+        }
+        stats.last_cache_execution = execution
+
+        assert stats.to_dict()["last_cache_execution"] == execution
 
     def test_prefill_trace_records_named_segments_and_stats_surface(self, monkeypatch):
         """MLLM prefill diagnostics must expose segment timing when enabled."""
@@ -753,6 +800,66 @@ class TestMLLMSchedulerOutput:
         assert output.finished_request_ids == set()
         assert output.outputs == []
         assert output.has_work is False
+
+    def test_scheduler_trace_aggregates_step_executor_and_dispatch_time(self, caplog):
+        import logging
+
+        from vmlx_engine.mllm_scheduler import MLLMScheduler, MLLMSchedulerOutput
+        from vmlx_engine.request import RequestOutput
+
+        scheduler = MLLMScheduler.__new__(MLLMScheduler)
+        scheduler._scheduler_trace_timings = {}
+
+        first = MLLMSchedulerOutput(
+            outputs=[
+                RequestOutput(
+                    request_id="trace-req",
+                    new_token_ids=[1],
+                    finished=False,
+                )
+            ],
+            trace_timings={
+                "total_s": 0.011,
+                "schedule_s": 0.001,
+                "batch_next_s": 0.008,
+                "process_cleanup_s": 0.002,
+                "process_responses_s": 0.0015,
+                "cleanup_finished_s": 0.0005,
+            },
+        )
+        second = MLLMSchedulerOutput(
+            outputs=[
+                RequestOutput(
+                    request_id="trace-req",
+                    new_token_ids=[2, 3],
+                    finished=True,
+                )
+            ],
+            trace_timings={
+                "total_s": 0.021,
+                "schedule_s": 0.001,
+                "batch_next_s": 0.018,
+                "process_cleanup_s": 0.002,
+                "process_responses_s": 0.0005,
+                "cleanup_finished_s": 0.0015,
+            },
+        )
+
+        with caplog.at_level(logging.INFO, logger="vmlx_engine.mllm_scheduler"):
+            scheduler._record_scheduler_trace(first, executor_s=0.01, dispatch_s=0.001)
+            scheduler._record_scheduler_trace(second, executor_s=0.02, dispatch_s=0.002)
+
+        assert "VMLINUX_MLLM_SCHEDULER_TRACE request_id=trace-req" in caplog.text
+        assert "steps=2" in caplog.text
+        assert "output_tokens=3" in caplog.text
+        assert "executor_ms=30.000" in caplog.text
+        assert "dispatch_ms=3.000" in caplog.text
+        assert "step_ms=32.000" in caplog.text
+        assert "batch_next_ms=26.000" in caplog.text
+        assert "process_cleanup_ms=4.000" in caplog.text
+        assert "process_responses_ms=2.000" in caplog.text
+        assert "cleanup_finished_ms=2.000" in caplog.text
+        assert scheduler._scheduler_trace_timings == {}
 
 
 class TestVisionCache:

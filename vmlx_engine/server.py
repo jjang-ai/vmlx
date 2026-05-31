@@ -130,6 +130,7 @@ from .logprobs import (
     format_chat_logprobs as _format_chat_logprobs,
     format_completion_logprobs as _format_completion_logprobs,
 )
+from .mlx_memory import clear_mlx_memory_cache
 from .reasoning.gptoss_parser import GptOssReasoningParser
 from .tool_parsers import ToolParserManager
 
@@ -523,10 +524,18 @@ _distributed_coordinator = None  # Coordinator instance when distributed is acti
 _FALLBACK_TEMPERATURE = 0.0
 _FALLBACK_TOP_P = 1.0
 
-# Family fallbacks are intentionally empty. Defaults come from explicit request
-# values, explicit CLI flags, bundle metadata, or generic server fallback.
-# Runtime correctness must not depend on hidden family-specific sampling guards.
+# Family temperature/top_p/repetition fallbacks are intentionally empty.
+# Defaults come from explicit request values, explicit CLI flags, bundle
+# metadata, or generic server fallback.
 _FAMILY_FALLBACK_DEFAULTS: dict[str, tuple[float | None, float | None, float | None]] = {
+}
+
+# Ling/Bailing bundles on this host omit top_k metadata, but live multilingual
+# audit shows unconstrained stochastic sampling can leak CJK into non-CJK
+# prompts. Keep the bounded fallback at request resolution so it is logged in
+# resolved kwargs and remains overrideable by request/CLI/bundle metadata.
+_FAMILY_TOP_K_DEFAULTS: dict[str, int] = {
+    "ling": 20,
 }
 
 
@@ -695,6 +704,121 @@ def _output_token_ids_for_reasoning(output: Any) -> list[int] | None:
     return None
 
 
+_SINGLE_MARKDOWN_CODE_FENCE_RE = re.compile(
+    r"^\s*```[A-Za-z0-9_+.#-]*[ \t]*\n(?P<body>.*?)\n?```\s*$",
+    re.DOTALL,
+)
+
+
+def _request_text_fragments(request: Any) -> list[str]:
+    fragments: list[str] = []
+
+    def add_content(value: Any) -> None:
+        if value is None:
+            return
+        if isinstance(value, str):
+            fragments.append(value)
+            return
+        if isinstance(value, list):
+            for item in value:
+                add_content(item)
+            return
+        if isinstance(value, dict):
+            for key in ("text", "content", "input_text", "output_text"):
+                if key in value:
+                    add_content(value.get(key))
+            return
+        for attr in ("text", "content"):
+            if hasattr(value, attr):
+                add_content(getattr(value, attr))
+
+    prompt = getattr(request, "prompt", None)
+    if isinstance(prompt, list):
+        for item in prompt:
+            add_content(item)
+    else:
+        add_content(prompt)
+
+    for attr in ("messages", "input"):
+        value = getattr(request, attr, None)
+        add_content(value)
+    return fragments
+
+
+def _strict_exact_no_markdown_requested(request: Any) -> bool:
+    text = "\n".join(_request_text_fragments(request)).lower()
+    if not text:
+        return False
+    if "markdown" not in text and "code fence" not in text and "fenced" not in text:
+        return False
+    if not any(marker in text for marker in ("exact", "copy", "only")):
+        return False
+    return True
+
+
+def _unwrap_single_markdown_code_fence(text: str) -> str:
+    match = _SINGLE_MARKDOWN_CODE_FENCE_RE.match(text or "")
+    if not match:
+        return text
+    body = match.group("body")
+    if "```" in body:
+        return text
+    return body.strip()
+
+
+def _finalize_visible_text_for_request(text: str, request: Any) -> str:
+    if not text:
+        return ""
+    text = _strip_visual_grounding_markup_for_display(text)
+    if not text:
+        return ""
+    if _strict_exact_no_markdown_requested(request):
+        return _unwrap_single_markdown_code_fence(text)
+    return text
+
+
+def _visible_text_for_dsv4_completion(output: Any, engine: Any, request: Any) -> str:
+    """Return the visible DSV4 completion text from chat-rail output."""
+    raw_text = getattr(output, "raw_text", "") or getattr(output, "text", "") or ""
+    visible_text = raw_text
+
+    token_reasoning, token_content = _dsv4_split_reasoning_from_token_ids(
+        _output_token_ids_for_reasoning(output),
+        getattr(engine, "tokenizer", None),
+    )
+    if token_content:
+        visible_text = token_content
+    elif _reasoning_parser is not None:
+        try:
+            parser = _reasoning_parser.__class__()
+            parser.reset_state(think_in_prompt=True)
+            _, parsed_content = parser.extract_reasoning(raw_text)
+            if parsed_content is not None:
+                visible_text = parsed_content
+        except Exception:
+            if "</think>" in raw_text:
+                _, _, visible_text = raw_text.partition("</think>")
+    elif "</think>" in raw_text:
+        _, _, visible_text = raw_text.partition("</think>")
+
+    return _finalize_visible_text_for_request(
+        clean_output_text(visible_text),
+        request,
+    )
+
+
+def _dsv4_completion_prompt_for_chat_rail(prompt: str, request: Any) -> str:
+    if _strict_exact_no_markdown_requested(request):
+        return prompt.rstrip()
+    return prompt
+
+
+def _dsv4_completion_internal_max_tokens(max_tokens: int, request: Any) -> int:
+    if _strict_exact_no_markdown_requested(request):
+        return max(int(max_tokens), 512)
+    return max_tokens
+
+
 _jang_sampling_defaults_cache: dict[str, dict] = {}
 _generation_defaults_cache: dict[str, dict] = {}
 
@@ -790,9 +914,13 @@ def _bundle_repetition_penalty_keys(
     family = _model_family_for_defaults(bundle_path)
     if family == "deepseek_v4":
         if enable_thinking is False:
+            # Direct/no-thinking DSV4 exact-code probes corrupt identifiers
+            # with the chat-specific 1.05 penalty. Prefer the bundle's neutral
+            # generic value when present; fall back to chat metadata only for
+            # older bundles that lack it.
             return (
-                "repetition_penalty_chat",
                 "repetition_penalty",
+                "repetition_penalty_chat",
                 "repetition_penalty_thinking",
             )
         return (
@@ -900,7 +1028,7 @@ def _resolve_top_p(request_value: float | None, model_name: str = "") -> float:
 
 
 def _resolve_top_k(request_value: int | None, model_name: str = "") -> int:
-    """Resolve top_k: request > explicit CLI/session > bundle > disabled."""
+    """Resolve top_k: request > explicit CLI/session > bundle > family > disabled."""
     if request_value is not None:
         return max(0, int(request_value))
     if _default_top_k is not None:
@@ -908,6 +1036,9 @@ def _resolve_top_k(request_value: int | None, model_name: str = "") -> int:
     v = _bundle_sampling_default(model_name, "top_k")
     if v is not None:
         return max(0, int(v))
+    family = _model_family_for_defaults(model_name)
+    if family in _FAMILY_TOP_K_DEFAULTS:
+        return max(0, int(_FAMILY_TOP_K_DEFAULTS[family]))
     return 0
 
 
@@ -979,12 +1110,18 @@ def _resolve_dsv4_thinking_policy(
     tools_present: bool,
     tool_choice: Any,
 ) -> _DSV4ThinkingDecision:
-    """Resolve DSV4's public thinking toggle without hidden rail guards."""
+    """Resolve DSV4's public thinking toggle without hidden force-on behavior."""
     if requested_enable_thinking is True or effort_requested:
         return _DSV4ThinkingDecision(
             enable_thinking=True,
             reasoning_effort_allowed=True,
             reason="requested_thinking",
+        )
+    if requested_enable_thinking is False:
+        return _DSV4ThinkingDecision(
+            enable_thinking=False,
+            reasoning_effort_allowed=False,
+            reason="thinking_disabled",
         )
     return _DSV4ThinkingDecision(
         enable_thinking=False,
@@ -1000,6 +1137,18 @@ def _normalize_dsv4_reasoning_effort(effort: str | None) -> str | None:
     if effort in ("low", "medium", "high"):
         return "high"
     return None
+
+
+def _is_loaded_dsv4_model(model: str = "") -> bool:
+    """Return whether the current loaded model resolves to the DSV4 family."""
+    try:
+        from .model_config_registry import get_model_config_registry
+
+        key = _model_path or _model_name or model or ""
+        cfg = get_model_config_registry().lookup(key)
+        return getattr(cfg, "family_name", "") == "deepseek_v4"
+    except Exception:
+        return False
 
 
 def _is_hy3_model(model_key: str) -> bool:
@@ -1491,6 +1640,9 @@ def _bundle_declares_native_video(bundle_path: str | None) -> bool:
         return True
     if Path(str(bundle_path or "")).joinpath("video_preprocessor_config.json").is_file():
         return True
+    model_type = str(cfg.get("model_type") or "").lower()
+    if model_type == "gemma4":
+        return False
     for obj in (cfg, cfg.get("text_config"), cfg.get("vision_config")):
         if not isinstance(obj, dict):
             continue
@@ -1779,6 +1931,8 @@ _TOOL_CALL_MARKERS = [
     "<zyphra_tool_call",
     "<|tool_call>",  # Gemma 4 native tool call format
     "<|tool_call|>",
+    "<|tool_call_start|>",
+    "<|tool_call_end|>",
     "[TOOL_CALLS]",
     "<function",
     "<function=",
@@ -1830,6 +1984,8 @@ _TOOL_MARKUP_RESIDUE_PATTERNS.extend(
         r"</?\|tool_calls_section_begin\|>?",
         r"</?\|tool_call_begin\|>?",
         r"</?\|tool_call\|>?",
+        r"</?\|tool_call_start\|>?",
+        r"</?\|tool_call_end\|>?",
         r"</?｜tool▁calls?▁begin｜>?",
         r"```tool_code",
     ]
@@ -1838,6 +1994,55 @@ _TOOL_MARKUP_RESIDUE_RE = re.compile(
     "|".join(_TOOL_MARKUP_RESIDUE_PATTERNS),
     re.DOTALL,
 )
+
+_VISUAL_GROUNDING_MARKERS = (
+    "<|point_start|>",
+    "<|point_end|>",
+    "<|box_start|>",
+    "<|box_end|>",
+)
+_VISUAL_GROUNDING_SPAN_RE = re.compile(
+    r"<\|(?:point|box)_start\|>[\s\S]*?(?:<\|(?:point|box)_end\|>|$)",
+    re.DOTALL,
+)
+_VISUAL_GROUNDING_END_RE = re.compile(r"<\|(?:point|box)_end\|>")
+
+
+def _strip_partial_visual_grounding_suffix(text: str) -> str:
+    if not text:
+        return text
+    for marker in _VISUAL_GROUNDING_MARKERS:
+        max_prefix = min(len(marker) - 1, len(text))
+        for n in range(max_prefix, 0, -1):
+            if text.endswith(marker[:n]):
+                return text[:-n]
+    return text
+
+
+def _strip_visual_grounding_markup_for_display(text: str) -> str:
+    """Remove VL point/box control spans from user-visible assistant text."""
+    if not text:
+        return text
+    cleaned = _VISUAL_GROUNDING_SPAN_RE.sub("", text)
+    cleaned = _VISUAL_GROUNDING_END_RE.sub("", cleaned)
+    return _strip_partial_visual_grounding_suffix(cleaned)
+
+
+def _visual_grounding_display_delta(
+    accumulated_text: str,
+    streamed_display_text: str,
+) -> str | None:
+    """Return the next visible delta after hiding VL point/box markup."""
+    cleaned = _strip_visual_grounding_markup_for_display(accumulated_text)
+    if not cleaned:
+        return None
+    if streamed_display_text and cleaned.startswith(streamed_display_text):
+        delta = cleaned[len(streamed_display_text) :]
+    elif streamed_display_text == cleaned:
+        delta = ""
+    else:
+        delta = cleaned
+    return delta if delta else None
 
 
 def _strip_tool_markup_residue_for_display(text: str) -> str:
@@ -1979,6 +2184,37 @@ def _template_starts_reasoning(
 
     _template_starts_reasoning_cache[key] = result
     return result
+
+
+def _apply_tokenizer_thinking_vocab_fallback(
+    think_in_template: bool,
+    *,
+    reasoning_parser,
+    tokenizer,
+    model_config,
+) -> bool:
+    """Use tokenizer thinking-token fallback only for unknown model configs.
+
+    Several known families expose ``<think>`` tokens in the tokenizer vocabulary
+    without leaving the rendered assistant prefix inside a reasoning block. For
+    those families, the registry's explicit ``think_in_template=False`` verdict
+    is authoritative; otherwise streaming can suppress plain visible text as
+    hidden reasoning.
+    """
+    if think_in_template or not reasoning_parser:
+        return bool(think_in_template)
+
+    family_name = str(getattr(model_config, "family_name", "") or "")
+    if family_name and family_name != "unknown":
+        return False
+
+    try:
+        if getattr(tokenizer, "has_thinking", False):
+            logger.info("Detected think_in_template from tokenizer vocabulary")
+            return True
+    except Exception:
+        pass
+    return False
 
 
 def _engine_prompt_starts_in_reasoning(
@@ -2351,6 +2587,8 @@ _enable_jit: bool = False
 _jang_metadata: dict | None = None  # Cached at model load time for /health
 _model_type: str = "text"  # "text" or "image" — auto-detected from model directory
 _image_quantize: int | None = None  # Image model quantization bits (set by cli.py)
+_image_lora_paths: list[str] = []
+_image_lora_scales: list[float] = []
 
 
 class _CompiledModuleProxy:
@@ -2759,13 +2997,9 @@ async def check_memory_pressure(request: Request):
     # a sticky 503 state.
     try:
         import gc as _gc
-        import mlx.core as _mx
 
         _gc.collect()
-        if hasattr(_mx, "clear_cache"):
-            _mx.clear_cache()
-        elif hasattr(_mx, "clear_memory_cache"):
-            _mx.clear_memory_cache()
+        clear_mlx_memory_cache(log=logger)
         mem = psutil.virtual_memory()
         if mem.percent < threshold_pct:
             logger.info(
@@ -2949,16 +3183,72 @@ def _parse_tool_calls_with_parser(
         allowed = _allowed_tool_names()
         if not allowed:
             return tool_calls
-        filtered = []
-        for tc in tool_calls:
+
+        def _function_payload(tc: Any) -> tuple[str | None, str, str]:
             try:
-                name = tc.function.name
+                return tc.function.name, tc.function.arguments, getattr(tc, "id", "")
             except Exception:
                 fn = tc.get("function") if isinstance(tc, dict) else None
-                name = fn.get("name") if isinstance(fn, dict) else tc.get("name") if isinstance(tc, dict) else None
+                if isinstance(fn, dict):
+                    return fn.get("name"), fn.get("arguments") or "{}", tc.get("id", "")
+                if isinstance(tc, dict):
+                    return tc.get("name"), tc.get("arguments") or "{}", tc.get("id", "")
+                return None, "{}", ""
+
+        def _coerce_json_args(raw_args: Any) -> dict[str, Any]:
+            if isinstance(raw_args, dict):
+                return dict(raw_args)
+            if isinstance(raw_args, str) and raw_args.strip():
+                try:
+                    parsed = json.loads(raw_args)
+                    if isinstance(parsed, dict):
+                        return parsed
+                except Exception:
+                    return {}
+            return {}
+
+        def _rewrite_tool_alias(tc: Any) -> Any | None:
+            name, raw_args, call_id = _function_payload(tc)
+            if name != "create_file" or "write_file" not in allowed:
+                return None
+            args = _coerce_json_args(raw_args)
+            path = (
+                args.get("path")
+                or args.get("file_path")
+                or args.get("filename")
+                or args.get("file")
+                or args.get("name")
+            )
+            content = (
+                args.get("content")
+                or args.get("text")
+                or args.get("value")
+                or args.get("body")
+            )
+            if not isinstance(path, str) or not isinstance(content, str):
+                return None
+            return ToolCall(
+                id=call_id or f"call_{uuid.uuid4().hex[:8]}",
+                type="function",
+                function=FunctionCall(
+                    name="write_file",
+                    arguments=json.dumps(
+                        {"path": path, "content": content},
+                        ensure_ascii=False,
+                    ),
+                ),
+            )
+
+        filtered = []
+        for tc in tool_calls:
+            name, _, _ = _function_payload(tc)
             if name in allowed:
                 filtered.append(tc)
             else:
+                rewritten = _rewrite_tool_alias(tc)
+                if rewritten is not None:
+                    filtered.append(rewritten)
+                    continue
                 logger.warning(
                     "Dropping parsed tool call for unavailable tool %r; "
                     "available tools=%s",
@@ -5234,7 +5524,7 @@ def _model_acceleration_status(bundle_path: str | None = None) -> dict:
         mpp_nax = _jangtq_mpp_nax_runtime_status(host)
         active = bool(mpp_nax.get("active"))
         kernel_type = (
-            "turboquant_codebook_accelerated" if active else "turboquant_codebook"
+            "turboquant_codebook_mpp_nax" if active else "turboquant_codebook"
         )
         reason = None
         if not active:
@@ -5558,7 +5848,33 @@ def _native_cache_status(scheduler=None, *, family: str | None = None, cfg=None)
             "block_disk_l2": bool(block_disk_store is not None),
         }
 
-    return {}
+    tq_enabled = bool(getattr(scheduler, "_tq_active", False))
+    try:
+        stored_kv_bits = int(getattr(scheduler, "_kv_cache_bits", 0) or 0)
+    except (TypeError, ValueError):
+        stored_kv_bits = 0
+    try:
+        stored_kv_group = int(getattr(scheduler, "_kv_cache_group_size", 64) or 64)
+    except (TypeError, ValueError):
+        stored_kv_group = 64
+    return {
+        "family": family_name or scheduler_family or "plain_attention",
+        "schema": "plain_kv_v1",
+        "cache_type": "paged_kv",
+        "components": ["attention_kv"],
+        "generic_turboquant_kv": {
+            "enabled": tq_enabled,
+            "reason": "plain_attention_kv" if tq_enabled else "not_active",
+        },
+        "storage_quantization": {
+            "enabled": stored_kv_bits > 0,
+            "bits": stored_kv_bits if stored_kv_bits > 0 else None,
+            "group_size": stored_kv_group if stored_kv_bits > 0 else None,
+        },
+        "prefix": bool(block_aware_cache is not None),
+        "paged": bool(block_aware_cache is not None and paged_cache_manager is not None),
+        "block_disk_l2": bool(block_disk_store is not None),
+    }
 
 
 def _stat_int(stats: dict[str, Any] | None, *keys: str) -> int:
@@ -5867,6 +6183,8 @@ async def health():
             "last_cache_reuse_partial": scheduler_stats.get(
                 "last_cache_reuse_partial"
             ),
+            "last_cache_selection": scheduler_stats.get("last_cache_selection"),
+            "last_cache_execution": scheduler_stats.get("last_cache_execution"),
         }
         cache_snapshot = _cache_telemetry_snapshot(scheduler)
         if cache_snapshot:
@@ -6013,10 +6331,7 @@ async def admin_soft_sleep():
             if _set_cache:
                 _pre_sleep_cache_limit = _set_cache(512 * 1024 * 1024)
 
-            if hasattr(mx, "clear_cache"):
-                mx.clear_cache()
-            elif hasattr(mx.metal, "clear_cache"):
-                mx.metal.clear_cache()
+            clear_mlx_memory_cache(log=logger)
 
             _standby_state = "soft"
             logger.info("Entered soft sleep — caches cleared, model loaded")
@@ -6107,10 +6422,7 @@ async def admin_deep_sleep():
                 logger.debug(f"Draft model unload during deep sleep: {e}")
 
             gc.collect()
-            if hasattr(mx, "clear_cache"):
-                mx.clear_cache()
-            elif hasattr(mx.metal, "clear_cache"):
-                mx.metal.clear_cache()
+            clear_mlx_memory_cache(log=logger)
 
             _standby_state = "deep"
             logger.info("Entered deep sleep — model unloaded, process alive")
@@ -6165,6 +6477,8 @@ async def admin_wake():
                     quantize=getattr(_image_gen, "_quantize", None),
                     model_path=getattr(_image_gen, "_model_path", None),
                     mflux_class=getattr(_image_gen, "_mflux_class", None),
+                    lora_paths=_image_lora_paths,
+                    lora_scales=_image_lora_scales,
                 )
                 _standby_state = None
                 logger.info(
@@ -6295,6 +6609,8 @@ async def cache_stats():
                 "cache_reuse_partial_tokens", 0
             ),
             "last_cache_reuse_partial": stats.get("last_cache_reuse_partial"),
+            "last_cache_selection": stats.get("last_cache_selection"),
+            "last_cache_execution": stats.get("last_cache_execution"),
         }
         # Stored-KV cache quantization info. Normalize disabled state so the
         # panel never renders raw bits=0 as a fake "0-bit" codec.
@@ -6553,15 +6869,10 @@ async def clear_cache(cache_type: str = Query("all", alias="type")):
                     cleared.append("block_disk_store")
             try:
                 import gc as _gc
-                import mlx.core as _mx
 
                 _gc.collect()
-                if hasattr(_mx, "clear_cache"):
-                    _mx.clear_cache()
+                if clear_mlx_memory_cache(log=logger):
                     cleared.append("mlx_cache")
-                elif hasattr(_mx, "clear_memory_cache"):
-                    _mx.clear_memory_cache()
-                    cleared.append("mlx_memory_cache")
             except Exception:
                 pass
 
@@ -8649,6 +8960,8 @@ async def create_image(request: Request):
                         if _preserve_mflux_class_for_same_model
                         else None
                     ),
+                    lora_paths=_image_lora_paths,
+                    lora_scales=_image_lora_scales,
                 )
             except Exception as e:
                 raise HTTPException(
@@ -8990,6 +9303,8 @@ async def create_image_edit(request: Request):
                         model,
                         model_path=edit_model_path,
                         quantize=_image_quantize,
+                        lora_paths=_image_lora_paths,
+                        lora_scales=_image_lora_scales,
                     )
                 except HTTPException:
                     raise
@@ -9481,10 +9796,42 @@ async def create_completion(request: CompletionRequest):
             if request.logprobs is not None:
                 gen_kwargs["logprobs"] = True
                 gen_kwargs["top_logprobs"] = request.logprobs
-            output = await asyncio.wait_for(
-                engine.generate(**gen_kwargs),
-                timeout=timeout,
-            )
+            if _is_loaded_dsv4_model(request.model):
+                chat_prompt = _dsv4_completion_prompt_for_chat_rail(prompt, request)
+                chat_kwargs = {
+                    key: value
+                    for key, value in gen_kwargs.items()
+                    if key != "prompt"
+                }
+                chat_kwargs["max_tokens"] = _dsv4_completion_internal_max_tokens(
+                    chat_kwargs["max_tokens"],
+                    request,
+                )
+                decision = _resolve_dsv4_thinking_policy(
+                    requested_enable_thinking=None,
+                    effort_requested=False,
+                    tools_present=False,
+                    tool_choice=None,
+                )
+                chat_kwargs["enable_thinking"] = decision.enable_thinking
+                _set_resolved_repetition_penalty(
+                    chat_kwargs,
+                    request.repetition_penalty,
+                    request.model,
+                    enable_thinking=decision.enable_thinking,
+                )
+                output = await asyncio.wait_for(
+                    engine.chat(
+                        messages=[{"role": "user", "content": chat_prompt}],
+                        **chat_kwargs,
+                    ),
+                    timeout=timeout,
+                )
+            else:
+                output = await asyncio.wait_for(
+                    engine.generate(**gen_kwargs),
+                    timeout=timeout,
+                )
         except asyncio.TimeoutError:
             raise HTTPException(
                 status_code=504, detail=f"Request timed out after {timeout:.1f} seconds"
@@ -9500,10 +9847,16 @@ async def create_completion(request: CompletionRequest):
                 detail=f"Generation failed: {type(e).__name__}: {e}",
             )
 
+        completion_text = (
+            _visible_text_for_dsv4_completion(output, engine, request)
+            if _is_loaded_dsv4_model(request.model)
+            else output.text
+        )
+
         choices.append(
             CompletionChoice(
                 index=i,
-                text=output.text,
+                text=completion_text,
                 logprobs=_format_completion_logprobs(
                     getattr(output, "logprobs", None),
                     engine.tokenizer,
@@ -9776,6 +10129,8 @@ async def create_chat_completion(
         if json_instruction:
             # Inject JSON instruction into messages
             messages = _inject_json_instruction(messages, json_instruction)
+    if engine.is_mllm and _should_coerce_zaya_vl_tool_history(request.model):
+        messages = _coerce_zaya_vl_tool_history_for_template(messages)
     messages = _normalize_leading_system_messages(messages)
 
     # When thinking is explicitly disabled, strip <think> blocks from prior assistant
@@ -10143,21 +10498,12 @@ async def create_chat_completion(
             from .model_config_registry import get_model_config_registry as _mcr
             _mc_nonstream = _mcr().lookup(_model_path or _model_name or request.model)
             _think_in_prompt_ns = _mc_nonstream.think_in_template
-            # Heuristic: if registry doesn't pin think_in_template AND the
-            # tokenizer reports `has_thinking`, assume the template injects
-            # `<think>`. SKIP this heuristic when the registry returned a
-            # named family (not the default) — Ling/Bailing-V2.5 supports
-            # thinking but does NOT auto-inject `<think>` (default is
-            # `detailed thinking off`); without this skip, the deepseek_r1
-            # parser routes every token to reasoning_content and content
-            # comes back null.
-            _family_is_explicit = bool(getattr(_mc_nonstream, "family_name", "") or "")
-            if not _think_in_prompt_ns and _reasoning_parser and not _family_is_explicit:
-                try:
-                    if getattr(engine.tokenizer, "has_thinking", False):
-                        _think_in_prompt_ns = True
-                except Exception:
-                    pass
+            _think_in_prompt_ns = _apply_tokenizer_thinking_vocab_fallback(
+                _think_in_prompt_ns,
+                reasoning_parser=_reasoning_parser,
+                tokenizer=engine.tokenizer,
+                model_config=_mc_nonstream,
+            )
             if _think_in_prompt_ns and _template_completes_thinking(
                 engine.tokenizer, _model_name or request.model
             ):
@@ -10303,6 +10649,8 @@ async def create_chat_completion(
     # Determine finish reason
     finish_reason = "tool_calls" if tool_calls else output.finish_reason
     response_content = clean_output_text(cleaned_text) if cleaned_text else None
+    if response_content:
+        response_content = _finalize_visible_text_for_request(response_content, request)
     response_warnings = _chat_completion_warnings_for_reasoning_only(
         response_content,
         reasoning_text,
@@ -10915,6 +11263,94 @@ def _responses_input_to_messages(
     return messages
 
 
+def _zaya_vl_text_part(text: str) -> list[dict[str, str]]:
+    return [{"type": "text", "text": text}]
+
+
+def _render_zaya_tool_call_history(tool_calls: list) -> str:
+    blocks: list[str] = []
+    for tc in tool_calls or []:
+        if hasattr(tc, "model_dump"):
+            tc = tc.model_dump()
+        elif hasattr(tc, "dict"):
+            tc = tc.dict()
+        if not isinstance(tc, dict):
+            continue
+        fn = tc.get("function") if isinstance(tc.get("function"), dict) else {}
+        name = fn.get("name") or ""
+        if not name:
+            continue
+        args = fn.get("arguments") or {}
+        if isinstance(args, str):
+            try:
+                args = json.loads(args)
+            except Exception:
+                args = {}
+        lines = ["<zyphra_tool_call>", f"<function={name}>"]
+        if isinstance(args, dict):
+            for key, value in args.items():
+                if not isinstance(value, str):
+                    value = json.dumps(value, ensure_ascii=False)
+                lines.extend([f"<parameter={key}>", value, "</parameter>"])
+        lines.extend(["</function>", "</zyphra_tool_call>"])
+        blocks.append("\n".join(lines))
+    return "\n\n".join(blocks)
+
+
+def _coerce_zaya_vl_tool_history_for_template(messages: list[dict]) -> list[dict]:
+    """Render ZAYA-VL tool history as text parts instead of role=tool turns.
+
+    ZAYA-VL's template is multimodal/list-content aware, but it does not have a
+    native role="tool" contract. Preserving OpenAI tool messages renders
+    ``<|im_start|>tool`` and live runs showed the model continuing in visual
+    grounding tokens (``<|point_start|>tool``). Keep zaya_xml output parsing
+    native, but serialize prior calls/results as ordinary text parts.
+    """
+    coerced: list[dict] = []
+    for msg in messages or []:
+        if not isinstance(msg, dict):
+            coerced.append(msg)
+            continue
+        role = msg.get("role")
+        if role == "assistant" and msg.get("tool_calls"):
+            rendered = _render_zaya_tool_call_history(msg.get("tool_calls") or [])
+            if rendered:
+                coerced.append({**msg, "content": _zaya_vl_text_part(rendered)})
+            else:
+                coerced.append(msg)
+            continue
+        if role == "tool":
+            content = _extract_text_from_content(msg.get("content", ""))
+            coerced.append(
+                {
+                    "role": "user",
+                    "content": _zaya_vl_text_part(
+                        "<zyphra_tool_response>"
+                        + content
+                        + "</zyphra_tool_response>"
+                    ),
+                }
+            )
+            continue
+        if role in {"user", "assistant", "system"} and isinstance(msg.get("content"), str):
+            coerced.append({**msg, "content": _zaya_vl_text_part(msg.get("content", ""))})
+            continue
+        coerced.append(msg)
+    return coerced
+
+
+def _should_coerce_zaya_vl_tool_history(model_hint: str | None = None) -> bool:
+    try:
+        from .model_config_registry import get_model_config_registry
+
+        cfg = get_model_config_registry().lookup(
+            _model_path or _model_name or model_hint or ""
+        )
+        return cfg.family_name == "zaya1_vl"
+    except Exception:
+        return False
+
+
 def _synthesize_tools_from_message_tool_calls(messages: list[dict]) -> list[dict]:
     """Build minimal tool schemas from assistant tool-call history.
 
@@ -11110,6 +11546,8 @@ async def create_response(
                 "continuing with request input only",
                 request.previous_response_id,
             )
+    if engine.is_mllm and _should_coerce_zaya_vl_tool_history(request.model):
+        messages = _coerce_zaya_vl_tool_history_for_template(messages)
 
     # Re-detect DSV4 for the Responses rail policy below. This is cheap
     # (cached registry lookup) and does not mutate caller messages.
@@ -11584,21 +12022,12 @@ async def create_response(
             from .model_config_registry import get_model_config_registry as _mcr
             _mc_nonstream = _mcr().lookup(_model_path or _model_name or request.model)
             _think_in_prompt_ns = _mc_nonstream.think_in_template
-            # Heuristic: if registry doesn't pin think_in_template AND the
-            # tokenizer reports `has_thinking`, assume the template injects
-            # `<think>`. SKIP this heuristic when the registry returned a
-            # named family (not the default) — Ling/Bailing-V2.5 supports
-            # thinking but does NOT auto-inject `<think>` (default is
-            # `detailed thinking off`); without this skip, the deepseek_r1
-            # parser routes every token to reasoning_content and content
-            # comes back null.
-            _family_is_explicit = bool(getattr(_mc_nonstream, "family_name", "") or "")
-            if not _think_in_prompt_ns and _reasoning_parser and not _family_is_explicit:
-                try:
-                    if getattr(engine.tokenizer, "has_thinking", False):
-                        _think_in_prompt_ns = True
-                except Exception:
-                    pass
+            _think_in_prompt_ns = _apply_tokenizer_thinking_vocab_fallback(
+                _think_in_prompt_ns,
+                reasoning_parser=_reasoning_parser,
+                tokenizer=engine.tokenizer,
+                model_config=_mc_nonstream,
+            )
             if _think_in_prompt_ns and _template_completes_thinking(
                 engine.tokenizer, _model_name or request.model
             ):
@@ -11807,6 +12236,8 @@ async def create_response(
         if cleaned_text
         else ("" if tool_calls else (clean_output_text(content_for_parsing) if content_for_parsing else ""))
     )
+    if final_text:
+        final_text = _finalize_visible_text_for_request(final_text, request)
     if final_text:
         output_items.append(
             ResponsesOutputMessage(
@@ -12124,17 +12555,14 @@ async def stream_chat_completion(
     )
     think_in_template = _model_config.think_in_template
 
-    # Fallback: detect from tokenizer if model config doesn't know this model.
-    # If the tokenizer has <think>/<\/think> in its vocabulary, the template
-    # almost certainly injects <think> in the generation prompt.
-    if not think_in_template and _reasoning_parser:
-        try:
-            _tok = engine.tokenizer
-            if getattr(_tok, "has_thinking", False):
-                think_in_template = True
-                logger.info("Detected think_in_template from tokenizer vocabulary")
-        except Exception:
-            pass
+    # Fallback only for unknown configs. Known families may expose thinking
+    # tokens in vocab without opening a reasoning rail in the rendered prompt.
+    think_in_template = _apply_tokenizer_thinking_vocab_fallback(
+        think_in_template,
+        reasoning_parser=_reasoning_parser,
+        tokenizer=engine.tokenizer,
+        model_config=_model_config,
+    )
 
     # S5 seed detection: some templates (e.g., Nemotron CRACK) complete the
     # thinking block in the generation prompt (<think>\nOK.\n</think>\n).
@@ -12459,6 +12887,11 @@ async def stream_chat_completion(
                         streamed_content,
                         request,
                     )
+                elif emit_content:
+                    emit_content = _visual_grounding_display_delta(
+                        accumulated_content,
+                        streamed_content,
+                    )
 
                 # Skip chunks that have nothing to emit after conversion
                 if not emit_content and not emit_reasoning and not output.finished:
@@ -12553,6 +12986,11 @@ async def stream_chat_completion(
                         accumulated_text,
                         streamed_content,
                         request,
+                    )
+                elif content:
+                    content = _visual_grounding_display_delta(
+                        accumulated_text,
+                        streamed_content,
                     )
 
                 if content:
@@ -13144,14 +13582,14 @@ async def stream_responses_api(
     )
     think_in_template = _model_config.think_in_template
 
-    # Fallback: detect from tokenizer if model config doesn't know this model
-    if not think_in_template and _reasoning_parser:
-        try:
-            _tok = engine.tokenizer
-            if getattr(_tok, "has_thinking", False):
-                think_in_template = True
-        except Exception:
-            pass
+    # Fallback only for unknown configs. Known families may expose thinking
+    # tokens in vocab without opening a reasoning rail in the rendered prompt.
+    think_in_template = _apply_tokenizer_thinking_vocab_fallback(
+        think_in_template,
+        reasoning_parser=_reasoning_parser,
+        tokenizer=engine.tokenizer,
+        model_config=_model_config,
+    )
 
     # S5 seed detection (mirrors Chat Completions path)
     if think_in_template:
@@ -13361,6 +13799,11 @@ async def stream_responses_api(
                                     streamed_text,
                                     request,
                                 )
+                            elif emit_content:
+                                emit_content = _visual_grounding_display_delta(
+                                    accumulated_content,
+                                    streamed_text,
+                                )
 
                             # Emit reasoning as OpenAI Responses reasoning-summary events.
                             if emit_reasoning:
@@ -13420,6 +13863,11 @@ async def stream_responses_api(
                                 full_text,
                                 streamed_text,
                                 request,
+                            )
+                        elif content:
+                            content = _visual_grounding_display_delta(
+                                full_text,
+                                streamed_text,
                             )
 
                         if content:
@@ -13599,6 +14047,7 @@ async def stream_responses_api(
 
         # Finalize the text message with whatever content was before the tool call
         final_text = (cleaned_text or "").strip()
+        final_text = _finalize_visible_text_for_request(final_text, request)
         yield _sse(
             "response.output_text.done",
             {
@@ -13827,6 +14276,8 @@ async def stream_responses_api(
                 display_text,
                 request,
             )
+        if display_text:
+            display_text = _finalize_visible_text_for_request(display_text, request)
 
         yield _sse(
             "response.output_text.done",

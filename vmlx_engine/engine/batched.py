@@ -947,16 +947,10 @@ class BatchedEngine(BaseEngine):
                 tool_parser_id=self._model_tool_parser_name(),
             )
 
-            # When thinking is OFF and no tools in request, close any unclosed
-            # <think> in the prompt. This tells the model "thinking already
-            # happened" and it should produce content directly.
-            # CRITICAL: skip this when tools are present — the model needs to
-            # think in order to decide whether to call a tool. The <think></think>
-            # injection suppresses not just thinking but also tool-call decision
-            # making, causing the model to produce a direct (often wrong) answer
-            # instead of calling the tool. Server-side reasoning suppression
-            # (heartbeats) handles the UX when tools are active.
-            if enable_thinking is False and not tools:
+            # When thinking is OFF, close any unclosed <think> when the family
+            # needs an explicit empty thought sentinel. The helper deliberately
+            # leaves most tool turns untouched; LFM2 is the known exception.
+            if enable_thinking is False:
                 prompt = ensure_thinking_off_sentinel(
                     prompt,
                     family_name=self._model_family_name(),

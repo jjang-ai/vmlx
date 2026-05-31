@@ -30,6 +30,31 @@ export interface ToolResult {
   videoDataUrl?: string
 }
 
+function isExpectedChildProcessStreamDisconnectError(err: unknown): boolean {
+  const code = (err as NodeJS.ErrnoException)?.code
+  const message = String((err as Error)?.message || '').toLowerCase()
+  return (
+    code === "EPIPE" ||
+    code === "ECONNRESET" ||
+    code === "ERR_STREAM_DESTROYED" ||
+    code === "ERR_STREAM_WRITE_AFTER_END" ||
+    message.includes("write EPIPE".toLowerCase()) ||
+    message.includes("broken pipe") ||
+    message.includes("stream has been destroyed") ||
+    message.includes("write after end")
+  )
+}
+
+function attachChildProcessStreamErrorGuard(
+  stream: NodeJS.ReadableStream | null | undefined,
+  onUnexpected: (err: Error) => void,
+): void {
+  stream?.on('error', (err: Error) => {
+    if (isExpectedChildProcessStreamDisconnectError(err)) return
+    onUnexpected(err)
+  })
+}
+
 // ─── Security ────────────────────────────────────────────────────────────────
 
 /** Resolve path relative to working directory. Blocks directory traversal and symlink escape. */
@@ -509,6 +534,12 @@ async function runCommand(command: string, workingDir: string): Promise<ToolResu
     proc.stderr?.on('data', (d: Buffer) => {
       stderr += d.toString()
       if (!killReason && stderr.length > 10 * 1024 * 1024) { killReason = 'Stderr exceeded 10MB limit'; proc.kill() }
+    })
+    attachChildProcessStreamErrorGuard(proc.stdout, (err) => {
+      stderr += `\nStdout stream error: ${err.message}`
+    })
+    attachChildProcessStreamErrorGuard(proc.stderr, (err) => {
+      stderr += `\nStderr stream error: ${err.message}`
     })
     const timer = setTimeout(() => { if (!killReason) { killReason = 'Command timed out after 60 seconds'; proc.kill() } }, 60000)
     proc.on('close', (code, signal) => {
@@ -1215,6 +1246,12 @@ function spawnProcess(command: string, workingDir: string): ToolResult {
   proc.stderr?.on('data', (d: Buffer) => {
     entry.stderr += d.toString()
     if (entry.stderr.length > 100000) entry.stderr = entry.stderr.slice(-50000)
+  })
+  attachChildProcessStreamErrorGuard(proc.stdout, (err) => {
+    entry.stderr += `\nStdout stream error: ${err.message}`
+  })
+  attachChildProcessStreamErrorGuard(proc.stderr, (err) => {
+    entry.stderr += `\nStderr stream error: ${err.message}`
   })
   proc.on('close', () => { entry.running = false })
   proc.on('error', (err: Error) => { entry.stderr += `\nProcess error: ${err.message}`; entry.running = false })

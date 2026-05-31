@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Any
 
 
-DEFAULT_OUT = Path("build/current-parser-registry-contract-20260521.json")
+DEFAULT_OUT = Path("build/current-parser-registry-contract-20260531-post-step-lfm-refresh.json")
 
 SOURCE_HASH_FILES = (
     "vmlx_engine/cli.py",
@@ -60,10 +60,13 @@ REQUIRED_PARSER_TEST_MARKERS = (
     "test_gemma3_reasoning_parser",
     "test_glm_flash_vs_base_reasoning_parser_differs",
     "test_deepseek_v4_eos_includes_latest_reminder",
+    "test_lfm2_registered",
+    "test_lfm2_moe_config",
     # Panel-side launch and UI parity. These protect aliases/dropdowns and the
     # command builder, not only backend Python config.
     "canonicalizes legacy DSV4 and Hy3 parser aliases before launch",
     "tool parser dropdown exposes DSV4 DSML, Hy3, and ZAYA parsers",
+    "tool parser dropdown exposes Liquid LFM2 parser",
     "reasoning parser dropdown covers every parser the panel registry can emit",
     "passes MiniMax through the registered minimax_m2 reasoning parser",
     "uses the registered MiniMax reasoning parser even when bundle sidecars say qwen3",
@@ -82,7 +85,7 @@ COMMANDS: dict[str, tuple[Path, list[str]]] = {
             "tests/test_engine_audit.py",
             "tests/test_model_config_registry.py",
             "-k",
-            "parser or minimax or reasoning or reasoning_parser or zaya or ling or deepseek_v4_eos or role_boundary",
+            "parser or minimax or reasoning or reasoning_parser or zaya or ling or lfm2 or deepseek_v4_eos or role_boundary",
         ],
     ),
     "panel_parser_registry": (
@@ -94,7 +97,7 @@ COMMANDS: dict[str, tuple[Path, list[str]]] = {
             "tests/model-config-registry.test.ts",
             "tests/settings-flow.test.ts",
             "--testNamePattern",
-            "parser|Parser|reasoning|Reasoning|minimax|MiniMax",
+            "parser|Parser|reasoning|Reasoning|minimax|MiniMax|LFM2|lfm2",
             "--reporter=verbose",
         ],
     ),
@@ -194,6 +197,8 @@ def build_artifact(root: Path) -> dict[str, Any]:
             and "test_zaya1_vl_registered_with_full_contract" not in missing_markers
             and "test_ling_is_not_a_reasoning_model_per_eric_2026_05_11" not in missing_markers
             and "test_deepseek_v4_eos_includes_latest_reminder" not in missing_markers
+            and "test_lfm2_moe_config" not in missing_markers
+            and "test_lfm2_registered" not in missing_markers
             and "detects Hy3 as text-only KV with Hunyuan tools and qwen3 reasoning" not in missing_markers
         ),
         "non_reasoning_family_boundaries_are_present": (

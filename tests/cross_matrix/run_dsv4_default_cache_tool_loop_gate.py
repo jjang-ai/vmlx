@@ -77,6 +77,18 @@ EXPECTED_CODE_TOOL_CONTENT = (
     "scene.add(cube);\n"
     "renderer.render(scene, camera);"
 )
+EXPECTED_CODE_FRAGMENTS = (
+    "THREE.WebGLRenderer",
+    "THREE.PerspectiveCamera",
+    "THREE.MeshBasicMaterial",
+    "renderer.render(scene, camera);",
+)
+CORRUPT_CODE_PATTERNS = (
+    "THREE.WebRenderer",
+    "THREE.PPerspectiveCamera",
+    "THREE.BBoxGeometry",
+    "scene.add(c)",
+)
 
 
 def resolve_default_model() -> str:
@@ -148,7 +160,8 @@ def wait_health(port: int, proc: subprocess.Popen, timeout_s: int) -> dict[str, 
 
 
 def build_command(args: argparse.Namespace) -> list[str]:
-    return [
+    max_output_tokens = int(getattr(args, "max_output_tokens", 320) or 320)
+    cmd = [
         str(args.python),
         "-B",
         "-s",
@@ -170,22 +183,34 @@ def build_command(args: argparse.Namespace) -> list[str]:
         "--enable-auto-tool-choice",
         "--reasoning-parser",
         "deepseek_r1",
-        "--dsv4-enable-prefix-cache",
-        "--use-paged-cache",
-        "--paged-cache-block-size",
-        "256",
-        "--max-cache-blocks",
-        "1000",
-        "--enable-block-disk-cache",
-        "--block-disk-cache-max-gb",
-        "10",
-        "--stream-interval",
-        "1",
-        "--max-tokens",
-        "320",
-        "--served-model-name",
-        "dsv4-default-cache-tools",
     ]
+    if bool(getattr(args, "disable_prefix_cache", False)):
+        cmd.append("--disable-prefix-cache")
+    else:
+        cmd.extend(
+            [
+                "--dsv4-enable-prefix-cache",
+                "--use-paged-cache",
+                "--paged-cache-block-size",
+                "256",
+                "--max-cache-blocks",
+                "1000",
+                "--enable-block-disk-cache",
+                "--block-disk-cache-max-gb",
+                "10",
+            ]
+        )
+    cmd.extend(
+        [
+            "--stream-interval",
+            "1",
+            "--max-tokens",
+            str(max_output_tokens),
+            "--served-model-name",
+            "dsv4-default-cache-tools",
+        ]
+    )
+    return cmd
 
 
 def build_env(args: argparse.Namespace) -> dict[str, str]:
@@ -249,6 +274,115 @@ def usage_details(resp: dict[str, Any]) -> dict[str, Any]:
     return details if isinstance(details, dict) else {}
 
 
+def code_round_request_controls(
+    *,
+    request_max_output_tokens: int,
+    request_thinking_mode: dict[str, Any],
+) -> dict[str, Any]:
+    return {
+        "round": 2,
+        "model": "dsv4-default-cache-tools",
+        "store": True,
+        "stream": False,
+        "max_output_tokens": request_max_output_tokens,
+        "temperature": 0.0,
+        "top_p": 1.0,
+        "top_k": 0,
+        "repetition_penalty": 1.0,
+        **request_thinking_mode,
+        "tools_enabled": True,
+        "tool_choice": "auto",
+    }
+
+
+def build_code_prompt(variant: str) -> str:
+    if variant == "copy_block":
+        return (
+            f"Copy this exact JavaScript into {EXPECTED_CODE_TOOL_PATH} using write_file. "
+            "Preserve every character, newline, capitalization, punctuation, and identifier spelling. "
+            "Do not answer in prose.\n\n"
+            f"{EXPECTED_CODE_TOOL_CONTENT}"
+        )
+    return (
+        f"Use write_file to create {EXPECTED_CODE_TOOL_PATH} with content exactly "
+        f"{EXPECTED_CODE_TOOL_CONTENT!r}. Preserve identifier spelling and do not answer in prose."
+    )
+
+
+def first_difference(expected: str, actual: str | None) -> dict[str, Any] | None:
+    if actual is None:
+        return {
+            "index": 0,
+            "expected_char": expected[:1] or None,
+            "actual_char": None,
+            "expected_tail": expected[:80],
+            "actual_tail": None,
+        }
+    for index, (expected_char, actual_char) in enumerate(zip(expected, actual)):
+        if expected_char != actual_char:
+            return {
+                "index": index,
+                "expected_char": expected_char,
+                "actual_char": actual_char,
+                "expected_tail": expected[index : index + 80],
+                "actual_tail": actual[index : index + 80],
+            }
+    if len(expected) != len(actual):
+        index = min(len(expected), len(actual))
+        return {
+            "index": index,
+            "expected_char": expected[index : index + 1] or None,
+            "actual_char": actual[index : index + 1] or None,
+            "expected_tail": expected[index : index + 80],
+            "actual_tail": actual[index : index + 80],
+        }
+    return None
+
+
+def build_code_tool_probe(actual_content: str | None) -> dict[str, Any]:
+    return {
+        "path": EXPECTED_CODE_TOOL_PATH,
+        "expected_content": EXPECTED_CODE_TOOL_CONTENT,
+        "actual_content": actual_content,
+        "exact": actual_content == EXPECTED_CODE_TOOL_CONTENT,
+        "expected_length": len(EXPECTED_CODE_TOOL_CONTENT),
+        "actual_length": len(actual_content) if actual_content is not None else None,
+        "first_difference": first_difference(
+            EXPECTED_CODE_TOOL_CONTENT,
+            actual_content,
+        ),
+        "missing_expected_fragments": [
+            item
+            for item in EXPECTED_CODE_FRAGMENTS
+            if actual_content is None or item not in actual_content
+        ],
+        "corrupt_identifier_patterns": [
+            item
+            for item in CORRUPT_CODE_PATTERNS
+            if actual_content is not None and item in actual_content
+        ],
+    }
+
+
+def response_diagnostics(resp: dict[str, Any]) -> dict[str, Any]:
+    output_items = resp.get("output") if isinstance(resp.get("output"), list) else []
+    return {
+        "response_status": resp.get("status"),
+        "incomplete_details": resp.get("incomplete_details"),
+        "output_item_statuses": [
+            {
+                "type": item.get("type"),
+                "id": item.get("id"),
+                "status": item.get("status"),
+                "finish_reason": item.get("finish_reason"),
+                "name": item.get("name"),
+            }
+            for item in output_items
+            if isinstance(item, dict)
+        ],
+    }
+
+
 def execute_tool(workspace: Path, call: dict[str, Any]) -> dict[str, Any]:
     name = str(call.get("name") or "")
     call_id = str(call.get("call_id") or call.get("id") or "")
@@ -283,6 +417,20 @@ def execute_tool(workspace: Path, call: dict[str, Any]) -> dict[str, Any]:
 def run(args: argparse.Namespace) -> dict[str, Any]:
     cmd = build_command(args)
     env = build_env(args)
+    request_max_output_tokens = int(getattr(args, "max_output_tokens", 320) or 320)
+    enable_thinking = bool(getattr(args, "enable_thinking", False))
+    request_thinking_mode = {
+        "enable_thinking": enable_thinking,
+        "chat_template_kwargs": {"enable_thinking": enable_thinking},
+    }
+    code_controls = code_round_request_controls(
+        request_max_output_tokens=request_max_output_tokens,
+        request_thinking_mode=request_thinking_mode,
+    )
+    code_prompt_variant = str(
+        getattr(args, "code_prompt_variant", "exact_inline") or "exact_inline"
+    )
+    code_prompt = build_code_prompt(code_prompt_variant)
     env_summary = {
         "DSV4_LONG_CTX": env["DSV4_LONG_CTX"],
         "DSV4_POOL_QUANT": env["DSV4_POOL_QUANT"],
@@ -294,10 +442,15 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             "model": args.model,
             "cmd": cmd,
             "env": env_summary,
-            "code_tool_probe": {
-                "path": EXPECTED_CODE_TOOL_PATH,
-                "expected_content": EXPECTED_CODE_TOOL_CONTENT,
-            },
+            "diagnostic_cache_mode": "disabled"
+            if bool(getattr(args, "disable_prefix_cache", False))
+            else "default_native_prefix_paged_l2",
+            "request_max_output_tokens": request_max_output_tokens,
+            "request_thinking_mode": request_thinking_mode,
+            "diagnostic_code_prompt_variant": code_prompt_variant,
+            "diagnostic_code_prompt": code_prompt,
+            "code_round_request_controls": code_controls,
+            "code_tool_probe": build_code_tool_probe(None),
             "telemetry": [resource_snapshot("dry_run")],
         }
 
@@ -327,10 +480,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             prompts = [
                 "Use list_directory for path '.' and do not answer in prose.",
                 f"Now use write_file to create {EXPECTED_HTML_TOOL_PATH} with content exactly {EXPECTED_HTML_TOOL_CONTENT!r}. Do not answer in prose.",
-                (
-                    f"Use write_file to create {EXPECTED_CODE_TOOL_PATH} with content exactly "
-                    f"{EXPECTED_CODE_TOOL_CONTENT!r}. Preserve identifier spelling and do not answer in prose."
-                ),
+                code_prompt,
                 "No more tools. Reply exactly DONE.",
             ]
             for index, prompt in enumerate(prompts):
@@ -341,13 +491,12 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                     else prompt,
                     "store": True,
                     "stream": False,
-                    "max_output_tokens": 320,
+                    "max_output_tokens": request_max_output_tokens,
                     "temperature": 0.0,
                     "top_p": 1.0,
                     "top_k": 0,
                     "repetition_penalty": 1.0,
-                    "enable_thinking": False,
-                    "chat_template_kwargs": {"enable_thinking": False},
+                    **request_thinking_mode,
                 }
                 if index < 3:
                     body["tools"] = TOOLS
@@ -379,6 +528,9 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                         ],
                         "tool_outputs": executed,
                         "output_text": output_text(resp),
+                        "response_diagnostics": response_diagnostics(resp),
+                        "request_thinking_mode": request_thinking_mode,
+                        "request_controls": code_controls if index == 2 else None,
                         "usage": resp.get("usage") or {},
                     }
                 )
@@ -427,6 +579,13 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             "model": args.model,
             "cmd": cmd,
             "env": env_summary,
+            "diagnostic_cache_mode": "disabled"
+            if bool(getattr(args, "disable_prefix_cache", False))
+            else "default_native_prefix_paged_l2",
+            "request_max_output_tokens": request_max_output_tokens,
+            "request_thinking_mode": request_thinking_mode,
+            "diagnostic_code_prompt_variant": code_prompt_variant,
+            "code_round_request_controls": code_controls,
             "server_pid": proc.pid,
             "log_path": str(log_path),
             "health": health1,
@@ -434,11 +593,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             "cache_stats": cache_stats,
             "rounds": rounds,
             "checks": checks,
-            "code_tool_probe": {
-                "path": EXPECTED_CODE_TOOL_PATH,
-                "expected_content": EXPECTED_CODE_TOOL_CONTENT,
-                "actual_content": code_file_content,
-            },
+            "code_tool_probe": build_code_tool_probe(code_file_content),
             "telemetry": telemetry,
             "tool_loop_cached_tokens": cached_total,
             "tool_loop_cache_details": details,
@@ -450,6 +605,12 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             "model": args.model,
             "cmd": cmd,
             "env": env_summary,
+            "diagnostic_cache_mode": "disabled"
+            if bool(getattr(args, "disable_prefix_cache", False))
+            else "default_native_prefix_paged_l2",
+            "request_max_output_tokens": request_max_output_tokens,
+            "request_thinking_mode": request_thinking_mode,
+            "diagnostic_code_prompt_variant": code_prompt_variant,
             "log_path": str(log_path),
             "log_tail": log_path.read_text(errors="replace")[-12000:]
             if log_path.exists()
@@ -474,8 +635,25 @@ def main() -> None:
     parser.add_argument("--timeout", type=int, default=420)
     parser.add_argument("--request-timeout", type=int, default=600)
     parser.add_argument("--min-free-gb", type=float, default=DEFAULT_MIN_FREE_GB)
+    parser.add_argument("--max-output-tokens", type=int, default=320)
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--pool-quant", action="store_true")
+    parser.add_argument(
+        "--disable-prefix-cache",
+        action="store_true",
+        help="Diagnostic A/B only: disable prefix/paged/L2 cache for this tool loop.",
+    )
+    parser.add_argument(
+        "--code-prompt-variant",
+        choices=("exact_inline", "copy_block"),
+        default="exact_inline",
+        help="Diagnostic A/B only: vary the code-round prompt with the same expected file content.",
+    )
+    parser.add_argument(
+        "--enable-thinking",
+        action="store_true",
+        help="Diagnostic only: request DSV4 thinking mode for each tool-loop turn.",
+    )
     args = parser.parse_args()
 
     result = run(args)

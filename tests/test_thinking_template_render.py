@@ -243,6 +243,40 @@ def test_thinking_off_sentinel_does_not_touch_other_families_or_tools():
     )
 
 
+def test_lfm2_thinking_off_sentinel_applies_even_with_tools():
+    """LFM2 loops in `<think>` on tool turns unless the prompt closes it."""
+    prompt = "<|im_start|>assistant\n"
+
+    fixed = ensure_thinking_off_sentinel(
+        prompt,
+        family_name="lfm2",
+        model_name="LFM2.5-8B-A1B-JANG_2L",
+        tools_present=True,
+    )
+
+    assert fixed.endswith("<think>\n</think>\n\n")
+    assert _has_empty_think_pair(fixed)
+
+
+def test_step37_thinking_off_sentinel_closes_forced_template_think_with_tools():
+    """Step3.7's native template opens `<think>` even when thinking is off."""
+    prompt = (
+        "<|im_start|>system\n# Tools\n<|im_end|>\n"
+        "<|im_start|>user\nUse run_command once.<|im_end|>\n"
+        "<|im_start|>assistant\n<think>\n"
+    )
+
+    fixed = ensure_thinking_off_sentinel(
+        prompt,
+        family_name="step3p7",
+        model_name="Step-3.7-Flash-JANG_2L",
+        tools_present=True,
+    )
+
+    assert fixed.endswith("<think>\n</think>\n\n")
+    assert _has_empty_think_pair(fixed)
+
+
 # ---------------------------------------------------------------------------
 # Layer 2: live-engine generation (slow, model load required, marker `live`)
 # ---------------------------------------------------------------------------

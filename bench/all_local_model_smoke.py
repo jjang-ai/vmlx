@@ -20,7 +20,8 @@ from typing import Any
 
 
 ROOT = Path(__file__).resolve().parents[1]
-PYTHON = Path(os.environ.get("VMLINUX_BENCH_PYTHON", sys.executable))
+_PYTHON_ENV = Path(os.environ.get("VMLINUX_BENCH_PYTHON", sys.executable)).expanduser()
+PYTHON = _PYTHON_ENV if _PYTHON_ENV.is_absolute() else (ROOT / _PYTHON_ENV).resolve()
 DEFAULT_SKIP_TERMS = ("kimi",)
 
 
@@ -76,12 +77,37 @@ def _index_has_mtp_tensors(model_dir: Path) -> bool:
     return any(str(key).startswith("mtp.") for key in weight_map)
 
 
+def _bundle_declares_native_video(model_dir: Path, config: dict[str, Any], lower_blob: str) -> bool:
+    if config.get("video_config") is not None:
+        return True
+    if (model_dir / "video_preprocessor_config.json").is_file():
+        return True
+    if "qwen" in lower_blob and _has_key_recursive(
+        config,
+        {"video_token_id", "video_token_index"},
+    ):
+        return True
+    return False
+
+
 def classify_model_dir(model_dir: Path) -> dict[str, Any]:
     config = read_json(model_dir / "config.json")
     jang = read_json(model_dir / "jang_config.json")
     name = model_dir.name
     model_type = _raw_model_type(config)
     lower_blob = json.dumps({"name": name, "config": config, "jang": jang}, sort_keys=True).lower()
+    jang_capabilities = jang.get("capabilities") if isinstance(jang.get("capabilities"), dict) else {}
+    config_capabilities = (
+        config.get("capabilities") if isinstance(config.get("capabilities"), dict) else {}
+    )
+    capabilities = jang_capabilities or config_capabilities
+    runtime = (
+        jang.get("runtime")
+        if isinstance(jang.get("runtime"), dict)
+        else config.get("runtime")
+        if isinstance(config.get("runtime"), dict)
+        else {}
+    )
 
     is_mllm = (
         _has_key_recursive(config, {"vision_config", "visual", "image_token_id", "video_token_id"})
@@ -96,6 +122,7 @@ def classify_model_dir(model_dir: Path) -> dict[str, Any]:
         jang.get("drop_mtp") is not True
         and (
             name_has_mtp
+            or runtime.get("bundle_has_mtp") is True
             or _index_has_mtp_tensors(model_dir)
             or _positive_int_recursive(
                 config,
@@ -103,18 +130,54 @@ def classify_model_dir(model_dir: Path) -> dict[str, Any]:
             )
         )
     )
-    supports_video = bool(is_mllm and ("video" in lower_blob or "qwen" in lower_blob or "vl" in lower_blob or "omni" in lower_blob))
+    supports_video = bool(
+        is_mllm
+        and (
+            _bundle_declares_native_video(model_dir, config, lower_blob)
+        )
+    )
     supports_thinking = (
         "qwen" in lower_blob
         or "deepseek" in lower_blob
         or "gemma4" in lower_blob
         or "hy3" in lower_blob
         or "hy_v3" in lower_blob
+        or "minimax" in lower_blob
+        or model_type == "zaya1_vl"
     )
-    if "ling" in lower_blob or "zaya" in lower_blob or "minimax" in lower_blob:
+    non_reasoning_family_blob = " ".join((name_lower, model_type.lower()))
+    if "ling" in non_reasoning_family_blob or model_type == "zaya":
         supports_thinking = False
+    reasoning_capabilities = (
+        capabilities.get("reasoning")
+        if isinstance(capabilities.get("reasoning"), dict)
+        else {}
+    )
+    if isinstance(capabilities.get("supports_thinking"), bool):
+        supports_thinking = bool(capabilities["supports_thinking"])
+    elif isinstance(reasoning_capabilities.get("supported"), bool):
+        supports_thinking = bool(reasoning_capabilities["supported"])
 
-    if "deepseek_v4" in lower_blob or "deepseek-v4" in name.lower():
+    supports_tools = True
+    tool_capabilities = (
+        capabilities.get("tools")
+        if isinstance(capabilities.get("tools"), dict)
+        else {}
+    )
+    if isinstance(capabilities.get("supports_tools"), bool):
+        supports_tools = bool(capabilities["supports_tools"])
+    elif isinstance(tool_capabilities.get("supported"), bool):
+        supports_tools = bool(tool_capabilities["supported"])
+    elif (
+        capabilities.get("tool_parser") is None
+        and tool_capabilities.get("parser") is None
+        and model_type == "mimo_v2"
+    ):
+        supports_tools = False
+
+    if model_type == "mimo_v2":
+        cache_family = "mimo_v2_hybrid_swa"
+    elif "deepseek_v4" in lower_blob or "deepseek-v4" in name.lower():
         cache_family = "deepseek_v4_composite"
     elif "zaya" in lower_blob:
         cache_family = "zaya_cca"
@@ -138,6 +201,7 @@ def classify_model_dir(model_dir: Path) -> dict[str, Any]:
         "is_mllm": is_mllm,
         "supports_video": supports_video,
         "supports_thinking": supports_thinking,
+        "supports_tools": supports_tools,
         "has_mtp": has_mtp,
         "cache_family": cache_family,
         "has_jang_config": bool(jang),
@@ -163,6 +227,8 @@ def build_serve_command(
     py: str | None = None,
 ) -> list[str]:
     python = py or str(PYTHON)
+    dsv4_active = row.get("cache_family") == "deepseek_v4_composite"
+    paged_block_size = "256" if dsv4_active else "64"
     cmd = [
         python,
         "-B",
@@ -190,12 +256,12 @@ def build_serve_command(
         "--continuous-batching",
         "--use-paged-cache",
         "--paged-cache-block-size",
-        "64",
+        paged_block_size,
         "--max-cache-blocks",
         "1000",
         "--enable-block-disk-cache",
         "--block-disk-cache-dir",
-        str(out_dir / "block_cache"),
+        str((out_dir / "block_cache").resolve()),
         "--block-disk-cache-max-gb",
         "2",
         "--ssm-state-cache-mb",
@@ -207,6 +273,8 @@ def build_serve_command(
         "--default-enable-thinking",
         "false",
     ]
+    if dsv4_active:
+        cmd.append("--dsv4-enable-prefix-cache")
     if row.get("is_mllm"):
         cmd.append("--is-mllm")
     return cmd
@@ -219,8 +287,19 @@ def build_server_env() -> dict[str, str]:
         env.pop("PYTHONPATH", None)
         env["PYTHONNOUSERSITE"] = "1"
     else:
-        env["PYTHONPATH"] = str(ROOT)
+        pythonpath_parts = [str(ROOT)]
+        extra_pythonpath = os.environ.get("VMLINUX_BENCH_EXTRA_PYTHONPATH", "")
+        pythonpath_parts.extend(
+            part for part in extra_pythonpath.split(os.pathsep) if part
+        )
+        env["PYTHONPATH"] = os.pathsep.join(pythonpath_parts)
     return env
+
+
+def server_process_cwd(row_dir: Path) -> Path:
+    if os.environ.get("VMLINUX_BENCH_ISOLATED") == "1":
+        return row_dir.resolve()
+    return ROOT
 
 
 def solid_png_base64(width: int, height: int, rgb: tuple[int, int, int]) -> str:
@@ -288,6 +367,102 @@ def _text_payload(model: str, prompt: str, max_tokens: int, *, thinking: bool = 
     }
 
 
+def _exact_ack_cache_payload(model: str, prompt: str, max_tokens: int) -> dict[str, Any]:
+    payload = _text_payload(model, prompt, max_tokens, thinking=False)
+    payload["messages"] = [
+        {
+            "role": "system",
+            "content": "Output exactly ACK and nothing else. Do not explain or prefix it.",
+        },
+        {"role": "user", "content": prompt},
+    ]
+    return payload
+
+
+def _required_tool_payload(model: str, max_tokens: int) -> dict[str, Any]:
+    return {
+        "model": model,
+        "messages": [
+            {
+                "role": "user",
+                "content": (
+                    "Use the record_fact tool exactly once with value blue-cat. "
+                    "Do not answer in visible text."
+                ),
+            }
+        ],
+        "temperature": 0,
+        "max_tokens": max_tokens,
+        "stream": False,
+        "enable_thinking": False,
+        "tool_choice": "required",
+        "tools": [
+            {
+                "type": "function",
+                "function": {
+                    "name": "record_fact",
+                    "description": "Record one exact fact for a smoke test.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "value": {
+                                "type": "string",
+                                "description": "The exact value to record.",
+                            }
+                        },
+                        "required": ["value"],
+                    },
+                },
+            }
+        ],
+    }
+
+
+def _cache_probe_prompt(row: dict[str, Any]) -> str:
+    base = (
+        "Cache probe fixed prefix. Read these stable words: alpha beta gamma delta "
+        "epsilon zeta eta theta iota kappa lambda mu nu xi omicron pi rho sigma tau."
+    )
+    if row.get("cache_family") != "deepseek_v4_composite":
+        return base
+    anchors = " ".join(f"dsv4-native-cache-anchor-{index:03d}" for index in range(360))
+    return (
+        "DSV4 native cache probe. Keep this deterministic prefix unchanged and "
+        f"answer according to the system instruction only. {anchors}"
+    )
+
+
+def _no_media_payload(
+    model: str,
+    media_kind: str,
+    max_tokens: int,
+) -> dict[str, Any]:
+    sentinel = media_kind.upper()
+    payload = _text_payload(
+        model,
+        (
+            f"Look only at attachments in this current user message. If there "
+            f"are no {media_kind} attachments, answer exactly NONE. Otherwise "
+            f"answer exactly {sentinel}."
+        ),
+        max_tokens,
+        thinking=False,
+    )
+    payload["messages"] = [
+        {
+            "role": "system",
+            "content": (
+                f"For this request, the current user message has zero {media_kind} "
+                f"attachments. Answer exactly NONE if there is no {media_kind} "
+                f"attachment; answer exactly {sentinel} only if a {media_kind} "
+                "attachment is actually included in the current user message."
+            ),
+        },
+        payload["messages"][0],
+    ]
+    return payload
+
+
 def build_probe_payloads(
     row: dict[str, Any],
     *,
@@ -295,21 +470,18 @@ def build_probe_payloads(
     include_reasoning: bool,
     include_media: bool = True,
     include_video: bool = True,
+    include_tools: bool = False,
 ) -> list[dict[str, Any]]:
     model = row["served_name"]
-    cache_prompt = (
-        "Cache probe fixed prefix. Read these stable words: alpha beta gamma delta "
-        "epsilon zeta eta theta iota kappa lambda mu nu xi omicron pi rho sigma tau. "
-        "Reply exactly: ACK"
-    )
+    cache_prompt = _cache_probe_prompt(row)
     probes: list[dict[str, Any]] = [
         {
             "label": "text_cache_repeat_1",
-            "payload": _text_payload(model, cache_prompt, max_tokens, thinking=False),
+            "payload": _exact_ack_cache_payload(model, cache_prompt, max_tokens),
         },
         {
             "label": "text_cache_repeat_2",
-            "payload": _text_payload(model, cache_prompt, max_tokens, thinking=False),
+            "payload": _exact_ack_cache_payload(model, cache_prompt, max_tokens),
         },
         {
             "label": "text_multiturn_recall",
@@ -339,6 +511,13 @@ def build_probe_payloads(
                 ),
             }
         )
+    if include_tools and row.get("supports_tools", True):
+        probes.append(
+            {
+                "label": "tool_required",
+                "payload": _required_tool_payload(model, max(96, max_tokens)),
+            }
+        )
     if include_media and row.get("is_mllm"):
         image_content = [
             {"type": "text", "text": "What is the dominant color in this image? Reply one word."},
@@ -363,12 +542,7 @@ def build_probe_payloads(
                 },
                 {
                     "label": "text_no_media_after_image",
-                    "payload": _text_payload(
-                        model,
-                        "Do you currently see an image in this message? Reply exactly yes or no.",
-                        max_tokens,
-                        thinking=False,
-                    ),
+                    "payload": _no_media_payload(model, "image", max_tokens),
                 },
                 {
                     "label": "vl_blue_image_repeat",
@@ -394,7 +568,7 @@ def build_probe_payloads(
                 },
             ]
         )
-        if include_video and row.get("supports_video"):
+        if include_video:
             video_url = blue_video_data_url()
             if video_url:
                 video_content = [
@@ -418,12 +592,7 @@ def build_probe_payloads(
                         },
                         {
                             "label": "text_no_media_after_video",
-                            "payload": _text_payload(
-                                model,
-                                "Do you currently see a video in this message? Reply exactly yes or no.",
-                                max_tokens,
-                                thinking=False,
-                            ),
+                            "payload": _no_media_payload(model, "video", max_tokens),
                         },
                     ]
                 )
@@ -500,10 +669,31 @@ def extract_text(resp: Any) -> tuple[str, str, dict[str, Any]]:
     return "", "", usage
 
 
+def extract_tool_calls(resp: Any) -> list[dict[str, Any]]:
+    if not isinstance(resp, dict):
+        return []
+    choices = resp.get("choices") or []
+    if not choices:
+        return []
+    message = (choices[0] or {}).get("message") or {}
+    tool_calls = message.get("tool_calls")
+    return tool_calls if isinstance(tool_calls, list) else []
+
+
 _CONTROL_FRAGMENT_RE = re.compile(r"(?:}<\?|<\?){2,}")
 _TEMPLATE_FRAGMENT_RE = re.compile(
     r"(?i)(?:^|[^a-z0-9_])(?:codeline|promcodeline|prep|instructions)(?:[^a-z0-9_]|$)"
 )
+_CJK_RE = re.compile(
+    r"[\u1100-\u11ff\u3040-\u309f\u30a0-\u30ff\u3130-\u318f"
+    r"\u3400-\u4dbf\u4e00-\u9fff\ua960-\ua97f\uac00-\ud7af"
+    r"\ud7b0-\ud7ff\uf900-\ufaff\uff66-\uff9f"
+    r"\U00020000-\U0002a6df\U0002a700-\U0002b73f"
+    r"\U0002b740-\U0002b81f\U0002b820-\U0002ceaf"
+    r"\U0002ceb0-\U0002ebef\U0002f800-\U0002fa1f"
+    r"\U00030000-\U0003134f]"
+)
+MAX_REASONING_ON_CHARS = 4096
 
 
 def _word_set(text: str) -> set[str]:
@@ -515,6 +705,7 @@ def validate_probe_response(
     code: int,
     content: str,
     reasoning: str = "",
+    tool_calls: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     """Apply semantic gates so nonempty incoherent output cannot pass."""
     visible = str(content or "")
@@ -522,7 +713,7 @@ def validate_probe_response(
     failures: list[dict[str, Any]] = []
     if code != 200:
         failures.append({"label": label, "reason": "http_status", "code": code})
-    if not stripped:
+    if not stripped and label != "tool_required":
         failures.append(
             {
                 "label": label,
@@ -542,11 +733,62 @@ def validate_probe_response(
             }
         )
 
+    cjk_chars = len(_CJK_RE.findall(stripped))
+    if cjk_chars:
+        failures.append(
+            {
+                "label": label,
+                "reason": "unexpected_cjk_visible_text",
+                "cjk_chars": cjk_chars,
+            }
+        )
+
     lower = stripped.lower()
     compact_lower = re.sub(r"\s+", "", lower)
     words = _word_set(stripped)
-    if label.startswith("text_cache_repeat") and not ({"ack", "acknowledged"} & words):
-        failures.append({"label": label, "reason": "expected_ack_missing", "missing": ["ACK"]})
+    if label == "tool_required":
+        expected_tool = "record_fact"
+        expected_value = "blue-cat"
+        matching_call = None
+        for call in tool_calls or []:
+            function = call.get("function") if isinstance(call, dict) else None
+            if not isinstance(function, dict):
+                continue
+            if function.get("name") == expected_tool:
+                matching_call = function
+                break
+        if matching_call is None:
+            failures.append(
+                {
+                    "label": label,
+                    "reason": "expected_tool_call_missing",
+                    "expected_tool": expected_tool,
+                }
+            )
+        else:
+            arguments = matching_call.get("arguments")
+            try:
+                parsed_args = json.loads(arguments) if isinstance(arguments, str) else arguments
+            except Exception:
+                parsed_args = None
+            value = parsed_args.get("value") if isinstance(parsed_args, dict) else None
+            if value != expected_value:
+                failures.append(
+                    {
+                        "label": label,
+                        "reason": "expected_tool_argument_missing",
+                        "expected": {"value": expected_value},
+                        "actual": parsed_args,
+                    }
+                )
+    elif label.startswith("text_cache_repeat") and stripped != "ACK":
+        failures.append(
+            {
+                "label": label,
+                "reason": "expected_exact_ack_missing",
+                "expected": "ACK",
+            }
+        )
     elif label == "text_multiturn_recall":
         missing = [term for term in ("blue", "cat") if term not in words]
         if missing:
@@ -567,6 +809,16 @@ def validate_probe_response(
                     "missing": ["FINAL=OK"],
                 }
             )
+        reasoning_chars = len(str(reasoning or ""))
+        if reasoning_chars > MAX_REASONING_ON_CHARS:
+            failures.append(
+                {
+                    "label": label,
+                    "reason": "reasoning_loop_too_long",
+                    "reasoning_chars": reasoning_chars,
+                    "max_reasoning_chars": MAX_REASONING_ON_CHARS,
+                }
+            )
     elif label in {"vl_blue_image", "vl_blue_image_repeat", "vl_blue_video"}:
         if "blue" not in words:
             failures.append({"label": label, "reason": "expected_color_missing", "expected": "blue"})
@@ -574,9 +826,37 @@ def validate_probe_response(
         if "red" not in words:
             failures.append({"label": label, "reason": "expected_color_missing", "expected": "red"})
     elif label in {"text_no_media_after_image", "text_no_media_after_video"}:
-        says_no = "no" in words or "do not" in lower or "don't" in lower
+        media_kind = "video" if label.endswith("_video") else "image"
+        says_no = (
+            "no" in words
+            or "none" in words
+            or "zero" in words
+            or "text_only" in compact_lower
+            or "textonly" in compact_lower
+            or "text-only" in lower
+            or "not included" in lower
+            or "not provided" in lower
+            or "not attached" in lower
+            or "without" in words
+            or "do not" in lower
+            or "don't" in lower
+        )
+        says_affirmative_media = (
+            lower in {media_kind, f"{media_kind}."}
+            or lower.startswith(f"yes")
+            or f"{media_kind} is included" in lower
+            or f"{media_kind} attachment is included" in lower
+        )
         if not says_no:
-            failures.append({"label": label, "reason": "expected_no_media_missing", "expected": "no"})
+            failures.append({"label": label, "reason": "expected_no_media_missing", "expected": "no-or-none"})
+        if says_affirmative_media:
+            failures.append(
+                {
+                    "label": label,
+                    "reason": "unexpected_media_carryover_claim",
+                    "media_kind": media_kind,
+                }
+            )
     return failures
 
 
@@ -587,7 +867,8 @@ def collect_probe_failures(requests: list[dict[str, Any]]) -> list[dict[str, Any
         code = int(req.get("code") or 0)
         content = str(req.get("content") or "")
         reasoning = str(req.get("reasoning") or req.get("reasoning_head") or "")
-        for failure in validate_probe_response(label, code, content, reasoning):
+        tool_calls = req.get("tool_calls") if isinstance(req.get("tool_calls"), list) else []
+        for failure in validate_probe_response(label, code, content, reasoning, tool_calls=tool_calls):
             failure.setdefault("content_head", req.get("content_head", content[:280]))
             if "reasoning_chars" not in failure and "reasoning_chars" in req:
                 failure["reasoning_chars"] = req["reasoning_chars"]
@@ -682,6 +963,7 @@ def run_model_row(
     include_reasoning: bool,
     include_media: bool,
     include_video: bool,
+    include_tools: bool,
 ) -> dict[str, Any]:
     row_dir = out_root / sanitize_name(row["namespace"] + "_" + row["name"])
     row_dir.mkdir(parents=True, exist_ok=True)
@@ -691,6 +973,7 @@ def run_model_row(
         "row": row,
         "port": port,
         "command": cmd,
+        "server_cwd": str(server_process_cwd(row_dir)),
         "started_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
         "requests": [],
         "status": "starting",
@@ -698,8 +981,9 @@ def run_model_row(
     write_json(row_dir / "start.json", result)
 
     env = build_server_env()
+    server_cwd = server_process_cwd(row_dir)
     with log_path.open("w") as log:
-        proc = subprocess.Popen(cmd, cwd=ROOT, env=env, stdout=log, stderr=subprocess.STDOUT, text=True)
+        proc = subprocess.Popen(cmd, cwd=server_cwd, env=env, stdout=log, stderr=subprocess.STDOUT, text=True)
     base_url = f"http://127.0.0.1:{port}"
     try:
         try:
@@ -739,6 +1023,7 @@ def run_model_row(
             include_reasoning=include_reasoning,
             include_media=probe_options["include_media"],
             include_video=probe_options["include_video"],
+            include_tools=include_tools,
         ):
             label = probe["label"]
             payload = probe["payload"]
@@ -749,6 +1034,7 @@ def run_model_row(
                 timeout=request_timeout_s,
             )
             content, reasoning, usage = extract_text(resp)
+            tool_calls = extract_tool_calls(resp)
             code_stats, cache_stats, _ = request_json("GET", f"{base_url}/v1/cache/stats", timeout=30.0)
             request_record = {
                 "label": label,
@@ -758,12 +1044,13 @@ def run_model_row(
                 "content_head": content[:280],
                 "reasoning_head": reasoning[:280],
                 "reasoning_chars": len(reasoning),
+                "tool_calls": tool_calls,
                 "usage": usage,
                 "cache_stats_code": code_stats,
                 "cache_summary": summarize_cache(cache_stats),
             }
             request_record["validation_failures"] = validate_probe_response(
-                label, code, content, reasoning
+                label, code, content, reasoning, tool_calls=tool_calls
             )
             result["requests"].append(request_record)
             write_json(
@@ -848,6 +1135,11 @@ def main() -> int:
     parser.add_argument("--no-reasoning", action="store_true")
     parser.add_argument("--no-media", action="store_true")
     parser.add_argument("--no-video", action="store_true")
+    parser.add_argument(
+        "--include-tools",
+        action="store_true",
+        help="Add an explicit Chat Completions tool_choice=required probe.",
+    )
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
 
@@ -887,16 +1179,20 @@ def main() -> int:
             include_reasoning=not args.no_reasoning,
             include_media=not args.no_media,
             include_video=not args.no_video,
+            include_tools=args.include_tools,
         )
         results.append(result)
         if result.get("status") != "pass":
             any_failed = True
+        failed_count = sum(1 for item in results if item.get("status") != "pass")
         write_json(
             out_root / "summary.json",
             {
                 "created_at": stamp,
+                "status": "fail" if failed_count else "pass",
                 "completed": len(results),
                 "row_count": len(rows),
+                "failed": failed_count,
                 "results": results,
             },
         )
