@@ -1433,8 +1433,12 @@ def _write_passing_real_ui_dsv4_memory_preflight_artifact(root: Path) -> None:
                 "model_path": "/Users/example/models/JANGQ/DeepSeek-V4-Flash-JANGTQ-K",
                 "model_size_gb": 80.0,
                 "free_plus_speculative_purgeable_gb": 39.15,
+                "preflight_memory_source": "vm_stat_free_plus_speculative_purgeable",
                 "required_available_gb": 120.0,
                 "memory_gap_gb": 80.85,
+                "psutil_available_gb": 104.0,
+                "psutil_memory_gap_gb": 16.0,
+                "inactive_file_cache_gb": 30.0,
                 "launch_decision": "do_not_launch",
                 "top_memory_processes": [
                     {"pid": 1001, "rss_gb": 10.0, "command": "vMLX"}
@@ -1798,6 +1802,9 @@ def _passing_open_requirement_details() -> dict[str, object]:
                     "available_gb": 103.87,
                     "required_available_gb": 120.0,
                     "memory_gap_gb": 16.13,
+                    "strict_vm_stat_memory_gap_gb": 16.13,
+                    "psutil_available_gap_gb": 16.13,
+                    "preflight_memory_source": "psutil_available",
                     "did_not_launch": True,
                     "launch_decision": "do_not_launch",
                     "case_count": 14,
@@ -3015,8 +3022,12 @@ def test_release_regression_manifest_real_ui_matrix_records_dsv4_memory_blocker(
                 "model_path": "/Users/example/models/JANGQ/DeepSeek-V4-Flash-JANGTQ-K",
                 "model_size_gb": 80.0,
                 "free_plus_speculative_purgeable_gb": 39.15,
+                "preflight_memory_source": "vm_stat_free_plus_speculative_purgeable",
                 "required_available_gb": 120.0,
                 "memory_gap_gb": 80.85,
+                "psutil_available_gb": 104.0,
+                "psutil_memory_gap_gb": 16.0,
+                "inactive_file_cache_gb": 30.0,
                 "launch_decision": "do_not_launch",
                 "top_memory_processes": [
                     {"pid": 1001, "rss_gb": 10.0, "command": "vMLX"}
@@ -3039,8 +3050,12 @@ def test_release_regression_manifest_real_ui_matrix_records_dsv4_memory_blocker(
         "reason": "insufficient_memory",
         "model_path": "/Users/example/models/JANGQ/DeepSeek-V4-Flash-JANGTQ-K",
         "required_available_gb": 120.0,
+        "preflight_memory_source": "vm_stat_free_plus_speculative_purgeable",
         "free_plus_speculative_purgeable_gb": 39.15,
         "memory_gap_gb": 80.85,
+        "psutil_available_gb": 104.0,
+        "psutil_memory_gap_gb": 16.0,
+        "inactive_file_cache_gb": 30.0,
     }
     assert result["real_ui_live_model_matrix"]["unblocked_non_mimo_status"] == "pass"
     assert (
@@ -4677,6 +4692,9 @@ def test_release_regression_manifest_validates_current_proof_sweep_artifacts(tmp
                     "available_gb": 103.87,
                     "required_available_gb": 120.0,
                     "memory_gap_gb": 16.13,
+                    "strict_vm_stat_memory_gap_gb": 16.13,
+                    "psutil_available_gap_gb": 16.13,
+                    "preflight_memory_source": "psutil_available",
                     "did_not_launch": True,
                     "launch_decision": "do_not_launch",
                     "case_count": 14,
@@ -4687,6 +4705,18 @@ def test_release_regression_manifest_validates_current_proof_sweep_artifacts(tmp
                 "status": "open",
                 "evidence": CURRENT_REAL_UI_DSV4_MEMORY_PREFLIGHT_ARTIFACT,
                 "next_proof": "Run DSV4 real Electron UI proof on a local machine/session with enough free memory.",
+                "details": {
+                    "artifact": CURRENT_REAL_UI_DSV4_MEMORY_PREFLIGHT_ARTIFACT,
+                    "reason": "insufficient_memory",
+                    "model_path": "/Users/example/models/JANGQ/DeepSeek-V4-Flash-JANGTQ-K",
+                    "required_available_gb": 120.0,
+                    "preflight_memory_source": "vm_stat_free_plus_speculative_purgeable",
+                    "free_plus_speculative_purgeable_gb": 39.15,
+                    "memory_gap_gb": 80.85,
+                    "psutil_available_gb": 104.0,
+                    "psutil_memory_gap_gb": 16.0,
+                    "inactive_file_cache_gb": 30.0,
+                },
             },
         ],
         "deferred_release_families": [

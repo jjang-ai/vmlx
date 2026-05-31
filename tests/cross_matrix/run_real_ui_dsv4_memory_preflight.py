@@ -49,6 +49,20 @@ def gb_from_pages(count: int, page_size: int) -> float:
     return round((count * page_size) / (1024**3), 2)
 
 
+def psutil_memory_snapshot() -> dict[str, Any]:
+    try:
+        import psutil
+
+        vm = psutil.virtual_memory()
+    except Exception as exc:  # noqa: BLE001 - diagnostic helper
+        return {"error": f"{type(exc).__name__}: {exc}"}
+    return {
+        "available_gb": round(vm.available / (1024**3), 2),
+        "total_gb": round(vm.total / (1024**3), 2),
+        "percent": vm.percent,
+    }
+
+
 def model_size_gb(model_path: Path) -> float | None:
     if not model_path.exists():
         return None
@@ -122,6 +136,13 @@ def build_preflight(
     purgeable_gb = gb_from_pages(int(pages.get("purgeable", 0)), page_size)
     inactive_gb = gb_from_pages(int(pages.get("inactive", 0)), page_size)
     free_plus_speculative_purgeable = round(free_gb + speculative_gb + purgeable_gb, 2)
+    psutil_snapshot = psutil_memory_snapshot()
+    psutil_available_gb = psutil_snapshot.get("available_gb")
+    psutil_memory_gap_gb = (
+        round(max(0.0, required_available_gb - float(psutil_available_gb)), 2)
+        if isinstance(psutil_available_gb, (int, float))
+        else None
+    )
     size_gb = model_size_gb(model_path)
     safety_margin_gb = (
         round(required_available_gb - size_gb, 2) if size_gb is not None else None
@@ -180,9 +201,14 @@ def build_preflight(
         "required_model_margin_gb": DEFAULT_REQUIRED_MODEL_MARGIN_GB,
         "safety_margin_gb": safety_margin_gb,
         "floor_valid": floor_valid,
+        "preflight_memory_source": "vm_stat_free_plus_speculative_purgeable",
         "free_plus_speculative_purgeable_gb": free_plus_speculative_purgeable,
         "memory_gap_gb": memory_gap_gb,
         "inactive_file_cache_gb": inactive_gb,
+        "psutil_available_gb": psutil_available_gb,
+        "psutil_total_gb": psutil_snapshot.get("total_gb"),
+        "psutil_memory_percent": psutil_snapshot.get("percent"),
+        "psutil_memory_gap_gb": psutil_memory_gap_gb,
         "top_memory_processes": parse_top_memory_processes(top_processes_text),
         "active_heavy_processes": active_heavy_processes,
         "active_heavy_process_count": len(active_heavy_processes),

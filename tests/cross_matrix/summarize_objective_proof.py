@@ -1472,7 +1472,7 @@ def _dsv4_source_memory_preflight_detail(
         if isinstance(system_memory, dict):
             memory = system_memory
         break
-    available_gb = memory.get("available_gb")
+    available_gb = artifact.get("available_gb", memory.get("available_gb"))
     required_available_gb = artifact.get("required_available_gb")
     memory_gap_gb = artifact.get("memory_gap_gb")
     if (
@@ -1502,6 +1502,14 @@ def _dsv4_source_memory_preflight_detail(
         "total_gb": memory.get("total_gb"),
         "required_available_gb": required_available_gb,
         "memory_gap_gb": memory_gap_gb,
+        "strict_vm_stat_memory_gap_gb": artifact.get(
+            "strict_vm_stat_memory_gap_gb"
+        ),
+        "psutil_available_gap_gb": artifact.get("psutil_available_gap_gb"),
+        "preflight_memory_source": artifact.get("preflight_memory_source"),
+        "free_plus_speculative_purgeable_gb": artifact.get(
+            "free_plus_speculative_purgeable_gb"
+        ),
         "did_not_launch": did_not_launch,
         "launch_decision": launch_decision,
     }

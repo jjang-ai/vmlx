@@ -591,7 +591,9 @@ Pages purgeable:                           25000.
     assert artifact["status"] == "skipped"
     assert artifact["reason"] == "insufficient_vm_stat_memory"
     assert artifact["available_gb"] == 130.0
+    assert artifact["psutil_available_gap_gb"] == 0.0
     assert artifact["free_plus_speculative_purgeable_gb"] < 120.0
+    assert artifact["strict_vm_stat_memory_gap_gb"] > 0
     assert artifact["launch_decision"] == "do_not_launch"
     assert "insufficient_memory" in artifact["launch_blockers"]
 

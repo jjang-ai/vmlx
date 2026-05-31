@@ -2184,10 +2184,22 @@ def validate_current_proof_sweep_artifacts(root: Path) -> dict[str, Any]:
                 "required_available_gb": real_ui_dsv4_memory_preflight.get(
                     "required_available_gb"
                 ),
+                "preflight_memory_source": real_ui_dsv4_memory_preflight.get(
+                    "preflight_memory_source"
+                ),
                 "free_plus_speculative_purgeable_gb": real_ui_dsv4_memory_preflight.get(
                     "free_plus_speculative_purgeable_gb"
                 ),
                 "memory_gap_gb": real_ui_dsv4_memory_preflight.get("memory_gap_gb"),
+                "psutil_available_gb": real_ui_dsv4_memory_preflight.get(
+                    "psutil_available_gb"
+                ),
+                "psutil_memory_gap_gb": real_ui_dsv4_memory_preflight.get(
+                    "psutil_memory_gap_gb"
+                ),
+                "inactive_file_cache_gb": real_ui_dsv4_memory_preflight.get(
+                    "inactive_file_cache_gb"
+                ),
             }
         real_ui_live_model_matrix["resource_blockers"] = resource_blockers
     _annotate_real_ui_unblocked_non_mimo_status(real_ui_live_model_matrix)
@@ -2680,6 +2692,9 @@ def _current_release_blocker_ledger(
                         "available_gb",
                         "required_available_gb",
                         "memory_gap_gb",
+                        "strict_vm_stat_memory_gap_gb",
+                        "psutil_available_gap_gb",
+                        "preflight_memory_source",
                         "did_not_launch",
                         "launch_decision",
                         "case_count",
@@ -2821,6 +2836,7 @@ def _current_release_blocker_ledger(
                         "Run DSV4 real Electron UI proof on a local "
                         "machine/session with enough free memory."
                     ),
+                    "details": blocker if isinstance(blocker, dict) else {},
                 }
             )
         if (
@@ -3092,6 +3108,10 @@ def _validate_current_real_ui_dsv4_memory_preflight(root: Path) -> dict[str, Any
             "free_plus_speculative_purgeable_gb": free_gb,
             "required_available_gb": required_gb,
             "memory_gap_gb": memory_gap_gb,
+            "preflight_memory_source": payload.get("preflight_memory_source"),
+            "psutil_available_gb": _json_number(payload, "psutil_available_gb"),
+            "psutil_memory_gap_gb": _json_number(payload, "psutil_memory_gap_gb"),
+            "inactive_file_cache_gb": _json_number(payload, "inactive_file_cache_gb"),
         }
     )
     return result

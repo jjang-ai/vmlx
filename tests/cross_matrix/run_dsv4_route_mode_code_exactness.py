@@ -161,6 +161,11 @@ def memory_preflight_artifact(
     if gate_available is not None and (force_no_launch or gate_available < min_free_gb):
         selected_cases = selected_case_names(args)
         memory_gap_gb = round(max(0.0, min_free_gb - gate_available), 2)
+        psutil_available_gap_gb = (
+            round(max(0.0, min_free_gb - float(available)), 2)
+            if isinstance(available, (int, float))
+            else None
+        )
         status = "ready_to_launch" if gate_available >= min_free_gb else "skipped"
         used_vm_stat = isinstance(vm_available, (int, float))
         return {
@@ -184,6 +189,8 @@ def memory_preflight_artifact(
                 if used_vm_stat
                 else "psutil_available"
             ),
+            "strict_vm_stat_memory_gap_gb": memory_gap_gb if used_vm_stat else None,
+            "psutil_available_gap_gb": psutil_available_gap_gb,
             "free_plus_speculative_purgeable_gb": round(float(vm_available), 2)
             if isinstance(vm_available, (int, float))
             else None,

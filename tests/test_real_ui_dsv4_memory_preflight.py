@@ -42,6 +42,39 @@ Pages purgeable:                           25000.
     assert "insufficient_memory" in payload["launch_blockers"]
 
 
+def test_dsv4_memory_preflight_records_psutil_available_as_diagnostic(tmp_path, monkeypatch):
+    model = tmp_path / "DeepSeek-V4-Flash-JANGTQ-K"
+    model.mkdir()
+    (model / "weights.bin").write_bytes(b"x" * 1024)
+    vm_stat = """Mach Virtual Memory Statistics: (page size of 16384 bytes)
+Pages free:                               100000.
+Pages active:                                  1.
+Pages inactive:                         9000000.
+Pages speculative:                         50000.
+Pages purgeable:                           25000.
+"""
+
+    monkeypatch.setattr(
+        gate,
+        "psutil_memory_snapshot",
+        lambda: {"available_gb": 108.91, "percent": 15.0, "total_gb": 128.0},
+    )
+
+    payload = gate.build_preflight(
+        model_path=model,
+        required_available_gb=120.0,
+        vm_stat_text=vm_stat,
+    )
+
+    assert payload["status"] == "skipped_insufficient_memory"
+    assert payload["preflight_memory_source"] == "vm_stat_free_plus_speculative_purgeable"
+    assert payload["psutil_available_gb"] == 108.91
+    assert payload["psutil_memory_percent"] == 15.0
+    assert payload["psutil_memory_gap_gb"] == 11.09
+    assert payload["memory_gap_gb"] > payload["psutil_memory_gap_gb"]
+    assert payload["inactive_file_cache_gb"] > 0
+
+
 def test_dsv4_memory_preflight_refuses_to_skip_when_floor_is_met(tmp_path):
     model = tmp_path / "DeepSeek-V4-Flash-JANGTQ-K"
     model.mkdir()
