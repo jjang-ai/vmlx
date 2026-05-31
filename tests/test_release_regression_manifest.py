@@ -2351,6 +2351,8 @@ def test_release_regression_manifest_tracks_real_electron_ui_live_model_slice():
     assert "Hy3-preview-JANGTQ2" in joined
     assert "current-real-ui-live-model-hy3-jangtq2-20260526-proof.json" in joined
     assert "TurboQuantKVCache/paged prefix cache" in joined
+    assert "current-lfm25-direct-responses-runcommand-cache-boundary-20260530.json" in joined
+    assert "server-clean while the real UI stream path remains malformed" in joined
 
 
 def test_release_regression_manifest_real_ui_live_model_script_exists_and_uses_real_session_path():
