@@ -1015,6 +1015,7 @@ def test_current_regression_suite_refreshes_current_packaged_integrity_artifact(
     monkeypatch,
     tmp_path,
 ):
+    from tests.cross_matrix import release_regression_manifest as manifest
     from tests.cross_matrix import run_current_regression_suite as suite
 
     _write_known_open_objective_digest(tmp_path)
@@ -1030,7 +1031,15 @@ def test_current_regression_suite_refreshes_current_packaged_integrity_artifact(
     artifact = suite.build_suite_artifact(tmp_path, include_release_gate=False)
 
     assert artifact["status"] == "open"
+    current_artifact = manifest.CURRENT_POST_BUDGET_EDGE_ARTIFACTS[
+        "packaged-release-integrity"
+    ]
     assert any(
+        name == "packaged_integrity_contracts"
+        and current_artifact in cmd
+        for name, cmd in seen_steps
+    )
+    assert not any(
         name == "packaged_integrity_contracts"
         and "build/current-packaged-integrity-contract-20260531-live-signing-refresh.json"
         in cmd

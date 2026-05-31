@@ -25,7 +25,7 @@ from typing import Any
 
 
 DEFAULT_OUT = Path(
-    "build/current-packaged-integrity-contract-20260531-live-signing-refresh.json"
+    "build/current-packaged-integrity-contract-20260531-after-adhoc-reseal.json"
 )
 EXPECTED_OPEN_REQUIREMENTS = [
     "Real Electron UI cross-family live model matrix is release-cleared",
@@ -79,6 +79,40 @@ PACKAGED_EPIPE_CLOSED_STREAM_GUARD_STRINGS = (
     b"function chatBackendRequestWritable(req)",
     b"function imageServerRequestWritable(req)",
     b"!req.closed",
+)
+
+STAGED_APP_ENGINE_HASH_FILES = (
+    "server.py",
+    "api/tool_calling.py",
+    "api/anthropic_adapter.py",
+    "api/ollama_adapter.py",
+    "block_disk_store.py",
+    "cli.py",
+    "disk_cache.py",
+    "engine/batched.py",
+    "engine/simple.py",
+    "loaders/load_jangtq_dsv4.py",
+    "mllm_batch_generator.py",
+    "mllm_scheduler.py",
+    "model_configs.py",
+    "model_config_registry.py",
+    "models/mllm.py",
+    "omni_multimodal.py",
+    "paged_cache.py",
+    "prefix_cache.py",
+    "runtime_patches/gemma4_processing.py",
+    "scheduler.py",
+    "tool_parsers/dsml_tool_parser.py",
+    "utils/single_batch_generator.py",
+    "utils/head_dim_detection.py",
+    "utils/ssm_companion_cache.py",
+    "utils/ssm_companion_disk_store.py",
+    "utils/jang_loader.py",
+    "utils/tokenizer.py",
+    "chat_templates/gemma4.jinja",
+    "config/defaults.yaml",
+    "metal/codebook_matvec.metal",
+    "metal/codebook_moe.metal",
 )
 
 SOURCE_HASH_FILES = (
@@ -218,6 +252,25 @@ def _check_packaged_python_has_no_pycache(root: Path) -> bool:
         for path in python_root.rglob("*.pyc")
         if "__pycache__" in path.parts
     )
+
+
+def _check_staged_app_engine_hash_parity(root: Path) -> bool:
+    source_engine_dir = root / "vmlx_engine"
+    staged_engine_dir = (
+        root
+        / PACKAGED_PYTHON_ROOT
+        / "lib/python3.12/site-packages/vmlx_engine"
+    )
+    checked = 0
+    for rel in STAGED_APP_ENGINE_HASH_FILES:
+        source = source_engine_dir / rel
+        if not source.exists():
+            continue
+        staged = staged_engine_dir / rel
+        if not staged.exists() or _sha256(source) != _sha256(staged):
+            return False
+        checked += 1
+    return checked > 0
 
 
 def _check_release_dmg_hardened_runtime_contract(root: Path) -> bool:
@@ -536,6 +589,7 @@ def build_artifact(
             _check_packaged_user_data_isolation_bootstrap(root)
         ),
         "packaged_python_has_no_pycache": _check_packaged_python_has_no_pycache(root),
+        "staged_app_engine_hash_parity": _check_staged_app_engine_hash_parity(root),
         "release_dmg_hardened_runtime_entitlements": (
             _check_release_dmg_hardened_runtime_contract(root)
         ),

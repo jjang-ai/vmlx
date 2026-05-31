@@ -13,7 +13,7 @@ def test_packaged_integrity_known_open_rows_match_current_suite():
 
 def test_packaged_integrity_default_out_tracks_current_release_proof_artifact():
     assert runner.DEFAULT_OUT == Path(
-        "build/current-packaged-integrity-contract-20260531-live-signing-refresh.json"
+        "build/current-packaged-integrity-contract-20260531-after-adhoc-reseal.json"
     )
 
 
@@ -137,6 +137,7 @@ def test_packaged_integrity_accepts_current_release_gate_unit_count(monkeypatch,
     monkeypatch.setattr(runner, "_check_packaged_epipe_closed_stream_guards", lambda _root: True)
     monkeypatch.setattr(runner, "_check_packaged_user_data_isolation_bootstrap", lambda _root: True)
     monkeypatch.setattr(runner, "_check_packaged_python_has_no_pycache", lambda _root: True)
+    monkeypatch.setattr(runner, "_check_staged_app_engine_hash_parity", lambda _root: True)
     monkeypatch.setattr(runner, "_check_release_dmg_hardened_runtime_contract", lambda _root: True)
     monkeypatch.setattr(runner, "dry_release_gate_used_current_objective_digest", lambda _step: True)
 
@@ -189,6 +190,7 @@ def test_packaged_integrity_sets_clean_jang_source_env_for_bundle_checks(monkeyp
     monkeypatch.setattr(runner, "_check_packaged_epipe_closed_stream_guards", lambda _root: True)
     monkeypatch.setattr(runner, "_check_packaged_user_data_isolation_bootstrap", lambda _root: True)
     monkeypatch.setattr(runner, "_check_packaged_python_has_no_pycache", lambda _root: True)
+    monkeypatch.setattr(runner, "_check_staged_app_engine_hash_parity", lambda _root: True)
     monkeypatch.setattr(runner, "_check_release_dmg_hardened_runtime_contract", lambda _root: True)
     monkeypatch.setattr(runner, "dry_release_gate_used_current_objective_digest", lambda _step: True)
 
@@ -332,6 +334,25 @@ def test_packaged_integrity_checks_packaged_python_has_no_pycache(monkeypatch, t
 
     assert artifact["checks"]["packaged_python_has_no_pycache"] is False
     assert artifact["status"] == "fail"
+
+
+def test_staged_app_engine_hash_parity_rejects_stale_packaged_runtime(tmp_path):
+    source = tmp_path / "vmlx_engine/server.py"
+    staged = (
+        tmp_path
+        / runner.PACKAGED_PYTHON_ROOT
+        / "lib/python3.12/site-packages/vmlx_engine/server.py"
+    )
+    source.parent.mkdir(parents=True)
+    staged.parent.mkdir(parents=True)
+    source.write_text("current\n", encoding="utf-8")
+    staged.write_text("stale\n", encoding="utf-8")
+
+    assert runner._check_staged_app_engine_hash_parity(tmp_path) is False
+
+    staged.write_text("current\n", encoding="utf-8")
+
+    assert runner._check_staged_app_engine_hash_parity(tmp_path) is True
 
 
 def test_packaged_user_data_isolation_check_rejects_missing_user_data_override(tmp_path):
@@ -629,6 +650,7 @@ def test_packaged_integrity_surfaces_signing_blocker_without_failing_integrity(
     monkeypatch.setattr(runner, "_check_packaged_epipe_closed_stream_guards", lambda _root: True)
     monkeypatch.setattr(runner, "_check_packaged_user_data_isolation_bootstrap", lambda _root: True)
     monkeypatch.setattr(runner, "_check_packaged_python_has_no_pycache", lambda _root: True)
+    monkeypatch.setattr(runner, "_check_staged_app_engine_hash_parity", lambda _root: True)
     monkeypatch.setattr(runner, "_check_release_dmg_hardened_runtime_contract", lambda _root: True)
     monkeypatch.setattr(runner, "dry_release_gate_used_current_objective_digest", lambda _step: True)
 
