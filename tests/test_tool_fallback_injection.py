@@ -128,6 +128,46 @@ def test_fallback_with_existing_system_message(mock_tools):
     assert "read_file" in result
 
 
+def test_fallback_with_list_system_message_preserves_multimodal_content(mock_tools):
+    """Multimodal templates may represent system/user content as content parts."""
+    messages = [
+        {
+            "role": "system",
+            "content": [{"type": "text", "text": "You are a helpful AI."}],
+        },
+        {
+            "role": "user",
+            "content": [
+                {"type": "image"},
+                {"type": "text", "text": "Read a file."},
+            ],
+        },
+    ]
+    mock_tokenizer = MagicMock()
+
+    def mock_apply(modified_messages, **kwargs):
+        assert len(modified_messages) == 2
+        system_content = modified_messages[0]["content"]
+        assert isinstance(system_content, list)
+        assert system_content[0]["text"] == "You are a helpful AI."
+        assert "You are an expert assistant" in system_content[-1]["text"]
+        assert modified_messages[1]["content"][0]["type"] == "image"
+        return "\n".join(part.get("text", "") for part in system_content)
+
+    mock_tokenizer.apply_chat_template.side_effect = mock_apply
+
+    result = check_and_inject_fallback_tools(
+        prompt="<|im_start|>user\nRead a file.<|im_end|>",
+        messages=messages,
+        template_tools=mock_tools,
+        tokenizer=mock_tokenizer,
+        template_kwargs={},
+    )
+
+    assert "You are a helpful AI." in result
+    assert "read_file" in result
+
+
 def test_fallback_skips_when_no_tools_requested(mock_messages):
     """If no tools were requested, fallback does nothing."""
     mock_tokenizer = MagicMock()

@@ -810,24 +810,41 @@ def check_and_inject_fallback_tools(
         as_list_text: bool = False,
     ) -> None:
         content = msg.get("content")
+        text_part = {"type": "text", "text": text, "content": text}
+        if isinstance(content, list) and (as_list_text or not is_zaya_native_tool_prompt):
+            msg["content"] = [text_part, *content]
+            return
         if is_zaya_native_tool_prompt and as_list_text:
             if isinstance(content, list):
-                msg["content"] = [{"type": "text", "text": text}, *content]
+                msg["content"] = [text_part, *content]
             else:
                 existing = content if isinstance(content, str) else ""
-                msg["content"] = [{"type": "text", "text": text + "\n\n" + existing}]
+                text_value = text + "\n\n" + existing
+                msg["content"] = [
+                    {"type": "text", "text": text_value, "content": text_value}
+                ]
             return
         if is_zaya_native_tool_prompt and isinstance(content, list):
-            msg["content"] = [{"type": "text", "text": text}, *content]
+            msg["content"] = [text_part, *content]
             return
         msg["content"] = text + "\n\n" + (content or "")
+
+    def _append_tool_prompt_to_message(msg: dict, text: str) -> None:
+        content = msg.get("content")
+        if isinstance(content, list):
+            msg["content"] = [
+                *content,
+                {"type": "text", "text": "\n\n" + text, "content": "\n\n" + text},
+            ]
+        else:
+            msg["content"] = (content or "") + "\n\n" + text
 
     # Inject into messages
     messages_copy = [dict(m) for m in messages]
     injected = False
     for msg in messages_copy:
         if msg.get("role") == "system":
-            msg["content"] = (msg.get("content") or "") + "\n\n" + tool_prompt
+            _append_tool_prompt_to_message(msg, tool_prompt)
             injected = True
             break
 

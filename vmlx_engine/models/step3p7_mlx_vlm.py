@@ -1271,6 +1271,20 @@ class Step3VLProcessor:
         )
         _preserve_extra(self, kwargs, set())
 
+    def apply_chat_template(
+        self,
+        messages: list[dict[str, Any]],
+        *args: Any,
+        **kwargs: Any,
+    ) -> Any:
+        if self.tokenizer is None or not hasattr(self.tokenizer, "apply_chat_template"):
+            raise ValueError(
+                "Step3VLProcessor requires a tokenizer with apply_chat_template()."
+            )
+        if self.chat_template is not None and "chat_template" not in kwargs:
+            kwargs["chat_template"] = self.chat_template
+        return self.tokenizer.apply_chat_template(messages, *args, **kwargs)
+
     @property
     def image_token_id(self) -> int:
         if self.tokenizer is None:

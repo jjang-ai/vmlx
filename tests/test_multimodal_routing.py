@@ -98,6 +98,46 @@ def test_mllm_thinking_off_does_not_synthesize_empty_think_block(monkeypatch):
     assert "<think>" not in prompt
 
 
+def test_step37_processor_exposes_chat_template_for_source_vlm_route():
+    from vmlx_engine.models.step3p7_mlx_vlm import Step3VLProcessor
+
+    captured = {}
+
+    class _Tokenizer:
+        def apply_chat_template(self, messages, **kwargs):
+            captured["messages"] = messages
+            captured["kwargs"] = kwargs
+            return "<|im_start|>user\n<im_patch>What color?<|im_end|>\n<|im_start|>assistant\n<think>\n"
+
+    processor = Step3VLProcessor(tokenizer=_Tokenizer())
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "image"},
+                {"type": "text", "text": "What color?"},
+            ],
+        }
+    ]
+    tools = [{"type": "function", "function": {"name": "run_command"}}]
+
+    prompt = processor.apply_chat_template(
+        messages,
+        tokenize=False,
+        add_generation_prompt=True,
+        enable_thinking=False,
+        tools=tools,
+    )
+
+    assert prompt.startswith("<|im_start|>user")
+    assert "<im_patch>" in prompt
+    assert captured["messages"] == messages
+    assert captured["kwargs"]["tokenize"] is False
+    assert captured["kwargs"]["add_generation_prompt"] is True
+    assert captured["kwargs"]["enable_thinking"] is False
+    assert captured["kwargs"]["tools"] == tools
+
+
 def test_server_detects_media_before_text_only_responses_flattening():
     import vmlx_engine.server as server
 
