@@ -56,6 +56,7 @@ from tests.cross_matrix.release_regression_manifest import (
     _annotate_real_ui_unblocked_non_mimo_status,
     _current_release_blocker_ledger,
     _live_smoke_gap_is_expected_mimo_open,
+    _real_ui_architecture_cache_policy_ok,
     _real_ui_named_tool_probe_semantics_ok,
     _validate_current_issue175_179_release_boundary_audit,
     _validate_current_real_ui_live_model_matrix,
@@ -702,12 +703,12 @@ def _write_passing_real_ui_live_model_proof_artifacts(root: Path) -> None:
             (
                 "zaya-text-responses-stricttools-cachecontrols-20260530-proof.json",
                 "zaya-vl-responses-stricttools-cachecontrols-20260530-proof.json",
-                "step37-jang2l-responses-tools-image-cachecontrols-after-direct-media-tool-filter-20260531-proof.json",
+                "step37-jang2l-devbuild-tools-image-cache-templateclean-20260531-proof.json",
                 "step37-jang2l-responses-tools-l2storage-integrated-20260531-proof.json",
                 "lfm25-moe-a1b-jang2l-stricttools-chat-20260530-proof.json",
                 "lfm25-moe-a1b-jang2l-stricttools-responses-filesemantic-20260530-proof.json",
                 "lfm25-moe-a1b-jang2l-stricttools-responses-post-epipe-20260531-proof.json",
-                "lfm25-moe-a1b-jang2l-responses-delta-longtool-20260531-proof.json",
+                "lfm25-moe-a1b-jang2l-devbuild-cache-parser-rerun-20260531-proof.json",
             )
         ):
             proof["rendererWireApi"] = "responses"
@@ -749,7 +750,7 @@ def _write_passing_real_ui_live_model_proof_artifacts(root: Path) -> None:
                 ],
             ]
         if row["proof"].endswith(
-            "step37-jang2l-responses-tools-image-cachecontrols-after-direct-media-tool-filter-20260531-proof.json"
+            "step37-jang2l-devbuild-tools-image-cache-templateclean-20260531-proof.json"
         ):
             proof["media"] = {"imageVerified": True}
             proof["requestedBuiltinTools"] = True
@@ -763,7 +764,7 @@ def _write_passing_real_ui_live_model_proof_artifacts(root: Path) -> None:
             (
                 "lfm25-moe-a1b-jang2l-stricttools-chat-20260530-proof.json",
                 "lfm25-moe-a1b-jang2l-stricttools-responses-post-epipe-20260531-proof.json",
-                "lfm25-moe-a1b-jang2l-responses-delta-longtool-20260531-proof.json",
+                "lfm25-moe-a1b-jang2l-devbuild-cache-parser-rerun-20260531-proof.json",
             )
         ):
             add_extensive_tool_churn(proof)
@@ -3293,7 +3294,7 @@ def test_release_regression_manifest_real_ui_live_model_rows_include_ling_bailin
     assert rows["step37_flash_jang2l"]["family"] == "step37"
     assert (
         rows["step37_flash_jang2l"]["proof"]
-        == "docs/internal/agent-notes/current-real-ui-live-model-step37-jang2l-responses-tools-image-cachecontrols-after-direct-media-tool-filter-20260531-proof.json"
+        == "docs/internal/agent-notes/current-real-ui-live-model-step37-jang2l-devbuild-tools-image-cache-templateclean-20260531-proof.json"
     )
     assert rows["step37_flash_jang2l_reasoning"]["model_path"] == (
         "/Users/example/.mlxstudio/models/JANGQ-AI/Step-3.7-Flash-JANG_2L"
@@ -3337,7 +3338,7 @@ def test_release_regression_manifest_real_ui_live_model_rows_include_ling_bailin
     )
     assert (
         rows["lfm25_moe_a1b_responses_delta"]["proof"]
-        == "docs/internal/agent-notes/current-real-ui-live-model-lfm25-moe-a1b-jang2l-responses-delta-longtool-20260531-proof.json"
+        == "docs/internal/agent-notes/current-real-ui-live-model-lfm25-moe-a1b-jang2l-devbuild-cache-parser-rerun-20260531-proof.json"
     )
 
 
@@ -5205,6 +5206,73 @@ def test_release_regression_manifest_real_ui_matrix_requires_lfm_architecture_ca
     )
     assert "architecture_cache_policy" not in lfm25["covered_surfaces"]
     assert "architecture_cache_policy" in lfm25["missing_surfaces"]
+
+
+def test_release_regression_manifest_real_ui_matrix_accepts_lfm2_family_alias_for_hybrid_ssm_policy():
+    proof = {
+        "modelName": "LFM2.5-8B-A1B-JANG_2L",
+        "appLogTail": ["start electron app"],
+        "server": {
+            "health": {
+                "status": "healthy",
+                "model_loaded": True,
+                "native_cache": {
+                    "family": "lfm2",
+                    "schema": "hybrid_ssm_v1",
+                    "cache_type": "hybrid_ssm_typed",
+                    "components": [
+                        "attention_kv",
+                        "ssm_companion_state",
+                        "async_rederive",
+                    ],
+                    "generic_turboquant_kv": {
+                        "enabled": False,
+                        "reason": "hybrid_ssm_state",
+                    },
+                    "attention_kv_storage_quantization": {
+                        "enabled": True,
+                        "mode": "storage_boundary",
+                        "bits": 4,
+                        "group_size": 64,
+                        "applies_to": "attention_kv_layers_only",
+                        "ssm_policy": "native_companion_state",
+                    },
+                    "prefix": True,
+                    "paged": True,
+                    "block_disk_l2": True,
+                },
+                "kv_cache_quantization": {
+                    "enabled": True,
+                    "bits": 4,
+                    "group_size": 64,
+                },
+            }
+        },
+        "cache": {
+            "before": {"scheduler_cache": {"hits": 0}},
+            "after": {
+                "scheduler_cache": {"hits": 1},
+                "block_disk_cache": {"disk_hits": 1},
+                "cache_totals": {
+                    "l2_tokens_on_disk": 32,
+                    "l2_ssm_tokens_on_disk": 16,
+                    "ssm_tokens_on_disk": 16,
+                },
+                "ssm_companion": {
+                    "entries": 1,
+                    "disk_enabled": True,
+                    "disk": {
+                        "enabled": True,
+                        "entries": 1,
+                        "total_tokens_on_disk": 16,
+                    },
+                },
+            },
+            "cacheHitTokens": 32,
+        },
+    }
+
+    assert _real_ui_architecture_cache_policy_ok("lfm25", proof) is True
 
 
 def test_release_regression_manifest_real_ui_matrix_requires_lfm_responses_cache_detail_usage():

@@ -620,8 +620,8 @@ CURRENT_REAL_UI_LIVE_MODEL_PROOF_ROWS = {
         "family": "hy3",
     },
     "step37_flash_jang2l": {
-        "proof": "docs/internal/agent-notes/current-real-ui-live-model-step37-jang2l-responses-tools-image-cachecontrols-after-direct-media-tool-filter-20260531-proof.json",
-        "chat_screenshot": "docs/internal/agent-notes/current-real-ui-live-model-step37-jang2l-responses-tools-image-cachecontrols-after-direct-media-tool-filter-20260531-chat.png",
+        "proof": "docs/internal/agent-notes/current-real-ui-live-model-step37-jang2l-devbuild-tools-image-cache-templateclean-20260531-proof.json",
+        "chat_screenshot": "docs/internal/agent-notes/current-real-ui-live-model-step37-jang2l-devbuild-tools-image-cache-templateclean-20260531-chat.png",
         "model_path": "/Users/example/.mlxstudio/models/JANGQ-AI/Step-3.7-Flash-JANG_2L",
         "model_name": "Step-3.7-Flash-JANG_2L",
         "family": "step37",
@@ -655,8 +655,8 @@ CURRENT_REAL_UI_LIVE_MODEL_PROOF_ROWS = {
         "family": "lfm25",
     },
     "lfm25_moe_a1b_responses_delta": {
-        "proof": "docs/internal/agent-notes/current-real-ui-live-model-lfm25-moe-a1b-jang2l-responses-delta-longtool-20260531-proof.json",
-        "chat_screenshot": "docs/internal/agent-notes/current-real-ui-live-model-lfm25-moe-a1b-jang2l-responses-delta-longtool-20260531-chat.png",
+        "proof": "docs/internal/agent-notes/current-real-ui-live-model-lfm25-moe-a1b-jang2l-devbuild-cache-parser-rerun-20260531-proof.json",
+        "chat_screenshot": "docs/internal/agent-notes/current-real-ui-live-model-lfm25-moe-a1b-jang2l-devbuild-cache-parser-rerun-20260531-chat.png",
         "model_path": "/Users/example/.mlxstudio/models/JANGQ-AI/LFM2.5-8B-A1B-JANG_2L",
         "model_name": "LFM2.5-8B-A1B-JANG_2L",
         "family": "lfm25",
@@ -3761,7 +3761,7 @@ def _real_ui_architecture_cache_policy_ok(
             else {}
         )
         return (
-            native.get("family") == "lfm2_moe"
+            native.get("family") in {"lfm2_moe", "lfm2"}
             and native.get("schema") == "hybrid_ssm_v1"
             and native.get("cache_type") == "hybrid_ssm_typed"
             and {"attention_kv", "ssm_companion_state", "async_rederive"}
