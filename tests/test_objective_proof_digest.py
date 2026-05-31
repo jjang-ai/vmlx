@@ -35,6 +35,15 @@ def test_objective_proof_digest_live_smoke_pointers_match_release_manifest_curre
     assert objective.ALL_LOCAL_MODEL_SMOKE_QWEN36_MXFP4_CRACK_REL == (
         manifest.CURRENT_COVERED_LIVE_SMOKE_ARTIFACTS["qwen36_moe_crack"]
     )
+
+
+def test_objective_proof_digest_dsv4_source_preflight_pointer_matches_release_manifest():
+    from tests.cross_matrix import release_regression_manifest as manifest
+    from tests.cross_matrix import summarize_objective_proof as objective
+
+    assert objective.DSV4_CURRENT_SOURCE_MEMORY_PREFLIGHT_REL == (
+        manifest.CURRENT_DSV4_SOURCE_MEMORY_PREFLIGHT_ARTIFACT
+    )
     assert objective.ALL_LOCAL_MODEL_SMOKE_HY3_JANGTQ2_REL == (
         manifest.CURRENT_COVERED_LIVE_SMOKE_ARTIFACTS["hy3_preview_jangtq2"]
     )
@@ -1175,7 +1184,7 @@ def test_objective_proof_digest_tracks_ling_multilingual_cjk_leakage(tmp_path):
     )
     _write_json(
         tmp_path,
-        "build/current-dsv4-route-mode-code-exactness-live-memory-preflight-20260531.json",
+        "build/current-dsv4-route-mode-code-exactness-memory-preflight-20260531-release-decision-refresh.json",
         {
             "status": "pass",
             "reason": "sufficient_free_memory",
@@ -2368,7 +2377,7 @@ def test_objective_proof_digest_surfaces_dsv4_chatmax_prompt_trigger_probe(tmp_p
     )
     _write_json(
         tmp_path,
-        "build/current-dsv4-route-mode-code-exactness-live-memory-preflight-20260531.json",
+        "build/current-dsv4-route-mode-code-exactness-memory-preflight-20260531-release-decision-refresh.json",
         {
             "status": "pass",
             "reason": "sufficient_free_memory",
@@ -3424,11 +3433,15 @@ def test_objective_proof_digest_summarizes_dsv4_exact_code_root_boundary(
     )
     _write_json(
         tmp_path,
-        "build/current-dsv4-route-mode-code-exactness-live-memory-preflight-20260531.json",
+        "build/current-dsv4-route-mode-code-exactness-memory-preflight-20260531-release-decision-refresh.json",
         {
             "status": "skipped",
             "reason": "insufficient_free_memory",
             "required_available_gb": 120.0,
+            "required_model_margin_gb": 40.0,
+            "model_size_gb": 79.98,
+            "safety_margin_gb": 40.02,
+            "floor_valid": True,
             "launch_blockers": ["insufficient_memory"],
             "active_heavy_process_count": 0,
             "top_memory_processes": [
@@ -3544,7 +3557,7 @@ def test_objective_proof_digest_summarizes_dsv4_exact_code_root_boundary(
     assert summary["current_primary_failure"] == "direct_off_exact_code_generation"
     assert summary["source_full_output_preflight"]["artifact_present"] is True
     assert summary["source_full_output_preflight"]["artifact"] == (
-        "build/current-dsv4-route-mode-code-exactness-live-memory-preflight-20260531.json"
+        "build/current-dsv4-route-mode-code-exactness-memory-preflight-20260531-release-decision-refresh.json"
     )
     assert summary["source_full_output_preflight"]["status"] == "skipped"
     assert summary["source_full_output_preflight"]["reason"] == "insufficient_free_memory"
@@ -3556,6 +3569,10 @@ def test_objective_proof_digest_summarizes_dsv4_exact_code_root_boundary(
     assert summary["source_full_output_preflight"]["did_not_launch"] is True
     assert summary["source_full_output_preflight"]["launch_decision"] == "do_not_launch"
     assert summary["source_full_output_preflight"]["required_available_gb"] == 120.0
+    assert summary["source_full_output_preflight"]["required_model_margin_gb"] == 40.0
+    assert summary["source_full_output_preflight"]["model_size_gb"] == 79.98
+    assert summary["source_full_output_preflight"]["safety_margin_gb"] == 40.02
+    assert summary["source_full_output_preflight"]["floor_valid"] is True
     assert summary["source_full_output_preflight"]["launch_blockers"] == [
         "insufficient_memory"
     ]
@@ -3570,7 +3587,7 @@ def test_objective_proof_digest_summarizes_dsv4_exact_code_root_boundary(
     assert summary["source_full_output_clearance_missing"] is True
     joined_evidence = "\n".join(quality["evidence"])
     assert (
-        "current-dsv4-route-mode-code-exactness-live-memory-preflight-20260531.json"
+        "current-dsv4-route-mode-code-exactness-memory-preflight-20260531-release-decision-refresh.json"
         in joined_evidence
     )
     assert (
@@ -9155,13 +9172,13 @@ def test_objective_proof_digest_accepts_dsv4_quality_clearance_artifact(tmp_path
             },
             "artifacts": {
                 "identifier_gate": "build/current-dsv4-identifier-count-ablation-20260521/result.json",
-                "full_output_gate": "build/current-dsv4-route-mode-code-exactness-live-memory-preflight-20260531.json",
+                "full_output_gate": "build/current-dsv4-route-mode-code-exactness-memory-preflight-20260531-release-decision-refresh.json",
             },
         },
     )
     _write_json(
         tmp_path,
-        "build/current-dsv4-route-mode-code-exactness-live-memory-preflight-20260531.json",
+        "build/current-dsv4-route-mode-code-exactness-memory-preflight-20260531-release-decision-refresh.json",
         {
             "status": "pass",
             "reason": "sufficient_free_memory",
@@ -9665,7 +9682,7 @@ def test_objective_proof_digest_reports_missing_current_dsv4_clearance_artifacts
             },
             "artifacts": {
                 "identifier_gate": "build/current-dsv4-identifier-count-ablation-20260521/result.json",
-                "full_output_gate": "build/current-dsv4-route-mode-code-exactness-live-memory-preflight-20260531.json",
+                "full_output_gate": "build/current-dsv4-route-mode-code-exactness-memory-preflight-20260531-release-decision-refresh.json",
             },
         },
     )
@@ -9678,7 +9695,7 @@ def test_objective_proof_digest_reports_missing_current_dsv4_clearance_artifacts
     assert quality["details"]["legacy_clearance_artifacts"] == {}
     assert quality["details"]["missing_clearance_artifacts"] == [
         "build/current-dsv4-identifier-count-ablation-20260521/result.json",
-        "build/current-dsv4-route-mode-code-exactness-live-memory-preflight-20260531.json",
+        "build/current-dsv4-route-mode-code-exactness-memory-preflight-20260531-release-decision-refresh.json",
     ]
 
 

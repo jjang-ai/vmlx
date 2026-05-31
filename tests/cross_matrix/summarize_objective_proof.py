@@ -45,6 +45,7 @@ from tests.cross_matrix.run_vl_media_cache_contract import (
     SOURCE_HASH_FILES as VL_MEDIA_SOURCE_HASH_FILES,
 )
 from tests.cross_matrix.release_regression_manifest import (
+    CURRENT_DSV4_SOURCE_MEMORY_PREFLIGHT_ARTIFACT,
     CURRENT_REAL_UI_DSV4_MEMORY_PREFLIGHT_ARTIFACT,
 )
 
@@ -114,7 +115,7 @@ DSV4_CURRENT_SOURCE_BUNDLE_DEFAULTS_DRYRUN_REL = (
     "build/current-dsv4-route-mode-code-exactness-bundle-defaults-dryrun-20260525.json"
 )
 DSV4_CURRENT_SOURCE_MEMORY_PREFLIGHT_REL = (
-    "build/current-dsv4-route-mode-code-exactness-live-memory-preflight-20260531.json"
+    CURRENT_DSV4_SOURCE_MEMORY_PREFLIGHT_ARTIFACT
 )
 DSV4_CURRENT_JANGTQK_DIRECT_OFF_RECHECK_REL = (
     "build/current-dsv4-route-mode-code-exactness-jangtqk-direct-off-recheck-20260525.json"
@@ -1483,7 +1484,10 @@ def _dsv4_source_memory_preflight_detail(
         memory_gap_gb = round(max(0.0, required_available_gb - available_gb), 2)
     did_not_launch = artifact.get("did_not_launch")
     if did_not_launch is None and artifact.get("status") == "skipped":
-        did_not_launch = artifact.get("reason") == "insufficient_free_memory"
+        did_not_launch = artifact.get("reason") in {
+            "insufficient_free_memory",
+            "insufficient_vm_stat_memory",
+        }
     launch_decision = artifact.get("launch_decision")
     if launch_decision is None and did_not_launch is True:
         launch_decision = "do_not_launch"
@@ -1501,6 +1505,10 @@ def _dsv4_source_memory_preflight_detail(
         "available_gb": available_gb,
         "total_gb": memory.get("total_gb"),
         "required_available_gb": required_available_gb,
+        "required_model_margin_gb": artifact.get("required_model_margin_gb"),
+        "model_size_gb": artifact.get("model_size_gb"),
+        "safety_margin_gb": artifact.get("safety_margin_gb"),
+        "floor_valid": artifact.get("floor_valid"),
         "memory_gap_gb": memory_gap_gb,
         "strict_vm_stat_memory_gap_gb": artifact.get(
             "strict_vm_stat_memory_gap_gb"
