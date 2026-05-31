@@ -851,6 +851,25 @@ def _write_passing_real_ui_live_model_proof_artifacts(root: Path) -> None:
                 ]
             )
             proof["chat"]["finalVisibleText"] = "Red"
+        request_contract = proof["requestContract"]
+        if "rendererWireApi" in proof:
+            request_contract["wireApi"] = proof["rendererWireApi"]
+        if "requestedBuiltinTools" in proof:
+            request_contract["builtinToolsEnabled"] = proof["requestedBuiltinTools"]
+        if "requestedEnableThinking" in proof:
+            request_contract["enableThinking"] = proof["requestedEnableThinking"]
+        chat_overrides = proof.get("chatOverrides")
+        if isinstance(chat_overrides, dict):
+            if "maxTokens" in chat_overrides:
+                request_contract["requestMaxTokens"] = chat_overrides["maxTokens"]
+            if "maxToolIterations" in chat_overrides:
+                request_contract["maxToolIterations"] = chat_overrides[
+                    "maxToolIterations"
+                ]
+            if "toolResultMaxChars" in chat_overrides:
+                request_contract["toolResultMaxChars"] = chat_overrides[
+                    "toolResultMaxChars"
+                ]
         proof_path.write_text(json.dumps(proof) + "\n", encoding="utf-8")
     _write_expected_issue175_179_release_boundary_audit(root)
     _write_expected_issue179_minimax_k_root_cause_audit(root)
@@ -3097,6 +3116,25 @@ def test_release_regression_manifest_current_sweep_rejects_real_ui_proof_without
 
     assert result["real_ui_live_model_proof"]["status"] == "fail"
     assert "request_contract_missing:zaya_text" in result["real_ui_live_model_proof"]["failures"]
+
+
+def test_release_regression_manifest_current_sweep_rejects_real_ui_request_contract_mismatch(
+    tmp_path,
+):
+    _write_passing_real_ui_live_model_proof_artifacts(tmp_path)
+    proof_path = tmp_path / CURRENT_REAL_UI_LIVE_MODEL_PROOF_ARTIFACTS["proof"]
+    proof = json.loads(proof_path.read_text(encoding="utf-8"))
+    proof.setdefault("chatOverrides", {})["maxTokens"] = 64
+    proof["requestContract"]["requestMaxTokens"] = 512
+    proof_path.write_text(json.dumps(proof) + "\n", encoding="utf-8")
+
+    result = validate_current_proof_sweep_artifacts(tmp_path)
+
+    assert result["real_ui_live_model_proof"]["status"] == "fail"
+    assert (
+        "request_contract_mismatch:zaya_text:maxTokens"
+        in result["real_ui_live_model_proof"]["failures"]
+    )
 
 
 def test_release_regression_manifest_accepts_structured_electron_dev_launch_when_log_tail_rotates(

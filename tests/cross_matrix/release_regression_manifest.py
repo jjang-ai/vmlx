@@ -3554,6 +3554,86 @@ def _real_ui_model_id_matches(row: dict[str, Any], model_id: Any) -> bool:
     )
 
 
+def _validate_real_ui_request_contract(
+    row_id: str,
+    proof: dict[str, Any],
+    request_contract: dict[str, Any],
+) -> list[str]:
+    failures: list[str] = []
+    chat_overrides = (
+        proof.get("chatOverrides")
+        if isinstance(proof.get("chatOverrides"), dict)
+        else {}
+    )
+    server_cache_controls = (
+        proof.get("serverCacheControls")
+        if isinstance(proof.get("serverCacheControls"), dict)
+        else {}
+    )
+    media = proof.get("media") if isinstance(proof.get("media"), dict) else {}
+
+    def mismatch(field: str) -> None:
+        failures.append(f"request_contract_mismatch:{row_id}:{field}")
+
+    expected_wire_api = request_contract.get("wireApi")
+    if proof.get("requestedWireApi") not in {None, expected_wire_api}:
+        mismatch("requestedWireApi")
+    if proof.get("rendererWireApi") not in {None, expected_wire_api}:
+        mismatch("rendererWireApi")
+    if chat_overrides.get("wireApi") not in {None, expected_wire_api}:
+        mismatch("chatOverrides.wireApi")
+
+    expected_builtin_tools = request_contract.get("builtinToolsEnabled")
+    if proof.get("requestedBuiltinTools") not in {None, expected_builtin_tools}:
+        mismatch("requestedBuiltinTools")
+    if chat_overrides.get("builtinToolsEnabled") not in {None, expected_builtin_tools}:
+        mismatch("chatOverrides.builtinToolsEnabled")
+
+    expected_enable_thinking = request_contract.get("enableThinking")
+    if proof.get("requestedEnableThinking") not in {None, expected_enable_thinking}:
+        mismatch("requestedEnableThinking")
+
+    expected_max_tokens = request_contract.get("requestMaxTokens")
+    if chat_overrides.get("maxTokens") not in {None, expected_max_tokens}:
+        mismatch("maxTokens")
+    expected_max_tool_iterations = request_contract.get("maxToolIterations")
+    if chat_overrides.get("maxToolIterations") not in {
+        None,
+        expected_max_tool_iterations,
+    }:
+        mismatch("maxToolIterations")
+    expected_tool_result_max_chars = request_contract.get("toolResultMaxChars")
+    if chat_overrides.get("toolResultMaxChars") not in {
+        None,
+        expected_tool_result_max_chars,
+    }:
+        mismatch("toolResultMaxChars")
+
+    for sampler_field in ("temperature", "topP", "topK", "minP", "repeatPenalty"):
+        if chat_overrides.get(sampler_field) is not None:
+            mismatch(f"unexpectedSamplerOverride.{sampler_field}")
+
+    expected_cache_controls = request_contract.get("checkServerCacheControls")
+    if proof.get("requestedServerCacheControls") not in {
+        None,
+        expected_cache_controls,
+    }:
+        mismatch("requestedServerCacheControls")
+    if expected_cache_controls is True and server_cache_controls.get("requested") is False:
+        mismatch("serverCacheControls.requested")
+
+    if proof.get("requestedMedia") not in {None, request_contract.get("checkMedia")}:
+        mismatch("requestedMedia")
+    if proof.get("requestedVideo") not in {None, request_contract.get("checkVideo")}:
+        mismatch("requestedVideo")
+    if request_contract.get("checkMedia") is True and media.get("imageVerified") is not True:
+        mismatch("media.imageVerified")
+    if request_contract.get("checkVideo") is True and media.get("videoVerified") is not True:
+        mismatch("media.videoVerified")
+
+    return failures
+
+
 def _real_ui_proof_is_installed_app(proof: dict[str, Any]) -> bool:
     surfaces = proof.get("provenSurfaces")
     return (
@@ -4482,6 +4562,9 @@ def _validate_current_real_ui_live_model_proof_artifacts(
                     f"request_contract_incomplete:{row_id}:"
                     + ",".join(missing_contract_fields)
                 )
+            failures.extend(
+                _validate_real_ui_request_contract(row_id, proof, request_contract)
+            )
 
         installed_app_ui = _real_ui_proof_is_installed_app(proof)
         if not installed_app_ui:
