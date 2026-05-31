@@ -2807,6 +2807,11 @@ def _current_release_blocker_ledger(
                 details = {
                     key: preflight.get(key)
                     for key in (
+                        "artifact_present",
+                        "status",
+                        "reason",
+                        "model",
+                        "commands",
                         "available_gb",
                         "required_available_gb",
                         "memory_gap_gb",

@@ -2019,6 +2019,11 @@ def _passing_open_requirement_details() -> dict[str, object]:
                     "artifact_present": True,
                     "status": "skipped",
                     "reason": "insufficient_free_memory",
+                    "model": "/Users/example/models/JANGQ/DeepSeek-V4-Flash-JANGTQ-K",
+                    "commands": {
+                        "memory": "vm_stat",
+                        "memory_pressure": "memory_pressure",
+                    },
                     "available_gb": 103.87,
                     "required_available_gb": 120.0,
                     "memory_gap_gb": 16.13,
@@ -5910,6 +5915,14 @@ def test_release_regression_manifest_validates_current_proof_sweep_artifacts(tmp
                 "evidence": CURRENT_DSV4_SOURCE_MEMORY_PREFLIGHT_ARTIFACT,
                 "next_proof": "Run and pass DSV4 long-output/code exactness with current source/app in a memory-safe local session.",
                 "details": {
+                    "artifact_present": True,
+                    "status": "skipped",
+                    "reason": "insufficient_free_memory",
+                    "model": "/Users/example/models/JANGQ/DeepSeek-V4-Flash-JANGTQ-K",
+                    "commands": {
+                        "memory": "vm_stat",
+                        "memory_pressure": "memory_pressure",
+                    },
                     "available_gb": 103.87,
                     "required_available_gb": 120.0,
                     "memory_gap_gb": 16.13,
@@ -6252,6 +6265,14 @@ def test_release_blocker_ledger_preserves_dsv4_exactness_memory_pressure_diagnos
                 "DSV4 long-output/code/file-generation quality is release-cleared": {
                     "details": {
                         "current_source_full_output_preflight": {
+                            "artifact_present": True,
+                            "status": "skipped",
+                            "reason": "insufficient_vm_stat_memory",
+                            "model": "/Users/example/models/JANGQ/DeepSeek-V4-Flash-JANGTQ-K",
+                            "commands": {
+                                "memory": "vm_stat",
+                                "memory_pressure": "memory_pressure",
+                            },
                             "available_gb": 107.63,
                             "required_available_gb": 120.0,
                             "memory_gap_gb": 61.74,
@@ -6284,6 +6305,17 @@ def test_release_blocker_ledger_preserves_dsv4_exactness_memory_pressure_diagnos
 
     blocker = ledger["blockers"][0]
     assert blocker["id"] == "dsv4_long_output_code_exactness_open"
+    assert blocker["details"]["artifact_present"] is True
+    assert blocker["details"]["status"] == "skipped"
+    assert blocker["details"]["reason"] == "insufficient_vm_stat_memory"
+    assert (
+        blocker["details"]["model"]
+        == "/Users/example/models/JANGQ/DeepSeek-V4-Flash-JANGTQ-K"
+    )
+    assert blocker["details"]["commands"] == {
+        "memory": "vm_stat",
+        "memory_pressure": "memory_pressure",
+    }
     assert blocker["details"]["free_plus_speculative_purgeable_gb"] == 58.26
     assert blocker["details"]["memory_pressure_free_percent"] == 94
     assert blocker["details"]["active_heavy_processes"] == []
