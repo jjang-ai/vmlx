@@ -2302,6 +2302,15 @@ def validate_current_proof_sweep_artifacts(root: Path) -> dict[str, Any]:
                 "launch_blockers": real_ui_dsv4_memory_preflight.get(
                     "launch_blockers"
                 ),
+                "active_heavy_process_count": real_ui_dsv4_memory_preflight.get(
+                    "active_heavy_process_count"
+                ),
+                "active_heavy_processes": real_ui_dsv4_memory_preflight.get(
+                    "active_heavy_processes"
+                ),
+                "top_memory_processes": real_ui_dsv4_memory_preflight.get(
+                    "top_memory_processes"
+                ),
             }
         real_ui_live_model_matrix["resource_blockers"] = resource_blockers
     _annotate_real_ui_unblocked_non_mimo_status(real_ui_live_model_matrix)
@@ -3273,6 +3282,9 @@ def _validate_current_real_ui_dsv4_memory_preflight(root: Path) -> dict[str, Any
             "did_not_launch": payload.get("did_not_launch"),
             "launch_decision": payload.get("launch_decision"),
             "launch_blockers": payload.get("launch_blockers"),
+            "active_heavy_process_count": payload.get("active_heavy_process_count"),
+            "active_heavy_processes": payload.get("active_heavy_processes"),
+            "top_memory_processes": payload.get("top_memory_processes"),
         }
     )
     return result

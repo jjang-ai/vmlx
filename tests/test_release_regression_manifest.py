@@ -3526,6 +3526,11 @@ def test_release_regression_manifest_real_ui_matrix_records_dsv4_memory_blocker(
         "did_not_launch": True,
         "launch_decision": "do_not_launch",
         "launch_blockers": ["insufficient_memory"],
+        "active_heavy_process_count": 0,
+        "active_heavy_processes": [],
+        "top_memory_processes": [
+            {"pid": 1001, "rss_gb": 10.0, "command": "vMLX"}
+        ],
     }
     assert result["real_ui_live_model_matrix"]["unblocked_non_mimo_status"] == "pass"
     assert (
@@ -5946,6 +5951,11 @@ def test_release_regression_manifest_validates_current_proof_sweep_artifacts(tmp
                     "did_not_launch": True,
                     "launch_decision": "do_not_launch",
                     "launch_blockers": ["insufficient_memory"],
+                    "active_heavy_process_count": 0,
+                    "active_heavy_processes": [],
+                    "top_memory_processes": [
+                        {"pid": 1001, "rss_gb": 10.0, "command": "vMLX"}
+                    ],
                 },
             },
         ],
