@@ -484,6 +484,28 @@ async function terminateProcess(proc) {
   }
 }
 
+function visibleAssistantAfterEachUser(turns) {
+  if (!Array.isArray(turns)) return false
+  let sawUser = false
+  for (let i = 0; i < turns.length; i += 1) {
+    const turn = turns[i]
+    if (!turn || turn.role !== 'user') continue
+    sawUser = true
+    let nextUserIndex = turns.length
+    for (let j = i + 1; j < turns.length; j += 1) {
+      if (turns[j]?.role === 'user') {
+        nextUserIndex = j
+        break
+      }
+    }
+    const hasVisibleAssistant = turns
+      .slice(i + 1, nextUserIndex)
+      .some((candidate) => candidate?.role === 'assistant' && String(candidate?.content || '').trim())
+    if (!hasVisibleAssistant) return false
+  }
+  return sawUser
+}
+
 function assertResult(result) {
   const failures = []
   const chat = result.chat || {}
@@ -491,6 +513,10 @@ function assertResult(result) {
   if (result.remoteSessionStarted !== true) failures.push('remote session did not start through Electron UI API')
   if (!chat.turns?.some((m) => m.role === 'assistant' && m.content)) failures.push('assistant content is empty')
   if (!chat.finalVisibleText) failures.push('final visible assistant content is empty')
+  const visibleAssistantTurnsComplete = visibleAssistantAfterEachUser(chat.turns)
+  if (result.requestedEnableThinking === true && !visibleAssistantTurnsComplete) {
+    failures.push('requested reasoning turn ended with empty visible assistant content')
+  }
   if (chat.rawParserTagLeak) failures.push('raw parser/reasoning/tool markup leaked into UI content')
   if (chat.reasoningRawParserTagLeak) failures.push('raw parser/reasoning/tool markup leaked into reasoning segments')
   if ((chat.reasoningCjkLeakCount || 0) > 0 || (chat.reasoningKoreanLeakCount || 0) > 0) {
@@ -564,7 +590,10 @@ function deriveProvenSurfaces(result) {
   ) {
     surfaces.add('long_tool_loop')
   }
-  if ((result.eventCounts?.reasoningDone || 0) > 0 || (result.persistedReasoningCount || 0) > 0) {
+  if (
+    ((result.eventCounts?.reasoningDone || 0) > 0 || (result.persistedReasoningCount || 0) > 0)
+    && (result.requestedEnableThinking !== true || visibleAssistantAfterEachUser(chat.turns))
+  ) {
     surfaces.add('reasoning_display')
   }
   if (result.chatOverrides?.builtinToolsEnabled === result.requestedBuiltinTools) {
@@ -1119,6 +1148,7 @@ async function main() {
         appLogTail: appLogs.slice(-120),
         serverLogTail: server.logs.slice(-160),
       }
+      result.visibleAssistantTurnsComplete = visibleAssistantAfterEachUser(result.chat?.turns || [])
       result.provenSurfaces = deriveProvenSurfaces(result)
       writeFileSync(
         path.join(proofDir, `${proofBasename}-proof.json`),
@@ -1329,6 +1359,7 @@ async function main() {
       appLogTail: appLogs.slice(-80),
       serverLogTail: server.logs.slice(-120),
     }
+    result.visibleAssistantTurnsComplete = visibleAssistantAfterEachUser(result.chat?.turns || [])
     result.provenSurfaces = deriveProvenSurfaces(result)
     writeFileSync(
       path.join(proofDir, `${proofBasename}-proof.json`),

@@ -441,10 +441,10 @@ def _write_passing_real_ui_live_model_proof_artifacts(root: Path) -> None:
                 ],
             ]
         if row["proof"].endswith(
-            "gemma4-responses-tools-reasoning-20260527-proof.json"
+            "gemma4-responses-stricttools-max768-visible-20260531-proof.json"
         ):
             proof["rendererWireApi"] = "responses"
-            proof["eventCounts"] = {"complete": 2, "tool": 4, "reasoningDone": 1}
+            proof["eventCounts"] = {"complete": 2, "tool": 4, "reasoningDone": 0}
             proof["requestedBuiltinTools"] = True
             proof["chatOverrides"] = {"builtinToolsEnabled": True}
             proof["persistedToolsByMessage"] = [
@@ -453,6 +453,15 @@ def _write_passing_real_ui_live_model_proof_artifacts(root: Path) -> None:
                     {"phase": "result", "toolName": "write_file"},
                 ],
             ]
+        if row["proof"].endswith(
+            "gemma4-responses-reasoningonly-max768-visible-20260531-proof.json"
+        ):
+            proof["rendererWireApi"] = "responses"
+            proof["eventCounts"] = {"complete": 2, "tool": 0, "reasoningDone": 2}
+            proof["requestedEnableThinking"] = True
+            proof["requestedBuiltinTools"] = False
+            proof["chatOverrides"] = {"builtinToolsEnabled": False}
+            proof["persistedReasoningCount"] = 2
         if row["proof"].endswith("gemma4-cachecontrols-20260527-proof.json"):
             proof["serverCacheControls"] = {
                 "requested": True,
@@ -524,7 +533,7 @@ def _write_passing_real_ui_live_model_proof_artifacts(root: Path) -> None:
                 ],
             ]
         if row["proof"].endswith(
-            "step37-jang2l-responses-reasoning-20260531-proof.json"
+            "step37-jang2l-responses-reasoning-max768-20260531-proof.json"
         ):
             proof["rendererWireApi"] = "responses"
             proof["eventCounts"] = {"complete": 2, "tool": 0, "reasoningDone": 1}
@@ -2483,6 +2492,15 @@ def test_release_regression_manifest_real_ui_script_records_stream_text_trace():
     assert "streamTrace: rendererResult.streamTraceByMessage" in source
 
 
+def test_release_regression_manifest_real_ui_script_rejects_reasoning_only_visible_turns():
+    script = Path("panel/scripts/live-real-ui-model-proof.mjs")
+    source = script.read_text(encoding="utf-8")
+
+    assert "visibleAssistantAfterEachUser" in source
+    assert "requested reasoning turn ended with empty visible assistant content" in source
+    assert "visibleAssistantTurnsComplete" in source
+
+
 def test_release_regression_manifest_real_ui_script_rejects_visible_tool_probe_corruption():
     script = Path("panel/scripts/live-real-ui-model-proof.mjs")
     source = script.read_text(encoding="utf-8")
@@ -2630,7 +2648,13 @@ def test_release_regression_manifest_real_ui_live_model_rows_include_ling_bailin
     assert rows["gemma4"]["model_name"] == "Gemma-4-26B-A4B-it-JANG_4M-CRACK"
     assert (
         rows["gemma4"]["proof"]
-        == "docs/internal/agent-notes/diagnostic-real-ui-live-model-gemma4-responses-tools-reasoning-20260527-proof.json"
+        == "docs/internal/agent-notes/current-real-ui-live-model-gemma4-responses-stricttools-max768-visible-20260531-proof.json"
+    )
+    assert rows["gemma4_reasoning"]["model_name"] == "Gemma-4-26B-A4B-it-JANG_4M-CRACK"
+    assert rows["gemma4_reasoning"]["family"] == "gemma4"
+    assert (
+        rows["gemma4_reasoning"]["proof"]
+        == "docs/internal/agent-notes/current-real-ui-live-model-gemma4-responses-reasoningonly-max768-visible-20260531-proof.json"
     )
     assert rows["gemma4_cachecontrols"]["model_name"] == "Gemma-4-26B-A4B-it-JANG_4M-CRACK"
     assert rows["gemma4_cachecontrols"]["family"] == "gemma4"
@@ -2811,7 +2835,7 @@ def test_release_regression_manifest_real_ui_live_model_rows_include_ling_bailin
     assert rows["step37_flash_jang2l_reasoning"]["family"] == "step37"
     assert (
         rows["step37_flash_jang2l_reasoning"]["proof"]
-        == "docs/internal/agent-notes/current-real-ui-live-model-step37-jang2l-responses-reasoning-20260531-proof.json"
+        == "docs/internal/agent-notes/current-real-ui-live-model-step37-jang2l-responses-reasoning-max768-20260531-proof.json"
     )
     assert rows["lfm25_moe_a1b"]["model_path"] == (
         "/Users/example/.mlxstudio/models/JANGQ-AI/LFM2.5-8B-A1B-JANG_2L"
@@ -3779,6 +3803,68 @@ def test_release_regression_manifest_real_ui_matrix_rejects_forged_tool_reasonin
     assert "responses_api" in gemma4["missing_surfaces"]
     assert "long_tool_loop" in gemma4["missing_surfaces"]
     assert "reasoning_display" in gemma4["missing_surfaces"]
+
+
+def test_release_regression_manifest_real_ui_matrix_rejects_reasoning_only_visible_turns():
+    proof = {
+        "modelName": "Step-3.7-Flash-JANG_2L",
+        "appLogTail": ["start electron app"],
+        "server": {
+            "health": {
+                "status": "healthy",
+                "model_loaded": True,
+                "native_cache": {
+                    "family": "step_vl",
+                    "schema": "mllm_rotating_kv_v1",
+                    "cache_type": "mllm_rotating_paged_kv",
+                    "components": ["attention_kv"],
+                    "prefix": True,
+                    "paged": True,
+                    "block_disk_l2": True,
+                },
+            }
+        },
+        "chat": {
+            "rawParserTagLeak": False,
+            "reasoningRawParserTagLeak": False,
+            "cjkLeakCount": 0,
+            "koreanLeakCount": 0,
+            "reasoningCjkLeakCount": 0,
+            "reasoningKoreanLeakCount": 0,
+            "reasoningNumericRunCount": 0,
+            "turns": [
+                {"role": "user", "content": "Say FINAL=STEP37_REASONING_OK."},
+                {"role": "assistant", "content": "FINAL=STEP37_REASONING_OK"},
+                {"role": "user", "content": "Confirm it again."},
+                {"role": "assistant", "content": ""},
+            ],
+        },
+        "cache": {
+            "before": {"scheduler_cache": {"hits": 0}},
+            "after": {
+                "scheduler_cache": {"hits": 1},
+                "block_disk_cache": {"disk_hits": 1},
+                "cache_totals": {"l2_tokens_on_disk": 12},
+            },
+            "cacheHitTokens": 12,
+        },
+        "rendererWireApi": "responses",
+        "requestedEnableThinking": True,
+        "eventCounts": {"complete": 2, "reasoningDone": 2},
+        "persistedReasoningCount": 2,
+        "requestedBuiltinTools": False,
+        "chatOverrides": {"builtinToolsEnabled": False},
+        "serverCacheControls": {"verified": True},
+        "media": {"imageVerified": True},
+    }
+
+    matrix = _validate_current_real_ui_live_model_matrix(
+        {"status": "pass", "proofs": {"step37_flash_jang2l_reasoning": proof}}
+    )
+
+    step37 = matrix["covered_families"]["step37"]
+    assert "reasoning_display" not in step37["covered_surfaces"]
+    assert "reasoning_display" in step37["missing_surfaces"]
 
 
 def test_release_regression_manifest_real_ui_matrix_rejects_lfm2_raw_tool_markers():

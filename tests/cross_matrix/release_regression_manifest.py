@@ -451,8 +451,15 @@ CURRENT_REAL_UI_LIVE_MODEL_PROOF_ROWS = {
         "family": "ling_bailing",
     },
     "gemma4": {
-        "proof": "docs/internal/agent-notes/diagnostic-real-ui-live-model-gemma4-responses-tools-reasoning-20260527-proof.json",
-        "chat_screenshot": "docs/internal/agent-notes/diagnostic-real-ui-live-model-gemma4-responses-tools-reasoning-20260527-chat.png",
+        "proof": "docs/internal/agent-notes/current-real-ui-live-model-gemma4-responses-stricttools-max768-visible-20260531-proof.json",
+        "chat_screenshot": "docs/internal/agent-notes/current-real-ui-live-model-gemma4-responses-stricttools-max768-visible-20260531-chat.png",
+        "model_path": "/Users/example/models/dealign.ai/Gemma-4-26B-A4B-it-JANG_4M-CRACK",
+        "model_name": "Gemma-4-26B-A4B-it-JANG_4M-CRACK",
+        "family": "gemma4",
+    },
+    "gemma4_reasoning": {
+        "proof": "docs/internal/agent-notes/current-real-ui-live-model-gemma4-responses-reasoningonly-max768-visible-20260531-proof.json",
+        "chat_screenshot": "docs/internal/agent-notes/current-real-ui-live-model-gemma4-responses-reasoningonly-max768-visible-20260531-chat.png",
         "model_path": "/Users/example/models/dealign.ai/Gemma-4-26B-A4B-it-JANG_4M-CRACK",
         "model_name": "Gemma-4-26B-A4B-it-JANG_4M-CRACK",
         "family": "gemma4",
@@ -577,8 +584,8 @@ CURRENT_REAL_UI_LIVE_MODEL_PROOF_ROWS = {
         "family": "step37",
     },
     "step37_flash_jang2l_reasoning": {
-        "proof": "docs/internal/agent-notes/current-real-ui-live-model-step37-jang2l-responses-reasoning-20260531-proof.json",
-        "chat_screenshot": "docs/internal/agent-notes/current-real-ui-live-model-step37-jang2l-responses-reasoning-20260531-chat.png",
+        "proof": "docs/internal/agent-notes/current-real-ui-live-model-step37-jang2l-responses-reasoning-max768-20260531-proof.json",
+        "chat_screenshot": "docs/internal/agent-notes/current-real-ui-live-model-step37-jang2l-responses-reasoning-max768-20260531-chat.png",
         "model_path": "/Users/example/.mlxstudio/models/JANGQ-AI/Step-3.7-Flash-JANG_2L",
         "model_name": "Step-3.7-Flash-JANG_2L",
         "family": "step37",
@@ -4512,7 +4519,7 @@ def _validate_current_real_ui_live_model_matrix(
             if (
                 (event_counts.get("reasoningDone") or 0) > 0
                 or (proof.get("persistedReasoningCount") or 0) > 0
-            ):
+            ) and _real_ui_visible_assistant_turns_complete(proof, chat):
                 surfaces.add("reasoning_display")
             if (
                 "builtinToolsEnabled" in chat_overrides
@@ -4637,6 +4644,36 @@ def _validate_current_real_ui_live_model_matrix(
         "partial_families": partial_families,
         "mixed_model_identity_families": sorted(mixed_model_identity_families),
     }
+
+
+def _real_ui_visible_assistant_turns_complete(
+    proof: dict[str, Any],
+    chat: dict[str, Any],
+) -> bool:
+    if proof.get("requestedEnableThinking") is not True:
+        return True
+    turns = chat.get("turns")
+    if not isinstance(turns, list):
+        return False
+    saw_user = False
+    for index, turn in enumerate(turns):
+        if not isinstance(turn, dict) or turn.get("role") != "user":
+            continue
+        saw_user = True
+        next_user_index = len(turns)
+        for candidate_index in range(index + 1, len(turns)):
+            candidate = turns[candidate_index]
+            if isinstance(candidate, dict) and candidate.get("role") == "user":
+                next_user_index = candidate_index
+                break
+        assistant_after_user = [
+            candidate
+            for candidate in turns[index + 1 : next_user_index]
+            if isinstance(candidate, dict) and candidate.get("role") == "assistant"
+        ]
+        if not any(str(candidate.get("content") or "").strip() for candidate in assistant_after_user):
+            return False
+    return saw_user
 
 
 def _validate_current_dev_ui_proof_artifacts(root: Path) -> dict[str, Any]:
