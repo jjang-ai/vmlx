@@ -496,6 +496,18 @@ def _write_passing_real_ui_live_model_proof_artifacts(root: Path) -> None:
                                 "bits": 4,
                                 "group_size": 64,
                             },
+                            "scheduler": {
+                                "last_cache_execution": {
+                                    "cache_detail": (
+                                        "paged+ssm"
+                                        if row.get("family") == "lfm25"
+                                        else "paged+mixed_swa"
+                                        if row.get("family") == "step37"
+                                        else "paged"
+                                    ),
+                                    "cached_tokens": 12,
+                                }
+                            },
                         },
                         "models": {"data": [{"id": row["model_name"]}]},
                     },
@@ -3674,6 +3686,12 @@ def test_release_regression_manifest_real_ui_matrix_requires_every_family_surfac
                         "bits": 4,
                         "group_size": 64,
                     },
+                    "scheduler": {
+                        "last_cache_execution": {
+                            "cache_detail": "paged",
+                            "cached_tokens": 12,
+                        }
+                    },
                 }
             },
             "chat": {
@@ -4683,6 +4701,132 @@ def test_release_regression_manifest_real_ui_matrix_requires_lfm_architecture_ca
     )
     assert "architecture_cache_policy" not in lfm25["covered_surfaces"]
     assert "architecture_cache_policy" in lfm25["missing_surfaces"]
+
+
+def test_release_regression_manifest_real_ui_matrix_requires_lfm_responses_cache_detail_usage():
+    proof = {
+        "modelName": "LFM2.5-8B-A1B-JANG_2L",
+        "appLogTail": ["start electron app"],
+        "server": {
+            "health": {
+                "status": "healthy",
+                "model_loaded": True,
+                "native_cache": {
+                    "family": "lfm2_moe",
+                    "schema": "hybrid_ssm_v1",
+                    "cache_type": "hybrid_ssm_typed",
+                    "components": [
+                        "attention_kv",
+                        "ssm_companion_state",
+                        "async_rederive",
+                    ],
+                    "generic_turboquant_kv": {
+                        "enabled": False,
+                        "reason": "hybrid_ssm_state",
+                    },
+                    "attention_kv_storage_quantization": {
+                        "enabled": True,
+                        "mode": "storage_boundary",
+                        "bits": 4,
+                        "group_size": 64,
+                        "applies_to": "attention_kv_layers_only",
+                        "ssm_policy": "native_companion_state",
+                    },
+                    "prefix": True,
+                    "paged": True,
+                    "block_disk_l2": True,
+                },
+                "kv_cache_quantization": {
+                    "enabled": True,
+                    "bits": 4,
+                    "group_size": 64,
+                },
+            }
+        },
+        "chat": {
+            "turns": [{"role": "assistant", "content": "ok"}],
+            "rawParserTagLeak": False,
+            "cjkLeakCount": 0,
+            "koreanLeakCount": 0,
+        },
+        "cache": {
+            "before": {"scheduler_cache": {"hits": 0}},
+            "after": {
+                "scheduler_cache": {"hits": 1},
+                "block_disk_cache": {
+                    "blocks_on_disk": 1,
+                    "total_tokens_on_disk": 12,
+                    "disk_hits": 1,
+                    "disk_writes": 1,
+                },
+                "cache_totals": {
+                    "l2_tokens_on_disk": 76,
+                    "l2_ssm_tokens_on_disk": 64,
+                    "ssm_tokens_on_disk": 64,
+                },
+                "ssm_companion": {
+                    "disk": {
+                        "enabled": True,
+                        "entries": 1,
+                        "total_tokens_on_disk": 64,
+                        "total_cached_tokens": 64,
+                        "stores": 1,
+                    }
+                },
+            },
+            "cacheHitTokens": 12,
+        },
+        "rendererWireApi": "responses",
+        "eventCounts": {
+            "complete": 2,
+            "stream": 4,
+            "tool": 24,
+        },
+        "streamTrace": [
+            {
+                "messageId": "lfm-stream",
+                "count": 4,
+                "firstFullContent": "o",
+                "lastFullContent": "ok streamed",
+            }
+        ],
+        "persistedToolCount": 24,
+        "persistedToolsByMessage": [
+            [
+                {"phase": "result", "toolName": "run_command"},
+                {"phase": "result", "toolName": "write_file"},
+            ],
+            [
+                {"phase": "result", "toolName": "run_command"},
+                {"phase": "result", "toolName": "write_file"},
+            ],
+        ],
+        "requestedBuiltinTools": True,
+        "chatOverrides": {"builtinToolsEnabled": True, "maxTokens": 512},
+        "serverCacheControls": {"verified": True},
+        "serverLogTail": [
+            "INFO:vmlx_engine.server:Resolved sampling kwargs "
+            "route=/v1/responses model=lfm "
+            "kwargs={'temperature': 0.0, 'top_p': 1.0, 'max_tokens': 512}"
+        ],
+        "requestContract": {
+            "requestMaxTokens": 512,
+            "wireApi": "responses",
+            "builtinToolsEnabled": True,
+        },
+    }
+
+    matrix = _validate_current_real_ui_live_model_matrix(
+        {"status": "pass", "proofs": {"lfm25_moe_a1b_responses_delta": proof}}
+    )
+
+    lfm25 = matrix["covered_families"]["lfm25"]
+    assert (
+        "responses_cache_detail_usage"
+        in REQUIRED_REAL_UI_LIVE_MODEL_SURFACES_BY_FAMILY["lfm25"]
+    )
+    assert "responses_cache_detail_usage" not in lfm25["covered_surfaces"]
+    assert "responses_cache_detail_usage" in lfm25["missing_surfaces"]
 
 
 def test_release_regression_manifest_real_ui_matrix_rejects_empty_tool_status_spam():

@@ -684,6 +684,7 @@ REQUIRED_REAL_UI_LIVE_MODEL_SURFACES = (
     "chat_completions",
     "responses_api",
     "responses_delta_streaming",
+    "responses_cache_detail_usage",
     "generation_defaults_applied",
     "long_tool_loop",
     "reasoning_display",
@@ -703,6 +704,7 @@ _REQUIRED_REAL_UI_LIVE_MODEL_GENERIC_SURFACES = tuple(
     surface
     for surface in REQUIRED_REAL_UI_LIVE_MODEL_SURFACES
     if surface != "architecture_cache_policy"
+    and surface != "responses_cache_detail_usage"
 )
 _REQUIRED_REAL_UI_LIVE_MODEL_NON_MEDIA_SURFACES = tuple(
     surface
@@ -3445,6 +3447,29 @@ def _real_ui_responses_delta_streaming_ok(proof: dict[str, Any]) -> bool:
     return False
 
 
+def _real_ui_responses_cache_detail_usage_ok(proof: dict[str, Any]) -> bool:
+    if proof.get("rendererWireApi") != "responses":
+        return False
+
+    def walk(value: Any) -> bool:
+        if isinstance(value, dict):
+            cache_detail = value.get("cache_detail")
+            cached_tokens = value.get("cached_tokens")
+            if (
+                isinstance(cache_detail, str)
+                and cache_detail.strip()
+                and isinstance(cached_tokens, (int, float))
+                and cached_tokens > 0
+            ):
+                return True
+            return any(walk(child) for child in value.values())
+        if isinstance(value, list):
+            return any(walk(child) for child in value)
+        return False
+
+    return walk(proof)
+
+
 def _real_ui_generation_defaults_applied_ok(proof: dict[str, Any]) -> bool:
     chat_overrides = (
         proof.get("chatOverrides")
@@ -4986,6 +5011,8 @@ def _validate_current_real_ui_live_model_matrix(
                 surfaces.add("responses_api")
             if _real_ui_responses_delta_streaming_ok(proof):
                 surfaces.add("responses_delta_streaming")
+            if _real_ui_responses_cache_detail_usage_ok(proof):
+                surfaces.add("responses_cache_detail_usage")
             if _real_ui_generation_defaults_applied_ok(proof):
                 surfaces.add("generation_defaults_applied")
             if (
