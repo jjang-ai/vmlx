@@ -1326,7 +1326,7 @@ async function main() {
         toolResultMaxChars,
         wireApi,
         builtinToolsEnabled,
-        enableThinking: enableThinkingOverride,
+        enableThinking: enableThinkingOverride ?? null,
         checkServerCacheControls,
         checkMedia,
         checkVideo,

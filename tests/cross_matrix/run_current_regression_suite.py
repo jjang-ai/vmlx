@@ -322,6 +322,7 @@ def _release_manifest_failure_is_expected(step: dict[str, Any], root: Path) -> b
         "issue175_179_release_boundary_audit",
         "installed_app_runtime_parity_audit",
         "real_ui_dsv4_memory_blocked",
+        "real_ui_request_contract_proofs_stale",
         "real_ui_step37_vlm_runtime_missing",
         "real_ui_unblocked_non_mimo_missing",
         "real_ui_unblocked_non_mimo_partial",

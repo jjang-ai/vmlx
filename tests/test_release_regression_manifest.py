@@ -392,6 +392,23 @@ def _write_passing_real_ui_live_model_proof_artifacts(root: Path) -> None:
                         "reasoningNumericRunCount": 0,
                     },
                     "cache": cache_endpoint_stats(),
+                    "requestContract": {
+                        "promptOne": "Say READY in English.",
+                        "promptTwo": "Repeat READY once.",
+                        "requestMaxTokens": 512,
+                        "maxToolIterations": 8,
+                        "toolResultMaxChars": 12000,
+                        "wireApi": "chat",
+                        "builtinToolsEnabled": False,
+                        "enableThinking": None,
+                        "checkServerCacheControls": False,
+                        "checkMedia": False,
+                        "checkVideo": False,
+                        "expectPagedCacheLocked": False,
+                        "imageExpectRegex": None,
+                        "videoExpectRegex": None,
+                        "cacheExpectRegex": None,
+                    },
                     "screenshots": {
                         "chat": str(
                             (
@@ -2511,6 +2528,17 @@ def test_release_regression_manifest_real_ui_script_records_request_contract():
     assert "cacheExpectRegex" in result_block
 
 
+def test_release_regression_manifest_real_ui_script_serializes_unset_thinking_contract():
+    script = Path("panel/scripts/live-real-ui-model-proof.mjs")
+    source = script.read_text(encoding="utf-8")
+
+    result_block = source.split("const result = {", 2)[2].split(
+        "result.visibleAssistantTurnsComplete",
+        1,
+    )[0]
+    assert "enableThinking: enableThinkingOverride ?? null" in result_block
+
+
 def test_release_regression_manifest_real_ui_script_rejects_reasoning_only_visible_turns():
     script = Path("panel/scripts/live-real-ui-model-proof.mjs")
     source = script.read_text(encoding="utf-8")
@@ -2964,6 +2992,21 @@ def test_release_regression_manifest_current_sweep_rejects_failed_real_ui_live_m
 
     assert result["real_ui_live_model_proof"]["status"] == "fail"
     assert "proof_status_failed" in result["real_ui_live_model_proof"]["failures"]
+
+
+def test_release_regression_manifest_current_sweep_rejects_real_ui_proof_without_request_contract(
+    tmp_path,
+):
+    _write_passing_real_ui_live_model_proof_artifacts(tmp_path)
+    proof_path = tmp_path / CURRENT_REAL_UI_LIVE_MODEL_PROOF_ARTIFACTS["proof"]
+    proof = json.loads(proof_path.read_text(encoding="utf-8"))
+    proof.pop("requestContract", None)
+    proof_path.write_text(json.dumps(proof) + "\n", encoding="utf-8")
+
+    result = validate_current_proof_sweep_artifacts(tmp_path)
+
+    assert result["real_ui_live_model_proof"]["status"] == "fail"
+    assert "request_contract_missing" in result["real_ui_live_model_proof"]["failures"]
 
 
 def test_release_regression_manifest_accepts_structured_electron_dev_launch_when_log_tail_rotates(
@@ -5049,6 +5092,36 @@ def test_release_blocker_ledger_tracks_dsv4_exactness_open_requirement():
             {"family": "mimo_v2", "reason": "deferred_out_of_release_scope"}
         ],
     }
+
+
+def test_release_blocker_ledger_tracks_stale_real_ui_request_contract_proofs():
+    ledger = _current_release_blocker_ledger(
+        regression_suite={"open_requirements": []},
+        live_smoke_summaries={"status": "pass", "missing": [], "not_pass": []},
+        live_tool_smoke_summaries={"status": "pass", "missing": [], "not_pass": []},
+        mimo_v2_jang2l_sink_ab={"status": "pass"},
+        mimo_v2_jang2l_root_cause={"remote_evidence_only": False},
+        issue175_179_release_boundary_audit={"status": "pass", "issues": {}},
+        installed_app_runtime_parity_audit={"status": "pass"},
+        issue179_minimax_k_root_cause_audit={"status": "pass"},
+        real_ui_live_model_proof={
+            "status": "fail",
+            "failures": [
+                "request_contract_missing",
+                "request_contract_incomplete:enableThinking",
+            ],
+        },
+        real_ui_live_model_matrix={"status": "pass", "missing_families": []},
+    )
+
+    assert ledger["blockers"] == [
+        {
+            "id": "real_ui_request_contract_proofs_stale",
+            "status": "open",
+            "evidence": "current_proof_sweep.real_ui_live_model_proof.failures:request_contract_incomplete:enableThinking,request_contract_missing",
+            "next_proof": "Rerun real Electron UI model proofs with current live-real-ui-model-proof.mjs so every artifact records its prompts and request knobs.",
+        }
+    ]
 
 
 def test_release_blocker_ledger_splits_real_ui_missing_family_blockers():

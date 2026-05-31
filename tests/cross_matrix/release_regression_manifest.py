@@ -42,6 +42,24 @@ RAW_REAL_UI_PARSER_LEAK_RE = re.compile(
     r"<\|tool_call_start\|>|<\|tool_call_end\|>"
 )
 
+REQUIRED_REAL_UI_REQUEST_CONTRACT_FIELDS = (
+    "promptOne",
+    "promptTwo",
+    "requestMaxTokens",
+    "maxToolIterations",
+    "toolResultMaxChars",
+    "wireApi",
+    "builtinToolsEnabled",
+    "enableThinking",
+    "checkServerCacheControls",
+    "checkMedia",
+    "checkVideo",
+    "expectPagedCacheLocked",
+    "imageExpectRegex",
+    "videoExpectRegex",
+    "cacheExpectRegex",
+)
+
 EXPECTED_CURRENT_CACHE_ARCHITECTURE_CHECKS = (
     "dsv4_native_composite_cache_status",
     "zaya_typed_cca_status",
@@ -2471,6 +2489,7 @@ def validate_current_proof_sweep_artifacts(root: Path) -> dict[str, Any]:
         installed_app_runtime_parity_audit=installed_app_runtime_parity_audit,
         issue179_minimax_k_root_cause_audit=issue179_minimax_k_root_cause_audit,
         release_surface_matrix=release_surface_matrix,
+        real_ui_live_model_proof=real_ui_live_model_proof,
         real_ui_live_model_matrix=real_ui_live_model_matrix,
         step37_vlm_runtime_audit=step37_vlm_runtime_audit,
     )
@@ -2617,6 +2636,7 @@ def _current_release_blocker_ledger(
     installed_app_runtime_parity_audit: dict[str, Any],
     issue179_minimax_k_root_cause_audit: dict[str, Any],
     release_surface_matrix: dict[str, Any] | None = None,
+    real_ui_live_model_proof: dict[str, Any] | None = None,
     real_ui_live_model_matrix: dict[str, Any],
     step37_vlm_runtime_audit: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
@@ -2816,6 +2836,35 @@ def _current_release_blocker_ledger(
                 ),
             }
         )
+
+    if isinstance(real_ui_live_model_proof, dict):
+        proof_failures = {
+            str(item)
+            for item in real_ui_live_model_proof.get("failures", [])
+            if isinstance(item, str)
+        }
+        request_contract_failures = sorted(
+            failure
+            for failure in proof_failures
+            if failure == "request_contract_missing"
+            or failure.startswith("request_contract_incomplete:")
+        )
+        if request_contract_failures:
+            blockers.append(
+                {
+                    "id": "real_ui_request_contract_proofs_stale",
+                    "status": "open",
+                    "evidence": (
+                        "current_proof_sweep.real_ui_live_model_proof.failures:"
+                        + ",".join(request_contract_failures)
+                    ),
+                    "next_proof": (
+                        "Rerun real Electron UI model proofs with current "
+                        "live-real-ui-model-proof.mjs so every artifact records "
+                        "its prompts and request knobs."
+                    ),
+                }
+            )
 
     if real_ui_live_model_matrix.get("status") == "open":
         real_ui_subblocker_added = False
@@ -4343,6 +4392,20 @@ def _validate_current_real_ui_live_model_proof_artifacts(
             failures.append("proof_model_path_mismatch")
         if proof.get("modelName") != row["model_name"]:
             failures.append("proof_model_name_mismatch")
+        request_contract = proof.get("requestContract")
+        if not isinstance(request_contract, dict):
+            failures.append("request_contract_missing")
+        else:
+            missing_contract_fields = [
+                field
+                for field in REQUIRED_REAL_UI_REQUEST_CONTRACT_FIELDS
+                if field not in request_contract
+            ]
+            if missing_contract_fields:
+                failures.append(
+                    "request_contract_incomplete:"
+                    + ",".join(missing_contract_fields)
+                )
 
         installed_app_ui = _real_ui_proof_is_installed_app(proof)
         if not installed_app_ui:
