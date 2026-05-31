@@ -761,7 +761,9 @@ def check_and_inject_fallback_tools(
         tool_prompt = (
             "\n".join(lfm2_lines).rstrip()
             + "\n\nWhen a tool call is needed, emit ONLY this Python-call-list shape. "
-            "Do not emit JSON, generic XML tool blocks, markdown, prose, or fake results.\n"
+            "Do not emit JSON, generic XML tool blocks, markdown, prose, or fake results. "
+            'Do not emit JSON such as {"content": "..."}; that is assistant text, '
+            "not a tool call.\n"
             + _render_lfm2_examples(lfm2_prompt_tools)
         )
     else:

@@ -709,6 +709,7 @@ def _write_passing_real_ui_live_model_proof_artifacts(root: Path) -> None:
                 "lfm25-moe-a1b-jang2l-stricttools-responses-filesemantic-20260530-proof.json",
                 "lfm25-moe-a1b-jang2l-stricttools-responses-post-epipe-20260531-proof.json",
                 "lfm25-moe-a1b-jang2l-devbuild-cache-parser-rerun-20260531-proof.json",
+                "lfm25-moe-a1b-jang2l-responses-tools-l2storage-pagedlocked-after-content-json-ban-20260531-proof.json",
             )
         ):
             proof["rendererWireApi"] = "responses"
@@ -765,6 +766,7 @@ def _write_passing_real_ui_live_model_proof_artifacts(root: Path) -> None:
                 "lfm25-moe-a1b-jang2l-stricttools-chat-20260530-proof.json",
                 "lfm25-moe-a1b-jang2l-stricttools-responses-post-epipe-20260531-proof.json",
                 "lfm25-moe-a1b-jang2l-devbuild-cache-parser-rerun-20260531-proof.json",
+                "lfm25-moe-a1b-jang2l-responses-tools-l2storage-pagedlocked-after-content-json-ban-20260531-proof.json",
             )
         ):
             add_extensive_tool_churn(proof)
@@ -3342,7 +3344,7 @@ def test_release_regression_manifest_real_ui_live_model_rows_include_ling_bailin
     )
     assert (
         rows["lfm25_moe_a1b_responses_delta"]["proof"]
-        == "docs/internal/agent-notes/current-real-ui-live-model-lfm25-moe-a1b-jang2l-devbuild-cache-parser-rerun-20260531-proof.json"
+        == "docs/internal/agent-notes/current-real-ui-live-model-lfm25-moe-a1b-jang2l-responses-tools-l2storage-pagedlocked-after-content-json-ban-20260531-proof.json"
     )
 
 
