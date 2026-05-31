@@ -703,7 +703,26 @@ function namedToolProbeSemanticsOk(result) {
       || detail.includes('REAL_UI_LIVE_TOOL_TWO')
     )
   )
-  return commandSemanticsOk && fileSemanticsOk
+  const visibleToolSemanticsOk = (() => {
+    const turns = Array.isArray(result.chat?.turns) ? result.chat.turns : []
+    for (const turn of turns) {
+      if (!turn || turn.role !== 'assistant') continue
+      const content = String(turn.content || '')
+      const lower = content.toLowerCase()
+      const secondFile = lower.indexOf('real_ui_tool_probe_2.txt')
+      const firstTokenAfterSecondFile = secondFile >= 0
+        && /real[\s_\\-]*ui[\s_\\-]*live[\s_\\-]*tool[\s_\\-]*one/i.test(
+          content.slice(secondFile, secondFile + 160),
+        )
+      const malformedSecondToken = (
+        content.includes('RE:AL_UI_LIVE_TOOL_TWO')
+        || /\bre\s*:\s*al[\s_\\-]*ui[\s_\\-]*live[\s_\\-]*tool[\s_\\-]*two\b/i.test(content)
+      )
+      if (firstTokenAfterSecondFile || malformedSecondToken) return false
+    }
+    return true
+  })()
+  return commandSemanticsOk && fileSemanticsOk && visibleToolSemanticsOk
 }
 
 function countMatches(text, regex) {
@@ -913,6 +932,30 @@ async function main() {
           const persistedTools = persistedToolsByMessage.flat();
           const allAssistantText = assistants.map((m) => m.content || '').join('\\n');
           const visible = first + '\\n' + second;
+          const streamTraceByMessage = Object.values(events.stream.reduce((acc, event) => {
+            const key = event?.messageId || 'unknown';
+            const row = acc[key] || {
+              messageId: key,
+              count: 0,
+              firstFullContent: '',
+              lastFullContent: '',
+              firstReasoningContent: '',
+              lastReasoningContent: '',
+              firstMetrics: null,
+              lastMetrics: null,
+            };
+            row.count += 1;
+            const fullContent = typeof event?.fullContent === 'string' ? event.fullContent : '';
+            const reasoningContent = event?.isReasoning && fullContent ? fullContent : '';
+            if (fullContent && !row.firstFullContent) row.firstFullContent = fullContent;
+            if (fullContent) row.lastFullContent = fullContent;
+            if (reasoningContent && !row.firstReasoningContent) row.firstReasoningContent = reasoningContent;
+            if (reasoningContent) row.lastReasoningContent = reasoningContent;
+            if (event?.metrics && !row.firstMetrics) row.firstMetrics = event.metrics;
+            if (event?.metrics) row.lastMetrics = event.metrics;
+            acc[key] = row;
+            return acc;
+          }, {}));
           const reasoningText = persistedReasoningSegments
             .map((segment) => typeof segment?.text === 'string' ? segment.text : '')
             .filter(Boolean)
@@ -970,6 +1013,7 @@ async function main() {
             persistedReasoningText: reasoningText,
             persistedReasoningCount: persistedReasoningSegments.length,
             persistedToolCount: persistedTools.length,
+            streamTraceByMessage,
             turns: messages.map((m) => ({ role: m.role, content: m.content || '' })),
             rawParserLeak: rawParserLeakRegex.test(visible) || rawParserLeakRegex.test(reasoningText),
             reasoningRawParserLeak: rawParserLeakRegex.test(reasoningText),
@@ -1261,6 +1305,7 @@ async function main() {
       ...rendererResult,
       serverCacheControls,
       toolProbeFiles,
+      streamTrace: rendererResult.streamTraceByMessage || [],
       appLogTail: appLogs.slice(-80),
       serverLogTail: server.logs.slice(-120),
     }

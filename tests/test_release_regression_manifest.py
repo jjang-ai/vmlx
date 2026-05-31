@@ -2464,6 +2464,31 @@ def test_release_regression_manifest_real_ui_script_preserves_tool_probe_file_ev
     assert "&& fileSemanticsOk" in semantics_block
 
 
+def test_release_regression_manifest_real_ui_script_records_stream_text_trace():
+    script = Path("panel/scripts/live-real-ui-model-proof.mjs")
+    source = script.read_text(encoding="utf-8")
+
+    assert "streamTraceByMessage" in source
+    assert "lastFullContent" in source
+    assert "lastReasoningContent" in source
+    assert "streamTrace: rendererResult.streamTraceByMessage" in source
+
+
+def test_release_regression_manifest_real_ui_script_rejects_visible_tool_probe_corruption():
+    script = Path("panel/scripts/live-real-ui-model-proof.mjs")
+    source = script.read_text(encoding="utf-8")
+
+    semantics_block = source.split("function namedToolProbeSemanticsOk(result)", 1)[1].split(
+        "function countMatches",
+        1,
+    )[0]
+    assert "visibleToolSemanticsOk" in semantics_block
+    assert "real_ui_tool_probe_2.txt" in semantics_block
+    assert "REAL_UI_LIVE_TOOL_ONE" in semantics_block
+    assert "RE:AL_UI_LIVE_TOOL_TWO" in semantics_block
+    assert "&& visibleToolSemanticsOk" in semantics_block
+
+
 def test_release_regression_manifest_current_sweep_rejects_missing_dev_ui_proof(tmp_path):
     result = validate_current_proof_sweep_artifacts(tmp_path)
 
@@ -2787,7 +2812,7 @@ def test_release_regression_manifest_real_ui_live_model_rows_include_ling_bailin
     )
     assert (
         rows["lfm25_moe_a1b_responses"]["proof"]
-        == "docs/internal/agent-notes/current-real-ui-live-model-lfm25-moe-a1b-jang2l-stricttools-responses-stdoutverified-20260530-proof.json"
+        == "docs/internal/agent-notes/current-real-ui-live-model-lfm25-moe-a1b-jang2l-stricttools-responses-streamtrace-20260530-proof.json"
     )
 
 
