@@ -41,6 +41,11 @@ RAW_REAL_UI_PARSER_LEAK_RE = re.compile(
     r"<\|point_end\|>|<\|box_start\|>|<\|box_end\|>|"
     r"<\|tool_call_start\|>|<\|tool_call_end\|>"
 )
+REAL_UI_RESPONSE_COMPLETE_SPEED_RE = re.compile(
+    r"Response complete:\s+(?P<tokens>\d+)\s+tokens.*?"
+    r"live=(?P<live_tps>\d+(?:\.\d+)?)\s+t/s,\s+"
+    r"TTFT:\s+(?P<ttft>\d+(?:\.\d+)?)s.*?usage=server"
+)
 
 REQUIRED_REAL_UI_REQUEST_CONTRACT_FIELDS = (
     "promptOne",
@@ -685,6 +690,7 @@ REQUIRED_REAL_UI_LIVE_MODEL_SURFACES = (
     "responses_api",
     "responses_delta_streaming",
     "responses_cache_detail_usage",
+    "live_speed_floor",
     "generation_defaults_applied",
     "long_tool_loop",
     "reasoning_display",
@@ -705,6 +711,7 @@ _REQUIRED_REAL_UI_LIVE_MODEL_GENERIC_SURFACES = tuple(
     for surface in REQUIRED_REAL_UI_LIVE_MODEL_SURFACES
     if surface != "architecture_cache_policy"
     and surface != "responses_cache_detail_usage"
+    and surface != "live_speed_floor"
 )
 _REQUIRED_REAL_UI_LIVE_MODEL_NON_MEDIA_SURFACES = tuple(
     surface
@@ -3470,6 +3477,32 @@ def _real_ui_responses_cache_detail_usage_ok(proof: dict[str, Any]) -> bool:
     return walk(proof)
 
 
+def _real_ui_live_speed_floor_ok(family_id: str, proof: dict[str, Any]) -> bool:
+    floors = {
+        "lfm25": 100.0,
+        "step37": 45.0,
+    }
+    floor = floors.get(family_id)
+    if floor is None:
+        return False
+    lines: list[str] = []
+    for key in ("appLogTail", "serverLogTail"):
+        values = proof.get(key)
+        if isinstance(values, list):
+            lines.extend(str(value) for value in values)
+    passing_samples = 0
+    for line in lines:
+        match = REAL_UI_RESPONSE_COMPLETE_SPEED_RE.search(line)
+        if not match:
+            continue
+        tokens = float(match.group("tokens"))
+        live_tps = float(match.group("live_tps"))
+        ttft = float(match.group("ttft"))
+        if tokens > 0 and live_tps >= floor and 0.0 < ttft <= 5.0:
+            passing_samples += 1
+    return passing_samples >= 2
+
+
 def _real_ui_generation_defaults_applied_ok(proof: dict[str, Any]) -> bool:
     chat_overrides = (
         proof.get("chatOverrides")
@@ -5050,6 +5083,8 @@ def _validate_current_real_ui_live_model_matrix(
             family_id = str(row.get("family") or row_id)
             if _real_ui_architecture_cache_policy_ok(family_id, proof):
                 surfaces.add("architecture_cache_policy")
+            if _real_ui_live_speed_floor_ok(family_id, proof):
+                surfaces.add("live_speed_floor")
             current_model_name = str(proof.get("modelName") or row.get("model_name") or "")
             current_model_path = str(proof.get("modelPath") or row.get("model_path") or "")
             existing = covered_families.get(family_id)

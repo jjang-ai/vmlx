@@ -515,7 +515,28 @@ def _write_passing_real_ui_live_model_proof_artifacts(root: Path) -> None:
                         "dev server running for the electron renderer process at:",
                         "  \u279c  Local:   http://localhost:5173/",
                         "start electron app...",
-                    ],
+                    ]
+                    + (
+                        [
+                            "[CHAT] Response complete: 134 tokens in 1.1s "
+                            "(356.4 t/s, live=228.3 t/s, TTFT: 0.07s, "
+                            "pp: 725 tokens (618 cached), 10984.8 pp/s, usage=server)",
+                            "[CHAT] Response complete: 136 tokens in 1.1s "
+                            "(353.2 t/s, live=228.3 t/s, TTFT: 0.07s, "
+                            "pp: 1024 tokens (917 cached), 14027.4 pp/s, usage=server)",
+                        ]
+                        if row.get("family") == "lfm25"
+                        else [
+                            "[CHAT] Response complete: 78 tokens in 11.1s "
+                            "(18.9 t/s, live=50.2 t/s, TTFT: 0.43s, "
+                            "pp: 2529 tokens (2441 cached), 5813.8 pp/s, usage=server)",
+                            "[CHAT] Response complete: 86 tokens in 7.7s "
+                            "(19.5 t/s, live=49.9 t/s, TTFT: 0.44s, "
+                            "pp: 2700 tokens (2612 cached), 6178.5 pp/s, usage=server)",
+                        ]
+                        if row.get("family") == "step37"
+                        else []
+                    ),
                     "chat": {
                         "turns": [
                             {"role": "user", "content": "Say READY in English."},
@@ -3752,7 +3773,25 @@ def test_release_regression_manifest_real_ui_matrix_requires_every_family_surfac
             "ssm_tokens_on_disk": 64,
         }
     )
+    proofs["lfm25"]["appLogTail"] = [
+        "start electron app",
+        "[CHAT] Response complete: 134 tokens in 1.1s "
+        "(356.4 t/s, live=228.3 t/s, TTFT: 0.07s, "
+        "pp: 725 tokens (618 cached), 10984.8 pp/s, usage=server)",
+        "[CHAT] Response complete: 136 tokens in 1.1s "
+        "(353.2 t/s, live=228.3 t/s, TTFT: 0.07s, "
+        "pp: 1024 tokens (917 cached), 14027.4 pp/s, usage=server)",
+    ]
     proofs["step37"]["server"]["health"]["native_cache"] = step_native_cache
+    proofs["step37"]["appLogTail"] = [
+        "start electron app",
+        "[CHAT] Response complete: 78 tokens in 11.1s "
+        "(18.9 t/s, live=50.2 t/s, TTFT: 0.43s, "
+        "pp: 2529 tokens (2441 cached), 5813.8 pp/s, usage=server)",
+        "[CHAT] Response complete: 86 tokens in 7.7s "
+        "(19.5 t/s, live=49.9 t/s, TTFT: 0.44s, "
+        "pp: 2700 tokens (2612 cached), 6178.5 pp/s, usage=server)",
+    ]
     proofs["gemma4"]["persistedToolCount"] = 0
     proofs["gemma4"]["persistedToolsByMessage"] = []
 
@@ -4827,6 +4866,92 @@ def test_release_regression_manifest_real_ui_matrix_requires_lfm_responses_cache
     )
     assert "responses_cache_detail_usage" not in lfm25["covered_surfaces"]
     assert "responses_cache_detail_usage" in lfm25["missing_surfaces"]
+
+
+def test_release_regression_manifest_real_ui_matrix_requires_lfm_live_speed_floor():
+    proof = {
+        "modelName": "LFM2.5-8B-A1B-JANG_2L",
+        "appLogTail": ["start electron app"],
+        "server": {
+            "health": {
+                "status": "healthy",
+                "model_loaded": True,
+                "native_cache": {
+                    "family": "lfm2_moe",
+                    "schema": "hybrid_ssm_v1",
+                    "cache_type": "hybrid_ssm_typed",
+                    "components": [
+                        "attention_kv",
+                        "ssm_companion_state",
+                        "async_rederive",
+                    ],
+                    "generic_turboquant_kv": {
+                        "enabled": False,
+                        "reason": "hybrid_ssm_state",
+                    },
+                    "attention_kv_storage_quantization": {
+                        "enabled": True,
+                        "mode": "storage_boundary",
+                        "bits": 4,
+                        "group_size": 64,
+                        "applies_to": "attention_kv_layers_only",
+                        "ssm_policy": "native_companion_state",
+                    },
+                    "prefix": True,
+                    "paged": True,
+                    "block_disk_l2": True,
+                },
+                "kv_cache_quantization": {
+                    "enabled": True,
+                    "bits": 4,
+                    "group_size": 64,
+                },
+                "scheduler": {
+                    "last_cache_execution": {
+                        "cache_detail": "paged+ssm",
+                        "cached_tokens": 917,
+                    }
+                },
+            }
+        },
+        "chat": {
+            "turns": [{"role": "assistant", "content": "ok"}],
+            "rawParserTagLeak": False,
+            "cjkLeakCount": 0,
+            "koreanLeakCount": 0,
+        },
+        "cache": {"cacheHitTokens": 917},
+        "rendererWireApi": "responses",
+        "eventCounts": {"complete": 2, "stream": 4, "tool": 24},
+        "streamTrace": [
+            {
+                "messageId": "lfm-stream",
+                "count": 4,
+                "firstFullContent": "o",
+                "lastFullContent": "ok streamed",
+            }
+        ],
+        "requestedBuiltinTools": True,
+        "chatOverrides": {"builtinToolsEnabled": True, "maxTokens": 512},
+        "serverLogTail": [
+            "INFO:vmlx_engine.server:Resolved sampling kwargs "
+            "route=/v1/responses model=lfm "
+            "kwargs={'temperature': 0.0, 'top_p': 1.0, 'max_tokens': 512}"
+        ],
+        "requestContract": {"requestMaxTokens": 512, "wireApi": "responses"},
+    }
+
+    matrix = _validate_current_real_ui_live_model_matrix(
+        {"status": "pass", "proofs": {"lfm25_moe_a1b_responses_delta": proof}}
+    )
+
+    lfm25 = matrix["covered_families"]["lfm25"]
+    assert (
+        "live_speed_floor"
+        in REQUIRED_REAL_UI_LIVE_MODEL_SURFACES_BY_FAMILY["lfm25"]
+    )
+    assert "live_speed_floor" not in lfm25["covered_surfaces"]
+    assert "live_speed_floor" in lfm25["missing_surfaces"]
 
 
 def test_release_regression_manifest_real_ui_matrix_rejects_empty_tool_status_spam():
