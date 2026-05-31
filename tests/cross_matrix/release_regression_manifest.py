@@ -316,7 +316,7 @@ CURRENT_POST_BUDGET_EDGE_ARTIFACTS = {
     "reasoning-template-no-think-tag-leak": "build/current-reasoning-template-contract-20260526-settings-audit.json",
     "tool-call-loop-parser-cleanup": "build/current-tool-call-contract-20260528-tool-parser-loop-matrix.json",
     "panel-tool-security-loop-boundary": "build/current-panel-tool-security-contract-20260528-tool-loop-security-matrix.json",
-    "api-chat-responses-anthropic-ollama-parity": "build/current-api-surface-contract-20260531-live-epipe-refresh.json",
+    "api-chat-responses-anthropic-ollama-parity": "build/current-api-surface-contract-20260531-nested-epipe-childstream-refresh.json",
     "cache-architecture-family-classification": "build/current-cache-architecture-contract-20260530-lfm2-tool-parser-local.json",
     "jang-model-compat-runtime-boundary": "build/current-jang-model-compat-contract-20260528-pr155-runtime-boundary.json",
     "model-artifact-format-detection": "build/current-model-artifact-format-contract-20260531-post-step-lfm-refresh.json",
@@ -324,18 +324,18 @@ CURRENT_POST_BUDGET_EDGE_ARTIFACTS = {
     "native-mtp-d3-effect-policy": "build/current-native-mtp-contract-20260531-post-step-lfm-refresh.json",
     "mcp-policy-ui-gateway": "build/current-mcp-policy-contract-20260531-post-step-lfm-refresh.json",
     "vl-media-cache-tool-followup": "build/current-vl-media-cache-contract-20260531-post-step-lfm-refresh.json",
-    "packaged-release-integrity": "build/current-packaged-integrity-contract-20260531-live-signing-refresh.json",
+    "packaged-release-integrity": "build/current-packaged-integrity-contract-20260531-childstream-epipe-refresh.json",
     "public-release-surface-preflight": "build/current-release-surface-contract-20260528-release-surface-matrix.json",
 }
 
 CURRENT_REGRESSION_SUITE_ARTIFACT = (
-    "build/current-regression-suite-20260531-live-epipe-signing-dsv4-refresh.json"
+    "build/current-regression-suite-20260531-childstream-epipe-guard.json"
 )
 CURRENT_ISSUE175_179_RELEASE_BOUNDARY_AUDIT_ARTIFACT = (
     "build/current-issue175-179-release-boundary-audit-20260531-post-install-sync.json"
 )
 CURRENT_INSTALLED_APP_RUNTIME_PARITY_AUDIT_ARTIFACT = (
-    "build/current-installed-app-runtime-parity-audit-20260531-live-epipe-refresh.json"
+    "build/current-installed-app-runtime-parity-audit-20260531-childstream-epipe-source-drift.json"
 )
 CURRENT_STAGED_APP_RUNTIME_PARITY_AUDIT_ARTIFACT = (
     "build/current-staged-app-runtime-parity-audit-20260528-staged-runtime-recheck.json"
@@ -1300,10 +1300,10 @@ _ROWS: list[dict[str, Any]] = [
             "panel request builders omit invalid persisted maxTokens instead of poisoning Chat Completions or Responses",
         ],
         "commands": [
-            ".venv/bin/python tests/cross_matrix/run_api_surface_contract.py --out build/current-api-surface-contract-20260531-live-epipe-refresh.json",
+            ".venv/bin/python tests/cross_matrix/run_api_surface_contract.py --out build/current-api-surface-contract-20260531-nested-epipe-childstream-refresh.json",
         ],
         "artifacts": [
-            "build/current-api-surface-contract-20260531-live-epipe-refresh.json",
+            "build/current-api-surface-contract-20260531-nested-epipe-childstream-refresh.json",
             "build/current-api-surface-contract-20260529-single-model-transition-lock.json",
             "build/current-api-surface-contract-20260525-single-model-ollama-chat-deltas.json",
             "build/current-api-surface-contract-20260523-post-budget-edge.json",
@@ -1546,13 +1546,13 @@ _ROWS: list[dict[str, Any]] = [
             "packaged Python has no __pycache__/*.pyc files that would invalidate the signed app seal",
         ],
         "commands": [
-            ".venv/bin/python tests/cross_matrix/run_packaged_integrity_contract.py --out build/current-packaged-integrity-contract-20260531-live-signing-refresh.json",
+            ".venv/bin/python tests/cross_matrix/run_packaged_integrity_contract.py --out build/current-packaged-integrity-contract-20260531-childstream-epipe-refresh.json",
             ".venv/bin/python tests/cross_matrix/run_packaged_integrity_contract.py --jang-tools-source /Users/example/jang/jang-tools --out build/current-packaged-integrity-contract-20260524-pycache-seal-check.json",
             ".venv/bin/python tests/cross_matrix/run_packaged_integrity_contract.py --jang-tools-source /Users/example/jang/.worktrees/vmlx-release-clean-b5f66a7/jang-tools --out build/current-packaged-integrity-contract-20260522-recheck-bundled-release-gate.json",
         ],
         "artifacts": [
             "build/current-objective-proof-audit-20260531-nemotron-exact-finalizer-ledger.json",
-            "build/current-packaged-integrity-contract-20260531-live-signing-refresh.json",
+            "build/current-packaged-integrity-contract-20260531-childstream-epipe-refresh.json",
             "build/current-packaged-integrity-contract-20260528-prepackage-gate.json",
             "build/current-packaged-integrity-contract-20260528-release-ready-dmg-gate.json",
             "build/current-packaged-integrity-contract-20260528-release-ready-gate.json",
@@ -1944,7 +1944,7 @@ _ROWS: list[dict[str, Any]] = [
             "VMLINUX_REAL_UI_APP_PATH=/Applications/vMLX.app VMLINUX_REAL_UI_MODEL_PATH=/Users/example/models/JANGQ/MiniMax-M2.7-JANGTQ_K VMLINUX_REAL_UI_PROOF_BASENAME=diagnostic-installed-ui-live-model-minimax-m27-jangtq-k-issue179-512-20260527 VMLINUX_REAL_UI_WIRE_API=responses VMLINUX_REAL_UI_MAX_TOKENS=512 node panel/scripts/live-real-ui-model-proof.mjs",
             ".venv/bin/python tests/cross_matrix/run_issue179_responses_cancel_probe.py --out build/current-issue179-minimax-k-responses-cancel-probe-installed-20260527.json --load-timeout 240 --request-timeout 180 --stream-seconds 8 --cancel-delay 0.25",
             ".venv/bin/python tests/cross_matrix/run_issue175_179_release_boundary_audit.py --out build/current-issue175-179-release-boundary-audit-20260531-post-install-sync.json",
-            ".venv/bin/python tests/cross_matrix/run_installed_app_runtime_parity_audit.py --out build/current-installed-app-runtime-parity-audit-20260531-live-epipe-refresh.json",
+            ".venv/bin/python tests/cross_matrix/run_installed_app_runtime_parity_audit.py --out build/current-installed-app-runtime-parity-audit-20260531-childstream-epipe-source-drift.json",
             ".venv/bin/python tests/cross_matrix/run_installed_app_runtime_parity_audit.py --app panel/release/mac-arm64/vMLX.app --user-data build/staged-parity-user-data --diagnostic-reports build/staged-parity-diagnostic-reports --out build/current-staged-app-runtime-parity-audit-20260528-staged-runtime-recheck.json",
             ".venv/bin/python tests/cross_matrix/run_issue175_177_installed_runtime_audit.py --out build/current-issue175-177-installed-runtime-audit-20260527.json",
             ".venv/bin/python tests/cross_matrix/run_issue175_177_live_runtime_audit.py --out build/current-issue175-177-live-runtime-audit-20260527.json",
@@ -2001,7 +2001,7 @@ _ROWS: list[dict[str, Any]] = [
             "build/current-issue179-minimax-k-responses-cancel-probe-installed-20260527.json",
             "build/current-issue179-minimax-k-responses-cancel-probe-installed-20260527.server.log",
             "build/current-issue175-179-release-boundary-audit-20260531-post-install-sync.json",
-            "build/current-installed-app-runtime-parity-audit-20260531-live-epipe-refresh.json",
+            "build/current-installed-app-runtime-parity-audit-20260531-childstream-epipe-source-drift.json",
             "build/current-staged-app-runtime-parity-audit-20260528-staged-runtime-recheck.json",
             "build/current-installed-app-runtime-parity-audit-20260528-userdata-epipe-scan.json",
             "build/current-issue175-177-installed-runtime-audit-20260527.json",

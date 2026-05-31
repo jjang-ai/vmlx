@@ -47,6 +47,8 @@ interface ManagedModelProcess {
 function isExpectedChildProcessStreamDisconnectError(err: unknown): boolean {
   const code = (err as NodeJS.ErrnoException)?.code
   const message = String((err as Error)?.message || '').toLowerCase()
+  const cause = (err as any)?.cause
+  const nestedErrors = Array.isArray((err as any)?.errors) ? (err as any).errors : []
   return (
     code === "EPIPE" ||
     code === "ECONNRESET" ||
@@ -55,7 +57,9 @@ function isExpectedChildProcessStreamDisconnectError(err: unknown): boolean {
     message.includes("write EPIPE".toLowerCase()) ||
     message.includes("broken pipe") ||
     message.includes("stream has been destroyed") ||
-    message.includes("write after end")
+    message.includes("write after end") ||
+    (cause ? isExpectedChildProcessStreamDisconnectError(cause) : false) ||
+    nestedErrors.some((nested) => isExpectedChildProcessStreamDisconnectError(nested))
   )
 }
 

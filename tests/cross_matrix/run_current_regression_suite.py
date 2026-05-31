@@ -21,7 +21,7 @@ from typing import Any
 
 
 DEFAULT_OUT = Path(
-    "build/current-regression-suite-20260531-live-epipe-signing-dsv4-refresh.json"
+    "build/current-regression-suite-20260531-childstream-epipe-guard.json"
 )
 
 EXPECTED_OPEN_REQUIREMENTS = [
@@ -42,14 +42,18 @@ CURRENT_SUITE_SOURCE_HASH_FILES = (
     "panel/scripts/release-gate-python-app.py",
     "panel/scripts/verify-bundled-python.sh",
     "panel/src/main/api-gateway.ts",
+    "panel/src/main/engine-manager.ts",
     "panel/src/main/index.ts",
     "panel/src/main/ipc/chat.ts",
+    "panel/src/main/ipc/developer.ts",
     "panel/src/main/ipc/image.ts",
     "panel/src/main/ipc/imageGenerationState.ts",
     "panel/src/main/ipc/models.ts",
     "panel/src/main/model-config-registry.ts",
+    "panel/src/main/process-manager.ts",
     "panel/src/main/server.ts",
     "panel/src/main/sessions.ts",
+    "panel/src/main/tools/executor.ts",
     "panel/src/renderer/src/components/chat/MessageBubble.tsx",
     "panel/src/renderer/src/components/sessions/SessionConfigForm.tsx",
     "panel/src/renderer/src/components/sessions/SessionSettings.tsx",
@@ -428,7 +432,7 @@ CURRENT_SUITE_COMMANDS: dict[str, list[str]] = {
         sys.executable,
         "tests/cross_matrix/run_api_surface_contract.py",
         "--out",
-        "build/current-api-surface-contract-20260531-live-epipe-refresh.json",
+        "build/current-api-surface-contract-20260531-nested-epipe-childstream-refresh.json",
     ],
     "panel_tool_security_contracts": [
         sys.executable,
@@ -508,13 +512,13 @@ CURRENT_SUITE_COMMANDS: dict[str, list[str]] = {
         sys.executable,
         "tests/cross_matrix/run_packaged_integrity_contract.py",
         "--out",
-        "build/current-packaged-integrity-contract-20260531-live-signing-refresh.json",
+        "build/current-packaged-integrity-contract-20260531-childstream-epipe-refresh.json",
     ],
     "installed_app_runtime_parity_audit": [
         sys.executable,
         "tests/cross_matrix/run_installed_app_runtime_parity_audit.py",
         "--out",
-        "build/current-installed-app-runtime-parity-audit-20260531-live-epipe-refresh.json",
+        "build/current-installed-app-runtime-parity-audit-20260531-childstream-epipe-source-drift.json",
     ],
     "staged_app_runtime_parity_audit": [
         sys.executable,
@@ -568,7 +572,7 @@ CURRENT_SUITE_COMMANDS: dict[str, list[str]] = {
         "--require-current-proof-sweep",
         "--require-release-ready",
         "--out",
-        "build/current-release-regression-manifest-20260531-live-epipe-signing-dsv4-refresh.json",
+        "build/current-release-regression-manifest-20260531-childstream-epipe-guard.json",
     ],
 }
 
