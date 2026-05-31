@@ -130,16 +130,41 @@ async function requestJson(url, timeoutMs = 1000) {
   }
 }
 
+function isSocketDisconnectError(error) {
+  const code = String(error?.code || '')
+  const message = String(error?.message || error || '')
+  const cause = error?.cause
+  const nestedErrors = Array.isArray(error?.errors) ? error.errors : []
+  return (
+    code === 'EPIPE'
+    || code === 'ECONNRESET'
+    || code === 'ERR_STREAM_DESTROYED'
+    || code === 'ERR_STREAM_WRITE_AFTER_END'
+    || /EPIPE|write EPIPE|broken pipe|socket hang up|connection reset|premature close|stream.*destroyed|write after end/i.test(message)
+    || (cause ? isSocketDisconnectError(cause) : false)
+    || nestedErrors.some((nested) => isSocketDisconnectError(nested))
+  )
+}
+
 class CdpSocket {
   constructor(socket) {
     this.socket = socket
     this.buffer = Buffer.alloc(0)
     this.nextId = 1
     this.pending = new Map()
+    this.closed = false
     socket.on('data', (chunk) => this.onData(chunk))
     socket.on('error', (error) => {
-      for (const { reject } of this.pending.values()) reject(error)
-      this.pending.clear()
+      if (isSocketDisconnectError(error)) this.closed = true
+      this.rejectPending(error)
+    })
+    socket.on('close', () => {
+      this.closed = true
+      this.rejectPending(new Error('CDP socket closed before response'))
+    })
+    socket.on('end', () => {
+      this.closed = true
+      this.rejectPending(new Error('CDP socket ended before response'))
     })
   }
 
@@ -185,7 +210,6 @@ class CdpSocket {
   send(method, params = {}, timeoutMs = 60_000) {
     const id = this.nextId++
     const payload = JSON.stringify({ id, method, params })
-    this.socket.write(encodeClientFrame(payload))
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         if (this.pending.has(id)) {
@@ -194,12 +218,48 @@ class CdpSocket {
         }
       }, timeoutMs)
       this.pending.set(id, { resolve, reject, timer })
+      try {
+        this.writeClientFrame(payload)
+      } catch (error) {
+        clearTimeout(timer)
+        this.pending.delete(id)
+        reject(error)
+      }
     })
   }
 
   close() {
+    this.closed = true
     try { this.socket.end() } catch {}
     try { this.socket.destroy() } catch {}
+  }
+
+  rejectPending(error) {
+    for (const { reject, timer } of this.pending.values()) {
+      clearTimeout(timer)
+      reject(error)
+    }
+    this.pending.clear()
+  }
+
+  writeClientFrame(payload) {
+    if (this.socket.destroyed || this.closed) {
+      const error = new Error('CDP socket closed before write')
+      error.code = 'ERR_STREAM_DESTROYED'
+      this.rejectPending(error)
+      return false
+    }
+    try {
+      this.socket.write(encodeClientFrame(payload))
+      return true
+    } catch (error) {
+      if (isSocketDisconnectError(error)) {
+        this.closed = true
+        this.rejectPending(error)
+        return false
+      }
+      throw error
+    }
   }
 
   onData(chunk) {

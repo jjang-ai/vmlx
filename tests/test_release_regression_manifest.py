@@ -2678,6 +2678,18 @@ def test_release_regression_manifest_real_ui_live_model_script_exists_and_uses_r
     assert "server.logs.slice(-80)" in source
 
 
+def test_release_regression_manifest_real_ui_live_model_cdp_write_guards_epipe():
+    script = Path("panel/scripts/live-real-ui-model-proof.mjs")
+    source = script.read_text(encoding="utf-8")
+
+    assert "function isSocketDisconnectError" in source
+    assert "write EPIPE" in source
+    assert "ERR_STREAM_DESTROYED" in source
+    assert "writeClientFrame(payload)" in source
+    assert "if (this.socket.destroyed || this.closed)" in source
+    assert "this.rejectPending(error)" in source
+
+
 def test_release_regression_manifest_real_ui_cache_checker_is_model_specific():
     script = Path("panel/scripts/live-real-ui-model-proof.mjs")
     source = script.read_text(encoding="utf-8")
