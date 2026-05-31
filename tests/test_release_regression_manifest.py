@@ -362,6 +362,24 @@ def _write_passing_real_ui_live_model_proof_artifacts(root: Path) -> None:
             ],
         ]
 
+    def add_responses_delta_streaming(proof: dict[str, object]) -> None:
+        event_counts = proof.setdefault("eventCounts", {})
+        event_counts["stream"] = max(int(event_counts.get("stream", 0)), 8)
+        proof["streamTrace"] = [
+            {
+                "messageId": "synthetic-delta-one",
+                "count": 4,
+                "firstFullContent": "RE",
+                "lastFullContent": "READY streamed progressively.",
+            },
+            {
+                "messageId": "synthetic-delta-two",
+                "count": 4,
+                "firstFullContent": "OK",
+                "lastFullContent": "OK second streamed turn.",
+            },
+        ]
+
     for row in CURRENT_REAL_UI_LIVE_MODEL_PROOF_ROWS.values():
         screenshot = root / row["chat_screenshot"]
         screenshot.parent.mkdir(parents=True, exist_ok=True)
@@ -515,6 +533,7 @@ def _write_passing_real_ui_live_model_proof_artifacts(root: Path) -> None:
                 "lfm25-moe-a1b-jang2l-stricttools-chat-20260530-proof.json",
                 "lfm25-moe-a1b-jang2l-stricttools-responses-filesemantic-20260530-proof.json",
                 "lfm25-moe-a1b-jang2l-stricttools-responses-post-epipe-20260531-proof.json",
+                "lfm25-moe-a1b-jang2l-responses-delta-longtool-20260531-proof.json",
             )
         ):
             proof["rendererWireApi"] = "responses"
@@ -566,6 +585,7 @@ def _write_passing_real_ui_live_model_proof_artifacts(root: Path) -> None:
             (
                 "lfm25-moe-a1b-jang2l-stricttools-chat-20260530-proof.json",
                 "lfm25-moe-a1b-jang2l-stricttools-responses-post-epipe-20260531-proof.json",
+                "lfm25-moe-a1b-jang2l-responses-delta-longtool-20260531-proof.json",
             )
         ):
             add_extensive_tool_churn(proof)
@@ -887,6 +907,8 @@ def _write_passing_real_ui_live_model_proof_artifacts(root: Path) -> None:
                 request_contract["toolResultMaxChars"] = chat_overrides[
                     "toolResultMaxChars"
                 ]
+        if proof.get("rendererWireApi") == "responses":
+            add_responses_delta_streaming(proof)
         proof_path.write_text(json.dumps(proof) + "\n", encoding="utf-8")
     _write_expected_issue175_179_release_boundary_audit(root)
     _write_expected_issue179_minimax_k_root_cause_audit(root)
@@ -3023,6 +3045,10 @@ def test_release_regression_manifest_real_ui_live_model_rows_include_ling_bailin
         rows["lfm25_moe_a1b_responses"]["proof"]
         == "docs/internal/agent-notes/current-real-ui-live-model-lfm25-moe-a1b-jang2l-stricttools-responses-post-epipe-20260531-proof.json"
     )
+    assert (
+        rows["lfm25_moe_a1b_responses_delta"]["proof"]
+        == "docs/internal/agent-notes/current-real-ui-live-model-lfm25-moe-a1b-jang2l-responses-delta-longtool-20260531-proof.json"
+    )
 
 
 def test_release_regression_manifest_real_ui_requires_step37_and_lfm25():
@@ -3235,6 +3261,7 @@ def test_release_regression_manifest_real_ui_matrix_tracks_mixed_minimax_identit
     assert "cache_hit_telemetry" in matrix["covered_families"]["zaya_text"]["covered_surfaces"]
     assert matrix["covered_families"]["ling_bailing"]["status"] == "pass"
     assert "responses_api" not in matrix["missing_surfaces"]
+    assert "responses_delta_streaming" not in matrix["missing_surfaces"]
     assert "long_tool_loop" not in matrix["missing_surfaces"]
     assert "server_cache_controls" not in matrix["missing_surfaces"]
     assert "vl_image" not in matrix["missing_surfaces"]
@@ -3518,7 +3545,20 @@ def test_release_regression_manifest_real_ui_matrix_requires_every_family_surfac
             },
             "cache": cache_stats,
             "rendererWireApi": "responses",
-            "eventCounts": {"complete": 2, "tool": 3, "reasoningDone": 1},
+            "eventCounts": {
+                "complete": 2,
+                "stream": 4,
+                "tool": 3,
+                "reasoningDone": 1,
+            },
+            "streamTrace": [
+                {
+                    "messageId": f"{family}-stream",
+                    "count": 4,
+                    "firstFullContent": "o",
+                    "lastFullContent": "ok streamed",
+                }
+            ],
             "persistedToolCount": 1,
             "persistedToolsByMessage": [
                 [
@@ -3584,7 +3624,20 @@ def test_release_regression_manifest_real_ui_matrix_uses_family_specific_media_r
                 "cacheHitTokens": 12,
             },
             "rendererWireApi": "responses",
-            "eventCounts": {"complete": 2, "tool": 3, "reasoningDone": 1},
+            "eventCounts": {
+                "complete": 2,
+                "stream": 4,
+                "tool": 3,
+                "reasoningDone": 1,
+            },
+            "streamTrace": [
+                {
+                    "messageId": "media-proof-stream",
+                    "count": 4,
+                    "firstFullContent": "o",
+                    "lastFullContent": "ok streamed",
+                }
+            ],
             "persistedToolCount": 1,
             "persistedToolsByMessage": [
                 [
@@ -4252,6 +4305,57 @@ def test_release_regression_manifest_real_ui_matrix_accepts_top_level_parser_lea
     lfm25 = matrix["covered_families"]["lfm25"]
     assert "parser_leak_check" in lfm25["covered_surfaces"]
     assert "parser_leak_check" not in lfm25["missing_surfaces"]
+
+
+def test_release_regression_manifest_real_ui_matrix_requires_responses_delta_streaming():
+    proof = {
+        "modelName": "LFM2.5-8B-A1B-JANG_2L",
+        "appLogTail": ["start electron app"],
+        "server": {
+            "health": {
+                "status": "healthy",
+                "model_loaded": True,
+                "native_cache": {
+                    "family": "lfm2_moe",
+                    "schema": "hybrid_ssm_v1",
+                    "cache_type": "hybrid_ssm_typed",
+                    "components": ["attention_kv", "ssm_companion_state"],
+                    "prefix": True,
+                    "paged": True,
+                    "block_disk_l2": True,
+                },
+            }
+        },
+        "cache": {"cacheHitTokens": 64},
+        "chat": {
+            "turns": [
+                {"role": "user", "content": "tool turn one"},
+                {"role": "assistant", "content": "complete only"},
+            ],
+            "rawParserTagLeak": False,
+            "cjkLeakCount": 0,
+            "koreanLeakCount": 0,
+        },
+        "reasoningRawParserLeak": False,
+        "rendererWireApi": "responses",
+        "eventCounts": {"complete": 1, "stream": 1},
+        "streamTrace": [
+            {
+                "messageId": "m1",
+                "count": 1,
+                "firstFullContent": "complete only",
+                "lastFullContent": "complete only",
+            }
+        ],
+    }
+
+    matrix = _validate_current_real_ui_live_model_matrix(
+        {"status": "pass", "proofs": {"lfm25_moe_a1b_responses": proof}}
+    )
+
+    lfm25 = matrix["covered_families"]["lfm25"]
+    assert "responses_delta_streaming" not in lfm25["covered_surfaces"]
+    assert "responses_delta_streaming" in lfm25["missing_surfaces"]
 
 
 def test_release_regression_manifest_real_ui_matrix_rejects_empty_tool_status_spam():

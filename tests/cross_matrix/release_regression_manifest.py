@@ -64,6 +64,7 @@ REQUIRED_REAL_UI_EXTENSIVE_TOOL_ROWS = frozenset(
         "step37_flash_jang2l",
         "lfm25_moe_a1b",
         "lfm25_moe_a1b_responses",
+        "lfm25_moe_a1b_responses_delta",
     }
 )
 MIN_REAL_UI_EXTENSIVE_TOOL_EVENTS = 20
@@ -639,6 +640,13 @@ CURRENT_REAL_UI_LIVE_MODEL_PROOF_ROWS = {
         "model_name": "LFM2.5-8B-A1B-JANG_2L",
         "family": "lfm25",
     },
+    "lfm25_moe_a1b_responses_delta": {
+        "proof": "docs/internal/agent-notes/current-real-ui-live-model-lfm25-moe-a1b-jang2l-responses-delta-longtool-20260531-proof.json",
+        "chat_screenshot": "docs/internal/agent-notes/current-real-ui-live-model-lfm25-moe-a1b-jang2l-responses-delta-longtool-20260531-chat.png",
+        "model_path": "/Users/example/.mlxstudio/models/JANGQ-AI/LFM2.5-8B-A1B-JANG_2L",
+        "model_name": "LFM2.5-8B-A1B-JANG_2L",
+        "family": "lfm25",
+    },
     "lfm25_moe_a1b_responses": {
         "proof": "docs/internal/agent-notes/current-real-ui-live-model-lfm25-moe-a1b-jang2l-stricttools-responses-post-epipe-20260531-proof.json",
         "chat_screenshot": "docs/internal/agent-notes/current-real-ui-live-model-lfm25-moe-a1b-jang2l-stricttools-responses-post-epipe-20260531-chat.png",
@@ -675,6 +683,7 @@ REQUIRED_REAL_UI_LIVE_MODEL_SURFACES = (
     "real_loaded_model",
     "chat_completions",
     "responses_api",
+    "responses_delta_streaming",
     "long_tool_loop",
     "reasoning_display",
     "parser_leak_check",
@@ -3389,6 +3398,36 @@ def _real_ui_extensive_tool_churn_ok(proof: dict[str, Any]) -> bool:
     )
 
 
+def _real_ui_responses_delta_streaming_ok(proof: dict[str, Any]) -> bool:
+    if proof.get("rendererWireApi") != "responses":
+        return False
+    event_counts = (
+        proof.get("eventCounts") if isinstance(proof.get("eventCounts"), dict) else {}
+    )
+    if (event_counts.get("stream") or 0) < 2:
+        return False
+    traces = proof.get("streamTrace")
+    if not isinstance(traces, list):
+        traces = proof.get("streamTraceByMessage")
+    if not isinstance(traces, list):
+        return False
+    for trace in traces:
+        if not isinstance(trace, dict):
+            continue
+        first = trace.get("firstFullContent")
+        last = trace.get("lastFullContent")
+        if (
+            isinstance(first, str)
+            and isinstance(last, str)
+            and first
+            and last
+            and first != last
+            and (trace.get("count") or 0) >= 2
+        ):
+            return True
+    return False
+
+
 REAL_UI_TOOL_ONE_TOKEN_RE = (
     r"real[\s_\\-]*ui[\s_\\-]*live[\s_\\-]*tool[\s_\\-]*one"
 )
@@ -4791,6 +4830,8 @@ def _validate_current_real_ui_live_model_matrix(
                 and _json_number(proof, "eventCounts", "complete")
             ):
                 surfaces.add("responses_api")
+            if _real_ui_responses_delta_streaming_ok(proof):
+                surfaces.add("responses_delta_streaming")
             if (
                 (event_counts.get("tool") or 0) >= 3
                 and _real_ui_named_tool_result_count(proof) >= 2

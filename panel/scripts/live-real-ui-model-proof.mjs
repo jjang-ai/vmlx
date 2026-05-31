@@ -604,6 +604,9 @@ function deriveProvenSurfaces(result) {
   if (result.rendererWireApi === 'responses' && (result.eventCounts?.complete || 0) > 0) {
     surfaces.add('responses_api')
   }
+  if (responsesDeltaStreamingSeen(result)) {
+    surfaces.add('responses_delta_streaming')
+  }
   if (
     (result.eventCounts?.tool || 0) >= 3
     && namedToolResultCount(result) >= 2
@@ -677,6 +680,24 @@ function l2DiskStorageSeen(cache) {
     if (typeof value === 'number' && value > 0) return true
   }
   return false
+}
+
+function responsesDeltaStreamingSeen(result) {
+  if (result?.rendererWireApi !== 'responses') return false
+  if ((result.eventCounts?.stream || 0) < 2) return false
+  const traces = Array.isArray(result.streamTrace)
+    ? result.streamTrace
+    : (Array.isArray(result.streamTraceByMessage) ? result.streamTraceByMessage : [])
+  return traces.some((trace) =>
+    trace
+    && typeof trace === 'object'
+    && (trace.count || 0) >= 2
+    && typeof trace.firstFullContent === 'string'
+    && typeof trace.lastFullContent === 'string'
+    && trace.firstFullContent.length > 0
+    && trace.lastFullContent.length > 0
+    && trace.firstFullContent !== trace.lastFullContent
+  )
 }
 
 function cacheReconstructionClean(result) {
