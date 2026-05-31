@@ -4380,6 +4380,28 @@ def test_release_regression_manifest_real_ui_matrix_requires_integrated_tool_l2_
     assert "tool_l2_cache_integrated" in step37["missing_surfaces"]
 
 
+def test_release_regression_manifest_real_ui_matrix_records_surface_artifacts():
+    proof = _lfm_integrated_matrix_proof()
+
+    matrix = _validate_current_real_ui_live_model_matrix(
+        {"status": "pass", "proofs": {"lfm25_moe_a1b_responses_delta": proof}}
+    )
+
+    lfm25 = matrix["covered_families"]["lfm25"]
+    expected_artifact = CURRENT_REAL_UI_LIVE_MODEL_PROOF_ROWS[
+        "lfm25_moe_a1b_responses_delta"
+    ]["proof"]
+    assert lfm25["surface_artifacts"]["tool_l2_cache_integrated"] == [
+        expected_artifact
+    ]
+    assert lfm25["surface_artifacts"]["architecture_cache_policy"] == [
+        expected_artifact
+    ]
+    assert lfm25["surface_artifacts"]["responses_delta_streaming"] == [
+        expected_artifact
+    ]
+
+
 def test_release_regression_manifest_real_ui_matrix_requires_step37_mixed_swa_storage_quantization():
     proof = {
         "modelName": "Step-3.7-Flash-JANG_2L",

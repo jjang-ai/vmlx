@@ -5263,12 +5263,32 @@ def _validate_current_real_ui_live_model_matrix(
 
             current_model_name = str(proof.get("modelName") or row.get("model_name") or "")
             current_model_path = str(proof.get("modelPath") or row.get("model_path") or "")
+            row_artifact = str(row.get("proof") or "")
+            row_surface_artifacts = {
+                surface: [row_artifact] for surface in surfaces if row_artifact
+            }
             existing = covered_families.get(family_id)
             if existing:
                 surfaces.update(existing.get("covered_surfaces", []))
                 artifacts = list(existing.get("artifacts", []))
                 if row.get("proof") and row.get("proof") not in artifacts:
                     artifacts.append(row.get("proof"))
+                surface_artifacts = {
+                    str(surface): [
+                        str(artifact)
+                        for artifact in artifact_list
+                        if isinstance(artifact, str) and artifact
+                    ]
+                    for surface, artifact_list in (
+                        existing.get("surface_artifacts") or {}
+                    ).items()
+                    if isinstance(artifact_list, list)
+                }
+                for surface, artifact_list in row_surface_artifacts.items():
+                    current = surface_artifacts.setdefault(surface, [])
+                    for artifact in artifact_list:
+                        if artifact not in current:
+                            current.append(artifact)
                 model_names = {
                     str(name)
                     for name in existing.get("modelNames", [])
@@ -5286,6 +5306,7 @@ def _validate_current_real_ui_live_model_matrix(
                 model_name = existing.get("modelName") or current_model_name
             else:
                 artifacts = [row.get("proof")] if row.get("proof") else []
+                surface_artifacts = row_surface_artifacts
                 model_names = {current_model_name} if current_model_name else set()
                 model_paths = {current_model_path} if current_model_path else set()
                 model_name = current_model_name
@@ -5313,6 +5334,11 @@ def _validate_current_real_ui_live_model_matrix(
                 "artifacts": artifacts,
                 "required_surfaces": list(required_family_surfaces),
                 "covered_surfaces": sorted(surfaces),
+                "surface_artifacts": {
+                    surface: artifact_list
+                    for surface, artifact_list in sorted(surface_artifacts.items())
+                    if surface in surfaces
+                },
                 "missing_surfaces": missing_family_surfaces,
             }
 
