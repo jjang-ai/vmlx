@@ -828,6 +828,74 @@ def test_batched_engine_zaya1_vl_uses_processor_template_when_prompt_utils_unsup
     assert captured["kwargs"]["tokenize"] is False
 
 
+def test_batched_engine_zaya1_vl_with_tools_still_uses_processor_image_template(monkeypatch):
+    """Tool-enabled ZAYA1-VL turns must not bypass the VL processor template."""
+
+    from vmlx_engine.engine.batched import BatchedEngine
+    import mlx_vlm.prompt_utils as prompt_utils
+
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}},
+                {"type": "text", "text": "What color is this image?"},
+            ],
+        }
+    ]
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "run_command",
+                "description": "Run a shell command",
+                "parameters": {"type": "object", "properties": {}},
+            },
+        }
+    ]
+    captured = {}
+
+    class FakeTokenizer:
+        def apply_chat_template(self, *_args, **_kwargs):
+            return "<|im_start|>user\nWhat color is this image?<|im_end|>\n<|im_start|>assistant\n"
+
+    class FakeProcessor:
+        tokenizer = FakeTokenizer()
+
+        def apply_chat_template(self, messages_arg, **kwargs):
+            captured["messages"] = messages_arg
+            captured["kwargs"] = kwargs
+            return (
+                "<|vision_start|><image><|vision_end|>\n"
+                "<|im_start|>user\n"
+                "What color is this image?<|im_end|>\n"
+                "<|im_start|>assistant\n"
+            )
+
+    def unsupported_model(*_args, **_kwargs):
+        raise ValueError("Unsupported model: zaya1_vl")
+
+    monkeypatch.setattr(prompt_utils, "apply_chat_template", unsupported_model)
+
+    engine = BatchedEngine.__new__(BatchedEngine)
+    engine._is_mllm = True
+    engine._processor = FakeProcessor()
+    engine._model = SimpleNamespace(config={"model_type": "zaya1_vl"})
+    engine._model_name = "zaya-vl-with-tools-test"
+    engine._tokenizer = None
+
+    prompt = engine._apply_chat_template(
+        messages,
+        tools=tools,
+        num_images=1,
+        enable_thinking=False,
+    )
+
+    assert "<|vision_start|><image><|vision_end|>" in prompt
+    assert captured["messages"][0]["content"][0]["type"] == "image"
+    assert captured["kwargs"]["tools"] == tools
+
+
 def test_batched_engine_zaya1_vl_text_only_keeps_user_text():
     model_dir = Path("/Users/example/models/JANGQ/ZAYA1-VL-8B-MXFP4")
     if not model_dir.exists():

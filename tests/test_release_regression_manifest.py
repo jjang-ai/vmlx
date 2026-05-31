@@ -2530,6 +2530,40 @@ def test_release_regression_manifest_real_ui_script_records_request_contract():
     assert "cacheExpectRegex" in result_block
 
 
+def test_release_regression_manifest_real_ui_default_image_fixture_has_valid_png_crc():
+    import base64
+    import binascii
+    import struct
+
+    script = Path("panel/scripts/live-real-ui-model-proof.mjs")
+    source = script.read_text(encoding="utf-8")
+    match = re.search(r"\|\| 'data:image/png;base64,([^']+)'", source)
+    assert match, "default real UI image data URL not found"
+
+    png = base64.b64decode(match.group(1), validate=True)
+    assert png.startswith(b"\x89PNG\r\n\x1a\n")
+
+    offset = 8
+    seen_iend = False
+    while offset < len(png):
+        length = struct.unpack(">I", png[offset : offset + 4])[0]
+        chunk_type = png[offset + 4 : offset + 8]
+        chunk_data = png[offset + 8 : offset + 8 + length]
+        expected_crc = struct.unpack(
+            ">I",
+            png[offset + 8 + length : offset + 12 + length],
+        )[0]
+        actual_crc = binascii.crc32(chunk_type + chunk_data) & 0xFFFFFFFF
+        assert actual_crc == expected_crc, f"invalid PNG CRC for {chunk_type!r}"
+        offset += 12 + length
+        if chunk_type == b"IEND":
+            seen_iend = True
+            break
+
+    assert seen_iend
+    assert offset == len(png)
+
+
 def test_release_regression_manifest_real_ui_script_serializes_unset_thinking_contract():
     script = Path("panel/scripts/live-real-ui-model-proof.mjs")
     source = script.read_text(encoding="utf-8")
@@ -7354,6 +7388,7 @@ def test_release_regression_manifest_requires_runtime_launch_and_mllm_cache_sour
         "tests/cross_matrix/run_decode_speed_gate.py",
         "vmlx_engine/block_disk_store.py",
         "vmlx_engine/cli.py",
+        "vmlx_engine/engine/batched.py",
         "vmlx_engine/engine/simple.py",
         "vmlx_engine/mllm_scheduler.py",
         "vmlx_engine/models/mllm.py",

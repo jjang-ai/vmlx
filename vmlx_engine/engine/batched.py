@@ -738,7 +738,7 @@ class BatchedEngine(BaseEngine):
         non_system_msgs = sum(1 for m in messages if m.get("role") != "system")
 
         mllm_model_type = None
-        if self._is_mllm and self._processor and not tools:
+        if self._is_mllm and self._processor:
             try:
                 model_config = getattr(self._model, "config", None)
                 mllm_model_type = (
@@ -751,7 +751,6 @@ class BatchedEngine(BaseEngine):
         if (
             self._is_mllm
             and self._processor
-            and not tools
             and (num_images > 0 or num_videos > 0 or mllm_model_type == "zaya1_vl")
         ):
             # Use mlx_vlm for MLLM when actual images are present (any turn count).
@@ -775,6 +774,8 @@ class BatchedEngine(BaseEngine):
                     add_generation_prompt=not skip_generation_prompt,
                     include_thinking_alias=False,
                 )
+                if tools:
+                    tpl_kwargs["tools"] = tools
 
                 def _normalize_processor_messages(messages_arg):
                     try:

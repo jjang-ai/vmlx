@@ -152,6 +152,7 @@ CURRENT_SUITE_SOURCE_HASH_FILES = (
     "vmlx_engine/api/tool_calling.py",
     "vmlx_engine/block_disk_store.py",
     "vmlx_engine/cli.py",
+    "vmlx_engine/engine/batched.py",
     "vmlx_engine/engine/simple.py",
     "vmlx_engine/image_gen.py",
     "vmlx_engine/mllm_batch_generator.py",

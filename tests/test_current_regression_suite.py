@@ -368,6 +368,7 @@ def test_current_regression_suite_hashes_runtime_launch_and_mllm_cache_sources()
         "tests/cross_matrix/run_decode_speed_gate.py",
         "vmlx_engine/block_disk_store.py",
         "vmlx_engine/cli.py",
+        "vmlx_engine/engine/batched.py",
         "vmlx_engine/engine/simple.py",
         "vmlx_engine/mllm_scheduler.py",
         "vmlx_engine/models/mllm.py",
