@@ -2475,7 +2475,8 @@ def test_release_regression_manifest_current_sweep_uses_latest_live_smoke_artifa
     assert "current-regression-suite-20260528-installed-aggregate-stale.json" not in joined
     assert "current-regression-suite-20260528-epipe-aggregate-guard.json" not in joined
     assert "current-regression-suite-20260528-dsv4-continue-refresh.json" not in joined
-    assert "current-regression-suite-20260531-step37-integrated-tool-l2-proof.json" in joined
+    assert "current-regression-suite-20260531-packaged-pointer-bundle-refresh.json" in joined
+    assert "current-regression-suite-20260531-step37-integrated-tool-l2-proof.json" not in joined
     assert "current-regression-suite-20260531-two-turn-responses-delta-gate.json" not in joined
     assert "current-regression-suite-20260531-live-chat-tools-proof-refresh.json" not in joined
     assert "current-regression-suite-20260531-live-epipe-signing-dsv4-refresh.json" not in joined
