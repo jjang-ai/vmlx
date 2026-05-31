@@ -88,6 +88,7 @@ EXPECTED_CURRENT_CACHE_ARCHITECTURE_CHECKS = (
     "named_family_registry_cache_parser_contracts",
     "dsv4_terminal_composite_contracts",
     "dsv4_swa_hca_csa_component_contracts",
+    "hybrid_ssm_companion_l2_contracts",
     "prompt_disk_l2_backfill_contracts",
     "cache_detail_telemetry_contracts",
     "panel_cache_launch_policy",

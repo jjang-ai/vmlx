@@ -9944,6 +9944,13 @@ def test_release_regression_manifest_rejects_incomplete_current_cache_architectu
     ]
 
 
+def test_release_regression_manifest_requires_hybrid_ssm_companion_l2_contract():
+    assert (
+        "hybrid_ssm_companion_l2_contracts"
+        in EXPECTED_CURRENT_CACHE_ARCHITECTURE_CHECKS
+    )
+
+
 def test_release_regression_manifest_rejects_missing_current_cache_family_matrix(tmp_path):
     cache_artifact = CURRENT_POST_BUDGET_EDGE_ARTIFACTS["cache-architecture-family-classification"]
     for artifact in CURRENT_POST_BUDGET_EDGE_ARTIFACTS.values():
