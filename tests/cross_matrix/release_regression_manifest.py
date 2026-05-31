@@ -5169,6 +5169,12 @@ def _validate_current_real_ui_live_model_matrix(
                 surfaces.add("responses_cache_detail_usage")
             if _real_ui_generation_defaults_applied_ok(proof):
                 surfaces.add("generation_defaults_applied")
+            row = CURRENT_REAL_UI_LIVE_MODEL_PROOF_ROWS.get(row_id, {})
+            family_id = str(row.get("family") or row_id)
+            if _real_ui_architecture_cache_policy_ok(family_id, proof):
+                surfaces.add("architecture_cache_policy")
+            if _real_ui_live_speed_floor_ok(family_id, proof):
+                surfaces.add("live_speed_floor")
             if (
                 (event_counts.get("tool") or 0) >= 3
                 and _real_ui_named_tool_result_count(proof) >= 2
@@ -5201,6 +5207,7 @@ def _validate_current_real_ui_live_model_matrix(
                 "long_tool_loop",
                 "responses_cache_detail_usage",
                 "server_cache_controls",
+                "live_speed_floor",
             }.issubset(surfaces):
                 surfaces.add(REAL_UI_INTEGRATED_TOOL_L2_CACHE_SURFACE)
             media = proof.get("media") if isinstance(proof.get("media"), dict) else {}
@@ -5209,12 +5216,6 @@ def _validate_current_real_ui_live_model_matrix(
             if media.get("videoVerified") is True:
                 surfaces.add("video_where_supported")
 
-            row = CURRENT_REAL_UI_LIVE_MODEL_PROOF_ROWS.get(row_id, {})
-            family_id = str(row.get("family") or row_id)
-            if _real_ui_architecture_cache_policy_ok(family_id, proof):
-                surfaces.add("architecture_cache_policy")
-            if _real_ui_live_speed_floor_ok(family_id, proof):
-                surfaces.add("live_speed_floor")
             current_model_name = str(proof.get("modelName") or row.get("model_name") or "")
             current_model_path = str(proof.get("modelPath") or row.get("model_path") or "")
             existing = covered_families.get(family_id)
