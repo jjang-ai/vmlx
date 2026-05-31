@@ -6117,12 +6117,19 @@ def test_release_blocker_ledger_tracks_packaged_signing_blocker():
                 "developer_id_signed": False,
                 "developer_id_identity_count": 9,
                 "signature_is_adhoc": True,
+                "hardened_runtime_enabled": False,
                 "team_identifier": "not set",
+                "codesign_display_rc": 0,
+                "signature_summary_tail": [
+                    "Signature=adhoc",
+                    "TeamIdentifier=not set",
+                ],
                 "simple_developer_id_sign_rc": 1,
                 "simple_developer_id_sign_tail": [
                     "codesign-probe: User interaction is not allowed.",
                 ],
                 "codesign_verify_rc": 1,
+                "verify_tail": ["adhoc verify failed"],
                 "keychain_info_statuses": [
                     {
                         "keychain": "/Users/example/Library/Keychains/vmlx-build.keychain-db",
@@ -6163,12 +6170,19 @@ def test_release_blocker_ledger_tracks_packaged_signing_blocker():
                     "developer_id_signed": False,
                     "developer_id_identity_count": 9,
                     "signature_is_adhoc": True,
+                    "hardened_runtime_enabled": False,
                     "team_identifier": "not set",
+                    "codesign_display_rc": 0,
+                    "signature_summary_tail": [
+                        "Signature=adhoc",
+                        "TeamIdentifier=not set",
+                    ],
                     "simple_developer_id_sign_rc": 1,
                     "simple_developer_id_sign_tail": [
                         "codesign-probe: User interaction is not allowed.",
                     ],
                     "codesign_verify_rc": 1,
+                    "verify_tail": ["adhoc verify failed"],
                     "keychain_info_statuses": [
                         {
                             "keychain": "/Users/example/Library/Keychains/vmlx-build.keychain-db",
