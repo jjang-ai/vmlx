@@ -5178,6 +5178,7 @@ def _validate_current_real_ui_live_model_matrix(
             if (
                 (event_counts.get("tool") or 0) >= 3
                 and _real_ui_named_tool_result_count(proof) >= 2
+                and _real_ui_named_tool_lifecycle_message_count(proof) >= 2
                 and _real_ui_named_tool_error_count(proof) == 0
                 and _real_ui_named_tool_probe_semantics_ok(proof)
             ):

@@ -1058,6 +1058,9 @@ def _write_passing_real_ui_live_model_proof_artifacts(root: Path) -> None:
                 ]
             )
             proof["chat"]["finalVisibleText"] = "Red"
+        event_counts = proof.get("eventCounts")
+        if isinstance(event_counts, dict) and (event_counts.get("tool") or 0) >= 3:
+            add_extensive_tool_churn(proof)
         request_contract = proof["requestContract"]
         if "rendererWireApi" in proof:
             request_contract["wireApi"] = proof["rendererWireApi"]
@@ -3927,10 +3930,16 @@ def test_release_regression_manifest_real_ui_matrix_requires_every_family_surfac
                     "lastFullContent": "second ok streamed",
                 },
             ],
-            "persistedToolCount": 1,
+            "persistedToolCount": 6,
             "persistedToolsByMessage": [
                 [
+                    {"phase": "calling", "toolName": "run_command"},
+                    {"phase": "executing", "toolName": "run_command"},
                     {"phase": "result", "toolName": "run_command"},
+                ],
+                [
+                    {"phase": "calling", "toolName": "write_file"},
+                    {"phase": "executing", "toolName": "write_file"},
                     {"phase": "result", "toolName": "write_file"},
                 ],
             ],
@@ -4052,10 +4061,16 @@ def test_release_regression_manifest_real_ui_matrix_uses_family_specific_media_r
                     "lastFullContent": "second ok streamed",
                 },
             ],
-            "persistedToolCount": 1,
+            "persistedToolCount": 6,
             "persistedToolsByMessage": [
                 [
+                    {"phase": "calling", "toolName": "run_command"},
+                    {"phase": "executing", "toolName": "run_command"},
                     {"phase": "result", "toolName": "run_command"},
+                ],
+                [
+                    {"phase": "calling", "toolName": "write_file"},
+                    {"phase": "executing", "toolName": "write_file"},
                     {"phase": "result", "toolName": "write_file"},
                 ],
             ],
@@ -4298,11 +4313,13 @@ def test_release_regression_manifest_real_ui_matrix_requires_integrated_tool_l2_
         "persistedToolCount": 24,
         "persistedToolsByMessage": [
             [
+                {"phase": "calling", "toolName": "run_command"},
+                {"phase": "executing", "toolName": "run_command"},
                 {"phase": "result", "toolName": "run_command"},
-                {"phase": "result", "toolName": "write_file"},
             ],
             [
-                {"phase": "result", "toolName": "run_command"},
+                {"phase": "calling", "toolName": "write_file"},
+                {"phase": "executing", "toolName": "write_file"},
                 {"phase": "result", "toolName": "write_file"},
             ],
         ],
@@ -5964,6 +5981,34 @@ def test_release_regression_manifest_real_ui_matrix_rejects_empty_tool_status_sp
     gemma4 = matrix["covered_families"]["gemma4"]
     assert "long_tool_loop" not in gemma4["covered_surfaces"]
     assert "long_tool_loop" in gemma4["missing_surfaces"]
+
+
+def test_release_regression_manifest_real_ui_matrix_rejects_result_only_tool_lifecycle():
+    proof = _lfm_integrated_matrix_proof()
+    proof["persistedToolsByMessage"] = [
+        [
+            {
+                "phase": "result",
+                "toolName": "run_command",
+                "detail": "real_ui_tool_probe_1.txt REAL_UI_LIVE_TOOL_ONE",
+            },
+        ],
+        [
+            {
+                "phase": "result",
+                "toolName": "run_command",
+                "detail": "real_ui_tool_probe_2.txt REAL_UI_LIVE_TOOL_TWO",
+            },
+        ],
+    ]
+
+    matrix = _validate_current_real_ui_live_model_matrix(
+        {"status": "pass", "proofs": {"lfm25_moe_a1b_responses_delta": proof}}
+    )
+
+    lfm25 = matrix["covered_families"]["lfm25"]
+    assert "long_tool_loop" not in lfm25["covered_surfaces"]
+    assert "long_tool_loop" in lfm25["missing_surfaces"]
 
 
 def test_release_regression_manifest_real_ui_matrix_rejects_failed_tool_loop():
