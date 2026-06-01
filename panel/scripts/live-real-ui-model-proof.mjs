@@ -604,6 +604,9 @@ function assertResult(result) {
   if ((chat.turns?.length || 0) < 4) failures.push(`expected at least four persisted chat messages, got ${chat.turns?.length || 0}`)
   if (result.sendErrors?.length) failures.push(`renderer send errors: ${result.sendErrors.join('; ')}`)
   if ((result.cache?.cacheHitTokens || 0) <= 0) failures.push('expected real cache-hit token telemetry after repeated UI turns')
+  if (!result.provenSurfaces?.includes('cache_hit_telemetry')) {
+    failures.push('live proof did not record clean cache-hit telemetry')
+  }
   if (
     result.requestedServerCacheControls === true
     && result.server?.health?.native_cache?.block_disk_l2 === true
