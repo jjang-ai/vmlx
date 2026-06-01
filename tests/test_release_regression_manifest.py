@@ -2478,13 +2478,13 @@ def test_release_regression_manifest_current_sweep_uses_latest_live_smoke_artifa
     assert "current-regression-suite-20260528-installed-aggregate-stale.json" not in joined
     assert "current-regression-suite-20260528-epipe-aggregate-guard.json" not in joined
     assert "current-regression-suite-20260528-dsv4-continue-refresh.json" not in joined
-    assert "current-regression-suite-20260531-step37-ui-pagedlock.json" in joined
+    assert "current-regression-suite-20260531-live-epipe-signing-dsv4-refresh.json" in joined
+    assert "current-regression-suite-20260531-step37-ui-pagedlock.json" not in joined
     assert "current-regression-suite-20260531-step37-mixed-swa-runtime.json" not in joined
     assert "current-regression-suite-20260531-packaged-pointer-bundle-refresh.json" not in joined
     assert "current-regression-suite-20260531-step37-integrated-tool-l2-proof.json" not in joined
     assert "current-regression-suite-20260531-two-turn-responses-delta-gate.json" not in joined
     assert "current-regression-suite-20260531-live-chat-tools-proof-refresh.json" not in joined
-    assert "current-regression-suite-20260531-live-epipe-signing-dsv4-refresh.json" not in joined
     assert "current-regression-suite-20260531-childstream-epipe-guard.json" not in joined
     assert "current-regression-suite-20260530-bundled-sync-step37-projector-rerun.json" not in joined
     assert "current-regression-suite-20260530-bundled-sync-step37-projector.json" not in joined
@@ -2598,7 +2598,8 @@ def test_release_regression_manifest_current_sweep_uses_latest_live_smoke_artifa
     assert "current-api-surface-contract-20260527-cache-endpoint-autoswitch-proof.json" not in joined
     assert "current-api-surface-contract-20260526-single-model-auto-switch-review.json" not in joined
     assert "current-api-surface-contract-20260525-single-model-responses-deltas.json" not in joined
-    assert "current-packaged-integrity-contract-20260531-step37-mixed-swa-runtime.json" in joined
+    assert "current-packaged-integrity-contract-20260531-after-lfm2-staged-sync.json" in joined
+    assert "current-packaged-integrity-contract-20260531-step37-mixed-swa-runtime.json" not in joined
     assert "current-packaged-integrity-contract-20260531-after-adhoc-reseal.json" not in joined
     assert "current-packaged-integrity-contract-20260531-local-release-decision-refresh.json" not in joined
     assert "current-packaged-integrity-contract-20260531-live-signing-refresh.json" not in joined
@@ -12310,8 +12311,12 @@ def test_release_regression_manifest_tracks_packaged_integrity_with_runner_artif
     joined = " ".join(row["commands"] + row["artifacts"] + row["proves"])
 
     assert "run_packaged_integrity_contract.py" in joined
-    assert "current-packaged-integrity-contract-20260531-step37-mixed-swa-runtime.json" in joined
-    assert "current-packaged-integrity-contract-20260531-after-adhoc-reseal.json" in joined
+    assert "current-packaged-integrity-contract-20260531-after-lfm2-staged-sync.json" in joined
+    assert "current-packaged-integrity-contract-20260531-step37-mixed-swa-runtime.json" not in joined
+    assert (
+        "build/current-packaged-integrity-contract-20260531-after-lfm2-staged-sync.json"
+        in " ".join(row["commands"])
+    )
     assert "current-packaged-integrity-contract-20260531-local-release-decision-refresh.json" not in joined
     assert "current-packaged-integrity-contract-20260531-gemma4-l2-rotating-kv-fix.json" not in joined
     assert "current-packaged-integrity-contract-20260531-childstream-epipe-refresh.json" not in joined
