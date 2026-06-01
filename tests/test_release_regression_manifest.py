@@ -12948,7 +12948,9 @@ def test_release_regression_manifest_tracks_gemma4_crack_language_visible_qualit
     assert "wall decode samples are below 80 tok/s" in joined
     assert "decode_tok_s_stream" in joined
     assert "installed repeat still remains below or unstable" not in joined
-    assert "compat MLX wheels remain a separate installed-app speed risk" in joined
+    assert "compat MLX wheels remain a separate Sequoia-flavor speed/quality risk" in joined
+    assert "installed Tahoe-native app now uses macosx_26_0_arm64 MLX/Metal wheels" in joined
+    assert "installed app currently uses macosx_14_0_arm64" not in joined
     assert "current-runtime-memory-stress-gemma4-26b-jang4m-responses-thinkingon-app-visible-512-nocache-20260524.json" in joined
     assert "current-runtime-memory-stress-gemma4-26b-jang4m-responses-thinkingbudget16-visible-contract-20260524.json" in joined
     assert "current-runtime-memory-stress-gemma4-26b-jang4m-chat-thinkingoff-cachehit-256-source-skip-redundant-store-notrace-20260525.json" in joined
