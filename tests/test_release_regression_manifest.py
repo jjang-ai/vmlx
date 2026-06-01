@@ -2797,7 +2797,7 @@ def test_release_regression_manifest_current_sweep_uses_latest_live_smoke_artifa
     assert "current-regression-suite-20260528-dsv4-preflight-refresh.json" not in joined
     assert "current-regression-suite-20260528-admin-sleep-sourcehash.json" not in joined
     assert "current-regression-suite-20260528-issue179-econnreset-boundary.json" not in joined
-    assert "current-real-ui-dsv4-memory-preflight-20260601-post-public-issue-audit.json" in joined
+    assert "current-real-ui-dsv4-memory-preflight-20260601-post-wrapped-epipe.json" in joined
     assert "current-real-ui-dsv4-memory-preflight-20260601-local-refresh.json" not in joined
     assert "current-real-ui-dsv4-memory-preflight-20260531-live-refresh.json" not in joined
     assert "current-real-ui-dsv4-memory-preflight-20260530-local-refresh.json" not in joined
@@ -13092,7 +13092,7 @@ def test_release_regression_manifest_tracks_fresh_dsv4_live_failure_artifact():
     assert "current-dsv4-jang-batch-generator-isolated-identifier-logits-after-full-prefill-fix-20260524.json" in joined
     assert "current-dsv4-jang-thinking-off-logit-probe-20260524.json" in joined
     assert "current-dsv4-jang-live-api-copy-framing-canary-20260524.json" in joined
-    assert "current-dsv4-route-mode-code-exactness-memory-preflight-20260601-post-public-issue-audit.json" in joined
+    assert "current-dsv4-route-mode-code-exactness-memory-preflight-20260601-post-wrapped-epipe.json" in joined
     assert "current-dsv4-route-mode-code-exactness-memory-preflight-20260531-release-decision-refresh.json" not in joined
     assert "current-dsv4-route-mode-code-exactness-live-memory-preflight-20260531.json" not in joined
     assert "current-dsv4-route-mode-code-exactness-source-memory-preflight-20260528-post-install-sync.json" not in joined

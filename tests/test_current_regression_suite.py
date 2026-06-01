@@ -765,14 +765,14 @@ def test_current_regression_suite_refreshes_release_regression_manifest(monkeypa
         and "tests/cross_matrix/run_dsv4_route_mode_code_exactness.py" in " ".join(cmd)
         and "--memory-preflight-only" in cmd
         and "--cases" not in cmd
-        and "build/current-dsv4-route-mode-code-exactness-memory-preflight-20260601-post-public-issue-audit.json"
+        and "build/current-dsv4-route-mode-code-exactness-memory-preflight-20260601-post-wrapped-epipe.json"
         in cmd
         for name, cmd in seen_steps
     )
     assert any(
         name == "real_ui_dsv4_memory_preflight"
         and "tests/cross_matrix/run_real_ui_dsv4_memory_preflight.py" in " ".join(cmd)
-        and "build/current-real-ui-dsv4-memory-preflight-20260601-post-public-issue-audit.json"
+        and "build/current-real-ui-dsv4-memory-preflight-20260601-post-wrapped-epipe.json"
         in cmd
         for name, cmd in seen_steps
     )
