@@ -61,6 +61,17 @@ def test_installed_app_runtime_parity_requires_versioned_python_entrypoint():
     )
 
 
+def test_installed_app_runtime_parity_hashes_packaged_engine_surface():
+    from tests.cross_matrix import run_installed_app_runtime_parity_audit as gate
+    from tests.cross_matrix import run_packaged_integrity_contract as packaged
+
+    assert gate.CRITICAL_ENGINE_HASH_FILES == packaged.STAGED_APP_ENGINE_HASH_FILES
+    assert "tool_parsers/dsml_tool_parser.py" in gate.CRITICAL_ENGINE_HASH_FILES
+    assert "patches/mlx_vlm_mtp/qwen35_vl.py" in gate.CRITICAL_ENGINE_HASH_FILES
+    assert "utils/ssm_companion_cache.py" in gate.CRITICAL_ENGINE_HASH_FILES
+    assert "runtime_patches/gemma4_processing.py" in gate.CRITICAL_ENGINE_HASH_FILES
+
+
 def test_installed_app_runtime_parity_default_out_tracks_manifest():
     from tests.cross_matrix import release_regression_manifest as manifest
     from tests.cross_matrix import run_installed_app_runtime_parity_audit as gate
