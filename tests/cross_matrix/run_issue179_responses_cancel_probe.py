@@ -30,6 +30,7 @@ DEFAULT_MODEL = Path("/Users/example/models/JANGQ/MiniMax-M2.7-JANGTQ_K")
 DEFAULT_INSTALLED_PYTHON = Path(
     "/Applications/vMLX.app/Contents/Resources/bundled-python/python/bin/python3"
 )
+DEFAULT_MEMORY_PREFLIGHT_MARGIN_GB = 6.0
 
 
 def extract_response_id(raw_sse: str) -> str | None:
@@ -97,6 +98,80 @@ def _looks_like_bad_text(text: str) -> bool:
     korean = len(re.findall(r"[\uac00-\ud7af]", text))
     numeric_run = bool(re.search(r"(?:\b\d+[,\s]*){12,}", text))
     return cjk >= 6 or korean >= 6 or numeric_run
+
+
+def _run_text(cmd: list[str]) -> str:
+    return subprocess.check_output(cmd, text=True, stderr=subprocess.STDOUT)
+
+
+def parse_vm_stat_available_gb(text: str) -> float:
+    page_size_match = re.search(r"page size of (\d+) bytes", text)
+    page_size = int(page_size_match.group(1)) if page_size_match else 16384
+    pages: dict[str, int] = {}
+    for line in text.splitlines():
+        if ":" not in line:
+            continue
+        label, raw_value = line.split(":", 1)
+        match = re.search(r"(\d+)", raw_value.replace(".", ""))
+        if match:
+            pages[label.strip()] = int(match.group(1))
+    gate_pages = (
+        pages.get("Pages free", 0)
+        + pages.get("Pages speculative", 0)
+        + pages.get("Pages purgeable", 0)
+    )
+    return round(gate_pages * page_size / (1024**3), 2)
+
+
+def model_size_gb(model_path: Path) -> float | None:
+    if not model_path.exists():
+        return None
+    total = 0
+    for path in model_path.rglob("*"):
+        if path.is_file():
+            total += path.stat().st_size
+    return round(total / (1024**3), 2)
+
+
+def memory_preflight_block(
+    args: argparse.Namespace,
+    *,
+    vm_stat_text: str | None = None,
+    model_size_gb_override: float | None = None,
+) -> dict[str, Any] | None:
+    size_gb = (
+        model_size_gb_override
+        if model_size_gb_override is not None
+        else model_size_gb(Path(args.model))
+    )
+    if size_gb is None:
+        return {
+            "status": "skipped",
+            "reason": "model_path_missing",
+            "launch_allowed": False,
+            "launch_decision": "do_not_launch",
+            "model_path": str(args.model),
+        }
+    available_gb = parse_vm_stat_available_gb(
+        vm_stat_text if vm_stat_text is not None else _run_text(["vm_stat"])
+    )
+    required_free_gb = round(size_gb + float(args.memory_preflight_margin_gb), 2)
+    if available_gb >= required_free_gb:
+        return None
+    return {
+        "status": "skipped",
+        "reason": "insufficient_vm_stat_memory",
+        "launch_allowed": False,
+        "launch_decision": "do_not_launch",
+        "model_path": str(args.model),
+        "model_size_gb": size_gb,
+        "required_free_gb": required_free_gb,
+        "min_free_gb": required_free_gb,
+        "available_for_gate_gb": available_gb,
+        "free_plus_speculative_purgeable_gb": available_gb,
+        "memory_gap_gb": round(required_free_gb - available_gb, 2),
+        "preflight_memory_source": "vm_stat_free_plus_speculative_purgeable",
+    }
 
 
 @dataclass
@@ -378,9 +453,17 @@ def main() -> int:
     parser.add_argument("--cancel-delay", type=float, default=0.25)
     parser.add_argument("--cancel-on-bad-text", action="store_true")
     parser.add_argument("--max-lines-after-cancel", type=int, default=20)
+    parser.add_argument(
+        "--memory-preflight-margin-gb",
+        type=float,
+        default=DEFAULT_MEMORY_PREFLIGHT_MARGIN_GB,
+    )
+    parser.add_argument("--skip-memory-preflight", action="store_true")
     args = parser.parse_args()
 
-    result = run_live_probe(args)
+    result = None if args.skip_memory_preflight else memory_preflight_block(args)
+    if result is None:
+        result = run_live_probe(args)
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     print(
@@ -388,14 +471,18 @@ def main() -> int:
             {
                 "status": result["status"],
                 "out": str(args.out),
-                "response_id": result["raw"].get("response_id"),
-                "cancel_status": result["raw"].get("cancel_status"),
-                "bad_text_captured": result["probe"]["bad_text_captured"],
+                "response_id": (result.get("raw") or {}).get("response_id"),
+                "cancel_status": (result.get("raw") or {}).get("cancel_status"),
+                "bad_text_captured": (result.get("probe") or {}).get(
+                    "bad_text_captured"
+                ),
+                "launch_allowed": result.get("launch_allowed"),
+                "reason": result.get("reason"),
             },
             sort_keys=True,
         )
     )
-    return 0 if result["status"] == "pass" else 1
+    return 0 if result["status"] in {"pass", "skipped"} else 1
 
 
 if __name__ == "__main__":

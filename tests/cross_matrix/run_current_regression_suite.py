@@ -614,6 +614,7 @@ CURRENT_SUITE_COMMANDS: dict[str, list[str]] = {
         "tests/test_release_regression_manifest.py",
         "tests/test_issue179_reporter_parity_metadata.py",
         "tests/test_issue179_minimax_k_root_cause_audit.py",
+        "tests/test_issue179_responses_cancel_probe.py",
         "tests/test_issue181_183_runtime_audit.py",
         "tests/test_public_app_issue_audit.py",
         "tests/test_model_family_detection_contract.py",
@@ -625,7 +626,7 @@ CURRENT_SUITE_COMMANDS: dict[str, list[str]] = {
         "tests/test_dsv4_paged_cache.py",
         "tests/test_dsv4_route_mode_code_exactness.py",
         "-k",
-        "objective_proof_digest or default_cache_tool_loop or current_regression_suite or release_regression_manifest or issue179_reporter_parity_metadata or reporter_server_hash_parity or issue181_183_runtime_audit or public_app_issue_audit or model_family_detection or mcp_policy_contract or decode_speed_gate or vl_media_cache_contract or dsv4_cache_hit_repetition_processor or generated_only_logits_processor or dsv4_repetition_penalty_uses_generated_only_prompt_context or dsv4_warmup or dsv4_code_exactness_probe",
+        "objective_proof_digest or default_cache_tool_loop or current_regression_suite or release_regression_manifest or issue179_reporter_parity_metadata or reporter_server_hash_parity or issue179_memory_preflight or issue181_183_runtime_audit or public_app_issue_audit or model_family_detection or mcp_policy_contract or decode_speed_gate or vl_media_cache_contract or dsv4_cache_hit_repetition_processor or generated_only_logits_processor or dsv4_repetition_penalty_uses_generated_only_prompt_context or dsv4_warmup or dsv4_code_exactness_probe",
     ],
     "objective_digest": [
         sys.executable,

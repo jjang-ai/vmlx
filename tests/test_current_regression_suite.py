@@ -488,6 +488,16 @@ def test_current_regression_suite_runs_issue179_root_cause_pytest():
     assert "reporter_server_hash_parity" in joined
 
 
+def test_current_regression_suite_runs_issue179_cancel_probe_memory_preflight_pytest():
+    from tests.cross_matrix import run_current_regression_suite as suite
+
+    command = suite.CURRENT_SUITE_COMMANDS["focused_regression_pytest"]
+    joined = " ".join(command)
+
+    assert "tests/test_issue179_responses_cancel_probe.py" in command
+    assert "issue179_memory_preflight" in joined
+
+
 def test_current_regression_suite_hashes_dirty_contract_unit_sources():
     from tests.cross_matrix import run_current_regression_suite as suite
 
