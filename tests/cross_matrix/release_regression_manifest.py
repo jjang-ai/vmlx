@@ -4682,6 +4682,7 @@ def _validate_current_public_app_issue_audit(root: Path) -> dict[str, Any]:
             "installed_and_staged_sequoia_compat_runtime_flavor_guarded_packaging_still_gated"
         ),
         "111": "mapped_to_mistral_small4_vlm_wrapper_detection_guard",
+        "116": "mapped_to_thinking_off_ui_api_request_guard",
         "117": "mapped_to_minimax_k_issue179_live_reporter_prompt_boundary",
         "180": "mapped_to_minimax_small_real_ui_language_numeric_guard",
         "118": "installed_gui_download_endpoint_and_stale_auth_fallback_guarded",
@@ -4704,6 +4705,12 @@ def _validate_current_public_app_issue_audit(root: Path) -> dict[str, Any]:
             "mistral_small4_wrapper_stays_mllm",
             "mistral_small4_parser_metadata_preserved",
             "installed_app_mllm_hash_guarded",
+        ),
+        "116": (
+            "reasoning_template_contract_passes",
+            "explicit_thinking_off_request_wired",
+            "panel_thinking_off_control_present",
+            "packaged_renderer_thinking_controls_present",
         ),
         "118": ("installed_app_download_fallback_guarded",),
     }

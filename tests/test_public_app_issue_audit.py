@@ -10,7 +10,16 @@ def test_public_app_issue_audit_tracks_open_app_runtime_issue_slices():
     audit = gate.build_audit(Path("."))
 
     assert audit["status"] == "pass"
-    assert set(audit["issues"]) == {"165", "169", "180", "111", "117", "118", "119"}
+    assert set(audit["issues"]) == {
+        "165",
+        "169",
+        "180",
+        "111",
+        "116",
+        "117",
+        "118",
+        "119",
+    }
     assert audit["issues"]["165"]["focused_source_slice"] == "pass"
     assert audit["issues"]["165"]["checks"]["tool_call_contract_passes"] is True
     assert audit["issues"]["165"]["checks"]["dsml_issue_165_regression_present"] is True
@@ -58,6 +67,14 @@ def test_public_app_issue_audit_tracks_open_app_runtime_issue_slices():
     assert audit["issues"]["111"]["checks"]["installed_app_mllm_hash_guarded"] is True
     assert audit["issues"]["111"]["release_clearance"] == (
         "mapped_to_mistral_small4_vlm_wrapper_detection_guard"
+    )
+    assert audit["issues"]["116"]["focused_source_slice"] == "pass"
+    assert audit["issues"]["116"]["checks"]["reasoning_template_contract_passes"] is True
+    assert audit["issues"]["116"]["checks"]["explicit_thinking_off_request_wired"] is True
+    assert audit["issues"]["116"]["checks"]["panel_thinking_off_control_present"] is True
+    assert audit["issues"]["116"]["checks"]["packaged_renderer_thinking_controls_present"] is True
+    assert audit["issues"]["116"]["release_clearance"] == (
+        "mapped_to_thinking_off_ui_api_request_guard"
     )
     assert audit["issues"]["118"]["focused_source_slice"] == "pass"
     assert audit["issues"]["118"]["checks"]["download_worker_clears_raw_endpoint"] is True

@@ -1346,6 +1346,18 @@ def _write_expected_public_app_issue_audit(root: Path) -> None:
                             "installed_app_mllm_hash_guarded": True,
                         },
                     },
+                    "116": {
+                        "focused_source_slice": "pass",
+                        "release_clearance": (
+                            "mapped_to_thinking_off_ui_api_request_guard"
+                        ),
+                        "checks": {
+                            "reasoning_template_contract_passes": True,
+                            "explicit_thinking_off_request_wired": True,
+                            "panel_thinking_off_control_present": True,
+                            "packaged_renderer_thinking_controls_present": True,
+                        },
+                    },
                     "117": {
                         "focused_source_slice": "pass",
                         "release_clearance": (
@@ -1424,6 +1436,20 @@ def test_release_regression_manifest_rejects_public_issue111_without_installed_m
     result = _validate_current_public_app_issue_audit(tmp_path)
 
     assert "missing_issue:111" in result["failures"]
+
+
+def test_release_regression_manifest_rejects_public_issue116_without_thinking_off_guard(
+    tmp_path,
+):
+    _write_expected_public_app_issue_audit(tmp_path)
+    path = tmp_path / CURRENT_PUBLIC_APP_ISSUE_AUDIT_ARTIFACT
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["issues"].pop("116", None)
+    path.write_text(json.dumps(payload) + "\n", encoding="utf-8")
+
+    result = _validate_current_public_app_issue_audit(tmp_path)
+
+    assert "missing_issue:116" in result["failures"]
 
 
 def test_release_regression_manifest_rejects_public_issue169_without_installed_runtime_flavor(

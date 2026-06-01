@@ -31,6 +31,12 @@ TOOL_CALL_CONTRACT = Path(
 INSTALLED_APP_RUNTIME_PARITY = Path(
     "build/current-installed-app-runtime-parity-audit-20260601-cache-ipc-epipe-installed.json"
 )
+REASONING_TEMPLATE_CONTRACT = Path(
+    "build/current-reasoning-template-contract-20260526-settings-audit.json"
+)
+PACKAGED_INTEGRITY_CONTRACT = Path(
+    "build/current-packaged-integrity-contract-20260601-developer-id-dmg-assertions.json"
+)
 
 
 def _read(path: Path) -> str:
@@ -359,6 +365,51 @@ def _issue111_checks(root: Path) -> dict[str, bool]:
     }
 
 
+def _issue116_checks(root: Path) -> dict[str, bool]:
+    reasoning = _load_json(root / REASONING_TEMPLATE_CONTRACT)
+    reasoning_checks = reasoning.get("checks")
+    if not isinstance(reasoning_checks, dict):
+        reasoning_checks = {}
+    packaged = _load_json(root / PACKAGED_INTEGRITY_CONTRACT)
+    packaged_checks = packaged.get("checks")
+    if not isinstance(packaged_checks, dict):
+        packaged_checks = {}
+    reasoning_stdout = json.dumps(reasoning.get("results", {}))
+    chat_settings = _read(root / "panel/src/renderer/src/components/chat/ChatSettings.tsx")
+    database = _read(root / "panel/src/main/database.ts")
+    gateway_tests = _read(root / "panel/tests/api-gateway-ollama.test.ts")
+    reasoning_tests = _read(root / "tests/test_reasoning_modes.py")
+    return {
+        "reasoning_template_contract_passes": (
+            reasoning.get("status") == "pass"
+            and reasoning_checks.get("reasoning_on_off_request_wiring_explicit") is True
+            and reasoning_checks.get("no_hidden_family_sampling_or_reasoning_forcing")
+            is True
+        ),
+        "explicit_thinking_off_request_wired": (
+            "test_reasoning_effort_none_disables_thinking_for_chat_and_responses"
+            in reasoning_tests
+            and "test_enable_thinking_explicit_values_still_win_for_reasoning_families"
+            in reasoning_tests
+            and "Completions: Explicit Off" in reasoning_stdout
+            and "enable_thinking=false" in reasoning_stdout
+            and "thinking=Off: no think tags generated" in reasoning_stdout
+            and "openaiBody?.enable_thinking === false" in gateway_tests
+        ),
+        "panel_thinking_off_control_present": (
+            "updateThinkingMode(false, undefined)" in chat_settings
+            and "displayedEnableThinking === false" in chat_settings
+            and "enable_thinking tri-state" in database
+            and "0 → false (Off)" in database
+        ),
+        "packaged_renderer_thinking_controls_present": (
+            packaged.get("status") == "pass"
+            and packaged_checks.get("packaged_renderer_max_thinking_tokens_wired")
+            is True
+        ),
+    }
+
+
 def _issue118_checks(root: Path) -> dict[str, bool]:
     models = _read(root / "panel/src/main/ipc/models.ts")
     hf_settings = _read(root / "panel/src/shared/hfSettings.ts")
@@ -503,6 +554,12 @@ def build_audit(root: Path) -> dict[str, Any]:
                 "mapped_to_mistral_small4_vlm_wrapper_detection_guard"
             ),
         },
+        "116": {
+            "repo": "jjang-ai/mlxstudio",
+            "title": "Disable thinking ?",
+            "checks": _issue116_checks(root),
+            "release_clearance": "mapped_to_thinking_off_ui_api_request_guard",
+        },
         "118": {
             "repo": "jjang-ai/mlxstudio",
             "title": "Studio 1.5.42 cannot download models from the Hub",
@@ -533,7 +590,7 @@ def build_audit(root: Path) -> dict[str, Any]:
         "issues": issues,
         "focused_failures": focused_failures,
         "release_boundary": (
-            "Public issue slices #165, #169, #180, and mlxstudio #111, #117-#119 "
+            "Public issue slices #165, #169, #180, and mlxstudio #111, #116-#119 "
             "have focused source/proof coverage here, and #118 includes "
             "installed app download fallback proof. This does not clear the "
             "full release; Developer ID signing/notarization, DSV4 exactness, "
