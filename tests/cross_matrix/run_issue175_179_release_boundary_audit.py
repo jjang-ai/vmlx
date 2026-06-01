@@ -363,9 +363,11 @@ def build_audit(root: Path) -> dict[str, Any]:
         "open_release_rows": OPEN_RELEASE_ROWS,
         "required_live_proof_axes": REQUIRED_LIVE_PROOF_AXES,
         "release_boundary": (
-            "Issue #175-#179 focused installed/live runtime boundaries are "
-            "proven, but the broader release still requires the live model "
-            "matrix, real Electron UI matrix, and DSV4 exactness rows."
+            "Issue #175-#178 focused installed/live runtime boundaries are "
+            "proven. Issue #179 remains open until reporter parity and the "
+            "screenshot-shaped MiniMax-K failure boundary are matched. The "
+            "broader release still requires the live model matrix, real "
+            "Electron UI matrix, and DSV4 exactness rows."
         ),
     }
 

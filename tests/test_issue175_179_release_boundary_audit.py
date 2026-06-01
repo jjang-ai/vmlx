@@ -66,6 +66,13 @@ def test_issue175_179_audit_preserves_open_release_boundaries():
     assert "Real Electron UI unblocked non-MiMo live model matrix is proven" not in audit["open_release_rows"]
     assert "Real Electron UI cross-family live model matrix is release-cleared" in audit["open_release_rows"]
     assert "DSV4 long-output/code/file-generation quality is release-cleared" in audit["open_release_rows"]
+    assert "Issue #175-#178 focused installed/live runtime boundaries are proven" in audit[
+        "release_boundary"
+    ]
+    assert "Issue #179 remains open" in audit["release_boundary"]
+    assert "Issue #175-#179 focused installed/live runtime boundaries are proven" not in audit[
+        "release_boundary"
+    ]
 
 
 def test_issue175_179_audit_uses_current_manifest_artifacts():
