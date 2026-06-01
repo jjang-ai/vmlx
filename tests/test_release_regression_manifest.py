@@ -13284,8 +13284,9 @@ def test_release_regression_manifest_tracks_gemma4_crack_language_visible_qualit
     assert "decode_tok_s_stream" in joined
     assert "installed repeat still remains below or unstable" not in joined
     assert "compat MLX wheels remain a separate Sequoia-flavor speed/quality risk" in joined
-    assert "installed Tahoe-native app now uses macosx_26_0_arm64 MLX/Metal wheels" in joined
-    assert "installed app currently uses macosx_14_0_arm64" not in joined
+    assert "installed app currently uses macosx_14_0_arm64 MLX/Metal wheels" in joined
+    assert "Tahoe-native speed/quality claims require explicit native-flavor artifacts" in joined
+    assert "installed Tahoe-native app now uses macosx_26_0_arm64" not in joined
     assert "current-runtime-memory-stress-gemma4-26b-jang4m-responses-thinkingon-app-visible-512-nocache-20260524.json" in joined
     assert "current-runtime-memory-stress-gemma4-26b-jang4m-responses-thinkingbudget16-visible-contract-20260524.json" in joined
     assert "current-runtime-memory-stress-gemma4-26b-jang4m-chat-thinkingoff-cachehit-256-source-skip-redundant-store-notrace-20260525.json" in joined
@@ -13299,6 +13300,27 @@ def test_release_regression_manifest_tracks_gemma4_crack_language_visible_qualit
     assert "current-runtime-memory-stress-gemma4-26b-jang4m-chat-thinkingoff-cachehit-speedram-945c84ba-20260524b.json" not in joined
     assert "current-runtime-memory-stress-gemma4-26b-jang4m-text-installed149.json" not in joined
     assert "current-production-family-live-gemma4-crack-parser-tool-config-latest-jang-20260524.json" in joined
+
+
+def test_release_regression_manifest_gemma4_installed_wheel_claim_matches_installed_app():
+    manifest = build_manifest()
+    rows = {row["id"]: row for row in manifest["rows"]}
+    row = rows["gemma4-crack-live-language-visible-quality"]
+    joined = " ".join(row["proves"] + row["commands"] + row["artifacts"])
+    site_packages = Path(
+        "/Applications/vMLX.app/Contents/Resources/bundled-python/python/lib/python3.12/site-packages"
+    )
+    mlx_wheel = (site_packages / "mlx-0.31.2.dist-info/WHEEL").read_text(
+        encoding="utf-8"
+    )
+    mlx_metal_wheel = (
+        site_packages / "mlx_metal-0.31.2.dist-info/WHEEL"
+    ).read_text(encoding="utf-8")
+
+    assert "Tag: cp312-cp312-macosx_14_0_arm64" in mlx_wheel
+    assert "Tag: py3-none-macosx_14_0_arm64" in mlx_metal_wheel
+    assert "installed app currently uses macosx_14_0_arm64" in joined
+    assert "installed Tahoe-native app now uses macosx_26_0_arm64" not in joined
 
 
 def test_release_regression_manifest_does_not_overclaim_gemma4_installed_speed_floor():

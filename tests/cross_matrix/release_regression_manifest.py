@@ -1858,7 +1858,7 @@ _ROWS: list[dict[str, Any]] = [
             "After syncing bundled/app jang_loader, installed-app health now reports generic TurboQuant KV off with mixed_swa_kv_v1, but decode remains below the 80 tok/s floor",
             "source now proves native mixed-SWA cache telemetry as paged+mixed_swa and clears the sustained 512-token speed-floor prompt after the redundant full-prefix cache store fix",
             "Current installed app proves source-hash parity and paged+mixed_swa cache telemetry; installed app speed remains a release risk because several wall decode samples are below 80 tok/s even though decode_tok_s_stream is above the floor",
-            "compat MLX wheels remain a separate Sequoia-flavor speed/quality risk; installed Tahoe-native app now uses macosx_26_0_arm64 MLX/Metal wheels, but Gemma4 speed remains uncleared until fresh installed-app speed-floor artifacts replace the older sub-floor rows",
+            "compat MLX wheels remain a separate Sequoia-flavor speed/quality risk; installed app currently uses macosx_14_0_arm64 MLX/Metal wheels, so Tahoe-native speed/quality claims require explicit native-flavor artifacts rather than /Applications/vMLX.app; Gemma4 speed remains uncleared until fresh installed-app speed-floor artifacts replace the older sub-floor rows",
         ],
         "commands": [
             "panel/bundled-python/python/bin/python3 tests/cross_matrix/run_runtime_memory_stress_probe.py --row gemma4_26b_jang4m --route responses --enable-thinking --max-tokens 512 --skip-prefix-cache --expect-visible-content --out build/current-runtime-memory-stress-gemma4-26b-jang4m-responses-thinkingon-app-visible-512-nocache-20260524.json",
