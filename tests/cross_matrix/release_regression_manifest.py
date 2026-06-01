@@ -4677,7 +4677,9 @@ def _validate_current_public_app_issue_audit(root: Path) -> dict[str, Any]:
         issues = {}
     result["issues"] = issues
     expected_clearance = {
-        "169": "source_dual_dmg_metal_compat_route_guarded_packaging_still_gated",
+        "169": (
+            "installed_and_staged_sequoia_compat_runtime_flavor_guarded_packaging_still_gated"
+        ),
         "117": "mapped_to_minimax_k_issue179_live_reporter_prompt_boundary",
         "180": "mapped_to_minimax_small_real_ui_language_numeric_guard",
         "118": "installed_gui_download_endpoint_and_stale_auth_fallback_guarded",
@@ -4686,6 +4688,11 @@ def _validate_current_public_app_issue_audit(root: Path) -> dict[str, Any]:
         ),
     }
     required_checks = {
+        "169": (
+            "installed_app_sequoia_compat_runtime_flavor",
+            "staged_sequoia_app_compat_runtime_flavor",
+            "staged_tahoe_app_native_runtime_flavor",
+        ),
         "118": ("installed_app_download_fallback_guarded",),
     }
     for number, clearance in expected_clearance.items():

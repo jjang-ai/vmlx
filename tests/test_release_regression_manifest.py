@@ -1315,9 +1315,14 @@ def _write_expected_public_app_issue_audit(root: Path) -> None:
                     "169": {
                         "focused_source_slice": "pass",
                         "release_clearance": (
-                            "source_dual_dmg_metal_compat_route_guarded_packaging_still_gated"
+                            "installed_and_staged_sequoia_compat_runtime_flavor_guarded_packaging_still_gated"
                         ),
-                        "checks": {"dual_public_dmg_flavors": True},
+                        "checks": {
+                            "dual_public_dmg_flavors": True,
+                            "installed_app_sequoia_compat_runtime_flavor": True,
+                            "staged_sequoia_app_compat_runtime_flavor": True,
+                            "staged_tahoe_app_native_runtime_flavor": True,
+                        },
                     },
                     "117": {
                         "focused_source_slice": "pass",
@@ -1383,6 +1388,25 @@ def test_release_regression_manifest_rejects_public_issue118_without_installed_a
     assert "missing_issue_check:118:installed_app_download_fallback_guarded" in result[
         "failures"
     ]
+
+
+def test_release_regression_manifest_rejects_public_issue169_without_installed_runtime_flavor(
+    tmp_path,
+):
+    _write_expected_public_app_issue_audit(tmp_path)
+    path = tmp_path / CURRENT_PUBLIC_APP_ISSUE_AUDIT_ARTIFACT
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["issues"]["169"]["checks"].pop(
+        "installed_app_sequoia_compat_runtime_flavor"
+    )
+    path.write_text(json.dumps(payload) + "\n", encoding="utf-8")
+
+    result = _validate_current_public_app_issue_audit(tmp_path)
+
+    assert (
+        "missing_issue_check:169:installed_app_sequoia_compat_runtime_flavor"
+        in result["failures"]
+    )
 
 
 def test_release_regression_manifest_accepts_open_issue175_179_boundary_audit(

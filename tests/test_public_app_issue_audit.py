@@ -14,8 +14,24 @@ def test_public_app_issue_audit_tracks_open_app_runtime_issue_slices():
     assert audit["issues"]["169"]["focused_source_slice"] == "pass"
     assert audit["issues"]["169"]["checks"]["dual_public_dmg_flavors"] is True
     assert audit["issues"]["169"]["checks"]["compat_wheel_default"] is True
+    assert (
+        audit["issues"]["169"]["checks"][
+            "installed_app_sequoia_compat_runtime_flavor"
+        ]
+        is True
+    )
+    assert (
+        audit["issues"]["169"]["checks"][
+            "staged_sequoia_app_compat_runtime_flavor"
+        ]
+        is True
+    )
+    assert (
+        audit["issues"]["169"]["checks"]["staged_tahoe_app_native_runtime_flavor"]
+        is True
+    )
     assert audit["issues"]["169"]["release_clearance"] == (
-        "source_dual_dmg_metal_compat_route_guarded_packaging_still_gated"
+        "installed_and_staged_sequoia_compat_runtime_flavor_guarded_packaging_still_gated"
     )
     assert audit["issues"]["117"]["focused_source_slice"] == "pass"
     assert audit["issues"]["117"]["checks"]["issue179_root_cause_audit_passes"] is True

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import plistlib
 import subprocess
 from pathlib import Path
 from typing import Any
@@ -20,6 +21,9 @@ DEFAULT_OUT = Path(
     "build/current-public-app-issue-audit-20260601-installed-download-proof.json"
 )
 INSTALLED_APP_ASAR = Path("/Applications/vMLX.app/Contents/Resources/app.asar")
+INSTALLED_APP = Path("/Applications/vMLX.app")
+STAGED_SEQUOIA_APP = Path("panel/release/mac-arm64/vMLX.app")
+STAGED_TAHOE_APP = Path("panel/release/native-cache-metrics-app/mac-arm64/vMLX.app")
 
 
 def _read(path: Path) -> str:
@@ -34,6 +38,57 @@ def _load_json(path: Path) -> dict[str, Any]:
     except Exception:  # noqa: BLE001 - audit reports false checks, not tracebacks
         return {}
     return payload if isinstance(payload, dict) else {}
+
+
+def _app_minimum_system_version(app: Path) -> str:
+    info_plist = app / "Contents/Info.plist"
+    if not info_plist.exists():
+        return ""
+    try:
+        with info_plist.open("rb") as handle:
+            payload = plistlib.load(handle)
+    except Exception:  # noqa: BLE001 - audit reports false checks, not tracebacks
+        return ""
+    return str(payload.get("LSMinimumSystemVersion", ""))
+
+
+def _wheel_tags(app: Path) -> dict[str, str]:
+    site_packages = (
+        app
+        / "Contents/Resources/bundled-python/python/lib/python3.12/site-packages"
+    )
+    tags: dict[str, str] = {}
+    for package, pattern in (
+        ("mlx", "mlx-*.dist-info"),
+        ("mlx_metal", "mlx_metal-*.dist-info"),
+    ):
+        matches = sorted(site_packages.glob(pattern))
+        if not matches:
+            tags[package] = ""
+            continue
+        wheel = matches[0] / "WHEEL"
+        tag = ""
+        for line in _read(wheel).splitlines():
+            if line.startswith("Tag: "):
+                tag = line.removeprefix("Tag: ").strip()
+                break
+        tags[package] = tag
+    return tags
+
+
+def _app_runtime_flavor_matches(
+    app: Path,
+    *,
+    minimum_system_version: str,
+    mlx_tag: str,
+    mlx_metal_tag: str,
+) -> bool:
+    tags = _wheel_tags(app)
+    return (
+        _app_minimum_system_version(app) == minimum_system_version
+        and tags.get("mlx") == mlx_tag
+        and tags.get("mlx_metal") == mlx_metal_tag
+    )
 
 
 def _surfaces(path: Path) -> set[str]:
@@ -95,6 +150,24 @@ def _issue169_checks(root: Path) -> dict[str, bool]:
             "test_macos_compat_error_points_to_sequoia_dmg_for_tahoe_wheels"
             in engine_tests
             and "Failed to load the default metallib" in engine_tests
+        ),
+        "installed_app_sequoia_compat_runtime_flavor": _app_runtime_flavor_matches(
+            INSTALLED_APP,
+            minimum_system_version="14.5.0",
+            mlx_tag="cp312-cp312-macosx_14_0_arm64",
+            mlx_metal_tag="py3-none-macosx_14_0_arm64",
+        ),
+        "staged_sequoia_app_compat_runtime_flavor": _app_runtime_flavor_matches(
+            root / STAGED_SEQUOIA_APP,
+            minimum_system_version="14.5.0",
+            mlx_tag="cp312-cp312-macosx_14_0_arm64",
+            mlx_metal_tag="py3-none-macosx_14_0_arm64",
+        ),
+        "staged_tahoe_app_native_runtime_flavor": _app_runtime_flavor_matches(
+            root / STAGED_TAHOE_APP,
+            minimum_system_version="14.5.0",
+            mlx_tag="cp312-cp312-macosx_26_0_arm64",
+            mlx_metal_tag="py3-none-macosx_26_0_arm64",
         ),
     }
 
@@ -269,7 +342,7 @@ def build_audit(root: Path) -> dict[str, Any]:
             ),
             "checks": _issue169_checks(root),
             "release_clearance": (
-                "source_dual_dmg_metal_compat_route_guarded_packaging_still_gated"
+                "installed_and_staged_sequoia_compat_runtime_flavor_guarded_packaging_still_gated"
             ),
         },
         "117": {
