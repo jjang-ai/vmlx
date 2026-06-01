@@ -13,7 +13,7 @@ def test_packaged_integrity_known_open_rows_match_current_suite():
 
 def test_packaged_integrity_default_out_tracks_current_release_proof_artifact():
     assert runner.DEFAULT_OUT == Path(
-        "build/current-packaged-integrity-contract-20260601-after-adhoc-reseal.json"
+        "build/current-packaged-integrity-contract-20260601-wrapper-epipe-package-refresh.json"
     )
 
 
@@ -297,6 +297,51 @@ def test_packaged_integrity_checks_packaged_user_data_isolation_bootstrap(monkey
     artifact = runner.build_artifact(tmp_path)
 
     assert "packaged_user_data_isolation_bootstrap" in artifact["checks"]
+
+
+def test_packaged_epipe_guard_rejects_missing_wrapped_disconnect_recursion(tmp_path):
+    app_asar = tmp_path / runner.PACKAGED_RENDERER_ASAR
+    app_asar.parent.mkdir(parents=True)
+    app_asar.write_bytes(
+        b"responseWritable(res)\n"
+        b"!anyRes.closed\n"
+        b"requestWritable(req)\n"
+        b"!anyReq.closed\n"
+        b"function chatBackendRequestWritable(req)\n"
+        b"function imageServerRequestWritable(req)\n"
+        b"!req.closed\n"
+        b"isExpectedChildProcessStreamDisconnectError\n"
+        b"isExpectedImageServerDisconnectError\n"
+        b"nestedErrors.some((nested) => isExpectedChildProcessStreamDisconnectError(nested))\n"
+        b"nestedErrors.some((nested) => isExpectedImageServerDisconnectError(nested))\n"
+    )
+
+    assert runner._check_packaged_epipe_closed_stream_guards(tmp_path) is False
+
+
+def test_packaged_epipe_guard_accepts_wrapped_disconnect_recursion(tmp_path):
+    app_asar = tmp_path / runner.PACKAGED_RENDERER_ASAR
+    app_asar.parent.mkdir(parents=True)
+    app_asar.write_bytes(
+        b"responseWritable(res)\n"
+        b"!anyRes.closed\n"
+        b"requestWritable(req)\n"
+        b"!anyReq.closed\n"
+        b"function chatBackendRequestWritable(req)\n"
+        b"function imageServerRequestWritable(req)\n"
+        b"!req.closed\n"
+        b"isExpectedChildProcessStreamDisconnectError\n"
+        b"isExpectedImageServerDisconnectError\n"
+        b"wrappedDisconnects\n"
+        b"reason\n"
+        b"detail\n"
+        b"wrappedDisconnects.some((nested) => isExpectedChildProcessStreamDisconnectError(nested))\n"
+        b"nestedErrors.some((nested) => isExpectedChildProcessStreamDisconnectError(nested))\n"
+        b"wrappedDisconnects.some((nested) => isExpectedImageServerDisconnectError(nested))\n"
+        b"nestedErrors.some((nested) => isExpectedImageServerDisconnectError(nested))\n"
+    )
+
+    assert runner._check_packaged_epipe_closed_stream_guards(tmp_path) is True
 
 
 def test_packaged_integrity_checks_packaged_python_has_no_pycache(monkeypatch, tmp_path):
@@ -844,6 +889,15 @@ def test_packaged_epipe_closed_stream_guard_check_accepts_current_asar(tmp_path)
         b"!anyReq.destroyed && !anyReq.writableEnded && !anyReq.writableDestroyed}"
         b"function imageServerRequestWritable(req){return !req.closed && "
         b"!req.destroyed && !req.writableEnded && !req.writableDestroyed}"
+        b"isExpectedChildProcessStreamDisconnectError\n"
+        b"isExpectedImageServerDisconnectError\n"
+        b"wrappedDisconnects\n"
+        b"reason\n"
+        b"detail\n"
+        b"wrappedDisconnects.some((nested) => isExpectedChildProcessStreamDisconnectError(nested))\n"
+        b"nestedErrors.some((nested) => isExpectedChildProcessStreamDisconnectError(nested))\n"
+        b"wrappedDisconnects.some((nested) => isExpectedImageServerDisconnectError(nested))\n"
+        b"nestedErrors.some((nested) => isExpectedImageServerDisconnectError(nested))\n"
     )
 
     assert runner._check_packaged_epipe_closed_stream_guards(tmp_path) is True

@@ -25,7 +25,7 @@ from typing import Any
 
 
 DEFAULT_OUT = Path(
-    "build/current-packaged-integrity-contract-20260601-after-adhoc-reseal.json"
+    "build/current-packaged-integrity-contract-20260601-wrapper-epipe-package-refresh.json"
 )
 EXPECTED_OPEN_REQUIREMENTS = [
     "Real Electron UI cross-family live model matrix is release-cleared",
@@ -79,6 +79,13 @@ PACKAGED_EPIPE_CLOSED_STREAM_GUARD_STRINGS = (
     b"function chatBackendRequestWritable(req)",
     b"function imageServerRequestWritable(req)",
     b"!req.closed",
+    b"wrappedDisconnects",
+    b"reason",
+    b"detail",
+    b"wrappedDisconnects.some((nested) => isExpectedChildProcessStreamDisconnectError(nested))",
+    b"nestedErrors.some((nested) => isExpectedChildProcessStreamDisconnectError(nested))",
+    b"wrappedDisconnects.some((nested) => isExpectedImageServerDisconnectError(nested))",
+    b"nestedErrors.some((nested) => isExpectedImageServerDisconnectError(nested))",
 )
 
 STAGED_APP_ENGINE_HASH_FILES = (
@@ -126,6 +133,13 @@ SOURCE_HASH_FILES = (
     "panel/scripts/notarize-release-dmgs.sh",
     "panel/scripts/verify-release-dmgs.sh",
     "panel/src/main/index.ts",
+    "panel/src/main/engine-manager.ts",
+    "panel/src/main/process-manager.ts",
+    "panel/src/main/ipc/developer.ts",
+    "panel/src/main/ipc/image.ts",
+    "panel/src/main/ipc/imageGenerationState.ts",
+    "panel/src/main/ipc/models.ts",
+    "panel/src/main/tools/executor.ts",
     "panel/src/main/user-data-dir.ts",
     "panel/package.json",
     "pyproject.toml",

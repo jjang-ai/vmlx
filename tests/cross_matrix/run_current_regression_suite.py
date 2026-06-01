@@ -518,7 +518,7 @@ CURRENT_SUITE_COMMANDS: dict[str, list[str]] = {
         sys.executable,
         "tests/cross_matrix/run_packaged_integrity_contract.py",
         "--out",
-        "build/current-packaged-integrity-contract-20260601-after-adhoc-reseal.json",
+        "build/current-packaged-integrity-contract-20260601-wrapper-epipe-package-refresh.json",
     ],
     "installed_app_runtime_parity_audit": [
         sys.executable,
@@ -536,7 +536,7 @@ CURRENT_SUITE_COMMANDS: dict[str, list[str]] = {
         "--diagnostic-reports",
         "build/staged-parity-diagnostic-reports",
         "--out",
-        "build/current-staged-app-runtime-parity-audit-20260601-epipe-renderer-installed.json",
+        "build/current-staged-app-runtime-parity-audit-20260601-wrapper-epipe-package-refresh.json",
     ],
     "issue175_179_release_boundary_audit": [
         sys.executable,

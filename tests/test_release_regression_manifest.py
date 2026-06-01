@@ -2751,7 +2751,7 @@ def test_release_regression_manifest_current_sweep_uses_latest_live_smoke_artifa
     assert "current-installed-app-runtime-parity-audit-20260531-childstream-epipe-installed-sync.json" not in row_text
     assert "current-installed-app-runtime-parity-audit-20260528-epipe-aggregate-guard.json" not in joined
     assert "current-installed-app-runtime-parity-audit-20260528-epipe-aggregate-guard.json" not in row_text
-    assert "current-staged-app-runtime-parity-audit-20260601-epipe-renderer-installed.json" in joined
+    assert "current-staged-app-runtime-parity-audit-20260601-wrapper-epipe-package-refresh.json" in joined
     assert "current-staged-app-runtime-parity-audit-20260531-step37-mixed-swa-runtime.json" not in joined
     assert "current-staged-app-runtime-parity-audit-20260528-staged-runtime-recheck.json" not in joined
     assert "current-staged-app-runtime-parity-audit-20260528-installed-aggregate-stale.json" not in joined
@@ -2851,7 +2851,7 @@ def test_release_regression_manifest_current_sweep_uses_latest_live_smoke_artifa
     assert "current-api-surface-contract-20260527-cache-endpoint-autoswitch-proof.json" not in joined
     assert "current-api-surface-contract-20260526-single-model-auto-switch-review.json" not in joined
     assert "current-api-surface-contract-20260525-single-model-responses-deltas.json" not in joined
-    assert "current-packaged-integrity-contract-20260601-after-adhoc-reseal.json" in joined
+    assert "current-packaged-integrity-contract-20260601-wrapper-epipe-package-refresh.json" in joined
     assert "current-packaged-integrity-contract-20260531-after-lfm2-staged-sync.json" not in joined
     assert "current-packaged-integrity-contract-20260531-step37-mixed-swa-runtime.json" not in joined
     assert "current-packaged-integrity-contract-20260531-after-adhoc-reseal.json" not in joined
@@ -12969,11 +12969,11 @@ def test_release_regression_manifest_tracks_packaged_integrity_with_runner_artif
     joined = " ".join(row["commands"] + row["artifacts"] + row["proves"])
 
     assert "run_packaged_integrity_contract.py" in joined
-    assert "current-packaged-integrity-contract-20260601-after-adhoc-reseal.json" in joined
+    assert "current-packaged-integrity-contract-20260601-wrapper-epipe-package-refresh.json" in joined
     assert "current-packaged-integrity-contract-20260531-after-lfm2-staged-sync.json" not in joined
     assert "current-packaged-integrity-contract-20260531-step37-mixed-swa-runtime.json" not in joined
     assert (
-        "build/current-packaged-integrity-contract-20260601-after-adhoc-reseal.json"
+        "build/current-packaged-integrity-contract-20260601-wrapper-epipe-package-refresh.json"
         in " ".join(row["commands"])
     )
     assert "current-packaged-integrity-contract-20260531-local-release-decision-refresh.json" not in joined
