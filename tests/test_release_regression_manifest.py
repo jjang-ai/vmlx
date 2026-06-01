@@ -1423,6 +1423,28 @@ def test_release_regression_manifest_accepts_public_app_issue_audit(tmp_path):
     assert result["failures"] == []
 
 
+def test_release_regression_manifest_accepts_public_app_issue179_open_boundary(
+    tmp_path,
+):
+    _write_expected_public_app_issue_audit(tmp_path)
+    path = tmp_path / CURRENT_PUBLIC_APP_ISSUE_AUDIT_ARTIFACT
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["status"] = "open"
+    payload["focused_open"] = ["117"]
+    payload["issues"]["117"]["focused_source_slice"] = "open"
+    payload["issues"]["117"][
+        "release_clearance"
+    ] = "open_minimax_k_issue179_reporter_parity_required"
+    payload["issues"]["117"]["checks"]["issue179_root_cause_audit_passes"] = False
+    payload["issues"]["117"]["checks"]["issue179_root_cause_audit_open"] = True
+    path.write_text(json.dumps(payload) + "\n", encoding="utf-8")
+
+    result = _validate_current_public_app_issue_audit(tmp_path)
+
+    assert result["status"] == "open"
+    assert result["failures"] == []
+
+
 def test_release_regression_manifest_rejects_public_issue118_without_installed_app_download_guard(
     tmp_path,
 ):
@@ -1503,12 +1525,14 @@ def test_release_regression_manifest_accepts_open_issue175_179_boundary_audit(
     path = tmp_path / CURRENT_ISSUE175_179_RELEASE_BOUNDARY_AUDIT_ARTIFACT
     payload = json.loads(path.read_text(encoding="utf-8"))
     payload["status"] = "open"
+    payload["issues"]["179"]["focused_source_slice"] = "open"
     payload["issues"]["179"]["release_clearance"] = "open_reporter_parity_required"
     path.write_text(json.dumps(payload) + "\n", encoding="utf-8")
 
     result = _validate_current_issue175_179_release_boundary_audit(tmp_path)
 
     assert result["status"] == "open"
+    assert result["failures"] == []
     assert "issue175_179_boundary_still_open" not in result["failures"]
 
 

@@ -39,12 +39,12 @@ def test_issue175_179_audit_preserves_open_release_boundaries():
         "packaged_app_lora_surface_proven",
         "open_packaged_image_lora_proof_required",
     }
-    assert audit["issues"]["179"]["focused_source_slice"] == "pass"
+    assert audit["issues"]["179"]["focused_source_slice"] == "open"
     assert audit["issues"]["179"]["checks"]["local_installed_live_cancel_probe_proven"] is True
-    assert audit["issues"]["179"]["checks"]["reporter_parity_proven"] is True
+    assert audit["issues"]["179"]["checks"]["reporter_parity_proven"] is False
     assert audit["issues"]["179"]["checks"]["local_reporter_prompt_reproduction_clean"] is True
     assert audit["issues"]["179"]["release_clearance"] == (
-        "installed_app_reporter_prompt_and_cancel_boundary_proven"
+        "open_reporter_parity_required"
     )
     assert audit["required_live_proof_axes"] == [
         "real_app_parameters",

@@ -267,6 +267,13 @@ def build_audit(root: Path) -> dict[str, Any]:
         if key != "installed_app_lora_surface_proven"
     }
 
+    issue179_open = (
+        issue179_checks.get("local_installed_live_cancel_probe_proven") is True
+        and issue179_checks.get("local_reporter_prompt_reproduction_clean") is True
+        and issue179_checks.get("responses_cancel_route_tested") is True
+        and issue179_checks.get("not_proven_empty") is False
+    )
+
     issues = {
         "175": {
             "title": "`mx.clear_memory_cache()` silently fails on MLX 0.31+",
@@ -324,7 +331,9 @@ def build_audit(root: Path) -> dict[str, Any]:
         },
         "179": {
             "title": "MiniMax-M2.7-JANGTQ_K produces gabage",
-            "focused_source_slice": "pass" if all(issue179_checks.values()) else "fail",
+            "focused_source_slice": (
+                "pass" if all(issue179_checks.values()) else "open" if issue179_open else "fail"
+            ),
             "checks": issue179_checks,
             "release_clearance": (
                 "installed_app_reporter_prompt_and_cancel_boundary_proven"

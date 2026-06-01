@@ -1002,6 +1002,7 @@ def test_current_regression_suite_allows_release_manifest_not_ready_for_known_op
                 "open_requirements": suite.EXPECTED_OPEN_REQUIREMENTS,
                 "blockers": [
                     {"id": "dsv4_long_output_code_exactness_open"},
+                    {"id": "issue179_minimax_k_root_cause_audit"},
                     {"id": "issue175_179_release_boundary_audit"},
                     {"id": "installed_app_runtime_parity_audit"},
                     {"id": "real_ui_dsv4_memory_blocked"},

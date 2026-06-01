@@ -264,6 +264,7 @@ def _issue117_checks(root: Path) -> dict[str, bool]:
     surfaces = _surfaces(minimax_real_ui)
     return {
         "issue179_root_cause_audit_passes": issue179.get("status") == "pass",
+        "issue179_root_cause_audit_open": issue179.get("status") == "open",
         "issue179_cancel_probe_present": (
             root
             / "build/current-issue179-minimax-k-responses-cancel-probe-installed-20260527.json"
@@ -735,17 +736,36 @@ def build_audit(root: Path) -> dict[str, Any]:
         },
     }
     focused_failures: list[str] = []
+    focused_open: list[str] = []
     for number, issue in issues.items():
         checks = issue["checks"]
-        issue["focused_source_slice"] = "pass" if all(checks.values()) else "fail"
-        if issue["focused_source_slice"] != "pass":
+        if number == "117" and checks.get("issue179_root_cause_audit_open") is True:
+            required_open_checks = {
+                key: value
+                for key, value in checks.items()
+                if key
+                not in {
+                    "issue179_root_cause_audit_passes",
+                    "issue179_root_cause_audit_open",
+                }
+            }
+            issue["focused_source_slice"] = (
+                "open" if all(required_open_checks.values()) else "fail"
+            )
+            issue["release_clearance"] = "open_minimax_k_issue179_reporter_parity_required"
+        else:
+            issue["focused_source_slice"] = "pass" if all(checks.values()) else "fail"
+        if issue["focused_source_slice"] == "fail":
             focused_failures.append(number)
+        elif issue["focused_source_slice"] == "open":
+            focused_open.append(number)
 
     return {
         "artifact": "",
-        "status": "fail" if focused_failures else "pass",
+        "status": "fail" if focused_failures else "open" if focused_open else "pass",
         "issues": issues,
         "focused_failures": focused_failures,
+        "focused_open": focused_open,
         "release_boundary": (
             "Public issue slices #165, #169, #180, and mlxstudio #111, #115-#119 "
             "have focused source/proof coverage here, and #118 includes "
@@ -772,7 +792,7 @@ def main() -> int:
 
     audit = write_audit(args.root, args.out)
     print(json.dumps({"status": audit["status"], "out": str(args.out)}, sort_keys=True))
-    return 0 if audit["status"] == "pass" else 1
+    return 0 if audit["status"] in {"open", "pass"} else 1
 
 
 if __name__ == "__main__":
