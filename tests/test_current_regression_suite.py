@@ -185,6 +185,7 @@ def test_current_regression_suite_hashes_dsv4_generation_boundary_sources():
     }
 
     assert required.issubset(set(suite.CURRENT_SUITE_SOURCE_HASH_FILES))
+    assert all(Path(path).exists() for path in required)
 
 
 def test_current_regression_suite_source_hash_list_matches_release_manifest():
@@ -463,6 +464,7 @@ def test_current_regression_suite_hashes_focused_pytest_gate_sources():
         "tests/test_release_gate_python_app.py",
         "tests/test_current_regression_suite.py",
         "tests/test_release_regression_manifest.py",
+        "tests/test_issue179_minimax_k_root_cause_audit.py",
         "tests/test_model_family_detection_contract.py",
         "tests/test_mcp_policy_contract.py",
         "tests/test_vl_media_cache_contract.py",
@@ -474,6 +476,16 @@ def test_current_regression_suite_hashes_focused_pytest_gate_sources():
 
     assert required.issubset(set(suite.CURRENT_SUITE_SOURCE_HASH_FILES))
     assert all(Path(path).exists() for path in required)
+
+
+def test_current_regression_suite_runs_issue179_root_cause_pytest():
+    from tests.cross_matrix import run_current_regression_suite as suite
+
+    command = suite.CURRENT_SUITE_COMMANDS["focused_regression_pytest"]
+    joined = " ".join(command)
+
+    assert "tests/test_issue179_minimax_k_root_cause_audit.py" in command
+    assert "reporter_server_hash_parity" in joined
 
 
 def test_current_regression_suite_hashes_dirty_contract_unit_sources():

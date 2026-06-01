@@ -1612,6 +1612,17 @@ def _write_expected_issue179_minimax_k_root_cause_audit(root: Path) -> None:
                     "raw_sse_cancel_lifecycle_present": True,
                     "failures": [],
                 },
+                "reporter_server_hash_parity": {
+                    "status": "pass",
+                    "reporter_installed_server_sha256": "server-sha",
+                    "source_server_sha256": "server-sha",
+                    "local_installed_server_sha256": "server-sha",
+                    "public_v1549_tahoe_server_sha256": "public-sha",
+                    "reporter_matches_source": True,
+                    "reporter_matches_local_installed": True,
+                    "reporter_matches_public_v1549_tahoe": False,
+                    "route_markers_match": True,
+                },
             }
         )
         + "\n",
@@ -1764,6 +1775,22 @@ def test_current_proof_sweep_rejects_issue179_missing_reporter_parity_comparison
     ]
 
     assert "missing_reporter_parity_comparison" in result["failures"]
+
+
+def test_current_proof_sweep_rejects_issue179_missing_reporter_server_hash_parity(
+    tmp_path,
+):
+    _write_expected_issue179_minimax_k_root_cause_audit(tmp_path)
+    path = tmp_path / CURRENT_ISSUE179_MINIMAX_K_ROOT_CAUSE_AUDIT_ARTIFACT
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload.pop("reporter_server_hash_parity")
+    path.write_text(json.dumps(payload) + "\n", encoding="utf-8")
+
+    result = validate_current_proof_sweep_artifacts(tmp_path)[
+        "issue179_minimax_k_root_cause_audit"
+    ]
+
+    assert "missing_reporter_server_hash_parity" in result["failures"]
 
 
 def _write_expected_installed_app_runtime_parity_audit(root: Path) -> None:

@@ -290,6 +290,32 @@ def test_issue179_reporter_parity_comparison_marks_matching_reporter_metadata_pa
     }
 
 
+def test_issue179_reporter_server_hash_parity_names_drift():
+    parity = gate.build_reporter_server_hash_parity(
+        reporter_parity_artifact={
+            "installed_server_sha256": "reporter-sha",
+            "server_has_responses_cancel_route": True,
+            "server_cancel_calls_engine_abort": True,
+        },
+        source={"source_hashes": {"vmlx_engine/server.py": "source-sha"}},
+        installed_bundle={"sha256": "source-sha"},
+        public_dmg={"server_sha256": "public-sha"},
+    )
+
+    assert parity == {
+        "reporter_installed_server_sha256": "reporter-sha",
+        "source_server_sha256": "source-sha",
+        "local_installed_server_sha256": "source-sha",
+        "public_v1549_tahoe_server_sha256": "public-sha",
+        "reporter_matches_source": False,
+        "reporter_matches_local_installed": False,
+        "reporter_matches_public_v1549_tahoe": False,
+        "route_markers_match": True,
+        "status": "open",
+        "failure": "reporter_installed_server_hash_drift",
+    }
+
+
 def test_issue179_not_proven_removes_reporter_parity_gaps_when_comparison_passes():
     not_proven = gate.build_not_proven_items(
         reporter_parity_comparison={
@@ -324,6 +350,32 @@ def test_issue179_not_proven_removes_reporter_parity_gaps_when_comparison_passes
         "the 404 cancel response caused the screenshot rather than followed the stream abort"
         not in not_proven
     )
+
+
+def test_issue179_not_proven_keeps_only_server_hash_when_other_parity_checks_pass():
+    not_proven = gate.build_not_proven_items(
+        reporter_parity_comparison={
+            "status": "open",
+            "server_hash_matches_local_installed": False,
+            "model_manifest_sha256_matches_local": True,
+            "model_file_hashes_match_local": True,
+            "response_active_at_cancel_recorded": True,
+            "raw_sse_cancel_lifecycle_present": True,
+        },
+        reporter_parity_artifact={
+            "status": "pass",
+            "session_settings": {"wireApi": "responses"},
+        },
+        reporter={
+            "responses_cancel_404_after_econnreset_same_response_id": True,
+            "responses_cancel_404_after_request_error": True,
+        },
+        local_reporter_prompt_reproduction={"clean": True},
+    )
+
+    assert not_proven == [
+        "reporter installed app bundle hash matches public/local server.py route proof"
+    ]
 
 
 def test_issue179_reporter_parity_artifact_keeps_local_template_open(tmp_path):

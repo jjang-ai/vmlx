@@ -349,38 +349,29 @@ def build_not_proven_items(
     reporter: dict[str, Any],
     local_reporter_prompt_reproduction: dict[str, Any],
 ) -> list[str]:
-    reporter_parity_passes = reporter_parity_comparison.get("status") == "pass"
     items: list[str] = []
     if not (
-        reporter_parity_passes
-        and reporter_parity_comparison.get("model_file_hashes_match_local") is True
+        reporter_parity_comparison.get("model_file_hashes_match_local") is True
     ):
         items.append("reporter model shard/codebook hashes match local full K artifact")
     if not (
-        reporter_parity_passes
-        and reporter_parity_comparison.get("model_manifest_sha256_matches_local")
-        is True
+        reporter_parity_comparison.get("model_manifest_sha256_matches_local") is True
     ):
         items.append(
             "reporter model artifact manifest is available for direct local comparison"
         )
     if not (
-        reporter_parity_passes
-        and reporter_parity_comparison.get("server_hash_matches_local_installed")
-        is True
+        reporter_parity_comparison.get("server_hash_matches_local_installed") is True
     ):
         items.append(
             "reporter installed app bundle hash matches public/local server.py route proof"
         )
     if not (
-        reporter_parity_passes
-        and reporter_parity_comparison.get("response_active_at_cancel_recorded")
-        is True
+        reporter_parity_comparison.get("response_active_at_cancel_recorded") is True
     ):
         items.append("reporter response id was still active when the cancel request was sent")
     if not (
-        reporter_parity_passes
-        and isinstance(reporter_parity_artifact.get("session_settings"), dict)
+        isinstance(reporter_parity_artifact.get("session_settings"), dict)
     ):
         items.append(
             "reporter chat/session/settings database state matches local diagnostic state"
@@ -962,6 +953,54 @@ def build_bundle_hash_parity(
     }
 
 
+def build_reporter_server_hash_parity(
+    *,
+    reporter_parity_artifact: dict[str, Any],
+    source: dict[str, Any],
+    installed_bundle: dict[str, Any],
+    public_dmg: dict[str, Any],
+) -> dict[str, Any]:
+    source_hashes = source.get("source_hashes")
+    if not isinstance(source_hashes, dict):
+        source_hashes = {}
+    reporter_sha = reporter_parity_artifact.get("installed_server_sha256")
+    source_sha = source_hashes.get("vmlx_engine/server.py")
+    local_sha = installed_bundle.get("sha256")
+    public_sha = public_dmg.get("server_sha256")
+    route_markers_match = (
+        reporter_parity_artifact.get("server_has_responses_cancel_route") is True
+        and reporter_parity_artifact.get("server_cancel_calls_engine_abort") is True
+    )
+    reporter_matches_source = (
+        bool(reporter_sha) and bool(source_sha) and reporter_sha == source_sha
+    )
+    reporter_matches_local = (
+        bool(reporter_sha) and bool(local_sha) and reporter_sha == local_sha
+    )
+    reporter_matches_public = (
+        bool(reporter_sha) and bool(public_sha) and reporter_sha == public_sha
+    )
+    status = (
+        "pass"
+        if reporter_matches_source and reporter_matches_local and route_markers_match
+        else "open"
+    )
+    out = {
+        "reporter_installed_server_sha256": reporter_sha,
+        "source_server_sha256": source_sha,
+        "local_installed_server_sha256": local_sha,
+        "public_v1549_tahoe_server_sha256": public_sha,
+        "reporter_matches_source": reporter_matches_source,
+        "reporter_matches_local_installed": reporter_matches_local,
+        "reporter_matches_public_v1549_tahoe": reporter_matches_public,
+        "route_markers_match": route_markers_match,
+        "status": status,
+    }
+    if status != "pass":
+        out["failure"] = "reporter_installed_server_hash_drift"
+    return out
+
+
 def build_root_cause_discriminators(
     *,
     reporter: dict[str, Any],
@@ -1164,6 +1203,12 @@ def build_audit(root: Path) -> dict[str, Any]:
         installed_bundle=installed_bundle,
         public_dmg=public_dmg,
     )
+    reporter_server_hash_parity = build_reporter_server_hash_parity(
+        reporter_parity_artifact=reporter_parity_artifact,
+        source=source,
+        installed_bundle=installed_bundle,
+        public_dmg=public_dmg,
+    )
     reporter_parity_comparison = build_reporter_parity_comparison(
         reporter_parity_artifact=reporter_parity_artifact,
         reporter=reporter,
@@ -1312,6 +1357,7 @@ def build_audit(root: Path) -> dict[str, Any]:
         "local_installed_bundle_contract": installed_bundle,
         "public_release_dmg_contract": public_dmg,
         "bundle_hash_parity": bundle_hash_parity,
+        "reporter_server_hash_parity": reporter_server_hash_parity,
         "reporter_parity_artifact": reporter_parity_artifact,
         "reporter_parity_comparison": reporter_parity_comparison,
         "local_responses_cancel_probe": cancel_probe,

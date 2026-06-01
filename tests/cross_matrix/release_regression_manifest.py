@@ -4322,13 +4322,23 @@ def _validate_current_issue179_minimax_k_root_cause_audit(root: Path) -> dict[st
     not_proven = payload.get("not_proven")
     if not isinstance(not_proven, list):
         not_proven = []
-    required_not_proven = (
-        set()
-        if status == "pass"
-        else {
-            "a concrete prompt reproduces screenshot-shaped wrong-language or numeric garbage",
-        }
+    reporter_server_hash_parity = payload.get("reporter_server_hash_parity")
+    server_hash_drift_open = (
+        isinstance(reporter_server_hash_parity, dict)
+        and reporter_server_hash_parity.get("status") == "open"
+        and reporter_server_hash_parity.get("failure")
+        == "reporter_installed_server_hash_drift"
     )
+    required_not_proven = set()
+    if status != "pass":
+        if server_hash_drift_open:
+            required_not_proven.add(
+                "reporter installed app bundle hash matches public/local server.py route proof"
+            )
+        else:
+            required_not_proven.add(
+                "a concrete prompt reproduces screenshot-shaped wrong-language or numeric garbage"
+            )
     missing_not_proven = required_not_proven.difference({str(item) for item in not_proven})
     for item in sorted(missing_not_proven):
         result["failures"].append(f"missing_not_proven:{item}")
@@ -4412,6 +4422,27 @@ def _validate_current_issue179_minimax_k_root_cause_audit(root: Path) -> dict[st
                         f"missing_reporter_parity_comparison_check:{key}"
                     )
     result["reporter_parity_comparison"] = reporter_parity_comparison
+
+    if not isinstance(reporter_server_hash_parity, dict):
+        result["failures"].append("missing_reporter_server_hash_parity")
+    else:
+        parity_status = reporter_server_hash_parity.get("status")
+        if parity_status not in {"open", "pass"}:
+            result["failures"].append("invalid_reporter_server_hash_parity_status")
+        if reporter_server_hash_parity.get("route_markers_match") is not True:
+            result["failures"].append("reporter_server_route_markers_mismatch")
+        if parity_status == "open" and not reporter_server_hash_parity.get("failure"):
+            result["failures"].append("missing_reporter_server_hash_parity_failure")
+        if parity_status == "pass":
+            for key in (
+                "reporter_matches_source",
+                "reporter_matches_local_installed",
+            ):
+                if reporter_server_hash_parity.get(key) is not True:
+                    result["failures"].append(
+                        f"missing_reporter_server_hash_parity_check:{key}"
+                    )
+    result["reporter_server_hash_parity"] = reporter_server_hash_parity
 
     return result
 
