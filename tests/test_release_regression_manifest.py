@@ -1206,9 +1206,12 @@ def _write_expected_issue181_183_runtime_audit(root: Path) -> None:
                     "181": {
                         "focused_source_slice": "pass",
                         "release_clearance": (
-                            "source_and_packaged_mpp_auto_policy_guarded"
+                            "installed_mpp_auto_policy_guarded"
                         ),
-                        "checks": {"mpp_auto_disabled_for_mxtq": True},
+                        "checks": {
+                            "mpp_auto_disabled_for_mxtq": True,
+                            "installed_app_mpp_auto_policy_disables_mxtq": True,
+                        },
                     },
                     "182": {
                         "focused_source_slice": "pass",
@@ -1258,6 +1261,24 @@ def test_release_regression_manifest_rejects_issue183_missing_installed_runtime_
     result = _validate_current_issue181_183_runtime_audit(tmp_path)
 
     assert "missing_issue_check:183:installed_app_minicpm_v46_runtime_remap" in result[
+        "failures"
+    ]
+
+
+def test_release_regression_manifest_rejects_issue181_missing_installed_mpp_probe(
+    tmp_path,
+):
+    _write_expected_issue181_183_runtime_audit(tmp_path)
+    path = tmp_path / CURRENT_ISSUE181_183_RUNTIME_AUDIT_ARTIFACT
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["issues"]["181"]["checks"].pop(
+        "installed_app_mpp_auto_policy_disables_mxtq"
+    )
+    path.write_text(json.dumps(payload) + "\n", encoding="utf-8")
+
+    result = _validate_current_issue181_183_runtime_audit(tmp_path)
+
+    assert "missing_issue_check:181:installed_app_mpp_auto_policy_disables_mxtq" in result[
         "failures"
     ]
 

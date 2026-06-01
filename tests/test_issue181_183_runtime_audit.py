@@ -14,8 +14,12 @@ def test_issue181_183_audit_proves_recent_runtime_issue_slices():
     assert audit["issues"]["181"]["focused_source_slice"] == "pass"
     assert audit["issues"]["181"]["checks"]["mpp_auto_disabled_for_mxtq"] is True
     assert audit["issues"]["181"]["checks"]["explicit_mpp_on_still_allowed"] is True
+    assert (
+        audit["issues"]["181"]["checks"]["installed_app_mpp_auto_policy_disables_mxtq"]
+        is True
+    )
     assert audit["issues"]["181"]["release_clearance"] == (
-        "source_and_packaged_mpp_auto_policy_guarded"
+        "installed_mpp_auto_policy_guarded"
     )
     assert audit["issues"]["182"]["focused_source_slice"] == "pass"
     assert audit["issues"]["182"]["checks"]["normal_vlm_patch_embed_transpose"] is True

@@ -93,10 +93,108 @@ print(json.dumps(payload, sort_keys=True))
     }
 
 
-def _issue181_checks(root: Path) -> dict[str, bool]:
+def _run_installed_mpp_policy_probe(
+    python_path: Path = INSTALLED_PYTHON,
+) -> dict[str, object]:
+    if not python_path.exists():
+        return {
+            "returncode": 127,
+            "error": f"missing installed python: {python_path}",
+            "checks": {},
+        }
+    env = os.environ.copy()
+    env["PYTHONNOUSERSITE"] = "1"
+    env["PYTHONPATH"] = ""
+    code = r"""
+import json
+import os
+from pathlib import Path
+import tempfile
+from types import SimpleNamespace
+
+from vmlx_engine.cli import _apply_jangtq_mpp_nax_policy
+
+
+class Logger:
+    def __init__(self):
+        self.messages = []
+
+    def info(self, *args):
+        self.messages.append(("info", " ".join(str(item) for item in args)))
+
+    def warning(self, *args):
+        self.messages.append(("warning", " ".join(str(item) for item in args)))
+
+    def debug(self, *args):
+        self.messages.append(("debug", " ".join(str(item) for item in args)))
+
+
+logger = Logger()
+os.environ.pop("JANGTQ_MPP_NAX", None)
+os.environ.pop("JANGTQ_TOPK_OVERRIDE", None)
+with tempfile.TemporaryDirectory(prefix="MiniMax-M2.7-JANGTQ_K-") as model_dir:
+    Path(model_dir, "config.json").write_text(json.dumps({"mxtq_bits": 4}))
+    auto_mode = _apply_jangtq_mpp_nax_policy(SimpleNamespace(model=model_dir), logger)
+    auto_env = os.environ.get("JANGTQ_MPP_NAX")
+    os.environ["JANGTQ_MPP_NAX"] = "on"
+    explicit_mode = _apply_jangtq_mpp_nax_policy(
+        SimpleNamespace(model=model_dir),
+        logger,
+    )
+    explicit_env = os.environ.get("JANGTQ_MPP_NAX")
+
+payload = {
+    "auto_mode": auto_mode,
+    "auto_env": auto_env,
+    "explicit_mode": explicit_mode,
+    "explicit_env": explicit_env,
+    "messages": logger.messages,
+}
+print(json.dumps(payload, sort_keys=True))
+"""
+    proc = subprocess.run(
+        [str(python_path), "-B", "-s", "-c", code],
+        cwd="/tmp",
+        env=env,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        timeout=30,
+        check=False,
+    )
+    payload: dict[str, object] = {}
+    if proc.returncode == 0 and proc.stdout.strip():
+        try:
+            payload = json.loads(proc.stdout.splitlines()[-1])
+        except Exception as exc:  # noqa: BLE001 - report malformed probe output
+            payload = {"parse_error": f"{type(exc).__name__}: {exc}"}
+    checks = {
+        "installed_auto_mxtq_jangtq_disables_mpp": (
+            payload.get("auto_mode") == "off" and payload.get("auto_env") == "off"
+        ),
+        "installed_explicit_mpp_on_still_allowed": (
+            payload.get("explicit_mode") == "on" and payload.get("explicit_env") == "1"
+        ),
+    }
+    return {
+        "returncode": proc.returncode,
+        "stdout_tail": proc.stdout.splitlines()[-5:],
+        "stderr_tail": proc.stderr.splitlines()[-20:],
+        "payload": payload,
+        "checks": checks,
+    }
+
+
+def _issue181_checks(
+    root: Path,
+    installed_mpp_probe: dict[str, object],
+) -> dict[str, bool]:
     cli = _read(root / "vmlx_engine/cli.py")
     server = _read(root / "vmlx_engine/server.py")
     engine_tests = _read(root / "tests/test_engine_audit.py")
+    installed_checks = installed_mpp_probe.get("checks")
+    if not isinstance(installed_checks, dict):
+        installed_checks = {}
     return {
         "mpp_auto_policy_function_exists": "def _apply_jangtq_mpp_nax_policy" in cli,
         "mpp_auto_disabled_for_mxtq": "MXTQ/JANGTQ bundle detected" in cli
@@ -112,6 +210,10 @@ def _issue181_checks(root: Path) -> dict[str, bool]:
         ),
         "server_health_reports_mpp_status": "def _jangtq_mpp_nax_runtime_status" in server
         and '"jangtq_acceleration"' in server,
+        "installed_app_mpp_auto_policy_disables_mxtq": (
+            installed_checks.get("installed_auto_mxtq_jangtq_disables_mpp") is True
+            and installed_checks.get("installed_explicit_mpp_on_still_allowed") is True
+        ),
     }
 
 
@@ -201,14 +303,15 @@ def build_audit(
 ) -> dict:
     root = root.resolve()
     installed_minicpm_probe = _run_installed_minicpm_v46_probe(installed_python)
+    installed_mpp_probe = _run_installed_mpp_policy_probe(installed_python)
     issues = {
         "181": {
             "title": (
                 "JANGTQ_MPP_NAX=auto appears to produce incorrect prefill logits "
                 "for MXTQ/hybrid JANGTQ models in vmlx serve"
             ),
-            "checks": _issue181_checks(root),
-            "release_clearance": "source_and_packaged_mpp_auto_policy_guarded",
+            "checks": _issue181_checks(root, installed_mpp_probe),
+            "release_clearance": "installed_mpp_auto_policy_guarded",
         },
         "182": {
             "title": "Qwen VL patch-embed layout must load in MLX Conv3D format",
@@ -234,11 +337,13 @@ def build_audit(
         "artifact": "",
         "status": "fail" if focused_failures else "pass",
         "issues": issues,
+        "installed_mpp_policy_probe": installed_mpp_probe,
         "installed_minicpm_v46_probe": installed_minicpm_probe,
         "focused_failures": focused_failures,
         "release_boundary": (
             "Issues #181-#183 have focused no-heavy source/packaged guard "
-            "coverage. Broader release clearance still depends on the full live "
+            "coverage; #181 and #183 also include installed app runtime probes. "
+            "Broader release clearance still depends on the full live "
             "model/UI/cache/parser matrix."
         ),
     }
