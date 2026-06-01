@@ -21,6 +21,7 @@ def test_installed_app_runtime_parity_records_known_stale_surface():
     assert "installed_panel_image_ipc_epipe_aggregate_guard" in audit["checks"]
     assert "installed_panel_child_process_stdio_epipe_guard" in audit["checks"]
     assert "installed_panel_child_process_stdio_epipe_aggregate_guard" in audit["checks"]
+    assert "installed_panel_renderer_chat_epipe_toast_normalized" in audit["checks"]
     assert "installed_panel_gateway_guarded_proxy_forwarding" in audit["checks"]
     assert "installed_panel_gateway_write_once_behavior_marker" in audit["checks"]
     assert "installed_panel_gateway_response_socket_destroyed_guard" in audit["checks"]

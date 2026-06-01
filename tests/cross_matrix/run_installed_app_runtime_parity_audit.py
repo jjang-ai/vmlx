@@ -481,6 +481,15 @@ def build_audit(
             panel_result["returncode"] == 0
             and installed_child_stdio_aggregate_guard
         ),
+        "installed_panel_renderer_chat_epipe_toast_normalized": (
+            renderer_result["returncode"] == 0
+            and "isExpectedChatDisconnectError" in panel_renderer
+            and "write EPIPE" in panel_renderer
+            and "ERR_STREAM_DESTROYED" in panel_renderer
+            and "ERR_STREAM_WRITE_AFTER_END" in panel_renderer
+            and "Server connection lost. The model server may have crashed or stopped. Try restarting the session."
+            in panel_renderer
+        ),
         "installed_panel_gateway_guarded_proxy_forwarding": (
             panel_result["returncode"] == 0
             and "proxyRes.pipe" not in panel_main
@@ -653,6 +662,13 @@ def build_audit(
         "panel_renderer_stderr": renderer_result["stderr"],
         "panel_renderer_files": renderer_result["files"],
         "panel_renderer_markers": {
+            "has_chat_epipe_toast_normalizer": (
+                "isExpectedChatDisconnectError" in panel_renderer
+                and "Server connection lost. The model server may have crashed or stopped. Try restarting the session."
+                in panel_renderer
+            ),
+            "has_chat_epipe_detector": "write EPIPE" in panel_renderer
+            and "ERR_STREAM_WRITE_AFTER_END" in panel_renderer,
             "has_max_output_tokens_label": "Max Output Tokens" in panel_renderer,
             "has_max_context_tokens_label": "Max Context Tokens" in panel_renderer,
             "has_max_tokens_cli": "--max-tokens" in panel_renderer,
