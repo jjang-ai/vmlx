@@ -242,6 +242,42 @@ describe("Ollama gateway parity contracts", () => {
     );
   });
 
+  it("guards disconnect-shaped chat stream error chunks before raw logging", () => {
+    const chatSource = readFileSync(
+      resolve(process.cwd(), "src/main/ipc/chat.ts"),
+      "utf8",
+    );
+    expect(chatSource).toContain("function expectedChatBackendDisconnectError");
+    expect(chatSource).toContain(
+      "if (isExpectedChatBackendDisconnectError(errDetail)) {",
+    );
+    expect(chatSource).toContain("throw expectedChatBackendDisconnectError();");
+    expect(chatSource).toContain(
+      "console.error(`[CHAT] Responses API error event: ${errDetail}`);",
+    );
+    expect(chatSource).toContain(
+      "console.error(\n                  `[CHAT] Chat completions error chunk: ${errDetail}`,",
+    );
+    const responseErrorStart = chatSource.indexOf(
+      'currentEventType === "error"',
+    );
+    const responseErrorLog = chatSource.indexOf(
+      "console.error(`[CHAT] Responses API error event: ${errDetail}`);",
+      responseErrorStart,
+    );
+    const chatErrorStart = chatSource.indexOf("// Handle error chunks from Chat Completions");
+    const chatErrorLog = chatSource.indexOf(
+      "`[CHAT] Chat completions error chunk: ${errDetail}`,",
+      chatErrorStart,
+    );
+    expect(
+      chatSource.indexOf("throw expectedChatBackendDisconnectError();", responseErrorStart),
+    ).toBeLessThan(responseErrorLog);
+    expect(
+      chatSource.indexOf("throw expectedChatBackendDisconnectError();", chatErrorStart),
+    ).toBeLessThan(chatErrorLog);
+  });
+
   it("normalizes cache IPC endpoint EPIPE disconnects instead of surfacing raw unexpected errors", () => {
     const cacheSource = readFileSync(
       resolve(process.cwd(), "src/main/ipc/cache.ts"),

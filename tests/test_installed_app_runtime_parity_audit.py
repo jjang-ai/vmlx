@@ -19,6 +19,7 @@ def test_installed_app_runtime_parity_records_known_stale_surface():
     assert "installed_panel_gateway_epipe_aggregate_guard" in audit["checks"]
     assert "installed_panel_chat_ipc_epipe_aggregate_guard" in audit["checks"]
     assert "installed_panel_chat_ipc_epipe_raw_diagnostic_guard" in audit["checks"]
+    assert "installed_panel_chat_stream_error_disconnect_guard" in audit["checks"]
     assert "installed_panel_image_ipc_epipe_aggregate_guard" in audit["checks"]
     assert "installed_panel_cache_ipc_epipe_aggregate_guard" in audit["checks"]
     assert "installed_panel_child_process_stdio_epipe_guard" in audit["checks"]
@@ -154,6 +155,45 @@ if (!isExpectedChatBackendDisconnectError(error)) {
     assert not gate._has_chat_epipe_raw_diagnostic_guard(old_unconditional_log)
     assert gate._has_chat_epipe_raw_diagnostic_guard(compiled_guard)
     assert gate._has_chat_epipe_raw_diagnostic_guard(source_guard)
+
+
+def test_installed_app_runtime_parity_scopes_chat_stream_error_disconnect_guard():
+    from tests.cross_matrix import run_installed_app_runtime_parity_audit as gate
+
+    old_raw_error_logs = """
+const errDetail = parsed.error.message || parsed.error.code || JSON.stringify(parsed.error);
+console.error(`[CHAT] Responses API error event: ${errDetail}`);
+throw new Error(`Server error: ${errDetail}`);
+const otherErrDetail = parsed.error.message || parsed.error.code || JSON.stringify(parsed.error);
+console.error(
+  `[CHAT] Chat completions error chunk: ${errDetail}`,
+);
+throw new Error(`Server error: ${errDetail}`);
+"""
+    guarded_error_logs = """
+function expectedChatBackendDisconnectError() {
+  const error = new Error("Backend connection closed while streaming response.");
+  error.code = "EPIPE";
+  return error;
+}
+const errDetail = parsed.error.message || parsed.error.code || JSON.stringify(parsed.error);
+if (isExpectedChatBackendDisconnectError(errDetail)) {
+  throw expectedChatBackendDisconnectError();
+}
+console.error(`[CHAT] Responses API error event: ${errDetail}`);
+throw new Error(`Server error: ${errDetail}`);
+const otherErrDetail = parsed.error.message || parsed.error.code || JSON.stringify(parsed.error);
+if (isExpectedChatBackendDisconnectError(errDetail)) {
+  throw expectedChatBackendDisconnectError();
+}
+console.error(
+  `[CHAT] Chat completions error chunk: ${errDetail}`,
+);
+throw new Error(`Server error: ${errDetail}`);
+"""
+
+    assert not gate._has_chat_stream_error_disconnect_guard(old_raw_error_logs)
+    assert gate._has_chat_stream_error_disconnect_guard(guarded_error_logs)
 
 
 def test_installed_app_runtime_parity_writes_json_artifact(tmp_path):

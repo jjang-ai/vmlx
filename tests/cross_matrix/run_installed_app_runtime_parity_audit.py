@@ -267,6 +267,28 @@ def _has_chat_epipe_raw_diagnostic_guard(panel_main: str) -> bool:
     return True
 
 
+def _has_chat_stream_error_disconnect_guard(panel_main: str) -> bool:
+    if "function expectedChatBackendDisconnectError" not in panel_main:
+        return False
+    logs = list(
+        re.finditer(
+            r"console\.error\s*\([\s\S]{0,80}\[CHAT\]\s+(?:Responses API error event|Chat completions error chunk):\s*\$\{errDetail\}",
+            panel_main,
+        )
+    )
+    if len(logs) < 2:
+        return False
+    guard_re = re.compile(
+        r"if\s*\(\s*isExpectedChatBackendDisconnectError\s*\(\s*errDetail\s*\)\s*\)\s*\{\s*throw\s+expectedChatBackendDisconnectError\s*\(\s*\)\s*;?\s*\}\s*$",
+        re.DOTALL,
+    )
+    for match in logs:
+        prefix = panel_main[max(0, match.start() - 220) : match.start()]
+        if not guard_re.search(prefix):
+            return False
+    return True
+
+
 def _read_installed_asar_file(
     root: Path,
     relpath: str,
@@ -618,6 +640,9 @@ def build_audit(
     installed_chat_epipe_raw_diagnostic_guard = (
         _has_chat_epipe_raw_diagnostic_guard(panel_main)
     )
+    installed_chat_stream_error_disconnect_guard = (
+        _has_chat_stream_error_disconnect_guard(panel_main)
+    )
 
     checks = {
         "installed_python_exists": python_path.exists(),
@@ -692,6 +717,10 @@ def build_audit(
         "installed_panel_chat_ipc_epipe_raw_diagnostic_guard": (
             panel_result["returncode"] == 0
             and installed_chat_epipe_raw_diagnostic_guard
+        ),
+        "installed_panel_chat_stream_error_disconnect_guard": (
+            panel_result["returncode"] == 0
+            and installed_chat_stream_error_disconnect_guard
         ),
         "installed_panel_image_ipc_epipe_aggregate_guard": (
             panel_result["returncode"] == 0
@@ -875,6 +904,9 @@ def build_audit(
             ),
             "has_chat_epipe_raw_diagnostic_guard": (
                 installed_chat_epipe_raw_diagnostic_guard
+            ),
+            "has_chat_stream_error_disconnect_guard": (
+                installed_chat_stream_error_disconnect_guard
             ),
             "has_image_ipc_aggregate_disconnect_guard": (
                 "isExpectedImageServerDisconnectError" in panel_main

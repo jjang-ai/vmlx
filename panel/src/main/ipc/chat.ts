@@ -89,6 +89,14 @@ function isExpectedChatBackendDisconnectError(error: unknown): boolean {
   );
 }
 
+function expectedChatBackendDisconnectError(): NodeJS.ErrnoException {
+  const error = new Error(
+    "Backend connection closed while streaming response.",
+  ) as NodeJS.ErrnoException;
+  error.code = "EPIPE";
+  return error;
+}
+
 function chatBackendRequestWritable(req: ClientRequest): boolean {
   const anyReq = req as ClientRequest & {
     closed?: boolean;
@@ -2402,6 +2410,9 @@ export function registerChatHandlers(
                   parsed.error?.code ||
                   parsed.detail ||
                   JSON.stringify(parsed);
+                if (isExpectedChatBackendDisconnectError(errDetail)) {
+                  throw expectedChatBackendDisconnectError();
+                }
                 console.error(`[CHAT] Responses API error event: ${errDetail}`);
                 throw new Error(`Server error: ${errDetail}`);
               }
@@ -2512,6 +2523,9 @@ export function registerChatHandlers(
                   parsed.error.message ||
                   parsed.error.code ||
                   JSON.stringify(parsed.error);
+                if (isExpectedChatBackendDisconnectError(errDetail)) {
+                  throw expectedChatBackendDisconnectError();
+                }
                 console.error(
                   `[CHAT] Chat completions error chunk: ${errDetail}`,
                 );
