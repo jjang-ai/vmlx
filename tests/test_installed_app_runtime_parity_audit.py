@@ -18,6 +18,7 @@ def test_installed_app_runtime_parity_records_known_stale_surface():
     assert "installed_panel_gateway_epipe_guard" in audit["checks"]
     assert "installed_panel_gateway_epipe_aggregate_guard" in audit["checks"]
     assert "installed_panel_chat_ipc_epipe_aggregate_guard" in audit["checks"]
+    assert "installed_panel_chat_ipc_epipe_raw_diagnostic_guard" in audit["checks"]
     assert "installed_panel_image_ipc_epipe_aggregate_guard" in audit["checks"]
     assert "installed_panel_cache_ipc_epipe_aggregate_guard" in audit["checks"]
     assert "installed_panel_child_process_stdio_epipe_guard" in audit["checks"]
@@ -122,6 +123,37 @@ function isExpectedChildProcessStreamDisconnectError(err: unknown): boolean {
     )
     assert gate._has_child_stdio_aggregate_disconnect_guard(compiled_child_guard)
     assert gate._has_child_stdio_aggregate_disconnect_guard(source_child_guard)
+
+
+def test_installed_app_runtime_parity_scopes_chat_epipe_raw_diagnostic_guard():
+    from tests.cross_matrix import run_installed_app_runtime_parity_audit as gate
+
+    old_unconditional_log = """
+const _err = error;
+console.error("[CHAT] Error caught:", {
+  message: _err?.message,
+});
+"""
+    compiled_guard = """
+const _err = error;
+if (!isExpectedChatBackendDisconnectError(error)) {
+  console.error("[CHAT] Error caught:", {
+    message: _err?.message,
+  });
+}
+"""
+    source_guard = """
+const _err = error as any;
+if (!isExpectedChatBackendDisconnectError(error)) {
+  console.error("[CHAT] Error caught:", {
+    message: _err?.message,
+  });
+}
+"""
+
+    assert not gate._has_chat_epipe_raw_diagnostic_guard(old_unconditional_log)
+    assert gate._has_chat_epipe_raw_diagnostic_guard(compiled_guard)
+    assert gate._has_chat_epipe_raw_diagnostic_guard(source_guard)
 
 
 def test_installed_app_runtime_parity_writes_json_artifact(tmp_path):

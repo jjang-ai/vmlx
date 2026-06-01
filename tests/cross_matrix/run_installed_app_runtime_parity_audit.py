@@ -247,6 +247,26 @@ def _has_child_stdio_aggregate_disconnect_guard(panel_main: str) -> bool:
     return False
 
 
+def _has_chat_epipe_raw_diagnostic_guard(panel_main: str) -> bool:
+    logs = list(
+        re.finditer(
+            r"console\.error\s*\(\s*[\"']\[CHAT\]\s+Error caught:",
+            panel_main,
+        )
+    )
+    if not logs:
+        return False
+    guard_re = re.compile(
+        r"if\s*\(\s*!\s*isExpectedChatBackendDisconnectError\s*\(\s*error\s*\)\s*\)\s*\{?\s*$",
+        re.DOTALL,
+    )
+    for match in logs:
+        prefix = panel_main[max(0, match.start() - 180) : match.start()]
+        if not guard_re.search(prefix):
+            return False
+    return True
+
+
 def _read_installed_asar_file(
     root: Path,
     relpath: str,
@@ -595,6 +615,9 @@ def build_audit(
     installed_child_stdio_aggregate_guard = _has_child_stdio_aggregate_disconnect_guard(
         panel_main
     )
+    installed_chat_epipe_raw_diagnostic_guard = (
+        _has_chat_epipe_raw_diagnostic_guard(panel_main)
+    )
 
     checks = {
         "installed_python_exists": python_path.exists(),
@@ -665,6 +688,10 @@ def build_audit(
             and "nestedErrors.some((nested) => isExpectedChatBackendDisconnectError(nested))"
             in panel_main
             and "write EPIPE" in panel_main
+        ),
+        "installed_panel_chat_ipc_epipe_raw_diagnostic_guard": (
+            panel_result["returncode"] == 0
+            and installed_chat_epipe_raw_diagnostic_guard
         ),
         "installed_panel_image_ipc_epipe_aggregate_guard": (
             panel_result["returncode"] == 0
@@ -845,6 +872,9 @@ def build_audit(
                 "isExpectedChatBackendDisconnectError" in panel_main
                 and "nestedErrors.some((nested) => isExpectedChatBackendDisconnectError(nested))"
                 in panel_main
+            ),
+            "has_chat_epipe_raw_diagnostic_guard": (
+                installed_chat_epipe_raw_diagnostic_guard
             ),
             "has_image_ipc_aggregate_disconnect_guard": (
                 "isExpectedImageServerDisconnectError" in panel_main
