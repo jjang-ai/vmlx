@@ -3021,6 +3021,18 @@ def test_release_regression_manifest_real_ui_script_requires_responses_cache_det
     )
 
 
+def test_release_regression_manifest_real_ui_script_requires_generation_defaults_proof():
+    script = Path("panel/scripts/live-real-ui-model-proof.mjs")
+    source = script.read_text(encoding="utf-8")
+
+    assert "generationDefaultsAppliedSeen(result)" in source
+    assert "generation_defaults_applied" in source
+    assert (
+        "live proof did not record model-owned generation defaults / request max_tokens resolution"
+        in source
+    )
+
+
 def test_release_regression_manifest_chat_ipc_stream_metrics_include_cache_reuse_detail():
     source = Path("panel/src/main/ipc/chat.ts").read_text(encoding="utf-8")
 

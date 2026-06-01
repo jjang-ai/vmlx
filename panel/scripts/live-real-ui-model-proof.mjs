@@ -624,6 +624,9 @@ function assertResult(result) {
   ) {
     failures.push('requested Responses API cache controls but proof did not record responses_cache_detail_usage surface')
   }
+  if (!result.provenSurfaces?.includes('generation_defaults_applied')) {
+    failures.push('live proof did not record model-owned generation defaults / request max_tokens resolution')
+  }
   if (result.requestedBuiltinTools === true && !result.provenSurfaces?.includes('long_tool_loop')) {
     failures.push('requested real built-in tools but proof did not record long_tool_loop surface')
   }
