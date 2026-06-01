@@ -17,6 +17,7 @@ from tests.cross_matrix.release_regression_manifest import (
     CURRENT_ISSUE175_177_LIVE_RUNTIME_AUDIT_ARTIFACT,
     CURRENT_ISSUE175_179_RELEASE_BOUNDARY_AUDIT_ARTIFACT,
     CURRENT_POST_BUDGET_EDGE_ARTIFACTS,
+    CURRENT_ISSUE179_MINIMAX_K_LIVE_PROBE_MEMORY_PREFLIGHT_ARTIFACT,
     CURRENT_ISSUE179_MINIMAX_K_ROOT_CAUSE_AUDIT_ARTIFACT,
     CURRENT_ISSUE181_183_RUNTIME_AUDIT_ARTIFACT,
     CURRENT_PUBLIC_APP_ISSUE_AUDIT_ARTIFACT,
@@ -1630,6 +1631,31 @@ def _write_expected_issue179_minimax_k_root_cause_audit(root: Path) -> None:
     )
 
 
+def _write_passing_issue179_minimax_k_live_probe_memory_preflight(root: Path) -> None:
+    path = root / CURRENT_ISSUE179_MINIMAX_K_LIVE_PROBE_MEMORY_PREFLIGHT_ARTIFACT
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(
+            {
+                "status": "skipped",
+                "reason": "insufficient_vm_stat_memory",
+                "launch_allowed": False,
+                "launch_decision": "do_not_launch",
+                "model_path": "/Users/example/models/JANGQ/MiniMax-M2.7-JANGTQ_K",
+                "model_size_gb": 73.96,
+                "required_free_gb": 79.96,
+                "min_free_gb": 79.96,
+                "available_for_gate_gb": 73.54,
+                "free_plus_speculative_purgeable_gb": 73.54,
+                "memory_gap_gb": 6.42,
+                "preflight_memory_source": "vm_stat_free_plus_speculative_purgeable",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+
 def test_current_proof_sweep_rejects_issue179_missing_live_cancel_probe(tmp_path):
     _write_expected_issue179_minimax_k_root_cause_audit(tmp_path)
     path = tmp_path / CURRENT_ISSUE179_MINIMAX_K_ROOT_CAUSE_AUDIT_ARTIFACT
@@ -1791,6 +1817,56 @@ def test_current_proof_sweep_rejects_issue179_missing_reporter_server_hash_parit
     ]
 
     assert "missing_reporter_server_hash_parity" in result["failures"]
+
+
+def test_current_proof_sweep_requires_issue179_memory_preflight_when_open(tmp_path):
+    _write_expected_issue179_minimax_k_root_cause_audit(tmp_path)
+    path = tmp_path / CURRENT_ISSUE179_MINIMAX_K_ROOT_CAUSE_AUDIT_ARTIFACT
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["status"] = "open"
+    payload["not_proven"] = [
+        "reporter installed app bundle hash matches public/local server.py route proof"
+    ]
+    payload["reporter_server_hash_parity"]["status"] = "open"
+    payload["reporter_server_hash_parity"][
+        "failure"
+    ] = "reporter_installed_server_hash_drift"
+    path.write_text(json.dumps(payload) + "\n", encoding="utf-8")
+
+    result = validate_current_proof_sweep_artifacts(tmp_path)
+
+    assert result["issue179_minimax_k_live_probe_memory_preflight"]["status"] == "missing"
+    assert (
+        result["issue179_minimax_k_live_probe_memory_preflight"]["artifact"]
+        == CURRENT_ISSUE179_MINIMAX_K_LIVE_PROBE_MEMORY_PREFLIGHT_ARTIFACT
+    )
+    assert result["component_ok"]["issue179_minimax_k_live_probe_memory_preflight"] is False
+    assert result["status"] == "fail"
+
+
+def test_current_proof_sweep_accepts_issue179_memory_preflight_skip(tmp_path):
+    _write_passing_issue179_minimax_k_live_probe_memory_preflight(tmp_path)
+
+    result = validate_current_proof_sweep_artifacts(tmp_path)[
+        "issue179_minimax_k_live_probe_memory_preflight"
+    ]
+
+    assert result == {
+        "artifact": CURRENT_ISSUE179_MINIMAX_K_LIVE_PROBE_MEMORY_PREFLIGHT_ARTIFACT,
+        "status": "pass",
+        "failures": [],
+        "reason": "insufficient_vm_stat_memory",
+        "model_path": "/Users/example/models/JANGQ/MiniMax-M2.7-JANGTQ_K",
+        "model_size_gb": 73.96,
+        "required_free_gb": 79.96,
+        "min_free_gb": 79.96,
+        "available_for_gate_gb": 73.54,
+        "free_plus_speculative_purgeable_gb": 73.54,
+        "memory_gap_gb": 6.42,
+        "preflight_memory_source": "vm_stat_free_plus_speculative_purgeable",
+        "launch_decision": "do_not_launch",
+        "launch_allowed": False,
+    }
 
 
 def _write_expected_installed_app_runtime_parity_audit(root: Path) -> None:
@@ -12528,6 +12604,11 @@ def test_release_regression_manifest_runner_embeds_current_proof_validation(tmp_
     expected_issue179_minimax_k_root_cause_audit = validate_current_proof_sweep_artifacts(
         tmp_path
     )["issue179_minimax_k_root_cause_audit"]
+    expected_issue179_minimax_k_live_probe_memory_preflight = (
+        validate_current_proof_sweep_artifacts(tmp_path)[
+            "issue179_minimax_k_live_probe_memory_preflight"
+        ]
+    )
     expected_mimo_v2_jang2l_sink_ab = validate_current_proof_sweep_artifacts(
         tmp_path
     )["mimo_v2_jang2l_sink_ab"]
@@ -12761,6 +12842,9 @@ def test_release_regression_manifest_runner_embeds_current_proof_validation(tmp_
         "issue181_183_runtime_audit": expected_issue181_183_runtime_audit,
         "public_app_issue_audit": expected_public_app_issue_audit,
         "issue179_minimax_k_root_cause_audit": expected_issue179_minimax_k_root_cause_audit,
+        "issue179_minimax_k_live_probe_memory_preflight": (
+            expected_issue179_minimax_k_live_probe_memory_preflight
+        ),
         "mimo_v2_jang2l_sink_ab": expected_mimo_v2_jang2l_sink_ab,
         "mimo_v2_jang2l_root_cause": expected_mimo_v2_jang2l_root_cause,
         "installed_app_runtime_parity_audit": expected_installed_app_runtime_parity_audit,

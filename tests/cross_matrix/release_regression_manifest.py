@@ -387,6 +387,9 @@ CURRENT_ISSUE175_177_LIVE_RUNTIME_AUDIT_ARTIFACT = (
 CURRENT_ISSUE179_MINIMAX_K_ROOT_CAUSE_AUDIT_ARTIFACT = (
     "build/current-issue179-minimax-k-root-cause-audit-20260527.json"
 )
+CURRENT_ISSUE179_MINIMAX_K_LIVE_PROBE_MEMORY_PREFLIGHT_ARTIFACT = (
+    "build/current-issue179-minimax-k-responses-cancel-probe-memory-preflight-20260601.json"
+)
 CURRENT_ISSUE181_183_RUNTIME_AUDIT_ARTIFACT = (
     "build/current-issue181-183-runtime-audit-20260601-qwen3vl-minicpm-mpp.json"
 )
@@ -2275,6 +2278,9 @@ def validate_current_proof_sweep_artifacts(root: Path) -> dict[str, Any]:
     issue179_minimax_k_root_cause_audit = (
         _validate_current_issue179_minimax_k_root_cause_audit(root)
     )
+    issue179_minimax_k_live_probe_memory_preflight = (
+        _validate_current_issue179_minimax_k_live_probe_memory_preflight(root)
+    )
     issue181_183_runtime_audit = _validate_current_issue181_183_runtime_audit(root)
     public_app_issue_audit = _validate_current_public_app_issue_audit(root)
     mimo_v2_jang2l_sink_ab = _validate_current_mimo_v2_jang2l_sink_ab(root)
@@ -2572,6 +2578,10 @@ def validate_current_proof_sweep_artifacts(root: Path) -> dict[str, Any]:
         and not issue179_minimax_k_root_cause_audit["missing"]
         and not issue179_minimax_k_root_cause_audit["failures"]
     )
+    issue179_minimax_k_live_probe_memory_preflight_ok = (
+        issue179_minimax_k_root_cause_audit["status"] == "pass"
+        or issue179_minimax_k_live_probe_memory_preflight["status"] == "pass"
+    )
     issue181_183_runtime_audit_ok = (
         issue181_183_runtime_audit["status"] == "pass"
         and not issue181_183_runtime_audit["missing"]
@@ -2628,6 +2638,9 @@ def validate_current_proof_sweep_artifacts(root: Path) -> dict[str, Any]:
         issue175_179_release_boundary_audit=issue175_179_release_boundary_audit,
         installed_app_runtime_parity_audit=installed_app_runtime_parity_audit,
         issue179_minimax_k_root_cause_audit=issue179_minimax_k_root_cause_audit,
+        issue179_minimax_k_live_probe_memory_preflight=(
+            issue179_minimax_k_live_probe_memory_preflight
+        ),
         public_app_issue_audit=public_app_issue_audit,
         release_surface_matrix=release_surface_matrix,
         real_ui_live_model_proof=real_ui_live_model_proof,
@@ -2697,6 +2710,9 @@ def validate_current_proof_sweep_artifacts(root: Path) -> dict[str, Any]:
         "mimo_v2_jang2l_sink_ab": True,
         "mimo_v2_jang2l_root_cause": True,
         "issue179_minimax_k_root_cause_audit": issue179_minimax_k_root_cause_audit_ok,
+        "issue179_minimax_k_live_probe_memory_preflight": (
+            issue179_minimax_k_live_probe_memory_preflight_ok
+        ),
         "issue181_183_runtime_audit": issue181_183_runtime_audit_ok,
         "public_app_issue_audit": public_app_issue_audit_ok,
         "real_ui_dsv4_memory_preflight": real_ui_dsv4_memory_preflight_ok,
@@ -2760,6 +2776,9 @@ def validate_current_proof_sweep_artifacts(root: Path) -> dict[str, Any]:
         "mimo_v2_jang2l_sink_ab": mimo_v2_jang2l_sink_ab,
         "mimo_v2_jang2l_root_cause": mimo_v2_jang2l_root_cause,
         "issue179_minimax_k_root_cause_audit": issue179_minimax_k_root_cause_audit,
+        "issue179_minimax_k_live_probe_memory_preflight": (
+            issue179_minimax_k_live_probe_memory_preflight
+        ),
         "issue181_183_runtime_audit": issue181_183_runtime_audit,
         "public_app_issue_audit": public_app_issue_audit,
         "real_ui_live_model_matrix": real_ui_live_model_matrix,
@@ -2780,6 +2799,7 @@ def _current_release_blocker_ledger(
     issue175_179_release_boundary_audit: dict[str, Any],
     installed_app_runtime_parity_audit: dict[str, Any],
     issue179_minimax_k_root_cause_audit: dict[str, Any],
+    issue179_minimax_k_live_probe_memory_preflight: dict[str, Any] | None = None,
     public_app_issue_audit: dict[str, Any] | None = None,
     release_surface_matrix: dict[str, Any] | None = None,
     real_ui_live_model_proof: dict[str, Any] | None = None,
@@ -2999,17 +3019,40 @@ def _current_release_blocker_ledger(
         )
 
     if issue179_minimax_k_root_cause_audit.get("status") == "open":
-        blockers.append(
-            {
-                "id": "issue179_minimax_k_root_cause_audit",
-                "status": "open",
-                "evidence": CURRENT_ISSUE179_MINIMAX_K_ROOT_CAUSE_AUDIT_ARTIFACT,
-                "next_proof": (
-                    "Reproduce or disprove screenshot-shaped wrong-language/numeric "
-                    "reasoning-panel garbage with the reporter prompt/session."
-                ),
+        blocker = {
+            "id": "issue179_minimax_k_root_cause_audit",
+            "status": "open",
+            "evidence": CURRENT_ISSUE179_MINIMAX_K_ROOT_CAUSE_AUDIT_ARTIFACT,
+            "next_proof": (
+                "Reproduce or disprove screenshot-shaped wrong-language/numeric "
+                "reasoning-panel garbage with the reporter prompt/session."
+            ),
+        }
+        if isinstance(issue179_minimax_k_live_probe_memory_preflight, dict):
+            details = {
+                key: issue179_minimax_k_live_probe_memory_preflight.get(key)
+                for key in (
+                    "artifact",
+                    "status",
+                    "reason",
+                    "model_path",
+                    "model_size_gb",
+                    "required_free_gb",
+                    "min_free_gb",
+                    "available_for_gate_gb",
+                    "free_plus_speculative_purgeable_gb",
+                    "memory_gap_gb",
+                    "preflight_memory_source",
+                    "launch_decision",
+                    "launch_allowed",
+                )
+                if key in issue179_minimax_k_live_probe_memory_preflight
             }
-        )
+            if details:
+                blocker["details"] = {
+                    "live_probe_memory_preflight": details,
+                }
+        blockers.append(blocker)
 
     if not isinstance(public_app_issue_audit, dict):
         public_app_issue_audit = {}
@@ -3407,6 +3450,96 @@ def _validate_current_real_ui_dsv4_memory_preflight(root: Path) -> dict[str, Any
             "active_heavy_process_count": payload.get("active_heavy_process_count"),
             "active_heavy_processes": payload.get("active_heavy_processes"),
             "top_memory_processes": payload.get("top_memory_processes"),
+        }
+    )
+    return result
+
+
+def _validate_current_issue179_minimax_k_live_probe_memory_preflight(
+    root: Path,
+) -> dict[str, Any]:
+    artifact = CURRENT_ISSUE179_MINIMAX_K_LIVE_PROBE_MEMORY_PREFLIGHT_ARTIFACT
+    path = root / artifact
+    result: dict[str, Any] = {
+        "artifact": artifact,
+        "status": "missing",
+        "failures": [],
+    }
+    if not path.exists():
+        return result
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception as exc:  # noqa: BLE001 - diagnostic helper reports load failures
+        result["status"] = f"load_error:{type(exc).__name__}"
+        return result
+
+    failures: list[str] = []
+    model_path = str(payload.get("model_path") or "")
+    status = str(payload.get("status") or "")
+    reason = str(payload.get("reason") or "")
+    model_size_gb = _json_number(payload, "model_size_gb")
+    required_free_gb = _json_number(payload, "required_free_gb")
+    min_free_gb = _json_number(payload, "min_free_gb")
+    available_for_gate_gb = _json_number(payload, "available_for_gate_gb")
+    free_plus_speculative_purgeable_gb = _json_number(
+        payload,
+        "free_plus_speculative_purgeable_gb",
+    )
+    memory_gap_gb = _json_number(payload, "memory_gap_gb")
+
+    if status != "skipped":
+        failures.append("status_not_skipped")
+    if reason != "insufficient_vm_stat_memory":
+        failures.append("reason_not_insufficient_vm_stat_memory")
+    if payload.get("launch_decision") != "do_not_launch":
+        failures.append("launch_decision_not_do_not_launch")
+    if payload.get("launch_allowed") is not False:
+        failures.append("launch_allowed_not_false")
+    if not model_path.endswith("MiniMax-M2.7-JANGTQ_K"):
+        failures.append("model_path_not_minimax_m27_jangtq_k")
+    if model_size_gb is None or model_size_gb < 70:
+        failures.append("model_size_gb_not_recorded")
+    if required_free_gb is None:
+        failures.append("required_free_gb_missing")
+    elif model_size_gb is not None and required_free_gb < model_size_gb + 5.0:
+        failures.append("required_free_gb_missing_minimax_margin")
+    if min_free_gb != required_free_gb:
+        failures.append("min_free_gb_mismatch")
+    if available_for_gate_gb != free_plus_speculative_purgeable_gb:
+        failures.append("available_for_gate_gb_mismatch")
+    if available_for_gate_gb is None:
+        failures.append("available_for_gate_gb_missing")
+    elif required_free_gb is not None and available_for_gate_gb >= required_free_gb:
+        failures.append("preflight_claims_insufficient_memory_but_floor_met")
+    if memory_gap_gb is None or memory_gap_gb <= 0:
+        failures.append("memory_gap_gb_missing")
+    elif required_free_gb is not None and available_for_gate_gb is not None:
+        expected_gap = round(required_free_gb - available_for_gate_gb, 2)
+        if abs(memory_gap_gb - expected_gap) > 0.01:
+            failures.append("memory_gap_gb_mismatch")
+    if (
+        payload.get("preflight_memory_source")
+        != "vm_stat_free_plus_speculative_purgeable"
+    ):
+        failures.append("preflight_memory_source_not_vm_stat")
+
+    result.update(
+        {
+            "status": "pass" if not failures else "fail",
+            "failures": failures,
+            "reason": reason,
+            "model_path": model_path,
+            "model_size_gb": model_size_gb,
+            "required_free_gb": required_free_gb,
+            "min_free_gb": min_free_gb,
+            "available_for_gate_gb": available_for_gate_gb,
+            "free_plus_speculative_purgeable_gb": (
+                free_plus_speculative_purgeable_gb
+            ),
+            "memory_gap_gb": memory_gap_gb,
+            "preflight_memory_source": payload.get("preflight_memory_source"),
+            "launch_decision": payload.get("launch_decision"),
+            "launch_allowed": payload.get("launch_allowed"),
         }
     )
     return result
