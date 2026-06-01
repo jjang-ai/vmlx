@@ -4607,6 +4607,7 @@ def _validate_app_runtime_parity_audit(
         "installed_python_exists",
         "installed_versioned_python_exists",
         "installed_versioned_python_runs",
+        "installed_bundled_python_launch_crash_reports_classified",
         "serve_help_runs",
         "responses_cancel_route",
         "image_lora_cli_flags",

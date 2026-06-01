@@ -350,6 +350,57 @@ def _scan_vmlx_diagnostic_disconnect_errors(
     }
 
 
+def _extract_launch_crash_reason(text: str) -> str:
+    match = re.search(r"Library not loaded:\s*([^\"\\\]]+)", text)
+    if match:
+        return f"Library not loaded: {match.group(1).strip()}"
+    if "Library missing" in text:
+        return "Library missing"
+    if "DYLD" in text:
+        return "DYLD launch failure"
+    return "bundled Python launch crash"
+
+
+def _scan_vmlx_bundled_python_launch_crashes(
+    diagnostic_reports: Path = INSTALLED_APP_DIAGNOSTIC_REPORTS,
+) -> dict[str, Any]:
+    """Classify bundled Python launch crashes that may surface as broken pipes."""
+    hits: list[dict[str, Any]] = []
+    scanned: list[str] = []
+    if not diagnostic_reports.exists():
+        return {
+            "diagnostic_reports": str(diagnostic_reports),
+            "exists": False,
+            "scanned": scanned,
+            "hits": hits,
+        }
+    for path in sorted(diagnostic_reports.rglob("python*.ips")):
+        if not path.is_file():
+            continue
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        normalized = text.replace("\\/", "/")
+        if not (
+            "vMLX.app/Contents/Resources/bundled-python/python/bin/python" in normalized
+            and ("DYLD" in text or "Library missing" in text or "Library not loaded" in text)
+        ):
+            continue
+        try:
+            rel = str(path.relative_to(diagnostic_reports))
+        except ValueError:
+            rel = str(path)
+        scanned.append(rel)
+        hits.append({"file": rel, "reason": _extract_launch_crash_reason(normalized)})
+    return {
+        "diagnostic_reports": str(diagnostic_reports),
+        "exists": True,
+        "scanned": scanned,
+        "hits": hits,
+    }
+
+
 def build_audit(
     root: Path,
     *,
@@ -372,6 +423,9 @@ def build_audit(
     panel_renderer = renderer_result["text"]
     user_data_disconnect_errors = _scan_vmlx_user_data_disconnect_errors(user_data)
     diagnostic_disconnect_errors = _scan_vmlx_diagnostic_disconnect_errors(
+        diagnostic_reports
+    )
+    bundled_python_launch_crashes = _scan_vmlx_bundled_python_launch_crashes(
         diagnostic_reports
     )
     import_result = _run_installed_python(
@@ -446,6 +500,9 @@ def build_audit(
         "installed_versioned_python_runs": (
             versioned_python_result["returncode"] == 0
             and "Python 3.12" in versioned_python_text
+        ),
+        "installed_bundled_python_launch_crash_reports_classified": (
+            bundled_python_launch_crashes["exists"] is True
         ),
         "serve_help_runs": help_result["returncode"] == 0,
         "responses_cancel_route": any(
@@ -747,6 +804,7 @@ def build_audit(
         },
         "vmlx_user_data_disconnect_errors": user_data_disconnect_errors,
         "vmlx_diagnostic_disconnect_errors": diagnostic_disconnect_errors,
+        "vmlx_bundled_python_launch_crash_reports": bundled_python_launch_crashes,
         "boundary": (
             "Installed app parity is required before claiming packaged/app "
             "coverage for #178 LoRA flags, MiMo xml_function launch, or "

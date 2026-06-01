@@ -48,6 +48,8 @@ def test_installed_app_runtime_parity_requires_versioned_python_entrypoint():
 
     assert "installed_versioned_python_exists" in audit["checks"]
     assert "installed_versioned_python_runs" in audit["checks"]
+    assert "installed_bundled_python_launch_crash_reports_classified" in audit["checks"]
+    assert "vmlx_bundled_python_launch_crash_reports" in audit
     assert audit["installed_versioned_python"].endswith(
         "Contents/Resources/bundled-python/python/bin/python3.12"
     )
@@ -214,5 +216,37 @@ def test_installed_app_runtime_parity_scans_vmlx_diagnostic_disconnect_reports(
             "file": "Retired/vMLX-2026-05-28-120000.ips",
             "line": 2,
             "text": "Error: write EPIPE",
+        }
+    ]
+
+
+def test_installed_app_runtime_parity_classifies_bundled_python_launch_crashes(
+    tmp_path,
+):
+    from tests.cross_matrix import run_installed_app_runtime_parity_audit as gate
+
+    reports = tmp_path / "DiagnosticReports"
+    reports.mkdir()
+    (reports / "python3.12-2026-05-31-194414.ips").write_text(
+        '{"app_name":"python3.12","timestamp":"2026-05-31 19:44:14.00 -0700"}\n'
+        '  "procPath" : "\\/Applications\\/vMLX.app\\/Contents\\/Resources\\/'
+        'bundled-python\\/python\\/bin\\/python3.12",\n'
+        '  "termination" : {"namespace":"DYLD","indicator":"Library missing",'
+        '"reasons":["Library not loaded: @rpath\\/libpython3.12.dylib"]}\n',
+        encoding="utf-8",
+    )
+    (reports / "python3.12-2026-05-31-200000.ips").write_text(
+        "unrelated python crash\n",
+        encoding="utf-8",
+    )
+
+    scan = gate._scan_vmlx_bundled_python_launch_crashes(reports)
+
+    assert scan["exists"] is True
+    assert scan["scanned"] == ["python3.12-2026-05-31-194414.ips"]
+    assert scan["hits"] == [
+        {
+            "file": "python3.12-2026-05-31-194414.ips",
+            "reason": "Library not loaded: @rpath/libpython3.12.dylib",
         }
     ]
