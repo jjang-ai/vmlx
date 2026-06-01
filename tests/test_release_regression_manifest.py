@@ -1573,6 +1573,7 @@ def _write_expected_installed_app_runtime_parity_audit(root: Path) -> None:
                     "installed_panel_gateway_epipe_aggregate_guard": True,
                     "installed_panel_chat_ipc_epipe_aggregate_guard": True,
                     "installed_panel_image_ipc_epipe_aggregate_guard": True,
+                    "installed_panel_cache_ipc_epipe_aggregate_guard": True,
                     "installed_panel_child_process_stdio_epipe_guard": True,
                     "installed_panel_child_process_stdio_epipe_aggregate_guard": True,
                     "installed_panel_renderer_chat_epipe_toast_normalized": True,
@@ -1626,6 +1627,7 @@ def _write_expected_staged_app_runtime_parity_audit(root: Path) -> None:
                     "installed_panel_gateway_epipe_aggregate_guard": True,
                     "installed_panel_chat_ipc_epipe_aggregate_guard": True,
                     "installed_panel_image_ipc_epipe_aggregate_guard": True,
+                    "installed_panel_cache_ipc_epipe_aggregate_guard": True,
                     "installed_panel_child_process_stdio_epipe_guard": True,
                     "installed_panel_child_process_stdio_epipe_aggregate_guard": True,
                     "installed_panel_renderer_chat_epipe_toast_normalized": True,
@@ -1763,6 +1765,7 @@ def test_current_proof_sweep_rejects_installed_app_missing_ipc_epipe_aggregate_g
     payload = json.loads(path.read_text(encoding="utf-8"))
     payload["checks"].pop("installed_panel_chat_ipc_epipe_aggregate_guard")
     payload["checks"].pop("installed_panel_image_ipc_epipe_aggregate_guard")
+    payload["checks"].pop("installed_panel_cache_ipc_epipe_aggregate_guard")
     path.write_text(json.dumps(payload) + "\n", encoding="utf-8")
 
     result = validate_current_proof_sweep_artifacts(tmp_path)[
@@ -1775,6 +1778,10 @@ def test_current_proof_sweep_rejects_installed_app_missing_ipc_epipe_aggregate_g
     )
     assert (
         "missing_check:installed_panel_image_ipc_epipe_aggregate_guard"
+        in result["failures"]
+    )
+    assert (
+        "missing_check:installed_panel_cache_ipc_epipe_aggregate_guard"
         in result["failures"]
     )
 
@@ -2724,7 +2731,8 @@ def test_release_regression_manifest_current_sweep_uses_latest_live_smoke_artifa
     assert "current-regression-suite-20260528-installed-aggregate-stale.json" not in joined
     assert "current-regression-suite-20260528-epipe-aggregate-guard.json" not in joined
     assert "current-regression-suite-20260528-dsv4-continue-refresh.json" not in joined
-    assert "current-regression-suite-20260601-after-adhoc-reseal.json" in joined
+    assert "current-regression-suite-20260601-cache-ipc-installed-refresh.json" in joined
+    assert "current-regression-suite-20260601-after-adhoc-reseal.json" not in joined
     assert "current-regression-suite-20260601-qwen3vl-minicpm-mpp-final.json" not in joined
     assert "current-regression-suite-20260531-live-epipe-signing-dsv4-refresh.json" not in joined
     assert "current-regression-suite-20260531-step37-ui-pagedlock.json" not in joined
@@ -2743,15 +2751,18 @@ def test_release_regression_manifest_current_sweep_uses_latest_live_smoke_artifa
     assert "current-regression-suite-20260528-release-ready-top-level.json" not in joined
     assert "current-regression-suite-20260528-dsv4-memory-refresh.json" not in joined
     assert "current-regression-suite-20260528-signing-detail-ledger.json" not in joined
-    assert "current-installed-app-runtime-parity-audit-20260601-epipe-renderer-installed.json" in joined
-    assert "current-installed-app-runtime-parity-audit-20260601-epipe-renderer-installed.json" in row_text
+    assert "current-installed-app-runtime-parity-audit-20260601-cache-ipc-epipe-installed.json" in joined
+    assert "current-installed-app-runtime-parity-audit-20260601-cache-ipc-epipe-installed.json" in row_text
+    assert "current-installed-app-runtime-parity-audit-20260601-epipe-renderer-installed.json" not in joined
+    assert "current-installed-app-runtime-parity-audit-20260601-epipe-renderer-installed.json" not in row_text
     assert "current-installed-app-runtime-parity-audit-20260531-live-epipe-refresh.json" not in joined
     assert "current-installed-app-runtime-parity-audit-20260531-live-epipe-refresh.json" not in row_text
     assert "current-installed-app-runtime-parity-audit-20260531-childstream-epipe-installed-sync.json" not in joined
     assert "current-installed-app-runtime-parity-audit-20260531-childstream-epipe-installed-sync.json" not in row_text
     assert "current-installed-app-runtime-parity-audit-20260528-epipe-aggregate-guard.json" not in joined
     assert "current-installed-app-runtime-parity-audit-20260528-epipe-aggregate-guard.json" not in row_text
-    assert "current-staged-app-runtime-parity-audit-20260601-wrapper-epipe-package-refresh.json" in joined
+    assert "current-staged-app-runtime-parity-audit-20260601-cache-ipc-epipe-staged.json" in joined
+    assert "current-staged-app-runtime-parity-audit-20260601-wrapper-epipe-package-refresh.json" not in joined
     assert "current-staged-app-runtime-parity-audit-20260531-step37-mixed-swa-runtime.json" not in joined
     assert "current-staged-app-runtime-parity-audit-20260528-staged-runtime-recheck.json" not in joined
     assert "current-staged-app-runtime-parity-audit-20260528-installed-aggregate-stale.json" not in joined
@@ -10254,7 +10265,7 @@ def test_release_regression_manifest_runner_default_out_tracks_current_release_p
     from tests.cross_matrix import run_release_regression_manifest as runner
 
     assert runner.DEFAULT_OUT == Path(
-        "build/current-release-regression-manifest-20260601-after-adhoc-reseal.json"
+        "build/current-release-regression-manifest-20260601-cache-ipc-installed-refresh.json"
     )
 
 

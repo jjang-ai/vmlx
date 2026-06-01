@@ -18,7 +18,7 @@ from typing import Any
 
 
 DEFAULT_OUT = Path(
-    "build/current-installed-app-runtime-parity-audit-20260601-epipe-renderer-installed.json"
+    "build/current-installed-app-runtime-parity-audit-20260601-cache-ipc-epipe-installed.json"
 )
 INSTALLED_PYTHON = Path(
     "/Applications/vMLX.app/Contents/Resources/bundled-python/python/bin/python3"
@@ -567,6 +567,18 @@ def build_audit(
             in panel_main
             and "write EPIPE" in panel_main
         ),
+        "installed_panel_cache_ipc_epipe_aggregate_guard": (
+            panel_result["returncode"] == 0
+            and "isExpectedCacheEndpointDisconnectError" in panel_main
+            and "fetchCacheJson" in panel_main
+            and "Cache stats" in panel_main
+            and "connection lost. The model server may have stopped or restarted"
+            in panel_main
+            and "wrappedDisconnects.some((nested) => isExpectedCacheEndpointDisconnectError(nested))"
+            in panel_main
+            and "nestedErrors.some((nested) => isExpectedCacheEndpointDisconnectError(nested))"
+            in panel_main
+        ),
         "installed_panel_child_process_stdio_epipe_guard": (
             panel_result["returncode"] == 0
             and "isExpectedChildProcessStreamDisconnectError" in panel_main
@@ -729,6 +741,14 @@ def build_audit(
             "has_image_ipc_aggregate_disconnect_guard": (
                 "isExpectedImageServerDisconnectError" in panel_main
                 and "nestedErrors.some((nested) => isExpectedImageServerDisconnectError(nested))"
+                in panel_main
+            ),
+            "has_cache_ipc_aggregate_disconnect_guard": (
+                "isExpectedCacheEndpointDisconnectError" in panel_main
+                and "fetchCacheJson" in panel_main
+                and "wrappedDisconnects.some((nested) => isExpectedCacheEndpointDisconnectError(nested))"
+                in panel_main
+                and "nestedErrors.some((nested) => isExpectedCacheEndpointDisconnectError(nested))"
                 in panel_main
             ),
             "has_child_stdio_disconnect_guard": (

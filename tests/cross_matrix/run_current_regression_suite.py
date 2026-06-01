@@ -21,7 +21,7 @@ from typing import Any
 
 
 DEFAULT_OUT = Path(
-    "build/current-regression-suite-20260601-after-adhoc-reseal.json"
+    "build/current-regression-suite-20260601-cache-ipc-installed-refresh.json"
 )
 
 EXPECTED_OPEN_REQUIREMENTS = [
@@ -524,7 +524,7 @@ CURRENT_SUITE_COMMANDS: dict[str, list[str]] = {
         sys.executable,
         "tests/cross_matrix/run_installed_app_runtime_parity_audit.py",
         "--out",
-        "build/current-installed-app-runtime-parity-audit-20260601-epipe-renderer-installed.json",
+        "build/current-installed-app-runtime-parity-audit-20260601-cache-ipc-epipe-installed.json",
     ],
     "staged_app_runtime_parity_audit": [
         sys.executable,
@@ -536,7 +536,7 @@ CURRENT_SUITE_COMMANDS: dict[str, list[str]] = {
         "--diagnostic-reports",
         "build/staged-parity-diagnostic-reports",
         "--out",
-        "build/current-staged-app-runtime-parity-audit-20260601-wrapper-epipe-package-refresh.json",
+        "build/current-staged-app-runtime-parity-audit-20260601-cache-ipc-epipe-staged.json",
     ],
     "issue175_179_release_boundary_audit": [
         sys.executable,
@@ -592,7 +592,7 @@ CURRENT_SUITE_COMMANDS: dict[str, list[str]] = {
         "--require-current-proof-sweep",
         "--require-release-ready",
         "--out",
-        "build/current-release-regression-manifest-20260601-after-adhoc-reseal.json",
+        "build/current-release-regression-manifest-20260601-cache-ipc-installed-refresh.json",
     ],
 }
 

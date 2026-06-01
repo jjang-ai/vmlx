@@ -25,7 +25,7 @@ from tests.cross_matrix.release_regression_manifest import (
 
 
 DEFAULT_OUT = Path(
-    "build/current-release-regression-manifest-20260601-after-adhoc-reseal.json"
+    "build/current-release-regression-manifest-20260601-cache-ipc-installed-refresh.json"
 )
 PREPACKAGE_ALLOWED_BLOCKERS = {
     "packaged_app_developer_id_signing_blocked",
