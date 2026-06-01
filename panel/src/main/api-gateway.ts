@@ -208,6 +208,12 @@ export class ApiGateway extends EventEmitter {
     const code = String(anyErr?.code || "");
     const message = String(anyErr?.message || "");
     const cause = (anyErr as any)?.cause;
+    const wrappedDisconnects = [
+      cause,
+      (anyErr as any)?.reason,
+      (anyErr as any)?.error,
+      (anyErr as any)?.detail,
+    ].filter(Boolean);
     const nestedErrors = Array.isArray((anyErr as any)?.errors)
       ? (anyErr as any).errors
       : [];
@@ -217,7 +223,7 @@ export class ApiGateway extends EventEmitter {
       code === "ERR_STREAM_DESTROYED" ||
       code === "ERR_STREAM_WRITE_AFTER_END" ||
       /EPIPE|write EPIPE|broken pipe|socket hang up|connection reset|premature close|stream.*destroyed|write after end/i.test(message) ||
-      (cause ? this.isClientDisconnectError(cause) : false) ||
+      wrappedDisconnects.some((nested) => this.isClientDisconnectError(nested)) ||
       nestedErrors.some((nested) => this.isClientDisconnectError(nested))
     );
   }

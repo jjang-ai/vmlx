@@ -143,6 +143,11 @@ describe("Ollama gateway parity contracts", () => {
     expect(mainSource).toContain("write EPIPE");
     expect(mainSource).toContain("broken pipe");
     expect(mainSource).toContain("const cause = (err as any)?.cause");
+    expect(mainSource).toContain("const wrappedDisconnects = [");
+    expect(mainSource).toContain("(err as any)?.reason");
+    expect(mainSource).toContain("(err as any)?.error");
+    expect(mainSource).toContain("(err as any)?.detail");
+    expect(mainSource).toContain("wrappedDisconnects.some((nested) => isExpectedClientDisconnectError(nested))");
     expect(mainSource).toContain("const nestedErrors = Array.isArray((err as any)?.errors)");
     expect(mainSource).toContain("nestedErrors.some((nested) => isExpectedClientDisconnectError(nested))");
     expect(mainSource).toContain("if (isExpectedClientDisconnectError(error))");
@@ -207,6 +212,11 @@ describe("Ollama gateway parity contracts", () => {
     expect(chatSource).toContain('code === "ERR_STREAM_WRITE_AFTER_END"');
     expect(chatSource).toContain("broken pipe");
     expect(chatSource).toContain("const cause = (err as any)?.cause");
+    expect(chatSource).toContain("const wrappedDisconnects = [");
+    expect(chatSource).toContain("(err as any)?.reason");
+    expect(chatSource).toContain("(err as any)?.error");
+    expect(chatSource).toContain("(err as any)?.detail");
+    expect(chatSource).toContain("wrappedDisconnects.some((nested) => isExpectedChatBackendDisconnectError(nested))");
     expect(chatSource).toContain("const nestedErrors = Array.isArray((err as any)?.errors)");
     expect(chatSource).toContain("nestedErrors.some((nested) => isExpectedChatBackendDisconnectError(nested))");
     const rawEnds = chatSource.match(/req\.end\(bodyBuf\);/g) || [];
@@ -345,6 +355,11 @@ describe("Gateway passthrough contracts for non-Ollama APIs", () => {
     expect(source).toContain("private attachResponseErrorGuard");
     expect(source).toContain('code === "EPIPE"');
     expect(source).toContain("write EPIPE");
+    expect(source).toContain("const wrappedDisconnects = [");
+    expect(source).toContain("(anyErr as any)?.reason");
+    expect(source).toContain("(anyErr as any)?.error");
+    expect(source).toContain("(anyErr as any)?.detail");
+    expect(source).toContain("wrappedDisconnects.some((nested) => this.isClientDisconnectError(nested))");
     expect(source).toContain("this.attachResponseErrorGuard(res)");
     expect(source).toContain("private writeHeadResponse");
     expect(source).toContain("private writeProxyBody");

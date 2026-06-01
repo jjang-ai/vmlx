@@ -98,6 +98,12 @@ function isExpectedChatDisconnectError(error: any): boolean {
   const code = String(error?.code || '')
   const message = String(error?.message || error || '')
   const cause = error?.cause
+  const wrappedDisconnects = [
+    cause,
+    error?.reason,
+    error?.error,
+    error?.detail,
+  ].filter(Boolean)
   const nestedErrors = Array.isArray(error?.errors) ? error.errors : []
   return (
     code === 'EPIPE' ||
@@ -105,7 +111,7 @@ function isExpectedChatDisconnectError(error: any): boolean {
     code === 'ERR_STREAM_DESTROYED' ||
     code === 'ERR_STREAM_WRITE_AFTER_END' ||
     /EPIPE|write EPIPE|broken pipe|socket hang up|connection reset|premature close|stream.*destroyed|write after end/i.test(message) ||
-    (cause ? isExpectedChatDisconnectError(cause) : false) ||
+    wrappedDisconnects.some((nested) => isExpectedChatDisconnectError(nested)) ||
     nestedErrors.some((nested) => isExpectedChatDisconnectError(nested))
   )
 }
