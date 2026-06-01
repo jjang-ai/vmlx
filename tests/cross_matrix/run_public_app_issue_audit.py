@@ -51,6 +51,9 @@ GEMMA4_INSTALLED_SPEED_ARTIFACTS = (
         "build/current-runtime-memory-stress-gemma4-26b-jang4m-chat-thinkingoff-speed-floor-installed-app-triple-nocache-256-streaming-20260525.json"
     ),
 )
+QWEN35_INSTALLED_SPEED_ARTIFACT = Path(
+    "build/current-decode-speed-live-qwen35-4bit-issue115-installed-app-after-decode-position-20260601.json"
+)
 
 
 def _read(path: Path) -> str:
@@ -440,6 +443,30 @@ def _installed_gemma4_speed_samples_below_floor(root: Path) -> list[float]:
     return below
 
 
+def _qwen35_installed_speed_gate_passes(root: Path) -> bool:
+    payload = _load_json(root / QWEN35_INSTALLED_SPEED_ARTIFACT)
+    for result in payload.get("results") or []:
+        if not isinstance(result, dict) or result.get("name") != "qwen35_4bit":
+            continue
+        if result.get("status") != "pass":
+            return False
+        bundle = result.get("bundle_sampling")
+        if not isinstance(bundle, dict):
+            bundle = result.get("bundle")
+        if not isinstance(bundle, dict):
+            return False
+        speed = bundle.get("decode_tps_wall")
+        if not isinstance(speed, int | float) or speed < 80.0:
+            return False
+        text = " ".join(
+            str(bundle.get(key) or "") for key in ("content_head", "content_tail")
+        )
+        if "Generation failed:" in text:
+            return False
+        return True
+    return False
+
+
 def _issue115_checks(root: Path) -> dict[str, bool]:
     release_manifest = _read(root / "tests/cross_matrix/release_regression_manifest.py")
     release_tests = _read(root / "tests/test_release_regression_manifest.py")
@@ -460,6 +487,9 @@ def _issue115_checks(root: Path) -> dict[str, bool]:
             in release_manifest
             and "test_release_regression_manifest_tracks_qwen_jang_live_speed_review"
             in release_tests
+        ),
+        "qwen35_installed_app_speed_gate_passes": (
+            _qwen35_installed_speed_gate_passes(root)
         ),
     }
 

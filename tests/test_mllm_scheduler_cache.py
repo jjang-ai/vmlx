@@ -543,6 +543,29 @@ class TestBatchGeneratorCacheParams:
         assert pos.shape == (3, 1, 4)
         assert pos[0, 0].tolist() == [627, 628, 629, 630]
 
+    def test_absolute_text_position_ids_zero_offset_is_still_explicit(self):
+        """Qwen text-only MLLM prefill should not depend on cached rope deltas."""
+        import mlx.core as mx
+        from vmlx_engine.mllm_batch_generator import _absolute_text_position_ids
+
+        class OffsetCache:
+            offset = 0
+
+        class InnerModel:
+            fa_idx = 0
+
+        language_model = SimpleNamespace(model=InnerModel())
+
+        pos = _absolute_text_position_ids(
+            mx.array([[21, 22, 23]]),
+            [OffsetCache()],
+            language_model,
+        )
+
+        assert pos is not None
+        assert pos.shape == (3, 1, 3)
+        assert pos[0, 0].tolist() == [0, 1, 2]
+
     def test_lm_supports_position_ids_uses_call_signature(self):
         from vmlx_engine.mllm_batch_generator import _lm_supports_position_ids
 

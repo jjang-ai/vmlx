@@ -925,6 +925,25 @@ def test_decode_speed_gate_detects_cache_health_mismatches():
     ]
 
 
+def test_decode_speed_gate_treats_generation_failed_text_as_hard_failure():
+    from tests.cross_matrix.run_decode_speed_gate import generation_failure_note
+
+    case = {
+        "content_head": (
+            "Generation failed: __radd__(): incompatible function arguments. "
+            "Invoked with types: mlx.core.array, NoneType"
+        ),
+        "content_tail": "",
+        "completion_tokens": 0,
+        "prompt_tokens": 0,
+        "usage": {},
+    }
+
+    assert generation_failure_note("bundle", case) == (
+        "bundle generation failed text returned with zero usage"
+    )
+
+
 def test_decode_speed_gate_detects_plain_kv_cache_health_mismatches():
     from tests.cross_matrix.run_decode_speed_gate import cache_health_mismatches
 

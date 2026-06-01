@@ -1356,6 +1356,7 @@ def _write_expected_public_app_issue_audit(root: Path) -> None:
                         "checks": {
                             "gemma4_installed_speed_risk_tracked": True,
                             "gemma4_installed_speed_artifacts_below_floor": True,
+                            "qwen35_installed_app_speed_gate_passes": True,
                             "qwen36_speed_review_tracked": True,
                         },
                     },
@@ -1476,7 +1477,8 @@ def test_release_regression_manifest_adds_issue115_performance_blocker():
     assert blocker["status"] == "open"
     assert blocker["evidence"] == CURRENT_PUBLIC_APP_ISSUE_AUDIT_ARTIFACT
     assert "Gemma" in blocker["next_proof"]
-    assert "Qwen" in blocker["next_proof"]
+    assert "Qwen" not in blocker["next_proof"]
+    assert blocker["details"]["checks"]["qwen35_installed_app_speed_gate_passes"] is True
 
 
 def test_release_regression_manifest_rejects_public_issue169_without_installed_runtime_flavor(
@@ -7952,16 +7954,17 @@ def test_release_regression_manifest_validates_current_proof_sweep_artifacts(tmp
                 "status": "open",
                 "evidence": CURRENT_PUBLIC_APP_ISSUE_AUDIT_ARTIFACT,
                 "next_proof": (
-                    "Rerun reporter-equivalent Gemma and Qwen installed-app speed "
-                    "proofs under current app/runtime and replace sub-floor speed "
+                    "Rerun reporter-equivalent Gemma installed-app speed proof "
+                    "under current app/runtime and replace sub-floor speed "
                     "artifacts before release."
                 ),
                 "details": {
                     "repo": "jjang-ai/mlxstudio",
                     "title": "Performance regression in v1.5.32 compared to v1.3.53",
                     "checks": {
-                        "gemma4_installed_speed_risk_tracked": True,
                         "gemma4_installed_speed_artifacts_below_floor": True,
+                        "gemma4_installed_speed_risk_tracked": True,
+                        "qwen35_installed_app_speed_gate_passes": True,
                         "qwen36_speed_review_tracked": True,
                     },
                 },

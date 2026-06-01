@@ -81,6 +81,7 @@ def test_public_app_issue_audit_tracks_open_app_runtime_issue_slices():
     assert audit["issues"]["115"]["checks"]["gemma4_installed_speed_risk_tracked"] is True
     assert audit["issues"]["115"]["checks"]["gemma4_installed_speed_artifacts_below_floor"] is True
     assert audit["issues"]["115"]["checks"]["qwen36_speed_review_tracked"] is True
+    assert audit["issues"]["115"]["checks"]["qwen35_installed_app_speed_gate_passes"] is True
     assert audit["issues"]["115"]["release_clearance"] == (
         "tracked_as_performance_regression_release_blocker"
     )

@@ -602,15 +602,12 @@ def _absolute_text_position_ids(
 ) -> Optional[mx.array]:
     """Build absolute text-only position_ids for cache-hit prompt tails.
 
-    Qwen3.5/3.6 mRoPE language models reset module-level rope state between
-    requests. If we feed only a cache-hit tail without explicit position_ids,
-    mlx-vlm recomputes positions from that tail starting at zero even though
-    the KV/SSM cache offset is non-zero. Passing absolute positions makes
-    partial-prefix reuse match full prefill.
+    Qwen3.5/3.6 mRoPE language models keep module-level rope state. Passing
+    explicit text positions avoids depending on ``_rope_deltas`` for both
+    cold text-only prefill and cache-hit tails, and makes partial-prefix reuse
+    match full prefill.
     """
     offset = _cache_offset_for_position_ids(cache, language_model)
-    if offset <= 0:
-        return None
     if input_ids.ndim == 1:
         batch_size = 1
         seq_len = input_ids.shape[0]
@@ -3967,7 +3964,7 @@ class MLLMBatchGenerator:
                 _abs_position_ids = _absolute_text_position_ids(
                     input_ids, cache, lm
                 ) if _supports_position_ids else None
-                if _abs_position_ids is not None:
+                if cache is not None:
                     _seed_text_rope_delta_for_decode(lm, input_ids)
 
                 def _lm_kwargs_for(start: int, end: int) -> Dict[str, Any]:
@@ -4057,7 +4054,7 @@ class MLLMBatchGenerator:
                 _abs_position_ids = _absolute_text_position_ids(
                     input_ids, cache, lm
                 ) if _supports_position_ids else None
-                if _abs_position_ids is not None:
+                if cache is not None:
                     _seed_text_rope_delta_for_decode(lm, input_ids)
 
                 def _lm_kwargs_for(start: int, end: int) -> Dict[str, Any]:
@@ -4187,7 +4184,7 @@ class MLLMBatchGenerator:
                 _abs_position_ids = _absolute_text_position_ids(
                     input_ids, cache, lm
                 ) if cache is not None and _supports_position_ids else None
-                if _abs_position_ids is not None:
+                if cache is not None:
                     _seed_text_rope_delta_for_decode(lm, input_ids)
 
                 def _lm_kwargs_for(start: int, end: int) -> Dict[str, Any]:
@@ -6152,8 +6149,20 @@ class MLLMBatchGenerator:
         trace = self._decode_trace
         model_t0 = time.perf_counter() if trace else 0.0
 
-        # Run language model only (not full VLM)
-        output = self.language_model(input_tokens, cache=cache)
+        # Run language model only (not full VLM). Qwen3.5/3.6 mRoPE language
+        # models may leave `_rope_deltas` unset when text-only prefill used
+        # explicit positions, so keep decode absolute too instead of relying on
+        # module-level rope state.
+        lm_kwargs: Dict[str, Any] = {"cache": cache}
+        if _lm_supports_position_ids(self.language_model):
+            position_ids = _absolute_text_position_ids(
+                input_tokens,
+                cache,
+                self.language_model,
+            )
+            if position_ids is not None:
+                lm_kwargs["position_ids"] = position_ids
+        output = self.language_model(input_tokens, **lm_kwargs)
         if trace:
             mx.synchronize()
             model_s = time.perf_counter() - model_t0

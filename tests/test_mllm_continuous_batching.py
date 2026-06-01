@@ -248,6 +248,69 @@ class TestMLLMBatchFastNoLogprobs:
         assert lm._position_ids is None
         assert lm._rope_deltas.tolist() == [[0]]
 
+    def test_decode_step_passes_position_ids_for_qwen_cache_decode(self):
+        from vmlx_engine.mllm_batch_generator import (
+            MLLMBatch,
+            MLLMBatchGenerator,
+            MLLMBatchRequest,
+        )
+
+        class OffsetCache:
+            offset = 9
+
+        class InnerModel:
+            fa_idx = 0
+
+        class QwenLikeLanguageModel:
+            model = InnerModel()
+            seen_position_ids = None
+
+            def __call__(self, input_tokens, cache=None, position_ids=None):
+                if cache is not None and position_ids is None:
+                    raise AssertionError("cached Qwen decode needs position_ids")
+                self.seen_position_ids = position_ids
+                batch = input_tokens.shape[0]
+                return mx.array([[[0.0, 0.0, 9.0]]] * batch)
+
+        lm = QwenLikeLanguageModel()
+        req = MLLMBatchRequest(
+            uid=0,
+            request_id="req-qwen",
+            prompt="hello",
+            temperature=0.0,
+        )
+        generator = MLLMBatchGenerator(
+            model=lm,
+            processor=object(),
+            enable_prefix_cache=False,
+        )
+        generator.active_batch = MLLMBatch(
+            uids=[0],
+            request_ids=["req-qwen"],
+            y=mx.array([1]),
+            logprobs=[None],
+            max_tokens=[16],
+            num_tokens=[0],
+            cache=[OffsetCache()],
+            requests=[req],
+        )
+
+        sampled, logprobs = generator._step(mx.array([42]), [OffsetCache()])
+
+        assert sampled.tolist() == [2]
+        assert logprobs == [None]
+        assert lm.seen_position_ids is not None
+        assert lm.seen_position_ids.shape == (3, 1, 1)
+        assert lm.seen_position_ids[0, 0].tolist() == [9]
+
+    def test_text_only_lm_fast_paths_seed_qwen_rope_delta_when_cache_exists(self):
+        import inspect
+        from vmlx_engine.mllm_batch_generator import MLLMBatchGenerator
+
+        source = inspect.getsource(MLLMBatchGenerator._run_vision_encoding_inner)
+
+        assert "if cache is not None:\n                    _seed_text_rope_delta_for_decode(lm, input_ids)" in source
+
     def test_batch_filter(self):
         """Test filtering a batch."""
         from vmlx_engine.mllm_batch_generator import MLLMBatch, MLLMBatchRequest

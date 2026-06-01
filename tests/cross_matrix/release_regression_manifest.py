@@ -3010,8 +3010,8 @@ def _current_release_blocker_ledger(
                 "status": "open",
                 "evidence": CURRENT_PUBLIC_APP_ISSUE_AUDIT_ARTIFACT,
                 "next_proof": (
-                    "Rerun reporter-equivalent Gemma and Qwen installed-app speed "
-                    "proofs under current app/runtime and replace sub-floor speed "
+                    "Rerun reporter-equivalent Gemma installed-app speed proof "
+                    "under current app/runtime and replace sub-floor speed "
                     "artifacts before release."
                 ),
                 "details": {

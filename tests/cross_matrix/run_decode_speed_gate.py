@@ -639,6 +639,24 @@ def run_pp_case(url: str, model_name: str, target_tokens: int) -> dict[str, Any]
     }
 
 
+def generation_failure_note(label: str, case: dict[str, Any]) -> str | None:
+    """Detect server-side generator exceptions returned as normal content."""
+    text = " ".join(
+        str(case.get(key) or "")
+        for key in ("content_head", "content_tail", "content_excerpt")
+    )
+    if "Generation failed:" not in text:
+        return None
+    usage = case.get("usage") or {}
+    prompt_tokens = int(case.get("prompt_tokens") or usage.get("prompt_tokens") or 0)
+    completion_tokens = int(
+        case.get("completion_tokens") or usage.get("completion_tokens") or 0
+    )
+    if prompt_tokens == 0 and completion_tokens == 0:
+        return f"{label} generation failed text returned with zero usage"
+    return f"{label} generation failed text returned"
+
+
 def resolve_row_registry_metadata(row: Row) -> dict[str, Any]:
     """Return the engine registry policy that this live speed row should exercise."""
     from vmlx_engine.model_config_registry import get_model_config_registry
@@ -820,6 +838,22 @@ def run_row(
         if coherency["loopish"] or any(pp["loopish"] for pp in pp_rows):
             status = "fail"
             notes.append("coherency or PP row loopish output detected")
+        generation_failures = [
+            note
+            for note in (
+                generation_failure_note("coherency", coherency),
+                generation_failure_note("bundle", bundle),
+                generation_failure_note("greedy", greedy),
+                *(
+                    generation_failure_note(f"pp{pp['target_tokens']}", pp)
+                    for pp in pp_rows
+                ),
+            )
+            if note
+        ]
+        if generation_failures:
+            status = "fail"
+            notes.extend(generation_failures)
         if not bundle["content_head"] and bundle["reasoning_chars"]:
             status = "fail"
             notes.append("bundle-sampling row was reasoning-only")
