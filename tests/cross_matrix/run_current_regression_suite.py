@@ -531,12 +531,8 @@ CURRENT_SUITE_COMMANDS: dict[str, list[str]] = {
         "tests/cross_matrix/run_installed_app_runtime_parity_audit.py",
         "--app",
         "panel/release/mac-arm64/vMLX.app",
-        "--user-data",
-        "build/staged-parity-user-data",
-        "--diagnostic-reports",
-        "build/staged-parity-diagnostic-reports",
         "--out",
-        "build/current-staged-app-runtime-parity-audit-20260601-cache-ipc-epipe-staged.json",
+        "build/current-staged-app-runtime-parity-audit-20260601-epipe-python-launch-refresh.json",
     ],
     "issue175_179_release_boundary_audit": [
         sys.executable,
