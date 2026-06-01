@@ -310,6 +310,40 @@ def test_dsv4_thinking_policy_omitted_does_not_force_reasoning(monkeypatch):
     assert decision.reason == "thinking_not_requested"
 
 
+def test_dsv4_thinking_policy_uses_bundle_default_thinking_when_omitted(monkeypatch):
+    """Model-owned DSV4 default_mode=thinking is honored without hardcoding."""
+    from vmlx_engine import server
+
+    decision = server._resolve_dsv4_thinking_policy(
+        requested_enable_thinking=None,
+        effort_requested=False,
+        tools_present=False,
+        tool_choice=None,
+        default_mode="thinking",
+    )
+
+    assert decision.enable_thinking is True
+    assert decision.reasoning_effort_allowed is True
+    assert decision.reason == "bundle_default_thinking"
+
+
+def test_dsv4_thinking_policy_explicit_false_overrides_bundle_default(monkeypatch):
+    """Per-request disable remains authoritative over bundle defaults."""
+    from vmlx_engine import server
+
+    decision = server._resolve_dsv4_thinking_policy(
+        requested_enable_thinking=False,
+        effort_requested=False,
+        tools_present=False,
+        tool_choice=None,
+        default_mode="thinking",
+    )
+
+    assert decision.enable_thinking is False
+    assert decision.reasoning_effort_allowed is False
+    assert decision.reason == "thinking_disabled"
+
+
 def test_dsv4_bundle_defaults_apply_only_when_request_omits_values(tmp_path, monkeypatch):
     """Bundle sampling defaults are startup/API defaults, not hidden request rewrites."""
     import json

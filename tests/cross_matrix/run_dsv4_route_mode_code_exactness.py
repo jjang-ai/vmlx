@@ -655,13 +655,17 @@ def effective_prompt_diagnostics(
 ) -> dict[str, Any]:
     """Record the DSV4 prompt rail after server-side policy resolution."""
     if route == "completion":
-        from vmlx_engine.server import _resolve_dsv4_thinking_policy
+        from vmlx_engine.server import (
+            _jang_chat_default_mode,
+            _resolve_dsv4_thinking_policy,
+        )
 
         decision = _resolve_dsv4_thinking_policy(
             requested_enable_thinking=None,
             effort_requested=False,
             tools_present=False,
             tool_choice=None,
+            default_mode=_jang_chat_default_mode(model_path),
         )
         prompt = str(body.get("prompt") or "")
         render = renderer or _render_dsv4_prompt
@@ -713,6 +717,7 @@ def effective_prompt_diagnostics(
     requested_effort = template_kwargs.get("reasoning_effort", body.get("reasoning_effort"))
 
     from vmlx_engine.server import (
+        _jang_chat_default_mode,
         _normalize_dsv4_reasoning_effort,
         _resolve_dsv4_thinking_policy,
     )
@@ -722,6 +727,7 @@ def effective_prompt_diagnostics(
         effort_requested=bool(requested_effort),
         tools_present=bool(body.get("tools")),
         tool_choice=body.get("tool_choice"),
+        default_mode=_jang_chat_default_mode(model_path),
     )
     effective_effort = (
         _normalize_dsv4_reasoning_effort(requested_effort)

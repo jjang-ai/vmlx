@@ -924,6 +924,8 @@ def _generation_config_default(model_name: str, key: str) -> float | None:
 
 def _jang_chat_default_mode(bundle_path: str) -> str | None:
     """Return ``jang_config.chat.reasoning.default_mode`` or None."""
+    if not bundle_path:
+        return None
     try:
         from pathlib import Path as _P
         _p = _P(bundle_path) / "jang_config.json"
@@ -1148,6 +1150,7 @@ def _resolve_dsv4_thinking_policy(
     effort_requested: bool = False,
     tools_present: bool,
     tool_choice: Any,
+    default_mode: str | None = None,
 ) -> _DSV4ThinkingDecision:
     """Resolve DSV4's public thinking toggle without hidden force-on behavior."""
     if requested_enable_thinking is True or effort_requested:
@@ -1161,6 +1164,19 @@ def _resolve_dsv4_thinking_policy(
             enable_thinking=False,
             reasoning_effort_allowed=False,
             reason="thinking_disabled",
+        )
+    _default_mode = str(default_mode or "").strip().lower()
+    if _default_mode in {"thinking", "reasoning", "reasoning_on", "on", "true"}:
+        return _DSV4ThinkingDecision(
+            enable_thinking=True,
+            reasoning_effort_allowed=True,
+            reason="bundle_default_thinking",
+        )
+    if _default_mode in {"chat", "direct", "instruct", "off", "false"}:
+        return _DSV4ThinkingDecision(
+            enable_thinking=False,
+            reasoning_effort_allowed=False,
+            reason="bundle_default_chat",
         )
     return _DSV4ThinkingDecision(
         enable_thinking=False,
@@ -7573,6 +7589,9 @@ async def create_anthropic_message(
             effort_requested=bool(_cur_effort),
             tools_present=bool(getattr(chat_req, "tools", None)),
             tool_choice=getattr(chat_req, "tool_choice", None),
+            default_mode=_jang_chat_default_mode(
+                _model_path or _model_name or getattr(chat_req, "model", "") or ""
+            ),
         )
         if (
             not _dsv4_thinking.enable_thinking
@@ -8356,6 +8375,9 @@ async def ollama_chat(fastapi_request: Request):
             effort_requested=bool(_cur_effort_o),
             tools_present=bool(getattr(chat_req, "tools", None)),
             tool_choice=getattr(chat_req, "tool_choice", None),
+            default_mode=_jang_chat_default_mode(
+                _model_path or _model_name or getattr(chat_req, "model", "") or ""
+            ),
         )
         if (
             not _dsv4_thinking_o.enable_thinking
@@ -9893,6 +9915,9 @@ async def create_completion(request: CompletionRequest):
                     effort_requested=False,
                     tools_present=False,
                     tool_choice=None,
+                    default_mode=_jang_chat_default_mode(
+                        _model_path or _model_name or request.model or ""
+                    ),
                 )
                 chat_kwargs["enable_thinking"] = decision.enable_thinking
                 _set_resolved_repetition_penalty(
@@ -10363,6 +10388,9 @@ async def create_chat_completion(
             effort_requested=bool(_cur_effort),
             tools_present=bool(getattr(request, "tools", None)),
             tool_choice=getattr(request, "tool_choice", None),
+            default_mode=_jang_chat_default_mode(
+                _model_path or _model_name or request.model or ""
+            ),
         )
         if (
             not _dsv4_thinking.enable_thinking
@@ -11774,6 +11802,9 @@ async def create_response(
             ),
             tools_present=bool(getattr(request, "tools", None)),
             tool_choice=getattr(request, "tool_choice", None),
+            default_mode=_jang_chat_default_mode(
+                _model_path or _model_name or request.model or ""
+            ),
         )
         if (
             not _dsv4_thinking_resp.enable_thinking

@@ -217,6 +217,41 @@ def test_dsv4_code_exactness_probe_records_completion_chat_rail_effective_prompt
     assert effective_diag["dsv4_policy_reason"] == "thinking_not_requested"
 
 
+def test_dsv4_code_exactness_effective_prompt_honors_bundle_default_mode(tmp_path):
+    import json
+
+    (tmp_path / "jang_config.json").write_text(
+        json.dumps({"chat": {"reasoning": {"default_mode": "thinking"}}})
+    )
+
+    def fake_renderer(messages, *, enable_thinking, reasoning_effort, model_path):
+        suffix = "<｜Assistant｜><think>" if enable_thinking else "<｜Assistant｜></think>"
+        return "<｜begin▁of▁sentence｜><｜User｜>" + messages[0]["content"] + suffix
+
+    route, completion_body = case_body("legacy_completion_raw")
+    effective_diag = effective_prompt_diagnostics(
+        route,
+        completion_body,
+        model_path=str(tmp_path),
+        renderer=fake_renderer,
+    )
+
+    assert effective_diag["assistant_suffix_kind"] == "thinking_open"
+    assert effective_diag["enable_thinking"] is True
+    assert effective_diag["dsv4_policy_reason"] == "bundle_default_thinking"
+
+    route, chat_off = case_body("chat_off")
+    explicit_diag = effective_prompt_diagnostics(
+        route,
+        chat_off,
+        model_path=str(tmp_path),
+        renderer=fake_renderer,
+    )
+    assert explicit_diag["assistant_suffix_kind"] == "thinking_closed"
+    assert explicit_diag["enable_thinking"] is False
+    assert explicit_diag["dsv4_policy_reason"] == "thinking_disabled"
+
+
 def test_dsv4_code_exactness_probe_separates_fence_from_identifier_corruption():
     fenced_exact = f"```javascript\n{EXACT_CODE}\n```"
     fenced_analysis = analyze_content(fenced_exact)
