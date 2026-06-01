@@ -490,6 +490,13 @@ def build_audit(
             and "Server connection lost. The model server may have crashed or stopped. Try restarting the session."
             in panel_renderer
         ),
+        "installed_panel_responses_stream_cache_detail_metrics": (
+            panel_result["returncode"] == 0
+            and "cachedTokens" in panel_main
+            and "cacheDetail" in panel_main
+            and "respUsage.input_tokens_details.cache_detail" in panel_main
+            and panel_main.count("cacheDetail") >= 4
+        ),
         "installed_panel_gateway_guarded_proxy_forwarding": (
             panel_result["returncode"] == 0
             and "proxyRes.pipe" not in panel_main
@@ -655,6 +662,11 @@ def build_audit(
             "has_ollama_num_predict": "num_predict" in panel_main,
             "has_ollama_num_ctx": "num_ctx" in panel_main,
             "has_thinking_budget": "thinking_budget" in panel_main,
+            "has_responses_stream_cache_detail_metrics": (
+                "cachedTokens" in panel_main
+                and "cacheDetail" in panel_main
+                and "respUsage.input_tokens_details.cache_detail" in panel_main
+            ),
             "ollama_json_write_count": installed_ollama_json_writes,
             "guarded_ollama_json_write_count": installed_guarded_ollama_json_writes,
         },

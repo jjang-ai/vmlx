@@ -3597,7 +3597,11 @@ def _real_ui_responses_cache_detail_usage_ok(proof: dict[str, Any]) -> bool:
     def walk(value: Any) -> bool:
         if isinstance(value, dict):
             cache_detail = value.get("cache_detail")
+            if cache_detail is None:
+                cache_detail = value.get("cacheDetail")
             cached_tokens = value.get("cached_tokens")
+            if cached_tokens is None:
+                cached_tokens = value.get("cachedTokens")
             if (
                 isinstance(cache_detail, str)
                 and cache_detail.strip()
@@ -4616,6 +4620,7 @@ def _validate_app_runtime_parity_audit(
         "installed_panel_child_process_stdio_epipe_guard",
         "installed_panel_child_process_stdio_epipe_aggregate_guard",
         "installed_panel_renderer_chat_epipe_toast_normalized",
+        "installed_panel_responses_stream_cache_detail_metrics",
         "installed_panel_gateway_guarded_proxy_forwarding",
         "installed_panel_gateway_write_once_behavior_marker",
         "installed_panel_gateway_response_socket_destroyed_guard",

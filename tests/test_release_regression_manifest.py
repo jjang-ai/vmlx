@@ -1438,6 +1438,7 @@ def _write_expected_installed_app_runtime_parity_audit(root: Path) -> None:
                     "installed_panel_child_process_stdio_epipe_guard": True,
                     "installed_panel_child_process_stdio_epipe_aggregate_guard": True,
                     "installed_panel_renderer_chat_epipe_toast_normalized": True,
+                    "installed_panel_responses_stream_cache_detail_metrics": True,
                     "installed_panel_gateway_guarded_proxy_forwarding": True,
                     "installed_panel_gateway_write_once_behavior_marker": True,
                     "installed_panel_gateway_response_socket_destroyed_guard": True,
@@ -1487,6 +1488,7 @@ def _write_expected_staged_app_runtime_parity_audit(root: Path) -> None:
                     "installed_panel_child_process_stdio_epipe_guard": True,
                     "installed_panel_child_process_stdio_epipe_aggregate_guard": True,
                     "installed_panel_renderer_chat_epipe_toast_normalized": True,
+                    "installed_panel_responses_stream_cache_detail_metrics": True,
                     "installed_panel_gateway_guarded_proxy_forwarding": True,
                     "installed_panel_gateway_write_once_behavior_marker": True,
                     "installed_panel_gateway_response_socket_destroyed_guard": True,
@@ -1641,6 +1643,28 @@ def test_current_proof_sweep_rejects_installed_app_missing_renderer_epipe_toast_
 
     assert (
         "missing_check:installed_panel_renderer_chat_epipe_toast_normalized"
+        in result["failures"]
+    )
+
+
+def test_current_proof_sweep_rejects_installed_app_missing_responses_cache_detail_metrics(
+    tmp_path,
+):
+    _write_expected_installed_app_runtime_parity_audit(tmp_path)
+    path = tmp_path / CURRENT_INSTALLED_APP_RUNTIME_PARITY_AUDIT_ARTIFACT
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["checks"].pop(
+        "installed_panel_responses_stream_cache_detail_metrics",
+        None,
+    )
+    path.write_text(json.dumps(payload) + "\n", encoding="utf-8")
+
+    result = validate_current_proof_sweep_artifacts(tmp_path)[
+        "installed_app_runtime_parity_audit"
+    ]
+
+    assert (
+        "missing_check:installed_panel_responses_stream_cache_detail_metrics"
         in result["failures"]
     )
 
@@ -2895,6 +2919,24 @@ def test_release_regression_manifest_real_ui_script_records_stream_text_trace():
     assert "lastFullContent" in source
     assert "lastReasoningContent" in source
     assert "streamTrace: rendererResult.streamTraceByMessage" in source
+
+
+def test_release_regression_manifest_chat_ipc_stream_metrics_include_cache_reuse_detail():
+    source = Path("panel/src/main/ipc/chat.ts").read_text(encoding="utf-8")
+
+    stream_sends = source.split('win.webContents.send("chat:stream",')[1:]
+    assert stream_sends, "chat IPC stream emissions not found"
+    for send_block in stream_sends:
+        metrics_block = send_block.split("metrics: {", 1)[1].split("}", 1)[0]
+        assert "cachedTokens" in metrics_block
+        assert "cacheDetail" in metrics_block
+
+    complete_block = source.split('win.webContents.send("chat:complete",', 1)[
+        1
+    ].split("metrics: {", 1)[1].split("}", 1)[0]
+    assert "cachedTokens" in complete_block
+    assert "cacheDetail" in complete_block
+    assert "respUsage.input_tokens_details.cache_detail" in source
 
 
 def test_release_regression_manifest_real_ui_script_records_request_contract():
@@ -5820,6 +5862,17 @@ def test_release_regression_manifest_real_ui_matrix_requires_lfm_responses_cache
     )
     assert "responses_cache_detail_usage" not in lfm25["covered_surfaces"]
     assert "responses_cache_detail_usage" in lfm25["missing_surfaces"]
+
+    proof["streamTrace"][0]["lastMetrics"] = {
+        "cachedTokens": 917,
+        "cacheDetail": "paged+ssm",
+    }
+    matrix = _validate_current_real_ui_live_model_matrix(
+        {"status": "pass", "proofs": {"lfm25_moe_a1b_responses_delta": proof}}
+    )
+    lfm25 = matrix["covered_families"]["lfm25"]
+    assert "responses_cache_detail_usage" in lfm25["covered_surfaces"]
+    assert "responses_cache_detail_usage" not in lfm25["missing_surfaces"]
 
 
 def test_release_regression_manifest_real_ui_integrated_tool_l2_requires_responses_cache_detail():

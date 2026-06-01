@@ -2168,6 +2168,8 @@ export function registerChatHandlers(
                 metrics: {
                   tokenCount: cumulativeTokenOffset + iterationTokenCount,
                   promptTokens,
+                  cachedTokens,
+                  cacheDetail,
                   tokensPerSecond: streamTps.toFixed(1),
                   ppSpeed,
                   ttft: ttft.toFixed(2),
@@ -2441,8 +2443,11 @@ export function registerChatHandlers(
                 }
                 if (respUsage.input_tokens != null)
                   promptTokens = respUsage.input_tokens;
-                if (respUsage.input_tokens_details?.cached_tokens)
+                if (respUsage.input_tokens_details?.cached_tokens) {
                   cachedTokens = respUsage.input_tokens_details.cached_tokens;
+                  if (respUsage.input_tokens_details.cache_detail)
+                    cacheDetail = respUsage.input_tokens_details.cache_detail;
+                }
               }
             } else {
               // ── Chat Completions SSE parsing ──
@@ -3151,6 +3156,8 @@ export function registerChatHandlers(
                   metrics: {
                     tokenCount: cumulativeTokenOffset + iterationTokenCount,
                     promptTokens,
+                    cachedTokens,
+                    cacheDetail,
                     tokensPerSecond: liveTps.toFixed(1),
                     ttft: firstTokenTime
                       ? ((firstTokenTime - fetchStartTime) / 1000).toFixed(2)
@@ -3600,6 +3607,7 @@ export function registerChatHandlers(
                 tokenCount: totalTokenCount,
                 promptTokens,
                 cachedTokens,
+                cacheDetail,
                 tokensPerSecond: finalTps.toFixed(1),
                 ppSpeed: finalPpSpeed,
                 ttft: ttft.toFixed(2),
