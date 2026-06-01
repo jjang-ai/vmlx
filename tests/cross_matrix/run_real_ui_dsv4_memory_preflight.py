@@ -199,7 +199,7 @@ def build_preflight(
             top_processes_text = _run_text(["sh", "-c", top_process_command])
         except Exception:
             top_processes_text = ""
-    return {
+    payload = {
         "status": status,
         "reason": (
             "local memory meets DSV4 real-UI preflight floor; run the live row instead of leaving dsv4 missing"
@@ -212,15 +212,19 @@ def build_preflight(
         ),
         "did_not_launch": True,
         "launch_decision": "launch_allowed" if status == "ready_to_launch" else "do_not_launch",
+        "launch_allowed": status == "ready_to_launch",
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "model_path": str(model_path),
         "model_size_gb": size_gb,
         "required_available_gb": required_available_gb,
+        "required_free_gb": required_available_gb,
+        "min_free_gb": required_available_gb,
         "required_model_margin_gb": DEFAULT_REQUIRED_MODEL_MARGIN_GB,
         "safety_margin_gb": safety_margin_gb,
         "floor_valid": floor_valid,
         "preflight_memory_source": "vm_stat_free_plus_speculative_purgeable",
         "free_plus_speculative_purgeable_gb": free_plus_speculative_purgeable,
+        "available_for_gate_gb": free_plus_speculative_purgeable,
         "memory_gap_gb": memory_gap_gb,
         "inactive_file_cache_gb": inactive_gb,
         "psutil_available_gb": psutil_available_gb,
@@ -255,6 +259,8 @@ def build_preflight(
             "active_heavy_processes": active_process_command,
         },
     }
+    payload["memory_breakdown"] = payload["memory_breakdown_gb"]
+    return payload
 
 
 def write_preflight(

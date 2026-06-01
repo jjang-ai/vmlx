@@ -2308,11 +2308,18 @@ def validate_current_proof_sweep_artifacts(root: Path) -> dict[str, Any]:
                 "required_available_gb": real_ui_dsv4_memory_preflight.get(
                     "required_available_gb"
                 ),
+                "required_free_gb": real_ui_dsv4_memory_preflight.get(
+                    "required_free_gb"
+                ),
+                "min_free_gb": real_ui_dsv4_memory_preflight.get("min_free_gb"),
                 "preflight_memory_source": real_ui_dsv4_memory_preflight.get(
                     "preflight_memory_source"
                 ),
                 "free_plus_speculative_purgeable_gb": real_ui_dsv4_memory_preflight.get(
                     "free_plus_speculative_purgeable_gb"
+                ),
+                "available_for_gate_gb": real_ui_dsv4_memory_preflight.get(
+                    "available_for_gate_gb"
                 ),
                 "memory_gap_gb": real_ui_dsv4_memory_preflight.get("memory_gap_gb"),
                 "psutil_available_gb": real_ui_dsv4_memory_preflight.get(
@@ -2332,6 +2339,9 @@ def validate_current_proof_sweep_artifacts(root: Path) -> dict[str, Any]:
                 ),
                 "launch_decision": real_ui_dsv4_memory_preflight.get(
                     "launch_decision"
+                ),
+                "launch_allowed": real_ui_dsv4_memory_preflight.get(
+                    "launch_allowed"
                 ),
                 "launch_blockers": real_ui_dsv4_memory_preflight.get(
                     "launch_blockers"
@@ -2870,6 +2880,9 @@ def _current_release_blocker_ledger(
                         "commands",
                         "available_gb",
                         "required_available_gb",
+                        "required_free_gb",
+                        "min_free_gb",
+                        "available_for_gate_gb",
                         "memory_gap_gb",
                         "strict_vm_stat_memory_gap_gb",
                         "psutil_available_gap_gb",
@@ -2879,6 +2892,7 @@ def _current_release_blocker_ledger(
                         "preflight_memory_source",
                         "did_not_launch",
                         "launch_decision",
+                        "launch_allowed",
                         "launch_blockers",
                         "active_heavy_process_count",
                         "active_heavy_processes",
@@ -3313,6 +3327,9 @@ def _validate_current_real_ui_dsv4_memory_preflight(root: Path) -> dict[str, Any
     model_size_gb = _json_number(payload, "model_size_gb")
     free_gb = _json_number(payload, "free_plus_speculative_purgeable_gb")
     required_gb = _json_number(payload, "required_available_gb")
+    required_free_gb = _json_number(payload, "required_free_gb")
+    min_free_gb = _json_number(payload, "min_free_gb")
+    available_for_gate_gb = _json_number(payload, "available_for_gate_gb")
     memory_gap_gb = _json_number(payload, "memory_gap_gb")
     top_memory_processes = payload.get("top_memory_processes")
     active_heavy_processes = payload.get("active_heavy_processes")
@@ -3321,12 +3338,18 @@ def _validate_current_real_ui_dsv4_memory_preflight(root: Path) -> dict[str, Any
         failures.append("status_not_skipped_insufficient_memory")
     if payload.get("launch_decision") != "do_not_launch":
         failures.append("launch_decision_not_do_not_launch")
+    if payload.get("launch_allowed") is not False:
+        failures.append("launch_allowed_not_false")
     if not model_path.endswith("DeepSeek-V4-Flash-JANGTQ-K"):
         failures.append("model_path_not_dsv4_jangtq_k")
     if model_size_gb is None or model_size_gb < 70:
         failures.append("model_size_gb_not_recorded")
     if required_gb is None or required_gb < 120:
         failures.append("required_available_gb_below_floor")
+    if required_free_gb != required_gb:
+        failures.append("required_free_gb_mismatch")
+    if min_free_gb != required_gb:
+        failures.append("min_free_gb_mismatch")
     if (
         model_size_gb is not None
         and required_gb is not None
@@ -3337,6 +3360,8 @@ def _validate_current_real_ui_dsv4_memory_preflight(root: Path) -> dict[str, Any
         failures.append("free_plus_speculative_purgeable_gb_missing")
     elif required_gb is not None and free_gb >= required_gb:
         failures.append("preflight_claims_insufficient_memory_but_floor_met")
+    if available_for_gate_gb != free_gb:
+        failures.append("available_for_gate_gb_mismatch")
     if memory_gap_gb is None or memory_gap_gb <= 0:
         failures.append("memory_gap_gb_missing")
     elif required_gb is not None and free_gb is not None:
@@ -3364,6 +3389,9 @@ def _validate_current_real_ui_dsv4_memory_preflight(root: Path) -> dict[str, Any
             "model_size_gb": model_size_gb,
             "free_plus_speculative_purgeable_gb": free_gb,
             "required_available_gb": required_gb,
+            "required_free_gb": required_free_gb,
+            "min_free_gb": min_free_gb,
+            "available_for_gate_gb": available_for_gate_gb,
             "memory_gap_gb": memory_gap_gb,
             "preflight_memory_source": payload.get("preflight_memory_source"),
             "psutil_available_gb": _json_number(payload, "psutil_available_gb"),
@@ -3374,6 +3402,7 @@ def _validate_current_real_ui_dsv4_memory_preflight(root: Path) -> dict[str, Any
             "inactive_file_cache_gb": _json_number(payload, "inactive_file_cache_gb"),
             "did_not_launch": payload.get("did_not_launch"),
             "launch_decision": payload.get("launch_decision"),
+            "launch_allowed": payload.get("launch_allowed"),
             "launch_blockers": payload.get("launch_blockers"),
             "active_heavy_process_count": payload.get("active_heavy_process_count"),
             "active_heavy_processes": payload.get("active_heavy_processes"),

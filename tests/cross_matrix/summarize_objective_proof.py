@@ -1507,6 +1507,9 @@ def _dsv4_source_memory_preflight_detail(
         "available_gb": available_gb,
         "total_gb": memory.get("total_gb"),
         "required_available_gb": required_available_gb,
+        "required_free_gb": artifact.get("required_free_gb"),
+        "min_free_gb": artifact.get("min_free_gb"),
+        "available_for_gate_gb": artifact.get("available_for_gate_gb"),
         "required_model_margin_gb": artifact.get("required_model_margin_gb"),
         "model_size_gb": artifact.get("model_size_gb"),
         "safety_margin_gb": artifact.get("safety_margin_gb"),
@@ -1531,6 +1534,7 @@ def _dsv4_source_memory_preflight_detail(
         "commands": artifact.get("commands"),
         "did_not_launch": did_not_launch,
         "launch_decision": launch_decision,
+        "launch_allowed": artifact.get("launch_allowed"),
     }
 
 

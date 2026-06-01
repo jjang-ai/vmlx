@@ -3496,11 +3496,15 @@ def test_objective_proof_digest_summarizes_dsv4_exact_code_root_boundary(
             "status": "skipped",
             "reason": "insufficient_free_memory",
             "required_available_gb": 120.0,
+            "required_free_gb": 120.0,
+            "min_free_gb": 120.0,
             "required_model_margin_gb": 40.0,
             "model_size_gb": 79.98,
             "safety_margin_gb": 40.02,
             "floor_valid": True,
+            "available_for_gate_gb": 105.89,
             "launch_blockers": ["insufficient_memory"],
+            "launch_allowed": False,
             "active_heavy_process_count": 0,
             "top_memory_processes": [
                 {
@@ -3627,6 +3631,10 @@ def test_objective_proof_digest_summarizes_dsv4_exact_code_root_boundary(
     assert summary["source_full_output_preflight"]["did_not_launch"] is True
     assert summary["source_full_output_preflight"]["launch_decision"] == "do_not_launch"
     assert summary["source_full_output_preflight"]["required_available_gb"] == 120.0
+    assert summary["source_full_output_preflight"]["required_free_gb"] == 120.0
+    assert summary["source_full_output_preflight"]["min_free_gb"] == 120.0
+    assert summary["source_full_output_preflight"]["available_for_gate_gb"] == 105.89
+    assert summary["source_full_output_preflight"]["launch_allowed"] is False
     assert summary["source_full_output_preflight"]["required_model_margin_gb"] == 40.0
     assert summary["source_full_output_preflight"]["model_size_gb"] == 79.98
     assert summary["source_full_output_preflight"]["safety_margin_gb"] == 40.02

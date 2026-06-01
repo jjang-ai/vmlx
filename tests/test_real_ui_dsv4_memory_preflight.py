@@ -34,8 +34,13 @@ Pages purgeable:                           25000.
     assert payload["did_not_launch"] is True
     assert payload["model_path"].endswith("DeepSeek-V4-Flash-JANGTQ-K")
     assert payload["free_plus_speculative_purgeable_gb"] < 120.0
+    assert payload["available_for_gate_gb"] == payload["free_plus_speculative_purgeable_gb"]
+    assert payload["required_free_gb"] == 120.0
+    assert payload["min_free_gb"] == 120.0
     assert payload["memory_gap_gb"] > 0
     assert payload["launch_decision"] == "do_not_launch"
+    assert payload["launch_allowed"] is False
+    assert payload["memory_breakdown"] == payload["memory_breakdown_gb"]
     assert payload["safety_margin_gb"] >= 40.0
     assert payload["active_heavy_processes"] == []
     assert payload["active_heavy_process_count"] == 0
@@ -123,8 +128,10 @@ Pages purgeable:                          100000.
     assert payload["status"] == "ready_to_launch"
     assert payload["did_not_launch"] is True
     assert payload["free_plus_speculative_purgeable_gb"] >= 120.0
+    assert payload["available_for_gate_gb"] == payload["free_plus_speculative_purgeable_gb"]
     assert payload["memory_gap_gb"] == 0
     assert payload["launch_decision"] == "launch_allowed"
+    assert payload["launch_allowed"] is True
     assert payload["safety_margin_gb"] >= 40.0
     assert payload["launch_blockers"] == []
 
