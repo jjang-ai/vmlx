@@ -41,6 +41,18 @@ def test_installed_app_runtime_parity_records_known_stale_surface():
         assert audit["missing_or_stale"]
 
 
+def test_installed_app_runtime_parity_requires_versioned_python_entrypoint():
+    from tests.cross_matrix import run_installed_app_runtime_parity_audit as gate
+
+    audit = gate.build_audit(Path("."))
+
+    assert "installed_versioned_python_exists" in audit["checks"]
+    assert "installed_versioned_python_runs" in audit["checks"]
+    assert audit["installed_versioned_python"].endswith(
+        "Contents/Resources/bundled-python/python/bin/python3.12"
+    )
+
+
 def test_installed_app_runtime_parity_default_out_tracks_manifest():
     from tests.cross_matrix import release_regression_manifest as manifest
     from tests.cross_matrix import run_installed_app_runtime_parity_audit as gate
@@ -121,6 +133,9 @@ def test_installed_app_runtime_parity_can_target_staged_app_path(tmp_path):
 
     assert audit["installed_app"] == str(staged_app)
     assert audit["installed_python"] == str(staged_python)
+    assert audit["installed_versioned_python"] == str(
+        staged_python.with_name("python3.12")
+    )
     assert audit["installed_app_asar"] == str(staged_asar)
     assert audit["serve_help_returncode"] == 127
     assert audit["panel_main_stderr"] == f"missing installed app.asar: {staged_asar}"

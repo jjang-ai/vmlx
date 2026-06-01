@@ -90,6 +90,38 @@ def _serve_help(python_path: Path = INSTALLED_PYTHON) -> dict[str, Any]:
     }
 
 
+def _versioned_python_path(python_path: Path) -> Path:
+    if python_path.name == "python3.12":
+        return python_path
+    return python_path.with_name("python3.12")
+
+
+def _python_version(python_path: Path) -> dict[str, Any]:
+    if not python_path.exists():
+        return {
+            "returncode": 127,
+            "stdout": "",
+            "stderr": f"missing python: {python_path}",
+        }
+    env = os.environ.copy()
+    env["PYTHONPATH"] = ""
+    env["PYTHONNOUSERSITE"] = "1"
+    proc = subprocess.run(
+        [str(python_path), "--version"],
+        cwd="/tmp",
+        env=env,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+    return {
+        "returncode": proc.returncode,
+        "stdout": proc.stdout,
+        "stderr": proc.stderr,
+    }
+
+
 def _read_installed_panel_main(
     root: Path,
     app_asar: Path = INSTALLED_APP_ASAR,
@@ -329,6 +361,11 @@ def build_audit(
 ) -> dict[str, Any]:
     help_result = _serve_help(python_path)
     help_text = help_result["stdout"] + "\n" + help_result["stderr"]
+    versioned_python_path = _versioned_python_path(python_path)
+    versioned_python_result = _python_version(versioned_python_path)
+    versioned_python_text = (
+        versioned_python_result["stdout"] + "\n" + versioned_python_result["stderr"]
+    )
     panel_result = _read_installed_panel_main(root, app_asar=app_asar)
     panel_main = panel_result["text"]
     renderer_result = _read_installed_panel_renderer(root, app_asar=app_asar)
@@ -405,6 +442,11 @@ def build_audit(
 
     checks = {
         "installed_python_exists": python_path.exists(),
+        "installed_versioned_python_exists": versioned_python_path.exists(),
+        "installed_versioned_python_runs": (
+            versioned_python_result["returncode"] == 0
+            and "Python 3.12" in versioned_python_text
+        ),
         "serve_help_runs": help_result["returncode"] == 0,
         "responses_cancel_route": any(
             "/v1/responses/{response_id}/cancel" in route
@@ -598,6 +640,9 @@ def build_audit(
         "status": "pass" if not missing_or_stale else "open",
         "installed_app": str(app_path),
         "installed_python": str(python_path),
+        "installed_versioned_python": str(versioned_python_path),
+        "versioned_python_returncode": versioned_python_result["returncode"],
+        "versioned_python_output": versioned_python_text.strip(),
         "checks": checks,
         "missing_or_stale": missing_or_stale,
         "serve_help_returncode": help_result["returncode"],
