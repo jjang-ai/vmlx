@@ -234,6 +234,12 @@ describe("Ollama gateway parity contracts", () => {
     expect(chatSource).toContain(
       'if (isExpectedChatBackendDisconnectError(err)) {',
     );
+    expect(chatSource).toContain(
+      'if (!isExpectedChatBackendDisconnectError(error)) {\n          console.error("[CHAT] Error caught:",',
+    );
+    expect(chatSource).not.toContain(
+      'console.error("[CHAT] Error caught:", {\n          message: _err?.message,',
+    );
   });
 
   it("normalizes cache IPC endpoint EPIPE disconnects instead of surfacing raw unexpected errors", () => {

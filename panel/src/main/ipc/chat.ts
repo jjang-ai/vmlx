@@ -3636,17 +3636,19 @@ export function registerChatHandlers(
         } catch (_) {}
 
         const _err = error as any;
-        console.error("[CHAT] Error caught:", {
-          message: _err?.message,
-          name: _err?.name,
-          code: _err?.code,
-          type: _err?.constructor?.name,
-          stack: _err?.stack?.split("\n").slice(0, 5).join("\n"),
-          abortSignal: abortController.signal.aborted,
-          timedOut,
-          fullContentLen: fullContent?.length,
-          readerAcquired: !!reader,
-        });
+        if (!isExpectedChatBackendDisconnectError(error)) {
+          console.error("[CHAT] Error caught:", {
+            message: _err?.message,
+            name: _err?.name,
+            code: _err?.code,
+            type: _err?.constructor?.name,
+            stack: _err?.stack?.split("\n").slice(0, 5).join("\n"),
+            abortSignal: abortController.signal.aborted,
+            timedOut,
+            fullContentLen: fullContent?.length,
+            readerAcquired: !!reader,
+          });
+        }
         pushChatSessionLog(
           chatSession?.id || resolvedSession?.id,
           `[CHAT_DIAG] request_error=${JSON.stringify({
