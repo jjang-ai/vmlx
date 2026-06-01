@@ -289,6 +289,26 @@ def _has_chat_stream_error_disconnect_guard(panel_main: str) -> bool:
     return True
 
 
+def _has_backend_stderr_line_disconnect_guard(panel_main: str) -> bool:
+    helper = "function isExpectedBackendStderrDisconnectLine"
+    guard = "if (isExpectedBackendStderrDisconnectLine(text)) {"
+    normalized = (
+        "[SERVER] Client disconnected during stream; backend pipe closed cleanly."
+    )
+    raw_log = "console.error(`[SERVER] ${text.trimEnd()}`)"
+    helper_index = panel_main.find(helper)
+    guard_index = panel_main.find(guard)
+    raw_log_index = panel_main.find(raw_log, guard_index)
+    return (
+        helper_index >= 0
+        and "write EPIPE" in panel_main
+        and "broken pipe" in panel_main
+        and normalized in panel_main
+        and guard_index > helper_index
+        and raw_log_index > guard_index
+    )
+
+
 def _read_installed_asar_file(
     root: Path,
     relpath: str,
@@ -643,6 +663,9 @@ def build_audit(
     installed_chat_stream_error_disconnect_guard = (
         _has_chat_stream_error_disconnect_guard(panel_main)
     )
+    installed_backend_stderr_line_disconnect_guard = (
+        _has_backend_stderr_line_disconnect_guard(panel_main)
+    )
 
     checks = {
         "installed_python_exists": python_path.exists(),
@@ -721,6 +744,10 @@ def build_audit(
         "installed_panel_chat_stream_error_disconnect_guard": (
             panel_result["returncode"] == 0
             and installed_chat_stream_error_disconnect_guard
+        ),
+        "installed_panel_backend_stderr_line_disconnect_guard": (
+            panel_result["returncode"] == 0
+            and installed_backend_stderr_line_disconnect_guard
         ),
         "installed_panel_image_ipc_epipe_aggregate_guard": (
             panel_result["returncode"] == 0

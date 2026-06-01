@@ -36,6 +36,10 @@ interface ManagedProcess {
   intentionalStop?: boolean   // Set true when stopSession sends SIGTERM — prevents crash misreport
 }
 
+function isExpectedBackendStderrDisconnectLine(text: string): boolean {
+  return /(?:EPIPE|write EPIPE|broken pipe|socket hang up|connection reset|ECONNRESET|ERR_STREAM_DESTROYED|ERR_STREAM_WRITE_AFTER_END|premature close|stream.*destroyed|write after end)/i.test(text)
+}
+
 /** Normalize model paths for consistent matching: resolve and strip trailing slashes */
 function normalizePath(p: string): string {
   return p.replace(/\/+$/, '')
@@ -1494,6 +1498,12 @@ export class SessionManager extends EventEmitter {
     })
     proc.stderr?.on('data', (data) => {
       const text = data.toString()
+      if (isExpectedBackendStderrDisconnectLine(text)) {
+        const normalized = '[SERVER] Client disconnected during stream; backend pipe closed cleanly.\n'
+        this.pushLog(sessionId, normalized)
+        this.emit('session:log', { sessionId, data: '[SERVER] Client disconnected during stream; backend pipe closed cleanly.\n' })
+        return
+      }
       this.pushLog(sessionId, text)
       // Log errors to main console for diagnostics
       if (text.includes('ERROR') || text.includes('Traceback') || text.includes('Exception')) {

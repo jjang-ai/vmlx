@@ -204,6 +204,32 @@ describe("Ollama gateway parity contracts", () => {
     }
   });
 
+  it("does not relay backend stderr EPIPE lines as user-visible session errors", () => {
+    const sessionsSource = readFileSync(
+      resolve(process.cwd(), "src/main/sessions.ts"),
+      "utf8",
+    );
+    expect(sessionsSource).toContain("function isExpectedBackendStderrDisconnectLine");
+    expect(sessionsSource).toContain("write EPIPE");
+    expect(sessionsSource).toContain("broken pipe");
+    expect(sessionsSource).toContain("if (isExpectedBackendStderrDisconnectLine(text)) {");
+    expect(sessionsSource).toContain(
+      "this.emit('session:log', { sessionId, data: '[SERVER] Client disconnected during stream; backend pipe closed cleanly.\\n' })",
+    );
+    expect(sessionsSource).toContain("return");
+    const stderrHandler = sessionsSource.indexOf("proc.stderr?.on('data'");
+    const disconnectGuard = sessionsSource.indexOf(
+      "if (isExpectedBackendStderrDisconnectLine(text)) {",
+      stderrHandler,
+    );
+    const rawErrorLog = sessionsSource.indexOf(
+      "console.error(`[SERVER] ${text.trimEnd()}`)",
+      stderrHandler,
+    );
+    expect(disconnectGuard).toBeGreaterThan(stderrHandler);
+    expect(rawErrorLog).toBeGreaterThan(disconnectGuard);
+  });
+
   it("does not leave raw chat IPC backend request finalization unguarded", () => {
     const chatSource = readFileSync(
       resolve(process.cwd(), "src/main/ipc/chat.ts"),

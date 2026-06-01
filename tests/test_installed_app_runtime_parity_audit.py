@@ -20,6 +20,7 @@ def test_installed_app_runtime_parity_records_known_stale_surface():
     assert "installed_panel_chat_ipc_epipe_aggregate_guard" in audit["checks"]
     assert "installed_panel_chat_ipc_epipe_raw_diagnostic_guard" in audit["checks"]
     assert "installed_panel_chat_stream_error_disconnect_guard" in audit["checks"]
+    assert "installed_panel_backend_stderr_line_disconnect_guard" in audit["checks"]
     assert "installed_panel_image_ipc_epipe_aggregate_guard" in audit["checks"]
     assert "installed_panel_cache_ipc_epipe_aggregate_guard" in audit["checks"]
     assert "installed_panel_child_process_stdio_epipe_guard" in audit["checks"]
@@ -194,6 +195,42 @@ throw new Error(`Server error: ${errDetail}`);
 
     assert not gate._has_chat_stream_error_disconnect_guard(old_raw_error_logs)
     assert gate._has_chat_stream_error_disconnect_guard(guarded_error_logs)
+
+
+def test_installed_app_runtime_parity_scopes_backend_stderr_line_disconnect_guard():
+    from tests.cross_matrix import run_installed_app_runtime_parity_audit as gate
+
+    old_raw_stderr_handler = """
+proc.stderr?.on('data', (data) => {
+  const text = data.toString()
+  this.pushLog(sessionId, text)
+  if (text.includes('ERROR') || text.includes('Traceback') || text.includes('Exception')) {
+    console.error(`[SERVER] ${text.trimEnd()}`)
+  }
+  this.emit('session:log', { sessionId, data: text })
+})
+"""
+    guarded_stderr_handler = """
+function isExpectedBackendStderrDisconnectLine(text) {
+  return /(?:EPIPE|write EPIPE|broken pipe|ECONNRESET)/i.test(text)
+}
+proc.stderr?.on('data', (data) => {
+  const text = data.toString()
+  if (isExpectedBackendStderrDisconnectLine(text)) {
+    const normalized = '[SERVER] Client disconnected during stream; backend pipe closed cleanly.\\n'
+    this.pushLog(sessionId, normalized)
+    this.emit('session:log', { sessionId, data: '[SERVER] Client disconnected during stream; backend pipe closed cleanly.\\n' })
+    return
+  }
+  this.pushLog(sessionId, text)
+  if (text.includes('ERROR') || text.includes('Traceback') || text.includes('Exception')) {
+    console.error(`[SERVER] ${text.trimEnd()}`)
+  }
+})
+"""
+
+    assert not gate._has_backend_stderr_line_disconnect_guard(old_raw_stderr_handler)
+    assert gate._has_backend_stderr_line_disconnect_guard(guarded_stderr_handler)
 
 
 def test_installed_app_runtime_parity_writes_json_artifact(tmp_path):
