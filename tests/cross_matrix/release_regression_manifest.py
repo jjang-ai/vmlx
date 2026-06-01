@@ -388,6 +388,9 @@ CURRENT_ISSUE179_MINIMAX_K_ROOT_CAUSE_AUDIT_ARTIFACT = (
 CURRENT_ISSUE181_183_RUNTIME_AUDIT_ARTIFACT = (
     "build/current-issue181-183-runtime-audit-20260601-qwen3vl-minicpm-mpp.json"
 )
+CURRENT_PUBLIC_APP_ISSUE_AUDIT_ARTIFACT = (
+    "build/current-public-app-issue-audit-20260601-sequoia-download-minimax-gemma.json"
+)
 CURRENT_DEV_UI_PROOF_ARTIFACTS = {
     "proof": "docs/internal/agent-notes/2026-05-31-live-chat-tools-reasoning-proof.json",
     "chat_settings_screenshot": "docs/internal/agent-notes/2026-05-31-live-chat-tools-reasoning-chat-settings.png",
@@ -2268,6 +2271,7 @@ def validate_current_proof_sweep_artifacts(root: Path) -> dict[str, Any]:
         _validate_current_issue179_minimax_k_root_cause_audit(root)
     )
     issue181_183_runtime_audit = _validate_current_issue181_183_runtime_audit(root)
+    public_app_issue_audit = _validate_current_public_app_issue_audit(root)
     mimo_v2_jang2l_sink_ab = _validate_current_mimo_v2_jang2l_sink_ab(root)
     mimo_v2_jang2l_root_cause = _validate_current_mimo_v2_jang2l_root_cause(root)
     real_ui_live_model_matrix = _validate_current_real_ui_live_model_matrix(
@@ -2558,6 +2562,11 @@ def validate_current_proof_sweep_artifacts(root: Path) -> dict[str, Any]:
         and not issue181_183_runtime_audit["missing"]
         and not issue181_183_runtime_audit["failures"]
     )
+    public_app_issue_audit_ok = (
+        public_app_issue_audit["status"] == "pass"
+        and not public_app_issue_audit["missing"]
+        and not public_app_issue_audit["failures"]
+    )
     issue175_179_release_boundary_audit_ok = (
         issue175_179_release_boundary_audit["status"] in {"open", "pass"}
         and not issue175_179_release_boundary_audit["missing"]
@@ -2673,6 +2682,7 @@ def validate_current_proof_sweep_artifacts(root: Path) -> dict[str, Any]:
         "mimo_v2_jang2l_root_cause": True,
         "issue179_minimax_k_root_cause_audit": issue179_minimax_k_root_cause_audit_ok,
         "issue181_183_runtime_audit": issue181_183_runtime_audit_ok,
+        "public_app_issue_audit": public_app_issue_audit_ok,
         "real_ui_dsv4_memory_preflight": real_ui_dsv4_memory_preflight_ok,
     }
     failed_components = [
@@ -2735,6 +2745,7 @@ def validate_current_proof_sweep_artifacts(root: Path) -> dict[str, Any]:
         "mimo_v2_jang2l_root_cause": mimo_v2_jang2l_root_cause,
         "issue179_minimax_k_root_cause_audit": issue179_minimax_k_root_cause_audit,
         "issue181_183_runtime_audit": issue181_183_runtime_audit,
+        "public_app_issue_audit": public_app_issue_audit,
         "real_ui_live_model_matrix": real_ui_live_model_matrix,
         "real_ui_dsv4_memory_preflight": real_ui_dsv4_memory_preflight,
         "step37_vlm_runtime_audit": step37_vlm_runtime_audit,
@@ -4595,6 +4606,59 @@ def _validate_current_issue181_183_runtime_audit(root: Path) -> dict[str, Any]:
         "181": "source_and_packaged_mpp_auto_policy_guarded",
         "182": "source_and_packaged_qwen_vl_patch_embed_layout_guarded",
         "183": "source_and_packaged_minicpm_v46_load_guarded",
+    }
+    for number, clearance in expected_clearance.items():
+        issue = issues.get(number)
+        if not isinstance(issue, dict):
+            result["failures"].append(f"missing_issue:{number}")
+            continue
+        if issue.get("focused_source_slice") != "pass":
+            result["failures"].append(f"unexpected_issue_slice:{number}")
+        if issue.get("release_clearance") != clearance:
+            result["failures"].append(f"unexpected_issue_clearance:{number}")
+        checks = issue.get("checks")
+        if not isinstance(checks, dict) or not checks:
+            result["failures"].append(f"missing_issue_checks:{number}")
+        elif not all(value is True for value in checks.values()):
+            result["failures"].append(f"failed_issue_checks:{number}")
+
+    return result
+
+
+def _validate_current_public_app_issue_audit(root: Path) -> dict[str, Any]:
+    artifact = CURRENT_PUBLIC_APP_ISSUE_AUDIT_ARTIFACT
+    path = root / artifact
+    result: dict[str, Any] = {
+        "artifact": artifact,
+        "status": "missing",
+        "missing": [],
+        "failures": [],
+    }
+    if not path.exists():
+        result["missing"].append(artifact)
+        return result
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception as exc:  # noqa: BLE001 - report validation failure
+        result["status"] = f"load_error:{type(exc).__name__}"
+        result["failures"].append("json_load_error")
+        return result
+
+    status = str(payload.get("status"))
+    result["status"] = status
+    if status != "pass":
+        result["failures"].append("public_app_issue_audit_must_pass")
+    issues = payload.get("issues")
+    if not isinstance(issues, dict):
+        issues = {}
+    result["issues"] = issues
+    expected_clearance = {
+        "169": "source_dual_dmg_metal_compat_route_guarded_packaging_still_gated",
+        "117": "mapped_to_minimax_k_issue179_live_reporter_prompt_boundary",
+        "118": "source_gui_download_endpoint_and_stale_auth_fallback_guarded",
+        "119": (
+            "source_and_live_gemma26_memory_runtime_guarded_release_package_pending"
+        ),
     }
     for number, clearance in expected_clearance.items():
         issue = issues.get(number)

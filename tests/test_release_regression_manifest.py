@@ -19,6 +19,7 @@ from tests.cross_matrix.release_regression_manifest import (
     CURRENT_POST_BUDGET_EDGE_ARTIFACTS,
     CURRENT_ISSUE179_MINIMAX_K_ROOT_CAUSE_AUDIT_ARTIFACT,
     CURRENT_ISSUE181_183_RUNTIME_AUDIT_ARTIFACT,
+    CURRENT_PUBLIC_APP_ISSUE_AUDIT_ARTIFACT,
     CURRENT_MIMO_V2_JANG2L_MOE_OUTPUT_PARITY_ARTIFACT,
     CURRENT_MIMO_V2_JANG2L_NOCACHE_NO_KVQ_ARTIFACT,
     CURRENT_MIMO_V2_JANG2L_PROFILE_DIAGNOSTIC_ARTIFACT,
@@ -61,6 +62,7 @@ from tests.cross_matrix.release_regression_manifest import (
     _real_ui_named_tool_probe_semantics_ok,
     _validate_current_issue175_179_release_boundary_audit,
     _validate_current_issue181_183_runtime_audit,
+    _validate_current_public_app_issue_audit,
     _validate_current_real_ui_live_model_matrix,
     _validate_current_step37_vlm_runtime_audit,
     build_manifest,
@@ -1121,6 +1123,7 @@ def _write_passing_real_ui_live_model_proof_artifacts(root: Path) -> None:
         proof_path.write_text(json.dumps(proof) + "\n", encoding="utf-8")
     _write_expected_issue175_179_release_boundary_audit(root)
     _write_expected_issue181_183_runtime_audit(root)
+    _write_expected_public_app_issue_audit(root)
     _write_expected_issue179_minimax_k_root_cause_audit(root)
     _write_expected_installed_app_runtime_parity_audit(root)
     _write_expected_staged_app_runtime_parity_audit(root)
@@ -1233,6 +1236,59 @@ def test_release_regression_manifest_accepts_issue181_183_runtime_audit(tmp_path
     _write_expected_issue181_183_runtime_audit(tmp_path)
 
     result = _validate_current_issue181_183_runtime_audit(tmp_path)
+
+    assert result["status"] == "pass"
+    assert result["failures"] == []
+
+
+def _write_expected_public_app_issue_audit(root: Path) -> None:
+    path = root / CURRENT_PUBLIC_APP_ISSUE_AUDIT_ARTIFACT
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(
+            {
+                "status": "pass",
+                "issues": {
+                    "169": {
+                        "focused_source_slice": "pass",
+                        "release_clearance": (
+                            "source_dual_dmg_metal_compat_route_guarded_packaging_still_gated"
+                        ),
+                        "checks": {"dual_public_dmg_flavors": True},
+                    },
+                    "117": {
+                        "focused_source_slice": "pass",
+                        "release_clearance": (
+                            "mapped_to_minimax_k_issue179_live_reporter_prompt_boundary"
+                        ),
+                        "checks": {"issue179_root_cause_audit_passes": True},
+                    },
+                    "118": {
+                        "focused_source_slice": "pass",
+                        "release_clearance": (
+                            "source_gui_download_endpoint_and_stale_auth_fallback_guarded"
+                        ),
+                        "checks": {"api_retries_without_stale_auth": True},
+                    },
+                    "119": {
+                        "focused_source_slice": "pass",
+                        "release_clearance": (
+                            "source_and_live_gemma26_memory_runtime_guarded_release_package_pending"
+                        ),
+                        "checks": {"gemma26_memory_stress_artifact_present": True},
+                    },
+                },
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+
+def test_release_regression_manifest_accepts_public_app_issue_audit(tmp_path):
+    _write_expected_public_app_issue_audit(tmp_path)
+
+    result = _validate_current_public_app_issue_audit(tmp_path)
 
     assert result["status"] == "pass"
     assert result["failures"] == []
@@ -10225,6 +10281,7 @@ def test_release_regression_manifest_requires_release_blocker_boundary_source_ha
         "tests/cross_matrix/run_issue175_177_live_runtime_audit.py",
         "tests/cross_matrix/run_issue175_179_release_boundary_audit.py",
         "tests/cross_matrix/run_issue181_183_runtime_audit.py",
+        "tests/cross_matrix/run_public_app_issue_audit.py",
         "tests/cross_matrix/run_issue179_minimax_k_model_manifest.py",
         "tests/cross_matrix/run_issue179_reporter_parity_metadata.py",
         "tests/cross_matrix/run_issue179_minimax_k_root_cause_audit.py",
@@ -10235,6 +10292,7 @@ def test_release_regression_manifest_requires_release_blocker_boundary_source_ha
         "tests/test_issue175_177_live_runtime_audit.py",
         "tests/test_issue175_179_release_boundary_audit.py",
         "tests/test_issue181_183_runtime_audit.py",
+        "tests/test_public_app_issue_audit.py",
         "tests/test_issue179_minimax_k_model_manifest.py",
         "tests/test_issue179_reporter_parity_metadata.py",
         "tests/test_issue179_minimax_k_root_cause_audit.py",
@@ -12145,6 +12203,9 @@ def test_release_regression_manifest_runner_embeds_current_proof_validation(tmp_
     expected_issue181_183_runtime_audit = validate_current_proof_sweep_artifacts(
         tmp_path
     )["issue181_183_runtime_audit"]
+    expected_public_app_issue_audit = validate_current_proof_sweep_artifacts(
+        tmp_path
+    )["public_app_issue_audit"]
     expected_issue179_minimax_k_root_cause_audit = validate_current_proof_sweep_artifacts(
         tmp_path
     )["issue179_minimax_k_root_cause_audit"]
@@ -12379,6 +12440,7 @@ def test_release_regression_manifest_runner_embeds_current_proof_validation(tmp_
         "real_ui_live_model_proof": expected_real_ui_live_model_proof,
         "issue175_179_release_boundary_audit": expected_issue175_179_release_boundary_audit,
         "issue181_183_runtime_audit": expected_issue181_183_runtime_audit,
+        "public_app_issue_audit": expected_public_app_issue_audit,
         "issue179_minimax_k_root_cause_audit": expected_issue179_minimax_k_root_cause_audit,
         "mimo_v2_jang2l_sink_ab": expected_mimo_v2_jang2l_sink_ab,
         "mimo_v2_jang2l_root_cause": expected_mimo_v2_jang2l_root_cause,

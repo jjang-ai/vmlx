@@ -198,6 +198,7 @@ def test_current_regression_suite_contract_outputs_track_runner_defaults():
     from tests.cross_matrix import run_generation_defaults_contract
     from tests.cross_matrix import run_installed_app_runtime_parity_audit
     from tests.cross_matrix import run_issue175_179_release_boundary_audit
+    from tests.cross_matrix import run_issue181_183_runtime_audit
     from tests.cross_matrix import run_jang_model_compat_contract
     from tests.cross_matrix import run_max_output_context_contract
     from tests.cross_matrix import run_mcp_policy_contract
@@ -209,6 +210,7 @@ def test_current_regression_suite_contract_outputs_track_runner_defaults():
     from tests.cross_matrix import run_packaged_integrity_contract
     from tests.cross_matrix import run_panel_tool_security_contract
     from tests.cross_matrix import run_parser_registry_contract
+    from tests.cross_matrix import run_public_app_issue_audit
     from tests.cross_matrix import run_reasoning_template_contract
     from tests.cross_matrix import run_real_ui_dsv4_memory_preflight
     from tests.cross_matrix import run_release_surface_contract
@@ -242,6 +244,8 @@ def test_current_regression_suite_contract_outputs_track_runner_defaults():
         "issue175_179_release_boundary_audit": (
             run_issue175_179_release_boundary_audit.DEFAULT_OUT
         ),
+        "issue181_183_runtime_audit": run_issue181_183_runtime_audit.DEFAULT_OUT,
+        "public_app_issue_audit": run_public_app_issue_audit.DEFAULT_OUT,
     }
 
     for name, expected_out in expected.items():
@@ -339,6 +343,8 @@ def test_current_regression_suite_hashes_release_blocker_boundary_sources():
         "tests/cross_matrix/run_issue175_177_live_runtime_audit.py",
         "tests/cross_matrix/run_issue175_admin_sleep_probe.py",
         "tests/cross_matrix/run_issue175_179_release_boundary_audit.py",
+        "tests/cross_matrix/run_issue181_183_runtime_audit.py",
+        "tests/cross_matrix/run_public_app_issue_audit.py",
         "tests/cross_matrix/run_issue179_minimax_k_model_manifest.py",
         "tests/cross_matrix/run_issue179_reporter_parity_metadata.py",
         "tests/cross_matrix/run_issue179_minimax_k_root_cause_audit.py",
@@ -349,6 +355,8 @@ def test_current_regression_suite_hashes_release_blocker_boundary_sources():
         "tests/test_issue175_177_live_runtime_audit.py",
         "tests/test_issue175_admin_sleep_probe.py",
         "tests/test_issue175_179_release_boundary_audit.py",
+        "tests/test_issue181_183_runtime_audit.py",
+        "tests/test_public_app_issue_audit.py",
         "tests/test_issue179_minimax_k_model_manifest.py",
         "tests/test_issue179_reporter_parity_metadata.py",
         "tests/test_issue179_minimax_k_root_cause_audit.py",
