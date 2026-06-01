@@ -588,8 +588,8 @@ function assertResult(result) {
   if (!chat.turns?.some((m) => m.role === 'assistant' && m.content)) failures.push('assistant content is empty')
   if (!chat.finalVisibleText) failures.push('final visible assistant content is empty')
   const visibleAssistantTurnsComplete = visibleAssistantAfterEachUser(chat.turns)
-  if (result.requestedEnableThinking === true && !visibleAssistantTurnsComplete) {
-    failures.push('requested reasoning turn ended with empty visible assistant content')
+  if (!visibleAssistantTurnsComplete) {
+    failures.push('UI turn ended with empty visible assistant content')
   }
   if (chat.rawParserTagLeak) failures.push('raw parser/reasoning/tool markup leaked into UI content')
   if (chat.reasoningRawParserTagLeak) failures.push('raw parser/reasoning/tool markup leaked into reasoning segments')

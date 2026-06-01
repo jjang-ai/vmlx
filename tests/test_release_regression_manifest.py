@@ -3138,7 +3138,8 @@ def test_release_regression_manifest_real_ui_script_rejects_reasoning_only_visib
     source = script.read_text(encoding="utf-8")
 
     assert "visibleAssistantAfterEachUser" in source
-    assert "requested reasoning turn ended with empty visible assistant content" in source
+    assert "UI turn ended with empty visible assistant content" in source
+    assert "requestedEnableThinking === true && !visibleAssistantTurnsComplete" not in source
     assert "visibleAssistantTurnsComplete" in source
 
 
