@@ -21,7 +21,7 @@ from typing import Any
 
 
 DEFAULT_OUT = Path(
-    "build/current-regression-suite-20260531-live-epipe-signing-dsv4-refresh.json"
+    "build/current-regression-suite-20260601-epipe-renderer-installed-refresh.json"
 )
 
 EXPECTED_OPEN_REQUIREMENTS = [
@@ -574,7 +574,7 @@ CURRENT_SUITE_COMMANDS: dict[str, list[str]] = {
         "--require-current-proof-sweep",
         "--require-release-ready",
         "--out",
-        "build/current-release-regression-manifest-20260601-dsv4-local-preflight-refresh.json",
+        "build/current-release-regression-manifest-20260601-epipe-renderer-installed-refresh.json",
     ],
 }
 
