@@ -592,7 +592,7 @@ CURRENT_SUITE_COMMANDS: dict[str, list[str]] = {
         "--require-current-proof-sweep",
         "--require-release-ready",
         "--out",
-        "build/current-release-regression-manifest-20260601-installed-download-proof.json",
+        "build/current-release-regression-manifest-20260601-developer-id-dmg-assertions-refresh.json",
     ],
 }
 

@@ -10395,7 +10395,7 @@ def test_release_regression_manifest_runner_default_out_tracks_current_release_p
     from tests.cross_matrix import run_release_regression_manifest as runner
 
     assert runner.DEFAULT_OUT == Path(
-        "build/current-release-regression-manifest-20260601-installed-download-proof.json"
+        "build/current-release-regression-manifest-20260601-developer-id-dmg-assertions-refresh.json"
     )
 
 
