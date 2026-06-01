@@ -4616,6 +4616,11 @@ def _validate_current_issue181_183_runtime_audit(root: Path) -> dict[str, Any]:
         "182": "source_and_packaged_qwen_vl_patch_embed_layout_guarded",
         "183": "source_and_packaged_minicpm_v46_load_guarded",
     }
+    required_issue_checks = {
+        "183": {
+            "installed_app_minicpm_v46_runtime_remap",
+        },
+    }
     for number, clearance in expected_clearance.items():
         issue = issues.get(number)
         if not isinstance(issue, dict):
@@ -4628,8 +4633,12 @@ def _validate_current_issue181_183_runtime_audit(root: Path) -> dict[str, Any]:
         checks = issue.get("checks")
         if not isinstance(checks, dict) or not checks:
             result["failures"].append(f"missing_issue_checks:{number}")
+            checks = {}
         elif not all(value is True for value in checks.values()):
             result["failures"].append(f"failed_issue_checks:{number}")
+        for check in sorted(required_issue_checks.get(number, set())):
+            if checks.get(check) is not True:
+                result["failures"].append(f"missing_issue_check:{number}:{check}")
 
     return result
 

@@ -28,6 +28,7 @@ def test_issue181_183_audit_proves_recent_runtime_issue_slices():
     assert audit["issues"]["183"]["checks"]["minicpm_v46_registry_remap"] is True
     assert audit["issues"]["183"]["checks"]["minicpm_v46_prompt_config_remap"] is True
     assert audit["issues"]["183"]["checks"]["bundled_import_gate_covers_runtime"] is True
+    assert audit["issues"]["183"]["checks"]["installed_app_minicpm_v46_runtime_remap"] is True
     assert audit["issues"]["183"]["release_clearance"] == (
         "source_and_packaged_minicpm_v46_load_guarded"
     )

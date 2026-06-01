@@ -10,16 +10,87 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import subprocess
 from pathlib import Path
 
 
 DEFAULT_OUT = Path(
     "build/current-issue181-183-runtime-audit-20260601-qwen3vl-minicpm-mpp.json"
 )
+INSTALLED_PYTHON = Path(
+    "/Applications/vMLX.app/Contents/Resources/bundled-python/python/bin/python3"
+)
 
 
 def _read(path: Path) -> str:
     return path.read_text(encoding="utf-8", errors="replace") if path.exists() else ""
+
+
+def _run_installed_minicpm_v46_probe(
+    python_path: Path = INSTALLED_PYTHON,
+) -> dict[str, object]:
+    if not python_path.exists():
+        return {
+            "returncode": 127,
+            "error": f"missing installed python: {python_path}",
+            "checks": {},
+        }
+    env = os.environ.copy()
+    env["PYTHONNOUSERSITE"] = "1"
+    env["PYTHONPATH"] = ""
+    code = r"""
+import json
+import vmlx_engine
+from mlx_vlm.prompt_utils import MODEL_CONFIG
+from mlx_vlm.utils import MODEL_REMAPPING, get_model_and_args
+
+module, model_type = get_model_and_args({"model_type": "minicpmv4_6"})
+payload = {
+    "model_remapping": MODEL_REMAPPING.get("minicpmv4_6"),
+    "model_config_present": "minicpmv4_6" in MODEL_CONFIG,
+    "model_config_matches_minicpmo": MODEL_CONFIG.get("minicpmv4_6") == MODEL_CONFIG.get("minicpmo"),
+    "resolved_model_type": model_type,
+    "resolved_module": getattr(module, "__name__", ""),
+    "resolved_has_model": hasattr(module, "Model"),
+}
+print(json.dumps(payload, sort_keys=True))
+"""
+    proc = subprocess.run(
+        [str(python_path), "-B", "-s", "-c", code],
+        cwd="/tmp",
+        env=env,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        timeout=30,
+        check=False,
+    )
+    payload: dict[str, object] = {}
+    if proc.returncode == 0 and proc.stdout.strip():
+        try:
+            payload = json.loads(proc.stdout.splitlines()[-1])
+        except Exception as exc:  # noqa: BLE001 - report malformed probe output
+            payload = {"parse_error": f"{type(exc).__name__}: {exc}"}
+    checks = {
+        "installed_model_remapping": payload.get("model_remapping") == "minicpmo",
+        "installed_prompt_config_present": payload.get("model_config_present") is True,
+        "installed_prompt_config_matches_minicpmo": (
+            payload.get("model_config_matches_minicpmo") is True
+        ),
+        "installed_get_model_and_args_resolves_minicpmo": (
+            payload.get("resolved_model_type") == "minicpmo"
+            and payload.get("resolved_has_model") is True
+            and str(payload.get("resolved_module", "")).endswith(".minicpmo")
+        ),
+    }
+    return {
+        "returncode": proc.returncode,
+        "stdout_tail": proc.stdout.splitlines()[-5:],
+        "stderr_tail": proc.stderr.splitlines()[-20:],
+        "payload": payload,
+        "checks": checks,
+    }
 
 
 def _issue181_checks(root: Path) -> dict[str, bool]:
@@ -87,9 +158,15 @@ def _issue182_checks(root: Path) -> dict[str, bool]:
     }
 
 
-def _issue183_checks(root: Path) -> dict[str, bool]:
+def _issue183_checks(
+    root: Path,
+    installed_minicpm_probe: dict[str, object],
+) -> dict[str, bool]:
     verify_bundled = _read(root / "panel/scripts/verify-bundled-python.sh")
     engine_tests = _read(root / "tests/test_engine_audit.py")
+    installed_checks = installed_minicpm_probe.get("checks")
+    if not isinstance(installed_checks, dict):
+        installed_checks = {}
     return {
         "minicpm_v46_registry_remap": (
             'MODEL_REMAPPING.get("minicpmv4_6") != "minicpmo"' in verify_bundled
@@ -105,11 +182,25 @@ def _issue183_checks(root: Path) -> dict[str, bool]:
             and "test_mlx_vlm_registry_patch_remaps_minicpm_v46_to_minicpmo"
             in engine_tests
         ),
+        "installed_app_minicpm_v46_runtime_remap": all(
+            installed_checks.get(key) is True
+            for key in (
+                "installed_model_remapping",
+                "installed_prompt_config_present",
+                "installed_prompt_config_matches_minicpmo",
+                "installed_get_model_and_args_resolves_minicpmo",
+            )
+        ),
     }
 
 
-def build_audit(root: Path) -> dict:
+def build_audit(
+    root: Path,
+    *,
+    installed_python: Path = INSTALLED_PYTHON,
+) -> dict:
     root = root.resolve()
+    installed_minicpm_probe = _run_installed_minicpm_v46_probe(installed_python)
     issues = {
         "181": {
             "title": (
@@ -128,7 +219,7 @@ def build_audit(root: Path) -> dict:
         },
         "183": {
             "title": "MiniCPM-V-4.6 model_type must remap to mlx-vlm minicpmo",
-            "checks": _issue183_checks(root),
+            "checks": _issue183_checks(root, installed_minicpm_probe),
             "release_clearance": "source_and_packaged_minicpm_v46_load_guarded",
         },
     }
@@ -143,6 +234,7 @@ def build_audit(root: Path) -> dict:
         "artifact": "",
         "status": "fail" if focused_failures else "pass",
         "issues": issues,
+        "installed_minicpm_v46_probe": installed_minicpm_probe,
         "focused_failures": focused_failures,
         "release_boundary": (
             "Issues #181-#183 have focused no-heavy source/packaged guard "
