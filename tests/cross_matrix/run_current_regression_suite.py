@@ -13,16 +13,20 @@ from contextlib import contextmanager
 import hashlib
 import json
 import os
+import signal
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 from typing import Any
 
 
 DEFAULT_OUT = Path(
-    "build/current-regression-suite-20260601-developer-id-dmg-assertions.json"
+    "build/current-regression-suite-20260601-pipe-safe-runner.json"
 )
+DEFAULT_STEP_TIMEOUT_SEC = 900.0
+STEP_TIMEOUT_RETURNCODE = 124
 
 EXPECTED_OPEN_REQUIREMENTS = [
     "Real Electron UI cross-family live model matrix is release-cleared",
@@ -201,22 +205,66 @@ def _scoped_jang_tools_source(jang_tools_source: Path | None):
                 os.environ[key] = previous
 
 
-def _run_step(name: str, cmd: list[str], cwd: Path) -> dict[str, Any]:
+def _run_step(
+    name: str,
+    cmd: list[str],
+    cwd: Path,
+    *,
+    timeout_sec: float = DEFAULT_STEP_TIMEOUT_SEC,
+) -> dict[str, Any]:
     started = time.monotonic()
-    proc = subprocess.run(
-        cmd,
-        cwd=cwd,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        check=False,
-    )
-    output = proc.stdout
+    timed_out = False
+    with tempfile.TemporaryFile("w+", encoding="utf-8", errors="replace") as output_file:
+        proc = subprocess.Popen(
+            cmd,
+            cwd=cwd,
+            text=True,
+            stdout=output_file,
+            stderr=subprocess.STDOUT,
+            start_new_session=True,
+        )
+        try:
+            returncode = proc.wait(timeout=timeout_sec)
+        except subprocess.TimeoutExpired:
+            timed_out = True
+            try:
+                os.killpg(proc.pid, signal.SIGTERM)
+            except ProcessLookupError:
+                pass
+            except Exception:
+                proc.terminate()
+            try:
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                try:
+                    os.killpg(proc.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                except Exception:
+                    proc.kill()
+                proc.wait()
+            returncode = STEP_TIMEOUT_RETURNCODE
+        else:
+            try:
+                os.killpg(proc.pid, signal.SIGTERM)
+            except ProcessLookupError:
+                pass
+            except Exception:
+                pass
+        output_file.flush()
+        output_file.seek(0)
+        output = output_file.read()
+    if timed_out:
+        output = (
+            f"{output}\n[TIMEOUT] step {name} exceeded {timeout_sec:.1f}s; "
+            "terminated process group"
+        )
     return {
         "name": name,
         "command": cmd,
-        "returncode": proc.returncode,
+        "returncode": returncode,
         "elapsed_sec": round(time.monotonic() - started, 3),
+        "timed_out": timed_out,
         "stdout_tail": output.splitlines()[-80:],
     }
 

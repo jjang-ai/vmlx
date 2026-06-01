@@ -2,6 +2,8 @@ import json
 import os
 from pathlib import Path
 import hashlib
+import sys
+import time
 
 
 def _write_json(path: Path, obj: dict) -> None:
@@ -306,6 +308,31 @@ def test_current_regression_suite_refreshes_release_boundary_artifacts():
     assert ordered.index("installed_app_runtime_parity_audit") < ordered.index(
         "issue175_179_release_boundary_audit"
     )
+
+
+def test_current_regression_suite_does_not_hang_on_pipe_inheriting_descendants(tmp_path):
+    from tests.cross_matrix import run_current_regression_suite as suite
+
+    script = tmp_path / "pipe_holder.py"
+    script.write_text(
+        "import subprocess, sys\n"
+        "subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(5)'])\n"
+        "print('parent exited')\n",
+        encoding="utf-8",
+    )
+
+    started = time.monotonic()
+    step = suite._run_step(
+        "pipe_holder",
+        [sys.executable, str(script)],
+        tmp_path,
+        timeout_sec=0.2,
+    )
+
+    assert time.monotonic() - started < 2.0
+    assert step["returncode"] == 0
+    assert step["timed_out"] is False
+    assert "parent exited" in "\n".join(step["stdout_tail"])
 
 
 def test_current_regression_suite_hashes_model_matrix_contract_sources():

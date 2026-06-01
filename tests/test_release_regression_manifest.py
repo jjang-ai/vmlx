@@ -2945,7 +2945,8 @@ def test_release_regression_manifest_current_sweep_uses_latest_live_smoke_artifa
     assert "current-regression-suite-20260528-installed-aggregate-stale.json" not in joined
     assert "current-regression-suite-20260528-epipe-aggregate-guard.json" not in joined
     assert "current-regression-suite-20260528-dsv4-continue-refresh.json" not in joined
-    assert "current-regression-suite-20260601-developer-id-dmg-assertions.json" in joined
+    assert "current-regression-suite-20260601-pipe-safe-runner.json" in joined
+    assert "current-regression-suite-20260601-developer-id-dmg-assertions.json" not in joined
     assert "current-regression-suite-20260601-cache-ipc-installed-refresh.json" not in joined
     assert "current-regression-suite-20260601-after-adhoc-reseal.json" not in joined
     assert "current-regression-suite-20260601-qwen3vl-minicpm-mpp-final.json" not in joined
