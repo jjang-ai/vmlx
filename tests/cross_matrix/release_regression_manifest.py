@@ -6683,6 +6683,9 @@ def _validate_current_regression_suite_artifact(root: Path) -> dict[str, Any]:
     open_requirement_detail_failures = _validate_open_requirement_details(
         open_requirement_details
     )
+    progress_checkpoint_failures = _validate_current_suite_progress_checkpoints(
+        payload
+    )
     source_hashes = payload.get("source_hashes")
     if not isinstance(source_hashes, dict):
         source_hashes = {}
@@ -6729,7 +6732,58 @@ def _validate_current_regression_suite_artifact(root: Path) -> dict[str, Any]:
         result["missing_source_hashes"] = missing_source_hashes
     if stale_source_hashes:
         result["stale_source_hashes"] = stale_source_hashes
+    if progress_checkpoint_failures:
+        result["progress_checkpoint_failures"] = progress_checkpoint_failures
     return result
+
+
+def _validate_current_suite_progress_checkpoints(
+    payload: dict[str, Any],
+) -> list[str]:
+    failures: list[str] = []
+    if "current_step" not in payload:
+        failures.append("missing_current_step")
+    if "completed_steps" not in payload:
+        failures.append("missing_completed_steps")
+
+    completed_steps = payload.get("completed_steps")
+    if "completed_steps" in payload and not isinstance(completed_steps, list):
+        failures.append("completed_steps_not_list")
+
+    steps = payload.get("steps")
+    if not isinstance(steps, dict):
+        return failures
+
+    step_names = [str(name) for name in steps]
+    completed_step_names: list[str] = []
+    if isinstance(completed_steps, list):
+        completed_step_names = [str(name) for name in completed_steps]
+        unknown_completed = [
+            name for name in completed_step_names if name not in step_names
+        ]
+        if unknown_completed:
+            failures.append(
+                f"completed_steps_unknown:{','.join(unknown_completed[:5])}"
+            )
+
+    current_step = payload.get("current_step")
+    if current_step is not None and str(current_step) not in step_names:
+        failures.append(f"current_step_unknown:{current_step}")
+
+    if (
+        "current_step" in payload
+        and current_step is None
+        and payload.get("status") in {"open", "pass"}
+        and isinstance(completed_steps, list)
+    ):
+        missing_completed = [
+            name for name in step_names if name not in completed_step_names
+        ]
+        if missing_completed:
+            failures.append(
+                f"completed_steps_missing_final_steps:{','.join(missing_completed[:5])}"
+            )
+    return failures
 
 
 def _current_regression_suite_state_is_acceptable(
@@ -6744,6 +6798,8 @@ def _current_regression_suite_state_is_acceptable(
     if regression_suite.get("stale_source_hashes"):
         return False
     if regression_suite.get("open_requirement_detail_failures"):
+        return False
+    if regression_suite.get("progress_checkpoint_failures"):
         return False
     if regression_suite["status"] == "pass" and not regression_suite["failed_steps"]:
         return True

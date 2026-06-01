@@ -2788,6 +2788,18 @@ def _passing_open_requirement_details() -> dict[str, object]:
     }
 
 
+def _passing_current_suite_progress_checkpoints() -> dict[str, object]:
+    steps = {
+        "objective_digest": {"status": "pass"},
+        "release_regression_manifest": {"status": "pass"},
+    }
+    return {
+        "current_step": None,
+        "completed_steps": list(steps),
+        "steps": steps,
+    }
+
+
 def test_release_regression_manifest_covers_required_domains():
     manifest = build_manifest()
     domains = {row["domain"] for row in manifest["rows"]}
@@ -7734,6 +7746,7 @@ def test_release_regression_manifest_validates_current_proof_sweep_artifacts(tmp
                 "failed_steps": [],
                 "open_requirements": EXPECTED_CURRENT_OPEN_REQUIREMENTS,
                 "open_requirement_details": open_requirement_details,
+                **_passing_current_suite_progress_checkpoints(),
             }
         )
         + "\n",
@@ -9065,6 +9078,7 @@ def test_release_regression_manifest_rejects_stale_current_objective_digest(tmp_
                 "failed_steps": [],
                 "open_requirements": EXPECTED_CURRENT_OPEN_REQUIREMENTS,
                 "open_requirement_details": _passing_open_requirement_details(),
+                **_passing_current_suite_progress_checkpoints(),
             }
         )
         + "\n",
@@ -9103,6 +9117,7 @@ def test_release_regression_manifest_rejects_missing_or_failing_current_artifact
                 "failed_steps": [],
                 "open_requirements": EXPECTED_CURRENT_OPEN_REQUIREMENTS,
                 "open_requirement_details": _passing_open_requirement_details(),
+                **_passing_current_suite_progress_checkpoints(),
             }
         )
         + "\n",
@@ -10573,6 +10588,10 @@ def test_release_regression_manifest_rejects_unexpected_current_regression_suite
         "unexpected_open_requirements": ["Server max output/context wiring regressed"],
         "missing_expected_open_requirements": [],
         "open_requirement_detail_failures": [],
+        "progress_checkpoint_failures": [
+            "missing_current_step",
+            "missing_completed_steps",
+        ],
     }
 
 
@@ -10645,6 +10664,39 @@ def test_release_regression_manifest_rejects_missing_current_suite_source_hashes
     result = manifest._validate_current_regression_suite_artifact(tmp_path)
 
     assert result["missing_source_hashes"] == [source_rel]
+    assert manifest._current_regression_suite_state_is_acceptable(result) is False
+
+
+def test_release_regression_manifest_rejects_current_suite_without_progress_checkpoints(
+    tmp_path,
+):
+    from tests.cross_matrix import release_regression_manifest as manifest
+
+    regression_suite = tmp_path / CURRENT_REGRESSION_SUITE_ARTIFACT
+    regression_suite.parent.mkdir(parents=True, exist_ok=True)
+    regression_suite.write_text(
+        json.dumps(
+            {
+                "status": "open",
+                "failed_steps": [],
+                "open_requirements": EXPECTED_CURRENT_OPEN_REQUIREMENTS,
+                "open_requirement_details": _passing_open_requirement_details(),
+                "steps": {
+                    "objective_digest": {"status": "pass"},
+                    "release_regression_manifest": {"status": "pass"},
+                },
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    result = manifest._validate_current_regression_suite_artifact(tmp_path)
+
+    assert result["progress_checkpoint_failures"] == [
+        "missing_current_step",
+        "missing_completed_steps",
+    ]
     assert manifest._current_regression_suite_state_is_acceptable(result) is False
 
 
@@ -12610,6 +12662,7 @@ def test_release_regression_manifest_runner_embeds_current_proof_validation(tmp_
                 "failed_steps": [],
                 "open_requirements": EXPECTED_CURRENT_OPEN_REQUIREMENTS,
                 "open_requirement_details": _passing_open_requirement_details(),
+                **_passing_current_suite_progress_checkpoints(),
             }
         )
         + "\n",
