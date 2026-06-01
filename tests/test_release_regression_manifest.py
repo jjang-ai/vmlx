@@ -1351,11 +1351,12 @@ def _write_expected_public_app_issue_audit(root: Path) -> None:
                         "title": "Performance regression in v1.5.32 compared to v1.3.53",
                         "focused_source_slice": "pass",
                         "release_clearance": (
-                            "tracked_as_performance_regression_release_blocker"
+                            "mapped_to_current_installed_app_gemma_qwen_speed_gate"
                         ),
                         "checks": {
                             "gemma4_installed_speed_risk_tracked": True,
-                            "gemma4_installed_speed_artifacts_below_floor": True,
+                            "gemma4_current_installed_ui_speed_gate_passes": True,
+                            "gemma4_cold_wall_includes_ttft_tracked": True,
                             "qwen35_installed_app_speed_gate_passes": True,
                             "qwen36_speed_review_tracked": True,
                         },
@@ -1466,19 +1467,14 @@ def test_release_regression_manifest_rejects_public_issue116_without_thinking_of
     assert "missing_issue:116" in result["failures"]
 
 
-def test_release_regression_manifest_adds_issue115_performance_blocker():
+def test_release_regression_manifest_does_not_block_on_issue115_after_current_speed_proofs():
     sweep = validate_current_proof_sweep_artifacts(Path("."))
     blockers = {
         blocker["id"]: blocker
         for blocker in sweep["release_blocker_ledger"]["blockers"]
     }
 
-    blocker = blockers["issue115_installed_app_performance_regression_open"]
-    assert blocker["status"] == "open"
-    assert blocker["evidence"] == CURRENT_PUBLIC_APP_ISSUE_AUDIT_ARTIFACT
-    assert "Gemma" in blocker["next_proof"]
-    assert "Qwen" not in blocker["next_proof"]
-    assert blocker["details"]["checks"]["qwen35_installed_app_speed_gate_passes"] is True
+    assert "issue115_installed_app_performance_regression_open" not in blockers
 
 
 def test_release_regression_manifest_rejects_public_issue169_without_installed_runtime_flavor(
@@ -7950,26 +7946,6 @@ def test_release_regression_manifest_validates_current_proof_sweep_artifacts(tmp
                 },
             },
             {
-                "id": "issue115_installed_app_performance_regression_open",
-                "status": "open",
-                "evidence": CURRENT_PUBLIC_APP_ISSUE_AUDIT_ARTIFACT,
-                "next_proof": (
-                    "Rerun reporter-equivalent Gemma installed-app speed proof "
-                    "under current app/runtime and replace sub-floor speed "
-                    "artifacts before release."
-                ),
-                "details": {
-                    "repo": "jjang-ai/mlxstudio",
-                    "title": "Performance regression in v1.5.32 compared to v1.3.53",
-                    "checks": {
-                        "gemma4_installed_speed_artifacts_below_floor": True,
-                        "gemma4_installed_speed_risk_tracked": True,
-                        "qwen35_installed_app_speed_gate_passes": True,
-                        "qwen36_speed_review_tracked": True,
-                    },
-                },
-            },
-            {
                 "id": "real_ui_dsv4_memory_blocked",
                 "status": "open",
                 "evidence": CURRENT_REAL_UI_DSV4_MEMORY_PREFLIGHT_ARTIFACT,
@@ -13436,10 +13412,12 @@ def test_release_regression_manifest_tracks_gemma4_crack_language_visible_qualit
     assert "generic TurboQuant KV off" in joined
     assert "source now proves native mixed-SWA cache telemetry as paged+mixed_swa" in joined
     assert "clears the sustained 512-token speed-floor prompt" in joined
-    assert "Current installed app proves source-hash parity and paged+mixed_swa cache telemetry" in joined
-    assert "installed app speed remains a release risk" in joined
-    assert "wall decode samples are below 80 tok/s" in joined
+    assert "Current installed app proves source-hash parity, paged+mixed_swa cache telemetry" in joined
+    assert "stream UI TPS above 80 tok/s for cold and cache-hit rows" in joined
+    assert "cold wall decode includes TTFT and remains tracked separately" in joined
     assert "decode_tok_s_stream" in joined
+    assert "installed app speed remains a release risk" not in joined
+    assert "wall decode samples are below 80 tok/s" not in joined
     assert "installed repeat still remains below or unstable" not in joined
     assert "compat MLX wheels remain a separate Sequoia-flavor speed/quality risk" in joined
     assert "installed app currently uses macosx_14_0_arm64 MLX/Metal wheels" in joined
@@ -13453,6 +13431,7 @@ def test_release_regression_manifest_tracks_gemma4_crack_language_visible_qualit
     assert "current-runtime-memory-stress-gemma4-26b-jang4m-chat-thinkingoff-speed-floor-prompt-cachehit-512-installed-app-repeat-20260525.json" in joined
     assert "current-runtime-memory-stress-gemma4-26b-jang4m-chat-thinkingoff-speed-floor-prompt-cachehit-512-installed-app-trace-20260525.json" in joined
     assert "current-runtime-memory-stress-gemma4-26b-jang4m-chat-thinkingoff-speed-floor-installed-app-triple-nocache-256-streaming-20260525.json" in joined
+    assert "current-runtime-memory-stress-gemma4-26b-jang4m-chat-thinkingoff-speed-floor-issue115-installed-app-20260601.json" in joined
     assert "current-runtime-memory-stress-gemma4-26b-jang4m-chat-thinkingoff-cachehit-256-installed-app-native-schema-v5-20260525.json" not in joined
     assert "current-runtime-memory-stress-gemma4-26b-jang4m-chat-thinkingoff-cachehit-256-installed-app-skip-redundant-store-20260525.json" not in joined
     assert "current-runtime-memory-stress-gemma4-26b-jang4m-chat-thinkingoff-cachehit-speedram-945c84ba-20260524b.json" not in joined
@@ -13481,7 +13460,7 @@ def test_release_regression_manifest_gemma4_installed_wheel_claim_matches_instal
     assert "installed Tahoe-native app now uses macosx_26_0_arm64" not in joined
 
 
-def test_release_regression_manifest_does_not_overclaim_gemma4_installed_speed_floor():
+def test_release_regression_manifest_clears_gemma4_ui_speed_without_hiding_cold_wall_ttft():
     manifest = build_manifest()
     rows = {row["id"]: row for row in manifest["rows"]}
 
@@ -13493,19 +13472,21 @@ def test_release_regression_manifest_does_not_overclaim_gemma4_installed_speed_f
         if "installed-app" in artifact and "speed-floor" in artifact
     ]
 
-    below_floor: list[float] = []
-    for artifact in installed_speed_artifacts:
-        payload = json.loads(Path(artifact).read_text())
-        for result in payload.get("results", []):
-            speed = result.get("speed", {})
-            decode_tok_s_wall = speed.get("decode_tok_s_wall")
-            if decode_tok_s_wall is not None and decode_tok_s_wall < 80.0:
-                below_floor.append(decode_tok_s_wall)
+    current_artifact = Path(
+        "build/current-runtime-memory-stress-gemma4-26b-jang4m-chat-thinkingoff-speed-floor-issue115-installed-app-20260601.json"
+    )
+    payload = json.loads(current_artifact.read_text())
+    stream_tps = [
+        result["stream_speed"]["decode_tok_s_stream"]
+        for result in payload["results"]
+    ]
+    cold_wall = payload["results"][0]["speed"]["decode_tok_s_wall"]
 
-    assert below_floor
-    assert "installed app speed remains a release risk" in joined
-    assert "installed-app chat streaming proof clears the 80 tok/s decode floor" not in joined
-    assert "every required chat/Responses/cold/cache-hit sample meets the 80 tok/s decode floor" not in joined
+    assert min(stream_tps) >= 80.0
+    assert cold_wall < 80.0
+    assert "stream UI TPS above 80 tok/s for cold and cache-hit rows" in joined
+    assert "cold wall decode includes TTFT and remains tracked separately" in joined
+    assert "installed app speed remains a release risk" not in joined
 
 
 def test_release_regression_manifest_live_soak_does_not_overclaim_qwen_mtp():

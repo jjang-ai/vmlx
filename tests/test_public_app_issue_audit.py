@@ -79,11 +79,12 @@ def test_public_app_issue_audit_tracks_open_app_runtime_issue_slices():
     )
     assert audit["issues"]["115"]["focused_source_slice"] == "pass"
     assert audit["issues"]["115"]["checks"]["gemma4_installed_speed_risk_tracked"] is True
-    assert audit["issues"]["115"]["checks"]["gemma4_installed_speed_artifacts_below_floor"] is True
+    assert audit["issues"]["115"]["checks"]["gemma4_current_installed_ui_speed_gate_passes"] is True
+    assert audit["issues"]["115"]["checks"]["gemma4_cold_wall_includes_ttft_tracked"] is True
     assert audit["issues"]["115"]["checks"]["qwen36_speed_review_tracked"] is True
     assert audit["issues"]["115"]["checks"]["qwen35_installed_app_speed_gate_passes"] is True
     assert audit["issues"]["115"]["release_clearance"] == (
-        "tracked_as_performance_regression_release_blocker"
+        "mapped_to_current_installed_app_gemma_qwen_speed_gate"
     )
     assert audit["issues"]["118"]["focused_source_slice"] == "pass"
     assert audit["issues"]["118"]["checks"]["download_worker_clears_raw_endpoint"] is True

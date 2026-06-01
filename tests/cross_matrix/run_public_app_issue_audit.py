@@ -51,6 +51,9 @@ GEMMA4_INSTALLED_SPEED_ARTIFACTS = (
         "build/current-runtime-memory-stress-gemma4-26b-jang4m-chat-thinkingoff-speed-floor-installed-app-triple-nocache-256-streaming-20260525.json"
     ),
 )
+GEMMA4_CURRENT_INSTALLED_SPEED_ARTIFACT = Path(
+    "build/current-runtime-memory-stress-gemma4-26b-jang4m-chat-thinkingoff-speed-floor-issue115-installed-app-20260601.json"
+)
 QWEN35_INSTALLED_SPEED_ARTIFACT = Path(
     "build/current-decode-speed-live-qwen35-4bit-issue115-installed-app-after-decode-position-20260601.json"
 )
@@ -443,6 +446,65 @@ def _installed_gemma4_speed_samples_below_floor(root: Path) -> list[float]:
     return below
 
 
+def _gemma4_current_installed_ui_speed_gate(root: Path) -> dict[str, bool]:
+    payload = _load_json(root / GEMMA4_CURRENT_INSTALLED_SPEED_ARTIFACT)
+    results = payload.get("results")
+    if not isinstance(results, list) or len(results) < 3:
+        return {
+            "ui_speed_passes": False,
+            "cold_wall_ttft_tracked": False,
+        }
+
+    stream_speeds: list[float] = []
+    cached_wall_speeds: list[float] = []
+    cold_wall_below_floor = False
+    cold_stream_above_floor = False
+    mixed_swa_cache_hits = 0
+    for idx, result in enumerate(results):
+        if not isinstance(result, dict) or result.get("status") != "ok":
+            return {
+                "ui_speed_passes": False,
+                "cold_wall_ttft_tracked": False,
+            }
+        stream_speed = result.get("stream_speed")
+        speed = result.get("speed")
+        if not isinstance(stream_speed, dict) or not isinstance(speed, dict):
+            return {
+                "ui_speed_passes": False,
+                "cold_wall_ttft_tracked": False,
+            }
+        decode_stream = stream_speed.get("decode_tok_s_stream")
+        decode_wall = speed.get("decode_tok_s_wall")
+        if not isinstance(decode_stream, int | float):
+            return {
+                "ui_speed_passes": False,
+                "cold_wall_ttft_tracked": False,
+            }
+        stream_speeds.append(float(decode_stream))
+        cached_tokens = int(stream_speed.get("cached_tokens") or 0)
+        if idx == 0:
+            cold_stream_above_floor = float(decode_stream) >= 80.0
+            cold_wall_below_floor = (
+                isinstance(decode_wall, int | float) and float(decode_wall) < 80.0
+            )
+        if cached_tokens > 0:
+            if speed.get("cache_detail") == "paged+mixed_swa":
+                mixed_swa_cache_hits += 1
+            if isinstance(decode_wall, int | float):
+                cached_wall_speeds.append(float(decode_wall))
+
+    return {
+        "ui_speed_passes": (
+            min(stream_speeds) >= 80.0
+            and len(cached_wall_speeds) >= 2
+            and min(cached_wall_speeds) >= 80.0
+            and mixed_swa_cache_hits >= 2
+            and payload.get("status") == "pass"
+        ),
+        "cold_wall_ttft_tracked": cold_wall_below_floor and cold_stream_above_floor,
+    }
+
+
 def _qwen35_installed_speed_gate_passes(root: Path) -> bool:
     payload = _load_json(root / QWEN35_INSTALLED_SPEED_ARTIFACT)
     for result in payload.get("results") or []:
@@ -470,16 +532,21 @@ def _qwen35_installed_speed_gate_passes(root: Path) -> bool:
 def _issue115_checks(root: Path) -> dict[str, bool]:
     release_manifest = _read(root / "tests/cross_matrix/release_regression_manifest.py")
     release_tests = _read(root / "tests/test_release_regression_manifest.py")
-    below_floor = _installed_gemma4_speed_samples_below_floor(root)
+    gemma_current = _gemma4_current_installed_ui_speed_gate(root)
     return {
         "gemma4_installed_speed_risk_tracked": (
             "Gemma4 26B mixed-SWA UI/app-engine speed is not cleared" in release_manifest
-            and "installed app speed remains a release risk" in release_manifest
-            and "Gemma4 speed remains uncleared" in release_manifest
-            and "test_release_regression_manifest_does_not_overclaim_gemma4_installed_speed_floor"
+            and "stream UI TPS above 80 tok/s for cold and cache-hit rows" in release_manifest
+            and "cold wall decode includes TTFT and remains tracked separately" in release_manifest
+            and "test_release_regression_manifest_clears_gemma4_ui_speed_without_hiding_cold_wall_ttft"
             in release_tests
         ),
-        "gemma4_installed_speed_artifacts_below_floor": bool(below_floor),
+        "gemma4_current_installed_ui_speed_gate_passes": (
+            gemma_current["ui_speed_passes"]
+        ),
+        "gemma4_cold_wall_includes_ttft_tracked": (
+            gemma_current["cold_wall_ttft_tracked"]
+        ),
         "qwen36_speed_review_tracked": (
             "qwen-jang-mx-live-speed-review" in release_manifest
             and "Qwen3.6-27B JANG_4M live decode speed" in release_manifest
@@ -648,7 +715,7 @@ def build_audit(root: Path) -> dict[str, Any]:
             "repo": "jjang-ai/mlxstudio",
             "title": "Performance regression in v1.5.32 compared to v1.3.53",
             "checks": _issue115_checks(root),
-            "release_clearance": "tracked_as_performance_regression_release_blocker",
+            "release_clearance": "mapped_to_current_installed_app_gemma_qwen_speed_gate",
         },
         "118": {
             "repo": "jjang-ai/mlxstudio",

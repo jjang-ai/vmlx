@@ -324,7 +324,6 @@ def _release_manifest_failure_is_expected(step: dict[str, Any], root: Path) -> b
     allowed_blocker_ids = {
         "packaged_app_developer_id_signing_blocked",
         "dsv4_long_output_code_exactness_open",
-        "issue115_installed_app_performance_regression_open",
         "issue175_179_release_boundary_audit",
         "installed_app_runtime_parity_audit",
         "real_ui_dsv4_memory_blocked",

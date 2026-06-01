@@ -1857,8 +1857,8 @@ _ROWS: list[dict[str, Any]] = [
             "Latest bundled 256-token cache-hit probe still reports sub-floor wall throughput and generic live TurboQuant KV under mixed_swa_kv_v1 health, so the speed blocker is not a short-output artifact",
             "After syncing bundled/app jang_loader, installed-app health now reports generic TurboQuant KV off with mixed_swa_kv_v1, but decode remains below the 80 tok/s floor",
             "source now proves native mixed-SWA cache telemetry as paged+mixed_swa and clears the sustained 512-token speed-floor prompt after the redundant full-prefix cache store fix",
-            "Current installed app proves source-hash parity and paged+mixed_swa cache telemetry; installed app speed remains a release risk because several wall decode samples are below 80 tok/s even though decode_tok_s_stream is above the floor",
-            "compat MLX wheels remain a separate Sequoia-flavor speed/quality risk; installed app currently uses macosx_14_0_arm64 MLX/Metal wheels, so Tahoe-native speed/quality claims require explicit native-flavor artifacts rather than /Applications/vMLX.app; Gemma4 speed remains uncleared until fresh installed-app speed-floor artifacts replace the older sub-floor rows",
+            "Current installed app proves source-hash parity, paged+mixed_swa cache telemetry, and stream UI TPS above 80 tok/s for cold and cache-hit rows (`decode_tok_s_stream`); cold wall decode includes TTFT and remains tracked separately",
+            "compat MLX wheels remain a separate Sequoia-flavor speed/quality risk; installed app currently uses macosx_14_0_arm64 MLX/Metal wheels, so Tahoe-native speed/quality claims require explicit native-flavor artifacts rather than /Applications/vMLX.app; current Gemma4 installed-app UI-speed proof supersedes the older sub-floor wall rows for #115",
         ],
         "commands": [
             "panel/bundled-python/python/bin/python3 tests/cross_matrix/run_runtime_memory_stress_probe.py --row gemma4_26b_jang4m --route responses --enable-thinking --max-tokens 512 --skip-prefix-cache --expect-visible-content --out build/current-runtime-memory-stress-gemma4-26b-jang4m-responses-thinkingon-app-visible-512-nocache-20260524.json",
@@ -1879,6 +1879,7 @@ _ROWS: list[dict[str, Any]] = [
             "build/current-runtime-memory-stress-gemma4-26b-jang4m-chat-thinkingoff-speed-floor-prompt-cachehit-512-installed-app-repeat-20260525.json",
             "build/current-runtime-memory-stress-gemma4-26b-jang4m-chat-thinkingoff-speed-floor-prompt-cachehit-512-installed-app-trace-20260525.json",
             "build/current-runtime-memory-stress-gemma4-26b-jang4m-chat-thinkingoff-speed-floor-installed-app-triple-nocache-256-streaming-20260525.json",
+            "build/current-runtime-memory-stress-gemma4-26b-jang4m-chat-thinkingoff-speed-floor-issue115-installed-app-20260601.json",
             "build/current-production-family-live-gemma4-crack-parser-tool-config-latest-jang-20260524.json",
             "build/current-production-family-audit-gemma4-crack-live-bundled-a461e09c-20260524.json",
         ],
@@ -4711,7 +4712,7 @@ def _validate_current_public_app_issue_audit(root: Path) -> dict[str, Any]:
             "installed_and_staged_sequoia_compat_runtime_flavor_guarded_packaging_still_gated"
         ),
         "111": "mapped_to_mistral_small4_vlm_wrapper_detection_guard",
-        "115": "tracked_as_performance_regression_release_blocker",
+        "115": "mapped_to_current_installed_app_gemma_qwen_speed_gate",
         "116": "mapped_to_thinking_off_ui_api_request_guard",
         "117": "mapped_to_minimax_k_issue179_live_reporter_prompt_boundary",
         "180": "mapped_to_minimax_small_real_ui_language_numeric_guard",
@@ -4738,7 +4739,8 @@ def _validate_current_public_app_issue_audit(root: Path) -> dict[str, Any]:
         ),
         "115": (
             "gemma4_installed_speed_risk_tracked",
-            "gemma4_installed_speed_artifacts_below_floor",
+            "gemma4_current_installed_ui_speed_gate_passes",
+            "gemma4_cold_wall_includes_ttft_tracked",
             "qwen36_speed_review_tracked",
         ),
         "116": (
