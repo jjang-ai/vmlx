@@ -13,8 +13,13 @@ def test_packaged_integrity_known_open_rows_match_current_suite():
 
 def test_packaged_integrity_default_out_tracks_current_release_proof_artifact():
     assert runner.DEFAULT_OUT == Path(
-        "build/current-packaged-integrity-contract-20260601-wrapper-epipe-package-refresh.json"
+        "build/current-packaged-integrity-contract-20260601-cache-ipc-epipe-package-refresh.json"
     )
+
+
+def test_packaged_integrity_hashes_cache_ipc_guard_source():
+    assert "panel/src/main/ipc/cache.ts" in runner.SOURCE_HASH_FILES
+    assert "tests/test_packaged_integrity_contract.py" in runner.SOURCE_HASH_FILES
 
 
 def _result(name: str, returncode: int, stdout_tail: list[str], passed: int | None = None):
@@ -339,9 +344,40 @@ def test_packaged_epipe_guard_accepts_wrapped_disconnect_recursion(tmp_path):
         b"nestedErrors.some((nested) => isExpectedChildProcessStreamDisconnectError(nested))\n"
         b"wrappedDisconnects.some((nested) => isExpectedImageServerDisconnectError(nested))\n"
         b"nestedErrors.some((nested) => isExpectedImageServerDisconnectError(nested))\n"
+        b"function isExpectedCacheEndpointDisconnectError\n"
+        b"function fetchCacheJson\n"
+        b"Cache stats\n"
+        b"connection lost. The model server may have stopped or restarted\n"
+        b"wrappedDisconnects.some((nested) => isExpectedCacheEndpointDisconnectError(nested))\n"
+        b"nestedErrors.some((nested) => isExpectedCacheEndpointDisconnectError(nested))\n"
     )
 
     assert runner._check_packaged_epipe_closed_stream_guards(tmp_path) is True
+
+
+def test_packaged_epipe_guard_rejects_missing_cache_endpoint_disconnect_guard(tmp_path):
+    app_asar = tmp_path / runner.PACKAGED_RENDERER_ASAR
+    app_asar.parent.mkdir(parents=True)
+    app_asar.write_bytes(
+        b"responseWritable(res)\n"
+        b"!anyRes.closed\n"
+        b"requestWritable(req)\n"
+        b"!anyReq.closed\n"
+        b"function chatBackendRequestWritable(req)\n"
+        b"function imageServerRequestWritable(req)\n"
+        b"!req.closed\n"
+        b"isExpectedChildProcessStreamDisconnectError\n"
+        b"isExpectedImageServerDisconnectError\n"
+        b"wrappedDisconnects\n"
+        b"reason\n"
+        b"detail\n"
+        b"wrappedDisconnects.some((nested) => isExpectedChildProcessStreamDisconnectError(nested))\n"
+        b"nestedErrors.some((nested) => isExpectedChildProcessStreamDisconnectError(nested))\n"
+        b"wrappedDisconnects.some((nested) => isExpectedImageServerDisconnectError(nested))\n"
+        b"nestedErrors.some((nested) => isExpectedImageServerDisconnectError(nested))\n"
+    )
+
+    assert runner._check_packaged_epipe_closed_stream_guards(tmp_path) is False
 
 
 def test_packaged_integrity_checks_packaged_python_has_no_pycache(monkeypatch, tmp_path):
@@ -898,6 +934,12 @@ def test_packaged_epipe_closed_stream_guard_check_accepts_current_asar(tmp_path)
         b"nestedErrors.some((nested) => isExpectedChildProcessStreamDisconnectError(nested))\n"
         b"wrappedDisconnects.some((nested) => isExpectedImageServerDisconnectError(nested))\n"
         b"nestedErrors.some((nested) => isExpectedImageServerDisconnectError(nested))\n"
+        b"function isExpectedCacheEndpointDisconnectError\n"
+        b"function fetchCacheJson\n"
+        b"Cache stats\n"
+        b"connection lost. The model server may have stopped or restarted\n"
+        b"wrappedDisconnects.some((nested) => isExpectedCacheEndpointDisconnectError(nested))\n"
+        b"nestedErrors.some((nested) => isExpectedCacheEndpointDisconnectError(nested))\n"
     )
 
     assert runner._check_packaged_epipe_closed_stream_guards(tmp_path) is True

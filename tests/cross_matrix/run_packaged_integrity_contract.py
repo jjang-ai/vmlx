@@ -25,7 +25,7 @@ from typing import Any
 
 
 DEFAULT_OUT = Path(
-    "build/current-packaged-integrity-contract-20260601-wrapper-epipe-package-refresh.json"
+    "build/current-packaged-integrity-contract-20260601-cache-ipc-epipe-package-refresh.json"
 )
 EXPECTED_OPEN_REQUIREMENTS = [
     "Real Electron UI cross-family live model matrix is release-cleared",
@@ -86,6 +86,12 @@ PACKAGED_EPIPE_CLOSED_STREAM_GUARD_STRINGS = (
     b"nestedErrors.some((nested) => isExpectedChildProcessStreamDisconnectError(nested))",
     b"wrappedDisconnects.some((nested) => isExpectedImageServerDisconnectError(nested))",
     b"nestedErrors.some((nested) => isExpectedImageServerDisconnectError(nested))",
+    b"function isExpectedCacheEndpointDisconnectError",
+    b"function fetchCacheJson",
+    b"Cache stats",
+    b"connection lost. The model server may have stopped or restarted",
+    b"wrappedDisconnects.some((nested) => isExpectedCacheEndpointDisconnectError(nested))",
+    b"nestedErrors.some((nested) => isExpectedCacheEndpointDisconnectError(nested))",
 )
 
 STAGED_APP_ENGINE_HASH_FILES = (
@@ -136,6 +142,7 @@ SOURCE_HASH_FILES = (
     "panel/src/main/engine-manager.ts",
     "panel/src/main/process-manager.ts",
     "panel/src/main/ipc/developer.ts",
+    "panel/src/main/ipc/cache.ts",
     "panel/src/main/ipc/image.ts",
     "panel/src/main/ipc/imageGenerationState.ts",
     "panel/src/main/ipc/models.ts",
@@ -144,6 +151,7 @@ SOURCE_HASH_FILES = (
     "panel/package.json",
     "pyproject.toml",
     "tests/test_release_gate_python_app.py",
+    "tests/test_packaged_integrity_contract.py",
     "tests/cross_matrix/summarize_objective_proof.py",
     "tests/test_objective_proof_digest.py",
 )
