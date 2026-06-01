@@ -150,17 +150,33 @@ def _write_current_objective_digest(
             },
         },
     ]
-    requirements.extend(
-        {
-            "requirement": requirement,
-            "status": "open",
-            "details": {
-                "evidence_files_present": not missing_evidence,
-                "missing_evidence": missing_evidence or [],
-            },
+    for requirement in open_rows:
+        details: dict[str, object] = {
+            "evidence_files_present": not missing_evidence,
+            "missing_evidence": missing_evidence or [],
         }
-        for requirement in open_rows
-    )
+        if (
+            requirement
+            == "MiniMax-M2.7-JANGTQ_K reporter parity/root cause is release-cleared"
+        ):
+            details.update(
+                {
+                    "release_blocker_id": "issue179_minimax_k_root_cause_audit",
+                    "not_proven": [
+                        "reporter installed app bundle hash matches public/local server.py route proof"
+                    ],
+                    "release_boundary": (
+                        "#179 remains open: reporter bundle/server parity is not proven."
+                    ),
+                }
+            )
+        requirements.append(
+            {
+                "requirement": requirement,
+                "status": "open",
+                "details": details,
+            }
+        )
     artifact.write_text(json.dumps({"requirements": requirements}) + "\n", encoding="utf-8")
 
 
@@ -1914,6 +1930,59 @@ def test_current_proof_sweep_rejects_issue179_missing_reporter_server_hash_prove
     ]
 
     assert "missing_reporter_server_hash_provenance" in result["failures"]
+
+
+def test_current_proof_sweep_surfaces_issue179_open_not_proven_details(tmp_path):
+    _write_expected_issue179_minimax_k_root_cause_audit(tmp_path)
+    path = tmp_path / CURRENT_ISSUE179_MINIMAX_K_ROOT_CAUSE_AUDIT_ARTIFACT
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    not_proven = (
+        "reporter installed app bundle hash matches public/local server.py route proof"
+    )
+    payload["status"] = "open"
+    payload["not_proven"] = [not_proven]
+    payload["release_boundary"] = (
+        "#179 remains open until reporter bundle hash provenance is proven."
+    )
+    payload["reporter_server_hash_parity"]["status"] = "open"
+    payload["reporter_server_hash_parity"][
+        "failure"
+    ] = "reporter_installed_server_hash_drift"
+    payload["reporter_server_hash_parity"]["provenance"] = {
+        "status": "open",
+        "checked_sources": [
+            "source_contract",
+            "local_installed_bundle",
+            "public_v1549_tahoe_dmg",
+            "local_installed_app_backups",
+            "git_history",
+        ],
+        "failure": "reporter_server_hash_provenance_unknown",
+    }
+    path.write_text(json.dumps(payload) + "\n", encoding="utf-8")
+
+    sweep = validate_current_proof_sweep_artifacts(tmp_path)
+    result = sweep["issue179_minimax_k_root_cause_audit"]
+
+    assert result["status"] == "open"
+    assert result["not_proven"] == [not_proven]
+    assert result["release_boundary"] == (
+        "#179 remains open until reporter bundle hash provenance is proven."
+    )
+    assert result["failures"] == []
+    blockers = {
+        blocker["id"]: blocker
+        for blocker in sweep["release_blocker_ledger"]["blockers"]
+    }
+    assert blockers["issue179_minimax_k_root_cause_audit"]["details"][
+        "not_proven"
+    ] == [not_proven]
+    assert blockers["issue179_minimax_k_root_cause_audit"]["details"][
+        "release_boundary"
+    ] == "#179 remains open until reporter bundle hash provenance is proven."
+    assert blockers["issue179_minimax_k_root_cause_audit"]["details"][
+        "reporter_server_hash_parity"
+    ]["failure"] == "reporter_installed_server_hash_drift"
 
 
 def test_current_proof_sweep_requires_issue179_memory_preflight_when_open(tmp_path):
@@ -9234,6 +9303,31 @@ def test_release_regression_manifest_rejects_stale_dsv4_open_requirement_details
         {
             "requirement": "DSV4 long-output/code/file-generation quality is release-cleared",
             "reason": "missing_or_stale_exact_code_root_boundary",
+        }
+    ]
+
+
+def test_release_regression_manifest_rejects_stale_issue179_objective_digest_details(
+    tmp_path,
+):
+    _write_current_objective_digest(tmp_path)
+    path = tmp_path / "build/current-objective-proof-audit-20260531-nemotron-exact-finalizer-ledger.json"
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    for row in payload["requirements"]:
+        if (
+            row.get("requirement")
+            == "MiniMax-M2.7-JANGTQ_K reporter parity/root cause is release-cleared"
+        ):
+            row["details"] = {"evidence_files_present": True, "missing_evidence": []}
+    path.write_text(json.dumps(payload) + "\n", encoding="utf-8")
+
+    result = validate_current_proof_sweep_artifacts(tmp_path)
+
+    assert result["status"] == "fail"
+    assert result["objective_digest"]["open_requirement_detail_failures"] == [
+        {
+            "requirement": "MiniMax-M2.7-JANGTQ_K reporter parity/root cause is release-cleared",
+            "reason": "missing_or_stale_issue179_root_cause_boundary",
         }
     ]
 

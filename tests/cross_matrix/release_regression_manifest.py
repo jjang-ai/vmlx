@@ -2374,6 +2374,7 @@ def validate_current_proof_sweep_artifacts(root: Path) -> dict[str, Any]:
         and not objective_digest["invalid_requirements"]
         and not objective_digest["failed_requirements"]
         and not objective_digest["missing_evidence_requirements"]
+        and not objective_digest["open_requirement_detail_failures"]
     )
     model_family_matrix_ok = (
         model_family_matrix["status"] == "pass"
@@ -3028,8 +3029,18 @@ def _current_release_blocker_ledger(
                 "reasoning-panel garbage with the reporter prompt/session."
             ),
         }
+        details = {
+            key: issue179_minimax_k_root_cause_audit.get(key)
+            for key in (
+                "not_proven",
+                "release_boundary",
+                "reporter_server_hash_parity",
+                "reporter_parity_comparison",
+            )
+            if key in issue179_minimax_k_root_cause_audit
+        }
         if isinstance(issue179_minimax_k_live_probe_memory_preflight, dict):
-            details = {
+            preflight_details = {
                 key: issue179_minimax_k_live_probe_memory_preflight.get(key)
                 for key in (
                     "artifact",
@@ -3048,10 +3059,10 @@ def _current_release_blocker_ledger(
                 )
                 if key in issue179_minimax_k_live_probe_memory_preflight
             }
-            if details:
-                blocker["details"] = {
-                    "live_probe_memory_preflight": details,
-                }
+            if preflight_details:
+                details["live_probe_memory_preflight"] = preflight_details
+        if details:
+            blocker["details"] = details
         blockers.append(blocker)
 
     if not isinstance(public_app_issue_audit, dict):
@@ -4477,6 +4488,8 @@ def _validate_current_issue179_minimax_k_root_cause_audit(root: Path) -> dict[st
         result["failures"].append(f"missing_not_proven:{item}")
     if status == "pass" and not_proven:
         result["failures"].append("issue179_pass_has_not_proven_items")
+    result["not_proven"] = [str(item) for item in not_proven]
+    result["release_boundary"] = payload.get("release_boundary")
 
     local_reporter_prompt = payload.get("local_reporter_prompt_reproduction")
     if not isinstance(local_reporter_prompt, dict):
@@ -6834,6 +6847,8 @@ def _validate_current_objective_digest_artifact(root: Path) -> dict[str, Any]:
         "invalid_requirements": [],
         "failed_requirements": [],
         "missing_evidence_requirements": [],
+        "open_requirement_details": {},
+        "open_requirement_detail_failures": [],
     }
     path = root / CURRENT_OBJECTIVE_DIGEST_ARTIFACT
     if not path.exists():
@@ -6852,6 +6867,7 @@ def _validate_current_objective_digest_artifact(root: Path) -> dict[str, Any]:
         return result
 
     open_requirements: list[str] = []
+    open_requirement_details: dict[str, dict[str, Any]] = {}
     invalid_requirements: list[dict[str, Any]] = []
     failed_requirements: list[dict[str, str]] = []
     missing_evidence_requirements: list[dict[str, Any]] = []
@@ -6868,6 +6884,11 @@ def _validate_current_objective_digest_artifact(root: Path) -> dict[str, Any]:
             continue
         if status == "open":
             open_requirements.append(requirement)
+            open_requirement_details[requirement] = {
+                key: item[key]
+                for key in ("status", "caveat", "evidence", "details")
+                if key in item
+            }
         elif status != "pass":
             failed_requirements.append(
                 {"requirement": requirement, "status": status or "missing"}
@@ -6902,6 +6923,9 @@ def _validate_current_objective_digest_artifact(root: Path) -> dict[str, Any]:
     missing_expected_open_requirements = [
         item for item in EXPECTED_CURRENT_OPEN_REQUIREMENTS if item not in open_requirements
     ]
+    open_requirement_detail_failures = (
+        _validate_objective_digest_open_requirement_details(open_requirement_details)
+    )
     result.update(
         {
             "status": "pass",
@@ -6911,9 +6935,51 @@ def _validate_current_objective_digest_artifact(root: Path) -> dict[str, Any]:
             "invalid_requirements": invalid_requirements,
             "failed_requirements": failed_requirements,
             "missing_evidence_requirements": missing_evidence_requirements,
+            "open_requirement_details": open_requirement_details,
+            "open_requirement_detail_failures": open_requirement_detail_failures,
         }
     )
     return result
+
+
+def _validate_objective_digest_open_requirement_details(
+    open_requirement_details: dict[str, Any],
+) -> list[dict[str, str]]:
+    failures: list[dict[str, str]] = []
+    requirement = "MiniMax-M2.7-JANGTQ_K reporter parity/root cause is release-cleared"
+    row = open_requirement_details.get(requirement)
+    if not isinstance(row, dict):
+        failures.append(
+            {
+                "requirement": requirement,
+                "reason": "missing_or_stale_issue179_root_cause_boundary",
+            }
+        )
+        return failures
+    details = row.get("details")
+    if not isinstance(details, dict):
+        details = {}
+    not_proven = details.get("not_proven")
+    if not isinstance(not_proven, list):
+        not_proven = []
+    release_boundary = details.get("release_boundary")
+    if (
+        details.get("release_blocker_id") != "issue179_minimax_k_root_cause_audit"
+        or not any(
+            str(item)
+            == "reporter installed app bundle hash matches public/local server.py route proof"
+            for item in not_proven
+        )
+        or not isinstance(release_boundary, str)
+        or "#179 remains open" not in release_boundary
+    ):
+        failures.append(
+            {
+                "requirement": requirement,
+                "reason": "missing_or_stale_issue179_root_cause_boundary",
+            }
+        )
+    return failures
 
 
 def _validate_open_requirement_details(
