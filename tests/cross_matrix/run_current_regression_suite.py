@@ -520,7 +520,7 @@ CURRENT_SUITE_COMMANDS: dict[str, list[str]] = {
         sys.executable,
         "tests/cross_matrix/run_installed_app_runtime_parity_audit.py",
         "--out",
-        "build/current-installed-app-runtime-parity-audit-20260531-live-epipe-refresh.json",
+        "build/current-installed-app-runtime-parity-audit-20260601-epipe-renderer-installed.json",
     ],
     "staged_app_runtime_parity_audit": [
         sys.executable,

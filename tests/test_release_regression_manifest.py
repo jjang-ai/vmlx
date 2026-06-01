@@ -2496,8 +2496,10 @@ def test_release_regression_manifest_current_sweep_uses_latest_live_smoke_artifa
     assert "current-regression-suite-20260528-release-ready-top-level.json" not in joined
     assert "current-regression-suite-20260528-dsv4-memory-refresh.json" not in joined
     assert "current-regression-suite-20260528-signing-detail-ledger.json" not in joined
-    assert "current-installed-app-runtime-parity-audit-20260531-live-epipe-refresh.json" in joined
-    assert "current-installed-app-runtime-parity-audit-20260531-live-epipe-refresh.json" in row_text
+    assert "current-installed-app-runtime-parity-audit-20260601-epipe-renderer-installed.json" in joined
+    assert "current-installed-app-runtime-parity-audit-20260601-epipe-renderer-installed.json" in row_text
+    assert "current-installed-app-runtime-parity-audit-20260531-live-epipe-refresh.json" not in joined
+    assert "current-installed-app-runtime-parity-audit-20260531-live-epipe-refresh.json" not in row_text
     assert "current-installed-app-runtime-parity-audit-20260531-childstream-epipe-installed-sync.json" not in joined
     assert "current-installed-app-runtime-parity-audit-20260531-childstream-epipe-installed-sync.json" not in row_text
     assert "current-installed-app-runtime-parity-audit-20260528-epipe-aggregate-guard.json" not in joined
