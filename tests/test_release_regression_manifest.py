@@ -711,12 +711,21 @@ def _write_passing_real_ui_live_model_proof_artifacts(root: Path) -> None:
                 "lfm25-moe-a1b-jang2l-stricttools-responses-post-epipe-20260531-proof.json",
                 "lfm25-moe-a1b-jang2l-devbuild-cache-parser-rerun-20260531-proof.json",
                 "lfm25-moe-a1b-jang2l-responses-tools-l2storage-pagedlocked-after-content-json-ban-20260531-proof.json",
+                "installed-app-lfm25-moe-a1b-jang2l-responses-tools-l2storage-cachecontrols-localonly-20260601-proof.json",
             )
         ):
             proof["rendererWireApi"] = "responses"
             proof["eventCounts"] = {"complete": 2, "tool": 4}
             proof["requestedBuiltinTools"] = True
             proof["chatOverrides"] = {"builtinToolsEnabled": True}
+            if "installed-app" in row["proof"]:
+                proof["uiLaunchMode"] = "installed-app"
+                proof["installedAppPath"] = "/Applications/vMLX.app"
+                proof["python"] = (
+                    "/Applications/vMLX.app/Contents/Resources/"
+                    "bundled-python/python/bin/python3"
+                )
+                proof["provenSurfaces"] = ["installed_app_ui"]
             proof["serverCacheControls"] = {
                 "requested": True,
                 "verified": True,
@@ -768,6 +777,7 @@ def _write_passing_real_ui_live_model_proof_artifacts(root: Path) -> None:
                 "lfm25-moe-a1b-jang2l-stricttools-responses-post-epipe-20260531-proof.json",
                 "lfm25-moe-a1b-jang2l-devbuild-cache-parser-rerun-20260531-proof.json",
                 "lfm25-moe-a1b-jang2l-responses-tools-l2storage-pagedlocked-after-content-json-ban-20260531-proof.json",
+                "installed-app-lfm25-moe-a1b-jang2l-responses-tools-l2storage-cachecontrols-localonly-20260601-proof.json",
             )
         ):
             add_extensive_tool_churn(proof)
@@ -2916,6 +2926,17 @@ def test_release_regression_manifest_uses_installed_app_nemotron_cachecontrols_p
     assert expected in row["chat_screenshot"]
 
 
+def test_release_regression_manifest_uses_installed_app_lfm25_responses_delta_cache_proof():
+    row = CURRENT_REAL_UI_LIVE_MODEL_PROOF_ROWS["lfm25_moe_a1b_responses_delta"]
+
+    expected = (
+        "current-real-ui-installed-app-lfm25-moe-a1b-jang2l-responses-tools-"
+        "l2storage-cachecontrols-localonly-20260601"
+    )
+    assert expected in row["proof"]
+    assert expected in row["chat_screenshot"]
+
+
 def test_release_regression_manifest_real_ui_script_preserves_tool_probe_file_evidence():
     script = Path("panel/scripts/live-real-ui-model-proof.mjs")
     source = script.read_text(encoding="utf-8")
@@ -3459,7 +3480,7 @@ def test_release_regression_manifest_real_ui_live_model_rows_include_ling_bailin
     )
     assert (
         rows["lfm25_moe_a1b_responses_delta"]["proof"]
-        == "docs/internal/agent-notes/current-real-ui-live-model-lfm25-moe-a1b-jang2l-responses-tools-l2storage-pagedlocked-after-content-json-ban-20260531-proof.json"
+        == "docs/internal/agent-notes/current-real-ui-installed-app-lfm25-moe-a1b-jang2l-responses-tools-l2storage-cachecontrols-localonly-20260601-proof.json"
     )
 
 
