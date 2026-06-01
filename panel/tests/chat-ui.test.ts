@@ -1295,6 +1295,12 @@ describe('Media attachment product path', () => {
     expect(source).not.toContain("const msg = error?.message || 'Unknown error'")
   })
 
+  it('does not log expected chat EPIPE disconnects as raw failed-message console errors', () => {
+    const source = readFileSync('src/renderer/src/components/chat/ChatInterface.tsx', 'utf8')
+    expect(source).toContain("if (!isExpectedChatDisconnectError(error)) {\n        console.error('Failed to send message:', error)\n      }")
+    expect(source).not.toContain("      console.error('Failed to send message:', error)\n      const msg = formatChatSendErrorMessage(error)")
+  })
+
   it('Thinking Auto and Off clear stale reasoning effort in chat settings', () => {
     const source = readFileSync('src/renderer/src/components/chat/ChatSettings.tsx', 'utf8')
     expect(source).toContain('onClick={() => updateThinkingMode(undefined, undefined)}')

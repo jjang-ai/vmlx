@@ -1396,7 +1396,7 @@ _ROWS: list[dict[str, Any]] = [
             "Ollama adapter streaming/done behavior, streaming num_predict output-cap overrides, malformed num_predict omission, and malformed context omission",
             "Gateway single-model mode auto-switches by requested model id before preserving Ollama streaming content deltas",
             "Gateway disconnect handling guards every streaming JSON write, byte-forwarding path, request-body write, backend request end, destroyed client/backend socket, top-level request handler disconnect failures, nested broken-pipe/write-after-end stream errors, and Ollama client-close backend response aborts against EPIPE/ECONNRESET",
-            "Chat and image IPC backend request finalization also guards EPIPE/ECONNRESET instead of surfacing raw write EPIPE to the app",
+            "Chat, renderer, and image request paths guard EPIPE/ECONNRESET instead of surfacing raw write EPIPE or failed-message console errors to the app",
             "Ollama-specific backend response streams guard response errors at the proxy boundary",
             "Auto chat Max Tokens omits per-request output caps so server startup defaults can apply on Chat Completions and Responses",
             "Chat Completions and Responses streaming usage preserve cached_tokens plus cache_detail through finish chunks",

@@ -126,6 +126,7 @@ REQUIRED_PANEL_API_TEST_MARKERS = (
     "does not leave raw backend request end calls unguarded after disconnect",
     "does not leave raw chat IPC backend request finalization unguarded",
     "normalizes cache IPC endpoint EPIPE disconnects instead of surfacing raw unexpected errors",
+    "does not log expected chat EPIPE disconnects as raw failed-message console errors",
     "routes local image server request writes through EPIPE-aware helpers",
     "image requests disable connection reuse and normalize reset-like socket errors",
 )
@@ -151,6 +152,7 @@ COMMANDS: dict[str, tuple[Path, list[str]]] = {
             "tests/api-gateway-ollama-behavior.test.ts",
             "tests/api-gateway-single-model.behavior.test.ts",
             "tests/chat-override-policy.test.ts",
+            "tests/chat-ui.test.ts",
             "tests/image-generation-state.test.ts",
             "tests/image-system.test.ts",
             "--reporter=verbose",
@@ -337,6 +339,7 @@ def build_artifact(root: Path) -> dict[str, Any]:
         "panel_ipc_backend_request_epipe_guard": (
             not failed
             and "does not leave raw chat IPC backend request finalization unguarded" not in missing_panel_markers
+            and "does not log expected chat EPIPE disconnects as raw failed-message console errors" not in missing_panel_markers
             and "routes local image server request writes through EPIPE-aware helpers" not in missing_panel_markers
             and "image requests disable connection reuse and normalize reset-like socket errors" not in missing_panel_markers
             and panel_passed >= 73

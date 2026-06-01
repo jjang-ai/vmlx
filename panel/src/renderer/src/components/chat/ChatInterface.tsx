@@ -500,7 +500,9 @@ export function ChatInterface({ chatId, onNewChat, sessionEndpoint, sessionId, s
     } catch (error: any) {
       // Guard: if user switched chats, don't show error or touch state
       if (chatIdRef.current !== chatId) return
-      console.error('Failed to send message:', error)
+      if (!isExpectedChatDisconnectError(error)) {
+        console.error('Failed to send message:', error)
+      }
       const msg = formatChatSendErrorMessage(error)
       showToast('error', 'Message failed', msg)
       // Reload messages from DB to restore consistent state

@@ -75,8 +75,12 @@ def test_api_surface_contract_pins_named_public_surface_edges():
     assert "does not leave raw backend request end calls unguarded after disconnect" in panel
     assert "does not leave raw chat IPC backend request finalization unguarded" in panel
     assert "normalizes cache IPC endpoint EPIPE disconnects instead of surfacing raw unexpected errors" in panel
+    assert "does not log expected chat EPIPE disconnects as raw failed-message console errors" in panel
     assert "routes local image server request writes through EPIPE-aware helpers" in panel
     assert "image requests disable connection reuse and normalize reset-like socket errors" in panel
+    assert "tests/chat-ui.test.ts" in Path(
+        "tests/cross_matrix/run_api_surface_contract.py"
+    ).read_text()
     assert "panel_gateway_streaming_disconnect_epipe_guard" in Path(
         "tests/cross_matrix/run_api_surface_contract.py"
     ).read_text()
