@@ -21,7 +21,7 @@ from typing import Any
 
 
 DEFAULT_OUT = Path(
-    "build/current-regression-suite-20260601-installed-download-proof.json"
+    "build/current-regression-suite-20260601-developer-id-dmg-assertions.json"
 )
 
 EXPECTED_OPEN_REQUIREMENTS = [
