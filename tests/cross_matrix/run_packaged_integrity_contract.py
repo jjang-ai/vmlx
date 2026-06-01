@@ -25,7 +25,7 @@ from typing import Any
 
 
 DEFAULT_OUT = Path(
-    "build/current-packaged-integrity-contract-20260601-dsv4-preflight-refresh.json"
+    "build/current-packaged-integrity-contract-20260601-after-adhoc-reseal.json"
 )
 EXPECTED_OPEN_REQUIREMENTS = [
     "Real Electron UI cross-family live model matrix is release-cleared",
@@ -422,7 +422,8 @@ def _package_signing_preflight(root: Path) -> dict[str, Any]:
             break
     signature_is_adhoc = "Signature=adhoc" in signature_text
     hardened_runtime_enabled = any(
-        line.startswith("CodeDirectory ") and "(runtime)" in line
+        line.startswith("CodeDirectory ")
+        and re.search(r"\([^)]*\bruntime\b[^)]*\)", line) is not None
         for line in signature_text.splitlines()
     )
     developer_id_signed = (

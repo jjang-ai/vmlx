@@ -13,7 +13,7 @@ def test_packaged_integrity_known_open_rows_match_current_suite():
 
 def test_packaged_integrity_default_out_tracks_current_release_proof_artifact():
     assert runner.DEFAULT_OUT == Path(
-        "build/current-packaged-integrity-contract-20260601-dsv4-preflight-refresh.json"
+        "build/current-packaged-integrity-contract-20260601-after-adhoc-reseal.json"
     )
 
 
@@ -665,6 +665,52 @@ def test_package_signing_preflight_rejects_developer_id_without_hardened_runtime
     assert (
         preflight["signing_blocker_reason"]
         == "packaged_app_missing_hardened_runtime"
+    )
+
+
+def test_package_signing_preflight_detects_runtime_flag_with_adhoc_signature(
+    monkeypatch, tmp_path
+):
+    app = tmp_path / runner.PACKAGED_APP
+    app.mkdir(parents=True)
+
+    def fake_run(cmd, **_kwargs):
+        command = " ".join(str(part) for part in cmd)
+        if cmd[:3] == ["codesign", "-dv", "--verbose=4"]:
+            return runner.subprocess.CompletedProcess(
+                cmd,
+                0,
+                "\n".join(
+                    [
+                        "CodeDirectory v=20500 size=461 flags=0x10002(adhoc,runtime) hashes=4+7 location=embedded",
+                        "Signature=adhoc",
+                        "TeamIdentifier=not set",
+                    ]
+                ),
+            )
+        if cmd[:2] == ["codesign", "--verify"]:
+            return runner.subprocess.CompletedProcess(cmd, 0, "valid on disk\n")
+        if cmd[:3] == ["security", "find-identity", "-v"]:
+            return runner.subprocess.CompletedProcess(
+                cmd,
+                0,
+                '  1) D4DBBCB52F666D03F0A5154BFFEA2227BEE8FC7C "Developer ID Application: ShieldStack LLC (55KGF2S5AY)"\n',
+            )
+        if cmd[:2] == ["security", "show-keychain-info"]:
+            return runner.subprocess.CompletedProcess(cmd, 0, "no-timeout\n")
+        if "codesign --force --sign" in command:
+            return runner.subprocess.CompletedProcess(cmd, 0, "probe signed\n")
+        raise AssertionError(command)
+
+    monkeypatch.setattr(runner.subprocess, "run", fake_run)
+
+    preflight = runner._package_signing_preflight(tmp_path)
+
+    assert preflight["signature_is_adhoc"] is True
+    assert preflight["hardened_runtime_enabled"] is True
+    assert (
+        preflight["signing_blocker_reason"]
+        == "packaged_app_not_developer_id_signed"
     )
 
 
