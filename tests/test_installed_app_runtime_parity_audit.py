@@ -53,6 +53,8 @@ def test_installed_app_runtime_parity_requires_versioned_python_entrypoint():
     assert (
         "installed_bundled_python_launch_crashes_not_reproduced" in audit["checks"]
     )
+    assert "installed_bundled_engine_hash_parity" in audit["checks"]
+    assert "bundled_engine_hash_parity" in audit
     assert "vmlx_bundled_python_launch_crash_reports" in audit
     assert audit["installed_versioned_python"].endswith(
         "Contents/Resources/bundled-python/python/bin/python3.12"
@@ -145,6 +147,54 @@ def test_installed_app_runtime_parity_can_target_staged_app_path(tmp_path):
     assert audit["installed_app_asar"] == str(staged_asar)
     assert audit["serve_help_returncode"] == 127
     assert audit["panel_main_stderr"] == f"missing installed app.asar: {staged_asar}"
+
+
+def test_installed_app_runtime_parity_rejects_stale_bundled_engine_file(tmp_path):
+    from tests.cross_matrix import run_installed_app_runtime_parity_audit as gate
+
+    root = tmp_path / "repo"
+    source_engine = root / "vmlx_engine"
+    bundled_python = tmp_path / "Staged.app/Contents/Resources/bundled-python/python"
+    bundled_engine = bundled_python / "lib/python3.12/site-packages/vmlx_engine"
+    source_engine.mkdir(parents=True)
+    bundled_engine.mkdir(parents=True)
+    (source_engine / "server.py").write_text("source\n", encoding="utf-8")
+    (bundled_engine / "server.py").write_text("stale\n", encoding="utf-8")
+
+    result = gate._check_bundled_engine_hash_parity(
+        root,
+        bundled_python / "bin/python3",
+        relpaths=("server.py",),
+    )
+
+    assert result["ok"] is False
+    assert result["missing_source"] == []
+    assert result["missing_bundled"] == []
+    assert result["mismatched"] == ["server.py"]
+    assert result["files"]["server.py"]["match"] is False
+
+
+def test_installed_app_runtime_parity_accepts_matching_bundled_engine_file(tmp_path):
+    from tests.cross_matrix import run_installed_app_runtime_parity_audit as gate
+
+    root = tmp_path / "repo"
+    source_engine = root / "vmlx_engine"
+    bundled_python = tmp_path / "Staged.app/Contents/Resources/bundled-python/python"
+    bundled_engine = bundled_python / "lib/python3.12/site-packages/vmlx_engine"
+    source_engine.mkdir(parents=True)
+    bundled_engine.mkdir(parents=True)
+    (source_engine / "server.py").write_text("same\n", encoding="utf-8")
+    (bundled_engine / "server.py").write_text("same\n", encoding="utf-8")
+
+    result = gate._check_bundled_engine_hash_parity(
+        root,
+        bundled_python / "bin/python3",
+        relpaths=("server.py",),
+    )
+
+    assert result["ok"] is True
+    assert result["mismatched"] == []
+    assert result["files"]["server.py"]["match"] is True
 
 
 def test_installed_app_runtime_parity_write_audit_accepts_staged_paths(tmp_path):

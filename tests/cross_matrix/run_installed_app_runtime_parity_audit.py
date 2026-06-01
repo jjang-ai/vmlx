@@ -8,6 +8,7 @@ isolated subprocess from /tmp so source-checkout modules cannot satisfy imports.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -26,6 +27,20 @@ INSTALLED_PYTHON = Path(
 INSTALLED_APP_ASAR = Path("/Applications/vMLX.app/Contents/Resources/app.asar")
 INSTALLED_APP_USER_DATA = Path.home() / "Library/Application Support/vMLX"
 INSTALLED_APP_DIAGNOSTIC_REPORTS = Path.home() / "Library/Logs/DiagnosticReports"
+CRITICAL_ENGINE_HASH_FILES = (
+    "server.py",
+    "cli.py",
+    "scheduler.py",
+    "prefix_cache.py",
+    "paged_cache.py",
+    "block_disk_store.py",
+    "disk_cache.py",
+    "utils/single_batch_generator.py",
+    "utils/jang_loader.py",
+    "api/tool_calling.py",
+    "api/anthropic_adapter.py",
+    "api/ollama_adapter.py",
+)
 DISCONNECT_ERROR_RE = re.compile(
     r"\b(?:EPIPE|ECONNRESET|ERR_STREAM_DESTROYED|write EPIPE)\b",
     re.IGNORECASE,
@@ -119,6 +134,69 @@ def _python_version(python_path: Path) -> dict[str, Any]:
         "returncode": proc.returncode,
         "stdout": proc.stdout,
         "stderr": proc.stderr,
+    }
+
+
+def _python_root_from_executable(python_path: Path) -> Path:
+    if python_path.parent.name == "bin":
+        return python_path.parent.parent
+    return python_path
+
+
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _check_bundled_engine_hash_parity(
+    root: Path,
+    python_path: Path,
+    *,
+    relpaths: tuple[str, ...] = CRITICAL_ENGINE_HASH_FILES,
+) -> dict[str, Any]:
+    source_engine = root / "vmlx_engine"
+    bundled_engine = (
+        _python_root_from_executable(python_path)
+        / "lib/python3.12/site-packages/vmlx_engine"
+    )
+    files: dict[str, dict[str, Any]] = {}
+    missing_source: list[str] = []
+    missing_bundled: list[str] = []
+    mismatched: list[str] = []
+    for relpath in relpaths:
+        source_path = source_engine / relpath
+        bundled_path = bundled_engine / relpath
+        source_hash = ""
+        bundled_hash = ""
+        if not source_path.exists():
+            missing_source.append(relpath)
+        else:
+            source_hash = _sha256(source_path)
+        if not bundled_path.exists():
+            missing_bundled.append(relpath)
+        else:
+            bundled_hash = _sha256(bundled_path)
+        if source_hash and bundled_hash and source_hash != bundled_hash:
+            mismatched.append(relpath)
+        files[relpath] = {
+            "source": str(source_path),
+            "bundled": str(bundled_path),
+            "source_sha256": source_hash,
+            "bundled_sha256": bundled_hash,
+            "match": bool(source_hash and bundled_hash and source_hash == bundled_hash),
+        }
+    ok = not missing_source and not missing_bundled and not mismatched
+    return {
+        "ok": ok,
+        "source_engine": str(source_engine),
+        "bundled_engine": str(bundled_engine),
+        "missing_source": missing_source,
+        "missing_bundled": missing_bundled,
+        "mismatched": mismatched,
+        "files": files,
     }
 
 
@@ -428,6 +506,7 @@ def build_audit(
     bundled_python_launch_crashes = _scan_vmlx_bundled_python_launch_crashes(
         diagnostic_reports
     )
+    bundled_engine_hash_parity = _check_bundled_engine_hash_parity(root, python_path)
     import_result = _run_installed_python(
         "import inspect, json\n"
         "from types import SimpleNamespace\n"
@@ -509,6 +588,7 @@ def build_audit(
             and "Python 3.12" in versioned_python_text
             and help_result["returncode"] == 0
         ),
+        "installed_bundled_engine_hash_parity": bundled_engine_hash_parity["ok"],
         "serve_help_runs": help_result["returncode"] == 0,
         "responses_cancel_route": any(
             "/v1/responses/{response_id}/cancel" in route
@@ -830,6 +910,7 @@ def build_audit(
         "vmlx_user_data_disconnect_errors": user_data_disconnect_errors,
         "vmlx_diagnostic_disconnect_errors": diagnostic_disconnect_errors,
         "vmlx_bundled_python_launch_crash_reports": bundled_python_launch_crashes,
+        "bundled_engine_hash_parity": bundled_engine_hash_parity,
         "vmlx_bundled_python_launch_crash_repro": {
             "versioned_python_runs": versioned_python_result["returncode"] == 0,
             "serve_help_runs": help_result["returncode"] == 0,
