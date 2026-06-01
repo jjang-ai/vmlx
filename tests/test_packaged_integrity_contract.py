@@ -140,6 +140,7 @@ def test_packaged_integrity_accepts_current_release_gate_unit_count(monkeypatch,
     monkeypatch.setattr(runner, "_check_staged_app_engine_hash_parity", lambda _root: True)
     monkeypatch.setattr(runner, "_check_release_dmg_hardened_runtime_contract", lambda _root: True)
     monkeypatch.setattr(runner, "_check_release_dmg_notarization_verifier_contract", lambda _root: True)
+    monkeypatch.setattr(runner, "_check_release_dmg_notarization_submit_contract", lambda _root: True)
     monkeypatch.setattr(runner, "dry_release_gate_used_current_objective_digest", lambda _step: True)
 
     artifact = runner.build_artifact(tmp_path)
@@ -194,6 +195,7 @@ def test_packaged_integrity_sets_clean_jang_source_env_for_bundle_checks(monkeyp
     monkeypatch.setattr(runner, "_check_staged_app_engine_hash_parity", lambda _root: True)
     monkeypatch.setattr(runner, "_check_release_dmg_hardened_runtime_contract", lambda _root: True)
     monkeypatch.setattr(runner, "_check_release_dmg_notarization_verifier_contract", lambda _root: True)
+    monkeypatch.setattr(runner, "_check_release_dmg_notarization_submit_contract", lambda _root: True)
     monkeypatch.setattr(runner, "dry_release_gate_used_current_objective_digest", lambda _step: True)
 
     artifact = runner.build_artifact(tmp_path, jang_tools_source=clean_jang)
@@ -412,6 +414,10 @@ def test_packaged_integrity_source_hashes_cover_release_dmg_verifier_script():
     assert "panel/scripts/verify-release-dmgs.sh" in runner.SOURCE_HASH_FILES
 
 
+def test_packaged_integrity_source_hashes_cover_release_dmg_notary_script():
+    assert "panel/scripts/notarize-release-dmgs.sh" in runner.SOURCE_HASH_FILES
+
+
 def test_release_dmg_hardened_runtime_contract_rejects_weak_final_codesign(tmp_path):
     script = tmp_path / "panel/scripts/build-release-dmgs.sh"
     script.parent.mkdir(parents=True)
@@ -465,6 +471,31 @@ def test_release_dmg_notarization_verifier_contract_accepts_final_dmg_checks(tmp
     )
 
     assert runner._check_release_dmg_notarization_verifier_contract(tmp_path) is True
+
+
+def test_release_dmg_notarization_submit_contract_rejects_missing_script(tmp_path):
+    assert runner._check_release_dmg_notarization_submit_contract(tmp_path) is False
+
+
+def test_release_dmg_notarization_submit_contract_accepts_signed_dmg_workflow(tmp_path):
+    script = tmp_path / "panel/scripts/notarize-release-dmgs.sh"
+    script.parent.mkdir(parents=True)
+    script.write_text(
+        "#!/usr/bin/env bash\n"
+        "NOTARY_PROFILE=\"${VMLINUX_NOTARY_KEYCHAIN_PROFILE:-vmlx-notary}\"\n"
+        "for flavor in sequoia tahoe; do\n"
+        '  dmg="release/vMLX-${VERSION}-${flavor}-arm64.dmg"\n'
+        '  codesign --verify --verbose=2 "$dmg"\n'
+        '  xcrun notarytool submit "$dmg" --keychain-profile "$NOTARY_PROFILE" --wait --output-format json\n'
+        '  xcrun stapler staple "$dmg"\n'
+        '  xcrun stapler validate "$dmg"\n'
+        '  spctl --assess --type open --context context:primary-signature --verbose=4 "$dmg"\n'
+        '  shasum -a 256 "$dmg"\n'
+        "done\n",
+        encoding="utf-8",
+    )
+
+    assert runner._check_release_dmg_notarization_submit_contract(tmp_path) is True
 
 
 def test_package_signing_preflight_records_missing_signed_app(tmp_path):
@@ -746,6 +777,7 @@ def test_packaged_integrity_surfaces_signing_blocker_without_failing_integrity(
     monkeypatch.setattr(runner, "_check_staged_app_engine_hash_parity", lambda _root: True)
     monkeypatch.setattr(runner, "_check_release_dmg_hardened_runtime_contract", lambda _root: True)
     monkeypatch.setattr(runner, "_check_release_dmg_notarization_verifier_contract", lambda _root: True)
+    monkeypatch.setattr(runner, "_check_release_dmg_notarization_submit_contract", lambda _root: True)
     monkeypatch.setattr(runner, "dry_release_gate_used_current_objective_digest", lambda _step: True)
 
     artifact = runner.build_artifact(tmp_path)

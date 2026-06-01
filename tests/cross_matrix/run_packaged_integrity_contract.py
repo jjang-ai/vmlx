@@ -123,6 +123,7 @@ SOURCE_HASH_FILES = (
     "panel/scripts/verify-bundled-python.sh",
     "panel/scripts/bundle-python.sh",
     "panel/scripts/build-release-dmgs.sh",
+    "panel/scripts/notarize-release-dmgs.sh",
     "panel/scripts/verify-release-dmgs.sh",
     "panel/src/main/index.ts",
     "panel/src/main/user-data-dir.ts",
@@ -308,6 +309,26 @@ def _check_release_dmg_notarization_verifier_contract(root: Path) -> bool:
         "hdiutil verify",
         "codesign --verify",
         "codesign -dv",
+        "xcrun stapler validate",
+        "spctl --assess --type open --context context:primary-signature",
+        "shasum -a 256",
+    )
+    return all(fragment in text for fragment in required_fragments)
+
+
+def _check_release_dmg_notarization_submit_contract(root: Path) -> bool:
+    script = root / "panel/scripts/notarize-release-dmgs.sh"
+    if not script.exists():
+        return False
+    text = script.read_text(encoding="utf-8", errors="replace")
+    required_fragments = (
+        "sequoia tahoe",
+        "VMLINUX_NOTARY_KEYCHAIN_PROFILE",
+        "codesign --verify",
+        "xcrun notarytool submit",
+        "--keychain-profile",
+        "--wait",
+        "xcrun stapler staple",
         "xcrun stapler validate",
         "spctl --assess --type open --context context:primary-signature",
         "shasum -a 256",
@@ -656,6 +677,9 @@ def build_artifact(
         ),
         "release_dmg_notarization_verifier_contract": (
             _check_release_dmg_notarization_verifier_contract(root)
+        ),
+        "release_dmg_notarization_submit_contract": (
+            _check_release_dmg_notarization_submit_contract(root)
         ),
         "dry_release_gate_fails_only_on_known_objectives": release_gate_ok,
         "dry_release_gate_uses_current_objective_digest": (
