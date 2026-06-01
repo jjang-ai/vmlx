@@ -2546,7 +2546,7 @@ def test_release_regression_manifest_current_sweep_uses_latest_live_smoke_artifa
     assert "current-regression-suite-20260528-dsv4-preflight-refresh.json" not in joined
     assert "current-regression-suite-20260528-admin-sleep-sourcehash.json" not in joined
     assert "current-regression-suite-20260528-issue179-econnreset-boundary.json" not in joined
-    assert "current-real-ui-dsv4-memory-preflight-20260531-release-decision-refresh.json" in joined
+    assert "current-real-ui-dsv4-memory-preflight-20260601-local-refresh.json" in joined
     assert "current-real-ui-dsv4-memory-preflight-20260531-live-refresh.json" not in joined
     assert "current-real-ui-dsv4-memory-preflight-20260530-local-refresh.json" not in joined
     assert "current-real-ui-dsv4-memory-preflight-20260528-continue-refresh.json" not in joined
@@ -9778,7 +9778,7 @@ def test_release_regression_manifest_runner_default_out_tracks_current_release_p
     from tests.cross_matrix import run_release_regression_manifest as runner
 
     assert runner.DEFAULT_OUT == Path(
-        "build/current-release-regression-manifest-20260531-release-decision-refresh.json"
+        "build/current-release-regression-manifest-20260601-dsv4-local-preflight-refresh.json"
     )
 
 

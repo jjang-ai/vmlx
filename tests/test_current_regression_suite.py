@@ -764,13 +764,13 @@ def test_current_regression_suite_refreshes_release_regression_manifest(monkeypa
     assert any(
         name == "real_ui_dsv4_memory_preflight"
         and "tests/cross_matrix/run_real_ui_dsv4_memory_preflight.py" in " ".join(cmd)
-        and "build/current-real-ui-dsv4-memory-preflight-20260531-release-decision-refresh.json"
+        and "build/current-real-ui-dsv4-memory-preflight-20260601-local-refresh.json"
         in cmd
         for name, cmd in seen_steps
     )
     assert any(
         name == "release_regression_manifest"
-        and "build/current-release-regression-manifest-20260531-release-decision-refresh.json"
+        and "build/current-release-regression-manifest-20260601-dsv4-local-preflight-refresh.json"
         in cmd
         for name, cmd in seen_steps
     )

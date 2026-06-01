@@ -465,7 +465,7 @@ CURRENT_SUITE_COMMANDS: dict[str, list[str]] = {
         sys.executable,
         "tests/cross_matrix/run_real_ui_dsv4_memory_preflight.py",
         "--out",
-        "build/current-real-ui-dsv4-memory-preflight-20260531-release-decision-refresh.json",
+        "build/current-real-ui-dsv4-memory-preflight-20260601-local-refresh.json",
     ],
     "release_surface_contracts": [
         sys.executable,
@@ -574,7 +574,7 @@ CURRENT_SUITE_COMMANDS: dict[str, list[str]] = {
         "--require-current-proof-sweep",
         "--require-release-ready",
         "--out",
-        "build/current-release-regression-manifest-20260531-release-decision-refresh.json",
+        "build/current-release-regression-manifest-20260601-dsv4-local-preflight-refresh.json",
     ],
 }
 
