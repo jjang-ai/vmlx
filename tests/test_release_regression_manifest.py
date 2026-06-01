@@ -2987,7 +2987,8 @@ def test_release_regression_manifest_real_ui_live_model_script_exists_and_uses_r
     assert "live_speed_floor" in source
     assert "sendErrors" in source
     assert "rendererFailureStage" in source
-    assert "status: rendererResult.rendererFailureStage ? 'fail' : undefined" in source
+    assert "status: rendererResult.rendererFailureStage ? 'fail' : 'pass'" in source
+    assert "status: rendererResult.rendererFailureStage ? 'fail' : undefined" not in source
     assert "failureStage: rendererResult.rendererFailureStage || undefined" in source
     assert "persistedToolsByMessage" in source
     assert "persistedReasoningByMessage" in source

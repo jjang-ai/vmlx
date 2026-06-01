@@ -1602,7 +1602,7 @@ async function main() {
     }
     const result = {
       generatedAt: new Date().toISOString(),
-      status: rendererResult.rendererFailureStage ? 'fail' : undefined,
+      status: rendererResult.rendererFailureStage ? 'fail' : 'pass',
       failureStage: rendererResult.rendererFailureStage || undefined,
       repoDir,
       panelDir,
