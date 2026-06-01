@@ -13,7 +13,7 @@ def test_packaged_integrity_known_open_rows_match_current_suite():
 
 def test_packaged_integrity_default_out_tracks_current_release_proof_artifact():
     assert runner.DEFAULT_OUT == Path(
-        "build/current-packaged-integrity-contract-20260531-after-lfm2-staged-sync.json"
+        "build/current-packaged-integrity-contract-20260601-dsv4-preflight-refresh.json"
     )
 
 
