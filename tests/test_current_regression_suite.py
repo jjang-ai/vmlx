@@ -1075,7 +1075,7 @@ def test_current_regression_suite_refreshes_current_packaged_integrity_artifact(
     )
     assert any(
         name == "api_surface_contracts"
-        and "build/current-api-surface-contract-20260601-wrapped-epipe-refresh.json"
+        and "build/current-api-surface-contract-20260601-child-image-wrapped-epipe-refresh.json"
         in cmd
         for name, cmd in seen_steps
     )

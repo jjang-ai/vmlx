@@ -5,7 +5,7 @@ def test_api_surface_contract_default_out_tracks_current_release_proof_artifact(
     from tests.cross_matrix import run_api_surface_contract as gate
 
     assert gate.DEFAULT_OUT == Path(
-        "build/current-api-surface-contract-20260601-wrapped-epipe-refresh.json"
+        "build/current-api-surface-contract-20260601-child-image-wrapped-epipe-refresh.json"
     )
     assert gate.NESTED_OUT == Path(
         "build/current-api-cache-contract-api-surface-check-20260528-epipe-aggregate-guard.json"

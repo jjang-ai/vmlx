@@ -191,6 +191,11 @@ describe("Ollama gateway parity contracts", () => {
       expect(sourceText).toContain("write EPIPE");
       expect(sourceText).toContain("broken pipe");
       expect(sourceText).toContain("const cause = (err as any)?.cause");
+      expect(sourceText).toContain("const wrappedDisconnects = [");
+      expect(sourceText).toContain("(err as any)?.reason");
+      expect(sourceText).toContain("(err as any)?.error");
+      expect(sourceText).toContain("(err as any)?.detail");
+      expect(sourceText).toContain("wrappedDisconnects.some((nested) => isExpectedChildProcessStreamDisconnectError(nested))");
       expect(sourceText).toContain("const nestedErrors = Array.isArray((err as any)?.errors)");
       expect(sourceText).toContain("nestedErrors.some((nested) => isExpectedChildProcessStreamDisconnectError(nested))");
       expect(sourceText).toContain("attachChildProcessStreamErrorGuard");

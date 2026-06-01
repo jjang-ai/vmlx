@@ -70,6 +70,12 @@ function isExpectedImageServerDisconnectError(error: unknown): boolean {
   const code = String(err?.code || '')
   const message = String(err?.message || error || '')
   const cause = (err as any)?.cause
+  const wrappedDisconnects = [
+    cause,
+    (err as any)?.reason,
+    (err as any)?.error,
+    (err as any)?.detail,
+  ].filter(Boolean)
   const nestedErrors = Array.isArray((err as any)?.errors) ? (err as any).errors : []
   return (
     code === 'EPIPE' ||
@@ -77,7 +83,7 @@ function isExpectedImageServerDisconnectError(error: unknown): boolean {
     code === 'ERR_STREAM_DESTROYED' ||
     code === 'ERR_STREAM_WRITE_AFTER_END' ||
     /EPIPE|write EPIPE|broken pipe|socket hang up|connection reset|premature close|stream.*destroyed|write after end/i.test(message) ||
-    (cause ? isExpectedImageServerDisconnectError(cause) : false) ||
+    wrappedDisconnects.some((nested) => isExpectedImageServerDisconnectError(nested)) ||
     nestedErrors.some((nested) => isExpectedImageServerDisconnectError(nested))
   )
 }

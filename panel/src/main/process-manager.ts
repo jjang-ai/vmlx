@@ -48,6 +48,12 @@ function isExpectedChildProcessStreamDisconnectError(err: unknown): boolean {
   const code = (err as NodeJS.ErrnoException)?.code
   const message = String((err as Error)?.message || '').toLowerCase()
   const cause = (err as any)?.cause
+  const wrappedDisconnects = [
+    cause,
+    (err as any)?.reason,
+    (err as any)?.error,
+    (err as any)?.detail,
+  ].filter(Boolean)
   const nestedErrors = Array.isArray((err as any)?.errors) ? (err as any).errors : []
   return (
     code === "EPIPE" ||
@@ -58,7 +64,7 @@ function isExpectedChildProcessStreamDisconnectError(err: unknown): boolean {
     message.includes("broken pipe") ||
     message.includes("stream has been destroyed") ||
     message.includes("write after end") ||
-    (cause ? isExpectedChildProcessStreamDisconnectError(cause) : false) ||
+    wrappedDisconnects.some((nested) => isExpectedChildProcessStreamDisconnectError(nested)) ||
     nestedErrors.some((nested) => isExpectedChildProcessStreamDisconnectError(nested))
   )
 }

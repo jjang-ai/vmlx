@@ -42,6 +42,13 @@ export function classifyImageGenerationError(
   const msg = String(err?.message || error)
   const code = String(err?.code || '')
   const cause = err?.cause
+  const wrappedDisconnects = [
+    cause,
+    err?.reason,
+    err?.error,
+    err?.detail,
+  ].filter(Boolean)
+  const nestedErrors = Array.isArray(err?.errors) ? err.errors : []
   const reason = controller ? abortReasons.get(controller) : undefined
 
   if (reason === 'cancel') return 'Image generation cancelled.'
@@ -53,7 +60,8 @@ export function classifyImageGenerationError(
     code === 'ERR_STREAM_DESTROYED' ||
     code === 'ERR_STREAM_WRITE_AFTER_END' ||
     /EPIPE|socket hang up|ECONNRESET|write EPIPE|broken pipe|premature close|stream.*destroyed|write after end/i.test(msg) ||
-    (cause ? classifyImageGenerationError(cause, controller).startsWith('Image server connection lost') : false)
+    wrappedDisconnects.some((nested) => classifyImageGenerationError(nested, controller).startsWith('Image server connection lost')) ||
+    nestedErrors.some((nested) => classifyImageGenerationError(nested, controller).startsWith('Image server connection lost'))
   return resetLike
     ? 'Image server connection lost. The model may have crashed, been stopped, or hit memory pressure. Check Logs and restart the image server.'
     : msg

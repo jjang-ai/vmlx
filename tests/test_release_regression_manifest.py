@@ -2835,7 +2835,7 @@ def test_release_regression_manifest_current_sweep_uses_latest_live_smoke_artifa
     assert "current-regression-suite-20260525-cjk-smoke-guard.json" not in joined
     assert "current-regression-suite-20260525-gemma-installed-speed-boundary.json" not in joined
     assert "current-regression-suite-20260524-openai-single-model-streaming-audit.json" not in joined
-    assert "current-api-surface-contract-20260601-wrapped-epipe-refresh.json" in joined
+    assert "current-api-surface-contract-20260601-child-image-wrapped-epipe-refresh.json" in joined
     assert "current-api-surface-contract-20260531-nested-epipe-childstream-refresh.json" not in joined
     assert "current-api-surface-contract-20260529-single-model-transition-lock.json" not in joined
     assert "current-api-surface-contract-20260528-ollama-embedding-timeout.json" not in joined
@@ -12801,7 +12801,7 @@ def test_release_regression_manifest_tracks_api_surface_with_runner_artifact():
     joined = " ".join(row["commands"] + row["artifacts"] + row["proves"])
 
     assert "run_api_surface_contract.py" in joined
-    assert "current-api-surface-contract-20260601-wrapped-epipe-refresh.json" in joined
+    assert "current-api-surface-contract-20260601-child-image-wrapped-epipe-refresh.json" in joined
     assert "current-api-surface-contract-20260531-nested-epipe-childstream-refresh.json" not in joined
     assert "current-api-surface-contract-20260529-single-model-transition-lock.json" in joined
     assert "current-api-surface-contract-20260528-ollama-embeddings-single-model.json" not in joined

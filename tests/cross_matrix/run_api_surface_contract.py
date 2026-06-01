@@ -22,7 +22,7 @@ from typing import Any
 
 
 DEFAULT_OUT = Path(
-    "build/current-api-surface-contract-20260601-wrapped-epipe-refresh.json"
+    "build/current-api-surface-contract-20260601-child-image-wrapped-epipe-refresh.json"
 )
 NESTED_OUT = Path(
     "build/current-api-cache-contract-api-surface-check-20260528-epipe-aggregate-guard.json"

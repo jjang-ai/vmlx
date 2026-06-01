@@ -82,6 +82,26 @@ describe("image generation in-flight state survives tab switches", () => {
     expect(src).toContain("getImageGenerationStatus()");
   });
 
+  it("classifies wrapped image-server EPIPE disconnects", () => {
+    resetImageGenerationStateForTests();
+
+    const wrapped = Object.assign(new Error("request failed"), {
+      reason: Object.assign(new Error("write EPIPE"), { code: "EPIPE" }),
+    });
+
+    expect(classifyImageGenerationError(wrapped)).toBe(
+      "Image server connection lost. The model may have crashed, been stopped, or hit memory pressure. Check Logs and restart the image server.",
+    );
+
+    const aggregate = Object.assign(new Error("aggregate failed"), {
+      errors: [Object.assign(new Error("write EPIPE"), { code: "EPIPE" })],
+    });
+
+    expect(classifyImageGenerationError(aggregate)).toBe(
+      "Image server connection lost. The model may have crashed, been stopped, or hit memory pressure. Check Logs and restart the image server.",
+    );
+  });
+
   it("renderer polls in-flight image status until the detached generation finishes", () => {
     const src = readFileSync(IMAGE_TAB_TSX, "utf-8");
     expect(src).toContain("syncGenerationStatus");
