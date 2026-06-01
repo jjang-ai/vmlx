@@ -121,6 +121,7 @@ SOURCE_HASH_FILES = (
     "panel/scripts/verify-bundled-python.sh",
     "panel/scripts/bundle-python.sh",
     "panel/scripts/build-release-dmgs.sh",
+    "panel/scripts/verify-release-dmgs.sh",
     "panel/src/main/index.ts",
     "panel/src/main/user-data-dir.ts",
     "panel/package.json",
@@ -293,6 +294,23 @@ def _check_release_dmg_hardened_runtime_contract(root: Path) -> bool:
         and "entitlements.mac.plist" in final_sign_block
         and "codesign --verify --deep --strict" in final_sign_block
     )
+
+
+def _check_release_dmg_notarization_verifier_contract(root: Path) -> bool:
+    script = root / "panel/scripts/verify-release-dmgs.sh"
+    if not script.exists():
+        return False
+    text = script.read_text(encoding="utf-8", errors="replace")
+    required_fragments = (
+        "sequoia tahoe",
+        "hdiutil verify",
+        "codesign --verify",
+        "codesign -dv",
+        "xcrun stapler validate",
+        "spctl --assess --type open --context context:primary-signature",
+        "shasum -a 256",
+    )
+    return all(fragment in text for fragment in required_fragments)
 
 
 def _package_signing_preflight(root: Path) -> dict[str, Any]:
@@ -593,6 +611,9 @@ def build_artifact(
         "staged_app_engine_hash_parity": _check_staged_app_engine_hash_parity(root),
         "release_dmg_hardened_runtime_entitlements": (
             _check_release_dmg_hardened_runtime_contract(root)
+        ),
+        "release_dmg_notarization_verifier_contract": (
+            _check_release_dmg_notarization_verifier_contract(root)
         ),
         "dry_release_gate_fails_only_on_known_objectives": release_gate_ok,
         "dry_release_gate_uses_current_objective_digest": (
