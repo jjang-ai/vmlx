@@ -12399,7 +12399,7 @@ def test_release_regression_manifest_tracks_panel_cache_family_gating():
 
     assert row["domain"] == "cache_architecture"
     assert "run_noheavy_panel_settings_contract.py" in joined
-    assert "current-panel-settings-contract-proof-20260528-cache-ui-matrix.json" in joined
+    assert "current-panel-settings-contract-proof-20260601-cache-ui-storage-quant.json" in joined
     assert "current-panel-settings-contract-proof-20260524-text-additional-args-sanitizer.json" in joined
     assert "current-panel-settings-contract-proof-20260522-launch-memory-warning.json" in joined
     assert "DSV4 pool quant" in joined
@@ -13064,7 +13064,7 @@ def test_release_regression_manifest_tracks_cache_architecture_with_runner_artif
     joined = " ".join(row["commands"] + row["artifacts"] + row["proves"])
 
     assert "run_cache_architecture_contract.py" in joined
-    assert "current-cache-architecture-contract-20260531-step37-mixed-swa-runtime.json" in joined
+    assert "current-cache-architecture-contract-20260601-step37-mixed-swa-ui-storage-quant.json" in joined
     assert "current-cache-architecture-contract-20260530-lfm2-tool-parser-local.json" in joined
     assert "current-cache-architecture-contract-20260528-gemma4-mixed-swa-row.json" in joined
     assert "current-cache-architecture-contract-20260527-cache-family-matrix.json" in joined

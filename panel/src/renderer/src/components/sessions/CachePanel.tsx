@@ -99,7 +99,9 @@ export function CachePanel({ endpoint, sessionStatus, sessionId }: CachePanelPro
   const nativeCache = stats?.native_cache
   const turboQuantKv = stats?.turboquant_kv_cache
   const cacheTotals = stats?.cache_totals
-  const attentionKvStorage = nativeCache?.attention_kv_storage_quantization
+  const attentionKvStorage =
+    nativeCache?.attention_kv_storage_quantization ??
+    nativeCache?.storage_quantization
 
   return (
     <div className="space-y-4">

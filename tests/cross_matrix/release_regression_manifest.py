@@ -346,14 +346,14 @@ REQUIRED_RELEASE_DOMAINS = {
 CURRENT_POST_BUDGET_EDGE_ARTIFACTS = {
     "noheavy-api-cache-endpoint-runtime": "build/current-api-cache-contract-proof-20260531-post-step-lfm-refresh.json",
     "chat-settings-max-output-context-ui": "build/current-max-output-context-contract-20260531-post-step-lfm-refresh.json",
-    "panel-session-cache-settings-family-gating": "build/current-panel-settings-contract-proof-20260528-cache-ui-matrix.json",
+    "panel-session-cache-settings-family-gating": "build/current-panel-settings-contract-proof-20260601-cache-ui-storage-quant.json",
     "generation-defaults-no-hidden-forcing": "build/current-generation-defaults-contract-20260531-post-step-lfm-refresh.json",
     "parser-registry-tool-reasoning-parity": "build/current-parser-registry-contract-20260531-post-step-lfm-refresh.json",
     "reasoning-template-no-think-tag-leak": "build/current-reasoning-template-contract-20260526-settings-audit.json",
     "tool-call-loop-parser-cleanup": "build/current-tool-call-contract-20260528-tool-parser-loop-matrix.json",
     "panel-tool-security-loop-boundary": "build/current-panel-tool-security-contract-20260528-tool-loop-security-matrix.json",
     "api-chat-responses-anthropic-ollama-parity": "build/current-api-surface-contract-20260531-nested-epipe-childstream-refresh.json",
-    "cache-architecture-family-classification": "build/current-cache-architecture-contract-20260531-step37-mixed-swa-runtime.json",
+    "cache-architecture-family-classification": "build/current-cache-architecture-contract-20260601-step37-mixed-swa-ui-storage-quant.json",
     "jang-model-compat-runtime-boundary": "build/current-jang-model-compat-contract-20260528-pr155-runtime-boundary.json",
     "model-artifact-format-detection": "build/current-model-artifact-format-contract-20260531-post-step-lfm-refresh.json",
     "model-family-detection-noheavy": "build/current-model-family-detection-contract-20260531-post-step-lfm-refresh.json",
@@ -1240,10 +1240,10 @@ _ROWS: list[dict[str, Any]] = [
             "panel typecheck and model-family registry stay green with those controls",
         ],
         "commands": [
-            ".venv/bin/python tests/cross_matrix/run_noheavy_panel_settings_contract.py --out build/current-panel-settings-contract-proof-20260528-cache-ui-matrix.json",
+            ".venv/bin/python tests/cross_matrix/run_noheavy_panel_settings_contract.py --out build/current-panel-settings-contract-proof-20260601-cache-ui-storage-quant.json",
         ],
         "artifacts": [
-            "build/current-panel-settings-contract-proof-20260528-cache-ui-matrix.json",
+            "build/current-panel-settings-contract-proof-20260601-cache-ui-storage-quant.json",
             "build/current-panel-settings-contract-proof-20260524-text-additional-args-sanitizer.json",
             "build/current-panel-settings-contract-proof-20260523-post-budget-edge.json",
             "build/current-panel-settings-contract-proof-20260522-launch-memory-warning.json",
@@ -1428,10 +1428,10 @@ _ROWS: list[dict[str, Any]] = [
             "Panel session launch builder preserves DSV4 default-on native prefix-cache policy, DSV4-only native cache controls, Qwen3.6 hybrid and Mamba paged-cache forcing, and regular KV stale saved false semantics",
         ],
         "commands": [
-            ".venv/bin/python tests/cross_matrix/run_cache_architecture_contract.py --out build/current-cache-architecture-contract-20260531-step37-mixed-swa-runtime.json",
+            ".venv/bin/python tests/cross_matrix/run_cache_architecture_contract.py --out build/current-cache-architecture-contract-20260601-step37-mixed-swa-ui-storage-quant.json",
         ],
         "artifacts": [
-            "build/current-cache-architecture-contract-20260531-step37-mixed-swa-runtime.json",
+            "build/current-cache-architecture-contract-20260601-step37-mixed-swa-ui-storage-quant.json",
             "build/current-cache-architecture-contract-20260530-lfm2-tool-parser-local.json",
             "build/current-cache-architecture-contract-20260528-gemma4-mixed-swa-row.json",
             "build/current-cache-architecture-contract-20260527-cache-family-matrix.json",

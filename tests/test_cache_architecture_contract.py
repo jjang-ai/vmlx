@@ -5,7 +5,7 @@ def test_cache_architecture_contract_default_out_tracks_current_release_proof_ar
     from tests.cross_matrix import run_cache_architecture_contract as gate
 
     assert gate.DEFAULT_OUT == Path(
-        "build/current-cache-architecture-contract-20260531-step37-mixed-swa-runtime.json"
+        "build/current-cache-architecture-contract-20260601-step37-mixed-swa-ui-storage-quant.json"
     )
 
 
@@ -76,6 +76,8 @@ def test_cache_architecture_contract_pins_panel_launch_cache_policy():
     assert "panel/src/main/sessions.ts" in gate.SOURCE_HASH_FILES
     assert "panel/src/shared/dsv4Env.ts" in gate.SOURCE_HASH_FILES
     assert "panel/src/shared/cacheControlPolicy.ts" in gate.SOURCE_HASH_FILES
+    assert "panel/src/renderer/src/components/sessions/CachePanel.tsx" in gate.SOURCE_HASH_FILES
+    assert "panel/src/renderer/src/components/sessions/PerformancePanel.tsx" in gate.SOURCE_HASH_FILES
     assert "panel/tests/dsv4-env.test.ts" in gate.SOURCE_HASH_FILES
     assert "panel/tests/settings-flow.test.ts" in gate.SOURCE_HASH_FILES
     assert "panel/tests/cache-control-policy.test.ts" in gate.SOURCE_HASH_FILES

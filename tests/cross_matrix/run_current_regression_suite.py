@@ -398,13 +398,13 @@ CURRENT_SUITE_COMMANDS: dict[str, list[str]] = {
         sys.executable,
         "tests/cross_matrix/run_cache_architecture_contract.py",
         "--out",
-        "build/current-cache-architecture-contract-20260531-step37-mixed-swa-runtime.json",
+        "build/current-cache-architecture-contract-20260601-step37-mixed-swa-ui-storage-quant.json",
     ],
     "noheavy_panel_settings_contract": [
         sys.executable,
         "tests/cross_matrix/run_noheavy_panel_settings_contract.py",
         "--out",
-        "build/current-panel-settings-contract-proof-20260528-cache-ui-matrix.json",
+        "build/current-panel-settings-contract-proof-20260601-cache-ui-storage-quant.json",
     ],
     "max_output_context_contracts": [
         sys.executable,

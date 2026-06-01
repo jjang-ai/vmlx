@@ -162,15 +162,8 @@ interface HealthData {
       enabled?: boolean
       reason?: string
     }
-    attention_kv_storage_quantization?: {
-      enabled?: boolean
-      mode?: string
-      bits?: number | null
-      group_size?: number | null
-      applies_to?: string
-      ssm_policy?: string
-      rederive?: string
-    }
+    attention_kv_storage_quantization?: NativeStorageQuantization
+    storage_quantization?: NativeStorageQuantization
   }
   quantization_format?: {
     type: string
@@ -242,13 +235,26 @@ interface HealthData {
   }
 }
 
+type NativeStorageQuantization = {
+  enabled?: boolean
+  mode?: string
+  bits?: number | null
+  group_size?: number | null
+  applies_to?: string
+  ssm_policy?: string
+  rederive?: string
+  metadata_policy?: string
+}
+
 export function PerformancePanel({ endpoint, sessionStatus }: PerformancePanelProps) {
   const [health, setHealth] = useState<HealthData | null>(null)
   const [history, setHistory] = useState<Array<{ time: number; active: number; peak: number }>>([])
   const [error, setError] = useState<string | null>(null)
   const intervalRef = useRef<NodeJS.Timeout | null>(null)
   const lastNativeMtp = health?.scheduler?.batch_generator?.last_native_mtp
-  const attentionKvStorage = health?.native_cache?.attention_kv_storage_quantization
+  const attentionKvStorage =
+    health?.native_cache?.attention_kv_storage_quantization ??
+    health?.native_cache?.storage_quantization
 
   useEffect(() => {
     if (sessionStatus !== 'running') {

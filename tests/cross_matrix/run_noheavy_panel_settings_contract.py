@@ -31,7 +31,7 @@ from pathlib import Path
 from typing import Any
 
 
-DEFAULT_OUT = Path("build/current-panel-settings-contract-proof-20260528-cache-ui-matrix.json")
+DEFAULT_OUT = Path("build/current-panel-settings-contract-proof-20260601-cache-ui-storage-quant.json")
 SOURCE_HASH_FILES = (
     "panel/src/main/sessions.ts",
     "panel/src/main/memory-enforcer.ts",
@@ -40,6 +40,8 @@ SOURCE_HASH_FILES = (
     "panel/src/renderer/src/components/sessions/SessionConfigForm.tsx",
     "panel/src/renderer/src/components/sessions/CreateSession.tsx",
     "panel/src/renderer/src/components/sessions/ServerSettingsDrawer.tsx",
+    "panel/src/renderer/src/components/sessions/CachePanel.tsx",
+    "panel/src/renderer/src/components/sessions/PerformancePanel.tsx",
     "panel/src/renderer/src/components/chat/ChatSettings.tsx",
     "panel/src/shared/dsv4Env.ts",
     "panel/src/shared/cacheControlPolicy.ts",

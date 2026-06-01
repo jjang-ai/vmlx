@@ -178,7 +178,7 @@ DSV4_BATCH_GENERATOR_WARMUP_ABLATION_REL = (
     "build/current-dsv4-jang-batch-generator-warmup-ablation-20260524.json"
 )
 API_CACHE_CONTRACT_REL = "build/current-api-cache-contract-proof-20260531-post-step-lfm-refresh.json"
-PANEL_SETTINGS_CONTRACT_REL = "build/current-panel-settings-contract-proof-20260528-cache-ui-matrix.json"
+PANEL_SETTINGS_CONTRACT_REL = "build/current-panel-settings-contract-proof-20260601-cache-ui-storage-quant.json"
 MAX_OUTPUT_CONTEXT_CONTRACT_REL = "build/current-max-output-context-contract-20260531-post-step-lfm-refresh.json"
 MAX_OUTPUT_CONTEXT_CONTRACT_FALLBACK_REL = "build/current-max-output-context-contract-20260521.json"
 MODEL_FAMILY_CONTRACT_REL = "build/current-model-family-detection-contract-20260531-post-step-lfm-refresh.json"

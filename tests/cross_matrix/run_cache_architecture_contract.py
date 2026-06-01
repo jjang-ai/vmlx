@@ -22,7 +22,7 @@ from typing import Any
 
 
 DEFAULT_OUT = Path(
-    "build/current-cache-architecture-contract-20260531-step37-mixed-swa-runtime.json"
+    "build/current-cache-architecture-contract-20260601-step37-mixed-swa-ui-storage-quant.json"
 )
 API_CACHE_CONTRACT_ARTIFACT = Path(
     "build/current-api-cache-contract-cache-architecture-check-20260528-named-family-registry-matrix.json"
@@ -63,6 +63,8 @@ SOURCE_HASH_FILES = (
     "panel/src/main/sessions.ts",
     "panel/src/shared/dsv4Env.ts",
     "panel/src/shared/cacheControlPolicy.ts",
+    "panel/src/renderer/src/components/sessions/CachePanel.tsx",
+    "panel/src/renderer/src/components/sessions/PerformancePanel.tsx",
     "panel/tests/dsv4-env.test.ts",
     "panel/tests/settings-flow.test.ts",
     "panel/tests/cache-control-policy.test.ts",

@@ -651,7 +651,7 @@ def test_noheavy_panel_settings_contract_default_out_tracks_current_release_proo
     from tests.cross_matrix import run_noheavy_panel_settings_contract as gate
 
     assert gate.DEFAULT_OUT == Path(
-        "build/current-panel-settings-contract-proof-20260528-cache-ui-matrix.json"
+        "build/current-panel-settings-contract-proof-20260601-cache-ui-storage-quant.json"
     )
 
 
@@ -673,7 +673,7 @@ def test_current_regression_suite_runs_panel_settings_contract_to_current_artifa
     assert artifact["status"] == "open"
     assert any(
         name == "noheavy_panel_settings_contract"
-        and "current-panel-settings-contract-proof-20260528-cache-ui-matrix.json" in " ".join(cmd)
+        and "current-panel-settings-contract-proof-20260601-cache-ui-storage-quant.json" in " ".join(cmd)
         for name, cmd in seen_steps
     )
 
@@ -687,6 +687,8 @@ def test_noheavy_panel_settings_contract_hashes_parser_mtp_and_migration_sources
         "panel/src/main/model-config-registry.ts",
         "panel/src/renderer/src/components/sessions/CreateSession.tsx",
         "panel/src/renderer/src/components/sessions/ServerSettingsDrawer.tsx",
+        "panel/src/renderer/src/components/sessions/CachePanel.tsx",
+        "panel/src/renderer/src/components/sessions/PerformancePanel.tsx",
         "panel/src/renderer/src/i18n/locales/en.json",
         "panel/src/renderer/src/i18n/locales/es.json",
         "panel/src/renderer/src/i18n/locales/ja.json",
