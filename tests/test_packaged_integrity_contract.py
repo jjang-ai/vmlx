@@ -493,7 +493,11 @@ def test_package_signing_preflight_records_keychain_private_key_failure(
                 "Signature=adhoc\nTeamIdentifier=not set\n",
             )
         if cmd[:2] == ["codesign", "--verify"]:
-            return runner.subprocess.CompletedProcess(cmd, 1, "adhoc verify failed\n")
+            return runner.subprocess.CompletedProcess(
+                cmd,
+                1,
+                "file modified: /tmp/vMLX.app/Contents/Resources/runtime.py\n",
+            )
         if cmd[:3] == ["security", "find-identity", "-v"]:
             return runner.subprocess.CompletedProcess(
                 cmd,
@@ -551,6 +555,14 @@ def test_package_signing_preflight_records_keychain_private_key_failure(
         },
     ]
     assert preflight["signing_blocker_reason"] == "developer_id_keychain_user_interaction_not_allowed"
+    assert preflight["packaged_app_modified_after_signing"] is True
+    assert preflight["modified_after_signing_file_count"] == 1
+    assert preflight["missing_after_signing_file_count"] == 0
+    assert preflight["modified_after_signing_tail"] == [
+        "file modified: /tmp/vMLX.app/Contents/Resources/runtime.py"
+    ]
+    assert preflight["missing_after_signing_tail"] == []
+    assert "packaged_app_modified_after_signing" in preflight["signing_blocker_reasons"]
     assert preflight["manual_remediation_required"] is True
     assert preflight["remediation_summary"] == (
         "Developer ID identities are visible, but codesign cannot use the private "
@@ -559,6 +571,7 @@ def test_package_signing_preflight_records_keychain_private_key_failure(
     assert preflight["remediation_steps"] == [
         "Unlock the signing keychain in an interactive macOS session.",
         "Grant codesign access to the Developer ID private key, for example with security set-key-partition-list using the keychain password outside Codex logs.",
+        "Rebuild or reseal the packaged app after bundled runtime sync so codesign --verify --deep --strict passes before notarization.",
         "Rerun the packaged integrity contract and require package_signing_preflight.status=pass before notarization.",
     ]
 

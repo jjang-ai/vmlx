@@ -25,7 +25,7 @@ from typing import Any
 
 
 DEFAULT_OUT = Path(
-    "build/current-packaged-integrity-contract-20260601-qwen3vl-minicpm-mpp-staged-refresh.json"
+    "build/current-packaged-integrity-contract-20260601-dsv4-preflight-refresh.json"
 )
 EXPECTED_OPEN_REQUIREMENTS = [
     "Real Electron UI cross-family live model matrix is release-cleared",
@@ -327,6 +327,7 @@ def _package_signing_preflight(root: Path) -> dict[str, Any]:
         "simple_developer_id_sign_rc": None,
         "simple_developer_id_sign_tail": [],
         "signing_blocker_reason": "packaged_app_missing",
+        "signing_blocker_reasons": ["packaged_app_missing"],
         "manual_remediation_required": False,
         "remediation_summary": None,
         "remediation_steps": [],
@@ -335,6 +336,11 @@ def _package_signing_preflight(root: Path) -> dict[str, Any]:
         "team_identifier": None,
         "codesign_display_rc": None,
         "codesign_verify_rc": None,
+        "packaged_app_modified_after_signing": False,
+        "modified_after_signing_file_count": 0,
+        "missing_after_signing_file_count": 0,
+        "modified_after_signing_tail": [],
+        "missing_after_signing_tail": [],
         "signature_summary_tail": [],
         "verify_tail": [],
     }
@@ -425,6 +431,16 @@ def _package_signing_preflight(root: Path) -> dict[str, Any]:
         and "TeamIdentifier=55KGF2S5AY" in signature_text
         and not signature_is_adhoc
     )
+    verify_lines = verify.stdout.splitlines()
+    modified_after_signing_lines = [
+        line for line in verify_lines if line.startswith("file modified:")
+    ]
+    missing_after_signing_lines = [
+        line for line in verify_lines if line.startswith("file missing:")
+    ]
+    modified_after_signing = bool(
+        modified_after_signing_lines or missing_after_signing_lines
+    )
     result.update(
         {
             "developer_id_signed": developer_id_signed,
@@ -433,8 +449,13 @@ def _package_signing_preflight(root: Path) -> dict[str, Any]:
             "team_identifier": team_identifier,
             "codesign_display_rc": display.returncode,
             "codesign_verify_rc": verify.returncode,
+            "packaged_app_modified_after_signing": modified_after_signing,
+            "modified_after_signing_file_count": len(modified_after_signing_lines),
+            "missing_after_signing_file_count": len(missing_after_signing_lines),
+            "modified_after_signing_tail": modified_after_signing_lines[-40:],
+            "missing_after_signing_tail": missing_after_signing_lines[-40:],
             "signature_summary_tail": signature_text.splitlines()[-40:],
-            "verify_tail": verify.stdout.splitlines()[-40:],
+            "verify_tail": verify_lines[-40:],
         }
     )
     keychain_user_interaction_blocked = any(
@@ -449,12 +470,20 @@ def _package_signing_preflight(root: Path) -> dict[str, Any]:
     if developer_id_signed and hardened_runtime_enabled and verify.returncode == 0:
         result["status"] = "pass"
         result["signing_blocker_reason"] = None
+        result["signing_blocker_reasons"] = []
     elif simple_sign.returncode != 0 and (
         keychain_user_interaction_blocked or codesign_user_interaction_blocked
     ):
         result["signing_blocker_reason"] = (
             "developer_id_keychain_user_interaction_not_allowed"
         )
+        result["signing_blocker_reasons"] = [
+            "developer_id_keychain_user_interaction_not_allowed"
+        ]
+        if modified_after_signing:
+            result["signing_blocker_reasons"].append(
+                "packaged_app_modified_after_signing"
+            )
         result["manual_remediation_required"] = True
         result["remediation_summary"] = (
             "Developer ID identities are visible, but codesign cannot use the private "
@@ -463,18 +492,28 @@ def _package_signing_preflight(root: Path) -> dict[str, Any]:
         result["remediation_steps"] = [
             "Unlock the signing keychain in an interactive macOS session.",
             "Grant codesign access to the Developer ID private key, for example with security set-key-partition-list using the keychain password outside Codex logs.",
+            "Rebuild or reseal the packaged app after bundled runtime sync so codesign --verify --deep --strict passes before notarization.",
             "Rerun the packaged integrity contract and require package_signing_preflight.status=pass before notarization.",
         ]
     elif simple_sign.returncode != 0:
         result["signing_blocker_reason"] = "developer_id_private_key_unusable"
+        result["signing_blocker_reasons"] = ["developer_id_private_key_unusable"]
     elif not developer_identity_lines:
         result["signing_blocker_reason"] = "developer_id_identity_missing"
+        result["signing_blocker_reasons"] = ["developer_id_identity_missing"]
     elif not developer_id_signed:
         result["signing_blocker_reason"] = "packaged_app_not_developer_id_signed"
+        result["signing_blocker_reasons"] = ["packaged_app_not_developer_id_signed"]
     elif not hardened_runtime_enabled:
         result["signing_blocker_reason"] = "packaged_app_missing_hardened_runtime"
+        result["signing_blocker_reasons"] = ["packaged_app_missing_hardened_runtime"]
     elif verify.returncode != 0:
-        result["signing_blocker_reason"] = "packaged_app_codesign_verify_failed"
+        result["signing_blocker_reason"] = (
+            "packaged_app_modified_after_signing"
+            if modified_after_signing
+            else "packaged_app_codesign_verify_failed"
+        )
+        result["signing_blocker_reasons"] = [result["signing_blocker_reason"]]
     return result
 
 
