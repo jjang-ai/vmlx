@@ -374,7 +374,7 @@ CURRENT_INSTALLED_APP_RUNTIME_PARITY_AUDIT_ARTIFACT = (
     "build/current-installed-app-runtime-parity-audit-20260601-epipe-renderer-installed.json"
 )
 CURRENT_STAGED_APP_RUNTIME_PARITY_AUDIT_ARTIFACT = (
-    "build/current-staged-app-runtime-parity-audit-20260531-step37-mixed-swa-runtime.json"
+    "build/current-staged-app-runtime-parity-audit-20260601-epipe-renderer-installed.json"
 )
 CURRENT_ISSUE175_177_INSTALLED_RUNTIME_AUDIT_ARTIFACT = (
     "build/current-issue175-177-installed-runtime-audit-20260527.json"
@@ -4551,8 +4551,8 @@ def _validate_current_installed_app_runtime_parity_audit(root: Path) -> dict[str
     return _validate_app_runtime_parity_audit(
         root,
         CURRENT_INSTALLED_APP_RUNTIME_PARITY_AUDIT_ARTIFACT,
-        allowed_statuses={"open", "pass"},
-        require_pass=False,
+        allowed_statuses={"pass"},
+        require_pass=True,
     )
 
 
@@ -4615,6 +4615,7 @@ def _validate_app_runtime_parity_audit(
         "installed_panel_image_ipc_epipe_aggregate_guard",
         "installed_panel_child_process_stdio_epipe_guard",
         "installed_panel_child_process_stdio_epipe_aggregate_guard",
+        "installed_panel_renderer_chat_epipe_toast_normalized",
         "installed_panel_gateway_guarded_proxy_forwarding",
         "installed_panel_gateway_write_once_behavior_marker",
         "installed_panel_gateway_response_socket_destroyed_guard",
@@ -4637,9 +4638,11 @@ def _validate_app_runtime_parity_audit(
         if not isinstance(missing_or_stale, list) or not missing_or_stale:
             result["failures"].append("open_app_parity_without_stale_list")
     if require_pass:
+        if status != "pass":
+            result["failures"].append("installed_app_parity_not_pass")
         missing_or_stale = payload.get("missing_or_stale")
         if missing_or_stale:
-            result["failures"].append("staged_app_parity_has_missing_or_stale")
+            result["failures"].append("app_parity_has_missing_or_stale")
 
     return result
 

@@ -532,7 +532,7 @@ CURRENT_SUITE_COMMANDS: dict[str, list[str]] = {
         "--diagnostic-reports",
         "build/staged-parity-diagnostic-reports",
         "--out",
-        "build/current-staged-app-runtime-parity-audit-20260531-step37-mixed-swa-runtime.json",
+        "build/current-staged-app-runtime-parity-audit-20260601-epipe-renderer-installed.json",
     ],
     "issue175_179_release_boundary_audit": [
         sys.executable,

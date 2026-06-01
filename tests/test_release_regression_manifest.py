@@ -1437,6 +1437,7 @@ def _write_expected_installed_app_runtime_parity_audit(root: Path) -> None:
                     "installed_panel_image_ipc_epipe_aggregate_guard": True,
                     "installed_panel_child_process_stdio_epipe_guard": True,
                     "installed_panel_child_process_stdio_epipe_aggregate_guard": True,
+                    "installed_panel_renderer_chat_epipe_toast_normalized": True,
                     "installed_panel_gateway_guarded_proxy_forwarding": True,
                     "installed_panel_gateway_write_once_behavior_marker": True,
                     "installed_panel_gateway_response_socket_destroyed_guard": True,
@@ -1485,6 +1486,7 @@ def _write_expected_staged_app_runtime_parity_audit(root: Path) -> None:
                     "installed_panel_image_ipc_epipe_aggregate_guard": True,
                     "installed_panel_child_process_stdio_epipe_guard": True,
                     "installed_panel_child_process_stdio_epipe_aggregate_guard": True,
+                    "installed_panel_renderer_chat_epipe_toast_normalized": True,
                     "installed_panel_gateway_guarded_proxy_forwarding": True,
                     "installed_panel_gateway_write_once_behavior_marker": True,
                     "installed_panel_gateway_response_socket_destroyed_guard": True,
@@ -1619,6 +1621,47 @@ def test_current_proof_sweep_rejects_installed_app_missing_child_stdio_epipe_gua
         "missing_check:installed_panel_child_process_stdio_epipe_aggregate_guard"
         in result["failures"]
     )
+
+
+def test_current_proof_sweep_rejects_installed_app_missing_renderer_epipe_toast_guard(
+    tmp_path,
+):
+    _write_expected_installed_app_runtime_parity_audit(tmp_path)
+    path = tmp_path / CURRENT_INSTALLED_APP_RUNTIME_PARITY_AUDIT_ARTIFACT
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["checks"].pop(
+        "installed_panel_renderer_chat_epipe_toast_normalized",
+        None,
+    )
+    path.write_text(json.dumps(payload) + "\n", encoding="utf-8")
+
+    result = validate_current_proof_sweep_artifacts(tmp_path)[
+        "installed_app_runtime_parity_audit"
+    ]
+
+    assert (
+        "missing_check:installed_panel_renderer_chat_epipe_toast_normalized"
+        in result["failures"]
+    )
+
+
+def test_current_proof_sweep_rejects_open_installed_app_runtime_parity(
+    tmp_path,
+):
+    _write_expected_installed_app_runtime_parity_audit(tmp_path)
+    path = tmp_path / CURRENT_INSTALLED_APP_RUNTIME_PARITY_AUDIT_ARTIFACT
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["status"] = "open"
+    payload["missing_or_stale"] = [
+        "installed_panel_renderer_chat_epipe_toast_normalized"
+    ]
+    path.write_text(json.dumps(payload) + "\n", encoding="utf-8")
+
+    result = validate_current_proof_sweep_artifacts(tmp_path)[
+        "installed_app_runtime_parity_audit"
+    ]
+
+    assert "installed_app_parity_not_pass" in result["failures"]
 
 
 def test_current_proof_sweep_rejects_installed_app_missing_user_data_epipe_scan(
@@ -2505,7 +2548,8 @@ def test_release_regression_manifest_current_sweep_uses_latest_live_smoke_artifa
     assert "current-installed-app-runtime-parity-audit-20260531-childstream-epipe-installed-sync.json" not in row_text
     assert "current-installed-app-runtime-parity-audit-20260528-epipe-aggregate-guard.json" not in joined
     assert "current-installed-app-runtime-parity-audit-20260528-epipe-aggregate-guard.json" not in row_text
-    assert "current-staged-app-runtime-parity-audit-20260531-step37-mixed-swa-runtime.json" in joined
+    assert "current-staged-app-runtime-parity-audit-20260601-epipe-renderer-installed.json" in joined
+    assert "current-staged-app-runtime-parity-audit-20260531-step37-mixed-swa-runtime.json" not in joined
     assert "current-staged-app-runtime-parity-audit-20260528-staged-runtime-recheck.json" not in joined
     assert "current-staged-app-runtime-parity-audit-20260528-installed-aggregate-stale.json" not in joined
     assert "current-installed-app-runtime-parity-audit-20260528-epipe-postrefresh.json" not in joined
