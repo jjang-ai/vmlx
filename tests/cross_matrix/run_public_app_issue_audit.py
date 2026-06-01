@@ -24,6 +24,12 @@ INSTALLED_APP_ASAR = Path("/Applications/vMLX.app/Contents/Resources/app.asar")
 INSTALLED_APP = Path("/Applications/vMLX.app")
 STAGED_SEQUOIA_APP = Path("panel/release/mac-arm64/vMLX.app")
 STAGED_TAHOE_APP = Path("panel/release/native-cache-metrics-app/mac-arm64/vMLX.app")
+TOOL_CALL_CONTRACT = Path(
+    "build/current-tool-call-contract-20260528-tool-parser-loop-matrix.json"
+)
+INSTALLED_APP_RUNTIME_PARITY = Path(
+    "build/current-installed-app-runtime-parity-audit-20260601-cache-ipc-epipe-installed.json"
+)
 
 
 def _read(path: Path) -> str:
@@ -168,6 +174,52 @@ def _issue169_checks(root: Path) -> dict[str, bool]:
             minimum_system_version="14.5.0",
             mlx_tag="cp312-cp312-macosx_26_0_arm64",
             mlx_metal_tag="py3-none-macosx_26_0_arm64",
+        ),
+    }
+
+
+def _issue165_checks(root: Path) -> dict[str, bool]:
+    tool_contract = _load_json(root / TOOL_CALL_CONTRACT)
+    tool_checks = tool_contract.get("checks")
+    if not isinstance(tool_checks, dict):
+        tool_checks = {}
+    installed_parity = _load_json(root / INSTALLED_APP_RUNTIME_PARITY)
+    installed_checks = installed_parity.get("checks")
+    if not isinstance(installed_checks, dict):
+        installed_checks = {}
+    engine_hash = installed_parity.get("bundled_engine_hash_parity")
+    if not isinstance(engine_hash, dict):
+        engine_hash = {}
+    engine_files = engine_hash.get("files")
+    if not isinstance(engine_files, dict):
+        engine_files = {}
+    dsml_file = engine_files.get("tool_parsers/dsml_tool_parser.py")
+    if not isinstance(dsml_file, dict):
+        dsml_file = {}
+    engine_tests = _read(root / "tests/test_engine_audit.py")
+    tool_runner = _read(root / "tests/cross_matrix/run_tool_call_contract.py")
+    return {
+        "tool_call_contract_passes": (
+            tool_contract.get("status") == "pass"
+            and not tool_contract.get("failed")
+            and tool_checks.get("schema_valid_dsml_tool_call_preserved") is True
+            and tool_checks.get(
+                "dsv4_default_cache_degraded_dsml_shapes_repaired_when_schema_valid"
+            )
+            is True
+            and tool_checks.get("tool_choice_none_does_not_fallback_to_raw_dsml")
+            is True
+        ),
+        "dsml_issue_165_regression_present": (
+            "test_dsml_issue_165_server_tool_call_arguments_are_not_empty_or_raw"
+            in engine_tests
+            and "dsml_issue_165_server_tool_call_arguments_are_not_empty_or_raw"
+            in tool_runner
+        ),
+        "installed_app_dsml_parser_hash_guarded": (
+            installed_parity.get("status") == "pass"
+            and installed_checks.get("installed_bundled_engine_hash_parity") is True
+            and dsml_file.get("match") is True
         ),
     }
 
@@ -334,6 +386,17 @@ def _issue119_checks(root: Path) -> dict[str, bool]:
 def build_audit(root: Path) -> dict[str, Any]:
     root = root.resolve()
     issues: dict[str, dict[str, Any]] = {
+        "165": {
+            "repo": "jjang-ai/vmlx",
+            "title": (
+                "DSV4-Flash JANGTQ2 + dsml parser: tool_calls.function.arguments "
+                "empty / contains raw markup"
+            ),
+            "checks": _issue165_checks(root),
+            "release_clearance": (
+                "mapped_to_dsv4_dsml_tool_call_arguments_guard"
+            ),
+        },
         "169": {
             "repo": "jjang-ai/vmlx",
             "title": (
@@ -397,11 +460,11 @@ def build_audit(root: Path) -> dict[str, Any]:
         "issues": issues,
         "focused_failures": focused_failures,
         "release_boundary": (
-            "Public issue slices #169, #180, and mlxstudio #117-#119 have "
-            "focused source/proof coverage here, and #118 includes installed "
-            "app download fallback proof. This does not clear the full release; "
-            "Developer ID signing/notarization, DSV4 exactness, and real UI "
-            "matrix blockers remain owned by the release manifest."
+            "Public issue slices #165, #169, #180, and mlxstudio #117-#119 "
+            "have focused source/proof coverage here, and #118 includes "
+            "installed app download fallback proof. This does not clear the "
+            "full release; Developer ID signing/notarization, DSV4 exactness, "
+            "and real UI matrix blockers remain owned by the release manifest."
         ),
     }
 

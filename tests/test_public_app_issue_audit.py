@@ -10,7 +10,14 @@ def test_public_app_issue_audit_tracks_open_app_runtime_issue_slices():
     audit = gate.build_audit(Path("."))
 
     assert audit["status"] == "pass"
-    assert set(audit["issues"]) == {"169", "180", "117", "118", "119"}
+    assert set(audit["issues"]) == {"165", "169", "180", "117", "118", "119"}
+    assert audit["issues"]["165"]["focused_source_slice"] == "pass"
+    assert audit["issues"]["165"]["checks"]["tool_call_contract_passes"] is True
+    assert audit["issues"]["165"]["checks"]["dsml_issue_165_regression_present"] is True
+    assert audit["issues"]["165"]["checks"]["installed_app_dsml_parser_hash_guarded"] is True
+    assert audit["issues"]["165"]["release_clearance"] == (
+        "mapped_to_dsv4_dsml_tool_call_arguments_guard"
+    )
     assert audit["issues"]["169"]["focused_source_slice"] == "pass"
     assert audit["issues"]["169"]["checks"]["dual_public_dmg_flavors"] is True
     assert audit["issues"]["169"]["checks"]["compat_wheel_default"] is True
