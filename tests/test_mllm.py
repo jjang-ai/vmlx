@@ -98,6 +98,65 @@ def test_video_path(tmp_path):
 class TestMLLMHelperFunctions:
     """Test helper functions that don't require model loading."""
 
+    def test_qwen35_vlm_compat_transposes_patch_embed_to_mlx_conv3d_layout(self):
+        """Issue #182: Qwen VL HF patch embed weights must load in MLX layout."""
+        pytest.importorskip("mlx_vlm")
+        import mlx.core as mx
+        from types import SimpleNamespace
+
+        from mlx_vlm.models.qwen3_5 import qwen3_5 as qwen_vl
+        from mlx_vlm.models.qwen3_5_moe import qwen3_5_moe as qwen_moe_vl
+        from vmlx_engine.utils import mlx_vlm_compat
+
+        mlx_vlm_compat.apply()
+
+        dense = qwen_vl.Model.__new__(qwen_vl.Model)
+        dense.config = SimpleNamespace(
+            text_config=SimpleNamespace(tie_word_embeddings=False)
+        )
+        dense_fixed = qwen_vl.Model.sanitize(
+            dense,
+            {
+                "model.visual.patch_embed.proj.weight": mx.zeros(
+                    (1152, 3, 2, 16, 16),
+                    dtype=mx.float16,
+                ),
+            },
+        )
+
+        assert dense_fixed["vision_tower.patch_embed.proj.weight"].shape == (
+            1152,
+            2,
+            16,
+            16,
+            3,
+        )
+
+        moe = qwen_moe_vl.Model.__new__(qwen_moe_vl.Model)
+        moe.config = SimpleNamespace(
+            text_config=SimpleNamespace(
+                num_hidden_layers=0,
+                tie_word_embeddings=False,
+            )
+        )
+        moe_fixed = qwen_moe_vl.Model.sanitize(
+            moe,
+            {
+                "model.visual.patch_embed.proj.weight": mx.zeros(
+                    (1152, 3, 2, 16, 16),
+                    dtype=mx.float16,
+                ),
+            },
+        )
+
+        assert moe_fixed["vision_tower.patch_embed.proj.weight"].shape == (
+            1152,
+            2,
+            16,
+            16,
+            3,
+        )
+
     def test_is_base64_image(self):
         """Test base64 image detection."""
         from vmlx_engine.models.mllm import is_base64_image

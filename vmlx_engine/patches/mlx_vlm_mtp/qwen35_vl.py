@@ -50,6 +50,17 @@ def _qwen_norm_shard_looks_unshifted(weights, norm_keys) -> bool:
     return False
 
 
+def _qwen35_patch_embed_to_mlx_layout(key: str, value: Any) -> Any:
+    if (
+        key.endswith("patch_embed.proj.weight")
+        and getattr(value, "ndim", None) == 5
+        and int(value.shape[1]) in (1, 3)
+        and int(value.shape[-1]) not in (1, 3)
+    ):
+        return value.transpose(0, 2, 3, 4, 1)
+    return value
+
+
 def apply() -> bool:
     """Apply the Qwen3.5/3.6 VLM native-MTP adapter. Idempotent."""
     global _PATCHED
@@ -943,6 +954,7 @@ def _patch_outer_model(qvl: Any) -> None:
                 key = "language_model." + key
             elif "lm_head" in key:
                 key = key.replace("lm_head", "language_model.lm_head")
+            value = _qwen35_patch_embed_to_mlx_layout(key, value)
             if "conv1d.weight" in key and value.shape[-1] != 1:
                 value = value.moveaxis(2, 1)
             is_norm = any(key.endswith(sfx) for sfx in norm_keys)
@@ -1072,6 +1084,7 @@ def _patch_moe_outer_model(qmoe_vl: Any) -> None:
                 key = "language_model." + key
             elif "lm_head" in key:
                 key = key.replace("lm_head", "language_model.lm_head")
+            value = _qwen35_patch_embed_to_mlx_layout(key, value)
             if "conv1d.weight" in key and value.shape[-1] != 1:
                 value = value.moveaxis(2, 1)
             is_norm = any(key.endswith(sfx) for sfx in norm_keys)

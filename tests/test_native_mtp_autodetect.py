@@ -914,7 +914,7 @@ class TestNativeMtpAutodetect:
                 "mtp.fc.weight": mx.ones((2, 2), dtype=mx.float16),
                 "mtp.fc.scales": mx.ones((2,), dtype=mx.uint8),
                 "model.visual.patch_embed.proj.weight": mx.ones(
-                    (1, 1), dtype=mx.float16
+                    (1152, 3, 2, 16, 16), dtype=mx.float16
                 ),
                 "lm_head.weight": mx.ones((2, 2), dtype=mx.float16),
             },
@@ -923,6 +923,13 @@ class TestNativeMtpAutodetect:
         assert "language_model.mtp.fc.weight" in sanitized
         assert "language_model.mtp.fc.scales" in sanitized
         assert "vision_tower.patch_embed.proj.weight" in sanitized
+        assert sanitized["vision_tower.patch_embed.proj.weight"].shape == (
+            1152,
+            2,
+            16,
+            16,
+            3,
+        )
         assert "language_model.lm_head.weight" not in sanitized
 
         fake_moe_model = qwen_moe_vl.Model.__new__(qwen_moe_vl.Model)

@@ -12,6 +12,9 @@ Patches applied
   ``TypeError: max(): incompatible function arguments``. Coerce on entry.
 * Qwen3-VL ``VisionModel.__call__`` — same ``grid_thw`` typing issue when
   ``fast_pos_embed_interpolate`` iterates over a numpy array.
+* Qwen3.5/3.6 VL ``Model.sanitize`` — HF-native 3D patch-embed weights can
+  arrive as ``(out, channels, temporal, height, width)`` while MLX Conv3D
+  expects channels-last ``(out, temporal, height, width, channels)``.
 """
 
 from __future__ import annotations
@@ -29,6 +32,7 @@ def apply() -> None:
         return
     _applied = True
     _patch_qwen3_vl_grid_thw()
+    _patch_qwen35_patch_embed_layout()
 
 
 def _patch_qwen3_vl_grid_thw() -> None:
@@ -65,3 +69,44 @@ def _patch_qwen3_vl_grid_thw() -> None:
         VisionModel.__call__ = __call__  # type: ignore[assignment]
 
     _logger.debug("mlx_vlm_compat: patched Qwen3-VL VisionModel grid_thw coercion")
+
+
+def _qwen35_patch_embed_to_mlx_layout(key, value):
+    if (
+        str(key).endswith("patch_embed.proj.weight")
+        and getattr(value, "ndim", None) == 5
+        and int(value.shape[1]) in (1, 3)
+        and int(value.shape[-1]) not in (1, 3)
+    ):
+        return value.transpose(0, 2, 3, 4, 1)
+    return value
+
+
+def _patch_qwen35_patch_embed_layout() -> None:
+    try:
+        from mlx_vlm.models.qwen3_5 import qwen3_5 as _qwen_vl
+    except ImportError:
+        _qwen_vl = None
+    try:
+        from mlx_vlm.models.qwen3_5_moe import qwen3_5_moe as _qwen_moe_vl
+    except ImportError:
+        _qwen_moe_vl = None
+
+    for module in (_qwen_vl, _qwen_moe_vl):
+        Model = getattr(module, "Model", None)
+        if Model is None:
+            continue
+        original = getattr(Model, "sanitize", None)
+        if original is None or getattr(original, "_vmlx_patch_embed_layout", False):
+            continue
+
+        def sanitize(self, weights, _original=original):
+            fixed = {}
+            for key, value in weights.items():
+                fixed[key] = _qwen35_patch_embed_to_mlx_layout(key, value)
+            return _original(self, fixed)
+
+        sanitize._vmlx_patch_embed_layout = True  # type: ignore[attr-defined]
+        Model.sanitize = sanitize  # type: ignore[assignment]
+
+    _logger.debug("mlx_vlm_compat: patched Qwen3.5/3.6 patch_embed layout")
