@@ -4613,12 +4613,15 @@ def _validate_current_issue181_183_runtime_audit(root: Path) -> dict[str, Any]:
     result["issues"] = issues
     expected_clearance = {
         "181": "installed_mpp_auto_policy_guarded",
-        "182": "source_and_packaged_qwen_vl_patch_embed_layout_guarded",
+        "182": "installed_qwen_vl_patch_embed_layout_guarded",
         "183": "source_and_packaged_minicpm_v46_load_guarded",
     }
     required_issue_checks = {
         "181": {
             "installed_app_mpp_auto_policy_disables_mxtq",
+        },
+        "182": {
+            "installed_app_qwen_vl_patch_embed_layout",
         },
         "183": {
             "installed_app_minicpm_v46_runtime_remap",

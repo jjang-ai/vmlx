@@ -25,8 +25,12 @@ def test_issue181_183_audit_proves_recent_runtime_issue_slices():
     assert audit["issues"]["182"]["checks"]["normal_vlm_patch_embed_transpose"] is True
     assert audit["issues"]["182"]["checks"]["native_mtp_patch_embed_transpose"] is True
     assert audit["issues"]["182"]["checks"]["bundled_hash_gate_covers_runtime"] is True
+    assert (
+        audit["issues"]["182"]["checks"]["installed_app_qwen_vl_patch_embed_layout"]
+        is True
+    )
     assert audit["issues"]["182"]["release_clearance"] == (
-        "source_and_packaged_qwen_vl_patch_embed_layout_guarded"
+        "installed_qwen_vl_patch_embed_layout_guarded"
     )
     assert audit["issues"]["183"]["focused_source_slice"] == "pass"
     assert audit["issues"]["183"]["checks"]["minicpm_v46_registry_remap"] is True

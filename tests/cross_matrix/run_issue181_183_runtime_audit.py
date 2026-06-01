@@ -185,6 +185,83 @@ print(json.dumps(payload, sort_keys=True))
     }
 
 
+def _run_installed_qwen_vl_patch_probe(
+    python_path: Path = INSTALLED_PYTHON,
+) -> dict[str, object]:
+    if not python_path.exists():
+        return {
+            "returncode": 127,
+            "error": f"missing installed python: {python_path}",
+            "checks": {},
+        }
+    env = os.environ.copy()
+    env["PYTHONNOUSERSITE"] = "1"
+    env["PYTHONPATH"] = ""
+    code = r"""
+import json
+
+import mlx.core as mx
+from vmlx_engine.utils import mlx_vlm_compat
+from vmlx_engine.patches.mlx_vlm_mtp import qwen35_vl
+
+value = mx.zeros((2, 3, 2, 4, 4), dtype=mx.float32)
+normal = mlx_vlm_compat._qwen35_patch_embed_to_mlx_layout(
+    "vision_tower.patch_embed.proj.weight",
+    value,
+)
+native = qwen35_vl._qwen35_patch_embed_to_mlx_layout(
+    "model.visual.patch_embed.proj.weight",
+    value,
+)
+already_mlx = mx.zeros((2, 2, 4, 4, 3), dtype=mx.float32)
+unchanged = mlx_vlm_compat._qwen35_patch_embed_to_mlx_layout(
+    "vision_tower.patch_embed.proj.weight",
+    already_mlx,
+)
+payload = {
+    "normal_shape": list(normal.shape),
+    "native_shape": list(native.shape),
+    "already_mlx_shape": list(unchanged.shape),
+}
+print(json.dumps(payload, sort_keys=True))
+"""
+    proc = subprocess.run(
+        [str(python_path), "-B", "-s", "-c", code],
+        cwd="/tmp",
+        env=env,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        timeout=30,
+        check=False,
+    )
+    payload: dict[str, object] = {}
+    if proc.returncode == 0 and proc.stdout.strip():
+        try:
+            payload = json.loads(proc.stdout.splitlines()[-1])
+        except Exception as exc:  # noqa: BLE001 - report malformed probe output
+            payload = {"parse_error": f"{type(exc).__name__}: {exc}"}
+    expected = [2, 2, 4, 4, 3]
+    checks = {
+        "installed_normal_vlm_patch_embed_transposes": (
+            payload.get("normal_shape") == expected
+        ),
+        "installed_native_mtp_patch_embed_transposes": (
+            payload.get("native_shape") == expected
+        ),
+        "installed_mlx_layout_stays_unchanged": (
+            payload.get("already_mlx_shape") == expected
+        ),
+    }
+    return {
+        "returncode": proc.returncode,
+        "stdout_tail": proc.stdout.splitlines()[-5:],
+        "stderr_tail": proc.stderr.splitlines()[-20:],
+        "payload": payload,
+        "checks": checks,
+    }
+
+
 def _issue181_checks(
     root: Path,
     installed_mpp_probe: dict[str, object],
@@ -217,7 +294,10 @@ def _issue181_checks(
     }
 
 
-def _issue182_checks(root: Path) -> dict[str, bool]:
+def _issue182_checks(
+    root: Path,
+    installed_qwen_vl_probe: dict[str, object],
+) -> dict[str, bool]:
     compat = _read(root / "vmlx_engine/utils/mlx_vlm_compat.py")
     mtp_qwen = _read(root / "vmlx_engine/patches/mlx_vlm_mtp/qwen35_vl.py")
     mllm_tests = _read(root / "tests/test_mllm.py")
@@ -225,6 +305,9 @@ def _issue182_checks(root: Path) -> dict[str, bool]:
     verify_bundled = _read(root / "panel/scripts/verify-bundled-python.sh")
     release_gate = _read(root / "panel/scripts/release-gate-python-app.py")
     packaged_contract = _read(root / "tests/cross_matrix/run_packaged_integrity_contract.py")
+    installed_checks = installed_qwen_vl_probe.get("checks")
+    if not isinstance(installed_checks, dict):
+        installed_checks = {}
     return {
         "normal_vlm_patch_embed_transpose": (
             "def _qwen35_patch_embed_to_mlx_layout" in compat
@@ -256,6 +339,14 @@ def _issue182_checks(root: Path) -> dict[str, bool]:
             and "patches/mlx_vlm_mtp/qwen35_vl.py" in release_gate
             and "utils/mlx_vlm_compat.py" in packaged_contract
             and "patches/mlx_vlm_mtp/qwen35_vl.py" in packaged_contract
+        ),
+        "installed_app_qwen_vl_patch_embed_layout": all(
+            installed_checks.get(key) is True
+            for key in (
+                "installed_normal_vlm_patch_embed_transposes",
+                "installed_native_mtp_patch_embed_transposes",
+                "installed_mlx_layout_stays_unchanged",
+            )
         ),
     }
 
@@ -304,6 +395,7 @@ def build_audit(
     root = root.resolve()
     installed_minicpm_probe = _run_installed_minicpm_v46_probe(installed_python)
     installed_mpp_probe = _run_installed_mpp_policy_probe(installed_python)
+    installed_qwen_vl_probe = _run_installed_qwen_vl_patch_probe(installed_python)
     issues = {
         "181": {
             "title": (
@@ -315,9 +407,9 @@ def build_audit(
         },
         "182": {
             "title": "Qwen VL patch-embed layout must load in MLX Conv3D format",
-            "checks": _issue182_checks(root),
+            "checks": _issue182_checks(root, installed_qwen_vl_probe),
             "release_clearance": (
-                "source_and_packaged_qwen_vl_patch_embed_layout_guarded"
+                "installed_qwen_vl_patch_embed_layout_guarded"
             ),
         },
         "183": {
@@ -338,6 +430,7 @@ def build_audit(
         "status": "fail" if focused_failures else "pass",
         "issues": issues,
         "installed_mpp_policy_probe": installed_mpp_probe,
+        "installed_qwen_vl_patch_probe": installed_qwen_vl_probe,
         "installed_minicpm_v46_probe": installed_minicpm_probe,
         "focused_failures": focused_failures,
         "release_boundary": (

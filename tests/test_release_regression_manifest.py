@@ -1216,9 +1216,12 @@ def _write_expected_issue181_183_runtime_audit(root: Path) -> None:
                     "182": {
                         "focused_source_slice": "pass",
                         "release_clearance": (
-                            "source_and_packaged_qwen_vl_patch_embed_layout_guarded"
+                            "installed_qwen_vl_patch_embed_layout_guarded"
                         ),
-                        "checks": {"normal_vlm_patch_embed_transpose": True},
+                        "checks": {
+                            "normal_vlm_patch_embed_transpose": True,
+                            "installed_app_qwen_vl_patch_embed_layout": True,
+                        },
                     },
                     "183": {
                         "focused_source_slice": "pass",
@@ -1279,6 +1282,24 @@ def test_release_regression_manifest_rejects_issue181_missing_installed_mpp_prob
     result = _validate_current_issue181_183_runtime_audit(tmp_path)
 
     assert "missing_issue_check:181:installed_app_mpp_auto_policy_disables_mxtq" in result[
+        "failures"
+    ]
+
+
+def test_release_regression_manifest_rejects_issue182_missing_installed_qwen_vl_probe(
+    tmp_path,
+):
+    _write_expected_issue181_183_runtime_audit(tmp_path)
+    path = tmp_path / CURRENT_ISSUE181_183_RUNTIME_AUDIT_ARTIFACT
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["issues"]["182"]["checks"].pop(
+        "installed_app_qwen_vl_patch_embed_layout"
+    )
+    path.write_text(json.dumps(payload) + "\n", encoding="utf-8")
+
+    result = _validate_current_issue181_183_runtime_audit(tmp_path)
+
+    assert "missing_issue_check:182:installed_app_qwen_vl_patch_embed_layout" in result[
         "failures"
     ]
 
