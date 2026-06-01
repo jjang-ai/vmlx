@@ -500,6 +500,11 @@ def _write_passing_base_artifacts(tmp_path: Path) -> None:
     )
     _write_json(
         tmp_path,
+        "tests/test_responses_history.py",
+        {"fixture": "responses-history"},
+    )
+    _write_json(
+        tmp_path,
         "tests/test_tool_format.py",
         {"fixture": "tool-format"},
     )
@@ -513,6 +518,7 @@ def _write_passing_base_artifacts(tmp_path: Path) -> None:
             "tests/test_mllm_scheduler_cache.py",
             "tests/test_tq_disk_cache.py",
             "tests/test_dsml_tool_parser.py",
+            "tests/test_responses_history.py",
             "tests/test_tool_format.py",
         )
     }
@@ -528,6 +534,7 @@ def _write_passing_base_artifacts(tmp_path: Path) -> None:
                 "responses_sampling_kwargs": True,
                 "anthropic_bundle_defaults": True,
                 "ollama_adapter_surface": True,
+                "responses_previous_response_history": True,
                 "dsv4_native_cache_status": True,
                 "dsv4_dsml_parser_residue_rejection": True,
                 "dsv4_dsml_valid_tool_call_preserved": True,
@@ -8832,6 +8839,7 @@ def test_objective_proof_digest_rejects_api_cache_contract_without_source_hashes
         "tests/test_mllm_scheduler_cache.py",
         "tests/test_tq_disk_cache.py",
         "tests/test_dsml_tool_parser.py",
+        "tests/test_responses_history.py",
         "tests/test_tool_format.py",
     ]
 

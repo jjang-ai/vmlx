@@ -26,6 +26,7 @@ def test_api_surface_contract_pins_named_public_surface_edges():
     assert "anthropic_bundle_defaults" in nested
     assert "ollama_adapter_surface" in nested
     assert "streaming_cache_detail_usage" in nested
+    assert "responses_previous_response_history" in nested
     assert "cache_reuse_endpoints" in nested
     assert "dsv4_native_cache_status" in nested
     assert "zaya_typed_cca_status" in nested
@@ -137,6 +138,9 @@ def test_noheavy_api_cache_contract_pins_named_server_rows():
     assert "test_chat_stream_finish_chunks_emit_cache_detail" in required
     assert "test_responses_stream_tracks_cache_detail_alongside_cached" in required
     assert "test_responses_stream_finish_emits_cache_detail" in required
+    assert "test_responses_streaming_stores_history_for_previous_response_id" in required
+    assert "test_responses_streaming_reasoning_only_stores_placeholder_and_marker" in required
+    assert "test_chained_response_helper_emits_warning_for_reasoning_only_predecessor" in required
     assert "test_cache_entries_endpoint_lists_paged_prefix_blocks" in required
     assert "test_cache_warm_endpoint_prefills_and_stores_block_cache" in required
     assert "test_clear_cache_prefix_clears_prefix_l2_without_multimodal" in required

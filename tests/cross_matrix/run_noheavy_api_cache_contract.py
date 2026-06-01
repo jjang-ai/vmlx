@@ -37,6 +37,7 @@ SOURCE_HASH_FILES = (
     "tests/test_mllm_scheduler_cache.py",
     "tests/test_tq_disk_cache.py",
     "tests/test_dsml_tool_parser.py",
+    "tests/test_responses_history.py",
     "tests/test_tool_format.py",
     "tests/cross_matrix/run_noheavy_api_cache_contract.py",
 )
@@ -61,6 +62,9 @@ REQUIRED_NOHEAVY_API_CACHE_TEST_MARKERS = (
     "test_chat_stream_finish_chunks_emit_cache_detail",
     "test_responses_stream_tracks_cache_detail_alongside_cached",
     "test_responses_stream_finish_emits_cache_detail",
+    "test_responses_streaming_stores_history_for_previous_response_id",
+    "test_responses_streaming_reasoning_only_stores_placeholder_and_marker",
+    "test_chained_response_helper_emits_warning_for_reasoning_only_predecessor",
     "test_cache_stats_endpoint_projects_cache_reuse_skip_telemetry",
     "test_cache_entries_endpoint_lists_paged_prefix_blocks",
     "test_cache_warm_endpoint_prefills_and_stores_block_cache",
@@ -182,6 +186,20 @@ COMMANDS: dict[str, list[str]] = {
             "or responses_extracts_suppressed_reasoning_tool_calls_before_finalize"
         ),
     ],
+    "responses_history_contracts": [
+        sys.executable,
+        "-m",
+        "pytest",
+        "-q",
+        "-vv",
+        "tests/test_responses_history.py",
+        "-k",
+        (
+            "responses_streaming_stores_history_for_previous_response_id "
+            "or responses_streaming_reasoning_only_stores_placeholder_and_marker "
+            "or chained_response_helper_emits_warning_for_reasoning_only_predecessor"
+        ),
+    ],
 }
 
 
@@ -242,6 +260,7 @@ def build_artifact(root: Path) -> dict[str, Any]:
     scheduler_ok = commands["scheduler_cache_contracts"]["returncode"] == 0
     tq_ok = commands["tq_and_mllm_cache_contracts"]["returncode"] == 0
     dsml_ok = commands["dsv4_dsml_tool_contracts"]["returncode"] == 0
+    responses_history_ok = commands["responses_history_contracts"]["returncode"] == 0
     checks = {
         "openai_chat_sampling_kwargs": (
             api_ok and "test_chat_and_responses_log_and_forward_supported_sampling_kwargs" not in missing_markers
@@ -281,6 +300,15 @@ def build_artifact(root: Path) -> dict[str, Any]:
             and "test_chat_stream_finish_chunks_emit_cache_detail" not in missing_markers
             and "test_responses_stream_tracks_cache_detail_alongside_cached" not in missing_markers
             and "test_responses_stream_finish_emits_cache_detail" not in missing_markers
+        ),
+        "responses_previous_response_history": (
+            responses_history_ok
+            and "test_responses_streaming_stores_history_for_previous_response_id"
+            not in missing_markers
+            and "test_responses_streaming_reasoning_only_stores_placeholder_and_marker"
+            not in missing_markers
+            and "test_chained_response_helper_emits_warning_for_reasoning_only_predecessor"
+            not in missing_markers
         ),
         "cache_reuse_endpoints": (
             api_ok

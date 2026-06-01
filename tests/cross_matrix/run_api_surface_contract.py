@@ -64,6 +64,7 @@ REQUIRED_NESTED_API_CHECKS = (
     "anthropic_bundle_defaults",
     "ollama_adapter_surface",
     "streaming_cache_detail_usage",
+    "responses_previous_response_history",
     "cache_reuse_endpoints",
     "dsv4_native_cache_status",
     "dsv4_dsml_parser_residue_rejection",
@@ -257,6 +258,9 @@ def build_artifact(root: Path) -> dict[str, Any]:
         ),
         "chat_and_responses_streaming_cache_detail_usage": (
             not failed and "streaming_cache_detail_usage" not in missing_nested_checks
+        ),
+        "responses_previous_response_history": (
+            not failed and "responses_previous_response_history" not in missing_nested_checks
         ),
         "server_cache_and_tool_surfaces_named": (
             not failed and not missing_nested_checks and not nested_missing_markers

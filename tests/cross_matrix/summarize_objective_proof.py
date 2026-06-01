@@ -428,6 +428,7 @@ API_CACHE_CONTRACT_CHECKS = (
     "responses_sampling_kwargs",
     "anthropic_bundle_defaults",
     "ollama_adapter_surface",
+    "responses_previous_response_history",
     "dsv4_native_cache_status",
     "dsv4_dsml_parser_residue_rejection",
     "dsv4_dsml_valid_tool_call_preserved",
@@ -446,6 +447,7 @@ API_CACHE_SOURCE_HASH_FILES = (
     "tests/test_mllm_scheduler_cache.py",
     "tests/test_tq_disk_cache.py",
     "tests/test_dsml_tool_parser.py",
+    "tests/test_responses_history.py",
     "tests/test_tool_format.py",
 )
 PANEL_SETTINGS_CONTRACT_CHECKS = (
