@@ -11,13 +11,15 @@ from __future__ import annotations
 
 import argparse
 import json
+import subprocess
 from pathlib import Path
 from typing import Any
 
 
 DEFAULT_OUT = Path(
-    "build/current-public-app-issue-audit-20260601-sequoia-download-minimax-gemma.json"
+    "build/current-public-app-issue-audit-20260601-installed-download-proof.json"
 )
+INSTALLED_APP_ASAR = Path("/Applications/vMLX.app/Contents/Resources/app.asar")
 
 
 def _read(path: Path) -> str:
@@ -40,6 +42,31 @@ def _surfaces(path: Path) -> set[str]:
     if not isinstance(surfaces, list):
         return set()
     return {str(item) for item in surfaces}
+
+
+def _read_installed_asar_file(root: Path, relpath: str) -> str:
+    if not INSTALLED_APP_ASAR.exists():
+        return ""
+    panel_dir = root / "panel"
+    proc = subprocess.run(
+        [
+            "node",
+            "-e",
+            (
+                "const asar=require('@electron/asar');"
+                "process.stdout.write(asar.extractFile(process.argv[1], process.argv[2])"
+                ".toString('utf8'));"
+            ),
+            str(INSTALLED_APP_ASAR),
+            relpath,
+        ],
+        cwd=panel_dir if panel_dir.exists() else root,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+    return proc.stdout if proc.returncode == 0 else ""
 
 
 def _issue169_checks(root: Path) -> dict[str, bool]:
@@ -147,6 +174,7 @@ def _issue118_checks(root: Path) -> dict[str, bool]:
     hf_settings = _read(root / "panel/src/shared/hfSettings.ts")
     hf_tests = _read(root / "panel/tests/hf-settings.test.ts")
     engine_tests = _read(root / "tests/test_engine_audit.py")
+    installed_panel_main = _read_installed_asar_file(root, "dist/main/index.mjs")
     return {
         "hf_endpoint_and_token_normalized": (
             "normalizeHfEndpointSetting" in hf_settings
@@ -172,6 +200,19 @@ def _issue118_checks(root: Path) -> dict[str, bool]:
             "Issue #118: stale saved HF mirrors or tokens" in engine_tests
             and "test_panel_hf_api_retries_public_requests_without_stale_auth"
             in engine_tests
+        ),
+        "installed_app_download_fallback_guarded": (
+            "normalizeHfEndpointSetting" in installed_panel_main
+            and "normalizeHfTokenSetting" in installed_panel_main
+            and "HF_ENDPOINT: void 0" in installed_panel_main
+            and "const hfEndpoint = getConfiguredHfEndpoint() ?? \"\"" in installed_panel_main
+            and "endpoint = sys.argv[3] or None" in installed_panel_main
+            and "endpoint=active_endpoint" in installed_panel_main
+            and "https://huggingface.co" in installed_panel_main
+            and "retrying ${baseUrl} without auth" in installed_panel_main
+            and "retryWithoutAuth" in installed_panel_main
+            and "isHfAuthStatus(response.status)" in installed_panel_main
+            and "print(json.dumps({'type':'fallback'" in installed_panel_main
         ),
     }
 
@@ -258,7 +299,7 @@ def build_audit(root: Path) -> dict[str, Any]:
             "title": "Studio 1.5.42 cannot download models from the Hub",
             "checks": _issue118_checks(root),
             "release_clearance": (
-                "source_gui_download_endpoint_and_stale_auth_fallback_guarded"
+                "installed_gui_download_endpoint_and_stale_auth_fallback_guarded"
             ),
         },
         "119": {
@@ -284,9 +325,10 @@ def build_audit(root: Path) -> dict[str, Any]:
         "focused_failures": focused_failures,
         "release_boundary": (
             "Public issue slices #169, #180, and mlxstudio #117-#119 have "
-            "focused source/proof coverage here. This does not clear the full "
-            "release; Developer ID signing/notarization, DSV4 exactness, and "
-            "real UI matrix blockers remain owned by the release manifest."
+            "focused source/proof coverage here, and #118 includes installed "
+            "app download fallback proof. This does not clear the full release; "
+            "Developer ID signing/notarization, DSV4 exactness, and real UI "
+            "matrix blockers remain owned by the release manifest."
         ),
     }
 

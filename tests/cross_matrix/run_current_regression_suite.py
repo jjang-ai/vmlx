@@ -21,7 +21,7 @@ from typing import Any
 
 
 DEFAULT_OUT = Path(
-    "build/current-regression-suite-20260601-cache-ipc-installed-refresh.json"
+    "build/current-regression-suite-20260601-installed-download-proof.json"
 )
 
 EXPECTED_OPEN_REQUIREMENTS = [
@@ -554,7 +554,7 @@ CURRENT_SUITE_COMMANDS: dict[str, list[str]] = {
         sys.executable,
         "tests/cross_matrix/run_public_app_issue_audit.py",
         "--out",
-        "build/current-public-app-issue-audit-20260601-sequoia-download-minimax-gemma.json",
+        "build/current-public-app-issue-audit-20260601-installed-download-proof.json",
     ],
     "focused_regression_pytest": [
         sys.executable,
@@ -592,7 +592,7 @@ CURRENT_SUITE_COMMANDS: dict[str, list[str]] = {
         "--require-current-proof-sweep",
         "--require-release-ready",
         "--out",
-        "build/current-release-regression-manifest-20260601-cache-ipc-installed-refresh.json",
+        "build/current-release-regression-manifest-20260601-installed-download-proof.json",
     ],
 }
 

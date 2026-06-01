@@ -32,8 +32,12 @@ def test_public_app_issue_audit_tracks_open_app_runtime_issue_slices():
     assert audit["issues"]["118"]["focused_source_slice"] == "pass"
     assert audit["issues"]["118"]["checks"]["download_worker_clears_raw_endpoint"] is True
     assert audit["issues"]["118"]["checks"]["api_retries_without_stale_auth"] is True
+    assert (
+        audit["issues"]["118"]["checks"]["installed_app_download_fallback_guarded"]
+        is True
+    )
     assert audit["issues"]["118"]["release_clearance"] == (
-        "source_gui_download_endpoint_and_stale_auth_fallback_guarded"
+        "installed_gui_download_endpoint_and_stale_auth_fallback_guarded"
     )
     assert audit["issues"]["119"]["focused_source_slice"] == "pass"
     assert audit["issues"]["119"]["checks"]["gemma26_memory_stress_artifact_present"] is True

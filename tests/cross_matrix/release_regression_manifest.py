@@ -367,7 +367,7 @@ CURRENT_POST_BUDGET_EDGE_ARTIFACTS = {
 }
 
 CURRENT_REGRESSION_SUITE_ARTIFACT = (
-    "build/current-regression-suite-20260601-cache-ipc-installed-refresh.json"
+    "build/current-regression-suite-20260601-installed-download-proof.json"
 )
 CURRENT_ISSUE175_179_RELEASE_BOUNDARY_AUDIT_ARTIFACT = (
     "build/current-issue175-179-release-boundary-audit-20260531-post-install-sync.json"
@@ -391,7 +391,7 @@ CURRENT_ISSUE181_183_RUNTIME_AUDIT_ARTIFACT = (
     "build/current-issue181-183-runtime-audit-20260601-qwen3vl-minicpm-mpp.json"
 )
 CURRENT_PUBLIC_APP_ISSUE_AUDIT_ARTIFACT = (
-    "build/current-public-app-issue-audit-20260601-sequoia-download-minimax-gemma.json"
+    "build/current-public-app-issue-audit-20260601-installed-download-proof.json"
 )
 CURRENT_DEV_UI_PROOF_ARTIFACTS = {
     "proof": "docs/internal/agent-notes/2026-05-31-live-chat-tools-reasoning-proof.json",
@@ -4674,10 +4674,13 @@ def _validate_current_public_app_issue_audit(root: Path) -> dict[str, Any]:
         "169": "source_dual_dmg_metal_compat_route_guarded_packaging_still_gated",
         "117": "mapped_to_minimax_k_issue179_live_reporter_prompt_boundary",
         "180": "mapped_to_minimax_small_real_ui_language_numeric_guard",
-        "118": "source_gui_download_endpoint_and_stale_auth_fallback_guarded",
+        "118": "installed_gui_download_endpoint_and_stale_auth_fallback_guarded",
         "119": (
             "source_and_live_gemma26_memory_runtime_guarded_release_package_pending"
         ),
+    }
+    required_checks = {
+        "118": ("installed_app_download_fallback_guarded",),
     }
     for number, clearance in expected_clearance.items():
         issue = issues.get(number)
@@ -4693,6 +4696,9 @@ def _validate_current_public_app_issue_audit(root: Path) -> dict[str, Any]:
             result["failures"].append(f"missing_issue_checks:{number}")
         elif not all(value is True for value in checks.values()):
             result["failures"].append(f"failed_issue_checks:{number}")
+        for check in required_checks.get(number, ()):
+            if checks.get(check) is not True:
+                result["failures"].append(f"missing_issue_check:{number}:{check}")
 
     return result
 
