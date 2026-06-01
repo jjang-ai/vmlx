@@ -368,6 +368,7 @@ def test_issue179_reporter_server_hash_provenance_names_unknown_hash(tmp_path):
             "source_contract",
             "local_installed_bundle",
             "public_v1549_tahoe_dmg",
+            "public_release_dmg_contracts",
             "local_installed_app_backups",
             "git_history",
         ],
@@ -376,6 +377,8 @@ def test_issue179_reporter_server_hash_provenance_names_unknown_hash(tmp_path):
             "local_installed": False,
             "public_v1549_tahoe": False,
         },
+        "public_release_matches": [],
+        "public_release_checked_count": 0,
         "local_backup_matches": [],
         "local_backup_checked_count": 1,
         "git_history": {
@@ -386,6 +389,44 @@ def test_issue179_reporter_server_hash_provenance_names_unknown_hash(tmp_path):
         },
         "failure": "reporter_server_hash_provenance_unknown",
     }
+
+
+def test_issue179_reporter_server_hash_provenance_checks_all_public_dmg_contracts(tmp_path):
+    provenance = gate.build_reporter_server_hash_provenance(
+        root=tmp_path,
+        reporter_sha="reporter-sha",
+        source_sha="source-sha",
+        local_sha="local-sha",
+        public_sha="tahoe-sha",
+        public_dmg_contracts=[
+            {
+                "asset": "vMLX-1.5.49-tahoe-arm64.dmg",
+                "server_sha256": "tahoe-sha",
+            },
+            {
+                "asset": "vMLX-1.5.49-sequoia-arm64.dmg",
+                "server_sha256": "reporter-sha",
+            },
+        ],
+        check_git_history=False,
+    )
+
+    assert provenance["status"] == "pass"
+    assert provenance["direct_matches"] == {
+        "source": False,
+        "local_installed": False,
+        "public_v1549_tahoe": False,
+    }
+    assert provenance["public_release_checked_count"] == 2
+    assert provenance["public_release_matches"] == [
+        {
+            "asset": "vMLX-1.5.49-sequoia-arm64.dmg",
+            "path": None,
+            "release_tag": None,
+            "server_sha256": "reporter-sha",
+        }
+    ]
+    assert "failure" not in provenance
 
 
 def test_issue179_reporter_server_hash_provenance_finds_backup_match(tmp_path):

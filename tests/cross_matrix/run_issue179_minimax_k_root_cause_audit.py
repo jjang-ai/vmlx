@@ -73,6 +73,7 @@ LOCAL_MODEL_MANIFEST = Path(
 PUBLIC_RELEASE_DMG_CONTRACT = Path(
     "build/issue-179/public-v1.5.49-tahoe-dmg-contract.json"
 )
+PUBLIC_RELEASE_DMG_CONTRACT_GLOB = "public-v1.5.49-*-dmg-contract.json"
 
 SOURCE_CONTRACT_FILES = (
     Path("vmlx_engine/server.py"),
@@ -897,11 +898,10 @@ def analyze_local_model_manifest(root: Path) -> dict[str, Any]:
     }
 
 
-def analyze_public_release_dmg_contract(root: Path) -> dict[str, Any]:
-    path = root / PUBLIC_RELEASE_DMG_CONTRACT
+def _public_release_dmg_contract_from_path(root: Path, path: Path) -> dict[str, Any]:
     data = read_json(path)
     return {
-        "path": str(PUBLIC_RELEASE_DMG_CONTRACT),
+        "path": str(path.relative_to(root)),
         "exists": path.exists(),
         "sha256": sha256_file(path),
         "release_tag": data.get("release_tag"),
@@ -918,6 +918,18 @@ def analyze_public_release_dmg_contract(root: Path) -> dict[str, Any]:
         is True,
         "boundary": data.get("boundary"),
     }
+
+
+def analyze_public_release_dmg_contract(root: Path) -> dict[str, Any]:
+    return _public_release_dmg_contract_from_path(root, root / PUBLIC_RELEASE_DMG_CONTRACT)
+
+
+def analyze_public_release_dmg_contracts(root: Path) -> list[dict[str, Any]]:
+    contract_root = root / "build/issue-179"
+    paths = sorted(contract_root.glob(PUBLIC_RELEASE_DMG_CONTRACT_GLOB))
+    if not paths and (root / PUBLIC_RELEASE_DMG_CONTRACT).exists():
+        paths = [root / PUBLIC_RELEASE_DMG_CONTRACT]
+    return [_public_release_dmg_contract_from_path(root, path) for path in paths]
 
 
 def build_bundle_hash_parity(
@@ -1052,6 +1064,7 @@ def build_reporter_server_hash_provenance(
     source_sha: str | None,
     local_sha: str | None,
     public_sha: str | None,
+    public_dmg_contracts: list[dict[str, Any]] | None = None,
     check_git_history: bool = True,
 ) -> dict[str, Any]:
     if not reporter_sha:
@@ -1066,6 +1079,19 @@ def build_reporter_server_hash_provenance(
         "local_installed": bool(local_sha) and reporter_sha == local_sha,
         "public_v1549_tahoe": bool(public_sha) and reporter_sha == public_sha,
     }
+    public_contract_rows = [
+        row for row in (public_dmg_contracts or []) if isinstance(row, dict)
+    ]
+    public_release_matches = [
+        {
+            "asset": row.get("asset"),
+            "path": row.get("path"),
+            "release_tag": row.get("release_tag"),
+            "server_sha256": row.get("server_sha256"),
+        }
+        for row in public_contract_rows
+        if row.get("server_sha256") == reporter_sha
+    ]
     backup_rows = []
     backup_root = root / "build/installed-app-backups"
     if backup_root.exists():
@@ -1085,6 +1111,7 @@ def build_reporter_server_hash_provenance(
     )
     matched = (
         any(direct_matches.values())
+        or bool(public_release_matches)
         or any(row["matches_reporter"] for row in backup_rows)
         or git_history.get("match") is True
     )
@@ -1094,10 +1121,13 @@ def build_reporter_server_hash_provenance(
             "source_contract",
             "local_installed_bundle",
             "public_v1549_tahoe_dmg",
+            "public_release_dmg_contracts",
             "local_installed_app_backups",
             "git_history",
         ],
         "direct_matches": direct_matches,
+        "public_release_matches": public_release_matches,
+        "public_release_checked_count": len(public_contract_rows),
         "local_backup_matches": [
             row for row in backup_rows if row["matches_reporter"]
         ],
@@ -1305,6 +1335,7 @@ def build_audit(root: Path) -> dict[str, Any]:
     local_model_manifest = analyze_local_model_manifest(root)
     reporter_parity_artifact = analyze_reporter_parity_artifact(root)
     public_dmg = analyze_public_release_dmg_contract(root)
+    public_dmgs = analyze_public_release_dmg_contracts(root)
     screenshot = analyze_reporter_screenshot(root)
     bundle_hash_parity = build_bundle_hash_parity(
         source=source,
@@ -1320,6 +1351,7 @@ def build_audit(root: Path) -> dict[str, Any]:
         source_sha=source_hashes.get("vmlx_engine/server.py"),
         local_sha=installed_bundle.get("sha256"),
         public_sha=public_dmg.get("server_sha256"),
+        public_dmg_contracts=public_dmgs,
     )
     reporter_server_hash_parity = build_reporter_server_hash_parity(
         reporter_parity_artifact=reporter_parity_artifact,
@@ -1475,6 +1507,7 @@ def build_audit(root: Path) -> dict[str, Any]:
         "source_contract": source,
         "local_installed_bundle_contract": installed_bundle,
         "public_release_dmg_contract": public_dmg,
+        "public_release_dmg_contracts": public_dmgs,
         "bundle_hash_parity": bundle_hash_parity,
         "reporter_server_hash_parity": reporter_server_hash_parity,
         "reporter_parity_artifact": reporter_parity_artifact,
