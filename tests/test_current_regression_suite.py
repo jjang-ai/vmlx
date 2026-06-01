@@ -792,7 +792,7 @@ def test_current_regression_suite_refreshes_release_regression_manifest(monkeypa
         and "tests/cross_matrix/run_dsv4_route_mode_code_exactness.py" in " ".join(cmd)
         and "--memory-preflight-only" in cmd
         and "--cases" not in cmd
-        and "build/current-dsv4-route-mode-code-exactness-memory-preflight-20260601-local-recheck.json"
+        and "build/current-dsv4-route-mode-code-exactness-memory-preflight-20260601-post-epipe-fix.json"
         in cmd
         for name, cmd in seen_steps
     )

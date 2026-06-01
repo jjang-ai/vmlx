@@ -341,14 +341,19 @@ def memory_preflight_artifact(
                 else "insufficient_free_memory"
             ),
             "required_available_gb": min_free_gb,
+            "required_free_gb": min_free_gb,
+            "min_free_gb": min_free_gb,
             "required_model_margin_gb": DEFAULT_REQUIRED_MODEL_MARGIN_GB,
             "model_size_gb": size_gb,
             "safety_margin_gb": safety_margin_gb,
             "floor_valid": floor_valid,
-            "available_gb": round(float(available), 2)
-            if isinstance(available, (int, float))
-            else None,
+            "available_gb": (
+                round(float(available), 2)
+                if isinstance(available, (int, float))
+                else None
+            ),
             "preflight_available_gb": round(gate_available, 2),
+            "available_for_gate_gb": round(gate_available, 2),
             "preflight_memory_source": (
                 "vm_stat_free_plus_speculative_purgeable"
                 if used_vm_stat
@@ -372,6 +377,7 @@ def memory_preflight_artifact(
             "launch_decision": (
                 "launch_allowed" if status == "ready_to_launch" else "do_not_launch"
             ),
+            "launch_allowed": status == "ready_to_launch",
             "launch_blockers": launch_blockers,
             "model": args.model,
             "cmd": build_cmd(args),
@@ -379,6 +385,7 @@ def memory_preflight_artifact(
             "case_count": len(selected_cases),
             "telemetry": [snap],
         }
+        artifact["memory_breakdown"] = artifact["memory_breakdown_gb"]
         artifact.update(process_context)
         artifact["commands"]["memory_pressure"] = "memory_pressure"
         return artifact

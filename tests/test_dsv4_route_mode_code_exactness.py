@@ -525,10 +525,15 @@ def test_dsv4_code_exactness_probe_memory_preflight_skips_before_spawn(monkeypat
     assert artifact["status"] == "skipped"
     assert artifact["reason"] == "insufficient_free_memory"
     assert artifact["required_available_gb"] == 120.0
+    assert artifact["required_free_gb"] == 120.0
+    assert artifact["min_free_gb"] == 120.0
     assert artifact["available_gb"] == 74.0
+    assert artifact["available_for_gate_gb"] == 74.0
     assert artifact["memory_gap_gb"] == 46.0
     assert artifact["did_not_launch"] is True
     assert artifact["launch_decision"] == "do_not_launch"
+    assert artifact["launch_allowed"] is False
+    assert artifact["memory_breakdown"] == artifact["memory_breakdown_gb"]
     assert artifact["selected_cases"] == ["chat_max"]
     assert artifact["telemetry"][0]["system_memory"]["available_gb"] == 74.0
 
@@ -571,10 +576,15 @@ def test_dsv4_code_exactness_probe_preflight_only_never_spawns_when_ready(
     assert artifact["status"] == "ready_to_launch"
     assert artifact["reason"] == "memory_preflight_floor_met"
     assert artifact["required_available_gb"] == 120.0
+    assert artifact["required_free_gb"] == 120.0
+    assert artifact["min_free_gb"] == 120.0
     assert artifact["available_gb"] == 130.0
+    assert artifact["available_for_gate_gb"] == 130.0
     assert artifact["memory_gap_gb"] == 0.0
     assert artifact["did_not_launch"] is True
     assert artifact["launch_decision"] == "launch_allowed"
+    assert artifact["launch_allowed"] is True
+    assert artifact["memory_breakdown"] == artifact["memory_breakdown_gb"]
     assert artifact["case_count"] == len(CASE_NAMES)
     assert artifact["selected_cases"] == list(CASE_NAMES)
 
@@ -628,8 +638,10 @@ Pages purgeable:                           25000.
     assert artifact["available_gb"] == 130.0
     assert artifact["psutil_available_gap_gb"] == 0.0
     assert artifact["free_plus_speculative_purgeable_gb"] < 120.0
+    assert artifact["available_for_gate_gb"] == artifact["free_plus_speculative_purgeable_gb"]
     assert artifact["strict_vm_stat_memory_gap_gb"] > 0
     assert artifact["launch_decision"] == "do_not_launch"
+    assert artifact["launch_allowed"] is False
     assert "insufficient_memory" in artifact["launch_blockers"]
 
 

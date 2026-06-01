@@ -513,7 +513,7 @@ CURRENT_SUITE_COMMANDS: dict[str, list[str]] = {
         "tests/cross_matrix/run_dsv4_route_mode_code_exactness.py",
         "--memory-preflight-only",
         "--out",
-        "build/current-dsv4-route-mode-code-exactness-memory-preflight-20260601-local-recheck.json",
+        "build/current-dsv4-route-mode-code-exactness-memory-preflight-20260601-post-epipe-fix.json",
     ],
     "real_ui_dsv4_memory_preflight": [
         sys.executable,

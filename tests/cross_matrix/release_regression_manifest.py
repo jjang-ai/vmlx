@@ -412,7 +412,7 @@ DEFERRED_RELEASE_FAMILIES = {
     "mimo_v2": "deferred_out_of_release_scope",
 }
 CURRENT_DSV4_SOURCE_MEMORY_PREFLIGHT_ARTIFACT = (
-    "build/current-dsv4-route-mode-code-exactness-memory-preflight-20260601-local-recheck.json"
+    "build/current-dsv4-route-mode-code-exactness-memory-preflight-20260601-post-epipe-fix.json"
 )
 EXPECTED_DSV4_SOURCE_PREFLIGHT_CASES = (
     "chat_off",
