@@ -8,7 +8,7 @@ from tests.cross_matrix import run_real_ui_dsv4_memory_preflight as gate
 
 def test_dsv4_memory_preflight_default_out_tracks_current_release_artifact():
     assert gate.DEFAULT_OUT == Path(
-        "build/current-real-ui-dsv4-memory-preflight-20260601-post-wrapped-epipe.json"
+        "build/current-real-ui-dsv4-memory-preflight-20260601-local-recheck.json"
     )
 
 
