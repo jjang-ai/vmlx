@@ -204,6 +204,25 @@ describe("Ollama gateway parity contracts", () => {
     }
   });
 
+  it("guards live proof script child stdio EPIPE while collecting e2e evidence", () => {
+    const liveRealUiProof = readFileSync(
+      resolve(process.cwd(), "scripts/live-real-ui-model-proof.mjs"),
+      "utf8",
+    );
+    const liveChatToolsProof = readFileSync(
+      resolve(process.cwd(), "scripts/live-chat-tools-reasoning-proof.mjs"),
+      "utf8",
+    );
+
+    for (const sourceText of [liveRealUiProof, liveChatToolsProof]) {
+      expect(sourceText).toContain("function attachChildProcessStreamErrorGuard");
+      expect(sourceText).toContain("isSocketDisconnectError(error)");
+      expect(sourceText).toContain("stream?.on('error'");
+      expect(sourceText).toContain(".stdout,");
+      expect(sourceText).toContain(".stderr,");
+    }
+  });
+
   it("does not relay backend stderr EPIPE lines as user-visible session errors", () => {
     const sessionsSource = readFileSync(
       resolve(process.cwd(), "src/main/sessions.ts"),

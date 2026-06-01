@@ -70,6 +70,7 @@ def test_api_surface_contract_pins_named_public_surface_edges():
     assert "treats top-level request handler EPIPE failures as client disconnects" in panel
     assert "treats nested broken-pipe stream errors as client disconnects" in panel
     assert "guards child process stdio stream EPIPE across app-managed process lanes" in panel
+    assert "guards live proof script child stdio EPIPE while collecting e2e evidence" in panel
     assert "does not end proxied requests after the backend socket is destroyed" in panel
     assert "does not end proxied requests after Node marks the request closed" in panel
     assert "does not leave raw backend request end calls unguarded after disconnect" in panel
@@ -122,6 +123,8 @@ def test_api_surface_contract_status_fails_when_required_panel_markers_are_missi
 def test_api_surface_contract_source_hash_files_exist():
     from tests.cross_matrix import run_api_surface_contract as gate
 
+    assert "panel/scripts/live-real-ui-model-proof.mjs" in gate.SOURCE_HASH_FILES
+    assert "panel/scripts/live-chat-tools-reasoning-proof.mjs" in gate.SOURCE_HASH_FILES
     assert "panel/src/main/ipc/models.ts" in gate.SOURCE_HASH_FILES
     assert "panel/src/main/tools/executor.ts" in gate.SOURCE_HASH_FILES
 

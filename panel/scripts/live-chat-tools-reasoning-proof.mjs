@@ -30,6 +30,13 @@ function isSocketDisconnectError(error) {
   )
 }
 
+function attachChildProcessStreamErrorGuard(stream, logs) {
+  stream?.on('error', (error) => {
+    if (isSocketDisconnectError(error)) return
+    logs.push(`child stdio stream error: ${error?.message || String(error)}`)
+  })
+}
+
 function safeHttpWrite(res, chunk) {
   if (res.destroyed || res.writableEnded) return false
   try {
@@ -568,6 +575,8 @@ async function main() {
   })
   app.stdout.on('data', (d) => appLogs.push(...d.toString().split(/\r?\n/).filter(Boolean)))
   app.stderr.on('data', (d) => appLogs.push(...d.toString().split(/\r?\n/).filter(Boolean)))
+  attachChildProcessStreamErrorGuard(app.stdout, appLogs)
+  attachChildProcessStreamErrorGuard(app.stderr, appLogs)
 
   let cdp
   try {

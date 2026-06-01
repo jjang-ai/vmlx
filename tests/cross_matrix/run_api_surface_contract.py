@@ -45,6 +45,8 @@ SOURCE_HASH_FILES = (
     "panel/src/main/process-manager.ts",
     "panel/src/main/tools/executor.ts",
     "panel/src/shared/sessionConfigMigrations.ts",
+    "panel/scripts/live-real-ui-model-proof.mjs",
+    "panel/scripts/live-chat-tools-reasoning-proof.mjs",
     "panel/tests/request-builder.test.ts",
     "panel/tests/api-gateway-ollama.test.ts",
     "panel/tests/api-gateway-ollama-behavior.test.ts",
@@ -121,6 +123,7 @@ REQUIRED_PANEL_API_TEST_MARKERS = (
     "treats top-level request handler EPIPE failures as client disconnects",
     "treats nested broken-pipe stream errors as client disconnects",
     "guards child process stdio stream EPIPE across app-managed process lanes",
+    "guards live proof script child stdio EPIPE while collecting e2e evidence",
     "does not end proxied requests after the backend socket is destroyed",
     "does not end proxied requests after Node marks the request closed",
     "does not leave raw backend request end calls unguarded after disconnect",
@@ -328,7 +331,8 @@ def build_artifact(root: Path) -> dict[str, Any]:
         "panel_child_process_stdio_epipe_guard": (
             not failed
             and "guards child process stdio stream EPIPE across app-managed process lanes" not in missing_panel_markers
-            and panel_passed >= 64
+            and "guards live proof script child stdio EPIPE while collecting e2e evidence" not in missing_panel_markers
+            and panel_passed >= 65
         ),
         "panel_gateway_ollama_proxy_response_error_guard": (
             not failed

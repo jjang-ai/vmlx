@@ -146,6 +146,13 @@ function isSocketDisconnectError(error) {
   )
 }
 
+function attachChildProcessStreamErrorGuard(stream, logs) {
+  stream?.on('error', (error) => {
+    if (isSocketDisconnectError(error)) return
+    logs.push(`child stdio stream error: ${error?.message || String(error)}`)
+  })
+}
+
 class CdpSocket {
   constructor(socket) {
     this.socket = socket
@@ -449,6 +456,8 @@ function startRealServer(port, outDir) {
   })
   proc.stdout.on('data', (d) => logs.push(...d.toString().split(/\r?\n/).filter(Boolean)))
   proc.stderr.on('data', (d) => logs.push(...d.toString().split(/\r?\n/).filter(Boolean)))
+  attachChildProcessStreamErrorGuard(proc.stdout, logs)
+  attachChildProcessStreamErrorGuard(proc.stderr, logs)
   return { proc, logs, command: [python, ...args] }
 }
 
@@ -471,6 +480,8 @@ function startUiApp(userDataDir, debugPort) {
     })
     proc.stdout.on('data', (d) => logs.push(...d.toString().split(/\r?\n/).filter(Boolean)))
     proc.stderr.on('data', (d) => logs.push(...d.toString().split(/\r?\n/).filter(Boolean)))
+    attachChildProcessStreamErrorGuard(proc.stdout, logs)
+    attachChildProcessStreamErrorGuard(proc.stderr, logs)
     return {
       proc,
       logs,
@@ -497,6 +508,8 @@ function startUiApp(userDataDir, debugPort) {
   })
   proc.stdout.on('data', (d) => logs.push(...d.toString().split(/\r?\n/).filter(Boolean)))
   proc.stderr.on('data', (d) => logs.push(...d.toString().split(/\r?\n/).filter(Boolean)))
+  attachChildProcessStreamErrorGuard(proc.stdout, logs)
+  attachChildProcessStreamErrorGuard(proc.stderr, logs)
   return {
     proc,
     logs,
