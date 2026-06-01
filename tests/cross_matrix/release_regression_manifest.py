@@ -4575,6 +4575,27 @@ def _validate_current_issue179_minimax_k_root_cause_audit(root: Path) -> dict[st
                     result["failures"].append(
                         f"missing_reporter_server_hash_parity_check:{key}"
                     )
+        provenance = reporter_server_hash_parity.get("provenance")
+        if not isinstance(provenance, dict):
+            result["failures"].append("missing_reporter_server_hash_provenance")
+        else:
+            provenance_status = provenance.get("status")
+            if provenance_status not in {"missing", "open", "pass"}:
+                result["failures"].append("invalid_reporter_server_hash_provenance_status")
+            checked_sources = provenance.get("checked_sources")
+            required_sources = {
+                "source_contract",
+                "local_installed_bundle",
+                "public_v1549_tahoe_dmg",
+                "local_installed_app_backups",
+                "git_history",
+            }
+            if not isinstance(checked_sources, list) or required_sources.difference(
+                {str(source) for source in checked_sources}
+            ):
+                result["failures"].append("missing_reporter_server_hash_provenance_sources")
+            if provenance_status == "open" and not provenance.get("failure"):
+                result["failures"].append("missing_reporter_server_hash_provenance_failure")
     result["reporter_server_hash_parity"] = reporter_server_hash_parity
 
     return result

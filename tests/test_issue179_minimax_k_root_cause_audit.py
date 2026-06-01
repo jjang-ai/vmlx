@@ -10,7 +10,7 @@ from tests.cross_matrix import run_issue179_minimax_k_root_cause_audit as gate
 def test_issue179_audit_keeps_reporter_cancel_404_boundary_open():
     audit = gate.build_audit(Path("."))
 
-    assert audit["status"] == "pass"
+    assert audit["status"] == "open"
     assert audit["reporter"]["responses_cancel_404_seen"] is True
     assert audit["reporter"]["request_error_before_visible_content"] is True
     assert audit["reporter"]["responses_cancel_404_after_request_error"] is True
@@ -145,9 +145,9 @@ def test_issue179_audit_keeps_reporter_cancel_404_boundary_open():
         == "ready_for_direct_comparison"
     )
     assert audit["reporter_parity_comparison"] == {
-        "status": "pass",
+        "status": "open",
         "capture_provenance_is_reporter_machine": True,
-        "server_hash_matches_local_installed": True,
+        "server_hash_matches_local_installed": False,
         "server_route_markers_match": True,
         "model_manifest_sha256_matches_local": True,
         "model_file_hashes_match_local": True,
@@ -155,8 +155,34 @@ def test_issue179_audit_keeps_reporter_cancel_404_boundary_open():
         "response_id_matches_reporter_log": True,
         "response_active_at_cancel_recorded": True,
         "raw_sse_cancel_lifecycle_present": True,
-        "failures": [],
+        "failures": ["server_hash_matches_local_installed"],
     }
+    assert audit["reporter_server_hash_parity"]["status"] == "open"
+    assert (
+        audit["reporter_server_hash_parity"]["failure"]
+        == "reporter_installed_server_hash_drift"
+    )
+    assert audit["reporter_server_hash_parity"]["route_markers_match"] is True
+    assert (
+        audit["reporter_server_hash_parity"]["provenance"]["status"]
+        == "open"
+    )
+    assert (
+        audit["reporter_server_hash_parity"]["provenance"]["failure"]
+        == "reporter_server_hash_provenance_unknown"
+    )
+    assert (
+        audit["reporter_server_hash_parity"]["provenance"]["direct_matches"]
+        == {
+            "source": False,
+            "local_installed": False,
+            "public_v1549_tahoe": False,
+        }
+    )
+    assert (
+        audit["reporter_server_hash_parity"]["provenance"]["git_history"]["match"]
+        is False
+    )
     assert audit["proven"]["local_installed_bundle_has_responses_cancel_route"] is True
     assert audit["public_release_dmg_contract"]["server_has_responses_cancel_route"] is True
     assert audit["proven"]["public_v1549_tahoe_dmg_has_responses_cancel_route"] is True
@@ -221,14 +247,16 @@ def test_issue179_audit_keeps_reporter_cancel_404_boundary_open():
     ]["observed"]
     assert "reporter model shard/codebook hashes match local full K artifact" not in audit["not_proven"]
     assert "reporter model artifact manifest is available for direct local comparison" not in audit["not_proven"]
-    assert "reporter installed app bundle hash matches public/local server.py route proof" not in audit["not_proven"]
+    assert "reporter installed app bundle hash matches public/local server.py route proof" in audit["not_proven"]
     assert "reporter chat/session/settings database state matches local diagnostic state" not in audit["not_proven"]
     assert "the reporter 404 happened before the client stream abort" not in audit["not_proven"]
     assert (
         "the 404 cancel response caused the screenshot rather than followed the stream abort"
         not in audit["not_proven"]
     )
-    assert audit["not_proven"] == []
+    assert audit["not_proven"] == [
+        "reporter installed app bundle hash matches public/local server.py route proof"
+    ]
     assert "reporter screenshot garbage is an interrupted reasoning-panel stream, not proven final visible answer text" in audit["release_boundary"]
 
 
@@ -314,6 +342,86 @@ def test_issue179_reporter_server_hash_parity_names_drift():
         "status": "open",
         "failure": "reporter_installed_server_hash_drift",
     }
+
+
+def test_issue179_reporter_server_hash_provenance_names_unknown_hash(tmp_path):
+    backup = (
+        tmp_path
+        / "build/installed-app-backups/old.app/Contents/Resources/bundled-python/"
+        "python/lib/python3.12/site-packages/vmlx_engine/server.py"
+    )
+    backup.parent.mkdir(parents=True)
+    backup.write_text("different server\n", encoding="utf-8")
+
+    provenance = gate.build_reporter_server_hash_provenance(
+        root=tmp_path,
+        reporter_sha="reporter-sha",
+        source_sha="source-sha",
+        local_sha="local-sha",
+        public_sha="public-sha",
+        check_git_history=False,
+    )
+
+    assert provenance == {
+        "status": "open",
+        "checked_sources": [
+            "source_contract",
+            "local_installed_bundle",
+            "public_v1549_tahoe_dmg",
+            "local_installed_app_backups",
+            "git_history",
+        ],
+        "direct_matches": {
+            "source": False,
+            "local_installed": False,
+            "public_v1549_tahoe": False,
+        },
+        "local_backup_matches": [],
+        "local_backup_checked_count": 1,
+        "git_history": {
+            "checked": False,
+            "match": False,
+            "commit": None,
+            "error": "skipped",
+        },
+        "failure": "reporter_server_hash_provenance_unknown",
+    }
+
+
+def test_issue179_reporter_server_hash_provenance_finds_backup_match(tmp_path):
+    content = b"matched server\n"
+    reporter_sha = gate.hashlib.sha256(content).hexdigest()
+    backup = (
+        tmp_path
+        / "build/installed-app-backups/matched.app/Contents/Resources/"
+        "bundled-python/python/lib/python3.12/site-packages/vmlx_engine/server.py"
+    )
+    backup.parent.mkdir(parents=True)
+    backup.write_bytes(content)
+
+    provenance = gate.build_reporter_server_hash_provenance(
+        root=tmp_path,
+        reporter_sha=reporter_sha,
+        source_sha="source-sha",
+        local_sha="local-sha",
+        public_sha="public-sha",
+        check_git_history=False,
+    )
+
+    assert provenance["status"] == "pass"
+    assert provenance["local_backup_checked_count"] == 1
+    assert provenance["local_backup_matches"] == [
+        {
+            "path": (
+                "build/installed-app-backups/matched.app/Contents/Resources/"
+                "bundled-python/python/lib/python3.12/site-packages/"
+                "vmlx_engine/server.py"
+            ),
+            "sha256": reporter_sha,
+            "matches_reporter": True,
+        }
+    ]
+    assert "failure" not in provenance
 
 
 def test_issue179_not_proven_removes_reporter_parity_gaps_when_comparison_passes():

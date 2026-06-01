@@ -1623,6 +1623,29 @@ def _write_expected_issue179_minimax_k_root_cause_audit(root: Path) -> None:
                     "reporter_matches_local_installed": True,
                     "reporter_matches_public_v1549_tahoe": False,
                     "route_markers_match": True,
+                    "provenance": {
+                        "status": "pass",
+                        "checked_sources": [
+                            "source_contract",
+                            "local_installed_bundle",
+                            "public_v1549_tahoe_dmg",
+                            "local_installed_app_backups",
+                            "git_history",
+                        ],
+                        "direct_matches": {
+                            "source": True,
+                            "local_installed": True,
+                            "public_v1549_tahoe": False,
+                        },
+                        "local_backup_matches": [],
+                        "local_backup_checked_count": 0,
+                        "git_history": {
+                            "checked": True,
+                            "match": True,
+                            "commit": "abc123",
+                            "error": None,
+                        },
+                    },
                 },
             }
         )
@@ -1817,6 +1840,22 @@ def test_current_proof_sweep_rejects_issue179_missing_reporter_server_hash_parit
     ]
 
     assert "missing_reporter_server_hash_parity" in result["failures"]
+
+
+def test_current_proof_sweep_rejects_issue179_missing_reporter_server_hash_provenance(
+    tmp_path,
+):
+    _write_expected_issue179_minimax_k_root_cause_audit(tmp_path)
+    path = tmp_path / CURRENT_ISSUE179_MINIMAX_K_ROOT_CAUSE_AUDIT_ARTIFACT
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["reporter_server_hash_parity"].pop("provenance")
+    path.write_text(json.dumps(payload) + "\n", encoding="utf-8")
+
+    result = validate_current_proof_sweep_artifacts(tmp_path)[
+        "issue179_minimax_k_root_cause_audit"
+    ]
+
+    assert "missing_reporter_server_hash_provenance" in result["failures"]
 
 
 def test_current_proof_sweep_requires_issue179_memory_preflight_when_open(tmp_path):

@@ -14,6 +14,7 @@ import hashlib
 import json
 import re
 import shlex
+import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -959,6 +960,7 @@ def build_reporter_server_hash_parity(
     source: dict[str, Any],
     installed_bundle: dict[str, Any],
     public_dmg: dict[str, Any],
+    provenance: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     source_hashes = source.get("source_hashes")
     if not isinstance(source_hashes, dict):
@@ -996,8 +998,114 @@ def build_reporter_server_hash_parity(
         "route_markers_match": route_markers_match,
         "status": status,
     }
+    if provenance is not None:
+        out["provenance"] = provenance
     if status != "pass":
         out["failure"] = "reporter_installed_server_hash_drift"
+    return out
+
+
+def _git_history_server_hash_match(root: Path, reporter_sha: str) -> dict[str, Any]:
+    result: dict[str, Any] = {
+        "checked": False,
+        "match": False,
+        "commit": None,
+        "error": None,
+    }
+    try:
+        revs = subprocess.run(
+            ["git", "rev-list", "--all", "--", "vmlx_engine/server.py"],
+            cwd=root,
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+        result["error"] = type(exc).__name__
+        return result
+
+    result["checked"] = True
+    for commit in revs.stdout.splitlines():
+        try:
+            show = subprocess.run(
+                ["git", "show", f"{commit}:vmlx_engine/server.py"],
+                cwd=root,
+                check=True,
+                capture_output=True,
+                timeout=30,
+            )
+        except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
+            continue
+        digest = hashlib.sha256(show.stdout).hexdigest()
+        if digest == reporter_sha:
+            result["match"] = True
+            result["commit"] = commit
+            return result
+    return result
+
+
+def build_reporter_server_hash_provenance(
+    *,
+    root: Path,
+    reporter_sha: str | None,
+    source_sha: str | None,
+    local_sha: str | None,
+    public_sha: str | None,
+    check_git_history: bool = True,
+) -> dict[str, Any]:
+    if not reporter_sha:
+        return {
+            "status": "missing",
+            "failure": "missing_reporter_server_sha256",
+            "checked_sources": [],
+        }
+
+    direct_matches = {
+        "source": bool(source_sha) and reporter_sha == source_sha,
+        "local_installed": bool(local_sha) and reporter_sha == local_sha,
+        "public_v1549_tahoe": bool(public_sha) and reporter_sha == public_sha,
+    }
+    backup_rows = []
+    backup_root = root / "build/installed-app-backups"
+    if backup_root.exists():
+        for path in sorted(backup_root.glob("**/vmlx_engine/server.py")):
+            digest = sha256_file(path)
+            backup_rows.append(
+                {
+                    "path": str(path.relative_to(root)),
+                    "sha256": digest,
+                    "matches_reporter": digest == reporter_sha,
+                }
+            )
+    git_history = (
+        _git_history_server_hash_match(root, reporter_sha)
+        if check_git_history
+        else {"checked": False, "match": False, "commit": None, "error": "skipped"}
+    )
+    matched = (
+        any(direct_matches.values())
+        or any(row["matches_reporter"] for row in backup_rows)
+        or git_history.get("match") is True
+    )
+    out: dict[str, Any] = {
+        "status": "pass" if matched else "open",
+        "checked_sources": [
+            "source_contract",
+            "local_installed_bundle",
+            "public_v1549_tahoe_dmg",
+            "local_installed_app_backups",
+            "git_history",
+        ],
+        "direct_matches": direct_matches,
+        "local_backup_matches": [
+            row for row in backup_rows if row["matches_reporter"]
+        ],
+        "local_backup_checked_count": len(backup_rows),
+        "git_history": git_history,
+    }
+    if not matched:
+        out["failure"] = "reporter_server_hash_provenance_unknown"
     return out
 
 
@@ -1203,11 +1311,22 @@ def build_audit(root: Path) -> dict[str, Any]:
         installed_bundle=installed_bundle,
         public_dmg=public_dmg,
     )
+    source_hashes = source.get("source_hashes")
+    if not isinstance(source_hashes, dict):
+        source_hashes = {}
+    reporter_server_hash_provenance = build_reporter_server_hash_provenance(
+        root=root,
+        reporter_sha=reporter_parity_artifact.get("installed_server_sha256"),
+        source_sha=source_hashes.get("vmlx_engine/server.py"),
+        local_sha=installed_bundle.get("sha256"),
+        public_sha=public_dmg.get("server_sha256"),
+    )
     reporter_server_hash_parity = build_reporter_server_hash_parity(
         reporter_parity_artifact=reporter_parity_artifact,
         source=source,
         installed_bundle=installed_bundle,
         public_dmg=public_dmg,
+        provenance=reporter_server_hash_provenance,
     )
     reporter_parity_comparison = build_reporter_parity_comparison(
         reporter_parity_artifact=reporter_parity_artifact,
