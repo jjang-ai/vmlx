@@ -3931,7 +3931,12 @@ def test_release_regression_manifest_real_ui_matrix_requires_every_family_surfac
                 }
             },
             "chat": {
-                "turns": [{"role": "assistant", "content": "ok"}],
+                "turns": [
+                    {"role": "user", "content": "Say READY."},
+                    {"role": "assistant", "content": "READY"},
+                    {"role": "user", "content": "Repeat READY."},
+                    {"role": "assistant", "content": "READY"},
+                ],
                 "rawParserTagLeak": False,
                 "cjkLeakCount": 0,
                 "koreanLeakCount": 0,
@@ -4054,7 +4059,12 @@ def test_release_regression_manifest_real_ui_matrix_uses_family_specific_media_r
                 }
             },
             "chat": {
-                "turns": [{"role": "assistant", "content": "ok"}],
+                "turns": [
+                    {"role": "user", "content": "Say READY."},
+                    {"role": "assistant", "content": "READY"},
+                    {"role": "user", "content": "Repeat READY."},
+                    {"role": "assistant", "content": "READY"},
+                ],
                 "rawParserTagLeak": False,
                 "cjkLeakCount": 0,
                 "koreanLeakCount": 0,
@@ -4135,6 +4145,100 @@ def test_release_regression_manifest_real_ui_matrix_uses_family_specific_media_r
     assert "video_where_supported" not in matrix["covered_families"]["zaya_vl"]["missing_surfaces"]
     assert matrix["covered_families"]["qwen36"]["status"] == "partial"
     assert "video_where_supported" in matrix["covered_families"]["qwen36"]["missing_surfaces"]
+
+
+def test_release_regression_manifest_real_ui_matrix_requires_multi_turn_chat():
+    proof = {
+        "modelName": "ZAYA1-8B-MXFP4",
+        "appLogTail": ["start electron app"],
+        "server": {
+            "health": {
+                "status": "healthy",
+                "model_loaded": True,
+                "native_cache": {
+                    "family": "zaya",
+                    "schema": "zaya_cca_v1",
+                    "cache_type": "typed_cca",
+                    "components": ["standard_kv", "cca_conv_state"],
+                    "prefix": True,
+                    "paged": True,
+                    "block_disk_l2": True,
+                },
+            }
+        },
+        "chat": {
+            "turns": [{"role": "assistant", "content": "READY"}],
+            "rawParserTagLeak": False,
+            "cjkLeakCount": 0,
+            "koreanLeakCount": 0,
+        },
+        "cache": {
+            "before": {"scheduler_cache": {"hits": 0}},
+            "after": {
+                "scheduler_cache": {"hits": 1},
+                "block_disk_cache": {"disk_hits": 1},
+                "cache_totals": {"l2_tokens_on_disk": 12},
+            },
+            "cacheHitTokens": 12,
+        },
+        "rendererWireApi": "responses",
+        "eventCounts": {"complete": 2, "stream": 4, "tool": 24},
+        "streamTrace": [
+            {
+                "messageId": "stream-one",
+                "count": 4,
+                "firstFullContent": "R",
+                "lastFullContent": "READY one",
+            },
+            {
+                "messageId": "stream-two",
+                "count": 4,
+                "firstFullContent": "O",
+                "lastFullContent": "OK two",
+            },
+        ],
+        "persistedToolCount": 24,
+        "persistedToolsByMessage": [
+            [
+                {"phase": "calling", "toolName": "run_command"},
+                {"phase": "executing", "toolName": "run_command"},
+                {
+                    "phase": "result",
+                    "toolName": "run_command",
+                    "detail": "REAL_UI_LIVE_TOOL_ONE",
+                },
+            ],
+            [
+                {"phase": "calling", "toolName": "run_command"},
+                {"phase": "executing", "toolName": "run_command"},
+                {
+                    "phase": "result",
+                    "toolName": "run_command",
+                    "detail": "REAL_UI_LIVE_TOOL_TWO",
+                },
+            ],
+        ],
+        "toolProbeFiles": {
+            "real_ui_tool_probe_1.txt": "REAL_UI_LIVE_TOOL_ONE",
+            "real_ui_tool_probe_2.txt": "REAL_UI_LIVE_TOOL_TWO",
+        },
+        "requestedBuiltinTools": True,
+        "chatOverrides": {"builtinToolsEnabled": True},
+        "serverCacheControls": {"verified": True},
+        "serverLogTail": [
+            "INFO:vmlx_engine.server:Resolved sampling kwargs "
+            "route=/v1/responses model=ZAYA1-8B-MXFP4 "
+            "kwargs={'temperature': 0.0, 'top_p': 1.0, 'max_tokens': 512}"
+        ],
+    }
+
+    matrix = _validate_current_real_ui_live_model_matrix(
+        {"status": "pass", "proofs": {"zaya_text": proof}}
+    )
+
+    zaya = matrix["covered_families"]["zaya_text"]
+    assert "multi_turn_chat" not in zaya["covered_surfaces"]
+    assert "multi_turn_chat" in zaya["missing_surfaces"]
 
 
 def test_release_regression_manifest_real_ui_matrix_rejects_cache_hit_telemetry_when_reconstruction_falls_back_to_miss():

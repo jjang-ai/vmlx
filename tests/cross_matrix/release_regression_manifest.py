@@ -701,6 +701,7 @@ REQUIRED_REAL_UI_LIVE_MODEL_SURFACES = (
     "responses_cache_detail_usage",
     "live_speed_floor",
     "generation_defaults_applied",
+    "multi_turn_chat",
     "long_tool_loop",
     "reasoning_display",
     "parser_leak_check",
@@ -3352,6 +3353,40 @@ def _real_ui_chat_has_raw_parser_leak(chat: dict[str, Any]) -> bool:
     return bool(RAW_REAL_UI_PARSER_LEAK_RE.search("\n".join(visible_parts)))
 
 
+def _real_ui_multi_turn_chat_ok(
+    proof: dict[str, Any],
+    chat: dict[str, Any],
+) -> bool:
+    turns = chat.get("turns")
+    if not isinstance(turns, list):
+        turns = proof.get("turns")
+    if not isinstance(turns, list):
+        return False
+    user_indices = [
+        index
+        for index, turn in enumerate(turns)
+        if isinstance(turn, dict) and turn.get("role") == "user"
+    ]
+    if len(user_indices) < 2:
+        return False
+    assistant_after_user = 0
+    for user_index_index, user_index in enumerate(user_indices):
+        next_user_index = (
+            user_indices[user_index_index + 1]
+            if user_index_index + 1 < len(user_indices)
+            else len(turns)
+        )
+        if any(
+            isinstance(turn, dict)
+            and turn.get("role") == "assistant"
+            and isinstance(turn.get("content"), str)
+            and turn.get("content", "").strip()
+            for turn in turns[user_index + 1 : next_user_index]
+        ):
+            assistant_after_user += 1
+    return assistant_after_user >= 2
+
+
 REASONING_NUMERIC_GARBAGE_RE = re.compile(
     r"(?:^|[\s([{,;:])(?:\d{1,4}[\s,;:|\-/.]+){8,}\d{1,4}(?=$|[\s)\]},;:.])",
     re.MULTILINE,
@@ -5216,6 +5251,8 @@ def _validate_current_real_ui_live_model_matrix(
                 surfaces.add("responses_cache_detail_usage")
             if _real_ui_generation_defaults_applied_ok(proof):
                 surfaces.add("generation_defaults_applied")
+            if _real_ui_multi_turn_chat_ok(proof, chat):
+                surfaces.add("multi_turn_chat")
             row = CURRENT_REAL_UI_LIVE_MODEL_PROOF_ROWS.get(row_id, {})
             family_id = str(row.get("family") or row_id)
             if _real_ui_architecture_cache_policy_ok(family_id, proof):
