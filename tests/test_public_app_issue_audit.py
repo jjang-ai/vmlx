@@ -15,6 +15,7 @@ def test_public_app_issue_audit_tracks_open_app_runtime_issue_slices():
         "169",
         "180",
         "111",
+        "115",
         "116",
         "117",
         "118",
@@ -75,6 +76,13 @@ def test_public_app_issue_audit_tracks_open_app_runtime_issue_slices():
     assert audit["issues"]["116"]["checks"]["packaged_renderer_thinking_controls_present"] is True
     assert audit["issues"]["116"]["release_clearance"] == (
         "mapped_to_thinking_off_ui_api_request_guard"
+    )
+    assert audit["issues"]["115"]["focused_source_slice"] == "pass"
+    assert audit["issues"]["115"]["checks"]["gemma4_installed_speed_risk_tracked"] is True
+    assert audit["issues"]["115"]["checks"]["gemma4_installed_speed_artifacts_below_floor"] is True
+    assert audit["issues"]["115"]["checks"]["qwen36_speed_review_tracked"] is True
+    assert audit["issues"]["115"]["release_clearance"] == (
+        "tracked_as_performance_regression_release_blocker"
     )
     assert audit["issues"]["118"]["focused_source_slice"] == "pass"
     assert audit["issues"]["118"]["checks"]["download_worker_clears_raw_endpoint"] is True

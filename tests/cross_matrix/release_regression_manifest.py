@@ -2616,6 +2616,7 @@ def validate_current_proof_sweep_artifacts(root: Path) -> dict[str, Any]:
         issue175_179_release_boundary_audit=issue175_179_release_boundary_audit,
         installed_app_runtime_parity_audit=installed_app_runtime_parity_audit,
         issue179_minimax_k_root_cause_audit=issue179_minimax_k_root_cause_audit,
+        public_app_issue_audit=public_app_issue_audit,
         release_surface_matrix=release_surface_matrix,
         real_ui_live_model_proof=real_ui_live_model_proof,
         real_ui_live_model_matrix=real_ui_live_model_matrix,
@@ -2767,6 +2768,7 @@ def _current_release_blocker_ledger(
     issue175_179_release_boundary_audit: dict[str, Any],
     installed_app_runtime_parity_audit: dict[str, Any],
     issue179_minimax_k_root_cause_audit: dict[str, Any],
+    public_app_issue_audit: dict[str, Any] | None = None,
     release_surface_matrix: dict[str, Any] | None = None,
     real_ui_live_model_proof: dict[str, Any] | None = None,
     real_ui_live_model_matrix: dict[str, Any],
@@ -2990,6 +2992,33 @@ def _current_release_blocker_ledger(
                     "Reproduce or disprove screenshot-shaped wrong-language/numeric "
                     "reasoning-panel garbage with the reporter prompt/session."
                 ),
+            }
+        )
+
+    if not isinstance(public_app_issue_audit, dict):
+        public_app_issue_audit = {}
+    public_issues = public_app_issue_audit.get("issues")
+    if not isinstance(public_issues, dict):
+        public_issues = {}
+    issue115 = public_issues.get("115")
+    if isinstance(issue115, dict) and issue115.get("release_clearance") == (
+        "tracked_as_performance_regression_release_blocker"
+    ):
+        blockers.append(
+            {
+                "id": "issue115_installed_app_performance_regression_open",
+                "status": "open",
+                "evidence": CURRENT_PUBLIC_APP_ISSUE_AUDIT_ARTIFACT,
+                "next_proof": (
+                    "Rerun reporter-equivalent Gemma and Qwen installed-app speed "
+                    "proofs under current app/runtime and replace sub-floor speed "
+                    "artifacts before release."
+                ),
+                "details": {
+                    "repo": issue115.get("repo"),
+                    "title": issue115.get("title"),
+                    "checks": issue115.get("checks"),
+                },
             }
         )
 
@@ -4682,6 +4711,7 @@ def _validate_current_public_app_issue_audit(root: Path) -> dict[str, Any]:
             "installed_and_staged_sequoia_compat_runtime_flavor_guarded_packaging_still_gated"
         ),
         "111": "mapped_to_mistral_small4_vlm_wrapper_detection_guard",
+        "115": "tracked_as_performance_regression_release_blocker",
         "116": "mapped_to_thinking_off_ui_api_request_guard",
         "117": "mapped_to_minimax_k_issue179_live_reporter_prompt_boundary",
         "180": "mapped_to_minimax_small_real_ui_language_numeric_guard",
@@ -4705,6 +4735,11 @@ def _validate_current_public_app_issue_audit(root: Path) -> dict[str, Any]:
             "mistral_small4_wrapper_stays_mllm",
             "mistral_small4_parser_metadata_preserved",
             "installed_app_mllm_hash_guarded",
+        ),
+        "115": (
+            "gemma4_installed_speed_risk_tracked",
+            "gemma4_installed_speed_artifacts_below_floor",
+            "qwen36_speed_review_tracked",
         ),
         "116": (
             "reasoning_template_contract_passes",

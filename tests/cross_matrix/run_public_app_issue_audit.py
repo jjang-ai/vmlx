@@ -37,6 +37,20 @@ REASONING_TEMPLATE_CONTRACT = Path(
 PACKAGED_INTEGRITY_CONTRACT = Path(
     "build/current-packaged-integrity-contract-20260601-developer-id-dmg-assertions.json"
 )
+GEMMA4_INSTALLED_SPEED_ARTIFACTS = (
+    Path(
+        "build/current-runtime-memory-stress-gemma4-26b-jang4m-chat-thinkingoff-speed-floor-prompt-cachehit-512-installed-app-20260525.json"
+    ),
+    Path(
+        "build/current-runtime-memory-stress-gemma4-26b-jang4m-chat-thinkingoff-speed-floor-prompt-cachehit-512-installed-app-repeat-20260525.json"
+    ),
+    Path(
+        "build/current-runtime-memory-stress-gemma4-26b-jang4m-chat-thinkingoff-speed-floor-prompt-cachehit-512-installed-app-trace-20260525.json"
+    ),
+    Path(
+        "build/current-runtime-memory-stress-gemma4-26b-jang4m-chat-thinkingoff-speed-floor-installed-app-triple-nocache-256-streaming-20260525.json"
+    ),
+)
 
 
 def _read(path: Path) -> str:
@@ -410,6 +424,46 @@ def _issue116_checks(root: Path) -> dict[str, bool]:
     }
 
 
+def _installed_gemma4_speed_samples_below_floor(root: Path) -> list[float]:
+    below: list[float] = []
+    for relpath in GEMMA4_INSTALLED_SPEED_ARTIFACTS:
+        payload = _load_json(root / relpath)
+        for result in payload.get("results") or []:
+            if not isinstance(result, dict):
+                continue
+            speed = result.get("speed")
+            if not isinstance(speed, dict):
+                continue
+            decode_tok_s_wall = speed.get("decode_tok_s_wall")
+            if isinstance(decode_tok_s_wall, int | float) and decode_tok_s_wall < 80.0:
+                below.append(float(decode_tok_s_wall))
+    return below
+
+
+def _issue115_checks(root: Path) -> dict[str, bool]:
+    release_manifest = _read(root / "tests/cross_matrix/release_regression_manifest.py")
+    release_tests = _read(root / "tests/test_release_regression_manifest.py")
+    below_floor = _installed_gemma4_speed_samples_below_floor(root)
+    return {
+        "gemma4_installed_speed_risk_tracked": (
+            "Gemma4 26B mixed-SWA UI/app-engine speed is not cleared" in release_manifest
+            and "installed app speed remains a release risk" in release_manifest
+            and "Gemma4 speed remains uncleared" in release_manifest
+            and "test_release_regression_manifest_does_not_overclaim_gemma4_installed_speed_floor"
+            in release_tests
+        ),
+        "gemma4_installed_speed_artifacts_below_floor": bool(below_floor),
+        "qwen36_speed_review_tracked": (
+            "qwen-jang-mx-live-speed-review" in release_manifest
+            and "Qwen3.6-27B JANG_4M live decode speed" in release_manifest
+            and "This row prevents broad JANG/MX matmul speed claims from hiding prompt-processing regressions"
+            in release_manifest
+            and "test_release_regression_manifest_tracks_qwen_jang_live_speed_review"
+            in release_tests
+        ),
+    }
+
+
 def _issue118_checks(root: Path) -> dict[str, bool]:
     models = _read(root / "panel/src/main/ipc/models.ts")
     hf_settings = _read(root / "panel/src/shared/hfSettings.ts")
@@ -560,6 +614,12 @@ def build_audit(root: Path) -> dict[str, Any]:
             "checks": _issue116_checks(root),
             "release_clearance": "mapped_to_thinking_off_ui_api_request_guard",
         },
+        "115": {
+            "repo": "jjang-ai/mlxstudio",
+            "title": "Performance regression in v1.5.32 compared to v1.3.53",
+            "checks": _issue115_checks(root),
+            "release_clearance": "tracked_as_performance_regression_release_blocker",
+        },
         "118": {
             "repo": "jjang-ai/mlxstudio",
             "title": "Studio 1.5.42 cannot download models from the Hub",
@@ -590,7 +650,7 @@ def build_audit(root: Path) -> dict[str, Any]:
         "issues": issues,
         "focused_failures": focused_failures,
         "release_boundary": (
-            "Public issue slices #165, #169, #180, and mlxstudio #111, #116-#119 "
+            "Public issue slices #165, #169, #180, and mlxstudio #111, #115-#119 "
             "have focused source/proof coverage here, and #118 includes "
             "installed app download fallback proof. This does not clear the "
             "full release; Developer ID signing/notarization, DSV4 exactness, "

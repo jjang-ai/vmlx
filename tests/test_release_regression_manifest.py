@@ -1346,6 +1346,19 @@ def _write_expected_public_app_issue_audit(root: Path) -> None:
                             "installed_app_mllm_hash_guarded": True,
                         },
                     },
+                    "115": {
+                        "repo": "jjang-ai/mlxstudio",
+                        "title": "Performance regression in v1.5.32 compared to v1.3.53",
+                        "focused_source_slice": "pass",
+                        "release_clearance": (
+                            "tracked_as_performance_regression_release_blocker"
+                        ),
+                        "checks": {
+                            "gemma4_installed_speed_risk_tracked": True,
+                            "gemma4_installed_speed_artifacts_below_floor": True,
+                            "qwen36_speed_review_tracked": True,
+                        },
+                    },
                     "116": {
                         "focused_source_slice": "pass",
                         "release_clearance": (
@@ -1450,6 +1463,20 @@ def test_release_regression_manifest_rejects_public_issue116_without_thinking_of
     result = _validate_current_public_app_issue_audit(tmp_path)
 
     assert "missing_issue:116" in result["failures"]
+
+
+def test_release_regression_manifest_adds_issue115_performance_blocker():
+    sweep = validate_current_proof_sweep_artifacts(Path("."))
+    blockers = {
+        blocker["id"]: blocker
+        for blocker in sweep["release_blocker_ledger"]["blockers"]
+    }
+
+    blocker = blockers["issue115_installed_app_performance_regression_open"]
+    assert blocker["status"] == "open"
+    assert blocker["evidence"] == CURRENT_PUBLIC_APP_ISSUE_AUDIT_ARTIFACT
+    assert "Gemma" in blocker["next_proof"]
+    assert "Qwen" in blocker["next_proof"]
 
 
 def test_release_regression_manifest_rejects_public_issue169_without_installed_runtime_flavor(
@@ -7918,6 +7945,25 @@ def test_release_regression_manifest_validates_current_proof_sweep_artifacts(tmp
                         "legacy_completion_raw",
                     ],
                     "case_count": 14,
+                },
+            },
+            {
+                "id": "issue115_installed_app_performance_regression_open",
+                "status": "open",
+                "evidence": CURRENT_PUBLIC_APP_ISSUE_AUDIT_ARTIFACT,
+                "next_proof": (
+                    "Rerun reporter-equivalent Gemma and Qwen installed-app speed "
+                    "proofs under current app/runtime and replace sub-floor speed "
+                    "artifacts before release."
+                ),
+                "details": {
+                    "repo": "jjang-ai/mlxstudio",
+                    "title": "Performance regression in v1.5.32 compared to v1.3.53",
+                    "checks": {
+                        "gemma4_installed_speed_risk_tracked": True,
+                        "gemma4_installed_speed_artifacts_below_floor": True,
+                        "qwen36_speed_review_tracked": True,
+                    },
                 },
             },
             {
