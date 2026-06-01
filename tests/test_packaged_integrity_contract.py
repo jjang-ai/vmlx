@@ -13,7 +13,7 @@ def test_packaged_integrity_known_open_rows_match_current_suite():
 
 def test_packaged_integrity_default_out_tracks_current_release_proof_artifact():
     assert runner.DEFAULT_OUT == Path(
-        "build/current-packaged-integrity-contract-20260601-cache-ipc-epipe-package-refresh.json"
+        "build/current-packaged-integrity-contract-20260601-developer-id-dmg-assertions.json"
     )
 
 
@@ -539,6 +539,34 @@ def test_release_dmg_notarization_verifier_contract_accepts_final_dmg_checks(tmp
     script.parent.mkdir(parents=True)
     script.write_text(
         "#!/usr/bin/env bash\n"
+        "require_developer_id_signature() {\n"
+        '  codesign -dv --verbose=4 "$1" 2>&1 | grep -F "Authority=Developer ID Application: ShieldStack LLC (55KGF2S5AY)"\n'
+        '  codesign -dv --verbose=4 "$1" 2>&1 | grep -F "TeamIdentifier=55KGF2S5AY"\n'
+        '  if codesign -dv --verbose=4 "$1" 2>&1 | grep -F "Signature=adhoc"; then exit 1; fi\n'
+        "}\n"
+        "for flavor in sequoia tahoe; do\n"
+        '  dmg="release/vMLX-${VERSION}-${flavor}-arm64.dmg"\n'
+        '  hdiutil verify "$dmg"\n'
+        '  codesign --verify --verbose=2 "$dmg"\n'
+        '  codesign -dv --verbose=4 "$dmg"\n'
+        '  require_developer_id_signature "$dmg"\n'
+        '  xcrun stapler validate "$dmg"\n'
+        '  spctl --assess --type open --context context:primary-signature --verbose=4 "$dmg"\n'
+        '  shasum -a 256 "$dmg"\n'
+        "done\n",
+        encoding="utf-8",
+    )
+
+    assert runner._check_release_dmg_notarization_verifier_contract(tmp_path) is True
+
+
+def test_release_dmg_notarization_verifier_contract_rejects_no_developer_id_assertion(
+    tmp_path,
+):
+    script = tmp_path / "panel/scripts/verify-release-dmgs.sh"
+    script.parent.mkdir(parents=True)
+    script.write_text(
+        "#!/usr/bin/env bash\n"
         "for flavor in sequoia tahoe; do\n"
         '  dmg="release/vMLX-${VERSION}-${flavor}-arm64.dmg"\n'
         '  hdiutil verify "$dmg"\n'
@@ -551,7 +579,7 @@ def test_release_dmg_notarization_verifier_contract_accepts_final_dmg_checks(tmp
         encoding="utf-8",
     )
 
-    assert runner._check_release_dmg_notarization_verifier_contract(tmp_path) is True
+    assert runner._check_release_dmg_notarization_verifier_contract(tmp_path) is False
 
 
 def test_release_dmg_notarization_submit_contract_rejects_missing_script(tmp_path):
@@ -559,6 +587,36 @@ def test_release_dmg_notarization_submit_contract_rejects_missing_script(tmp_pat
 
 
 def test_release_dmg_notarization_submit_contract_accepts_signed_dmg_workflow(tmp_path):
+    script = tmp_path / "panel/scripts/notarize-release-dmgs.sh"
+    script.parent.mkdir(parents=True)
+    script.write_text(
+        "#!/usr/bin/env bash\n"
+        "NOTARY_PROFILE=\"${VMLINUX_NOTARY_KEYCHAIN_PROFILE:-vmlx-notary}\"\n"
+        "require_developer_id_signature() {\n"
+        '  codesign -dv --verbose=4 "$1" 2>&1 | grep -F "Authority=Developer ID Application: ShieldStack LLC (55KGF2S5AY)"\n'
+        '  codesign -dv --verbose=4 "$1" 2>&1 | grep -F "TeamIdentifier=55KGF2S5AY"\n'
+        '  if codesign -dv --verbose=4 "$1" 2>&1 | grep -F "Signature=adhoc"; then exit 1; fi\n'
+        "}\n"
+        "for flavor in sequoia tahoe; do\n"
+        '  dmg="release/vMLX-${VERSION}-${flavor}-arm64.dmg"\n'
+        '  codesign --verify --verbose=2 "$dmg"\n'
+        '  codesign -dv --verbose=4 "$dmg"\n'
+        '  require_developer_id_signature "$dmg"\n'
+        '  xcrun notarytool submit "$dmg" --keychain-profile "$NOTARY_PROFILE" --wait --output-format json\n'
+        '  xcrun stapler staple "$dmg"\n'
+        '  xcrun stapler validate "$dmg"\n'
+        '  spctl --assess --type open --context context:primary-signature --verbose=4 "$dmg"\n'
+        '  shasum -a 256 "$dmg"\n'
+        "done\n",
+        encoding="utf-8",
+    )
+
+    assert runner._check_release_dmg_notarization_submit_contract(tmp_path) is True
+
+
+def test_release_dmg_notarization_submit_contract_rejects_no_developer_id_assertion(
+    tmp_path,
+):
     script = tmp_path / "panel/scripts/notarize-release-dmgs.sh"
     script.parent.mkdir(parents=True)
     script.write_text(
@@ -576,7 +634,7 @@ def test_release_dmg_notarization_submit_contract_accepts_signed_dmg_workflow(tm
         encoding="utf-8",
     )
 
-    assert runner._check_release_dmg_notarization_submit_contract(tmp_path) is True
+    assert runner._check_release_dmg_notarization_submit_contract(tmp_path) is False
 
 
 def test_package_signing_preflight_records_missing_signed_app(tmp_path):

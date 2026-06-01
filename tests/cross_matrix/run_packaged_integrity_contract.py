@@ -25,7 +25,7 @@ from typing import Any
 
 
 DEFAULT_OUT = Path(
-    "build/current-packaged-integrity-contract-20260601-cache-ipc-epipe-package-refresh.json"
+    "build/current-packaged-integrity-contract-20260601-developer-id-dmg-assertions.json"
 )
 EXPECTED_OPEN_REQUIREMENTS = [
     "Real Electron UI cross-family live model matrix is release-cleared",
@@ -331,6 +331,10 @@ def _check_release_dmg_notarization_verifier_contract(root: Path) -> bool:
         "hdiutil verify",
         "codesign --verify",
         "codesign -dv",
+        "require_developer_id_signature",
+        "Authority=Developer ID Application: ShieldStack LLC (55KGF2S5AY)",
+        "TeamIdentifier=55KGF2S5AY",
+        "Signature=adhoc",
         "xcrun stapler validate",
         "spctl --assess --type open --context context:primary-signature",
         "shasum -a 256",
@@ -347,6 +351,11 @@ def _check_release_dmg_notarization_submit_contract(root: Path) -> bool:
         "sequoia tahoe",
         "VMLINUX_NOTARY_KEYCHAIN_PROFILE",
         "codesign --verify",
+        "codesign -dv",
+        "require_developer_id_signature",
+        "Authority=Developer ID Application: ShieldStack LLC (55KGF2S5AY)",
+        "TeamIdentifier=55KGF2S5AY",
+        "Signature=adhoc",
         "xcrun notarytool submit",
         "--keychain-profile",
         "--wait",
