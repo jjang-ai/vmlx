@@ -5129,6 +5129,8 @@ def _validate_current_real_ui_live_model_proof_artifacts(
         turns = chat.get("turns")
         if not isinstance(turns, list) or len(turns) < 4:
             failures.append("multi_turn_chat_not_proven")
+        elif not _real_ui_multi_turn_chat_ok(proof, chat):
+            failures.append("visible_multi_turn_chat_not_proven")
 
         cache_hit_tokens = _json_number(proof, "cache", "cacheHitTokens")
         if cache_hit_tokens is None or cache_hit_tokens <= 0:

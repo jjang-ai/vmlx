@@ -3450,6 +3450,28 @@ def test_release_regression_manifest_current_sweep_rejects_fake_real_ui_live_mod
     assert "cache_hit_tokens_missing" in result["real_ui_live_model_proof"]["failures"]
 
 
+def test_release_regression_manifest_real_ui_proof_requires_visible_multi_turn_assistant_text(
+    tmp_path,
+):
+    _write_passing_real_ui_live_model_proof_artifacts(tmp_path)
+    proof_path = tmp_path / CURRENT_REAL_UI_LIVE_MODEL_PROOF_ARTIFACTS["proof"]
+    proof = json.loads(proof_path.read_text(encoding="utf-8"))
+    proof["chat"]["turns"] = [
+        {"role": "user", "content": "Say READY."},
+        {"role": "assistant", "content": "READY"},
+        {"role": "user", "content": "Say READY again."},
+        {"role": "assistant", "content": ""},
+    ]
+    proof_path.write_text(json.dumps(proof) + "\n", encoding="utf-8")
+
+    result = validate_current_proof_sweep_artifacts(tmp_path)
+
+    assert result["real_ui_live_model_proof"]["status"] == "fail"
+    assert "visible_multi_turn_chat_not_proven" in result[
+        "real_ui_live_model_proof"
+    ]["failures"]
+
+
 def test_release_regression_manifest_real_ui_proof_rejects_zaya_point_tag_leak(tmp_path):
     _write_passing_real_ui_live_model_proof_artifacts(tmp_path)
     proof_path = tmp_path / CURRENT_REAL_UI_LIVE_MODEL_PROOF_ARTIFACTS["proof"]
