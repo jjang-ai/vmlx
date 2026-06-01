@@ -25,7 +25,7 @@ from typing import Any
 
 
 DEFAULT_OUT = Path(
-    "build/current-packaged-integrity-contract-20260601-developer-id-dmg-assertions.json"
+    "build/current-packaged-integrity-contract-20260601-qwen-fix-resigned-staged-app.json"
 )
 EXPECTED_OPEN_REQUIREMENTS = [
     "Real Electron UI cross-family live model matrix is release-cleared",

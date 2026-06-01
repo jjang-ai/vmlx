@@ -518,7 +518,7 @@ CURRENT_SUITE_COMMANDS: dict[str, list[str]] = {
         sys.executable,
         "tests/cross_matrix/run_packaged_integrity_contract.py",
         "--out",
-        "build/current-packaged-integrity-contract-20260601-developer-id-dmg-assertions.json",
+        "build/current-packaged-integrity-contract-20260601-qwen-fix-resigned-staged-app.json",
     ],
     "installed_app_runtime_parity_audit": [
         sys.executable,

@@ -3078,7 +3078,8 @@ def test_release_regression_manifest_current_sweep_uses_latest_live_smoke_artifa
     assert "current-api-surface-contract-20260527-cache-endpoint-autoswitch-proof.json" not in joined
     assert "current-api-surface-contract-20260526-single-model-auto-switch-review.json" not in joined
     assert "current-api-surface-contract-20260525-single-model-responses-deltas.json" not in joined
-    assert "current-packaged-integrity-contract-20260601-developer-id-dmg-assertions.json" in joined
+    assert "current-packaged-integrity-contract-20260601-qwen-fix-resigned-staged-app.json" in joined
+    assert "current-packaged-integrity-contract-20260601-developer-id-dmg-assertions.json" not in joined
     assert "current-packaged-integrity-contract-20260601-cache-ipc-epipe-package-refresh.json" not in joined
     assert "current-packaged-integrity-contract-20260531-after-lfm2-staged-sync.json" not in joined
     assert "current-packaged-integrity-contract-20260531-step37-mixed-swa-runtime.json" not in joined
@@ -10482,7 +10483,7 @@ def test_release_regression_manifest_runner_default_out_tracks_current_release_p
     from tests.cross_matrix import run_release_regression_manifest as runner
 
     assert runner.DEFAULT_OUT == Path(
-        "build/current-release-regression-manifest-20260601-developer-id-dmg-assertions-refresh.json"
+        "build/current-release-regression-manifest-20260601-qwen35-gemma115-speed-cleared.json"
     )
 
 
@@ -13198,12 +13199,12 @@ def test_release_regression_manifest_tracks_packaged_integrity_with_runner_artif
     joined = " ".join(row["commands"] + row["artifacts"] + row["proves"])
 
     assert "run_packaged_integrity_contract.py" in joined
-    assert "current-packaged-integrity-contract-20260601-developer-id-dmg-assertions.json" in joined
+    assert "current-packaged-integrity-contract-20260601-qwen-fix-resigned-staged-app.json" in joined
     assert "current-packaged-integrity-contract-20260601-cache-ipc-epipe-package-refresh.json" not in joined
     assert "current-packaged-integrity-contract-20260531-after-lfm2-staged-sync.json" not in joined
     assert "current-packaged-integrity-contract-20260531-step37-mixed-swa-runtime.json" not in joined
     assert (
-        "build/current-packaged-integrity-contract-20260601-developer-id-dmg-assertions.json"
+        "build/current-packaged-integrity-contract-20260601-qwen-fix-resigned-staged-app.json"
         in " ".join(row["commands"])
     )
     assert "current-packaged-integrity-contract-20260531-local-release-decision-refresh.json" not in joined
@@ -13226,6 +13227,7 @@ def test_release_regression_manifest_tracks_current_packaged_integrity_recheck()
     joined = " ".join(row["commands"] + row["artifacts"] + row["proves"])
 
     assert "current-packaged-integrity-contract-20260522-recheck-bundled-release-gate.json" in joined
+    assert "current-packaged-integrity-contract-20260601-qwen-fix-resigned-staged-app.json" in joined
     assert "current-packaged-integrity-contract-20260524-text-additional-args-sanitizer.json" in joined
     assert "clean JANG source path" in joined
     assert "bundled critical jang_tools files match source content" in joined
