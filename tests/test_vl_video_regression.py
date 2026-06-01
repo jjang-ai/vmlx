@@ -108,14 +108,18 @@ def fake_processor(fake_image_processor, fake_tokenizer):
 # ---------- _install_video_fallback ----------
 
 class TestVideoFallback:
-    def test_noop_when_video_processor_present(self, fake_processor):
-        """Real video_processor wins — no patching."""
+    def test_real_video_processor_still_wins_when_it_accepts_input(self, fake_processor):
+        """Real video_processor wins unless it rejects frame-list inputs."""
         from jang_tools.load_jangtq_vlm import _install_video_fallback
-        fake_processor.video_processor = MagicMock()
-        orig_call = type(fake_processor).__call__
+        fake_processor.video_processor = MagicMock(
+            return_value={"pixel_values_videos": "real", "video_grid_thw": "real"}
+        )
         _install_video_fallback(fake_processor)
-        assert type(fake_processor).__call__ is orig_call, \
-            "patch ran despite real video_processor"
+
+        out = fake_processor(videos=[["f1", "f2"]])
+
+        assert out["pixel_values_videos"] == "real"
+        fake_processor.video_processor.assert_called_once()
 
     def test_patches_when_video_processor_none(self, fake_processor):
         """torchvision-free fallback installs."""
@@ -158,6 +162,21 @@ class TestVideoFallback:
         assert vg.shape == (1, 3), f"expected (1,3) got {vg.shape}"
         # 4 frames @ temporal_patch_size=2 → t=2
         assert int(vg[0, 0]) == 2, f"expected t=2 for 4 frames, got {int(vg[0,0])}"
+
+    def test_video_processor_frame_list_shape_error_falls_back(self, fake_processor):
+        """mlx-vlm 0.5.0 video processor rejects frame path lists as shape (N,)."""
+        from jang_tools.load_jangtq_vlm import _install_video_fallback
+
+        fake_processor.video_processor = MagicMock(
+            side_effect=ValueError("Expected video as (T, C, H, W), got shape (4,).")
+        )
+        _install_video_fallback(fake_processor)
+
+        text = "<|vision_start|><|video_pad|><|vision_end|>desc"
+        out = fake_processor(text=[text], videos=[["f1", "f2", "f3", "f4"]])
+
+        assert "pixel_values_videos" in out
+        assert "video_grid_thw" in out
 
     def test_video_temporal_rollup_odd_frames(self, fake_processor):
         """5 frames at temporal_patch_size=2 → t=ceil(5/2)=3."""

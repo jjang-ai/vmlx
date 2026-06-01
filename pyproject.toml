@@ -34,7 +34,11 @@ dependencies = [
                        # model registry that vMLX patches with bailing_hybrid for
                        # Ling. NOTE: mlx-audio 0.4.1 hard-pins 0.31.1; audio support
                        # is opt-in via [audio] extra and not in the main bundle.
-    "mlx-vlm>=0.4.3",  # Gemma 4 model class added in 0.4.3
+    # MiniCPM-V-4.6 model class added in mlx-vlm 0.5.0; Gemma 4 remains covered.
+    # Keep the floor Darwin-specific so optional Linux image-extra resolution
+    # does not inherit mlx-vlm's macOS MLX wheel floor.
+    "mlx-vlm>=0.5.0; sys_platform == 'darwin'",
+    "mlx-vlm>=0.4.3; sys_platform != 'darwin'",
     "transformers>=4.40.0",
     "tokenizers>=0.19.0",
     # Kimi K2.6 tokenizer remote code imports tiktoken during chat-template

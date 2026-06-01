@@ -52,7 +52,7 @@ from tests.cross_matrix.release_regression_manifest import (
 
 DEFAULT_OUT = Path("build/current-objective-proof-audit-20260531-nemotron-exact-finalizer-ledger.json")
 CURRENT_RELEASE_REGRESSION_MANIFEST_REL = (
-    "build/current-release-regression-manifest-20260601-epipe-renderer-installed-refresh.json"
+    "build/current-release-regression-manifest-20260601-qwen3vl-minicpm-mpp-refresh.json"
 )
 DSV4_QUALITY_CLEARANCE_REL = "build/current-dsv4-long-output-quality-clearance-20260521.json"
 DSV4_CURRENT_IDENTIFIER_CANARY_REL = (
@@ -186,7 +186,7 @@ PARSER_REGISTRY_CONTRACT_REL = "build/current-parser-registry-contract-20260531-
 MODEL_ARTIFACT_FORMAT_CONTRACT_REL = "build/current-model-artifact-format-contract-20260531-post-step-lfm-refresh.json"
 GENERATION_DEFAULTS_CONTRACT_REL = "build/current-generation-defaults-contract-20260531-post-step-lfm-refresh.json"
 NATIVE_MTP_CONTRACT_REL = "build/current-native-mtp-contract-20260531-post-step-lfm-refresh.json"
-VL_MEDIA_CONTRACT_REL = "build/current-vl-media-cache-contract-20260531-post-step-lfm-refresh.json"
+VL_MEDIA_CONTRACT_REL = "build/current-vl-media-cache-contract-20260601-qwen3vl-frame-list-fallback.json"
 QWEN_JANG_SOURCE_SPEED_REL = "build/current-decode-speed-live-qwen27-jang4m-source-keepalloc-20260522.json"
 QWEN_JANG_PACKAGED_SPEED_REL = "build/current-decode-speed-live-qwen27-jang4m-packaged-tahoe-dmg-20260522.json"
 QWEN_NATIVE_MTP_SPEED_REL = "build/current-decode-speed-live-qwen27-jang4m-mtp-20260523.json"

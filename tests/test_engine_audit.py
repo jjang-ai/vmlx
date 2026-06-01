@@ -5374,6 +5374,7 @@ class TestStartupCompatibilityGuards:
             "capabilities.py",
             "convert_hy3_jangtq.py",
             "load_jangtq.py",
+            "load_jangtq_vlm.py",
             "load_jangtq_kimi_vlm.py",
             "nemotron_omni_chat.py",
             "dsv4/mlx_model.py",
@@ -5413,6 +5414,26 @@ class TestStartupCompatibilityGuards:
         assert "Hy3 model-family mlx-lm registration missing" in verify_script
         assert "Ling/Bailing hybrid mlx-lm runtime missing" in verify_script
         assert "MiMo-V2.5 mlx-lm registration missing" in verify_script
+
+    def test_bundled_python_import_gate_covers_minicpm_v46_runtime(self):
+        verify_script = Path("./panel/scripts/verify-bundled-python.sh").read_text()
+
+        assert 'MODEL_REMAPPING.get("minicpmv4_6") != "minicpmo"' in verify_script
+        assert "MiniCPM-V-4.6 → minicpmo remap missing" in verify_script
+        assert "MiniCPM-V-4.6 mlx_vlm remap + prompt_utils config" in verify_script
+
+    def test_mlx_vlm_registry_patch_remaps_minicpm_v46_to_minicpmo(self):
+        import vmlx_engine
+        from mlx_vlm.prompt_utils import MODEL_CONFIG
+        from mlx_vlm.utils import MODEL_REMAPPING, get_model_and_args
+
+        vmlx_engine._install_mlx_vlm_registry_patches()
+
+        assert MODEL_REMAPPING["minicpmv4_6"] == "minicpmo"
+        assert MODEL_CONFIG["minicpmv4_6"] == MODEL_CONFIG["minicpmo"]
+        module, model_type = get_model_and_args({"model_type": "minicpmv4_6"})
+        assert model_type == "minicpmo"
+        assert hasattr(module, "Model")
 
     def test_bundled_python_import_gate_covers_step37_source_runtime(self):
         verify_script = Path("./panel/scripts/verify-bundled-python.sh").read_text()
@@ -5604,7 +5625,7 @@ class TestStartupCompatibilityGuards:
         bundle_script = Path("./panel/scripts/bundle-python.sh").read_text()
         assert 'MLX_VERSION="0.31.2"' in bundle_script
         assert 'MLX_LM_VERSION="0.31.3"' in bundle_script
-        assert 'MLX_VLM_VERSION="0.4.4"' in bundle_script
+        assert 'MLX_VLM_VERSION="0.5.0"' in bundle_script
         assert 'detect_mlx_wheel_platform()' in bundle_script
         assert 'VMLX_BUNDLE_MLX_PLATFORM:-${VMLINUX_BUNDLE_MLX_PLATFORM:-compat}' in bundle_script
         assert "legacy misspelled VMLINUX_BUNDLE_MLX_PLATFORM is still accepted" in bundle_script
@@ -5648,7 +5669,10 @@ class TestStartupCompatibilityGuards:
         assert '-name "*.dylib" -o -name "*.so" -o -perm +111' in source
         assert 'codesign --force --sign "$identity" "$native_file"' in source
         assert "finalize_release_app_signature" in source
-        assert 'codesign --force --deep --sign "$identity" "$app_path"' in source
+        assert (
+            'codesign --force --deep --options runtime --entitlements "$entitlements" '
+            '--sign "$identity" "$app_path"'
+        ) in source
         assert 'codesign --verify --deep --strict --verbose=2 "$app_path"' in source
         assert 'finalize_release_app_signature "$app_path"' in source
         assert '--prepackaged "$app_path"' in source
@@ -7123,6 +7147,63 @@ class TestJangTqMppNaxCliPolicy:
         assert mode == "off"
         assert os.environ["JANGTQ_MPP_NAX"] == "off"
         logger.info.assert_called_once()
+
+    def test_jangtq_mpp_nax_cli_policy_disables_auto_for_mxtq_bundle(
+        self, monkeypatch, tmp_path
+    ):
+        from vmlx_engine.cli import _apply_jangtq_mpp_nax_policy
+
+        monkeypatch.delenv("JANGTQ_MPP_NAX", raising=False)
+        (tmp_path / "config.json").write_text(
+            json.dumps({"model_type": "qwen3_5_moe"})
+        )
+        (tmp_path / "jang_config.json").write_text(
+            json.dumps({"weight_format": "mxtq", "mxtq_bits": {"routed_expert": 4}})
+        )
+        (tmp_path / "jangtq_runtime.safetensors").write_bytes(b"sidecar")
+        args = SimpleNamespace(model=str(tmp_path))
+        logger = MagicMock()
+
+        mode = _apply_jangtq_mpp_nax_policy(args, logger)
+
+        assert mode == "off"
+        assert os.environ["JANGTQ_MPP_NAX"] == "off"
+        assert any(
+            "JANGTQ_MPP_NAX=auto" in str(call)
+            and "MXTQ/JANGTQ" in str(call)
+            for call in logger.info.call_args_list
+        )
+
+    def test_jangtq_mpp_nax_cli_policy_disables_auto_for_jangtq_repo_id(
+        self, monkeypatch
+    ):
+        from vmlx_engine.cli import _apply_jangtq_mpp_nax_policy
+
+        monkeypatch.delenv("JANGTQ_MPP_NAX", raising=False)
+        args = SimpleNamespace(model="JANGQ-AI/MiniMax-M2.7-JANGTQ_K")
+        logger = MagicMock()
+
+        mode = _apply_jangtq_mpp_nax_policy(args, logger)
+
+        assert mode == "off"
+        assert os.environ["JANGTQ_MPP_NAX"] == "off"
+
+    def test_jangtq_mpp_nax_cli_policy_allows_explicit_on_for_kernel_diagnostics(
+        self, monkeypatch, tmp_path
+    ):
+        from vmlx_engine.cli import _apply_jangtq_mpp_nax_policy
+
+        monkeypatch.setenv("JANGTQ_MPP_NAX", "on")
+        (tmp_path / "jang_config.json").write_text(
+            json.dumps({"quantization": {"format": "mxtq"}})
+        )
+        args = SimpleNamespace(model=str(tmp_path))
+        logger = MagicMock()
+
+        mode = _apply_jangtq_mpp_nax_policy(args, logger)
+
+        assert mode == "on"
+        assert os.environ["JANGTQ_MPP_NAX"] == "1"
 
     def test_jangtq_mpp_nax_cli_policy_can_force_on(self, monkeypatch):
         from vmlx_engine.cli import _apply_jangtq_mpp_nax_policy

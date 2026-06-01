@@ -91,6 +91,43 @@ def _validate_lora_args_for_model_type(args, *, is_image: bool) -> None:
         )
 
 
+def _bundle_declares_mxtq_jangtq(model_path: str | None) -> bool:
+    """Return true for bundles that should not enter MPP_NAX auto by default."""
+
+    if not model_path:
+        return False
+    model_text = str(model_path).lower()
+    if "mxtq" in model_text or "jangtq" in model_text:
+        return True
+    try:
+        import json
+        from pathlib import Path
+
+        root = Path(model_path).expanduser()
+        configs = []
+        for name in ("config.json", "jang_config.json"):
+            path = root / name
+            if path.is_file():
+                configs.append(json.loads(path.read_text()))
+        if (root / "jangtq_runtime.safetensors").is_file():
+            return True
+    except Exception:
+        configs = []
+
+    def _declares_mxtq(value) -> bool:
+        if isinstance(value, dict):
+            for key, item in value.items():
+                if key == "mxtq_bits":
+                    return True
+                if _declares_mxtq(item):
+                    return True
+            return False
+        text = str(value or "").lower()
+        return "mxtq" in text or "jangtq" in text
+
+    return any(_declares_mxtq(config) for config in configs)
+
+
 def _speculative_incompatibility_reason(args) -> str | None:
     if not getattr(args, "speculative_model", None):
         return None
@@ -133,6 +170,14 @@ def _apply_jangtq_mpp_nax_policy(args, logger):
                 "Ling/Bailing detected — disabling JANGTQ_MPP_NAX auto lane. "
                 "Live bundled greedy Russian probes showed CJK leakage with "
                 "JANGTQ_MPP_NAX=auto; set JANGTQ_MPP_NAX=on only for explicit "
+                "kernel diagnostics."
+            )
+        elif _bundle_declares_mxtq_jangtq(getattr(args, "model", None)):
+            mode = "off"
+            logger.info(
+                "MXTQ/JANGTQ bundle detected — disabling JANGTQ_MPP_NAX=auto. "
+                "Reporter repros showed incorrect prefill logits on MXTQ/hybrid "
+                "JANGTQ with auto; set JANGTQ_MPP_NAX=on only for explicit "
                 "kernel diagnostics."
             )
     os.environ["JANGTQ_MPP_NAX"] = "1" if mode == "on" else mode

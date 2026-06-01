@@ -21,7 +21,7 @@ from typing import Any
 
 
 DEFAULT_OUT = Path(
-    "build/current-regression-suite-20260601-epipe-renderer-installed-refresh.json"
+    "build/current-regression-suite-20260601-qwen3vl-minicpm-mpp-final.json"
 )
 
 EXPECTED_OPEN_REQUIREMENTS = [
@@ -508,13 +508,13 @@ CURRENT_SUITE_COMMANDS: dict[str, list[str]] = {
         sys.executable,
         "tests/cross_matrix/run_vl_media_cache_contract.py",
         "--out",
-        "build/current-vl-media-cache-contract-20260531-post-step-lfm-refresh.json",
+        "build/current-vl-media-cache-contract-20260601-qwen3vl-frame-list-fallback.json",
     ],
     "packaged_integrity_contracts": [
         sys.executable,
         "tests/cross_matrix/run_packaged_integrity_contract.py",
         "--out",
-        "build/current-packaged-integrity-contract-20260601-dsv4-preflight-refresh.json",
+        "build/current-packaged-integrity-contract-20260601-qwen3vl-minicpm-mpp-staged-refresh.json",
     ],
     "installed_app_runtime_parity_audit": [
         sys.executable,
@@ -574,7 +574,7 @@ CURRENT_SUITE_COMMANDS: dict[str, list[str]] = {
         "--require-current-proof-sweep",
         "--require-release-ready",
         "--out",
-        "build/current-release-regression-manifest-20260601-epipe-renderer-installed-refresh.json",
+        "build/current-release-regression-manifest-20260601-qwen3vl-minicpm-mpp-refresh.json",
     ],
 }
 

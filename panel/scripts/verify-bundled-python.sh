@@ -158,6 +158,7 @@ HASH_GATED_JANG_TOOLS_FILES=(
   "convert_hy3_jangtq.py"
   "loader.py"
   "load_jangtq.py"
+  "load_jangtq_vlm.py"
   "load_jangtq_kimi_vlm.py"
   "nemotron_omni_chat.py"
   "dsv4/mlx_model.py"
@@ -370,12 +371,12 @@ for _mod_name, _class_name, _label in [
         print(f"  FAIL {_label} MLA patch check: {type(e).__name__}: {e}")
         sys.exit(1)
 
-# mlx_vlm kimi_k25 dispatch remap must be live (installed by
+# mlx_vlm kimi_k25 / MiniCPM-V-4.6 dispatch remaps must be live (installed by
 # vmlx_engine.__init__ at import time). Catches a silent regression if the
 # remap block ever gets removed.
 try:
     import vmlx_engine  # triggers remap install
-    from mlx_vlm.utils import MODEL_REMAPPING
+    from mlx_vlm.utils import MODEL_REMAPPING, get_model_and_args
     from mlx_vlm.prompt_utils import MODEL_CONFIG
     if MODEL_REMAPPING.get("kimi_k25") != "kimi_vl":
         print("  FAIL kimi_k25 → kimi_vl remap missing in mlx_vlm.utils.MODEL_REMAPPING")
@@ -383,9 +384,20 @@ try:
     if "kimi_k25" not in MODEL_CONFIG:
         print("  FAIL kimi_k25 missing in mlx_vlm.prompt_utils.MODEL_CONFIG")
         sys.exit(1)
+    if MODEL_REMAPPING.get("minicpmv4_6") != "minicpmo":
+        print("  FAIL MiniCPM-V-4.6 → minicpmo remap missing in mlx_vlm.utils.MODEL_REMAPPING")
+        sys.exit(1)
+    if "minicpmv4_6" not in MODEL_CONFIG:
+        print("  FAIL minicpmv4_6 missing in mlx_vlm.prompt_utils.MODEL_CONFIG")
+        sys.exit(1)
+    _arch, _model_type = get_model_and_args({"model_type": "minicpmv4_6"})
+    if _model_type != "minicpmo" or not hasattr(_arch, "Model"):
+        print("  FAIL MiniCPM-V-4.6 remap did not resolve mlx_vlm.models.minicpmo")
+        sys.exit(1)
     print("  ok   Kimi K2.6 mlx_vlm remap + prompt_utils config")
+    print("  ok   MiniCPM-V-4.6 mlx_vlm remap + prompt_utils config")
 except Exception as e:
-    print(f"  FAIL Kimi K2.6 mlx_vlm remap check: {type(e).__name__}: {e}")
+    print(f"  FAIL mlx_vlm remap check: {type(e).__name__}: {e}")
     sys.exit(1)
 
 print()

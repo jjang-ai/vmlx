@@ -459,6 +459,7 @@ JANG_TOOLS_SOURCE_HASH_PATHS = (
     "convert_hy3_jangtq.py",
     "loader.py",
     "load_jangtq.py",
+    "load_jangtq_vlm.py",
     "load_jangtq_kimi_vlm.py",
     "dsv4/mlx_model.py",
     "dsv4/pool_quant_cache.py",

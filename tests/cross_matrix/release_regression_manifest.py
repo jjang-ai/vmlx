@@ -359,13 +359,13 @@ CURRENT_POST_BUDGET_EDGE_ARTIFACTS = {
     "model-family-detection-noheavy": "build/current-model-family-detection-contract-20260531-post-step-lfm-refresh.json",
     "native-mtp-d3-effect-policy": "build/current-native-mtp-contract-20260531-post-step-lfm-refresh.json",
     "mcp-policy-ui-gateway": "build/current-mcp-policy-contract-20260531-post-step-lfm-refresh.json",
-    "vl-media-cache-tool-followup": "build/current-vl-media-cache-contract-20260531-post-step-lfm-refresh.json",
-    "packaged-release-integrity": "build/current-packaged-integrity-contract-20260601-dsv4-preflight-refresh.json",
+    "vl-media-cache-tool-followup": "build/current-vl-media-cache-contract-20260601-qwen3vl-frame-list-fallback.json",
+    "packaged-release-integrity": "build/current-packaged-integrity-contract-20260601-qwen3vl-minicpm-mpp-staged-refresh.json",
     "public-release-surface-preflight": "build/current-release-surface-contract-20260528-release-surface-matrix.json",
 }
 
 CURRENT_REGRESSION_SUITE_ARTIFACT = (
-    "build/current-regression-suite-20260601-epipe-renderer-installed-refresh.json"
+    "build/current-regression-suite-20260601-qwen3vl-minicpm-mpp-final.json"
 )
 CURRENT_ISSUE175_179_RELEASE_BOUNDARY_AUDIT_ARTIFACT = (
     "build/current-issue175-179-release-boundary-audit-20260531-post-install-sync.json"
@@ -1615,9 +1615,10 @@ _ROWS: list[dict[str, Any]] = [
             "Still-image live rows do not imply video/audio/Omni clearance",
         ],
         "commands": [
-            ".venv/bin/python tests/cross_matrix/run_vl_media_cache_contract.py --out build/current-vl-media-cache-contract-20260531-post-step-lfm-refresh.json",
+            ".venv/bin/python tests/cross_matrix/run_vl_media_cache_contract.py --out build/current-vl-media-cache-contract-20260601-qwen3vl-frame-list-fallback.json",
         ],
         "artifacts": [
+            "build/current-vl-media-cache-contract-20260601-qwen3vl-frame-list-fallback.json",
             "build/current-vl-media-cache-contract-20260531-post-step-lfm-refresh.json",
             "build/current-vl-media-cache-contract-20260527-after-think-xml-registry-fix.json",
             "build/current-vl-media-cache-contract-20260527-issues-175-178-bundled-sync.json",
@@ -1642,12 +1643,13 @@ _ROWS: list[dict[str, Any]] = [
             "packaged Python has no __pycache__/*.pyc files that would invalidate the signed app seal",
         ],
         "commands": [
-            ".venv/bin/python tests/cross_matrix/run_packaged_integrity_contract.py --out build/current-packaged-integrity-contract-20260601-dsv4-preflight-refresh.json",
+            ".venv/bin/python tests/cross_matrix/run_packaged_integrity_contract.py --out build/current-packaged-integrity-contract-20260601-qwen3vl-minicpm-mpp-staged-refresh.json",
             ".venv/bin/python tests/cross_matrix/run_packaged_integrity_contract.py --jang-tools-source /Users/example/jang/jang-tools --out build/current-packaged-integrity-contract-20260524-pycache-seal-check.json",
             ".venv/bin/python tests/cross_matrix/run_packaged_integrity_contract.py --jang-tools-source /Users/example/jang/.worktrees/vmlx-release-clean-b5f66a7/jang-tools --out build/current-packaged-integrity-contract-20260522-recheck-bundled-release-gate.json",
         ],
         "artifacts": [
             "build/current-objective-proof-audit-20260531-nemotron-exact-finalizer-ledger.json",
+            "build/current-packaged-integrity-contract-20260601-qwen3vl-minicpm-mpp-staged-refresh.json",
             "build/current-packaged-integrity-contract-20260601-dsv4-preflight-refresh.json",
             "build/current-packaged-integrity-contract-20260531-after-adhoc-reseal.json",
             "build/current-packaged-integrity-contract-20260528-prepackage-gate.json",
