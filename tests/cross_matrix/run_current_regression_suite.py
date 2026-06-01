@@ -21,7 +21,7 @@ from typing import Any
 
 
 DEFAULT_OUT = Path(
-    "build/current-regression-suite-20260601-qwen3vl-minicpm-mpp-final.json"
+    "build/current-regression-suite-20260601-after-adhoc-reseal.json"
 )
 
 EXPECTED_OPEN_REQUIREMENTS = [
@@ -592,7 +592,7 @@ CURRENT_SUITE_COMMANDS: dict[str, list[str]] = {
         "--require-current-proof-sweep",
         "--require-release-ready",
         "--out",
-        "build/current-release-regression-manifest-20260601-qwen3vl-minicpm-mpp-refresh.json",
+        "build/current-release-regression-manifest-20260601-after-adhoc-reseal.json",
     ],
 }
 

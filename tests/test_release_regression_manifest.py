@@ -2724,7 +2724,8 @@ def test_release_regression_manifest_current_sweep_uses_latest_live_smoke_artifa
     assert "current-regression-suite-20260528-installed-aggregate-stale.json" not in joined
     assert "current-regression-suite-20260528-epipe-aggregate-guard.json" not in joined
     assert "current-regression-suite-20260528-dsv4-continue-refresh.json" not in joined
-    assert "current-regression-suite-20260601-qwen3vl-minicpm-mpp-final.json" in joined
+    assert "current-regression-suite-20260601-after-adhoc-reseal.json" in joined
+    assert "current-regression-suite-20260601-qwen3vl-minicpm-mpp-final.json" not in joined
     assert "current-regression-suite-20260531-live-epipe-signing-dsv4-refresh.json" not in joined
     assert "current-regression-suite-20260531-step37-ui-pagedlock.json" not in joined
     assert "current-regression-suite-20260531-step37-mixed-swa-runtime.json" not in joined
@@ -10251,7 +10252,7 @@ def test_release_regression_manifest_runner_default_out_tracks_current_release_p
     from tests.cross_matrix import run_release_regression_manifest as runner
 
     assert runner.DEFAULT_OUT == Path(
-        "build/current-release-regression-manifest-20260601-qwen3vl-minicpm-mpp-refresh.json"
+        "build/current-release-regression-manifest-20260601-after-adhoc-reseal.json"
     )
 
 
