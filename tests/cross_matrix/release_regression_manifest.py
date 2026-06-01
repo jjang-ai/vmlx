@@ -401,7 +401,7 @@ CURRENT_REAL_UI_LIVE_MODEL_PROOF_ARTIFACTS = {
     "chat_screenshot": "docs/internal/agent-notes/current-real-ui-live-model-zaya-text-20260526-chat.png",
 }
 CURRENT_REAL_UI_DSV4_MEMORY_PREFLIGHT_ARTIFACT = (
-    "build/current-real-ui-dsv4-memory-preflight-20260601-local-refresh.json"
+    "build/current-real-ui-dsv4-memory-preflight-20260601-post-public-issue-audit.json"
 )
 CURRENT_STEP37_VLM_RUNTIME_AUDIT_ARTIFACT = (
     "build/current-step37-vlm-runtime-audit-20260530-source-runtime-route.json"
@@ -410,7 +410,7 @@ DEFERRED_RELEASE_FAMILIES = {
     "mimo_v2": "deferred_out_of_release_scope",
 }
 CURRENT_DSV4_SOURCE_MEMORY_PREFLIGHT_ARTIFACT = (
-    "build/current-dsv4-route-mode-code-exactness-memory-preflight-20260531-release-decision-refresh.json"
+    "build/current-dsv4-route-mode-code-exactness-memory-preflight-20260601-post-public-issue-audit.json"
 )
 EXPECTED_DSV4_SOURCE_PREFLIGHT_CASES = (
     "chat_off",

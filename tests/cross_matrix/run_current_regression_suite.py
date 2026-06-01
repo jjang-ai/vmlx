@@ -463,13 +463,13 @@ CURRENT_SUITE_COMMANDS: dict[str, list[str]] = {
         "tests/cross_matrix/run_dsv4_route_mode_code_exactness.py",
         "--memory-preflight-only",
         "--out",
-        "build/current-dsv4-route-mode-code-exactness-memory-preflight-20260531-release-decision-refresh.json",
+        "build/current-dsv4-route-mode-code-exactness-memory-preflight-20260601-post-public-issue-audit.json",
     ],
     "real_ui_dsv4_memory_preflight": [
         sys.executable,
         "tests/cross_matrix/run_real_ui_dsv4_memory_preflight.py",
         "--out",
-        "build/current-real-ui-dsv4-memory-preflight-20260601-local-refresh.json",
+        "build/current-real-ui-dsv4-memory-preflight-20260601-post-public-issue-audit.json",
     ],
     "release_surface_contracts": [
         sys.executable,
