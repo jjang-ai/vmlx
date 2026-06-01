@@ -22,7 +22,7 @@ from typing import Any
 
 
 DEFAULT_OUT = Path(
-    "build/current-cache-architecture-contract-20260601-step37-mixed-swa-ui-storage-quant.json"
+    "build/current-cache-architecture-contract-20260601-zaya-dsv4-terminal-disk-guard.json"
 )
 API_CACHE_CONTRACT_ARTIFACT = Path(
     "build/current-api-cache-contract-cache-architecture-check-20260528-named-family-registry-matrix.json"

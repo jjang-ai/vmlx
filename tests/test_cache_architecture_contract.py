@@ -5,7 +5,7 @@ def test_cache_architecture_contract_default_out_tracks_current_release_proof_ar
     from tests.cross_matrix import run_cache_architecture_contract as gate
 
     assert gate.DEFAULT_OUT == Path(
-        "build/current-cache-architecture-contract-20260601-step37-mixed-swa-ui-storage-quant.json"
+        "build/current-cache-architecture-contract-20260601-zaya-dsv4-terminal-disk-guard.json"
     )
 
 

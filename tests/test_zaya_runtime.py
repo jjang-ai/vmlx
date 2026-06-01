@@ -2030,6 +2030,49 @@ def test_zaya_frugal_store_keeps_terminal_cca_block_in_ram(monkeypatch):
     assert pc.reconstruct_cache(table) is not None
 
 
+def test_zaya_disk_only_nonterminal_cca_prefix_is_a_miss():
+    from types import SimpleNamespace
+
+    from vmlx_engine.paged_cache import PagedCacheManager, compute_block_hash
+    from vmlx_engine.prefix_cache import BlockAwarePrefixCache
+
+    class _DiskOnlyNonTerminalZaya:
+        def __init__(self, cache_data):
+            self.cache_data = cache_data
+
+        def read_block(self, _block_hash):
+            return self.cache_data
+
+    tokens = [1, 2, 3, 4]
+    nonterminal_cca = [("zaya_cca", ("kv", "k", "v"), None, "", {})]
+    disk = _DiskOnlyNonTerminalZaya(nonterminal_cca)
+
+    assert BlockAwarePrefixCache._zaya_l2_chain_missing_terminal_state(
+        [SimpleNamespace(cache_data=None, block_hash=b"zaya-nonterminal")],
+        disk,
+    )
+
+    paged = PagedCacheManager(
+        block_size=4,
+        max_blocks=8,
+        disk_store=disk,
+    )
+    pc = BlockAwarePrefixCache(model=None, paged_cache_manager=paged)
+
+    block = paged.allocate_block()
+    block.token_count = len(tokens)
+    block.cache_data = None
+    block.cache_data_from_disk = False
+    block_hash = compute_block_hash(None, tokens)
+    block.block_hash = block_hash
+    paged.cached_block_hash_to_block.insert(block_hash, block)
+
+    table, remaining = pc.fetch_cache("zaya-disk-only-nonterminal", tokens + [5])
+
+    assert table is None
+    assert remaining == tokens + [5]
+
+
 def test_zaya_batch_generator_finishes_with_moe_no_state_cache():
     """Finished ZAYA generations must be able to return prompt_cache.
 

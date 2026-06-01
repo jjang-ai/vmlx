@@ -702,6 +702,7 @@ def _write_passing_real_ui_live_model_proof_artifacts(root: Path) -> None:
         if row["proof"].endswith(
             (
                 "zaya-text-responses-stricttools-cachecontrols-20260530-proof.json",
+                "zaya-text-responses-tools-cachecontrols-disk-terminal-fix-20260601-proof.json",
                 "zaya-vl-responses-stricttools-cachecontrols-20260530-proof.json",
                 "step37-jang2l-devbuild-tools-image-cache-templateclean-20260531-proof.json",
                 "step37-jang2l-responses-tools-l2storage-pagedlocked-after-subtype-ui-fix-20260531-proof.json",
@@ -3061,7 +3062,7 @@ def test_release_regression_manifest_real_ui_live_model_rows_include_ling_bailin
     assert rows["zaya_text_responses_tools"]["family"] == "zaya_text"
     assert (
         rows["zaya_text_responses_tools"]["proof"]
-        == "docs/internal/agent-notes/current-real-ui-live-model-zaya-text-responses-stricttools-cachecontrols-20260530-proof.json"
+        == "docs/internal/agent-notes/current-real-ui-live-model-zaya-text-responses-tools-cachecontrols-disk-terminal-fix-20260601-proof.json"
     )
     assert rows["zaya_vl_image"]["model_path"] == "/Users/example/models/JANGQ/ZAYA1-VL-8B-JANGTQ4"
     assert rows["zaya_vl_image"]["model_name"] == "ZAYA1-VL-8B-JANGTQ4"
@@ -13066,7 +13067,8 @@ def test_release_regression_manifest_tracks_cache_architecture_with_runner_artif
     joined = " ".join(row["commands"] + row["artifacts"] + row["proves"])
 
     assert "run_cache_architecture_contract.py" in joined
-    assert "current-cache-architecture-contract-20260601-step37-mixed-swa-ui-storage-quant.json" in joined
+    assert "current-cache-architecture-contract-20260601-zaya-dsv4-terminal-disk-guard.json" in joined
+    assert "current-cache-architecture-contract-20260601-step37-mixed-swa-ui-storage-quant.json" not in joined
     assert "current-cache-architecture-contract-20260530-lfm2-tool-parser-local.json" in joined
     assert "current-cache-architecture-contract-20260528-gemma4-mixed-swa-row.json" in joined
     assert "current-cache-architecture-contract-20260527-cache-family-matrix.json" in joined

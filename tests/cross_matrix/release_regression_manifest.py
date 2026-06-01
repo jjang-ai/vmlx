@@ -353,7 +353,7 @@ CURRENT_POST_BUDGET_EDGE_ARTIFACTS = {
     "tool-call-loop-parser-cleanup": "build/current-tool-call-contract-20260528-tool-parser-loop-matrix.json",
     "panel-tool-security-loop-boundary": "build/current-panel-tool-security-contract-20260528-tool-loop-security-matrix.json",
     "api-chat-responses-anthropic-ollama-parity": "build/current-api-surface-contract-20260531-nested-epipe-childstream-refresh.json",
-    "cache-architecture-family-classification": "build/current-cache-architecture-contract-20260601-step37-mixed-swa-ui-storage-quant.json",
+    "cache-architecture-family-classification": "build/current-cache-architecture-contract-20260601-zaya-dsv4-terminal-disk-guard.json",
     "jang-model-compat-runtime-boundary": "build/current-jang-model-compat-contract-20260528-pr155-runtime-boundary.json",
     "model-artifact-format-detection": "build/current-model-artifact-format-contract-20260531-post-step-lfm-refresh.json",
     "model-family-detection-noheavy": "build/current-model-family-detection-contract-20260531-post-step-lfm-refresh.json",
@@ -438,8 +438,8 @@ CURRENT_REAL_UI_LIVE_MODEL_PROOF_ROWS = {
         "family": "zaya_text",
     },
     "zaya_text_responses_tools": {
-        "proof": "docs/internal/agent-notes/current-real-ui-live-model-zaya-text-responses-stricttools-cachecontrols-20260530-proof.json",
-        "chat_screenshot": "docs/internal/agent-notes/current-real-ui-live-model-zaya-text-responses-stricttools-cachecontrols-20260530-chat.png",
+        "proof": "docs/internal/agent-notes/current-real-ui-live-model-zaya-text-responses-tools-cachecontrols-disk-terminal-fix-20260601-proof.json",
+        "chat_screenshot": "docs/internal/agent-notes/current-real-ui-live-model-zaya-text-responses-tools-cachecontrols-disk-terminal-fix-20260601-chat.png",
         "model_path": "/Users/example/models/JANGQ/ZAYA1-8B-MXFP4",
         "model_name": "ZAYA1-8B-MXFP4",
         "family": "zaya_text",
@@ -1428,10 +1428,10 @@ _ROWS: list[dict[str, Any]] = [
             "Panel session launch builder preserves DSV4 default-on native prefix-cache policy, DSV4-only native cache controls, Qwen3.6 hybrid and Mamba paged-cache forcing, and regular KV stale saved false semantics",
         ],
         "commands": [
-            ".venv/bin/python tests/cross_matrix/run_cache_architecture_contract.py --out build/current-cache-architecture-contract-20260601-step37-mixed-swa-ui-storage-quant.json",
+            ".venv/bin/python tests/cross_matrix/run_cache_architecture_contract.py --out build/current-cache-architecture-contract-20260601-zaya-dsv4-terminal-disk-guard.json",
         ],
         "artifacts": [
-            "build/current-cache-architecture-contract-20260601-step37-mixed-swa-ui-storage-quant.json",
+            "build/current-cache-architecture-contract-20260601-zaya-dsv4-terminal-disk-guard.json",
             "build/current-cache-architecture-contract-20260530-lfm2-tool-parser-local.json",
             "build/current-cache-architecture-contract-20260528-gemma4-mixed-swa-row.json",
             "build/current-cache-architecture-contract-20260527-cache-family-matrix.json",

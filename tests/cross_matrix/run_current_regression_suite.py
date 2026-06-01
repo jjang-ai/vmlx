@@ -398,7 +398,7 @@ CURRENT_SUITE_COMMANDS: dict[str, list[str]] = {
         sys.executable,
         "tests/cross_matrix/run_cache_architecture_contract.py",
         "--out",
-        "build/current-cache-architecture-contract-20260601-step37-mixed-swa-ui-storage-quant.json",
+        "build/current-cache-architecture-contract-20260601-zaya-dsv4-terminal-disk-guard.json",
     ],
     "noheavy_panel_settings_contract": [
         sys.executable,

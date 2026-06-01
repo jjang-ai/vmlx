@@ -695,6 +695,53 @@ def test_dsv4_in_memory_pending_chain_without_terminal_is_a_miss():
     assert remaining == tokens + [15]
 
 
+def test_dsv4_disk_only_pending_chain_without_terminal_is_a_miss():
+    from types import SimpleNamespace
+
+    from vmlx_engine.paged_cache import PagedCacheManager, compute_block_hash
+    from vmlx_engine.prefix_cache import BlockAwarePrefixCache
+
+    class _DiskOnlyPendingDsv4:
+        def __init__(self, cache_data):
+            self.cache_data = cache_data
+
+        def read_block(self, _block_hash):
+            return self.cache_data
+
+    tokens = [11, 12, 13, 14]
+    pending_cache = [(
+        "deepseek_v4_pending",
+        "DeepseekV4Cache",
+        {"compress_ratio": 4, "sliding_window": 128},
+    )]
+    disk = _DiskOnlyPendingDsv4(pending_cache)
+
+    assert BlockAwarePrefixCache._dsv4_l2_chain_missing_terminal_state(
+        [SimpleNamespace(cache_data=None, block_hash=b"dsv4-pending")],
+        disk,
+    )
+
+    paged = PagedCacheManager(
+        block_size=4,
+        max_blocks=8,
+        disk_store=disk,
+    )
+    pc = BlockAwarePrefixCache(model=None, paged_cache_manager=paged)
+
+    block = paged.allocate_block()
+    block.token_count = len(tokens)
+    block.cache_data = None
+    block.cache_data_from_disk = False
+    block_hash = compute_block_hash(None, tokens)
+    block.block_hash = block_hash
+    paged.cached_block_hash_to_block.insert(block_hash, block)
+
+    table, remaining = pc.fetch_cache("dsv4-disk-only-pending", tokens + [15])
+
+    assert table is None
+    assert remaining == tokens + [15]
+
+
 def test_dsv4_paged_reconstruct_returns_deepseek_cache_not_ssm_partial():
     from jang_tools.dsv4.mlx_model import DeepseekV4Cache
     from vmlx_engine.paged_cache import PagedCacheManager

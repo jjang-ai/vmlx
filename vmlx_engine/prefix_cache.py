@@ -1464,7 +1464,8 @@ class BlockAwarePrefixCache:
             cached_blocks = []
             num_cached = 0
         if cached_blocks:
-            if self._dsv4_l2_chain_missing_terminal_state(cached_blocks):
+            _disk_store = getattr(self.paged_cache, "_disk_store", None)
+            if self._dsv4_l2_chain_missing_terminal_state(cached_blocks, _disk_store):
                 _reject_table = BlockTable(
                     request_id=request_id,
                     block_ids=[cb.block_id for cb in cached_blocks],
@@ -1483,7 +1484,7 @@ class BlockAwarePrefixCache:
                 self._misses += 1
                 return None, tokens
 
-            if self._zaya_l2_chain_missing_terminal_state(cached_blocks):
+            if self._zaya_l2_chain_missing_terminal_state(cached_blocks, _disk_store):
                 _reject_table = BlockTable(
                     request_id=request_id,
                     block_ids=[cb.block_id for cb in cached_blocks],
@@ -1525,7 +1526,8 @@ class BlockAwarePrefixCache:
                 for block_id in matched_block_ids
             ]
             matched_blocks = [b for b in matched_blocks if b is not None]
-            if self._dsv4_l2_chain_missing_terminal_state(matched_blocks):
+            _disk_store = getattr(self.paged_cache, "_disk_store", None)
+            if self._dsv4_l2_chain_missing_terminal_state(matched_blocks, _disk_store):
                 logger.warning(
                     "Ignoring DSV4 prefix-index hit for %s: matched blocks "
                     "contain DeepseekV4Cache pending markers but no terminal "
@@ -1534,7 +1536,7 @@ class BlockAwarePrefixCache:
                 )
                 self._misses += 1
                 return None, tokens
-            if self._zaya_l2_chain_missing_terminal_state(matched_blocks):
+            if self._zaya_l2_chain_missing_terminal_state(matched_blocks, _disk_store):
                 logger.warning(
                     "Ignoring ZAYA prefix-index hit for %s: matched blocks "
                     "contain zaya_cca KV pages but no terminal CCA state.",
@@ -1569,7 +1571,23 @@ class BlockAwarePrefixCache:
         return None, tokens
 
     @staticmethod
-    def _dsv4_l2_chain_missing_terminal_state(cached_blocks: List[Any]) -> bool:
+    def _iter_terminal_check_entries(block: Any, disk_store: Optional[Any] = None):
+        cache_data = getattr(block, "cache_data", None)
+        if cache_data is None and disk_store is not None:
+            block_hash = getattr(block, "block_hash", None)
+            if block_hash is not None:
+                try:
+                    cache_data = disk_store.read_block(block_hash)
+                except Exception:
+                    cache_data = None
+        for entry in cache_data or []:
+            yield entry
+
+    @staticmethod
+    def _dsv4_l2_chain_missing_terminal_state(
+        cached_blocks: List[Any],
+        disk_store: Optional[Any] = None,
+    ) -> bool:
         """True when an L2 hit restored only non-terminal DSV4 blocks.
 
         DSV4 block L2 intentionally writes cheap ``deepseek_v4_pending``
@@ -1583,7 +1601,10 @@ class BlockAwarePrefixCache:
         saw_pending = False
         saw_terminal = False
         for block in cached_blocks or []:
-            for entry in getattr(block, "cache_data", None) or []:
+            for entry in BlockAwarePrefixCache._iter_terminal_check_entries(
+                block,
+                disk_store,
+            ):
                 if not isinstance(entry, (tuple, list)) or not entry:
                     continue
                 tag = entry[0]
@@ -1594,12 +1615,18 @@ class BlockAwarePrefixCache:
         return saw_pending and not saw_terminal
 
     @staticmethod
-    def _zaya_l2_chain_missing_terminal_state(cached_blocks: List[Any]) -> bool:
+    def _zaya_l2_chain_missing_terminal_state(
+        cached_blocks: List[Any],
+        disk_store: Optional[Any] = None,
+    ) -> bool:
         """True when a ZAYA hit has KV pages but lacks terminal CCA state."""
         saw_zaya = False
         saw_terminal = False
         for block in cached_blocks or []:
-            for entry in getattr(block, "cache_data", None) or []:
+            for entry in BlockAwarePrefixCache._iter_terminal_check_entries(
+                block,
+                disk_store,
+            ):
                 if not isinstance(entry, (tuple, list)) or not entry:
                     continue
                 if entry[0] != "zaya_cca":
