@@ -614,6 +614,16 @@ function assertResult(result) {
   if (result.requestedWireApi === 'responses' && !result.provenSurfaces?.includes('responses_api')) {
     failures.push('requested Responses API mode but proof did not record responses_api surface')
   }
+  if (result.requestedWireApi === 'responses' && !result.provenSurfaces?.includes('responses_delta_streaming')) {
+    failures.push('requested Responses API mode but proof did not record responses_delta_streaming surface')
+  }
+  if (
+    result.requestedWireApi === 'responses'
+    && result.requestedServerCacheControls === true
+    && !result.provenSurfaces?.includes('responses_cache_detail_usage')
+  ) {
+    failures.push('requested Responses API cache controls but proof did not record responses_cache_detail_usage surface')
+  }
   if (result.requestedBuiltinTools === true && !result.provenSurfaces?.includes('long_tool_loop')) {
     failures.push('requested real built-in tools but proof did not record long_tool_loop surface')
   }
@@ -666,6 +676,9 @@ function deriveProvenSurfaces(result) {
   }
   if (responsesDeltaStreamingSeen(result)) {
     surfaces.add('responses_delta_streaming')
+  }
+  if (responsesCacheDetailUsageSeen(result)) {
+    surfaces.add('responses_cache_detail_usage')
   }
   if (generationDefaultsAppliedSeen(result)) {
     surfaces.add('generation_defaults_applied')
@@ -832,6 +845,26 @@ function responsesDeltaStreamingSeen(result) {
     }
   }
   return qualifyingTraceIds.size + qualifyingTraceCount >= 2
+}
+
+function responsesCacheDetailUsageSeen(result) {
+  if (result?.rendererWireApi !== 'responses') return false
+  const walk = (value) => {
+    if (!value || typeof value !== 'object') return false
+    if (Array.isArray(value)) return value.some((child) => walk(child))
+    const cacheDetail = value.cache_detail ?? value.cacheDetail
+    const cachedTokens = value.cached_tokens ?? value.cachedTokens
+    if (
+      typeof cacheDetail === 'string'
+      && cacheDetail.trim()
+      && typeof cachedTokens === 'number'
+      && cachedTokens > 0
+    ) {
+      return true
+    }
+    return Object.values(value).some((child) => walk(child))
+  }
+  return walk(result)
 }
 
 function generationDefaultsAppliedSeen(result) {

@@ -3006,6 +3006,19 @@ def test_release_regression_manifest_real_ui_script_records_stream_text_trace():
     assert "lastFullContent" in source
     assert "lastReasoningContent" in source
     assert "streamTrace: rendererResult.streamTraceByMessage" in source
+    assert "requested Responses API mode but proof did not record responses_delta_streaming surface" in source
+
+
+def test_release_regression_manifest_real_ui_script_requires_responses_cache_detail_when_requested():
+    script = Path("panel/scripts/live-real-ui-model-proof.mjs")
+    source = script.read_text(encoding="utf-8")
+
+    assert "function responsesCacheDetailUsageSeen(result)" in source
+    assert "responses_cache_detail_usage" in source
+    assert (
+        "requested Responses API cache controls but proof did not record responses_cache_detail_usage surface"
+        in source
+    )
 
 
 def test_release_regression_manifest_chat_ipc_stream_metrics_include_cache_reuse_detail():
