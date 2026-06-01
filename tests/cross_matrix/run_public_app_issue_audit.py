@@ -106,6 +106,42 @@ def _issue117_checks(root: Path) -> dict[str, bool]:
     }
 
 
+def _issue180_checks(root: Path) -> dict[str, bool]:
+    release_manifest = _read(root / "tests/cross_matrix/release_regression_manifest.py")
+    minimax_real_ui = (
+        root
+        / "docs/internal/agent-notes/current-real-ui-live-model-minimax-m27-small-responses-stricttools-cachecontrols-20260530-proof.json"
+    )
+    payload = _load_json(minimax_real_ui)
+    surfaces = _surfaces(minimax_real_ui)
+    chat = payload.get("chat")
+    chat = chat if isinstance(chat, dict) else {}
+    reasoning_numeric = chat.get("reasoningNumericRunCount")
+    reasoning_cjk = chat.get("reasoningCjkLeakCount")
+    reasoning_korean = chat.get("reasoningKoreanLeakCount")
+    return {
+        "minimax_small_stricttools_real_ui_indexed": (
+            minimax_real_ui.exists()
+            and payload.get("modelName") == "MiniMax-M2.7-Small-JANGTQ"
+            and payload.get("servedModel") == "MiniMax-M2.7-Small-JANGTQ"
+            and "responses_api" in surfaces
+            and "server_cache_controls" in surfaces
+            and "parser_leak_check" in surfaces
+            and "language_leak_check" in surfaces
+            and "current-real-ui-live-model-minimax-m27-small-responses-stricttools-cachecontrols-20260530"
+            in release_manifest
+        ),
+        "minimax_small_numeric_garbage_guarded": (
+            "reasoning_language_or_numeric_leak" in release_manifest
+            and "numeric/list-like garbage leaked into reasoning segments"
+            in _read(root / "tests/test_release_regression_manifest.py")
+            and reasoning_numeric == 0
+            and reasoning_cjk == 0
+            and reasoning_korean == 0
+        ),
+    }
+
+
 def _issue118_checks(root: Path) -> dict[str, bool]:
     models = _read(root / "panel/src/main/ipc/models.ts")
     hf_settings = _read(root / "panel/src/shared/hfSettings.ts")
@@ -206,6 +242,17 @@ def build_audit(root: Path) -> dict[str, Any]:
                 "mapped_to_minimax_k_issue179_live_reporter_prompt_boundary"
             ),
         },
+        "180": {
+            "repo": "jjang-ai/vmlx",
+            "title": (
+                "MiniMax-M2.7-Small-JANGTQ produces gibberish output "
+                "(thinking block shows numeric sequences)"
+            ),
+            "checks": _issue180_checks(root),
+            "release_clearance": (
+                "mapped_to_minimax_small_real_ui_language_numeric_guard"
+            ),
+        },
         "118": {
             "repo": "jjang-ai/mlxstudio",
             "title": "Studio 1.5.42 cannot download models from the Hub",
@@ -236,10 +283,10 @@ def build_audit(root: Path) -> dict[str, Any]:
         "issues": issues,
         "focused_failures": focused_failures,
         "release_boundary": (
-            "Public issue slices #169 and mlxstudio #117-#119 have focused "
-            "source/proof coverage here. This does not clear the full release; "
-            "Developer ID signing/notarization, DSV4 exactness, and real UI "
-            "matrix blockers remain owned by the release manifest."
+            "Public issue slices #169, #180, and mlxstudio #117-#119 have "
+            "focused source/proof coverage here. This does not clear the full "
+            "release; Developer ID signing/notarization, DSV4 exactness, and "
+            "real UI matrix blockers remain owned by the release manifest."
         ),
     }
 

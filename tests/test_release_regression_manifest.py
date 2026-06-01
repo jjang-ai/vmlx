@@ -1263,6 +1263,15 @@ def _write_expected_public_app_issue_audit(root: Path) -> None:
                         ),
                         "checks": {"issue179_root_cause_audit_passes": True},
                     },
+                    "180": {
+                        "focused_source_slice": "pass",
+                        "release_clearance": (
+                            "mapped_to_minimax_small_real_ui_language_numeric_guard"
+                        ),
+                        "checks": {
+                            "minimax_small_stricttools_real_ui_indexed": True
+                        },
+                    },
                     "118": {
                         "focused_source_slice": "pass",
                         "release_clearance": (

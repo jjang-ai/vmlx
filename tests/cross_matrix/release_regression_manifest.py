@@ -4661,6 +4661,7 @@ def _validate_current_public_app_issue_audit(root: Path) -> dict[str, Any]:
     expected_clearance = {
         "169": "source_dual_dmg_metal_compat_route_guarded_packaging_still_gated",
         "117": "mapped_to_minimax_k_issue179_live_reporter_prompt_boundary",
+        "180": "mapped_to_minimax_small_real_ui_language_numeric_guard",
         "118": "source_gui_download_endpoint_and_stale_auth_fallback_guarded",
         "119": (
             "source_and_live_gemma26_memory_runtime_guarded_release_package_pending"

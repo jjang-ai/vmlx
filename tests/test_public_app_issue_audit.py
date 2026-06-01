@@ -10,7 +10,7 @@ def test_public_app_issue_audit_tracks_open_app_runtime_issue_slices():
     audit = gate.build_audit(Path("."))
 
     assert audit["status"] == "pass"
-    assert set(audit["issues"]) == {"169", "117", "118", "119"}
+    assert set(audit["issues"]) == {"169", "180", "117", "118", "119"}
     assert audit["issues"]["169"]["focused_source_slice"] == "pass"
     assert audit["issues"]["169"]["checks"]["dual_public_dmg_flavors"] is True
     assert audit["issues"]["169"]["checks"]["compat_wheel_default"] is True
@@ -22,6 +22,12 @@ def test_public_app_issue_audit_tracks_open_app_runtime_issue_slices():
     assert audit["issues"]["117"]["checks"]["minimax_live_ui_artifacts_indexed"] is True
     assert audit["issues"]["117"]["release_clearance"] == (
         "mapped_to_minimax_k_issue179_live_reporter_prompt_boundary"
+    )
+    assert audit["issues"]["180"]["focused_source_slice"] == "pass"
+    assert audit["issues"]["180"]["checks"]["minimax_small_stricttools_real_ui_indexed"] is True
+    assert audit["issues"]["180"]["checks"]["minimax_small_numeric_garbage_guarded"] is True
+    assert audit["issues"]["180"]["release_clearance"] == (
+        "mapped_to_minimax_small_real_ui_language_numeric_guard"
     )
     assert audit["issues"]["118"]["focused_source_slice"] == "pass"
     assert audit["issues"]["118"]["checks"]["download_worker_clears_raw_endpoint"] is True
