@@ -406,7 +406,10 @@ def build_audit(
             "release_clearance": "installed_mpp_auto_policy_guarded",
         },
         "182": {
-            "title": "Qwen VL patch-embed layout must load in MLX Conv3D format",
+            "title": (
+                "升级到新版本后，运行无审查版本模型一直失败 "
+                "(Qwen VL patch-embed Conv3D layout mismatch)"
+            ),
             "checks": _issue182_checks(root, installed_qwen_vl_probe),
             "release_clearance": (
                 "installed_qwen_vl_patch_embed_layout_guarded"

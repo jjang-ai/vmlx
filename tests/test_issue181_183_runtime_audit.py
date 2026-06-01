@@ -22,6 +22,10 @@ def test_issue181_183_audit_proves_recent_runtime_issue_slices():
         "installed_mpp_auto_policy_guarded"
     )
     assert audit["issues"]["182"]["focused_source_slice"] == "pass"
+    assert audit["issues"]["182"]["title"] == (
+        "升级到新版本后，运行无审查版本模型一直失败 "
+        "(Qwen VL patch-embed Conv3D layout mismatch)"
+    )
     assert audit["issues"]["182"]["checks"]["normal_vlm_patch_embed_transpose"] is True
     assert audit["issues"]["182"]["checks"]["native_mtp_patch_embed_transpose"] is True
     assert audit["issues"]["182"]["checks"]["bundled_hash_gate_covers_runtime"] is True
