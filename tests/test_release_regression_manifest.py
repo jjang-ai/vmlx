@@ -792,13 +792,24 @@ def _write_passing_real_ui_live_model_proof_artifacts(root: Path) -> None:
                 ],
             }
         if row["proof"].endswith(
-            "nemotron-omni-nano-responses-tools-reasoning-cachecontrols-localonly-20260527-proof.json"
+            (
+                "nemotron-omni-nano-responses-tools-reasoning-cachecontrols-localonly-20260527-proof.json",
+                "installed-app-nemotron-omni-nano-responses-tools-reasoning-cachecontrols-localonly-20260601-proof.json",
+            )
         ):
             proof["rendererWireApi"] = "responses"
-            proof["eventCounts"] = {"complete": 1, "tool": 4, "reasoningDone": 1}
+            proof["eventCounts"] = {"complete": 2, "tool": 4, "reasoningDone": 1}
             proof["requestedBuiltinTools"] = True
             proof["chatOverrides"] = {"builtinToolsEnabled": True}
             proof["persistedReasoningCount"] = 1
+            if "installed-app" in row["proof"]:
+                proof["uiLaunchMode"] = "installed-app"
+                proof["installedAppPath"] = "/Applications/vMLX.app"
+                proof["python"] = (
+                    "/Applications/vMLX.app/Contents/Resources/"
+                    "bundled-python/python/bin/python3"
+                )
+                proof["provenSurfaces"] = ["installed_app_ui"]
             proof["persistedToolsByMessage"] = [
                 [
                     {"phase": "result", "toolName": "run_command"},
@@ -2893,6 +2904,18 @@ def test_release_regression_manifest_real_ui_cache_checker_is_model_specific():
     assert "This architecture requires native/paged cache" not in verified_block
 
 
+def test_release_regression_manifest_uses_installed_app_nemotron_cachecontrols_proof():
+    row = CURRENT_REAL_UI_LIVE_MODEL_PROOF_ROWS[
+        "nemotron_omni_nano_responses_tools_reasoning_cachecontrols"
+    ]
+
+    expected = (
+        "current-real-ui-installed-app-nemotron-omni-nano-responses-tools-reasoning-cachecontrols-localonly-20260601"
+    )
+    assert expected in row["proof"]
+    assert expected in row["chat_screenshot"]
+
+
 def test_release_regression_manifest_real_ui_script_preserves_tool_probe_file_evidence():
     script = Path("panel/scripts/live-real-ui-model-proof.mjs")
     source = script.read_text(encoding="utf-8")
@@ -3355,7 +3378,7 @@ def test_release_regression_manifest_real_ui_live_model_rows_include_ling_bailin
     assert rows["nemotron_omni_nano_responses_tools_reasoning_cachecontrols"]["family"] == "nemotron_omni"
     assert (
         rows["nemotron_omni_nano_responses_tools_reasoning_cachecontrols"]["proof"]
-        == "docs/internal/agent-notes/current-real-ui-live-model-nemotron-omni-nano-responses-tools-reasoning-cachecontrols-localonly-20260527-proof.json"
+        == "docs/internal/agent-notes/current-real-ui-installed-app-nemotron-omni-nano-responses-tools-reasoning-cachecontrols-localonly-20260601-proof.json"
     )
     assert rows["nemotron_omni_nano_responses_reasoning"]["model_path"] == (
         "/Users/example/models/dealign.ai/Nemotron-Omni-Nano-JANGTQ-CRACK"
