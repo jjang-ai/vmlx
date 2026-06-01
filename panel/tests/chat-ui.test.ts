@@ -1280,6 +1280,16 @@ describe('Media attachment product path', () => {
     expect(source).toContain('sessionManager.emit("session:log", { sessionId, data })')
   })
 
+  it('chat send failures format expected EPIPE disconnects before showing toast', () => {
+    const source = readFileSync('src/renderer/src/components/chat/ChatInterface.tsx', 'utf8')
+    expect(source).toContain('function formatChatSendErrorMessage')
+    expect(source).toContain('isExpectedChatDisconnectError')
+    expect(source).toContain('write EPIPE')
+    expect(source).toContain('Server connection lost. The model server may have crashed or stopped. Try restarting the session.')
+    expect(source).toContain('const msg = formatChatSendErrorMessage(error)')
+    expect(source).not.toContain("const msg = error?.message || 'Unknown error'")
+  })
+
   it('Thinking Auto and Off clear stale reasoning effort in chat settings', () => {
     const source = readFileSync('src/renderer/src/components/chat/ChatSettings.tsx', 'utf8')
     expect(source).toContain('onClick={() => updateThinkingMode(undefined, undefined)}')

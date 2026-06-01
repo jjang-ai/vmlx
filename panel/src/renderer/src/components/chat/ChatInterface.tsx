@@ -94,6 +94,29 @@ function attachmentContentPart(a: MediaAttachment): any {
   return { type: 'image_url', image_url: { url: a.dataUrl } }
 }
 
+function isExpectedChatDisconnectError(error: any): boolean {
+  const code = String(error?.code || '')
+  const message = String(error?.message || error || '')
+  const cause = error?.cause
+  const nestedErrors = Array.isArray(error?.errors) ? error.errors : []
+  return (
+    code === 'EPIPE' ||
+    code === 'ECONNRESET' ||
+    code === 'ERR_STREAM_DESTROYED' ||
+    code === 'ERR_STREAM_WRITE_AFTER_END' ||
+    /EPIPE|write EPIPE|broken pipe|socket hang up|connection reset|premature close|stream.*destroyed|write after end/i.test(message) ||
+    (cause ? isExpectedChatDisconnectError(cause) : false) ||
+    nestedErrors.some((nested) => isExpectedChatDisconnectError(nested))
+  )
+}
+
+function formatChatSendErrorMessage(error: any): string {
+  if (isExpectedChatDisconnectError(error)) {
+    return 'Server connection lost. The model server may have crashed or stopped. Try restarting the session.'
+  }
+  return error?.message || 'Unknown error'
+}
+
 interface ChatInterfaceProps {
   chatId: string | null
   onNewChat?: () => void
@@ -472,7 +495,7 @@ export function ChatInterface({ chatId, onNewChat, sessionEndpoint, sessionId, s
       // Guard: if user switched chats, don't show error or touch state
       if (chatIdRef.current !== chatId) return
       console.error('Failed to send message:', error)
-      const msg = error?.message || 'Unknown error'
+      const msg = formatChatSendErrorMessage(error)
       showToast('error', 'Message failed', msg)
       // Reload messages from DB to restore consistent state
       try {
