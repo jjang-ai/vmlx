@@ -4908,6 +4908,7 @@ def _prompt_processing_speed_detail(
 
 def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
     root = Path(root)
+    release_manifest = _load(root, CURRENT_RELEASE_REGRESSION_MANIFEST_REL)
     cache = _load(root, "build/current-dsv4-cache-proof-digest-20260521.json")
     dev_cache = _load(root, "build/dev-ui-dsv4-live-cache-proof-20260521/result.json")
     dev_tool = _load(root, "build/dev-ui-dsv4-live-tool-proof-20260521/result.json")
@@ -6174,6 +6175,68 @@ def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
             )
         ),
         details=all_local_smoke_details,
+    )
+    release_blockers = release_manifest.get("release_blockers")
+    if not isinstance(release_blockers, list):
+        release_blockers = []
+    issue179_blocker = next(
+        (
+            blocker
+            for blocker in release_blockers
+            if isinstance(blocker, dict)
+            and blocker.get("id") == "issue179_minimax_k_root_cause_audit"
+        ),
+        None,
+    )
+    current_sweep = release_manifest.get("current_proof_sweep")
+    if not isinstance(current_sweep, dict):
+        current_sweep = {}
+    issue179_audit = current_sweep.get("issue179_minimax_k_root_cause_audit")
+    if not isinstance(issue179_audit, dict):
+        issue179_audit = {}
+    issue179_evidence = (
+        str(issue179_blocker.get("evidence"))
+        if isinstance(issue179_blocker, dict) and issue179_blocker.get("evidence")
+        else "build/current-issue179-minimax-k-root-cause-audit-20260527.json"
+    )
+    if not issue179_audit:
+        issue179_audit = _load(root, issue179_evidence)
+    issue179_not_proven = [
+        str(item) for item in issue179_audit.get("not_proven", []) if str(item)
+    ]
+    issue179_open = isinstance(issue179_blocker, dict) or issue179_audit.get(
+        "status"
+    ) == "open"
+    issue179_pass = (
+        not issue179_open
+        and issue179_audit.get("status") == "pass"
+        and _path_present(root, CURRENT_RELEASE_REGRESSION_MANIFEST_REL)
+    )
+    _add(
+        requirements,
+        "MiniMax-M2.7-JANGTQ_K reporter parity/root cause is release-cleared",
+        "pass" if issue179_pass else "open",
+        [CURRENT_RELEASE_REGRESSION_MANIFEST_REL, issue179_evidence],
+        caveat=(
+            None
+            if issue179_pass
+            else (
+                "MiniMax #179 remains open while "
+                + (
+                    "; ".join(issue179_not_proven)
+                    if issue179_not_proven
+                    else "reporter bundle/session parity and screenshot-shaped output reproduction remain unproven"
+                )
+                + "."
+            )
+        ),
+        details={
+            "release_blocker_id": "issue179_minimax_k_root_cause_audit",
+            "release_blocker": issue179_blocker,
+            "audit_status": issue179_audit.get("status") or "missing",
+            "not_proven": issue179_not_proven,
+            "release_boundary": issue179_audit.get("release_boundary"),
+        },
     )
     if real_ui_live_model_matrix:
         real_ui_unblocked_non_mimo_ok = (

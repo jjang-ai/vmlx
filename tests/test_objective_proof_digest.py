@@ -64,6 +64,56 @@ def test_objective_proof_digest_release_manifest_pointer_matches_current_suite()
     ]
 
 
+def test_objective_digest_tracks_minimax_issue179_root_cause_blocker(tmp_path):
+    from tests.cross_matrix import summarize_objective_proof as objective
+
+    _write_json(
+        tmp_path,
+        objective.CURRENT_RELEASE_REGRESSION_MANIFEST_REL,
+        {
+            "release_blockers": [
+                {
+                    "id": "issue179_minimax_k_root_cause_audit",
+                    "status": "open",
+                    "evidence": (
+                        "build/current-issue179-minimax-k-root-cause-audit-20260527.json"
+                    ),
+                    "next_proof": (
+                        "Reproduce or disprove screenshot-shaped wrong-language/numeric "
+                        "reasoning-panel garbage with the reporter prompt/session."
+                    ),
+                }
+            ],
+            "current_proof_sweep": {
+                "issue179_minimax_k_root_cause_audit": {
+                    "status": "open",
+                    "not_proven": [
+                        "reporter model shard/codebook hashes match local full K artifact",
+                        "reporter chat/session/settings database state matches local diagnostic state",
+                    ],
+                    "release_boundary": (
+                        "#179 remains open: local diagnostics are clean, but reporter parity is not proven."
+                    ),
+                }
+            },
+        },
+    )
+
+    digest = objective.build_digest(tmp_path)
+    rows = {item["requirement"]: item for item in digest["requirements"]}
+    row = rows[
+        "MiniMax-M2.7-JANGTQ_K reporter parity/root cause is release-cleared"
+    ]
+
+    assert row["status"] == "open"
+    assert row["evidence"] == [
+        objective.CURRENT_RELEASE_REGRESSION_MANIFEST_REL,
+        "build/current-issue179-minimax-k-root-cause-audit-20260527.json",
+    ]
+    assert "reporter model shard/codebook hashes" in row["caveat"]
+    assert row["details"]["release_blocker_id"] == "issue179_minimax_k_root_cause_audit"
+
+
 def _write_passing_base_artifacts(tmp_path: Path) -> None:
     _write_json(
         tmp_path,
@@ -973,6 +1023,7 @@ def test_objective_proof_digest_keeps_dsv4_long_quality_open(tmp_path):
         "Ling/Bailing multilingual output quality is release-cleared",
         "Gemma4 26B CRACK mixed-SWA app-engine speed floor is release-cleared",
         "Cross-family live multi-turn smoke matrix is release-cleared",
+        "MiniMax-M2.7-JANGTQ_K reporter parity/root cause is release-cleared",
         "Real Electron UI cross-family live model matrix is release-cleared",
         "DSV4 long-output/code/file-generation quality is release-cleared",
     ]
@@ -9525,6 +9576,7 @@ def test_objective_proof_digest_accepts_dsv4_quality_clearance_artifact(tmp_path
         "Ling/Bailing multilingual output quality is release-cleared",
         "Gemma4 26B CRACK mixed-SWA app-engine speed floor is release-cleared",
         "Cross-family live multi-turn smoke matrix is release-cleared",
+        "MiniMax-M2.7-JANGTQ_K reporter parity/root cause is release-cleared",
         "Real Electron UI cross-family live model matrix is release-cleared",
     ]
 
