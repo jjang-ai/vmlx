@@ -504,6 +504,11 @@ def build_audit(
         "installed_bundled_python_launch_crash_reports_classified": (
             bundled_python_launch_crashes["exists"] is True
         ),
+        "installed_bundled_python_launch_crashes_not_reproduced": (
+            versioned_python_result["returncode"] == 0
+            and "Python 3.12" in versioned_python_text
+            and help_result["returncode"] == 0
+        ),
         "serve_help_runs": help_result["returncode"] == 0,
         "responses_cancel_route": any(
             "/v1/responses/{response_id}/cancel" in route
@@ -825,6 +830,10 @@ def build_audit(
         "vmlx_user_data_disconnect_errors": user_data_disconnect_errors,
         "vmlx_diagnostic_disconnect_errors": diagnostic_disconnect_errors,
         "vmlx_bundled_python_launch_crash_reports": bundled_python_launch_crashes,
+        "vmlx_bundled_python_launch_crash_repro": {
+            "versioned_python_runs": versioned_python_result["returncode"] == 0,
+            "serve_help_runs": help_result["returncode"] == 0,
+        },
         "boundary": (
             "Installed app parity is required before claiming packaged/app "
             "coverage for #178 LoRA flags, MiMo xml_function launch, or "

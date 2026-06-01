@@ -50,6 +50,9 @@ def test_installed_app_runtime_parity_requires_versioned_python_entrypoint():
     assert "installed_versioned_python_exists" in audit["checks"]
     assert "installed_versioned_python_runs" in audit["checks"]
     assert "installed_bundled_python_launch_crash_reports_classified" in audit["checks"]
+    assert (
+        "installed_bundled_python_launch_crashes_not_reproduced" in audit["checks"]
+    )
     assert "vmlx_bundled_python_launch_crash_reports" in audit
     assert audit["installed_versioned_python"].endswith(
         "Contents/Resources/bundled-python/python/bin/python3.12"

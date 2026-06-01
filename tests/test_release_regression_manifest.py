@@ -1667,6 +1667,7 @@ def _write_expected_installed_app_runtime_parity_audit(root: Path) -> None:
                     "installed_versioned_python_exists": True,
                     "installed_versioned_python_runs": True,
                     "installed_bundled_python_launch_crash_reports_classified": True,
+                    "installed_bundled_python_launch_crashes_not_reproduced": True,
                     "serve_help_runs": True,
                     "responses_cancel_route": True,
                     "image_lora_cli_flags": True,
@@ -1721,6 +1722,7 @@ def _write_expected_staged_app_runtime_parity_audit(root: Path) -> None:
                     "installed_versioned_python_exists": True,
                     "installed_versioned_python_runs": True,
                     "installed_bundled_python_launch_crash_reports_classified": True,
+                    "installed_bundled_python_launch_crashes_not_reproduced": True,
                     "serve_help_runs": True,
                     "responses_cancel_route": True,
                     "image_lora_cli_flags": True,
@@ -1840,6 +1842,25 @@ def test_current_proof_sweep_rejects_installed_app_missing_bundled_python_crash_
 
     assert (
         "missing_check:installed_bundled_python_launch_crash_reports_classified"
+        in result["failures"]
+    )
+
+
+def test_current_proof_sweep_rejects_installed_app_missing_bundled_python_crash_repro_check(
+    tmp_path,
+):
+    _write_expected_installed_app_runtime_parity_audit(tmp_path)
+    path = tmp_path / CURRENT_INSTALLED_APP_RUNTIME_PARITY_AUDIT_ARTIFACT
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["checks"].pop("installed_bundled_python_launch_crashes_not_reproduced")
+    path.write_text(json.dumps(payload) + "\n", encoding="utf-8")
+
+    result = validate_current_proof_sweep_artifacts(tmp_path)[
+        "installed_app_runtime_parity_audit"
+    ]
+
+    assert (
+        "missing_check:installed_bundled_python_launch_crashes_not_reproduced"
         in result["failures"]
     )
 
