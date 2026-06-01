@@ -13,6 +13,7 @@ import argparse
 import json
 import plistlib
 import subprocess
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -294,6 +295,70 @@ def _issue180_checks(root: Path) -> dict[str, bool]:
     }
 
 
+def _mistral_small4_detection_probe() -> dict[str, bool]:
+    try:
+        from vmlx_engine.api import utils
+
+        with tempfile.TemporaryDirectory() as tmp:
+            model_dir = Path(tmp)
+            (model_dir / "config.json").write_text(
+                json.dumps(
+                    {
+                        "model_type": "mistral3",
+                        "architectures": ["Mistral3ForConditionalGeneration"],
+                        "text_config": {"model_type": "mistral4"},
+                        "vision_config": {"model_type": "pixtral"},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            utils._IS_MLLM_CACHE.clear()
+            auto = utils.is_mllm_model(str(model_dir))
+            forced = utils.is_mllm_model(str(model_dir), force_mllm=True)
+            return {"auto": auto is True, "forced": forced is True}
+    except Exception:  # noqa: BLE001 - issue audit should report false checks
+        return {"auto": False, "forced": False}
+
+
+def _issue111_checks(root: Path) -> dict[str, bool]:
+    installed_parity = _load_json(root / INSTALLED_APP_RUNTIME_PARITY)
+    installed_checks = installed_parity.get("checks")
+    if not isinstance(installed_checks, dict):
+        installed_checks = {}
+    engine_hash = installed_parity.get("bundled_engine_hash_parity")
+    if not isinstance(engine_hash, dict):
+        engine_hash = {}
+    engine_files = engine_hash.get("files")
+    if not isinstance(engine_files, dict):
+        engine_files = {}
+    api_utils = engine_files.get("api/utils.py")
+    if not isinstance(api_utils, dict):
+        api_utils = {}
+    probe = _mistral_small4_detection_probe()
+    engine_tests = _read(root / "tests/test_engine_audit.py")
+    registry_tests = _read(root / "tests/test_model_config_registry.py")
+    api_utils_source = _read(root / "vmlx_engine/api/utils.py")
+    return {
+        "mistral_small4_wrapper_stays_mllm": (
+            probe.get("auto") is True
+            and probe.get("forced") is True
+            and "Do not apply this to Mistral Small 4" in api_utils_source
+            and 'text_mt == "ministral3"' in api_utils_source
+            and "tier=force_mllm result=True" in api_utils_source
+        ),
+        "mistral_small4_parser_metadata_preserved": (
+            "test_mistral3_mistral4_vlm_wrapper_preserves_inner_reasoning"
+            in registry_tests
+            and "test_mistral4_detected_via_wrapper" in engine_tests
+        ),
+        "installed_app_mllm_hash_guarded": (
+            installed_parity.get("status") == "pass"
+            and installed_checks.get("installed_bundled_engine_hash_parity") is True
+            and api_utils.get("match") is True
+        ),
+    }
+
+
 def _issue118_checks(root: Path) -> dict[str, bool]:
     models = _read(root / "panel/src/main/ipc/models.ts")
     hf_settings = _read(root / "panel/src/shared/hfSettings.ts")
@@ -430,6 +495,14 @@ def build_audit(root: Path) -> dict[str, Any]:
                 "mapped_to_minimax_small_real_ui_language_numeric_guard"
             ),
         },
+        "111": {
+            "repo": "jjang-ai/mlxstudio",
+            "title": "VLM mode on Mistral Small 4 broken in vMLX",
+            "checks": _issue111_checks(root),
+            "release_clearance": (
+                "mapped_to_mistral_small4_vlm_wrapper_detection_guard"
+            ),
+        },
         "118": {
             "repo": "jjang-ai/mlxstudio",
             "title": "Studio 1.5.42 cannot download models from the Hub",
@@ -460,7 +533,7 @@ def build_audit(root: Path) -> dict[str, Any]:
         "issues": issues,
         "focused_failures": focused_failures,
         "release_boundary": (
-            "Public issue slices #165, #169, #180, and mlxstudio #117-#119 "
+            "Public issue slices #165, #169, #180, and mlxstudio #111, #117-#119 "
             "have focused source/proof coverage here, and #118 includes "
             "installed app download fallback proof. This does not clear the "
             "full release; Developer ID signing/notarization, DSV4 exactness, "

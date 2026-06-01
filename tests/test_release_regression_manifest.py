@@ -1312,6 +1312,17 @@ def _write_expected_public_app_issue_audit(root: Path) -> None:
             {
                 "status": "pass",
                 "issues": {
+                    "165": {
+                        "focused_source_slice": "pass",
+                        "release_clearance": (
+                            "mapped_to_dsv4_dsml_tool_call_arguments_guard"
+                        ),
+                        "checks": {
+                            "tool_call_contract_passes": True,
+                            "dsml_issue_165_regression_present": True,
+                            "installed_app_dsml_parser_hash_guarded": True,
+                        },
+                    },
                     "169": {
                         "focused_source_slice": "pass",
                         "release_clearance": (
@@ -1322,6 +1333,17 @@ def _write_expected_public_app_issue_audit(root: Path) -> None:
                             "installed_app_sequoia_compat_runtime_flavor": True,
                             "staged_sequoia_app_compat_runtime_flavor": True,
                             "staged_tahoe_app_native_runtime_flavor": True,
+                        },
+                    },
+                    "111": {
+                        "focused_source_slice": "pass",
+                        "release_clearance": (
+                            "mapped_to_mistral_small4_vlm_wrapper_detection_guard"
+                        ),
+                        "checks": {
+                            "mistral_small4_wrapper_stays_mllm": True,
+                            "mistral_small4_parser_metadata_preserved": True,
+                            "installed_app_mllm_hash_guarded": True,
                         },
                     },
                     "117": {
@@ -1388,6 +1410,20 @@ def test_release_regression_manifest_rejects_public_issue118_without_installed_a
     assert "missing_issue_check:118:installed_app_download_fallback_guarded" in result[
         "failures"
     ]
+
+
+def test_release_regression_manifest_rejects_public_issue111_without_installed_mllm_hash_guard(
+    tmp_path,
+):
+    _write_expected_public_app_issue_audit(tmp_path)
+    path = tmp_path / CURRENT_PUBLIC_APP_ISSUE_AUDIT_ARTIFACT
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["issues"].pop("111", None)
+    path.write_text(json.dumps(payload) + "\n", encoding="utf-8")
+
+    result = _validate_current_public_app_issue_audit(tmp_path)
+
+    assert "missing_issue:111" in result["failures"]
 
 
 def test_release_regression_manifest_rejects_public_issue169_without_installed_runtime_flavor(

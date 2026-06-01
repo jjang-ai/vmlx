@@ -423,6 +423,7 @@ REMOVED_ENV_VAR_FORCE_FLIPS = (
 
 BUNDLED_SOURCE_HASH_PATHS = (
     "server.py",
+    "api/utils.py",
     "api/anthropic_adapter.py",
     "api/ollama_adapter.py",
     "block_disk_store.py",

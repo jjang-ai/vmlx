@@ -29,6 +29,7 @@ INSTALLED_APP_USER_DATA = Path.home() / "Library/Application Support/vMLX"
 INSTALLED_APP_DIAGNOSTIC_REPORTS = Path.home() / "Library/Logs/DiagnosticReports"
 CRITICAL_ENGINE_HASH_FILES = (
     "server.py",
+    "api/utils.py",
     "api/tool_calling.py",
     "api/anthropic_adapter.py",
     "api/ollama_adapter.py",

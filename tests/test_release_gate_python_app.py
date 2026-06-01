@@ -520,6 +520,7 @@ def test_packaged_bundled_hash_gate_covers_runtime_files_changed_for_release():
 
     expected = {
         "server.py",
+        "api/utils.py",
         "api/anthropic_adapter.py",
         "api/ollama_adapter.py",
         "block_disk_store.py",
@@ -673,6 +674,7 @@ def test_verify_bundled_python_hash_gate_covers_release_runtime_files():
 
     expected_engine_files = {
         "server.py",
+        "api/utils.py",
         "api/anthropic_adapter.py",
         "api/ollama_adapter.py",
         "block_disk_store.py",

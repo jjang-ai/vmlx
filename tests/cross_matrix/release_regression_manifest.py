@@ -4677,9 +4677,11 @@ def _validate_current_public_app_issue_audit(root: Path) -> dict[str, Any]:
         issues = {}
     result["issues"] = issues
     expected_clearance = {
+        "165": "mapped_to_dsv4_dsml_tool_call_arguments_guard",
         "169": (
             "installed_and_staged_sequoia_compat_runtime_flavor_guarded_packaging_still_gated"
         ),
+        "111": "mapped_to_mistral_small4_vlm_wrapper_detection_guard",
         "117": "mapped_to_minimax_k_issue179_live_reporter_prompt_boundary",
         "180": "mapped_to_minimax_small_real_ui_language_numeric_guard",
         "118": "installed_gui_download_endpoint_and_stale_auth_fallback_guarded",
@@ -4688,10 +4690,20 @@ def _validate_current_public_app_issue_audit(root: Path) -> dict[str, Any]:
         ),
     }
     required_checks = {
+        "165": (
+            "tool_call_contract_passes",
+            "dsml_issue_165_regression_present",
+            "installed_app_dsml_parser_hash_guarded",
+        ),
         "169": (
             "installed_app_sequoia_compat_runtime_flavor",
             "staged_sequoia_app_compat_runtime_flavor",
             "staged_tahoe_app_native_runtime_flavor",
+        ),
+        "111": (
+            "mistral_small4_wrapper_stays_mllm",
+            "mistral_small4_parser_metadata_preserved",
+            "installed_app_mllm_hash_guarded",
         ),
         "118": ("installed_app_download_fallback_guarded",),
     }

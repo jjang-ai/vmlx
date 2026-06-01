@@ -96,6 +96,7 @@ PACKAGED_EPIPE_CLOSED_STREAM_GUARD_STRINGS = (
 
 STAGED_APP_ENGINE_HASH_FILES = (
     "server.py",
+    "api/utils.py",
     "api/tool_calling.py",
     "api/anthropic_adapter.py",
     "api/ollama_adapter.py",

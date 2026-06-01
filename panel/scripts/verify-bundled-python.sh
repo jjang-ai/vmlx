@@ -98,6 +98,7 @@ check_console_script_shebangs "$PANEL/bundled-python/python/bin" "bundled-python
 SOURCE_ENGINE_DIR="$PANEL/../vmlx_engine"
 HASH_GATED_ENGINE_FILES=(
   "server.py"
+  "api/utils.py"
   "api/tool_calling.py"
   "api/anthropic_adapter.py"
   "api/ollama_adapter.py"
