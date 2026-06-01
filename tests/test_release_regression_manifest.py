@@ -3033,6 +3033,14 @@ def test_release_regression_manifest_real_ui_script_requires_generation_defaults
     )
 
 
+def test_release_regression_manifest_real_ui_script_requires_language_leak_surface():
+    script = Path("panel/scripts/live-real-ui-model-proof.mjs")
+    source = script.read_text(encoding="utf-8")
+
+    assert "language_leak_check" in source
+    assert "live proof did not record clean visible/reasoning language leak check" in source
+
+
 def test_release_regression_manifest_chat_ipc_stream_metrics_include_cache_reuse_detail():
     source = Path("panel/src/main/ipc/chat.ts").read_text(encoding="utf-8")
 

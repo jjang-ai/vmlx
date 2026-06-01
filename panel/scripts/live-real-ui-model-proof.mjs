@@ -627,6 +627,9 @@ function assertResult(result) {
   if (!result.provenSurfaces?.includes('generation_defaults_applied')) {
     failures.push('live proof did not record model-owned generation defaults / request max_tokens resolution')
   }
+  if (!result.provenSurfaces?.includes('language_leak_check')) {
+    failures.push('live proof did not record clean visible/reasoning language leak check')
+  }
   if (result.requestedBuiltinTools === true && !result.provenSurfaces?.includes('long_tool_loop')) {
     failures.push('requested real built-in tools but proof did not record long_tool_loop surface')
   }
