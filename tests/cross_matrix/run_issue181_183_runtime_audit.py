@@ -438,7 +438,7 @@ def build_audit(
         "focused_failures": focused_failures,
         "release_boundary": (
             "Issues #181-#183 have focused no-heavy source/packaged guard "
-            "coverage; #181 and #183 also include installed app runtime probes. "
+            "coverage; #181, #182, and #183 also include installed app runtime probes. "
             "Broader release clearance still depends on the full live "
             "model/UI/cache/parser matrix."
         ),

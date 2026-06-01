@@ -4864,12 +4864,25 @@ def _validate_current_issue181_183_runtime_audit(root: Path) -> dict[str, Any]:
     }
     required_issue_checks = {
         "181": {
+            "mpp_auto_policy_function_exists",
+            "mpp_auto_disabled_for_mxtq",
+            "jangtq_repo_id_disables_auto",
+            "explicit_mpp_on_still_allowed",
+            "server_health_reports_mpp_status",
             "installed_app_mpp_auto_policy_disables_mxtq",
         },
         "182": {
+            "normal_vlm_patch_embed_transpose",
+            "native_mtp_patch_embed_transpose",
+            "focused_shape_regression_test_present",
+            "native_mtp_shape_regression_test_present",
+            "bundled_hash_gate_covers_runtime",
             "installed_app_qwen_vl_patch_embed_layout",
         },
         "183": {
+            "minicpm_v46_registry_remap",
+            "minicpm_v46_prompt_config_remap",
+            "bundled_import_gate_covers_runtime",
             "installed_app_minicpm_v46_runtime_remap",
         },
     }

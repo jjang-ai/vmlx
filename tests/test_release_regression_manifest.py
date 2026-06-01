@@ -1210,7 +1210,11 @@ def _write_expected_issue181_183_runtime_audit(root: Path) -> None:
                             "installed_mpp_auto_policy_guarded"
                         ),
                         "checks": {
+                            "mpp_auto_policy_function_exists": True,
                             "mpp_auto_disabled_for_mxtq": True,
+                            "jangtq_repo_id_disables_auto": True,
+                            "explicit_mpp_on_still_allowed": True,
+                            "server_health_reports_mpp_status": True,
                             "installed_app_mpp_auto_policy_disables_mxtq": True,
                         },
                     },
@@ -1221,6 +1225,10 @@ def _write_expected_issue181_183_runtime_audit(root: Path) -> None:
                         ),
                         "checks": {
                             "normal_vlm_patch_embed_transpose": True,
+                            "native_mtp_patch_embed_transpose": True,
+                            "focused_shape_regression_test_present": True,
+                            "native_mtp_shape_regression_test_present": True,
+                            "bundled_hash_gate_covers_runtime": True,
                             "installed_app_qwen_vl_patch_embed_layout": True,
                         },
                     },
@@ -1231,6 +1239,8 @@ def _write_expected_issue181_183_runtime_audit(root: Path) -> None:
                         ),
                         "checks": {
                             "minicpm_v46_registry_remap": True,
+                            "minicpm_v46_prompt_config_remap": True,
+                            "bundled_import_gate_covers_runtime": True,
                             "installed_app_minicpm_v46_runtime_remap": True,
                         },
                     },
@@ -1287,6 +1297,22 @@ def test_release_regression_manifest_rejects_issue181_missing_installed_mpp_prob
     ]
 
 
+def test_release_regression_manifest_rejects_issue181_missing_explicit_mpp_policy(
+    tmp_path,
+):
+    _write_expected_issue181_183_runtime_audit(tmp_path)
+    path = tmp_path / CURRENT_ISSUE181_183_RUNTIME_AUDIT_ARTIFACT
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["issues"]["181"]["checks"].pop("explicit_mpp_on_still_allowed")
+    path.write_text(json.dumps(payload) + "\n", encoding="utf-8")
+
+    result = _validate_current_issue181_183_runtime_audit(tmp_path)
+
+    assert "missing_issue_check:181:explicit_mpp_on_still_allowed" in result[
+        "failures"
+    ]
+
+
 def test_release_regression_manifest_rejects_issue182_missing_installed_qwen_vl_probe(
     tmp_path,
 ):
@@ -1301,6 +1327,38 @@ def test_release_regression_manifest_rejects_issue182_missing_installed_qwen_vl_
     result = _validate_current_issue181_183_runtime_audit(tmp_path)
 
     assert "missing_issue_check:182:installed_app_qwen_vl_patch_embed_layout" in result[
+        "failures"
+    ]
+
+
+def test_release_regression_manifest_rejects_issue182_missing_native_shape_marker(
+    tmp_path,
+):
+    _write_expected_issue181_183_runtime_audit(tmp_path)
+    path = tmp_path / CURRENT_ISSUE181_183_RUNTIME_AUDIT_ARTIFACT
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["issues"]["182"]["checks"].pop("native_mtp_shape_regression_test_present")
+    path.write_text(json.dumps(payload) + "\n", encoding="utf-8")
+
+    result = _validate_current_issue181_183_runtime_audit(tmp_path)
+
+    assert "missing_issue_check:182:native_mtp_shape_regression_test_present" in result[
+        "failures"
+    ]
+
+
+def test_release_regression_manifest_rejects_issue183_missing_prompt_config_marker(
+    tmp_path,
+):
+    _write_expected_issue181_183_runtime_audit(tmp_path)
+    path = tmp_path / CURRENT_ISSUE181_183_RUNTIME_AUDIT_ARTIFACT
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["issues"]["183"]["checks"].pop("minicpm_v46_prompt_config_remap")
+    path.write_text(json.dumps(payload) + "\n", encoding="utf-8")
+
+    result = _validate_current_issue181_183_runtime_audit(tmp_path)
+
+    assert "missing_issue_check:183:minicpm_v46_prompt_config_remap" in result[
         "failures"
     ]
 
