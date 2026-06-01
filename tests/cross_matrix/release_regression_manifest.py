@@ -354,7 +354,7 @@ CURRENT_POST_BUDGET_EDGE_ARTIFACTS = {
     "reasoning-template-no-think-tag-leak": "build/current-reasoning-template-contract-20260526-settings-audit.json",
     "tool-call-loop-parser-cleanup": "build/current-tool-call-contract-20260528-tool-parser-loop-matrix.json",
     "panel-tool-security-loop-boundary": "build/current-panel-tool-security-contract-20260528-tool-loop-security-matrix.json",
-    "api-chat-responses-anthropic-ollama-parity": "build/current-api-surface-contract-20260601-child-image-wrapped-epipe-refresh.json",
+    "api-chat-responses-anthropic-ollama-parity": "build/current-api-surface-contract-20260601-cache-ipc-epipe-refresh.json",
     "cache-architecture-family-classification": "build/current-cache-architecture-contract-20260601-zaya-dsv4-terminal-disk-guard.json",
     "jang-model-compat-runtime-boundary": "build/current-jang-model-compat-contract-20260528-pr155-runtime-boundary.json",
     "model-artifact-format-detection": "build/current-model-artifact-format-contract-20260531-post-step-lfm-refresh.json",
@@ -1403,10 +1403,10 @@ _ROWS: list[dict[str, Any]] = [
             "panel request builders omit invalid persisted maxTokens instead of poisoning Chat Completions or Responses",
         ],
         "commands": [
-            ".venv/bin/python tests/cross_matrix/run_api_surface_contract.py --out build/current-api-surface-contract-20260601-child-image-wrapped-epipe-refresh.json",
+            ".venv/bin/python tests/cross_matrix/run_api_surface_contract.py --out build/current-api-surface-contract-20260601-cache-ipc-epipe-refresh.json",
         ],
         "artifacts": [
-            "build/current-api-surface-contract-20260601-child-image-wrapped-epipe-refresh.json",
+            "build/current-api-surface-contract-20260601-cache-ipc-epipe-refresh.json",
             "build/current-api-surface-contract-20260529-single-model-transition-lock.json",
             "build/current-api-surface-contract-20260525-single-model-ollama-chat-deltas.json",
             "build/current-api-surface-contract-20260523-post-budget-edge.json",

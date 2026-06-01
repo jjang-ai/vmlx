@@ -236,6 +236,33 @@ describe("Ollama gateway parity contracts", () => {
     );
   });
 
+  it("normalizes cache IPC endpoint EPIPE disconnects instead of surfacing raw unexpected errors", () => {
+    const cacheSource = readFileSync(
+      resolve(process.cwd(), "src/main/ipc/cache.ts"),
+      "utf8",
+    );
+    expect(cacheSource).toContain("function isExpectedCacheEndpointDisconnectError");
+    expect(cacheSource).toContain('code === "EPIPE"');
+    expect(cacheSource).toContain('code === "ECONNRESET"');
+    expect(cacheSource).toContain('code === "ERR_STREAM_DESTROYED"');
+    expect(cacheSource).toContain('code === "ERR_STREAM_WRITE_AFTER_END"');
+    expect(cacheSource).toContain("write EPIPE");
+    expect(cacheSource).toContain("broken pipe");
+    expect(cacheSource).toContain("const cause = (err as any)?.cause");
+    expect(cacheSource).toContain("const wrappedDisconnects = [");
+    expect(cacheSource).toContain("(err as any)?.reason");
+    expect(cacheSource).toContain("(err as any)?.error");
+    expect(cacheSource).toContain("(err as any)?.detail");
+    expect(cacheSource).toContain("wrappedDisconnects.some((nested) => isExpectedCacheEndpointDisconnectError(nested))");
+    expect(cacheSource).toContain("const nestedErrors = Array.isArray((err as any)?.errors)");
+    expect(cacheSource).toContain("nestedErrors.some((nested) => isExpectedCacheEndpointDisconnectError(nested))");
+    expect(cacheSource).toContain("async function fetchCacheJson");
+    const rawFetches = cacheSource.match(/await fetch\(/g) || [];
+    expect(rawFetches.length).toBe(1);
+    const guardedFetches = cacheSource.match(/await fetchCacheJson\(/g) || [];
+    expect(guardedFetches.length).toBeGreaterThanOrEqual(4);
+  });
+
   it("aborts Ollama backend response streams when the client response closes", () => {
     expect(source).toContain("private abortProxyResponseOnClientClose");
     expect(source).toContain('res.on("close", () => {');

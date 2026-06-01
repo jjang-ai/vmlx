@@ -22,7 +22,7 @@ from typing import Any
 
 
 DEFAULT_OUT = Path(
-    "build/current-api-surface-contract-20260601-child-image-wrapped-epipe-refresh.json"
+    "build/current-api-surface-contract-20260601-cache-ipc-epipe-refresh.json"
 )
 NESTED_OUT = Path(
     "build/current-api-cache-contract-api-surface-check-20260528-epipe-aggregate-guard.json"
@@ -33,6 +33,7 @@ SOURCE_HASH_FILES = (
     "tests/cross_matrix/run_noheavy_api_cache_contract.py",
     "tests/test_engine_audit.py",
     "panel/src/main/ipc/chat.ts",
+    "panel/src/main/ipc/cache.ts",
     "panel/src/main/ipc/image.ts",
     "panel/src/main/ipc/imageGenerationState.ts",
     "panel/src/main/ipc/developer.ts",
@@ -124,6 +125,7 @@ REQUIRED_PANEL_API_TEST_MARKERS = (
     "does not end proxied requests after Node marks the request closed",
     "does not leave raw backend request end calls unguarded after disconnect",
     "does not leave raw chat IPC backend request finalization unguarded",
+    "normalizes cache IPC endpoint EPIPE disconnects instead of surfacing raw unexpected errors",
     "routes local image server request writes through EPIPE-aware helpers",
     "image requests disable connection reuse and normalize reset-like socket errors",
 )

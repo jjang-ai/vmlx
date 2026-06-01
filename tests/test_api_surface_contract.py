@@ -5,7 +5,7 @@ def test_api_surface_contract_default_out_tracks_current_release_proof_artifact(
     from tests.cross_matrix import run_api_surface_contract as gate
 
     assert gate.DEFAULT_OUT == Path(
-        "build/current-api-surface-contract-20260601-child-image-wrapped-epipe-refresh.json"
+        "build/current-api-surface-contract-20260601-cache-ipc-epipe-refresh.json"
     )
     assert gate.NESTED_OUT == Path(
         "build/current-api-cache-contract-api-surface-check-20260528-epipe-aggregate-guard.json"
@@ -74,6 +74,7 @@ def test_api_surface_contract_pins_named_public_surface_edges():
     assert "does not end proxied requests after Node marks the request closed" in panel
     assert "does not leave raw backend request end calls unguarded after disconnect" in panel
     assert "does not leave raw chat IPC backend request finalization unguarded" in panel
+    assert "normalizes cache IPC endpoint EPIPE disconnects instead of surfacing raw unexpected errors" in panel
     assert "routes local image server request writes through EPIPE-aware helpers" in panel
     assert "image requests disable connection reuse and normalize reset-like socket errors" in panel
     assert "panel_gateway_streaming_disconnect_epipe_guard" in Path(
@@ -97,6 +98,12 @@ def test_api_surface_contract_pins_named_public_surface_edges():
     assert "tests/image-generation-state.test.ts" in panel_command
     assert "tests/image-system.test.ts" in panel_command
     assert "--reporter=verbose" in panel_command
+
+
+def test_api_surface_contract_hashes_cache_ipc_disconnect_guard():
+    from tests.cross_matrix import run_api_surface_contract as gate
+
+    assert "panel/src/main/ipc/cache.ts" in gate.SOURCE_HASH_FILES
 
 
 def test_api_surface_contract_status_fails_when_required_panel_markers_are_missing():

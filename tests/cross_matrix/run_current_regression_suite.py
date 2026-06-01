@@ -438,7 +438,7 @@ CURRENT_SUITE_COMMANDS: dict[str, list[str]] = {
         sys.executable,
         "tests/cross_matrix/run_api_surface_contract.py",
         "--out",
-        "build/current-api-surface-contract-20260601-child-image-wrapped-epipe-refresh.json",
+        "build/current-api-surface-contract-20260601-cache-ipc-epipe-refresh.json",
     ],
     "panel_tool_security_contracts": [
         sys.executable,
