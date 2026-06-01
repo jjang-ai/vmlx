@@ -3360,6 +3360,7 @@ def test_release_regression_manifest_real_ui_requires_step37_and_lfm25():
             if surface != "video_where_supported"
         ),
         "tool_l2_cache_integrated",
+        "vl_tool_l2_cache_integrated",
     )
     assert REQUIRED_REAL_UI_LIVE_MODEL_SURFACES_BY_FAMILY["lfm25"] == tuple(
         surface
@@ -4405,6 +4406,175 @@ def test_release_regression_manifest_real_ui_matrix_records_surface_artifacts():
         expected_artifact
     ]
     assert lfm25["surface_artifacts"]["responses_delta_streaming"] == [
+        expected_artifact
+    ]
+
+
+def _step37_integrated_vl_tool_l2_matrix_proof() -> dict[str, object]:
+    return {
+        "modelName": "Step-3.7-Flash-JANG_2L",
+        "appLogTail": [
+            "start electron app",
+            "[CHAT] Response complete: 78 tokens in 11.1s "
+            "(18.9 t/s, live=50.2 t/s, TTFT: 0.43s, pp: 2529 tokens "
+            "(2441 cached), 5813.8 pp/s, usage=server)",
+            "[CHAT] Response complete: 86 tokens in 7.7s "
+            "(19.5 t/s, live=49.9 t/s, TTFT: 0.44s, pp: 2700 tokens "
+            "(2612 cached), 6178.5 pp/s, usage=server)",
+        ],
+        "server": {
+            "health": {
+                "status": "healthy",
+                "model_loaded": True,
+                "native_cache": {
+                    "family": "mixed_attention",
+                    "schema": "mixed_swa_kv_v1",
+                    "cache_type": "mixed_swa_kv",
+                    "components": [
+                        "full_attention_kv",
+                        "sliding_window_kv",
+                        "rotating_window_metadata",
+                    ],
+                    "generic_turboquant_kv": {
+                        "enabled": False,
+                        "reason": "mixed_swa_kv",
+                    },
+                    "storage_quantization": {
+                        "enabled": True,
+                        "mode": "storage_boundary",
+                        "bits": 4,
+                        "group_size": 64,
+                        "applies_to": "full_and_sliding_attention_kv",
+                        "metadata_policy": "preserve_rotating_window_metadata",
+                    },
+                    "prefix": True,
+                    "paged": True,
+                    "block_disk_l2": True,
+                },
+                "kv_cache_quantization": {
+                    "enabled": True,
+                    "bits": 4,
+                    "group_size": 64,
+                },
+                "scheduler": {
+                    "last_cache_execution": {
+                        "cache_detail": "paged+mixed_swa",
+                        "cached_tokens": 2612,
+                    }
+                },
+            }
+        },
+        "chat": {
+            "turns": [
+                {"role": "assistant", "content": "REAL_UI_LIVE_TOOL_ONE"},
+                {"role": "assistant", "content": "REAL_UI_LIVE_TOOL_TWO"},
+            ],
+            "rawParserTagLeak": False,
+            "cjkLeakCount": 0,
+            "koreanLeakCount": 0,
+        },
+        "cache": {
+            "before": {"scheduler_cache": {"hits": 0}},
+            "after": {
+                "scheduler_cache": {"hits": 3},
+                "block_disk_cache": {
+                    "blocks_on_disk": 24,
+                    "disk_hits": 31,
+                    "disk_writes": 24,
+                },
+                "cache_totals": {
+                    "l2_tokens_on_disk": 3179,
+                    "l2_block_tokens_on_disk": 3179,
+                },
+            },
+            "cacheHitTokens": 7101,
+        },
+        "rendererWireApi": "responses",
+        "eventCounts": {"complete": 2, "stream": 4, "tool": 24},
+        "streamTrace": [
+            {
+                "messageId": "step-stream-1",
+                "count": 2,
+                "firstFullContent": "o",
+                "lastFullContent": "ok streamed one",
+            },
+            {
+                "messageId": "step-stream-2",
+                "count": 2,
+                "firstFullContent": "t",
+                "lastFullContent": "ok streamed two",
+            },
+        ],
+        "persistedToolCount": 24,
+        "persistedToolsByMessage": [
+            [
+                {"phase": "calling", "toolName": "run_command"},
+                {"phase": "executing", "toolName": "run_command"},
+                {
+                    "phase": "result",
+                    "toolName": "run_command",
+                    "detail": "real_ui_tool_probe_1.txt REAL_UI_LIVE_TOOL_ONE",
+                },
+            ],
+            [
+                {"phase": "calling", "toolName": "run_command"},
+                {"phase": "executing", "toolName": "run_command"},
+                {
+                    "phase": "result",
+                    "toolName": "run_command",
+                    "detail": "real_ui_tool_probe_2.txt REAL_UI_LIVE_TOOL_TWO",
+                },
+            ],
+        ],
+        "toolProbeFiles": {
+            "real_ui_tool_probe_1.txt": "REAL_UI_LIVE_TOOL_ONE",
+            "real_ui_tool_probe_2.txt": "REAL_UI_LIVE_TOOL_TWO",
+        },
+        "requestedBuiltinTools": True,
+        "chatOverrides": {"builtinToolsEnabled": True, "maxTokens": 512},
+        "serverCacheControls": {"verified": True},
+        "serverLogTail": [
+            "INFO:vmlx_engine.server:Resolved sampling kwargs "
+            "route=/v1/responses model=step "
+            "kwargs={'temperature': 0.0, 'top_p': 1.0, 'max_tokens': 512}"
+        ],
+        "requestContract": {
+            "requestMaxTokens": 512,
+            "wireApi": "responses",
+            "builtinToolsEnabled": True,
+        },
+        "media": {"imageVerified": True},
+    }
+
+
+def test_release_regression_manifest_real_ui_matrix_requires_step37_vl_tool_l2_same_artifact():
+    proof = _step37_integrated_vl_tool_l2_matrix_proof()
+    proof["media"] = {"imageVerified": False}
+
+    matrix = _validate_current_real_ui_live_model_matrix(
+        {"status": "pass", "proofs": {"step37_flash_jang2l": proof}}
+    )
+
+    step37 = matrix["covered_families"]["step37"]
+    assert "tool_l2_cache_integrated" in step37["covered_surfaces"]
+    assert "vl_image" not in step37["covered_surfaces"]
+    assert "vl_tool_l2_cache_integrated" not in step37["covered_surfaces"]
+    assert "vl_tool_l2_cache_integrated" in step37["missing_surfaces"]
+
+
+def test_release_regression_manifest_real_ui_matrix_accepts_step37_vl_tool_l2_same_artifact():
+    proof = _step37_integrated_vl_tool_l2_matrix_proof()
+
+    matrix = _validate_current_real_ui_live_model_matrix(
+        {"status": "pass", "proofs": {"step37_flash_jang2l": proof}}
+    )
+
+    step37 = matrix["covered_families"]["step37"]
+    expected_artifact = CURRENT_REAL_UI_LIVE_MODEL_PROOF_ROWS[
+        "step37_flash_jang2l"
+    ]["proof"]
+    assert "vl_tool_l2_cache_integrated" in step37["covered_surfaces"]
+    assert step37["surface_artifacts"]["vl_tool_l2_cache_integrated"] == [
         expected_artifact
     ]
 

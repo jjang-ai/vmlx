@@ -716,6 +716,7 @@ REQUIRED_REAL_UI_LIVE_MODEL_SURFACES = (
     "video_where_supported",
 )
 REAL_UI_INTEGRATED_TOOL_L2_CACHE_SURFACE = "tool_l2_cache_integrated"
+REAL_UI_INTEGRATED_VL_TOOL_L2_CACHE_SURFACE = "vl_tool_l2_cache_integrated"
 _REQUIRED_REAL_UI_LIVE_MODEL_GENERIC_SURFACES = tuple(
     surface
     for surface in REQUIRED_REAL_UI_LIVE_MODEL_SURFACES
@@ -750,7 +751,10 @@ REQUIRED_REAL_UI_LIVE_MODEL_SURFACES_BY_FAMILY = {
         for surface in REQUIRED_REAL_UI_LIVE_MODEL_SURFACES
         if surface != "video_where_supported"
     )
-    + (REAL_UI_INTEGRATED_TOOL_L2_CACHE_SURFACE,),
+    + (
+        REAL_UI_INTEGRATED_TOOL_L2_CACHE_SURFACE,
+        REAL_UI_INTEGRATED_VL_TOOL_L2_CACHE_SURFACE,
+    ),
     "lfm25": tuple(
         surface
         for surface in REQUIRED_REAL_UI_LIVE_MODEL_SURFACES
@@ -5260,6 +5264,11 @@ def _validate_current_real_ui_live_model_matrix(
             media = proof.get("media") if isinstance(proof.get("media"), dict) else {}
             if media.get("imageVerified") is True:
                 surfaces.add("vl_image")
+                if (
+                    family_id == "step37"
+                    and REAL_UI_INTEGRATED_TOOL_L2_CACHE_SURFACE in surfaces
+                ):
+                    surfaces.add(REAL_UI_INTEGRATED_VL_TOOL_L2_CACHE_SURFACE)
             if media.get("videoVerified") is True:
                 surfaces.add("video_where_supported")
 
