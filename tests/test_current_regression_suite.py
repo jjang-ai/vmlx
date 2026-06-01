@@ -276,6 +276,44 @@ def test_current_regression_suite_executes_declared_command_table(monkeypatch, t
         assert seen_steps[name] == cmd
 
 
+def test_current_regression_suite_checkpoints_each_started_step(
+    monkeypatch,
+    tmp_path,
+):
+    from tests.cross_matrix import run_current_regression_suite as suite
+
+    _write_known_open_objective_digest(tmp_path)
+    out = tmp_path / "current-suite.json"
+    monkeypatch.setattr(
+        suite,
+        "CURRENT_SUITE_COMMANDS",
+        {
+            "first_contract": [sys.executable, "-c", "print('first')"],
+            "second_contract": [sys.executable, "-c", "print('second')"],
+        },
+    )
+    snapshots = {}
+
+    def fake_run_step(name, cmd, cwd):
+        if name == "second_contract":
+            snapshots["before_second"] = json.loads(
+                out.read_text(encoding="utf-8")
+            )
+        return {"name": name, "command": cmd, "returncode": 0, "stdout_tail": []}
+
+    monkeypatch.setattr(suite, "_run_step", fake_run_step)
+
+    suite.build_suite_artifact(
+        tmp_path,
+        include_release_gate=False,
+        current_suite_artifact_path=out,
+    )
+
+    before_second = snapshots["before_second"]
+    assert before_second["current_step"] == "second_contract"
+    assert before_second["completed_steps"] == ["first_contract"]
+
+
 def test_current_regression_suite_refreshes_release_boundary_artifacts():
     from tests.cross_matrix import run_current_regression_suite as suite
     from tests.cross_matrix import release_regression_manifest as manifest

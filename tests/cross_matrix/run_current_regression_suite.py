@@ -399,7 +399,12 @@ def _step_is_ok(name: str, step: dict[str, Any], root: Path) -> bool:
     return step["returncode"] == 0
 
 
-def _build_summary(steps: dict[str, dict[str, Any]], root: Path) -> dict[str, Any]:
+def _build_summary(
+    steps: dict[str, dict[str, Any]],
+    root: Path,
+    *,
+    current_step: str | None = None,
+) -> dict[str, Any]:
     digest = _load_objective_digest(root)
     open_requirements = _open_requirements(digest)
     open_requirement_details = _open_requirement_details(digest)
@@ -431,6 +436,8 @@ def _build_summary(steps: dict[str, dict[str, Any]], root: Path) -> dict[str, An
         "unexpected_open_requirements": unexpected_open,
         "missing_expected_open_requirements": missing_expected_open,
         "source_hashes": _source_hashes(root),
+        "current_step": current_step,
+        "completed_steps": list(steps),
         "failed_steps": failed_steps,
         "steps": steps,
     }
@@ -663,19 +670,14 @@ def build_suite_artifact(
 
     with _scoped_jang_tools_source(jang_tools_source):
         for name, cmd in commands.items():
-            if (
-                name
-                in {
-                    "packaged_integrity_contracts",
-                    "focused_regression_pytest",
-                    "release_regression_manifest",
-                }
-                and current_suite_artifact_path
-            ):
+            if current_suite_artifact_path:
                 current_path = current_suite_artifact_path
                 if not current_path.is_absolute():
                     current_path = root / current_path
-                _write_json(current_path, _build_summary(steps, root))
+                _write_json(
+                    current_path,
+                    _build_summary(steps, root, current_step=name),
+                )
             steps[name] = _run_step(name, cmd, root)
 
     return _build_summary(steps, root)
