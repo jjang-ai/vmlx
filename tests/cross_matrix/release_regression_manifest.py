@@ -3556,6 +3556,10 @@ def _validate_current_issue179_minimax_k_live_probe_memory_preflight(
         "free_plus_speculative_purgeable_gb",
     )
     memory_gap_gb = _json_number(payload, "memory_gap_gb")
+    top_memory_processes = payload.get("top_memory_processes")
+    active_heavy_processes = payload.get("active_heavy_processes")
+    launch_blockers = payload.get("launch_blockers")
+    commands = payload.get("commands")
 
     if status != "skipped":
         failures.append("status_not_skipped")
@@ -3592,6 +3596,28 @@ def _validate_current_issue179_minimax_k_live_probe_memory_preflight(
         != "vm_stat_free_plus_speculative_purgeable"
     ):
         failures.append("preflight_memory_source_not_vm_stat")
+    if not isinstance(top_memory_processes, list) or not top_memory_processes:
+        failures.append("top_memory_processes_missing")
+    if not isinstance(commands, dict):
+        failures.append("commands_missing")
+    else:
+        if commands.get("memory") != "vm_stat":
+            failures.append("memory_command_missing")
+        if "top_memory_processes" not in commands:
+            failures.append("top_memory_processes_command_missing")
+        if "active_heavy_processes" not in commands:
+            failures.append("active_heavy_processes_command_missing")
+    if not isinstance(active_heavy_processes, list):
+        failures.append("active_heavy_processes_missing")
+    elif active_heavy_processes:
+        failures.append("active_heavy_processes_not_clear")
+    active_heavy_process_count = payload.get("active_heavy_process_count")
+    if active_heavy_process_count != 0:
+        failures.append("active_heavy_process_count_not_zero")
+    if not isinstance(launch_blockers, list):
+        failures.append("launch_blockers_missing")
+    elif "insufficient_memory" not in launch_blockers:
+        failures.append("insufficient_memory_launch_blocker_missing")
     preflight_captured_at = payload.get("preflight_captured_at")
     if not isinstance(preflight_captured_at, str) or not preflight_captured_at:
         failures.append("preflight_captured_at_missing")
@@ -3614,6 +3640,11 @@ def _validate_current_issue179_minimax_k_live_probe_memory_preflight(
             "preflight_captured_at": preflight_captured_at,
             "launch_decision": payload.get("launch_decision"),
             "launch_allowed": payload.get("launch_allowed"),
+            "commands": commands,
+            "top_memory_processes": top_memory_processes,
+            "active_heavy_processes": active_heavy_processes,
+            "active_heavy_process_count": active_heavy_process_count,
+            "launch_blockers": launch_blockers,
         }
     )
     return result

@@ -105,6 +105,10 @@ Pages purgeable:                         250.
         ),
         vm_stat_text=vm_stat,
         model_size_gb_override=74.0,
+        top_processes_text="""  PID   RSS COMMAND
+  111 2097152 /Applications/vMLX.app/Contents/MacOS/vMLX
+""",
+        active_processes_text="",
     )
 
     assert result == {
@@ -113,6 +117,7 @@ Pages purgeable:                         250.
         "launch_allowed": False,
         "launch_decision": "do_not_launch",
         "did_not_launch": True,
+        "launch_blockers": ["insufficient_memory"],
         "model_path": "/models/MiniMax-M2.7-JANGTQ_K",
         "model_size_gb": 74.0,
         "required_free_gb": 80.0,
@@ -121,7 +126,87 @@ Pages purgeable:                         250.
         "free_plus_speculative_purgeable_gb": 0.03,
         "memory_gap_gb": 79.97,
         "preflight_memory_source": "vm_stat_free_plus_speculative_purgeable",
+        "commands": {
+            "memory": "vm_stat",
+            "top_memory_processes": "ps -axo pid,rss,command -r | head -n 11",
+            "active_heavy_processes": "pgrep -af 'vmlx_engine.cli serve|mlx_lm.server|run_runtime_memory_stress_probe|run_decode_speed_gate|live-real-ui-model-proof|run_dsv4_route_mode_code_exactness|run_dsv4_default_cache_tool_loop_gate|run_current_regression_suite|run_issue179_responses_cancel_probe'",
+        },
+        "top_memory_processes": [
+            {
+                "pid": 111,
+                "rss_gb": 2.0,
+                "command": "/Applications/vMLX.app/Contents/MacOS/vMLX",
+            }
+        ],
+        "active_heavy_processes": [],
+        "active_heavy_process_count": 0,
     }
+
+
+def test_issue179_memory_preflight_records_process_context_before_skip():
+    vm_stat = """Mach Virtual Memory Statistics: (page size of 16384 bytes)
+Pages free:                             1000.
+Pages speculative:                       500.
+Pages purgeable:                         250.
+"""
+
+    result = probe.memory_preflight_block(
+        SimpleNamespace(
+            model=Path("/models/MiniMax-M2.7-JANGTQ_K"),
+            memory_preflight_margin_gb=6.0,
+        ),
+        vm_stat_text=vm_stat,
+        model_size_gb_override=74.0,
+        top_processes_text="""  PID   RSS COMMAND
+  111 2097152 /Applications/vMLX.app/Contents/MacOS/vMLX
+  222 1048576 codex --yolo resume
+""",
+        active_processes_text="",
+    )
+
+    assert result["launch_blockers"] == ["insufficient_memory"]
+    assert result["active_heavy_process_count"] == 0
+    assert result["active_heavy_processes"] == []
+    assert result["top_memory_processes"] == [
+        {
+            "pid": 111,
+            "rss_gb": 2.0,
+            "command": "/Applications/vMLX.app/Contents/MacOS/vMLX",
+        },
+        {"pid": 222, "rss_gb": 1.0, "command": "codex --yolo resume"},
+    ]
+    assert result["commands"]["memory"] == "vm_stat"
+    assert "active_heavy_processes" in result["commands"]
+
+
+def test_issue179_memory_preflight_blocks_active_heavy_process_when_floor_met():
+    vm_stat = """Mach Virtual Memory Statistics: (page size of 16384 bytes)
+Pages free:                          6000000.
+Pages speculative:                    600000.
+Pages purgeable:                      300000.
+"""
+
+    result = probe.memory_preflight_block(
+        SimpleNamespace(
+            model=Path("/models/MiniMax-M2.7-JANGTQ_K"),
+            memory_preflight_margin_gb=6.0,
+        ),
+        vm_stat_text=vm_stat,
+        model_size_gb_override=74.0,
+        top_processes_text="""  PID   RSS COMMAND
+  333 1048576 /usr/bin/python run_current_regression_suite.py
+""",
+        active_processes_text="333 /usr/bin/python run_current_regression_suite.py\n",
+    )
+
+    assert result["status"] == "skipped_active_heavy_process"
+    assert result["reason"] == "active_heavy_process"
+    assert result["launch_allowed"] is False
+    assert result["launch_decision"] == "do_not_launch"
+    assert result["launch_blockers"] == ["active_heavy_process"]
+    assert result["active_heavy_processes"] == [
+        {"pid": 333, "command": "/usr/bin/python run_current_regression_suite.py"}
+    ]
 
 
 def test_issue179_memory_preflight_only_reports_ready_without_live_launch():
@@ -138,6 +223,10 @@ Pages purgeable:                      300000.
         ),
         vm_stat_text=vm_stat,
         model_size_gb_override=74.0,
+        top_processes_text="""  PID   RSS COMMAND
+  111 2097152 /Applications/vMLX.app/Contents/MacOS/vMLX
+""",
+        active_processes_text="",
     )
 
     assert result == {
@@ -146,6 +235,7 @@ Pages purgeable:                      300000.
         "launch_allowed": True,
         "launch_decision": "launch_allowed",
         "did_not_launch": True,
+        "launch_blockers": [],
         "model_path": "/models/MiniMax-M2.7-JANGTQ_K",
         "model_size_gb": 74.0,
         "required_free_gb": 80.0,
@@ -154,4 +244,18 @@ Pages purgeable:                      300000.
         "free_plus_speculative_purgeable_gb": 105.29,
         "memory_gap_gb": 0.0,
         "preflight_memory_source": "vm_stat_free_plus_speculative_purgeable",
+        "commands": {
+            "memory": "vm_stat",
+            "top_memory_processes": "ps -axo pid,rss,command -r | head -n 11",
+            "active_heavy_processes": "pgrep -af 'vmlx_engine.cli serve|mlx_lm.server|run_runtime_memory_stress_probe|run_decode_speed_gate|live-real-ui-model-proof|run_dsv4_route_mode_code_exactness|run_dsv4_default_cache_tool_loop_gate|run_current_regression_suite|run_issue179_responses_cancel_probe'",
+        },
+        "top_memory_processes": [
+            {
+                "pid": 111,
+                "rss_gb": 2.0,
+                "command": "/Applications/vMLX.app/Contents/MacOS/vMLX",
+            }
+        ],
+        "active_heavy_processes": [],
+        "active_heavy_process_count": 0,
     }

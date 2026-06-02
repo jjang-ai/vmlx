@@ -31,6 +31,26 @@ DEFAULT_INSTALLED_PYTHON = Path(
     "/Applications/vMLX.app/Contents/Resources/bundled-python/python/bin/python3"
 )
 DEFAULT_MEMORY_PREFLIGHT_MARGIN_GB = 6.0
+TOP_MEMORY_PROCESS_COUNT = 10
+TOP_MEMORY_PROCESS_COMMAND = "ps -axo pid,rss,command -r | head -n 11"
+ACTIVE_HEAVY_PROCESS_COMMAND = (
+    "pgrep -af 'vmlx_engine.cli serve|mlx_lm.server|"
+    "run_runtime_memory_stress_probe|run_decode_speed_gate|"
+    "live-real-ui-model-proof|run_dsv4_route_mode_code_exactness|"
+    "run_dsv4_default_cache_tool_loop_gate|run_current_regression_suite|"
+    "run_issue179_responses_cancel_probe'"
+)
+HEAVY_PROCESS_PATTERNS = (
+    "vmlx_engine.cli serve",
+    "mlx_lm.server",
+    "run_runtime_memory_stress_probe",
+    "run_decode_speed_gate",
+    "live-real-ui-model-proof",
+    "run_dsv4_route_mode_code_exactness",
+    "run_dsv4_default_cache_tool_loop_gate",
+    "run_current_regression_suite",
+    "run_issue179_responses_cancel_probe",
+)
 
 
 def extract_response_id(raw_sse: str) -> str | None:
@@ -123,6 +143,86 @@ def parse_vm_stat_available_gb(text: str) -> float:
     return round(gate_pages * page_size / (1024**3), 2)
 
 
+def parse_top_memory_processes(
+    text: str,
+    limit: int = TOP_MEMORY_PROCESS_COUNT,
+) -> list[dict[str, Any]]:
+    processes: list[dict[str, Any]] = []
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("PID "):
+            continue
+        parts = stripped.split(None, 2)
+        if len(parts) < 3:
+            continue
+        try:
+            pid = int(parts[0])
+            rss_kb = int(parts[1])
+        except ValueError:
+            continue
+        processes.append(
+            {
+                "pid": pid,
+                "rss_gb": round(rss_kb / (1024**2), 2),
+                "command": parts[2],
+            }
+        )
+    processes.sort(key=lambda item: item["rss_gb"], reverse=True)
+    return processes[:limit]
+
+
+def parse_active_heavy_processes(text: str) -> list[dict[str, Any]]:
+    processes: list[dict[str, Any]] = []
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        parts = stripped.split(None, 1)
+        if len(parts) < 2:
+            continue
+        try:
+            pid = int(parts[0])
+        except ValueError:
+            continue
+        command = parts[1]
+        if "pgrep -af" in command:
+            continue
+        if not any(pattern in command for pattern in HEAVY_PROCESS_PATTERNS):
+            continue
+        processes.append({"pid": pid, "command": command})
+    return processes
+
+
+def preflight_process_context(
+    *,
+    top_processes_text: str | None = None,
+    active_processes_text: str | None = None,
+) -> dict[str, Any]:
+    if top_processes_text is None:
+        try:
+            top_processes_text = _run_text(["sh", "-c", TOP_MEMORY_PROCESS_COMMAND])
+        except Exception:
+            top_processes_text = ""
+    if active_processes_text is None:
+        try:
+            active_processes_text = _run_text(["sh", "-c", ACTIVE_HEAVY_PROCESS_COMMAND])
+        except subprocess.CalledProcessError:
+            active_processes_text = ""
+        except Exception:
+            active_processes_text = ""
+    active_heavy_processes = parse_active_heavy_processes(active_processes_text)
+    return {
+        "commands": {
+            "memory": "vm_stat",
+            "top_memory_processes": TOP_MEMORY_PROCESS_COMMAND,
+            "active_heavy_processes": ACTIVE_HEAVY_PROCESS_COMMAND,
+        },
+        "top_memory_processes": parse_top_memory_processes(top_processes_text),
+        "active_heavy_processes": active_heavy_processes,
+        "active_heavy_process_count": len(active_heavy_processes),
+    }
+
+
 def model_size_gb(model_path: Path) -> float | None:
     if not model_path.exists():
         return None
@@ -138,6 +238,8 @@ def memory_preflight_block(
     *,
     vm_stat_text: str | None = None,
     model_size_gb_override: float | None = None,
+    top_processes_text: str | None = None,
+    active_processes_text: str | None = None,
 ) -> dict[str, Any] | None:
     size_gb = (
         model_size_gb_override
@@ -156,15 +258,37 @@ def memory_preflight_block(
     available_gb = parse_vm_stat_available_gb(
         vm_stat_text if vm_stat_text is not None else _run_text(["vm_stat"])
     )
+    process_context = preflight_process_context(
+        top_processes_text=top_processes_text,
+        active_processes_text=active_processes_text,
+    )
+    active_heavy_processes = process_context["active_heavy_processes"]
     required_free_gb = round(size_gb + float(args.memory_preflight_margin_gb), 2)
-    if available_gb >= required_free_gb:
+    launch_blockers = [
+        blocker
+        for blocker, blocked in (
+            ("active_heavy_process", bool(active_heavy_processes)),
+            ("insufficient_memory", available_gb < required_free_gb),
+        )
+        if blocked
+    ]
+    if not launch_blockers:
         return None
     return {
-        "status": "skipped",
-        "reason": "insufficient_vm_stat_memory",
+        "status": (
+            "skipped_active_heavy_process"
+            if active_heavy_processes
+            else "skipped"
+        ),
+        "reason": (
+            "active_heavy_process"
+            if active_heavy_processes
+            else "insufficient_vm_stat_memory"
+        ),
         "launch_allowed": False,
         "launch_decision": "do_not_launch",
         "did_not_launch": True,
+        "launch_blockers": launch_blockers,
         "model_path": str(args.model),
         "model_size_gb": size_gb,
         "required_free_gb": required_free_gb,
@@ -173,6 +297,7 @@ def memory_preflight_block(
         "free_plus_speculative_purgeable_gb": available_gb,
         "memory_gap_gb": round(required_free_gb - available_gb, 2),
         "preflight_memory_source": "vm_stat_free_plus_speculative_purgeable",
+        **process_context,
     }
 
 
@@ -181,11 +306,15 @@ def memory_preflight_only_result(
     *,
     vm_stat_text: str | None = None,
     model_size_gb_override: float | None = None,
+    top_processes_text: str | None = None,
+    active_processes_text: str | None = None,
 ) -> dict[str, Any]:
     blocked = memory_preflight_block(
         args,
         vm_stat_text=vm_stat_text,
         model_size_gb_override=model_size_gb_override,
+        top_processes_text=top_processes_text,
+        active_processes_text=active_processes_text,
     )
     if blocked is not None:
         return blocked
@@ -207,6 +336,10 @@ def memory_preflight_only_result(
     available_gb = parse_vm_stat_available_gb(
         vm_stat_text if vm_stat_text is not None else _run_text(["vm_stat"])
     )
+    process_context = preflight_process_context(
+        top_processes_text=top_processes_text,
+        active_processes_text=active_processes_text,
+    )
     required_free_gb = round(size_gb + float(args.memory_preflight_margin_gb), 2)
     return {
         "status": "ready_to_launch",
@@ -214,6 +347,7 @@ def memory_preflight_only_result(
         "launch_allowed": True,
         "launch_decision": "launch_allowed",
         "did_not_launch": True,
+        "launch_blockers": [],
         "model_path": str(args.model),
         "model_size_gb": size_gb,
         "required_free_gb": required_free_gb,
@@ -222,6 +356,7 @@ def memory_preflight_only_result(
         "free_plus_speculative_purgeable_gb": available_gb,
         "memory_gap_gb": 0.0,
         "preflight_memory_source": "vm_stat_free_plus_speculative_purgeable",
+        **process_context,
     }
 
 

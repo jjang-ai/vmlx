@@ -1846,6 +1846,17 @@ def _write_passing_issue179_minimax_k_live_probe_memory_preflight(root: Path) ->
                 "free_plus_speculative_purgeable_gb": 73.54,
                 "memory_gap_gb": 6.42,
                 "preflight_memory_source": "vm_stat_free_plus_speculative_purgeable",
+                "commands": {
+                    "memory": "vm_stat",
+                    "top_memory_processes": "ps -axo pid,rss,command -r | head -n 11",
+                    "active_heavy_processes": "pgrep -af 'vmlx_engine.cli serve|mlx_lm.server|run_runtime_memory_stress_probe|run_decode_speed_gate|live-real-ui-model-proof|run_dsv4_route_mode_code_exactness|run_dsv4_default_cache_tool_loop_gate|run_current_regression_suite|run_issue179_responses_cancel_probe'",
+                },
+                "top_memory_processes": [
+                    {"pid": 1001, "rss_gb": 2.0, "command": "codex --yolo resume"}
+                ],
+                "active_heavy_processes": [],
+                "active_heavy_process_count": 0,
+                "launch_blockers": ["insufficient_memory"],
                 "preflight_captured_at": "2026-06-01T170000-0700",
             }
         )
@@ -2137,10 +2148,42 @@ def test_current_proof_sweep_accepts_issue179_memory_preflight_skip(tmp_path):
         "free_plus_speculative_purgeable_gb": 73.54,
         "memory_gap_gb": 6.42,
         "preflight_memory_source": "vm_stat_free_plus_speculative_purgeable",
+        "commands": {
+            "memory": "vm_stat",
+            "top_memory_processes": "ps -axo pid,rss,command -r | head -n 11",
+            "active_heavy_processes": "pgrep -af 'vmlx_engine.cli serve|mlx_lm.server|run_runtime_memory_stress_probe|run_decode_speed_gate|live-real-ui-model-proof|run_dsv4_route_mode_code_exactness|run_dsv4_default_cache_tool_loop_gate|run_current_regression_suite|run_issue179_responses_cancel_probe'",
+        },
+        "top_memory_processes": [
+            {"pid": 1001, "rss_gb": 2.0, "command": "codex --yolo resume"}
+        ],
+        "active_heavy_processes": [],
+        "active_heavy_process_count": 0,
+        "launch_blockers": ["insufficient_memory"],
         "preflight_captured_at": "2026-06-01T170000-0700",
         "launch_decision": "do_not_launch",
         "launch_allowed": False,
     }
+
+
+def test_current_proof_sweep_rejects_issue179_memory_preflight_without_process_context(
+    tmp_path,
+):
+    _write_passing_issue179_minimax_k_live_probe_memory_preflight(tmp_path)
+    path = tmp_path / CURRENT_ISSUE179_MINIMAX_K_LIVE_PROBE_MEMORY_PREFLIGHT_ARTIFACT
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload.pop("commands", None)
+    payload.pop("top_memory_processes", None)
+    path.write_text(json.dumps(payload) + "\n", encoding="utf-8")
+
+    result = validate_current_proof_sweep_artifacts(tmp_path)[
+        "issue179_minimax_k_live_probe_memory_preflight"
+    ]
+
+    assert result["status"] == "fail"
+    assert result["failures"] == [
+        "top_memory_processes_missing",
+        "commands_missing",
+    ]
 
 
 def test_current_proof_sweep_rejects_issue179_memory_preflight_without_capture_time(
