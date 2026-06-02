@@ -94,6 +94,21 @@ def test_issue175_179_audit_uses_current_manifest_artifacts():
     )
 
 
+def test_issue175_179_audit_uses_june_local_refresh_issue175_177_inputs():
+    from tests.cross_matrix import release_regression_manifest as manifest
+    from tests.cross_matrix import run_issue175_179_release_boundary_audit as gate
+
+    installed = str(gate.ISSUE175_177_INSTALLED_RUNTIME_AUDIT_ARTIFACT)
+    live = str(gate.ISSUE175_177_LIVE_RUNTIME_AUDIT_ARTIFACT)
+
+    assert installed == manifest.CURRENT_ISSUE175_177_INSTALLED_RUNTIME_AUDIT_ARTIFACT
+    assert live == manifest.CURRENT_ISSUE175_177_LIVE_RUNTIME_AUDIT_ARTIFACT
+    assert installed.endswith("20260601-local-refresh.json")
+    assert live.endswith("20260601-local-refresh.json")
+    assert "20260527" not in installed
+    assert "20260527" not in live
+
+
 def test_issue175_179_audit_writes_json_artifact(tmp_path):
     from tests.cross_matrix import run_issue175_179_release_boundary_audit as gate
 

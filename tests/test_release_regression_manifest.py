@@ -1161,22 +1161,55 @@ def _write_expected_issue175_179_release_boundary_audit(root: Path) -> None:
                         "release_clearance": (
                             "installed_app_memory_clear_runtime_live_stress_proven"
                         ),
+                        "checks": {
+                            "helper_exists": True,
+                            "prefers_metal_clear_cache": True,
+                            "falls_back_to_top_level_clear_cache": True,
+                            "no_raw_removed_api_in_runtime_paths": True,
+                            "installed_app_memory_clear_runtime_proven": True,
+                            "installed_app_live_memory_stress_proven": True,
+                        },
                     },
                     "176": {
                         "focused_source_slice": "pass",
                         "release_clearance": (
                             "installed_app_promoted_block_cleanup_live_pressure_proven"
                         ),
+                        "checks": {
+                            "marks_promoted_disk_blocks": True,
+                            "drops_disk_mirror_after_reconstruct": True,
+                            "regression_test_present": True,
+                            "l2_readable_write_through_regression_test_present": True,
+                            "installed_app_promoted_block_cleanup_proven": True,
+                            "installed_app_live_memory_pressure_proven": True,
+                        },
                     },
                     "177": {
                         "focused_source_slice": "pass",
                         "release_clearance": (
                             "installed_app_cache_selection_live_ttft_proven"
                         ),
+                        "checks": {
+                            "selection_telemetry_in_scheduler": True,
+                            "selection_telemetry_in_health": True,
+                            "cold_paged_reason_present": True,
+                            "focused_regression_test_present": True,
+                            "worker_timing_regression_test_present": True,
+                            "installed_app_cache_selection_telemetry_proven": True,
+                            "installed_live_ttft_and_cold_paged_tq_proven": True,
+                        },
                     },
                     "178": {
                         "focused_source_slice": "pass",
                         "release_clearance": "packaged_app_lora_surface_proven",
+                        "checks": {
+                            "serve_cli_lora_paths": True,
+                            "serve_cli_lora_scales": True,
+                            "image_load_lora_signature_guard": True,
+                            "focused_regression_test_present": True,
+                            "text_lora_flags_rejected": True,
+                            "installed_app_lora_surface_proven": True,
+                        },
                     },
                     "179": {
                         "focused_source_slice": "pass",
@@ -1627,6 +1660,25 @@ def test_release_regression_manifest_accepts_open_issue175_179_boundary_audit(
     assert result["status"] == "open"
     assert result["failures"] == []
     assert "issue175_179_boundary_still_open" not in result["failures"]
+
+
+def test_release_regression_manifest_rejects_issue177_without_live_ttft_tq_guard(
+    tmp_path,
+):
+    _write_expected_issue175_179_release_boundary_audit(tmp_path)
+    path = tmp_path / CURRENT_ISSUE175_179_RELEASE_BOUNDARY_AUDIT_ARTIFACT
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["issues"]["177"]["checks"].pop(
+        "installed_live_ttft_and_cold_paged_tq_proven"
+    )
+    path.write_text(json.dumps(payload) + "\n", encoding="utf-8")
+
+    result = _validate_current_issue175_179_release_boundary_audit(tmp_path)
+
+    assert (
+        "missing_issue_check:177:installed_live_ttft_and_cold_paged_tq_proven"
+        in result["failures"]
+    )
 
 
 def _write_expected_issue179_minimax_k_root_cause_audit(root: Path) -> None:

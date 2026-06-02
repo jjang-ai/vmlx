@@ -26,7 +26,9 @@ DEFAULT_MINIMAX_RESTART_READER_SOURCE = Path(
 DEFAULT_ADMIN_SLEEP_SOURCE = Path(
     "build/current-issue175-admin-sleep-probe-installed-20260527.json"
 )
-DEFAULT_OUT = Path("build/current-issue175-177-live-runtime-audit-20260527.json")
+DEFAULT_OUT = Path(
+    "build/current-issue175-177-live-runtime-audit-20260601-local-refresh.json"
+)
 INSTALLED_PYTHON = (
     "/Applications/vMLX.app/Contents/Resources/bundled-python/python/bin/python3"
 )

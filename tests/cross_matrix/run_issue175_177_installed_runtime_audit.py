@@ -15,7 +15,9 @@ from pathlib import Path
 from typing import Any
 
 
-DEFAULT_OUT = Path("build/current-issue175-177-installed-runtime-audit-20260527.json")
+DEFAULT_OUT = Path(
+    "build/current-issue175-177-installed-runtime-audit-20260601-local-refresh.json"
+)
 INSTALLED_PYTHON = Path(
     "/Applications/vMLX.app/Contents/Resources/bundled-python/python/bin/python3"
 )

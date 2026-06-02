@@ -21,10 +21,10 @@ INSTALLED_APP_RUNTIME_PARITY_AUDIT_ARTIFACT = Path(
     "build/current-installed-app-runtime-parity-audit-20260601-cache-ipc-epipe-installed.json"
 )
 ISSUE175_177_INSTALLED_RUNTIME_AUDIT_ARTIFACT = Path(
-    "build/current-issue175-177-installed-runtime-audit-20260527.json"
+    "build/current-issue175-177-installed-runtime-audit-20260601-local-refresh.json"
 )
 ISSUE175_177_LIVE_RUNTIME_AUDIT_ARTIFACT = Path(
-    "build/current-issue175-177-live-runtime-audit-20260527.json"
+    "build/current-issue175-177-live-runtime-audit-20260601-local-refresh.json"
 )
 ISSUE179_MINIMAX_K_ROOT_CAUSE_AUDIT_ARTIFACT = Path(
     "build/current-issue179-minimax-k-root-cause-audit-20260527.json"

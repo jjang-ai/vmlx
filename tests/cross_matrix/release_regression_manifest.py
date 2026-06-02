@@ -379,10 +379,10 @@ CURRENT_STAGED_APP_RUNTIME_PARITY_AUDIT_ARTIFACT = (
     "build/current-staged-app-runtime-parity-audit-20260601-epipe-python-launch-refresh.json"
 )
 CURRENT_ISSUE175_177_INSTALLED_RUNTIME_AUDIT_ARTIFACT = (
-    "build/current-issue175-177-installed-runtime-audit-20260527.json"
+    "build/current-issue175-177-installed-runtime-audit-20260601-local-refresh.json"
 )
 CURRENT_ISSUE175_177_LIVE_RUNTIME_AUDIT_ARTIFACT = (
-    "build/current-issue175-177-live-runtime-audit-20260527.json"
+    "build/current-issue175-177-live-runtime-audit-20260601-local-refresh.json"
 )
 CURRENT_ISSUE179_MINIMAX_K_ROOT_CAUSE_AUDIT_ARTIFACT = (
     "build/current-issue179-minimax-k-root-cause-audit-20260527.json"
@@ -2060,8 +2060,8 @@ _ROWS: list[dict[str, Any]] = [
             ".venv/bin/python tests/cross_matrix/run_issue175_179_release_boundary_audit.py --out build/current-issue175-179-release-boundary-audit-20260531-post-install-sync.json",
             ".venv/bin/python tests/cross_matrix/run_installed_app_runtime_parity_audit.py --out build/current-installed-app-runtime-parity-audit-20260601-cache-ipc-epipe-installed.json",
             ".venv/bin/python tests/cross_matrix/run_installed_app_runtime_parity_audit.py --app panel/release/mac-arm64/vMLX.app --out build/current-staged-app-runtime-parity-audit-20260601-epipe-python-launch-refresh.json",
-            ".venv/bin/python tests/cross_matrix/run_issue175_177_installed_runtime_audit.py --out build/current-issue175-177-installed-runtime-audit-20260527.json",
-            ".venv/bin/python tests/cross_matrix/run_issue175_177_live_runtime_audit.py --out build/current-issue175-177-live-runtime-audit-20260527.json",
+            ".venv/bin/python tests/cross_matrix/run_issue175_177_installed_runtime_audit.py --out build/current-issue175-177-installed-runtime-audit-20260601-local-refresh.json",
+            ".venv/bin/python tests/cross_matrix/run_issue175_177_live_runtime_audit.py --out build/current-issue175-177-live-runtime-audit-20260601-local-refresh.json",
             ".venv/bin/python tests/cross_matrix/run_issue179_minimax_k_root_cause_audit.py --out build/current-issue179-minimax-k-root-cause-audit-20260527.json",
             ".venv/bin/python tests/cross_matrix/run_issue179_reporter_parity_metadata.py --out build/current-issue179-reporter-parity-metadata-template-20260528.json",
             "VMLINUX_REAL_UI_MODEL_PATH=/Users/example/.mlxstudio/models/JANGQ-AI/MiMo-V2.5-JANG_2L VMLINUX_REAL_UI_PROOF_BASENAME=current-real-ui-live-model-mimo-v2-jang2l-20260527 VMLINUX_REAL_UI_IS_MLLM=1 VMLINUX_REAL_UI_MAX_TOKENS=96 node panel/scripts/live-real-ui-model-proof.mjs",
@@ -2119,8 +2119,8 @@ _ROWS: list[dict[str, Any]] = [
             "build/current-installed-app-runtime-parity-audit-20260601-cache-ipc-epipe-installed.json",
             "build/current-staged-app-runtime-parity-audit-20260601-epipe-python-launch-refresh.json",
             "build/current-installed-app-runtime-parity-audit-20260528-userdata-epipe-scan.json",
-            "build/current-issue175-177-installed-runtime-audit-20260527.json",
-            "build/current-issue175-177-live-runtime-audit-20260527.json",
+            "build/current-issue175-177-installed-runtime-audit-20260601-local-refresh.json",
+            "build/current-issue175-177-live-runtime-audit-20260601-local-refresh.json",
             "build/current-issue179-minimax-k-root-cause-audit-20260527.json",
             "build/current-issue179-reporter-parity-metadata-template-20260528.json",
             "docs/internal/agent-notes/current-real-ui-live-model-nemotron-omni-nano-jangtq-20260527-proof.json",
@@ -4799,6 +4799,54 @@ def _validate_current_issue175_179_release_boundary_audit(root: Path) -> dict[st
         expected_values = expected if isinstance(expected, set) else {expected}
         if issue.get("focused_source_slice") not in expected_values:
             result["failures"].append(f"unexpected_issue_slice:{number}")
+    required_issue_checks = {
+        "175": {
+            "helper_exists",
+            "prefers_metal_clear_cache",
+            "falls_back_to_top_level_clear_cache",
+            "no_raw_removed_api_in_runtime_paths",
+            "installed_app_memory_clear_runtime_proven",
+            "installed_app_live_memory_stress_proven",
+        },
+        "176": {
+            "marks_promoted_disk_blocks",
+            "drops_disk_mirror_after_reconstruct",
+            "regression_test_present",
+            "l2_readable_write_through_regression_test_present",
+            "installed_app_promoted_block_cleanup_proven",
+            "installed_app_live_memory_pressure_proven",
+        },
+        "177": {
+            "selection_telemetry_in_scheduler",
+            "selection_telemetry_in_health",
+            "cold_paged_reason_present",
+            "focused_regression_test_present",
+            "worker_timing_regression_test_present",
+            "installed_app_cache_selection_telemetry_proven",
+            "installed_live_ttft_and_cold_paged_tq_proven",
+        },
+        "178": {
+            "serve_cli_lora_paths",
+            "serve_cli_lora_scales",
+            "image_load_lora_signature_guard",
+            "focused_regression_test_present",
+            "text_lora_flags_rejected",
+            "installed_app_lora_surface_proven",
+        },
+    }
+    for number, required_checks in required_issue_checks.items():
+        issue = issues.get(number)
+        if not isinstance(issue, dict):
+            continue
+        checks = issue.get("checks")
+        if not isinstance(checks, dict) or not checks:
+            result["failures"].append(f"missing_issue_checks:{number}")
+            checks = {}
+        elif not all(value is True for value in checks.values()):
+            result["failures"].append(f"failed_issue_checks:{number}")
+        for check in sorted(required_checks):
+            if checks.get(check) is not True:
+                result["failures"].append(f"missing_issue_check:{number}:{check}")
     if status == "pass":
         expected_clearance = {
             "175": "installed_app_memory_clear_runtime_live_stress_proven",
