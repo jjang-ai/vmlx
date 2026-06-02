@@ -32,7 +32,7 @@ TOOL_CALL_CONTRACT = Path(
     "build/current-tool-call-contract-20260528-tool-parser-loop-matrix.json"
 )
 INSTALLED_APP_RUNTIME_PARITY = Path(
-    "build/current-installed-app-runtime-parity-audit-20260602-performance-health-epipe.json"
+    "build/current-installed-app-runtime-parity-audit-20260602-developer-id-installed-signing.json"
 )
 REASONING_TEMPLATE_CONTRACT = Path(
     "build/current-reasoning-template-contract-20260526-settings-audit.json"

@@ -25,7 +25,7 @@ from typing import Any
 
 
 DEFAULT_OUT = Path(
-    "build/current-packaged-integrity-contract-20260601-qwen-fix-resigned-staged-app.json"
+    "build/current-packaged-integrity-contract-20260602-developer-id-staged-signing.json"
 )
 EXPECTED_OPEN_REQUIREMENTS = [
     "MiniMax-M2.7-JANGTQ_K reporter parity/root cause is release-cleared",

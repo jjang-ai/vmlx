@@ -373,7 +373,7 @@ CURRENT_POST_BUDGET_EDGE_ARTIFACTS = {
     "native-mtp-d3-effect-policy": "build/current-native-mtp-contract-20260531-post-step-lfm-refresh.json",
     "mcp-policy-ui-gateway": "build/current-mcp-policy-contract-20260531-post-step-lfm-refresh.json",
     "vl-media-cache-tool-followup": "build/current-vl-media-cache-contract-20260601-qwen3vl-frame-list-fallback.json",
-    "packaged-release-integrity": "build/current-packaged-integrity-contract-20260601-qwen-fix-resigned-staged-app.json",
+    "packaged-release-integrity": "build/current-packaged-integrity-contract-20260602-developer-id-staged-signing.json",
     "public-release-surface-preflight": "build/current-release-surface-contract-20260528-release-surface-matrix.json",
 }
 
@@ -384,10 +384,10 @@ CURRENT_ISSUE175_179_RELEASE_BOUNDARY_AUDIT_ARTIFACT = (
     "build/current-issue175-179-release-boundary-audit-20260531-post-install-sync.json"
 )
 CURRENT_INSTALLED_APP_RUNTIME_PARITY_AUDIT_ARTIFACT = (
-    "build/current-installed-app-runtime-parity-audit-20260602-performance-health-epipe.json"
+    "build/current-installed-app-runtime-parity-audit-20260602-developer-id-installed-signing.json"
 )
 CURRENT_STAGED_APP_RUNTIME_PARITY_AUDIT_ARTIFACT = (
-    "build/current-staged-app-runtime-parity-audit-20260602-performance-health-epipe.json"
+    "build/current-staged-app-runtime-parity-audit-20260602-developer-id-staged-signing.json"
 )
 CURRENT_ISSUE175_177_INSTALLED_RUNTIME_AUDIT_ARTIFACT = (
     "build/current-issue175-177-installed-runtime-audit-20260601-local-refresh.json"
@@ -1666,13 +1666,13 @@ _ROWS: list[dict[str, Any]] = [
             "packaged Python has no __pycache__/*.pyc files that would invalidate the signed app seal",
         ],
         "commands": [
-            ".venv/bin/python tests/cross_matrix/run_packaged_integrity_contract.py --out build/current-packaged-integrity-contract-20260601-qwen-fix-resigned-staged-app.json",
+            ".venv/bin/python tests/cross_matrix/run_packaged_integrity_contract.py --out build/current-packaged-integrity-contract-20260602-developer-id-staged-signing.json",
             ".venv/bin/python tests/cross_matrix/run_packaged_integrity_contract.py --jang-tools-source /Users/example/jang/jang-tools --out build/current-packaged-integrity-contract-20260524-pycache-seal-check.json",
             ".venv/bin/python tests/cross_matrix/run_packaged_integrity_contract.py --jang-tools-source /Users/example/jang/.worktrees/vmlx-release-clean-b5f66a7/jang-tools --out build/current-packaged-integrity-contract-20260522-recheck-bundled-release-gate.json",
         ],
         "artifacts": [
             "build/current-objective-proof-audit-20260531-nemotron-exact-finalizer-ledger.json",
-            "build/current-packaged-integrity-contract-20260601-qwen-fix-resigned-staged-app.json",
+            "build/current-packaged-integrity-contract-20260602-developer-id-staged-signing.json",
             "build/current-packaged-integrity-contract-20260601-dsv4-preflight-refresh.json",
             "build/current-packaged-integrity-contract-20260601-qwen3vl-minicpm-mpp-staged-refresh.json",
             "build/current-packaged-integrity-contract-20260531-after-adhoc-reseal.json",
@@ -2069,8 +2069,8 @@ _ROWS: list[dict[str, Any]] = [
             "VMLINUX_REAL_UI_APP_PATH=/Applications/vMLX.app VMLINUX_REAL_UI_MODEL_PATH=/Users/example/models/JANGQ/MiniMax-M2.7-JANGTQ_K VMLINUX_REAL_UI_PROOF_BASENAME=diagnostic-installed-ui-live-model-minimax-m27-jangtq-k-issue179-512-20260527 VMLINUX_REAL_UI_WIRE_API=responses VMLINUX_REAL_UI_MAX_TOKENS=512 node panel/scripts/live-real-ui-model-proof.mjs",
             ".venv/bin/python tests/cross_matrix/run_issue179_responses_cancel_probe.py --out build/current-issue179-minimax-k-responses-cancel-probe-installed-20260527.json --load-timeout 240 --request-timeout 180 --stream-seconds 8 --cancel-delay 0.25",
             ".venv/bin/python tests/cross_matrix/run_issue175_179_release_boundary_audit.py --out build/current-issue175-179-release-boundary-audit-20260531-post-install-sync.json",
-            ".venv/bin/python tests/cross_matrix/run_installed_app_runtime_parity_audit.py --out build/current-installed-app-runtime-parity-audit-20260602-performance-health-epipe.json",
-            ".venv/bin/python tests/cross_matrix/run_installed_app_runtime_parity_audit.py --app panel/release/mac-arm64/vMLX.app --out build/current-staged-app-runtime-parity-audit-20260602-performance-health-epipe.json",
+            ".venv/bin/python tests/cross_matrix/run_installed_app_runtime_parity_audit.py --out build/current-installed-app-runtime-parity-audit-20260602-developer-id-installed-signing.json",
+            ".venv/bin/python tests/cross_matrix/run_installed_app_runtime_parity_audit.py --app panel/release/mac-arm64/vMLX.app --out build/current-staged-app-runtime-parity-audit-20260602-developer-id-staged-signing.json",
             ".venv/bin/python tests/cross_matrix/run_issue175_177_installed_runtime_audit.py --out build/current-issue175-177-installed-runtime-audit-20260601-local-refresh.json",
             ".venv/bin/python tests/cross_matrix/run_issue175_177_live_runtime_audit.py --out build/current-issue175-177-live-runtime-audit-20260601-local-refresh.json",
             ".venv/bin/python tests/cross_matrix/run_issue179_minimax_k_root_cause_audit.py --out build/current-issue179-minimax-k-root-cause-audit-20260527.json",
@@ -2127,8 +2127,8 @@ _ROWS: list[dict[str, Any]] = [
             "build/current-issue179-minimax-k-responses-cancel-probe-installed-20260527.json",
             "build/current-issue179-minimax-k-responses-cancel-probe-installed-20260527.server.log",
             "build/current-issue175-179-release-boundary-audit-20260531-post-install-sync.json",
-            "build/current-installed-app-runtime-parity-audit-20260602-performance-health-epipe.json",
-            "build/current-staged-app-runtime-parity-audit-20260602-performance-health-epipe.json",
+            "build/current-installed-app-runtime-parity-audit-20260602-developer-id-installed-signing.json",
+            "build/current-staged-app-runtime-parity-audit-20260602-developer-id-staged-signing.json",
             "build/current-installed-app-runtime-parity-audit-20260528-userdata-epipe-scan.json",
             "build/current-issue175-177-installed-runtime-audit-20260601-local-refresh.json",
             "build/current-issue175-177-live-runtime-audit-20260601-local-refresh.json",

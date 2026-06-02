@@ -576,13 +576,13 @@ CURRENT_SUITE_COMMANDS: dict[str, list[str]] = {
         sys.executable,
         "tests/cross_matrix/run_packaged_integrity_contract.py",
         "--out",
-        "build/current-packaged-integrity-contract-20260601-qwen-fix-resigned-staged-app.json",
+        "build/current-packaged-integrity-contract-20260602-developer-id-staged-signing.json",
     ],
     "installed_app_runtime_parity_audit": [
         sys.executable,
         "tests/cross_matrix/run_installed_app_runtime_parity_audit.py",
         "--out",
-        "build/current-installed-app-runtime-parity-audit-20260602-performance-health-epipe.json",
+        "build/current-installed-app-runtime-parity-audit-20260602-developer-id-installed-signing.json",
     ],
     "staged_app_runtime_parity_audit": [
         sys.executable,
@@ -590,7 +590,7 @@ CURRENT_SUITE_COMMANDS: dict[str, list[str]] = {
         "--app",
         "panel/release/mac-arm64/vMLX.app",
         "--out",
-        "build/current-staged-app-runtime-parity-audit-20260602-performance-health-epipe.json",
+        "build/current-staged-app-runtime-parity-audit-20260602-developer-id-staged-signing.json",
     ],
     "issue175_179_release_boundary_audit": [
         sys.executable,
@@ -648,7 +648,7 @@ CURRENT_SUITE_COMMANDS: dict[str, list[str]] = {
         "--require-current-proof-sweep",
         "--require-release-ready",
         "--out",
-        "build/current-release-regression-manifest-20260601-pipe-safe-runner.json",
+        "build/current-release-regression-manifest-20260602-developer-id-staged-signing.json",
     ],
 }
 

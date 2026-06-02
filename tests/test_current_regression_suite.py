@@ -865,6 +865,12 @@ def test_current_regression_suite_refreshes_release_regression_manifest(monkeypa
     )
     assert any(
         name == "release_regression_manifest"
+        and "build/current-release-regression-manifest-20260602-developer-id-staged-signing.json"
+        in cmd
+        for name, cmd in seen_steps
+    )
+    assert not any(
+        name == "release_regression_manifest"
         and "build/current-release-regression-manifest-20260601-pipe-safe-runner.json"
         in cmd
         for name, cmd in seen_steps
