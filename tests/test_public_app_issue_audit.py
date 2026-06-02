@@ -12,6 +12,7 @@ def test_public_app_issue_audit_tracks_open_app_runtime_issue_slices():
     assert audit["status"] in {"open", "pass"}
     assert set(audit["issues"]) == {
         "165",
+        "166",
         "169",
         "180",
         "111",
@@ -27,6 +28,19 @@ def test_public_app_issue_audit_tracks_open_app_runtime_issue_slices():
     assert audit["issues"]["165"]["checks"]["installed_app_dsml_parser_hash_guarded"] is True
     assert audit["issues"]["165"]["release_clearance"] == (
         "mapped_to_dsv4_dsml_tool_call_arguments_guard"
+    )
+    assert audit["issues"]["166"]["focused_source_slice"] == "pass"
+    assert audit["issues"]["166"]["checks"]["source_gemma4_assistant_alias"] is True
+    assert (
+        audit["issues"]["166"]["checks"]["bundled_verify_gemma4_assistant_alias"]
+        is True
+    )
+    assert (
+        audit["issues"]["166"]["checks"]["installed_app_gemma4_assistant_alias"]
+        is True
+    )
+    assert audit["issues"]["166"]["release_clearance"] == (
+        "mapped_to_gemma4_assistant_mlx_vlm_alias_guard"
     )
     assert audit["issues"]["169"]["focused_source_slice"] == "pass"
     assert audit["issues"]["169"]["checks"]["dual_public_dmg_flavors"] is True

@@ -422,6 +422,7 @@ REMOVED_ENV_VAR_FORCE_FLIPS = (
 )
 
 BUNDLED_SOURCE_HASH_PATHS = (
+    "__init__.py",
     "server.py",
     "api/utils.py",
     "api/anthropic_adapter.py",

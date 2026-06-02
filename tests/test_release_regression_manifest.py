@@ -1431,6 +1431,17 @@ def _write_expected_public_app_issue_audit(root: Path) -> None:
                             "installed_app_dsml_parser_hash_guarded": True,
                         },
                     },
+                    "166": {
+                        "focused_source_slice": "pass",
+                        "release_clearance": (
+                            "mapped_to_gemma4_assistant_mlx_vlm_alias_guard"
+                        ),
+                        "checks": {
+                            "source_gemma4_assistant_alias": True,
+                            "bundled_verify_gemma4_assistant_alias": True,
+                            "installed_app_gemma4_assistant_alias": True,
+                        },
+                    },
                     "169": {
                         "focused_source_slice": "pass",
                         "release_clearance": (
@@ -1583,6 +1594,25 @@ def test_release_regression_manifest_rejects_public_issue180_without_numeric_gua
 
     assert (
         "missing_issue_check:180:minimax_small_numeric_garbage_guarded"
+        in result["failures"]
+    )
+
+
+def test_release_regression_manifest_rejects_public_issue166_without_installed_alias_guard(
+    tmp_path,
+):
+    _write_expected_public_app_issue_audit(tmp_path)
+    path = tmp_path / CURRENT_PUBLIC_APP_ISSUE_AUDIT_ARTIFACT
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["issues"]["166"]["checks"].pop(
+        "installed_app_gemma4_assistant_alias", None
+    )
+    path.write_text(json.dumps(payload) + "\n", encoding="utf-8")
+
+    result = _validate_current_public_app_issue_audit(tmp_path)
+
+    assert (
+        "missing_issue_check:166:installed_app_gemma4_assistant_alias"
         in result["failures"]
     )
 

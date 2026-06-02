@@ -519,6 +519,7 @@ def test_packaged_bundled_hash_gate_covers_runtime_files_changed_for_release():
     gate_module = _load_gate_module()
 
     expected = {
+        "__init__.py",
         "server.py",
         "api/utils.py",
         "api/anthropic_adapter.py",

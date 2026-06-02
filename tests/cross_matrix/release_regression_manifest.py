@@ -5002,6 +5002,7 @@ def _validate_current_public_app_issue_audit(root: Path) -> dict[str, Any]:
     result["issues"] = issues
     expected_clearance = {
         "165": "mapped_to_dsv4_dsml_tool_call_arguments_guard",
+        "166": "mapped_to_gemma4_assistant_mlx_vlm_alias_guard",
         "169": (
             "installed_and_staged_sequoia_compat_runtime_flavor_guarded_packaging_still_gated"
         ),
@@ -5023,6 +5024,11 @@ def _validate_current_public_app_issue_audit(root: Path) -> dict[str, Any]:
             "tool_call_contract_passes",
             "dsml_issue_165_regression_present",
             "installed_app_dsml_parser_hash_guarded",
+        ),
+        "166": (
+            "source_gemma4_assistant_alias",
+            "bundled_verify_gemma4_assistant_alias",
+            "installed_app_gemma4_assistant_alias",
         ),
         "169": (
             "installed_app_sequoia_compat_runtime_flavor",

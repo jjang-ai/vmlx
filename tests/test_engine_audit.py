@@ -5351,6 +5351,7 @@ class TestStartupCompatibilityGuards:
     def test_bundled_python_hash_gate_covers_runtime_files_changed_for_release(self):
         verify_script = Path("./panel/scripts/verify-bundled-python.sh").read_text()
         for rel in (
+            "__init__.py",
             "server.py",
             "api/anthropic_adapter.py",
             "api/ollama_adapter.py",
@@ -5422,6 +5423,12 @@ class TestStartupCompatibilityGuards:
         assert "MiniCPM-V-4.6 → minicpmo remap missing" in verify_script
         assert "MiniCPM-V-4.6 mlx_vlm remap + prompt_utils config" in verify_script
 
+    def test_bundled_python_import_gate_covers_gemma4_assistant_alias(self):
+        verify_script = Path("./panel/scripts/verify-bundled-python.sh").read_text()
+
+        assert '"mlx_vlm.models.gemma4_assistant"' in verify_script
+        assert "Gemma 4 assistant mlx_vlm.models alias" in verify_script
+
     def test_mlx_vlm_registry_patch_remaps_minicpm_v46_to_minicpmo(self):
         import vmlx_engine
         from mlx_vlm.prompt_utils import MODEL_CONFIG
@@ -5434,6 +5441,21 @@ class TestStartupCompatibilityGuards:
         module, model_type = get_model_and_args({"model_type": "minicpmv4_6"})
         assert model_type == "minicpmo"
         assert hasattr(module, "Model")
+
+    def test_mlx_vlm_registry_patch_aliases_gemma4_assistant_model_path(self):
+        import importlib
+        import sys
+
+        import vmlx_engine
+
+        sys.modules.pop("mlx_vlm.models.gemma4_assistant", None)
+
+        vmlx_engine._install_mlx_vlm_registry_patches()
+
+        module = importlib.import_module("mlx_vlm.models.gemma4_assistant")
+        assert module.__name__ == "mlx_vlm.speculative.drafters.gemma4_assistant"
+        assert hasattr(module, "Model")
+        assert hasattr(module, "ModelConfig")
 
     def test_bundled_python_import_gate_covers_step37_source_runtime(self):
         verify_script = Path("./panel/scripts/verify-bundled-python.sh").read_text()

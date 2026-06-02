@@ -23,6 +23,9 @@ DEFAULT_OUT = Path(
 )
 INSTALLED_APP_ASAR = Path("/Applications/vMLX.app/Contents/Resources/app.asar")
 INSTALLED_APP = Path("/Applications/vMLX.app")
+INSTALLED_APP_PYTHON = Path(
+    "/Applications/vMLX.app/Contents/Resources/bundled-python/python/bin/python3"
+)
 STAGED_SEQUOIA_APP = Path("panel/release/mac-arm64/vMLX.app")
 STAGED_TAHOE_APP = Path("panel/release/native-cache-metrics-app/mac-arm64/vMLX.app")
 TOOL_CALL_CONTRACT = Path(
@@ -155,6 +158,65 @@ def _read_installed_asar_file(root: Path, relpath: str) -> str:
         check=False,
     )
     return proc.stdout if proc.returncode == 0 else ""
+
+
+def _installed_gemma4_assistant_alias_imports() -> bool:
+    if not INSTALLED_APP_PYTHON.exists():
+        return False
+    try:
+        proc = subprocess.run(
+            [
+                str(INSTALLED_APP_PYTHON),
+                "-s",
+                "-c",
+                (
+                    "import importlib, vmlx_engine; "
+                    "vmlx_engine._install_mlx_vlm_registry_patches(); "
+                    "m=importlib.import_module('mlx_vlm.models.gemma4_assistant'); "
+                    "assert m.__name__ == "
+                    "'mlx_vlm.speculative.drafters.gemma4_assistant'; "
+                    "assert hasattr(m, 'Model'); "
+                    "assert hasattr(m, 'ModelConfig')"
+                ),
+            ],
+            cwd="/",
+            env={
+                "PYTHONPATH": "",
+                "PYTHONNOUSERSITE": "1",
+                "PYTHONDONTWRITEBYTECODE": "1",
+            },
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+    except Exception:  # noqa: BLE001 - audit reports false checks, not tracebacks
+        return False
+    return proc.returncode == 0
+
+
+def _issue166_checks(root: Path) -> dict[str, bool]:
+    engine_init = _read(root / "vmlx_engine/__init__.py")
+    verify_script = _read(root / "panel/scripts/verify-bundled-python.sh")
+    engine_tests = _read(root / "tests/test_engine_audit.py")
+    return {
+        "source_gemma4_assistant_alias": (
+            "mlx_vlm.speculative.drafters.gemma4_assistant" in engine_init
+            and "mlx_vlm.models.gemma4_assistant" in engine_init
+            and "gemma4_assistant" in engine_init
+            and "test_mlx_vlm_registry_patch_aliases_gemma4_assistant_model_path"
+            in engine_tests
+        ),
+        "bundled_verify_gemma4_assistant_alias": (
+            "Gemma 4 assistant mlx_vlm.models alias" in verify_script
+            and "mlx_vlm.models.gemma4_assistant" in verify_script
+            and '"__init__.py"' in verify_script
+        ),
+        "installed_app_gemma4_assistant_alias": (
+            _installed_gemma4_assistant_alias_imports()
+        ),
+    }
 
 
 def _issue169_checks(root: Path) -> dict[str, bool]:
@@ -665,6 +727,14 @@ def build_audit(root: Path) -> dict[str, Any]:
                 "mapped_to_dsv4_dsml_tool_call_arguments_guard"
             ),
         },
+        "166": {
+            "repo": "jjang-ai/vmlx",
+            "title": "Gemma 4 assistant support",
+            "checks": _issue166_checks(root),
+            "release_clearance": (
+                "mapped_to_gemma4_assistant_mlx_vlm_alias_guard"
+            ),
+        },
         "169": {
             "repo": "jjang-ai/vmlx",
             "title": (
@@ -767,7 +837,7 @@ def build_audit(root: Path) -> dict[str, Any]:
         "focused_failures": focused_failures,
         "focused_open": focused_open,
         "release_boundary": (
-            "Public issue slices #165, #169, #180, and mlxstudio #111, #115-#119 "
+            "Public issue slices #165, #166, #169, #180, and mlxstudio #111, #115-#119 "
             "have focused source/proof coverage here, and #118 includes "
             "installed app download fallback proof. This does not clear the "
             "full release; Developer ID signing/notarization, DSV4 exactness, "

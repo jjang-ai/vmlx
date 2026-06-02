@@ -98,7 +98,19 @@ def _install_mlx_vlm_registry_patches() -> None:
     except Exception:
         pass
     try:
+        import importlib
+        import sys
+
+        _assistant = importlib.import_module(
+            "mlx_vlm.speculative.drafters.gemma4_assistant"
+        )
+        sys.modules.setdefault("mlx_vlm.models.gemma4_assistant", _assistant)
+    except Exception:
+        pass
+    try:
         from mlx_vlm.prompt_utils import MODEL_CONFIG as _KV_MODEL_CONFIG
+        if "gemma4_assistant" not in _KV_MODEL_CONFIG and "gemma4" in _KV_MODEL_CONFIG:
+            _KV_MODEL_CONFIG["gemma4_assistant"] = _KV_MODEL_CONFIG["gemma4"]
         if "kimi_k25" not in _KV_MODEL_CONFIG and "kimi_vl" in _KV_MODEL_CONFIG:
             _KV_MODEL_CONFIG["kimi_k25"] = _KV_MODEL_CONFIG["kimi_vl"]
         if "minicpmv4_6" not in _KV_MODEL_CONFIG and "minicpmo" in _KV_MODEL_CONFIG:
@@ -121,6 +133,8 @@ def _patch_loaded_mlx_vlm_registry_module(module_name: str, module) -> None:
             if _model_config is not None and _message_format is not None:
                 _model_config.setdefault("gemma4", _message_format.LIST_WITH_IMAGE_TYPE)
                 _model_config.setdefault("gemma4_text", _message_format.LIST_WITH_IMAGE_TYPE)
+                if "gemma4_assistant" not in _model_config and "gemma4" in _model_config:
+                    _model_config["gemma4_assistant"] = _model_config["gemma4"]
                 if "kimi_k25" not in _model_config and "kimi_vl" in _model_config:
                     _model_config["kimi_k25"] = _model_config["kimi_vl"]
                 if "minicpmv4_6" not in _model_config and "minicpmo" in _model_config:
