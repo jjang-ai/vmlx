@@ -12019,6 +12019,10 @@ def test_release_regression_manifest_api_surface_requires_child_process_stdio_ep
     assert "panel_child_process_stdio_epipe_guard" in EXPECTED_CURRENT_API_SURFACE_CHECKS
 
 
+def test_release_regression_manifest_api_surface_requires_backend_stderr_split_epipe_guard():
+    assert "panel_backend_stderr_split_epipe_guard" in EXPECTED_CURRENT_API_SURFACE_CHECKS
+
+
 def test_release_regression_manifest_api_surface_requires_plain_attention_kv_status():
     assert "plain_attention_kv_status" in EXPECTED_CURRENT_API_SURFACE_CHECKS
 

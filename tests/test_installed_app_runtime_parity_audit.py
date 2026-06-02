@@ -210,7 +210,7 @@ proc.stderr?.on('data', (data) => {
   this.emit('session:log', { sessionId, data: text })
 })
 """
-    guarded_stderr_handler = """
+    chunk_only_guarded_stderr_handler = """
 function isExpectedBackendStderrDisconnectLine(text) {
   return /(?:EPIPE|write EPIPE|broken pipe|ECONNRESET)/i.test(text)
 }
@@ -228,9 +228,35 @@ proc.stderr?.on('data', (data) => {
   }
 })
 """
+    split_safe_stderr_handler = """
+function isExpectedBackendStderrDisconnectLine(text) {
+  return /(?:EPIPE|write EPIPE|broken pipe|ECONNRESET)/i.test(text)
+}
+function normalizeBackendStderrChunk(pending, chunk) {
+  const combined = pending + chunk
+  return { pending: "", events: [] }
+}
+proc.stderr?.on('data', (data) => {
+  const normalized = normalizeBackendStderrChunk(managed?.backendStderrPending || '', text)
+  if (managed) managed.backendStderrPending = normalized.pending
+  for (const event of normalized.events) {
+    if (event.type === 'disconnect') {
+      this.emit('session:log', { sessionId, data: BACKEND_STDERR_DISCONNECT_NORMALIZED_LINE })
+      continue
+    }
+    const stderrText = event.text
+    if (stderrText.includes('ERROR') || stderrText.includes('Traceback') || stderrText.includes('Exception')) {
+      console.error(`[SERVER] ${stderrText.trimEnd()}`)
+    }
+  }
+})
+"""
 
     assert not gate._has_backend_stderr_line_disconnect_guard(old_raw_stderr_handler)
-    assert gate._has_backend_stderr_line_disconnect_guard(guarded_stderr_handler)
+    assert not gate._has_backend_stderr_line_disconnect_guard(
+        chunk_only_guarded_stderr_handler
+    )
+    assert gate._has_backend_stderr_line_disconnect_guard(split_safe_stderr_handler)
 
 
 def test_installed_app_runtime_parity_writes_json_artifact(tmp_path):

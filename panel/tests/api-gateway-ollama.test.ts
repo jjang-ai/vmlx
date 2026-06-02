@@ -228,25 +228,30 @@ describe("Ollama gateway parity contracts", () => {
       resolve(process.cwd(), "src/main/sessions.ts"),
       "utf8",
     );
-    expect(sessionsSource).toContain("function isExpectedBackendStderrDisconnectLine");
-    expect(sessionsSource).toContain("write EPIPE");
-    expect(sessionsSource).toContain("broken pipe");
-    expect(sessionsSource).toContain("if (isExpectedBackendStderrDisconnectLine(text)) {");
+    const backendStderrSource = readFileSync(
+      resolve(process.cwd(), "src/main/backend-stderr.ts"),
+      "utf8",
+    );
+    expect(backendStderrSource).toContain("function isExpectedBackendStderrDisconnectLine");
+    expect(backendStderrSource).toContain("normalizeBackendStderrChunk");
+    expect(backendStderrSource).toContain("write EPIPE");
+    expect(backendStderrSource).toContain("broken pipe");
+    expect(sessionsSource).toContain("normalizeBackendStderrChunk(");
     expect(sessionsSource).toContain(
-      "this.emit('session:log', { sessionId, data: '[SERVER] Client disconnected during stream; backend pipe closed cleanly.\\n' })",
+      "data: BACKEND_STDERR_DISCONNECT_NORMALIZED_LINE",
     );
     expect(sessionsSource).toContain("return");
     const stderrHandler = sessionsSource.indexOf("proc.stderr?.on('data'");
-    const disconnectGuard = sessionsSource.indexOf(
-      "if (isExpectedBackendStderrDisconnectLine(text)) {",
+    const disconnectNormalizer = sessionsSource.indexOf(
+      "normalizeBackendStderrChunk(",
       stderrHandler,
     );
     const rawErrorLog = sessionsSource.indexOf(
-      "console.error(`[SERVER] ${text.trimEnd()}`)",
+      "console.error(`[SERVER] ${stderrText.trimEnd()}`)",
       stderrHandler,
     );
-    expect(disconnectGuard).toBeGreaterThan(stderrHandler);
-    expect(rawErrorLog).toBeGreaterThan(disconnectGuard);
+    expect(disconnectNormalizer).toBeGreaterThan(stderrHandler);
+    expect(rawErrorLog).toBeGreaterThan(disconnectNormalizer);
   });
 
   it("does not leave raw chat IPC backend request finalization unguarded", () => {

@@ -93,6 +93,7 @@ def test_api_surface_contract_pins_named_public_surface_edges():
     assert "does not leave raw chat IPC backend request finalization unguarded" in panel
     assert "normalizes cache IPC endpoint EPIPE disconnects instead of surfacing raw unexpected errors" in panel
     assert "does not log expected chat EPIPE disconnects as raw failed-message console errors" in panel
+    assert "normalizes split write EPIPE chunks before raw stderr reaches the UI" in panel
     assert "routes local image server request writes through EPIPE-aware helpers" in panel
     assert "image requests disable connection reuse and normalize reset-like socket errors" in panel
     assert "tests/chat-ui.test.ts" in Path(
@@ -110,12 +111,16 @@ def test_api_surface_contract_pins_named_public_surface_edges():
     assert "panel_child_process_stdio_epipe_guard" in Path(
         "tests/cross_matrix/run_api_surface_contract.py"
     ).read_text()
+    assert "panel_backend_stderr_split_epipe_guard" in Path(
+        "tests/cross_matrix/run_api_surface_contract.py"
+    ).read_text()
     assert "panel_gateway_single_model_auto_switch_cache_endpoints" in Path(
         "tests/cross_matrix/run_api_surface_contract.py"
     ).read_text()
 
     panel_command = gate.COMMANDS["panel_api_request_builders"][1]
     assert "tests/api-gateway-ollama.test.ts" in panel_command
+    assert "tests/backend-stderr.test.ts" in panel_command
     assert "tests/image-generation-state.test.ts" in panel_command
     assert "tests/image-system.test.ts" in panel_command
     assert "--reporter=verbose" in panel_command
@@ -142,6 +147,8 @@ def test_api_surface_contract_source_hash_files_exist():
     assert "panel/scripts/live-real-ui-model-proof.mjs" in gate.SOURCE_HASH_FILES
     assert "panel/scripts/live-chat-tools-reasoning-proof.mjs" in gate.SOURCE_HASH_FILES
     assert "panel/src/main/ipc/models.ts" in gate.SOURCE_HASH_FILES
+    assert "panel/src/main/backend-stderr.ts" in gate.SOURCE_HASH_FILES
+    assert "panel/tests/backend-stderr.test.ts" in gate.SOURCE_HASH_FILES
     assert "panel/src/main/tools/executor.ts" in gate.SOURCE_HASH_FILES
 
     missing = [rel for rel in gate.SOURCE_HASH_FILES if not Path(rel).exists()]

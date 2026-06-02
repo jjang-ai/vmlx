@@ -15,6 +15,10 @@ import { buildMcpPolicyArgs } from '../shared/mcpPolicy'
 import { canonicalizeToolParserId } from '../shared/toolParserAliases'
 import { canonicalizeReasoningParserForCli } from '../shared/reasoningParserAliases'
 import { GENERATION_STARTUP_DEFAULTS_VERSION, LEGACY_GENERIC_MAX_OUTPUT_TOKENS } from '../shared/sessionConfigMigrations'
+import {
+  BACKEND_STDERR_DISCONNECT_NORMALIZED_LINE,
+  normalizeBackendStderrChunk,
+} from './backend-stderr'
 
 export type { ServerConfig, DetectedProcess } from './server'
 import type { ServerConfig, DetectedProcess } from './server'
@@ -31,13 +35,10 @@ interface ManagedProcess {
   process: ChildProcess | null
   adoptedPid: number | null
   lastStderr?: string  // Last stderr line for error reporting
+  backendStderrPending?: string
   exitCode?: number | null
   exitSignal?: string | null  // Signal that killed the process (e.g. SIGKILL for OOM)
   intentionalStop?: boolean   // Set true when stopSession sends SIGTERM — prevents crash misreport
-}
-
-function isExpectedBackendStderrDisconnectLine(text: string): boolean {
-  return /(?:EPIPE|write EPIPE|broken pipe|socket hang up|connection reset|ECONNRESET|ERR_STREAM_DESTROYED|ERR_STREAM_WRITE_AFTER_END|premature close|stream.*destroyed|write after end)/i.test(text)
 }
 
 /** Normalize model paths for consistent matching: resolve and strip trailing slashes */
@@ -1498,25 +1499,34 @@ export class SessionManager extends EventEmitter {
     })
     proc.stderr?.on('data', (data) => {
       const text = data.toString()
-      if (isExpectedBackendStderrDisconnectLine(text)) {
-        const normalized = '[SERVER] Client disconnected during stream; backend pipe closed cleanly.\n'
-        this.pushLog(sessionId, normalized)
-        this.emit('session:log', { sessionId, data: '[SERVER] Client disconnected during stream; backend pipe closed cleanly.\n' })
-        return
-      }
-      this.pushLog(sessionId, text)
-      // Log errors to main console for diagnostics
-      if (text.includes('ERROR') || text.includes('Traceback') || text.includes('Exception')) {
-        console.error(`[SERVER] ${text.trimEnd()}`)
-      }
-      this.emit('session:log', { sessionId, data: text })
-      // Capture most meaningful stderr line for error reporting.
-      // Python exceptions print the error type several lines before the
-      // final output (e.g., RuntimeError on line N, then "library not found"
-      // on line N+3). Prefer exception lines over the last line.
       const managed = this.processes.get(sessionId)
-      if (managed) {
-        const lines = text.trim().split('\n').filter((l: string) => l.trim())
+      const normalized = normalizeBackendStderrChunk(
+        managed?.backendStderrPending || '',
+        text,
+      )
+      if (managed) managed.backendStderrPending = normalized.pending
+      for (const event of normalized.events) {
+        if (event.type === 'disconnect') {
+          this.pushLog(sessionId, event.text)
+          this.emit('session:log', {
+            sessionId,
+            data: BACKEND_STDERR_DISCONNECT_NORMALIZED_LINE,
+          })
+          continue
+        }
+        const stderrText = event.text
+        this.pushLog(sessionId, stderrText)
+        // Log errors to main console for diagnostics
+        if (stderrText.includes('ERROR') || stderrText.includes('Traceback') || stderrText.includes('Exception')) {
+          console.error(`[SERVER] ${stderrText.trimEnd()}`)
+        }
+        this.emit('session:log', { sessionId, data: stderrText })
+        // Capture most meaningful stderr line for error reporting.
+        // Python exceptions print the error type several lines before the
+        // final output (e.g., RuntimeError on line N, then "library not found"
+        // on line N+3). Prefer exception lines over the last line.
+        if (!managed) continue
+        const lines = stderrText.trim().split('\n').filter((l: string) => l.trim())
         // Look for Python exception lines (most informative)
         const exceptionLine = lines.find((l: string) =>
           /^(RuntimeError|ImportError|ModuleNotFoundError|OSError|ValueError|TypeError|MemoryError|FileNotFoundError):/.test(l.trim()) ||

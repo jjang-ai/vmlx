@@ -291,21 +291,33 @@ def _has_chat_stream_error_disconnect_guard(panel_main: str) -> bool:
 
 def _has_backend_stderr_line_disconnect_guard(panel_main: str) -> bool:
     helper = "function isExpectedBackendStderrDisconnectLine"
-    guard = "if (isExpectedBackendStderrDisconnectLine(text)) {"
+    normalizer = "function normalizeBackendStderrChunk"
+    normalizer_call = "normalizeBackendStderrChunk("
+    pending_state = "backendStderrPending"
     normalized = (
         "[SERVER] Client disconnected during stream; backend pipe closed cleanly."
     )
-    raw_log = "console.error(`[SERVER] ${text.trimEnd()}`)"
+    raw_log = "console.error(`[SERVER] ${stderrText.trimEnd()}`)"
     helper_index = panel_main.find(helper)
-    guard_index = panel_main.find(guard)
-    raw_log_index = panel_main.find(raw_log, guard_index)
+    normalizer_index = panel_main.find(normalizer)
+    call_index = panel_main.find(normalizer_call, normalizer_index + len(normalizer))
+    raw_log_index = panel_main.find(raw_log, call_index)
+    handler_window = panel_main[max(0, call_index - 900) : call_index]
+    handler_seen = bool(
+        re.search(r"\bproc\.stderr\?\.on\(\s*['\"]data['\"]", handler_window)
+    )
     return (
         helper_index >= 0
+        and normalizer_index > helper_index
         and "write EPIPE" in panel_main
         and "broken pipe" in panel_main
-        and normalized in panel_main
-        and guard_index > helper_index
-        and raw_log_index > guard_index
+        and (
+            normalized in panel_main
+            or "BACKEND_STDERR_DISCONNECT_NORMALIZED_LINE" in panel_main
+        )
+        and pending_state in panel_main
+        and handler_seen
+        and raw_log_index > call_index
     )
 
 

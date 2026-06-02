@@ -38,6 +38,7 @@ SOURCE_HASH_FILES = (
     "panel/src/main/ipc/imageGenerationState.ts",
     "panel/src/main/ipc/developer.ts",
     "panel/src/main/ipc/models.ts",
+    "panel/src/main/backend-stderr.ts",
     "panel/src/main/sessions.ts",
     "panel/src/main/server.ts",
     "panel/src/main/api-gateway.ts",
@@ -48,6 +49,7 @@ SOURCE_HASH_FILES = (
     "panel/scripts/live-real-ui-model-proof.mjs",
     "panel/scripts/live-chat-tools-reasoning-proof.mjs",
     "panel/tests/request-builder.test.ts",
+    "panel/tests/backend-stderr.test.ts",
     "panel/tests/api-gateway-ollama.test.ts",
     "panel/tests/api-gateway-ollama-behavior.test.ts",
     "panel/tests/api-gateway-single-model.behavior.test.ts",
@@ -132,6 +134,7 @@ REQUIRED_PANEL_API_TEST_MARKERS = (
     "does not leave raw chat IPC backend request finalization unguarded",
     "normalizes cache IPC endpoint EPIPE disconnects instead of surfacing raw unexpected errors",
     "does not log expected chat EPIPE disconnects as raw failed-message console errors",
+    "normalizes split write EPIPE chunks before raw stderr reaches the UI",
     "routes local image server request writes through EPIPE-aware helpers",
     "image requests disable connection reuse and normalize reset-like socket errors",
 )
@@ -153,6 +156,7 @@ COMMANDS: dict[str, tuple[Path, list[str]]] = {
             "vitest",
             "run",
             "tests/request-builder.test.ts",
+            "tests/backend-stderr.test.ts",
             "tests/api-gateway-ollama.test.ts",
             "tests/api-gateway-ollama-behavior.test.ts",
             "tests/api-gateway-single-model.behavior.test.ts",
@@ -356,6 +360,11 @@ def build_artifact(root: Path) -> dict[str, Any]:
             and "guards child process stdio stream EPIPE across app-managed process lanes" not in missing_panel_markers
             and "guards live proof script child stdio EPIPE while collecting e2e evidence" not in missing_panel_markers
             and panel_passed >= 65
+        ),
+        "panel_backend_stderr_split_epipe_guard": (
+            not failed
+            and "normalizes split write EPIPE chunks before raw stderr reaches the UI" not in missing_panel_markers
+            and panel_passed >= 67
         ),
         "panel_gateway_ollama_proxy_response_error_guard": (
             not failed
