@@ -1516,6 +1516,14 @@ describe('Generation Defaults', () => {
         expect(formSource).toContain('max output tokens')
     })
 
+    it('shows explicit greedy generation defaults in the startup summary', () => {
+        const formSource = readFileSync('src/renderer/src/components/sessions/SessionConfigForm.tsx', 'utf8')
+
+        expect(formSource).toContain('hasDeclaredSamplingDefaults')
+        expect(formSource).toContain("hasDeclaredSamplingDefaults ? `temperature ${(config.defaultTemperature / 100).toFixed(2)}` : null")
+        expect(formSource).toContain("hasDeclaredSamplingDefaults ? ((config.defaultTopK ?? 0) > 0 ? `top-k ${Math.floor(config.defaultTopK ?? 0)}` : 'top-k off') : null")
+    })
+
     it('chat settings default to neutral repeat penalty when bundle has no value', () => {
         const source = readFileSync('src/renderer/src/components/chat/ChatSettings.tsx', 'utf8')
         expect(source).toContain('value={overrides.repeatPenalty ?? modelDefaults.repeatPenalty ?? 1.0}')

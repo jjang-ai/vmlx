@@ -111,6 +111,39 @@ describe('readGenerationDefaults generation_config defaults', () => {
     })
   })
 
+  it('surfaces Step Flash JANG greedy chat metadata instead of treating zero temperature as missing', async () => {
+    const dir = makeModelDir({
+      'generation_config.json': {
+        bos_token_id: 0,
+        eos_token_id: [1, 2, 128007],
+      },
+      'jang_config.json': {
+        chat: {
+          reasoning: {
+            default_mode: 'no_think',
+            parser: 'qwen3',
+          },
+          sampling_defaults: {
+            temperature: 0.0,
+            top_p: 1.0,
+            top_k: 0,
+          },
+          tool_calling: {
+            parser: 'step3p5',
+            supported: true,
+          },
+        },
+      },
+    }, 'vmlx-generation-defaults-step37-flash-jang-')
+
+    await expect(readGenerationDefaults(dir)).resolves.toMatchObject({
+      temperature: 0.0,
+      topP: 1.0,
+      topK: 0,
+      source: 'jang_config',
+    })
+  })
+
   it('returns null when neither metadata file defines sampling defaults', async () => {
     const dir = makeModelDir({
       'generation_config.json': {

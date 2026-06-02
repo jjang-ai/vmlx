@@ -359,11 +359,17 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
   const nativeMtpDepth = config.nativeMtpDepthOverride === true
     ? (config.nativeMtpDepth || detectedNativeMtp?.depth || 3)
     : (detectedNativeMtp?.depth || config.nativeMtpDepth || 3)
+  const hasDeclaredSamplingDefaults =
+    config.defaultTemperature > 0 ||
+    config.defaultTopP > 0 ||
+    (config.defaultTopK ?? 0) > 0 ||
+    (config.defaultMinP ?? 0) > 0 ||
+    config.defaultRepetitionPenalty > 0
   const generationDefaultsSummary = [
     (config.defaultMaxNewTokens ?? 0) > 0 ? `max output tokens ${Math.floor(config.defaultMaxNewTokens ?? 0)}` : null,
-    config.defaultTemperature > 0 ? `temperature ${(config.defaultTemperature / 100).toFixed(2)}` : null,
+    hasDeclaredSamplingDefaults ? `temperature ${(config.defaultTemperature / 100).toFixed(2)}` : null,
     config.defaultTopP > 0 ? `top-p ${(config.defaultTopP / 100).toFixed(2)}` : null,
-    (config.defaultTopK ?? 0) > 0 ? `top-k ${Math.floor(config.defaultTopK ?? 0)}` : null,
+    hasDeclaredSamplingDefaults ? ((config.defaultTopK ?? 0) > 0 ? `top-k ${Math.floor(config.defaultTopK ?? 0)}` : 'top-k off') : null,
     (config.defaultMinP ?? 0) > 0 ? `min-p ${((config.defaultMinP ?? 0) / 100).toFixed(2)}` : null,
     config.defaultRepetitionPenalty > 0 ? `repetition ${(config.defaultRepetitionPenalty / 100).toFixed(2)}` : null,
   ].filter(Boolean).join(', ')
