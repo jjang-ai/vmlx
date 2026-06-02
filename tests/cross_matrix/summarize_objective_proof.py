@@ -1499,6 +1499,7 @@ def _dsv4_source_memory_preflight_detail(
             root,
             DSV4_CURRENT_SOURCE_MEMORY_PREFLIGHT_REL,
         ),
+        "created_at": artifact.get("created_at"),
         "status": artifact.get("status"),
         "reason": artifact.get("reason"),
         "model": artifact.get("model"),

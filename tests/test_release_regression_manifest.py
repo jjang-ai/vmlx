@@ -2615,6 +2615,7 @@ def _write_passing_real_ui_dsv4_memory_preflight_artifact(root: Path) -> None:
         json.dumps(
             {
                 "status": "skipped_insufficient_memory",
+                "generated_at": "2026-06-01T17:56:03.986322+00:00",
                 "model_path": "/Users/example/models/JANGQ/DeepSeek-V4-Flash-JANGTQ-K",
                 "model_size_gb": 80.0,
                 "free_plus_speculative_purgeable_gb": 39.15,
@@ -2987,6 +2988,7 @@ def _passing_open_requirement_details() -> dict[str, object]:
                 "current_source_full_output_preflight": {
                     "artifact": CURRENT_DSV4_SOURCE_MEMORY_PREFLIGHT_ARTIFACT,
                     "artifact_present": True,
+                    "created_at": "2026-06-01T17:56:03-0700",
                     "status": "skipped",
                     "reason": "insufficient_free_memory",
                     "model": "/Users/example/models/JANGQ/DeepSeek-V4-Flash-JANGTQ-K",
@@ -4663,6 +4665,7 @@ def test_release_regression_manifest_real_ui_matrix_records_dsv4_memory_blocker(
         json.dumps(
             {
                 "status": "skipped_insufficient_memory",
+                "generated_at": "2026-06-01T17:56:03.986322+00:00",
                 "model_path": "/Users/example/models/JANGQ/DeepSeek-V4-Flash-JANGTQ-K",
                 "model_size_gb": 80.0,
                 "free_plus_speculative_purgeable_gb": 39.15,
@@ -4880,6 +4883,22 @@ def test_release_regression_manifest_rejects_dsv4_preflight_with_active_heavy_pr
 
     assert result["status"] == "fail"
     assert "active_heavy_processes_not_clear" in result["failures"]
+
+
+def test_release_regression_manifest_rejects_dsv4_preflight_missing_generated_at(tmp_path):
+    _write_passing_real_ui_live_model_proof_artifacts(tmp_path)
+    _write_passing_real_ui_dsv4_memory_preflight_artifact(tmp_path)
+    preflight_path = tmp_path / CURRENT_REAL_UI_DSV4_MEMORY_PREFLIGHT_ARTIFACT
+    payload = json.loads(preflight_path.read_text(encoding="utf-8"))
+    payload.pop("generated_at", None)
+    preflight_path.write_text(json.dumps(payload) + "\n", encoding="utf-8")
+
+    result = validate_current_proof_sweep_artifacts(tmp_path)[
+        "real_ui_dsv4_memory_preflight"
+    ]
+
+    assert result["status"] == "fail"
+    assert "generated_at_missing" in result["failures"]
 
 
 def test_release_regression_manifest_real_ui_matrix_requires_every_family_surface():
@@ -9641,6 +9660,47 @@ def test_release_regression_manifest_rejects_stale_dsv4_source_preflight_artifac
     source_preflight["artifact"] = (
         "build/current-dsv4-route-mode-code-exactness-source-memory-preflight-20260528-0625.json"
     )
+    regression_suite = tmp_path / CURRENT_REGRESSION_SUITE_ARTIFACT
+    regression_suite.parent.mkdir(parents=True, exist_ok=True)
+    regression_suite.write_text(
+        json.dumps(
+            {
+                "status": "pass",
+                "failed_steps": [],
+                "open_requirements": EXPECTED_CURRENT_OPEN_REQUIREMENTS,
+                "open_requirement_details": open_details,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    result = validate_current_proof_sweep_artifacts(tmp_path)
+
+    assert result["status"] == "fail"
+    assert result["regression_suite"]["open_requirement_detail_failures"] == [
+        {
+            "requirement": "DSV4 long-output/code/file-generation quality is release-cleared",
+            "reason": "missing_or_stale_dsv4_source_full_output_preflight",
+        }
+    ]
+
+
+def test_release_regression_manifest_rejects_undated_dsv4_source_preflight(
+    tmp_path,
+):
+    for artifact in CURRENT_POST_BUDGET_EDGE_ARTIFACTS.values():
+        path = tmp_path / artifact
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text('{"status":"pass","failed":[]}\n', encoding="utf-8")
+    _write_passing_covered_live_smoke_artifacts(tmp_path)
+    _write_passing_covered_live_tool_smoke_artifacts(tmp_path)
+    open_details = _passing_open_requirement_details()
+    dsv4_row = open_details[
+        "DSV4 long-output/code/file-generation quality is release-cleared"
+    ]
+    source_preflight = dsv4_row["details"]["current_source_full_output_preflight"]
+    source_preflight.pop("created_at", None)
     regression_suite = tmp_path / CURRENT_REGRESSION_SUITE_ARTIFACT
     regression_suite.parent.mkdir(parents=True, exist_ok=True)
     regression_suite.write_text(

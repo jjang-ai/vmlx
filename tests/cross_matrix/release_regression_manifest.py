@@ -3403,8 +3403,11 @@ def _validate_current_real_ui_dsv4_memory_preflight(root: Path) -> dict[str, Any
     top_memory_processes = payload.get("top_memory_processes")
     active_heavy_processes = payload.get("active_heavy_processes")
     launch_blockers = payload.get("launch_blockers")
+    generated_at = payload.get("generated_at")
     if status != "skipped_insufficient_memory":
         failures.append("status_not_skipped_insufficient_memory")
+    if not isinstance(generated_at, str) or not generated_at:
+        failures.append("generated_at_missing")
     if payload.get("launch_decision") != "do_not_launch":
         failures.append("launch_decision_not_do_not_launch")
     if payload.get("launch_allowed") is not False:
@@ -3455,6 +3458,7 @@ def _validate_current_real_ui_dsv4_memory_preflight(root: Path) -> dict[str, Any
             "status": "pass" if not failures else "fail",
             "failures": failures,
             "model_path": model_path,
+            "generated_at": generated_at,
             "model_size_gb": model_size_gb,
             "free_plus_speculative_purgeable_gb": free_gb,
             "required_available_gb": required_gb,
@@ -7177,6 +7181,7 @@ def _validate_open_requirement_details(
         )
     required_available = source_preflight.get("required_available_gb")
     available = source_preflight.get("available_gb")
+    source_preflight_created_at = source_preflight.get("created_at")
     selected_cases = source_preflight.get("selected_cases")
     if not isinstance(selected_cases, list):
         selected_cases = []
@@ -7187,6 +7192,8 @@ def _validate_open_requirement_details(
         source_preflight.get("artifact_present") is True
         and source_preflight.get("artifact")
         == CURRENT_DSV4_SOURCE_MEMORY_PREFLIGHT_ARTIFACT
+        and isinstance(source_preflight_created_at, str)
+        and bool(source_preflight_created_at)
         and source_preflight.get("status") == "skipped"
         and source_preflight.get("reason")
         in {"insufficient_free_memory", "insufficient_vm_stat_memory"}
