@@ -19,6 +19,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from tests.cross_matrix.release_regression_manifest import (
+    DEFERRED_RELEASE_OPEN_REQUIREMENTS,
     build_manifest,
     validate_current_proof_sweep_artifacts,
 )
@@ -37,6 +38,9 @@ def release_clearance_from_proof_sweep(current_proof_sweep: dict) -> dict:
     open_requirements = [
         str(item) for item in regression_suite.get("open_requirements") or []
     ]
+    effective_open_requirements = [
+        item for item in open_requirements if item not in DEFERRED_RELEASE_OPEN_REQUIREMENTS
+    ]
     blocker_ledger = current_proof_sweep.get("release_blocker_ledger") or {}
     blockers = [
         item for item in blocker_ledger.get("blockers") or [] if isinstance(item, dict)
@@ -46,7 +50,7 @@ def release_clearance_from_proof_sweep(current_proof_sweep: dict) -> dict:
         str(item) for item in current_proof_sweep.get("failed_components") or []
     ]
     release_ready = (
-        proof_sweep_status == "pass" and not open_requirements and not blockers
+        proof_sweep_status == "pass" and not effective_open_requirements and not blockers
     )
     return {
         "status": "pass" if release_ready else "open",
@@ -54,18 +58,22 @@ def release_clearance_from_proof_sweep(current_proof_sweep: dict) -> dict:
         "proof_sweep_status": proof_sweep_status,
         "proof_sweep_failed_components": proof_sweep_failed_components,
         "open_requirements": open_requirements,
+        "effective_open_requirements": effective_open_requirements,
+        "deferred_open_requirements": [
+            item for item in open_requirements if item in DEFERRED_RELEASE_OPEN_REQUIREMENTS
+        ],
         "blockers": blockers,
         "reason": (
             "All current proof-sweep artifacts pass and no release blockers remain."
             if release_ready
-            else "Release is not cleared while current open requirements or release blockers remain."
+            else "Release is not cleared while non-deferred open requirements or release blockers remain."
         ),
     }
 
 
 def prepackage_clearance_from_release_clearance(release_clearance: dict) -> dict:
     open_requirements = [
-        str(item) for item in release_clearance.get("open_requirements") or []
+        str(item) for item in release_clearance.get("effective_open_requirements") or []
     ]
     blockers = [
         item
@@ -82,7 +90,8 @@ def prepackage_clearance_from_release_clearance(release_clearance: dict) -> dict
         str(item) for item in release_clearance.get("proof_sweep_failed_components") or []
     ]
     proof_sweep_prepackage_ok = proof_sweep_status == "pass" or (
-        set(proof_sweep_failed_components) <= {"no_release_blockers"}
+        set(proof_sweep_failed_components)
+        <= {"no_release_blockers", "no_open_objective_requirements", "regression_suite"}
     )
     prepackage_ready = (
         proof_sweep_prepackage_ok

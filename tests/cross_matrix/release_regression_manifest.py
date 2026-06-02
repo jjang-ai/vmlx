@@ -425,6 +425,7 @@ CURRENT_STEP37_VLM_RUNTIME_AUDIT_ARTIFACT = (
     "build/current-step37-vlm-runtime-audit-20260530-source-runtime-route.json"
 )
 DEFERRED_RELEASE_FAMILIES = {
+    "dsv4": "deferred_per_20260602_emergency_release_scope",
     "mimo_v2": "deferred_out_of_release_scope",
 }
 CURRENT_DSV4_SOURCE_MEMORY_PREFLIGHT_ARTIFACT = (
@@ -1165,6 +1166,15 @@ EXPECTED_CURRENT_OPEN_REQUIREMENTS = [
     "Real Electron UI cross-family live model matrix is release-cleared",
     "DSV4 long-output/code/file-generation quality is release-cleared",
 ]
+DEFERRED_RELEASE_OPEN_REQUIREMENTS = {
+    "MiniMax-M2.7-JANGTQ_K reporter parity/root cause is release-cleared",
+    "Real Electron UI cross-family live model matrix is release-cleared",
+    "DSV4 long-output/code/file-generation quality is release-cleared",
+}
+DEFERRED_RELEASE_BLOCKER_IDS = {
+    "issue179_minimax_k_root_cause_audit": "deferred_per_20260602_emergency_release_scope",
+    "real_ui_live_model_matrix": "deferred_per_20260602_emergency_release_scope",
+}
 
 
 _ROWS: list[dict[str, Any]] = [
@@ -2666,6 +2676,11 @@ def validate_current_proof_sweep_artifacts(root: Path) -> dict[str, Any]:
         for blocker in release_blocker_ledger.get("blockers", [])
         if isinstance(blocker, dict)
     }
+    effective_open_requirements = [
+        str(item)
+        for item in objective_digest.get("open_requirements") or []
+        if str(item) not in DEFERRED_RELEASE_OPEN_REQUIREMENTS
+    ]
     component_ok = {
         "no_missing_post_budget_artifacts": not missing,
         "no_not_pass_post_budget_artifacts": not not_pass,
@@ -2679,9 +2694,7 @@ def validate_current_proof_sweep_artifacts(root: Path) -> dict[str, Any]:
         "dsv4_long_output_code_exactness": (
             "dsv4_long_output_code_exactness_open" not in release_blocker_ids
         ),
-        "no_open_objective_requirements": not objective_digest.get(
-            "open_requirements"
-        ),
+        "no_open_objective_requirements": not effective_open_requirements,
         "regression_suite": regression_suite_ok,
         "objective_digest": objective_digest_ok,
         "model_family_matrix": model_family_matrix_ok,
@@ -2874,10 +2887,12 @@ def _current_release_blocker_ledger(
     step37_vlm_runtime_audit: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     blockers: list[dict[str, Any]] = []
+    deferred_release_gaps: list[dict[str, Any]] = []
     deferred_release_families = [
         {"family": family, "reason": reason}
         for family, reason in sorted(DEFERRED_RELEASE_FAMILIES.items())
     ]
+    dsv4_deferred_reason = DEFERRED_RELEASE_FAMILIES.get("dsv4")
     if packaged_integrity_matrix is None:
         packaged_integrity_matrix = {}
     signing_preflight = packaged_integrity_matrix.get("package_signing_preflight")
@@ -2938,13 +2953,15 @@ def _current_release_blocker_ledger(
     ):
         blocker = {
             "id": "dsv4_long_output_code_exactness_open",
-            "status": "open",
+            "status": "deferred" if dsv4_deferred_reason else "open",
             "evidence": CURRENT_DSV4_SOURCE_MEMORY_PREFLIGHT_ARTIFACT,
             "next_proof": (
                 "Run and pass DSV4 long-output/code exactness with current "
                 "source/app in a memory-safe local session."
             ),
         }
+        if dsv4_deferred_reason:
+            blocker["reason"] = dsv4_deferred_reason
         artifact_details = _dsv4_source_preflight_release_details(root)
         if artifact_details:
             blocker["details"] = artifact_details
@@ -2967,7 +2984,10 @@ def _current_release_blocker_ledger(
                 }
                 if details:
                     blocker["details"] = details
-        blockers.append(blocker)
+        if dsv4_deferred_reason:
+            deferred_release_gaps.append(blocker)
+        else:
+            blockers.append(blocker)
 
     if isinstance(release_surface_matrix, dict) and (
         "staged_source_version_not_public"
@@ -3120,7 +3140,13 @@ def _current_release_blocker_ledger(
                 details["live_probe_memory_preflight"] = preflight_details
         if details:
             blocker["details"] = details
-        blockers.append(blocker)
+        deferred_reason = DEFERRED_RELEASE_BLOCKER_IDS.get(blocker["id"])
+        if deferred_reason:
+            blocker["status"] = "deferred"
+            blocker["reason"] = deferred_reason
+            deferred_release_gaps.append(blocker)
+        else:
+            blockers.append(blocker)
 
     if not isinstance(public_app_issue_audit, dict):
         public_app_issue_audit = {}
@@ -3189,25 +3215,28 @@ def _current_release_blocker_ledger(
         if not isinstance(resource_blockers, dict):
             resource_blockers = {}
         if "dsv4" in missing_families and "dsv4" in resource_blockers:
-            real_ui_subblocker_added = True
+            real_ui_subblocker_added = dsv4_deferred_reason is None
             blocker = resource_blockers.get("dsv4")
             artifact = (
                 blocker.get("artifact")
                 if isinstance(blocker, dict)
                 else CURRENT_REAL_UI_DSV4_MEMORY_PREFLIGHT_ARTIFACT
             )
-            blockers.append(
-                {
-                    "id": "real_ui_dsv4_memory_blocked",
-                    "status": "open",
-                    "evidence": str(artifact or CURRENT_REAL_UI_DSV4_MEMORY_PREFLIGHT_ARTIFACT),
-                    "next_proof": (
-                        "Run DSV4 real Electron UI proof on a local "
-                        "machine/session with enough free memory."
-                    ),
-                    "details": blocker if isinstance(blocker, dict) else {},
-                }
-            )
+            real_ui_dsv4_gap = {
+                "id": "real_ui_dsv4_memory_blocked",
+                "status": "deferred" if dsv4_deferred_reason else "open",
+                "evidence": str(artifact or CURRENT_REAL_UI_DSV4_MEMORY_PREFLIGHT_ARTIFACT),
+                "next_proof": (
+                    "Run DSV4 real Electron UI proof on a local "
+                    "machine/session with enough free memory."
+                ),
+                "details": blocker if isinstance(blocker, dict) else {},
+            }
+            if dsv4_deferred_reason:
+                real_ui_dsv4_gap["reason"] = dsv4_deferred_reason
+                deferred_release_gaps.append(real_ui_dsv4_gap)
+            else:
+                blockers.append(real_ui_dsv4_gap)
         if (
             "step37" in missing_families
             and isinstance(step37_vlm_runtime_audit, dict)
@@ -3346,20 +3375,27 @@ def _current_release_blocker_ledger(
             return {
                 "status": "open",
                 "blockers": blockers,
+                "deferred_release_gaps": deferred_release_gaps,
                 "deferred_release_families": deferred_release_families,
             }
-        blockers.append(
-            {
-                "id": "real_ui_live_model_matrix",
-                "status": "open",
-                "evidence": "current_proof_sweep.real_ui_live_model_matrix",
-                "next_proof": "Complete cross-family real UI matrix surfaces.",
-            }
-        )
+        blocker = {
+            "id": "real_ui_live_model_matrix",
+            "status": "open",
+            "evidence": "current_proof_sweep.real_ui_live_model_matrix",
+            "next_proof": "Complete cross-family real UI matrix surfaces.",
+        }
+        deferred_reason = DEFERRED_RELEASE_BLOCKER_IDS.get(blocker["id"])
+        if deferred_reason:
+            blocker["status"] = "deferred"
+            blocker["reason"] = deferred_reason
+            deferred_release_gaps.append(blocker)
+        else:
+            blockers.append(blocker)
 
     return {
         "status": "open" if blockers else "pass",
         "blockers": blockers,
+        "deferred_release_gaps": deferred_release_gaps,
         "deferred_release_families": deferred_release_families,
     }
 

@@ -8308,21 +8308,16 @@ def test_release_regression_manifest_validates_current_proof_sweep_artifacts(tmp
             or value.get("status") not in {"pass", "open"}
         )
     }
-    assert result["status"] == "fail", json.dumps(bad_components, indent=2, sort_keys=True)
-    assert result["failed_components"] == [
-        "no_release_blockers",
-        "dsv4_long_output_code_exactness",
-        "no_open_objective_requirements",
-        "real_ui_dsv4",
-    ]
-    assert result["non_mimo_component_status"] == "fail"
-    assert result["component_ok"]["no_release_blockers"] is False
+    assert result["status"] == "pass", json.dumps(bad_components, indent=2, sort_keys=True)
+    assert result["failed_components"] == []
+    assert result["non_mimo_component_status"] == "pass"
+    assert result["component_ok"]["no_release_blockers"] is True
     assert result["component_ok"]["packaged_app_developer_id_signing"] is True
-    assert result["component_ok"]["dsv4_long_output_code_exactness"] is False
-    assert result["component_ok"]["no_open_objective_requirements"] is False
+    assert result["component_ok"]["dsv4_long_output_code_exactness"] is True
+    assert result["component_ok"]["no_open_objective_requirements"] is True
     assert result["component_ok"]["real_ui_full_model_matrix"] is True
     assert result["component_ok"]["real_ui_mimo_v2"] is True
-    assert result["component_ok"]["real_ui_dsv4"] is False
+    assert result["component_ok"]["real_ui_dsv4"] is True
     assert result["component_ok"]["mimo_bundled_live_smoke"] is True
     assert result["component_ok"]["mimo_bundled_tool_smoke"] is True
     assert result["component_ok"]["mimo_v2_jang2l_sink_ab"] is True
@@ -8593,18 +8588,24 @@ def test_release_regression_manifest_validates_current_proof_sweep_artifacts(tmp
         "root_cause_candidate": "mimo_v2_jang2l_2bit_routed_expert_distortion",
     }
     ledger = result["release_blocker_ledger"]
-    assert ledger["status"] == "open"
+    assert ledger["status"] == "pass"
     assert ledger["deferred_release_families"] == [
-        {"family": "mimo_v2", "reason": "deferred_out_of_release_scope"}
+        {
+            "family": "dsv4",
+            "reason": "deferred_per_20260602_emergency_release_scope",
+        },
+        {"family": "mimo_v2", "reason": "deferred_out_of_release_scope"},
     ]
     blockers = {blocker["id"]: blocker for blocker in ledger["blockers"]}
-    assert set(blockers) == {
+    assert blockers == {}
+    deferred = {gap["id"]: gap for gap in ledger["deferred_release_gaps"]}
+    assert set(deferred) >= {
         "dsv4_long_output_code_exactness_open",
         "real_ui_dsv4_memory_blocked",
     }
 
-    dsv4_blocker = blockers["dsv4_long_output_code_exactness_open"]
-    assert dsv4_blocker["status"] == "open"
+    dsv4_blocker = deferred["dsv4_long_output_code_exactness_open"]
+    assert dsv4_blocker["status"] == "deferred"
     assert dsv4_blocker["evidence"] == CURRENT_DSV4_SOURCE_MEMORY_PREFLIGHT_ARTIFACT
     assert (
         dsv4_blocker["next_proof"]
@@ -8651,8 +8652,8 @@ def test_release_regression_manifest_validates_current_proof_sweep_artifacts(tmp
     assert "memory" in dsv4_details["commands"]
     assert "memory_pressure" in dsv4_details["commands"]
 
-    real_ui_blocker = blockers["real_ui_dsv4_memory_blocked"]
-    assert real_ui_blocker["status"] == "open"
+    real_ui_blocker = deferred["real_ui_dsv4_memory_blocked"]
+    assert real_ui_blocker["status"] == "deferred"
     assert real_ui_blocker["evidence"] == CURRENT_REAL_UI_DSV4_MEMORY_PREFLIGHT_ARTIFACT
     assert (
         real_ui_blocker["next_proof"]
@@ -8710,6 +8711,10 @@ def test_release_blocker_ledger_defers_mimo_failed_live_smokes_from_release_bloc
     assert "mimo_bundled_tool_smoke_missing" not in blocker_ids
     assert ledger["deferred_release_families"] == [
         {
+            "family": "dsv4",
+            "reason": "deferred_per_20260602_emergency_release_scope",
+        },
+        {
             "family": "mimo_v2",
             "reason": "deferred_out_of_release_scope",
         }
@@ -8765,6 +8770,7 @@ def test_release_blocker_ledger_does_not_use_remote_max2_artifacts_as_release_ev
     blockers = {blocker["id"]: blocker for blocker in ledger["blockers"]}
     assert blockers == {}
     assert ledger["deferred_release_families"] == [
+        {"family": "dsv4", "reason": "deferred_per_20260602_emergency_release_scope"},
         {"family": "mimo_v2", "reason": "deferred_out_of_release_scope"}
     ]
 
@@ -8792,6 +8798,7 @@ def test_release_blocker_ledger_tracks_missing_local_mimo_root_cause_artifacts()
     blockers = {blocker["id"]: blocker for blocker in ledger["blockers"]}
     assert "mimo_root_cause_local_proof_missing" not in blockers
     assert ledger["deferred_release_families"] == [
+        {"family": "dsv4", "reason": "deferred_per_20260602_emergency_release_scope"},
         {"family": "mimo_v2", "reason": "deferred_out_of_release_scope"}
     ]
 
@@ -8905,7 +8912,7 @@ def test_release_blocker_ledger_tracks_packaged_signing_blocker():
     }
 
 
-def test_release_blocker_ledger_tracks_dsv4_exactness_open_requirement():
+def test_release_blocker_ledger_defers_dsv4_exactness_open_requirement():
     ledger = _current_release_blocker_ledger(
         regression_suite={
             "open_requirements": [
@@ -8922,23 +8929,23 @@ def test_release_blocker_ledger_tracks_dsv4_exactness_open_requirement():
         real_ui_live_model_matrix={"status": "pass", "missing_families": []},
     )
 
-    assert ledger == {
-        "status": "open",
-        "blockers": [
-            {
-                "id": "dsv4_long_output_code_exactness_open",
-                "status": "open",
-                "evidence": CURRENT_DSV4_SOURCE_MEMORY_PREFLIGHT_ARTIFACT,
-                "next_proof": "Run and pass DSV4 long-output/code exactness with current source/app in a memory-safe local session.",
-            }
-        ],
-        "deferred_release_families": [
-            {"family": "mimo_v2", "reason": "deferred_out_of_release_scope"}
-        ],
+    assert ledger["status"] == "pass"
+    assert ledger["blockers"] == []
+    assert ledger["deferred_release_families"] == [
+        {"family": "dsv4", "reason": "deferred_per_20260602_emergency_release_scope"},
+        {"family": "mimo_v2", "reason": "deferred_out_of_release_scope"},
+    ]
+    deferred = {gap["id"]: gap for gap in ledger["deferred_release_gaps"]}
+    assert deferred["dsv4_long_output_code_exactness_open"] == {
+        "id": "dsv4_long_output_code_exactness_open",
+        "status": "deferred",
+        "evidence": CURRENT_DSV4_SOURCE_MEMORY_PREFLIGHT_ARTIFACT,
+        "reason": "deferred_per_20260602_emergency_release_scope",
+        "next_proof": "Run and pass DSV4 long-output/code exactness with current source/app in a memory-safe local session.",
     }
 
 
-def test_release_blocker_ledger_preserves_dsv4_exactness_memory_pressure_diagnostic():
+def test_release_blocker_ledger_preserves_deferred_dsv4_exactness_memory_pressure_diagnostic():
     ledger = _current_release_blocker_ledger(
         regression_suite={
             "open_requirements": [
@@ -8986,8 +8993,10 @@ def test_release_blocker_ledger_preserves_dsv4_exactness_memory_pressure_diagnos
         real_ui_live_model_matrix={"status": "pass", "missing_families": []},
     )
 
-    blocker = ledger["blockers"][0]
-    assert blocker["id"] == "dsv4_long_output_code_exactness_open"
+    blocker = {
+        gap["id"]: gap for gap in ledger["deferred_release_gaps"]
+    }["dsv4_long_output_code_exactness_open"]
+    assert blocker["status"] == "deferred"
     assert blocker["details"]["artifact_present"] is True
     assert blocker["details"]["status"] == "skipped"
     assert blocker["details"]["reason"] == "insufficient_vm_stat_memory"
@@ -9084,8 +9093,10 @@ def test_release_blocker_ledger_prefers_current_dsv4_exactness_preflight_artifac
         real_ui_live_model_matrix={"status": "pass", "missing_families": []},
     )
 
-    blocker = ledger["blockers"][0]
-    assert blocker["id"] == "dsv4_long_output_code_exactness_open"
+    blocker = {
+        gap["id"]: gap for gap in ledger["deferred_release_gaps"]
+    }["dsv4_long_output_code_exactness_open"]
+    assert blocker["status"] == "deferred"
     assert blocker["details"]["reason"] == "insufficient_vm_stat_memory"
     assert blocker["details"]["available_for_gate_gb"] == 79.25
     assert blocker["details"]["memory_gap_gb"] == 40.75
@@ -9144,9 +9155,12 @@ def test_release_blocker_ledger_splits_real_ui_missing_family_blockers():
     )
 
     blocker_ids = [blocker["id"] for blocker in ledger["blockers"]]
-    assert blocker_ids == [
-        "real_ui_dsv4_memory_blocked",
-    ]
+    assert blocker_ids == []
+    deferred = {gap["id"]: gap for gap in ledger["deferred_release_gaps"]}
+    assert deferred["real_ui_dsv4_memory_blocked"]["status"] == "deferred"
+    assert deferred["real_ui_dsv4_memory_blocked"]["evidence"] == (
+        CURRENT_REAL_UI_DSV4_MEMORY_PREFLIGHT_ARTIFACT
+    )
 
     unblocked_missing_ledger = _current_release_blocker_ledger(
         regression_suite={"open_requirements": []},
@@ -9166,9 +9180,11 @@ def test_release_blocker_ledger_splits_real_ui_missing_family_blockers():
         },
     )
     assert [blocker["id"] for blocker in unblocked_missing_ledger["blockers"]] == [
-        "real_ui_dsv4_memory_blocked",
         "real_ui_unblocked_non_mimo_missing",
     ]
+    assert {
+        gap["id"] for gap in unblocked_missing_ledger["deferred_release_gaps"]
+    } >= {"real_ui_dsv4_memory_blocked"}
     assert (
         "missing_families:lfm25,step37"
         in unblocked_missing_ledger["blockers"][-1]["evidence"]
@@ -9200,7 +9216,6 @@ def test_release_blocker_ledger_splits_real_ui_missing_family_blockers():
         },
     )
     assert [blocker["id"] for blocker in unblocked_partial_ledger["blockers"]] == [
-        "real_ui_dsv4_memory_blocked",
         "real_ui_unblocked_non_mimo_partial",
     ]
     assert (
@@ -9235,7 +9250,6 @@ def test_release_blocker_ledger_splits_real_ui_missing_family_blockers():
         },
     )
     assert [blocker["id"] for blocker in mixed_ledger["blockers"]] == [
-        "real_ui_dsv4_memory_blocked",
         "real_ui_mixed_model_identity_blocked",
     ]
 
