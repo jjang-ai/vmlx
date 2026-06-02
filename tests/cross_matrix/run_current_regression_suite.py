@@ -462,7 +462,7 @@ CURRENT_SUITE_COMMANDS: dict[str, list[str]] = {
         sys.executable,
         "tests/cross_matrix/run_cache_architecture_contract.py",
         "--out",
-        "build/current-cache-architecture-contract-20260602-step-jangtq-boundary.json",
+        "build/current-cache-architecture-contract-20260602-v1554-attention-matmul-refresh.json",
     ],
     "noheavy_panel_settings_contract": [
         sys.executable,
@@ -560,7 +560,7 @@ CURRENT_SUITE_COMMANDS: dict[str, list[str]] = {
         sys.executable,
         "tests/cross_matrix/run_model_family_detection_contract.py",
         "--out",
-        "build/current-model-family-detection-contract-20260602-step-jangtq-boundary.json",
+        "build/current-model-family-detection-contract-20260602-v1554-attention-matmul-refresh.json",
     ],
     "native_mtp_contracts": [
         sys.executable,
@@ -604,7 +604,7 @@ CURRENT_SUITE_COMMANDS: dict[str, list[str]] = {
         sys.executable,
         "tests/cross_matrix/run_issue181_183_runtime_audit.py",
         "--out",
-        "build/current-issue181-183-runtime-audit-20260602-after-performance-health-epipe-app-sync.json",
+        "build/current-issue181-183-runtime-audit-20260602-v1554-installed-tahoe-refresh.json",
     ],
     "public_app_issue_audit": [
         sys.executable,

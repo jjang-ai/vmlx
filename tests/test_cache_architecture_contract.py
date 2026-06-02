@@ -5,7 +5,7 @@ def test_cache_architecture_contract_default_out_tracks_current_release_proof_ar
     from tests.cross_matrix import run_cache_architecture_contract as gate
 
     assert gate.DEFAULT_OUT == Path(
-        "build/current-cache-architecture-contract-20260602-step-jangtq-boundary.json"
+        "build/current-cache-architecture-contract-20260602-v1554-attention-matmul-refresh.json"
     )
 
 

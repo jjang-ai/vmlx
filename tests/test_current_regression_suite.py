@@ -1455,6 +1455,11 @@ def test_current_regression_suite_runs_model_family_detection_contracts(monkeypa
         "run_model_family_detection_contract.py" in " ".join(cmd)
         for _name, cmd in seen_steps
     )
+    assert any(
+        "build/current-model-family-detection-contract-20260602-v1554-attention-matmul-refresh.json"
+        in " ".join(cmd)
+        for _name, cmd in seen_steps
+    )
 
 
 def test_current_regression_suite_runs_parser_registry_contracts(monkeypatch, tmp_path):
@@ -1545,6 +1550,11 @@ def test_current_regression_suite_runs_cache_architecture_contracts(monkeypatch,
     assert any(name == "cache_architecture_contracts" for name, _cmd in seen_steps)
     assert any(
         "run_cache_architecture_contract.py" in " ".join(cmd)
+        for _name, cmd in seen_steps
+    )
+    assert any(
+        "build/current-cache-architecture-contract-20260602-v1554-attention-matmul-refresh.json"
+        in " ".join(cmd)
         for _name, cmd in seen_steps
     )
 

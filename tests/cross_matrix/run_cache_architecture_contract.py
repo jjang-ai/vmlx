@@ -22,7 +22,7 @@ from typing import Any
 
 
 DEFAULT_OUT = Path(
-    "build/current-cache-architecture-contract-20260602-step-jangtq-boundary.json"
+    "build/current-cache-architecture-contract-20260602-v1554-attention-matmul-refresh.json"
 )
 API_CACHE_CONTRACT_ARTIFACT = Path(
     "build/current-api-cache-contract-cache-architecture-check-20260528-named-family-registry-matrix.json"

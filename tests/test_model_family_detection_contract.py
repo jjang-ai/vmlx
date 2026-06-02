@@ -6,7 +6,7 @@ def test_family_detection_contract_default_out_tracks_current_release_proof_arti
     from tests.cross_matrix import run_model_family_detection_contract as gate
 
     assert gate.DEFAULT_OUT == Path(
-        "build/current-model-family-detection-contract-20260602-step-jangtq-boundary.json"
+        "build/current-model-family-detection-contract-20260602-v1554-attention-matmul-refresh.json"
     )
 
 
