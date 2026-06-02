@@ -2640,6 +2640,7 @@ def validate_current_proof_sweep_artifacts(root: Path) -> dict[str, Any]:
         and not mimo_v2_jang2l_root_cause["failures"]
     )
     release_blocker_ledger = _current_release_blocker_ledger(
+        root=root,
         regression_suite=regression_suite,
         packaged_integrity_matrix=packaged_integrity_matrix,
         live_smoke_summaries=live_smoke_summaries,
@@ -2799,8 +2800,61 @@ def validate_current_proof_sweep_artifacts(root: Path) -> dict[str, Any]:
     }
 
 
+DSV4_SOURCE_PREFLIGHT_RELEASE_DETAIL_KEYS = (
+    "artifact_present",
+    "status",
+    "reason",
+    "model",
+    "commands",
+    "available_gb",
+    "required_available_gb",
+    "required_free_gb",
+    "min_free_gb",
+    "available_for_gate_gb",
+    "memory_gap_gb",
+    "strict_vm_stat_memory_gap_gb",
+    "psutil_available_gap_gb",
+    "free_plus_speculative_purgeable_gb",
+    "memory_pressure_free_percent",
+    "memory_pressure_error",
+    "preflight_memory_source",
+    "did_not_launch",
+    "launch_decision",
+    "launch_allowed",
+    "launch_blockers",
+    "active_heavy_process_count",
+    "active_heavy_processes",
+    "top_memory_processes",
+    "selected_cases",
+    "case_count",
+)
+
+
+def _dsv4_source_preflight_release_details(root: Path | None) -> dict[str, Any] | None:
+    if root is None:
+        return None
+    path = root / CURRENT_DSV4_SOURCE_MEMORY_PREFLIGHT_ARTIFACT
+    if not path.exists():
+        return None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:  # noqa: BLE001 - release ledger falls back to suite details
+        return None
+    if not isinstance(payload, dict):
+        return None
+    details = {
+        key: payload.get(key)
+        for key in DSV4_SOURCE_PREFLIGHT_RELEASE_DETAIL_KEYS
+        if key in payload
+    }
+    if details and "artifact_present" not in details:
+        details["artifact_present"] = True
+    return details or None
+
+
 def _current_release_blocker_ledger(
     *,
+    root: Path | None = None,
     regression_suite: dict[str, Any],
     packaged_integrity_matrix: dict[str, Any] | None = None,
     live_smoke_summaries: dict[str, Any],
@@ -2889,8 +2943,11 @@ def _current_release_blocker_ledger(
                 "source/app in a memory-safe local session."
             ),
         }
+        artifact_details = _dsv4_source_preflight_release_details(root)
+        if artifact_details:
+            blocker["details"] = artifact_details
         open_details = regression_suite.get("open_requirement_details")
-        if isinstance(open_details, dict):
+        if "details" not in blocker and isinstance(open_details, dict):
             row = open_details.get(
                 "DSV4 long-output/code/file-generation quality is release-cleared"
             )
@@ -2903,34 +2960,7 @@ def _current_release_blocker_ledger(
             if isinstance(preflight, dict):
                 details = {
                     key: preflight.get(key)
-                    for key in (
-                        "artifact_present",
-                        "status",
-                        "reason",
-                        "model",
-                        "commands",
-                        "available_gb",
-                        "required_available_gb",
-                        "required_free_gb",
-                        "min_free_gb",
-                        "available_for_gate_gb",
-                        "memory_gap_gb",
-                        "strict_vm_stat_memory_gap_gb",
-                        "psutil_available_gap_gb",
-                        "free_plus_speculative_purgeable_gb",
-                        "memory_pressure_free_percent",
-                        "memory_pressure_error",
-                        "preflight_memory_source",
-                        "did_not_launch",
-                        "launch_decision",
-                        "launch_allowed",
-                        "launch_blockers",
-                        "active_heavy_process_count",
-                        "active_heavy_processes",
-                        "top_memory_processes",
-                        "selected_cases",
-                        "case_count",
-                    )
+                    for key in DSV4_SOURCE_PREFLIGHT_RELEASE_DETAIL_KEYS
                     if key in preflight
                 }
                 if details:

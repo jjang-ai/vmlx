@@ -8783,6 +8783,95 @@ def test_release_blocker_ledger_preserves_dsv4_exactness_memory_pressure_diagnos
     assert blocker["details"]["selected_cases"] == ["chat_max", "responses_on"]
 
 
+def test_release_blocker_ledger_prefers_current_dsv4_exactness_preflight_artifact(
+    tmp_path,
+):
+    artifact = tmp_path / CURRENT_DSV4_SOURCE_MEMORY_PREFLIGHT_ARTIFACT
+    artifact.parent.mkdir(parents=True, exist_ok=True)
+    artifact.write_text(
+        json.dumps(
+            {
+                "status": "skipped",
+                "reason": "insufficient_vm_stat_memory",
+                "model": "/Users/example/models/JANGQ/DeepSeek-V4-Flash-JANGTQ-K",
+                "commands": {
+                    "memory": "vm_stat",
+                    "memory_pressure": "memory_pressure",
+                },
+                "available_gb": 105.0,
+                "required_available_gb": 120.0,
+                "required_free_gb": 120.0,
+                "min_free_gb": 120.0,
+                "available_for_gate_gb": 79.25,
+                "memory_gap_gb": 40.75,
+                "strict_vm_stat_memory_gap_gb": 40.75,
+                "psutil_available_gap_gb": 15.0,
+                "free_plus_speculative_purgeable_gb": 79.25,
+                "memory_pressure_free_percent": 95,
+                "preflight_memory_source": "vm_stat_free_plus_speculative_purgeable",
+                "did_not_launch": True,
+                "launch_decision": "do_not_launch",
+                "launch_allowed": False,
+                "launch_blockers": ["insufficient_memory"],
+                "active_heavy_process_count": 0,
+                "active_heavy_processes": [],
+                "top_memory_processes": [
+                    {"pid": 4321, "rss_gb": 2.0, "command": "current-codex"}
+                ],
+                "selected_cases": ["chat_off", "responses_off"],
+                "case_count": 2,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    ledger = _current_release_blocker_ledger(
+        root=tmp_path,
+        regression_suite={
+            "open_requirements": [
+                "DSV4 long-output/code/file-generation quality is release-cleared"
+            ],
+            "open_requirement_details": {
+                "DSV4 long-output/code/file-generation quality is release-cleared": {
+                    "details": {
+                        "current_source_full_output_preflight": {
+                            "status": "skipped",
+                            "reason": "stale_suite_detail",
+                            "available_for_gate_gb": 12.0,
+                            "memory_gap_gb": 108.0,
+                            "top_memory_processes": [
+                                {
+                                    "pid": 9999,
+                                    "rss_gb": 99.0,
+                                    "command": "stale-runner",
+                                }
+                            ],
+                        }
+                    }
+                }
+            },
+        },
+        live_smoke_summaries={"status": "pass", "missing": [], "not_pass": []},
+        live_tool_smoke_summaries={"status": "pass", "missing": [], "not_pass": []},
+        mimo_v2_jang2l_sink_ab={"status": "pass"},
+        mimo_v2_jang2l_root_cause={"remote_evidence_only": False},
+        issue175_179_release_boundary_audit={"status": "pass", "issues": {}},
+        installed_app_runtime_parity_audit={"status": "pass"},
+        issue179_minimax_k_root_cause_audit={"status": "pass"},
+        real_ui_live_model_matrix={"status": "pass", "missing_families": []},
+    )
+
+    blocker = ledger["blockers"][0]
+    assert blocker["id"] == "dsv4_long_output_code_exactness_open"
+    assert blocker["details"]["reason"] == "insufficient_vm_stat_memory"
+    assert blocker["details"]["available_for_gate_gb"] == 79.25
+    assert blocker["details"]["memory_gap_gb"] == 40.75
+    assert blocker["details"]["top_memory_processes"] == [
+        {"pid": 4321, "rss_gb": 2.0, "command": "current-codex"}
+    ]
+
+
 def test_release_blocker_ledger_tracks_stale_real_ui_request_contract_proofs():
     ledger = _current_release_blocker_ledger(
         regression_suite={"open_requirements": []},
