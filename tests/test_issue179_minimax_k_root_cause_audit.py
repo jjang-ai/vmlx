@@ -223,6 +223,30 @@ def test_issue179_audit_keeps_reporter_cancel_404_boundary_open():
         "controlled_cancel_after_response_id"
     )
     assert audit["local_responses_cancel_probe"]["probe"]["bad_text_captured"] is False
+    assert audit["live_probe_memory_preflight"]["path"] == (
+        "build/current-issue179-minimax-k-responses-cancel-probe-memory-preflight-20260602-cache-detail-zero-cached-recheck.json"
+    )
+    assert audit["live_probe_memory_preflight"]["exists"] is True
+    assert audit["live_probe_memory_preflight"]["status"] in {
+        "skipped",
+        "ready_to_launch",
+    }
+    assert isinstance(audit["live_probe_memory_preflight"]["launch_allowed"], bool)
+    assert isinstance(
+        audit["live_probe_memory_preflight"]["available_for_gate_gb"],
+        int | float,
+    )
+    assert isinstance(
+        audit["live_probe_memory_preflight"]["required_free_gb"],
+        int | float,
+    )
+    assert audit["live_probe_memory_preflight"]["preflight_memory_source"] == (
+        "vm_stat_free_plus_speculative_purgeable"
+    )
+    assert isinstance(
+        audit["live_probe_memory_preflight"]["preflight_captured_at"],
+        str,
+    )
     assert audit["local_reporter_prompt_reproduction"]["clean"] is True
     assert audit["local_reporter_prompt_reproduction"]["request_matches_reporter"] is True
     assert audit["local_reporter_prompt_reproduction"]["bad_text_captured"] is False

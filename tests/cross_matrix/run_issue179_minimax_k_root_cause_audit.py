@@ -66,6 +66,9 @@ LOCAL_REAL_UI_PROOFS = (
 LOCAL_RESPONSES_CANCEL_PROOF = Path(
     "build/current-issue179-minimax-k-responses-cancel-probe-installed-20260527.json"
 )
+LOCAL_LIVE_PROBE_MEMORY_PREFLIGHT = Path(
+    "build/current-issue179-minimax-k-responses-cancel-probe-memory-preflight-20260602-cache-detail-zero-cached-recheck.json"
+)
 LOCAL_REPORTER_PROMPT_REPRODUCTION_PROOF = Path(
     "build/current-issue179-minimax-k-responses-cancel-probe-installed-badtext-20260528.json"
 )
@@ -802,6 +805,31 @@ def analyze_local_responses_cancel_probe(root: Path) -> dict[str, Any]:
     }
 
 
+def analyze_live_probe_memory_preflight(root: Path) -> dict[str, Any]:
+    path = root / LOCAL_LIVE_PROBE_MEMORY_PREFLIGHT
+    data = read_json(path)
+    return {
+        "path": str(LOCAL_LIVE_PROBE_MEMORY_PREFLIGHT),
+        "exists": path.exists(),
+        "sha256": sha256_file(path),
+        "status": data.get("status"),
+        "reason": data.get("reason"),
+        "launch_decision": data.get("launch_decision"),
+        "launch_allowed": data.get("launch_allowed"),
+        "model_path": data.get("model_path"),
+        "model_size_gb": data.get("model_size_gb"),
+        "required_free_gb": data.get("required_free_gb"),
+        "available_for_gate_gb": data.get("available_for_gate_gb"),
+        "free_plus_speculative_purgeable_gb": data.get(
+            "free_plus_speculative_purgeable_gb"
+        ),
+        "memory_gap_gb": data.get("memory_gap_gb"),
+        "preflight_memory_source": data.get("preflight_memory_source"),
+        "preflight_captured_at": data.get("preflight_captured_at"),
+        "active_heavy_process_count": data.get("active_heavy_process_count"),
+    }
+
+
 def _bad_text_counts(text: str) -> dict[str, int | bool]:
     return {
         "raw_parser_tag": bool(RAW_REAL_UI_PARSER_LEAK_RE.search(text)),
@@ -1342,6 +1370,7 @@ def build_audit(root: Path) -> dict[str, Any]:
     source = analyze_source_contract(root)
     installed_bundle = analyze_local_installed_bundle_contract()
     cancel_probe = analyze_local_responses_cancel_probe(root)
+    live_probe_memory_preflight = analyze_live_probe_memory_preflight(root)
     local_reporter_prompt_reproduction = analyze_local_reporter_prompt_reproduction(
         root
     )
@@ -1526,6 +1555,7 @@ def build_audit(root: Path) -> dict[str, Any]:
         "reporter_parity_artifact": reporter_parity_artifact,
         "reporter_parity_comparison": reporter_parity_comparison,
         "local_responses_cancel_probe": cancel_probe,
+        "live_probe_memory_preflight": live_probe_memory_preflight,
         "local_reporter_prompt_reproduction": local_reporter_prompt_reproduction,
         "local_model_manifest": local_model_manifest,
         "root_cause_discriminators": discriminators,
