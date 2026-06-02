@@ -15,6 +15,36 @@ function sessionAuthHeaders(config: Partial<ServerConfig>): Record<string, strin
   return key ? { Authorization: `Bearer ${key}` } : {}
 }
 
+function isExpectedSessionLifecycleDisconnectError(error: unknown): boolean {
+  const err = error as NodeJS.ErrnoException | undefined
+  const code = String(err?.code || '')
+  const message = String((err as Error)?.message || error || '')
+  const cause = (err as any)?.cause
+  const wrappedDisconnects = [
+    cause,
+    (err as any)?.reason,
+    (err as any)?.error,
+    (err as any)?.detail,
+  ].filter(Boolean)
+  const nestedErrors = Array.isArray((err as any)?.errors) ? (err as any).errors : []
+  return (
+    code === 'EPIPE' ||
+    code === 'ECONNRESET' ||
+    code === 'ERR_STREAM_DESTROYED' ||
+    code === 'ERR_STREAM_WRITE_AFTER_END' ||
+    /EPIPE|write EPIPE|broken pipe|socket hang up|connection reset|premature close|stream.*destroyed|write after end/i.test(message) ||
+    wrappedDisconnects.some((nested) => isExpectedSessionLifecycleDisconnectError(nested)) ||
+    nestedErrors.some((nested) => isExpectedSessionLifecycleDisconnectError(nested))
+  )
+}
+
+function formatSessionLifecycleError(error: unknown): string {
+  if (isExpectedSessionLifecycleDisconnectError(error)) {
+    return 'Server connection lost. The model server may have stopped or restarted. Try restarting the session.'
+  }
+  return String((error as Error)?.message || error || 'Unknown error')
+}
+
 async function fetchSessionJson(sessionId: string, path: string): Promise<any> {
   const session = sessionManager.getSession(sessionId)
   if (!session) throw new Error(`Session ${sessionId} not found`)
@@ -95,7 +125,7 @@ export function registerSessionHandlers(getWindow: () => BrowserWindow | null): 
         const session = await sessionManager.createSession(modelPath, config)
         return { success: true, session }
       } catch (error) {
-        return { success: false, error: (error as Error).message }
+        return { success: false, error: formatSessionLifecycleError(error) }
       }
     })
 
@@ -104,7 +134,7 @@ export function registerSessionHandlers(getWindow: () => BrowserWindow | null): 
         await sessionManager.startSession(sessionId)
         return { success: true }
       } catch (error) {
-        return { success: false, error: (error as Error).message }
+        return { success: false, error: formatSessionLifecycleError(error) }
       }
     })
 
@@ -119,7 +149,7 @@ export function registerSessionHandlers(getWindow: () => BrowserWindow | null): 
         await sessionManager.stopSession(sessionId)
         return { success: true }
       } catch (error) {
-        return { success: false, error: (error as Error).message }
+        return { success: false, error: formatSessionLifecycleError(error) }
       }
     })
 
@@ -205,7 +235,7 @@ export function registerSessionHandlers(getWindow: () => BrowserWindow | null): 
       try {
         return await sessionManager.softSleep(sessionId)
       } catch (error) {
-        return { success: false, error: (error as Error).message }
+        return { success: false, error: formatSessionLifecycleError(error) }
       }
     })
 
@@ -213,7 +243,7 @@ export function registerSessionHandlers(getWindow: () => BrowserWindow | null): 
       try {
         return await sessionManager.deepSleep(sessionId)
       } catch (error) {
-        return { success: false, error: (error as Error).message }
+        return { success: false, error: formatSessionLifecycleError(error) }
       }
     })
 
@@ -221,7 +251,7 @@ export function registerSessionHandlers(getWindow: () => BrowserWindow | null): 
       try {
         return await sessionManager.wakeSession(sessionId)
       } catch (error) {
-        return { success: false, error: (error as Error).message }
+        return { success: false, error: formatSessionLifecycleError(error) }
       }
     })
 
@@ -262,7 +292,10 @@ export function registerSessionHandlers(getWindow: () => BrowserWindow | null): 
       try {
         const win = getWindow()
         if (win && !win.isDestroyed()) {
-          win.webContents.send(eventName, data)
+          const payload = eventName === 'session:error'
+            ? { ...data, error: formatSessionLifecycleError(data.error) }
+            : data
+          win.webContents.send(eventName, payload)
         }
       } catch (_) {}
     })

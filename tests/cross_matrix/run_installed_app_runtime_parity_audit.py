@@ -845,6 +845,15 @@ def build_audit(
             and "nestedErrors.some((nested) => isExpectedPerformanceEndpointDisconnectError(nested))"
             in panel_main
         ),
+        "installed_panel_session_lifecycle_epipe_guard": (
+            panel_result["returncode"] == 0
+            and "function isExpectedSessionLifecycleDisconnectError" in panel_main
+            and "function formatSessionLifecycleError" in panel_main
+            and "Server connection lost. The model server may have stopped or restarted. Try restarting the session."
+            in panel_main
+            and "formatSessionLifecycleError(error)" in panel_main
+            and "formatSessionLifecycleError(data.error)" in panel_main
+        ),
         "installed_panel_child_process_stdio_epipe_guard": (
             panel_result["returncode"] == 0
             and "isExpectedChildProcessStreamDisconnectError" in panel_main

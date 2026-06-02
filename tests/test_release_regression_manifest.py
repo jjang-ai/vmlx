@@ -2269,6 +2269,7 @@ def _write_expected_installed_app_runtime_parity_audit(root: Path) -> None:
                     "installed_panel_image_ipc_epipe_aggregate_guard": True,
                     "installed_panel_cache_ipc_epipe_aggregate_guard": True,
                     "installed_panel_performance_health_epipe_guard": True,
+                    "installed_panel_session_lifecycle_epipe_guard": True,
                     "installed_panel_child_process_stdio_epipe_guard": True,
                     "installed_panel_child_process_stdio_epipe_aggregate_guard": True,
                     "installed_panel_renderer_chat_epipe_toast_normalized": True,
@@ -2325,6 +2326,7 @@ def _write_expected_staged_app_runtime_parity_audit(root: Path) -> None:
                     "installed_panel_image_ipc_epipe_aggregate_guard": True,
                     "installed_panel_cache_ipc_epipe_aggregate_guard": True,
                     "installed_panel_performance_health_epipe_guard": True,
+                    "installed_panel_session_lifecycle_epipe_guard": True,
                     "installed_panel_child_process_stdio_epipe_guard": True,
                     "installed_panel_child_process_stdio_epipe_aggregate_guard": True,
                     "installed_panel_renderer_chat_epipe_toast_normalized": True,
@@ -11372,6 +11374,7 @@ def test_release_regression_manifest_requires_panel_api_settings_source_hashes()
         "panel/src/main/server.ts",
         "panel/src/main/sessions.ts",
         "panel/src/main/ipc/chat.ts",
+        "panel/src/main/ipc/sessions.ts",
         "panel/src/main/ipc/developer.ts",
         "panel/src/main/ipc/image.ts",
         "panel/src/main/ipc/imageGenerationState.ts",
@@ -12209,6 +12212,20 @@ def test_release_regression_manifest_api_surface_requires_backend_stderr_split_e
 
 def test_release_regression_manifest_api_surface_requires_performance_health_epipe_guard():
     assert "panel_performance_health_epipe_guard" in EXPECTED_CURRENT_API_SURFACE_CHECKS
+
+
+def test_release_regression_manifest_api_surface_requires_session_lifecycle_epipe_guard():
+    assert "panel_session_lifecycle_epipe_guard" in EXPECTED_CURRENT_API_SURFACE_CHECKS
+
+
+def test_release_regression_manifest_session_ipc_normalizes_epipe_lifecycle_errors():
+    source = Path("panel/src/main/ipc/sessions.ts").read_text(encoding="utf-8")
+
+    assert "function isExpectedSessionLifecycleDisconnectError" in source
+    assert "function formatSessionLifecycleError" in source
+    assert "Server connection lost. The model server may have stopped or restarted. Try restarting the session." in source
+    assert "formatSessionLifecycleError(error)" in source
+    assert "formatSessionLifecycleError(data.error)" in source
 
 
 def test_release_regression_manifest_api_surface_requires_plain_attention_kv_status():

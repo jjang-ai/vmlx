@@ -55,6 +55,7 @@ CURRENT_SUITE_SOURCE_HASH_FILES = (
     "panel/src/main/ipc/imageGenerationState.ts",
     "panel/src/main/ipc/models.ts",
     "panel/src/main/ipc/performance.ts",
+    "panel/src/main/ipc/sessions.ts",
     "panel/src/main/model-config-registry.ts",
     "panel/src/main/process-manager.ts",
     "panel/src/main/server.ts",

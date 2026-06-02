@@ -33,6 +33,7 @@ SOURCE_HASH_FILES = (
     "tests/cross_matrix/run_noheavy_api_cache_contract.py",
     "tests/test_engine_audit.py",
     "panel/src/main/ipc/chat.ts",
+    "panel/src/main/ipc/sessions.ts",
     "panel/src/main/ipc/cache.ts",
     "panel/src/main/ipc/performance.ts",
     "panel/src/main/ipc/image.ts",
@@ -240,6 +241,7 @@ def build_artifact(root: Path) -> dict[str, Any]:
     nested_checks = nested.get("checks", {})
     nested_missing_markers = nested.get("missing_markers", [])
     panel_stdout = str(results["panel_api_request_builders"].get("stdout", ""))
+    session_ipc_source = (root / "panel/src/main/ipc/sessions.ts").read_text(encoding="utf-8")
     missing_panel_markers = [
         marker for marker in REQUIRED_PANEL_API_TEST_MARKERS if marker not in panel_stdout
     ]
@@ -386,6 +388,14 @@ def build_artifact(root: Path) -> dict[str, Any]:
             not failed
             and "normalizes performance health EPIPE disconnects instead of surfacing raw unexpected errors" not in missing_panel_markers
             and panel_passed >= 74
+        ),
+        "panel_session_lifecycle_epipe_guard": (
+            not failed
+            and "function isExpectedSessionLifecycleDisconnectError" in session_ipc_source
+            and "function formatSessionLifecycleError" in session_ipc_source
+            and "Server connection lost. The model server may have stopped or restarted. Try restarting the session." in session_ipc_source
+            and "formatSessionLifecycleError(error)" in session_ipc_source
+            and "formatSessionLifecycleError(data.error)" in session_ipc_source
         ),
         "all_required_panel_api_markers_present": not failed and not missing_panel_markers,
     }
