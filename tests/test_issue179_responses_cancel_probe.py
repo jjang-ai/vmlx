@@ -102,6 +102,7 @@ Pages purgeable:                         250.
         SimpleNamespace(
             model=Path("/models/MiniMax-M2.7-JANGTQ_K"),
             memory_preflight_margin_gb=6.0,
+            memory_preflight_headroom_gb=2.0,
         ),
         vm_stat_text=vm_stat,
         model_size_gb_override=74.0,
@@ -120,11 +121,13 @@ Pages purgeable:                         250.
         "launch_blockers": ["insufficient_memory"],
         "model_path": "/models/MiniMax-M2.7-JANGTQ_K",
         "model_size_gb": 74.0,
-        "required_free_gb": 80.0,
-        "min_free_gb": 80.0,
+        "required_free_gb": 82.0,
+        "min_free_gb": 82.0,
+        "memory_preflight_margin_gb": 6.0,
+        "memory_preflight_headroom_gb": 2.0,
         "available_for_gate_gb": 0.03,
         "free_plus_speculative_purgeable_gb": 0.03,
-        "memory_gap_gb": 79.97,
+        "memory_gap_gb": 81.97,
         "preflight_memory_source": "vm_stat_free_plus_speculative_purgeable",
         "commands": {
             "memory": "vm_stat",
@@ -154,6 +157,7 @@ Pages purgeable:                         250.
         SimpleNamespace(
             model=Path("/models/MiniMax-M2.7-JANGTQ_K"),
             memory_preflight_margin_gb=6.0,
+            memory_preflight_headroom_gb=2.0,
         ),
         vm_stat_text=vm_stat,
         model_size_gb_override=74.0,
@@ -190,6 +194,7 @@ Pages purgeable:                      300000.
         SimpleNamespace(
             model=Path("/models/MiniMax-M2.7-JANGTQ_K"),
             memory_preflight_margin_gb=6.0,
+            memory_preflight_headroom_gb=2.0,
         ),
         vm_stat_text=vm_stat,
         model_size_gb_override=74.0,
@@ -220,6 +225,7 @@ Pages purgeable:                      300000.
         SimpleNamespace(
             model=Path("/models/MiniMax-M2.7-JANGTQ_K"),
             memory_preflight_margin_gb=6.0,
+            memory_preflight_headroom_gb=2.0,
         ),
         vm_stat_text=vm_stat,
         model_size_gb_override=74.0,
@@ -238,8 +244,10 @@ Pages purgeable:                      300000.
         "launch_blockers": [],
         "model_path": "/models/MiniMax-M2.7-JANGTQ_K",
         "model_size_gb": 74.0,
-        "required_free_gb": 80.0,
-        "min_free_gb": 80.0,
+        "required_free_gb": 82.0,
+        "min_free_gb": 82.0,
+        "memory_preflight_margin_gb": 6.0,
+        "memory_preflight_headroom_gb": 2.0,
         "available_for_gate_gb": 105.29,
         "free_plus_speculative_purgeable_gb": 105.29,
         "memory_gap_gb": 0.0,
@@ -259,3 +267,33 @@ Pages purgeable:                      300000.
         "active_heavy_processes": [],
         "active_heavy_process_count": 0,
     }
+
+
+def test_issue179_memory_preflight_blocks_tiny_floor_surplus_as_unsafe():
+    # This reproduces the local unsafe case: model+margin is technically met,
+    # but there is not enough additional headroom for a responsible launch.
+    pages_for_80_1_gb = int(80.1 * (1024**3) / 16384)
+    vm_stat = f"""Mach Virtual Memory Statistics: (page size of 16384 bytes)
+Pages free:                          {pages_for_80_1_gb}.
+Pages speculative:                         0.
+Pages purgeable:                           0.
+"""
+
+    result = probe.memory_preflight_only_result(
+        SimpleNamespace(
+            model=Path("/models/MiniMax-M2.7-JANGTQ_K"),
+            memory_preflight_margin_gb=6.0,
+            memory_preflight_headroom_gb=2.0,
+        ),
+        vm_stat_text=vm_stat,
+        model_size_gb_override=74.0,
+        top_processes_text="  PID   RSS COMMAND\n",
+        active_processes_text="",
+    )
+
+    assert result["status"] == "skipped"
+    assert result["reason"] == "insufficient_vm_stat_memory"
+    assert result["required_free_gb"] == 82.0
+    assert result["available_for_gate_gb"] == 80.1
+    assert result["memory_gap_gb"] == 1.9
+    assert result["launch_allowed"] is False

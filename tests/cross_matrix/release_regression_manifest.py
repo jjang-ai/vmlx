@@ -399,7 +399,7 @@ CURRENT_ISSUE179_MINIMAX_K_ROOT_CAUSE_AUDIT_ARTIFACT = (
     "build/current-issue179-minimax-k-root-cause-audit-20260602-expanded-public-dmg-provenance.json"
 )
 CURRENT_ISSUE179_MINIMAX_K_LIVE_PROBE_MEMORY_PREFLIGHT_ARTIFACT = (
-    "build/current-issue179-minimax-k-responses-cancel-probe-memory-preflight-20260601.json"
+    "build/current-issue179-minimax-k-responses-cancel-probe-memory-preflight-20260602-developer-id-local-recheck.json"
 )
 CURRENT_ISSUE181_183_RUNTIME_AUDIT_ARTIFACT = (
     "build/current-issue181-183-runtime-audit-20260602-after-performance-health-epipe-app-sync.json"
@@ -417,7 +417,7 @@ CURRENT_REAL_UI_LIVE_MODEL_PROOF_ARTIFACTS = {
     "chat_screenshot": "docs/internal/agent-notes/current-real-ui-live-model-zaya-text-20260526-chat.png",
 }
 CURRENT_REAL_UI_DSV4_MEMORY_PREFLIGHT_ARTIFACT = (
-    "build/current-real-ui-dsv4-memory-preflight-20260601-local-recheck.json"
+    "build/current-real-ui-dsv4-memory-preflight-20260602-developer-id-local-recheck.json"
 )
 CURRENT_STEP37_VLM_RUNTIME_AUDIT_ARTIFACT = (
     "build/current-step37-vlm-runtime-audit-20260530-source-runtime-route.json"
@@ -426,7 +426,7 @@ DEFERRED_RELEASE_FAMILIES = {
     "mimo_v2": "deferred_out_of_release_scope",
 }
 CURRENT_DSV4_SOURCE_MEMORY_PREFLIGHT_ARTIFACT = (
-    "build/current-dsv4-route-mode-code-exactness-memory-preflight-20260601-post-epipe-fix.json"
+    "build/current-dsv4-route-mode-code-exactness-memory-preflight-20260602-developer-id-local-recheck.json"
 )
 EXPECTED_DSV4_SOURCE_PREFLIGHT_CASES = (
     "chat_off",

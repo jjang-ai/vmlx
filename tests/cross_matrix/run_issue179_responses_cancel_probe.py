@@ -31,6 +31,7 @@ DEFAULT_INSTALLED_PYTHON = Path(
     "/Applications/vMLX.app/Contents/Resources/bundled-python/python/bin/python3"
 )
 DEFAULT_MEMORY_PREFLIGHT_MARGIN_GB = 6.0
+DEFAULT_MEMORY_PREFLIGHT_HEADROOM_GB = 2.0
 TOP_MEMORY_PROCESS_COUNT = 10
 TOP_MEMORY_PROCESS_COMMAND = "ps -axo pid,rss,command -r | head -n 11"
 ACTIVE_HEAVY_PROCESS_COMMAND = (
@@ -233,6 +234,14 @@ def model_size_gb(model_path: Path) -> float | None:
     return round(total / (1024**3), 2)
 
 
+def required_memory_floor_gb(args: argparse.Namespace, size_gb: float) -> float:
+    margin_gb = float(args.memory_preflight_margin_gb)
+    headroom_gb = float(
+        getattr(args, "memory_preflight_headroom_gb", DEFAULT_MEMORY_PREFLIGHT_HEADROOM_GB)
+    )
+    return round(size_gb + margin_gb + headroom_gb, 2)
+
+
 def memory_preflight_block(
     args: argparse.Namespace,
     *,
@@ -263,7 +272,7 @@ def memory_preflight_block(
         active_processes_text=active_processes_text,
     )
     active_heavy_processes = process_context["active_heavy_processes"]
-    required_free_gb = round(size_gb + float(args.memory_preflight_margin_gb), 2)
+    required_free_gb = required_memory_floor_gb(args, size_gb)
     launch_blockers = [
         blocker
         for blocker, blocked in (
@@ -293,6 +302,14 @@ def memory_preflight_block(
         "model_size_gb": size_gb,
         "required_free_gb": required_free_gb,
         "min_free_gb": required_free_gb,
+        "memory_preflight_margin_gb": float(args.memory_preflight_margin_gb),
+        "memory_preflight_headroom_gb": float(
+            getattr(
+                args,
+                "memory_preflight_headroom_gb",
+                DEFAULT_MEMORY_PREFLIGHT_HEADROOM_GB,
+            )
+        ),
         "available_for_gate_gb": available_gb,
         "free_plus_speculative_purgeable_gb": available_gb,
         "memory_gap_gb": round(required_free_gb - available_gb, 2),
@@ -340,7 +357,7 @@ def memory_preflight_only_result(
         top_processes_text=top_processes_text,
         active_processes_text=active_processes_text,
     )
-    required_free_gb = round(size_gb + float(args.memory_preflight_margin_gb), 2)
+    required_free_gb = required_memory_floor_gb(args, size_gb)
     return {
         "status": "ready_to_launch",
         "reason": "memory_preflight_floor_met",
@@ -352,6 +369,14 @@ def memory_preflight_only_result(
         "model_size_gb": size_gb,
         "required_free_gb": required_free_gb,
         "min_free_gb": required_free_gb,
+        "memory_preflight_margin_gb": float(args.memory_preflight_margin_gb),
+        "memory_preflight_headroom_gb": float(
+            getattr(
+                args,
+                "memory_preflight_headroom_gb",
+                DEFAULT_MEMORY_PREFLIGHT_HEADROOM_GB,
+            )
+        ),
         "available_for_gate_gb": available_gb,
         "free_plus_speculative_purgeable_gb": available_gb,
         "memory_gap_gb": 0.0,
@@ -643,6 +668,11 @@ def main() -> int:
         "--memory-preflight-margin-gb",
         type=float,
         default=DEFAULT_MEMORY_PREFLIGHT_MARGIN_GB,
+    )
+    parser.add_argument(
+        "--memory-preflight-headroom-gb",
+        type=float,
+        default=DEFAULT_MEMORY_PREFLIGHT_HEADROOM_GB,
     )
     parser.add_argument("--memory-preflight-only", action="store_true")
     parser.add_argument("--skip-memory-preflight", action="store_true")
