@@ -28,6 +28,7 @@ def test_api_surface_contract_pins_named_public_surface_edges():
     assert "streaming_cache_detail_usage" in nested
     assert "responses_previous_response_history" in nested
     assert "cache_reuse_endpoints" in nested
+    assert "cache_stats_reuse_skip_telemetry" in nested
     assert "dsv4_native_cache_status" in nested
     assert "zaya_typed_cca_status" in nested
     assert "jangtq_mpp_nax_health_kernel_name" in nested
@@ -155,6 +156,7 @@ def test_noheavy_api_cache_contract_pins_named_server_rows():
     assert "test_responses_streaming_stores_history_for_previous_response_id" in required
     assert "test_responses_streaming_reasoning_only_stores_placeholder_and_marker" in required
     assert "test_chained_response_helper_emits_warning_for_reasoning_only_predecessor" in required
+    assert "test_cache_stats_endpoint_projects_cache_reuse_skip_telemetry" in required
     assert "test_cache_entries_endpoint_lists_paged_prefix_blocks" in required
     assert "test_cache_warm_endpoint_prefills_and_stores_block_cache" in required
     assert "test_clear_cache_prefix_clears_prefix_l2_without_multimodal" in required
@@ -167,3 +169,32 @@ def test_noheavy_api_cache_contract_pins_named_server_rows():
 
     for command in gate.COMMANDS.values():
         assert "-vv" in command
+
+
+def test_noheavy_api_cache_contract_cache_stats_telemetry_is_first_class_check(monkeypatch):
+    from tests.cross_matrix import run_noheavy_api_cache_contract as gate
+
+    missing = "test_cache_stats_endpoint_projects_cache_reuse_skip_telemetry"
+    stdout = "\n".join(
+        marker for marker in gate.REQUIRED_NOHEAVY_API_CACHE_TEST_MARKERS if marker != missing
+    )
+
+    def fake_run_command(name, cmd, cwd):
+        return {
+            "name": name,
+            "command": cmd,
+            "returncode": 0,
+            "elapsed_sec": 0.0,
+            "counts": {"passed": 1, "deselected": 0},
+            "stdout": stdout,
+            "stdout_tail": stdout.splitlines()[-40:],
+        }
+
+    monkeypatch.setattr(gate, "_run_command", fake_run_command)
+    monkeypatch.setattr(gate, "source_hashes", lambda root: {})
+
+    artifact = gate.build_artifact(Path("."))
+
+    assert missing in artifact["missing_markers"]
+    assert artifact["checks"]["cache_stats_reuse_skip_telemetry"] is False
+    assert artifact["checks"]["cache_reuse_endpoints"] is False

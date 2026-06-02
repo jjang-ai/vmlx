@@ -69,6 +69,7 @@ REQUIRED_NESTED_API_CHECKS = (
     "streaming_cache_detail_usage",
     "responses_previous_response_history",
     "cache_reuse_endpoints",
+    "cache_stats_reuse_skip_telemetry",
     "dsv4_native_cache_status",
     "dsv4_dsml_parser_residue_rejection",
     "dsv4_dsml_valid_tool_call_preserved",

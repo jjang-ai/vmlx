@@ -310,8 +310,14 @@ def build_artifact(root: Path) -> dict[str, Any]:
             and "test_chained_response_helper_emits_warning_for_reasoning_only_predecessor"
             not in missing_markers
         ),
+        "cache_stats_reuse_skip_telemetry": (
+            api_ok
+            and "test_cache_stats_endpoint_projects_cache_reuse_skip_telemetry"
+            not in missing_markers
+        ),
         "cache_reuse_endpoints": (
             api_ok
+            and "test_cache_stats_endpoint_projects_cache_reuse_skip_telemetry" not in missing_markers
             and "test_cache_entries_endpoint_lists_paged_prefix_blocks" not in missing_markers
             and "test_cache_warm_endpoint_prefills_and_stores_block_cache" not in missing_markers
             and "test_clear_cache_prefix_clears_prefix_l2_without_multimodal" not in missing_markers
