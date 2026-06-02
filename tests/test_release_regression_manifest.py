@@ -2191,8 +2191,23 @@ def test_current_proof_sweep_requires_issue179_memory_preflight_when_open(tmp_pa
     assert result["status"] == "fail"
 
 
-def test_current_proof_sweep_accepts_issue179_memory_preflight_skip(tmp_path):
+def test_current_proof_sweep_accepts_issue179_memory_preflight_ready(tmp_path):
     _write_passing_issue179_minimax_k_live_probe_memory_preflight(tmp_path)
+    path = tmp_path / CURRENT_ISSUE179_MINIMAX_K_LIVE_PROBE_MEMORY_PREFLIGHT_ARTIFACT
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload.update(
+        {
+            "status": "ready_to_launch",
+            "reason": "memory_preflight_floor_met",
+            "available_for_gate_gb": 83.83,
+            "free_plus_speculative_purgeable_gb": 83.83,
+            "memory_gap_gb": 0.0,
+            "launch_blockers": [],
+            "launch_decision": "launch_allowed",
+            "launch_allowed": True,
+        }
+    )
+    path.write_text(json.dumps(payload) + "\n", encoding="utf-8")
 
     result = validate_current_proof_sweep_artifacts(tmp_path)[
         "issue179_minimax_k_live_probe_memory_preflight"
@@ -2202,14 +2217,14 @@ def test_current_proof_sweep_accepts_issue179_memory_preflight_skip(tmp_path):
         "artifact": CURRENT_ISSUE179_MINIMAX_K_LIVE_PROBE_MEMORY_PREFLIGHT_ARTIFACT,
         "status": "pass",
         "failures": [],
-        "reason": "insufficient_vm_stat_memory",
+        "reason": "memory_preflight_floor_met",
         "model_path": "/Users/example/models/JANGQ/MiniMax-M2.7-JANGTQ_K",
         "model_size_gb": 73.96,
         "required_free_gb": 79.96,
         "min_free_gb": 79.96,
-        "available_for_gate_gb": 73.54,
-        "free_plus_speculative_purgeable_gb": 73.54,
-        "memory_gap_gb": 6.42,
+        "available_for_gate_gb": 83.83,
+        "free_plus_speculative_purgeable_gb": 83.83,
+        "memory_gap_gb": 0.0,
         "preflight_memory_source": "vm_stat_free_plus_speculative_purgeable",
         "commands": {
             "memory": "vm_stat",
@@ -2221,10 +2236,10 @@ def test_current_proof_sweep_accepts_issue179_memory_preflight_skip(tmp_path):
         ],
         "active_heavy_processes": [],
         "active_heavy_process_count": 0,
-        "launch_blockers": ["insufficient_memory"],
+        "launch_blockers": [],
         "preflight_captured_at": "2026-06-01T170000-0700",
-        "launch_decision": "do_not_launch",
-        "launch_allowed": False,
+        "launch_decision": "launch_allowed",
+        "launch_allowed": True,
     }
 
 

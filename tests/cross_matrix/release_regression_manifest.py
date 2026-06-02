@@ -398,10 +398,10 @@ CURRENT_ISSUE175_177_LIVE_RUNTIME_AUDIT_ARTIFACT = (
     "build/current-issue175-177-live-runtime-audit-20260601-local-refresh.json"
 )
 CURRENT_ISSUE179_MINIMAX_K_ROOT_CAUSE_AUDIT_ARTIFACT = (
-    "build/current-issue179-minimax-k-root-cause-audit-20260602-local-app-provenance.json"
+    "build/current-issue179-minimax-k-root-cause-audit-20260602-local-ready-live-cancel.json"
 )
 CURRENT_ISSUE179_MINIMAX_K_LIVE_PROBE_MEMORY_PREFLIGHT_ARTIFACT = (
-    "build/current-issue179-minimax-k-responses-cancel-probe-memory-preflight-20260602-cache-detail-zero-cached-recheck.json"
+    "build/current-issue179-minimax-k-responses-cancel-probe-memory-preflight-20260602-local-ready-check.json"
 )
 CURRENT_ISSUE181_183_RUNTIME_AUDIT_ARTIFACT = (
     "build/current-issue181-183-runtime-audit-20260602-after-performance-health-epipe-app-sync.json"
@@ -2069,13 +2069,13 @@ _ROWS: list[dict[str, Any]] = [
             "VMLINUX_REAL_UI_APP_PATH=/Applications/vMLX.app VMLINUX_REAL_UI_MODEL_PATH=/Users/example/models/JANGQ/MiniMax-M2.7-JANGTQ_K VMLINUX_REAL_UI_PROOF_BASENAME=diagnostic-installed-ui-live-model-minimax-m27-jangtq-k-issue179-hi-auto-20260527 VMLINUX_REAL_UI_WIRE_API=responses VMLINUX_REAL_UI_PROMPT_1='Hi' VMLINUX_REAL_UI_PROMPT_2='Hi' node panel/scripts/live-real-ui-model-proof.mjs",
             "VMLINUX_REAL_UI_APP_PATH=/Applications/vMLX.app VMLINUX_REAL_UI_MODEL_PATH=/Users/example/models/JANGQ/MiniMax-M2.7-JANGTQ_K VMLINUX_REAL_UI_PROOF_BASENAME=diagnostic-installed-ui-live-model-minimax-m27-jangtq-k-issue179-hi-thinking-20260527 VMLINUX_REAL_UI_WIRE_API=responses VMLINUX_REAL_UI_ENABLE_THINKING=1 VMLINUX_REAL_UI_PROMPT_1='Hi' VMLINUX_REAL_UI_PROMPT_2='Hi' node panel/scripts/live-real-ui-model-proof.mjs",
             "VMLINUX_REAL_UI_APP_PATH=/Applications/vMLX.app VMLINUX_REAL_UI_MODEL_PATH=/Users/example/models/JANGQ/MiniMax-M2.7-JANGTQ_K VMLINUX_REAL_UI_PROOF_BASENAME=diagnostic-installed-ui-live-model-minimax-m27-jangtq-k-issue179-512-20260527 VMLINUX_REAL_UI_WIRE_API=responses VMLINUX_REAL_UI_MAX_TOKENS=512 node panel/scripts/live-real-ui-model-proof.mjs",
-            ".venv/bin/python tests/cross_matrix/run_issue179_responses_cancel_probe.py --out build/current-issue179-minimax-k-responses-cancel-probe-installed-20260527.json --load-timeout 240 --request-timeout 180 --stream-seconds 8 --cancel-delay 0.25",
+            ".venv/bin/python tests/cross_matrix/run_issue179_responses_cancel_probe.py --out build/current-issue179-minimax-k-responses-cancel-probe-20260602-local-ready-live.json --port 8897 --load-timeout 240 --request-timeout 180 --stream-seconds 8 --cancel-delay 0.25 --max-lines-after-cancel 20",
             ".venv/bin/python tests/cross_matrix/run_issue175_179_release_boundary_audit.py --out build/current-issue175-179-release-boundary-audit-20260531-post-install-sync.json",
             ".venv/bin/python tests/cross_matrix/run_installed_app_runtime_parity_audit.py --out build/current-installed-app-runtime-parity-audit-20260602-developer-id-installed-signing.json",
             ".venv/bin/python tests/cross_matrix/run_installed_app_runtime_parity_audit.py --app panel/release/mac-arm64/vMLX.app --out build/current-staged-app-runtime-parity-audit-20260602-developer-id-staged-signing.json",
             ".venv/bin/python tests/cross_matrix/run_issue175_177_installed_runtime_audit.py --out build/current-issue175-177-installed-runtime-audit-20260601-local-refresh.json",
             ".venv/bin/python tests/cross_matrix/run_issue175_177_live_runtime_audit.py --out build/current-issue175-177-live-runtime-audit-20260601-local-refresh.json",
-            ".venv/bin/python tests/cross_matrix/run_issue179_minimax_k_root_cause_audit.py --out build/current-issue179-minimax-k-root-cause-audit-20260602-local-app-provenance.json",
+            ".venv/bin/python tests/cross_matrix/run_issue179_minimax_k_root_cause_audit.py --out build/current-issue179-minimax-k-root-cause-audit-20260602-local-ready-live-cancel.json",
             ".venv/bin/python tests/cross_matrix/run_issue179_reporter_parity_metadata.py --out build/current-issue179-reporter-parity-metadata-template-20260528.json",
             "VMLINUX_REAL_UI_MODEL_PATH=/Users/example/.mlxstudio/models/JANGQ-AI/MiMo-V2.5-JANG_2L VMLINUX_REAL_UI_PROOF_BASENAME=current-real-ui-live-model-mimo-v2-jang2l-20260527 VMLINUX_REAL_UI_IS_MLLM=1 VMLINUX_REAL_UI_MAX_TOKENS=96 node panel/scripts/live-real-ui-model-proof.mjs",
             "VMLINUX_REAL_UI_MODEL_PATH=/Users/example/models/dealign.ai/Nemotron-Omni-Nano-JANGTQ-CRACK VMLINUX_REAL_UI_PROOF_BASENAME=current-real-ui-live-model-nemotron-omni-nano-jangtq-20260527 VMLINUX_REAL_UI_MAX_TOKENS=96 node panel/scripts/live-real-ui-model-proof.mjs",
@@ -2126,15 +2126,14 @@ _ROWS: list[dict[str, Any]] = [
             "docs/internal/agent-notes/diagnostic-installed-ui-live-model-minimax-m27-jangtq-k-issue179-hi-thinking-20260527-chat.png",
             "docs/internal/agent-notes/diagnostic-installed-ui-live-model-minimax-m27-jangtq-k-issue179-512-20260527-proof.json",
             "docs/internal/agent-notes/diagnostic-installed-ui-live-model-minimax-m27-jangtq-k-issue179-512-20260527-chat.png",
-            "build/current-issue179-minimax-k-responses-cancel-probe-installed-20260527.json",
-            "build/current-issue179-minimax-k-responses-cancel-probe-installed-20260527.server.log",
+            "build/current-issue179-minimax-k-responses-cancel-probe-20260602-local-ready-live.json",
             "build/current-issue175-179-release-boundary-audit-20260531-post-install-sync.json",
             "build/current-installed-app-runtime-parity-audit-20260602-developer-id-installed-signing.json",
             "build/current-staged-app-runtime-parity-audit-20260602-developer-id-staged-signing.json",
             "build/current-installed-app-runtime-parity-audit-20260528-userdata-epipe-scan.json",
             "build/current-issue175-177-installed-runtime-audit-20260601-local-refresh.json",
             "build/current-issue175-177-live-runtime-audit-20260601-local-refresh.json",
-            "build/current-issue179-minimax-k-root-cause-audit-20260602-local-app-provenance.json",
+            "build/current-issue179-minimax-k-root-cause-audit-20260602-local-ready-live-cancel.json",
             "build/current-issue179-reporter-parity-metadata-template-20260528.json",
             "docs/internal/agent-notes/current-real-ui-live-model-nemotron-omni-nano-jangtq-20260527-proof.json",
             "docs/internal/agent-notes/current-real-ui-live-model-nemotron-omni-nano-jangtq-20260527-chat.png",
@@ -3568,14 +3567,24 @@ def _validate_current_issue179_minimax_k_live_probe_memory_preflight(
     launch_blockers = payload.get("launch_blockers")
     commands = payload.get("commands")
 
-    if status != "skipped":
-        failures.append("status_not_skipped")
-    if reason != "insufficient_vm_stat_memory":
-        failures.append("reason_not_insufficient_vm_stat_memory")
-    if payload.get("launch_decision") != "do_not_launch":
-        failures.append("launch_decision_not_do_not_launch")
-    if payload.get("launch_allowed") is not False:
-        failures.append("launch_allowed_not_false")
+    ready_to_launch = status == "ready_to_launch"
+    skipped_for_memory = status == "skipped"
+    if not (ready_to_launch or skipped_for_memory):
+        failures.append("status_not_skipped_or_ready_to_launch")
+    if ready_to_launch:
+        if reason != "memory_preflight_floor_met":
+            failures.append("reason_not_memory_preflight_floor_met")
+        if payload.get("launch_decision") != "launch_allowed":
+            failures.append("launch_decision_not_launch_allowed")
+        if payload.get("launch_allowed") is not True:
+            failures.append("launch_allowed_not_true")
+    if skipped_for_memory:
+        if reason != "insufficient_vm_stat_memory":
+            failures.append("reason_not_insufficient_vm_stat_memory")
+        if payload.get("launch_decision") != "do_not_launch":
+            failures.append("launch_decision_not_do_not_launch")
+        if payload.get("launch_allowed") is not False:
+            failures.append("launch_allowed_not_false")
     if not model_path.endswith("MiniMax-M2.7-JANGTQ_K"):
         failures.append("model_path_not_minimax_m27_jangtq_k")
     if model_size_gb is None or model_size_gb < 70:
@@ -3590,11 +3599,23 @@ def _validate_current_issue179_minimax_k_live_probe_memory_preflight(
         failures.append("available_for_gate_gb_mismatch")
     if available_for_gate_gb is None:
         failures.append("available_for_gate_gb_missing")
-    elif required_free_gb is not None and available_for_gate_gb >= required_free_gb:
+    elif (
+        skipped_for_memory
+        and required_free_gb is not None
+        and available_for_gate_gb >= required_free_gb
+    ):
         failures.append("preflight_claims_insufficient_memory_but_floor_met")
-    if memory_gap_gb is None or memory_gap_gb <= 0:
+    if memory_gap_gb is None:
         failures.append("memory_gap_gb_missing")
-    elif required_free_gb is not None and available_for_gate_gb is not None:
+    elif skipped_for_memory and memory_gap_gb <= 0:
+        failures.append("memory_gap_gb_missing")
+    elif ready_to_launch and memory_gap_gb != 0:
+        failures.append("memory_gap_gb_not_zero_when_ready")
+    elif (
+        skipped_for_memory
+        and required_free_gb is not None
+        and available_for_gate_gb is not None
+    ):
         expected_gap = round(required_free_gb - available_for_gate_gb, 2)
         if abs(memory_gap_gb - expected_gap) > 0.01:
             failures.append("memory_gap_gb_mismatch")
@@ -3623,8 +3644,10 @@ def _validate_current_issue179_minimax_k_live_probe_memory_preflight(
         failures.append("active_heavy_process_count_not_zero")
     if not isinstance(launch_blockers, list):
         failures.append("launch_blockers_missing")
-    elif "insufficient_memory" not in launch_blockers:
+    elif skipped_for_memory and "insufficient_memory" not in launch_blockers:
         failures.append("insufficient_memory_launch_blocker_missing")
+    elif ready_to_launch and launch_blockers:
+        failures.append("launch_blockers_not_empty_when_ready")
     preflight_captured_at = payload.get("preflight_captured_at")
     if not isinstance(preflight_captured_at, str) or not preflight_captured_at:
         failures.append("preflight_captured_at_missing")

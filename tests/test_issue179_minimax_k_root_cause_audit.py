@@ -231,19 +231,19 @@ def test_issue179_audit_keeps_reporter_cancel_404_boundary_open():
         is True
     )
     assert audit["local_responses_cancel_probe"]["status"] == "pass"
+    assert audit["local_responses_cancel_probe"]["path"] == (
+        "build/current-issue179-minimax-k-responses-cancel-probe-20260602-local-ready-live.json"
+    )
     assert audit["local_responses_cancel_probe"]["probe"]["abort_boundary"] == (
         "controlled_cancel_after_response_id"
     )
     assert audit["local_responses_cancel_probe"]["probe"]["bad_text_captured"] is False
     assert audit["live_probe_memory_preflight"]["path"] == (
-        "build/current-issue179-minimax-k-responses-cancel-probe-memory-preflight-20260602-cache-detail-zero-cached-recheck.json"
+        "build/current-issue179-minimax-k-responses-cancel-probe-memory-preflight-20260602-local-ready-check.json"
     )
     assert audit["live_probe_memory_preflight"]["exists"] is True
-    assert audit["live_probe_memory_preflight"]["status"] in {
-        "skipped",
-        "ready_to_launch",
-    }
-    assert isinstance(audit["live_probe_memory_preflight"]["launch_allowed"], bool)
+    assert audit["live_probe_memory_preflight"]["status"] == "ready_to_launch"
+    assert audit["live_probe_memory_preflight"]["launch_allowed"] is True
     assert isinstance(
         audit["live_probe_memory_preflight"]["available_for_gate_gb"],
         int | float,
