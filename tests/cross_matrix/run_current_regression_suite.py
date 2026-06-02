@@ -23,7 +23,7 @@ from typing import Any
 
 
 DEFAULT_OUT = Path(
-    "build/current-regression-suite-20260602-patched-known-open-pass.json"
+    "build/current-regression-suite-20260602-vm-stat-gate-validation.json"
 )
 DEFAULT_STEP_TIMEOUT_SEC = 900.0
 STEP_TIMEOUT_RETURNCODE = 124
@@ -650,7 +650,7 @@ CURRENT_SUITE_COMMANDS: dict[str, list[str]] = {
         "--require-current-proof-sweep",
         "--require-release-ready",
         "--out",
-        "build/current-release-regression-manifest-20260602-local-app-provenance.json",
+        "build/current-release-regression-manifest-20260602-vm-stat-gate-validation.json",
     ],
 }
 

@@ -866,7 +866,7 @@ def test_current_regression_suite_refreshes_release_regression_manifest(monkeypa
     )
     assert any(
         name == "release_regression_manifest"
-        and "build/current-release-regression-manifest-20260602-local-app-provenance.json"
+        and "build/current-release-regression-manifest-20260602-vm-stat-gate-validation.json"
         in cmd
         for name, cmd in seen_steps
     )

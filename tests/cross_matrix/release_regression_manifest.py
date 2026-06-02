@@ -380,7 +380,7 @@ CURRENT_POST_BUDGET_EDGE_ARTIFACTS = {
 }
 
 CURRENT_REGRESSION_SUITE_ARTIFACT = (
-    "build/current-regression-suite-20260602-patched-known-open-pass.json"
+    "build/current-regression-suite-20260602-vm-stat-gate-validation.json"
 )
 CURRENT_ISSUE175_179_RELEASE_BOUNDARY_AUDIT_ARTIFACT = (
     "build/current-issue175-179-release-boundary-audit-20260531-post-install-sync.json"
@@ -7272,7 +7272,11 @@ def _validate_open_requirement_details(
             }
         )
     required_available = source_preflight.get("required_available_gb")
-    available = source_preflight.get("available_gb")
+    gate_available = source_preflight.get("available_for_gate_gb")
+    if not isinstance(gate_available, int | float):
+        gate_available = source_preflight.get("free_plus_speculative_purgeable_gb")
+    if not isinstance(gate_available, int | float):
+        gate_available = source_preflight.get("available_gb")
     source_preflight_created_at = source_preflight.get("created_at")
     active_heavy_processes = source_preflight.get("active_heavy_processes")
     selected_cases = source_preflight.get("selected_cases")
@@ -7303,8 +7307,8 @@ def _validate_open_requirement_details(
         and not active_heavy_processes
         and isinstance(required_available, int | float)
         and required_available >= 120.0
-        and isinstance(available, int | float)
-        and available < required_available
+        and isinstance(gate_available, int | float)
+        and gate_available < required_available
         and required_source_preflight_cases.issubset(selected_case_names)
         and isinstance(case_count, int)
         and case_count >= len(EXPECTED_DSV4_SOURCE_PREFLIGHT_CASES)

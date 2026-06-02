@@ -25,7 +25,7 @@ from tests.cross_matrix.release_regression_manifest import (
 
 
 DEFAULT_OUT = Path(
-    "build/current-release-regression-manifest-20260602-local-app-provenance.json"
+    "build/current-release-regression-manifest-20260602-vm-stat-gate-validation.json"
 )
 PREPACKAGE_ALLOWED_BLOCKERS = {
     "packaged_app_developer_id_signing_blocked",

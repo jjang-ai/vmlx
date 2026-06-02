@@ -3559,7 +3559,7 @@ def test_release_regression_manifest_current_sweep_uses_latest_live_smoke_artifa
     assert "current-regression-suite-20260528-installed-aggregate-stale.json" not in joined
     assert "current-regression-suite-20260528-epipe-aggregate-guard.json" not in joined
     assert "current-regression-suite-20260528-dsv4-continue-refresh.json" not in joined
-    assert "current-regression-suite-20260602-patched-known-open-pass.json" in joined
+    assert "current-regression-suite-20260602-vm-stat-gate-validation.json" in joined
     assert "current-regression-suite-20260601-pipe-safe-runner.json" not in joined
     assert "current-regression-suite-20260601-developer-id-dmg-assertions.json" not in joined
     assert "current-regression-suite-20260601-cache-ipc-installed-refresh.json" not in joined
@@ -9872,6 +9872,11 @@ def test_release_regression_manifest_accepts_vm_stat_dsv4_source_preflight_reaso
     ]
     source_preflight = dsv4_row["details"]["current_source_full_output_preflight"]
     source_preflight["reason"] = "insufficient_vm_stat_memory"
+    source_preflight["available_gb"] = 130.0
+    source_preflight["available_for_gate_gb"] = 84.58
+    source_preflight["free_plus_speculative_purgeable_gb"] = 84.58
+    source_preflight["strict_vm_stat_memory_gap_gb"] = 35.42
+    source_preflight["psutil_available_gap_gb"] = 0.0
     regression_suite = tmp_path / CURRENT_REGRESSION_SUITE_ARTIFACT
     regression_suite.parent.mkdir(parents=True, exist_ok=True)
     regression_suite.write_text(
@@ -11448,7 +11453,7 @@ def test_release_regression_manifest_runner_default_out_tracks_current_release_p
     from tests.cross_matrix import run_release_regression_manifest as runner
 
     assert runner.DEFAULT_OUT == Path(
-        "build/current-release-regression-manifest-20260602-local-app-provenance.json"
+        "build/current-release-regression-manifest-20260602-vm-stat-gate-validation.json"
     )
 
 
