@@ -223,6 +223,52 @@ def _check_bundled_engine_hash_parity(
     }
 
 
+def _check_packaged_engine_source_hash_parity(
+    root: Path,
+    app_path: Path,
+    *,
+    relpaths: tuple[str, ...] = CRITICAL_ENGINE_HASH_FILES,
+) -> dict[str, Any]:
+    source_engine = root / "vmlx_engine"
+    packaged_engine = app_path / "Contents/Resources/vmlx-engine-source/vmlx_engine"
+    files: dict[str, dict[str, Any]] = {}
+    missing_source: list[str] = []
+    missing_packaged: list[str] = []
+    mismatched: list[str] = []
+    for relpath in relpaths:
+        source_path = source_engine / relpath
+        packaged_path = packaged_engine / relpath
+        source_hash = ""
+        packaged_hash = ""
+        if not source_path.exists():
+            missing_source.append(relpath)
+        else:
+            source_hash = _sha256(source_path)
+        if not packaged_path.exists():
+            missing_packaged.append(relpath)
+        else:
+            packaged_hash = _sha256(packaged_path)
+        if source_hash and packaged_hash and source_hash != packaged_hash:
+            mismatched.append(relpath)
+        files[relpath] = {
+            "source": str(source_path),
+            "packaged": str(packaged_path),
+            "source_sha256": source_hash,
+            "packaged_sha256": packaged_hash,
+            "match": bool(source_hash and packaged_hash and source_hash == packaged_hash),
+        }
+    ok = not missing_source and not missing_packaged and not mismatched
+    return {
+        "ok": ok,
+        "source_engine": str(source_engine),
+        "packaged_engine": str(packaged_engine),
+        "missing_source": missing_source,
+        "missing_packaged": missing_packaged,
+        "mismatched": mismatched,
+        "files": files,
+    }
+
+
 def _read_installed_panel_main(
     root: Path,
     app_asar: Path = INSTALLED_APP_ASAR,
@@ -604,6 +650,10 @@ def build_audit(
         diagnostic_reports
     )
     bundled_engine_hash_parity = _check_bundled_engine_hash_parity(root, python_path)
+    packaged_engine_source_hash_parity = _check_packaged_engine_source_hash_parity(
+        root,
+        app_path,
+    )
     import_result = _run_installed_python(
         "import inspect, json\n"
         "from types import SimpleNamespace\n"
@@ -695,6 +745,9 @@ def build_audit(
             and help_result["returncode"] == 0
         ),
         "installed_bundled_engine_hash_parity": bundled_engine_hash_parity["ok"],
+        "installed_packaged_engine_source_hash_parity": (
+            packaged_engine_source_hash_parity["ok"]
+        ),
         "serve_help_runs": help_result["returncode"] == 0,
         "responses_cancel_route": any(
             "/v1/responses/{response_id}/cancel" in route
@@ -1045,6 +1098,7 @@ def build_audit(
         "vmlx_diagnostic_disconnect_errors": diagnostic_disconnect_errors,
         "vmlx_bundled_python_launch_crash_reports": bundled_python_launch_crashes,
         "bundled_engine_hash_parity": bundled_engine_hash_parity,
+        "packaged_engine_source_hash_parity": packaged_engine_source_hash_parity,
         "vmlx_bundled_python_launch_crash_repro": {
             "versioned_python_runs": versioned_python_result["returncode"] == 0,
             "serve_help_runs": help_result["returncode"] == 0,

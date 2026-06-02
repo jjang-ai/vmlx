@@ -58,7 +58,9 @@ def test_installed_app_runtime_parity_requires_versioned_python_entrypoint():
         "installed_bundled_python_launch_crashes_not_reproduced" in audit["checks"]
     )
     assert "installed_bundled_engine_hash_parity" in audit["checks"]
+    assert "installed_packaged_engine_source_hash_parity" in audit["checks"]
     assert "bundled_engine_hash_parity" in audit
+    assert "packaged_engine_source_hash_parity" in audit
     assert "vmlx_bundled_python_launch_crash_reports" in audit
     assert audit["installed_versioned_python"].endswith(
         "Contents/Resources/bundled-python/python/bin/python3.12"
@@ -337,6 +339,62 @@ def test_installed_app_runtime_parity_accepts_matching_bundled_engine_file(tmp_p
     result = gate._check_bundled_engine_hash_parity(
         root,
         bundled_python / "bin/python3",
+        relpaths=("server.py",),
+    )
+
+    assert result["ok"] is True
+    assert result["mismatched"] == []
+    assert result["files"]["server.py"]["match"] is True
+
+
+def test_installed_app_runtime_parity_rejects_stale_packaged_engine_source_file(
+    tmp_path,
+):
+    from tests.cross_matrix import run_installed_app_runtime_parity_audit as gate
+
+    root = tmp_path / "repo"
+    source_engine = root / "vmlx_engine"
+    app_path = tmp_path / "Staged.app"
+    packaged_engine_source = (
+        app_path / "Contents/Resources/vmlx-engine-source/vmlx_engine"
+    )
+    source_engine.mkdir(parents=True)
+    packaged_engine_source.mkdir(parents=True)
+    (source_engine / "server.py").write_text("source\n", encoding="utf-8")
+    (packaged_engine_source / "server.py").write_text("stale\n", encoding="utf-8")
+
+    result = gate._check_packaged_engine_source_hash_parity(
+        root,
+        app_path,
+        relpaths=("server.py",),
+    )
+
+    assert result["ok"] is False
+    assert result["missing_source"] == []
+    assert result["missing_packaged"] == []
+    assert result["mismatched"] == ["server.py"]
+    assert result["files"]["server.py"]["match"] is False
+
+
+def test_installed_app_runtime_parity_accepts_matching_packaged_engine_source_file(
+    tmp_path,
+):
+    from tests.cross_matrix import run_installed_app_runtime_parity_audit as gate
+
+    root = tmp_path / "repo"
+    source_engine = root / "vmlx_engine"
+    app_path = tmp_path / "Staged.app"
+    packaged_engine_source = (
+        app_path / "Contents/Resources/vmlx-engine-source/vmlx_engine"
+    )
+    source_engine.mkdir(parents=True)
+    packaged_engine_source.mkdir(parents=True)
+    (source_engine / "server.py").write_text("same\n", encoding="utf-8")
+    (packaged_engine_source / "server.py").write_text("same\n", encoding="utf-8")
+
+    result = gate._check_packaged_engine_source_hash_parity(
+        root,
+        app_path,
         relpaths=("server.py",),
     )
 
