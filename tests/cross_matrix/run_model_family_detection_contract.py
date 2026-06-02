@@ -234,6 +234,7 @@ ROW_MARKERS: dict[str, tuple[str, ...]] = {
     ),
     "decode_speed_jang_only_mx_matmul_policy": (
         "test_decode_speed_gate_jang_only_rows_keep_text_mx_matmul_launch_policy",
+        "test_decode_speed_gate_health_rejects_wrong_weight_kernel_family",
     ),
     "decode_speed_distinct_jang_jangtq_mxfp_speed_rows": (
         "test_decode_speed_gate_has_distinct_jang_jangtq_mxfp_speed_rows",

@@ -734,6 +734,58 @@ def cache_health_mismatches(
     return mismatches
 
 
+def _expected_weight_kernel_family(row: Row) -> str | None:
+    path = row.path.upper()
+    if "JANGTQ" in path:
+        return "turboquant_codebook"
+    if "JANG_" in path or "MXFP" in path or "4BIT" in path:
+        return "affine_quantized_matmul"
+    return None
+
+
+def weight_kernel_health_mismatches(row: Row, health: dict[str, Any]) -> list[str]:
+    """Return live /health contradictions against the row's weight-kernel family."""
+    expected = _expected_weight_kernel_family(row)
+    if expected is None:
+        return []
+
+    quantization = health.get("quantization")
+    if not isinstance(quantization, dict):
+        quantization = {}
+    dispatch = quantization.get("weight_matmul_dispatch")
+    if not isinstance(dispatch, dict):
+        dispatch = {}
+    acceleration = health.get("acceleration")
+    if not isinstance(acceleration, dict):
+        acceleration = {}
+
+    codec = quantization.get("codec")
+    primary = dispatch.get("primary")
+    uses_mlx = dispatch.get("uses_mlx_quantized_matmul")
+    kernel_type = str(acceleration.get("kernel_type") or "")
+    mismatches: list[str] = []
+
+    if expected == "turboquant_codebook":
+        if codec != "turboquant_codebook":
+            mismatches.append(f"{row.name} expected TurboQuant codebook weight codec")
+        if primary != "jang_tools_turboquant_custom_kernels" or uses_mlx is not False:
+            mismatches.append(f"{row.name} expected TurboQuant custom weight kernels")
+        if not kernel_type.startswith("turboquant_codebook"):
+            mismatches.append(
+                f"{row.name} expected acceleration kernel_type=turboquant_codebook*"
+            )
+    elif expected == "affine_quantized_matmul":
+        if codec != "affine_quantized_matmul":
+            mismatches.append(f"{row.name} expected affine quantized weight codec")
+        if primary != "mlx_affine_quantized_matmul" or uses_mlx is not True:
+            mismatches.append(
+                f"{row.name} expected MLX affine quantized matmul dispatch"
+            )
+        if kernel_type.startswith("turboquant_codebook"):
+            mismatches.append(f"{row.name} expected non-TurboQuant acceleration kernel")
+    return mismatches
+
+
 def run_row(
     row: Row,
     *,
@@ -832,6 +884,10 @@ def run_row(
         if cache_mismatches:
             status = "fail"
             notes.extend(cache_mismatches)
+        kernel_mismatches = weight_kernel_health_mismatches(row, health1)
+        if kernel_mismatches:
+            status = "fail"
+            notes.extend(kernel_mismatches)
         if bundle["loopish"] or greedy["loopish"]:
             status = "fail"
             notes.append("loopish output detected")

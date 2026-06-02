@@ -59,6 +59,15 @@ def test_family_detection_contract_pins_named_release_rows():
     }.issubset(names)
 
 
+def test_family_detection_contract_requires_live_weight_kernel_health_marker():
+    from tests.cross_matrix import run_model_family_detection_contract as gate
+
+    assert (
+        "test_decode_speed_gate_health_rejects_wrong_weight_kernel_family"
+        in gate.ROW_MARKERS["decode_speed_jang_only_mx_matmul_policy"]
+    )
+
+
 def test_family_detection_contract_hashes_app_and_engine_sources():
     from tests.cross_matrix import run_model_family_detection_contract as gate
 
@@ -335,6 +344,61 @@ def test_decode_speed_gate_jang_only_rows_keep_text_mx_matmul_launch_policy():
     assert mtp_vlm_cmd[mtp_vlm_cmd.index("--reasoning-parser") + 1] == "qwen3"
 
 
+def test_decode_speed_gate_health_rejects_wrong_weight_kernel_family():
+    from tests.cross_matrix.run_decode_speed_gate import (
+        ROWS,
+        weight_kernel_health_mismatches,
+    )
+
+    assert weight_kernel_health_mismatches(
+        ROWS["qwen35_jangtq"],
+        {
+            "quantization": {
+                "codec": "turboquant_codebook",
+                "weight_matmul_dispatch": {
+                    "primary": "jang_tools_turboquant_custom_kernels",
+                    "uses_mlx_quantized_matmul": False,
+                },
+            },
+            "acceleration": {"kernel_type": "turboquant_codebook"},
+        },
+    ) == []
+    assert weight_kernel_health_mismatches(
+        ROWS["qwen35_jangtq"],
+        {
+            "quantization": {
+                "codec": "affine_quantized_matmul",
+                "weight_matmul_dispatch": {
+                    "primary": "mlx_affine_quantized_matmul",
+                    "uses_mlx_quantized_matmul": True,
+                },
+            },
+            "acceleration": {"kernel_type": "affine_quantized_matmul"},
+        },
+    ) == [
+        "qwen35_jangtq expected TurboQuant codebook weight codec",
+        "qwen35_jangtq expected TurboQuant custom weight kernels",
+        "qwen35_jangtq expected acceleration kernel_type=turboquant_codebook*",
+    ]
+    assert weight_kernel_health_mismatches(
+        ROWS["qwen27_jang4m"],
+        {
+            "quantization": {
+                "codec": "turboquant_codebook",
+                "weight_matmul_dispatch": {
+                    "primary": "jang_tools_turboquant_custom_kernels",
+                    "uses_mlx_quantized_matmul": False,
+                },
+            },
+            "acceleration": {"kernel_type": "turboquant_codebook"},
+        },
+    ) == [
+        "qwen27_jang4m expected affine quantized weight codec",
+        "qwen27_jang4m expected MLX affine quantized matmul dispatch",
+        "qwen27_jang4m expected non-TurboQuant acceleration kernel",
+    ]
+
+
 def test_decode_speed_gate_extra_serve_arg_is_opt_in_without_mutating_row_defaults():
     from tests.cross_matrix.run_decode_speed_gate import (
         ROWS,
@@ -402,7 +466,20 @@ def test_decode_speed_gate_extra_serve_env_is_opt_in_without_mutating_row_defaul
             "usage": {"completion_tokens": 3, "prompt_tokens": 3},
         },
     )
-    monkeypatch.setattr(gate, "get_json", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(
+        gate,
+        "get_json",
+        lambda *_args, **_kwargs: {
+            "quantization": {
+                "codec": "affine_quantized_matmul",
+                "weight_matmul_dispatch": {
+                    "primary": "mlx_affine_quantized_matmul",
+                    "uses_mlx_quantized_matmul": True,
+                },
+            },
+            "acceleration": {"kernel_type": "affine_quantized_matmul"},
+        },
+    )
 
     result = gate.run_row(
         row,
