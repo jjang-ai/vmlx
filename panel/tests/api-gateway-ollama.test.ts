@@ -355,6 +355,29 @@ describe("Ollama gateway parity contracts", () => {
     expect(guardedFetches.length).toBeGreaterThanOrEqual(4);
   });
 
+  it("normalizes performance health EPIPE disconnects instead of surfacing raw unexpected errors", () => {
+    const performanceSource = readFileSync(
+      resolve(process.cwd(), "src/main/ipc/performance.ts"),
+      "utf8",
+    );
+    expect(performanceSource).toContain("function isExpectedPerformanceEndpointDisconnectError");
+    expect(performanceSource).toContain("code === 'EPIPE'");
+    expect(performanceSource).toContain("code === 'ECONNRESET'");
+    expect(performanceSource).toContain("code === 'ERR_STREAM_DESTROYED'");
+    expect(performanceSource).toContain("code === 'ERR_STREAM_WRITE_AFTER_END'");
+    expect(performanceSource).toContain("write EPIPE");
+    expect(performanceSource).toContain("broken pipe");
+    expect(performanceSource).toContain("const cause = anyErr?.cause");
+    expect(performanceSource).toContain("const wrappedDisconnects = [");
+    expect(performanceSource).toContain("anyErr?.reason");
+    expect(performanceSource).toContain("anyErr?.error");
+    expect(performanceSource).toContain("anyErr?.detail");
+    expect(performanceSource).toContain("wrappedDisconnects.some((nested) => isExpectedPerformanceEndpointDisconnectError(nested))");
+    expect(performanceSource).toContain("const nestedErrors = Array.isArray(anyErr?.errors)");
+    expect(performanceSource).toContain("nestedErrors.some((nested) => isExpectedPerformanceEndpointDisconnectError(nested))");
+    expect(performanceSource).toContain("Performance health connection lost. The model server may have stopped or restarted; retry after the session is healthy.");
+  });
+
   it("aborts Ollama backend response streams when the client response closes", () => {
     expect(source).toContain("private abortProxyResponseOnClientClose");
     expect(source).toContain('res.on("close", () => {');

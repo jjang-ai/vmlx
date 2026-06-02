@@ -22,7 +22,7 @@ from typing import Any
 
 
 DEFAULT_OUT = Path(
-    "build/current-api-surface-contract-20260601-cache-ipc-epipe-refresh.json"
+    "build/current-api-surface-contract-20260602-performance-health-epipe.json"
 )
 NESTED_OUT = Path(
     "build/current-api-cache-contract-api-surface-check-20260528-epipe-aggregate-guard.json"
@@ -34,6 +34,7 @@ SOURCE_HASH_FILES = (
     "tests/test_engine_audit.py",
     "panel/src/main/ipc/chat.ts",
     "panel/src/main/ipc/cache.ts",
+    "panel/src/main/ipc/performance.ts",
     "panel/src/main/ipc/image.ts",
     "panel/src/main/ipc/imageGenerationState.ts",
     "panel/src/main/ipc/developer.ts",
@@ -133,6 +134,7 @@ REQUIRED_PANEL_API_TEST_MARKERS = (
     "does not leave raw backend request end calls unguarded after disconnect",
     "does not leave raw chat IPC backend request finalization unguarded",
     "normalizes cache IPC endpoint EPIPE disconnects instead of surfacing raw unexpected errors",
+    "normalizes performance health EPIPE disconnects instead of surfacing raw unexpected errors",
     "does not log expected chat EPIPE disconnects as raw failed-message console errors",
     "normalizes split write EPIPE chunks before raw stderr reaches the UI",
     "routes local image server request writes through EPIPE-aware helpers",
@@ -379,6 +381,11 @@ def build_artifact(root: Path) -> dict[str, Any]:
             and "routes local image server request writes through EPIPE-aware helpers" not in missing_panel_markers
             and "image requests disable connection reuse and normalize reset-like socket errors" not in missing_panel_markers
             and panel_passed >= 73
+        ),
+        "panel_performance_health_epipe_guard": (
+            not failed
+            and "normalizes performance health EPIPE disconnects instead of surfacing raw unexpected errors" not in missing_panel_markers
+            and panel_passed >= 74
         ),
         "all_required_panel_api_markers_present": not failed and not missing_panel_markers,
     }

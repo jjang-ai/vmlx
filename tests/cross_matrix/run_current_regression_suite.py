@@ -54,6 +54,7 @@ CURRENT_SUITE_SOURCE_HASH_FILES = (
     "panel/src/main/ipc/image.ts",
     "panel/src/main/ipc/imageGenerationState.ts",
     "panel/src/main/ipc/models.ts",
+    "panel/src/main/ipc/performance.ts",
     "panel/src/main/model-config-registry.ts",
     "panel/src/main/process-manager.ts",
     "panel/src/main/server.ts",
@@ -495,7 +496,7 @@ CURRENT_SUITE_COMMANDS: dict[str, list[str]] = {
         sys.executable,
         "tests/cross_matrix/run_api_surface_contract.py",
         "--out",
-        "build/current-api-surface-contract-20260601-cache-ipc-epipe-refresh.json",
+        "build/current-api-surface-contract-20260602-performance-health-epipe.json",
     ],
     "panel_tool_security_contracts": [
         sys.executable,

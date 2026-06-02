@@ -5,7 +5,7 @@ def test_api_surface_contract_default_out_tracks_current_release_proof_artifact(
     from tests.cross_matrix import run_api_surface_contract as gate
 
     assert gate.DEFAULT_OUT == Path(
-        "build/current-api-surface-contract-20260601-cache-ipc-epipe-refresh.json"
+        "build/current-api-surface-contract-20260602-performance-health-epipe.json"
     )
     assert gate.NESTED_OUT == Path(
         "build/current-api-cache-contract-api-surface-check-20260528-epipe-aggregate-guard.json"
@@ -92,6 +92,7 @@ def test_api_surface_contract_pins_named_public_surface_edges():
     assert "does not leave raw backend request end calls unguarded after disconnect" in panel
     assert "does not leave raw chat IPC backend request finalization unguarded" in panel
     assert "normalizes cache IPC endpoint EPIPE disconnects instead of surfacing raw unexpected errors" in panel
+    assert "normalizes performance health EPIPE disconnects instead of surfacing raw unexpected errors" in panel
     assert "does not log expected chat EPIPE disconnects as raw failed-message console errors" in panel
     assert "normalizes split write EPIPE chunks before raw stderr reaches the UI" in panel
     assert "routes local image server request writes through EPIPE-aware helpers" in panel
@@ -108,6 +109,9 @@ def test_api_surface_contract_pins_named_public_surface_edges():
     assert "panel_ipc_backend_request_epipe_guard" in Path(
         "tests/cross_matrix/run_api_surface_contract.py"
     ).read_text()
+    assert "panel_performance_health_epipe_guard" in Path(
+        "tests/cross_matrix/run_api_surface_contract.py"
+    ).read_text()
     assert "panel_child_process_stdio_epipe_guard" in Path(
         "tests/cross_matrix/run_api_surface_contract.py"
     ).read_text()
@@ -117,6 +121,17 @@ def test_api_surface_contract_pins_named_public_surface_edges():
     assert "panel_gateway_single_model_auto_switch_cache_endpoints" in Path(
         "tests/cross_matrix/run_api_surface_contract.py"
     ).read_text()
+
+
+def test_api_surface_contract_requires_performance_health_epipe_normalization():
+    from tests.cross_matrix import run_api_surface_contract as gate
+
+    source = Path("panel/src/main/ipc/performance.ts").read_text(encoding="utf-8")
+
+    assert "function isExpectedPerformanceEndpointDisconnectError" in source
+    assert "wrappedDisconnects.some((nested) => isExpectedPerformanceEndpointDisconnectError(nested))" in source
+    assert "nestedErrors.some((nested) => isExpectedPerformanceEndpointDisconnectError(nested))" in source
+    assert "Performance health connection lost. The model server may have stopped or restarted; retry after the session is healthy." in source
 
     panel_command = gate.COMMANDS["panel_api_request_builders"][1]
     assert "tests/api-gateway-ollama.test.ts" in panel_command
@@ -130,6 +145,12 @@ def test_api_surface_contract_hashes_cache_ipc_disconnect_guard():
     from tests.cross_matrix import run_api_surface_contract as gate
 
     assert "panel/src/main/ipc/cache.ts" in gate.SOURCE_HASH_FILES
+
+
+def test_api_surface_contract_hashes_performance_health_disconnect_guard():
+    from tests.cross_matrix import run_api_surface_contract as gate
+
+    assert "panel/src/main/ipc/performance.ts" in gate.SOURCE_HASH_FILES
 
 
 def test_api_surface_contract_status_fails_when_required_panel_markers_are_missing():

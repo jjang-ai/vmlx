@@ -782,6 +782,16 @@ def build_audit(
             and "nestedErrors.some((nested) => isExpectedCacheEndpointDisconnectError(nested))"
             in panel_main
         ),
+        "installed_panel_performance_health_epipe_guard": (
+            panel_result["returncode"] == 0
+            and "isExpectedPerformanceEndpointDisconnectError" in panel_main
+            and "Performance health connection lost. The model server may have stopped or restarted"
+            in panel_main
+            and "wrappedDisconnects.some((nested) => isExpectedPerformanceEndpointDisconnectError(nested))"
+            in panel_main
+            and "nestedErrors.some((nested) => isExpectedPerformanceEndpointDisconnectError(nested))"
+            in panel_main
+        ),
         "installed_panel_child_process_stdio_epipe_guard": (
             panel_result["returncode"] == 0
             and "isExpectedChildProcessStreamDisconnectError" in panel_main

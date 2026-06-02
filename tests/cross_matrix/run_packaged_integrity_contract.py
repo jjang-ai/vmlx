@@ -93,6 +93,10 @@ PACKAGED_EPIPE_CLOSED_STREAM_GUARD_STRINGS = (
     b"connection lost. The model server may have stopped or restarted",
     b"wrappedDisconnects.some((nested) => isExpectedCacheEndpointDisconnectError(nested))",
     b"nestedErrors.some((nested) => isExpectedCacheEndpointDisconnectError(nested))",
+    b"function isExpectedPerformanceEndpointDisconnectError",
+    b"Performance health connection lost. The model server may have stopped or restarted",
+    b"wrappedDisconnects.some((nested) => isExpectedPerformanceEndpointDisconnectError(nested))",
+    b"nestedErrors.some((nested) => isExpectedPerformanceEndpointDisconnectError(nested))",
 )
 
 STAGED_APP_ENGINE_HASH_FILES = (

@@ -2229,6 +2229,7 @@ def _write_expected_installed_app_runtime_parity_audit(root: Path) -> None:
                     "installed_panel_chat_ipc_epipe_aggregate_guard": True,
                     "installed_panel_image_ipc_epipe_aggregate_guard": True,
                     "installed_panel_cache_ipc_epipe_aggregate_guard": True,
+                    "installed_panel_performance_health_epipe_guard": True,
                     "installed_panel_child_process_stdio_epipe_guard": True,
                     "installed_panel_child_process_stdio_epipe_aggregate_guard": True,
                     "installed_panel_renderer_chat_epipe_toast_normalized": True,
@@ -2284,6 +2285,7 @@ def _write_expected_staged_app_runtime_parity_audit(root: Path) -> None:
                     "installed_panel_chat_ipc_epipe_aggregate_guard": True,
                     "installed_panel_image_ipc_epipe_aggregate_guard": True,
                     "installed_panel_cache_ipc_epipe_aggregate_guard": True,
+                    "installed_panel_performance_health_epipe_guard": True,
                     "installed_panel_child_process_stdio_epipe_guard": True,
                     "installed_panel_child_process_stdio_epipe_aggregate_guard": True,
                     "installed_panel_renderer_chat_epipe_toast_normalized": True,
@@ -2441,6 +2443,7 @@ def test_current_proof_sweep_rejects_installed_app_missing_ipc_epipe_aggregate_g
     payload["checks"].pop("installed_panel_chat_ipc_epipe_aggregate_guard")
     payload["checks"].pop("installed_panel_image_ipc_epipe_aggregate_guard")
     payload["checks"].pop("installed_panel_cache_ipc_epipe_aggregate_guard")
+    payload["checks"].pop("installed_panel_performance_health_epipe_guard")
     path.write_text(json.dumps(payload) + "\n", encoding="utf-8")
 
     result = validate_current_proof_sweep_artifacts(tmp_path)[
@@ -2457,6 +2460,10 @@ def test_current_proof_sweep_rejects_installed_app_missing_ipc_epipe_aggregate_g
     )
     assert (
         "missing_check:installed_panel_cache_ipc_epipe_aggregate_guard"
+        in result["failures"]
+    )
+    assert (
+        "missing_check:installed_panel_performance_health_epipe_guard"
         in result["failures"]
     )
 
@@ -3547,7 +3554,7 @@ def test_release_regression_manifest_current_sweep_uses_latest_live_smoke_artifa
     assert "current-regression-suite-20260525-cjk-smoke-guard.json" not in joined
     assert "current-regression-suite-20260525-gemma-installed-speed-boundary.json" not in joined
     assert "current-regression-suite-20260524-openai-single-model-streaming-audit.json" not in joined
-    assert "current-api-surface-contract-20260601-cache-ipc-epipe-refresh.json" in joined
+    assert "current-api-surface-contract-20260602-performance-health-epipe.json" in joined
     assert "current-api-surface-contract-20260531-nested-epipe-childstream-refresh.json" not in joined
     assert "current-api-surface-contract-20260529-single-model-transition-lock.json" not in joined
     assert "current-api-surface-contract-20260528-ollama-embedding-timeout.json" not in joined
@@ -12155,6 +12162,10 @@ def test_release_regression_manifest_api_surface_requires_backend_stderr_split_e
     assert "panel_backend_stderr_split_epipe_guard" in EXPECTED_CURRENT_API_SURFACE_CHECKS
 
 
+def test_release_regression_manifest_api_surface_requires_performance_health_epipe_guard():
+    assert "panel_performance_health_epipe_guard" in EXPECTED_CURRENT_API_SURFACE_CHECKS
+
+
 def test_release_regression_manifest_api_surface_requires_plain_attention_kv_status():
     assert "plain_attention_kv_status" in EXPECTED_CURRENT_API_SURFACE_CHECKS
 
@@ -13777,7 +13788,7 @@ def test_release_regression_manifest_tracks_api_surface_with_runner_artifact():
     joined = " ".join(row["commands"] + row["artifacts"] + row["proves"])
 
     assert "run_api_surface_contract.py" in joined
-    assert "current-api-surface-contract-20260601-cache-ipc-epipe-refresh.json" in joined
+    assert "current-api-surface-contract-20260602-performance-health-epipe.json" in joined
     assert "current-api-surface-contract-20260531-nested-epipe-childstream-refresh.json" not in joined
     assert "current-api-surface-contract-20260529-single-model-transition-lock.json" in joined
     assert "current-api-surface-contract-20260528-ollama-embeddings-single-model.json" not in joined
