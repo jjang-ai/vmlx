@@ -399,7 +399,7 @@ CURRENT_ISSUE179_MINIMAX_K_ROOT_CAUSE_AUDIT_ARTIFACT = (
     "build/current-issue179-minimax-k-root-cause-audit-20260602-expanded-public-dmg-provenance.json"
 )
 CURRENT_ISSUE179_MINIMAX_K_LIVE_PROBE_MEMORY_PREFLIGHT_ARTIFACT = (
-    "build/current-issue179-minimax-k-responses-cancel-probe-memory-preflight-20260602-developer-id-local-recheck.json"
+    "build/current-issue179-minimax-k-responses-cancel-probe-memory-preflight-20260602-cache-detail-zero-cached-recheck.json"
 )
 CURRENT_ISSUE181_183_RUNTIME_AUDIT_ARTIFACT = (
     "build/current-issue181-183-runtime-audit-20260602-after-performance-health-epipe-app-sync.json"

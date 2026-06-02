@@ -315,7 +315,8 @@ def _issue165_checks(root: Path) -> dict[str, bool]:
 
 def _issue117_checks(root: Path) -> dict[str, bool]:
     issue179 = _load_json(
-        root / "build/current-issue179-minimax-k-root-cause-audit-20260527.json"
+        root
+        / "build/current-issue179-minimax-k-root-cause-audit-20260602-expanded-public-dmg-provenance.json"
     )
     release_manifest = _read(root / "tests/cross_matrix/release_regression_manifest.py")
     parser_contract = _read(root / "tests/cross_matrix/run_parser_registry_contract.py")

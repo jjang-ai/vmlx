@@ -6202,7 +6202,7 @@ def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
     issue179_evidence = (
         str(issue179_blocker.get("evidence"))
         if isinstance(issue179_blocker, dict) and issue179_blocker.get("evidence")
-        else "build/current-issue179-minimax-k-root-cause-audit-20260527.json"
+        else "build/current-issue179-minimax-k-root-cause-audit-20260602-expanded-public-dmg-provenance.json"
     )
     if not issue179_audit:
         issue179_audit = _load(root, issue179_evidence)

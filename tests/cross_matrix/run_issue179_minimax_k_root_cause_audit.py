@@ -19,7 +19,9 @@ from pathlib import Path
 from typing import Any
 
 
-DEFAULT_OUT = Path("build/current-issue179-minimax-k-root-cause-audit-20260527.json")
+DEFAULT_OUT = Path(
+    "build/current-issue179-minimax-k-root-cause-audit-20260602-expanded-public-dmg-provenance.json"
+)
 REPORTER_LOG = Path("build/issue-179/vmlx-logs-490f58c0-2026-05-27.log")
 REPORTER_SCREENSHOT = Path("build/issue-179/minimax-garbage-screenshot.png")
 REPORTER_PARITY_ARTIFACT = Path(
