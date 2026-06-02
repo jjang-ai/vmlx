@@ -5,7 +5,7 @@ def test_vl_media_cache_contract_default_out_tracks_current_release_proof_artifa
     from tests.cross_matrix import run_vl_media_cache_contract as gate
 
     assert gate.DEFAULT_OUT == Path(
-        "build/current-vl-media-cache-contract-20260601-qwen3vl-frame-list-fallback.json"
+        "build/current-vl-media-cache-contract-20260602-step-jangtq-boundary.json"
     )
 
 

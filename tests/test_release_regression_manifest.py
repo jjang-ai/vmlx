@@ -14748,6 +14748,8 @@ def test_release_regression_manifest_tracks_named_model_family_detection_with_ru
 
     assert row["domain"] == "model_family_detection"
     assert "run_model_family_detection_contract.py" in joined
+    assert "current-model-family-detection-contract-20260602-step-jangtq-boundary.json" in joined
+    assert "current-model-family-detection-contract-20260531-post-step-lfm-refresh.json" not in joined
     assert "current-model-family-detection-contract-20260522-plain-kv-cache-health.json" in joined
     assert "DSV4" in joined
     assert "ZAYA" in joined
@@ -14841,6 +14843,8 @@ def test_release_regression_manifest_tracks_vl_media_with_runner_artifact():
     joined = " ".join(row["commands"] + row["artifacts"] + row["proves"])
 
     assert "run_vl_media_cache_contract.py" in joined
+    assert "current-vl-media-cache-contract-20260602-step-jangtq-boundary.json" in joined
+    assert "current-vl-media-cache-contract-20260601-qwen3vl-frame-list-fallback.json" not in joined
     assert "current-vl-media-cache-contract-20260522-panel-family.json" in joined
     assert "VLM media request serialization" in joined
     assert "media cache salting" in joined
@@ -14858,7 +14862,8 @@ def test_release_regression_manifest_tracks_cache_architecture_with_runner_artif
     joined = " ".join(row["commands"] + row["artifacts"] + row["proves"])
 
     assert "run_cache_architecture_contract.py" in joined
-    assert "current-cache-architecture-contract-20260601-zaya-dsv4-terminal-disk-guard.json" in joined
+    assert "current-cache-architecture-contract-20260602-step-jangtq-boundary.json" in joined
+    assert "current-cache-architecture-contract-20260601-zaya-dsv4-terminal-disk-guard.json" not in joined
     assert "current-cache-architecture-contract-20260601-step37-mixed-swa-ui-storage-quant.json" not in joined
     assert "current-cache-architecture-contract-20260530-lfm2-tool-parser-local.json" in joined
     assert "current-cache-architecture-contract-20260528-gemma4-mixed-swa-row.json" in joined

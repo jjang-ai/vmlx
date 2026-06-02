@@ -368,13 +368,13 @@ CURRENT_POST_BUDGET_EDGE_ARTIFACTS = {
     "tool-call-loop-parser-cleanup": "build/current-tool-call-contract-20260528-tool-parser-loop-matrix.json",
     "panel-tool-security-loop-boundary": "build/current-panel-tool-security-contract-20260528-tool-loop-security-matrix.json",
     "api-chat-responses-anthropic-ollama-parity": "build/current-api-surface-contract-20260602-cache-detail-zero-cached.json",
-    "cache-architecture-family-classification": "build/current-cache-architecture-contract-20260601-zaya-dsv4-terminal-disk-guard.json",
+    "cache-architecture-family-classification": "build/current-cache-architecture-contract-20260602-step-jangtq-boundary.json",
     "jang-model-compat-runtime-boundary": "build/current-jang-model-compat-contract-20260528-pr155-runtime-boundary.json",
     "model-artifact-format-detection": "build/current-model-artifact-format-contract-20260531-post-step-lfm-refresh.json",
-    "model-family-detection-noheavy": "build/current-model-family-detection-contract-20260531-post-step-lfm-refresh.json",
+    "model-family-detection-noheavy": "build/current-model-family-detection-contract-20260602-step-jangtq-boundary.json",
     "native-mtp-d3-effect-policy": "build/current-native-mtp-contract-20260531-post-step-lfm-refresh.json",
     "mcp-policy-ui-gateway": "build/current-mcp-policy-contract-20260531-post-step-lfm-refresh.json",
-    "vl-media-cache-tool-followup": "build/current-vl-media-cache-contract-20260601-qwen3vl-frame-list-fallback.json",
+    "vl-media-cache-tool-followup": "build/current-vl-media-cache-contract-20260602-step-jangtq-boundary.json",
     "packaged-release-integrity": "build/current-packaged-integrity-contract-20260602-developer-id-staged-signing.json",
     "public-release-surface-preflight": "build/current-release-surface-contract-20260528-release-surface-matrix.json",
 }
@@ -1454,10 +1454,10 @@ _ROWS: list[dict[str, Any]] = [
             "Panel session launch builder preserves DSV4 default-on native prefix-cache policy, DSV4-only native cache controls, Qwen3.6 hybrid and Mamba paged-cache forcing, and regular KV stale saved false semantics",
         ],
         "commands": [
-            ".venv/bin/python tests/cross_matrix/run_cache_architecture_contract.py --out build/current-cache-architecture-contract-20260601-zaya-dsv4-terminal-disk-guard.json",
+            ".venv/bin/python tests/cross_matrix/run_cache_architecture_contract.py --out build/current-cache-architecture-contract-20260602-step-jangtq-boundary.json",
         ],
         "artifacts": [
-            "build/current-cache-architecture-contract-20260601-zaya-dsv4-terminal-disk-guard.json",
+            "build/current-cache-architecture-contract-20260602-step-jangtq-boundary.json",
             "build/current-cache-architecture-contract-20260530-lfm2-tool-parser-local.json",
             "build/current-cache-architecture-contract-20260528-gemma4-mixed-swa-row.json",
             "build/current-cache-architecture-contract-20260527-cache-family-matrix.json",
@@ -1553,10 +1553,10 @@ _ROWS: list[dict[str, Any]] = [
             "This is source/static compatibility proof only; live multi-turn output quality remains a separate live row",
         ],
         "commands": [
-            ".venv/bin/python tests/cross_matrix/run_model_family_detection_contract.py --out build/current-model-family-detection-contract-20260531-post-step-lfm-refresh.json",
+            ".venv/bin/python tests/cross_matrix/run_model_family_detection_contract.py --out build/current-model-family-detection-contract-20260602-step-jangtq-boundary.json",
         ],
         "artifacts": [
-            "build/current-model-family-detection-contract-20260531-post-step-lfm-refresh.json",
+            "build/current-model-family-detection-contract-20260602-step-jangtq-boundary.json",
             "build/current-model-family-detection-contract-20260527-after-think-xml-registry-fix.json",
             "build/current-model-family-detection-contract-20260527-issues-175-178-bundled-sync.json",
             "build/current-model-family-detection-contract-20260523-post-budget-edge.json",
@@ -1640,10 +1640,10 @@ _ROWS: list[dict[str, Any]] = [
             "Still-image live rows do not imply video/audio/Omni clearance",
         ],
         "commands": [
-            ".venv/bin/python tests/cross_matrix/run_vl_media_cache_contract.py --out build/current-vl-media-cache-contract-20260601-qwen3vl-frame-list-fallback.json",
+            ".venv/bin/python tests/cross_matrix/run_vl_media_cache_contract.py --out build/current-vl-media-cache-contract-20260602-step-jangtq-boundary.json",
         ],
         "artifacts": [
-            "build/current-vl-media-cache-contract-20260601-qwen3vl-frame-list-fallback.json",
+            "build/current-vl-media-cache-contract-20260602-step-jangtq-boundary.json",
             "build/current-vl-media-cache-contract-20260531-post-step-lfm-refresh.json",
             "build/current-vl-media-cache-contract-20260527-after-think-xml-registry-fix.json",
             "build/current-vl-media-cache-contract-20260527-issues-175-178-bundled-sync.json",

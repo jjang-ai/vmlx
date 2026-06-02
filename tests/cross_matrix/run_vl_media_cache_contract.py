@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Any
 
 
-DEFAULT_OUT = Path("build/current-vl-media-cache-contract-20260601-qwen3vl-frame-list-fallback.json")
+DEFAULT_OUT = Path("build/current-vl-media-cache-contract-20260602-step-jangtq-boundary.json")
 
 PYTEST_PATTERN = (
     "video_url or video_fallback or media_salt or mediaSalt or tool_replay "

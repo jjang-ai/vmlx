@@ -462,7 +462,7 @@ CURRENT_SUITE_COMMANDS: dict[str, list[str]] = {
         sys.executable,
         "tests/cross_matrix/run_cache_architecture_contract.py",
         "--out",
-        "build/current-cache-architecture-contract-20260601-zaya-dsv4-terminal-disk-guard.json",
+        "build/current-cache-architecture-contract-20260602-step-jangtq-boundary.json",
     ],
     "noheavy_panel_settings_contract": [
         sys.executable,
@@ -560,7 +560,7 @@ CURRENT_SUITE_COMMANDS: dict[str, list[str]] = {
         sys.executable,
         "tests/cross_matrix/run_model_family_detection_contract.py",
         "--out",
-        "build/current-model-family-detection-contract-20260531-post-step-lfm-refresh.json",
+        "build/current-model-family-detection-contract-20260602-step-jangtq-boundary.json",
     ],
     "native_mtp_contracts": [
         sys.executable,
@@ -572,7 +572,7 @@ CURRENT_SUITE_COMMANDS: dict[str, list[str]] = {
         sys.executable,
         "tests/cross_matrix/run_vl_media_cache_contract.py",
         "--out",
-        "build/current-vl-media-cache-contract-20260601-qwen3vl-frame-list-fallback.json",
+        "build/current-vl-media-cache-contract-20260602-step-jangtq-boundary.json",
     ],
     "packaged_integrity_contracts": [
         sys.executable,

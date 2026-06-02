@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Any
 
 
-DEFAULT_OUT = Path("build/current-model-family-detection-contract-20260531-post-step-lfm-refresh.json")
+DEFAULT_OUT = Path("build/current-model-family-detection-contract-20260602-step-jangtq-boundary.json")
 
 SOURCE_HASH_FILES = (
     "vmlx_engine/model_config_registry.py",
