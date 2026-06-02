@@ -1107,6 +1107,40 @@ def _sibling_python_worktree_server_hashes(
     return rows
 
 
+def _local_app_bundle_server_hashes(
+    root: Path,
+    reporter_sha: str,
+    search_roots: list[Path] | None = None,
+) -> list[dict[str, Any]]:
+    if search_roots is None:
+        search_roots = [
+            root,
+            root.resolve().parent,
+            Path.home() / ".config/superpowers/worktrees/vllm-mlx",
+        ]
+    rows = []
+    seen: set[Path] = set()
+    for search_root in search_roots:
+        if not search_root.exists():
+            continue
+        for path in sorted(
+            search_root.glob("**/vMLX.app/Contents/Resources/**/vmlx_engine/server.py")
+        ):
+            resolved = path.resolve()
+            if resolved in seen:
+                continue
+            seen.add(resolved)
+            digest = sha256_file(path)
+            rows.append(
+                {
+                    "path": str(path),
+                    "sha256": digest,
+                    "matches_reporter": digest == reporter_sha,
+                }
+            )
+    return rows
+
+
 def build_reporter_server_hash_provenance(
     *,
     root: Path,
@@ -1115,6 +1149,7 @@ def build_reporter_server_hash_provenance(
     local_sha: str | None,
     public_sha: str | None,
     public_dmg_contracts: list[dict[str, Any]] | None = None,
+    app_bundle_search_roots: list[Path] | None = None,
     check_git_history: bool = True,
 ) -> dict[str, Any]:
     if not reporter_sha:
@@ -1165,6 +1200,11 @@ def build_reporter_server_hash_provenance(
                 }
             )
     sibling_source_rows = _sibling_python_worktree_server_hashes(root, reporter_sha)
+    local_app_bundle_rows = _local_app_bundle_server_hashes(
+        root,
+        reporter_sha,
+        app_bundle_search_roots,
+    )
     git_history = (
         _git_history_server_hash_match(root, reporter_sha)
         if check_git_history
@@ -1175,6 +1215,7 @@ def build_reporter_server_hash_provenance(
         or bool(public_release_matches)
         or any(row["matches_reporter"] for row in backup_rows)
         or any(row["matches_reporter"] for row in sibling_source_rows)
+        or any(row["matches_reporter"] for row in local_app_bundle_rows)
         or git_history.get("match") is True
     )
     out: dict[str, Any] = {
@@ -1186,6 +1227,7 @@ def build_reporter_server_hash_provenance(
             "public_release_dmg_contracts",
             "local_installed_app_backups",
             "sibling_python_worktrees",
+            "local_app_bundle_servers",
             "git_history",
         ],
         "direct_matches": direct_matches,
@@ -1201,6 +1243,11 @@ def build_reporter_server_hash_provenance(
         ],
         "sibling_source_checked": sibling_source_rows,
         "sibling_source_checked_count": len(sibling_source_rows),
+        "local_app_bundle_matches": [
+            row for row in local_app_bundle_rows if row["matches_reporter"]
+        ],
+        "local_app_bundle_checked": local_app_bundle_rows,
+        "local_app_bundle_checked_count": len(local_app_bundle_rows),
         "git_history": git_history,
     }
     if not matched:

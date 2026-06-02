@@ -448,6 +448,7 @@ def test_issue179_reporter_server_hash_provenance_names_unknown_hash(tmp_path):
         source_sha="source-sha",
         local_sha="local-sha",
         public_sha="public-sha",
+        app_bundle_search_roots=[tmp_path],
         check_git_history=False,
     )
 
@@ -460,6 +461,7 @@ def test_issue179_reporter_server_hash_provenance_names_unknown_hash(tmp_path):
             "public_release_dmg_contracts",
             "local_installed_app_backups",
             "sibling_python_worktrees",
+            "local_app_bundle_servers",
             "git_history",
         ],
         "direct_matches": {
@@ -475,6 +477,9 @@ def test_issue179_reporter_server_hash_provenance_names_unknown_hash(tmp_path):
         "sibling_source_matches": [],
         "sibling_source_checked": [],
         "sibling_source_checked_count": 0,
+        "local_app_bundle_matches": [],
+        "local_app_bundle_checked": [],
+        "local_app_bundle_checked_count": 0,
         "git_history": {
             "checked": False,
             "match": False,
@@ -551,6 +556,43 @@ def test_issue179_reporter_server_hash_provenance_checks_sibling_python_worktree
             "matches_reporter": False,
         }
     ]
+
+
+def test_issue179_reporter_server_hash_provenance_checks_local_app_bundles(
+    tmp_path,
+):
+    content = b"matched staged app server\n"
+    reporter_sha = gate.hashlib.sha256(content).hexdigest()
+    app_server = (
+        tmp_path
+        / "worktrees/release-candidate/panel/release/mac-arm64/"
+        "vMLX.app/Contents/Resources/bundled-python/python/lib/python3.12/"
+        "site-packages/vmlx_engine/server.py"
+    )
+    app_server.parent.mkdir(parents=True)
+    app_server.write_bytes(content)
+
+    provenance = gate.build_reporter_server_hash_provenance(
+        root=tmp_path / "vllm-mlx-finite-launch-guard",
+        reporter_sha=reporter_sha,
+        source_sha="source-sha",
+        local_sha="local-sha",
+        public_sha="public-sha",
+        app_bundle_search_roots=[tmp_path / "worktrees"],
+        check_git_history=False,
+    )
+
+    assert "local_app_bundle_servers" in provenance["checked_sources"]
+    assert provenance["status"] == "pass"
+    assert provenance["local_app_bundle_checked_count"] == 1
+    assert provenance["local_app_bundle_matches"] == [
+        {
+            "path": str(app_server),
+            "sha256": reporter_sha,
+            "matches_reporter": True,
+        }
+    ]
+    assert "failure" not in provenance
 
 
 def test_issue179_reporter_server_hash_provenance_finds_backup_match(tmp_path):
