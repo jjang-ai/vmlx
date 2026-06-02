@@ -602,13 +602,13 @@ CURRENT_SUITE_COMMANDS: dict[str, list[str]] = {
         sys.executable,
         "tests/cross_matrix/run_issue181_183_runtime_audit.py",
         "--out",
-        "build/current-issue181-183-runtime-audit-20260601-qwen3vl-minicpm-mpp.json",
+        "build/current-issue181-183-runtime-audit-20260602-after-performance-health-epipe-app-sync.json",
     ],
     "public_app_issue_audit": [
         sys.executable,
         "tests/cross_matrix/run_public_app_issue_audit.py",
         "--out",
-        "build/current-public-app-issue-audit-20260601-installed-download-proof.json",
+        "build/current-public-app-issue-audit-20260602-after-performance-health-epipe-app-sync.json",
     ],
     "focused_regression_pytest": [
         sys.executable,

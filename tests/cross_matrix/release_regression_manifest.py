@@ -402,10 +402,10 @@ CURRENT_ISSUE179_MINIMAX_K_LIVE_PROBE_MEMORY_PREFLIGHT_ARTIFACT = (
     "build/current-issue179-minimax-k-responses-cancel-probe-memory-preflight-20260601.json"
 )
 CURRENT_ISSUE181_183_RUNTIME_AUDIT_ARTIFACT = (
-    "build/current-issue181-183-runtime-audit-20260601-qwen3vl-minicpm-mpp.json"
+    "build/current-issue181-183-runtime-audit-20260602-after-performance-health-epipe-app-sync.json"
 )
 CURRENT_PUBLIC_APP_ISSUE_AUDIT_ARTIFACT = (
-    "build/current-public-app-issue-audit-20260601-installed-download-proof.json"
+    "build/current-public-app-issue-audit-20260602-after-performance-health-epipe-app-sync.json"
 )
 CURRENT_DEV_UI_PROOF_ARTIFACTS = {
     "proof": "docs/internal/agent-notes/2026-05-31-live-chat-tools-reasoning-proof.json",
