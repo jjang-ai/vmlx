@@ -205,7 +205,7 @@ def test_issue179_audit_keeps_reporter_cancel_404_boundary_open():
         audit["reporter_server_hash_parity"]["provenance"][
             "public_release_checked_count"
         ]
-        >= 19
+        >= 23
     )
     checked_public_dmg_assets = {
         (row.get("release_tag"), row.get("asset"))
@@ -220,6 +220,8 @@ def test_issue179_audit_keeps_reporter_cancel_404_boundary_open():
         ("v1.5.47", "vMLX-1.5.47-tahoe-arm64.dmg"),
         ("v1.5.48", "vMLX-1.5.48-tahoe-arm64.dmg"),
         ("v1.5.49", "vMLX-1.5.49-tahoe-arm64.dmg"),
+        ("v1.5.50", "vMLX-1.5.50-sequoia-arm64.dmg"),
+        ("v1.5.50", "vMLX-1.5.50-tahoe-arm64.dmg"),
     }.issubset(checked_public_dmg_assets)
     assert audit["proven"]["local_installed_bundle_has_responses_cancel_route"] is True
     assert audit["public_release_dmg_contract"]["server_has_responses_cancel_route"] is True
@@ -566,6 +568,48 @@ def test_issue179_reporter_server_hash_provenance_checks_all_public_dmg_contract
         }
     ]
     assert "failure" not in provenance
+
+
+def test_issue179_reporter_server_hash_provenance_reports_missing_required_public_dmg_contracts(
+    tmp_path,
+):
+    provenance = gate.build_reporter_server_hash_provenance(
+        root=tmp_path,
+        reporter_sha="reporter-sha",
+        source_sha="source-sha",
+        local_sha="local-sha",
+        public_sha="public-sha",
+        public_dmg_contracts=[
+            {
+                "asset": "vMLX-1.5.49-tahoe-arm64.dmg",
+                "release_tag": "v1.5.49",
+                "server_sha256": "public-sha",
+            },
+            {
+                "asset": "vMLX-1.5.52-tahoe-arm64.dmg",
+                "release_tag": "v1.5.52",
+                "server_sha256": "source-sha",
+            },
+        ],
+        required_public_release_contracts={
+            ("v1.5.50", "vMLX-1.5.50-sequoia-arm64.dmg"),
+            ("v1.5.50", "vMLX-1.5.50-tahoe-arm64.dmg"),
+        },
+        check_git_history=False,
+    )
+
+    assert provenance["status"] == "open"
+    assert provenance["failure"] == "missing_required_public_release_dmg_contracts"
+    assert provenance["missing_required_public_release_contracts"] == [
+        {
+            "asset": "vMLX-1.5.50-sequoia-arm64.dmg",
+            "release_tag": "v1.5.50",
+        },
+        {
+            "asset": "vMLX-1.5.50-tahoe-arm64.dmg",
+            "release_tag": "v1.5.50",
+        },
+    ]
 
 
 def test_issue179_reporter_server_hash_provenance_checks_sibling_python_worktrees(

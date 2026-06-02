@@ -79,6 +79,12 @@ PUBLIC_RELEASE_DMG_CONTRACT = Path(
     "build/issue-179/public-v1.5.49-tahoe-dmg-contract.json"
 )
 PUBLIC_RELEASE_DMG_CONTRACT_GLOB = "public-v*-*-dmg-contract.json"
+REQUIRED_PUBLIC_RELEASE_CONTRACTS = {
+    ("v1.5.50", "vMLX-1.5.50-sequoia-arm64.dmg"),
+    ("v1.5.50", "vMLX-1.5.50-tahoe-arm64.dmg"),
+    ("v1.5.52", "vMLX-1.5.52-sequoia-arm64.dmg"),
+    ("v1.5.52", "vMLX-1.5.52-tahoe-arm64.dmg"),
+}
 PUBLIC_RELEASE_TAG_RE = re.compile(r"^v(\d+)\.(\d+)\.(\d+)$")
 
 SOURCE_CONTRACT_FILES = (
@@ -1197,6 +1203,7 @@ def build_reporter_server_hash_provenance(
     local_sha: str | None,
     public_sha: str | None,
     public_dmg_contracts: list[dict[str, Any]] | None = None,
+    required_public_release_contracts: set[tuple[str, str]] | None = None,
     app_bundle_search_roots: list[Path] | None = None,
     check_git_history: bool = True,
 ) -> dict[str, Any]:
@@ -1235,6 +1242,16 @@ def build_reporter_server_hash_provenance(
         }
         for row in public_contract_rows
     ]
+    public_release_seen = {
+        (str(row.get("release_tag")), str(row.get("asset")))
+        for row in public_contract_rows
+        if row.get("release_tag") and row.get("asset")
+    }
+    missing_required_public_release_contracts = [
+        {"release_tag": release_tag, "asset": asset}
+        for release_tag, asset in sorted(required_public_release_contracts or set())
+        if (release_tag, asset) not in public_release_seen
+    ]
     backup_rows = []
     backup_root = root / "build/installed-app-backups"
     if backup_root.exists():
@@ -1258,6 +1275,7 @@ def build_reporter_server_hash_provenance(
         if check_git_history
         else {"checked": False, "match": False, "commit": None, "error": "skipped"}
     )
+    required_public_coverage_ok = not missing_required_public_release_contracts
     matched = (
         any(direct_matches.values())
         or bool(public_release_matches)
@@ -1267,7 +1285,7 @@ def build_reporter_server_hash_provenance(
         or git_history.get("match") is True
     )
     out: dict[str, Any] = {
-        "status": "pass" if matched else "open",
+        "status": "pass" if matched and required_public_coverage_ok else "open",
         "checked_sources": [
             "source_contract",
             "local_installed_bundle",
@@ -1282,6 +1300,9 @@ def build_reporter_server_hash_provenance(
         "public_release_matches": public_release_matches,
         "public_release_checked": public_release_checked,
         "public_release_checked_count": len(public_contract_rows),
+        "missing_required_public_release_contracts": (
+            missing_required_public_release_contracts
+        ),
         "local_backup_matches": [
             row for row in backup_rows if row["matches_reporter"]
         ],
@@ -1298,7 +1319,9 @@ def build_reporter_server_hash_provenance(
         "local_app_bundle_checked_count": len(local_app_bundle_rows),
         "git_history": git_history,
     }
-    if not matched:
+    if missing_required_public_release_contracts:
+        out["failure"] = "missing_required_public_release_dmg_contracts"
+    elif not matched:
         out["failure"] = "reporter_server_hash_provenance_unknown"
     return out
 
@@ -1519,6 +1542,7 @@ def build_audit(root: Path) -> dict[str, Any]:
         local_sha=installed_bundle.get("sha256"),
         public_sha=public_dmg.get("server_sha256"),
         public_dmg_contracts=public_dmgs,
+        required_public_release_contracts=REQUIRED_PUBLIC_RELEASE_CONTRACTS,
     )
     reporter_server_hash_parity = build_reporter_server_hash_parity(
         reporter_parity_artifact=reporter_parity_artifact,
