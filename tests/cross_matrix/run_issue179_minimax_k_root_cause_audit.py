@@ -73,7 +73,7 @@ LOCAL_MODEL_MANIFEST = Path(
 PUBLIC_RELEASE_DMG_CONTRACT = Path(
     "build/issue-179/public-v1.5.49-tahoe-dmg-contract.json"
 )
-PUBLIC_RELEASE_DMG_CONTRACT_GLOB = "public-v1.5.49-*-dmg-contract.json"
+PUBLIC_RELEASE_DMG_CONTRACT_GLOB = "public-v*-*-dmg-contract.json"
 
 SOURCE_CONTRACT_FILES = (
     Path("vmlx_engine/server.py"),
@@ -1092,6 +1092,16 @@ def build_reporter_server_hash_provenance(
         for row in public_contract_rows
         if row.get("server_sha256") == reporter_sha
     ]
+    public_release_checked = [
+        {
+            "asset": row.get("asset"),
+            "path": row.get("path"),
+            "release_tag": row.get("release_tag"),
+            "server_sha256": row.get("server_sha256"),
+            "matches_reporter": row.get("server_sha256") == reporter_sha,
+        }
+        for row in public_contract_rows
+    ]
     backup_rows = []
     backup_root = root / "build/installed-app-backups"
     if backup_root.exists():
@@ -1127,6 +1137,7 @@ def build_reporter_server_hash_provenance(
         ],
         "direct_matches": direct_matches,
         "public_release_matches": public_release_matches,
+        "public_release_checked": public_release_checked,
         "public_release_checked_count": len(public_contract_rows),
         "local_backup_matches": [
             row for row in backup_rows if row["matches_reporter"]

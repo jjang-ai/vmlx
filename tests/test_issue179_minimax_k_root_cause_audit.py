@@ -183,6 +183,19 @@ def test_issue179_audit_keeps_reporter_cancel_404_boundary_open():
         audit["reporter_server_hash_parity"]["provenance"]["git_history"]["match"]
         is False
     )
+    assert (
+        audit["reporter_server_hash_parity"]["provenance"][
+            "public_release_checked_count"
+        ]
+        >= 4
+    )
+    checked_release_tags = {
+        row.get("release_tag")
+        for row in audit["reporter_server_hash_parity"]["provenance"][
+            "public_release_checked"
+        ]
+    }
+    assert {"v1.5.46", "v1.5.49"}.issubset(checked_release_tags)
     assert audit["proven"]["local_installed_bundle_has_responses_cancel_route"] is True
     assert audit["public_release_dmg_contract"]["server_has_responses_cancel_route"] is True
     assert audit["proven"]["public_v1549_tahoe_dmg_has_responses_cancel_route"] is True
