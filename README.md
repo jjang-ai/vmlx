@@ -99,6 +99,12 @@ The vMLX inference server is now running at `http://0.0.0.0:8000` with an OpenAI
 
 Get [MLX Studio](https://github.com/jjang-ai/mlxstudio/releases/latest) -- a native macOS app with chat UI, model management, image generation, and developer tools. No terminal required. Just download the DMG and drag to Applications.
 
+Or install it with Homebrew:
+
+```bash
+brew install --cask vmlx
+```
+
 ### Use with OpenAI SDK
 
 ```python
@@ -552,6 +558,12 @@ git clone https://github.com/jjang-ai/vmlx.git
 cd vmlx/panel
 npm install && npm run build
 npx electron-builder --mac dmg
+```
+
+Or install with Homebrew:
+
+```bash
+brew install --cask vmlx
 ```
 
 ### Menu Bar
