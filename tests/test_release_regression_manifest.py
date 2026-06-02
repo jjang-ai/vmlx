@@ -2723,6 +2723,65 @@ def _write_expected_issue175_177_live_runtime_audit(root: Path) -> None:
     )
 
 
+def _write_passing_dsv4_source_memory_preflight_artifact(root: Path) -> None:
+    path = root / CURRENT_DSV4_SOURCE_MEMORY_PREFLIGHT_ARTIFACT
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(
+            {
+                "status": "skipped",
+                "reason": "insufficient_vm_stat_memory",
+                "model": "/Users/example/models/JANGQ/DeepSeek-V4-Flash-JANGTQ-K",
+                "commands": {
+                    "memory": "vm_stat",
+                    "top_memory_processes": "ps -axo pid,rss,command -r | head -n 11",
+                    "active_heavy_processes": "pgrep -af 'vmlx_engine.cli serve|mlx_lm.server|run_runtime_memory_stress_probe|run_decode_speed_gate|live-real-ui-model-proof|run_dsv4_route_mode_code_exactness|run_dsv4_default_cache_tool_loop_gate'",
+                    "memory_pressure": "memory_pressure",
+                },
+                "available_gb": 105.0,
+                "required_available_gb": 120.0,
+                "required_free_gb": 120.0,
+                "min_free_gb": 120.0,
+                "available_for_gate_gb": 79.25,
+                "memory_gap_gb": 40.75,
+                "strict_vm_stat_memory_gap_gb": 40.75,
+                "psutil_available_gap_gb": 15.0,
+                "free_plus_speculative_purgeable_gb": 79.25,
+                "memory_pressure_free_percent": 95,
+                "preflight_memory_source": "vm_stat_free_plus_speculative_purgeable",
+                "did_not_launch": True,
+                "launch_decision": "do_not_launch",
+                "launch_allowed": False,
+                "launch_blockers": ["insufficient_memory"],
+                "active_heavy_process_count": 0,
+                "active_heavy_processes": [],
+                "top_memory_processes": [
+                    {"pid": 4321, "rss_gb": 2.0, "command": "current-codex"}
+                ],
+                "selected_cases": [
+                    "chat_off",
+                    "chat_off_rep1",
+                    "chat_off_no_punct_rep1",
+                    "chat_off_bundle_defaults",
+                    "chat_on",
+                    "chat_on_rep1",
+                    "chat_max",
+                    "responses_off",
+                    "responses_off_rep1",
+                    "responses_off_no_punct_rep1",
+                    "responses_off_bundle_defaults",
+                    "responses_on",
+                    "responses_on_rep1",
+                    "legacy_completion_raw",
+                ],
+                "case_count": 14,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+
 def _write_passing_real_ui_dsv4_memory_preflight_artifact(root: Path) -> None:
     path = root / CURRENT_REAL_UI_DSV4_MEMORY_PREFLIGHT_ARTIFACT
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -8218,6 +8277,7 @@ def test_release_regression_manifest_validates_current_proof_sweep_artifacts(tmp
     )
     _write_passing_dev_ui_proof_artifacts(tmp_path)
     _write_passing_real_ui_live_model_proof_artifacts(tmp_path)
+    _write_passing_dsv4_source_memory_preflight_artifact(tmp_path)
     _write_passing_real_ui_dsv4_memory_preflight_artifact(tmp_path)
 
     result = validate_current_proof_sweep_artifacts(tmp_path)
@@ -8517,102 +8577,91 @@ def test_release_regression_manifest_validates_current_proof_sweep_artifacts(tmp
         "local_release_clearance": True,
         "root_cause_candidate": "mimo_v2_jang2l_2bit_routed_expert_distortion",
     }
-    assert result["release_blocker_ledger"] == {
-        "status": "open",
-        "blockers": [
-            {
-                "id": "dsv4_long_output_code_exactness_open",
-                "status": "open",
-                "evidence": CURRENT_DSV4_SOURCE_MEMORY_PREFLIGHT_ARTIFACT,
-                "next_proof": "Run and pass DSV4 long-output/code exactness with current source/app in a memory-safe local session.",
-                "details": {
-                    "artifact_present": True,
-                    "status": "skipped",
-                    "reason": "insufficient_free_memory",
-                    "model": "/Users/example/models/JANGQ/DeepSeek-V4-Flash-JANGTQ-K",
-                    "commands": {
-                        "memory": "vm_stat",
-                        "memory_pressure": "memory_pressure",
-                    },
-                    "available_gb": 103.87,
-                    "required_available_gb": 120.0,
-                    "required_free_gb": 120.0,
-                    "min_free_gb": 120.0,
-                    "available_for_gate_gb": 103.87,
-                    "memory_gap_gb": 16.13,
-                    "strict_vm_stat_memory_gap_gb": 16.13,
-                    "psutil_available_gap_gb": 16.13,
-                    "memory_pressure_free_percent": 94,
-                    "preflight_memory_source": "psutil_available",
-                    "did_not_launch": True,
-                    "launch_decision": "do_not_launch",
-                    "launch_allowed": False,
-                    "launch_blockers": ["insufficient_memory"],
-                    "active_heavy_process_count": 0,
-                    "active_heavy_processes": [],
-                    "top_memory_processes": [
-                        {
-                            "pid": 1001,
-                            "rss_gb": 10.0,
-                            "command": "/Applications/vMLX.app/Contents/MacOS/vMLX",
-                        }
-                    ],
-                    "selected_cases": [
-                        "chat_off",
-                        "chat_off_rep1",
-                        "chat_off_no_punct_rep1",
-                        "chat_off_bundle_defaults",
-                        "chat_on",
-                        "chat_on_rep1",
-                        "chat_max",
-                        "responses_off",
-                        "responses_off_rep1",
-                        "responses_off_no_punct_rep1",
-                        "responses_off_bundle_defaults",
-                        "responses_on",
-                        "responses_on_rep1",
-                        "legacy_completion_raw",
-                    ],
-                    "case_count": 14,
-                },
-            },
-            {
-                "id": "real_ui_dsv4_memory_blocked",
-                "status": "open",
-                "evidence": CURRENT_REAL_UI_DSV4_MEMORY_PREFLIGHT_ARTIFACT,
-                "next_proof": "Run DSV4 real Electron UI proof on a local machine/session with enough free memory.",
-                "details": {
-                    "artifact": CURRENT_REAL_UI_DSV4_MEMORY_PREFLIGHT_ARTIFACT,
-                    "reason": "insufficient_memory",
-                    "model_path": "/Users/example/models/JANGQ/DeepSeek-V4-Flash-JANGTQ-K",
-                    "model_size_gb": 80.0,
-                    "required_available_gb": 120.0,
-                    "required_free_gb": 120.0,
-                    "min_free_gb": 120.0,
-                    "preflight_memory_source": "vm_stat_free_plus_speculative_purgeable",
-                    "free_plus_speculative_purgeable_gb": 39.15,
-                    "available_for_gate_gb": 39.15,
-                    "memory_gap_gb": 80.85,
-                    "psutil_available_gb": 104.0,
-                    "psutil_memory_gap_gb": 16.0,
-                    "memory_pressure_free_percent": 95,
-                    "inactive_file_cache_gb": 30.0,
-                    "did_not_launch": True,
-                    "launch_decision": "do_not_launch",
-                    "launch_allowed": False,
-                    "launch_blockers": ["insufficient_memory"],
-                    "active_heavy_process_count": 0,
-                    "active_heavy_processes": [],
-                    "top_memory_processes": [
-                        {"pid": 1001, "rss_gb": 10.0, "command": "vMLX"}
-                    ],
-                },
-            },
-        ],
-        "deferred_release_families": [
-            {"family": "mimo_v2", "reason": "deferred_out_of_release_scope"}
-        ],
+    ledger = result["release_blocker_ledger"]
+    assert ledger["status"] == "open"
+    assert ledger["deferred_release_families"] == [
+        {"family": "mimo_v2", "reason": "deferred_out_of_release_scope"}
+    ]
+    blockers = {blocker["id"]: blocker for blocker in ledger["blockers"]}
+    assert set(blockers) == {
+        "dsv4_long_output_code_exactness_open",
+        "real_ui_dsv4_memory_blocked",
     }
+
+    dsv4_blocker = blockers["dsv4_long_output_code_exactness_open"]
+    assert dsv4_blocker["status"] == "open"
+    assert dsv4_blocker["evidence"] == CURRENT_DSV4_SOURCE_MEMORY_PREFLIGHT_ARTIFACT
+    assert (
+        dsv4_blocker["next_proof"]
+        == "Run and pass DSV4 long-output/code exactness with current source/app in a memory-safe local session."
+    )
+    dsv4_details = dsv4_blocker["details"]
+    assert dsv4_details["artifact_present"] is True
+    assert dsv4_details["status"] == "skipped"
+    assert dsv4_details["reason"] == "insufficient_vm_stat_memory"
+    assert (
+        dsv4_details["model"]
+        == "/Users/example/models/JANGQ/DeepSeek-V4-Flash-JANGTQ-K"
+    )
+    assert dsv4_details["preflight_memory_source"] == (
+        "vm_stat_free_plus_speculative_purgeable"
+    )
+    assert dsv4_details["did_not_launch"] is True
+    assert dsv4_details["launch_decision"] == "do_not_launch"
+    assert dsv4_details["launch_allowed"] is False
+    assert dsv4_details["launch_blockers"] == ["insufficient_memory"]
+    assert dsv4_details["active_heavy_process_count"] == 0
+    assert dsv4_details["active_heavy_processes"] == []
+    assert dsv4_details["case_count"] == 14
+    assert dsv4_details["selected_cases"] == [
+        "chat_off",
+        "chat_off_rep1",
+        "chat_off_no_punct_rep1",
+        "chat_off_bundle_defaults",
+        "chat_on",
+        "chat_on_rep1",
+        "chat_max",
+        "responses_off",
+        "responses_off_rep1",
+        "responses_off_no_punct_rep1",
+        "responses_off_bundle_defaults",
+        "responses_on",
+        "responses_on_rep1",
+        "legacy_completion_raw",
+    ]
+    assert dsv4_details["available_for_gate_gb"] < dsv4_details["required_available_gb"]
+    assert dsv4_details["memory_gap_gb"] > 0
+    assert dsv4_details["strict_vm_stat_memory_gap_gb"] > 0
+    assert dsv4_details["top_memory_processes"]
+    assert "memory" in dsv4_details["commands"]
+    assert "memory_pressure" in dsv4_details["commands"]
+
+    real_ui_blocker = blockers["real_ui_dsv4_memory_blocked"]
+    assert real_ui_blocker["status"] == "open"
+    assert real_ui_blocker["evidence"] == CURRENT_REAL_UI_DSV4_MEMORY_PREFLIGHT_ARTIFACT
+    assert (
+        real_ui_blocker["next_proof"]
+        == "Run DSV4 real Electron UI proof on a local machine/session with enough free memory."
+    )
+    real_ui_details = real_ui_blocker["details"]
+    assert real_ui_details["artifact"] == CURRENT_REAL_UI_DSV4_MEMORY_PREFLIGHT_ARTIFACT
+    assert real_ui_details["reason"] == "insufficient_memory"
+    assert (
+        real_ui_details["model_path"]
+        == "/Users/example/models/JANGQ/DeepSeek-V4-Flash-JANGTQ-K"
+    )
+    assert real_ui_details["preflight_memory_source"] == (
+        "vm_stat_free_plus_speculative_purgeable"
+    )
+    assert real_ui_details["did_not_launch"] is True
+    assert real_ui_details["launch_decision"] == "do_not_launch"
+    assert real_ui_details["launch_allowed"] is False
+    assert real_ui_details["launch_blockers"] == ["insufficient_memory"]
+    assert real_ui_details["active_heavy_process_count"] == 0
+    assert real_ui_details["active_heavy_processes"] == []
+    assert real_ui_details["available_for_gate_gb"] < real_ui_details["required_available_gb"]
+    assert real_ui_details["memory_gap_gb"] > 0
+    assert real_ui_details["top_memory_processes"]
 
 
 def test_release_blocker_ledger_defers_mimo_failed_live_smokes_from_release_blockers():

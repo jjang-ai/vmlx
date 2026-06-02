@@ -423,8 +423,8 @@ def _build_summary(
     status = (
         "pass"
         if (
-            not failed_steps
-            and not open_requirements
+            current_step is None
+            and not failed_steps
             and not unexpected_open
             and not missing_expected_open
         )

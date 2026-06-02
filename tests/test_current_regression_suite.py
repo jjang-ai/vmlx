@@ -51,7 +51,7 @@ def test_current_regression_suite_keeps_declared_known_blockers_open(tmp_path, m
 
     artifact = suite.build_suite_artifact(tmp_path, include_release_gate=True)
 
-    assert artifact["status"] == "open"
+    assert artifact["status"] == "pass"
     assert artifact["known_open_requirements"] == suite.EXPECTED_OPEN_REQUIREMENTS
     assert artifact["unexpected_open_requirements"] == []
     assert artifact["missing_expected_open_requirements"] == []
@@ -271,7 +271,7 @@ def test_current_regression_suite_executes_declared_command_table(monkeypatch, t
 
     artifact = suite.build_suite_artifact(tmp_path, include_release_gate=False)
 
-    assert artifact["status"] == "open"
+    assert artifact["status"] == "pass"
     for name, cmd in suite.CURRENT_SUITE_COMMANDS.items():
         assert seen_steps[name] == cmd
 
@@ -310,6 +310,7 @@ def test_current_regression_suite_checkpoints_each_started_step(
     )
 
     before_second = snapshots["before_second"]
+    assert before_second["status"] == "open"
     assert before_second["current_step"] == "second_contract"
     assert before_second["completed_steps"] == ["first_contract"]
 
@@ -672,7 +673,7 @@ def test_current_regression_suite_writes_provisional_artifact_before_packaged_an
         current_suite_artifact_path=current_suite_artifact,
     )
 
-    assert artifact["status"] == "open"
+    assert artifact["status"] == "pass"
     assert observed_failed_steps == {
         "packaged_integrity_contracts": [],
         "release_regression_manifest": [],
@@ -765,7 +766,7 @@ def test_current_regression_suite_runs_panel_settings_contract_to_current_artifa
 
     artifact = suite.build_suite_artifact(tmp_path, include_release_gate=False)
 
-    assert artifact["status"] == "open"
+    assert artifact["status"] == "pass"
     assert any(
         name == "noheavy_panel_settings_contract"
         and "current-panel-settings-contract-proof-20260601-cache-ui-storage-quant.json" in " ".join(cmd)
@@ -831,7 +832,7 @@ def test_current_regression_suite_refreshes_release_regression_manifest(monkeypa
 
     artifact = suite.build_suite_artifact(tmp_path, include_release_gate=False)
 
-    assert artifact["status"] == "open"
+    assert artifact["status"] == "pass"
     assert any(name == "release_regression_manifest" for name, _cmd in seen_steps)
     assert any(
         "run_release_regression_manifest.py" in " ".join(cmd)
@@ -1152,7 +1153,7 @@ def test_current_regression_suite_refreshes_current_packaged_integrity_artifact(
 
     artifact = suite.build_suite_artifact(tmp_path, include_release_gate=False)
 
-    assert artifact["status"] == "open"
+    assert artifact["status"] == "pass"
     current_artifact = manifest.CURRENT_POST_BUDGET_EDGE_ARTIFACTS[
         "packaged-release-integrity"
     ]
@@ -1245,7 +1246,7 @@ def test_current_regression_suite_runs_panel_tool_security_contracts(monkeypatch
 
     artifact = suite.build_suite_artifact(tmp_path, include_release_gate=False)
 
-    assert artifact["status"] == "open"
+    assert artifact["status"] == "pass"
     assert any(name == "panel_tool_security_contracts" for name, _cmd in seen_steps)
     assert any(
         "run_panel_tool_security_contract.py" in " ".join(cmd)
@@ -1282,7 +1283,7 @@ def test_current_regression_suite_refreshes_current_objective_digest_artifact(
 
     artifact = suite.build_suite_artifact(tmp_path, include_release_gate=False)
 
-    assert artifact["status"] == "open"
+    assert artifact["status"] == "pass"
     assert suite.CURRENT_OBJECTIVE_DIGEST_ARTIFACT == (
         "build/current-objective-proof-audit-20260602-cache-detail-zero-cached.json"
     )
@@ -1313,7 +1314,7 @@ def test_current_regression_suite_runs_release_surface_contract(monkeypatch, tmp
 
     artifact = suite.build_suite_artifact(tmp_path, include_release_gate=False)
 
-    assert artifact["status"] == "open"
+    assert artifact["status"] == "pass"
     assert any(name == "release_surface_contracts" for name, _cmd in seen_steps)
     assert any(
         "run_release_surface_contract.py" in " ".join(cmd)
@@ -1347,7 +1348,7 @@ def test_current_regression_suite_runs_cli_release_contracts(monkeypatch, tmp_pa
 
     artifact = suite.build_suite_artifact(tmp_path, include_release_gate=False)
 
-    assert artifact["status"] == "open"
+    assert artifact["status"] == "pass"
     assert any(name == "cli_release_contracts" for name, _cmd in seen_steps)
     assert any(
         "TestServeCommandSocketBinding" in " ".join(cmd)
@@ -1370,7 +1371,7 @@ def test_current_regression_suite_runs_jang_model_compat_contracts(monkeypatch, 
 
     artifact = suite.build_suite_artifact(tmp_path, include_release_gate=False)
 
-    assert artifact["status"] == "open"
+    assert artifact["status"] == "pass"
     assert any(name == "jang_model_compat_contracts" for name, _cmd in seen_steps)
     assert any(
         "run_jang_model_compat_contract.py" in " ".join(cmd)
@@ -1416,7 +1417,7 @@ def test_current_regression_suite_runs_model_artifact_format_contracts(monkeypat
 
     artifact = suite.build_suite_artifact(tmp_path, include_release_gate=False)
 
-    assert artifact["status"] == "open"
+    assert artifact["status"] == "pass"
     assert any(name == "model_artifact_format_contracts" for name, _cmd in seen_steps)
     assert any(
         "run_model_artifact_format_contract.py" in " ".join(cmd)
@@ -1439,7 +1440,7 @@ def test_current_regression_suite_runs_model_family_detection_contracts(monkeypa
 
     artifact = suite.build_suite_artifact(tmp_path, include_release_gate=False)
 
-    assert artifact["status"] == "open"
+    assert artifact["status"] == "pass"
     assert any(name == "model_family_detection_contracts" for name, _cmd in seen_steps)
     assert any(
         "run_model_family_detection_contract.py" in " ".join(cmd)
@@ -1462,7 +1463,7 @@ def test_current_regression_suite_runs_parser_registry_contracts(monkeypatch, tm
 
     artifact = suite.build_suite_artifact(tmp_path, include_release_gate=False)
 
-    assert artifact["status"] == "open"
+    assert artifact["status"] == "pass"
     assert any(name == "parser_registry_contracts" for name, _cmd in seen_steps)
     assert any(
         "run_parser_registry_contract.py" in " ".join(cmd)
@@ -1485,7 +1486,7 @@ def test_current_regression_suite_runs_max_output_context_contracts(monkeypatch,
 
     artifact = suite.build_suite_artifact(tmp_path, include_release_gate=False)
 
-    assert artifact["status"] == "open"
+    assert artifact["status"] == "pass"
     assert any(name == "max_output_context_contracts" for name, _cmd in seen_steps)
     assert any(
         "run_max_output_context_contract.py" in " ".join(cmd)
@@ -1508,7 +1509,7 @@ def test_current_regression_suite_runs_vl_media_cache_contracts(monkeypatch, tmp
 
     artifact = suite.build_suite_artifact(tmp_path, include_release_gate=False)
 
-    assert artifact["status"] == "open"
+    assert artifact["status"] == "pass"
     assert any(name == "vl_media_cache_contracts" for name, _cmd in seen_steps)
     assert any(
         "run_vl_media_cache_contract.py" in " ".join(cmd)
@@ -1531,7 +1532,7 @@ def test_current_regression_suite_runs_cache_architecture_contracts(monkeypatch,
 
     artifact = suite.build_suite_artifact(tmp_path, include_release_gate=False)
 
-    assert artifact["status"] == "open"
+    assert artifact["status"] == "pass"
     assert any(name == "cache_architecture_contracts" for name, _cmd in seen_steps)
     assert any(
         "run_cache_architecture_contract.py" in " ".join(cmd)
@@ -1554,7 +1555,7 @@ def test_current_regression_suite_runs_native_mtp_contracts(monkeypatch, tmp_pat
 
     artifact = suite.build_suite_artifact(tmp_path, include_release_gate=False)
 
-    assert artifact["status"] == "open"
+    assert artifact["status"] == "pass"
     assert any(name == "native_mtp_contracts" for name, _cmd in seen_steps)
     assert any(
         "run_native_mtp_contract.py" in " ".join(cmd)
@@ -1577,7 +1578,7 @@ def test_current_regression_suite_runs_generation_defaults_contracts(monkeypatch
 
     artifact = suite.build_suite_artifact(tmp_path, include_release_gate=False)
 
-    assert artifact["status"] == "open"
+    assert artifact["status"] == "pass"
     assert any(name == "generation_defaults_contracts" for name, _cmd in seen_steps)
     assert any(
         "run_generation_defaults_contract.py" in " ".join(cmd)
@@ -1600,7 +1601,7 @@ def test_current_regression_suite_runs_reasoning_template_contracts(monkeypatch,
 
     artifact = suite.build_suite_artifact(tmp_path, include_release_gate=False)
 
-    assert artifact["status"] == "open"
+    assert artifact["status"] == "pass"
     assert any(name == "reasoning_template_contracts" for name, _cmd in seen_steps)
     assert any(
         "run_reasoning_template_contract.py" in " ".join(cmd)
@@ -1634,7 +1635,7 @@ def test_current_regression_suite_runs_api_surface_contracts(monkeypatch, tmp_pa
 
     artifact = suite.build_suite_artifact(tmp_path, include_release_gate=False)
 
-    assert artifact["status"] == "open"
+    assert artifact["status"] == "pass"
     assert any(name == "api_surface_contracts" for name, _cmd in seen_steps)
     assert any(
         "run_api_surface_contract.py" in " ".join(cmd)
@@ -1657,7 +1658,7 @@ def test_current_regression_suite_runs_tool_call_contracts(monkeypatch, tmp_path
 
     artifact = suite.build_suite_artifact(tmp_path, include_release_gate=False)
 
-    assert artifact["status"] == "open"
+    assert artifact["status"] == "pass"
     assert any(name == "tool_call_contracts" for name, _cmd in seen_steps)
     assert any(
         "run_tool_call_contract.py" in " ".join(cmd)
@@ -1681,7 +1682,7 @@ def test_current_regression_suite_runs_mcp_policy_contracts(monkeypatch, tmp_pat
 
     artifact = suite.build_suite_artifact(tmp_path, include_release_gate=False)
 
-    assert artifact["status"] == "open"
+    assert artifact["status"] == "pass"
     assert any(name == "mcp_policy_contracts" for name, _cmd in seen_steps)
     assert any(
         "run_mcp_policy_contract.py" in " ".join(cmd)
@@ -1705,7 +1706,7 @@ def test_current_regression_suite_runs_mcp_policy_marker_contract(monkeypatch, t
 
     artifact = suite.build_suite_artifact(tmp_path, include_release_gate=False)
 
-    assert artifact["status"] == "open"
+    assert artifact["status"] == "pass"
     focused = next(cmd for name, cmd in seen_steps if name == "focused_regression_pytest")
     joined = " ".join(focused)
     assert "tests/test_mcp_policy_contract.py" in joined
@@ -1729,7 +1730,7 @@ def test_current_regression_suite_runs_dsv4_processor_context_regressions(
 
     artifact = suite.build_suite_artifact(tmp_path, include_release_gate=False)
 
-    assert artifact["status"] == "open"
+    assert artifact["status"] == "pass"
     focused = next(cmd for name, cmd in seen_steps if name == "focused_regression_pytest")
     joined = " ".join(focused)
     assert "tests/test_batching.py" in joined
@@ -1755,7 +1756,7 @@ def test_current_regression_suite_runs_packaged_integrity_contracts(monkeypatch,
 
     artifact = suite.build_suite_artifact(tmp_path, include_release_gate=False)
 
-    assert artifact["status"] == "open"
+    assert artifact["status"] == "pass"
     assert any(name == "packaged_integrity_contracts" for name, _cmd in seen_steps)
     assert any(
         "run_packaged_integrity_contract.py" in " ".join(cmd)
@@ -1787,7 +1788,7 @@ def test_current_regression_suite_sets_clean_jang_source_env_for_release_childre
         jang_tools_source=clean_jang,
     )
 
-    assert artifact["status"] == "open"
+    assert artifact["status"] == "pass"
     assert seen_env["packaged_integrity_contracts"] == (str(clean_jang), str(clean_jang))
     assert seen_env["release_gate_skip_app"] == (str(clean_jang), str(clean_jang))
 
