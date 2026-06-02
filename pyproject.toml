@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "vmlx"
-version = "1.5.52"
+version = "1.5.53"
 description = "MLX inference server for Apple Silicon — Text, Image, Video & Audio generation"
 readme = "README.md"
 license = {text = "Apache-2.0"}
