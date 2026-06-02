@@ -12595,6 +12595,10 @@ def test_release_regression_manifest_rejects_incomplete_current_vl_media_matrix(
     ]
 
 
+def test_release_regression_manifest_vl_media_requires_engine_marker_completeness():
+    assert "all_required_engine_markers_present" in EXPECTED_CURRENT_VL_MEDIA_CHECKS
+
+
 def test_release_regression_manifest_rejects_incomplete_current_mcp_policy_matrix(tmp_path):
     mcp_artifact = CURRENT_POST_BUDGET_EDGE_ARTIFACTS["mcp-policy-ui-gateway"]
     for artifact in CURRENT_POST_BUDGET_EDGE_ARTIFACTS.values():

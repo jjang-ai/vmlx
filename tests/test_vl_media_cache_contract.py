@@ -14,6 +14,7 @@ def test_vl_media_cache_contract_pins_named_engine_rows():
 
     required = set(gate.REQUIRED_VL_MEDIA_CACHE_TEST_MARKERS)
     sources = set(gate.SOURCE_HASH_FILES)
+    source = Path("tests/cross_matrix/run_vl_media_cache_contract.py").read_text()
 
     assert "test_video_url_parsed" in required
     assert "test_image_and_video_url_content_part_schemas" in required
@@ -32,6 +33,7 @@ def test_vl_media_cache_contract_pins_named_engine_rows():
     assert "-vv" in engine_command
     assert "vmlx_engine/api/models.py" in sources
     assert "vmlx_engine/openai_models.py" not in sources
+    assert '"all_required_engine_markers_present":' in source
 
 
 def test_vl_media_cache_contract_pins_named_panel_rows():

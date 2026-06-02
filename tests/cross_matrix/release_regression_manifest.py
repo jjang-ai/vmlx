@@ -263,6 +263,7 @@ EXPECTED_CURRENT_VL_MEDIA_CHECKS = (
     "panel_media_tool_followup_content_parts",
     "panel_image_display_consistency",
     "panel_vlm_launch_settings",
+    "all_required_engine_markers_present",
     "all_required_panel_markers_present",
 )
 

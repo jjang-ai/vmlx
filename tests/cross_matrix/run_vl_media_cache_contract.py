@@ -300,6 +300,7 @@ def build_artifact(root: Path) -> dict[str, Any]:
             and "multimodal/VLM detection suppresses --enable-jit because mlx-vlm streaming is not compile-safe" not in missing_panel_markers
             and settings_passed >= 6
         ),
+        "all_required_engine_markers_present": not failed and not missing_engine_markers,
         "all_required_panel_markers_present": not failed and not missing_panel_markers,
     }
     public_results = {
