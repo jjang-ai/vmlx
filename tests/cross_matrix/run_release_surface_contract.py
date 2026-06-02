@@ -384,11 +384,20 @@ def build_artifact(
                 "public_github_source_release_tag_matches_source_head",
             }
         )
-    status = "pass" if all(checks[name] for name in status_check_names) else "fail"
+    status_failed_checks = sorted(
+        name for name in status_check_names if not checks.get(name, False)
+    )
+    informational_false_checks = sorted(
+        name for name, passed in checks.items()
+        if not passed and name not in status_check_names
+    )
+    status = "pass" if not status_failed_checks else "fail"
     return {
         "created_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
         "status": status,
         "checks": checks,
+        "status_failed_checks": status_failed_checks,
+        "informational_false_checks": informational_false_checks,
         "source_versions": versions,
         "local_latest": {
             "version": latest.get("version"),

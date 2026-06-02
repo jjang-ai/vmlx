@@ -278,7 +278,7 @@ def test_release_surface_live_public_checks_require_pypi_files(tmp_path):
             return latest
         if "pypi.org" in url:
             return {"info": {"version": "1.5.48"}, "urls": []}
-        if "api.github.com" in url:
+        if "releases/tags" in url:
             return {
                 "draft": False,
                 "prerelease": False,
@@ -286,15 +286,34 @@ def test_release_surface_live_public_checks_require_pypi_files(tmp_path):
                     {
                         "name": "vMLX-1.5.48-sequoia-arm64.dmg",
                         "digest": "sha256:" + latest["sha256"],
-                    }
+                    },
+                    {
+                        "name": "vMLX-1.5.48-tahoe-arm64.dmg",
+                        "digest": "sha256:" + latest["downloads"]["tahoe"]["sha256"],
+                    },
                 ],
             }
+        if "git/ref/tags" in url:
+            return {"object": {"sha": "current-source-head"}}
         raise AssertionError(url)
 
-    artifact = gate.build_artifact(tmp_path, live_public=True, fetch_json=fetch_json)
+    artifact = gate.build_artifact(
+        tmp_path,
+        live_public=True,
+        fetch_json=fetch_json,
+        fetch_headers=lambda url: {
+            "cache-control": "no-cache, no-store, must-revalidate",
+            "pragma": "no-cache",
+            "expires": "0",
+        },
+        current_revision="current-source-head",
+    )
 
     assert artifact["status"] == "fail"
     assert artifact["checks"]["public_pypi_has_release_files"] is False
+    assert artifact["checks"]["staged_source_version_not_public"] is False
+    assert artifact["status_failed_checks"] == ["public_pypi_has_release_files"]
+    assert "staged_source_version_not_public" in artifact["informational_false_checks"]
 
 
 def test_release_surface_live_public_checks_require_github_release_asset(tmp_path):
