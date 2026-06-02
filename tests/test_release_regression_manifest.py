@@ -3457,8 +3457,8 @@ def test_release_regression_manifest_current_sweep_uses_latest_live_smoke_artifa
     assert "current-regression-suite-20260528-release-ready-top-level.json" not in joined
     assert "current-regression-suite-20260528-dsv4-memory-refresh.json" not in joined
     assert "current-regression-suite-20260528-signing-detail-ledger.json" not in joined
-    assert "current-installed-app-runtime-parity-audit-20260601-cache-ipc-epipe-installed.json" in joined
-    assert "current-installed-app-runtime-parity-audit-20260601-cache-ipc-epipe-installed.json" in row_text
+    assert "current-installed-app-runtime-parity-audit-20260602-performance-health-epipe.json" in joined
+    assert "current-installed-app-runtime-parity-audit-20260602-performance-health-epipe.json" in row_text
     assert "current-installed-app-runtime-parity-audit-20260601-epipe-renderer-installed.json" not in joined
     assert "current-installed-app-runtime-parity-audit-20260601-epipe-renderer-installed.json" not in row_text
     assert "current-installed-app-runtime-parity-audit-20260531-live-epipe-refresh.json" not in joined
@@ -3467,7 +3467,7 @@ def test_release_regression_manifest_current_sweep_uses_latest_live_smoke_artifa
     assert "current-installed-app-runtime-parity-audit-20260531-childstream-epipe-installed-sync.json" not in row_text
     assert "current-installed-app-runtime-parity-audit-20260528-epipe-aggregate-guard.json" not in joined
     assert "current-installed-app-runtime-parity-audit-20260528-epipe-aggregate-guard.json" not in row_text
-    assert "current-staged-app-runtime-parity-audit-20260601-epipe-python-launch-refresh.json" in joined
+    assert "current-staged-app-runtime-parity-audit-20260602-performance-health-epipe.json" in joined
     assert "current-staged-app-runtime-parity-audit-20260601-cache-ipc-epipe-staged.json" not in joined
     assert "current-staged-app-runtime-parity-audit-20260601-wrapper-epipe-package-refresh.json" not in joined
     assert "current-staged-app-runtime-parity-audit-20260531-step37-mixed-swa-runtime.json" not in joined
