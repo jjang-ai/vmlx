@@ -168,6 +168,7 @@ EXPECTED_CURRENT_API_SURFACE_CHECKS = (
     "chat_and_responses_streaming_cache_detail_usage",
     "responses_previous_response_history",
     "server_cache_and_tool_surfaces_named",
+    "plain_attention_kv_status",
     "panel_request_builder_sampling_and_output_overrides",
     "panel_ollama_gateway_omits_disabled_sentinels",
     "panel_gateway_single_model_auto_switch_streaming",

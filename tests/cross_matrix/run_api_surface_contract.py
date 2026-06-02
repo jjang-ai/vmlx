@@ -70,6 +70,7 @@ REQUIRED_NESTED_API_CHECKS = (
     "responses_previous_response_history",
     "cache_reuse_endpoints",
     "cache_stats_reuse_skip_telemetry",
+    "plain_attention_kv_status",
     "dsv4_native_cache_status",
     "dsv4_dsml_parser_residue_rejection",
     "dsv4_dsml_valid_tool_call_preserved",
@@ -272,6 +273,9 @@ def build_artifact(root: Path) -> dict[str, Any]:
         ),
         "server_cache_and_tool_surfaces_named": (
             not failed and not missing_nested_checks and not nested_missing_markers
+        ),
+        "plain_attention_kv_status": (
+            not failed and "plain_attention_kv_status" not in missing_nested_checks
         ),
         "panel_request_builder_sampling_and_output_overrides": (
             not failed

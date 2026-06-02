@@ -29,6 +29,7 @@ def test_api_surface_contract_pins_named_public_surface_edges():
     assert "responses_previous_response_history" in nested
     assert "cache_reuse_endpoints" in nested
     assert "cache_stats_reuse_skip_telemetry" in nested
+    assert "plain_attention_kv_status" in nested
     assert "dsv4_native_cache_status" in nested
     assert "zaya_typed_cca_status" in nested
     assert "jangtq_mpp_nax_health_kernel_name" in nested
