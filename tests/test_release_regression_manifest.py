@@ -3958,8 +3958,8 @@ def test_release_regression_manifest_uses_installed_app_lfm25_responses_delta_ca
     row = CURRENT_REAL_UI_LIVE_MODEL_PROOF_ROWS["lfm25_moe_a1b_responses_delta"]
 
     expected = (
-        "current-real-ui-installed-app-lfm25-moe-a1b-jang2l-responses-tools-"
-        "l2storage-cachecontrols-localonly-20260601"
+        "current-real-ui-live-model-lfm25-jang2l-installed-responses-tools-"
+        "max512-post-release-20260602"
     )
     assert expected in row["proof"]
     assert expected in row["chat_screenshot"]
