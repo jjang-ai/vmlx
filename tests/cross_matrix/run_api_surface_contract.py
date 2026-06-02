@@ -277,6 +277,24 @@ def build_artifact(root: Path) -> dict[str, Any]:
         "plain_attention_kv_status": (
             not failed and "plain_attention_kv_status" not in missing_nested_checks
         ),
+        "dsv4_native_cache_status": (
+            not failed and "dsv4_native_cache_status" not in missing_nested_checks
+        ),
+        "zaya_typed_cca_status": (
+            not failed and "zaya_typed_cca_status" not in missing_nested_checks
+        ),
+        "hybrid_ssm_partial_reuse": (
+            not failed and "hybrid_ssm_partial_reuse" not in missing_nested_checks
+        ),
+        "turboquant_kv_runtime_contract": (
+            not failed and "turboquant_kv_runtime_contract" not in missing_nested_checks
+        ),
+        "turboquant_disk_roundtrip": (
+            not failed and "turboquant_disk_roundtrip" not in missing_nested_checks
+        ),
+        "no_generic_tq_on_hybrid_ssm": (
+            not failed and "no_generic_tq_on_hybrid_ssm" not in missing_nested_checks
+        ),
         "panel_request_builder_sampling_and_output_overrides": (
             not failed
             and "omits sampling and token defaults when unset so the engine resolves bundle metadata" not in missing_panel_markers

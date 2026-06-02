@@ -32,9 +32,23 @@ def test_api_surface_contract_pins_named_public_surface_edges():
     assert "plain_attention_kv_status" in nested
     assert "dsv4_native_cache_status" in nested
     assert "zaya_typed_cca_status" in nested
+    assert "hybrid_ssm_partial_reuse" in nested
+    assert "turboquant_kv_runtime_contract" in nested
     assert "jangtq_mpp_nax_health_kernel_name" in nested
     assert "dsv4_dsml_parser_residue_rejection" in nested
     assert "turboquant_disk_roundtrip" in nested
+    assert "no_generic_tq_on_hybrid_ssm" in nested
+
+    contract_source = Path("tests/cross_matrix/run_api_surface_contract.py").read_text()
+    for check in (
+        "dsv4_native_cache_status",
+        "zaya_typed_cca_status",
+        "hybrid_ssm_partial_reuse",
+        "turboquant_kv_runtime_contract",
+        "turboquant_disk_roundtrip",
+        "no_generic_tq_on_hybrid_ssm",
+    ):
+        assert f'"{check}": (' in contract_source
 
     assert "omits sampling and token defaults when unset so the engine resolves bundle metadata" in panel
     assert "keeps per-chat maxTokens as output budget only, never prompt context" in panel

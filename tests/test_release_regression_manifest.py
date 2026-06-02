@@ -12023,6 +12023,18 @@ def test_release_regression_manifest_api_surface_requires_plain_attention_kv_sta
     assert "plain_attention_kv_status" in EXPECTED_CURRENT_API_SURFACE_CHECKS
 
 
+def test_release_regression_manifest_api_surface_requires_named_cache_architecture_statuses():
+    for check in (
+        "dsv4_native_cache_status",
+        "zaya_typed_cca_status",
+        "hybrid_ssm_partial_reuse",
+        "turboquant_kv_runtime_contract",
+        "turboquant_disk_roundtrip",
+        "no_generic_tq_on_hybrid_ssm",
+    ):
+        assert check in EXPECTED_CURRENT_API_SURFACE_CHECKS
+
+
 def test_release_regression_manifest_rejects_incomplete_current_reasoning_template_matrix(tmp_path):
     reasoning_artifact = CURRENT_POST_BUDGET_EDGE_ARTIFACTS["reasoning-template-no-think-tag-leak"]
     for artifact in CURRENT_POST_BUDGET_EDGE_ARTIFACTS.values():
