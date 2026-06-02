@@ -90,6 +90,7 @@ CURRENT_SUITE_SOURCE_HASH_FILES = (
     "tests/cross_matrix/run_issue179_minimax_k_model_manifest.py",
     "tests/cross_matrix/run_issue179_reporter_parity_metadata.py",
     "tests/cross_matrix/run_issue179_minimax_k_root_cause_audit.py",
+    "tests/cross_matrix/run_issue179_public_dmg_contract.py",
     "tests/cross_matrix/run_issue179_responses_cancel_probe.py",
     "tests/cross_matrix/run_real_ui_dsv4_memory_preflight.py",
     "tests/cross_matrix/run_jang_model_compat_contract.py",
@@ -648,7 +649,7 @@ CURRENT_SUITE_COMMANDS: dict[str, list[str]] = {
         "--require-current-proof-sweep",
         "--require-release-ready",
         "--out",
-        "build/current-release-regression-manifest-20260602-developer-id-staged-signing.json",
+        "build/current-release-regression-manifest-20260602-expanded-issue179-public-provenance.json",
     ],
 }
 

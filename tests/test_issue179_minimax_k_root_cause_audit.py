@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 
 from tests.cross_matrix import run_issue179_minimax_k_root_cause_audit as gate
+from tests.cross_matrix import run_issue179_public_dmg_contract as dmg_gate
 
 
 def test_issue179_audit_keeps_reporter_cancel_404_boundary_open():
@@ -281,6 +282,38 @@ def test_issue179_audit_writes_json_artifact(tmp_path):
     assert out.exists()
     assert '"status": "open"' in out.read_text(encoding="utf-8")
     assert audit["issue"]["id"] == 179
+
+
+def test_issue179_public_dmg_contract_extracts_server_route_and_hash(tmp_path):
+    app_server = (
+        tmp_path
+        / "mount/vMLX.app/Contents/Resources/bundled-python/python/lib/"
+        "python3.12/site-packages/vmlx_engine/server.py"
+    )
+    app_server.parent.mkdir(parents=True)
+    app_server.write_text(
+        '@app.post("/v1/responses/{response_id}/cancel")\n'
+        "async def cancel_response():\n"
+        '    await _engine.abort_request(response_id)\n',
+        encoding="utf-8",
+    )
+    out = tmp_path / "public-v1.5.48-sequoia-dmg-contract.json"
+
+    contract = dmg_gate.build_contract_from_mount(
+        mountpoint=tmp_path / "mount",
+        dmg=tmp_path / "vMLX-1.5.48-sequoia-arm64.dmg",
+        release_tag="v1.5.48",
+        asset="vMLX-1.5.48-sequoia-arm64.dmg",
+        asset_size_bytes=123,
+        out=out,
+    )
+
+    assert contract["release_tag"] == "v1.5.48"
+    assert contract["asset"] == "vMLX-1.5.48-sequoia-arm64.dmg"
+    assert contract["asset_size_bytes"] == 123
+    assert contract["server_has_responses_cancel_route"] is True
+    assert contract["server_cancel_calls_engine_abort"] is True
+    assert contract["server_sha256"] == dmg_gate.sha256_file(app_server)
 
 
 def test_issue179_reporter_parity_comparison_marks_matching_reporter_metadata_pass():

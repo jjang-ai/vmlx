@@ -1803,6 +1803,7 @@ def _write_expected_issue179_minimax_k_root_cause_audit(root: Path) -> None:
                             "source_contract",
                             "local_installed_bundle",
                             "public_v1549_tahoe_dmg",
+                            "public_release_dmg_contracts",
                             "local_installed_app_backups",
                             "git_history",
                         ],
@@ -2044,6 +2045,42 @@ def test_current_proof_sweep_rejects_issue179_missing_reporter_server_hash_prove
     assert "missing_reporter_server_hash_provenance" in result["failures"]
 
 
+def test_current_proof_sweep_rejects_issue179_narrow_public_dmg_hash_coverage(
+    tmp_path,
+):
+    _write_expected_issue179_minimax_k_root_cause_audit(tmp_path)
+    path = tmp_path / CURRENT_ISSUE179_MINIMAX_K_ROOT_CAUSE_AUDIT_ARTIFACT
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["status"] = "open"
+    payload["not_proven"] = [
+        "reporter installed app bundle hash matches public/local server.py route proof"
+    ]
+    payload["reporter_server_hash_parity"]["status"] = "open"
+    payload["reporter_server_hash_parity"][
+        "failure"
+    ] = "reporter_installed_server_hash_drift"
+    payload["reporter_server_hash_parity"]["provenance"] = {
+        "status": "open",
+        "checked_sources": [
+            "source_contract",
+            "local_installed_bundle",
+            "public_v1549_tahoe_dmg",
+            "public_release_dmg_contracts",
+            "local_installed_app_backups",
+            "git_history",
+        ],
+        "public_release_checked_count": 4,
+        "failure": "reporter_server_hash_provenance_unknown",
+    }
+    path.write_text(json.dumps(payload) + "\n", encoding="utf-8")
+
+    result = validate_current_proof_sweep_artifacts(tmp_path)[
+        "issue179_minimax_k_root_cause_audit"
+    ]
+
+    assert "insufficient_public_release_dmg_contract_coverage" in result["failures"]
+
+
 def test_current_proof_sweep_surfaces_issue179_open_not_proven_details(tmp_path):
     _write_expected_issue179_minimax_k_root_cause_audit(tmp_path)
     path = tmp_path / CURRENT_ISSUE179_MINIMAX_K_ROOT_CAUSE_AUDIT_ARTIFACT
@@ -2066,9 +2103,11 @@ def test_current_proof_sweep_surfaces_issue179_open_not_proven_details(tmp_path)
             "source_contract",
             "local_installed_bundle",
             "public_v1549_tahoe_dmg",
+            "public_release_dmg_contracts",
             "local_installed_app_backups",
             "git_history",
         ],
+        "public_release_checked_count": 15,
         "failure": "reporter_server_hash_provenance_unknown",
     }
     path.write_text(json.dumps(payload) + "\n", encoding="utf-8")
@@ -11207,7 +11246,7 @@ def test_release_regression_manifest_runner_default_out_tracks_current_release_p
     from tests.cross_matrix import run_release_regression_manifest as runner
 
     assert runner.DEFAULT_OUT == Path(
-        "build/current-release-regression-manifest-20260602-developer-id-staged-signing.json"
+        "build/current-release-regression-manifest-20260602-expanded-issue179-public-provenance.json"
     )
 
 
@@ -11251,6 +11290,7 @@ def test_release_regression_manifest_requires_release_blocker_boundary_source_ha
         "tests/cross_matrix/run_issue179_minimax_k_model_manifest.py",
         "tests/cross_matrix/run_issue179_reporter_parity_metadata.py",
         "tests/cross_matrix/run_issue179_minimax_k_root_cause_audit.py",
+        "tests/cross_matrix/run_issue179_public_dmg_contract.py",
         "tests/cross_matrix/run_issue179_responses_cancel_probe.py",
         "tests/cross_matrix/run_real_ui_dsv4_memory_preflight.py",
         "tests/test_installed_app_runtime_parity_audit.py",

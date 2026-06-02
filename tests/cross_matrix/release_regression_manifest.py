@@ -396,7 +396,7 @@ CURRENT_ISSUE175_177_LIVE_RUNTIME_AUDIT_ARTIFACT = (
     "build/current-issue175-177-live-runtime-audit-20260601-local-refresh.json"
 )
 CURRENT_ISSUE179_MINIMAX_K_ROOT_CAUSE_AUDIT_ARTIFACT = (
-    "build/current-issue179-minimax-k-root-cause-audit-20260527.json"
+    "build/current-issue179-minimax-k-root-cause-audit-20260602-expanded-public-dmg-provenance.json"
 )
 CURRENT_ISSUE179_MINIMAX_K_LIVE_PROBE_MEMORY_PREFLIGHT_ARTIFACT = (
     "build/current-issue179-minimax-k-responses-cancel-probe-memory-preflight-20260601.json"
@@ -2073,7 +2073,7 @@ _ROWS: list[dict[str, Any]] = [
             ".venv/bin/python tests/cross_matrix/run_installed_app_runtime_parity_audit.py --app panel/release/mac-arm64/vMLX.app --out build/current-staged-app-runtime-parity-audit-20260602-developer-id-staged-signing.json",
             ".venv/bin/python tests/cross_matrix/run_issue175_177_installed_runtime_audit.py --out build/current-issue175-177-installed-runtime-audit-20260601-local-refresh.json",
             ".venv/bin/python tests/cross_matrix/run_issue175_177_live_runtime_audit.py --out build/current-issue175-177-live-runtime-audit-20260601-local-refresh.json",
-            ".venv/bin/python tests/cross_matrix/run_issue179_minimax_k_root_cause_audit.py --out build/current-issue179-minimax-k-root-cause-audit-20260527.json",
+            ".venv/bin/python tests/cross_matrix/run_issue179_minimax_k_root_cause_audit.py --out build/current-issue179-minimax-k-root-cause-audit-20260602-expanded-public-dmg-provenance.json",
             ".venv/bin/python tests/cross_matrix/run_issue179_reporter_parity_metadata.py --out build/current-issue179-reporter-parity-metadata-template-20260528.json",
             "VMLINUX_REAL_UI_MODEL_PATH=/Users/example/.mlxstudio/models/JANGQ-AI/MiMo-V2.5-JANG_2L VMLINUX_REAL_UI_PROOF_BASENAME=current-real-ui-live-model-mimo-v2-jang2l-20260527 VMLINUX_REAL_UI_IS_MLLM=1 VMLINUX_REAL_UI_MAX_TOKENS=96 node panel/scripts/live-real-ui-model-proof.mjs",
             "VMLINUX_REAL_UI_MODEL_PATH=/Users/example/models/dealign.ai/Nemotron-Omni-Nano-JANGTQ-CRACK VMLINUX_REAL_UI_PROOF_BASENAME=current-real-ui-live-model-nemotron-omni-nano-jangtq-20260527 VMLINUX_REAL_UI_MAX_TOKENS=96 node panel/scripts/live-real-ui-model-proof.mjs",
@@ -2132,7 +2132,7 @@ _ROWS: list[dict[str, Any]] = [
             "build/current-installed-app-runtime-parity-audit-20260528-userdata-epipe-scan.json",
             "build/current-issue175-177-installed-runtime-audit-20260601-local-refresh.json",
             "build/current-issue175-177-live-runtime-audit-20260601-local-refresh.json",
-            "build/current-issue179-minimax-k-root-cause-audit-20260527.json",
+            "build/current-issue179-minimax-k-root-cause-audit-20260602-expanded-public-dmg-provenance.json",
             "build/current-issue179-reporter-parity-metadata-template-20260528.json",
             "docs/internal/agent-notes/current-real-ui-live-model-nemotron-omni-nano-jangtq-20260527-proof.json",
             "docs/internal/agent-notes/current-real-ui-live-model-nemotron-omni-nano-jangtq-20260527-chat.png",
@@ -4695,6 +4695,7 @@ def _validate_current_issue179_minimax_k_root_cause_audit(root: Path) -> dict[st
                 "source_contract",
                 "local_installed_bundle",
                 "public_v1549_tahoe_dmg",
+                "public_release_dmg_contracts",
                 "local_installed_app_backups",
                 "git_history",
             }
@@ -4704,6 +4705,16 @@ def _validate_current_issue179_minimax_k_root_cause_audit(root: Path) -> dict[st
                 result["failures"].append("missing_reporter_server_hash_provenance_sources")
             if provenance_status == "open" and not provenance.get("failure"):
                 result["failures"].append("missing_reporter_server_hash_provenance_failure")
+            if (
+                provenance_status == "open"
+                and provenance.get("failure")
+                == "reporter_server_hash_provenance_unknown"
+            ):
+                checked_count = provenance.get("public_release_checked_count")
+                if not isinstance(checked_count, int) or checked_count < 12:
+                    result["failures"].append(
+                        "insufficient_public_release_dmg_contract_coverage"
+                    )
     result["reporter_server_hash_parity"] = reporter_server_hash_parity
 
     return result
