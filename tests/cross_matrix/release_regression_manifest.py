@@ -3533,6 +3533,9 @@ def _validate_current_issue179_minimax_k_live_probe_memory_preflight(
         != "vm_stat_free_plus_speculative_purgeable"
     ):
         failures.append("preflight_memory_source_not_vm_stat")
+    preflight_captured_at = payload.get("preflight_captured_at")
+    if not isinstance(preflight_captured_at, str) or not preflight_captured_at:
+        failures.append("preflight_captured_at_missing")
 
     result.update(
         {
@@ -3549,6 +3552,7 @@ def _validate_current_issue179_minimax_k_live_probe_memory_preflight(
             ),
             "memory_gap_gb": memory_gap_gb,
             "preflight_memory_source": payload.get("preflight_memory_source"),
+            "preflight_captured_at": preflight_captured_at,
             "launch_decision": payload.get("launch_decision"),
             "launch_allowed": payload.get("launch_allowed"),
         }

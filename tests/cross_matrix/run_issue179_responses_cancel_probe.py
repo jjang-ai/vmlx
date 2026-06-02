@@ -464,6 +464,7 @@ def main() -> int:
     result = None if args.skip_memory_preflight else memory_preflight_block(args)
     if result is None:
         result = run_live_probe(args)
+    result.setdefault("preflight_captured_at", time.strftime("%Y-%m-%dT%H:%M:%S%z"))
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     print(
