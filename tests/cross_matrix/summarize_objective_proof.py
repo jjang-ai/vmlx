@@ -52,7 +52,7 @@ from tests.cross_matrix.release_regression_manifest import (
 
 DEFAULT_OUT = Path("build/current-objective-proof-audit-20260531-nemotron-exact-finalizer-ledger.json")
 CURRENT_RELEASE_REGRESSION_MANIFEST_REL = (
-    "build/current-release-regression-manifest-20260602-developer-id-staged-signing.json"
+    "build/current-release-regression-manifest-20260602-expanded-issue179-public-provenance.json"
 )
 DSV4_QUALITY_CLEARANCE_REL = "build/current-dsv4-long-output-quality-clearance-20260521.json"
 DSV4_CURRENT_IDENTIFIER_CANARY_REL = (
