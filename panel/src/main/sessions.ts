@@ -1902,6 +1902,8 @@ export class SessionManager extends EventEmitter {
           nativeMtpDepthOverride: false,
           enableAutoToolChoice: detected.enableAutoToolChoice
         }
+        applyBundleStartupDefaults(defaultConfig, proc.modelPath)
+        applyFamilyStartupDefaults(defaultConfig, proc.modelPath)
         session = {
           id,
           modelPath: proc.modelPath,

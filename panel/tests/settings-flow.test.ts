@@ -2321,6 +2321,20 @@ describe('Default IP and New Settings', () => {
         expect(existingBlock).toContain('markCacheStackStartupDefaultsCurrent(merged)')
     })
 
+    it('adopted running sessions apply bundle generation defaults before saving config', () => {
+        const source = readFileSync('src/main/sessions.ts', 'utf8')
+        const start = source.indexOf('async detectAndAdoptAll()')
+        const defaultConfigStart = source.indexOf('const defaultConfig: ServerConfig = {', start)
+        const createSession = source.indexOf('db.createSession(session)', defaultConfigStart)
+        const adoptCreateBlock = source.slice(defaultConfigStart, createSession)
+
+        expect(adoptCreateBlock).toContain('applyBundleStartupDefaults(defaultConfig, proc.modelPath)')
+        expect(adoptCreateBlock).toContain('applyFamilyStartupDefaults(defaultConfig, proc.modelPath)')
+        expect(adoptCreateBlock.indexOf('applyBundleStartupDefaults(defaultConfig, proc.modelPath)')).toBeLessThan(
+            adoptCreateBlock.indexOf('config: JSON.stringify(defaultConfig)'),
+        )
+    })
+
     it('session manager migrates stale no-prefix MiniMax-style batch tuple', () => {
         const source = readFileSync('src/main/sessions.ts', 'utf8')
         expect(source).toContain('staleNoPrefixBatchDefaults')
