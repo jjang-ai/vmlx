@@ -26,7 +26,7 @@ from pathlib import Path
 from typing import Any
 
 
-DEFAULT_OUT = Path("build/current-api-cache-contract-proof-20260531-post-step-lfm-refresh.json")
+DEFAULT_OUT = Path("build/current-api-cache-contract-proof-20260602-cache-detail-zero-cached.json")
 SOURCE_HASH_FILES = (
     "vmlx_engine/server.py",
     "vmlx_engine/tool_parsers/dsml_tool_parser.py",
@@ -62,6 +62,9 @@ REQUIRED_NOHEAVY_API_CACHE_TEST_MARKERS = (
     "test_chat_stream_finish_chunks_emit_cache_detail",
     "test_responses_stream_tracks_cache_detail_alongside_cached",
     "test_responses_stream_finish_emits_cache_detail",
+    "test_usage_builders_preserve_cache_detail_without_cached_tokens",
+    "test_chat_stream_usage_preserves_cache_detail_without_cached_tokens",
+    "test_responses_stream_usage_preserves_cache_detail_without_cached_tokens",
     "test_responses_streaming_stores_history_for_previous_response_id",
     "test_responses_streaming_reasoning_only_stores_placeholder_and_marker",
     "test_chained_response_helper_emits_warning_for_reasoning_only_predecessor",
@@ -119,6 +122,9 @@ COMMANDS: dict[str, list[str]] = {
             "or chat_stream_finish_chunks_emit_cache_detail "
             "or responses_stream_tracks_cache_detail_alongside_cached "
             "or responses_stream_finish_emits_cache_detail "
+            "or usage_builders_preserve_cache_detail_without_cached_tokens "
+            "or chat_stream_usage_preserves_cache_detail_without_cached_tokens "
+            "or responses_stream_usage_preserves_cache_detail_without_cached_tokens "
             "or generic_turboquant_patcher_skips_hybrid_ssm "
             "or ollama_streaming_suppresses_duplicate_done_chunks "
             "or cache_stats_endpoint_projects_cache_reuse_skip_telemetry "
@@ -300,6 +306,9 @@ def build_artifact(root: Path) -> dict[str, Any]:
             and "test_chat_stream_finish_chunks_emit_cache_detail" not in missing_markers
             and "test_responses_stream_tracks_cache_detail_alongside_cached" not in missing_markers
             and "test_responses_stream_finish_emits_cache_detail" not in missing_markers
+            and "test_usage_builders_preserve_cache_detail_without_cached_tokens" not in missing_markers
+            and "test_chat_stream_usage_preserves_cache_detail_without_cached_tokens" not in missing_markers
+            and "test_responses_stream_usage_preserves_cache_detail_without_cached_tokens" not in missing_markers
         ),
         "responses_previous_response_history": (
             responses_history_ok

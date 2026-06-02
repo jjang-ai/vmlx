@@ -50,9 +50,9 @@ from tests.cross_matrix.release_regression_manifest import (
 )
 
 
-DEFAULT_OUT = Path("build/current-objective-proof-audit-20260531-nemotron-exact-finalizer-ledger.json")
+DEFAULT_OUT = Path("build/current-objective-proof-audit-20260602-cache-detail-zero-cached.json")
 CURRENT_RELEASE_REGRESSION_MANIFEST_REL = (
-    "build/current-release-regression-manifest-20260602-expanded-issue179-public-provenance.json"
+    "build/current-release-regression-manifest-20260602-cache-detail-zero-cached.json"
 )
 DSV4_QUALITY_CLEARANCE_REL = "build/current-dsv4-long-output-quality-clearance-20260521.json"
 DSV4_CURRENT_IDENTIFIER_CANARY_REL = (
@@ -177,7 +177,7 @@ DSV4_BATCH_GENERATOR_LOGIT_TRACE_REL = (
 DSV4_BATCH_GENERATOR_WARMUP_ABLATION_REL = (
     "build/current-dsv4-jang-batch-generator-warmup-ablation-20260524.json"
 )
-API_CACHE_CONTRACT_REL = "build/current-api-cache-contract-proof-20260531-post-step-lfm-refresh.json"
+API_CACHE_CONTRACT_REL = "build/current-api-cache-contract-proof-20260602-cache-detail-zero-cached.json"
 PANEL_SETTINGS_CONTRACT_REL = "build/current-panel-settings-contract-proof-20260601-cache-ui-storage-quant.json"
 MAX_OUTPUT_CONTEXT_CONTRACT_REL = "build/current-max-output-context-contract-20260531-post-step-lfm-refresh.json"
 MAX_OUTPUT_CONTEXT_CONTRACT_FALLBACK_REL = "build/current-max-output-context-contract-20260521.json"

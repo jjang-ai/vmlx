@@ -5,10 +5,10 @@ def test_api_surface_contract_default_out_tracks_current_release_proof_artifact(
     from tests.cross_matrix import run_api_surface_contract as gate
 
     assert gate.DEFAULT_OUT == Path(
-        "build/current-api-surface-contract-20260602-performance-health-epipe.json"
+        "build/current-api-surface-contract-20260602-cache-detail-zero-cached.json"
     )
     assert gate.NESTED_OUT == Path(
-        "build/current-api-cache-contract-api-surface-check-20260528-epipe-aggregate-guard.json"
+        "build/current-api-cache-contract-api-surface-check-20260602-cache-detail-zero-cached.json"
     )
 
 
@@ -196,6 +196,9 @@ def test_noheavy_api_cache_contract_pins_named_server_rows():
     assert "test_chat_stream_finish_chunks_emit_cache_detail" in required
     assert "test_responses_stream_tracks_cache_detail_alongside_cached" in required
     assert "test_responses_stream_finish_emits_cache_detail" in required
+    assert "test_usage_builders_preserve_cache_detail_without_cached_tokens" in required
+    assert "test_chat_stream_usage_preserves_cache_detail_without_cached_tokens" in required
+    assert "test_responses_stream_usage_preserves_cache_detail_without_cached_tokens" in required
     assert "test_responses_streaming_stores_history_for_previous_response_id" in required
     assert "test_responses_streaming_reasoning_only_stores_placeholder_and_marker" in required
     assert "test_chained_response_helper_emits_warning_for_reasoning_only_predecessor" in required

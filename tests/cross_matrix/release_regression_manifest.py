@@ -357,7 +357,7 @@ REQUIRED_RELEASE_DOMAINS = {
 }
 
 CURRENT_POST_BUDGET_EDGE_ARTIFACTS = {
-    "noheavy-api-cache-endpoint-runtime": "build/current-api-cache-contract-proof-20260531-post-step-lfm-refresh.json",
+    "noheavy-api-cache-endpoint-runtime": "build/current-api-cache-contract-proof-20260602-cache-detail-zero-cached.json",
     "chat-settings-max-output-context-ui": "build/current-max-output-context-contract-20260531-post-step-lfm-refresh.json",
     "panel-session-cache-settings-family-gating": "build/current-panel-settings-contract-proof-20260601-cache-ui-storage-quant.json",
     "generation-defaults-no-hidden-forcing": "build/current-generation-defaults-contract-20260531-post-step-lfm-refresh.json",
@@ -365,7 +365,7 @@ CURRENT_POST_BUDGET_EDGE_ARTIFACTS = {
     "reasoning-template-no-think-tag-leak": "build/current-reasoning-template-contract-20260526-settings-audit.json",
     "tool-call-loop-parser-cleanup": "build/current-tool-call-contract-20260528-tool-parser-loop-matrix.json",
     "panel-tool-security-loop-boundary": "build/current-panel-tool-security-contract-20260528-tool-loop-security-matrix.json",
-    "api-chat-responses-anthropic-ollama-parity": "build/current-api-surface-contract-20260602-performance-health-epipe.json",
+    "api-chat-responses-anthropic-ollama-parity": "build/current-api-surface-contract-20260602-cache-detail-zero-cached.json",
     "cache-architecture-family-classification": "build/current-cache-architecture-contract-20260601-zaya-dsv4-terminal-disk-guard.json",
     "jang-model-compat-runtime-boundary": "build/current-jang-model-compat-contract-20260528-pr155-runtime-boundary.json",
     "model-artifact-format-detection": "build/current-model-artifact-format-contract-20260531-post-step-lfm-refresh.json",
@@ -1179,11 +1179,11 @@ _ROWS: list[dict[str, Any]] = [
             "DSV4 DSML tool parsing repairs and residue rejection remain schema-gated and cannot be hidden by broader API surface checks",
         ],
         "commands": [
-            ".venv/bin/python tests/cross_matrix/run_noheavy_api_cache_contract.py --out build/current-api-cache-contract-proof-20260531-post-step-lfm-refresh.json",
+            ".venv/bin/python tests/cross_matrix/run_noheavy_api_cache_contract.py --out build/current-api-cache-contract-proof-20260602-cache-detail-zero-cached.json",
         ],
         "artifacts": [
-            "build/current-api-cache-contract-proof-20260531-post-step-lfm-refresh.json",
-            "build/current-api-cache-contract-api-surface-check-20260528-epipe-aggregate-guard.json",
+            "build/current-api-cache-contract-proof-20260602-cache-detail-zero-cached.json",
+            "build/current-api-cache-contract-api-surface-check-20260602-cache-detail-zero-cached.json",
         ],
     },
     {
@@ -1418,10 +1418,10 @@ _ROWS: list[dict[str, Any]] = [
             "panel request builders omit invalid persisted maxTokens instead of poisoning Chat Completions or Responses",
         ],
         "commands": [
-            ".venv/bin/python tests/cross_matrix/run_api_surface_contract.py --out build/current-api-surface-contract-20260602-performance-health-epipe.json",
+            ".venv/bin/python tests/cross_matrix/run_api_surface_contract.py --out build/current-api-surface-contract-20260602-cache-detail-zero-cached.json",
         ],
         "artifacts": [
-            "build/current-api-surface-contract-20260602-performance-health-epipe.json",
+            "build/current-api-surface-contract-20260602-cache-detail-zero-cached.json",
             "build/current-api-surface-contract-20260529-single-model-transition-lock.json",
             "build/current-api-surface-contract-20260525-single-model-ollama-chat-deltas.json",
             "build/current-api-surface-contract-20260523-post-budget-edge.json",
@@ -1671,7 +1671,7 @@ _ROWS: list[dict[str, Any]] = [
             ".venv/bin/python tests/cross_matrix/run_packaged_integrity_contract.py --jang-tools-source /Users/example/jang/.worktrees/vmlx-release-clean-b5f66a7/jang-tools --out build/current-packaged-integrity-contract-20260522-recheck-bundled-release-gate.json",
         ],
         "artifacts": [
-            "build/current-objective-proof-audit-20260531-nemotron-exact-finalizer-ledger.json",
+            "build/current-objective-proof-audit-20260602-cache-detail-zero-cached.json",
             "build/current-packaged-integrity-contract-20260602-developer-id-staged-signing.json",
             "build/current-packaged-integrity-contract-20260601-dsv4-preflight-refresh.json",
             "build/current-packaged-integrity-contract-20260601-qwen3vl-minicpm-mpp-staged-refresh.json",
@@ -1836,7 +1836,7 @@ _ROWS: list[dict[str, Any]] = [
             "The clearance boundary is based on live artifacts, not a hidden sampler/repetition/default override",
         ],
         "commands": [
-            ".venv/bin/python tests/cross_matrix/summarize_objective_proof.py --out build/current-objective-proof-audit-20260531-nemotron-exact-finalizer-ledger.json",
+            ".venv/bin/python tests/cross_matrix/summarize_objective_proof.py --out build/current-objective-proof-audit-20260602-cache-detail-zero-cached.json",
             "uv run --extra dev python tests/cross_matrix/run_production_family_audit.py --rows ling_flash_tq --live --out build/current-production-family-audit-ling-flash-tq-live-installed149-20260524-codex.json",
         ],
         "artifacts": [
@@ -1854,7 +1854,7 @@ _ROWS: list[dict[str, Any]] = [
             "build/current-ling-jangtq-continuous-control-bundled-after-mpp-fix-20260524.json",
             "build/current-production-family-live-ling-bundled-after-mpp-fix-20260524.json",
             "build/current-production-family-live-ling-bundled-after-topk-policy-20260524.json",
-            "build/current-objective-proof-audit-20260531-nemotron-exact-finalizer-ledger.json",
+            "build/current-objective-proof-audit-20260602-cache-detail-zero-cached.json",
         ],
     },
     {

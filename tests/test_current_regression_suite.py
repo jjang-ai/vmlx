@@ -721,7 +721,7 @@ def test_noheavy_api_cache_contract_default_out_tracks_current_suite_artifact():
     from tests.cross_matrix import run_noheavy_api_cache_contract as gate
 
     assert gate.DEFAULT_OUT == Path(
-        "build/current-api-cache-contract-proof-20260531-post-step-lfm-refresh.json"
+        "build/current-api-cache-contract-proof-20260602-cache-detail-zero-cached.json"
     )
 
 
@@ -865,7 +865,7 @@ def test_current_regression_suite_refreshes_release_regression_manifest(monkeypa
     )
     assert any(
         name == "release_regression_manifest"
-        and "build/current-release-regression-manifest-20260602-expanded-issue179-public-provenance.json"
+        and "build/current-release-regression-manifest-20260602-cache-detail-zero-cached.json"
         in cmd
         for name, cmd in seen_steps
     )
@@ -1181,7 +1181,7 @@ def test_current_regression_suite_refreshes_current_packaged_integrity_artifact(
     )
     assert any(
         name == "api_surface_contracts"
-        and "build/current-api-surface-contract-20260602-performance-health-epipe.json"
+        and "build/current-api-surface-contract-20260602-cache-detail-zero-cached.json"
         in cmd
         for name, cmd in seen_steps
     )
@@ -1284,7 +1284,7 @@ def test_current_regression_suite_refreshes_current_objective_digest_artifact(
 
     assert artifact["status"] == "open"
     assert suite.CURRENT_OBJECTIVE_DIGEST_ARTIFACT == (
-        "build/current-objective-proof-audit-20260531-nemotron-exact-finalizer-ledger.json"
+        "build/current-objective-proof-audit-20260602-cache-detail-zero-cached.json"
     )
     assert any(
         name == "objective_digest"

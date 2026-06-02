@@ -33,7 +33,7 @@ EXPECTED_OPEN_REQUIREMENTS = [
     "DSV4 long-output/code/file-generation quality is release-cleared",
 ]
 CURRENT_OBJECTIVE_DIGEST_ARTIFACT = Path(
-    "build/current-objective-proof-audit-20260531-nemotron-exact-finalizer-ledger.json"
+    "build/current-objective-proof-audit-20260602-cache-detail-zero-cached.json"
 )
 MIN_RELEASE_GATE_UNIT_TESTS = 34
 PACKAGED_RENDERER_ASAR = Path(

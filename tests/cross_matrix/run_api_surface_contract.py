@@ -22,10 +22,10 @@ from typing import Any
 
 
 DEFAULT_OUT = Path(
-    "build/current-api-surface-contract-20260602-performance-health-epipe.json"
+    "build/current-api-surface-contract-20260602-cache-detail-zero-cached.json"
 )
 NESTED_OUT = Path(
-    "build/current-api-cache-contract-api-surface-check-20260528-epipe-aggregate-guard.json"
+    "build/current-api-cache-contract-api-surface-check-20260602-cache-detail-zero-cached.json"
 )
 
 SOURCE_HASH_FILES = (

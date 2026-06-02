@@ -133,7 +133,7 @@ def _write_current_objective_digest(
     open_requirements: list[str] | None = None,
     missing_evidence: list[str] | None = None,
 ) -> None:
-    artifact = root / "build/current-objective-proof-audit-20260531-nemotron-exact-finalizer-ledger.json"
+    artifact = root / "build/current-objective-proof-audit-20260602-cache-detail-zero-cached.json"
     artifact.parent.mkdir(parents=True, exist_ok=True)
     open_rows = (
         EXPECTED_CURRENT_OPEN_REQUIREMENTS
@@ -3597,7 +3597,7 @@ def test_release_regression_manifest_current_sweep_uses_latest_live_smoke_artifa
     assert "current-regression-suite-20260525-cjk-smoke-guard.json" not in joined
     assert "current-regression-suite-20260525-gemma-installed-speed-boundary.json" not in joined
     assert "current-regression-suite-20260524-openai-single-model-streaming-audit.json" not in joined
-    assert "current-api-surface-contract-20260602-performance-health-epipe.json" in joined
+    assert "current-api-surface-contract-20260602-cache-detail-zero-cached.json" in joined
     assert "current-api-surface-contract-20260531-nested-epipe-childstream-refresh.json" not in joined
     assert "current-api-surface-contract-20260529-single-model-transition-lock.json" not in joined
     assert "current-api-surface-contract-20260528-ollama-embedding-timeout.json" not in joined
@@ -9638,7 +9638,7 @@ def test_release_regression_manifest_rejects_stale_issue179_objective_digest_det
     tmp_path,
 ):
     _write_current_objective_digest(tmp_path)
-    path = tmp_path / "build/current-objective-proof-audit-20260531-nemotron-exact-finalizer-ledger.json"
+    path = tmp_path / "build/current-objective-proof-audit-20260602-cache-detail-zero-cached.json"
     payload = json.loads(path.read_text(encoding="utf-8"))
     for row in payload["requirements"]:
         if (
@@ -11247,7 +11247,7 @@ def test_release_regression_manifest_runner_default_out_tracks_current_release_p
     from tests.cross_matrix import run_release_regression_manifest as runner
 
     assert runner.DEFAULT_OUT == Path(
-        "build/current-release-regression-manifest-20260602-expanded-issue179-public-provenance.json"
+        "build/current-release-regression-manifest-20260602-cache-detail-zero-cached.json"
     )
 
 
@@ -13833,7 +13833,7 @@ def test_release_regression_manifest_tracks_api_surface_with_runner_artifact():
     joined = " ".join(row["commands"] + row["artifacts"] + row["proves"])
 
     assert "run_api_surface_contract.py" in joined
-    assert "current-api-surface-contract-20260602-performance-health-epipe.json" in joined
+    assert "current-api-surface-contract-20260602-cache-detail-zero-cached.json" in joined
     assert "current-api-surface-contract-20260531-nested-epipe-childstream-refresh.json" not in joined
     assert "current-api-surface-contract-20260529-single-model-transition-lock.json" in joined
     assert "current-api-surface-contract-20260528-ollama-embeddings-single-model.json" not in joined
@@ -14018,7 +14018,7 @@ def test_release_regression_manifest_tracks_packaged_integrity_with_runner_artif
     assert "Version triples" in joined
     assert "bundled Python hash parity" in joined
     assert "objective proof digest" in joined
-    assert "current-objective-proof-audit-20260531-nemotron-exact-finalizer-ledger.json" in joined
+    assert "current-objective-proof-audit-20260602-cache-detail-zero-cached.json" in joined
     assert "objective-gate-enforced" in joined
     assert "verify-bundled" in joined
 
@@ -14086,7 +14086,7 @@ def test_release_regression_manifest_tracks_current_updater_and_i18n_rechecks():
 
     ling = rows["ling-bailing-multilingual-quality-live"]
     ling_joined = " ".join(ling["commands"] + ling["artifacts"] + ling["proves"])
-    assert "current-objective-proof-audit-20260531-nemotron-exact-finalizer-ledger.json" in ling_joined
+    assert "current-objective-proof-audit-20260602-cache-detail-zero-cached.json" in ling_joined
 
 
 def test_release_regression_manifest_tracks_live_only_boundaries():

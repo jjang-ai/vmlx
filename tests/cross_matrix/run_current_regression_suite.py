@@ -35,7 +35,7 @@ EXPECTED_OPEN_REQUIREMENTS = [
 ]
 
 CURRENT_OBJECTIVE_DIGEST_ARTIFACT = (
-    "build/current-objective-proof-audit-20260531-nemotron-exact-finalizer-ledger.json"
+    "build/current-objective-proof-audit-20260602-cache-detail-zero-cached.json"
 )
 
 CURRENT_SUITE_SOURCE_HASH_FILES = (
@@ -455,7 +455,7 @@ CURRENT_SUITE_COMMANDS: dict[str, list[str]] = {
         sys.executable,
         "tests/cross_matrix/run_noheavy_api_cache_contract.py",
         "--out",
-        "build/current-api-cache-contract-proof-20260531-post-step-lfm-refresh.json",
+        "build/current-api-cache-contract-proof-20260602-cache-detail-zero-cached.json",
     ],
     "cache_architecture_contracts": [
         sys.executable,
@@ -497,7 +497,7 @@ CURRENT_SUITE_COMMANDS: dict[str, list[str]] = {
         sys.executable,
         "tests/cross_matrix/run_api_surface_contract.py",
         "--out",
-        "build/current-api-surface-contract-20260602-performance-health-epipe.json",
+        "build/current-api-surface-contract-20260602-cache-detail-zero-cached.json",
     ],
     "panel_tool_security_contracts": [
         sys.executable,
@@ -649,7 +649,7 @@ CURRENT_SUITE_COMMANDS: dict[str, list[str]] = {
         "--require-current-proof-sweep",
         "--require-release-ready",
         "--out",
-        "build/current-release-regression-manifest-20260602-expanded-issue179-public-provenance.json",
+        "build/current-release-regression-manifest-20260602-cache-detail-zero-cached.json",
     ],
 }
 

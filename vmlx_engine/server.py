@@ -4484,7 +4484,7 @@ def get_usage(output: GenerationOutput) -> Usage:
         prompt_tokens_details=PromptTokensDetails(
             cached_tokens=cached, cache_detail=detail
         )
-        if cached > 0
+        if cached > 0 or detail
         else None,
     )
 
@@ -4502,7 +4502,7 @@ def _get_responses_usage(output: GenerationOutput) -> "ResponsesUsage":
         input_tokens_details=InputTokensDetails(
             cached_tokens=cached, cache_detail=detail
         )
-        if cached > 0
+        if cached > 0 or detail
         else None,
     )
 
@@ -13185,7 +13185,7 @@ async def stream_chat_completion(
                 completion_tokens=completion_tokens,
                 total_tokens=prompt_tokens + completion_tokens,
             )
-            if cached_tokens > 0:
+            if cached_tokens > 0 or cache_detail:
                 _err_usage.prompt_tokens_details = PromptTokensDetails(
                     cached_tokens=cached_tokens, cache_detail=cache_detail
                 )
@@ -13312,7 +13312,7 @@ async def stream_chat_completion(
                     completion_tokens=completion_tokens,
                     total_tokens=prompt_tokens + completion_tokens,
                 )
-                if cached_tokens > 0:
+                if cached_tokens > 0 or cache_detail:
                     _tc_usage.prompt_tokens_details = PromptTokensDetails(
                         cached_tokens=cached_tokens, cache_detail=cache_detail
                     )
@@ -13566,7 +13566,7 @@ async def stream_chat_completion(
             completion_tokens=completion_tokens,
             total_tokens=prompt_tokens + completion_tokens,
         )
-        if cached_tokens > 0:
+        if cached_tokens > 0 or cache_detail:
             _usage.prompt_tokens_details = PromptTokensDetails(
                 cached_tokens=cached_tokens, cache_detail=cache_detail
             )
@@ -14153,7 +14153,7 @@ async def stream_responses_api(
                     "output_tokens": completion_tokens,
                     "total_tokens": prompt_tokens + completion_tokens,
                 }
-                if _cached > 0:
+                if _cached > 0 or _cache_detail:
                     _ictd = {"cached_tokens": _cached}
                     if _cache_detail:
                         _ictd["cache_detail"] = _cache_detail
@@ -14697,7 +14697,7 @@ async def stream_responses_api(
                         else {"cached_tokens": _cached}
                     )
                 }
-                if _cached > 0
+                if _cached > 0 or _cache_detail
                 else {}
             ),
         },

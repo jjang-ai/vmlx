@@ -10996,6 +10996,156 @@ class TestStreamUsagePropagatesCacheDetail:
         # Responses uses dict-builder shape, not PromptTokensDetails class.
         assert '"cache_detail": _cache_detail' in source
 
+    def test_usage_builders_preserve_cache_detail_without_cached_tokens(self):
+        from vmlx_engine.engine.base import GenerationOutput
+        from vmlx_engine.server import _get_responses_usage, get_usage
+
+        output = GenerationOutput(
+            text="ok",
+            prompt_tokens=8,
+            completion_tokens=2,
+            cached_tokens=0,
+            cache_detail="paged+zaya_cca",
+        )
+
+        chat_usage = get_usage(output).model_dump(exclude_none=True)
+        responses_usage = _get_responses_usage(output).model_dump(exclude_none=True)
+
+        assert chat_usage["prompt_tokens_details"] == {
+            "cached_tokens": 0,
+            "cache_detail": "paged+zaya_cca",
+        }
+        assert responses_usage["input_tokens_details"] == {
+            "cached_tokens": 0,
+            "cache_detail": "paged+zaya_cca",
+        }
+
+    @pytest.mark.asyncio
+    async def test_chat_stream_usage_preserves_cache_detail_without_cached_tokens(
+        self, monkeypatch
+    ):
+        import json
+        from types import SimpleNamespace
+
+        import vmlx_engine.server as server
+        from vmlx_engine.api.models import (
+            ChatCompletionRequest,
+            Message,
+            StreamOptions,
+        )
+        from vmlx_engine.engine.base import GenerationOutput
+
+        class _Engine:
+            tokenizer = SimpleNamespace(has_thinking=False)
+
+            async def stream_chat(self, *, messages, **kwargs):
+                yield GenerationOutput(
+                    text="ok",
+                    new_text="ok",
+                    prompt_tokens=8,
+                    completion_tokens=2,
+                    cached_tokens=0,
+                    cache_detail="paged+zaya_cca",
+                    finished=True,
+                    finish_reason="stop",
+                )
+
+        monkeypatch.setattr(server, "_default_timeout", 5.0)
+        monkeypatch.setattr(server, "_model_name", "zaya-vl-test")
+        monkeypatch.setattr(server, "_model_path", None)
+        monkeypatch.setattr(server, "_reasoning_parser", None)
+        monkeypatch.setattr(server, "_tool_call_parser", None)
+
+        request = ChatCompletionRequest(
+            model="zaya-vl-test",
+            messages=[Message(role="user", content="hi")],
+            stream=True,
+            stream_options=StreamOptions(include_usage=True),
+        )
+        chunks = []
+        async for line in server.stream_chat_completion(
+            _Engine(),
+            [m.model_dump(exclude_none=True) for m in request.messages],
+            request,
+            fastapi_request=None,
+        ):
+            if line.startswith("data: ") and line.strip() != "data: [DONE]":
+                chunks.append(json.loads(line.removeprefix("data: ")))
+
+        usage_chunks = [chunk for chunk in chunks if chunk.get("usage")]
+        assert usage_chunks
+        assert usage_chunks[-1]["usage"]["prompt_tokens_details"] == {
+            "cached_tokens": 0,
+            "cache_detail": "paged+zaya_cca",
+        }
+
+    @pytest.mark.asyncio
+    async def test_responses_stream_usage_preserves_cache_detail_without_cached_tokens(
+        self, monkeypatch
+    ):
+        import json
+        from types import SimpleNamespace
+
+        import vmlx_engine.server as server
+        from vmlx_engine.api.models import ResponsesRequest, StreamOptions
+        from vmlx_engine.engine.base import GenerationOutput
+
+        class _Engine:
+            tokenizer = SimpleNamespace(has_thinking=False)
+
+            async def stream_chat(self, *, messages, **kwargs):
+                yield GenerationOutput(
+                    text="ok",
+                    new_text="ok",
+                    prompt_tokens=8,
+                    completion_tokens=2,
+                    cached_tokens=0,
+                    cache_detail="paged+zaya_cca",
+                    finished=True,
+                    finish_reason="stop",
+                )
+
+        def _payloads(events, event_type):
+            payloads = []
+            prefix = f"event: {event_type}\n"
+            for event in events:
+                if event.startswith(prefix):
+                    data_line = next(
+                        line for line in event.splitlines() if line.startswith("data: ")
+                    )
+                    payloads.append(json.loads(data_line.removeprefix("data: ")))
+            return payloads
+
+        monkeypatch.setattr(server, "_default_timeout", 5.0)
+        monkeypatch.setattr(server, "_model_name", "zaya-vl-test")
+        monkeypatch.setattr(server, "_model_path", None)
+        monkeypatch.setattr(server, "_reasoning_parser", None)
+        monkeypatch.setattr(server, "_tool_call_parser", None)
+
+        request = ResponsesRequest(
+            model="zaya-vl-test",
+            input="hi",
+            stream=True,
+            stream_options=StreamOptions(include_usage=True),
+        )
+        events = [
+            event async for event in server.stream_responses_api(
+                _Engine(),
+                [{"role": "user", "content": "hi"}],
+                request,
+                fastapi_request=None,
+            )
+        ]
+
+        usage = _payloads(events, "response.usage")[-1]["usage"]
+        completed = _payloads(events, "response.completed")[-1]["response"]["usage"]
+        expected = {
+            "cached_tokens": 0,
+            "cache_detail": "paged+zaya_cca",
+        }
+        assert usage["input_tokens_details"] == expected
+        assert completed["input_tokens_details"] == expected
+
 
 class TestHuggingFaceDownloadRegression:
     """Issue #118: stale saved HF mirrors or tokens must not poison public GUI
