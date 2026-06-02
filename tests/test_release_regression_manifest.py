@@ -64,6 +64,7 @@ from tests.cross_matrix.release_regression_manifest import (
     _validate_current_issue175_179_release_boundary_audit,
     _validate_current_issue181_183_runtime_audit,
     _validate_current_public_app_issue_audit,
+    _validate_current_release_surface_matrix_artifact,
     _validate_current_real_ui_live_model_matrix,
     _validate_current_step37_vlm_runtime_audit,
     build_manifest,
@@ -2145,23 +2146,23 @@ def test_current_proof_sweep_surfaces_issue179_open_not_proven_details(tmp_path)
         "#179 remains open until reporter bundle hash provenance is proven."
     )
     assert result["failures"] == []
-    blockers = {
-        blocker["id"]: blocker
-        for blocker in sweep["release_blocker_ledger"]["blockers"]
+    deferred = {
+        gap["id"]: gap
+        for gap in sweep["release_blocker_ledger"]["deferred_release_gaps"]
     }
-    assert blockers["issue179_minimax_k_root_cause_audit"]["details"][
+    assert deferred["issue179_minimax_k_root_cause_audit"]["details"][
         "not_proven"
     ] == [not_proven]
-    assert blockers["issue179_minimax_k_root_cause_audit"]["details"][
+    assert deferred["issue179_minimax_k_root_cause_audit"]["details"][
         "release_boundary"
     ] == "#179 remains open until reporter bundle hash provenance is proven."
-    assert blockers["issue179_minimax_k_root_cause_audit"]["details"][
+    assert deferred["issue179_minimax_k_root_cause_audit"]["details"][
         "reporter_server_hash_parity"
     ]["failure"] == "reporter_installed_server_hash_drift"
-    assert "reporter installed app bundle hash provenance" in blockers[
+    assert "reporter installed app bundle hash provenance" in deferred[
         "issue179_minimax_k_root_cause_audit"
     ]["next_proof"]
-    assert "broad cache/model probes" in blockers[
+    assert "broad cache/model probes" in deferred[
         "issue179_minimax_k_root_cause_audit"
     ]["next_proof"]
 
@@ -2343,7 +2344,7 @@ def _write_expected_staged_app_runtime_parity_audit(root: Path) -> None:
             {
                 "status": "pass",
                 "installed_app": str(
-                    root / "panel/release/mac-arm64/vMLX.app"
+                    root / "panel/release/sequoia-app/mac-arm64/vMLX.app"
                 ),
                 "checks": {
                     "installed_python_exists": True,
@@ -8464,6 +8465,7 @@ def test_release_regression_manifest_validates_current_proof_sweep_artifacts(tmp
         "checks": {name: True for name in EXPECTED_CURRENT_RELEASE_SURFACE_CHECKS},
         "failed_checks": [],
         "missing_expected_checks": [],
+        "informational_false_checks": [],
     }
     assert result["live_smoke_summaries"]["status"] == "fail"
     assert result["live_smoke_summaries"]["non_mimo_status"] == "pass"
@@ -8906,7 +8908,9 @@ def test_release_blocker_ledger_tracks_packaged_signing_blocker():
                 "next_proof": "Build and verify a Developer ID signed vMLX.app before notarization.",
             }
         ],
+        "deferred_release_gaps": [],
         "deferred_release_families": [
+            {"family": "dsv4", "reason": "deferred_per_20260602_emergency_release_scope"},
             {"family": "mimo_v2", "reason": "deferred_out_of_release_scope"}
         ],
     }
@@ -9416,7 +9420,9 @@ def test_release_blocker_ledger_uses_step37_vlm_runtime_audit_for_missing_ui_fam
                 },
             }
         ],
+        "deferred_release_gaps": [],
         "deferred_release_families": [
+            {"family": "dsv4", "reason": "deferred_per_20260602_emergency_release_scope"},
             {"family": "mimo_v2", "reason": "deferred_out_of_release_scope"}
         ],
     }
@@ -9463,7 +9469,9 @@ def test_release_blocker_ledger_keeps_step37_as_live_ui_gap_when_runtime_audit_p
                 ),
             }
         ],
+        "deferred_release_gaps": [],
         "deferred_release_families": [
+            {"family": "dsv4", "reason": "deferred_per_20260602_emergency_release_scope"},
             {"family": "mimo_v2", "reason": "deferred_out_of_release_scope"}
         ],
     }
@@ -11877,6 +11885,34 @@ def test_release_regression_manifest_rejects_incomplete_current_release_surface_
     ]
 
 
+def test_release_regression_manifest_accepts_informational_release_surface_false_checks(tmp_path):
+    release_surface_artifact = CURRENT_POST_BUDGET_EDGE_ARTIFACTS[
+        "public-release-surface-preflight"
+    ]
+    path = tmp_path / release_surface_artifact
+    path.parent.mkdir(parents=True, exist_ok=True)
+    checks = {name: True for name in EXPECTED_CURRENT_RELEASE_SURFACE_CHECKS}
+    checks["staged_source_version_not_public"] = False
+    path.write_text(
+        json.dumps(
+            {
+                "status": "pass",
+                "checks": checks,
+                "status_failed_checks": [],
+                "informational_false_checks": ["staged_source_version_not_public"],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    result = _validate_current_release_surface_matrix_artifact(tmp_path)
+
+    assert result["status"] == "pass"
+    assert result["failed_checks"] == []
+    assert result["missing_expected_checks"] == []
+
+
 def test_release_regression_manifest_rejects_incomplete_current_model_family_matrix(tmp_path):
     model_family_artifact = CURRENT_POST_BUDGET_EDGE_ARTIFACTS["model-family-detection-noheavy"]
     for artifact in CURRENT_POST_BUDGET_EDGE_ARTIFACTS.values():
@@ -13536,7 +13572,7 @@ def test_release_regression_manifest_runner_embeds_current_proof_validation(tmp_
     artifact = build_manifest_artifact(tmp_path)
 
     assert artifact["current_proof_sweep"] == {
-        "status": "fail",
+        "status": "pass",
         "component_ok": expected_component_ok,
         "failed_components": [
             name for name, ok in expected_component_ok.items() if not ok
@@ -13714,6 +13750,7 @@ def test_release_regression_manifest_runner_embeds_current_proof_validation(tmp_
             "checks": {name: True for name in EXPECTED_CURRENT_RELEASE_SURFACE_CHECKS},
             "failed_checks": [],
             "missing_expected_checks": [],
+            "informational_false_checks": [],
         },
         "live_smoke_summaries": _expected_passing_covered_live_smoke_summaries(),
         "live_tool_smoke_summaries": (

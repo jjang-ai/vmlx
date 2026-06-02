@@ -408,7 +408,7 @@ def test_packaged_integrity_checks_packaged_python_has_no_pycache(monkeypatch, t
 
     app_python = (
         tmp_path
-        / "panel/release/mac-arm64/vMLX.app/Contents/Resources/bundled-python/python"
+        / "panel/release/sequoia-app/mac-arm64/vMLX.app/Contents/Resources/bundled-python/python"
     )
     pycache = app_python / "lib/python3.12/json/__pycache__"
     pycache.mkdir(parents=True)
@@ -503,7 +503,7 @@ def test_packaged_user_data_isolation_check_accepts_early_user_data_override(tmp
 def test_packaged_python_pycache_check_rejects_sealed_resource_drift(tmp_path):
     pycache = (
         tmp_path
-        / "panel/release/mac-arm64/vMLX.app/Contents/Resources/bundled-python/python/lib/python3.12/encodings/__pycache__"
+        / "panel/release/sequoia-app/mac-arm64/vMLX.app/Contents/Resources/bundled-python/python/lib/python3.12/encodings/__pycache__"
     )
     pycache.mkdir(parents=True)
     (pycache / "utf_8.cpython-312.pyc").write_bytes(b"pyc")
@@ -514,7 +514,7 @@ def test_packaged_python_pycache_check_rejects_sealed_resource_drift(tmp_path):
 def test_packaged_python_pycache_check_accepts_clean_bundle(tmp_path):
     python_root = (
         tmp_path
-        / "panel/release/mac-arm64/vMLX.app/Contents/Resources/bundled-python/python"
+        / "panel/release/sequoia-app/mac-arm64/vMLX.app/Contents/Resources/bundled-python/python"
     )
     python_root.mkdir(parents=True)
 

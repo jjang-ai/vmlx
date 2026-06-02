@@ -590,7 +590,7 @@ CURRENT_SUITE_COMMANDS: dict[str, list[str]] = {
         sys.executable,
         "tests/cross_matrix/run_installed_app_runtime_parity_audit.py",
         "--app",
-        "panel/release/mac-arm64/vMLX.app",
+        "panel/release/sequoia-app/mac-arm64/vMLX.app",
         "--out",
         "build/current-staged-app-runtime-parity-audit-20260602-developer-id-staged-signing.json",
     ],

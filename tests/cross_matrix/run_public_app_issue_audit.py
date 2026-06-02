@@ -26,8 +26,8 @@ INSTALLED_APP = Path("/Applications/vMLX.app")
 INSTALLED_APP_PYTHON = Path(
     "/Applications/vMLX.app/Contents/Resources/bundled-python/python/bin/python3"
 )
-STAGED_SEQUOIA_APP = Path("panel/release/mac-arm64/vMLX.app")
-STAGED_TAHOE_APP = Path("panel/release/native-cache-metrics-app/mac-arm64/vMLX.app")
+STAGED_SEQUOIA_APP = Path("panel/release/sequoia-app/mac-arm64/vMLX.app")
+STAGED_TAHOE_APP = Path("panel/release/tahoe-app/mac-arm64/vMLX.app")
 TOOL_CALL_CONTRACT = Path(
     "build/current-tool-call-contract-20260528-tool-parser-loop-matrix.json"
 )

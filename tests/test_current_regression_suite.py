@@ -328,7 +328,10 @@ def test_current_regression_suite_refreshes_release_boundary_artifacts():
 
     staged_cmd = suite.CURRENT_SUITE_COMMANDS["staged_app_runtime_parity_audit"]
     assert "--app" in staged_cmd
-    assert staged_cmd[staged_cmd.index("--app") + 1] == "panel/release/mac-arm64/vMLX.app"
+    assert (
+        staged_cmd[staged_cmd.index("--app") + 1]
+        == "panel/release/sequoia-app/mac-arm64/vMLX.app"
+    )
     assert "--user-data" not in staged_cmd
     assert "--diagnostic-reports" not in staged_cmd
     assert "--out" in staged_cmd

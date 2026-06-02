@@ -37,12 +37,12 @@ CURRENT_OBJECTIVE_DIGEST_ARTIFACT = Path(
 )
 MIN_RELEASE_GATE_UNIT_TESTS = 34
 PACKAGED_RENDERER_ASAR = Path(
-    "panel/release/mac-arm64/vMLX.app/Contents/Resources/app.asar"
+    "panel/release/sequoia-app/mac-arm64/vMLX.app/Contents/Resources/app.asar"
 )
 PACKAGED_PYTHON_ROOT = Path(
-    "panel/release/mac-arm64/vMLX.app/Contents/Resources/bundled-python/python"
+    "panel/release/sequoia-app/mac-arm64/vMLX.app/Contents/Resources/bundled-python/python"
 )
-PACKAGED_APP = Path("panel/release/mac-arm64/vMLX.app")
+PACKAGED_APP = Path("panel/release/sequoia-app/mac-arm64/vMLX.app")
 DEVELOPER_ID_IDENTITY = "D4DBBCB52F666D03F0A5154BFFEA2227BEE8FC7C"
 SIGNING_KEYCHAINS = (
     Path("~/Library/Keychains/vmlx-build.keychain-db").expanduser(),

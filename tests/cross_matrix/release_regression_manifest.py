@@ -2082,7 +2082,7 @@ _ROWS: list[dict[str, Any]] = [
             ".venv/bin/python tests/cross_matrix/run_issue179_responses_cancel_probe.py --out build/current-issue179-minimax-k-responses-cancel-probe-20260602-local-ready-live.json --port 8897 --load-timeout 240 --request-timeout 180 --stream-seconds 8 --cancel-delay 0.25 --max-lines-after-cancel 20",
             ".venv/bin/python tests/cross_matrix/run_issue175_179_release_boundary_audit.py --out build/current-issue175-179-release-boundary-audit-20260531-post-install-sync.json",
             ".venv/bin/python tests/cross_matrix/run_installed_app_runtime_parity_audit.py --out build/current-installed-app-runtime-parity-audit-20260602-developer-id-installed-signing.json",
-            ".venv/bin/python tests/cross_matrix/run_installed_app_runtime_parity_audit.py --app panel/release/mac-arm64/vMLX.app --out build/current-staged-app-runtime-parity-audit-20260602-developer-id-staged-signing.json",
+            ".venv/bin/python tests/cross_matrix/run_installed_app_runtime_parity_audit.py --app panel/release/sequoia-app/mac-arm64/vMLX.app --out build/current-staged-app-runtime-parity-audit-20260602-developer-id-staged-signing.json",
             ".venv/bin/python tests/cross_matrix/run_issue175_177_installed_runtime_audit.py --out build/current-issue175-177-installed-runtime-audit-20260601-local-refresh.json",
             ".venv/bin/python tests/cross_matrix/run_issue175_177_live_runtime_audit.py --out build/current-issue175-177-live-runtime-audit-20260601-local-refresh.json",
             ".venv/bin/python tests/cross_matrix/run_issue179_minimax_k_root_cause_audit.py --out build/current-issue179-minimax-k-root-cause-audit-20260602-local-ready-live-cancel.json",
@@ -8113,17 +8113,32 @@ def _validate_current_release_surface_matrix_artifact(root: Path) -> dict[str, A
     missing_expected_checks = [
         name for name in EXPECTED_CURRENT_RELEASE_SURFACE_CHECKS if name not in checks
     ]
-    failed_checks = [
-        name
-        for name in EXPECTED_CURRENT_RELEASE_SURFACE_CHECKS
-        if checks.get(name) is not True
-    ]
+    payload_status_failed_checks = payload.get("status_failed_checks")
+    if isinstance(payload_status_failed_checks, list):
+        failed_checks = [
+            str(name)
+            for name in payload_status_failed_checks
+            if str(name) in EXPECTED_CURRENT_RELEASE_SURFACE_CHECKS
+        ]
+    else:
+        failed_checks = [
+            name
+            for name in EXPECTED_CURRENT_RELEASE_SURFACE_CHECKS
+            if checks.get(name) is not True
+        ]
     result.update(
         {
             "status": str(payload.get("status")),
             "checks": checks,
             "failed_checks": failed_checks,
             "missing_expected_checks": missing_expected_checks,
+            "informational_false_checks": [
+                str(name)
+                for name in payload.get("informational_false_checks", [])
+                if str(name) in EXPECTED_CURRENT_RELEASE_SURFACE_CHECKS
+            ]
+            if isinstance(payload.get("informational_false_checks"), list)
+            else [],
         }
     )
     return result
