@@ -7270,6 +7270,7 @@ def _validate_open_requirement_details(
     required_available = source_preflight.get("required_available_gb")
     available = source_preflight.get("available_gb")
     source_preflight_created_at = source_preflight.get("created_at")
+    active_heavy_processes = source_preflight.get("active_heavy_processes")
     selected_cases = source_preflight.get("selected_cases")
     if not isinstance(selected_cases, list):
         selected_cases = []
@@ -7285,6 +7286,15 @@ def _validate_open_requirement_details(
         and source_preflight.get("status") == "skipped"
         and source_preflight.get("reason")
         in {"insufficient_free_memory", "insufficient_vm_stat_memory"}
+        and source_preflight.get("did_not_launch") is True
+        and source_preflight.get("launch_decision") == "do_not_launch"
+        and source_preflight.get("launch_allowed") is False
+        and str(source_preflight.get("model") or "").endswith(
+            "DeepSeek-V4-Flash-JANGTQ-K"
+        )
+        and source_preflight.get("active_heavy_process_count") == 0
+        and isinstance(active_heavy_processes, list)
+        and not active_heavy_processes
         and isinstance(required_available, int | float)
         and required_available >= 120.0
         and isinstance(available, int | float)

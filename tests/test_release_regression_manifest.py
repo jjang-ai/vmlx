@@ -9853,6 +9853,53 @@ def test_release_regression_manifest_rejects_partial_four_case_dsv4_source_prefl
     ]
 
 
+def test_release_regression_manifest_rejects_dsv4_source_preflight_without_no_launch_context(
+    tmp_path,
+):
+    for artifact in CURRENT_POST_BUDGET_EDGE_ARTIFACTS.values():
+        path = tmp_path / artifact
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text('{"status":"pass","failed":[]}\n', encoding="utf-8")
+    _write_passing_covered_live_smoke_artifacts(tmp_path)
+    _write_passing_covered_live_tool_smoke_artifacts(tmp_path)
+    open_details = _passing_open_requirement_details()
+    dsv4_row = open_details[
+        "DSV4 long-output/code/file-generation quality is release-cleared"
+    ]
+    source_preflight = dsv4_row["details"]["current_source_full_output_preflight"]
+    source_preflight["launch_allowed"] = True
+    source_preflight["launch_decision"] = "launch_allowed"
+    source_preflight["did_not_launch"] = False
+    source_preflight["active_heavy_process_count"] = 1
+    source_preflight["active_heavy_processes"] = [
+        {"pid": 1234, "command": "vmlx_engine.cli serve --model dsv4"}
+    ]
+    regression_suite = tmp_path / CURRENT_REGRESSION_SUITE_ARTIFACT
+    regression_suite.parent.mkdir(parents=True, exist_ok=True)
+    regression_suite.write_text(
+        json.dumps(
+            {
+                "status": "pass",
+                "failed_steps": [],
+                "open_requirements": EXPECTED_CURRENT_OPEN_REQUIREMENTS,
+                "open_requirement_details": open_details,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    result = validate_current_proof_sweep_artifacts(tmp_path)
+
+    assert result["status"] == "fail"
+    assert result["regression_suite"]["open_requirement_detail_failures"] == [
+        {
+            "requirement": "DSV4 long-output/code/file-generation quality is release-cleared",
+            "reason": "missing_or_stale_dsv4_source_full_output_preflight",
+        }
+    ]
+
+
 def test_release_regression_manifest_rejects_stale_dsv4_source_preflight_artifact(
     tmp_path,
 ):
