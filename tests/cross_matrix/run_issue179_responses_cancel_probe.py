@@ -150,6 +150,7 @@ def memory_preflight_block(
             "reason": "model_path_missing",
             "launch_allowed": False,
             "launch_decision": "do_not_launch",
+            "did_not_launch": True,
             "model_path": str(args.model),
         }
     available_gb = parse_vm_stat_available_gb(
@@ -163,6 +164,7 @@ def memory_preflight_block(
         "reason": "insufficient_vm_stat_memory",
         "launch_allowed": False,
         "launch_decision": "do_not_launch",
+        "did_not_launch": True,
         "model_path": str(args.model),
         "model_size_gb": size_gb,
         "required_free_gb": required_free_gb,
@@ -170,6 +172,55 @@ def memory_preflight_block(
         "available_for_gate_gb": available_gb,
         "free_plus_speculative_purgeable_gb": available_gb,
         "memory_gap_gb": round(required_free_gb - available_gb, 2),
+        "preflight_memory_source": "vm_stat_free_plus_speculative_purgeable",
+    }
+
+
+def memory_preflight_only_result(
+    args: argparse.Namespace,
+    *,
+    vm_stat_text: str | None = None,
+    model_size_gb_override: float | None = None,
+) -> dict[str, Any]:
+    blocked = memory_preflight_block(
+        args,
+        vm_stat_text=vm_stat_text,
+        model_size_gb_override=model_size_gb_override,
+    )
+    if blocked is not None:
+        return blocked
+
+    size_gb = (
+        model_size_gb_override
+        if model_size_gb_override is not None
+        else model_size_gb(Path(args.model))
+    )
+    if size_gb is None:
+        return {
+            "status": "skipped",
+            "reason": "model_path_missing",
+            "launch_allowed": False,
+            "launch_decision": "do_not_launch",
+            "did_not_launch": True,
+            "model_path": str(args.model),
+        }
+    available_gb = parse_vm_stat_available_gb(
+        vm_stat_text if vm_stat_text is not None else _run_text(["vm_stat"])
+    )
+    required_free_gb = round(size_gb + float(args.memory_preflight_margin_gb), 2)
+    return {
+        "status": "ready_to_launch",
+        "reason": "memory_preflight_floor_met",
+        "launch_allowed": True,
+        "launch_decision": "launch_allowed",
+        "did_not_launch": True,
+        "model_path": str(args.model),
+        "model_size_gb": size_gb,
+        "required_free_gb": required_free_gb,
+        "min_free_gb": required_free_gb,
+        "available_for_gate_gb": available_gb,
+        "free_plus_speculative_purgeable_gb": available_gb,
+        "memory_gap_gb": 0.0,
         "preflight_memory_source": "vm_stat_free_plus_speculative_purgeable",
     }
 
@@ -458,12 +509,16 @@ def main() -> int:
         type=float,
         default=DEFAULT_MEMORY_PREFLIGHT_MARGIN_GB,
     )
+    parser.add_argument("--memory-preflight-only", action="store_true")
     parser.add_argument("--skip-memory-preflight", action="store_true")
     args = parser.parse_args()
 
-    result = None if args.skip_memory_preflight else memory_preflight_block(args)
-    if result is None:
-        result = run_live_probe(args)
+    if args.memory_preflight_only:
+        result = memory_preflight_only_result(args)
+    else:
+        result = None if args.skip_memory_preflight else memory_preflight_block(args)
+        if result is None:
+            result = run_live_probe(args)
     result.setdefault("preflight_captured_at", time.strftime("%Y-%m-%dT%H:%M:%S%z"))
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8")
@@ -483,7 +538,7 @@ def main() -> int:
             sort_keys=True,
         )
     )
-    return 0 if result["status"] in {"pass", "skipped"} else 1
+    return 0 if result["status"] in {"pass", "skipped", "ready_to_launch"} else 1
 
 
 if __name__ == "__main__":

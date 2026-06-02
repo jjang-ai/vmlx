@@ -112,6 +112,7 @@ Pages purgeable:                         250.
         "reason": "insufficient_vm_stat_memory",
         "launch_allowed": False,
         "launch_decision": "do_not_launch",
+        "did_not_launch": True,
         "model_path": "/models/MiniMax-M2.7-JANGTQ_K",
         "model_size_gb": 74.0,
         "required_free_gb": 80.0,
@@ -119,5 +120,38 @@ Pages purgeable:                         250.
         "available_for_gate_gb": 0.03,
         "free_plus_speculative_purgeable_gb": 0.03,
         "memory_gap_gb": 79.97,
+        "preflight_memory_source": "vm_stat_free_plus_speculative_purgeable",
+    }
+
+
+def test_issue179_memory_preflight_only_reports_ready_without_live_launch():
+    vm_stat = """Mach Virtual Memory Statistics: (page size of 16384 bytes)
+Pages free:                          6000000.
+Pages speculative:                    600000.
+Pages purgeable:                      300000.
+"""
+
+    result = probe.memory_preflight_only_result(
+        SimpleNamespace(
+            model=Path("/models/MiniMax-M2.7-JANGTQ_K"),
+            memory_preflight_margin_gb=6.0,
+        ),
+        vm_stat_text=vm_stat,
+        model_size_gb_override=74.0,
+    )
+
+    assert result == {
+        "status": "ready_to_launch",
+        "reason": "memory_preflight_floor_met",
+        "launch_allowed": True,
+        "launch_decision": "launch_allowed",
+        "did_not_launch": True,
+        "model_path": "/models/MiniMax-M2.7-JANGTQ_K",
+        "model_size_gb": 74.0,
+        "required_free_gb": 80.0,
+        "min_free_gb": 80.0,
+        "available_for_gate_gb": 105.29,
+        "free_plus_speculative_purgeable_gb": 105.29,
+        "memory_gap_gb": 0.0,
         "preflight_memory_source": "vm_stat_free_plus_speculative_purgeable",
     }
