@@ -3020,13 +3020,28 @@ def _current_release_blocker_ledger(
         )
 
     if issue179_minimax_k_root_cause_audit.get("status") == "open":
+        issue179_not_proven = issue179_minimax_k_root_cause_audit.get("not_proven")
+        if not isinstance(issue179_not_proven, list):
+            issue179_not_proven = []
+        issue179_waiting_on_reporter_hash = any(
+            str(item)
+            == "reporter installed app bundle hash matches public/local server.py route proof"
+            for item in issue179_not_proven
+        )
         blocker = {
             "id": "issue179_minimax_k_root_cause_audit",
             "status": "open",
             "evidence": CURRENT_ISSUE179_MINIMAX_K_ROOT_CAUSE_AUDIT_ARTIFACT,
             "next_proof": (
-                "Reproduce or disprove screenshot-shaped wrong-language/numeric "
-                "reasoning-panel garbage with the reporter prompt/session."
+                "Obtain reporter installed app bundle hash provenance matching a "
+                "public/local vMLX server.py route proof, or refresh reporter "
+                "parity metadata against a known public DMG; do not rerun broad "
+                "cache/model probes until this provenance gap changes."
+                if issue179_waiting_on_reporter_hash
+                else (
+                    "Reproduce or disprove screenshot-shaped wrong-language/numeric "
+                    "reasoning-panel garbage with the reporter prompt/session."
+                )
             ),
         }
         details = {

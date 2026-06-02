@@ -2084,6 +2084,12 @@ def test_current_proof_sweep_surfaces_issue179_open_not_proven_details(tmp_path)
     assert blockers["issue179_minimax_k_root_cause_audit"]["details"][
         "reporter_server_hash_parity"
     ]["failure"] == "reporter_installed_server_hash_drift"
+    assert "reporter installed app bundle hash provenance" in blockers[
+        "issue179_minimax_k_root_cause_audit"
+    ]["next_proof"]
+    assert "broad cache/model probes" in blockers[
+        "issue179_minimax_k_root_cause_audit"
+    ]["next_proof"]
 
 
 def test_current_proof_sweep_requires_issue179_memory_preflight_when_open(tmp_path):
