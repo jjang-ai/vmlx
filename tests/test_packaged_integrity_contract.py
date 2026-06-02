@@ -143,6 +143,7 @@ def test_packaged_integrity_accepts_current_release_gate_unit_count(monkeypatch,
     monkeypatch.setattr(runner, "_check_packaged_user_data_isolation_bootstrap", lambda _root: True)
     monkeypatch.setattr(runner, "_check_packaged_python_has_no_pycache", lambda _root: True)
     monkeypatch.setattr(runner, "_check_staged_app_engine_hash_parity", lambda _root: True)
+    monkeypatch.setattr(runner, "_check_staged_app_engine_source_hash_parity", lambda _root: True)
     monkeypatch.setattr(runner, "_check_release_dmg_hardened_runtime_contract", lambda _root: True)
     monkeypatch.setattr(runner, "_check_release_dmg_notarization_verifier_contract", lambda _root: True)
     monkeypatch.setattr(runner, "_check_release_dmg_notarization_submit_contract", lambda _root: True)
@@ -198,6 +199,7 @@ def test_packaged_integrity_sets_clean_jang_source_env_for_bundle_checks(monkeyp
     monkeypatch.setattr(runner, "_check_packaged_user_data_isolation_bootstrap", lambda _root: True)
     monkeypatch.setattr(runner, "_check_packaged_python_has_no_pycache", lambda _root: True)
     monkeypatch.setattr(runner, "_check_staged_app_engine_hash_parity", lambda _root: True)
+    monkeypatch.setattr(runner, "_check_staged_app_engine_source_hash_parity", lambda _root: True)
     monkeypatch.setattr(runner, "_check_release_dmg_hardened_runtime_contract", lambda _root: True)
     monkeypatch.setattr(runner, "_check_release_dmg_notarization_verifier_contract", lambda _root: True)
     monkeypatch.setattr(runner, "_check_release_dmg_notarization_submit_contract", lambda _root: True)
@@ -350,6 +352,10 @@ def test_packaged_epipe_guard_accepts_wrapped_disconnect_recursion(tmp_path):
         b"connection lost. The model server may have stopped or restarted\n"
         b"wrappedDisconnects.some((nested) => isExpectedCacheEndpointDisconnectError(nested))\n"
         b"nestedErrors.some((nested) => isExpectedCacheEndpointDisconnectError(nested))\n"
+        b"function isExpectedPerformanceEndpointDisconnectError\n"
+        b"Performance health connection lost. The model server may have stopped or restarted\n"
+        b"wrappedDisconnects.some((nested) => isExpectedPerformanceEndpointDisconnectError(nested))\n"
+        b"nestedErrors.some((nested) => isExpectedPerformanceEndpointDisconnectError(nested))\n"
     )
 
     assert runner._check_packaged_epipe_closed_stream_guards(tmp_path) is True
@@ -442,6 +448,34 @@ def test_staged_app_engine_hash_parity_rejects_stale_packaged_runtime(tmp_path):
     staged.write_text("current\n", encoding="utf-8")
 
     assert runner._check_staged_app_engine_hash_parity(tmp_path) is True
+
+
+def test_staged_app_engine_hash_parity_rejects_stale_packaged_source_mirror(
+    tmp_path,
+):
+    source = tmp_path / "vmlx_engine/server.py"
+    staged_runtime = (
+        tmp_path
+        / runner.PACKAGED_PYTHON_ROOT
+        / "lib/python3.12/site-packages/vmlx_engine/server.py"
+    )
+    staged_source = (
+        tmp_path
+        / runner.PACKAGED_APP
+        / "Contents/Resources/vmlx-engine-source/vmlx_engine/server.py"
+    )
+    source.parent.mkdir(parents=True)
+    staged_runtime.parent.mkdir(parents=True)
+    staged_source.parent.mkdir(parents=True)
+    source.write_text("current\n", encoding="utf-8")
+    staged_runtime.write_text("current\n", encoding="utf-8")
+    staged_source.write_text("stale\n", encoding="utf-8")
+
+    assert runner._check_staged_app_engine_source_hash_parity(tmp_path) is False
+
+    staged_source.write_text("current\n", encoding="utf-8")
+
+    assert runner._check_staged_app_engine_source_hash_parity(tmp_path) is True
 
 
 def test_packaged_user_data_isolation_check_rejects_missing_user_data_override(tmp_path):
@@ -914,6 +948,7 @@ def test_packaged_integrity_surfaces_signing_blocker_without_failing_integrity(
     monkeypatch.setattr(runner, "_check_packaged_user_data_isolation_bootstrap", lambda _root: True)
     monkeypatch.setattr(runner, "_check_packaged_python_has_no_pycache", lambda _root: True)
     monkeypatch.setattr(runner, "_check_staged_app_engine_hash_parity", lambda _root: True)
+    monkeypatch.setattr(runner, "_check_staged_app_engine_source_hash_parity", lambda _root: True)
     monkeypatch.setattr(runner, "_check_release_dmg_hardened_runtime_contract", lambda _root: True)
     monkeypatch.setattr(runner, "_check_release_dmg_notarization_verifier_contract", lambda _root: True)
     monkeypatch.setattr(runner, "_check_release_dmg_notarization_submit_contract", lambda _root: True)
@@ -998,6 +1033,10 @@ def test_packaged_epipe_closed_stream_guard_check_accepts_current_asar(tmp_path)
         b"connection lost. The model server may have stopped or restarted\n"
         b"wrappedDisconnects.some((nested) => isExpectedCacheEndpointDisconnectError(nested))\n"
         b"nestedErrors.some((nested) => isExpectedCacheEndpointDisconnectError(nested))\n"
+        b"function isExpectedPerformanceEndpointDisconnectError\n"
+        b"Performance health connection lost. The model server may have stopped or restarted\n"
+        b"wrappedDisconnects.some((nested) => isExpectedPerformanceEndpointDisconnectError(nested))\n"
+        b"nestedErrors.some((nested) => isExpectedPerformanceEndpointDisconnectError(nested))\n"
     )
 
     assert runner._check_packaged_epipe_closed_stream_guards(tmp_path) is True

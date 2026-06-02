@@ -318,6 +318,7 @@ EXPECTED_CURRENT_PACKAGED_INTEGRITY_CHECKS = (
     "packaged_renderer_max_thinking_tokens_wired",
     "packaged_epipe_closed_stream_guards",
     "packaged_user_data_isolation_bootstrap",
+    "staged_app_engine_source_hash_parity",
     "release_dmg_hardened_runtime_entitlements",
     "dry_release_gate_fails_only_on_known_objectives",
     "dry_release_gate_uses_current_objective_digest",

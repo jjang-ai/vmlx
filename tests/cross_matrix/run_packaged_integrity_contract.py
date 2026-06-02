@@ -306,6 +306,25 @@ def _check_staged_app_engine_hash_parity(root: Path) -> bool:
     return checked > 0
 
 
+def _check_staged_app_engine_source_hash_parity(root: Path) -> bool:
+    source_engine_dir = root / "vmlx_engine"
+    staged_engine_dir = (
+        root
+        / PACKAGED_APP
+        / "Contents/Resources/vmlx-engine-source/vmlx_engine"
+    )
+    checked = 0
+    for rel in STAGED_APP_ENGINE_HASH_FILES:
+        source = source_engine_dir / rel
+        if not source.exists():
+            continue
+        staged = staged_engine_dir / rel
+        if not staged.exists() or _sha256(source) != _sha256(staged):
+            return False
+        checked += 1
+    return checked > 0
+
+
 def _check_release_dmg_hardened_runtime_contract(root: Path) -> bool:
     script = root / "panel/scripts/build-release-dmgs.sh"
     entitlements = root / "panel/build/entitlements.mac.plist"
@@ -709,6 +728,9 @@ def build_artifact(
         ),
         "packaged_python_has_no_pycache": _check_packaged_python_has_no_pycache(root),
         "staged_app_engine_hash_parity": _check_staged_app_engine_hash_parity(root),
+        "staged_app_engine_source_hash_parity": (
+            _check_staged_app_engine_source_hash_parity(root)
+        ),
         "release_dmg_hardened_runtime_entitlements": (
             _check_release_dmg_hardened_runtime_contract(root)
         ),
