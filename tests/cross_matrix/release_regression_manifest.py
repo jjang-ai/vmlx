@@ -4999,6 +4999,10 @@ def _validate_current_public_app_issue_audit(root: Path) -> dict[str, Any]:
             "packaged_renderer_thinking_controls_present",
         ),
         "118": ("installed_app_download_fallback_guarded",),
+        "180": (
+            "minimax_small_stricttools_real_ui_indexed",
+            "minimax_small_numeric_garbage_guarded",
+        ),
     }
     for number, clearance in expected_clearance.items():
         issue = issues.get(number)

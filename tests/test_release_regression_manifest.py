@@ -1461,7 +1461,8 @@ def _write_expected_public_app_issue_audit(root: Path) -> None:
                             "mapped_to_minimax_small_real_ui_language_numeric_guard"
                         ),
                         "checks": {
-                            "minimax_small_stricttools_real_ui_indexed": True
+                            "minimax_small_stricttools_real_ui_indexed": True,
+                            "minimax_small_numeric_garbage_guarded": True,
                         },
                     },
                     "118": {
@@ -1534,6 +1535,23 @@ def test_release_regression_manifest_rejects_public_issue118_without_installed_a
     assert "missing_issue_check:118:installed_app_download_fallback_guarded" in result[
         "failures"
     ]
+
+
+def test_release_regression_manifest_rejects_public_issue180_without_numeric_guard(
+    tmp_path,
+):
+    _write_expected_public_app_issue_audit(tmp_path)
+    path = tmp_path / CURRENT_PUBLIC_APP_ISSUE_AUDIT_ARTIFACT
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["issues"]["180"]["checks"].pop("minimax_small_numeric_garbage_guarded", None)
+    path.write_text(json.dumps(payload) + "\n", encoding="utf-8")
+
+    result = _validate_current_public_app_issue_audit(tmp_path)
+
+    assert (
+        "missing_issue_check:180:minimax_small_numeric_garbage_guarded"
+        in result["failures"]
+    )
 
 
 def test_release_regression_manifest_rejects_public_issue111_without_installed_mllm_hash_guard(
