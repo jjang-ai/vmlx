@@ -376,7 +376,7 @@ CURRENT_POST_BUDGET_EDGE_ARTIFACTS = {
     "mcp-policy-ui-gateway": "build/current-mcp-policy-contract-20260531-post-step-lfm-refresh.json",
     "vl-media-cache-tool-followup": "build/current-vl-media-cache-contract-20260602-step-jangtq-boundary.json",
     "packaged-release-integrity": "build/current-packaged-integrity-contract-20260602-developer-id-staged-signing.json",
-    "public-release-surface-preflight": "build/current-release-surface-contract-20260528-release-surface-matrix.json",
+    "public-release-surface-preflight": "build/current-release-surface-contract-20260602-v154-live-public-after-site-fix.json",
 }
 
 CURRENT_REGRESSION_SUITE_ARTIFACT = (
@@ -1726,13 +1726,13 @@ _ROWS: list[dict[str, Any]] = [
             "live public release-surface mode compares the source repo release tag to the current source head so green updater feeds cannot hide post-release source-only fixes",
         ],
         "commands": [
-            ".venv/bin/python tests/cross_matrix/run_release_surface_contract.py --out build/current-release-surface-contract-20260528-release-surface-matrix.json",
+            ".venv/bin/python tests/cross_matrix/run_release_surface_contract.py --out build/current-release-surface-contract-20260602-v154-live-public-after-site-fix.json",
             ".venv/bin/python tests/cross_matrix/run_release_surface_contract.py --out build/current-release-surface-contract-20260522-recheck-updater-i18n.json",
             ".venv/bin/python tests/cross_matrix/run_release_surface_contract.py --live-public --out build/current-release-surface-contract-20260522-live-public-v1548.json",
             ".venv/bin/python tests/cross_matrix/run_release_surface_contract.py --live-public --out build/current-release-surface-contract-20260524-live-source-tag-parity.json",
         ],
         "artifacts": [
-            "build/current-release-surface-contract-20260528-release-surface-matrix.json",
+            "build/current-release-surface-contract-20260602-v154-live-public-after-site-fix.json",
             "build/current-release-surface-contract-20260524-live-source-tag-parity.json",
             "build/current-release-surface-contract-20260523-post-budget-edge.json",
             "build/current-release-surface-contract-20260522-live-public-v1548.json",

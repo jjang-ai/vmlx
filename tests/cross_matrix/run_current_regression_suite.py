@@ -535,7 +535,7 @@ CURRENT_SUITE_COMMANDS: dict[str, list[str]] = {
         sys.executable,
         "tests/cross_matrix/run_release_surface_contract.py",
         "--out",
-        "build/current-release-surface-contract-20260528-release-surface-matrix.json",
+        "build/current-release-surface-contract-20260602-v154-live-public-after-site-fix.json",
     ],
     "cli_release_contracts": [
         sys.executable,

@@ -1331,7 +1331,7 @@ def test_current_regression_suite_runs_release_surface_contract(monkeypatch, tmp
     )
     assert any(
         name == "release_surface_contracts"
-        and "build/current-release-surface-contract-20260528-release-surface-matrix.json"
+        and "build/current-release-surface-contract-20260602-v154-live-public-after-site-fix.json"
         in cmd
         for name, cmd in seen_steps
     )

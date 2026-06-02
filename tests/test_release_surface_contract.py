@@ -6,7 +6,7 @@ def test_release_surface_contract_default_out_tracks_current_release_proof_artif
     from tests.cross_matrix import run_release_surface_contract as gate
 
     assert gate.DEFAULT_OUT == Path(
-        "build/current-release-surface-contract-20260528-release-surface-matrix.json"
+        "build/current-release-surface-contract-20260602-v154-live-public-after-site-fix.json"
     )
 
 

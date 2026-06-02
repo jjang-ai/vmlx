@@ -14348,9 +14348,9 @@ def test_release_regression_manifest_tracks_public_release_surface_preflight():
     assert "run_release_surface_contract.py" in joined
     assert (
         CURRENT_POST_BUDGET_EDGE_ARTIFACTS["public-release-surface-preflight"]
-        == "build/current-release-surface-contract-20260528-release-surface-matrix.json"
+        == "build/current-release-surface-contract-20260602-v154-live-public-after-site-fix.json"
     )
-    assert "current-release-surface-contract-20260528-release-surface-matrix.json" in joined
+    assert "current-release-surface-contract-20260602-v154-live-public-after-site-fix.json" in joined
     assert "latest.json" in joined
     assert "PyPI" in joined
     assert "GitHub release" in joined
