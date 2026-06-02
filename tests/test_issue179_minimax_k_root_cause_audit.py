@@ -129,9 +129,14 @@ def test_issue179_audit_keeps_reporter_cancel_404_boundary_open():
         "public_v1549_tahoe_server_sha256": audit["public_release_dmg_contract"][
             "server_sha256"
         ],
+        "latest_public_server_sha256": audit["latest_public_release_dmg_contract"][
+            "server_sha256"
+        ],
         "source_matches_local_installed": True,
         "source_matches_public_v1549_tahoe": False,
         "local_installed_matches_public_v1549_tahoe": False,
+        "source_matches_latest_public": True,
+        "local_installed_matches_latest_public": True,
     }
     assert audit["reporter_parity_artifact"]["path"] == (
         "build/issue-179/reporter-parity-metadata-20260527.json"
@@ -359,6 +364,39 @@ def test_issue179_public_dmg_contract_extracts_server_route_and_hash(tmp_path):
     assert contract["server_sha256"] == dmg_gate.sha256_file(app_server)
 
 
+def test_issue179_audit_surfaces_latest_public_dmg_contract():
+    audit = gate.build_audit(Path("."))
+
+    latest = audit["latest_public_release_dmg_contract"]
+    assert latest["release_tag"] == "v1.5.52"
+    assert latest["asset"] in {
+        "vMLX-1.5.52-sequoia-arm64.dmg",
+        "vMLX-1.5.52-tahoe-arm64.dmg",
+    }
+    assert latest["server_has_responses_cancel_route"] is True
+    assert latest["server_cancel_calls_engine_abort"] is True
+    assert audit["proven"]["latest_public_dmg_has_responses_cancel_route"] is True
+    assert (
+        audit["bundle_hash_parity"]["latest_public_server_sha256"]
+        == latest["server_sha256"]
+    )
+    assert (
+        audit["reporter_server_hash_parity"]["reporter_matches_latest_public"]
+        is False
+    )
+    checked_latest_assets = {
+        (row.get("release_tag"), row.get("asset"))
+        for row in audit["reporter_server_hash_parity"]["provenance"][
+            "public_release_checked"
+        ]
+        if row.get("release_tag") == "v1.5.52"
+    }
+    assert checked_latest_assets == {
+        ("v1.5.52", "vMLX-1.5.52-sequoia-arm64.dmg"),
+        ("v1.5.52", "vMLX-1.5.52-tahoe-arm64.dmg"),
+    }
+
+
 def test_issue179_reporter_parity_comparison_marks_matching_reporter_metadata_pass():
     comparison = gate.build_reporter_parity_comparison(
         reporter_parity_artifact={
@@ -424,9 +462,11 @@ def test_issue179_reporter_server_hash_parity_names_drift():
         "source_server_sha256": "source-sha",
         "local_installed_server_sha256": "source-sha",
         "public_v1549_tahoe_server_sha256": "public-sha",
+        "latest_public_server_sha256": None,
         "reporter_matches_source": False,
         "reporter_matches_local_installed": False,
         "reporter_matches_public_v1549_tahoe": False,
+        "reporter_matches_latest_public": False,
         "route_markers_match": True,
         "status": "open",
         "failure": "reporter_installed_server_hash_drift",

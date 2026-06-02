@@ -20,7 +20,7 @@ from typing import Any
 
 
 DEFAULT_OUT = Path(
-    "build/current-issue179-minimax-k-root-cause-audit-20260602-local-ready-live-cancel.json"
+    "build/current-issue179-minimax-k-root-cause-audit-20260602-post-v1552-public-dmg-scan.json"
 )
 REPORTER_LOG = Path("build/issue-179/vmlx-logs-490f58c0-2026-05-27.log")
 REPORTER_SCREENSHOT = Path("build/issue-179/minimax-garbage-screenshot.png")
@@ -79,6 +79,7 @@ PUBLIC_RELEASE_DMG_CONTRACT = Path(
     "build/issue-179/public-v1.5.49-tahoe-dmg-contract.json"
 )
 PUBLIC_RELEASE_DMG_CONTRACT_GLOB = "public-v*-*-dmg-contract.json"
+PUBLIC_RELEASE_TAG_RE = re.compile(r"^v(\d+)\.(\d+)\.(\d+)$")
 
 SOURCE_CONTRACT_FILES = (
     Path("vmlx_engine/server.py"),
@@ -962,11 +963,37 @@ def analyze_public_release_dmg_contracts(root: Path) -> list[dict[str, Any]]:
     return [_public_release_dmg_contract_from_path(root, path) for path in paths]
 
 
+def _release_tag_key(row: dict[str, Any]) -> tuple[int, int, int]:
+    tag = row.get("release_tag")
+    if not isinstance(tag, str):
+        return (0, 0, 0)
+    match = PUBLIC_RELEASE_TAG_RE.match(tag)
+    if not match:
+        return (0, 0, 0)
+    return tuple(int(part) for part in match.groups())
+
+
+def select_latest_public_release_dmg_contract(
+    rows: list[dict[str, Any]],
+) -> dict[str, Any]:
+    if not rows:
+        return {}
+    return max(
+        rows,
+        key=lambda row: (
+            _release_tag_key(row),
+            1 if str(row.get("asset") or "").endswith("-tahoe-arm64.dmg") else 0,
+            str(row.get("asset") or ""),
+        ),
+    )
+
+
 def build_bundle_hash_parity(
     *,
     source: dict[str, Any],
     installed_bundle: dict[str, Any],
     public_dmg: dict[str, Any],
+    latest_public_dmg: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     source_hashes = source.get("source_hashes")
     if not isinstance(source_hashes, dict):
@@ -974,10 +1001,12 @@ def build_bundle_hash_parity(
     source_server_sha = source_hashes.get("vmlx_engine/server.py")
     local_server_sha = installed_bundle.get("sha256")
     public_server_sha = public_dmg.get("server_sha256")
+    latest_public_server_sha = (latest_public_dmg or {}).get("server_sha256")
     return {
         "source_server_sha256": source_server_sha,
         "local_installed_server_sha256": local_server_sha,
         "public_v1549_tahoe_server_sha256": public_server_sha,
+        "latest_public_server_sha256": latest_public_server_sha,
         "source_matches_local_installed": (
             bool(source_server_sha)
             and bool(local_server_sha)
@@ -993,6 +1022,16 @@ def build_bundle_hash_parity(
             and bool(public_server_sha)
             and local_server_sha == public_server_sha
         ),
+        "source_matches_latest_public": (
+            bool(source_server_sha)
+            and bool(latest_public_server_sha)
+            and source_server_sha == latest_public_server_sha
+        ),
+        "local_installed_matches_latest_public": (
+            bool(local_server_sha)
+            and bool(latest_public_server_sha)
+            and local_server_sha == latest_public_server_sha
+        ),
     }
 
 
@@ -1002,6 +1041,7 @@ def build_reporter_server_hash_parity(
     source: dict[str, Any],
     installed_bundle: dict[str, Any],
     public_dmg: dict[str, Any],
+    latest_public_dmg: dict[str, Any] | None = None,
     provenance: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     source_hashes = source.get("source_hashes")
@@ -1011,6 +1051,7 @@ def build_reporter_server_hash_parity(
     source_sha = source_hashes.get("vmlx_engine/server.py")
     local_sha = installed_bundle.get("sha256")
     public_sha = public_dmg.get("server_sha256")
+    latest_public_sha = (latest_public_dmg or {}).get("server_sha256")
     route_markers_match = (
         reporter_parity_artifact.get("server_has_responses_cancel_route") is True
         and reporter_parity_artifact.get("server_cancel_calls_engine_abort") is True
@@ -1024,6 +1065,11 @@ def build_reporter_server_hash_parity(
     reporter_matches_public = (
         bool(reporter_sha) and bool(public_sha) and reporter_sha == public_sha
     )
+    reporter_matches_latest_public = (
+        bool(reporter_sha)
+        and bool(latest_public_sha)
+        and reporter_sha == latest_public_sha
+    )
     status = (
         "pass"
         if reporter_matches_source and reporter_matches_local and route_markers_match
@@ -1034,9 +1080,11 @@ def build_reporter_server_hash_parity(
         "source_server_sha256": source_sha,
         "local_installed_server_sha256": local_sha,
         "public_v1549_tahoe_server_sha256": public_sha,
+        "latest_public_server_sha256": latest_public_sha,
         "reporter_matches_source": reporter_matches_source,
         "reporter_matches_local_installed": reporter_matches_local,
         "reporter_matches_public_v1549_tahoe": reporter_matches_public,
+        "reporter_matches_latest_public": reporter_matches_latest_public,
         "route_markers_match": route_markers_match,
         "status": status,
     }
@@ -1453,11 +1501,13 @@ def build_audit(root: Path) -> dict[str, Any]:
     reporter_parity_artifact = analyze_reporter_parity_artifact(root)
     public_dmg = analyze_public_release_dmg_contract(root)
     public_dmgs = analyze_public_release_dmg_contracts(root)
+    latest_public_dmg = select_latest_public_release_dmg_contract(public_dmgs)
     screenshot = analyze_reporter_screenshot(root)
     bundle_hash_parity = build_bundle_hash_parity(
         source=source,
         installed_bundle=installed_bundle,
         public_dmg=public_dmg,
+        latest_public_dmg=latest_public_dmg,
     )
     source_hashes = source.get("source_hashes")
     if not isinstance(source_hashes, dict):
@@ -1475,6 +1525,7 @@ def build_audit(root: Path) -> dict[str, Any]:
         source=source,
         installed_bundle=installed_bundle,
         public_dmg=public_dmg,
+        latest_public_dmg=latest_public_dmg,
         provenance=reporter_server_hash_provenance,
     )
     reporter_parity_comparison = build_reporter_parity_comparison(
@@ -1581,6 +1632,10 @@ def build_audit(root: Path) -> dict[str, Any]:
             public_dmg["server_has_responses_cancel_route"]
             and public_dmg["server_cancel_calls_engine_abort"]
         ),
+        "latest_public_dmg_has_responses_cancel_route": (
+            latest_public_dmg.get("server_has_responses_cancel_route") is True
+            and latest_public_dmg.get("server_cancel_calls_engine_abort") is True
+        ),
         "local_installed_responses_cancel_live_probe": (
             cancel_probe["status"] == "pass"
             and cancel_probe["response_id_seen"] is True
@@ -1625,6 +1680,7 @@ def build_audit(root: Path) -> dict[str, Any]:
         "local_installed_bundle_contract": installed_bundle,
         "public_release_dmg_contract": public_dmg,
         "public_release_dmg_contracts": public_dmgs,
+        "latest_public_release_dmg_contract": latest_public_dmg,
         "bundle_hash_parity": bundle_hash_parity,
         "reporter_server_hash_parity": reporter_server_hash_parity,
         "reporter_parity_artifact": reporter_parity_artifact,
