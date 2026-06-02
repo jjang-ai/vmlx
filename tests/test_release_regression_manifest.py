@@ -3708,7 +3708,8 @@ def test_release_regression_manifest_current_sweep_uses_latest_live_smoke_artifa
     assert "current-regression-suite-20260525-cjk-smoke-guard.json" not in joined
     assert "current-regression-suite-20260525-gemma-installed-speed-boundary.json" not in joined
     assert "current-regression-suite-20260524-openai-single-model-streaming-audit.json" not in joined
-    assert "current-api-surface-contract-20260602-cache-detail-zero-cached.json" in joined
+    assert "current-api-surface-contract-20260602-v1554-stream-cache-reuse-refresh.json" in joined
+    assert "current-api-surface-contract-20260602-cache-detail-zero-cached.json" not in joined
     assert "current-api-surface-contract-20260531-nested-epipe-childstream-refresh.json" not in joined
     assert "current-api-surface-contract-20260529-single-model-transition-lock.json" not in joined
     assert "current-api-surface-contract-20260528-ollama-embedding-timeout.json" not in joined
@@ -3752,7 +3753,8 @@ def test_release_regression_manifest_current_sweep_uses_latest_live_smoke_artifa
     assert "current-packaged-integrity-contract-20260526-bundled-release-proof.json" not in joined
     assert "current-packaged-integrity-contract-20260525-additional-args-guard.json" not in joined
     assert "current-regression-suite-20260524-crossfamily-cleared-dsv4-open.json" not in joined
-    assert "current-generation-defaults-contract-20260602-step-greedy-display.json" in joined
+    assert "current-generation-defaults-contract-20260602-v1554-model-owned-defaults-refresh.json" in joined
+    assert "current-generation-defaults-contract-20260602-step-greedy-display.json" not in joined
     assert "current-generation-defaults-contract-20260531-post-step-lfm-refresh.json" not in joined
     assert "current-generation-defaults-contract-20260526-settings-audit.json" not in joined
     assert "current-max-output-context-contract-20260531-post-step-lfm-refresh.json" in joined
@@ -14100,7 +14102,8 @@ def test_release_regression_manifest_tracks_generation_defaults_with_runner_arti
     joined = " ".join(row["commands"] + row["artifacts"] + row["proves"])
 
     assert "run_generation_defaults_contract.py" in joined
-    assert "current-generation-defaults-contract-20260602-step-greedy-display.json" in joined
+    assert "current-generation-defaults-contract-20260602-v1554-model-owned-defaults-refresh.json" in joined
+    assert "current-generation-defaults-contract-20260602-step-greedy-display.json" not in joined
     assert "current-generation-defaults-contract-20260531-post-step-lfm-refresh.json" not in joined
     assert "current-generation-defaults-contract-20260526-settings-audit.json" not in joined
     assert "current-generation-defaults-contract-20260521.json" in joined
@@ -14131,7 +14134,8 @@ def test_release_regression_manifest_tracks_api_surface_with_runner_artifact():
     joined = " ".join(row["commands"] + row["artifacts"] + row["proves"])
 
     assert "run_api_surface_contract.py" in joined
-    assert "current-api-surface-contract-20260602-cache-detail-zero-cached.json" in joined
+    assert "current-api-surface-contract-20260602-v1554-stream-cache-reuse-refresh.json" in joined
+    assert "current-api-surface-contract-20260602-cache-detail-zero-cached.json" not in joined
     assert "current-api-surface-contract-20260531-nested-epipe-childstream-refresh.json" not in joined
     assert "current-api-surface-contract-20260529-single-model-transition-lock.json" in joined
     assert "current-api-surface-contract-20260528-ollama-embeddings-single-model.json" not in joined
@@ -14169,7 +14173,8 @@ def test_release_regression_manifest_tracks_current_defaults_reasoning_api_reche
 
     generation = rows["generation-defaults-no-hidden-forcing"]
     generation_joined = " ".join(generation["commands"] + generation["artifacts"] + generation["proves"])
-    assert "current-generation-defaults-contract-20260602-step-greedy-display.json" in generation_joined
+    assert "current-generation-defaults-contract-20260602-v1554-model-owned-defaults-refresh.json" in generation_joined
+    assert "current-generation-defaults-contract-20260602-step-greedy-display.json" not in generation_joined
     assert "current-generation-defaults-contract-20260531-post-step-lfm-refresh.json" not in generation_joined
     assert "current-generation-defaults-contract-20260526-settings-audit.json" not in generation_joined
     assert "current-generation-defaults-contract-20260522-recheck-no-hidden-forcing.json" in generation_joined

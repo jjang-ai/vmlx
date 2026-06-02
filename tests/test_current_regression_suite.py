@@ -1191,6 +1191,12 @@ def test_current_regression_suite_refreshes_current_packaged_integrity_artifact(
     )
     assert any(
         name == "api_surface_contracts"
+        and "build/current-api-surface-contract-20260602-v1554-stream-cache-reuse-refresh.json"
+        in cmd
+        for name, cmd in seen_steps
+    )
+    assert not any(
+        name == "api_surface_contracts"
         and "build/current-api-surface-contract-20260602-cache-detail-zero-cached.json"
         in cmd
         for name, cmd in seen_steps
@@ -1603,6 +1609,11 @@ def test_current_regression_suite_runs_generation_defaults_contracts(monkeypatch
         "run_generation_defaults_contract.py" in " ".join(cmd)
         for _name, cmd in seen_steps
     )
+    assert any(
+        "build/current-generation-defaults-contract-20260602-v1554-model-owned-defaults-refresh.json"
+        in " ".join(cmd)
+        for _name, cmd in seen_steps
+    )
 
 
 def test_current_regression_suite_runs_reasoning_template_contracts(monkeypatch, tmp_path):
@@ -1658,6 +1669,11 @@ def test_current_regression_suite_runs_api_surface_contracts(monkeypatch, tmp_pa
     assert any(name == "api_surface_contracts" for name, _cmd in seen_steps)
     assert any(
         "run_api_surface_contract.py" in " ".join(cmd)
+        for _name, cmd in seen_steps
+    )
+    assert any(
+        "build/current-api-surface-contract-20260602-v1554-stream-cache-reuse-refresh.json"
+        in " ".join(cmd)
         for _name, cmd in seen_steps
     )
 

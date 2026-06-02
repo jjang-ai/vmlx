@@ -22,7 +22,7 @@ from typing import Any
 
 
 DEFAULT_OUT = Path(
-    "build/current-api-surface-contract-20260602-cache-detail-zero-cached.json"
+    "build/current-api-surface-contract-20260602-v1554-stream-cache-reuse-refresh.json"
 )
 NESTED_OUT = Path(
     "build/current-api-cache-contract-api-surface-check-20260602-cache-detail-zero-cached.json"

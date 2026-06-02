@@ -486,7 +486,7 @@ CURRENT_SUITE_COMMANDS: dict[str, list[str]] = {
         sys.executable,
         "tests/cross_matrix/run_generation_defaults_contract.py",
         "--out",
-        "build/current-generation-defaults-contract-20260602-step-greedy-display.json",
+        "build/current-generation-defaults-contract-20260602-v1554-model-owned-defaults-refresh.json",
     ],
     "reasoning_template_contracts": [
         sys.executable,
@@ -498,7 +498,7 @@ CURRENT_SUITE_COMMANDS: dict[str, list[str]] = {
         sys.executable,
         "tests/cross_matrix/run_api_surface_contract.py",
         "--out",
-        "build/current-api-surface-contract-20260602-cache-detail-zero-cached.json",
+        "build/current-api-surface-contract-20260602-v1554-stream-cache-reuse-refresh.json",
     ],
     "panel_tool_security_contracts": [
         sys.executable,
