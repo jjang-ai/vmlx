@@ -123,6 +123,12 @@ def test_public_app_issue_audit_uses_current_manifest_artifact():
     from tests.cross_matrix import run_public_app_issue_audit as gate
 
     assert str(gate.DEFAULT_OUT) == manifest.CURRENT_PUBLIC_APP_ISSUE_AUDIT_ARTIFACT
+    assert str(gate.ISSUE179_ROOT_CAUSE_AUDIT) == (
+        manifest.CURRENT_ISSUE179_MINIMAX_K_ROOT_CAUSE_AUDIT_ARTIFACT
+    )
+    assert str(gate.ISSUE179_RESPONSES_CANCEL_PROOF) == (
+        "build/current-issue179-minimax-k-responses-cancel-probe-20260602-local-ready-live.json"
+    )
     assert str(gate.PACKAGED_INTEGRITY_CONTRACT) == (
         manifest.CURRENT_POST_BUDGET_EDGE_ARTIFACTS["packaged-release-integrity"]
     )

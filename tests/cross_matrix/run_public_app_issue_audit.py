@@ -60,6 +60,12 @@ GEMMA4_CURRENT_INSTALLED_SPEED_ARTIFACT = Path(
 QWEN35_INSTALLED_SPEED_ARTIFACT = Path(
     "build/current-decode-speed-live-qwen35-4bit-issue115-installed-app-after-decode-position-20260601.json"
 )
+ISSUE179_ROOT_CAUSE_AUDIT = Path(
+    "build/current-issue179-minimax-k-root-cause-audit-20260602-local-ready-live-cancel.json"
+)
+ISSUE179_RESPONSES_CANCEL_PROOF = Path(
+    "build/current-issue179-minimax-k-responses-cancel-probe-20260602-local-ready-live.json"
+)
 
 
 def _read(path: Path) -> str:
@@ -314,10 +320,7 @@ def _issue165_checks(root: Path) -> dict[str, bool]:
 
 
 def _issue117_checks(root: Path) -> dict[str, bool]:
-    issue179 = _load_json(
-        root
-        / "build/current-issue179-minimax-k-root-cause-audit-20260602-expanded-public-dmg-provenance.json"
-    )
+    issue179 = _load_json(root / ISSUE179_ROOT_CAUSE_AUDIT)
     release_manifest = _read(root / "tests/cross_matrix/release_regression_manifest.py")
     parser_contract = _read(root / "tests/cross_matrix/run_parser_registry_contract.py")
     minimax_real_ui = (
@@ -329,8 +332,7 @@ def _issue117_checks(root: Path) -> dict[str, bool]:
         "issue179_root_cause_audit_passes": issue179.get("status") == "pass",
         "issue179_root_cause_audit_open": issue179.get("status") == "open",
         "issue179_cancel_probe_present": (
-            root
-            / "build/current-issue179-minimax-k-responses-cancel-probe-installed-20260527.json"
+            root / ISSUE179_RESPONSES_CANCEL_PROOF
         ).exists(),
         "minimax_live_ui_artifacts_indexed": (
             minimax_real_ui.exists()
