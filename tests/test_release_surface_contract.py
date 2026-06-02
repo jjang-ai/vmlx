@@ -422,3 +422,60 @@ def test_release_surface_live_public_checks_require_release_tag_to_match_source_
     assert artifact["status"] == "fail"
     assert artifact["checks"]["public_github_source_release_tag_matches_source_head"] is False
     assert artifact["public_surfaces"]["github_source_release_tag"]["sha"] == "old-release-commit"
+
+
+def test_release_surface_live_public_checks_accept_annotated_release_tag(tmp_path):
+    from tests.cross_matrix import run_release_surface_contract as gate
+
+    latest = _write_release_root(tmp_path)
+
+    def fetch_json(url: str):
+        if "raw.githubusercontent.com" in url or "mlx.studio/update/latest.json" in url:
+            return latest
+        if "pypi.org" in url:
+            return {
+                "info": {"version": "1.5.48"},
+                "urls": [
+                    {"filename": "vmlx-1.5.48-py3-none-any.whl"},
+                    {"filename": "vmlx-1.5.48.tar.gz"},
+                ],
+            }
+        if "releases/tags" in url:
+            return {
+                "draft": False,
+                "prerelease": False,
+                "assets": [
+                    {
+                        "name": "vMLX-1.5.48-sequoia-arm64.dmg",
+                        "digest": "sha256:" + latest["downloads"]["sequoia"]["sha256"],
+                    },
+                    {
+                        "name": "vMLX-1.5.48-tahoe-arm64.dmg",
+                        "digest": "sha256:" + latest["downloads"]["tahoe"]["sha256"],
+                    },
+                ],
+            }
+        if "git/ref/tags" in url:
+            return {"object": {"sha": "annotated-tag-object", "type": "tag"}}
+        if "git/tags/annotated-tag-object" in url:
+            return {"object": {"sha": "current-source-head", "type": "commit"}}
+        raise AssertionError(url)
+
+    artifact = gate.build_artifact(
+        tmp_path,
+        live_public=True,
+        fetch_json=fetch_json,
+        fetch_headers=lambda url: {
+            "cache-control": "no-cache, no-store, must-revalidate",
+            "pragma": "no-cache",
+            "expires": "0",
+        },
+        current_revision="current-source-head",
+    )
+
+    assert artifact["status"] == "pass"
+    assert artifact["checks"]["public_github_source_release_tag_matches_source_head"] is True
+    tag = artifact["public_surfaces"]["github_source_release_tag"]
+    assert tag["type"] == "tag"
+    assert tag["resolved_sha"] == "current-source-head"
+    assert tag["resolved_type"] == "commit"

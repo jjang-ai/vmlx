@@ -180,6 +180,7 @@ def _public_release_checks(
     github_source_tag_ref_url = (
         f"https://api.github.com/repos/jjang-ai/vmlx/git/ref/tags/v{source_version}"
     )
+    github_source_tag_url_prefix = "https://api.github.com/repos/jjang-ai/vmlx/git/tags/"
 
     public: dict[str, Any] = {}
     checks: dict[str, bool] = {}
@@ -322,13 +323,27 @@ def _public_release_checks(
         tag_ref = fetch_json(github_source_tag_ref_url)
         tag_object = tag_ref.get("object") if isinstance(tag_ref.get("object"), dict) else {}
         tag_sha = str(tag_object.get("sha") or "")
+        tag_type = tag_object.get("type")
+        resolved_sha = tag_sha
+        resolved_type = tag_type
+        if tag_sha and tag_type == "tag":
+            annotated_tag = fetch_json(github_source_tag_url_prefix + tag_sha)
+            annotated_object = (
+                annotated_tag.get("object")
+                if isinstance(annotated_tag.get("object"), dict)
+                else {}
+            )
+            resolved_sha = str(annotated_object.get("sha") or "")
+            resolved_type = annotated_object.get("type")
         public["github_source_release_tag"] = {
             "sha": tag_sha,
-            "type": tag_object.get("type"),
+            "type": tag_type,
+            "resolved_sha": resolved_sha,
+            "resolved_type": resolved_type,
             "current_revision": current_revision,
         }
         checks["public_github_source_release_tag_matches_source_head"] = bool(
-            current_revision and tag_sha == current_revision
+            current_revision and resolved_sha == current_revision
         )
     except Exception as exc:  # pragma: no cover - exercised by live failures.
         public["github_source_release_tag_error"] = repr(exc)
