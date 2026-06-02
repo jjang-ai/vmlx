@@ -242,7 +242,10 @@ describe('Timestamp Formatting', () => {
 
   it('formats "Yesterday HH:MM" for yesterday', () => {
     const today = new Date(); today.setHours(0, 0, 0, 0)
-    const yesterdayTs = today.getTime() - 1 // 1ms before today
+    const yesterday = new Date(today)
+    yesterday.setDate(yesterday.getDate() - 1)
+    yesterday.setHours(12, 0, 0, 0)
+    const yesterdayTs = yesterday.getTime()
     const result = formatTimestamp(yesterdayTs)
     expect(result).toContain('Yesterday')
     expect(result).toMatch(/Yesterday \d{1,2}:\d{2}\s?(AM|PM)/i)

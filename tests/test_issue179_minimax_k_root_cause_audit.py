@@ -186,6 +186,18 @@ def test_issue179_audit_keeps_reporter_cancel_404_boundary_open():
     )
     assert (
         audit["reporter_server_hash_parity"]["provenance"][
+            "sibling_source_checked_count"
+        ]
+        >= 5
+    )
+    assert (
+        audit["reporter_server_hash_parity"]["provenance"][
+            "sibling_source_matches"
+        ]
+        == []
+    )
+    assert (
+        audit["reporter_server_hash_parity"]["provenance"][
             "public_release_checked_count"
         ]
         >= 19
@@ -447,6 +459,7 @@ def test_issue179_reporter_server_hash_provenance_names_unknown_hash(tmp_path):
             "public_v1549_tahoe_dmg",
             "public_release_dmg_contracts",
             "local_installed_app_backups",
+            "sibling_python_worktrees",
             "git_history",
         ],
         "direct_matches": {
@@ -459,6 +472,9 @@ def test_issue179_reporter_server_hash_provenance_names_unknown_hash(tmp_path):
         "public_release_checked_count": 0,
         "local_backup_matches": [],
         "local_backup_checked_count": 1,
+        "sibling_source_matches": [],
+        "sibling_source_checked": [],
+        "sibling_source_checked_count": 0,
         "git_history": {
             "checked": False,
             "match": False,
@@ -505,6 +521,36 @@ def test_issue179_reporter_server_hash_provenance_checks_all_public_dmg_contract
         }
     ]
     assert "failure" not in provenance
+
+
+def test_issue179_reporter_server_hash_provenance_checks_sibling_python_worktrees(
+    tmp_path,
+):
+    root = tmp_path / "vllm-mlx-finite-launch-guard"
+    root.mkdir()
+    sibling = tmp_path / "vllm-mlx-release-1.5.33/vmlx_engine/server.py"
+    sibling.parent.mkdir(parents=True)
+    sibling.write_text("known sibling server\n", encoding="utf-8")
+
+    provenance = gate.build_reporter_server_hash_provenance(
+        root=root,
+        reporter_sha="reporter-sha",
+        source_sha="source-sha",
+        local_sha="local-sha",
+        public_sha="public-sha",
+        check_git_history=False,
+    )
+
+    assert "sibling_python_worktrees" in provenance["checked_sources"]
+    assert provenance["sibling_source_checked_count"] == 1
+    assert provenance["sibling_source_matches"] == []
+    assert provenance["sibling_source_checked"] == [
+        {
+            "path": str(sibling),
+            "sha256": gate.sha256_file(sibling),
+            "matches_reporter": False,
+        }
+    ]
 
 
 def test_issue179_reporter_server_hash_provenance_finds_backup_match(tmp_path):

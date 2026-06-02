@@ -1087,6 +1087,26 @@ def _git_history_server_hash_match(root: Path, reporter_sha: str) -> dict[str, A
     return result
 
 
+def _sibling_python_worktree_server_hashes(
+    root: Path,
+    reporter_sha: str,
+) -> list[dict[str, Any]]:
+    resolved_root = root.resolve()
+    rows = []
+    for path in sorted(resolved_root.parent.glob("vllm-mlx*/vmlx_engine/server.py")):
+        if resolved_root in path.resolve().parents:
+            continue
+        digest = sha256_file(path)
+        rows.append(
+            {
+                "path": str(path),
+                "sha256": digest,
+                "matches_reporter": digest == reporter_sha,
+            }
+        )
+    return rows
+
+
 def build_reporter_server_hash_provenance(
     *,
     root: Path,
@@ -1144,6 +1164,7 @@ def build_reporter_server_hash_provenance(
                     "matches_reporter": digest == reporter_sha,
                 }
             )
+    sibling_source_rows = _sibling_python_worktree_server_hashes(root, reporter_sha)
     git_history = (
         _git_history_server_hash_match(root, reporter_sha)
         if check_git_history
@@ -1153,6 +1174,7 @@ def build_reporter_server_hash_provenance(
         any(direct_matches.values())
         or bool(public_release_matches)
         or any(row["matches_reporter"] for row in backup_rows)
+        or any(row["matches_reporter"] for row in sibling_source_rows)
         or git_history.get("match") is True
     )
     out: dict[str, Any] = {
@@ -1163,6 +1185,7 @@ def build_reporter_server_hash_provenance(
             "public_v1549_tahoe_dmg",
             "public_release_dmg_contracts",
             "local_installed_app_backups",
+            "sibling_python_worktrees",
             "git_history",
         ],
         "direct_matches": direct_matches,
@@ -1173,6 +1196,11 @@ def build_reporter_server_hash_provenance(
             row for row in backup_rows if row["matches_reporter"]
         ],
         "local_backup_checked_count": len(backup_rows),
+        "sibling_source_matches": [
+            row for row in sibling_source_rows if row["matches_reporter"]
+        ],
+        "sibling_source_checked": sibling_source_rows,
+        "sibling_source_checked_count": len(sibling_source_rows),
         "git_history": git_history,
     }
     if not matched:
