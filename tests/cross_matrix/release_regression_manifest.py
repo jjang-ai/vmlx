@@ -4699,6 +4699,7 @@ def _validate_current_issue179_minimax_k_root_cause_audit(root: Path) -> dict[st
                 "public_v1549_tahoe_dmg",
                 "public_release_dmg_contracts",
                 "local_installed_app_backups",
+                "sibling_python_worktrees",
                 "git_history",
             }
             if not isinstance(checked_sources, list) or required_sources.difference(

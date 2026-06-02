@@ -1805,6 +1805,7 @@ def _write_expected_issue179_minimax_k_root_cause_audit(root: Path) -> None:
                             "public_v1549_tahoe_dmg",
                             "public_release_dmg_contracts",
                             "local_installed_app_backups",
+                            "sibling_python_worktrees",
                             "git_history",
                         ],
                         "direct_matches": {
@@ -2067,6 +2068,7 @@ def test_current_proof_sweep_rejects_issue179_narrow_public_dmg_hash_coverage(
             "public_v1549_tahoe_dmg",
             "public_release_dmg_contracts",
             "local_installed_app_backups",
+            "sibling_python_worktrees",
             "git_history",
         ],
         "public_release_checked_count": 4,
@@ -2079,6 +2081,27 @@ def test_current_proof_sweep_rejects_issue179_narrow_public_dmg_hash_coverage(
     ]
 
     assert "insufficient_public_release_dmg_contract_coverage" in result["failures"]
+
+
+def test_current_proof_sweep_rejects_issue179_missing_sibling_worktree_hash_coverage(
+    tmp_path,
+):
+    _write_expected_issue179_minimax_k_root_cause_audit(tmp_path)
+    path = tmp_path / CURRENT_ISSUE179_MINIMAX_K_ROOT_CAUSE_AUDIT_ARTIFACT
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    checked_sources = payload["reporter_server_hash_parity"]["provenance"][
+        "checked_sources"
+    ]
+    payload["reporter_server_hash_parity"]["provenance"]["checked_sources"] = [
+        source for source in checked_sources if source != "sibling_python_worktrees"
+    ]
+    path.write_text(json.dumps(payload) + "\n", encoding="utf-8")
+
+    result = validate_current_proof_sweep_artifacts(tmp_path)[
+        "issue179_minimax_k_root_cause_audit"
+    ]
+
+    assert "missing_reporter_server_hash_provenance_sources" in result["failures"]
 
 
 def test_current_proof_sweep_surfaces_issue179_open_not_proven_details(tmp_path):
@@ -2105,6 +2128,7 @@ def test_current_proof_sweep_surfaces_issue179_open_not_proven_details(tmp_path)
             "public_v1549_tahoe_dmg",
             "public_release_dmg_contracts",
             "local_installed_app_backups",
+            "sibling_python_worktrees",
             "git_history",
         ],
         "public_release_checked_count": 15,
