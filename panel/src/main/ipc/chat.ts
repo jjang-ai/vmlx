@@ -64,6 +64,19 @@ function shouldForwardReasoningEffort(
   return sessionHasReasoningParser || detectedFamily === "deepseek-v4";
 }
 
+function shouldSuppressGenericAgenticPromptForNativeTools(
+  detectedFamily?: string,
+  modelNameOrPath?: string,
+): boolean {
+  const modelName = String(modelNameOrPath || "").toLowerCase();
+  return (
+    detectedFamily === "zaya" ||
+    detectedFamily === "zaya1-vl" ||
+    detectedFamily === "zaya1_vl" ||
+    modelName.includes("zaya")
+  );
+}
+
 function isExpectedChatBackendDisconnectError(error: unknown): boolean {
   const err = error as NodeJS.ErrnoException | undefined;
   const code = String(err?.code || "");
@@ -1268,6 +1281,12 @@ export function registerChatHandlers(
       const suppressAgenticToolPromptForExactOutput =
         overrides?.builtinToolsEnabled === true &&
         /\breply exactly\s*:/i.test(latestUserText);
+      const suppressGenericAgenticToolPromptForNativeTools =
+        overrides?.builtinToolsEnabled === true &&
+        shouldSuppressGenericAgenticPromptForNativeTools(
+          chatDetectedFamily,
+          chat.modelPath || chat.modelId,
+        );
       const directMediaAttachmentRule =
         hasMediaAttachments && overrides?.builtinToolsEnabled
           ? DIRECT_MEDIA_ATTACHMENT_TOOL_RULE
@@ -1279,7 +1298,10 @@ export function registerChatHandlers(
           role: "system",
           content:
             overrides!.systemPrompt! +
-            (suppressAgenticToolPromptForExactOutput ? "" : toolRule) +
+            (suppressAgenticToolPromptForExactOutput ||
+            suppressGenericAgenticToolPromptForNativeTools
+              ? ""
+              : toolRule) +
             directMediaAttachmentRule,
         });
       } else if (hasSystemPrompt) {
@@ -1287,7 +1309,11 @@ export function registerChatHandlers(
           role: "system",
           content: overrides!.systemPrompt!,
         });
-      } else if (overrides?.builtinToolsEnabled && !suppressAgenticToolPromptForExactOutput) {
+      } else if (
+        overrides?.builtinToolsEnabled &&
+        !suppressAgenticToolPromptForExactOutput &&
+        !suppressGenericAgenticToolPromptForNativeTools
+      ) {
         requestMessages.push({
           role: "system",
           content: AGENTIC_SYSTEM_PROMPT + directMediaAttachmentRule,

@@ -95,6 +95,27 @@ describe('tool auto-continue policy', () => {
     expect(source).toContain('!isRemote || isLoopbackUrl(url)')
   })
 
+  it('suppresses generic agentic instructions for ZAYA native tool prompts', () => {
+    const source = readFileSync('src/main/ipc/chat.ts', 'utf8')
+
+    expect(source).toContain('function shouldSuppressGenericAgenticPromptForNativeTools')
+    expect(source).toContain('detectedFamily === "zaya"')
+    expect(source).toContain('detectedFamily === "zaya1-vl"')
+    expect(source).toContain('detectedFamily === "zaya1_vl"')
+    expect(source).toContain('modelNameOrPath')
+    expect(source).toContain('modelName.includes("zaya")')
+    expect(source).toContain('const suppressGenericAgenticToolPromptForNativeTools =')
+
+    const promptBranch = source.slice(
+      source.indexOf('const suppressGenericAgenticToolPromptForNativeTools ='),
+      source.indexOf('// No default system prompt injected'),
+    )
+    expect(promptBranch).toContain('!suppressGenericAgenticToolPromptForNativeTools')
+    expect(promptBranch).toContain('chat.modelPath || chat.modelId')
+    expect(promptBranch).toContain('AGENTIC_SYSTEM_PROMPT + directMediaAttachmentRule')
+    expect(promptBranch).toContain('directMediaAttachmentRule.trim()')
+  })
+
   it('panel max tool iterations caps tool loops', () => {
     const source = readFileSync('src/main/ipc/chat.ts', 'utf8')
     const branch = source.slice(
