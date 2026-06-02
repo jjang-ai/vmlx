@@ -471,6 +471,26 @@ def _resolution_tools_enabled(resolution_tool_choice: str) -> bool:
     return resolution_tool_choice in {"auto", "required"}
 
 
+def _overall_acceptance_pass(acceptance: dict[str, Any]) -> bool:
+    requirement_keys = {
+        "turns_completed",
+        "previous_response_id_used",
+        "cache_reuse_observed",
+        "cache_reuse_each_turn_after_first",
+        "tool_call_observed",
+        "tool_call_each_required_turn",
+        "tool_evidence_each_required_turn",
+        "final_turn_tools_disabled",
+        "final_turn_thinking_disabled",
+        "visible_or_tool_output_each_turn",
+        "visible_output_observed",
+        "final_turn_visible_output",
+        "no_loop_like_tail",
+        "no_tool_markup_leak",
+    }
+    return all(bool(acceptance.get(key)) for key in requirement_keys)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--base-url", default=os.environ.get("VMLINUX_BASE_URL", "http://127.0.0.1:8001"))
@@ -831,7 +851,7 @@ def main() -> int:
         "no_loop_like_tail": no_loop,
         "no_tool_markup_leak": no_tool_markup_leak,
     }
-    overall_pass = all(acceptance.values())
+    overall_pass = _overall_acceptance_pass(acceptance)
     summary = {
         "base_url": args.base_url,
         "model": args.model,

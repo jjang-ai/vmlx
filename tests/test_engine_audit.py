@@ -9141,6 +9141,34 @@ class TestTurboQuantKVTelemetry:
         assert seen is True
         assert each is True
 
+    def test_responses_long_context_tool_cache_gate_ignores_disabled_require_flags_for_overall_pass(self):
+        import runpy
+
+        gate = runpy.run_path("./tests/cross_matrix/run_responses_long_tool_cache_gate.py")
+        overall_acceptance_pass = gate["_overall_acceptance_pass"]
+
+        acceptance = {
+            "turns_completed": True,
+            "previous_response_id_used": True,
+            "cache_reuse_observed": True,
+            "require_cache_each_turn_after_first": True,
+            "cache_reuse_each_turn_after_first": True,
+            "tool_call_observed": True,
+            "require_tool_call_each_turn": False,
+            "tool_call_each_required_turn": True,
+            "require_tool_evidence": False,
+            "tool_evidence_each_required_turn": True,
+            "final_turn_tools_disabled": True,
+            "final_turn_thinking_disabled": True,
+            "visible_or_tool_output_each_turn": True,
+            "visible_output_observed": True,
+            "final_turn_visible_output": True,
+            "no_loop_like_tail": True,
+            "no_tool_markup_leak": True,
+        }
+
+        assert overall_acceptance_pass(acceptance) is True
+
     def test_responses_long_context_tool_cache_gate_extracts_warnings(self):
         import runpy
 
