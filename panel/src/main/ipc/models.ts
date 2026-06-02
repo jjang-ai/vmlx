@@ -83,10 +83,7 @@ function isExpectedChildProcessStreamDisconnectError(err: unknown): boolean {
     code === "ECONNRESET" ||
     code === "ERR_STREAM_DESTROYED" ||
     code === "ERR_STREAM_WRITE_AFTER_END" ||
-    message.includes("write EPIPE".toLowerCase()) ||
-    message.includes("broken pipe") ||
-    message.includes("stream has been destroyed") ||
-    message.includes("write after end") ||
+    /EPIPE|write EPIPE|broken pipe|socket hang up|connection reset|premature close|stream.*destroyed|write after end/i.test(message) ||
     wrappedDisconnects.some((nested) => isExpectedChildProcessStreamDisconnectError(nested)) ||
     nestedErrors.some((nested) => isExpectedChildProcessStreamDisconnectError(nested))
   );

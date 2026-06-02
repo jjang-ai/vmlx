@@ -190,6 +190,9 @@ describe("Ollama gateway parity contracts", () => {
       expect(sourceText).toContain('code === "ERR_STREAM_WRITE_AFTER_END"');
       expect(sourceText).toContain("write EPIPE");
       expect(sourceText).toContain("broken pipe");
+      expect(sourceText).toContain("socket hang up");
+      expect(sourceText).toContain("connection reset");
+      expect(sourceText).toContain("premature close");
       expect(sourceText).toContain("const cause = (err as any)?.cause");
       expect(sourceText).toContain("const wrappedDisconnects = [");
       expect(sourceText).toContain("(err as any)?.reason");
