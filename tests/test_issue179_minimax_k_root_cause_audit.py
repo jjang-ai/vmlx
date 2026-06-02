@@ -391,6 +391,7 @@ def test_issue179_reporter_server_hash_provenance_names_unknown_hash(tmp_path):
             "public_v1549_tahoe": False,
         },
         "public_release_matches": [],
+        "public_release_checked": [],
         "public_release_checked_count": 0,
         "local_backup_matches": [],
         "local_backup_checked_count": 1,
