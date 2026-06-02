@@ -103,7 +103,7 @@ def test_issue175_179_audit_uses_june_local_refresh_issue175_177_inputs():
 
     assert installed == manifest.CURRENT_ISSUE175_177_INSTALLED_RUNTIME_AUDIT_ARTIFACT
     assert live == manifest.CURRENT_ISSUE175_177_LIVE_RUNTIME_AUDIT_ARTIFACT
-    assert installed.endswith("20260601-local-refresh.json")
+    assert installed.endswith("20260602-v1554-installed-tahoe.json")
     assert live.endswith("20260601-local-refresh.json")
     assert "20260527" not in installed
     assert "20260527" not in live

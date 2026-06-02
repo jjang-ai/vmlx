@@ -584,7 +584,7 @@ CURRENT_SUITE_COMMANDS: dict[str, list[str]] = {
         sys.executable,
         "tests/cross_matrix/run_installed_app_runtime_parity_audit.py",
         "--out",
-        "build/current-installed-app-runtime-parity-audit-20260602-v1553-installed-tahoe.json",
+        "build/current-installed-app-runtime-parity-audit-20260602-v1554-installed-tahoe.json",
     ],
     "staged_app_runtime_parity_audit": [
         sys.executable,
@@ -610,7 +610,7 @@ CURRENT_SUITE_COMMANDS: dict[str, list[str]] = {
         sys.executable,
         "tests/cross_matrix/run_public_app_issue_audit.py",
         "--out",
-        "build/current-public-app-issue-audit-20260602-after-performance-health-epipe-app-sync.json",
+        "build/current-public-app-issue-audit-20260602-v1554-installed-tahoe-refresh.json",
     ],
     "focused_regression_pytest": [
         sys.executable,

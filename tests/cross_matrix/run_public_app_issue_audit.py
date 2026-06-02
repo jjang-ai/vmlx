@@ -19,7 +19,7 @@ from typing import Any
 
 
 DEFAULT_OUT = Path(
-    "build/current-public-app-issue-audit-20260602-after-performance-health-epipe-app-sync.json"
+    "build/current-public-app-issue-audit-20260602-v1554-installed-tahoe-refresh.json"
 )
 INSTALLED_APP_ASAR = Path("/Applications/vMLX.app/Contents/Resources/app.asar")
 INSTALLED_APP = Path("/Applications/vMLX.app")
@@ -32,7 +32,7 @@ TOOL_CALL_CONTRACT = Path(
     "build/current-tool-call-contract-20260528-tool-parser-loop-matrix.json"
 )
 INSTALLED_APP_RUNTIME_PARITY = Path(
-    "build/current-installed-app-runtime-parity-audit-20260602-v1553-installed-tahoe.json"
+    "build/current-installed-app-runtime-parity-audit-20260602-v1554-installed-tahoe.json"
 )
 REASONING_TEMPLATE_CONTRACT = Path(
     "build/current-reasoning-template-contract-20260526-settings-audit.json"

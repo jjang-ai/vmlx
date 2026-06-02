@@ -3605,8 +3605,8 @@ def test_release_regression_manifest_current_sweep_uses_latest_live_smoke_artifa
     assert "current-regression-suite-20260528-release-ready-top-level.json" not in joined
     assert "current-regression-suite-20260528-dsv4-memory-refresh.json" not in joined
     assert "current-regression-suite-20260528-signing-detail-ledger.json" not in joined
-    assert "current-installed-app-runtime-parity-audit-20260602-v1553-installed-tahoe.json" in joined
-    assert "current-installed-app-runtime-parity-audit-20260602-v1553-installed-tahoe.json" in row_text
+    assert "current-installed-app-runtime-parity-audit-20260602-v1554-installed-tahoe.json" in joined
+    assert "current-installed-app-runtime-parity-audit-20260602-v1554-installed-tahoe.json" in row_text
     assert "current-installed-app-runtime-parity-audit-20260602-developer-id-installed-signing.json" not in joined
     assert "current-installed-app-runtime-parity-audit-20260602-developer-id-installed-signing.json" not in row_text
     assert "current-installed-app-runtime-parity-audit-20260602-performance-health-epipe.json" not in joined
