@@ -3495,6 +3495,8 @@ def _validate_current_real_ui_dsv4_memory_preflight(root: Path) -> dict[str, Any
         failures.append("insufficient_memory_launch_blocker_missing")
     if payload.get("did_not_launch") is not True:
         failures.append("did_not_launch_not_true")
+    if payload.get("preflight_memory_source") != "vm_stat_free_plus_speculative_purgeable":
+        failures.append("preflight_memory_source_not_vm_stat")
 
     result.update(
         {
@@ -7292,6 +7294,8 @@ def _validate_open_requirement_details(
         and str(source_preflight.get("model") or "").endswith(
             "DeepSeek-V4-Flash-JANGTQ-K"
         )
+        and source_preflight.get("preflight_memory_source")
+        == "vm_stat_free_plus_speculative_purgeable"
         and source_preflight.get("active_heavy_process_count") == 0
         and isinstance(active_heavy_processes, list)
         and not active_heavy_processes

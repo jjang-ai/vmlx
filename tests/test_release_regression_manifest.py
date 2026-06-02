@@ -3120,7 +3120,7 @@ def _passing_open_requirement_details() -> dict[str, object]:
                     "strict_vm_stat_memory_gap_gb": 16.13,
                     "psutil_available_gap_gb": 16.13,
                     "memory_pressure_free_percent": 94,
-                    "preflight_memory_source": "psutil_available",
+                    "preflight_memory_source": "vm_stat_free_plus_speculative_purgeable",
                     "did_not_launch": True,
                     "launch_decision": "do_not_launch",
                     "launch_allowed": False,
@@ -5020,6 +5020,24 @@ def test_release_regression_manifest_rejects_dsv4_preflight_missing_generated_at
 
     assert result["status"] == "fail"
     assert "generated_at_missing" in result["failures"]
+
+
+def test_release_regression_manifest_rejects_dsv4_preflight_without_vm_stat_memory_source(
+    tmp_path,
+):
+    _write_passing_real_ui_live_model_proof_artifacts(tmp_path)
+    _write_passing_real_ui_dsv4_memory_preflight_artifact(tmp_path)
+    preflight_path = tmp_path / CURRENT_REAL_UI_DSV4_MEMORY_PREFLIGHT_ARTIFACT
+    payload = json.loads(preflight_path.read_text(encoding="utf-8"))
+    payload["preflight_memory_source"] = "psutil_available"
+    preflight_path.write_text(json.dumps(payload) + "\n", encoding="utf-8")
+
+    result = validate_current_proof_sweep_artifacts(tmp_path)[
+        "real_ui_dsv4_memory_preflight"
+    ]
+
+    assert result["status"] == "fail"
+    assert "preflight_memory_source_not_vm_stat" in result["failures"]
 
 
 def test_release_regression_manifest_real_ui_matrix_requires_every_family_surface():
@@ -9874,6 +9892,47 @@ def test_release_regression_manifest_rejects_dsv4_source_preflight_without_no_la
     source_preflight["active_heavy_processes"] = [
         {"pid": 1234, "command": "vmlx_engine.cli serve --model dsv4"}
     ]
+    regression_suite = tmp_path / CURRENT_REGRESSION_SUITE_ARTIFACT
+    regression_suite.parent.mkdir(parents=True, exist_ok=True)
+    regression_suite.write_text(
+        json.dumps(
+            {
+                "status": "pass",
+                "failed_steps": [],
+                "open_requirements": EXPECTED_CURRENT_OPEN_REQUIREMENTS,
+                "open_requirement_details": open_details,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    result = validate_current_proof_sweep_artifacts(tmp_path)
+
+    assert result["status"] == "fail"
+    assert result["regression_suite"]["open_requirement_detail_failures"] == [
+        {
+            "requirement": "DSV4 long-output/code/file-generation quality is release-cleared",
+            "reason": "missing_or_stale_dsv4_source_full_output_preflight",
+        }
+    ]
+
+
+def test_release_regression_manifest_rejects_dsv4_source_preflight_without_vm_stat_memory_source(
+    tmp_path,
+):
+    for artifact in CURRENT_POST_BUDGET_EDGE_ARTIFACTS.values():
+        path = tmp_path / artifact
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text('{"status":"pass","failed":[]}\n', encoding="utf-8")
+    _write_passing_covered_live_smoke_artifacts(tmp_path)
+    _write_passing_covered_live_tool_smoke_artifacts(tmp_path)
+    open_details = _passing_open_requirement_details()
+    dsv4_row = open_details[
+        "DSV4 long-output/code/file-generation quality is release-cleared"
+    ]
+    source_preflight = dsv4_row["details"]["current_source_full_output_preflight"]
+    source_preflight["preflight_memory_source"] = "psutil_available"
     regression_suite = tmp_path / CURRENT_REGRESSION_SUITE_ARTIFACT
     regression_suite.parent.mkdir(parents=True, exist_ok=True)
     regression_suite.write_text(
