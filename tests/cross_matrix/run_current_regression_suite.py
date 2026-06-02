@@ -23,7 +23,7 @@ from typing import Any
 
 
 DEFAULT_OUT = Path(
-    "build/current-regression-suite-20260602-vm-stat-gate-validation.json"
+    "build/current-regression-suite-20260602-v1553-installed-tahoe-refresh.json"
 )
 DEFAULT_STEP_TIMEOUT_SEC = 900.0
 STEP_TIMEOUT_RETURNCODE = 124
@@ -584,7 +584,7 @@ CURRENT_SUITE_COMMANDS: dict[str, list[str]] = {
         sys.executable,
         "tests/cross_matrix/run_installed_app_runtime_parity_audit.py",
         "--out",
-        "build/current-installed-app-runtime-parity-audit-20260602-developer-id-installed-signing.json",
+        "build/current-installed-app-runtime-parity-audit-20260602-v1553-installed-tahoe.json",
     ],
     "staged_app_runtime_parity_audit": [
         sys.executable,
@@ -650,7 +650,7 @@ CURRENT_SUITE_COMMANDS: dict[str, list[str]] = {
         "--require-current-proof-sweep",
         "--require-release-ready",
         "--out",
-        "build/current-release-regression-manifest-20260602-vm-stat-gate-validation.json",
+        "build/current-release-regression-manifest-20260602-v1553-installed-tahoe-refresh.json",
     ],
 }
 

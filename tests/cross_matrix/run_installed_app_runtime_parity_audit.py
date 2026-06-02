@@ -19,7 +19,7 @@ from typing import Any
 
 
 DEFAULT_OUT = Path(
-    "build/current-installed-app-runtime-parity-audit-20260602-developer-id-installed-signing.json"
+    "build/current-installed-app-runtime-parity-audit-20260602-v1553-installed-tahoe.json"
 )
 INSTALLED_PYTHON = Path(
     "/Applications/vMLX.app/Contents/Resources/bundled-python/python/bin/python3"
