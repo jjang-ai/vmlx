@@ -48,7 +48,7 @@ sign_bundled_python_native_files() {
   local signed_count=0
   while IFS= read -r native_file; do
     if file "$native_file" | grep -q "Mach-O"; then
-      codesign --force --options runtime --sign "$identity" "$native_file" >/dev/null
+      codesign --force --timestamp --options runtime --sign "$identity" "$native_file" >/dev/null
       signed_count=$((signed_count + 1))
     fi
   done < <(find "$bundled_python" -type f \( -name "*.dylib" -o -name "*.so" -o -perm +111 \))
@@ -78,7 +78,7 @@ finalize_release_app_signature() {
 
   sign_bundled_python_native_files "$bundled_python" "$identity"
   echo "==> Final release app seal/signature: $app_path"
-  codesign --force --deep --options runtime --entitlements "$entitlements" --sign "$identity" "$app_path"
+  codesign --force --deep --timestamp --options runtime --entitlements "$entitlements" --sign "$identity" "$app_path"
   codesign --verify --deep --strict --verbose=2 "$app_path"
 }
 
