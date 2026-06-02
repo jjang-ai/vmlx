@@ -46,6 +46,7 @@ from tests.cross_matrix.run_vl_media_cache_contract import (
 )
 from tests.cross_matrix.release_regression_manifest import (
     CURRENT_DSV4_SOURCE_MEMORY_PREFLIGHT_ARTIFACT,
+    CURRENT_ISSUE179_MINIMAX_K_ROOT_CAUSE_AUDIT_ARTIFACT,
     CURRENT_REAL_UI_DSV4_MEMORY_PREFLIGHT_ARTIFACT,
 )
 
@@ -6202,7 +6203,7 @@ def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
     issue179_evidence = (
         str(issue179_blocker.get("evidence"))
         if isinstance(issue179_blocker, dict) and issue179_blocker.get("evidence")
-        else "build/current-issue179-minimax-k-root-cause-audit-20260602-expanded-public-dmg-provenance.json"
+        else CURRENT_ISSUE179_MINIMAX_K_ROOT_CAUSE_AUDIT_ARTIFACT
     )
     if not issue179_audit:
         issue179_audit = _load(root, issue179_evidence)
