@@ -331,6 +331,16 @@ function filterAdditionalArgs(raw: string | undefined, blockedFlags: Set<string>
   return filtered
 }
 
+function hasDeclaredSamplingDefaults(gen: any): boolean {
+  return !!gen && (
+    gen.temperature != null ||
+    gen.topP != null ||
+    gen.topK != null ||
+    gen.minP != null ||
+    gen.repeatPenalty != null
+  )
+}
+
 async function applyBundleGenerationDefaults(config: SessionConfig, modelPath: string): Promise<SessionConfig> {
   const next: SessionConfig = { ...config }
   try {
@@ -341,6 +351,7 @@ async function applyBundleGenerationDefaults(config: SessionConfig, modelPath: s
     next.defaultMinP = gen?.minP != null ? Math.round(gen.minP * 100) : 0
     next.defaultRepetitionPenalty = gen?.repeatPenalty != null ? Math.round(gen.repeatPenalty * 100) : 0
     next.defaultMaxNewTokens = gen?.maxNewTokens != null ? Math.round(gen.maxNewTokens) : 0
+    next.defaultSamplingDefaultsDeclared = hasDeclaredSamplingDefaults(gen)
   } catch (_) {
     next.defaultTemperature = 0
     next.defaultTopP = 0
@@ -348,6 +359,7 @@ async function applyBundleGenerationDefaults(config: SessionConfig, modelPath: s
     next.defaultMinP = 0
     next.defaultRepetitionPenalty = 0
     next.defaultMaxNewTokens = 0
+    next.defaultSamplingDefaultsDeclared = false
   }
   return next
 }

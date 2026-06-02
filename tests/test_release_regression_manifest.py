@@ -3580,7 +3580,8 @@ def test_release_regression_manifest_current_sweep_uses_latest_live_smoke_artifa
     assert "current-regression-suite-20260528-installed-aggregate-stale.json" not in joined
     assert "current-regression-suite-20260528-epipe-aggregate-guard.json" not in joined
     assert "current-regression-suite-20260528-dsv4-continue-refresh.json" not in joined
-    assert "current-regression-suite-20260602-v1553-installed-tahoe-refresh.json" in joined
+    assert "current-regression-suite-20260602-step-greedy-display-refresh.json" in joined
+    assert "current-regression-suite-20260602-v1553-installed-tahoe-refresh.json" not in joined
     assert "current-regression-suite-20260602-vm-stat-gate-validation.json" not in joined
     assert "current-regression-suite-20260601-pipe-safe-runner.json" not in joined
     assert "current-regression-suite-20260601-developer-id-dmg-assertions.json" not in joined
@@ -3751,7 +3752,8 @@ def test_release_regression_manifest_current_sweep_uses_latest_live_smoke_artifa
     assert "current-packaged-integrity-contract-20260526-bundled-release-proof.json" not in joined
     assert "current-packaged-integrity-contract-20260525-additional-args-guard.json" not in joined
     assert "current-regression-suite-20260524-crossfamily-cleared-dsv4-open.json" not in joined
-    assert "current-generation-defaults-contract-20260531-post-step-lfm-refresh.json" in joined
+    assert "current-generation-defaults-contract-20260602-step-greedy-display.json" in joined
+    assert "current-generation-defaults-contract-20260531-post-step-lfm-refresh.json" not in joined
     assert "current-generation-defaults-contract-20260526-settings-audit.json" not in joined
     assert "current-max-output-context-contract-20260531-post-step-lfm-refresh.json" in joined
     assert "current-max-output-context-contract-20260526-settings-audit.json" not in joined
@@ -11498,7 +11500,7 @@ def test_release_regression_manifest_runner_default_out_tracks_current_release_p
     from tests.cross_matrix import run_release_regression_manifest as runner
 
     assert runner.DEFAULT_OUT == Path(
-        "build/current-release-regression-manifest-20260602-v1553-installed-tahoe-refresh.json"
+        "build/current-release-regression-manifest-20260602-step-greedy-display-refresh.json"
     )
 
 
@@ -14098,7 +14100,8 @@ def test_release_regression_manifest_tracks_generation_defaults_with_runner_arti
     joined = " ".join(row["commands"] + row["artifacts"] + row["proves"])
 
     assert "run_generation_defaults_contract.py" in joined
-    assert "current-generation-defaults-contract-20260531-post-step-lfm-refresh.json" in joined
+    assert "current-generation-defaults-contract-20260602-step-greedy-display.json" in joined
+    assert "current-generation-defaults-contract-20260531-post-step-lfm-refresh.json" not in joined
     assert "current-generation-defaults-contract-20260526-settings-audit.json" not in joined
     assert "current-generation-defaults-contract-20260521.json" in joined
     assert "generation_config.json" in joined
@@ -14166,7 +14169,8 @@ def test_release_regression_manifest_tracks_current_defaults_reasoning_api_reche
 
     generation = rows["generation-defaults-no-hidden-forcing"]
     generation_joined = " ".join(generation["commands"] + generation["artifacts"] + generation["proves"])
-    assert "current-generation-defaults-contract-20260531-post-step-lfm-refresh.json" in generation_joined
+    assert "current-generation-defaults-contract-20260602-step-greedy-display.json" in generation_joined
+    assert "current-generation-defaults-contract-20260531-post-step-lfm-refresh.json" not in generation_joined
     assert "current-generation-defaults-contract-20260526-settings-audit.json" not in generation_joined
     assert "current-generation-defaults-contract-20260522-recheck-no-hidden-forcing.json" in generation_joined
     assert "bundle max_new_tokens" in generation_joined

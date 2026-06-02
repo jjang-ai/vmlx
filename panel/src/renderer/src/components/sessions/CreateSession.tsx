@@ -4,6 +4,16 @@ import { SessionConfigForm, SessionConfig, DEFAULT_CONFIG } from './SessionConfi
 import { DownloadTab } from './DownloadTab'
 import { DirectoryManager } from './DirectoryManager'
 
+function hasDeclaredSamplingDefaults(gen: any): boolean {
+  return !!gen && (
+    gen.temperature != null ||
+    gen.topP != null ||
+    gen.topK != null ||
+    gen.minP != null ||
+    gen.repeatPenalty != null
+  )
+}
+
 function applyGenerationDefaultsToConfig<T extends SessionConfig>(base: T, gen: any): T {
   const next = { ...base }
   if (gen?.temperature != null) next.defaultTemperature = Math.round(gen.temperature * 100)
@@ -16,6 +26,7 @@ function applyGenerationDefaultsToConfig<T extends SessionConfig>(base: T, gen: 
   if (gen?.repeatPenalty != null) next.defaultRepetitionPenalty = Math.round(gen.repeatPenalty * 100)
   else next.defaultRepetitionPenalty = 0
   next.defaultMaxNewTokens = gen?.maxNewTokens != null ? Math.round(gen.maxNewTokens) : 0
+  next.defaultSamplingDefaultsDeclared = hasDeclaredSamplingDefaults(gen)
   return next
 }
 
@@ -26,6 +37,7 @@ function applyGenerationDefaultsToStoredConfig(stored: any, gen: any): any {
   stored.defaultMinP = gen?.minP != null ? Math.round(gen.minP * 100) : 0
   stored.defaultRepetitionPenalty = gen?.repeatPenalty != null ? Math.round(gen.repeatPenalty * 100) : 0
   stored.defaultMaxNewTokens = gen?.maxNewTokens != null ? Math.round(gen.maxNewTokens) : 0
+  stored.defaultSamplingDefaultsDeclared = hasDeclaredSamplingDefaults(gen)
   return stored
 }
 

@@ -70,6 +70,7 @@ export interface ServerConfig {
   defaultMaxNewTokens?: number
   defaultTopK?: number
   defaultMinP?: number
+  defaultSamplingDefaultsDeclared?: boolean
 
   // Tool integration
   mcpConfig?: string

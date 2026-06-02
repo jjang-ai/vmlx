@@ -77,6 +77,7 @@ export interface SessionConfig {
   defaultMinP?: number
   defaultRepetitionPenalty: number
   defaultMaxNewTokens?: number
+  defaultSamplingDefaultsDeclared?: boolean
   defaultEnableThinking?: boolean
   dsv4PrefixCache?: boolean
   dsv4PoolQuant?: boolean
@@ -166,6 +167,7 @@ export const DEFAULT_CONFIG: SessionConfig = {
   defaultMinP: 0,
   defaultRepetitionPenalty: 0,
   defaultMaxNewTokens: 0,
+  defaultSamplingDefaultsDeclared: false,
   defaultEnableThinking: undefined,
   dsv4PrefixCache: true,
   dsv4PoolQuant: true,
@@ -360,6 +362,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
     ? (config.nativeMtpDepth || detectedNativeMtp?.depth || 3)
     : (detectedNativeMtp?.depth || config.nativeMtpDepth || 3)
   const hasDeclaredSamplingDefaults =
+    config.defaultSamplingDefaultsDeclared === true ||
     config.defaultTemperature > 0 ||
     config.defaultTopP > 0 ||
     (config.defaultTopK ?? 0) > 0 ||

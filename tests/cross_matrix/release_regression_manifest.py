@@ -362,7 +362,7 @@ CURRENT_POST_BUDGET_EDGE_ARTIFACTS = {
     "noheavy-api-cache-endpoint-runtime": "build/current-api-cache-contract-proof-20260602-cache-detail-zero-cached.json",
     "chat-settings-max-output-context-ui": "build/current-max-output-context-contract-20260531-post-step-lfm-refresh.json",
     "panel-session-cache-settings-family-gating": "build/current-panel-settings-contract-proof-20260601-cache-ui-storage-quant.json",
-    "generation-defaults-no-hidden-forcing": "build/current-generation-defaults-contract-20260531-post-step-lfm-refresh.json",
+    "generation-defaults-no-hidden-forcing": "build/current-generation-defaults-contract-20260602-step-greedy-display.json",
     "parser-registry-tool-reasoning-parity": "build/current-parser-registry-contract-20260531-post-step-lfm-refresh.json",
     "reasoning-template-no-think-tag-leak": "build/current-reasoning-template-contract-20260526-settings-audit.json",
     "tool-call-loop-parser-cleanup": "build/current-tool-call-contract-20260528-tool-parser-loop-matrix.json",
@@ -380,7 +380,7 @@ CURRENT_POST_BUDGET_EDGE_ARTIFACTS = {
 }
 
 CURRENT_REGRESSION_SUITE_ARTIFACT = (
-    "build/current-regression-suite-20260602-v1553-installed-tahoe-refresh.json"
+    "build/current-regression-suite-20260602-step-greedy-display-refresh.json"
 )
 CURRENT_ISSUE175_179_RELEASE_BOUNDARY_AUDIT_ARTIFACT = (
     "build/current-issue175-179-release-boundary-audit-20260531-post-install-sync.json"
@@ -1301,10 +1301,10 @@ _ROWS: list[dict[str, Any]] = [
             "structured family matrix covers standard MLX, JANG, DSV4, max-token/context, thinking-budget, and app-owned CLI boundaries",
         ],
         "commands": [
-            ".venv/bin/python tests/cross_matrix/run_generation_defaults_contract.py --out build/current-generation-defaults-contract-20260531-post-step-lfm-refresh.json",
+            ".venv/bin/python tests/cross_matrix/run_generation_defaults_contract.py --out build/current-generation-defaults-contract-20260602-step-greedy-display.json",
         ],
         "artifacts": [
-            "build/current-generation-defaults-contract-20260531-post-step-lfm-refresh.json",
+            "build/current-generation-defaults-contract-20260602-step-greedy-display.json",
             "build/current-generation-defaults-contract-20260528-family-matrix.json",
             "build/current-generation-defaults-contract-20260527-after-think-xml-registry-fix.json",
             "build/current-generation-defaults-contract-20260527-issues-175-178-bundled-sync.json",

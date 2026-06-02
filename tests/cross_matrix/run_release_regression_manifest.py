@@ -26,7 +26,7 @@ from tests.cross_matrix.release_regression_manifest import (
 
 
 DEFAULT_OUT = Path(
-    "build/current-release-regression-manifest-20260602-v1553-installed-tahoe-refresh.json"
+    "build/current-release-regression-manifest-20260602-step-greedy-display-refresh.json"
 )
 PREPACKAGE_ALLOWED_BLOCKERS = {
     "packaged_app_developer_id_signing_blocked",

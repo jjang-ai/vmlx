@@ -53,7 +53,7 @@ from tests.cross_matrix.release_regression_manifest import (
 
 DEFAULT_OUT = Path("build/current-objective-proof-audit-20260602-cache-detail-zero-cached.json")
 CURRENT_RELEASE_REGRESSION_MANIFEST_REL = (
-    "build/current-release-regression-manifest-20260602-v1553-installed-tahoe-refresh.json"
+    "build/current-release-regression-manifest-20260602-step-greedy-display-refresh.json"
 )
 DSV4_QUALITY_CLEARANCE_REL = "build/current-dsv4-long-output-quality-clearance-20260521.json"
 DSV4_CURRENT_IDENTIFIER_CANARY_REL = (
@@ -185,7 +185,7 @@ MAX_OUTPUT_CONTEXT_CONTRACT_FALLBACK_REL = "build/current-max-output-context-con
 MODEL_FAMILY_CONTRACT_REL = "build/current-model-family-detection-contract-20260602-step-jangtq-boundary.json"
 PARSER_REGISTRY_CONTRACT_REL = "build/current-parser-registry-contract-20260531-post-step-lfm-refresh.json"
 MODEL_ARTIFACT_FORMAT_CONTRACT_REL = "build/current-model-artifact-format-contract-20260531-post-step-lfm-refresh.json"
-GENERATION_DEFAULTS_CONTRACT_REL = "build/current-generation-defaults-contract-20260531-post-step-lfm-refresh.json"
+GENERATION_DEFAULTS_CONTRACT_REL = "build/current-generation-defaults-contract-20260602-step-greedy-display.json"
 NATIVE_MTP_CONTRACT_REL = "build/current-native-mtp-contract-20260531-post-step-lfm-refresh.json"
 VL_MEDIA_CONTRACT_REL = "build/current-vl-media-cache-contract-20260602-step-jangtq-boundary.json"
 QWEN_JANG_SOURCE_SPEED_REL = "build/current-decode-speed-live-qwen27-jang4m-source-keepalloc-20260522.json"

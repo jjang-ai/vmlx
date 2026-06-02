@@ -21,7 +21,7 @@ from pathlib import Path
 from typing import Any
 
 
-DEFAULT_OUT = Path("build/current-generation-defaults-contract-20260531-post-step-lfm-refresh.json")
+DEFAULT_OUT = Path("build/current-generation-defaults-contract-20260602-step-greedy-display.json")
 
 SOURCE_HASH_FILES = (
     "vmlx_engine/server.py",

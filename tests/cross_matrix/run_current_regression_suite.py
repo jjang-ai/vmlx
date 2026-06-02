@@ -23,7 +23,7 @@ from typing import Any
 
 
 DEFAULT_OUT = Path(
-    "build/current-regression-suite-20260602-v1553-installed-tahoe-refresh.json"
+    "build/current-regression-suite-20260602-step-greedy-display-refresh.json"
 )
 DEFAULT_STEP_TIMEOUT_SEC = 900.0
 STEP_TIMEOUT_RETURNCODE = 124
@@ -486,7 +486,7 @@ CURRENT_SUITE_COMMANDS: dict[str, list[str]] = {
         sys.executable,
         "tests/cross_matrix/run_generation_defaults_contract.py",
         "--out",
-        "build/current-generation-defaults-contract-20260531-post-step-lfm-refresh.json",
+        "build/current-generation-defaults-contract-20260602-step-greedy-display.json",
     ],
     "reasoning_template_contracts": [
         sys.executable,
@@ -650,7 +650,7 @@ CURRENT_SUITE_COMMANDS: dict[str, list[str]] = {
         "--require-current-proof-sweep",
         "--require-release-ready",
         "--out",
-        "build/current-release-regression-manifest-20260602-v1553-installed-tahoe-refresh.json",
+        "build/current-release-regression-manifest-20260602-step-greedy-display-refresh.json",
     ],
 }
 

@@ -61,7 +61,12 @@ interface BundleStartupDefaults {
   defaultMinP?: number
   defaultRepetitionPenalty?: number
   maxTokens?: number
+  samplingDefaultsDeclared?: boolean
   source?: 'generation_config' | 'jang_config'
+}
+
+function hasSamplingDefaultsRecord(record: Record<string, unknown>, keys: string[]): boolean {
+  return keys.some((key) => typeof record[key] === 'number')
 }
 
 function normalizeDetectedFamilyName(family?: string): string | undefined {
@@ -439,6 +444,9 @@ function readBundleStartupDefaults(modelPath?: string): BundleStartupDefaults {
     if (typeof gen.top_k === 'number') out.defaultTopK = Math.max(0, Math.round(gen.top_k))
     if (typeof gen.min_p === 'number') out.defaultMinP = Math.max(0, Math.round(gen.min_p * 100))
     if (typeof gen.repetition_penalty === 'number') out.defaultRepetitionPenalty = Math.round(gen.repetition_penalty * 100)
+    if (hasSamplingDefaultsRecord(gen, ['temperature', 'top_p', 'top_k', 'min_p', 'repetition_penalty'])) {
+      out.samplingDefaultsDeclared = true
+    }
     if (typeof gen.max_new_tokens === 'number' && gen.max_new_tokens > 0) out.maxTokens = Math.round(gen.max_new_tokens)
     if (Object.keys(out).length > 0) out.source = 'generation_config'
   } catch { /* generation_config.json is optional */ }
@@ -451,6 +459,9 @@ function readBundleStartupDefaults(modelPath?: string): BundleStartupDefaults {
       if (typeof sampling.top_p === 'number') out.defaultTopP = Math.round(sampling.top_p * 100)
       if (typeof sampling.top_k === 'number') out.defaultTopK = Math.max(0, Math.round(sampling.top_k))
       if (typeof sampling.min_p === 'number') out.defaultMinP = Math.max(0, Math.round(sampling.min_p * 100))
+      if (hasSamplingDefaultsRecord(sampling, ['temperature', 'top_p', 'top_k', 'min_p', 'repetition_penalty', 'repetition_penalty_thinking', 'repetition_penalty_chat'])) {
+        out.samplingDefaultsDeclared = true
+      }
       // Pick mode-specific repetition penalty based on the bundle's
       // default reasoning mode. Bundles can split _thinking vs _chat because
       // the correct value is part of the bundle's chat contract. Falls back
@@ -500,6 +511,7 @@ function applyBundleStartupDefaults(config: Partial<ServerConfig>, modelPath?: s
   changed = setConfigValue(mutable, 'defaultMinP', defs.defaultMinP ?? 0) || changed
   changed = setConfigValue(mutable, 'defaultRepetitionPenalty', defs.defaultRepetitionPenalty ?? 0) || changed
   changed = setConfigValue(mutable, 'defaultMaxNewTokens', defs.maxTokens ?? 0) || changed
+  changed = setConfigValue(mutable, 'defaultSamplingDefaultsDeclared', defs.samplingDefaultsDeclared === true) || changed
   const migrationKey = 'generationStartupDefaultsVersion'
   if (mutable[migrationKey] !== GENERATION_STARTUP_DEFAULTS_VERSION) {
     const oldHiddenMaxTokens =

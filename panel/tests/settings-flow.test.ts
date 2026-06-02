@@ -1518,8 +1518,13 @@ describe('Generation Defaults', () => {
 
     it('shows explicit greedy generation defaults in the startup summary', () => {
         const formSource = readFileSync('src/renderer/src/components/sessions/SessionConfigForm.tsx', 'utf8')
+        const createSource = readFileSync('src/renderer/src/components/sessions/CreateSession.tsx', 'utf8')
+        const settingsSource = readFileSync('src/renderer/src/components/sessions/SessionSettings.tsx', 'utf8')
 
         expect(formSource).toContain('hasDeclaredSamplingDefaults')
+        expect(formSource).toContain('config.defaultSamplingDefaultsDeclared === true')
+        expect(createSource).toContain('next.defaultSamplingDefaultsDeclared = hasDeclaredSamplingDefaults(gen)')
+        expect(settingsSource).toContain('next.defaultSamplingDefaultsDeclared = hasDeclaredSamplingDefaults(gen)')
         expect(formSource).toContain("hasDeclaredSamplingDefaults ? `temperature ${(config.defaultTemperature / 100).toFixed(2)}` : null")
         expect(formSource).toContain("hasDeclaredSamplingDefaults ? ((config.defaultTopK ?? 0) > 0 ? `top-k ${Math.floor(config.defaultTopK ?? 0)}` : 'top-k off') : null")
     })
