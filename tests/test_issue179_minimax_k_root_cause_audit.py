@@ -188,15 +188,22 @@ def test_issue179_audit_keeps_reporter_cancel_404_boundary_open():
         audit["reporter_server_hash_parity"]["provenance"][
             "public_release_checked_count"
         ]
-        >= 4
+        >= 19
     )
-    checked_release_tags = {
-        row.get("release_tag")
+    checked_public_dmg_assets = {
+        (row.get("release_tag"), row.get("asset"))
         for row in audit["reporter_server_hash_parity"]["provenance"][
             "public_release_checked"
         ]
     }
-    assert {"v1.5.46", "v1.5.49"}.issubset(checked_release_tags)
+    assert {
+        ("v1.5.43", "vMLX-1.5.43-tahoe-arm64.dmg"),
+        ("v1.5.44", "vMLX-1.5.44-tahoe-arm64.dmg"),
+        ("v1.5.46", "vMLX-1.5.46-tahoe-arm64.dmg"),
+        ("v1.5.47", "vMLX-1.5.47-tahoe-arm64.dmg"),
+        ("v1.5.48", "vMLX-1.5.48-tahoe-arm64.dmg"),
+        ("v1.5.49", "vMLX-1.5.49-tahoe-arm64.dmg"),
+    }.issubset(checked_public_dmg_assets)
     assert audit["proven"]["local_installed_bundle_has_responses_cancel_route"] is True
     assert audit["public_release_dmg_contract"]["server_has_responses_cancel_route"] is True
     assert audit["proven"]["public_v1549_tahoe_dmg_has_responses_cancel_route"] is True
