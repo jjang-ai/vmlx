@@ -38,7 +38,7 @@ REASONING_TEMPLATE_CONTRACT = Path(
     "build/current-reasoning-template-contract-20260526-settings-audit.json"
 )
 PACKAGED_INTEGRITY_CONTRACT = Path(
-    "build/current-packaged-integrity-contract-20260601-developer-id-dmg-assertions.json"
+    "build/current-packaged-integrity-contract-20260602-developer-id-staged-signing.json"
 )
 GEMMA4_INSTALLED_SPEED_ARTIFACTS = (
     Path(

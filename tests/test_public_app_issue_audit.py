@@ -123,6 +123,9 @@ def test_public_app_issue_audit_uses_current_manifest_artifact():
     from tests.cross_matrix import run_public_app_issue_audit as gate
 
     assert str(gate.DEFAULT_OUT) == manifest.CURRENT_PUBLIC_APP_ISSUE_AUDIT_ARTIFACT
+    assert str(gate.PACKAGED_INTEGRITY_CONTRACT) == (
+        manifest.CURRENT_POST_BUDGET_EDGE_ARTIFACTS["packaged-release-integrity"]
+    )
 
 
 def test_public_app_issue_audit_writes_json_artifact(tmp_path):
