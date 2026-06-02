@@ -734,6 +734,7 @@ def _write_passing_real_ui_live_model_proof_artifacts(root: Path) -> None:
                 "lfm25-moe-a1b-jang2l-devbuild-cache-parser-rerun-20260531-proof.json",
                 "lfm25-moe-a1b-jang2l-responses-tools-l2storage-pagedlocked-after-content-json-ban-20260531-proof.json",
                 "installed-app-lfm25-moe-a1b-jang2l-responses-tools-l2storage-cachecontrols-localonly-20260601-proof.json",
+                "lfm25-jang2l-installed-responses-tools-max512-post-release-20260602-proof.json",
             )
         ):
             proof["rendererWireApi"] = "responses"
@@ -800,6 +801,7 @@ def _write_passing_real_ui_live_model_proof_artifacts(root: Path) -> None:
                 "lfm25-moe-a1b-jang2l-devbuild-cache-parser-rerun-20260531-proof.json",
                 "lfm25-moe-a1b-jang2l-responses-tools-l2storage-pagedlocked-after-content-json-ban-20260531-proof.json",
                 "installed-app-lfm25-moe-a1b-jang2l-responses-tools-l2storage-cachecontrols-localonly-20260601-proof.json",
+                "lfm25-jang2l-installed-responses-tools-max512-post-release-20260602-proof.json",
             )
         ):
             add_extensive_tool_churn(proof)
@@ -1446,11 +1448,11 @@ def _write_expected_public_app_issue_audit(root: Path) -> None:
                     "169": {
                         "focused_source_slice": "pass",
                         "release_clearance": (
-                            "installed_and_staged_sequoia_compat_runtime_flavor_guarded_packaging_still_gated"
+                            "installed_supported_runtime_flavor_and_dual_staged_dmgs_guarded_packaging_still_gated"
                         ),
                         "checks": {
                             "dual_public_dmg_flavors": True,
-                            "installed_app_sequoia_compat_runtime_flavor": True,
+                            "installed_app_supported_runtime_flavor": True,
                             "staged_sequoia_app_compat_runtime_flavor": True,
                             "staged_tahoe_app_native_runtime_flavor": True,
                         },
@@ -1663,14 +1665,14 @@ def test_release_regression_manifest_rejects_public_issue169_without_installed_r
     path = tmp_path / CURRENT_PUBLIC_APP_ISSUE_AUDIT_ARTIFACT
     payload = json.loads(path.read_text(encoding="utf-8"))
     payload["issues"]["169"]["checks"].pop(
-        "installed_app_sequoia_compat_runtime_flavor"
+        "installed_app_supported_runtime_flavor"
     )
     path.write_text(json.dumps(payload) + "\n", encoding="utf-8")
 
     result = _validate_current_public_app_issue_audit(tmp_path)
 
     assert (
-        "missing_issue_check:169:installed_app_sequoia_compat_runtime_flavor"
+        "missing_issue_check:169:installed_app_supported_runtime_flavor"
         in result["failures"]
     )
 
@@ -4554,7 +4556,7 @@ def test_release_regression_manifest_real_ui_live_model_rows_include_ling_bailin
     )
     assert (
         rows["lfm25_moe_a1b_responses_delta"]["proof"]
-        == "docs/internal/agent-notes/current-real-ui-installed-app-lfm25-moe-a1b-jang2l-responses-tools-l2storage-cachecontrols-localonly-20260601-proof.json"
+        == "docs/internal/agent-notes/current-real-ui-live-model-lfm25-jang2l-installed-responses-tools-max512-post-release-20260602-proof.json"
     )
 
 
@@ -14518,9 +14520,9 @@ def test_release_regression_manifest_tracks_gemma4_crack_language_visible_qualit
     assert "wall decode samples are below 80 tok/s" not in joined
     assert "installed repeat still remains below or unstable" not in joined
     assert "compat MLX wheels remain a separate Sequoia-flavor speed/quality risk" in joined
-    assert "installed app currently uses macosx_14_0_arm64 MLX/Metal wheels" in joined
-    assert "Tahoe-native speed/quality claims require explicit native-flavor artifacts" in joined
-    assert "installed Tahoe-native app now uses macosx_26_0_arm64" not in joined
+    assert "staged Sequoia app uses macosx_14_0_arm64 MLX/Metal wheels" in joined
+    assert "staged Tahoe app uses macosx_26_0_arm64 MLX/Metal wheels" in joined
+    assert "/Applications/vMLX.app runtime flavor is checked separately" in joined
     assert "current-runtime-memory-stress-gemma4-26b-jang4m-responses-thinkingon-app-visible-512-nocache-20260524.json" in joined
     assert "current-runtime-memory-stress-gemma4-26b-jang4m-responses-thinkingbudget16-visible-contract-20260524.json" in joined
     assert "current-runtime-memory-stress-gemma4-26b-jang4m-chat-thinkingoff-cachehit-256-source-skip-redundant-store-notrace-20260525.json" in joined
@@ -14552,10 +14554,14 @@ def test_release_regression_manifest_gemma4_installed_wheel_claim_matches_instal
         site_packages / "mlx_metal-0.31.2.dist-info/WHEEL"
     ).read_text(encoding="utf-8")
 
-    assert "Tag: cp312-cp312-macosx_14_0_arm64" in mlx_wheel
-    assert "Tag: py3-none-macosx_14_0_arm64" in mlx_metal_wheel
-    assert "installed app currently uses macosx_14_0_arm64" in joined
-    assert "installed Tahoe-native app now uses macosx_26_0_arm64" not in joined
+    if "Tag: cp312-cp312-macosx_26_0_arm64" in mlx_wheel:
+        assert "Tag: py3-none-macosx_26_0_arm64" in mlx_metal_wheel
+        assert "installed Tahoe-native app now uses macosx_26_0_arm64" in joined
+    else:
+        assert "Tag: cp312-cp312-macosx_14_0_arm64" in mlx_wheel
+        assert "Tag: py3-none-macosx_14_0_arm64" in mlx_metal_wheel
+        assert "installed Sequoia-compatible app now uses macosx_14_0_arm64" in joined
+    assert "installed app currently uses macosx_14_0_arm64" not in joined
 
 
 def test_release_regression_manifest_clears_gemma4_ui_speed_without_hiding_cold_wall_ttft():

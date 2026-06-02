@@ -252,11 +252,19 @@ def _issue169_checks(root: Path) -> dict[str, bool]:
             in engine_tests
             and "Failed to load the default metallib" in engine_tests
         ),
-        "installed_app_sequoia_compat_runtime_flavor": _app_runtime_flavor_matches(
-            INSTALLED_APP,
-            minimum_system_version="14.5.0",
-            mlx_tag="cp312-cp312-macosx_14_0_arm64",
-            mlx_metal_tag="py3-none-macosx_14_0_arm64",
+        "installed_app_supported_runtime_flavor": (
+            _app_runtime_flavor_matches(
+                INSTALLED_APP,
+                minimum_system_version="14.5.0",
+                mlx_tag="cp312-cp312-macosx_14_0_arm64",
+                mlx_metal_tag="py3-none-macosx_14_0_arm64",
+            )
+            or _app_runtime_flavor_matches(
+                INSTALLED_APP,
+                minimum_system_version="14.5.0",
+                mlx_tag="cp312-cp312-macosx_26_0_arm64",
+                mlx_metal_tag="py3-none-macosx_26_0_arm64",
+            )
         ),
         "staged_sequoia_app_compat_runtime_flavor": _app_runtime_flavor_matches(
             root / STAGED_SEQUOIA_APP,
@@ -746,7 +754,7 @@ def build_audit(root: Path) -> dict[str, Any]:
             ),
             "checks": _issue169_checks(root),
             "release_clearance": (
-                "installed_and_staged_sequoia_compat_runtime_flavor_guarded_packaging_still_gated"
+                "installed_supported_runtime_flavor_and_dual_staged_dmgs_guarded_packaging_still_gated"
             ),
         },
         "117": {

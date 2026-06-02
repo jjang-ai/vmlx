@@ -163,6 +163,38 @@ def test_release_gate_objective_digest_default_tracks_current_release_matrix():
     ]
 
 
+def test_release_gate_twine_command_skips_installed_app_console_script(
+    monkeypatch, tmp_path
+):
+    gate_module = _load_gate_module()
+    stale_twine = tmp_path / "twine"
+    stale_twine.write_text(
+        "#!/Applications/vMLX.app/Contents/Resources/bundled-python/python/bin/python3\n",
+        encoding="utf-8",
+    )
+    stale_twine.chmod(0o755)
+    fallback_python = tmp_path / "python"
+    fallback_python.write_text("#!/bin/sh\n", encoding="utf-8")
+    fallback_python.chmod(0o755)
+
+    monkeypatch.delenv("TWINE", raising=False)
+    monkeypatch.setattr(gate_module, "python_has_module", lambda *_: False)
+    monkeypatch.setattr(gate_module.shutil, "which", lambda name: str(stale_twine))
+    monkeypatch.setattr(gate_module.sys, "executable", str(fallback_python))
+
+    assert gate_module.twine_command() == [str(fallback_python), "-m", "twine"]
+
+
+def test_release_gate_twine_env_disables_user_site_packages():
+    gate_module = _load_gate_module()
+    gate = _FakeGate("")
+
+    env = gate_module.twine_env(gate)
+
+    assert env["PYTHONPATH"] == ""
+    assert env["PYTHONNOUSERSITE"] == "1"
+
+
 def test_live_engine_gate_uses_packaged_python_with_isolated_cwd():
     src = Path("panel/scripts/release-gate-python-app.py").read_text()
     assert 'cwd=str(gate.log_dir)' in src

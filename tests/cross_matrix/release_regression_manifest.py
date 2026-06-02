@@ -1885,7 +1885,7 @@ _ROWS: list[dict[str, Any]] = [
             "After syncing bundled/app jang_loader, installed-app health now reports generic TurboQuant KV off with mixed_swa_kv_v1, but decode remains below the 80 tok/s floor",
             "source now proves native mixed-SWA cache telemetry as paged+mixed_swa and clears the sustained 512-token speed-floor prompt after the redundant full-prefix cache store fix",
             "Current installed app proves source-hash parity, paged+mixed_swa cache telemetry, and stream UI TPS above 80 tok/s for cold and cache-hit rows (`decode_tok_s_stream`); cold wall decode includes TTFT and remains tracked separately",
-            "compat MLX wheels remain a separate Sequoia-flavor speed/quality risk; installed app currently uses macosx_14_0_arm64 MLX/Metal wheels, so Tahoe-native speed/quality claims require explicit native-flavor artifacts rather than /Applications/vMLX.app; current Gemma4 installed-app UI-speed proof supersedes the older sub-floor wall rows for #115",
+            "compat MLX wheels remain a separate Sequoia-flavor speed/quality risk; staged Sequoia app uses macosx_14_0_arm64 MLX/Metal wheels and staged Tahoe app uses macosx_26_0_arm64 MLX/Metal wheels, while /Applications/vMLX.app runtime flavor is checked separately by the public app issue audit; installed Sequoia-compatible app now uses macosx_14_0_arm64 when that DMG is installed, and installed Tahoe-native app now uses macosx_26_0_arm64 when that DMG is installed; current Gemma4 installed-app UI-speed proof supersedes the older sub-floor wall rows for #115",
         ],
         "commands": [
             "panel/bundled-python/python/bin/python3 tests/cross_matrix/run_runtime_memory_stress_probe.py --row gemma4_26b_jang4m --route responses --enable-thinking --max-tokens 512 --skip-prefix-cache --expect-visible-content --out build/current-runtime-memory-stress-gemma4-26b-jang4m-responses-thinkingon-app-visible-512-nocache-20260524.json",
@@ -5173,7 +5173,7 @@ def _validate_current_public_app_issue_audit(root: Path) -> dict[str, Any]:
         "165": "mapped_to_dsv4_dsml_tool_call_arguments_guard",
         "166": "mapped_to_gemma4_assistant_mlx_vlm_alias_guard",
         "169": (
-            "installed_and_staged_sequoia_compat_runtime_flavor_guarded_packaging_still_gated"
+            "installed_supported_runtime_flavor_and_dual_staged_dmgs_guarded_packaging_still_gated"
         ),
         "111": "mapped_to_mistral_small4_vlm_wrapper_detection_guard",
         "115": "mapped_to_current_installed_app_gemma_qwen_speed_gate",
@@ -5200,7 +5200,7 @@ def _validate_current_public_app_issue_audit(root: Path) -> dict[str, Any]:
             "installed_app_gemma4_assistant_alias",
         ),
         "169": (
-            "installed_app_sequoia_compat_runtime_flavor",
+            "installed_app_supported_runtime_flavor",
             "staged_sequoia_app_compat_runtime_flavor",
             "staged_tahoe_app_native_runtime_flavor",
         ),

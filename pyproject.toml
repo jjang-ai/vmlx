@@ -127,6 +127,7 @@ dev = [
     "black>=23.0.0",
     "ruff>=0.1.0",
     "mypy>=1.0.0",
+    "twine>=6.2.0",
 ]
 vllm = [
     # vllm pins torch<=2.6.0 which conflicts with mflux (torch>=2.8.0) when both installed

@@ -47,7 +47,7 @@ def test_public_app_issue_audit_tracks_open_app_runtime_issue_slices():
     assert audit["issues"]["169"]["checks"]["compat_wheel_default"] is True
     assert (
         audit["issues"]["169"]["checks"][
-            "installed_app_sequoia_compat_runtime_flavor"
+            "installed_app_supported_runtime_flavor"
         ]
         is True
     )
@@ -62,7 +62,7 @@ def test_public_app_issue_audit_tracks_open_app_runtime_issue_slices():
         is True
     )
     assert audit["issues"]["169"]["release_clearance"] == (
-        "installed_and_staged_sequoia_compat_runtime_flavor_guarded_packaging_still_gated"
+        "installed_supported_runtime_flavor_and_dual_staged_dmgs_guarded_packaging_still_gated"
     )
     assert audit["issues"]["117"]["focused_source_slice"] == "open"
     assert audit["issues"]["117"]["checks"]["issue179_root_cause_audit_open"] is True

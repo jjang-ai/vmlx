@@ -47,6 +47,10 @@ REQUIRED_RELEASE_ENTITLEMENTS = (
     "com.apple.security.network.client",
     "com.apple.security.files.user-selected.read-write",
 )
+UNSAFE_TWINE_SHEBANG_MARKERS = (
+    "/Applications/vMLX.app/Contents/Resources/bundled-python/",
+    ".app/Contents/Resources/bundled-python/",
+)
 
 
 def twine_command() -> list[str]:
@@ -59,9 +63,21 @@ def twine_command() -> list[str]:
     if python_has_module(Path(sys.executable), "twine"):
         return [sys.executable, "-m", "twine"]
     found = shutil.which("twine")
-    if found:
+    if found and not console_script_uses_app_bundled_python(Path(found)):
         return [found]
     return [sys.executable, "-m", "twine"]
+
+
+def console_script_uses_app_bundled_python(path: Path) -> bool:
+    try:
+        first_line = path.read_text(encoding="utf-8", errors="replace").splitlines()[
+            0
+        ]
+    except Exception:  # noqa: BLE001 - an unreadable script is not safe to prefer
+        return True
+    if not first_line.startswith("#!"):
+        return False
+    return any(marker in first_line for marker in UNSAFE_TWINE_SHEBANG_MARKERS)
 
 
 def python_has_module(py: Path, module_name: str) -> bool:
@@ -74,6 +90,7 @@ def python_has_module(py: Path, module_name: str) -> bool:
         env={
             **os.environ,
             "PYTHONPATH": "",
+            "PYTHONNOUSERSITE": "1",
             "PYTHONDONTWRITEBYTECODE": "1",
         },
         timeout=30,
@@ -86,6 +103,7 @@ def twine_env(gate: Gate) -> dict[str, str]:
     pycache_prefix = writable_probe_cache_dir(gate, "twine-pycache")
     return {
         "PYTHONPATH": "",
+        "PYTHONNOUSERSITE": "1",
         "PYTHONDONTWRITEBYTECODE": "1",
         "PYTHONPYCACHEPREFIX": str(pycache_prefix),
     }

@@ -7788,7 +7788,7 @@ sdist = { url = "https://files.pythonhosted.org/packages/e2/bf/46631fd8e2e9d81c5
 
 [[package]]
 name = "vmlx"
-version = "1.5.50"
+version = "1.5.52"
 source = { editable = "." }
 dependencies = [
     { name = "einops" },
@@ -7850,6 +7850,7 @@ dev = [
     { name = "pytest" },
     { name = "pytest-asyncio" },
     { name = "ruff" },
+    { name = "twine" },
 ]
 image = [
     { name = "mflux" },
@@ -7931,6 +7932,7 @@ requires-dist = [
     { name = "torchvision", marker = "extra == 'vision'", specifier = ">=0.18.0" },
     { name = "tqdm", specifier = ">=4.66.0" },
     { name = "transformers", specifier = ">=4.40.0" },
+    { name = "twine", marker = "extra == 'dev'", specifier = ">=6.2.0" },
     { name = "unidic-lite", marker = "extra == 'audio'", specifier = ">=1.0.0" },
     { name = "uvicorn", specifier = ">=0.23.0" },
     { name = "vllm", marker = "python_full_version < '3.13' and extra == 'vllm'", specifier = ">=0.4.0" },
