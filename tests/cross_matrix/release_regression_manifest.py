@@ -3489,6 +3489,8 @@ def _validate_current_real_ui_dsv4_memory_preflight(root: Path) -> dict[str, Any
         failures.append("active_heavy_processes_missing")
     elif active_heavy_processes:
         failures.append("active_heavy_processes_not_clear")
+    if payload.get("active_heavy_process_count") != 0:
+        failures.append("active_heavy_process_count_not_zero")
     if not isinstance(launch_blockers, list):
         failures.append("launch_blockers_missing")
     elif "insufficient_memory" not in launch_blockers:

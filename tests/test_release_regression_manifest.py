@@ -5006,6 +5006,25 @@ def test_release_regression_manifest_rejects_dsv4_preflight_with_active_heavy_pr
     assert "active_heavy_processes_not_clear" in result["failures"]
 
 
+def test_release_regression_manifest_rejects_dsv4_preflight_with_nonzero_active_process_count(
+    tmp_path,
+):
+    _write_passing_real_ui_live_model_proof_artifacts(tmp_path)
+    _write_passing_real_ui_dsv4_memory_preflight_artifact(tmp_path)
+    preflight_path = tmp_path / CURRENT_REAL_UI_DSV4_MEMORY_PREFLIGHT_ARTIFACT
+    payload = json.loads(preflight_path.read_text(encoding="utf-8"))
+    payload["active_heavy_process_count"] = 1
+    payload["active_heavy_processes"] = []
+    preflight_path.write_text(json.dumps(payload) + "\n", encoding="utf-8")
+
+    result = validate_current_proof_sweep_artifacts(tmp_path)[
+        "real_ui_dsv4_memory_preflight"
+    ]
+
+    assert result["status"] == "fail"
+    assert "active_heavy_process_count_not_zero" in result["failures"]
+
+
 def test_release_regression_manifest_rejects_dsv4_preflight_missing_generated_at(tmp_path):
     _write_passing_real_ui_live_model_proof_artifacts(tmp_path)
     _write_passing_real_ui_dsv4_memory_preflight_artifact(tmp_path)
