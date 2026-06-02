@@ -626,6 +626,43 @@ def test_release_dmg_notarization_submit_contract_accepts_signed_dmg_workflow(tm
     script.write_text(
         "#!/usr/bin/env bash\n"
         "NOTARY_PROFILE=\"${VMLINUX_NOTARY_KEYCHAIN_PROFILE:-vmlx-notary}\"\n"
+        "NOTARY_KEYCHAIN=\"${VMLINUX_NOTARY_KEYCHAIN:-}\"\n"
+        "notarytool_args=(--keychain-profile \"$NOTARY_PROFILE\")\n"
+        'if [[ -n "$NOTARY_KEYCHAIN" ]]; then notarytool_args=(--keychain "$NOTARY_KEYCHAIN" "${notarytool_args[@]}"); fi\n'
+        "regenerate_blockmap() {\n"
+        '  ./node_modules/app-builder-bin/mac/app-builder_arm64 blockmap --input "$1" --output "$1.blockmap"\n'
+        "}\n"
+        "require_developer_id_signature() {\n"
+        '  codesign -dv --verbose=4 "$1" 2>&1 | grep -F "Authority=Developer ID Application: ShieldStack LLC (55KGF2S5AY)"\n'
+        '  codesign -dv --verbose=4 "$1" 2>&1 | grep -F "TeamIdentifier=55KGF2S5AY"\n'
+        '  if codesign -dv --verbose=4 "$1" 2>&1 | grep -F "Signature=adhoc"; then exit 1; fi\n'
+        "}\n"
+        "for flavor in sequoia tahoe; do\n"
+        '  dmg="release/vMLX-${VERSION}-${flavor}-arm64.dmg"\n'
+        '  codesign --verify --verbose=2 "$dmg"\n'
+        '  codesign -dv --verbose=4 "$dmg"\n'
+        '  require_developer_id_signature "$dmg"\n'
+        '  xcrun notarytool submit "$dmg" "${notarytool_args[@]}" --wait --output-format json\n'
+        '  xcrun stapler staple "$dmg"\n'
+        '  xcrun stapler validate "$dmg"\n'
+        '  regenerate_blockmap "$dmg"\n'
+        '  spctl --assess --type open --context context:primary-signature --verbose=4 "$dmg"\n'
+        '  shasum -a 256 "$dmg"\n'
+        "done\n",
+        encoding="utf-8",
+    )
+
+    assert runner._check_release_dmg_notarization_submit_contract(tmp_path) is True
+
+
+def test_release_dmg_notarization_submit_contract_rejects_default_keychain_only(
+    tmp_path,
+):
+    script = tmp_path / "panel/scripts/notarize-release-dmgs.sh"
+    script.parent.mkdir(parents=True)
+    script.write_text(
+        "#!/usr/bin/env bash\n"
+        "NOTARY_PROFILE=\"${VMLINUX_NOTARY_KEYCHAIN_PROFILE:-vmlx-notary}\"\n"
         "require_developer_id_signature() {\n"
         '  codesign -dv --verbose=4 "$1" 2>&1 | grep -F "Authority=Developer ID Application: ShieldStack LLC (55KGF2S5AY)"\n'
         '  codesign -dv --verbose=4 "$1" 2>&1 | grep -F "TeamIdentifier=55KGF2S5AY"\n'
@@ -645,7 +682,40 @@ def test_release_dmg_notarization_submit_contract_accepts_signed_dmg_workflow(tm
         encoding="utf-8",
     )
 
-    assert runner._check_release_dmg_notarization_submit_contract(tmp_path) is True
+    assert runner._check_release_dmg_notarization_submit_contract(tmp_path) is False
+
+
+def test_release_dmg_notarization_submit_contract_rejects_stale_prestaple_blockmaps(
+    tmp_path,
+):
+    script = tmp_path / "panel/scripts/notarize-release-dmgs.sh"
+    script.parent.mkdir(parents=True)
+    script.write_text(
+        "#!/usr/bin/env bash\n"
+        "NOTARY_PROFILE=\"${VMLINUX_NOTARY_KEYCHAIN_PROFILE:-vmlx-notary}\"\n"
+        "NOTARY_KEYCHAIN=\"${VMLINUX_NOTARY_KEYCHAIN:-}\"\n"
+        "notarytool_args=(--keychain-profile \"$NOTARY_PROFILE\")\n"
+        'if [[ -n "$NOTARY_KEYCHAIN" ]]; then notarytool_args=(--keychain "$NOTARY_KEYCHAIN" "${notarytool_args[@]}"); fi\n'
+        "require_developer_id_signature() {\n"
+        '  codesign -dv --verbose=4 "$1" 2>&1 | grep -F "Authority=Developer ID Application: ShieldStack LLC (55KGF2S5AY)"\n'
+        '  codesign -dv --verbose=4 "$1" 2>&1 | grep -F "TeamIdentifier=55KGF2S5AY"\n'
+        '  if codesign -dv --verbose=4 "$1" 2>&1 | grep -F "Signature=adhoc"; then exit 1; fi\n'
+        "}\n"
+        "for flavor in sequoia tahoe; do\n"
+        '  dmg="release/vMLX-${VERSION}-${flavor}-arm64.dmg"\n'
+        '  codesign --verify --verbose=2 "$dmg"\n'
+        '  codesign -dv --verbose=4 "$dmg"\n'
+        '  require_developer_id_signature "$dmg"\n'
+        '  xcrun notarytool submit "$dmg" "${notarytool_args[@]}" --wait --output-format json\n'
+        '  xcrun stapler staple "$dmg"\n'
+        '  xcrun stapler validate "$dmg"\n'
+        '  spctl --assess --type open --context context:primary-signature --verbose=4 "$dmg"\n'
+        '  shasum -a 256 "$dmg"\n'
+        "done\n",
+        encoding="utf-8",
+    )
+
+    assert runner._check_release_dmg_notarization_submit_contract(tmp_path) is False
 
 
 def test_release_dmg_notarization_submit_contract_rejects_no_developer_id_assertion(

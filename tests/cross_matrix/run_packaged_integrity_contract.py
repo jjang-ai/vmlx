@@ -375,6 +375,9 @@ def _check_release_dmg_notarization_submit_contract(root: Path) -> bool:
     required_fragments = (
         "sequoia tahoe",
         "VMLINUX_NOTARY_KEYCHAIN_PROFILE",
+        "VMLINUX_NOTARY_KEYCHAIN",
+        "notarytool_args",
+        "--keychain",
         "codesign --verify",
         "codesign -dv",
         "require_developer_id_signature",
@@ -386,6 +389,9 @@ def _check_release_dmg_notarization_submit_contract(root: Path) -> bool:
         "--wait",
         "xcrun stapler staple",
         "xcrun stapler validate",
+        "regenerate_blockmap",
+        "app-builder",
+        "blockmap",
         "spctl --assess --type open --context context:primary-signature",
         "shasum -a 256",
     )
