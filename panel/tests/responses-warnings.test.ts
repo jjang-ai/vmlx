@@ -114,7 +114,7 @@ describe('Responses warnings panel wiring', () => {
   it('main chat IPC extracts response.completed warnings and forwards them on chat:complete', () => {
     const source = readFileSync(new URL('../src/main/ipc/chat.ts', import.meta.url), 'utf8')
     expect(source).toContain('import { extractResponsesWarnings } from "../../shared/responsesWarnings"')
-    expect(source).toContain('currentEventType === "response.warning"')
+    expect(source).toContain('responsesEventType === "response.warning"')
     expect(source).toContain('const eventWarnings = extractResponsesWarnings(parsed)')
     expect(source).toContain('const completedWarnings = extractResponsesWarnings(')
     expect(source).toContain('const chatWarnings = extractResponsesWarnings(parsed)')

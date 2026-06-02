@@ -460,6 +460,15 @@ const TEMPLATE_TOKEN_REGEX = new RegExp(
 const remoteFetch: typeof globalThis.fetch = (input, init?) =>
   net.fetch(input as any, init as any);
 
+function isLoopbackUrl(url: string): boolean {
+  try {
+    const host = new URL(url).hostname.toLowerCase();
+    return host === "127.0.0.1" || host === "localhost" || host === "::1";
+  } catch (_) {
+    return false;
+  }
+}
+
 const DIRECT_MEDIA_ATTACHMENT_TOOL_RULE =
   "\n\nIMPORTANT: The current user message includes media attachments as chat content. Inspect attached images, video, or audio directly through the model's multimodal input. Do not call read_image, read_video, or list_directory to find attached media unless the user explicitly gives a local filesystem path.";
 
@@ -1873,16 +1882,17 @@ export function registerChatHandlers(
         }
 
         fetchStartTime = Date.now(); // Capture just before fetch for accurate TTFT
-        // Remote: use Electron's net.fetch (Chromium stack — proper HTTPS certs, proxies, SSE).
-        // Local: use streamingFetch (Node.js http/https) to avoid Electron 28's SSE buffering bug.
-        const response = isRemote
-          ? await remoteFetch(apiUrl, {
+        // Remote internet providers use Electron's net.fetch for certificates
+        // and proxies; loopback model servers use Node streaming for SSE.
+        const useNodeStreamingFetch = !isRemote || isLoopbackUrl(apiUrl);
+        const response = useNodeStreamingFetch
+          ? await streamingFetch(apiUrl, {
               method: "POST",
               headers: { "Content-Type": "application/json", ...authHeaders },
               body: requestBody,
               signal: abortController.signal,
             })
-          : await streamingFetch(apiUrl, {
+          : await remoteFetch(apiUrl, {
               method: "POST",
               headers: { "Content-Type": "application/json", ...authHeaders },
               body: requestBody,
@@ -2214,11 +2224,13 @@ export function registerChatHandlers(
 
           try {
             const parsed = JSON.parse(data);
+            const responsesEventType =
+              typeof parsed.type === "string" ? parsed.type : currentEventType;
 
-            if (useResponsesApi && currentEventType) {
+            if (useResponsesApi && responsesEventType) {
               const seq = parsed.sequence_number;
               if (typeof seq === "number") {
-                const key = `${currentEventType}:${seq}`;
+                const key = `${responsesEventType}:${seq}`;
                 if (seenResponsesApiEvents.has(key)) return;
                 seenResponsesApiEvents.add(key);
               }
@@ -2229,7 +2241,7 @@ export function registerChatHandlers(
               // Track response ID from response.created event
               // Server wraps in { response: { id: "resp_..." } }
               const respId = parsed.response?.id || parsed.id;
-              if (currentEventType === "response.created" && respId) {
+              if (responsesEventType === "response.created" && respId) {
                 const entry = activeRequests.get(chatId);
                 if (entry && !entry.responseId) {
                   entry.responseId = respId;
@@ -2238,7 +2250,7 @@ export function registerChatHandlers(
               }
 
               if (
-                currentEventType === "response.heartbeat" &&
+                responsesEventType === "response.heartbeat" &&
                 parsed.tool_call_generating
               ) {
                 if (!clientToolCallBuffering) clientToolCallBuffering = true;
@@ -2254,8 +2266,8 @@ export function registerChatHandlers(
               // Keep the legacy vMLX event accepted so older installed engines
               // still display reasoning in the panel.
               if (
-                (currentEventType === "response.reasoning_summary_text.delta" ||
-                  currentEventType === "response.reasoning.delta") &&
+                (responsesEventType === "response.reasoning_summary_text.delta" ||
+                  responsesEventType === "response.reasoning.delta") &&
                 parsed.delta
               ) {
                 emitDelta(parsed.delta, true);
@@ -2263,8 +2275,8 @@ export function registerChatHandlers(
 
               // Reasoning done — triggers reasoningDone event in emitDelta (isReasoning=true→false transition)
               if (
-                currentEventType === "response.reasoning_summary_text.done" ||
-                currentEventType === "response.reasoning.done"
+                responsesEventType === "response.reasoning_summary_text.done" ||
+                responsesEventType === "response.reasoning.done"
               ) {
                 // Force the reasoning→content transition so reasoningDone fires
                 if (isReasoning) {
@@ -2286,7 +2298,7 @@ export function registerChatHandlers(
               // Delta text from response.output_text.delta
               // Server sends { delta: "text" }, not { text: "..." }
               if (
-                currentEventType === "response.output_text.delta" &&
+                responsesEventType === "response.output_text.delta" &&
                 (parsed.delta || parsed.text)
               ) {
                 emitDelta(parsed.delta || parsed.text, false);
@@ -2304,7 +2316,7 @@ export function registerChatHandlers(
               // → new user prompt becomes invisible to the model and
               // it replays the LAST coherent user turn (e.g. "testing").
               if (
-                currentEventType === "response.output_text.done" &&
+                responsesEventType === "response.output_text.done" &&
                 typeof parsed.text === "string" &&
                 parsed.text.length > 0 &&
                 !_sawResponsesTextDelta
@@ -2313,7 +2325,7 @@ export function registerChatHandlers(
                 _sawResponsesTextDelta = true;
               }
               if (
-                currentEventType === "response.content_part.done" &&
+                responsesEventType === "response.content_part.done" &&
                 parsed.part?.type === "output_text" &&
                 typeof parsed.part?.text === "string" &&
                 parsed.part.text.length > 0 &&
@@ -2323,7 +2335,7 @@ export function registerChatHandlers(
                 _sawResponsesTextDelta = true;
               }
               if (
-                currentEventType === "response.completed" &&
+                responsesEventType === "response.completed" &&
                 !_sawResponsesTextDelta
               ) {
                 // Walk parsed.response.output[*].content[*].text and
@@ -2347,7 +2359,7 @@ export function registerChatHandlers(
               // Handle function_call items (tool calls) from Responses API
               // response.output_item.done carries the complete tool call: { item: { type, call_id, name, arguments } }
               if (
-                currentEventType === "response.output_item.done" &&
+                responsesEventType === "response.output_item.done" &&
                 parsed.item?.type === "function_call"
               ) {
                 const item = parsed.item;
@@ -2371,7 +2383,7 @@ export function registerChatHandlers(
               }
 
               // Real-time usage from response.usage events (per-chunk, for live TPS accuracy)
-              if (currentEventType === "response.usage" && parsed.usage) {
+              if (responsesEventType === "response.usage" && parsed.usage) {
                 if (parsed.usage.output_tokens != null) {
                   tokenCount = parsed.usage.output_tokens;
                   // Detect server token count restart (new HTTP request resets completion_tokens to 0)
@@ -2401,9 +2413,9 @@ export function registerChatHandlers(
               // Handle error events from Responses API
               // Server may emit "error", "response.error", or "response.failed" event types
               if (
-                currentEventType === "error" ||
-                currentEventType === "response.error" ||
-                currentEventType === "response.failed"
+                responsesEventType === "error" ||
+                responsesEventType === "response.error" ||
+                responsesEventType === "response.failed"
               ) {
                 const errDetail =
                   parsed.error?.message ||
@@ -2417,7 +2429,7 @@ export function registerChatHandlers(
                 throw new Error(`Server error: ${errDetail}`);
               }
 
-              if (currentEventType === "response.warning") {
+              if (responsesEventType === "response.warning") {
                 const eventWarnings = extractResponsesWarnings(parsed);
                 if (eventWarnings) {
                   responseWarnings = Array.from(
@@ -2429,7 +2441,7 @@ export function registerChatHandlers(
               // Final usage from response.completed event
               // Server wraps in { response: { usage: { input_tokens, output_tokens } } }
               const respUsage = parsed.response?.usage || parsed.usage;
-              if (currentEventType === "response.completed") {
+              if (responsesEventType === "response.completed") {
                 const completedWarnings = extractResponsesWarnings(
                   parsed.response || parsed,
                 );
@@ -2444,7 +2456,7 @@ export function registerChatHandlers(
                 else if (respStatus === "completed") lastFinishReason = "stop";
                 else if (respStatus) lastFinishReason = respStatus;
               }
-              if (currentEventType === "response.completed" && respUsage) {
+              if (responsesEventType === "response.completed" && respUsage) {
                 if (respUsage.output_tokens != null) {
                   tokenCount = respUsage.output_tokens;
                   if (tokenCount < iterationTokenBase) iterationTokenBase = 0;
@@ -2820,16 +2832,18 @@ export function registerChatHandlers(
           const url = useResponsesApi
             ? `${baseUrl}/v1/responses`
             : `${baseUrl}/v1/chat/completions`;
-          // Remote: net.fetch (Chromium); Local: streamingFetch (Node.js)
+          // Remote internet providers use Electron net.fetch; loopback model
+          // servers use Node streaming so SSE tool events are not buffered.
           const followUpInit = {
             method: "POST",
             headers: { "Content-Type": "application/json", ...authHeaders },
             body: JSON.stringify(buildRequestBody()),
             signal: abortController.signal,
           };
-          const res = isRemote
-            ? await remoteFetch(url, followUpInit)
-            : await streamingFetch(url, followUpInit as any);
+          const useNodeStreamingFetch = !isRemote || isLoopbackUrl(url);
+          const res = useNodeStreamingFetch
+            ? await streamingFetch(url, followUpInit as any)
+            : await remoteFetch(url, followUpInit);
           if (!res.ok) {
             const errText = await res.text();
             console.log(`[CHAT] Follow-up failed: ${res.status} ${errText}`);

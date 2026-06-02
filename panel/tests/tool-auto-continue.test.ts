@@ -68,6 +68,33 @@ describe('tool auto-continue policy', () => {
     }
   })
 
+  it('responses stream parser accepts data-only event types from parsed payloads', () => {
+    const source = readFileSync('src/main/ipc/chat.ts', 'utf8')
+
+    expect(source).toContain('const responsesEventType =')
+    expect(source).toContain(
+      'typeof parsed.type === "string" ? parsed.type : currentEventType',
+    )
+
+    const functionCallBranch = source.slice(
+      source.indexOf('// Handle function_call items (tool calls) from Responses API'),
+      source.indexOf('// Real-time usage from response.usage events'),
+    )
+
+    expect(functionCallBranch).toContain(
+      'responsesEventType === "response.output_item.done"',
+    )
+  })
+
+  it('loopback remote sessions use node streaming fetch for SSE', () => {
+    const source = readFileSync('src/main/ipc/chat.ts', 'utf8')
+
+    expect(source).toContain('function isLoopbackUrl')
+    expect(source).toContain('const useNodeStreamingFetch =')
+    expect(source).toContain('!isRemote || isLoopbackUrl(apiUrl)')
+    expect(source).toContain('!isRemote || isLoopbackUrl(url)')
+  })
+
   it('panel max tool iterations caps tool loops', () => {
     const source = readFileSync('src/main/ipc/chat.ts', 'utf8')
     const branch = source.slice(

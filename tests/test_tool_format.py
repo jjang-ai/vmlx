@@ -1593,6 +1593,137 @@ class TestFallbackToolPromptFormat:
         assert "<parameter=path>\nreal_ui_tool_probe_1.txt\n</parameter>" in rendered
         assert "<parameter=content>\nREAL_UI_LIVE_TOOL_ONE\n</parameter>" in rendered
 
+    def test_zaya_vl_processor_retries_when_template_keeps_only_generic_tool_scaffold(self):
+        from vmlx_engine.engine.batched import BatchedEngine
+
+        class GenericOnlyProcessor:
+            def __init__(self):
+                self.calls = 0
+
+            def apply_chat_template(self, messages, **kwargs):
+                self.calls += 1
+                body = []
+                for msg in messages:
+                    if msg.get("role") == "system":
+                        # ZAYA-VL can silently ignore system messages; keep only
+                        # the native generic scaffold from the template.
+                        continue
+                    content = msg.get("content", "")
+                    if isinstance(content, list):
+                        body.append(
+                            "\n".join(
+                                item.get("text", "")
+                                for item in content
+                                if isinstance(item, dict)
+                            )
+                        )
+                    else:
+                        body.append(str(content))
+                return (
+                    "<tools>\n"
+                    "<function><name>run_command</name></function>\n"
+                    "</tools>\n"
+                    "<zyphra_tool_call>\n"
+                    "<function=example_function_name>\n"
+                    "<parameter=example_parameter_1>\nvalue_1\n</parameter>\n"
+                    "</function>\n"
+                    "</zyphra_tool_call>\n"
+                    + "\n".join(body)
+                )
+
+        class FakeModel:
+            config = {"model_type": "zaya1_vl"}
+
+        processor = GenericOnlyProcessor()
+        engine = BatchedEngine.__new__(BatchedEngine)
+        engine._is_mllm = True
+        engine._processor = processor
+        engine._model = FakeModel()
+        engine._model_name = "ZAYA1-VL-8B-JANGTQ4"
+        engine._model_tool_parser_name = lambda: "zaya_xml"
+
+        tools = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "run_command",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"command": {"type": "string"}},
+                        "required": ["command"],
+                    },
+                },
+            }
+        ]
+
+        rendered = engine._apply_chat_template(
+            [
+                {
+                    "role": "user",
+                    "content": (
+                        "Use the run_command tool exactly once to create a file "
+                        "named real_ui_tool_probe_1.txt. Write the text "
+                        "REAL_UI_LIVE_TOOL_ONE into that file."
+                    ),
+                }
+            ],
+            tools=tools,
+            enable_thinking=False,
+        )
+
+        assert processor.calls >= 2
+        assert "<function=run_command>" in rendered
+        assert "<parameter=command>" in rendered
+        assert "printf %s REAL_UI_LIVE_TOOL_ONE > real_ui_tool_probe_1.txt" in rendered
+
+    def test_zaya_fallback_accepts_flat_responses_function_tool_shape(self):
+        from vmlx_engine.api.tool_calling import check_and_inject_fallback_tools
+
+        class FakeTokenizer:
+            def apply_chat_template(self, messages, **kwargs):
+                return "\n".join(str(m.get("content", "")) for m in messages)
+
+        rendered = check_and_inject_fallback_tools(
+            "<tools>\n"
+            "<function><name>run_command</name></function>\n"
+            "</tools>\n"
+            "<zyphra_tool_call>\n"
+            "<function=example_function_name>\n"
+            "<parameter=example_parameter_1>\nvalue_1\n</parameter>\n"
+            "</function>\n"
+            "</zyphra_tool_call>\n"
+            "user: Use run_command\nassistant:",
+            [
+                {
+                    "role": "user",
+                    "content": (
+                        "Use the run_command tool exactly once to create a file "
+                        "named real_ui_tool_probe_1.txt. Write the text "
+                        "REAL_UI_LIVE_TOOL_ONE into that file."
+                    ),
+                }
+            ],
+            [
+                {
+                    "type": "function",
+                    "name": "run_command",
+                    "description": "Run a shell command.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"command": {"type": "string"}},
+                        "required": ["command"],
+                    },
+                }
+            ],
+            FakeTokenizer(),
+            {"tokenize": False, "add_generation_prompt": True},
+            tool_parser_id="zaya_xml",
+        )
+
+        assert "<function=run_command>" in rendered
+        assert "<parameter=command>" in rendered
+        assert "printf %s REAL_UI_LIVE_TOOL_ONE > real_ui_tool_probe_1.txt" in rendered
+
     def test_zaya_vl_processor_without_native_scaffold_gets_full_tool_contract(self):
         from vmlx_engine.engine.batched import BatchedEngine
 

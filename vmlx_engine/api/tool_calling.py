@@ -67,8 +67,25 @@ def check_and_inject_fallback_tools(
     if not template_tools or prompt is None:
         return prompt
 
+    def _tool_func(tool: dict) -> dict:
+        if not isinstance(tool, dict):
+            return {}
+        nested = tool.get("function")
+        if isinstance(nested, dict):
+            return nested
+        if tool.get("type") == "function":
+            return tool
+        return {}
+
+    has_flat_responses_function_tools = any(
+        isinstance(tool, dict)
+        and tool.get("type") == "function"
+        and not isinstance(tool.get("function"), dict)
+        for tool in template_tools
+    )
+
     # Check if at least one tool name made it into the prompt
-    tool_names = [t.get("function", {}).get("name", "") for t in template_tools]
+    tool_names = [_tool_func(t).get("name", "") for t in template_tools]
     tool_names = [name for name in tool_names if name]
 
     if not tool_names:
@@ -139,6 +156,11 @@ def check_and_inject_fallback_tools(
             and "<tools>" in prompt
         )
     )
+    zaya_template_has_native_scaffold = (
+        is_zaya_native_tool_prompt
+        and "<zyphra_tool_call>" in instruction_prompt
+        and "<tools>" in instruction_prompt
+    )
     if (
         is_zaya_native_tool_prompt
         and not any(_request_mentions_tool_name(name) for name in tool_names)
@@ -197,7 +219,7 @@ def check_and_inject_fallback_tools(
     # Format fallback tool schema
     tool_descs = []
     for tool in template_tools:
-        func = tool.get("function", {})
+        func = _tool_func(tool)
         tool_descs.append({
             "name": func.get("name", ""),
             "description": func.get("description", ""),
@@ -205,7 +227,7 @@ def check_and_inject_fallback_tools(
         })
 
     def _tool_props(tool: dict) -> tuple[str, list[str]]:
-        func = tool.get("function", {}) if isinstance(tool, dict) else {}
+        func = _tool_func(tool)
         name = func.get("name", "") or "unknown_tool"
         params = func.get("parameters", {}) or {}
         props = params.get("properties", {}) if isinstance(params, dict) else {}
@@ -416,7 +438,7 @@ def check_and_inject_fallback_tools(
             "<tools>",
         ]
         for tool in tools:
-            func = tool.get("function", {}) if isinstance(tool, dict) else {}
+            func = _tool_func(tool)
             name = func.get("name", "") or "unknown_tool"
             desc = func.get("description", "")
             params = func.get("parameters", {}) or {}
@@ -428,19 +450,12 @@ def check_and_inject_fallback_tools(
                 else []
             )
             lines.extend(["<function>", f"<name>{name}</name>"])
-            if desc:
-                lines.append(f"<description>{str(desc).strip()}</description>")
             lines.append("<parameters>")
             for param_name, param_schema in props.items():
                 p_type = (
                     param_schema.get("type", "string")
                     if isinstance(param_schema, dict)
                     else "string"
-                )
-                p_desc = (
-                    param_schema.get("description", "")
-                    if isinstance(param_schema, dict)
-                    else ""
                 )
                 lines.extend(
                     [
@@ -449,8 +464,6 @@ def check_and_inject_fallback_tools(
                         f"<type>{p_type}</type>",
                     ]
                 )
-                if p_desc:
-                    lines.append(f"<description>{str(p_desc).strip()}</description>")
                 lines.append("</parameter>")
             if required:
                 lines.append("<required>" + json.dumps(required, ensure_ascii=False) + "</required>")
@@ -549,7 +562,7 @@ def check_and_inject_fallback_tools(
             "",
         ]
         for idx, tool in enumerate(template_tools):
-            func = tool.get("function", {})
+            func = _tool_func(tool)
             name = func.get("name", "") or "unknown_tool"
             dsv4_lines.append(f"Tool: {name}")
             desc = func.get("description", "")
@@ -599,7 +612,7 @@ def check_and_inject_fallback_tools(
         if "<tools>" not in instruction_prompt:
             zaya_lines.extend([_render_zaya_tool_scaffold(zaya_prompt_tools), ""])
         for tool in zaya_prompt_tools:
-            func = tool.get("function", {})
+            func = _tool_func(tool)
             name = func.get("name", "") or "unknown_tool"
             params = func.get("parameters", {}) or {}
             props = params.get("properties", {}) if isinstance(params, dict) else {}
@@ -662,7 +675,7 @@ def check_and_inject_fallback_tools(
             "",
         ]
         for idx, tool in enumerate(template_tools):
-            func = tool.get("function", {})
+            func = _tool_func(tool)
             name = func.get("name", "") or "unknown_tool"
             qwen_lines.append(f"Tool: {name}")
             desc = func.get("description", "")
@@ -706,7 +719,7 @@ def check_and_inject_fallback_tools(
             "",
         ]
         for tool in template_tools:
-            func = tool.get("function", {})
+            func = _tool_func(tool)
             name = func.get("name", "") or "unknown_tool"
             desc = func.get("description", "")
             if desc:
@@ -737,7 +750,7 @@ def check_and_inject_fallback_tools(
             "",
         ]
         for tool in lfm2_prompt_tools:
-            func = tool.get("function", {})
+            func = _tool_func(tool)
             name = func.get("name", "") or "unknown_tool"
             params = func.get("parameters", {}) or {}
             props = params.get("properties", {}) if isinstance(params, dict) else {}
@@ -784,7 +797,10 @@ def check_and_inject_fallback_tools(
         if is_zaya_native_tool_prompt:
             if not any(name in rendered for name in zaya_prompt_tool_names):
                 return False
-            return "<zyphra_tool_call>" in rendered
+            return (
+                "<zyphra_tool_call>" in rendered
+                and all(f"<function={name}>" in rendered for name in zaya_prompt_tool_names)
+            )
         if is_lfm2_native_tool_prompt:
             return (
                 "<|tool_call_start|>" in rendered
@@ -855,16 +871,33 @@ def check_and_inject_fallback_tools(
 
     # Re-apply template with modified messages
     # Remove tools from kwargs so generic templates don't try to format them again.
-    # ZAYA is the exception: its native template contains the canonical
-    # <tools> scaffold and IMPORTANT rules, so the fallback must add concrete
-    # examples without replacing that native contract.
+    # ZAYA templates that already exposed the native scaffold keep `tools` so
+    # their own <tools>/<IMPORTANT> rules survive while concrete examples are added.
     safe_kwargs = dict(template_kwargs)
-    if not is_zaya_native_tool_prompt:
+    if not (
+        is_zaya_native_tool_prompt
+        and zaya_template_has_native_scaffold
+        and not has_flat_responses_function_tools
+    ):
         safe_kwargs.pop("tools", None)
 
     try:
         new_prompt = tokenizer.apply_chat_template(messages_copy, **safe_kwargs)
         if _rendered_prompt_kept_tool_instructions(new_prompt):
+            if (
+                is_zaya_native_tool_prompt
+                and zaya_template_has_native_scaffold
+                and "tools" in safe_kwargs
+                and "<tools>" not in new_prompt
+            ):
+                zaya_plain_kwargs = dict(safe_kwargs)
+                zaya_plain_kwargs.pop("tools", None)
+                plain_prompt = tokenizer.apply_chat_template(
+                    messages_copy,
+                    **zaya_plain_kwargs,
+                )
+                if _rendered_prompt_kept_tool_instructions(plain_prompt):
+                    return plain_prompt
             return new_prompt
 
         # Some templates, including current ZAYA-VL, ignore system messages
