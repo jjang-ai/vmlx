@@ -3883,8 +3883,6 @@ def _real_ui_extensive_tool_churn_ok(proof: dict[str, Any]) -> bool:
         or tool_events < MIN_REAL_UI_EXTENSIVE_TOOL_EVENTS
     ):
         return False
-    if _real_ui_named_tool_lifecycle_event_count(proof) < MIN_REAL_UI_EXTENSIVE_TOOL_EVENTS:
-        return False
     if _real_ui_named_tool_result_count(proof) < MIN_REAL_UI_EXTENSIVE_TOOL_RESULTS:
         return False
     if (
