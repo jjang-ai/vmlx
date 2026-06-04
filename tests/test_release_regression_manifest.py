@@ -3356,10 +3356,8 @@ def _passing_open_requirement_details() -> dict[str, object]:
     return {
         "Cross-family live multi-turn smoke matrix is release-cleared": {
             "details": {
-                "missing_required_family_keys": ["mimo_v2"],
-                "missing_evidence": [
-                    CURRENT_COVERED_LIVE_SMOKE_ARTIFACTS["mimo_v2_jang2l"]
-                ],
+                "missing_required_family_keys": [],
+                "missing_evidence": [],
             }
         },
         "Real Electron UI cross-family live model matrix is release-cleared": {
@@ -3810,7 +3808,7 @@ def test_release_regression_manifest_current_sweep_uses_latest_live_smoke_artifa
     assert "current-regression-suite-20260528-installed-aggregate-stale.json" not in joined
     assert "current-regression-suite-20260528-epipe-aggregate-guard.json" not in joined
     assert "current-regression-suite-20260528-dsv4-continue-refresh.json" not in joined
-    assert "current-regression-suite-after-gemma31-step-lfm-continuation-20260604.json" in joined
+    assert "current-regression-suite-after-mimo-scope-removal-20260604.json" in joined
     assert "current-regression-suite-gemma4-release-boundary-after-ui-e2e-fixes-dmg-build-20260604.json" not in joined
     assert "current-regression-suite-20260602-v1553-installed-tahoe-refresh.json" not in joined
     assert "current-regression-suite-20260602-vm-stat-gate-validation.json" not in joined
@@ -5180,7 +5178,7 @@ def test_release_regression_manifest_real_ui_matrix_records_dsv4_memory_blocker(
     )
     assert result["real_ui_live_model_matrix"][
         "unblocked_non_mimo_excluded_families"
-    ] == ["dsv4", "mimo_v2"]
+    ] == ["dsv4"]
 
 
 def test_release_regression_manifest_real_ui_unblocked_non_mimo_status_fails_on_missing_family(
@@ -5194,7 +5192,7 @@ def test_release_regression_manifest_real_ui_unblocked_non_mimo_status_fails_on_
     _annotate_real_ui_unblocked_non_mimo_status(matrix)
 
     assert matrix["unblocked_non_mimo_status"] == "open"
-    assert matrix["unblocked_non_mimo_missing_families"] == ["qwen36"]
+    assert matrix["unblocked_non_mimo_missing_families"] == ["mimo_v2", "qwen36"]
     assert matrix["unblocked_non_mimo_partial_families"] == []
 
 
@@ -5208,10 +5206,10 @@ def test_release_regression_manifest_real_ui_unblocked_non_mimo_status_passes_wh
 
     _annotate_real_ui_unblocked_non_mimo_status(matrix)
 
-    assert matrix["unblocked_non_mimo_status"] == "pass"
-    assert matrix["unblocked_non_mimo_missing_families"] == []
+    assert matrix["unblocked_non_mimo_status"] == "open"
+    assert matrix["unblocked_non_mimo_missing_families"] == ["mimo_v2"]
     assert matrix["unblocked_non_mimo_partial_families"] == []
-    assert matrix["unblocked_non_mimo_excluded_families"] == ["dsv4", "mimo_v2"]
+    assert matrix["unblocked_non_mimo_excluded_families"] == ["dsv4"]
 
 
 def test_release_regression_manifest_real_ui_unblocked_non_mimo_status_excludes_runtime_blocked_step37():
@@ -5227,12 +5225,11 @@ def test_release_regression_manifest_real_ui_unblocked_non_mimo_status_excludes_
 
     _annotate_real_ui_unblocked_non_mimo_status(matrix)
 
-    assert matrix["unblocked_non_mimo_status"] == "pass"
-    assert matrix["unblocked_non_mimo_missing_families"] == []
+    assert matrix["unblocked_non_mimo_status"] == "open"
+    assert matrix["unblocked_non_mimo_missing_families"] == ["mimo_v2"]
     assert matrix["unblocked_non_mimo_partial_families"] == []
     assert matrix["unblocked_non_mimo_excluded_families"] == [
         "dsv4",
-        "mimo_v2",
         "step37",
     ]
 
@@ -5248,7 +5245,7 @@ def test_release_regression_manifest_real_ui_unblocked_non_mimo_status_rejects_m
     _annotate_real_ui_unblocked_non_mimo_status(matrix)
 
     assert matrix["unblocked_non_mimo_status"] == "open"
-    assert matrix["unblocked_non_mimo_missing_families"] == []
+    assert matrix["unblocked_non_mimo_missing_families"] == ["mimo_v2"]
     assert matrix["unblocked_non_mimo_partial_families"] == ["minimax"]
 
 
@@ -8518,40 +8515,9 @@ def test_release_regression_manifest_validates_current_proof_sweep_artifacts(tmp
         encoding="utf-8",
     )
     _write_passing_covered_live_smoke_artifacts(tmp_path)
-    mimo_live_artifact = CURRENT_COVERED_LIVE_SMOKE_ARTIFACTS["mimo_v2_jang2l"]
-    mimo_live_path = tmp_path / mimo_live_artifact
-    mimo_live_payload = json.loads(mimo_live_path.read_text(encoding="utf-8"))
-    mimo_live_payload["status"] = "fail"
-    mimo_live_payload["failed"] = 1
-    mimo_live_payload["results"][0]["status"] = "fail"
-    mimo_live_payload["results"][0]["failures"] = ["expected_exact_ack_missing"]
-    mimo_live_path.write_text(json.dumps(mimo_live_payload), encoding="utf-8")
     _write_passing_covered_live_tool_smoke_artifacts(tmp_path)
-    mimo_tool_artifact = CURRENT_COVERED_LIVE_TOOL_SMOKE_ARTIFACTS["mimo_v2_jang2l"]
-    mimo_tool_path = tmp_path / mimo_tool_artifact
-    mimo_tool_payload = json.loads(mimo_tool_path.read_text(encoding="utf-8"))
-    mimo_tool_payload["status"] = "fail"
-    mimo_tool_payload["failed"] = 1
-    mimo_tool_payload["results"][0]["status"] = "fail"
-    mimo_tool_payload["results"][0]["failures"] = ["expected_tool_call_missing"]
-    mimo_tool_path.write_text(json.dumps(mimo_tool_payload), encoding="utf-8")
     _write_expected_diagnostic_live_smoke_artifacts(tmp_path)
     _write_current_objective_digest(tmp_path)
-    _write_passing_mimo_v2_root_cause_artifacts(tmp_path)
-    sink_path = tmp_path / CURRENT_MIMO_V2_JANG2L_SINK_AB_ARTIFACT
-    sink_path.parent.mkdir(parents=True, exist_ok=True)
-    sink_path.write_text(
-        json.dumps(
-            {
-                "variants": [
-                    {"mode": "normal", "output": "- - - 0101"},
-                    {"mode": "sink_disabled", "output": "- - - 1010"},
-                ]
-            }
-        )
-        + "\n",
-        encoding="utf-8",
-    )
     _write_passing_dev_ui_proof_artifacts(tmp_path)
     _write_passing_real_ui_live_model_proof_artifacts(tmp_path)
     _write_passing_dsv4_source_memory_preflight_artifact(tmp_path)
@@ -8572,19 +8538,15 @@ def test_release_regression_manifest_validates_current_proof_sweep_artifacts(tmp
     }
     assert result["status"] == "pass", json.dumps(bad_components, indent=2, sort_keys=True)
     assert result["failed_components"] == []
-    assert result["non_mimo_component_status"] == "pass"
     assert result["component_ok"]["no_release_blockers"] is True
     assert result["component_ok"]["packaged_app_developer_id_signing"] is True
     assert result["component_ok"]["dsv4_long_output_code_exactness"] is True
     assert result["component_ok"]["no_open_objective_requirements"] is True
     assert result["component_ok"]["real_ui_full_model_matrix"] is True
-    assert result["component_ok"]["real_ui_mimo_v2"] is True
     assert result["component_ok"]["real_ui_dsv4"] is True
-    assert result["component_ok"]["mimo_bundled_live_smoke"] is True
-    assert result["component_ok"]["mimo_bundled_tool_smoke"] is True
-    assert result["component_ok"]["mimo_v2_jang2l_sink_ab"] is True
-    assert result["component_ok"]["mimo_v2_jang2l_root_cause"] is True
     assert result["component_ok"]["objective_digest"] is True
+    assert not any("mimo_v2" in key.lower() for key in result["component_ok"])
+    assert "mimo_v2_jang2l_root_cause" not in result
     assert result["objective_digest"]["status"] == "pass"
     assert result["missing"] == []
     assert result["not_pass"] == []
@@ -8728,7 +8690,7 @@ def test_release_regression_manifest_validates_current_proof_sweep_artifacts(tmp
         "missing_expected_checks": [],
         "informational_false_checks": [],
     }
-    assert result["live_smoke_summaries"]["status"] == "fail"
+    assert result["live_smoke_summaries"]["status"] == "pass"
     assert result["live_smoke_summaries"]["non_mimo_status"] == "pass"
     assert (
         "zaya_text_mxfp4"
@@ -8741,14 +8703,14 @@ def test_release_regression_manifest_validates_current_proof_sweep_artifacts(tmp
     assert result["live_smoke_summaries"]["missing"] == []
     assert [
         item["artifact"] for item in result["live_smoke_summaries"]["not_pass"]
-    ] == [CURRENT_COVERED_LIVE_SMOKE_ARTIFACTS["mimo_v2_jang2l"]]
-    assert result["live_tool_smoke_summaries"]["status"] == "fail"
+    ] == []
+    assert result["live_tool_smoke_summaries"]["status"] == "pass"
     assert result["live_tool_smoke_summaries"]["non_mimo_status"] == "pass"
     assert result["live_tool_smoke_summaries"]["missing"] == []
     assert [
         item["artifact"]
         for item in result["live_tool_smoke_summaries"]["not_pass"]
-    ] == [CURRENT_COVERED_LIVE_TOOL_SMOKE_ARTIFACTS["mimo_v2_jang2l"]]
+    ] == []
     assert (
         result["diagnostic_live_smoke_summaries"]
         == _expected_passing_diagnostic_live_smoke_summaries()
@@ -8775,8 +8737,6 @@ def test_release_regression_manifest_validates_current_proof_sweep_artifacts(tmp
     assert result["real_ui_live_model_matrix"][
         "unblocked_non_mimo_partial_families"
     ] == []
-    assert result["component_ok"]["live_smoke_non_mimo"] is True
-    assert result["component_ok"]["live_tool_smoke_non_mimo"] is True
     assert result["component_ok"]["real_ui_unblocked_non_mimo"] is True
     assert result["component_ok"]["jang_model_compat_matrix"] is True
     assert result["component_ok"]["panel_tool_security_matrix"] is True
@@ -8825,39 +8785,15 @@ def test_release_regression_manifest_validates_current_proof_sweep_artifacts(tmp
         "missing": [],
         "failures": [],
     }
-    assert result["mimo_v2_jang2l_root_cause"] == {
-        "status": "pass",
-        "artifacts": {
-            "router_topk_parity": CURRENT_MIMO_V2_JANG2L_ROUTER_TOPK_PARITY_ARTIFACT,
-            "moe_output_parity": CURRENT_MIMO_V2_JANG2L_MOE_OUTPUT_PARITY_ARTIFACT,
-            "profile_diagnostic": CURRENT_MIMO_V2_JANG2L_PROFILE_DIAGNOSTIC_ARTIFACT,
-            "nocache_no_kvq_probe": CURRENT_MIMO_V2_JANG2L_NOCACHE_NO_KVQ_ARTIFACT,
-        },
-        "missing": [],
-        "failures": [],
-        "router_topk_exact": True,
-        "moe_expert_distortion_seen": True,
-        "profile_diagnostic_seen": True,
-        "nocache_no_kvq_incoherent": True,
-        "max_moe_rel_l2": 0.603,
-        "min_moe_cosine": 0.813,
-        "profile_rel_l2": {
-            "source": 0.0,
-            "2L": 0.178,
-        },
-        "remote_artifacts": [],
-        "remote_evidence_only": False,
-        "local_release_clearance": True,
-        "root_cause_candidate": "mimo_v2_jang2l_2bit_routed_expert_distortion",
-    }
+    assert "mimo_v2_jang2l_root_cause" not in result
+    assert not any("mimo_v2" in key.lower() for key in result["component_ok"])
     ledger = result["release_blocker_ledger"]
     assert ledger["status"] == "pass"
     assert ledger["deferred_release_families"] == [
         {
             "family": "dsv4",
             "reason": "deferred_per_20260602_emergency_release_scope",
-        },
-        {"family": "mimo_v2", "reason": "deferred_out_of_release_scope"},
+        }
     ]
     blockers = {blocker["id"]: blocker for blocker in ledger["blockers"]}
     assert blockers == {}
@@ -8943,22 +8879,11 @@ def test_release_regression_manifest_validates_current_proof_sweep_artifacts(tmp
     assert real_ui_details["top_memory_processes"]
 
 
-def test_release_blocker_ledger_defers_mimo_failed_live_smokes_from_release_blockers():
-    live_artifact = CURRENT_COVERED_LIVE_SMOKE_ARTIFACTS["mimo_v2_jang2l"]
-    tool_artifact = CURRENT_COVERED_LIVE_TOOL_SMOKE_ARTIFACTS["mimo_v2_jang2l"]
-
+def test_release_blocker_ledger_excludes_mimo_from_current_release_scope():
     ledger = _current_release_blocker_ledger(
         regression_suite={"open_requirements": []},
-        live_smoke_summaries={
-            "status": "fail",
-            "missing": [],
-            "not_pass": [{"artifact": live_artifact, "status": "fail"}],
-        },
-        live_tool_smoke_summaries={
-            "status": "fail",
-            "missing": [],
-            "not_pass": [{"artifact": tool_artifact, "status": "fail"}],
-        },
+        live_smoke_summaries={"status": "pass", "missing": [], "not_pass": []},
+        live_tool_smoke_summaries={"status": "pass", "missing": [], "not_pass": []},
         mimo_v2_jang2l_sink_ab={"status": "open"},
         mimo_v2_jang2l_root_cause={"remote_evidence_only": False},
         issue175_179_release_boundary_audit={"status": "open", "issues": {}},
@@ -8968,20 +8893,12 @@ def test_release_blocker_ledger_defers_mimo_failed_live_smokes_from_release_bloc
     )
 
     blocker_ids = [blocker["id"] for blocker in ledger["blockers"]]
-    assert "mimo_bundled_live_smoke_failed" not in blocker_ids
-    assert "mimo_bundled_tool_smoke_failed" not in blocker_ids
-    assert "mimo_bundled_live_smoke_missing" not in blocker_ids
-    assert "mimo_bundled_tool_smoke_missing" not in blocker_ids
-    assert ledger["deferred_release_families"] == [
-        {
-            "family": "dsv4",
-            "reason": "deferred_per_20260602_emergency_release_scope",
-        },
-        {
-            "family": "mimo_v2",
-            "reason": "deferred_out_of_release_scope",
-        }
-    ]
+    assert not any("mimo" in blocker_id for blocker_id in blocker_ids)
+    assert not any(
+        item["family"] == "mimo_v2"
+        for item in ledger["deferred_release_families"]
+    )
+    assert ledger["deferred_release_families"] == [{"family": "dsv4", "reason": "deferred_per_20260602_emergency_release_scope"}]
 
 
 def test_release_blocker_ledger_tracks_public_version_collision():
@@ -9032,10 +8949,7 @@ def test_release_blocker_ledger_does_not_use_remote_max2_artifacts_as_release_ev
         assert "remote-max2" not in blocker["evidence"]
     blockers = {blocker["id"]: blocker for blocker in ledger["blockers"]}
     assert blockers == {}
-    assert ledger["deferred_release_families"] == [
-        {"family": "dsv4", "reason": "deferred_per_20260602_emergency_release_scope"},
-        {"family": "mimo_v2", "reason": "deferred_out_of_release_scope"}
-    ]
+    assert ledger["deferred_release_families"] == [{"family": "dsv4", "reason": "deferred_per_20260602_emergency_release_scope"}]
 
 
 def test_release_blocker_ledger_tracks_missing_local_mimo_root_cause_artifacts():
@@ -9060,10 +8974,7 @@ def test_release_blocker_ledger_tracks_missing_local_mimo_root_cause_artifacts()
 
     blockers = {blocker["id"]: blocker for blocker in ledger["blockers"]}
     assert "mimo_root_cause_local_proof_missing" not in blockers
-    assert ledger["deferred_release_families"] == [
-        {"family": "dsv4", "reason": "deferred_per_20260602_emergency_release_scope"},
-        {"family": "mimo_v2", "reason": "deferred_out_of_release_scope"}
-    ]
+    assert ledger["deferred_release_families"] == [{"family": "dsv4", "reason": "deferred_per_20260602_emergency_release_scope"}]
 
 
 def test_release_blocker_ledger_tracks_packaged_signing_blocker():
@@ -9170,10 +9081,7 @@ def test_release_blocker_ledger_tracks_packaged_signing_blocker():
             }
         ],
         "deferred_release_gaps": [],
-        "deferred_release_families": [
-            {"family": "dsv4", "reason": "deferred_per_20260602_emergency_release_scope"},
-            {"family": "mimo_v2", "reason": "deferred_out_of_release_scope"}
-        ],
+        "deferred_release_families": [{"family": "dsv4", "reason": "deferred_per_20260602_emergency_release_scope"}],
     }
 
 
@@ -9198,7 +9106,6 @@ def test_release_blocker_ledger_defers_dsv4_exactness_open_requirement():
     assert ledger["blockers"] == []
     assert ledger["deferred_release_families"] == [
         {"family": "dsv4", "reason": "deferred_per_20260602_emergency_release_scope"},
-        {"family": "mimo_v2", "reason": "deferred_out_of_release_scope"},
     ]
     deferred = {gap["id"]: gap for gap in ledger["deferred_release_gaps"]}
     assert deferred["dsv4_long_output_code_exactness_open"] == {
@@ -9420,7 +9327,8 @@ def test_release_blocker_ledger_splits_real_ui_missing_family_blockers():
     )
 
     blocker_ids = [blocker["id"] for blocker in ledger["blockers"]]
-    assert blocker_ids == []
+    assert blocker_ids == ["real_ui_unblocked_non_mimo_missing"]
+    assert "missing_families:mimo_v2" in ledger["blockers"][-1]["evidence"]
     deferred = {gap["id"]: gap for gap in ledger["deferred_release_gaps"]}
     assert deferred["real_ui_dsv4_memory_blocked"]["status"] == "deferred"
     assert deferred["real_ui_dsv4_memory_blocked"]["evidence"] == (
@@ -9451,7 +9359,7 @@ def test_release_blocker_ledger_splits_real_ui_missing_family_blockers():
         gap["id"] for gap in unblocked_missing_ledger["deferred_release_gaps"]
     } >= {"real_ui_dsv4_memory_blocked"}
     assert (
-        "missing_families:lfm25,step37"
+        "missing_families:lfm25,mimo_v2,step37"
         in unblocked_missing_ledger["blockers"][-1]["evidence"]
     )
 
@@ -9481,6 +9389,7 @@ def test_release_blocker_ledger_splits_real_ui_missing_family_blockers():
         },
     )
     assert [blocker["id"] for blocker in unblocked_partial_ledger["blockers"]] == [
+        "real_ui_unblocked_non_mimo_missing",
         "real_ui_unblocked_non_mimo_partial",
     ]
     assert (
@@ -9516,6 +9425,7 @@ def test_release_blocker_ledger_splits_real_ui_missing_family_blockers():
     )
     assert [blocker["id"] for blocker in mixed_ledger["blockers"]] == [
         "real_ui_mixed_model_identity_blocked",
+        "real_ui_unblocked_non_mimo_missing",
     ]
 
 
@@ -9682,10 +9592,7 @@ def test_release_blocker_ledger_uses_step37_vlm_runtime_audit_for_missing_ui_fam
             }
         ],
         "deferred_release_gaps": [],
-        "deferred_release_families": [
-            {"family": "dsv4", "reason": "deferred_per_20260602_emergency_release_scope"},
-            {"family": "mimo_v2", "reason": "deferred_out_of_release_scope"}
-        ],
+        "deferred_release_families": [{"family": "dsv4", "reason": "deferred_per_20260602_emergency_release_scope"}],
     }
 
 
@@ -9731,10 +9638,7 @@ def test_release_blocker_ledger_keeps_step37_as_live_ui_gap_when_runtime_audit_p
             }
         ],
         "deferred_release_gaps": [],
-        "deferred_release_families": [
-            {"family": "dsv4", "reason": "deferred_per_20260602_emergency_release_scope"},
-            {"family": "mimo_v2", "reason": "deferred_out_of_release_scope"}
-        ],
+        "deferred_release_families": [{"family": "dsv4", "reason": "deferred_per_20260602_emergency_release_scope"}],
     }
 
 
@@ -9869,19 +9773,18 @@ def test_release_manifest_rejects_step37_audit_without_mlx_vlm_port_contract(tmp
     assert "missing_step37_mlx_vlm_implementation_contract" in result["failures"]
 
 
-def test_current_proof_sweep_accepts_expected_mimo_failed_smoke_as_open_gap():
-    artifact = CURRENT_COVERED_LIVE_SMOKE_ARTIFACTS["mimo_v2_jang2l"]
-
-    assert _live_smoke_gap_is_expected_mimo_open(
+def test_current_proof_sweep_does_not_accept_mimo_as_current_open_gap():
+    assert "mimo_v2_jang2l" not in CURRENT_COVERED_LIVE_SMOKE_ARTIFACTS
+    assert not _live_smoke_gap_is_expected_mimo_open(
         {
             "status": "fail",
             "missing": [],
-            "not_pass": [{"artifact": artifact, "status": "fail"}],
+            "not_pass": [{"artifact": "build/current-mimo-stale.json", "status": "fail"}],
             "non_mimo_status": "pass",
             "non_mimo_missing": [],
             "non_mimo_not_pass": [],
         },
-        artifact,
+        "build/current-mimo-stale.json",
     )
 
 
@@ -9891,17 +9794,11 @@ def test_live_smoke_summary_tracks_non_mimo_status_separately(tmp_path):
     )
 
     _write_passing_covered_live_smoke_artifacts(tmp_path)
-    artifact = CURRENT_COVERED_LIVE_SMOKE_ARTIFACTS["mimo_v2_jang2l"]
-    payload = json.loads((tmp_path / artifact).read_text(encoding="utf-8"))
-    payload["status"] = "fail"
-    payload["failed"] = 1
-    payload["results"][0]["status"] = "fail"
-    payload["results"][0]["failures"] = ["expected_exact_ack_missing"]
-    (tmp_path / artifact).write_text(json.dumps(payload), encoding="utf-8")
 
     result = _validate_current_covered_live_smoke_artifacts(tmp_path)
 
-    assert result["status"] == "fail"
+    assert "mimo_v2_jang2l" not in CURRENT_COVERED_LIVE_SMOKE_ARTIFACTS
+    assert result["status"] == "pass"
     assert result["non_mimo_status"] == "pass"
     assert result["non_mimo_missing"] == []
     assert result["non_mimo_not_pass"] == []
@@ -9913,17 +9810,11 @@ def test_live_tool_smoke_summary_tracks_non_mimo_status_separately(tmp_path):
     )
 
     _write_passing_covered_live_tool_smoke_artifacts(tmp_path)
-    artifact = CURRENT_COVERED_LIVE_TOOL_SMOKE_ARTIFACTS["mimo_v2_jang2l"]
-    payload = json.loads((tmp_path / artifact).read_text(encoding="utf-8"))
-    payload["status"] = "fail"
-    payload["failed"] = 1
-    payload["results"][0]["status"] = "fail"
-    payload["results"][0]["failures"] = ["expected_tool_call_missing"]
-    (tmp_path / artifact).write_text(json.dumps(payload), encoding="utf-8")
 
     result = _validate_current_covered_live_tool_smoke_artifacts(tmp_path)
 
-    assert result["status"] == "fail"
+    assert "mimo_v2_jang2l" not in CURRENT_COVERED_LIVE_TOOL_SMOKE_ARTIFACTS
+    assert result["status"] == "pass"
     assert result["non_mimo_status"] == "pass"
     assert result["non_mimo_missing"] == []
     assert result["non_mimo_not_pass"] == []
@@ -11399,29 +11290,12 @@ def test_release_regression_manifest_rejects_mimo_v2_stale_qwen_reasoning_parser
     )
 
     _write_passing_covered_live_smoke_artifacts(tmp_path)
-    artifact = CURRENT_COVERED_LIVE_SMOKE_ARTIFACTS["mimo_v2_jang2l"]
-    path = tmp_path / artifact
-    payload = json.loads(path.read_text(encoding="utf-8"))
-    payload["results"][0]["capabilities"] = {
-        "code": 200,
-        "body": {
-            "family": "mimo_v2",
-            "tool_parser": "xml_function",
-            "reasoning_parser": "qwen3",
-        },
-    }
-    path.write_text(json.dumps(payload), encoding="utf-8")
 
     result = _validate_current_covered_live_smoke_artifacts(tmp_path)
 
-    assert result["status"] == "fail"
-    assert result["not_pass"][0]["artifact"] == artifact
-    assert result["not_pass"][0]["failing_results"][0]["capability_mismatches"] == {
-        "reasoning_parser": {
-            "expected": "think_xml",
-            "actual": "qwen3",
-        }
-    }
+    assert "mimo_v2_jang2l" not in CURRENT_COVERED_LIVE_SMOKE_ARTIFACTS
+    assert "mimo_v2_jang2l" not in result["artifacts"]
+    assert result["status"] == "pass"
 
 
 def test_release_regression_manifest_requires_mimo_v2_root_cause_artifacts(
@@ -11516,21 +11390,15 @@ def test_release_regression_manifest_requires_mimo_v2_root_cause_artifacts(
     )
 
 
-def test_current_proof_sweep_requires_local_mimo_root_cause_artifacts():
+def test_current_proof_sweep_excludes_mimo_root_cause_artifacts():
     from tests.cross_matrix.release_regression_manifest import (
         validate_current_proof_sweep_artifacts,
     )
 
     result = validate_current_proof_sweep_artifacts(Path.cwd())
 
-    assert result["mimo_v2_jang2l_root_cause"]["remote_evidence_only"] is False
-    assert result["mimo_v2_jang2l_root_cause"]["remote_artifacts"] == []
-    assert result["mimo_v2_jang2l_root_cause"]["missing"] == [
-        CURRENT_MIMO_V2_JANG2L_ROUTER_TOPK_PARITY_ARTIFACT,
-        CURRENT_MIMO_V2_JANG2L_MOE_OUTPUT_PARITY_ARTIFACT,
-    ]
-    assert result["component_ok"]["mimo_v2_jang2l_root_cause"] is True
-    assert result["status"] == "fail"
+    assert "mimo_v2_jang2l_root_cause" not in result
+    assert "mimo_v2_jang2l_root_cause" not in result["component_ok"]
 
 
 def test_current_mimo_v2_proof_artifact_constants_are_local_only():
@@ -11764,7 +11632,7 @@ def test_release_regression_manifest_runner_default_out_tracks_current_release_p
     from tests.cross_matrix import run_release_regression_manifest as runner
 
     assert runner.DEFAULT_OUT == Path(
-        "build/current-release-regression-manifest-after-installed-public-refresh-20260604.json"
+        "build/current-release-regression-manifest-after-mimo-scope-removal-20260604.json"
     )
 
 
@@ -13781,8 +13649,6 @@ def test_release_regression_manifest_runner_embeds_current_proof_validation(tmp_
     _write_passing_covered_live_tool_smoke_artifacts(tmp_path)
     _write_expected_diagnostic_live_smoke_artifacts(tmp_path)
     _write_current_objective_digest(tmp_path)
-    _write_open_mimo_v2_sink_ab_artifact(tmp_path)
-    _write_passing_mimo_v2_root_cause_artifacts(tmp_path)
     _write_passing_dev_ui_proof_artifacts(tmp_path)
     _write_passing_real_ui_live_model_proof_artifacts(tmp_path)
     _write_passing_real_ui_dsv4_memory_preflight_artifact(tmp_path)
@@ -13810,12 +13676,6 @@ def test_release_regression_manifest_runner_embeds_current_proof_validation(tmp_
             "issue179_minimax_k_live_probe_memory_preflight"
         ]
     )
-    expected_mimo_v2_jang2l_sink_ab = validate_current_proof_sweep_artifacts(
-        tmp_path
-    )["mimo_v2_jang2l_sink_ab"]
-    expected_mimo_v2_jang2l_root_cause = validate_current_proof_sweep_artifacts(
-        tmp_path
-    )["mimo_v2_jang2l_root_cause"]
     expected_installed_app_runtime_parity_audit = validate_current_proof_sweep_artifacts(
         tmp_path
     )["installed_app_runtime_parity_audit"]
@@ -13854,19 +13714,6 @@ def test_release_regression_manifest_runner_embeds_current_proof_validation(tmp_
         "failed_components": [
             name for name, ok in expected_component_ok.items() if not ok
         ],
-        "non_mimo_component_status": (
-            "pass"
-            if all(
-                ok
-                for name, ok in expected_component_ok.items()
-                if name
-                not in {
-                    "mimo_v2_jang2l_sink_ab",
-                    "mimo_v2_jang2l_root_cause",
-                }
-            )
-            else "fail"
-        ),
         "missing": [],
         "not_pass": [],
         "regression_suite": {
@@ -14050,8 +13897,6 @@ def test_release_regression_manifest_runner_embeds_current_proof_validation(tmp_
         "issue179_minimax_k_live_probe_memory_preflight": (
             expected_issue179_minimax_k_live_probe_memory_preflight
         ),
-        "mimo_v2_jang2l_sink_ab": expected_mimo_v2_jang2l_sink_ab,
-        "mimo_v2_jang2l_root_cause": expected_mimo_v2_jang2l_root_cause,
         "installed_app_runtime_parity_audit": expected_installed_app_runtime_parity_audit,
         "staged_app_runtime_parity_audit": expected_staged_app_runtime_parity_audit,
         "issue175_177_installed_runtime_audit": expected_issue175_177_installed_runtime_audit,

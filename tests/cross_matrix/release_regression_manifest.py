@@ -24,7 +24,7 @@ from tests.cross_matrix.run_current_regression_suite import (
 )
 
 CURRENT_RELEASE_REGRESSION_MANIFEST_ARTIFACT = (
-    "build/current-release-regression-manifest-after-installed-public-refresh-20260604.json"
+    "build/current-release-regression-manifest-after-mimo-scope-removal-20260604.json"
 )
 
 EXPECTED_CURRENT_MODEL_ARTIFACT_CHECKS = (
@@ -384,7 +384,7 @@ CURRENT_POST_BUDGET_EDGE_ARTIFACTS = {
 }
 
 CURRENT_REGRESSION_SUITE_ARTIFACT = (
-    "build/current-regression-suite-after-gemma31-step-lfm-continuation-20260604.json"
+    "build/current-regression-suite-after-mimo-scope-removal-20260604.json"
 )
 CURRENT_ISSUE175_179_RELEASE_BOUNDARY_AUDIT_ARTIFACT = (
     "build/current-issue175-179-release-boundary-audit-20260531-post-install-sync.json"
@@ -430,7 +430,6 @@ CURRENT_STEP37_VLM_RUNTIME_AUDIT_ARTIFACT = (
 )
 DEFERRED_RELEASE_FAMILIES = {
     "dsv4": "deferred_per_20260602_emergency_release_scope",
-    "mimo_v2": "deferred_out_of_release_scope",
 }
 CURRENT_DSV4_SOURCE_MEMORY_PREFLIGHT_ARTIFACT = (
     "build/current-dsv4-route-mode-code-exactness-memory-preflight-after-lfm-step-manifest-fix-20260604.json"
@@ -770,10 +769,6 @@ REQUIRED_REAL_UI_LIVE_MODEL_SURFACES_BY_FAMILY = {
     "gemma4": _REQUIRED_REAL_UI_LIVE_MODEL_NON_MEDIA_SURFACES,
     "hy3": _REQUIRED_REAL_UI_LIVE_MODEL_NON_MEDIA_SURFACES,
     "minimax": _REQUIRED_REAL_UI_LIVE_MODEL_NON_MEDIA_SURFACES,
-    "mimo_v2": (
-        *_REQUIRED_REAL_UI_LIVE_MODEL_NON_MEDIA_SURFACES,
-        "vl_image",
-    ),
     "nemotron_omni": _REQUIRED_REAL_UI_LIVE_MODEL_NON_MEDIA_SURFACES,
     "dsv4": _REQUIRED_REAL_UI_LIVE_MODEL_NON_MEDIA_SURFACES,
     "step37": tuple(
@@ -813,7 +808,6 @@ CURRENT_COVERED_LIVE_SMOKE_ARTIFACTS = {
     "qwen36_moe_crack": "build/current-all-local-model-smoke-qwen36-mxfp4-crack-bundled-20260525-rerun/summary.json",
     "hy3_preview_jangtq2": "build/current-all-local-model-smoke-hy3-jangtq2-bundled-toolprobe-20260525/summary.json",
     "minimax_m27_tq_k": "build/current-all-local-model-smoke-minimax-small-jangtq-bundled-20260525-rerun/summary.json",
-    "mimo_v2_jang2l": "build/current-all-local-model-smoke-mimo-v2-jang2l-bundled-20260527/summary.json",
     "nemotron_omni_tq2_system_nomedia": "build/current-all-local-model-smoke-nemotron-omni-jangtq-video-bundled-20260526-rerun/summary.json",
     "zaya_vl_jangtq4": "build/current-all-local-model-smoke-zaya-vl-jangtq4-true-bundled-toolprobe-media-sentinel-20260525/summary.json",
     "dsv4_jang_local": "build/current-all-local-model-smoke-dsv4-jangtq-k-bundled-cachehit-20260524/summary.json",
@@ -825,7 +819,6 @@ CURRENT_COVERED_LIVE_TOOL_SMOKE_ARTIFACTS = {
     "qwen36_moe_crack": "build/current-all-local-model-smoke-qwen36-mxfp4-crack-bundled-toolprobe-20260525/summary.json",
     "hy3_preview_jangtq2": "build/current-all-local-model-smoke-hy3-jangtq2-bundled-toolprobe-20260525/summary.json",
     "minimax_m27_tq_k": "build/current-all-local-model-smoke-minimax-small-jangtq-bundled-toolprobe-20260525/summary.json",
-    "mimo_v2_jang2l": "build/current-all-local-model-smoke-mimo-v2-jang2l-bundled-toolprobe-20260527/summary.json",
     "zaya_vl_jangtq4": "build/current-all-local-model-smoke-zaya-vl-jangtq4-true-bundled-toolprobe-media-sentinel-20260525/summary.json",
 }
 CURRENT_MIMO_V2_JANG2L_SINK_AB_ARTIFACT = (
@@ -940,14 +933,6 @@ CURRENT_COVERED_LIVE_SMOKE_ROW_EXPECTATIONS: dict[str, dict[str, Any]] = {
         "supports_video": False,
         "supports_thinking": True,
         "cache_family": "hybrid_ssm",
-    },
-    "mimo_v2_jang2l": {
-        "name": "MiMo-V2.5-JANG_2L",
-        "model_type": "mimo_v2",
-        "is_mllm": True,
-        "supports_video": False,
-        "supports_thinking": True,
-        "cache_family": "mimo_v2_hybrid_swa",
     },
     "zaya_vl_jangtq4": {
         "name": "ZAYA1-VL-8B-JANGTQ4",
@@ -1064,10 +1049,6 @@ def _expected_live_smoke_capability_parsers(row_id: str) -> dict[str, Any]:
         "minimax_m27_tq_k": {
             "tool_parser": "minimax",
             "reasoning_parser": "minimax_m2",
-        },
-        "mimo_v2_jang2l": {
-            "tool_parser": "xml_function",
-            "reasoning_parser": "think_xml",
         },
         "nemotron_omni_tq2_system_nomedia": {
             "tool_parser": "nemotron",
@@ -2055,7 +2036,6 @@ _ROWS: list[dict[str, Any]] = [
             "The installed /Applications/vMLX.app runtime parity audit is tracked separately so source/bundled checks cannot hide stale app CLI/parser/image LoRA wiring",
             "The installed-app runtime parity on issues #175-#177 proves packaged MLX memory-clear API selection, promoted paged-cache block mirror cleanup, and cache-selection telemetry are present in /Applications/vMLX.app",
             "The installed-app live runtime audit on issues #175-#177 records Qwen3.6 MTP cache-hit TTFT, paged+SSM L2 disk hits, visible streaming content, and memory telemetry as supporting evidence while keeping the live stress and cold paged/TurboQuant blockers open",
-            "MiMo-V2.5-JANG_2L must have real Electron UI live-model slices proving xml_function parser registration, no-MTP runtime metadata, hybrid full/SWA KV cache telemetry, sink-ablation follow-up status, image/VL behavior, and no gibberish/language leak before release",
             "Nemotron-Omni-Nano-JANGTQ-CRACK has a real Electron UI no-media text slice proving the stage1 Omni-compatible dispatcher path, DeepSeekR1 reasoning parser registration, hybrid SSM companion cache reuse, JANGTQ native kernels, and no parser/language leak",
             "Nemotron-Omni-Nano-JANGTQ-CRACK has a separate real Electron UI Responses reasoning slice proving reasoning display with model-owned generation defaults and hybrid SSM cache reuse",
             "Hy3-preview-JANGTQ2 now has a real Electron UI live-model slice covering the Hunyuan tool parser, qwen3 reasoning-parser registration, TurboQuantKVCache/paged prefix cache, block-disk L2, zero CJK/Korean leakage, and no raw parser-tag leakage",
@@ -2091,7 +2071,6 @@ _ROWS: list[dict[str, Any]] = [
             ".venv/bin/python tests/cross_matrix/run_issue175_177_live_runtime_audit.py --out build/current-issue175-177-live-runtime-audit-20260601-local-refresh.json",
             ".venv/bin/python tests/cross_matrix/run_issue179_minimax_k_root_cause_audit.py --out build/current-issue179-minimax-k-root-cause-audit-20260602-post-v1552-public-dmg-scan.json",
             ".venv/bin/python tests/cross_matrix/run_issue179_reporter_parity_metadata.py --out build/current-issue179-reporter-parity-metadata-template-20260528.json",
-            "VMLINUX_REAL_UI_MODEL_PATH=/Users/example/.mlxstudio/models/JANGQ-AI/MiMo-V2.5-JANG_2L VMLINUX_REAL_UI_PROOF_BASENAME=current-real-ui-live-model-mimo-v2-jang2l-20260527 VMLINUX_REAL_UI_IS_MLLM=1 VMLINUX_REAL_UI_MAX_TOKENS=96 node panel/scripts/live-real-ui-model-proof.mjs",
             "VMLINUX_REAL_UI_MODEL_PATH=/Users/example/models/dealign.ai/Nemotron-Omni-Nano-JANGTQ-CRACK VMLINUX_REAL_UI_PROOF_BASENAME=current-real-ui-live-model-nemotron-omni-nano-jangtq-20260527 VMLINUX_REAL_UI_MAX_TOKENS=96 node panel/scripts/live-real-ui-model-proof.mjs",
             "VMLINUX_REAL_UI_APP_PATH=/Applications/vMLX.app VMLINUX_REAL_UI_PYTHON=/Applications/vMLX.app/Contents/Resources/bundled-python/python/bin/python3 VMLINUX_REAL_UI_MODEL_PATH=/Users/example/models/dealign.ai/Nemotron-Omni-Nano-JANGTQ-CRACK VMLINUX_REAL_UI_SERVED_MODEL=Nemotron-Omni-Nano-JANGTQ-CRACK VMLINUX_REAL_UI_PROOF_BASENAME=current-real-ui-installed-app-nemotron-omni-nano-responses-tools-reasoning-cachecontrols-localonly-20260601 VMLINUX_REAL_UI_WIRE_API=responses VMLINUX_REAL_UI_BUILTIN_TOOLS=1 VMLINUX_REAL_UI_ENABLE_THINKING=1 VMLINUX_REAL_UI_MAX_TOKENS=512 VMLINUX_REAL_UI_MAX_TOOL_ITERATIONS=8 VMLINUX_REAL_UI_CHECK_SERVER_CACHE_CONTROLS=1 node panel/scripts/live-real-ui-model-proof.mjs",
             "VMLINUX_REAL_UI_MODEL_PATH=/Users/example/models/dealign.ai/Nemotron-Omni-Nano-JANGTQ-CRACK VMLINUX_REAL_UI_SERVED_MODEL=Nemotron-Omni-Nano-JANGTQ-CRACK VMLINUX_REAL_UI_PROOF_BASENAME=diagnostic-real-ui-live-model-nemotron-omni-nano-responses-reasoning-20260531 VMLINUX_REAL_UI_WIRE_API=responses VMLINUX_REAL_UI_ENABLE_THINKING=1 VMLINUX_REAL_UI_MAX_TOKENS=512 node panel/scripts/live-real-ui-model-proof.mjs",
@@ -2309,8 +2288,6 @@ def validate_current_proof_sweep_artifacts(root: Path) -> dict[str, Any]:
     )
     issue181_183_runtime_audit = _validate_current_issue181_183_runtime_audit(root)
     public_app_issue_audit = _validate_current_public_app_issue_audit(root)
-    mimo_v2_jang2l_sink_ab = _validate_current_mimo_v2_jang2l_sink_ab(root)
-    mimo_v2_jang2l_root_cause = _validate_current_mimo_v2_jang2l_root_cause(root)
     real_ui_live_model_matrix = _validate_current_real_ui_live_model_matrix(
         real_ui_live_model_proof
     )
@@ -2523,15 +2500,6 @@ def validate_current_proof_sweep_artifacts(root: Path) -> dict[str, Any]:
             and not live_smoke_summaries["missing"]
             and not live_smoke_summaries["not_pass"]
         )
-        or _live_smoke_gap_is_expected_mimo_open(
-            live_smoke_summaries,
-            CURRENT_COVERED_LIVE_SMOKE_ARTIFACTS["mimo_v2_jang2l"],
-        )
-    )
-    live_smoke_non_mimo_ok = (
-        live_smoke_summaries.get("non_mimo_status") == "pass"
-        and not live_smoke_summaries.get("non_mimo_missing")
-        and not live_smoke_summaries.get("non_mimo_not_pass")
     )
     live_tool_smoke_summaries_ok = (
         (
@@ -2539,15 +2507,6 @@ def validate_current_proof_sweep_artifacts(root: Path) -> dict[str, Any]:
             and not live_tool_smoke_summaries["missing"]
             and not live_tool_smoke_summaries["not_pass"]
         )
-        or _live_smoke_gap_is_expected_mimo_open(
-            live_tool_smoke_summaries,
-            CURRENT_COVERED_LIVE_TOOL_SMOKE_ARTIFACTS["mimo_v2_jang2l"],
-        )
-    )
-    live_tool_smoke_non_mimo_ok = (
-        live_tool_smoke_summaries.get("non_mimo_status") == "pass"
-        and not live_tool_smoke_summaries.get("non_mimo_missing")
-        and not live_tool_smoke_summaries.get("non_mimo_not_pass")
     )
     diagnostic_live_smoke_summaries_ok = (
         diagnostic_live_smoke_summaries["status"] == "pass"
@@ -2651,25 +2610,14 @@ def validate_current_proof_sweep_artifacts(root: Path) -> dict[str, Any]:
         and not issue175_177_live_runtime_audit["missing"]
         and not issue175_177_live_runtime_audit["failures"]
     )
-    mimo_v2_jang2l_sink_ab_ok = (
-        mimo_v2_jang2l_sink_ab["status"] == "pass"
-        and not mimo_v2_jang2l_sink_ab["failures"]
-    )
-    mimo_v2_jang2l_root_cause_ok = (
-        mimo_v2_jang2l_root_cause["status"] == "pass"
-        and mimo_v2_jang2l_root_cause.get("remote_evidence_only") is not True
-        and mimo_v2_jang2l_root_cause.get("local_release_clearance") is True
-        and not mimo_v2_jang2l_root_cause["missing"]
-        and not mimo_v2_jang2l_root_cause["failures"]
-    )
     release_blocker_ledger = _current_release_blocker_ledger(
         root=root,
         regression_suite=regression_suite,
         packaged_integrity_matrix=packaged_integrity_matrix,
         live_smoke_summaries=live_smoke_summaries,
         live_tool_smoke_summaries=live_tool_smoke_summaries,
-        mimo_v2_jang2l_sink_ab=mimo_v2_jang2l_sink_ab,
-        mimo_v2_jang2l_root_cause=mimo_v2_jang2l_root_cause,
+        mimo_v2_jang2l_sink_ab={},
+        mimo_v2_jang2l_root_cause={},
         issue175_179_release_boundary_audit=issue175_179_release_boundary_audit,
         installed_app_runtime_parity_audit=installed_app_runtime_parity_audit,
         issue179_minimax_k_root_cause_audit=issue179_minimax_k_root_cause_audit,
@@ -2726,14 +2674,11 @@ def validate_current_proof_sweep_artifacts(root: Path) -> dict[str, Any]:
         "packaged_integrity_matrix": packaged_integrity_matrix_ok,
         "release_surface_matrix": release_surface_matrix_ok,
         "live_smoke_summaries": live_smoke_summaries_ok,
-        "live_smoke_non_mimo": live_smoke_non_mimo_ok,
         "live_tool_smoke_summaries": live_tool_smoke_summaries_ok,
-        "live_tool_smoke_non_mimo": live_tool_smoke_non_mimo_ok,
         "diagnostic_live_smoke_summaries": diagnostic_live_smoke_summaries_ok,
         "dev_ui_proof": dev_ui_proof_ok,
         "real_ui_live_model_proof": real_ui_live_model_proof_ok,
         "real_ui_full_model_matrix": real_ui_full_model_matrix_ok,
-        "real_ui_mimo_v2": True,
         "real_ui_dsv4": (
             "real_ui_dsv4_memory_blocked" not in release_blocker_ids
         ),
@@ -2743,10 +2688,6 @@ def validate_current_proof_sweep_artifacts(root: Path) -> dict[str, Any]:
         "staged_app_runtime_parity_audit": staged_app_runtime_parity_audit_ok,
         "issue175_177_installed_runtime_audit": issue175_177_installed_runtime_audit_ok,
         "issue175_177_live_runtime_audit": issue175_177_live_runtime_audit_ok,
-        "mimo_bundled_live_smoke": True,
-        "mimo_bundled_tool_smoke": True,
-        "mimo_v2_jang2l_sink_ab": True,
-        "mimo_v2_jang2l_root_cause": True,
         "issue179_minimax_k_root_cause_audit": issue179_minimax_k_root_cause_audit_ok,
         "issue179_minimax_k_live_probe_memory_preflight": (
             issue179_minimax_k_live_probe_memory_preflight_ok
@@ -2759,28 +2700,11 @@ def validate_current_proof_sweep_artifacts(root: Path) -> dict[str, Any]:
     failed_components = [
         name for name, ok in component_ok.items() if not ok
     ]
-    mimo_component_names = {
-        "mimo_bundled_live_smoke",
-        "mimo_bundled_tool_smoke",
-        "real_ui_mimo_v2",
-        "mimo_v2_jang2l_sink_ab",
-        "mimo_v2_jang2l_root_cause",
-    }
-    non_mimo_component_status = (
-        "pass"
-        if all(
-            ok
-            for name, ok in component_ok.items()
-            if name not in mimo_component_names
-        )
-        else "fail"
-    )
 
     return {
         "status": "pass" if all(component_ok.values()) else "fail",
         "component_ok": component_ok,
         "failed_components": failed_components,
-        "non_mimo_component_status": non_mimo_component_status,
         "missing": missing,
         "not_pass": not_pass,
         "regression_suite": regression_suite,
@@ -2812,8 +2736,6 @@ def validate_current_proof_sweep_artifacts(root: Path) -> dict[str, Any]:
         "staged_app_runtime_parity_audit": staged_app_runtime_parity_audit,
         "issue175_177_installed_runtime_audit": issue175_177_installed_runtime_audit,
         "issue175_177_live_runtime_audit": issue175_177_live_runtime_audit,
-        "mimo_v2_jang2l_sink_ab": mimo_v2_jang2l_sink_ab,
-        "mimo_v2_jang2l_root_cause": mimo_v2_jang2l_root_cause,
         "issue179_minimax_k_root_cause_audit": issue179_minimax_k_root_cause_audit,
         "issue179_minimax_k_live_probe_memory_preflight": (
             issue179_minimax_k_live_probe_memory_preflight
@@ -3318,7 +3240,6 @@ def _current_release_blocker_ledger(
             for family in missing_families
             if family
             not in {
-                "mimo_v2",
                 *runtime_blocked_families,
                 *{str(key) for key in resource_blockers},
             }
@@ -3328,7 +3249,6 @@ def _current_release_blocker_ledger(
             for item in real_ui_live_model_matrix.get("partial_families", [])
             if str(item)
             not in {
-                "mimo_v2",
                 *runtime_blocked_families,
                 *{str(key) for key in resource_blockers},
                 *mixed_model_identity_families,
@@ -3423,7 +3343,6 @@ def _annotate_real_ui_unblocked_non_mimo_status(
     if not isinstance(runtime_blockers, dict):
         runtime_blockers = {}
     excluded = {
-        "mimo_v2",
         *{str(key) for key in resource_blockers},
         *{str(key) for key in runtime_blockers},
     }
@@ -7019,21 +6938,7 @@ def _live_smoke_gap_is_expected_mimo_open(
     summary: dict[str, Any],
     expected_artifact: str,
 ) -> bool:
-    not_pass = summary.get("not_pass") or []
-    expected_not_pass = (
-        len(not_pass) == 1
-        and isinstance(not_pass[0], dict)
-        and not_pass[0].get("artifact") == expected_artifact
-    )
-    return (
-        summary.get("non_mimo_status") == "pass"
-        and not summary.get("non_mimo_missing")
-        and not summary.get("non_mimo_not_pass")
-        and (
-            (summary.get("missing") == [expected_artifact] and not not_pass)
-            or (not summary.get("missing") and expected_not_pass)
-        )
-    )
+    return False
 
 
 def _validate_current_regression_suite_artifact(root: Path) -> dict[str, Any]:

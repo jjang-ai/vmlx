@@ -23,7 +23,7 @@ from typing import Any
 
 
 DEFAULT_OUT = Path(
-    "build/current-regression-suite-after-gemma31-step-lfm-continuation-20260604.json"
+    "build/current-regression-suite-after-mimo-scope-removal-20260604.json"
 )
 DEFAULT_STEP_TIMEOUT_SEC = 900.0
 STEP_TIMEOUT_RETURNCODE = 124
@@ -671,7 +671,7 @@ CURRENT_SUITE_COMMANDS: dict[str, list[str]] = {
         "--require-current-proof-sweep",
         "--require-release-ready",
         "--out",
-        "build/current-release-regression-manifest-after-installed-public-refresh-20260604.json",
+        "build/current-release-regression-manifest-after-mimo-scope-removal-20260604.json",
     ],
 }
 
