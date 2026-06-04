@@ -1098,10 +1098,10 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             log_lines.append(line.rstrip("\n"))
 
     threading.Thread(target=read_log, daemon=True).start()
+    selected_cases = selected_case_names(args)
     try:
         health = wait_health(args.port, proc, args.timeout)
         cases: list[dict[str, Any]] = []
-        selected_cases = selected_case_names(args)
         for name in selected_cases:
             route, body = case_body(name)
             endpoint = {
@@ -1166,6 +1166,26 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             "case_count": len(cases),
             "cases": cases,
             "status": "pass" if all(case.get("exact") is True for case in cases) else "fail",
+            "log_tail": log_lines[-240:],
+        }
+    except Exception as exc:  # noqa: BLE001 - preserve server evidence for load failures
+        return {
+            "schema": "vmlx-dsv4-route-mode-code-exactness-v1",
+            "created_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+            "model": args.model,
+            "cmd": cmd,
+            "env_overrides": {
+                "DSV4_POOL_QUANT": "0",
+                "VMLINUX_DSV4_ENABLE_PREFIX_CACHE": "0",
+                "VMLX_DSV4_ENABLE_PREFIX_CACHE": "0",
+                "PYTHONPATH": "",
+                "PYTHONNOUSERSITE": "1",
+            },
+            "selected_cases": list(selected_cases),
+            "case_count": len(selected_cases),
+            "status": "load_failed",
+            "reason": f"{type(exc).__name__}: {exc}",
+            "server_returncode": proc.returncode,
             "log_tail": log_lines[-240:],
         }
     finally:

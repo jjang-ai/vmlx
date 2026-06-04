@@ -490,6 +490,59 @@ def test_dsv4_code_exactness_probe_live_launch_honors_case_filter(monkeypatch):
     assert requested_paths == ["completions", "completions"]
 
 
+def test_dsv4_code_exactness_probe_records_load_failure_log_tail(monkeypatch):
+    import tests.cross_matrix.run_dsv4_route_mode_code_exactness as gate
+
+    class Args:
+        python = "/tmp/python"
+        model = "/unused/model"
+        port = 8861
+        timeout = 420
+        request_timeout = 5
+        max_tokens = 512
+        dry_run = False
+        base_url = None
+        cases = "chat_off_rep1,responses_off_rep1"
+
+    class FakeStdout:
+        def __iter__(self):
+            return iter(["loading model\n", "fatal source load error\n"])
+
+    class FakeProc:
+        stdout = FakeStdout()
+        returncode = 3
+
+        def poll(self):
+            return self.returncode
+
+        def send_signal(self, _signal):
+            return None
+
+        def wait(self, timeout=None):
+            return self.returncode
+
+        def kill(self):
+            return None
+
+    monkeypatch.setattr(gate.subprocess, "Popen", lambda *a, **k: FakeProc())
+    monkeypatch.setattr(
+        gate,
+        "wait_health",
+        lambda port, proc, timeout: (_ for _ in ()).throw(
+            RuntimeError("server exited before health: rc=3")
+        ),
+    )
+    monkeypatch.setattr(gate, "terminate", lambda proc: None)
+
+    artifact = run(Args())
+
+    assert artifact["status"] == "load_failed"
+    assert artifact["server_returncode"] == 3
+    assert artifact["selected_cases"] == ["chat_off_rep1", "responses_off_rep1"]
+    assert "RuntimeError: server exited before health: rc=3" in artifact["reason"]
+    assert artifact["log_tail"] == ["loading model", "fatal source load error"]
+
+
 def test_dsv4_code_exactness_probe_memory_preflight_skips_before_spawn(monkeypatch):
     import tests.cross_matrix.run_dsv4_route_mode_code_exactness as gate
 
