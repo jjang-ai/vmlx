@@ -266,6 +266,7 @@ def memory_preflight_artifact(
     force_no_launch: bool = False,
 ) -> dict[str, Any] | None:
     min_free_gb = float(getattr(args, "min_free_gb", 0.0) or 0.0)
+    user_ram_override = bool(getattr(args, "allow_user_ram_override", False))
     if min_free_gb <= 0:
         return None
     snap = resource_snapshot("preflight")
@@ -276,23 +277,29 @@ def memory_preflight_artifact(
         vm_breakdown = {"error": f"{type(exc).__name__}: {exc}"}
     pressure_snapshot = memory_pressure_snapshot()
     vm_available = vm_breakdown.get("free_plus_speculative_purgeable")
-    gate_available = (
-        float(vm_available)
-        if isinstance(vm_available, (int, float))
-        else float(available)
-        if isinstance(available, (int, float))
-        else None
-    )
+    if user_ram_override and isinstance(available, (int, float)):
+        gate_available = float(available)
+        memory_source = "psutil_available_user_ram_override"
+    elif isinstance(vm_available, (int, float)):
+        gate_available = float(vm_available)
+        memory_source = "vm_stat_free_plus_speculative_purgeable"
+    elif isinstance(available, (int, float)):
+        gate_available = float(available)
+        memory_source = "psutil_available"
+    else:
+        gate_available = None
+        memory_source = "unknown"
     process_context = process_context_snapshot()
     active_heavy_processes = process_context["active_heavy_processes"]
     size_gb = model_size_gb(Path(str(args.model)))
     safety_margin_gb = (
         round(min_free_gb - size_gb, 2) if size_gb is not None else None
     )
-    floor_valid = (
+    conservative_floor_valid = (
         safety_margin_gb is None
         or safety_margin_gb >= DEFAULT_REQUIRED_MODEL_MARGIN_GB
     )
+    floor_valid = conservative_floor_valid or user_ram_override
     if gate_available is not None and (
         force_no_launch
         or not floor_valid
@@ -315,7 +322,7 @@ def memory_preflight_artifact(
             if gate_available >= min_free_gb
             else "skipped"
         )
-        used_vm_stat = isinstance(vm_available, (int, float))
+        used_vm_stat = memory_source == "vm_stat_free_plus_speculative_purgeable"
         launch_blockers = [
             blocker
             for blocker, blocked in (
@@ -347,6 +354,8 @@ def memory_preflight_artifact(
             "model_size_gb": size_gb,
             "safety_margin_gb": safety_margin_gb,
             "floor_valid": floor_valid,
+            "conservative_floor_valid": conservative_floor_valid,
+            "user_ram_override": user_ram_override,
             "available_gb": (
                 round(float(available), 2)
                 if isinstance(available, (int, float))
@@ -354,11 +363,7 @@ def memory_preflight_artifact(
             ),
             "preflight_available_gb": round(gate_available, 2),
             "available_for_gate_gb": round(gate_available, 2),
-            "preflight_memory_source": (
-                "vm_stat_free_plus_speculative_purgeable"
-                if used_vm_stat
-                else "psutil_available"
-            ),
+            "preflight_memory_source": memory_source,
             "strict_vm_stat_memory_gap_gb": memory_gap_gb if used_vm_stat else None,
             "psutil_available_gap_gb": psutil_available_gap_gb,
             "free_plus_speculative_purgeable_gb": round(float(vm_available), 2)
@@ -1178,6 +1183,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--base-url", help="Reuse an already-running server instead of launching one")
     parser.add_argument("--cases", help="Comma-separated subset of cases to run")
     parser.add_argument("--min-free-gb", type=float, default=DEFAULT_MIN_FREE_GB)
+    parser.add_argument(
+        "--allow-user-ram-override",
+        action="store_true",
+        help=(
+            "Use psutil available memory and allow a below-conservative DSV4 "
+            "safety margin when an operator explicitly accepts the RAM risk."
+        ),
+    )
     parser.add_argument(
         "--memory-preflight-only",
         action="store_true",

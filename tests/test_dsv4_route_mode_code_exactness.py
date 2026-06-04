@@ -645,6 +645,62 @@ Pages purgeable:                           25000.
     assert "insufficient_memory" in artifact["launch_blockers"]
 
 
+def test_dsv4_code_exactness_probe_user_ram_override_uses_psutil_available(
+    monkeypatch,
+):
+    import tests.cross_matrix.run_dsv4_route_mode_code_exactness as gate
+
+    class Args:
+        python = "/tmp/python"
+        model = "/unused/model"
+        port = 8861
+        timeout = 420
+        request_timeout = 5
+        max_tokens = 512
+        dry_run = False
+        base_url = None
+        cases = "chat_max"
+        min_free_gb = 100.0
+        memory_preflight_only = True
+        allow_user_ram_override = True
+
+    vm_stat = """Mach Virtual Memory Statistics: (page size of 16384 bytes)
+Pages free:                               100000.
+Pages active:                                  1.
+Pages inactive:                         9000000.
+Pages speculative:                         50000.
+Pages purgeable:                           25000.
+"""
+
+    monkeypatch.setattr(
+        gate,
+        "resource_snapshot",
+        lambda name, proc=None: {
+            "name": name,
+            "system_memory": {"available_gb": 110.0, "total_gb": 128.0},
+        },
+        raising=False,
+    )
+    monkeypatch.setattr(gate, "_run_text", lambda cmd: vm_stat, raising=False)
+
+    def fail_popen(*args, **kwargs):
+        raise AssertionError("preflight-only mode must not spawn DSV4")
+
+    monkeypatch.setattr(gate.subprocess, "Popen", fail_popen)
+
+    artifact = run(Args())
+
+    assert artifact["status"] == "ready_to_launch"
+    assert artifact["reason"] == "memory_preflight_floor_met"
+    assert artifact["user_ram_override"] is True
+    assert artifact["preflight_memory_source"] == "psutil_available_user_ram_override"
+    assert artifact["available_for_gate_gb"] == 110.0
+    assert artifact["free_plus_speculative_purgeable_gb"] < 100.0
+    assert artifact["launch_decision"] == "launch_allowed"
+    assert artifact["launch_allowed"] is True
+    assert artifact["launch_blockers"] == []
+
+
 def test_dsv4_code_exactness_probe_marks_under_margin_floor_invalid(
     monkeypatch,
     tmp_path,

@@ -179,8 +179,10 @@ def test_current_regression_suite_hashes_dsv4_generation_boundary_sources():
         "vmlx_engine/utils/dsv4_batch_generator.py",
         "tests/cross_matrix/run_dsv4_route_mode_code_exactness.py",
         "tests/cross_matrix/run_dsv4_default_cache_tool_loop_gate.py",
+        "tests/cross_matrix/run_gemma4_12b_speed_gate.py",
         "tests/test_dsv4_route_mode_code_exactness.py",
         "tests/test_dsv4_default_cache_tool_loop_gate.py",
+        "tests/test_gemma4_12b_speed_gate.py",
         "tests/test_objective_proof_digest.py",
     }
 
