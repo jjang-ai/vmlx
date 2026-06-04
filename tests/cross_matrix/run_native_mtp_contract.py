@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Any
 
 
-DEFAULT_OUT = Path("build/current-native-mtp-contract-20260531-post-step-lfm-refresh.json")
+DEFAULT_OUT = Path("build/current-native-mtp-contract-gemma4-release-boundary-20260604.json")
 
 SOURCE_HASH_FILES = (
     "vmlx_engine/native_mtp.py",

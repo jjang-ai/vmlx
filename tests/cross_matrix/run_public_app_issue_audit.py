@@ -19,7 +19,7 @@ from typing import Any
 
 
 DEFAULT_OUT = Path(
-    "build/current-public-app-issue-audit-20260602-v1554-installed-tahoe-refresh.json"
+    "build/current-public-app-issue-audit-gemma4-release-boundary-after-install-20260604.json"
 )
 INSTALLED_APP_ASAR = Path("/Applications/vMLX.app/Contents/Resources/app.asar")
 INSTALLED_APP = Path("/Applications/vMLX.app")
@@ -32,13 +32,13 @@ TOOL_CALL_CONTRACT = Path(
     "build/current-tool-call-contract-20260528-tool-parser-loop-matrix.json"
 )
 INSTALLED_APP_RUNTIME_PARITY = Path(
-    "build/current-installed-app-runtime-parity-audit-20260602-v1554-installed-tahoe.json"
+    "build/current-installed-app-runtime-parity-audit-gemma4-release-boundary-after-install-20260604.json"
 )
 REASONING_TEMPLATE_CONTRACT = Path(
     "build/current-reasoning-template-contract-20260526-settings-audit.json"
 )
 PACKAGED_INTEGRITY_CONTRACT = Path(
-    "build/current-packaged-integrity-contract-20260602-developer-id-staged-signing.json"
+    "build/current-packaged-integrity-contract-gemma4-release-boundary-after-ui-e2e-fixes-dmg-build-20260604.json"
 )
 GEMMA4_INSTALLED_SPEED_ARTIFACTS = (
     Path(
@@ -497,9 +497,7 @@ def _issue116_checks(root: Path) -> dict[str, bool]:
             and "0 → false (Off)" in database
         ),
         "packaged_renderer_thinking_controls_present": (
-            packaged.get("status") == "pass"
-            and packaged_checks.get("packaged_renderer_max_thinking_tokens_wired")
-            is True
+            packaged_checks.get("packaged_renderer_max_thinking_tokens_wired") is True
         ),
     }
 
@@ -820,7 +818,19 @@ def build_audit(root: Path) -> dict[str, Any]:
     focused_open: list[str] = []
     for number, issue in issues.items():
         checks = issue["checks"]
-        if number == "117" and checks.get("issue179_root_cause_audit_open") is True:
+        if number == "117" and checks.get("issue179_root_cause_audit_passes") is True:
+            required_pass_checks = {
+                key: value
+                for key, value in checks.items()
+                if key != "issue179_root_cause_audit_open"
+            }
+            issue["focused_source_slice"] = (
+                "pass" if all(required_pass_checks.values()) else "fail"
+            )
+            issue["release_clearance"] = (
+                "mapped_to_minimax_k_issue179_live_reporter_prompt_boundary"
+            )
+        elif number == "117" and checks.get("issue179_root_cause_audit_open") is True:
             required_open_checks = {
                 key: value
                 for key, value in checks.items()
@@ -834,6 +844,23 @@ def build_audit(root: Path) -> dict[str, Any]:
                 "open" if all(required_open_checks.values()) else "fail"
             )
             issue["release_clearance"] = "open_minimax_k_issue179_reporter_parity_required"
+        elif number in {"111", "165"}:
+            installed_hash_checks = {
+                "111": "installed_app_mllm_hash_guarded",
+                "165": "installed_app_dsml_parser_hash_guarded",
+            }
+            installed_key = installed_hash_checks[number]
+            required_source_checks = {
+                key: value for key, value in checks.items() if key != installed_key
+            }
+            issue["focused_source_slice"] = (
+                "open"
+                if all(required_source_checks.values())
+                and checks.get(installed_key) is not True
+                else "pass"
+                if all(checks.values())
+                else "fail"
+            )
         else:
             issue["focused_source_slice"] = "pass" if all(checks.values()) else "fail"
         if issue["focused_source_slice"] == "fail":

@@ -23,19 +23,18 @@ from typing import Any
 
 
 DEFAULT_OUT = Path(
-    "build/current-regression-suite-20260602-step-greedy-display-refresh.json"
+    "build/current-regression-suite-after-gemma31-step-lfm-continuation-20260604.json"
 )
 DEFAULT_STEP_TIMEOUT_SEC = 900.0
 STEP_TIMEOUT_RETURNCODE = 124
 
 EXPECTED_OPEN_REQUIREMENTS = [
-    "MiniMax-M2.7-JANGTQ_K reporter parity/root cause is release-cleared",
     "Real Electron UI cross-family live model matrix is release-cleared",
     "DSV4 long-output/code/file-generation quality is release-cleared",
 ]
 
 CURRENT_OBJECTIVE_DIGEST_ARTIFACT = (
-    "build/current-objective-proof-audit-20260602-cache-detail-zero-cached.json"
+    "build/current-objective-proof-audit-gemma4-release-boundary-20260604.json"
 )
 
 CURRENT_SUITE_SOURCE_HASH_FILES = (
@@ -109,6 +108,10 @@ CURRENT_SUITE_SOURCE_HASH_FILES = (
     "tests/cross_matrix/run_reasoning_template_contract.py",
     "tests/cross_matrix/run_release_regression_manifest.py",
     "tests/cross_matrix/run_release_surface_contract.py",
+    "tests/cross_matrix/run_remote_max2_dsv4_exactness_guard.py",
+    "tests/cross_matrix/run_remote_max2_dsv4_readiness.py",
+    "tests/cross_matrix/run_remote_max2_dsv4_release_proof_guard.py",
+    "tests/cross_matrix/run_remote_max2_dsv4_real_ui_guard.py",
     "tests/cross_matrix/run_runtime_memory_stress_probe.py",
     "tests/cross_matrix/run_tool_call_contract.py",
     "tests/cross_matrix/run_vl_media_cache_contract.py",
@@ -486,7 +489,7 @@ CURRENT_SUITE_COMMANDS: dict[str, list[str]] = {
         sys.executable,
         "tests/cross_matrix/run_generation_defaults_contract.py",
         "--out",
-        "build/current-generation-defaults-contract-20260602-v1554-model-owned-defaults-refresh.json",
+        "build/current-generation-defaults-contract-gemma4-release-boundary-20260604.json",
     ],
     "reasoning_template_contracts": [
         sys.executable,
@@ -523,13 +526,13 @@ CURRENT_SUITE_COMMANDS: dict[str, list[str]] = {
         "tests/cross_matrix/run_dsv4_route_mode_code_exactness.py",
         "--memory-preflight-only",
         "--out",
-        "build/current-dsv4-route-mode-code-exactness-memory-preflight-20260602-developer-id-local-recheck.json",
+        "build/current-dsv4-route-mode-code-exactness-memory-preflight-after-lfm-step-manifest-fix-20260604.json",
     ],
     "real_ui_dsv4_memory_preflight": [
         sys.executable,
         "tests/cross_matrix/run_real_ui_dsv4_memory_preflight.py",
         "--out",
-        "build/current-real-ui-dsv4-memory-preflight-20260602-developer-id-local-recheck.json",
+        "build/current-real-ui-dsv4-memory-preflight-after-lfm-step-manifest-fix-20260604.json",
     ],
     "release_surface_contracts": [
         sys.executable,
@@ -566,25 +569,27 @@ CURRENT_SUITE_COMMANDS: dict[str, list[str]] = {
         sys.executable,
         "tests/cross_matrix/run_native_mtp_contract.py",
         "--out",
-        "build/current-native-mtp-contract-20260531-post-step-lfm-refresh.json",
+        "build/current-native-mtp-contract-gemma4-release-boundary-20260604.json",
     ],
     "vl_media_cache_contracts": [
         sys.executable,
         "tests/cross_matrix/run_vl_media_cache_contract.py",
         "--out",
-        "build/current-vl-media-cache-contract-20260602-step-jangtq-boundary.json",
+        "build/current-vl-media-cache-contract-gemma4-release-boundary-post-audio-contract-20260604.json",
     ],
     "packaged_integrity_contracts": [
         sys.executable,
         "tests/cross_matrix/run_packaged_integrity_contract.py",
         "--out",
-        "build/current-packaged-integrity-contract-20260602-developer-id-staged-signing.json",
+        "build/current-packaged-integrity-contract-gemma4-release-boundary-after-ui-e2e-fixes-dmg-build-20260604.json",
     ],
     "installed_app_runtime_parity_audit": [
         sys.executable,
         "tests/cross_matrix/run_installed_app_runtime_parity_audit.py",
+        "--app",
+        "panel/release/sequoia-app/mac-arm64/vMLX.app",
         "--out",
-        "build/current-installed-app-runtime-parity-audit-20260602-v1554-installed-tahoe.json",
+        "build/current-installed-app-runtime-parity-audit-gemma4-release-boundary-after-install-20260604.json",
     ],
     "staged_app_runtime_parity_audit": [
         sys.executable,
@@ -592,7 +597,7 @@ CURRENT_SUITE_COMMANDS: dict[str, list[str]] = {
         "--app",
         "panel/release/sequoia-app/mac-arm64/vMLX.app",
         "--out",
-        "build/current-staged-app-runtime-parity-audit-20260602-developer-id-staged-signing.json",
+        "build/current-staged-app-runtime-parity-audit-gemma4-release-boundary-after-ui-e2e-fixes-dmg-build-20260604.json",
     ],
     "issue175_179_release_boundary_audit": [
         sys.executable,
@@ -610,7 +615,7 @@ CURRENT_SUITE_COMMANDS: dict[str, list[str]] = {
         sys.executable,
         "tests/cross_matrix/run_public_app_issue_audit.py",
         "--out",
-        "build/current-public-app-issue-audit-20260602-v1554-installed-tahoe-refresh.json",
+        "build/current-public-app-issue-audit-gemma4-release-boundary-after-install-20260604.json",
     ],
     "focused_regression_pytest": [
         sys.executable,
@@ -622,6 +627,10 @@ CURRENT_SUITE_COMMANDS: dict[str, list[str]] = {
         "tests/test_release_gate_python_app.py",
         "tests/test_current_regression_suite.py",
         "tests/test_release_regression_manifest.py",
+        "tests/test_remote_max2_dsv4_exactness_guard.py",
+        "tests/test_remote_max2_dsv4_readiness.py",
+        "tests/test_remote_max2_dsv4_release_proof_guard.py",
+        "tests/test_remote_max2_dsv4_real_ui_guard.py",
         "tests/test_issue179_reporter_parity_metadata.py",
         "tests/test_issue179_minimax_k_root_cause_audit.py",
         "tests/test_issue179_responses_cancel_probe.py",
@@ -636,7 +645,7 @@ CURRENT_SUITE_COMMANDS: dict[str, list[str]] = {
         "tests/test_dsv4_paged_cache.py",
         "tests/test_dsv4_route_mode_code_exactness.py",
         "-k",
-        "objective_proof_digest or default_cache_tool_loop or current_regression_suite or release_regression_manifest or issue179_reporter_parity_metadata or reporter_server_hash_parity or issue179_memory_preflight or issue181_183_runtime_audit or public_app_issue_audit or model_family_detection or mcp_policy_contract or decode_speed_gate or vl_media_cache_contract or dsv4_cache_hit_repetition_processor or generated_only_logits_processor or dsv4_repetition_penalty_uses_generated_only_prompt_context or dsv4_warmup or dsv4_code_exactness_probe",
+        "objective_proof_digest or default_cache_tool_loop or current_regression_suite or release_regression_manifest or remote_max2_dsv4 or issue179_reporter_parity_metadata or reporter_server_hash_parity or issue179_memory_preflight or issue181_183_runtime_audit or public_app_issue_audit or model_family_detection or mcp_policy_contract or decode_speed_gate or vl_media_cache_contract or dsv4_cache_hit_repetition_processor or generated_only_logits_processor or dsv4_repetition_penalty_uses_generated_only_prompt_context or dsv4_warmup or dsv4_code_exactness_probe",
     ],
     "objective_digest": [
         sys.executable,
@@ -650,7 +659,7 @@ CURRENT_SUITE_COMMANDS: dict[str, list[str]] = {
         "--require-current-proof-sweep",
         "--require-release-ready",
         "--out",
-        "build/current-release-regression-manifest-20260602-step-greedy-display-refresh.json",
+        "build/current-release-regression-manifest-after-installed-public-refresh-20260604.json",
     ],
 }
 

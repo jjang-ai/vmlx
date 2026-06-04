@@ -1882,6 +1882,15 @@ class MLLMScheduler:
         )
         self._current_sampler_params = new_params
 
+    def _prefill_for_prompt_only_cache(self, tokens: List[int]) -> Optional[List[Any]]:
+        """Run clean text-only prompt prefill for cache warm endpoint."""
+        if not tokens:
+            return None
+        self._ensure_batch_generator()
+        if self.batch_generator is None:
+            return None
+        return self.batch_generator._prefill_for_clean_path_dependent_cache(tokens)
+
     # ========== Sync API (step-based) ==========
 
     def add_request(

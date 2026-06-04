@@ -53,7 +53,7 @@ from tests.cross_matrix.release_regression_manifest import (
 
 DEFAULT_OUT = Path("build/current-objective-proof-audit-20260602-cache-detail-zero-cached.json")
 CURRENT_RELEASE_REGRESSION_MANIFEST_REL = (
-    "build/current-release-regression-manifest-20260602-step-greedy-display-refresh.json"
+    "build/current-release-regression-manifest-after-installed-public-refresh-20260604.json"
 )
 DSV4_QUALITY_CLEARANCE_REL = "build/current-dsv4-long-output-quality-clearance-20260521.json"
 DSV4_CURRENT_IDENTIFIER_CANARY_REL = (
@@ -182,12 +182,12 @@ API_CACHE_CONTRACT_REL = "build/current-api-cache-contract-proof-20260602-cache-
 PANEL_SETTINGS_CONTRACT_REL = "build/current-panel-settings-contract-proof-20260601-cache-ui-storage-quant.json"
 MAX_OUTPUT_CONTEXT_CONTRACT_REL = "build/current-max-output-context-contract-20260531-post-step-lfm-refresh.json"
 MAX_OUTPUT_CONTEXT_CONTRACT_FALLBACK_REL = "build/current-max-output-context-contract-20260521.json"
-MODEL_FAMILY_CONTRACT_REL = "build/current-model-family-detection-contract-20260602-step-jangtq-boundary.json"
+MODEL_FAMILY_CONTRACT_REL = "build/current-model-family-detection-contract-20260602-v1554-attention-matmul-refresh.json"
 PARSER_REGISTRY_CONTRACT_REL = "build/current-parser-registry-contract-20260531-post-step-lfm-refresh.json"
 MODEL_ARTIFACT_FORMAT_CONTRACT_REL = "build/current-model-artifact-format-contract-20260531-post-step-lfm-refresh.json"
-GENERATION_DEFAULTS_CONTRACT_REL = "build/current-generation-defaults-contract-20260602-step-greedy-display.json"
-NATIVE_MTP_CONTRACT_REL = "build/current-native-mtp-contract-20260531-post-step-lfm-refresh.json"
-VL_MEDIA_CONTRACT_REL = "build/current-vl-media-cache-contract-20260602-step-jangtq-boundary.json"
+GENERATION_DEFAULTS_CONTRACT_REL = "build/current-generation-defaults-contract-gemma4-release-boundary-20260604.json"
+NATIVE_MTP_CONTRACT_REL = "build/current-native-mtp-contract-gemma4-release-boundary-20260604.json"
+VL_MEDIA_CONTRACT_REL = "build/current-vl-media-cache-contract-gemma4-release-boundary-post-audio-contract-20260604.json"
 QWEN_JANG_SOURCE_SPEED_REL = "build/current-decode-speed-live-qwen27-jang4m-source-keepalloc-20260522.json"
 QWEN_JANG_PACKAGED_SPEED_REL = "build/current-decode-speed-live-qwen27-jang4m-packaged-tahoe-dmg-20260522.json"
 QWEN_NATIVE_MTP_SPEED_REL = "build/current-decode-speed-live-qwen27-jang4m-mtp-20260523.json"
@@ -6197,16 +6197,27 @@ def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
     current_sweep = release_manifest.get("current_proof_sweep")
     if not isinstance(current_sweep, dict):
         current_sweep = {}
-    issue179_audit = current_sweep.get("issue179_minimax_k_root_cause_audit")
-    if not isinstance(issue179_audit, dict):
-        issue179_audit = {}
+    direct_issue179_audit = _load(root, CURRENT_ISSUE179_MINIMAX_K_ROOT_CAUSE_AUDIT_ARTIFACT)
+    direct_issue179_not_proven = [
+        str(item) for item in direct_issue179_audit.get("not_proven", []) if str(item)
+    ]
+    if (
+        direct_issue179_audit.get("status") == "pass"
+        and not direct_issue179_not_proven
+    ):
+        issue179_audit = direct_issue179_audit
+        issue179_blocker = None
+    else:
+        issue179_audit = current_sweep.get("issue179_minimax_k_root_cause_audit")
+        if not isinstance(issue179_audit, dict):
+            issue179_audit = {}
     issue179_evidence = (
         str(issue179_blocker.get("evidence"))
         if isinstance(issue179_blocker, dict) and issue179_blocker.get("evidence")
         else CURRENT_ISSUE179_MINIMAX_K_ROOT_CAUSE_AUDIT_ARTIFACT
     )
     if not issue179_audit:
-        issue179_audit = _load(root, issue179_evidence)
+        issue179_audit = direct_issue179_audit or _load(root, issue179_evidence)
     issue179_not_proven = [
         str(item) for item in issue179_audit.get("not_proven", []) if str(item)
     ]

@@ -394,6 +394,28 @@ async function capturePng(cdp, filePath) {
 }
 
 function startRealServer(port, outDir) {
+  const conservativeRuntime = envBool('VMLINUX_REAL_UI_CONSERVATIVE_RUNTIME', false)
+  const runtimeArgs = conservativeRuntime
+    ? [
+        '--no-continuous-batching',
+        '--disable-prefix-cache',
+        '--kv-cache-quantization',
+        'none',
+        '--disable-native-mtp',
+      ]
+    : [
+        '--continuous-batching',
+        '--use-paged-cache',
+        '--paged-cache-block-size',
+        '64',
+        '--max-cache-blocks',
+        '1000',
+        '--enable-block-disk-cache',
+        '--block-disk-cache-dir',
+        path.join(outDir, 'block-cache'),
+        '--block-disk-cache-max-gb',
+        '2',
+      ]
   const args = [
     '-B',
     '-s',
@@ -417,17 +439,7 @@ function startRealServer(port, outDir) {
     '1024',
     '--completion-batch-size',
     '128',
-    '--continuous-batching',
-    '--use-paged-cache',
-    '--paged-cache-block-size',
-    '64',
-    '--max-cache-blocks',
-    '1000',
-    '--enable-block-disk-cache',
-    '--block-disk-cache-dir',
-    path.join(outDir, 'block-cache'),
-    '--block-disk-cache-max-gb',
-    '2',
+    ...runtimeArgs,
     '--ssm-state-cache-mb',
     '512',
     '--max-tokens',
@@ -596,6 +608,11 @@ function visibleAssistantAfterEachUser(turns) {
 function assertResult(result) {
   const failures = []
   const chat = result.chat || {}
+  const cacheTelemetryExpected = (
+    Array.isArray(result.serverCommand)
+    && !result.serverCommand.includes('--disable-prefix-cache')
+    && !result.serverCommand.includes('--no-continuous-batching')
+  )
   if (!result.server?.models?.data?.length) failures.push('real server /v1/models returned no models')
   if (result.remoteSessionStarted !== true) failures.push('remote session did not start through Electron UI API')
   if (!chat.turns?.some((m) => m.role === 'assistant' && m.content)) failures.push('assistant content is empty')
@@ -616,8 +633,8 @@ function assertResult(result) {
   if ((result.eventCounts?.stream || 0) < 1) failures.push('expected streaming events from real model')
   if ((chat.turns?.length || 0) < 4) failures.push(`expected at least four persisted chat messages, got ${chat.turns?.length || 0}`)
   if (result.sendErrors?.length) failures.push(`renderer send errors: ${result.sendErrors.join('; ')}`)
-  if ((result.cache?.cacheHitTokens || 0) <= 0) failures.push('expected real cache-hit token telemetry after repeated UI turns')
-  if (!result.provenSurfaces?.includes('cache_hit_telemetry')) {
+  if (cacheTelemetryExpected && (result.cache?.cacheHitTokens || 0) <= 0) failures.push('expected real cache-hit token telemetry after repeated UI turns')
+  if (cacheTelemetryExpected && !result.provenSurfaces?.includes('cache_hit_telemetry')) {
     failures.push('live proof did not record clean cache-hit telemetry')
   }
   if (

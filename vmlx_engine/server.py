@@ -1696,12 +1696,59 @@ def _bundle_declares_native_video(bundle_path: str | None) -> bool:
     if Path(str(bundle_path or "")).joinpath("video_preprocessor_config.json").is_file():
         return True
     model_type = str(cfg.get("model_type") or "").lower()
-    if model_type == "gemma4":
+    if model_type in {"gemma4", "gemma4_unified"}:
         return False
     for obj in (cfg, cfg.get("text_config"), cfg.get("vision_config")):
         if not isinstance(obj, dict):
             continue
         for key in ("video_token_id", "video_token_index"):
+            if obj.get(key) is not None:
+                return True
+    return False
+
+
+def _bundle_declares_native_audio(bundle_path: str | None) -> bool:
+    cfg = _read_bundle_json(bundle_path, "config.json")
+    if not cfg:
+        return False
+    jang = _read_bundle_json(bundle_path, "jang_config.json")
+    model_type = str(cfg.get("model_type") or "").lower()
+    weight_format = str((jang or {}).get("weight_format") or "").lower()
+    profile = str((jang or {}).get("profile") or "").lower()
+    quant = (jang or {}).get("quantization") if isinstance(jang, dict) else {}
+    selective = quant.get("selective_passthrough") if isinstance(quant, dict) else {}
+    has_audio_safe_mxfp_repair = bool(
+        model_type == "gemma4_unified"
+        and weight_format == "mxfp8"
+        and "attnfp16" in profile
+        and isinstance(selective, dict)
+        and selective.get("preserve_attention_fp16") is True
+        and (
+            os.environ.get("VMLX_ALLOW_EXPERIMENTAL_MXFP_AUDIO") == "1"
+            or os.environ.get("VMLINUX_ALLOW_EXPERIMENTAL_MXFP_AUDIO") == "1"
+        )
+    )
+    if model_type == "gemma4_unified" and (
+        weight_format in {"mxfp4", "mxfp8"} or profile in {"mxfp4", "mxfp8"}
+    ):
+        if has_audio_safe_mxfp_repair:
+            return True
+        # The Gemma4 12B MXFP bundles route input_audio through the processor
+        # and reach generation, but current live proof shows broken speech
+        # quality (`The transcriptionno` / `Mario presents.` / refusals).
+        # Keep server capabilities honest until repaired artifacts are
+        # stamped/proven. A direct MXFP8 probe can sometimes produce recoverable
+        # raw `Audio present.` content, but the API path is not stable enough to
+        # advertise audio.
+        return False
+    if cfg.get("audio_config") is not None:
+        return True
+    if model_type == "gemma4_unified":
+        return True
+    for obj in (cfg, cfg.get("text_config")):
+        if not isinstance(obj, dict):
+            continue
+        for key in ("audio_token_id", "audio_token_index"):
             if obj.get(key) is not None:
                 return True
     return False
@@ -1715,6 +1762,8 @@ def _loaded_mllm_modalities() -> list[str] | None:
     if not engine_is_mllm:
         return None
     modalities = ["text", "vision"]
+    if _bundle_declares_native_audio(_model_path or _model_name):
+        modalities.append("audio")
     if _bundle_declares_native_video(_model_path or _model_name):
         modalities.append("video")
     return modalities
@@ -6868,6 +6917,17 @@ async def cache_warm(request: dict):
     if not prompts:
         return {"error": "No prompts provided"}
 
+    def _encode_prompt_for_warm(_scheduler, _prompt: str):
+        tokenizer = getattr(_scheduler, "_actual_tokenizer", None)
+        if tokenizer is None:
+            tokenizer = getattr(_scheduler, "tokenizer", None)
+        if tokenizer is None:
+            processor = getattr(_scheduler, "processor", None)
+            tokenizer = getattr(processor, "tokenizer", processor)
+        if tokenizer is None or not hasattr(tokenizer, "encode"):
+            raise AttributeError("scheduler has no tokenizer/processor tokenizer")
+        return tokenizer.encode(_prompt)
+
     def _do_warm():
         """Run prefill warming in a thread to avoid blocking the event loop."""
         warmed = 0
@@ -6876,10 +6936,7 @@ async def cache_warm(request: dict):
 
         for i, prompt in enumerate(prompts):
             try:
-                if hasattr(scheduler, "_actual_tokenizer"):
-                    tokens = scheduler._actual_tokenizer.encode(prompt)
-                else:
-                    tokens = scheduler.tokenizer.encode(prompt)
+                tokens = _encode_prompt_for_warm(scheduler, prompt)
 
                 if not tokens:
                     errors.append(f"Prompt {i}: empty after tokenization")

@@ -5,7 +5,7 @@ def test_native_mtp_contract_default_out_tracks_current_release_proof_artifact()
     from tests.cross_matrix import run_native_mtp_contract as gate
 
     assert gate.DEFAULT_OUT == Path(
-        "build/current-native-mtp-contract-20260531-post-step-lfm-refresh.json"
+        "build/current-native-mtp-contract-gemma4-release-boundary-20260604.json"
     )
 
 

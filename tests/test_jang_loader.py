@@ -54,6 +54,16 @@ class TestJangDetection:
 
         assert jang_loader.load_jang_model(tmp_path, skip_eval=True) is expected
 
+    def test_detects_jang_affine_weight_format(self, tmp_path):
+        from vmlx_engine.utils.jang_loader import is_jang_model
+
+        (tmp_path / "config.json").write_text('{"model_type":"gemma4_unified"}')
+        (tmp_path / "jang_config.json").write_text(
+            '{"version":2,"weight_format":"jang_affine","quantization":{}}'
+        )
+
+        assert is_jang_model(tmp_path) is True
+
     def test_normalize_step3p5_alias_for_step3p7_model_type(self):
         from vmlx_engine.utils.jang_loader import _normalize_step3p7_model_type
 

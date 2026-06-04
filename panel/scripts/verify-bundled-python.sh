@@ -115,6 +115,11 @@ HASH_GATED_ENGINE_FILES=(
   "model_config_registry.py"
   "models/mllm.py"
   "models/step3p7_mlx_vlm.py"
+  "models/gemma4_unified_register.py"
+  "models/gemma4_unified/__init__.py"
+  "models/gemma4_unified/config.py"
+  "models/gemma4_unified/gemma4_unified.py"
+  "models/gemma4_unified/processing_gemma4_unified.py"
   "omni_multimodal.py"
   "paged_cache.py"
   "prefix_cache.py"
@@ -261,6 +266,7 @@ REQUIRED = [
     ("jang_tools.kimi_prune.generate_vl", "jang_tools.kimi_prune.generate_vl", "Kimi chunked VL generate path missing — required by vmlx_engine.vlm.generate_vl"),
     ("vmlx_engine", "vmlx_engine", "bundled vmlx_engine missing"),
     ("vmlx_engine.models.step3p7_mlx_vlm", "vmlx_engine Step3p7 VLM runtime", "Step3p7 source VLM runtime missing from bundled vmlx_engine"),
+    ("vmlx_engine.models.gemma4_unified_register", "vmlx_engine Gemma 4 Unified VLM/audio runtime register", "Gemma 4 Unified source VLM/audio runtime missing from bundled vmlx_engine"),
     ("vmlx_engine.utils.jang_loader", "vmlx_engine jang_loader", "bundled jang_loader missing"),
     ("vmlx_engine.api.ollama_adapter", "vmlx_engine ollama_adapter", "bundled ollama_adapter missing"),
     # Doc §1.3 + §1.4 import paths — shipping these means the Kimi integration
@@ -306,6 +312,26 @@ try:
     print("  ok   Step3p7 mlx-vlm registration")
 except Exception as e:
     print(f"  FAIL Step3p7 mlx-vlm registration check: {type(e).__name__}: {e}")
+    sys.exit(1)
+
+# Gemma 4 Unified source runtime is registered under mlx-vlm until upstream
+# ships native support. This catches missing vendored files and broken relative
+# imports before a packaged app claims Gemma 4 12B media support.
+try:
+    import importlib.util
+    from vmlx_engine.models.gemma4_unified_register import _register_gemma4_unified_runtime
+
+    _register_gemma4_unified_runtime()
+    for _name in (
+        "mlx_vlm.models.gemma4_unified",
+        "mlx_vlm.models.gemma4_unified.processing_gemma4_unified",
+    ):
+        if importlib.util.find_spec(_name) is None:
+            print(f"  FAIL Gemma 4 Unified mlx-vlm registration missing: {_name}")
+            sys.exit(1)
+    print("  ok   Gemma 4 Unified mlx-vlm registration")
+except Exception as e:
+    print(f"  FAIL Gemma 4 Unified mlx-vlm registration check: {type(e).__name__}: {e}")
     sys.exit(1)
 
 # Extra spot-check: load the gemma4 Model class (catches broken relative

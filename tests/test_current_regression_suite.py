@@ -856,20 +856,20 @@ def test_current_regression_suite_refreshes_release_regression_manifest(monkeypa
         and "tests/cross_matrix/run_dsv4_route_mode_code_exactness.py" in " ".join(cmd)
         and "--memory-preflight-only" in cmd
         and "--cases" not in cmd
-        and "build/current-dsv4-route-mode-code-exactness-memory-preflight-20260602-developer-id-local-recheck.json"
+        and "build/current-dsv4-route-mode-code-exactness-memory-preflight-after-lfm-step-manifest-fix-20260604.json"
         in cmd
         for name, cmd in seen_steps
     )
     assert any(
         name == "real_ui_dsv4_memory_preflight"
         and "tests/cross_matrix/run_real_ui_dsv4_memory_preflight.py" in " ".join(cmd)
-        and "build/current-real-ui-dsv4-memory-preflight-20260602-developer-id-local-recheck.json"
+        and "build/current-real-ui-dsv4-memory-preflight-after-lfm-step-manifest-fix-20260604.json"
         in cmd
         for name, cmd in seen_steps
     )
     assert any(
         name == "release_regression_manifest"
-        and "build/current-release-regression-manifest-20260602-step-greedy-display-refresh.json"
+        and "build/current-release-regression-manifest-after-installed-public-refresh-20260604.json"
         in cmd
         for name, cmd in seen_steps
     )
@@ -1300,7 +1300,7 @@ def test_current_regression_suite_refreshes_current_objective_digest_artifact(
 
     assert artifact["status"] == "pass"
     assert suite.CURRENT_OBJECTIVE_DIGEST_ARTIFACT == (
-        "build/current-objective-proof-audit-20260602-cache-detail-zero-cached.json"
+        "build/current-objective-proof-audit-gemma4-release-boundary-20260604.json"
     )
     assert any(
         name == "objective_digest"
@@ -1610,7 +1610,7 @@ def test_current_regression_suite_runs_generation_defaults_contracts(monkeypatch
         for _name, cmd in seen_steps
     )
     assert any(
-        "build/current-generation-defaults-contract-20260602-v1554-model-owned-defaults-refresh.json"
+        "build/current-generation-defaults-contract-gemma4-release-boundary-20260604.json"
         in " ".join(cmd)
         for _name, cmd in seen_steps
     )

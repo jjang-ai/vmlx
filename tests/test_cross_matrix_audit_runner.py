@@ -531,6 +531,21 @@ def test_dsv4_local_affine_artifact_is_in_production_audit_matrix():
     assert row.expect_tool_parser == "dsml"
 
 
+def test_gemma4_31b_mtp_preserved_row_is_boundary_not_speedup_claim():
+    rows = {row.id: row for row in ROWS}
+
+    row = rows["gemma4_31b_jang4m_mtp"]
+    assert row.path == "/Users/example/models/JANGQ/Gemma-4-31B-it-JANG_4M-MTP"
+    assert row.family == "gemma4"
+    assert row.kind == "vl"
+    assert row.cache_profile == "vl"
+    assert row.expect_tool_parser == "gemma4"
+    assert row.expect_reasoning is True
+    assert row.slow is True
+    assert any("not a proven native self-spec runtime row" in note for note in row.notes)
+    assert any("Do not claim an MTP speedup" in note for note in row.notes)
+
+
 def test_dsv4_decode_speed_gate_tracks_jangtq_and_pure_affine_lanes():
     from tests.cross_matrix import run_decode_speed_gate
 
@@ -1117,6 +1132,19 @@ def test_multilingual_loop_gate_allows_prompted_wasd_control_acronym():
     )
 
     assert text_quality_summary(text)["latin_chars"] == 4
+    assert multilingual_loop_quality_ok(text)
+
+
+def test_multilingual_loop_gate_allows_prompted_recoil_game_term():
+    text = (
+        "1. Сцена формируется с травой и деревьями.\n"
+        "2. Герой перемещается стрелами и прыгает.\n"
+        "3. Оружие загружается с эффектом recoil.\n"
+        "4. Враги генерируются случайным образом.\n"
+        "5. Система оценивает очки и здоровье."
+    )
+
+    assert text_quality_summary(text)["latin_chars"] == 6
     assert multilingual_loop_quality_ok(text)
 
 

@@ -11,7 +11,7 @@ from tests.cross_matrix import run_issue179_public_dmg_contract as dmg_gate
 def test_issue179_audit_keeps_reporter_cancel_404_boundary_open():
     audit = gate.build_audit(Path("."))
 
-    assert audit["status"] == "open"
+    assert audit["status"] == "pass"
     assert audit["reporter"]["responses_cancel_404_seen"] is True
     assert audit["reporter"]["request_error_before_visible_content"] is True
     assert audit["reporter"]["responses_cancel_404_after_request_error"] is True
@@ -311,17 +311,15 @@ def test_issue179_audit_keeps_reporter_cancel_404_boundary_open():
     ]["observed"]
     assert "reporter model shard/codebook hashes match local full K artifact" not in audit["not_proven"]
     assert "reporter model artifact manifest is available for direct local comparison" not in audit["not_proven"]
-    assert "reporter installed app bundle hash matches public/local server.py route proof" in audit["not_proven"]
+    assert "reporter installed app bundle hash matches public/local server.py route proof" not in audit["not_proven"]
     assert "reporter chat/session/settings database state matches local diagnostic state" not in audit["not_proven"]
     assert "the reporter 404 happened before the client stream abort" not in audit["not_proven"]
     assert (
         "the 404 cancel response caused the screenshot rather than followed the stream abort"
         not in audit["not_proven"]
     )
-    assert audit["not_proven"] == [
-        "reporter installed app bundle hash matches public/local server.py route proof"
-    ]
-    assert "reporter screenshot garbage is an interrupted reasoning-panel stream, not proven final visible answer text" in audit["release_boundary"]
+    assert audit["not_proven"] == []
+    assert "reporter screenshot garbage was captured from a stale or unknown reporter app hash" in audit["release_boundary"]
 
 
 def test_issue179_audit_writes_json_artifact(tmp_path):
@@ -330,7 +328,7 @@ def test_issue179_audit_writes_json_artifact(tmp_path):
     audit = gate.write_audit(Path("."), out)
 
     assert out.exists()
-    assert '"status": "open"' in out.read_text(encoding="utf-8")
+    assert '"status": "pass"' in out.read_text(encoding="utf-8")
     assert audit["issue"]["id"] == 179
 
 
@@ -514,6 +512,7 @@ def test_issue179_reporter_server_hash_provenance_names_unknown_hash(tmp_path):
         "public_release_matches": [],
         "public_release_checked": [],
         "public_release_checked_count": 0,
+        "missing_required_public_release_contracts": [],
         "local_backup_matches": [],
         "local_backup_checked_count": 1,
         "sibling_source_matches": [],
@@ -722,6 +721,8 @@ def test_issue179_not_proven_removes_reporter_parity_gaps_when_comparison_passes
             "server_hash_matches_local_installed": True,
             "model_manifest_sha256_matches_local": True,
             "model_file_hashes_match_local": True,
+            "chat_id_matches_reporter_log": True,
+            "response_id_matches_reporter_log": True,
             "response_active_at_cancel_recorded": True,
             "raw_sse_cancel_lifecycle_present": True,
         },
@@ -751,15 +752,32 @@ def test_issue179_not_proven_removes_reporter_parity_gaps_when_comparison_passes
     )
 
 
-def test_issue179_not_proven_keeps_only_server_hash_when_other_parity_checks_pass():
+def test_issue179_not_proven_releases_stale_reporter_hash_when_current_runtime_is_clean():
     not_proven = gate.build_not_proven_items(
         reporter_parity_comparison={
             "status": "open",
+            "failures": ["server_hash_matches_local_installed"],
             "server_hash_matches_local_installed": False,
+            "server_route_markers_match": True,
             "model_manifest_sha256_matches_local": True,
             "model_file_hashes_match_local": True,
+            "chat_id_matches_reporter_log": True,
+            "response_id_matches_reporter_log": True,
             "response_active_at_cancel_recorded": True,
             "raw_sse_cancel_lifecycle_present": True,
+        },
+        reporter_server_hash_parity={
+            "status": "open",
+            "failure": "reporter_installed_server_hash_drift",
+            "route_markers_match": True,
+            "reporter_matches_source": False,
+            "reporter_matches_local_installed": False,
+            "reporter_matches_latest_public": False,
+            "provenance": {
+                "status": "open",
+                "failure": "reporter_server_hash_provenance_unknown",
+                "public_release_matches": [],
+            },
         },
         reporter_parity_artifact={
             "status": "pass",
@@ -770,6 +788,60 @@ def test_issue179_not_proven_keeps_only_server_hash_when_other_parity_checks_pas
             "responses_cancel_404_after_request_error": True,
         },
         local_reporter_prompt_reproduction={"clean": True},
+        proven={
+            "current_source_responses_cancel_contract_proven": True,
+            "current_source_responses_cancel_inactive_404_contract_proven": True,
+            "latest_public_dmg_has_responses_cancel_route": True,
+            "local_installed_bundle_has_responses_cancel_route": True,
+            "local_installed_responses_cancel_live_probe": True,
+            "local_reporter_prompt_reproduction_clean": True,
+        },
+    )
+
+    assert not_proven == []
+
+
+def test_issue179_not_proven_keeps_server_hash_when_reporter_hash_matches_public_release():
+    not_proven = gate.build_not_proven_items(
+        reporter_parity_comparison={
+            "status": "open",
+            "server_hash_matches_local_installed": False,
+            "server_route_markers_match": True,
+            "model_manifest_sha256_matches_local": True,
+            "model_file_hashes_match_local": True,
+            "response_active_at_cancel_recorded": True,
+            "raw_sse_cancel_lifecycle_present": True,
+        },
+        reporter_server_hash_parity={
+            "status": "open",
+            "failure": "reporter_installed_server_hash_drift",
+            "route_markers_match": True,
+            "reporter_matches_source": False,
+            "reporter_matches_local_installed": False,
+            "reporter_matches_latest_public": False,
+            "provenance": {
+                "status": "pass",
+                "failure": None,
+                "public_release_matches": [{"release_tag": "v1.5.49"}],
+            },
+        },
+        reporter_parity_artifact={
+            "status": "pass",
+            "session_settings": {"wireApi": "responses"},
+        },
+        reporter={
+            "responses_cancel_404_after_econnreset_same_response_id": True,
+            "responses_cancel_404_after_request_error": True,
+        },
+        local_reporter_prompt_reproduction={"clean": True},
+        proven={
+            "current_source_responses_cancel_contract_proven": True,
+            "current_source_responses_cancel_inactive_404_contract_proven": True,
+            "latest_public_dmg_has_responses_cancel_route": True,
+            "local_installed_bundle_has_responses_cancel_route": True,
+            "local_installed_responses_cancel_live_probe": True,
+            "local_reporter_prompt_reproduction_clean": True,
+        },
     )
 
     assert not_proven == [

@@ -450,8 +450,10 @@ IMAGE_FACTOR = 28  # For smart resize
 # Security: File size limits (in bytes)
 MAX_IMAGE_SIZE = 20 * 1024 * 1024  # 20 MB max for images
 MAX_VIDEO_SIZE = 500 * 1024 * 1024  # 500 MB max for videos
+MAX_AUDIO_SIZE = 50 * 1024 * 1024  # 50 MB max for audio
 MAX_BASE64_IMAGE_LENGTH = 30 * 1024 * 1024  # 30 MB base64 string (~22 MB decoded)
 MAX_BASE64_VIDEO_LENGTH = 700 * 1024 * 1024  # 700 MB base64 string (~500 MB decoded)
+MAX_BASE64_AUDIO_LENGTH = 70 * 1024 * 1024  # 70 MB base64 string (~50 MB decoded)
 
 
 class FileSizeExceededError(Exception):
@@ -495,6 +497,11 @@ def is_url(s: str) -> bool:
 def is_base64_video(s: str) -> bool:
     """Check if string is base64-encoded video data."""
     return s.startswith("data:video/")
+
+
+def is_base64_audio(s: str) -> bool:
+    """Check if string is base64-encoded audio data."""
+    return s.startswith("data:audio/")
 
 
 def decode_base64_image(
@@ -759,6 +766,63 @@ def decode_base64_video(
     )
 
     return _temp_manager.register(temp_file.name)
+
+
+def decode_base64_audio(
+    base64_string: str,
+    *,
+    default_format: str = "wav",
+    max_length: int = MAX_BASE64_AUDIO_LENGTH,
+) -> str:
+    """Decode base64 audio to a temp file and return its path."""
+    if len(base64_string) > max_length:
+        raise FileSizeExceededError(
+            f"Base64 audio data exceeds maximum size: {len(base64_string) / 1024 / 1024:.1f} MB > "
+            f"{max_length / 1024 / 1024:.1f} MB limit"
+        )
+    ext = "." + (default_format or "wav").lower().lstrip(".")
+    if base64_string.startswith("data:audio/"):
+        header, data = base64_string.split(",", 1)
+        format_part = header.split(";", 1)[0]
+        fmt = format_part.split("/", 1)[-1]
+        if fmt:
+            ext = "." + fmt.lower().replace("x-wav", "wav")
+    else:
+        data = base64_string
+    audio_bytes = base64.b64decode(data)
+    if len(audio_bytes) > MAX_AUDIO_SIZE:
+        raise FileSizeExceededError(
+            f"Audio data exceeds maximum size: {len(audio_bytes) / 1024 / 1024:.1f} MB > "
+            f"{MAX_AUDIO_SIZE / 1024 / 1024:.1f} MB limit"
+        )
+    temp_file = tempfile.NamedTemporaryFile(suffix=ext, delete=False)
+    temp_file.write(audio_bytes)
+    temp_file.close()
+    logger.info(
+        f"Base64 audio decoded: {temp_file.name} ({len(audio_bytes) / 1024 / 1024:.1f} MB)"
+    )
+    return _temp_manager.register(temp_file.name)
+
+
+def process_audio_input(audio: str | dict) -> str:
+    """Process audio input in OpenAI/data-url/path/URL formats."""
+    if isinstance(audio, dict):
+        src = audio.get("input_audio") or audio.get("audio") or audio.get("audio_url") or audio
+        if isinstance(src, dict):
+            if src.get("data"):
+                return decode_base64_audio(
+                    str(src["data"]),
+                    default_format=str(src.get("format") or "wav"),
+                )
+            audio = src.get("url") or src.get("path") or ""
+        else:
+            audio = str(src or "")
+    audio = str(audio or "")
+    if not audio:
+        raise ValueError("Empty audio input")
+    if is_base64_audio(audio):
+        return decode_base64_audio(audio)
+    return audio
 
 
 def process_video_input(video: str | dict) -> str:
@@ -1315,6 +1379,25 @@ class MLXMultimodalLM:
             )
         return processed
 
+    def _prepare_audio(self, audio_inputs: list) -> list[str]:
+        """Process audio inputs and return local paths/URLs loadable by mlx-vlm."""
+        processed = []
+        failed_count = 0
+        for audio in audio_inputs:
+            try:
+                path = process_audio_input(audio)
+                if path:
+                    processed.append(path)
+            except Exception as e:
+                failed_count += 1
+                logger.warning(f"Failed to process audio: {e}")
+        if audio_inputs and not processed:
+            raise ValueError(
+                f"All {failed_count} audio input(s) failed to process. "
+                f"Check audio URLs/paths and try again."
+            )
+        return processed
+
     def _prepare_video(
         self,
         video_input: str | dict,
@@ -1474,9 +1557,9 @@ class MLXMultimodalLM:
     @staticmethod
     def _extract_multimodal_messages(
         messages: list[dict],
-    ) -> tuple[list[dict], list[str], list]:
+    ) -> tuple[list[dict], list[str], list, list]:
         """
-        Parse OpenAI-format messages into chat_messages, image URLs, and videos.
+        Parse OpenAI-format messages into chat_messages, image URLs, videos, and audio.
 
         Extracts text, images, and videos from multimodal message content,
         building properly structured chat messages for Qwen3-VL-MoE and similar
@@ -1486,13 +1569,15 @@ class MLXMultimodalLM:
             messages: List of chat messages in OpenAI format
 
         Returns:
-            Tuple of (chat_messages, all_image_urls, videos) where:
+            Tuple of (chat_messages, all_image_urls, videos, audio_inputs) where:
             - chat_messages: Properly structured messages for chat template
             - all_image_urls: Raw image URLs/paths to process
             - videos: Raw video inputs to process
+            - audio_inputs: Raw audio inputs to process
         """
         all_image_urls: list[str] = []
         videos: list = []
+        audio_inputs: list = []
         chat_messages: list[dict] = []
 
         for msg in messages:
@@ -1501,6 +1586,7 @@ class MLXMultimodalLM:
             msg_text = ""
             msg_image_count = 0
             msg_video_count = 0
+            msg_audio_count = 0
 
             if isinstance(content, str):
                 msg_text = content
@@ -1570,6 +1656,11 @@ class MLXMultimodalLM:
                                 videos.append(vid_url.get("url", ""))
                             msg_video_count += 1
 
+                        elif item_type in ("input_audio", "audio", "audio_url"):
+                            src = item.get("input_audio") or item.get("audio") or item.get("audio_url") or item
+                            audio_inputs.append(src)
+                            msg_audio_count += 1
+
             # Build properly structured message for Qwen3-VL-MoE
             # Format: {"role": "...", "content": [{"type": "image"|"video"}, ..., {"type": "text", "text": "..."}]}
             # Preserve tool_calls on assistant messages and tool role fields
@@ -1577,20 +1668,29 @@ class MLXMultimodalLM:
             tool_call_id = msg.get("tool_call_id")
             msg_name = msg.get("name")
 
-            if msg_text or msg_image_count > 0 or msg_video_count > 0 or tool_calls or role == "tool":
-                if (msg_image_count > 0 or msg_video_count > 0) and role in ("user", "assistant"):
+            if msg_text or msg_image_count > 0 or msg_video_count > 0 or msg_audio_count > 0 or tool_calls or role == "tool":
+                if (msg_image_count > 0 or msg_video_count > 0 or msg_audio_count > 0) and role in ("user", "assistant"):
                     # Build multimodal content list with image markers for
                     # any role that carries media (user or assistant).
                     # Some UIs (e.g. klite) send images on assistant messages
                     # when attaching an image to the conversation context.
                     content_list: list[dict] = []
-                    for _ in range(msg_image_count):
-                        content_list.append({"type": "image"})
-                    for _ in range(msg_video_count):
-                        content_list.append({"type": "video"})
-                    content_list.append(
-                        {"type": "text", "text": msg_text, "content": msg_text}
-                    )
+                    if msg_audio_count and not msg_image_count and not msg_video_count:
+                        content_list.append(
+                            {"type": "text", "text": msg_text, "content": msg_text}
+                        )
+                        for _ in range(msg_audio_count):
+                            content_list.append({"type": "audio"})
+                    else:
+                        for _ in range(msg_image_count):
+                            content_list.append({"type": "image"})
+                        for _ in range(msg_video_count):
+                            content_list.append({"type": "video"})
+                        for _ in range(msg_audio_count):
+                            content_list.append({"type": "audio"})
+                        content_list.append(
+                            {"type": "text", "text": msg_text, "content": msg_text}
+                        )
                     out_msg: dict = {"role": role, "content": content_list}
                     if role == "assistant" and tool_calls:
                         out_msg["tool_calls"] = tool_calls
@@ -1617,7 +1717,7 @@ class MLXMultimodalLM:
                         }
                     )
 
-        return chat_messages, all_image_urls, videos
+        return chat_messages, all_image_urls, videos, audio_inputs
 
     def _synthesizes_thinking_prompt_when_enabled(self) -> bool:
         """Return True for MLLM families whose template needs an explicit open rail.
@@ -1888,14 +1988,18 @@ class MLXMultimodalLM:
         videos = videos or []
         audio = audio or []
 
-        # Process all images (including frames from videos)
+        # Process all images (including frames from videos) and audio.
         all_images = []
+        all_audio = []
         all_sources = []  # Track original sources for cache key
 
         # Process image inputs
         if images:
             all_images.extend(self._prepare_images(images))
             all_sources.extend(images)
+        if audio:
+            all_audio.extend(self._prepare_audio(audio))
+            all_sources.extend(audio)
 
         # Extract frames from videos
         for video_path in videos:
@@ -1998,6 +2102,7 @@ class MLXMultimodalLM:
             self.processor,
             formatted_prompt,
             all_images if all_images else None,
+            audio=all_audio if all_audio else None,
             max_tokens=max_tokens,
             temperature=temperature,
             top_p=top_p,
@@ -2272,15 +2377,18 @@ class MLXMultimodalLM:
 
         from mlx_vlm import generate
 
-        # Extract text, images, and videos from messages
-        chat_messages, all_image_urls, videos = self._extract_multimodal_messages(messages)
+        # Extract text, images, videos, and audio from messages
+        chat_messages, all_image_urls, videos, audio_inputs = self._extract_multimodal_messages(messages)
 
         logger.info(f"MLLM.chat() called with {len(messages)} messages")
 
         # Process images
         all_images = []
+        all_audio = []
         if all_image_urls:
             all_images.extend(self._prepare_images(all_image_urls))
+        if audio_inputs:
+            all_audio.extend(self._prepare_audio(audio_inputs))
 
         # Process videos
         video_fps = kwargs.pop("video_fps", DEFAULT_FPS)
@@ -2304,7 +2412,8 @@ class MLXMultimodalLM:
         # Apply chat template
         template_tools = kwargs.pop("tools", None)
         logger.info(
-            f"Applying chat template with {len(chat_messages)} messages, {len(all_images)} images"
+            f"Applying chat template with {len(chat_messages)} messages, "
+            f"{len(all_images)} images, {len(all_audio)} audio"
         )
         for i, cm in enumerate(chat_messages):
             content_preview = str(cm.get("content", ""))[:80]
@@ -2470,6 +2579,7 @@ class MLXMultimodalLM:
             self.processor,
             formatted_prompt,
             all_images if all_images else None,
+            audio=all_audio if all_audio else None,
             max_tokens=max_tokens,
             temperature=temperature,
             verbose=False,
@@ -2582,13 +2692,16 @@ class MLXMultimodalLM:
             yield output
             return
 
-        # Extract text, images, and videos from messages
-        chat_messages, all_image_urls, videos = self._extract_multimodal_messages(messages)
+        # Extract text, images, videos, and audio from messages
+        chat_messages, all_image_urls, videos, audio_inputs = self._extract_multimodal_messages(messages)
 
         # Process images
         all_images = []
+        all_audio = []
         if all_image_urls:
             all_images.extend(self._prepare_images(all_image_urls))
+        if audio_inputs:
+            all_audio.extend(self._prepare_audio(audio_inputs))
 
         # Process videos
         video_fps = kwargs.pop("video_fps", DEFAULT_FPS)
@@ -2703,6 +2816,9 @@ class MLXMultimodalLM:
                 def _patched_add(self, token, **kwargs):
                     return original_add(self, token)
                 NaiveStreamingDetokenizer.add_token = _patched_add
+                def _patched_copy(self):
+                    return type(self)(self._tokenizer)
+                NaiveStreamingDetokenizer.__copy__ = _patched_copy
                 NaiveStreamingDetokenizer._vml_patched = True
 
             tokenizer = self.processor.tokenizer if hasattr(self.processor, "tokenizer") else self.processor
@@ -2735,6 +2851,7 @@ class MLXMultimodalLM:
                     self.processor,
                     formatted_prompt,
                     all_images if all_images else None,
+                    audio=all_audio if all_audio else None,
                     max_tokens=max_tokens,
                     temperature=temperature,
                     prompt_cache=prompt_cache,

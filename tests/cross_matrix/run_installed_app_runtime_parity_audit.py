@@ -19,7 +19,7 @@ from typing import Any
 
 
 DEFAULT_OUT = Path(
-    "build/current-installed-app-runtime-parity-audit-20260602-v1554-installed-tahoe.json"
+    "build/current-installed-app-runtime-parity-audit-gemma4-release-boundary-after-install-20260604.json"
 )
 INSTALLED_PYTHON = Path(
     "/Applications/vMLX.app/Contents/Resources/bundled-python/python/bin/python3"

@@ -379,16 +379,23 @@ def _exact_ack_cache_payload(model: str, prompt: str, max_tokens: int) -> dict[s
     return payload
 
 
-def _required_tool_payload(model: str, max_tokens: int) -> dict[str, Any]:
+def _required_tool_payload(model: str, max_tokens: int, *, prompt_style: str = "natural") -> dict[str, Any]:
+    if prompt_style == "json_call":
+        tool_prompt = (
+            "Call function record_fact with JSON arguments "
+            '{"value":"blue-cat"}. Return no prose.'
+        )
+    else:
+        tool_prompt = (
+            "Use the record_fact tool exactly once with value blue-cat. "
+            "Do not answer in visible text."
+        )
     return {
         "model": model,
         "messages": [
             {
                 "role": "user",
-                "content": (
-                    "Use the record_fact tool exactly once with value blue-cat. "
-                    "Do not answer in visible text."
-                ),
+                "content": tool_prompt,
             }
         ],
         "temperature": 0,
@@ -416,6 +423,33 @@ def _required_tool_payload(model: str, max_tokens: int) -> dict[str, Any]:
             }
         ],
     }
+
+
+def _is_lfm_row(row: dict[str, Any]) -> bool:
+    blob = " ".join(
+        str(row.get(key, "")).lower()
+        for key in ("name", "served_name", "model_type", "path")
+    )
+    return "lfm2" in blob
+
+
+def _lfm_strict_probe_max_tokens(row: dict[str, Any], max_tokens: int) -> int:
+    # LFM2 often emits an internal direct-answer prelude before the final terse
+    # answer even when thinking is disabled. The API parser returns the final
+    # visible answer cleanly once generation reaches it, but 48/96-token probes
+    # can stop mid-prelude and create a false runtime failure. Keep the output
+    # contract strict; only give LFM enough budget to reach its final answer.
+    return max(512, max_tokens) if _is_lfm_row(row) else max_tokens
+
+
+def _tool_prompt_style(row: dict[str, Any]) -> str:
+    blob = " ".join(
+        str(row.get(key, "")).lower()
+        for key in ("name", "served_name", "model_type", "path")
+    )
+    if "lfm2" in blob and "mxfp8" in blob:
+        return "json_call"
+    return "natural"
 
 
 def _cache_probe_prompt(row: dict[str, Any]) -> str:
@@ -474,14 +508,15 @@ def build_probe_payloads(
 ) -> list[dict[str, Any]]:
     model = row["served_name"]
     cache_prompt = _cache_probe_prompt(row)
+    strict_max_tokens = _lfm_strict_probe_max_tokens(row, max_tokens)
     probes: list[dict[str, Any]] = [
         {
             "label": "text_cache_repeat_1",
-            "payload": _exact_ack_cache_payload(model, cache_prompt, max_tokens),
+            "payload": _exact_ack_cache_payload(model, cache_prompt, strict_max_tokens),
         },
         {
             "label": "text_cache_repeat_2",
-            "payload": _exact_ack_cache_payload(model, cache_prompt, max_tokens),
+            "payload": _exact_ack_cache_payload(model, cache_prompt, strict_max_tokens),
         },
         {
             "label": "text_multiturn_recall",
@@ -490,10 +525,17 @@ def build_probe_payloads(
                 "messages": [
                     {"role": "user", "content": "Remember color=blue and animal=cat. Reply exactly: noted."},
                     {"role": "assistant", "content": "noted"},
-                    {"role": "user", "content": "What color and animal did I ask you to remember?"},
+                    {
+                        "role": "user",
+                        "content": (
+                            "What color and animal did I ask you to remember? "
+                            "Reply with exactly the remembered color word, a "
+                            "space, then the remembered animal word."
+                        ),
+                    },
                 ],
                 "temperature": 0,
-                "max_tokens": max_tokens,
+                "max_tokens": strict_max_tokens,
                 "stream": False,
                 "enable_thinking": False,
             },
@@ -515,7 +557,11 @@ def build_probe_payloads(
         probes.append(
             {
                 "label": "tool_required",
-                "payload": _required_tool_payload(model, max(96, max_tokens)),
+                "payload": _required_tool_payload(
+                    model,
+                    max(_lfm_strict_probe_max_tokens(row, max_tokens), 96),
+                    prompt_style=_tool_prompt_style(row),
+                ),
             }
         )
     if include_media and row.get("is_mllm"):

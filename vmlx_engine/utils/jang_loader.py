@@ -34,7 +34,7 @@ JANG_CONFIG_FILENAMES = [
     "mxq_config.json",
 ]
 JANG_FORMAT_VALUES = ["jang", "jjqf", "mxq"]
-JANG_WEIGHT_FORMAT_VALUES = {"affine", "mxtq", "mxfp4", "mxfp8"}
+JANG_WEIGHT_FORMAT_VALUES = {"affine", "jang_affine", "mxtq", "mxfp4", "mxfp8"}
 _MLX_WEIGHT_QUANT_BITS = {2, 3, 4, 5, 6, 8}
 _MLX_WEIGHT_QUANT_GROUP_SIZES = {32, 64, 128}
 
@@ -1563,6 +1563,13 @@ def _load_jang_v2(
         context="JANG v2 pre-load",
     )
 
+    def _is_gemma4_unified_text_runtime_config(_cfg: dict) -> bool:
+        return (
+            str(_cfg.get("model_type") or "").lower() == "gemma4_unified"
+            and str((_cfg.get("text_config") or {}).get("model_type") or "").lower()
+            == "gemma4_unified_text"
+        )
+
     # Mistral-Small-4-119B mismatch: HF config.json has top model_type="mistral3"
     # (the VLM wrapper class) but text_config.model_type="mistral4" (the inner
     # MLA language model). When loaded as text-only via mlx_lm, the top-level
@@ -1593,6 +1600,21 @@ def _load_jang_v2(
         for _kk in ("eos_token_id", "bos_token_id", "pad_token_id"):
             if _kk in config and _kk not in _flat:
                 _flat[_kk] = config[_kk]
+        config = _flat
+        _ensure_jang_family_runtime_supported(path, config)
+
+    if _is_gemma4_unified_text_runtime_config(config):
+        logger.warning(
+            "  Gemma 4 Unified text-runtime promotion: top gemma4_unified + "
+            "text_config gemma4_unified_text → loading language model through "
+            "mlx_lm gemma4 wrapper. Vision/audio remain unavailable until the "
+            "encoder-free early-fusion runtime is implemented."
+        )
+        _text_config = dict(config.get("text_config") or {})
+        _text_config["model_type"] = "gemma4_text"
+        _flat = dict(config)
+        _flat["model_type"] = "gemma4"
+        _flat["text_config"] = _text_config
         config = _flat
         _ensure_jang_family_runtime_supported(path, config)
 
@@ -2493,6 +2515,38 @@ def _load_jang_v2_vlm(
         logger.info(
             "  Qwen3.5/3.6 native-MTP VL artifact detected by tensor metadata; "
             "using the real mlx-vlm loader with vMLX MTP/VL runtime adapters."
+        )
+
+    def _is_gemma4_unified_text_runtime_config(_cfg: dict) -> bool:
+        return (
+            str(_cfg.get("model_type") or "").lower() == "gemma4_unified"
+            and str((_cfg.get("text_config") or {}).get("model_type") or "").lower()
+            == "gemma4_unified_text"
+        )
+
+    def _gemma4_unified_runtime_available() -> bool:
+        try:
+            from vmlx_engine.models.gemma4_unified_register import (
+                gemma4_unified_runtime_available,
+            )
+
+            return gemma4_unified_runtime_available()
+        except Exception:
+            return False
+
+    if _is_gemma4_unified_text_runtime_config(config) and not _gemma4_unified_runtime_available():
+        logger.warning(
+            "  Gemma 4 Unified JANG VLM is routed text-only: current mlx_vlm "
+            "does not ship a gemma4_unified early-fusion runtime. Text loads "
+            "through mlx_lm gemma4; vision/audio/video stay unavailable until "
+            "the runtime is implemented."
+        )
+        globals()["_LAST_LOAD_VLM_FALLBACK"] = True
+        return _load_jang_v2(
+            path,
+            jang_cfg,
+            skip_eval=skip_eval,
+            filter_expert_keys=filter_expert_keys,
         )
 
     # Mistral Small 4 VLM uses outer config.model_type=mistral3 for the VLM

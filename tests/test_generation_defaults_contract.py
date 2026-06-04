@@ -5,7 +5,7 @@ def test_generation_defaults_contract_default_out_tracks_current_release_proof_a
     from tests.cross_matrix import run_generation_defaults_contract as gate
 
     assert gate.DEFAULT_OUT == Path(
-        "build/current-generation-defaults-contract-20260602-v1554-model-owned-defaults-refresh.json"
+        "build/current-generation-defaults-contract-gemma4-release-boundary-20260604.json"
     )
 
 

@@ -81,12 +81,22 @@ def _install_mlx_vlm_registry_patches() -> None:
     so any module-level `mx.new_stream(...)` ends up bound to that
     thread."""
     try:
+        from vmlx_engine.models.gemma4_unified_register import (
+            register_gemma4_unified_runtime as _register_gemma4_unified_runtime,
+        )
+
+        _register_gemma4_unified_runtime()
+    except Exception:
+        pass
+    try:
         from mlx_vlm.prompt_utils import (
             MODEL_CONFIG as _VLM_MODEL_CONFIG,
             MessageFormat as _VLMMF,
         )
         _VLM_MODEL_CONFIG.setdefault("gemma4", _VLMMF.LIST_WITH_IMAGE_TYPE)
         _VLM_MODEL_CONFIG.setdefault("gemma4_text", _VLMMF.LIST_WITH_IMAGE_TYPE)
+        _VLM_MODEL_CONFIG.setdefault("gemma4_unified", _VLMMF.LIST_WITH_IMAGE_TYPE)
+        _VLM_MODEL_CONFIG.setdefault("gemma4_unified_text", _VLMMF.LIST_WITH_IMAGE_TYPE)
     except Exception:
         pass
     try:
@@ -133,6 +143,8 @@ def _patch_loaded_mlx_vlm_registry_module(module_name: str, module) -> None:
             if _model_config is not None and _message_format is not None:
                 _model_config.setdefault("gemma4", _message_format.LIST_WITH_IMAGE_TYPE)
                 _model_config.setdefault("gemma4_text", _message_format.LIST_WITH_IMAGE_TYPE)
+                _model_config.setdefault("gemma4_unified", _message_format.LIST_WITH_IMAGE_TYPE)
+                _model_config.setdefault("gemma4_unified_text", _message_format.LIST_WITH_IMAGE_TYPE)
                 if "gemma4_assistant" not in _model_config and "gemma4" in _model_config:
                     _model_config["gemma4_assistant"] = _model_config["gemma4"]
                 if "kimi_k25" not in _model_config and "kimi_vl" in _model_config:

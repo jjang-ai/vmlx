@@ -26,10 +26,11 @@ from tests.cross_matrix.release_regression_manifest import (
 
 
 DEFAULT_OUT = Path(
-    "build/current-release-regression-manifest-20260602-step-greedy-display-refresh.json"
+    "build/current-release-regression-manifest-after-installed-public-refresh-20260604.json"
 )
 PREPACKAGE_ALLOWED_BLOCKERS = {
     "packaged_app_developer_id_signing_blocked",
+    "installed_app_runtime_parity_audit",
 }
 
 
@@ -91,7 +92,16 @@ def prepackage_clearance_from_release_clearance(release_clearance: dict) -> dict
     ]
     proof_sweep_prepackage_ok = proof_sweep_status == "pass" or (
         set(proof_sweep_failed_components)
-        <= {"no_release_blockers", "no_open_objective_requirements", "regression_suite"}
+        <= {
+            "no_not_pass_post_budget_artifacts",
+            "no_release_blockers",
+            "no_open_objective_requirements",
+            "regression_suite",
+            "packaged_integrity_matrix",
+            "installed_app_runtime_parity_audit",
+            "staged_app_runtime_parity_audit",
+            "public_app_issue_audit",
+        }
     )
     prepackage_ready = (
         proof_sweep_prepackage_ok

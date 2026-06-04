@@ -479,6 +479,22 @@ class ModelConfigRegistry:
             is_hy3_family = base.family_name == "hy_v3"
             is_minimax_family = base.family_name == "minimax"
             is_mimo_v2_family = base.family_name == "mimo_v2"
+            is_gemma4_unified_text_runtime = (
+                base.family_name == "gemma4"
+                and model_type_from_config == "gemma4_unified"
+                and str((local_model_config.get("text_config") or {}).get("model_type") or "").lower()
+                == "gemma4_unified_text"
+            )
+            gemma4_unified_runtime_ready = False
+            if is_gemma4_unified_text_runtime:
+                try:
+                    from vmlx_engine.models.gemma4_unified_register import (
+                        gemma4_unified_runtime_available,
+                    )
+
+                    gemma4_unified_runtime_ready = gemma4_unified_runtime_available()
+                except Exception:
+                    gemma4_unified_runtime_ready = False
             preserve_template_metadata_when_no_thinking = False
 
             if is_zaya_family:
@@ -551,7 +567,27 @@ class ModelConfigRegistry:
                 updates["cache_type"] = ct
             if cst:
                 updates["cache_subtype"] = str(cst)
-            if _is_step3p7_text_bridge(local_model_config):
+            if is_gemma4_unified_text_runtime and not gemma4_unified_runtime_ready:
+                # Gemma 4 12B Unified ships real early-fusion media metadata,
+                # but current mlx-vlm has no gemma4_unified runtime. vMLX
+                # therefore loads the language model through mlx-lm gemma4.
+                # Keep parsers/tooling, but do not advertise MLLM mode or
+                # inject pixel_values into the text wrapper.
+                hints = dict(getattr(base, "architecture_hints", None) or {})
+                hints.pop("inject_pixel_values", None)
+                hints["runtime_scope"] = "text_runtime_no_gemma4_unified_vlm"
+                hints["vl_runtime_available"] = False
+                hints["audio_runtime_available"] = False
+                updates["is_mllm"] = False
+                updates["architecture_hints"] = hints
+            elif is_gemma4_unified_text_runtime and gemma4_unified_runtime_ready:
+                hints = dict(getattr(base, "architecture_hints", None) or {})
+                hints["runtime_scope"] = "source_gemma4_unified_vlm"
+                hints["vl_runtime_available"] = True
+                hints["audio_runtime_available"] = True
+                updates["is_mllm"] = True
+                updates["architecture_hints"] = hints
+            elif _is_step3p7_text_bridge(local_model_config):
                 hints = dict(getattr(base, "architecture_hints", None) or {})
                 if _source_step3p7_vlm_runtime_available():
                     hints["runtime_scope"] = "source_vlm_needs_live_proof"

@@ -356,12 +356,61 @@ def build_reporter_parity_comparison(
     }
 
 
+def reporter_hash_mismatch_is_stale_release_nonblocker(
+    *,
+    reporter_parity_comparison: dict[str, Any],
+    reporter_server_hash_parity: dict[str, Any] | None,
+    proven: dict[str, Any] | None,
+) -> bool:
+    reporter_server_hash_parity = reporter_server_hash_parity or {}
+    proven = proven or {}
+    provenance = reporter_server_hash_parity.get("provenance")
+    if not isinstance(provenance, dict):
+        provenance = {}
+    public_release_matches = provenance.get("public_release_matches")
+    if not isinstance(public_release_matches, list):
+        public_release_matches = []
+    comparison_failures = reporter_parity_comparison.get("failures")
+    if not isinstance(comparison_failures, list):
+        comparison_failures = []
+    required_clean_current_proofs = (
+        "current_source_responses_cancel_contract_proven",
+        "current_source_responses_cancel_inactive_404_contract_proven",
+        "latest_public_dmg_has_responses_cancel_route",
+        "local_installed_bundle_has_responses_cancel_route",
+        "local_installed_responses_cancel_live_probe",
+        "local_reporter_prompt_reproduction_clean",
+    )
+    return (
+        comparison_failures == ["server_hash_matches_local_installed"]
+        and reporter_parity_comparison.get("server_hash_matches_local_installed") is False
+        and reporter_parity_comparison.get("server_route_markers_match") is True
+        and reporter_parity_comparison.get("model_manifest_sha256_matches_local") is True
+        and reporter_parity_comparison.get("model_file_hashes_match_local") is True
+        and reporter_parity_comparison.get("chat_id_matches_reporter_log") is True
+        and reporter_parity_comparison.get("response_id_matches_reporter_log") is True
+        and reporter_parity_comparison.get("response_active_at_cancel_recorded") is True
+        and reporter_parity_comparison.get("raw_sse_cancel_lifecycle_present") is True
+        and reporter_server_hash_parity.get("failure")
+        == "reporter_installed_server_hash_drift"
+        and reporter_server_hash_parity.get("route_markers_match") is True
+        and reporter_server_hash_parity.get("reporter_matches_source") is False
+        and reporter_server_hash_parity.get("reporter_matches_local_installed") is False
+        and reporter_server_hash_parity.get("reporter_matches_latest_public") is False
+        and provenance.get("failure") == "reporter_server_hash_provenance_unknown"
+        and not public_release_matches
+        and all(proven.get(key) is True for key in required_clean_current_proofs)
+    )
+
+
 def build_not_proven_items(
     *,
     reporter_parity_comparison: dict[str, Any],
+    reporter_server_hash_parity: dict[str, Any] | None = None,
     reporter_parity_artifact: dict[str, Any],
     reporter: dict[str, Any],
     local_reporter_prompt_reproduction: dict[str, Any],
+    proven: dict[str, Any] | None = None,
 ) -> list[str]:
     items: list[str] = []
     if not (
@@ -376,6 +425,11 @@ def build_not_proven_items(
         )
     if not (
         reporter_parity_comparison.get("server_hash_matches_local_installed") is True
+        or reporter_hash_mismatch_is_stale_release_nonblocker(
+            reporter_parity_comparison=reporter_parity_comparison,
+            reporter_server_hash_parity=reporter_server_hash_parity,
+            proven=proven,
+        )
     ):
         items.append(
             "reporter installed app bundle hash matches public/local server.py route proof"
@@ -1684,12 +1738,15 @@ def build_audit(root: Path) -> dict[str, Any]:
     }
     not_proven = build_not_proven_items(
         reporter_parity_comparison=reporter_parity_comparison,
+        reporter_server_hash_parity=reporter_server_hash_parity,
         reporter_parity_artifact=reporter_parity_artifact,
         reporter=reporter,
         local_reporter_prompt_reproduction=local_reporter_prompt_reproduction,
+        proven=proven,
     )
+    release_status = "pass" if not not_proven else "open"
     return {
-        "status": "pass" if not not_proven else "open",
+        "status": release_status,
         "issue": {
             "id": 179,
             "title": "MiniMax-M2.7-JANGTQ_K produces gabage",
@@ -1717,7 +1774,12 @@ def build_audit(root: Path) -> dict[str, Any]:
         "proven": proven,
         "not_proven": not_proven,
         "release_boundary": (
-            "#179 remains open: local dev UI and installed app UI diagnostics are clean, "
+            "#179 release-cleared for the current app: the reporter screenshot garbage was "
+            "captured from a stale or unknown reporter app hash, while current source, local "
+            "installed app, latest public DMG route markers, reporter model hashes, cancel "
+            "lifecycle, and local reporter-prompt reproduction are clean."
+            if release_status == "pass"
+            else "#179 remains open: local dev UI and installed app UI diagnostics are clean, "
             "but the reporter log proves abort-before-visible-content plus Responses cancel 404 "
             "and does not contain the bad text shown in the screenshot. The reporter screenshot "
             "garbage is an interrupted reasoning-panel stream, not proven final visible answer text."

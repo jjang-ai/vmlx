@@ -4,11 +4,14 @@ from pathlib import Path
 import shlex
 import hashlib
 
+from tests.cross_matrix import release_regression_manifest
 from tests.cross_matrix.run_release_regression_manifest import build_manifest_artifact
 from tests.cross_matrix.release_regression_manifest import (
     CURRENT_COVERED_LIVE_SMOKE_ARTIFACTS,
     CURRENT_COVERED_LIVE_SMOKE_ROW_EXPECTATIONS,
     CURRENT_COVERED_LIVE_TOOL_SMOKE_ARTIFACTS,
+    CURRENT_DSV4_PROOF_ARTIFACT_FRESHNESS_ARTIFACTS,
+    CURRENT_DSV4_PROOF_ARTIFACT_REQUIRED_ARTIFACTS,
     CURRENT_DEV_UI_PROOF_ARTIFACTS,
     CURRENT_DIAGNOSTIC_LIVE_SMOKE_ARTIFACTS,
     CURRENT_DSV4_SOURCE_MEMORY_PREFLIGHT_ARTIFACT,
@@ -26,9 +29,11 @@ from tests.cross_matrix.release_regression_manifest import (
     CURRENT_MIMO_V2_JANG2L_PROFILE_DIAGNOSTIC_ARTIFACT,
     CURRENT_MIMO_V2_JANG2L_ROUTER_TOPK_PARITY_ARTIFACT,
     CURRENT_MIMO_V2_JANG2L_SINK_AB_ARTIFACT,
+    CURRENT_OBJECTIVE_DIGEST_ARTIFACT,
     CURRENT_REAL_UI_DSV4_MEMORY_PREFLIGHT_ARTIFACT,
     CURRENT_REAL_UI_LIVE_MODEL_PROOF_ARTIFACTS,
     CURRENT_REAL_UI_LIVE_MODEL_PROOF_ROWS,
+    CURRENT_RELEASE_REGRESSION_MANIFEST_ARTIFACT,
     CURRENT_REGRESSION_SUITE_ARTIFACT,
     CURRENT_STEP37_VLM_RUNTIME_AUDIT_ARTIFACT,
     CURRENT_STAGED_APP_RUNTIME_PARITY_AUDIT_ARTIFACT,
@@ -68,6 +73,7 @@ from tests.cross_matrix.release_regression_manifest import (
     _validate_current_real_ui_live_model_matrix,
     _validate_current_step37_vlm_runtime_audit,
     build_manifest,
+    validate_current_dsv4_proof_artifact_freshness,
     validate_current_proof_sweep_artifacts,
 )
 
@@ -134,7 +140,7 @@ def _write_current_objective_digest(
     open_requirements: list[str] | None = None,
     missing_evidence: list[str] | None = None,
 ) -> None:
-    artifact = root / "build/current-objective-proof-audit-20260602-cache-detail-zero-cached.json"
+    artifact = root / "build/current-objective-proof-audit-gemma4-release-boundary-20260604.json"
     artifact.parent.mkdir(parents=True, exist_ok=True)
     open_rows = (
         EXPECTED_CURRENT_OPEN_REQUIREMENTS
@@ -178,7 +184,224 @@ def _write_current_objective_digest(
                 "details": details,
             }
         )
-    artifact.write_text(json.dumps({"requirements": requirements}) + "\n", encoding="utf-8")
+    artifact.write_text(
+        json.dumps(
+            {
+                "requirements": requirements,
+                "dsv4_proof_artifact_freshness_evidence": list(
+                    CURRENT_DSV4_PROOF_ARTIFACT_REQUIRED_ARTIFACTS
+                ),
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+
+def test_current_proof_artifacts_do_not_reference_stale_dsv4_second_local_check():
+    freshness = validate_current_dsv4_proof_artifact_freshness(Path("."))
+
+    assert freshness["status"] == "pass"
+    assert freshness["checked_artifacts"] == list(
+        CURRENT_DSV4_PROOF_ARTIFACT_FRESHNESS_ARTIFACTS
+    )
+    assert freshness["stale_markers"] == ["second-local-check"]
+    assert freshness["required_artifacts"] == [
+        CURRENT_REAL_UI_DSV4_MEMORY_PREFLIGHT_ARTIFACT,
+        CURRENT_DSV4_SOURCE_MEMORY_PREFLIGHT_ARTIFACT,
+    ]
+    for artifact in freshness["artifacts"]:
+        assert artifact["missing"] is False
+        assert artifact["stale_references"] == []
+        assert artifact["missing_required_artifacts"] == []
+
+
+def test_current_dsv4_proof_artifact_freshness_checks_all_current_proof_artifacts():
+    assert CURRENT_DSV4_PROOF_ARTIFACT_FRESHNESS_ARTIFACTS == (
+        CURRENT_RELEASE_REGRESSION_MANIFEST_ARTIFACT,
+        CURRENT_REGRESSION_SUITE_ARTIFACT,
+        CURRENT_OBJECTIVE_DIGEST_ARTIFACT,
+    )
+
+
+def test_current_dsv4_proof_artifact_freshness_rejects_stale_second_local_check(
+    tmp_path,
+):
+    for artifact in CURRENT_DSV4_PROOF_ARTIFACT_FRESHNESS_ARTIFACTS:
+        path = tmp_path / artifact
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            "\n".join(CURRENT_DSV4_PROOF_ARTIFACT_REQUIRED_ARTIFACTS) + "\n",
+            encoding="utf-8",
+        )
+    stale_path = tmp_path / CURRENT_DSV4_PROOF_ARTIFACT_FRESHNESS_ARTIFACTS[0]
+    stale_path.write_text(
+        stale_path.read_text(encoding="utf-8") + "second-local-check\n",
+        encoding="utf-8",
+    )
+
+    freshness = validate_current_dsv4_proof_artifact_freshness(tmp_path)
+
+    assert freshness["status"] == "fail"
+    assert freshness["failures"] == [
+        {
+            "path": CURRENT_DSV4_PROOF_ARTIFACT_FRESHNESS_ARTIFACTS[0],
+            "missing": False,
+            "stale_references": ["second-local-check"],
+            "missing_required_artifacts": [],
+        }
+    ]
+
+
+def test_current_dsv4_proof_artifact_freshness_rejects_missing_third_local_check(
+    tmp_path,
+):
+    for artifact in CURRENT_DSV4_PROOF_ARTIFACT_FRESHNESS_ARTIFACTS:
+        path = tmp_path / artifact
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            CURRENT_DSV4_PROOF_ARTIFACT_REQUIRED_ARTIFACTS[0] + "\n",
+            encoding="utf-8",
+        )
+
+    freshness = validate_current_dsv4_proof_artifact_freshness(tmp_path)
+
+    assert freshness["status"] == "fail"
+    assert freshness["failures"] == [
+        {
+            "path": artifact,
+            "missing": False,
+            "stale_references": [],
+            "missing_required_artifacts": [
+                CURRENT_DSV4_PROOF_ARTIFACT_REQUIRED_ARTIFACTS[1]
+            ],
+        }
+        for artifact in CURRENT_DSV4_PROOF_ARTIFACT_FRESHNESS_ARTIFACTS
+    ]
+
+
+def test_current_dsv4_proof_artifact_freshness_rejects_missing_current_artifact(
+    tmp_path,
+):
+    missing_artifact = CURRENT_DSV4_PROOF_ARTIFACT_FRESHNESS_ARTIFACTS[0]
+    for artifact in CURRENT_DSV4_PROOF_ARTIFACT_FRESHNESS_ARTIFACTS[1:]:
+        path = tmp_path / artifact
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            "\n".join(CURRENT_DSV4_PROOF_ARTIFACT_REQUIRED_ARTIFACTS) + "\n",
+            encoding="utf-8",
+        )
+
+    freshness = validate_current_dsv4_proof_artifact_freshness(tmp_path)
+
+    assert freshness["status"] == "fail"
+    assert freshness["failures"] == [
+        {
+            "path": missing_artifact,
+            "missing": True,
+            "stale_references": [],
+            "missing_required_artifacts": list(
+                CURRENT_DSV4_PROOF_ARTIFACT_REQUIRED_ARTIFACTS
+            ),
+        }
+    ]
+
+
+def test_current_dsv4_proof_artifact_freshness_non_circular_mode_skips_manifest(
+    tmp_path,
+):
+    for artifact in CURRENT_DSV4_PROOF_ARTIFACT_FRESHNESS_ARTIFACTS:
+        if artifact == CURRENT_RELEASE_REGRESSION_MANIFEST_ARTIFACT:
+            continue
+        path = tmp_path / artifact
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            "\n".join(CURRENT_DSV4_PROOF_ARTIFACT_REQUIRED_ARTIFACTS) + "\n",
+            encoding="utf-8",
+        )
+
+    freshness = validate_current_dsv4_proof_artifact_freshness(
+        tmp_path,
+        require_manifest_artifact=False,
+    )
+
+    assert freshness["status"] == "pass"
+    assert freshness["require_manifest_artifact"] is False
+    assert freshness["checked_artifacts"] == [
+        artifact
+        for artifact in CURRENT_DSV4_PROOF_ARTIFACT_FRESHNESS_ARTIFACTS
+        if artifact != CURRENT_RELEASE_REGRESSION_MANIFEST_ARTIFACT
+    ]
+
+
+def test_current_proof_sweep_fails_when_dsv4_proof_artifact_freshness_fails(
+    monkeypatch,
+    tmp_path,
+):
+    freshness_failure = {
+        "status": "fail",
+        "artifacts": [],
+        "checked_artifacts": [],
+        "require_manifest_artifact": False,
+        "stale_markers": ["second-local-check"],
+        "required_artifacts": list(CURRENT_DSV4_PROOF_ARTIFACT_REQUIRED_ARTIFACTS),
+        "failures": [
+            {
+                "path": CURRENT_REGRESSION_SUITE_ARTIFACT,
+                "missing": False,
+                "stale_references": ["second-local-check"],
+                "missing_required_artifacts": [],
+            }
+        ],
+    }
+
+    def fail_freshness(root: Path, *, require_manifest_artifact: bool = True):
+        assert root == tmp_path
+        assert require_manifest_artifact is False
+        return freshness_failure
+
+    monkeypatch.setattr(
+        release_regression_manifest,
+        "validate_current_dsv4_proof_artifact_freshness",
+        fail_freshness,
+    )
+
+    result = validate_current_proof_sweep_artifacts(tmp_path)
+
+    assert result["component_ok"]["dsv4_proof_artifact_freshness"] is False
+    assert "dsv4_proof_artifact_freshness" in result["failed_components"]
+    assert result["dsv4_proof_artifact_freshness"] == freshness_failure
+
+
+def test_current_proof_sweep_surfaces_dsv4_proof_artifact_freshness_details(
+    monkeypatch,
+    tmp_path,
+):
+    freshness_pass = {
+        "status": "pass",
+        "artifacts": [],
+        "checked_artifacts": [],
+        "require_manifest_artifact": False,
+        "stale_markers": ["second-local-check"],
+        "required_artifacts": list(CURRENT_DSV4_PROOF_ARTIFACT_REQUIRED_ARTIFACTS),
+        "failures": [],
+    }
+
+    def pass_freshness(root: Path, *, require_manifest_artifact: bool = True):
+        assert root == tmp_path
+        assert require_manifest_artifact is False
+        return freshness_pass
+
+    monkeypatch.setattr(
+        release_regression_manifest,
+        "validate_current_dsv4_proof_artifact_freshness",
+        pass_freshness,
+    )
+
+    result = validate_current_proof_sweep_artifacts(tmp_path)
+
+    assert result["component_ok"]["dsv4_proof_artifact_freshness"] is True
+    assert result["dsv4_proof_artifact_freshness"] == freshness_pass
 
 
 def _write_passing_covered_live_smoke_artifacts(root: Path) -> None:
@@ -477,6 +700,7 @@ def _write_passing_real_ui_live_model_proof_artifacts(root: Path) -> None:
                         "REAL_UI_LIVE_TOOL_ONE"
                     ),
                 },
+                *({"phase": "result", "toolName": "run_command"} for _ in range(7)),
             ],
             [
                 *({"phase": "generating", "toolName": ""} for _ in range(9)),
@@ -498,6 +722,7 @@ def _write_passing_real_ui_live_model_proof_artifacts(root: Path) -> None:
                         "REAL_UI_LIVE_TOOL_TWO"
                     ),
                 },
+                *({"phase": "result", "toolName": "run_command"} for _ in range(7)),
             ],
         ]
 
@@ -802,6 +1027,7 @@ def _write_passing_real_ui_live_model_proof_artifacts(root: Path) -> None:
                 "lfm25-moe-a1b-jang2l-responses-tools-l2storage-pagedlocked-after-content-json-ban-20260531-proof.json",
                 "installed-app-lfm25-moe-a1b-jang2l-responses-tools-l2storage-cachecontrols-localonly-20260601-proof.json",
                 "lfm25-jang2l-installed-responses-tools-max512-post-release-20260602-proof.json",
+                "lfm25-jang2l-continuation-responses-tools-cache-settings-default-max512-20260604-proof.json",
             )
         ):
             add_extensive_tool_churn(proof)
@@ -2151,23 +2377,20 @@ def test_current_proof_sweep_surfaces_issue179_open_not_proven_details(tmp_path)
         "#179 remains open until reporter bundle hash provenance is proven."
     )
     assert result["failures"] == []
-    deferred = {
-        gap["id"]: gap
-        for gap in sweep["release_blocker_ledger"]["deferred_release_gaps"]
-    }
-    assert deferred["issue179_minimax_k_root_cause_audit"]["details"][
+    blockers = {gap["id"]: gap for gap in sweep["release_blocker_ledger"]["blockers"]}
+    assert blockers["issue179_minimax_k_root_cause_audit"]["details"][
         "not_proven"
     ] == [not_proven]
-    assert deferred["issue179_minimax_k_root_cause_audit"]["details"][
+    assert blockers["issue179_minimax_k_root_cause_audit"]["details"][
         "release_boundary"
     ] == "#179 remains open until reporter bundle hash provenance is proven."
-    assert deferred["issue179_minimax_k_root_cause_audit"]["details"][
+    assert blockers["issue179_minimax_k_root_cause_audit"]["details"][
         "reporter_server_hash_parity"
     ]["failure"] == "reporter_installed_server_hash_drift"
-    assert "reporter installed app bundle hash provenance" in deferred[
+    assert "reporter installed app bundle hash provenance" in blockers[
         "issue179_minimax_k_root_cause_audit"
     ]["next_proof"]
-    assert "broad cache/model probes" in deferred[
+    assert "broad cache/model probes" in blockers[
         "issue179_minimax_k_root_cause_audit"
     ]["next_proof"]
 
@@ -3232,6 +3455,13 @@ def _passing_open_requirement_details() -> dict[str, object]:
                         "legacy_completion_raw",
                     ],
                 },
+                "real_ui_dsv4_memory_preflight": {
+                    "artifact": CURRENT_REAL_UI_DSV4_MEMORY_PREFLIGHT_ARTIFACT,
+                    "status": "skipped",
+                    "reason": "insufficient_memory",
+                    "did_not_launch": True,
+                    "launch_blockers": ["insufficient_memory"],
+                },
             }
         },
     }
@@ -3580,7 +3810,8 @@ def test_release_regression_manifest_current_sweep_uses_latest_live_smoke_artifa
     assert "current-regression-suite-20260528-installed-aggregate-stale.json" not in joined
     assert "current-regression-suite-20260528-epipe-aggregate-guard.json" not in joined
     assert "current-regression-suite-20260528-dsv4-continue-refresh.json" not in joined
-    assert "current-regression-suite-20260602-step-greedy-display-refresh.json" in joined
+    assert "current-regression-suite-after-gemma31-step-lfm-continuation-20260604.json" in joined
+    assert "current-regression-suite-gemma4-release-boundary-after-ui-e2e-fixes-dmg-build-20260604.json" not in joined
     assert "current-regression-suite-20260602-v1553-installed-tahoe-refresh.json" not in joined
     assert "current-regression-suite-20260602-vm-stat-gate-validation.json" not in joined
     assert "current-regression-suite-20260601-pipe-safe-runner.json" not in joined
@@ -3605,8 +3836,9 @@ def test_release_regression_manifest_current_sweep_uses_latest_live_smoke_artifa
     assert "current-regression-suite-20260528-release-ready-top-level.json" not in joined
     assert "current-regression-suite-20260528-dsv4-memory-refresh.json" not in joined
     assert "current-regression-suite-20260528-signing-detail-ledger.json" not in joined
-    assert "current-installed-app-runtime-parity-audit-20260602-v1554-installed-tahoe.json" in joined
-    assert "current-installed-app-runtime-parity-audit-20260602-v1554-installed-tahoe.json" in row_text
+    assert "current-installed-app-runtime-parity-audit-gemma4-release-boundary-after-install-20260604.json" in joined
+    assert "current-installed-app-runtime-parity-audit-gemma4-release-boundary-after-install-20260604.json" in row_text
+    assert "run_installed_app_runtime_parity_audit.py --app panel/release/sequoia-app/mac-arm64/vMLX.app --out build/current-installed-app-runtime-parity-audit-gemma4-release-boundary-after-install-20260604.json" in row_text
     assert "current-installed-app-runtime-parity-audit-20260602-developer-id-installed-signing.json" not in joined
     assert "current-installed-app-runtime-parity-audit-20260602-developer-id-installed-signing.json" not in row_text
     assert "current-installed-app-runtime-parity-audit-20260602-performance-health-epipe.json" not in joined
@@ -3619,7 +3851,7 @@ def test_release_regression_manifest_current_sweep_uses_latest_live_smoke_artifa
     assert "current-installed-app-runtime-parity-audit-20260531-childstream-epipe-installed-sync.json" not in row_text
     assert "current-installed-app-runtime-parity-audit-20260528-epipe-aggregate-guard.json" not in joined
     assert "current-installed-app-runtime-parity-audit-20260528-epipe-aggregate-guard.json" not in row_text
-    assert "current-staged-app-runtime-parity-audit-20260602-developer-id-staged-signing.json" in joined
+    assert "current-staged-app-runtime-parity-audit-gemma4-release-boundary-after-ui-e2e-fixes-dmg-build-20260604.json" in joined
     assert "current-staged-app-runtime-parity-audit-20260602-performance-health-epipe.json" not in joined
     assert "current-staged-app-runtime-parity-audit-20260601-cache-ipc-epipe-staged.json" not in joined
     assert "current-staged-app-runtime-parity-audit-20260601-wrapper-epipe-package-refresh.json" not in joined
@@ -3668,7 +3900,9 @@ def test_release_regression_manifest_current_sweep_uses_latest_live_smoke_artifa
     assert "current-regression-suite-20260528-dsv4-preflight-refresh.json" not in joined
     assert "current-regression-suite-20260528-admin-sleep-sourcehash.json" not in joined
     assert "current-regression-suite-20260528-issue179-econnreset-boundary.json" not in joined
-    assert "current-real-ui-dsv4-memory-preflight-20260602-developer-id-local-recheck.json" in joined
+    assert "current-real-ui-dsv4-memory-preflight-after-lfm-step-manifest-fix-20260604.json" in joined
+    assert "current-real-ui-dsv4-memory-preflight-20260603-second-local-check.json" not in joined
+    assert "current-real-ui-dsv4-memory-preflight-20260602-developer-id-local-recheck.json" not in joined
     assert "current-real-ui-dsv4-memory-preflight-20260601-local-recheck.json" not in joined
     assert "current-real-ui-dsv4-memory-preflight-20260601-post-wrapped-epipe.json" not in joined
     assert "current-real-ui-dsv4-memory-preflight-20260601-local-refresh.json" not in joined
@@ -3725,7 +3959,7 @@ def test_release_regression_manifest_current_sweep_uses_latest_live_smoke_artifa
     assert "current-api-surface-contract-20260527-cache-endpoint-autoswitch-proof.json" not in joined
     assert "current-api-surface-contract-20260526-single-model-auto-switch-review.json" not in joined
     assert "current-api-surface-contract-20260525-single-model-responses-deltas.json" not in joined
-    assert "current-packaged-integrity-contract-20260602-developer-id-staged-signing.json" in joined
+    assert "current-packaged-integrity-contract-gemma4-release-boundary-after-ui-e2e-fixes-dmg-build-20260604.json" in joined
     assert "current-packaged-integrity-contract-20260601-qwen-fix-resigned-staged-app.json" not in joined
     assert "current-packaged-integrity-contract-20260601-developer-id-dmg-assertions.json" not in joined
     assert "current-packaged-integrity-contract-20260601-cache-ipc-epipe-package-refresh.json" not in joined
@@ -3753,7 +3987,7 @@ def test_release_regression_manifest_current_sweep_uses_latest_live_smoke_artifa
     assert "current-packaged-integrity-contract-20260526-bundled-release-proof.json" not in joined
     assert "current-packaged-integrity-contract-20260525-additional-args-guard.json" not in joined
     assert "current-regression-suite-20260524-crossfamily-cleared-dsv4-open.json" not in joined
-    assert "current-generation-defaults-contract-20260602-v1554-model-owned-defaults-refresh.json" in joined
+    assert "current-generation-defaults-contract-gemma4-release-boundary-20260604.json" in joined
     assert "current-generation-defaults-contract-20260602-step-greedy-display.json" not in joined
     assert "current-generation-defaults-contract-20260531-post-step-lfm-refresh.json" not in joined
     assert "current-generation-defaults-contract-20260526-settings-audit.json" not in joined
@@ -3970,8 +4204,8 @@ def test_release_regression_manifest_uses_installed_app_lfm25_responses_delta_ca
     row = CURRENT_REAL_UI_LIVE_MODEL_PROOF_ROWS["lfm25_moe_a1b_responses_delta"]
 
     expected = (
-        "current-real-ui-live-model-lfm25-jang2l-installed-responses-tools-"
-        "max512-post-release-20260602"
+        "current-real-ui-live-model-lfm25-jang2l-continuation-responses-tools-"
+        "cache-settings-default-max512-20260604"
     )
     assert expected in row["proof"]
     assert expected in row["chat_screenshot"]
@@ -4563,7 +4797,7 @@ def test_release_regression_manifest_real_ui_live_model_rows_include_ling_bailin
     )
     assert (
         rows["lfm25_moe_a1b_responses_delta"]["proof"]
-        == "docs/internal/agent-notes/current-real-ui-live-model-lfm25-jang2l-installed-responses-tools-max512-post-release-20260602-proof.json"
+        == "docs/internal/agent-notes/current-real-ui-live-model-lfm25-jang2l-continuation-responses-tools-cache-settings-default-max512-20260604-proof.json"
     )
 
 
@@ -5269,11 +5503,19 @@ def test_release_regression_manifest_real_ui_matrix_requires_every_family_surfac
                     {"phase": "calling", "toolName": "run_command"},
                     {"phase": "executing", "toolName": "run_command"},
                     {"phase": "result", "toolName": "run_command"},
+                    *(
+                        {"phase": "result", "toolName": "run_command"}
+                        for _ in range(7)
+                    ),
                 ],
                 [
                     {"phase": "calling", "toolName": "write_file"},
                     {"phase": "executing", "toolName": "write_file"},
                     {"phase": "result", "toolName": "write_file"},
+                    *(
+                        {"phase": "result", "toolName": "write_file"}
+                        for _ in range(7)
+                    ),
                 ],
             ],
             "persistedReasoningCount": 1,
@@ -5921,6 +6163,7 @@ def _step37_integrated_vl_tool_l2_matrix_proof() -> dict[str, object]:
                     "toolName": "run_command",
                     "detail": "real_ui_tool_probe_1.txt REAL_UI_LIVE_TOOL_ONE",
                 },
+                *({"phase": "result", "toolName": "run_command"} for _ in range(7)),
             ],
             [
                 {"phase": "calling", "toolName": "run_command"},
@@ -5930,6 +6173,7 @@ def _step37_integrated_vl_tool_l2_matrix_proof() -> dict[str, object]:
                     "toolName": "run_command",
                     "detail": "real_ui_tool_probe_2.txt REAL_UI_LIVE_TOOL_TWO",
                 },
+                *({"phase": "result", "toolName": "run_command"} for _ in range(7)),
             ],
         ],
         "toolProbeFiles": {
@@ -7325,6 +7569,7 @@ def _lfm_integrated_matrix_proof() -> dict[str, object]:
                     "toolName": "run_command",
                     "detail": "real_ui_tool_probe_1.txt REAL_UI_LIVE_TOOL_ONE",
                 },
+                *({"phase": "result", "toolName": "run_command"} for _ in range(7)),
             ],
             [
                 {"phase": "calling", "toolName": "run_command"},
@@ -7334,6 +7579,7 @@ def _lfm_integrated_matrix_proof() -> dict[str, object]:
                     "toolName": "run_command",
                     "detail": "real_ui_tool_probe_2.txt REAL_UI_LIVE_TOOL_TWO",
                 },
+                *({"phase": "result", "toolName": "run_command"} for _ in range(7)),
             ],
         ],
         "toolProbeFiles": {
@@ -8262,6 +8508,9 @@ def test_release_regression_manifest_validates_current_proof_sweep_artifacts(tmp
                 "failed_steps": [],
                 "open_requirements": EXPECTED_CURRENT_OPEN_REQUIREMENTS,
                 "open_requirement_details": open_requirement_details,
+                "dsv4_proof_artifact_freshness_evidence": list(
+                    CURRENT_DSV4_PROOF_ARTIFACT_REQUIRED_ARTIFACTS
+                ),
                 **_passing_current_suite_progress_checkpoints(),
             }
         )
@@ -9796,28 +10045,26 @@ def test_release_regression_manifest_rejects_stale_dsv4_open_requirement_details
     ]
 
 
-def test_release_regression_manifest_rejects_stale_issue179_objective_digest_details(
+def test_release_regression_manifest_rejects_stale_issue179_objective_digest_row(
     tmp_path,
 ):
     _write_current_objective_digest(tmp_path)
-    path = tmp_path / "build/current-objective-proof-audit-20260602-cache-detail-zero-cached.json"
+    path = tmp_path / "build/current-objective-proof-audit-gemma4-release-boundary-20260604.json"
     payload = json.loads(path.read_text(encoding="utf-8"))
-    for row in payload["requirements"]:
-        if (
-            row.get("requirement")
-            == "MiniMax-M2.7-JANGTQ_K reporter parity/root cause is release-cleared"
-        ):
-            row["details"] = {"evidence_files_present": True, "missing_evidence": []}
+    payload["requirements"].append(
+        {
+            "requirement": "MiniMax-M2.7-JANGTQ_K reporter parity/root cause is release-cleared",
+            "status": "open",
+            "details": {"evidence_files_present": True, "missing_evidence": []},
+        }
+    )
     path.write_text(json.dumps(payload) + "\n", encoding="utf-8")
 
     result = validate_current_proof_sweep_artifacts(tmp_path)
 
     assert result["status"] == "fail"
-    assert result["objective_digest"]["open_requirement_detail_failures"] == [
-        {
-            "requirement": "MiniMax-M2.7-JANGTQ_K reporter parity/root cause is release-cleared",
-            "reason": "missing_or_stale_issue179_root_cause_boundary",
-        }
+    assert result["objective_digest"]["unexpected_open_requirements"] == [
+        "MiniMax-M2.7-JANGTQ_K reporter parity/root cause is release-cleared"
     ]
 
 
@@ -11288,12 +11535,14 @@ def test_current_proof_sweep_requires_local_mimo_root_cause_artifacts():
 
 def test_current_mimo_v2_proof_artifact_constants_are_local_only():
     from tests.cross_matrix.release_regression_manifest import (
+        CURRENT_MIMO_V2_JANG2L_HOST_AVAILABILITY_ARTIFACT,
         CURRENT_MIMO_V2_JANG2L_MOE_OUTPUT_PARITY_ARTIFACT,
         CURRENT_MIMO_V2_JANG2L_ROUTER_TOPK_PARITY_ARTIFACT,
         CURRENT_MIMO_V2_JANG2L_SINK_AB_ARTIFACT,
     )
 
     artifacts = [
+        CURRENT_MIMO_V2_JANG2L_HOST_AVAILABILITY_ARTIFACT,
         CURRENT_MIMO_V2_JANG2L_SINK_AB_ARTIFACT,
         CURRENT_MIMO_V2_JANG2L_ROUTER_TOPK_PARITY_ARTIFACT,
         CURRENT_MIMO_V2_JANG2L_MOE_OUTPUT_PARITY_ARTIFACT,
@@ -11301,6 +11550,17 @@ def test_current_mimo_v2_proof_artifact_constants_are_local_only():
 
     assert all(artifact.startswith("build/current-") for artifact in artifacts)
     assert not any("/remote-" in artifact for artifact in artifacts)
+
+
+def test_current_proof_sweep_tracks_mimo_host_availability_artifact():
+    from tests.cross_matrix.release_regression_manifest import (
+        validate_current_proof_sweep_artifacts,
+    )
+
+    result = validate_current_proof_sweep_artifacts(Path.cwd())
+
+    assert "mimo_v2_jang2l_host_availability" not in result
+    assert "mimo_v2_jang2l_host_availability" not in result["component_ok"]
 
 
 def test_release_regression_manifest_rejects_missing_mimo_v2_root_cause_artifacts(
@@ -11502,7 +11762,7 @@ def test_release_regression_manifest_runner_default_out_tracks_current_release_p
     from tests.cross_matrix import run_release_regression_manifest as runner
 
     assert runner.DEFAULT_OUT == Path(
-        "build/current-release-regression-manifest-20260602-step-greedy-display-refresh.json"
+        "build/current-release-regression-manifest-after-installed-public-refresh-20260604.json"
     )
 
 
@@ -13569,6 +13829,9 @@ def test_release_regression_manifest_runner_embeds_current_proof_validation(tmp_
     expected_real_ui_dsv4_memory_preflight = validate_current_proof_sweep_artifacts(
         tmp_path
     )["real_ui_dsv4_memory_preflight"]
+    expected_dsv4_proof_artifact_freshness = validate_current_proof_sweep_artifacts(
+        tmp_path
+    )["dsv4_proof_artifact_freshness"]
     expected_step37_vlm_runtime_audit = validate_current_proof_sweep_artifacts(
         tmp_path
     )["step37_vlm_runtime_audit"]
@@ -13793,6 +14056,7 @@ def test_release_regression_manifest_runner_embeds_current_proof_validation(tmp_
         "issue175_177_live_runtime_audit": expected_issue175_177_live_runtime_audit,
         "real_ui_live_model_matrix": expected_real_ui_live_model_matrix,
         "real_ui_dsv4_memory_preflight": expected_real_ui_dsv4_memory_preflight,
+        "dsv4_proof_artifact_freshness": expected_dsv4_proof_artifact_freshness,
         "step37_vlm_runtime_audit": expected_step37_vlm_runtime_audit,
         "release_blocker_ledger": expected_release_blocker_ledger,
     }
@@ -14102,7 +14366,7 @@ def test_release_regression_manifest_tracks_generation_defaults_with_runner_arti
     joined = " ".join(row["commands"] + row["artifacts"] + row["proves"])
 
     assert "run_generation_defaults_contract.py" in joined
-    assert "current-generation-defaults-contract-20260602-v1554-model-owned-defaults-refresh.json" in joined
+    assert "current-generation-defaults-contract-gemma4-release-boundary-20260604.json" in joined
     assert "current-generation-defaults-contract-20260602-step-greedy-display.json" not in joined
     assert "current-generation-defaults-contract-20260531-post-step-lfm-refresh.json" not in joined
     assert "current-generation-defaults-contract-20260526-settings-audit.json" not in joined
@@ -14173,7 +14437,7 @@ def test_release_regression_manifest_tracks_current_defaults_reasoning_api_reche
 
     generation = rows["generation-defaults-no-hidden-forcing"]
     generation_joined = " ".join(generation["commands"] + generation["artifacts"] + generation["proves"])
-    assert "current-generation-defaults-contract-20260602-v1554-model-owned-defaults-refresh.json" in generation_joined
+    assert "current-generation-defaults-contract-gemma4-release-boundary-20260604.json" in generation_joined
     assert "current-generation-defaults-contract-20260602-step-greedy-display.json" not in generation_joined
     assert "current-generation-defaults-contract-20260531-post-step-lfm-refresh.json" not in generation_joined
     assert "current-generation-defaults-contract-20260526-settings-audit.json" not in generation_joined
@@ -14305,13 +14569,13 @@ def test_release_regression_manifest_tracks_packaged_integrity_with_runner_artif
     joined = " ".join(row["commands"] + row["artifacts"] + row["proves"])
 
     assert "run_packaged_integrity_contract.py" in joined
-    assert "current-packaged-integrity-contract-20260602-developer-id-staged-signing.json" in joined
+    assert "current-packaged-integrity-contract-gemma4-release-boundary-after-ui-e2e-fixes-dmg-build-20260604.json" in joined
     assert "current-packaged-integrity-contract-20260601-qwen-fix-resigned-staged-app.json" not in joined
     assert "current-packaged-integrity-contract-20260601-cache-ipc-epipe-package-refresh.json" not in joined
     assert "current-packaged-integrity-contract-20260531-after-lfm2-staged-sync.json" not in joined
     assert "current-packaged-integrity-contract-20260531-step37-mixed-swa-runtime.json" not in joined
     assert (
-        "build/current-packaged-integrity-contract-20260602-developer-id-staged-signing.json"
+        "build/current-packaged-integrity-contract-gemma4-release-boundary-after-ui-e2e-fixes-dmg-build-20260604.json"
         in " ".join(row["commands"])
     )
     assert "current-packaged-integrity-contract-20260531-local-release-decision-refresh.json" not in joined
@@ -14322,7 +14586,7 @@ def test_release_regression_manifest_tracks_packaged_integrity_with_runner_artif
     assert "Version triples" in joined
     assert "bundled Python hash parity" in joined
     assert "objective proof digest" in joined
-    assert "current-objective-proof-audit-20260602-cache-detail-zero-cached.json" in joined
+    assert "current-objective-proof-audit-gemma4-release-boundary-20260604.json" in joined
     assert "objective-gate-enforced" in joined
     assert "verify-bundled" in joined
 
@@ -14334,7 +14598,7 @@ def test_release_regression_manifest_tracks_current_packaged_integrity_recheck()
     joined = " ".join(row["commands"] + row["artifacts"] + row["proves"])
 
     assert "current-packaged-integrity-contract-20260522-recheck-bundled-release-gate.json" in joined
-    assert "current-packaged-integrity-contract-20260602-developer-id-staged-signing.json" in joined
+    assert "current-packaged-integrity-contract-gemma4-release-boundary-after-ui-e2e-fixes-dmg-build-20260604.json" in joined
     assert "current-packaged-integrity-contract-20260601-qwen-fix-resigned-staged-app.json" not in joined
     assert "current-packaged-integrity-contract-20260524-text-additional-args-sanitizer.json" in joined
     assert "clean JANG source path" in joined
@@ -14390,7 +14654,7 @@ def test_release_regression_manifest_tracks_current_updater_and_i18n_rechecks():
 
     ling = rows["ling-bailing-multilingual-quality-live"]
     ling_joined = " ".join(ling["commands"] + ling["artifacts"] + ling["proves"])
-    assert "current-objective-proof-audit-20260602-cache-detail-zero-cached.json" in ling_joined
+    assert "current-objective-proof-audit-gemma4-release-boundary-20260604.json" in ling_joined
 
 
 def test_release_regression_manifest_tracks_live_only_boundaries():
@@ -14432,7 +14696,9 @@ def test_release_regression_manifest_tracks_fresh_dsv4_live_failure_artifact():
     assert "current-dsv4-jang-batch-generator-isolated-identifier-logits-after-full-prefill-fix-20260524.json" in joined
     assert "current-dsv4-jang-thinking-off-logit-probe-20260524.json" in joined
     assert "current-dsv4-jang-live-api-copy-framing-canary-20260524.json" in joined
-    assert "current-dsv4-route-mode-code-exactness-memory-preflight-20260602-developer-id-local-recheck.json" in joined
+    assert "current-dsv4-route-mode-code-exactness-memory-preflight-after-lfm-step-manifest-fix-20260604.json" in joined
+    assert "current-dsv4-route-mode-code-exactness-memory-preflight-20260603-second-local-check.json" not in joined
+    assert "current-dsv4-route-mode-code-exactness-memory-preflight-20260602-developer-id-local-recheck.json" not in joined
     assert "current-dsv4-route-mode-code-exactness-memory-preflight-20260601-post-epipe-fix.json" not in joined
     assert "current-dsv4-route-mode-code-exactness-memory-preflight-20260601-local-recheck.json" not in joined
     assert "current-dsv4-route-mode-code-exactness-memory-preflight-20260601-post-wrapped-epipe.json" not in joined
@@ -14916,7 +15182,7 @@ def test_release_regression_manifest_tracks_vl_media_with_runner_artifact():
     joined = " ".join(row["commands"] + row["artifacts"] + row["proves"])
 
     assert "run_vl_media_cache_contract.py" in joined
-    assert "current-vl-media-cache-contract-20260602-step-jangtq-boundary.json" in joined
+    assert "current-vl-media-cache-contract-gemma4-release-boundary-post-audio-contract-20260604.json" in joined
     assert "current-vl-media-cache-contract-20260601-qwen3vl-frame-list-fallback.json" not in joined
     assert "current-vl-media-cache-contract-20260522-panel-family.json" in joined
     assert "VLM media request serialization" in joined

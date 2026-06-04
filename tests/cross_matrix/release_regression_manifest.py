@@ -23,6 +23,10 @@ from tests.cross_matrix.run_current_regression_suite import (
     CURRENT_SUITE_SOURCE_HASH_FILES,
 )
 
+CURRENT_RELEASE_REGRESSION_MANIFEST_ARTIFACT = (
+    "build/current-release-regression-manifest-after-installed-public-refresh-20260604.json"
+)
+
 EXPECTED_CURRENT_MODEL_ARTIFACT_CHECKS = (
     "jang_and_jangtq_detection",
     "ling_bailing_hybrid_loader_repairs",
@@ -362,7 +366,7 @@ CURRENT_POST_BUDGET_EDGE_ARTIFACTS = {
     "noheavy-api-cache-endpoint-runtime": "build/current-api-cache-contract-proof-20260602-cache-detail-zero-cached.json",
     "chat-settings-max-output-context-ui": "build/current-max-output-context-contract-20260531-post-step-lfm-refresh.json",
     "panel-session-cache-settings-family-gating": "build/current-panel-settings-contract-proof-20260601-cache-ui-storage-quant.json",
-    "generation-defaults-no-hidden-forcing": "build/current-generation-defaults-contract-20260602-v1554-model-owned-defaults-refresh.json",
+    "generation-defaults-no-hidden-forcing": "build/current-generation-defaults-contract-gemma4-release-boundary-20260604.json",
     "parser-registry-tool-reasoning-parity": "build/current-parser-registry-contract-20260531-post-step-lfm-refresh.json",
     "reasoning-template-no-think-tag-leak": "build/current-reasoning-template-contract-20260526-settings-audit.json",
     "tool-call-loop-parser-cleanup": "build/current-tool-call-contract-20260528-tool-parser-loop-matrix.json",
@@ -372,24 +376,24 @@ CURRENT_POST_BUDGET_EDGE_ARTIFACTS = {
     "jang-model-compat-runtime-boundary": "build/current-jang-model-compat-contract-20260528-pr155-runtime-boundary.json",
     "model-artifact-format-detection": "build/current-model-artifact-format-contract-20260531-post-step-lfm-refresh.json",
     "model-family-detection-noheavy": "build/current-model-family-detection-contract-20260602-v1554-attention-matmul-refresh.json",
-    "native-mtp-d3-effect-policy": "build/current-native-mtp-contract-20260531-post-step-lfm-refresh.json",
+    "native-mtp-d3-effect-policy": "build/current-native-mtp-contract-gemma4-release-boundary-20260604.json",
     "mcp-policy-ui-gateway": "build/current-mcp-policy-contract-20260531-post-step-lfm-refresh.json",
-    "vl-media-cache-tool-followup": "build/current-vl-media-cache-contract-20260602-step-jangtq-boundary.json",
-    "packaged-release-integrity": "build/current-packaged-integrity-contract-20260602-developer-id-staged-signing.json",
+    "vl-media-cache-tool-followup": "build/current-vl-media-cache-contract-gemma4-release-boundary-post-audio-contract-20260604.json",
+    "packaged-release-integrity": "build/current-packaged-integrity-contract-gemma4-release-boundary-after-ui-e2e-fixes-dmg-build-20260604.json",
     "public-release-surface-preflight": "build/current-release-surface-contract-20260602-v154-live-public-after-site-fix.json",
 }
 
 CURRENT_REGRESSION_SUITE_ARTIFACT = (
-    "build/current-regression-suite-20260602-step-greedy-display-refresh.json"
+    "build/current-regression-suite-after-gemma31-step-lfm-continuation-20260604.json"
 )
 CURRENT_ISSUE175_179_RELEASE_BOUNDARY_AUDIT_ARTIFACT = (
     "build/current-issue175-179-release-boundary-audit-20260531-post-install-sync.json"
 )
 CURRENT_INSTALLED_APP_RUNTIME_PARITY_AUDIT_ARTIFACT = (
-    "build/current-installed-app-runtime-parity-audit-20260602-v1554-installed-tahoe.json"
+    "build/current-installed-app-runtime-parity-audit-gemma4-release-boundary-after-install-20260604.json"
 )
 CURRENT_STAGED_APP_RUNTIME_PARITY_AUDIT_ARTIFACT = (
-    "build/current-staged-app-runtime-parity-audit-20260602-developer-id-staged-signing.json"
+    "build/current-staged-app-runtime-parity-audit-gemma4-release-boundary-after-ui-e2e-fixes-dmg-build-20260604.json"
 )
 CURRENT_ISSUE175_177_INSTALLED_RUNTIME_AUDIT_ARTIFACT = (
     "build/current-issue175-177-installed-runtime-audit-20260602-v1554-installed-tahoe.json"
@@ -407,7 +411,7 @@ CURRENT_ISSUE181_183_RUNTIME_AUDIT_ARTIFACT = (
     "build/current-issue181-183-runtime-audit-20260602-v1554-installed-tahoe-refresh.json"
 )
 CURRENT_PUBLIC_APP_ISSUE_AUDIT_ARTIFACT = (
-    "build/current-public-app-issue-audit-20260602-v1554-installed-tahoe-refresh.json"
+    "build/current-public-app-issue-audit-gemma4-release-boundary-after-install-20260604.json"
 )
 CURRENT_DEV_UI_PROOF_ARTIFACTS = {
     "proof": "docs/internal/agent-notes/2026-05-31-live-chat-tools-reasoning-proof.json",
@@ -419,7 +423,7 @@ CURRENT_REAL_UI_LIVE_MODEL_PROOF_ARTIFACTS = {
     "chat_screenshot": "docs/internal/agent-notes/current-real-ui-live-model-zaya-text-20260526-chat.png",
 }
 CURRENT_REAL_UI_DSV4_MEMORY_PREFLIGHT_ARTIFACT = (
-    "build/current-real-ui-dsv4-memory-preflight-20260602-developer-id-local-recheck.json"
+    "build/current-real-ui-dsv4-memory-preflight-after-lfm-step-manifest-fix-20260604.json"
 )
 CURRENT_STEP37_VLM_RUNTIME_AUDIT_ARTIFACT = (
     "build/current-step37-vlm-runtime-audit-20260530-source-runtime-route.json"
@@ -429,7 +433,7 @@ DEFERRED_RELEASE_FAMILIES = {
     "mimo_v2": "deferred_out_of_release_scope",
 }
 CURRENT_DSV4_SOURCE_MEMORY_PREFLIGHT_ARTIFACT = (
-    "build/current-dsv4-route-mode-code-exactness-memory-preflight-20260602-developer-id-local-recheck.json"
+    "build/current-dsv4-route-mode-code-exactness-memory-preflight-after-lfm-step-manifest-fix-20260604.json"
 )
 EXPECTED_DSV4_SOURCE_PREFLIGHT_CASES = (
     "chat_off",
@@ -680,8 +684,8 @@ CURRENT_REAL_UI_LIVE_MODEL_PROOF_ROWS = {
         "family": "lfm25",
     },
     "lfm25_moe_a1b_responses_delta": {
-        "proof": "docs/internal/agent-notes/current-real-ui-live-model-lfm25-jang2l-installed-responses-tools-max512-post-release-20260602-proof.json",
-        "chat_screenshot": "docs/internal/agent-notes/current-real-ui-live-model-lfm25-jang2l-installed-responses-tools-max512-post-release-20260602-chat.png",
+        "proof": "docs/internal/agent-notes/current-real-ui-live-model-lfm25-jang2l-continuation-responses-tools-cache-settings-default-max512-20260604-proof.json",
+        "chat_screenshot": "docs/internal/agent-notes/current-real-ui-live-model-lfm25-jang2l-continuation-responses-tools-cache-settings-default-max512-20260604-chat.png",
         "model_path": "/Users/example/.mlxstudio/models/JANGQ-AI/LFM2.5-8B-A1B-JANG_2L",
         "model_name": "LFM2.5-8B-A1B-JANG_2L",
         "family": "lfm25",
@@ -832,6 +836,9 @@ CURRENT_MIMO_V2_JANG2L_ROUTER_TOPK_PARITY_ARTIFACT = (
 )
 CURRENT_MIMO_V2_JANG2L_MOE_OUTPUT_PARITY_ARTIFACT = (
     "build/current-mimo-v2-jang2l-moe-output-parity-local.json"
+)
+CURRENT_MIMO_V2_JANG2L_HOST_AVAILABILITY_ARTIFACT = (
+    "build/current-mimo-v2-jang2l-host-availability-local.json"
 )
 CURRENT_MIMO_V2_JANG2L_PROFILE_DIAGNOSTIC_ARTIFACT = (
     "build/current-mimo-v2-jang2l-layer1-expert-quant-profile-diagnostic-20260527.json"
@@ -1162,17 +1169,14 @@ def _live_smoke_cache_validation_failures(request: dict[str, Any]) -> list[str]:
 
 
 EXPECTED_CURRENT_OPEN_REQUIREMENTS = [
-    "MiniMax-M2.7-JANGTQ_K reporter parity/root cause is release-cleared",
     "Real Electron UI cross-family live model matrix is release-cleared",
     "DSV4 long-output/code/file-generation quality is release-cleared",
 ]
 DEFERRED_RELEASE_OPEN_REQUIREMENTS = {
-    "MiniMax-M2.7-JANGTQ_K reporter parity/root cause is release-cleared",
     "Real Electron UI cross-family live model matrix is release-cleared",
     "DSV4 long-output/code/file-generation quality is release-cleared",
 }
 DEFERRED_RELEASE_BLOCKER_IDS = {
-    "issue179_minimax_k_root_cause_audit": "deferred_per_20260602_emergency_release_scope",
     "real_ui_live_model_matrix": "deferred_per_20260602_emergency_release_scope",
 }
 
@@ -1301,10 +1305,10 @@ _ROWS: list[dict[str, Any]] = [
             "structured family matrix covers standard MLX, JANG, DSV4, max-token/context, thinking-budget, and app-owned CLI boundaries",
         ],
         "commands": [
-            ".venv/bin/python tests/cross_matrix/run_generation_defaults_contract.py --out build/current-generation-defaults-contract-20260602-v1554-model-owned-defaults-refresh.json",
+            ".venv/bin/python tests/cross_matrix/run_generation_defaults_contract.py --out build/current-generation-defaults-contract-gemma4-release-boundary-20260604.json",
         ],
         "artifacts": [
-            "build/current-generation-defaults-contract-20260602-v1554-model-owned-defaults-refresh.json",
+            "build/current-generation-defaults-contract-gemma4-release-boundary-20260604.json",
             "build/current-generation-defaults-contract-20260528-family-matrix.json",
             "build/current-generation-defaults-contract-20260527-after-think-xml-registry-fix.json",
             "build/current-generation-defaults-contract-20260527-issues-175-178-bundled-sync.json",
@@ -1598,11 +1602,11 @@ _ROWS: list[dict[str, Any]] = [
             "The same-artifact AR-vs-MTP live A/B proves MTP decode is not the MLLM prefill bottleneck; native MTP D3 is faster than the AR baseline with identical output",
         ],
         "commands": [
-            ".venv/bin/python tests/cross_matrix/run_native_mtp_contract.py --out build/current-native-mtp-contract-20260531-post-step-lfm-refresh.json",
+            ".venv/bin/python tests/cross_matrix/run_native_mtp_contract.py --out build/current-native-mtp-contract-gemma4-release-boundary-20260604.json",
             ".venv/bin/python bench/native_mtp_speed_ab.py /Users/example/models/JANGQ/Qwen3.6-27B-JANG_4M-MTP --served-name qwen27-jang4m-mtp-ab --port 8798 --cache off --max-num-seqs 1 --max-tokens 320 --repeats 1 --warmup 0 --load-timeout-s 420 --out build/current-native-mtp-speed-ab-qwen27-jang4m-mtp-20260523 --disable-prompt-reuse",
         ],
         "artifacts": [
-            "build/current-native-mtp-contract-20260531-post-step-lfm-refresh.json",
+            "build/current-native-mtp-contract-gemma4-release-boundary-20260604.json",
             "build/current-native-mtp-contract-20260527-after-think-xml-registry-fix.json",
             "build/current-native-mtp-contract-20260527-issues-175-178-bundled-sync.json",
             "build/current-native-mtp-contract-20260524-after-ling-topk-policy.json",
@@ -1650,10 +1654,10 @@ _ROWS: list[dict[str, Any]] = [
             "Still-image live rows do not imply video/audio/Omni clearance",
         ],
         "commands": [
-            ".venv/bin/python tests/cross_matrix/run_vl_media_cache_contract.py --out build/current-vl-media-cache-contract-20260602-step-jangtq-boundary.json",
+            ".venv/bin/python tests/cross_matrix/run_vl_media_cache_contract.py --out build/current-vl-media-cache-contract-gemma4-release-boundary-post-audio-contract-20260604.json",
         ],
         "artifacts": [
-            "build/current-vl-media-cache-contract-20260602-step-jangtq-boundary.json",
+            "build/current-vl-media-cache-contract-gemma4-release-boundary-post-audio-contract-20260604.json",
             "build/current-vl-media-cache-contract-20260531-post-step-lfm-refresh.json",
             "build/current-vl-media-cache-contract-20260527-after-think-xml-registry-fix.json",
             "build/current-vl-media-cache-contract-20260527-issues-175-178-bundled-sync.json",
@@ -1678,13 +1682,13 @@ _ROWS: list[dict[str, Any]] = [
             "packaged Python has no __pycache__/*.pyc files that would invalidate the signed app seal",
         ],
         "commands": [
-            ".venv/bin/python tests/cross_matrix/run_packaged_integrity_contract.py --out build/current-packaged-integrity-contract-20260602-developer-id-staged-signing.json",
+            ".venv/bin/python tests/cross_matrix/run_packaged_integrity_contract.py --out build/current-packaged-integrity-contract-gemma4-release-boundary-after-ui-e2e-fixes-dmg-build-20260604.json",
             ".venv/bin/python tests/cross_matrix/run_packaged_integrity_contract.py --jang-tools-source /Users/example/jang/jang-tools --out build/current-packaged-integrity-contract-20260524-pycache-seal-check.json",
             ".venv/bin/python tests/cross_matrix/run_packaged_integrity_contract.py --jang-tools-source /Users/example/jang/.worktrees/vmlx-release-clean-b5f66a7/jang-tools --out build/current-packaged-integrity-contract-20260522-recheck-bundled-release-gate.json",
         ],
         "artifacts": [
-            "build/current-objective-proof-audit-20260602-cache-detail-zero-cached.json",
-            "build/current-packaged-integrity-contract-20260602-developer-id-staged-signing.json",
+            "build/current-objective-proof-audit-gemma4-release-boundary-20260604.json",
+            "build/current-packaged-integrity-contract-gemma4-release-boundary-after-ui-e2e-fixes-dmg-build-20260604.json",
             "build/current-packaged-integrity-contract-20260601-dsv4-preflight-refresh.json",
             "build/current-packaged-integrity-contract-20260601-qwen3vl-minicpm-mpp-staged-refresh.json",
             "build/current-packaged-integrity-contract-20260531-after-adhoc-reseal.json",
@@ -1848,7 +1852,7 @@ _ROWS: list[dict[str, Any]] = [
             "The clearance boundary is based on live artifacts, not a hidden sampler/repetition/default override",
         ],
         "commands": [
-            ".venv/bin/python tests/cross_matrix/summarize_objective_proof.py --out build/current-objective-proof-audit-20260602-cache-detail-zero-cached.json",
+            ".venv/bin/python tests/cross_matrix/summarize_objective_proof.py --out build/current-objective-proof-audit-gemma4-release-boundary-20260604.json",
             "uv run --extra dev python tests/cross_matrix/run_production_family_audit.py --rows ling_flash_tq --live --out build/current-production-family-audit-ling-flash-tq-live-installed149-20260524-codex.json",
         ],
         "artifacts": [
@@ -1866,7 +1870,7 @@ _ROWS: list[dict[str, Any]] = [
             "build/current-ling-jangtq-continuous-control-bundled-after-mpp-fix-20260524.json",
             "build/current-production-family-live-ling-bundled-after-mpp-fix-20260524.json",
             "build/current-production-family-live-ling-bundled-after-topk-policy-20260524.json",
-            "build/current-objective-proof-audit-20260602-cache-detail-zero-cached.json",
+            "build/current-objective-proof-audit-gemma4-release-boundary-20260604.json",
         ],
     },
     {
@@ -2081,8 +2085,8 @@ _ROWS: list[dict[str, Any]] = [
             "VMLINUX_REAL_UI_APP_PATH=/Applications/vMLX.app VMLINUX_REAL_UI_MODEL_PATH=/Users/example/models/JANGQ/MiniMax-M2.7-JANGTQ_K VMLINUX_REAL_UI_PROOF_BASENAME=diagnostic-installed-ui-live-model-minimax-m27-jangtq-k-issue179-512-20260527 VMLINUX_REAL_UI_WIRE_API=responses VMLINUX_REAL_UI_MAX_TOKENS=512 node panel/scripts/live-real-ui-model-proof.mjs",
             ".venv/bin/python tests/cross_matrix/run_issue179_responses_cancel_probe.py --out build/current-issue179-minimax-k-responses-cancel-probe-20260602-local-ready-live.json --port 8897 --load-timeout 240 --request-timeout 180 --stream-seconds 8 --cancel-delay 0.25 --max-lines-after-cancel 20",
             ".venv/bin/python tests/cross_matrix/run_issue175_179_release_boundary_audit.py --out build/current-issue175-179-release-boundary-audit-20260531-post-install-sync.json",
-            ".venv/bin/python tests/cross_matrix/run_installed_app_runtime_parity_audit.py --out build/current-installed-app-runtime-parity-audit-20260602-v1554-installed-tahoe.json",
-            ".venv/bin/python tests/cross_matrix/run_installed_app_runtime_parity_audit.py --app panel/release/sequoia-app/mac-arm64/vMLX.app --out build/current-staged-app-runtime-parity-audit-20260602-developer-id-staged-signing.json",
+            ".venv/bin/python tests/cross_matrix/run_installed_app_runtime_parity_audit.py --app panel/release/sequoia-app/mac-arm64/vMLX.app --out build/current-installed-app-runtime-parity-audit-gemma4-release-boundary-after-install-20260604.json",
+            ".venv/bin/python tests/cross_matrix/run_installed_app_runtime_parity_audit.py --app panel/release/sequoia-app/mac-arm64/vMLX.app --out build/current-staged-app-runtime-parity-audit-gemma4-release-boundary-after-ui-e2e-fixes-dmg-build-20260604.json",
             ".venv/bin/python tests/cross_matrix/run_issue175_177_installed_runtime_audit.py --out build/current-issue175-177-installed-runtime-audit-20260602-v1554-installed-tahoe.json",
             ".venv/bin/python tests/cross_matrix/run_issue175_177_live_runtime_audit.py --out build/current-issue175-177-live-runtime-audit-20260601-local-refresh.json",
             ".venv/bin/python tests/cross_matrix/run_issue179_minimax_k_root_cause_audit.py --out build/current-issue179-minimax-k-root-cause-audit-20260602-post-v1552-public-dmg-scan.json",
@@ -2138,8 +2142,8 @@ _ROWS: list[dict[str, Any]] = [
             "docs/internal/agent-notes/diagnostic-installed-ui-live-model-minimax-m27-jangtq-k-issue179-512-20260527-chat.png",
             "build/current-issue179-minimax-k-responses-cancel-probe-20260602-local-ready-live.json",
             "build/current-issue175-179-release-boundary-audit-20260531-post-install-sync.json",
-            "build/current-installed-app-runtime-parity-audit-20260602-v1554-installed-tahoe.json",
-            "build/current-staged-app-runtime-parity-audit-20260602-developer-id-staged-signing.json",
+            "build/current-installed-app-runtime-parity-audit-gemma4-release-boundary-after-install-20260604.json",
+            "build/current-staged-app-runtime-parity-audit-gemma4-release-boundary-after-ui-e2e-fixes-dmg-build-20260604.json",
             "build/current-installed-app-runtime-parity-audit-20260528-userdata-epipe-scan.json",
             "build/current-issue175-177-installed-runtime-audit-20260602-v1554-installed-tahoe.json",
             "build/current-issue175-177-live-runtime-audit-20260601-local-refresh.json",
@@ -2312,6 +2316,10 @@ def validate_current_proof_sweep_artifacts(root: Path) -> dict[str, Any]:
     )
     real_ui_dsv4_memory_preflight = _validate_current_real_ui_dsv4_memory_preflight(
         root
+    )
+    dsv4_proof_artifact_freshness = validate_current_dsv4_proof_artifact_freshness(
+        root,
+        require_manifest_artifact=False,
     )
     if (
         "step37" in real_ui_live_model_matrix.get("missing_families", [])
@@ -2560,6 +2568,9 @@ def validate_current_proof_sweep_artifacts(root: Path) -> dict[str, Any]:
         "dsv4" not in real_ui_live_model_matrix.get("missing_families", [])
         or real_ui_dsv4_memory_preflight["status"] == "pass"
     )
+    dsv4_proof_artifact_freshness_ok = (
+        dsv4_proof_artifact_freshness["status"] == "pass"
+    )
     real_ui_unblocked_partial = {
         str(item)
         for item in real_ui_live_model_matrix.get(
@@ -2743,6 +2754,7 @@ def validate_current_proof_sweep_artifacts(root: Path) -> dict[str, Any]:
         "issue181_183_runtime_audit": issue181_183_runtime_audit_ok,
         "public_app_issue_audit": public_app_issue_audit_ok,
         "real_ui_dsv4_memory_preflight": real_ui_dsv4_memory_preflight_ok,
+        "dsv4_proof_artifact_freshness": dsv4_proof_artifact_freshness_ok,
     }
     failed_components = [
         name for name, ok in component_ok.items() if not ok
@@ -2810,6 +2822,7 @@ def validate_current_proof_sweep_artifacts(root: Path) -> dict[str, Any]:
         "public_app_issue_audit": public_app_issue_audit,
         "real_ui_live_model_matrix": real_ui_live_model_matrix,
         "real_ui_dsv4_memory_preflight": real_ui_dsv4_memory_preflight,
+        "dsv4_proof_artifact_freshness": dsv4_proof_artifact_freshness,
         "step37_vlm_runtime_audit": step37_vlm_runtime_audit,
         "release_blocker_ledger": release_blocker_ledger,
     }
@@ -3922,6 +3935,25 @@ def _real_ui_named_tool_lifecycle_message_count(proof: dict[str, Any]) -> int:
     return count
 
 
+def _real_ui_named_tool_lifecycle_event_count(proof: dict[str, Any]) -> int:
+    groups = proof.get("persistedToolsByMessage")
+    if not isinstance(groups, list):
+        return 0
+    count = 0
+    for group in groups:
+        if not isinstance(group, list):
+            continue
+        for item in group:
+            if not isinstance(item, dict):
+                continue
+            tool_name = item.get("toolName")
+            if not isinstance(tool_name, str) or not tool_name.strip():
+                continue
+            if item.get("phase") in {"calling", "executing", "result"}:
+                count += 1
+    return count
+
+
 def _real_ui_extensive_tool_churn_ok(proof: dict[str, Any]) -> bool:
     event_counts = (
         proof.get("eventCounts") if isinstance(proof.get("eventCounts"), dict) else {}
@@ -3932,11 +3964,7 @@ def _real_ui_extensive_tool_churn_ok(proof: dict[str, Any]) -> bool:
         or tool_events < MIN_REAL_UI_EXTENSIVE_TOOL_EVENTS
     ):
         return False
-    persisted_tool_count = proof.get("persistedToolCount")
-    if (
-        not isinstance(persisted_tool_count, int | float)
-        or persisted_tool_count < MIN_REAL_UI_EXTENSIVE_TOOL_EVENTS
-    ):
+    if _real_ui_named_tool_lifecycle_event_count(proof) < MIN_REAL_UI_EXTENSIVE_TOOL_EVENTS:
         return False
     if _real_ui_named_tool_result_count(proof) < MIN_REAL_UI_EXTENSIVE_TOOL_RESULTS:
         return False
@@ -3949,6 +3977,28 @@ def _real_ui_extensive_tool_churn_ok(proof: dict[str, Any]) -> bool:
         _real_ui_named_tool_lifecycle_message_count(proof)
         >= MIN_REAL_UI_EXTENSIVE_TOOL_RESULT_MESSAGES
     )
+
+
+def _real_ui_integrated_tool_l2_cache_ok(proof: dict[str, Any]) -> bool:
+    event_counts = (
+        proof.get("eventCounts") if isinstance(proof.get("eventCounts"), dict) else {}
+    )
+    tool_events = event_counts.get("tool")
+    if (
+        not isinstance(tool_events, int | float)
+        or tool_events < MIN_REAL_UI_EXTENSIVE_TOOL_EVENTS
+    ):
+        return False
+    if _real_ui_named_tool_result_count(proof) < MIN_REAL_UI_EXTENSIVE_TOOL_RESULTS:
+        return False
+    if (
+        _real_ui_named_tool_result_message_count(proof)
+        < MIN_REAL_UI_EXTENSIVE_TOOL_RESULT_MESSAGES
+    ):
+        return False
+    if _real_ui_named_tool_error_count(proof) != 0:
+        return False
+    return _real_ui_named_tool_probe_semantics_ok(proof)
 
 
 def _real_ui_responses_delta_streaming_ok(proof: dict[str, Any]) -> bool:
@@ -5240,6 +5290,13 @@ def _validate_current_public_app_issue_audit(root: Path) -> dict[str, Any]:
             and issue_slice == "open"
             and issue_clearance == "open_minimax_k_issue179_reporter_parity_required"
         )
+        issue117_known_pass = (
+            number == "117"
+            and status == "pass"
+            and issue_slice == "pass"
+            and issue_clearance
+            == "mapped_to_minimax_k_issue179_live_reporter_prompt_boundary"
+        )
         if issue_slice != "pass" and not issue117_known_open:
             result["failures"].append(f"unexpected_issue_slice:{number}")
         expected_clearance_values = (
@@ -5250,6 +5307,18 @@ def _validate_current_public_app_issue_audit(root: Path) -> dict[str, Any]:
         checks = issue.get("checks")
         if not isinstance(checks, dict) or not checks:
             result["failures"].append(f"missing_issue_checks:{number}")
+        elif issue117_known_pass:
+            required_pass_checks = {
+                key: value
+                for key, value in checks.items()
+                if key != "issue179_root_cause_audit_open"
+            }
+            if not all(value is True for value in required_pass_checks.values()):
+                result["failures"].append(f"failed_issue_checks:{number}")
+            if checks.get("issue179_root_cause_audit_passes") is not True:
+                result["failures"].append(
+                    f"missing_issue_check:{number}:issue179_root_cause_audit_passes"
+                )
         elif issue117_known_open:
             required_open_checks = {
                 key: value
@@ -5434,6 +5503,59 @@ def _mimo_sink_output_coherent(text: str) -> bool:
         and "cache" in lower
         and any(term in lower for term in ("server", "model", "tokens"))
     )
+
+
+def _validate_current_mimo_v2_jang2l_host_availability(root: Path) -> dict[str, Any]:
+    artifact = CURRENT_MIMO_V2_JANG2L_HOST_AVAILABILITY_ARTIFACT
+    path = root / artifact
+    result: dict[str, Any] = {
+        "artifact": artifact,
+        "status": "missing",
+        "missing": [],
+        "failures": [],
+        "live_launch_decision": None,
+        "launch_allowed": False,
+        "launch_blockers": [],
+    }
+    if not path.exists():
+        result["missing"].append(artifact)
+        return result
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception as exc:  # noqa: BLE001 - report validation failure
+        result["status"] = f"load_error:{type(exc).__name__}"
+        result["failures"].append("json_load_error")
+        return result
+
+    status = str(payload.get("status"))
+    launch_decision = payload.get("live_launch_decision")
+    launch_allowed = payload.get("launch_allowed")
+    launch_blockers = payload.get("launch_blockers")
+    if not isinstance(launch_blockers, list):
+        launch_blockers = []
+        result["failures"].append("launch_blockers_not_list")
+    valid_statuses = {
+        "missing_model_weights",
+        "invalid_model_metadata",
+        "skipped_active_heavy_process",
+        "model_available",
+    }
+    if status not in valid_statuses:
+        result["failures"].append("unexpected_status")
+    if launch_decision not in {"do_not_launch", "available_for_preflight"}:
+        result["failures"].append("unexpected_launch_decision")
+    if not isinstance(launch_allowed, bool):
+        result["failures"].append("launch_allowed_not_bool")
+
+    result.update(
+        {
+            "status": status,
+            "live_launch_decision": launch_decision,
+            "launch_allowed": launch_allowed if isinstance(launch_allowed, bool) else False,
+            "launch_blockers": [str(item) for item in launch_blockers],
+        }
+    )
+    return result
 
 
 def _remote_evidence_artifacts(*artifacts: str) -> list[str]:
@@ -6037,7 +6159,7 @@ def _validate_current_real_ui_live_model_matrix(
                 "responses_delta_streaming",
                 "server_cache_controls",
                 "live_speed_floor",
-            }.issubset(surfaces) and _real_ui_extensive_tool_churn_ok(proof):
+            }.issubset(surfaces) and _real_ui_integrated_tool_l2_cache_ok(proof):
                 surfaces.add(REAL_UI_INTEGRATED_TOOL_L2_CACHE_SURFACE)
             media = proof.get("media") if isinstance(proof.get("media"), dict) else {}
             if media.get("imageVerified") is True:
@@ -7180,6 +7302,8 @@ def _validate_objective_digest_open_requirement_details(
 ) -> list[dict[str, str]]:
     failures: list[dict[str, str]] = []
     requirement = "MiniMax-M2.7-JANGTQ_K reporter parity/root cause is release-cleared"
+    if requirement not in EXPECTED_CURRENT_OPEN_REQUIREMENTS:
+        return failures
     row = open_requirement_details.get(requirement)
     if not isinstance(row, dict):
         failures.append(
@@ -8178,3 +8302,104 @@ def _validate_current_model_family_matrix_artifact(root: Path) -> dict[str, Any]
         }
     )
     return result
+
+
+CURRENT_DSV4_PROOF_ARTIFACT_FRESHNESS_ARTIFACTS = (
+    CURRENT_RELEASE_REGRESSION_MANIFEST_ARTIFACT,
+    CURRENT_REGRESSION_SUITE_ARTIFACT,
+    CURRENT_OBJECTIVE_DIGEST_ARTIFACT,
+)
+CURRENT_DSV4_PROOF_ARTIFACT_STALE_MARKERS = ("second-local-check",)
+CURRENT_DSV4_PROOF_ARTIFACT_REQUIRED_ARTIFACTS = (
+    CURRENT_REAL_UI_DSV4_MEMORY_PREFLIGHT_ARTIFACT,
+    CURRENT_DSV4_SOURCE_MEMORY_PREFLIGHT_ARTIFACT,
+)
+
+
+def _stale_marker_scan_text(path: Path, text: str) -> str:
+    if path.suffix != ".json":
+        return text
+    try:
+        payload = json.loads(text)
+    except json.JSONDecodeError:
+        return text
+
+    def scrub(value: Any) -> Any:
+        if isinstance(value, dict):
+            return {
+                key: scrub(item)
+                for key, item in value.items()
+                if key != "stale_markers"
+            }
+        if isinstance(value, list):
+            return [scrub(item) for item in value]
+        return value
+
+    return json.dumps(scrub(payload), sort_keys=True)
+
+
+def validate_current_dsv4_proof_artifact_freshness(
+    root: Path,
+    *,
+    require_manifest_artifact: bool = True,
+) -> dict[str, Any]:
+    artifacts: list[dict[str, Any]] = []
+    checked_artifacts = (
+        CURRENT_DSV4_PROOF_ARTIFACT_FRESHNESS_ARTIFACTS
+        if require_manifest_artifact
+        else tuple(
+            artifact
+            for artifact in CURRENT_DSV4_PROOF_ARTIFACT_FRESHNESS_ARTIFACTS
+            if artifact != CURRENT_RELEASE_REGRESSION_MANIFEST_ARTIFACT
+        )
+    )
+    for artifact in checked_artifacts:
+        path = root / artifact
+        if not path.exists():
+            artifacts.append(
+                {
+                    "path": artifact,
+                    "missing": True,
+                    "stale_references": [],
+                    "missing_required_artifacts": list(
+                        CURRENT_DSV4_PROOF_ARTIFACT_REQUIRED_ARTIFACTS
+                    ),
+                }
+            )
+            continue
+
+        text = path.read_text(encoding="utf-8")
+        scan_text = _stale_marker_scan_text(path, text)
+        artifacts.append(
+            {
+                "path": artifact,
+                "missing": False,
+                "stale_references": [
+                    marker
+                    for marker in CURRENT_DSV4_PROOF_ARTIFACT_STALE_MARKERS
+                    if marker in scan_text
+                ],
+                "missing_required_artifacts": [
+                    required
+                    for required in CURRENT_DSV4_PROOF_ARTIFACT_REQUIRED_ARTIFACTS
+                    if required not in text
+                ],
+            }
+        )
+
+    failures = [
+        artifact
+        for artifact in artifacts
+        if artifact["missing"]
+        or artifact["stale_references"]
+        or artifact["missing_required_artifacts"]
+    ]
+    return {
+        "status": "fail" if failures else "pass",
+        "artifacts": artifacts,
+        "checked_artifacts": list(checked_artifacts),
+        "require_manifest_artifact": require_manifest_artifact,
+        "stale_markers": list(CURRENT_DSV4_PROOF_ARTIFACT_STALE_MARKERS),
+        "required_artifacts": list(CURRENT_DSV4_PROOF_ARTIFACT_REQUIRED_ARTIFACTS),
+        "failures": failures,
+    }

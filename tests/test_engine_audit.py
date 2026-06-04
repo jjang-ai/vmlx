@@ -3724,6 +3724,136 @@ class TestMediaDiagnostics:
 
         assert server._loaded_runtime_modalities() == ["text", "vision"]
 
+    def test_gemma4_unified_jang4m_runtime_modalities_advertise_audio(
+        self, monkeypatch, tmp_path
+    ):
+        import vmlx_engine.server as server
+
+        (tmp_path / "config.json").write_text(
+            json.dumps(
+                {
+                    "model_type": "gemma4_unified",
+                    "vision_config": {"model_type": "gemma4_unified_vision"},
+                    "audio_config": {"model_type": "gemma4_unified_audio"},
+                }
+            )
+        )
+        (tmp_path / "jang_config.json").write_text(
+            json.dumps({"weight_format": "jang_4m", "profile": "jang_4m"})
+        )
+
+        monkeypatch.setattr(server, "_engine", SimpleNamespace(is_mllm=True))
+        monkeypatch.setattr(server, "_model_path", str(tmp_path))
+        monkeypatch.setattr(server, "_model_name", "gemma4-unified-jang4m-test")
+        monkeypatch.setattr(server, "_loaded_omni_modalities", lambda: None)
+
+        assert server._loaded_runtime_modalities() == ["text", "vision", "audio"]
+
+    def test_gemma4_unified_mxfp_runtime_modalities_gate_unproven_audio(
+        self, monkeypatch, tmp_path
+    ):
+        import vmlx_engine.server as server
+
+        for weight_format in ("mxfp4", "mxfp8"):
+            bundle_path = tmp_path / weight_format
+            bundle_path.mkdir()
+            (bundle_path / "config.json").write_text(
+                json.dumps(
+                    {
+                        "model_type": "gemma4_unified",
+                        "vision_config": {"model_type": "gemma4_unified_vision"},
+                        "audio_config": {"model_type": "gemma4_unified_audio"},
+                    }
+                )
+            )
+            (bundle_path / "jang_config.json").write_text(
+                json.dumps({"weight_format": weight_format, "profile": weight_format})
+            )
+
+            monkeypatch.setattr(server, "_engine", SimpleNamespace(is_mllm=True))
+            monkeypatch.setattr(server, "_model_path", str(bundle_path))
+            monkeypatch.setattr(server, "_model_name", f"gemma4-unified-{weight_format}-test")
+            monkeypatch.setattr(server, "_loaded_omni_modalities", lambda: None)
+
+            assert server._loaded_runtime_modalities() == ["text", "vision"]
+
+    def test_gemma4_unified_mxfp8_attnfp16_runtime_modalities_gate_audio_by_default(
+        self, monkeypatch, tmp_path
+    ):
+        import vmlx_engine.server as server
+
+        (tmp_path / "config.json").write_text(
+            json.dumps(
+                {
+                    "model_type": "gemma4_unified",
+                    "vision_config": {"model_type": "gemma4_unified_vision"},
+                    "audio_config": {"model_type": "gemma4_unified_audio"},
+                }
+            )
+        )
+        (tmp_path / "jang_config.json").write_text(
+            json.dumps(
+                {
+                    "weight_format": "mxfp8",
+                    "profile": "MXFP8_ATTNFP16",
+                    "quantization": {
+                        "selective_passthrough": {
+                            "preserve_attention_fp16": True,
+                            "preserve_full_attention_fp16": False,
+                            "preserve_first_layers": 0,
+                        }
+                    },
+                }
+            )
+        )
+
+        monkeypatch.setattr(server, "_engine", SimpleNamespace(is_mllm=True))
+        monkeypatch.setattr(server, "_model_path", str(tmp_path))
+        monkeypatch.setattr(server, "_model_name", "gemma4-unified-mxfp8-attnfp16-test")
+        monkeypatch.setattr(server, "_loaded_omni_modalities", lambda: None)
+        monkeypatch.delenv("VMLX_ALLOW_EXPERIMENTAL_MXFP_AUDIO", raising=False)
+        monkeypatch.delenv("VMLINUX_ALLOW_EXPERIMENTAL_MXFP_AUDIO", raising=False)
+
+        assert server._loaded_runtime_modalities() == ["text", "vision"]
+
+    def test_gemma4_unified_mxfp8_attnfp16_runtime_modalities_can_experimentally_advertise_audio(
+        self, monkeypatch, tmp_path
+    ):
+        import vmlx_engine.server as server
+
+        (tmp_path / "config.json").write_text(
+            json.dumps(
+                {
+                    "model_type": "gemma4_unified",
+                    "vision_config": {"model_type": "gemma4_unified_vision"},
+                    "audio_config": {"model_type": "gemma4_unified_audio"},
+                }
+            )
+        )
+        (tmp_path / "jang_config.json").write_text(
+            json.dumps(
+                {
+                    "weight_format": "mxfp8",
+                    "profile": "MXFP8_ATTNFP16",
+                    "quantization": {
+                        "selective_passthrough": {
+                            "preserve_attention_fp16": True,
+                            "preserve_full_attention_fp16": False,
+                            "preserve_first_layers": 0,
+                        }
+                    },
+                }
+            )
+        )
+
+        monkeypatch.setattr(server, "_engine", SimpleNamespace(is_mllm=True))
+        monkeypatch.setattr(server, "_model_path", str(tmp_path))
+        monkeypatch.setattr(server, "_model_name", "gemma4-unified-mxfp8-attnfp16-test")
+        monkeypatch.setattr(server, "_loaded_omni_modalities", lambda: None)
+        monkeypatch.setenv("VMLX_ALLOW_EXPERIMENTAL_MXFP_AUDIO", "1")
+
+        assert server._loaded_runtime_modalities() == ["text", "vision", "audio"]
+
     def test_video_request_on_image_only_mllm_rejects_instead_of_crashing(
         self, monkeypatch, tmp_path
     ):
@@ -5361,6 +5491,11 @@ class TestStartupCompatibilityGuards:
             "mllm_scheduler.py",
             "models/mllm.py",
             "models/step3p7_mlx_vlm.py",
+            "models/gemma4_unified_register.py",
+            "models/gemma4_unified/__init__.py",
+            "models/gemma4_unified/config.py",
+            "models/gemma4_unified/gemma4_unified.py",
+            "models/gemma4_unified/processing_gemma4_unified.py",
             "omni_multimodal.py",
             "prefix_cache.py",
             "runtime_patches/gemma4_processing.py",
@@ -5428,6 +5563,16 @@ class TestStartupCompatibilityGuards:
 
         assert '"mlx_vlm.models.gemma4_assistant"' in verify_script
         assert "Gemma 4 assistant mlx_vlm.models alias" in verify_script
+
+    def test_bundled_python_import_gate_covers_gemma4_unified_runtime(self):
+        verify_script = Path("./panel/scripts/verify-bundled-python.sh").read_text()
+
+        assert '"vmlx_engine.models.gemma4_unified_register"' in verify_script
+        assert "_register_gemma4_unified_runtime()" in verify_script
+        assert '"mlx_vlm.models.gemma4_unified"' in verify_script
+        assert '"mlx_vlm.models.gemma4_unified.processing_gemma4_unified"' in verify_script
+        assert "Gemma 4 Unified source VLM/audio runtime missing" in verify_script
+        assert "Gemma 4 Unified mlx-vlm registration missing" in verify_script
 
     def test_mlx_vlm_registry_patch_remaps_minicpm_v46_to_minicpmo(self):
         import vmlx_engine
@@ -7415,6 +7560,175 @@ class TestJangVLMFallbacks:
 
         assert utils.is_mllm_model(str(model_dir)) is False
 
+    def test_gemma4_unified_routes_text_only_when_mlx_vlm_runtime_missing(
+        self,
+        tmp_path,
+        monkeypatch,
+    ):
+        from vmlx_engine.api import utils
+        from vmlx_engine.models import gemma4_unified_register
+
+        model_dir = tmp_path
+        (model_dir / "config.json").write_text(json.dumps({
+            "model_type": "gemma4_unified",
+            "text_config": {"model_type": "gemma4_unified_text"},
+            "vision_config": {"model_type": "gemma4_unified_vision"},
+            "audio_config": {"model_type": "gemma4_unified_audio"},
+        }))
+        (model_dir / "jang_config.json").write_text(json.dumps({
+            "weight_format": "mxfp4",
+            "has_vision": True,
+            "has_audio": True,
+            "capabilities": {
+                "family": "gemma4",
+                "modality": "vision",
+                "tool_parser": "gemma4",
+                "reasoning_parser": "gemma4",
+            },
+        }))
+        utils._IS_MLLM_CACHE.clear()
+        monkeypatch.setattr(
+            gemma4_unified_register,
+            "gemma4_unified_runtime_available",
+            lambda: False,
+        )
+
+        assert utils.is_mllm_model(str(model_dir)) is False
+        assert utils.is_mllm_model(str(model_dir), force_mllm=True) is False
+
+    def test_gemma4_unified_routes_multimodal_when_source_runtime_available(
+        self,
+        tmp_path,
+    ):
+        from vmlx_engine.api import utils
+
+        model_dir = tmp_path
+        (model_dir / "config.json").write_text(json.dumps({
+            "model_type": "gemma4_unified",
+            "text_config": {"model_type": "gemma4_unified_text"},
+            "vision_config": {"model_type": "gemma4_unified_vision"},
+            "audio_config": {"model_type": "gemma4_unified_audio"},
+        }))
+        (model_dir / "jang_config.json").write_text(json.dumps({
+            "weight_format": "mxfp4",
+            "has_vision": True,
+            "has_audio": True,
+            "capabilities": {
+                "family": "gemma4",
+                "modality": "vision",
+                "tool_parser": "gemma4",
+                "reasoning_parser": "gemma4",
+            },
+        }))
+        utils._IS_MLLM_CACHE.clear()
+
+        assert utils.is_mllm_model(str(model_dir)) is True
+
+    def test_gemma4_unified_registry_removes_text_runtime_pixel_injection(
+        self,
+        tmp_path,
+        monkeypatch,
+    ):
+        from vmlx_engine.model_config_registry import get_model_config_registry
+        from vmlx_engine.models import gemma4_unified_register
+
+        model_dir = tmp_path
+        (model_dir / "config.json").write_text(json.dumps({
+            "model_type": "gemma4_unified",
+            "text_config": {"model_type": "gemma4_unified_text"},
+            "vision_config": {"model_type": "gemma4_unified_vision"},
+            "audio_config": {"model_type": "gemma4_unified_audio"},
+        }))
+        (model_dir / "jang_config.json").write_text(json.dumps({
+            "weight_format": "mxfp4",
+            "has_vision": True,
+            "has_audio": True,
+            "capabilities": {
+                "family": "gemma4",
+                "modality": "vision",
+                "tool_parser": "gemma4",
+                "reasoning_parser": "gemma4",
+                "think_in_template": False,
+                "supports_thinking": True,
+                "supports_tools": True,
+                "cache_type": "kv",
+            },
+        }))
+        monkeypatch.setattr(
+            gemma4_unified_register,
+            "gemma4_unified_runtime_available",
+            lambda: False,
+        )
+
+        registry = get_model_config_registry()
+        registry.clear_cache()
+        cfg = registry.lookup(str(model_dir))
+
+        assert cfg.family_name == "gemma4"
+        assert cfg.is_mllm is False
+        assert cfg.tool_parser == "gemma4"
+        assert cfg.reasoning_parser == "gemma4"
+        assert cfg.architecture_hints["vl_runtime_available"] is False
+        assert cfg.architecture_hints["audio_runtime_available"] is False
+        assert "inject_pixel_values" not in cfg.architecture_hints
+
+    def test_gemma4_unified_registry_advertises_source_runtime_when_available(
+        self,
+        tmp_path,
+    ):
+        from vmlx_engine.model_config_registry import get_model_config_registry
+
+        model_dir = tmp_path
+        (model_dir / "config.json").write_text(json.dumps({
+            "model_type": "gemma4_unified",
+            "text_config": {"model_type": "gemma4_unified_text"},
+            "vision_config": {"model_type": "gemma4_unified_vision"},
+            "audio_config": {"model_type": "gemma4_unified_audio"},
+        }))
+        (model_dir / "jang_config.json").write_text(json.dumps({
+            "weight_format": "mxfp4",
+            "has_vision": True,
+            "has_audio": True,
+            "capabilities": {
+                "family": "gemma4",
+                "modality": "vision",
+                "tool_parser": "gemma4",
+                "reasoning_parser": "gemma4",
+                "think_in_template": False,
+                "supports_thinking": True,
+                "supports_tools": True,
+                "cache_type": "kv",
+            },
+        }))
+
+        registry = get_model_config_registry()
+        registry.clear_cache()
+        cfg = registry.lookup(str(model_dir))
+
+        assert cfg.family_name == "gemma4"
+        assert cfg.is_mllm is True
+        assert cfg.architecture_hints["runtime_scope"] == "source_gemma4_unified_vlm"
+        assert cfg.architecture_hints["vl_runtime_available"] is True
+        assert cfg.architecture_hints["audio_runtime_available"] is True
+
+    def test_batched_model_wrapper_does_not_inject_pixel_values_for_gemma4_text_wrapper(
+        self,
+    ):
+        import mlx.core as mx
+
+        from vmlx_engine.engine.batched import MLLMModelWrapper
+
+        class _Gemma4TextWrapper:
+            model_type = "gemma4"
+
+            def __call__(self, tokens, **kwargs):
+                assert "pixel_values" not in kwargs
+                return mx.zeros((1, 1, 4))
+
+        wrapped = MLLMModelWrapper(_Gemma4TextWrapper())
+
+        wrapped(mx.array([[1]], dtype=mx.int32), cache=None)
+
     def test_affine_qwen_hybrid_detection_normalizes_config_case_for_text_only(self, tmp_path):
         from vmlx_engine.api import utils
 
@@ -7446,6 +7760,7 @@ class TestJangVLMFallbacks:
     def test_qwen_vlm_loader_affine_delegates_to_text_loader(self, tmp_path, monkeypatch):
         """Affine-JANG Qwen hybrid uses text loader until mlx_vlm M-RoPE is fixed."""
         from vmlx_engine.utils import jang_loader
+        from vmlx_engine.models import gemma4_unified_register
         import mlx_vlm.utils as vlm_utils
 
         model_dir = self._write_qwen_hybrid_fixture(tmp_path)
@@ -7453,6 +7768,11 @@ class TestJangVLMFallbacks:
         jang_cfg = json.loads((model_dir / "jang_config.json").read_text())
 
         monkeypatch.setattr(vlm_utils, "load_config", lambda path: dict(config))
+        monkeypatch.setattr(
+            gemma4_unified_register,
+            "gemma4_unified_runtime_available",
+            lambda: False,
+        )
         monkeypatch.setattr(
             vlm_utils,
             "get_model_and_args",
@@ -7470,6 +7790,54 @@ class TestJangVLMFallbacks:
         assert model is sentinel
         assert tokenizer == "tokenizer"
         assert jang_loader._LAST_LOAD_VLM_FALLBACK is True
+
+    def test_gemma4_unified_vlm_loader_delegates_to_text_loader(
+        self,
+        tmp_path,
+        monkeypatch,
+    ):
+        from vmlx_engine.utils import jang_loader
+        import mlx_vlm.utils as vlm_utils
+
+        model_dir = tmp_path
+        config = {
+            "model_type": "gemma4_unified",
+            "text_config": {"model_type": "gemma4_unified_text"},
+            "vision_config": {"model_type": "gemma4_unified_vision"},
+            "audio_config": {"model_type": "gemma4_unified_audio"},
+        }
+        jang_cfg = {
+            "weight_format": "mxfp4",
+            "has_vision": True,
+            "has_audio": True,
+        }
+
+        monkeypatch.setattr(vlm_utils, "load_config", lambda path: dict(config))
+        monkeypatch.setattr(
+            vlm_utils,
+            "get_model_and_args",
+            lambda *, config: pytest.fail("Gemma4 unified must not hit missing native VLM loader"),
+        )
+        sentinel = object()
+        monkeypatch.setattr(
+            jang_loader,
+            "_load_jang_v2",
+            lambda *args, **kwargs: (sentinel, "tokenizer"),
+        )
+
+        model, tokenizer = jang_loader._load_jang_v2_vlm(model_dir, jang_cfg)
+
+        assert model is sentinel
+        assert tokenizer == "tokenizer"
+        assert jang_loader._LAST_LOAD_VLM_FALLBACK is True
+
+    def test_gemma4_unified_vlm_loader_fallback_is_guarded_by_runtime_availability(self):
+        source = Path("vmlx_engine/utils/jang_loader.py").read_text()
+
+        assert (
+            "if _is_gemma4_unified_text_runtime_config(config) "
+            "and not _gemma4_unified_runtime_available():" in source
+        )
 
     def test_qwen_vlm_loader_affine_native_path_normalizes_config_case(
         self,

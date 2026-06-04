@@ -4,6 +4,7 @@ Utility functions for text processing and model detection.
 """
 
 import functools
+import importlib.util
 import json
 import logging
 import os
@@ -265,6 +266,38 @@ def _is_affine_jang_qwen_hybrid_vlm_path(local_path: str) -> bool:
         return False
 
 
+def _is_gemma4_unified_text_runtime_path(local_path: str) -> bool:
+    """Return True when Gemma 4 Unified must use the text runtime.
+
+    Gemma 4 12B Unified ships encoder-free early-fusion image/audio metadata
+    under ``model_type=gemma4_unified``. Current mlx-vlm does not expose a
+    ``gemma4_unified`` runtime class, while mlx-lm does expose the Gemma4 text
+    wrapper that matches the language weights. Route text-only until the real
+    early-fusion VL/audio runtime exists; do not silently pretend media works.
+    """
+    try:
+        cfg_path = os.path.join(local_path, "config.json")
+        if not os.path.isfile(cfg_path):
+            return False
+        with open(cfg_path) as f:
+            config = json.load(f)
+        if str(config.get("model_type") or "").lower() != "gemma4_unified":
+            return False
+        text_type = str((config.get("text_config") or {}).get("model_type") or "").lower()
+        if text_type != "gemma4_unified_text":
+            return False
+        try:
+            from vmlx_engine.models.gemma4_unified_register import (
+                gemma4_unified_runtime_available,
+            )
+
+            return not gemma4_unified_runtime_available()
+        except Exception:
+            return importlib.util.find_spec("mlx_vlm.models.gemma4_unified") is None
+    except Exception:
+        return False
+
+
 def _has_native_mtp_vl_artifact(local_path: str) -> bool:
     """Return True for real artifact-backed Qwen native-MTP VL bundles.
 
@@ -417,6 +450,22 @@ def is_mllm_model(model_name: str, force_mllm: bool = False) -> bool:
         else:
             _logger.info(
                 "is_mllm_model(%s): tier=affine_qwen_hybrid_jang_text_only "
+                "result=False",
+                model_name,
+        )
+        return False
+
+    if _is_gemma4_unified_text_runtime_path(local_path):
+        if force_mllm:
+            _logger.warning(
+                "is_mllm_model(%s): Gemma 4 Unified overrides force_mllm — "
+                "current mlx_vlm has no gemma4_unified runtime; routing "
+                "text-only until the early-fusion image/audio path is wired",
+                model_name,
+            )
+        else:
+            _logger.info(
+                "is_mllm_model(%s): tier=gemma4_unified_text_runtime "
                 "result=False",
                 model_name,
             )

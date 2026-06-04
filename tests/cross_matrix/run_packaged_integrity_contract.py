@@ -25,10 +25,9 @@ from typing import Any
 
 
 DEFAULT_OUT = Path(
-    "build/current-packaged-integrity-contract-20260602-developer-id-staged-signing.json"
+    "build/current-packaged-integrity-contract-gemma4-release-boundary-after-ui-e2e-fixes-dmg-build-20260604.json"
 )
 EXPECTED_OPEN_REQUIREMENTS = [
-    "MiniMax-M2.7-JANGTQ_K reporter parity/root cause is release-cleared",
     "Real Electron UI cross-family live model matrix is release-cleared",
     "DSV4 long-output/code/file-generation quality is release-cleared",
 ]

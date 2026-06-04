@@ -33,10 +33,11 @@ def test_mllm_tool_replay_normalizes_tool_call_arguments_for_chat_template():
         {"role": "user", "content": [{"type": "text", "text": "now call add"}]},
     ]
 
-    chat_messages, images, videos = MLXMultimodalLM._extract_multimodal_messages(messages)
+    chat_messages, images, videos, audio = MLXMultimodalLM._extract_multimodal_messages(messages)
 
     assert images == []
     assert videos == []
+    assert audio == []
     assert chat_messages[1]["role"] == "assistant"
     assert chat_messages[1]["tool_calls"][0]["function"]["name"] == "smoke__echo"
     assert chat_messages[1]["tool_calls"][0]["function"]["arguments"] == {

@@ -458,13 +458,29 @@ ROWS: list[ModelRow] = [
     ModelRow(
         id="gemma4_crack",
         label="Gemma-4-26B-A4B-it JANG_4M CRACK",
-        path="/Volumes/ModelDrive/dealignai/Gemma-4-26B-A4B-it-JANG_4M-CRACK",
+        path="/Users/example/models/dealign.ai/Gemma-4-26B-A4B-it-JANG_4M-CRACK",
         family="gemma4",
         kind="vl",
         expect_reasoning=True,
         expect_tool_parser="gemma4",
         cache_profile="vl",
         slow=True,
+    ),
+    ModelRow(
+        id="gemma4_31b_jang4m_mtp",
+        label="Gemma-4-31B-it JANG_4M MTP-preserved",
+        path="/Users/example/models/JANGQ/Gemma-4-31B-it-JANG_4M-MTP",
+        family="gemma4",
+        kind="vl",
+        expect_reasoning=True,
+        expect_tool_parser="gemma4",
+        cache_profile="vl",
+        slow=True,
+        notes=[
+            "Gemma 31B row is an MTP-preserved artifact boundary, not a proven "
+            "native self-spec runtime row. Do not claim an MTP speedup unless "
+            "accept/reject and full-output equivalence are live-proven."
+        ],
     ),
     ModelRow(
         id="minimax_m27_tq_crack",
@@ -2124,7 +2140,16 @@ def text_quality_summary(text: str) -> dict[str, Any]:
 
 
 def multilingual_latin_tokens_ok(text: str) -> bool:
-    allowed = {"html", "three", "js", "javascript", "css", "webgl", "wasd"}
+    allowed = {
+        "html",
+        "three",
+        "js",
+        "javascript",
+        "css",
+        "webgl",
+        "wasd",
+        "recoil",
+    }
     tokens = {token.lower() for token in re.findall(r"[A-Za-z]{2,}", text)}
     return tokens <= allowed
 
@@ -3004,7 +3029,8 @@ def live_audit(row: ModelRow, py: Path, port: int, timeout_load: int, keep_runni
                             "а кабаны и лоси появляются как враги. Ответь по-русски "
                             "структурировано в 5 пунктах; каждый пункт должен быть "
                             "полным коротким предложением, без повторения одного "
-                            "слова или символа."
+                            "слова или символа. Не используй английские или "
+                            "китайские слова, кроме HTML и Three.js."
                         ),
                     }
                 ],

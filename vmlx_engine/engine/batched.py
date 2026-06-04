@@ -62,7 +62,7 @@ class MLLMModelWrapper:
     but MLLM models return LanguageModelOutput objects. This wrapper extracts
     the logits from the output.
 
-    Also handles Gemma 3's required pixel_values argument by injecting None
+        Also handles Gemma 3's required pixel_values argument by injecting None
     for text-only requests.
     """
 
@@ -79,7 +79,7 @@ class MLLMModelWrapper:
             _mt = str(getattr(model, "model_type", "")).lower()
             self._inject_pixel_values = (
                 hasattr(model, "model_type")
-                and _mt in ("gemma3", "gemma3n", "gemma4")
+                and _mt in ("gemma3", "gemma3n")
             )
 
     def __call__(self, *args, **kwargs):
