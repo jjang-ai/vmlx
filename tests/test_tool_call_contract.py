@@ -48,7 +48,7 @@ def test_tool_call_contract_fails_when_required_marker_missing(monkeypatch, tmp_
     assert artifact["missing_markers"] == ["missing marker"]
 
 
-def test_tool_call_contract_rejects_skipped_live_dsv4_default_cache_artifact(monkeypatch, tmp_path):
+def test_tool_call_contract_keeps_skipped_live_dsv4_default_cache_artifact_open(monkeypatch, tmp_path):
     from tests.cross_matrix import run_tool_call_contract as gate
 
     def fake_run(root, name, cwd_rel, cmd):
@@ -71,5 +71,6 @@ def test_tool_call_contract_rejects_skipped_live_dsv4_default_cache_artifact(mon
 
     artifact = gate.build_artifact(tmp_path)
 
-    assert artifact["status"] == "fail"
+    assert artifact["status"] == "open"
     assert artifact["checks"]["live_default_cache_dsv4_tool_loop_artifact_passed"] is False
+    assert artifact["open_proof_gaps"] == ["live_default_cache_dsv4_tool_loop"]

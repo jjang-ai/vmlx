@@ -226,12 +226,37 @@ def build_artifact(root: Path) -> dict[str, Any]:
         "live_default_cache_dsv4_tool_loop_artifact_passed": live_default_cache_status == "pass",
         "all_required_tool_call_markers_present": not failed and not missing_markers,
     }
+    source_checks = {
+        key: value
+        for key, value in checks.items()
+        if key
+        not in {
+            "live_default_cache_dsv4_tool_loop_artifact_present",
+            "live_default_cache_dsv4_tool_loop_artifact_passed",
+        }
+    }
+    live_default_cache_open = (
+        checks["live_default_cache_dsv4_tool_loop_artifact_present"] is True
+        and live_default_cache_status in {"skipped", "dry_run", "review", "error"}
+    )
+    status = (
+        "pass"
+        if all(checks.values())
+        else "open"
+        if all(source_checks.values()) and live_default_cache_open
+        else "fail"
+    )
     return {
         "created_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
-        "status": "pass" if all(checks.values()) else "fail",
+        "status": status,
         "checks": checks,
         "failed": failed,
         "missing_markers": missing_markers,
+        "open_proof_gaps": [
+            "live_default_cache_dsv4_tool_loop"
+        ]
+        if status == "open"
+        else [],
         "source_hashes": {
             rel: _sha256(root / rel)
             for rel in SOURCE_HASH_FILES

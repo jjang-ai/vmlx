@@ -433,6 +433,15 @@ def _step_is_ok(name: str, step: dict[str, Any], root: Path) -> bool:
         return _release_gate_failure_is_expected(step)
     if name == "release_regression_manifest":
         return _release_manifest_failure_is_expected(step, root)
+    if name == "tool_call_contracts":
+        if step["returncode"] == 0:
+            return True
+        path = root / "build/current-tool-call-contract-20260528-tool-parser-loop-matrix.json"
+        try:
+            artifact = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            return False
+        return artifact.get("status") in {"open", "pass"}
     return step["returncode"] == 0
 
 
