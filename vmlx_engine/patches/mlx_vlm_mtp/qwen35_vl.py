@@ -374,6 +374,7 @@ def _patch_gated_delta_net(qlang: Any) -> None:
         inputs: Any,
         mask: Optional[Any] = None,
         cache: Optional[Any] = None,
+        gdn_sink: Optional[list] = None,
         n_confirmed: int = 0,
     ):
         batch_size, seq_len, _ = inputs.shape
@@ -407,9 +408,56 @@ def _patch_gated_delta_net(qlang: Any) -> None:
             else:
                 qkv = mx.where(mask[..., None], qkv, 0)
 
+        def capture_gdn_sink(
+            qkv_chunk,
+            a_chunk,
+            b_chunk,
+            conv_state_chunk,
+            ssm_state_chunk,
+            mask_chunk,
+        ):
+            if gdn_sink is None:
+                return
+            conv_input = mx.concatenate([conv_state_chunk, qkv_chunk], axis=1)
+            conv_out = nn.silu(self.conv1d(conv_input))
+            q, k, v = [
+                t.reshape(batch_size, qkv_chunk.shape[1], heads, dim)
+                for t, heads, dim in zip(
+                    mx.split(conv_out, [self.key_dim, 2 * self.key_dim], -1),
+                    [self.num_k_heads, self.num_k_heads, self.num_v_heads],
+                    [self.head_k_dim, self.head_k_dim, self.head_v_dim],
+                )
+            ]
+            inv_scale = k.shape[-1] ** -0.5
+            q = (inv_scale**2) * mx.fast.rms_norm(q, None, 1e-6)
+            k = inv_scale * mx.fast.rms_norm(k, None, 1e-6)
+            gdn_sink.append(
+                (
+                    q,
+                    k,
+                    v,
+                    a_chunk,
+                    b_chunk,
+                    self.A_log,
+                    self.dt_bias,
+                    ssm_state_chunk,
+                    mask_chunk,
+                    conv_input,
+                    self.conv_kernel_size,
+                )
+            )
+
         if n_confirmed > 0 and n_confirmed < seq_len:
             mask_c = mask[:, :n_confirmed] if mask is not None else None
             mask_d = mask[:, n_confirmed:] if mask is not None else None
+            capture_gdn_sink(
+                qkv[:, :n_confirmed],
+                a[:, :n_confirmed],
+                b[:, :n_confirmed],
+                conv_state,
+                ssm_state,
+                mask_c,
+            )
             out_c, conv_c, ssm_c = self._process_chunk(
                 qkv[:, :n_confirmed],
                 a[:, :n_confirmed],
@@ -420,6 +468,14 @@ def _patch_gated_delta_net(qlang: Any) -> None:
             )
             if cache is not None:
                 cache.rollback_state = (conv_c, ssm_c)
+            capture_gdn_sink(
+                qkv[:, n_confirmed:],
+                a[:, n_confirmed:],
+                b[:, n_confirmed:],
+                conv_c,
+                ssm_c,
+                mask_d,
+            )
             out_d, conv_f, ssm_f = self._process_chunk(
                 qkv[:, n_confirmed:],
                 a[:, n_confirmed:],
@@ -431,6 +487,7 @@ def _patch_gated_delta_net(qlang: Any) -> None:
             out = mx.concatenate([out_c, out_d], axis=1)
         else:
             lengths = getattr(cache, "lengths", None) if cache is not None else None
+            capture_gdn_sink(qkv, a, b, conv_state, ssm_state, mask)
             out, conv_f, ssm_f = self._process_chunk(
                 qkv, a, b, conv_state, ssm_state, mask, lengths=lengths
             )
@@ -463,14 +520,19 @@ def _patch_decoder_layer(qlang: Any) -> None:
         mask=None,
         cache=None,
         position_ids=None,
+        gdn_sink: Optional[list] = None,
         n_confirmed: int = 0,
     ):
         if n_confirmed == 0:
-            return original_call(self, x, mask, cache, position_ids)
+            return original_call(self, x, mask, cache, position_ids, gdn_sink=gdn_sink)
 
         if self.is_linear:
             r = self.linear_attn(
-                self.input_layernorm(x), mask, cache, n_confirmed=n_confirmed
+                self.input_layernorm(x),
+                mask,
+                cache,
+                gdn_sink=gdn_sink,
+                n_confirmed=n_confirmed,
             )
         else:
             r = self.self_attn(self.input_layernorm(x), mask, cache, position_ids)
@@ -494,14 +556,19 @@ def _patch_moe_decoder_layer(qmoe_lang: Any) -> None:
         mask=None,
         cache=None,
         position_ids=None,
+        gdn_sink: Optional[list] = None,
         n_confirmed: int = 0,
     ):
         if n_confirmed == 0:
-            return original_call(self, x, mask, cache, position_ids)
+            return original_call(self, x, mask, cache, position_ids, gdn_sink=gdn_sink)
 
         if self.is_linear:
             r = self.linear_attn(
-                self.input_layernorm(x), mask, cache, n_confirmed=n_confirmed
+                self.input_layernorm(x),
+                mask,
+                cache,
+                gdn_sink=gdn_sink,
+                n_confirmed=n_confirmed,
             )
         else:
             r = self.self_attn(self.input_layernorm(x), mask, cache, position_ids)
@@ -526,6 +593,7 @@ def _patch_qwen_model(qlang: Any) -> None:
         mask=None,
         cache=None,
         position_ids=None,
+        gdn_sink=None,
         n_confirmed: int = 0,
         return_unnormed: bool = False,
     ):
@@ -537,6 +605,7 @@ def _patch_qwen_model(qlang: Any) -> None:
                 mask=mask,
                 cache=cache,
                 position_ids=position_ids,
+                gdn_sink=gdn_sink,
             )
 
         h = self.embed_tokens(inputs) if inputs_embeds is None else inputs_embeds
@@ -554,6 +623,7 @@ def _patch_qwen_model(qlang: Any) -> None:
                 layer_mask,
                 layer_cache,
                 position_ids=position_ids,
+                gdn_sink=gdn_sink,
                 n_confirmed=n_confirmed,
             )
 

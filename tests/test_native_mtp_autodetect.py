@@ -875,10 +875,19 @@ class TestNativeMtpAutodetect:
         assert "n_confirmed" in inspect.signature(
             vl_language.Qwen3_5GatedDeltaNet.__call__
         ).parameters
+        assert "gdn_sink" in inspect.signature(
+            vl_language.Qwen3_5GatedDeltaNet.__call__
+        ).parameters
         assert "n_confirmed" in inspect.signature(
             vl_language.Qwen3_5DecoderLayer.__call__
         ).parameters
+        assert "gdn_sink" in inspect.signature(
+            vl_language.Qwen3_5DecoderLayer.__call__
+        ).parameters
         assert "n_confirmed" in inspect.signature(
+            vl_language.Qwen3_5Model.__call__
+        ).parameters
+        assert "gdn_sink" in inspect.signature(
             vl_language.Qwen3_5Model.__call__
         ).parameters
         assert hasattr(moe_vl_language.LanguageModel, "mtp_forward")
@@ -888,12 +897,28 @@ class TestNativeMtpAutodetect:
         assert "n_confirmed" in inspect.signature(
             moe_vl_language.Qwen3_5MoeGatedDeltaNet.__call__
         ).parameters
+        assert "gdn_sink" in inspect.signature(
+            moe_vl_language.Qwen3_5MoeGatedDeltaNet.__call__
+        ).parameters
         assert "n_confirmed" in inspect.signature(
+            moe_vl_language.Qwen3_5MoeDecoderLayer.__call__
+        ).parameters
+        assert "gdn_sink" in inspect.signature(
             moe_vl_language.Qwen3_5MoeDecoderLayer.__call__
         ).parameters
         assert "n_confirmed" in inspect.signature(
             moe_vl_language.Qwen3_5MoeModel.__call__
         ).parameters
+        assert "gdn_sink" in inspect.signature(
+            moe_vl_language.Qwen3_5MoeModel.__call__
+        ).parameters
+        patched_gdn = inspect.getsource(vl_language.Qwen3_5GatedDeltaNet.__call__)
+        patched_decoder = inspect.getsource(vl_language.Qwen3_5DecoderLayer.__call__)
+        patched_model = inspect.getsource(vl_language.Qwen3_5Model.__call__)
+        assert "gdn_sink.append" in patched_gdn
+        assert "conv_input" in patched_gdn
+        assert "gdn_sink=gdn_sink" in patched_decoder
+        assert "gdn_sink=gdn_sink" in patched_model
         fake_attention = vl_language.Qwen3_5Attention.__new__(
             vl_language.Qwen3_5Attention
         )
