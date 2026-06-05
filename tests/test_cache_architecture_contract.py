@@ -9,6 +9,14 @@ def test_cache_architecture_contract_default_out_tracks_current_release_proof_ar
     )
 
 
+def test_cache_architecture_contract_hashes_real_tq_disk_store_source():
+    from tests.cross_matrix import run_cache_architecture_contract as gate
+
+    assert "vmlx_engine/tq_disk_store.py" in gate.SOURCE_HASH_FILES
+    assert "vmlx_engine/tq_disk_cache.py" not in gate.SOURCE_HASH_FILES
+    assert Path("vmlx_engine/tq_disk_store.py").is_file()
+
+
 def test_cache_architecture_contract_api_child_artifact_is_current():
     from tests.cross_matrix import run_cache_architecture_contract as gate
 

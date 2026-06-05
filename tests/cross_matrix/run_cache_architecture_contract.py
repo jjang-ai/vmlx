@@ -46,7 +46,7 @@ SOURCE_HASH_FILES = (
     "vmlx_engine/mllm_batch_generator.py",
     "vmlx_engine/mllm_scheduler.py",
     "vmlx_engine/model_config_registry.py",
-    "vmlx_engine/tq_disk_cache.py",
+    "vmlx_engine/tq_disk_store.py",
     "tests/cross_matrix/run_noheavy_api_cache_contract.py",
     "tests/cross_matrix/run_cache_architecture_contract.py",
     "tests/test_engine_audit.py",

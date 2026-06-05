@@ -355,6 +355,42 @@ def _write_passing_base_artifacts(tmp_path: Path) -> None:
             ]
         },
     )
+    from tests.cross_matrix import run_cache_architecture_contract as cache_contract
+    from tests.cross_matrix import release_regression_manifest as manifest
+
+    for rel in cache_contract.SOURCE_HASH_FILES:
+        if not (tmp_path / rel).exists():
+            _write_json(tmp_path, rel, {"fixture": rel})
+    _write_json(
+        tmp_path,
+        cache_contract.DEFAULT_OUT,
+        {
+            "status": "pass",
+            "checks": {
+                key: True
+                for key in manifest.EXPECTED_CURRENT_CACHE_ARCHITECTURE_CHECKS
+            },
+            "failed": [],
+            "missing_markers": [],
+            "missing_api_checks": [],
+            "missing_api_command_markers": [],
+            "missing_panel_markers": [],
+            "cache_family_matrix": {
+                row_id: {
+                    "status": "pass",
+                    "missing_markers": [],
+                    "missing_api_checks": [],
+                    "missing_api_command_markers": [],
+                    "missing_panel_markers": [],
+                }
+                for row_id in manifest.EXPECTED_CURRENT_CACHE_FAMILY_MATRIX_ROWS
+            },
+            "source_hashes": {
+                rel: _sha256(tmp_path / rel)
+                for rel in cache_contract.SOURCE_HASH_FILES
+            },
+        },
+    )
     _write_json(
         tmp_path,
         "build/current-dsv4-long-context-proof-digest-20260521.json",
@@ -1033,6 +1069,22 @@ def _write_passing_base_artifacts(tmp_path: Path) -> None:
             ],
         },
     )
+    _refresh_cache_architecture_contract_source_hashes(tmp_path)
+
+
+def _refresh_cache_architecture_contract_source_hashes(tmp_path: Path) -> None:
+    from tests.cross_matrix import run_cache_architecture_contract as cache_contract
+
+    contract_path = tmp_path / cache_contract.DEFAULT_OUT
+    contract = json.loads(contract_path.read_text(encoding="utf-8"))
+    for rel in cache_contract.SOURCE_HASH_FILES:
+        if not (tmp_path / rel).exists():
+            _write_json(tmp_path, rel, {"fixture": rel})
+    contract["source_hashes"] = {
+        rel: _sha256(tmp_path / rel)
+        for rel in cache_contract.SOURCE_HASH_FILES
+    }
+    contract_path.write_text(json.dumps(contract), encoding="utf-8")
 
 
 def test_objective_proof_digest_keeps_dsv4_long_quality_open(tmp_path):
@@ -8431,6 +8483,42 @@ def test_objective_proof_digest_accepts_panel_settings_contract_artifact(tmp_pat
     assert row["details"]["contract_checks"]["max_output_context_cli_split"] is True
     assert row["details"]["missing_evidence"] == []
     assert row["details"]["stale_source_hashes"] == []
+
+
+def test_objective_proof_digest_does_not_require_legacy_static_cache_architecture_audit(tmp_path):
+    from tests.cross_matrix import run_cache_architecture_contract as cache_contract
+    from tests.cross_matrix.summarize_objective_proof import build_digest
+
+    _write_passing_base_artifacts(tmp_path)
+    _refresh_cache_architecture_contract_source_hashes(tmp_path)
+    (tmp_path / "build/current-static-cache-architecture-audit-full-qwen-hybrid-20260521.json").unlink()
+
+    digest = build_digest(tmp_path)
+    rows = {item["requirement"]: item for item in digest["requirements"]}
+
+    row = rows["Cross-family cache architecture is classified per family"]
+    assert row["status"] == "pass"
+    assert row["evidence"] == [str(cache_contract.DEFAULT_OUT)]
+    assert row["details"]["missing_evidence"] == []
+    assert row["details"]["missing_family_rows"] == []
+    assert row["details"]["failed_family_rows"] == []
+    assert "build/current-static-cache-architecture-audit-full-qwen-hybrid-20260521.json" not in row["details"]["evidence_files_present"]
+
+
+def test_objective_proof_digest_requires_current_cache_architecture_contract_artifact(tmp_path):
+    from tests.cross_matrix import run_cache_architecture_contract as cache_contract
+    from tests.cross_matrix.summarize_objective_proof import build_digest
+
+    _write_passing_base_artifacts(tmp_path)
+    _refresh_cache_architecture_contract_source_hashes(tmp_path)
+    (tmp_path / cache_contract.DEFAULT_OUT).unlink()
+
+    digest = build_digest(tmp_path)
+    rows = {item["requirement"]: item for item in digest["requirements"]}
+
+    row = rows["Cross-family cache architecture is classified per family"]
+    assert row["status"] == "open"
+    assert row["details"]["missing_evidence"] == [str(cache_contract.DEFAULT_OUT)]
 
 
 def test_objective_proof_digest_requires_max_output_context_contract_artifact(tmp_path):

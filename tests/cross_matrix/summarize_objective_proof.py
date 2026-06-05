@@ -24,6 +24,10 @@ if str(ROOT) not in sys.path:
 from tests.cross_matrix.run_max_output_context_contract import (
     SOURCE_HASH_FILES as MAX_OUTPUT_CONTEXT_SOURCE_HASH_FILES,
 )
+from tests.cross_matrix.run_cache_architecture_contract import (
+    DEFAULT_OUT as CACHE_ARCHITECTURE_CONTRACT_DEFAULT_OUT,
+    SOURCE_HASH_FILES as CACHE_ARCHITECTURE_SOURCE_HASH_FILES,
+)
 from tests.cross_matrix.run_model_artifact_format_contract import (
     SOURCE_HASH_FILES as MODEL_ARTIFACT_FORMAT_SOURCE_HASH_FILES,
 )
@@ -48,6 +52,8 @@ from tests.cross_matrix.release_regression_manifest import (
     CURRENT_DSV4_SOURCE_MEMORY_PREFLIGHT_ARTIFACT,
     CURRENT_ISSUE179_MINIMAX_K_ROOT_CAUSE_AUDIT_ARTIFACT,
     CURRENT_REAL_UI_DSV4_MEMORY_PREFLIGHT_ARTIFACT,
+    EXPECTED_CURRENT_CACHE_ARCHITECTURE_CHECKS,
+    EXPECTED_CURRENT_CACHE_FAMILY_MATRIX_ROWS,
 )
 
 
@@ -179,6 +185,7 @@ DSV4_BATCH_GENERATOR_WARMUP_ABLATION_REL = (
     "build/current-dsv4-jang-batch-generator-warmup-ablation-20260524.json"
 )
 API_CACHE_CONTRACT_REL = "build/current-api-cache-contract-proof-20260602-cache-detail-zero-cached.json"
+CACHE_ARCHITECTURE_CONTRACT_REL = str(CACHE_ARCHITECTURE_CONTRACT_DEFAULT_OUT)
 PANEL_SETTINGS_CONTRACT_REL = "build/current-panel-settings-contract-proof-20260601-cache-ui-storage-quant.json"
 MAX_OUTPUT_CONTEXT_CONTRACT_REL = "build/current-max-output-context-contract-20260531-post-step-lfm-refresh.json"
 MAX_OUTPUT_CONTEXT_CONTRACT_FALLBACK_REL = "build/current-max-output-context-contract-20260521.json"
@@ -4945,7 +4952,7 @@ def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
     )
     cap = _load(root, "build/v1546-dsv4-app-tool-cap-nocache-proof-20260521090706/summary.json")
     ui = _load(root, "build/dev-ui-smoke-20260521/summary.json")
-    static = _load(root, "build/current-static-cache-architecture-audit-full-qwen-hybrid-20260521.json")
+    cache_architecture_contract = _load(root, CACHE_ARCHITECTURE_CONTRACT_REL)
     longctx = _load(root, "build/current-dsv4-long-context-proof-digest-20260521.json")
     quality_clearance = _load(root, DSV4_QUALITY_CLEARANCE_REL)
     dsv4_current_identifier_canary_rel, dsv4_current_identifier_canary = _load_first_present(
@@ -5579,8 +5586,6 @@ def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
     cap_checks = cap.get("checks") or {}
     ui_visible = ui.get("visible_assertions") or {}
     ui_cli = ui.get("cli_preview_assertions") or {}
-    rows = _static_rows(static)
-
     _add(
         requirements,
         "DSV4 Flash prefix/paged/L2 cache is enabled by default from app launch",
@@ -5818,34 +5823,59 @@ def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
             **panel_settings_hash_details,
         },
     )
-    expected_profiles = {
-        "dsv4_jang_local": "dsv4_composite",
-        "minimax_m27_tq_k": "default",
-        "qwen36_dense_mxfp4": "hybrid_ssm",
-        "qwen36_dense_jang": "hybrid_ssm",
-        "zaya_vl_mxfp4": "zaya_cca",
-        "nemotron_omni_tq2": "hybrid_ssm",
-        "ling_flash_tq": "hybrid_ssm",
+    cache_architecture_checks = cache_architecture_contract.get("checks") or {}
+    cache_architecture_check_status = {
+        key: cache_architecture_checks.get(key) is True
+        for key in EXPECTED_CURRENT_CACHE_ARCHITECTURE_CHECKS
     }
+    cache_architecture_matrix = cache_architecture_contract.get("cache_family_matrix") or {}
+    missing_cache_family_rows = [
+        row_id
+        for row_id in EXPECTED_CURRENT_CACHE_FAMILY_MATRIX_ROWS
+        if row_id not in cache_architecture_matrix
+    ]
+    failed_cache_family_rows = [
+        row_id
+        for row_id in EXPECTED_CURRENT_CACHE_FAMILY_MATRIX_ROWS
+        if (cache_architecture_matrix.get(row_id) or {}).get("status") != "pass"
+    ]
+    cache_architecture_hash_ok, cache_architecture_hash_details = _source_hash_status(
+        root,
+        cache_architecture_contract,
+        CACHE_ARCHITECTURE_SOURCE_HASH_FILES,
+    )
     _add(
         requirements,
         "Cross-family cache architecture is classified per family",
         _status(
-            all(
-                (rows.get(row_id) or {}).get("cache_profile_expected") == expected
-                for row_id, expected in expected_profiles.items()
-            )
+            cache_architecture_contract.get("status") == "pass"
+            and all(cache_architecture_check_status.values())
+            and not missing_cache_family_rows
+            and not failed_cache_family_rows
+            and not cache_architecture_contract.get("failed")
+            and not cache_architecture_contract.get("missing_markers")
+            and not cache_architecture_contract.get("missing_api_checks")
+            and not cache_architecture_contract.get("missing_api_command_markers")
+            and not cache_architecture_contract.get("missing_panel_markers")
+            and cache_architecture_hash_ok
         ),
-        ["build/current-static-cache-architecture-audit-full-qwen-hybrid-20260521.json"],
+        [CACHE_ARCHITECTURE_CONTRACT_REL],
         caveat="Static architecture proof only; broad live generation still requires per-family live rows.",
         details={
-            row_id: {
-                "exists": (rows.get(row_id) or {}).get("exists"),
-                "expected": (rows.get(row_id) or {}).get("cache_profile_expected"),
-                "registry_cache": ((rows.get(row_id) or {}).get("registry") or {}).get("cache_type"),
-                "issues": (rows.get(row_id) or {}).get("issues"),
-            }
-            for row_id in expected_profiles
+            "contract_status": cache_architecture_contract.get("status"),
+            "contract_checks": cache_architecture_check_status,
+            "missing_family_rows": missing_cache_family_rows,
+            "failed_family_rows": failed_cache_family_rows,
+            "failed": cache_architecture_contract.get("failed") or [],
+            "missing_markers": cache_architecture_contract.get("missing_markers") or [],
+            "missing_api_checks": cache_architecture_contract.get("missing_api_checks") or [],
+            "missing_api_command_markers": cache_architecture_contract.get("missing_api_command_markers") or [],
+            "missing_panel_markers": cache_architecture_contract.get("missing_panel_markers") or [],
+            "cache_family_matrix": {
+                row_id: cache_architecture_matrix.get(row_id)
+                for row_id in EXPECTED_CURRENT_CACHE_FAMILY_MATRIX_ROWS
+            },
+            **cache_architecture_hash_details,
         },
     )
     model_family_ok, model_family_details = _contract_detail(
