@@ -203,6 +203,14 @@ def build_artifact(root: Path) -> dict[str, Any]:
     panel_passed = results["panel_tool_loop_security"]["counts"]["passed"] or 0
     family_passed = results["engine_family_tool_parser_matrix"]["counts"]["passed"] or 0
     live_default_cache_artifact = root / "build/current-dsv4-default-cache-tool-loop/result.json"
+    live_default_cache_status = None
+    if live_default_cache_artifact.exists():
+        try:
+            live_default_cache_status = json.loads(
+                live_default_cache_artifact.read_text(encoding="utf-8")
+            ).get("status")
+        except (OSError, json.JSONDecodeError, TypeError):
+            live_default_cache_status = "unreadable"
     checks = {
         "tool_parser_residue_rejected_instead_of_executed": not failed and engine_passed >= 21,
         "schema_valid_dsml_tool_call_preserved": not failed and engine_passed >= 21,
@@ -215,6 +223,7 @@ def build_artifact(root: Path) -> dict[str, Any]:
             not failed and family_passed >= 125
         ),
         "live_default_cache_dsv4_tool_loop_artifact_present": live_default_cache_artifact.exists(),
+        "live_default_cache_dsv4_tool_loop_artifact_passed": live_default_cache_status == "pass",
         "all_required_tool_call_markers_present": not failed and not missing_markers,
     }
     return {
@@ -230,6 +239,7 @@ def build_artifact(root: Path) -> dict[str, Any]:
         },
         "results": results,
         "live_default_cache_artifact": str(live_default_cache_artifact),
+        "live_default_cache_artifact_status": live_default_cache_status,
     }
 
 

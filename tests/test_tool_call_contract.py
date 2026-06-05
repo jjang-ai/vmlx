@@ -1,4 +1,5 @@
 from pathlib import Path
+import json
 
 
 def test_tool_call_contract_default_out_tracks_current_release_proof_artifact():
@@ -45,3 +46,30 @@ def test_tool_call_contract_fails_when_required_marker_missing(monkeypatch, tmp_
 
     assert artifact["status"] == "fail"
     assert artifact["missing_markers"] == ["missing marker"]
+
+
+def test_tool_call_contract_rejects_skipped_live_dsv4_default_cache_artifact(monkeypatch, tmp_path):
+    from tests.cross_matrix import run_tool_call_contract as gate
+
+    def fake_run(root, name, cwd_rel, cmd):
+        stdout = "\n".join(gate.REQUIRED_TOOL_CALL_TEST_MARKERS)
+        return {
+            "name": name,
+            "command": cmd,
+            "cwd": str(cwd_rel),
+            "returncode": 0,
+            "elapsed_sec": 0,
+            "counts": {"passed": 999, "skipped": 0, "deselected": 0},
+            "stdout": stdout,
+            "stdout_tail": stdout.splitlines(),
+        }
+
+    skipped_artifact = tmp_path / "build/current-dsv4-default-cache-tool-loop/result.json"
+    skipped_artifact.parent.mkdir(parents=True)
+    skipped_artifact.write_text(json.dumps({"status": "skipped"}), encoding="utf-8")
+    monkeypatch.setattr(gate, "_run", fake_run)
+
+    artifact = gate.build_artifact(tmp_path)
+
+    assert artifact["status"] == "fail"
+    assert artifact["checks"]["live_default_cache_dsv4_tool_loop_artifact_passed"] is False
