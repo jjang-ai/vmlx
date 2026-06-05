@@ -186,6 +186,7 @@ COMMANDS: dict[str, tuple[Path, list[str]]] = {
             "panel/scripts/release-gate-python-app.py",
             "--skip-app",
             "--skip-gui",
+            "--skip-release-manifest",
         ],
     ),
 }

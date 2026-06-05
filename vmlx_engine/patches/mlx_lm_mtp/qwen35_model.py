@@ -301,6 +301,7 @@ def _patch_gated_delta_net(q35: Any) -> None:
         inputs: Any,
         mask: Optional[Any] = None,
         cache: Optional[Any] = None,
+        gdn_sink: Optional[list] = None,
         n_confirmed: int = 0,
     ):
         B, S, _ = inputs.shape
@@ -380,13 +381,28 @@ def _patch_decoder_layer(q35: Any) -> None:
     if "_omlx_mtp_patched" in cls.__dict__:
         return
 
-    def __call__(self, x, mask=None, cache=None, n_confirmed: int = 0):
+    def __call__(
+        self,
+        x,
+        mask=None,
+        cache=None,
+        position_ids=None,
+        gdn_sink: Optional[list] = None,
+        n_confirmed: int = 0,
+    ):
         if self.is_linear:
             r = self.linear_attn(
-                self.input_layernorm(x), mask, cache, n_confirmed=n_confirmed
+                self.input_layernorm(x),
+                mask,
+                cache,
+                gdn_sink=gdn_sink,
+                n_confirmed=n_confirmed,
             )
         else:
-            r = self.self_attn(self.input_layernorm(x), mask, cache)
+            try:
+                r = self.self_attn(self.input_layernorm(x), mask, cache, position_ids)
+            except TypeError:
+                r = self.self_attn(self.input_layernorm(x), mask, cache)
         h = x + r
         out = h + self.mlp(self.post_attention_layernorm(h))
         return out

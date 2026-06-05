@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "vmlx"
-version = "1.5.54"
+version = "1.5.55"
 description = "MLX inference server for Apple Silicon — Text, Image, Video & Audio generation"
 readme = "README.md"
 license = {text = "Apache-2.0"}
@@ -202,6 +202,8 @@ vmlx_engine = [
     "chat_templates/*.jinja",
     "config/*.yaml",
     "metal/*.metal",
+    "vendor/transformers_modules/nvidia/C_hyphen_RADIOv2_hyphen_H/*.py",
+    "vendor/transformers_modules/nvidia/C_hyphen_RADIOv2_hyphen_H/*/*.py",
 ]
 
 [tool.poetry]

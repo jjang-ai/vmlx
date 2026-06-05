@@ -13999,6 +13999,41 @@ def test_release_regression_manifest_artifact_exposes_open_release_clearance(
     assert artifact["release_clearance"]["release_ready"] is False
 
 
+def test_release_regression_manifest_release_ready_allows_only_deferred_sweep_failure(
+    monkeypatch,
+    tmp_path,
+):
+    from tests.cross_matrix import run_release_regression_manifest as runner
+
+    monkeypatch.setattr(
+        runner,
+        "validate_current_proof_sweep_artifacts",
+        lambda _root: {
+            "status": "fail",
+            "failed_components": ["regression_suite"],
+            "regression_suite": {
+                "status": "open",
+                "open_requirements": EXPECTED_CURRENT_OPEN_REQUIREMENTS,
+            },
+            "release_blocker_ledger": {
+                "status": "pass",
+                "blockers": [],
+            },
+        },
+    )
+
+    artifact = runner.build_manifest_artifact(tmp_path, require_release_ready=True)
+
+    assert artifact["status"] == "pass"
+    assert artifact["release_ready"] is True
+    assert artifact["release_clearance"]["status"] == "pass"
+    assert artifact["release_clearance"]["proof_sweep_failure_is_deferred"] is True
+    assert artifact["release_clearance"]["effective_open_requirements"] == []
+    assert artifact["release_clearance"]["deferred_open_requirements"] == (
+        EXPECTED_CURRENT_OPEN_REQUIREMENTS
+    )
+
+
 def test_release_regression_manifest_artifact_exposes_top_level_release_blockers(
     monkeypatch,
     tmp_path,

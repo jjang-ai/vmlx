@@ -314,9 +314,496 @@ class TestBatchedEngineVideoTemplate:
         assert content[1]["type"] == "text"
         assert not any(part.get("type") == "video_url" for part in content)
 
+    def test_qwen_video_frame_fallback_rewrites_video_to_image_parts(self, monkeypatch):
+        from vmlx_engine.engine.batched import BatchedEngine
+
+        class _Frame:
+            pass
+
+        monkeypatch.setattr(
+            "vmlx_engine.models.mllm.process_video_input",
+            lambda src: f"/resolved/{src}",
+        )
+        monkeypatch.setattr(
+            "vmlx_engine.models.mllm.extract_video_frames_smart",
+            lambda path, fps, max_frames: [_Frame(), _Frame()],
+        )
+        monkeypatch.setattr(
+            "vmlx_engine.models.mllm.save_frames_to_temp",
+            lambda frames: [f"/tmp/frame-{i}.png" for i, _ in enumerate(frames)],
+        )
+
+        engine = BatchedEngine.__new__(BatchedEngine)
+        engine._model_name = "JANGQ/Qwen3.6-27B-MXFP4-MTP"
+        engine._model_family_name = lambda: "qwen3_5"
+
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "video_url", "video_url": {"url": "blue.mp4"}},
+                    {"type": "text", "text": "What color?"},
+                ],
+            }
+        ]
+
+        rewritten = engine._qwen_video_frame_fallback_messages(
+            messages,
+            video_fps=1.0,
+            video_max_frames=2,
+        )
+
+        content = rewritten[0]["content"]
+        assert [part["type"] for part in content] == [
+            "image_url",
+            "image_url",
+            "text",
+        ]
+        assert content[0]["image_url"]["url"] == "/tmp/frame-0.png"
+        assert content[1]["image_url"]["url"] == "/tmp/frame-1.png"
+        assert rewritten is not messages
+
+    def test_step37_video_frame_fallback_rewrites_video_to_image_parts(self, monkeypatch):
+        from vmlx_engine.engine.batched import BatchedEngine
+
+        class _Frame:
+            pass
+
+        resolved_sources = []
+
+        def _process_video_input(src):
+            resolved_sources.append(src)
+            return f"/resolved/{src}"
+
+        monkeypatch.setattr(
+            "vmlx_engine.models.mllm.process_video_input",
+            _process_video_input,
+        )
+        monkeypatch.setattr(
+            "vmlx_engine.models.mllm.extract_video_frames_smart",
+            lambda path, fps, max_frames: [_Frame(), _Frame()],
+        )
+        monkeypatch.setattr(
+            "vmlx_engine.models.mllm.save_frames_to_temp",
+            lambda frames: [f"/tmp/step-frame-{i}.png" for i, _ in enumerate(frames)],
+        )
+
+        engine = BatchedEngine.__new__(BatchedEngine)
+        engine._model_name = "JANGQ-AI/Step-3.7-Flash-JANG_2L"
+        engine._model_family_name = lambda: "step3p7"
+
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "input_video", "video_url": {"url": "file:///tmp/scene%20one.mp4"}},
+                    {"type": "text", "text": "What happened?"},
+                ],
+            }
+        ]
+
+        rewritten = engine._video_frame_fallback_messages(
+            messages,
+            video_fps=1.0,
+            video_max_frames=2,
+        )
+
+        content = rewritten[0]["content"]
+        assert [part["type"] for part in content] == [
+            "image_url",
+            "image_url",
+            "text",
+        ]
+        assert content[0]["image_url"]["url"] == "/tmp/step-frame-0.png"
+        assert content[1]["image_url"]["url"] == "/tmp/step-frame-1.png"
+        assert rewritten is not messages
+        assert resolved_sources == ["/tmp/scene one.mp4"]
+
+    def test_mllm_processor_template_receives_thinking_alias(self):
+        from vmlx_engine.engine.batched import BatchedEngine
+
+        class _Processor:
+            def __init__(self):
+                self.kwargs = None
+
+            def apply_chat_template(self, messages, **kwargs):
+                self.kwargs = kwargs
+                return "rendered"
+
+        processor = _Processor()
+        engine = BatchedEngine.__new__(BatchedEngine)
+        engine._is_mllm = True
+        engine._processor = processor
+        engine._model = type("_Model", (), {"config": {"model_type": "step3p7"}})()
+        engine._model_name = "JANGQ-AI/Step-3.7-Flash-JANG_2L"
+        engine._model_tool_parser_name = lambda: "step3p5"
+
+        prompt = engine._apply_chat_template(
+            [{"role": "user", "content": [{"type": "video"}, {"type": "text", "text": "x"}]}],
+            tools=None,
+            num_images=0,
+            num_videos=1,
+            enable_thinking=False,
+        )
+
+        assert prompt == "rendered"
+        assert processor.kwargs["enable_thinking"] is False
+        assert processor.kwargs["thinking"] is False
+
+    def test_qwen35_dense_mtp_patch_accepts_gdn_sink_kwarg(self):
+        import inspect
+        import types
+
+        from vmlx_engine.patches.mlx_lm_mtp.qwen35_model import _patch_decoder_layer
+        from vmlx_engine.patches.mlx_lm_mtp.qwen35_model import _patch_gated_delta_net
+
+        class GatedDeltaNet:
+            pass
+
+        class DecoderLayer:
+            pass
+
+        q35 = types.SimpleNamespace(
+            GatedDeltaNet=GatedDeltaNet,
+            DecoderLayer=DecoderLayer,
+        )
+
+        _patch_gated_delta_net(q35)
+        _patch_decoder_layer(q35)
+
+        assert "gdn_sink" in inspect.signature(GatedDeltaNet.__call__).parameters
+        assert "gdn_sink" in inspect.signature(DecoderLayer.__call__).parameters
+
+    def test_step37_video_frame_fallback_uses_contact_sheet(self, monkeypatch, tmp_path):
+        from PIL import Image
+
+        from vmlx_engine.engine.batched import BatchedEngine
+
+        frame_paths = []
+        for i, color in enumerate([(255, 0, 0), (255, 0, 0), (0, 255, 0), (0, 0, 255)]):
+            path = tmp_path / f"frame-{i}.png"
+            Image.new("RGB", (32, 24), color).save(path)
+            frame_paths.append(str(path))
+
+        monkeypatch.setattr(
+            "vmlx_engine.models.mllm.process_video_input",
+            lambda src: "/tmp/source.mp4",
+        )
+        monkeypatch.setattr(
+            "vmlx_engine.models.mllm.extract_video_frames_smart",
+            lambda path, fps, max_frames: [object(), object(), object(), object()],
+        )
+        monkeypatch.setattr(
+            "vmlx_engine.models.mllm.save_frames_to_temp",
+            lambda frames: frame_paths,
+        )
+
+        engine = BatchedEngine.__new__(BatchedEngine)
+        engine._model_name = "JANGQ-AI/Step-3.7-Flash-JANG_2L"
+        engine._model_family_name = lambda: "step3p7"
+
+        rewritten = engine._video_frame_fallback_messages(
+            [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "video_url", "video_url": {"url": "file:///tmp/source.mp4"}},
+                    ],
+                }
+            ],
+            video_fps=1.0,
+            video_max_frames=3,
+        )
+
+        content = rewritten[0]["content"]
+        assert [part["type"] for part in content] == ["image_url"]
+        sheet_path = content[0]["image_url"]["url"]
+        assert sheet_path.endswith("_step_video_contact_sheet.png")
+        with Image.open(sheet_path) as sheet:
+            assert sheet.size == (96, 24)
+        rewritten_again = engine._video_frame_fallback_messages(
+            [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "video_url", "video_url": {"url": "file:///tmp/source.mp4"}},
+                    ],
+                }
+            ],
+            video_fps=1.0,
+            video_max_frames=3,
+        )
+        assert rewritten_again[0]["content"][0]["image_url"]["url"] == sheet_path
+
+    def test_gemma4_batched_video_frame_fallback_dedupes_to_frame_list(self, monkeypatch, tmp_path):
+        from PIL import Image
+
+        from vmlx_engine.engine.batched import BatchedEngine
+
+        frame_paths = []
+        for i, color in enumerate([(255, 0, 0), (255, 0, 0), (0, 255, 0), (0, 0, 255)]):
+            path = tmp_path / f"gemma-frame-{i}.png"
+            Image.new("RGB", (32, 24), color).save(path)
+            frame_paths.append(str(path))
+
+        monkeypatch.setattr(
+            "vmlx_engine.models.mllm.process_video_input",
+            lambda src: src,
+        )
+        monkeypatch.setattr(
+            "vmlx_engine.models.mllm.extract_video_frames_smart",
+            lambda path, fps, max_frames: [object(), object(), object(), object()],
+        )
+        monkeypatch.setattr(
+            "vmlx_engine.models.mllm.save_frames_to_temp",
+            lambda frames: frame_paths,
+        )
+
+        engine = BatchedEngine.__new__(BatchedEngine)
+        engine._model_name = "dealign.ai/Gemma-4-12B-it-MXFP4-CRACK"
+        engine._model_family_name = lambda: "gemma4"
+
+        rewritten = engine._video_frame_fallback_messages(
+            [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "video_url", "video_url": {"url": "file:///tmp/gemma%20clip.mp4"}},
+                    ],
+                }
+            ],
+            video_fps=1.0,
+            video_max_frames=2,
+        )
+
+        content = rewritten[0]["content"]
+        assert [part["type"] for part in content] == ["image_url", "image_url", "image_url"]
+        assert [part["image_url"]["url"] for part in content] == [
+            frame_paths[0],
+            frame_paths[2],
+            frame_paths[3],
+        ]
+
+    def test_gemma_video_frame_fallback_expands_video_placeholder_to_images(self):
+        from vmlx_engine.models.mllm import _expand_video_placeholders_to_image_frames
+
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "video"},
+                    {"type": "text", "text": "What color?"},
+                ],
+            }
+        ]
+
+        rewritten = _expand_video_placeholders_to_image_frames(messages, [3])
+
+        assert [part["type"] for part in rewritten[0]["content"]] == [
+            "image",
+            "image",
+            "image",
+            "text",
+        ]
+        assert rewritten is not messages
+
 
 class TestServerSamplingResolution:
     """Tests for server-side sampling parameter resolution."""
+
+    def test_gemma4_video_capability_requires_video_processor(self, monkeypatch):
+        import vmlx_engine.server as server
+
+        def fake_read_bundle_json(_bundle_path, filename):
+            if filename == "config.json":
+                return {
+                    "model_type": "gemma4_unified",
+                    "video_token_id": 258884,
+                }
+            if filename == "processor_config.json":
+                return {"video_processor": {"video_processor_type": "Gemma4UnifiedVideoProcessor"}}
+            return {}
+
+        monkeypatch.setattr(server, "_read_bundle_json", fake_read_bundle_json)
+
+        assert server._bundle_declares_native_video("/tmp/gemma4") is True
+
+    def test_step37_video_capability_uses_frame_fallback(self, monkeypatch, tmp_path):
+        import vmlx_engine.server as server
+
+        (tmp_path / "config.json").write_text(
+            json.dumps(
+                {
+                    "model_type": "step3p7",
+                    "image_token_id": 128001,
+                    "image_token_len": 169,
+                    "vision_config": {"model_type": "perception_encoder"},
+                }
+            )
+        )
+
+        monkeypatch.setattr(server, "_engine", SimpleNamespace(is_mllm=True))
+        monkeypatch.setattr(server, "_model_path", str(tmp_path))
+        monkeypatch.setattr(server, "_model_name", "step37-video-fallback-test")
+        monkeypatch.setattr(server, "_loaded_omni_modalities", lambda: None)
+
+        assert server._bundle_declares_native_video(str(tmp_path)) is False
+        assert server._bundle_supports_video_frame_fallback(str(tmp_path)) is True
+        assert server._loaded_runtime_modalities() == ["text", "vision", "video"]
+
+    def test_nemotron_omni_installs_vendored_cradio_dynamic_module(self, tmp_path):
+        from vmlx_engine.omni_multimodal import (
+            _CRADIO_CACHE_REPO,
+            _CRADIO_CACHE_REVISION,
+            _ensure_vendored_cradio_dynamic_module,
+        )
+
+        status = _ensure_vendored_cradio_dynamic_module(cache_root=tmp_path)
+
+        dst = (
+            tmp_path
+            / "transformers_modules"
+            / "nvidia"
+            / _CRADIO_CACHE_REPO
+            / _CRADIO_CACHE_REVISION
+        )
+        assert status["installed"] is True
+        assert dst.joinpath("hf_model.py").is_file()
+        assert dst.joinpath("radio_model.py").is_file()
+        assert not dst.joinpath("__pycache__").exists()
+
+    def test_nemotron_omni_temp_view_rewrites_cradio_automap(
+        self, monkeypatch, tmp_path
+    ):
+        import sys
+        import types
+        from vmlx_engine.omni_multimodal import (
+            _patch_omni_encoder_view_for_vendored_cradio,
+        )
+
+        module = types.SimpleNamespace()
+
+        def original(_bundle_path, view_dir):
+            view_dir.mkdir(parents=True, exist_ok=True)
+            view_dir.joinpath("config.json").write_text(
+                json.dumps(
+                    {
+                        "vision_config": {
+                            "auto_map": {
+                                "AutoModel": "nvidia/C-RADIOv2-H--hf_model.RADIOModel"
+                            }
+                        }
+                    }
+                )
+            )
+
+        module._populate_omni_encoder_view = original
+        monkeypatch.setitem(sys.modules, "jang_tools.nemotron_omni_chat", module)
+
+        assert _patch_omni_encoder_view_for_vendored_cradio() is True
+        module._populate_omni_encoder_view(tmp_path / "bundle", tmp_path / "view")
+
+        cfg = json.loads(tmp_path.joinpath("view", "config.json").read_text())
+        assert cfg["vision_config"]["auto_map"] == {
+            "AutoConfig": "configuration_radio.RADIOConfig",
+            "AutoModel": "hf_model.RADIOModel",
+        }
+        assert cfg["vision_config"]["_name_or_path"] == str(tmp_path / "view")
+        assert tmp_path.joinpath("view", "hf_model.py").is_file()
+
+    def test_nemotron_omni_temp_view_patches_radio_constructor(
+        self, monkeypatch, tmp_path
+    ):
+        import sys
+        import types
+        from vmlx_engine.omni_multimodal import (
+            _patch_omni_encoder_view_for_vendored_cradio,
+        )
+
+        module = types.SimpleNamespace()
+
+        def original(_bundle_path, view_dir):
+            view_dir.mkdir(parents=True, exist_ok=True)
+            view_dir.joinpath("config.json").write_text(
+                json.dumps({"vision_config": {}})
+            )
+            view_dir.joinpath("modeling.py").write_text(
+                "        self.vision_model = AutoModel.from_config("
+                "config.vision_config, trust_remote_code=True)\n"
+            )
+
+        module._populate_omni_encoder_view = original
+        monkeypatch.setitem(sys.modules, "jang_tools.nemotron_omni_chat", module)
+
+        assert _patch_omni_encoder_view_for_vendored_cradio() is True
+        module._populate_omni_encoder_view(tmp_path / "bundle", tmp_path / "view")
+
+        modeling = tmp_path.joinpath("view", "modeling.py").read_text()
+        assert "AutoModel.from_config(config.vision_config" not in modeling
+        assert "_VMLINUX_RADIOModel(config.vision_config)" in modeling
+
+    def test_nemotron_omni_temp_view_preseeds_cradio_cache(
+        self, monkeypatch, tmp_path
+    ):
+        import sys
+        import types
+        from vmlx_engine.omni_multimodal import (
+            _patch_omni_encoder_view_for_vendored_cradio,
+        )
+
+        fake_hub = types.SimpleNamespace(HF_MODULES_CACHE=str(tmp_path / "hf_modules"))
+        monkeypatch.setitem(sys.modules, "transformers.utils.hub", fake_hub)
+        module = types.SimpleNamespace()
+
+        def original(_bundle_path, view_dir):
+            view_dir.mkdir(parents=True, exist_ok=True)
+            view_dir.joinpath("config.json").write_text(
+                json.dumps({"vision_config": {}})
+            )
+            view_dir.joinpath("modeling.py").write_text("")
+
+        module._populate_omni_encoder_view = original
+        monkeypatch.setitem(sys.modules, "jang_tools.nemotron_omni_chat", module)
+
+        assert _patch_omni_encoder_view_for_vendored_cradio() is True
+        module._populate_omni_encoder_view(tmp_path / "bundle", tmp_path / "view")
+
+        cached = tmp_path / "hf_modules" / "transformers_modules" / "view"
+        assert cached.joinpath("hf_model.py").is_file()
+        assert cached.joinpath("input_conditioner.py").is_file()
+
+    def test_nemotron_omni_extract_parts_routes_video_to_image_frames(
+        self, monkeypatch, tmp_path
+    ):
+        from vmlx_engine import omni_multimodal
+
+        video = tmp_path / "clip.mp4"
+        video.write_bytes(b"video")
+        frame = tmp_path / "frame.jpg"
+        frame.write_bytes(b"image")
+        monkeypatch.setattr(
+            omni_multimodal,
+            "_extract_omni_video_frames",
+            lambda path, scratch: [frame],
+        )
+
+        text, images, audio, native_video = omni_multimodal._extract_parts(
+            [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "describe video"},
+                        {"type": "video_url", "video_url": {"url": str(video)}},
+                    ],
+                }
+            ],
+            tmp_path,
+        )
+
+        assert text == "describe video"
+        assert images == [frame]
+        assert audio is None
+        assert native_video is None
 
     def test_resolve_temperature_request_value(self):
         """Request value should take priority."""

@@ -13,7 +13,11 @@ This is necessary because BatchGenerator only supports token IDs, not pixel_valu
 """
 
 import asyncio
+import hashlib
 import logging
+import os
+import tempfile
+from urllib.parse import unquote, urlparse
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -159,6 +163,218 @@ class BatchedEngine(BaseEngine):
             return get_model_config_registry().lookup(self._model_name).tool_parser
         except Exception:
             return None
+
+    def _video_frame_fallback_messages(
+        self,
+        messages: list[dict[str, Any]],
+        *,
+        video_fps: float | None = None,
+        video_max_frames: int | None = None,
+    ) -> list[dict[str, Any]]:
+        """Route selected VLM video turns through sampled image frames.
+
+        Current upstream Qwen3.5/3.6 native video tensors can return coherent
+        API responses while misreading simple colors. The image path is stable
+        for the same bundles, so use real sampled frames as image parts until
+        native ``pixel_values_videos`` is proven coherent.
+
+        Gemma4 unified currently has a stable image path and source-owned
+        video placeholder expansion, but the OpenAI ``video_url`` API shape can
+        otherwise fall through to native video processing with a raw ``file://``
+        URL. Route it through the same frame-image path for API parity.
+
+        Step3.7 Flash bundles are image/VL artifacts with no native video
+        processor metadata. For those bundles, video support is intentionally
+        a frame-fallback path rather than native video tensors.
+        """
+        family = self._model_family_name()
+        if family not in {"qwen3_5", "qwen3_5_moe", "step3p7", "gemma4", "gemma4_unified"}:
+            return messages
+
+        try:
+            from ..models.mllm import (
+                DEFAULT_FPS,
+                MAX_FRAMES,
+                extract_video_frames_smart,
+                process_video_input,
+                save_frames_to_temp,
+            )
+        except Exception:
+            return messages
+
+        fps = video_fps or DEFAULT_FPS
+        max_frames = video_max_frames or MAX_FRAMES
+        rewritten: list[dict[str, Any]] = []
+        changed = False
+
+        def _normalize_video_source(src: Any) -> Any:
+            if not isinstance(src, str) or not src.startswith("file://"):
+                return src
+            parsed = urlparse(src)
+            if parsed.netloc and parsed.netloc not in {"", "localhost"}:
+                return src
+            return unquote(parsed.path)
+
+        def _dedup_video_frames(
+            frame_paths: list[str],
+            *,
+            cache_key: str | None = None,
+        ) -> list[str]:
+            if family not in {"step3p7", "gemma4", "gemma4_unified"} or len(frame_paths) <= 1:
+                return frame_paths
+            try:
+                from PIL import Image, ImageDraw
+
+                raw_images = [
+                    (path, Image.open(path).convert("RGB"))
+                    for path in frame_paths
+                ]
+                kept_paths = []
+                images = []
+                prev_avg = None
+                for path, img in raw_images:
+                    avg = img.resize((1, 1)).getpixel((0, 0))
+                    if prev_avg is not None:
+                        delta = sum(abs(int(a) - int(b)) for a, b in zip(avg, prev_avg))
+                        if delta < 24:
+                            continue
+                    kept_paths.append(path)
+                    images.append(img)
+                    prev_avg = avg
+                if not images:
+                    return frame_paths
+                if family in {"gemma4", "gemma4_unified"}:
+                    return kept_paths
+                thumb_w = max(1, min(384, max(img.width for img in images)))
+                thumbs = []
+                for idx, img in enumerate(images, start=1):
+                    scale = thumb_w / max(1, img.width)
+                    thumb_h = max(1, int(img.height * scale))
+                    thumb = img.resize((thumb_w, thumb_h))
+                    draw = ImageDraw.Draw(thumb)
+                    draw.rectangle((0, 0, 72, 28), fill=(0, 0, 0))
+                    draw.text((8, 7), f"frame {idx}", fill=(255, 255, 255))
+                    thumbs.append(thumb)
+                sheet_w = thumb_w * len(thumbs)
+                sheet_h = max(thumb.height for thumb in thumbs)
+                sheet = Image.new("RGB", (sheet_w, sheet_h), (255, 255, 255))
+                x = 0
+                for thumb in thumbs:
+                    sheet.paste(thumb, (x, 0))
+                    x += thumb.width
+                digest = hashlib.sha256(
+                    (cache_key or "|".join(frame_paths)).encode("utf-8", "ignore")
+                ).hexdigest()[:20]
+                cache_dir = os.path.join(tempfile.gettempdir(), "vmlx_video_fallback")
+                os.makedirs(cache_dir, exist_ok=True)
+                sheet_path = os.path.join(
+                    cache_dir,
+                    f"{digest}_step_video_contact_sheet.png",
+                )
+                if not os.path.exists(sheet_path):
+                    sheet.save(sheet_path)
+                return [sheet_path]
+            except Exception as exc:
+                logger.warning(
+                    "%s video contact-sheet fallback failed; using frame list: %s",
+                    family or "VLM",
+                    exc,
+                )
+                return frame_paths
+
+        for msg in messages:
+            content = msg.get("content")
+            if not isinstance(content, list):
+                rewritten.append(msg)
+                continue
+
+            new_content: list[Any] = []
+            for part in content:
+                item = part
+                if hasattr(item, "model_dump"):
+                    item = item.model_dump(exclude_none=True)
+                elif hasattr(item, "dict"):
+                    item = {
+                        k: v for k, v in item.dict().items()
+                        if v is not None
+                    }
+
+                if not isinstance(item, dict):
+                    new_content.append(item)
+                    continue
+
+                item_type = item.get("type")
+                if item_type not in {"video_url", "video", "input_video"}:
+                    new_content.append(item)
+                    continue
+
+                src = item.get("video_url") or item.get("video") or item.get("url") or item.get("file_id")
+                if isinstance(src, dict):
+                    src = src.get("url") or src.get("path") or src.get("video_url")
+                if not src:
+                    new_content.append(item)
+                    continue
+                src = _normalize_video_source(src)
+
+                try:
+                    video_path = process_video_input(src)
+                    try:
+                        stat = os.stat(video_path)
+                        fallback_cache_key = (
+                            f"{family}|{video_path}|{stat.st_size}|{stat.st_mtime_ns}|"
+                            f"{fps}|{max_frames}"
+                        )
+                    except Exception:
+                        fallback_cache_key = f"{family}|{video_path}|{fps}|{max_frames}"
+                    frames = extract_video_frames_smart(
+                        video_path,
+                        fps=fps,
+                        max_frames=max_frames,
+                    )
+                    frame_paths = save_frames_to_temp(frames)
+                    frame_paths = _dedup_video_frames(
+                        frame_paths,
+                        cache_key=fallback_cache_key,
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "%s video frame fallback failed; using native video path: %s",
+                        family or "VLM",
+                        exc,
+                    )
+                    new_content.append(item)
+                    continue
+
+                for frame_path in frame_paths:
+                    new_content.append(
+                        {
+                            "type": "image_url",
+                            "image_url": {"url": frame_path},
+                        }
+                    )
+                changed = True
+
+            if changed:
+                out_msg = dict(msg)
+                out_msg["content"] = new_content
+                rewritten.append(out_msg)
+            else:
+                rewritten.append(msg)
+
+        return rewritten if changed else messages
+
+    def _qwen_video_frame_fallback_messages(
+        self,
+        messages: list[dict[str, Any]],
+        *,
+        video_fps: float | None = None,
+        video_max_frames: int | None = None,
+    ) -> list[dict[str, Any]]:
+        return self._video_frame_fallback_messages(
+            messages,
+            video_fps=video_fps,
+            video_max_frames=video_max_frames,
+        )
 
     @property
     def is_mllm(self) -> bool:
@@ -772,7 +988,6 @@ class BatchedEngine(BaseEngine):
                     extra=extra_template_kwargs,
                     tokenize=False,
                     add_generation_prompt=not skip_generation_prompt,
-                    include_thinking_alias=False,
                 )
                 if tools:
                     tpl_kwargs["tools"] = tools
@@ -781,7 +996,7 @@ class BatchedEngine(BaseEngine):
                     try:
                         from ..models.mllm import MLXMultimodalLM
 
-                        direct_messages, _, _ = (
+                        direct_messages, _, _, _ = (
                             MLXMultimodalLM._extract_multimodal_messages(messages_arg)
                         )
                         if direct_messages:
@@ -1259,6 +1474,12 @@ class BatchedEngine(BaseEngine):
         if not self._loaded:
             await self.start()
 
+        messages = self._video_frame_fallback_messages(
+            messages,
+            video_fps=kwargs.get("video_fps"),
+            video_max_frames=kwargs.get("video_max_frames"),
+        )
+
         # Extract images/videos from messages (OpenAI multimodal format)
         # Note: We only use extracted media here, messages are already processed by server
         _, extracted_images, extracted_videos = extract_multimodal_content(messages)
@@ -1372,6 +1593,12 @@ class BatchedEngine(BaseEngine):
         """
         if not self._loaded:
             await self.start()
+
+        messages = self._video_frame_fallback_messages(
+            messages,
+            video_fps=kwargs.get("video_fps"),
+            video_max_frames=kwargs.get("video_max_frames"),
+        )
 
         # Extract images/videos from messages (OpenAI multimodal format)
         # Note: We only use extracted media here, messages are already processed by server

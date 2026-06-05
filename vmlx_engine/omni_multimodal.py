@@ -36,6 +36,7 @@ import hashlib
 import json
 import logging
 import os
+import shutil
 import tempfile
 import threading
 from pathlib import Path
@@ -47,6 +48,151 @@ logger = logging.getLogger(__name__)
 _IMAGE_TYPES = {"image_url", "image"}
 _AUDIO_TYPES = {"input_audio", "audio"}
 _VIDEO_TYPES = {"video_url", "video"}
+_CRADIO_CACHE_REPO = "C_hyphen_RADIOv2_hyphen_H"
+_CRADIO_CACHE_REVISION = "0d8f4c18c877166eda07ddae1386bcad256b7a6a"
+
+
+def _ensure_vendored_cradio_dynamic_module(
+    cache_root: str | Path | None = None,
+) -> dict[str, Any]:
+    """Install the vendored C-RADIO Transformers module into HF's cache.
+
+    Nemotron-Omni's local wrapper delegates RADIO construction to
+    ``AutoModel.from_config(..., trust_remote_code=True)``. The model weights
+    are local, but Transformers still resolves the ``nvidia/C-RADIOv2-H``
+    dynamic Python module on first media request. Shipping this small Apache-2
+    module with vMLX keeps notarized app media cold-start offline and
+    deterministic.
+    """
+    src_root = (
+        Path(__file__).resolve().parent
+        / "vendor"
+        / "transformers_modules"
+        / "nvidia"
+        / _CRADIO_CACHE_REPO
+    )
+    src_revision = src_root / _CRADIO_CACHE_REVISION
+    if not src_revision.is_dir():
+        return {
+            "installed": False,
+            "reason": "vendored_cradio_missing",
+            "source": str(src_revision),
+        }
+    if cache_root is None:
+        try:
+            from transformers.utils.hub import HF_MODULES_CACHE
+
+            cache_root = HF_MODULES_CACHE
+        except Exception:
+            cache_root = Path.home() / ".cache" / "huggingface" / "modules"
+    cache_base = Path(cache_root) / "transformers_modules" / "nvidia" / _CRADIO_CACHE_REPO
+    dst_revision = cache_base / _CRADIO_CACHE_REVISION
+    cache_base.mkdir(parents=True, exist_ok=True)
+    init_src = src_root / "__init__.py"
+    if init_src.is_file():
+        shutil.copy2(init_src, cache_base / "__init__.py")
+    shutil.copytree(src_revision, dst_revision, dirs_exist_ok=True)
+    return {
+        "installed": True,
+        "source": str(src_revision),
+        "destination": str(dst_revision),
+    }
+
+
+def _patch_omni_encoder_view_for_vendored_cradio() -> bool:
+    """Make jang_tools' temporary Omni HF view self-contained for C-RADIO.
+
+    ``jang_tools`` builds a temporary directory where ``config.json`` is the
+    Omni wrapper config, then Transformers dynamic-loads ``modeling.py`` from
+    that temp view. The nested ``vision_config.auto_map`` in shipped bundles
+    still references ``nvidia/C-RADIOv2-H--hf_model.RADIOModel``. In offline
+    packaged apps, that makes ``AutoModel.from_config(config.vision_config)``
+    call Hugging Face hub even though the C-RADIO code is vendored.
+
+    Patch the temp-view builder once so each view contains the vendored RADIO
+    module files and points the nested auto-map at those local files.
+    """
+    try:
+        import jang_tools.nemotron_omni_chat as omni_chat
+    except Exception:
+        return False
+    if getattr(omni_chat, "_vmlx_cradio_view_patch", False):
+        return True
+    original = getattr(omni_chat, "_populate_omni_encoder_view", None)
+    if original is None:
+        return False
+
+    src_revision = (
+        Path(__file__).resolve().parent
+        / "vendor"
+        / "transformers_modules"
+        / "nvidia"
+        / _CRADIO_CACHE_REPO
+        / _CRADIO_CACHE_REVISION
+    )
+    if not src_revision.is_dir():
+        return False
+
+    def _populate_with_local_cradio(bundle_path: Path, view_dir: Path) -> None:
+        original(bundle_path, view_dir)
+        for src in src_revision.glob("*.py"):
+            shutil.copy2(src, view_dir / src.name)
+        try:
+            from transformers.utils.hub import HF_MODULES_CACHE
+
+            cache_view = Path(HF_MODULES_CACHE) / "transformers_modules" / view_dir.name
+            cache_view.mkdir(parents=True, exist_ok=True)
+            for src in src_revision.glob("*.py"):
+                shutil.copy2(src, cache_view / src.name)
+        except Exception as exc:
+            logger.warning(
+                "OmniMultimodalDispatcher: failed to pre-seed C-RADIO "
+                "dynamic-module cache for %s: %s",
+                view_dir,
+                exc,
+            )
+        modeling_path = view_dir / "modeling.py"
+        try:
+            modeling = modeling_path.read_text()
+            needle = (
+                "self.vision_model = AutoModel.from_config("
+                "config.vision_config, trust_remote_code=True)"
+            )
+            replacement = (
+                "from .hf_model import RADIOModel as _VMLINUX_RADIOModel\n"
+                "        self.vision_model = _VMLINUX_RADIOModel(config.vision_config)"
+            )
+            if needle in modeling:
+                modeling_path.write_text(modeling.replace(needle, replacement))
+        except Exception as exc:
+            logger.warning(
+                "OmniMultimodalDispatcher: failed to patch local RADIOModel "
+                "constructor in %s: %s",
+                modeling_path,
+                exc,
+            )
+        config_path = view_dir / "config.json"
+        try:
+            cfg = json.loads(config_path.read_text())
+            vision_config = cfg.get("vision_config")
+            if isinstance(vision_config, dict):
+                vision_config["auto_map"] = {
+                    "AutoConfig": "configuration_radio.RADIOConfig",
+                    "AutoModel": "hf_model.RADIOModel",
+                }
+                vision_config["_name_or_path"] = str(view_dir)
+                config_path.write_text(json.dumps(cfg, indent=2))
+        except Exception as exc:
+            logger.warning(
+                "OmniMultimodalDispatcher: failed to rewrite local C-RADIO "
+                "auto_map in %s: %s",
+                config_path,
+                exc,
+            )
+
+    omni_chat._populate_omni_encoder_view = _populate_with_local_cradio
+    omni_chat._vmlx_cradio_view_patch = True
+    return True
 
 
 def omni_multimodal_component_status(model_path: str | Path) -> dict[str, Any]:
@@ -128,8 +274,8 @@ def omni_multimodal_component_status(model_path: str | Path) -> dict[str, Any]:
             # Nemotron bundles with only the image processor can still process
             # images, but advertising video turns into a runtime 500.
             status["video_bridge_supported"] = bool(status["has_video_preprocessor_config"])
-            if status["video_bridge_supported"]:
-                status["modalities"].append("video")
+            status["video_frame_fallback_supported"] = True
+            status["modalities"].append("video")
         if status["has_parakeet_weights"]:
             status["modalities"].append("audio")
         requirements = {
@@ -213,6 +359,62 @@ def _materialize_to_temp(data: bytes, suffix: str, scratch_dir: Path) -> Path:
     return out
 
 
+def _extract_omni_video_frames(video_path: Path, scratch_dir: Path) -> List[Path]:
+    """Sample an Omni video into image files for the RADIO image encoder."""
+    try:
+        from PIL import Image
+        import numpy as np
+        from .models.mllm import extract_video_frames_smart
+
+        frames = extract_video_frames_smart(
+            str(video_path),
+            fps=float(os.environ.get("VMLINUX_OMNI_VIDEO_FPS", "1")),
+            max_frames=int(os.environ.get("VMLINUX_OMNI_VIDEO_MAX_FRAMES", "4")),
+        )
+        deduped = []
+        threshold = float(os.environ.get("VMLINUX_OMNI_VIDEO_DEDUP_MAD", "8"))
+        for frame in frames:
+            if not deduped:
+                deduped.append(frame)
+                continue
+            delta = np.mean(
+                np.abs(frame.astype(np.int16) - deduped[-1].astype(np.int16))
+            )
+            if delta >= threshold:
+                deduped.append(frame)
+        out: List[Path] = []
+        digest = hashlib.sha256(str(video_path).encode("utf-8")).hexdigest()[:10]
+        if (
+            len(deduped) > 1
+            and os.environ.get("VMLINUX_OMNI_VIDEO_CONTACT_SHEET", "1") != "0"
+        ):
+            images = [Image.fromarray(frame).convert("RGB") for frame in deduped]
+            width = sum(img.width for img in images)
+            height = max(img.height for img in images)
+            sheet = Image.new("RGB", (width, height), "white")
+            x = 0
+            for img in images:
+                sheet.paste(img, (x, 0))
+                x += img.width
+            frame_path = scratch_dir / f"{video_path.stem}-{digest}-contact-sheet.jpg"
+            if not frame_path.exists():
+                sheet.save(frame_path, "JPEG", quality=92)
+            return [frame_path]
+        for idx, frame in enumerate(deduped):
+            frame_path = scratch_dir / f"{video_path.stem}-{digest}-frame-{idx}.jpg"
+            if not frame_path.exists():
+                Image.fromarray(frame).save(frame_path, "JPEG", quality=90)
+            out.append(frame_path)
+        return out
+    except Exception as exc:
+        logger.warning(
+            "Omni video frame fallback failed for %s; trying native video path: %s",
+            video_path,
+            exc,
+        )
+        return []
+
+
 def _extract_parts(
     messages: List[Dict[str, Any]], scratch_dir: Path
 ) -> Tuple[str, List[Path], Optional[Path], Optional[Path]]:
@@ -272,9 +474,21 @@ def _extract_parts(
                     if isinstance(url, str):
                         if url.startswith("data:"):
                             raw, ext = _decode_data_url(url)
-                            cur_video = _materialize_to_temp(raw, ext, scratch_dir)
+                            video_path = _materialize_to_temp(raw, ext, scratch_dir)
                         elif Path(url).exists():
-                            cur_video = Path(url)
+                            video_path = Path(url)
+                        else:
+                            video_path = None
+                        if video_path is not None:
+                            frame_paths = _extract_omni_video_frames(
+                                video_path,
+                                scratch_dir,
+                            )
+                            if frame_paths:
+                                cur_images.extend(frame_paths)
+                                cur_video = None
+                            else:
+                                cur_video = video_path
                 elif ptype == "text":
                     last_user_text += (part.get("text") if isinstance(part, dict) else getattr(part, "text", "")) or ""
     return last_user_text, cur_images, cur_audio, cur_video
@@ -481,6 +695,20 @@ class OmniMultimodalDispatcher:
         PyTorch encoders bridged into MLX LLM. Keeps bit-exact parakeet
         rel-pos for transcription benchmarks but ~10× slower per encode.
         """
+        cradio_status = _ensure_vendored_cradio_dynamic_module()
+        if cradio_status.get("installed"):
+            os.environ.setdefault("HF_HUB_OFFLINE", "1")
+            os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
+            _patch_omni_encoder_view_for_vendored_cradio()
+            logger.info(
+                "OmniMultimodalDispatcher: vendored C-RADIO module ready at %s",
+                cradio_status.get("destination"),
+            )
+        else:
+            logger.warning(
+                "OmniMultimodalDispatcher: vendored C-RADIO module unavailable: %s",
+                cradio_status,
+            )
         from jang_tools.nemotron_omni_session import OmniSession
 
         class _ThinkingAwareOmniSession(OmniSession):

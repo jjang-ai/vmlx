@@ -1697,7 +1697,11 @@ def _bundle_declares_native_video(bundle_path: str | None) -> bool:
         return True
     model_type = str(cfg.get("model_type") or "").lower()
     if model_type in {"gemma4", "gemma4_unified"}:
-        return False
+        proc = _read_bundle_json(bundle_path, "processor_config.json")
+        return bool(
+            cfg.get("video_token_id") is not None
+            and isinstance(proc.get("video_processor") if proc else None, dict)
+        )
     for obj in (cfg, cfg.get("text_config"), cfg.get("vision_config")):
         if not isinstance(obj, dict):
             continue
@@ -1705,6 +1709,25 @@ def _bundle_declares_native_video(bundle_path: str | None) -> bool:
             if obj.get(key) is not None:
                 return True
     return False
+
+
+def _bundle_supports_video_frame_fallback(bundle_path: str | None) -> bool:
+    """Return True when video is safe to expose via sampled image frames.
+
+    This is deliberately narrower than "has vision". ZAYA1-VL, for example,
+    has an image path but must continue rejecting video because its template
+    does not support the current frame-fallback route safely.
+    """
+    cfg = _read_bundle_json(bundle_path, "config.json")
+    if not cfg:
+        return False
+    model_type = str(cfg.get("model_type") or "").lower()
+    if model_type != "step3p7":
+        return False
+    return bool(
+        cfg.get("image_token_id") is not None
+        and isinstance(cfg.get("vision_config"), dict)
+    )
 
 
 def _bundle_declares_native_audio(bundle_path: str | None) -> bool:
@@ -1765,6 +1788,8 @@ def _loaded_mllm_modalities() -> list[str] | None:
     if _bundle_declares_native_audio(_model_path or _model_name):
         modalities.append("audio")
     if _bundle_declares_native_video(_model_path or _model_name):
+        modalities.append("video")
+    elif _bundle_supports_video_frame_fallback(_model_path or _model_name):
         modalities.append("video")
     return modalities
 

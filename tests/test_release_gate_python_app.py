@@ -618,7 +618,7 @@ def test_packaged_bundled_hash_gate_covers_critical_jang_tools_files():
     assert expected.issubset(set(gate_module.JANG_TOOLS_SOURCE_HASH_PATHS))
 
 
-def test_release_gate_objective_digest_fails_on_open_requirement(tmp_path):
+def test_release_gate_objective_digest_allows_deferred_open_requirement(tmp_path):
     gate_module = _load_gate_module()
     digest = tmp_path / "objective.json"
     digest.write_text(
@@ -637,8 +637,32 @@ def test_release_gate_objective_digest_fails_on_open_requirement(tmp_path):
 
     assert gate.records[-1] == (
         "objective proof digest",
+        "PASS",
+        f"{digest}; deferred=1",
+    )
+
+
+def test_release_gate_objective_digest_fails_on_non_deferred_open_requirement(tmp_path):
+    gate_module = _load_gate_module()
+    digest = tmp_path / "objective.json"
+    digest.write_text(
+        json.dumps(
+            {
+                "requirements": [
+                    {"requirement": "safe cache", "status": "pass"},
+                    {"requirement": "Qwen video MTP is release-cleared", "status": "open"},
+                ]
+            }
+        )
+    )
+    gate = _FakeGate("refreshed\n")
+
+    gate_module.check_objective_proof_digest(gate, digest_path=digest)
+
+    assert gate.records[-1] == (
+        "objective proof digest",
         "FAIL",
-        "DSV4 long-output/code/file-generation quality is release-cleared",
+        "Qwen video MTP is release-cleared",
     )
 
 
@@ -654,6 +678,7 @@ def test_release_gate_static_requires_release_ready_manifest():
 
     assert "def check_release_ready_manifest" in src
     assert "check_release_ready_manifest(gate)" in src
+    assert "--skip-release-manifest" in src
     assert "--require-release-ready" in src
     assert "run_release_regression_manifest.py" in src
 

@@ -1126,6 +1126,45 @@ def save_frames_to_temp(frames: list[np.ndarray]) -> list[str]:
     return paths
 
 
+def _expand_video_placeholders_to_image_frames(
+    chat_messages: list[dict],
+    frame_counts: list[int],
+) -> list[dict]:
+    """Replace each video placeholder with N image placeholders.
+
+    Some VLMs route videos through sampled image frames in the SimpleEngine
+    path. Their prompts must contain image placeholders matching those sampled
+    frames; otherwise the model sees no attached media or receives a native
+    video marker unsupported by its image-only template.
+    """
+    if not frame_counts:
+        return chat_messages
+
+    counts = iter(frame_counts)
+    rewritten: list[dict] = []
+    changed = False
+    for msg in chat_messages:
+        content = msg.get("content")
+        if not isinstance(content, list):
+            rewritten.append(msg)
+            continue
+        new_content: list[dict] = []
+        for part in content:
+            if isinstance(part, dict) and part.get("type") == "video":
+                count = max(1, int(next(counts, 1) or 1))
+                new_content.extend({"type": "image"} for _ in range(count))
+                changed = True
+            else:
+                new_content.append(part)
+        if changed:
+            out = dict(msg)
+            out["content"] = new_content
+            rewritten.append(out)
+        else:
+            rewritten.append(msg)
+    return rewritten if changed else chat_messages
+
+
 class MLXMultimodalLM:
     """
     Wrapper around mlx-vlm for multimodal inference.
@@ -2393,12 +2432,25 @@ class MLXMultimodalLM:
         # Process videos
         video_fps = kwargs.pop("video_fps", DEFAULT_FPS)
         video_max_frames = kwargs.pop("video_max_frames", MAX_FRAMES)
+        video_frame_counts: list[int] = []
         for video_path in videos:
             frames = self._prepare_video(
                 video_path, fps=video_fps, max_frames=video_max_frames
             )
             all_images.extend(frames)
+            video_frame_counts.append(len(frames))
             logger.info(f"Added {len(frames)} frames from video: {video_path}")
+
+        model_type = (
+            str(self.config.get("model_type", "") or "").lower()
+            if isinstance(self.config, dict)
+            else str(getattr(self.config, "model_type", "") or "").lower()
+        )
+        if model_type in {"gemma4_unified", "step3p7"} and video_frame_counts:
+            chat_messages = _expand_video_placeholders_to_image_frames(
+                chat_messages,
+                video_frame_counts,
+            )
 
         # Guard against excessive total images (including video frames)
         _max_images = kwargs.get("max_images_per_request", 20)
@@ -2706,11 +2758,24 @@ class MLXMultimodalLM:
         # Process videos
         video_fps = kwargs.pop("video_fps", DEFAULT_FPS)
         video_max_frames = kwargs.pop("video_max_frames", MAX_FRAMES)
+        video_frame_counts: list[int] = []
         for video_path in videos:
             frames = self._prepare_video(
                 video_path, fps=video_fps, max_frames=video_max_frames
             )
             all_images.extend(frames)
+            video_frame_counts.append(len(frames))
+
+        model_type = (
+            str(self.config.get("model_type", "") or "").lower()
+            if isinstance(self.config, dict)
+            else str(getattr(self.config, "model_type", "") or "").lower()
+        )
+        if model_type == "gemma4_unified" and video_frame_counts:
+            chat_messages = _expand_video_placeholders_to_image_frames(
+                chat_messages,
+                video_frame_counts,
+            )
 
         # Guard against excessive total images (including video frames)
         _max_images = kwargs.get("max_images_per_request", 20)
