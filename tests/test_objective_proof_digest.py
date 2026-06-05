@@ -1069,7 +1069,43 @@ def _write_passing_base_artifacts(tmp_path: Path) -> None:
             ],
         },
     )
+    _write_current_tool_call_contract(tmp_path)
     _refresh_cache_architecture_contract_source_hashes(tmp_path)
+
+
+def _write_current_tool_call_contract(tmp_path: Path) -> None:
+    from tests.cross_matrix import run_tool_call_contract as tool_contract
+
+    for rel in tool_contract.SOURCE_HASH_FILES:
+        if not (tmp_path / rel).exists():
+            _write_json(tmp_path, rel, {"fixture": rel})
+    _write_json(
+        tmp_path,
+        str(tool_contract.DEFAULT_OUT),
+        {
+            "status": "open",
+            "checks": {
+                "tool_parser_residue_rejected_instead_of_executed": True,
+                "schema_valid_dsml_tool_call_preserved": True,
+                "dsv4_default_cache_degraded_dsml_shapes_repaired_when_schema_valid": True,
+                "dsv4_tool_preamble_suppressed_and_not_stored_without_call": True,
+                "tool_choice_none_does_not_fallback_to_raw_dsml": True,
+                "panel_tool_executor_blocks_unsafe_paths_and_commands": True,
+                "panel_max_tool_iterations_caps_tool_loops": True,
+                "family_tool_parser_matrix_covers_no_leak_and_alias_edges": True,
+                "live_default_cache_dsv4_tool_loop_artifact_present": True,
+                "live_default_cache_dsv4_tool_loop_artifact_passed": False,
+                "all_required_tool_call_markers_present": True,
+            },
+            "failed": [],
+            "missing_markers": [],
+            "open_proof_gaps": ["live_default_cache_dsv4_tool_loop"],
+            "source_hashes": {
+                rel: _sha256(tmp_path / rel)
+                for rel in tool_contract.SOURCE_HASH_FILES
+            },
+        },
+    )
 
 
 def _refresh_cache_architecture_contract_source_hashes(tmp_path: Path) -> None:
@@ -5184,6 +5220,43 @@ def test_objective_proof_digest_does_not_require_legacy_ui_smoke_for_max_output_
     assert row["details"]["missing_evidence"] == []
     assert "build/dev-ui-smoke-20260521/summary.json" not in row["evidence"]
     assert "build/dev-ui-smoke-20260521/summary.json" not in row["details"]["evidence_files_present"]
+
+
+def test_objective_proof_digest_does_not_require_legacy_dsv4_app_tool_cap_artifact(tmp_path):
+    from tests.cross_matrix import run_tool_call_contract as tool_contract
+    from tests.cross_matrix.summarize_objective_proof import build_digest
+
+    _write_passing_base_artifacts(tmp_path)
+    (
+        tmp_path
+        / "build/v1546-dsv4-app-tool-cap-nocache-proof-20260521090706/summary.json"
+    ).unlink()
+
+    digest = build_digest(tmp_path)
+    rows = {item["requirement"]: item for item in digest["requirements"]}
+
+    row = rows["App maxToolIterations cap is enforced for DSV4 tool loop"]
+    assert row["status"] == "pass"
+    assert row["evidence"] == [str(tool_contract.DEFAULT_OUT)]
+    assert row["details"]["contract_status"] == "open"
+    assert row["details"]["contract_checks"]["panel_max_tool_iterations_caps_tool_loops"] is True
+    assert row["details"]["open_proof_gaps"] == ["live_default_cache_dsv4_tool_loop"]
+    assert row["details"]["missing_evidence"] == []
+
+
+def test_objective_proof_digest_requires_current_tool_call_contract_for_app_tool_cap(tmp_path):
+    from tests.cross_matrix import run_tool_call_contract as tool_contract
+    from tests.cross_matrix.summarize_objective_proof import build_digest
+
+    _write_passing_base_artifacts(tmp_path)
+    (tmp_path / tool_contract.DEFAULT_OUT).unlink()
+
+    digest = build_digest(tmp_path)
+    rows = {item["requirement"]: item for item in digest["requirements"]}
+
+    row = rows["App maxToolIterations cap is enforced for DSV4 tool loop"]
+    assert row["status"] == "open"
+    assert row["details"]["missing_evidence"] == [str(tool_contract.DEFAULT_OUT)]
 
 
 def test_objective_proof_digest_rejects_no_cache_dsv4_multi_tool_proof(tmp_path):

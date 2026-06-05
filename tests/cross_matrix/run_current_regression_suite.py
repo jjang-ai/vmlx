@@ -36,7 +36,6 @@ EXPECTED_OPEN_REQUIREMENTS = [
     "DSV4 Responses one-tool call stops after tool result",
     "DSV4 can perform multiple tool iterations then final answer",
     "DSV4 default-cache multi-tool agent loop is proven",
-    "App maxToolIterations cap is enforced for DSV4 tool loop",
     "Qwen/JANG packaged MX matmul speed is release-cleared",
     "Qwen native MTP live decode speed and output equivalence are release-cleared",
     "Qwen 27B JANG_4M prompt-processing speed floor is release-cleared",

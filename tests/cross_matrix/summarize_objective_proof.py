@@ -28,6 +28,10 @@ from tests.cross_matrix.run_cache_architecture_contract import (
     DEFAULT_OUT as CACHE_ARCHITECTURE_CONTRACT_DEFAULT_OUT,
     SOURCE_HASH_FILES as CACHE_ARCHITECTURE_SOURCE_HASH_FILES,
 )
+from tests.cross_matrix.run_tool_call_contract import (
+    DEFAULT_OUT as TOOL_CALL_CONTRACT_DEFAULT_OUT,
+    SOURCE_HASH_FILES as TOOL_CALL_SOURCE_HASH_FILES,
+)
 from tests.cross_matrix.run_model_artifact_format_contract import (
     SOURCE_HASH_FILES as MODEL_ARTIFACT_FORMAT_SOURCE_HASH_FILES,
 )
@@ -186,6 +190,7 @@ DSV4_BATCH_GENERATOR_WARMUP_ABLATION_REL = (
 )
 API_CACHE_CONTRACT_REL = "build/current-api-cache-contract-proof-20260602-cache-detail-zero-cached.json"
 CACHE_ARCHITECTURE_CONTRACT_REL = str(CACHE_ARCHITECTURE_CONTRACT_DEFAULT_OUT)
+TOOL_CALL_CONTRACT_REL = str(TOOL_CALL_CONTRACT_DEFAULT_OUT)
 PANEL_SETTINGS_CONTRACT_REL = "build/current-panel-settings-contract-proof-20260601-cache-ui-storage-quant.json"
 MAX_OUTPUT_CONTEXT_CONTRACT_REL = "build/current-max-output-context-contract-20260531-post-step-lfm-refresh.json"
 MAX_OUTPUT_CONTEXT_CONTRACT_FALLBACK_REL = "build/current-max-output-context-contract-20260521.json"
@@ -4950,7 +4955,7 @@ def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
     default_cache_tool_loop_dryrun_controls = _load(
         root, DSV4_DEFAULT_CACHE_TOOL_LOOP_DRYRUN_CONTROLS_REL
     )
-    cap = _load(root, "build/v1546-dsv4-app-tool-cap-nocache-proof-20260521090706/summary.json")
+    tool_call_contract = _load(root, TOOL_CALL_CONTRACT_REL)
     ui = _load(root, "build/dev-ui-smoke-20260521/summary.json")
     cache_architecture_contract = _load(root, CACHE_ARCHITECTURE_CONTRACT_REL)
     longctx = _load(root, "build/current-dsv4-long-context-proof-digest-20260521.json")
@@ -5583,7 +5588,6 @@ def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
             else None
         ),
     }
-    cap_checks = cap.get("checks") or {}
     ui_visible = ui.get("visible_assertions") or {}
     ui_cli = ui.get("cli_preview_assertions") or {}
     _add(
@@ -5759,23 +5763,43 @@ def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
             "code_tool_corrupt_identifier_patterns": code_tool_corrupt_identifier_patterns,
         },
     )
+    tool_call_checks = tool_call_contract.get("checks") or {}
+    tool_call_cap_hash_ok, tool_call_cap_hash_details = _source_hash_status(
+        root,
+        tool_call_contract,
+        TOOL_CALL_SOURCE_HASH_FILES,
+    )
     _add(
         requirements,
         "App maxToolIterations cap is enforced for DSV4 tool loop",
         _status(
-            cap.get("allPassed")
-            and all(
-                cap_checks.get(key)
-                for key in (
-                    "maxToolIterationsPersisted",
-                    "sawLimitMessage",
-                    "executedExactlyOneRealTool",
-                    "capFileNotWritten",
-                )
-            )
+            tool_call_checks.get("panel_max_tool_iterations_caps_tool_loops") is True
+            and not tool_call_contract.get("failed")
+            and not tool_call_contract.get("missing_markers")
+            and tool_call_cap_hash_ok
         ),
-        ["build/v1546-dsv4-app-tool-cap-nocache-proof-20260521090706/summary.json"],
-        details=cap_checks,
+        [TOOL_CALL_CONTRACT_REL],
+        details={
+            "contract_status": tool_call_contract.get("status"),
+            "contract_checks": {
+                "panel_max_tool_iterations_caps_tool_loops": (
+                    tool_call_checks.get("panel_max_tool_iterations_caps_tool_loops") is True
+                ),
+                "panel_tool_executor_blocks_unsafe_paths_and_commands": (
+                    tool_call_checks.get("panel_tool_executor_blocks_unsafe_paths_and_commands") is True
+                ),
+                "all_required_tool_call_markers_present": (
+                    tool_call_checks.get("all_required_tool_call_markers_present") is True
+                ),
+                "live_default_cache_dsv4_tool_loop_artifact_passed": (
+                    tool_call_checks.get("live_default_cache_dsv4_tool_loop_artifact_passed") is True
+                ),
+            },
+            "failed": tool_call_contract.get("failed") or [],
+            "missing_markers": tool_call_contract.get("missing_markers") or [],
+            "open_proof_gaps": tool_call_contract.get("open_proof_gaps") or [],
+            **tool_call_cap_hash_details,
+        },
     )
     max_output_context_ok, max_output_context_checks = _contract_checks(
         max_output_context_contract, MAX_OUTPUT_CONTEXT_CONTRACT_CHECKS
