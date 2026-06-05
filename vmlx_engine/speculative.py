@@ -155,11 +155,10 @@ def unload_draft_model() -> None:
         # Free memory
         try:
             import gc
-            import mlx.core as mx
+            from .mlx_memory import clear_mlx_memory_cache
 
             gc.collect()
-            if hasattr(mx.metal, "clear_cache"):
-                mx.metal.clear_cache()
+            clear_mlx_memory_cache(log=logger)
         except Exception:
             pass
 

@@ -210,9 +210,9 @@ class MLXWorker:
 
         # Clear MLX cache
         try:
-            import mlx.core as mx
+            from .mlx_memory import clear_mlx_memory_cache
 
-            mx.metal.clear_cache()
+            clear_mlx_memory_cache(log=logger)
         except Exception:
             pass
 

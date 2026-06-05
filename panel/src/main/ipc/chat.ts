@@ -3881,6 +3881,22 @@ export function registerChatHandlers(
           } catch (_) {}
         }
 
+        if (hasMediaAttachments && !hadVisibleActivity && !wasAborted) {
+          // A failed oversized media turn must not remain in local history.
+          // Otherwise the next text-only prompt replays the same image payload and
+          // hits the same VLM image prefill guard until the user manually rolls back.
+          try {
+            db.deleteMessage(userMessage.id);
+            pushChatSessionLog(
+              chatSession?.id || resolvedSession?.id,
+              `[CHAT_DIAG] rolled_back_failed_media_user_message=${JSON.stringify({
+                chatId: chatId.slice(0, 8),
+                messageId: userMessage.id.slice(0, 8),
+              })}`,
+            );
+          } catch (_) {}
+        }
+
         // Distinguish timeout from user-initiated abort for better error messages.
         // CRITICAL: Check abortController.signal.aborted FIRST — when abort fires during
         // reader.read(), the error message can be 'terminated' instead of 'AbortError',

@@ -1211,7 +1211,7 @@ def _is_hy3_model(model_key: str) -> bool:
     try:
         from .model_config_registry import get_model_config_registry
 
-        cfg = get_model_config_registry().lookup(model_key)
+        cfg = get_model_config_registry().lookup(_registry_model_key(model_key))
         return getattr(cfg, "family_name", None) == "hy_v3"
     except Exception:
         return False
@@ -1304,7 +1304,7 @@ def _synthetic_mllm_think_prompt_starts(
     try:
         from .model_config_registry import get_model_config_registry
 
-        cfg = get_model_config_registry().lookup(model_key)
+        cfg = get_model_config_registry().lookup(_registry_model_key(model_key))
     except Exception:
         return False
     family = str(getattr(cfg, "family_name", "") or "").lower()
@@ -1914,7 +1914,7 @@ def _resolve_enable_thinking(
     _mc = None
     try:
         from .model_config_registry import get_model_config_registry
-        _mc = get_model_config_registry().lookup(model_key)
+        _mc = get_model_config_registry().lookup(_registry_model_key(model_key))
     except Exception:
         _mc = None
     _family = getattr(_mc, "family_name", None) or getattr(_mc, "model_type", None)
@@ -3929,6 +3929,16 @@ def _resolve_model_name() -> str:
     Priority: _served_model_name > _model_name > 'default'
     """
     return _served_model_name or _model_name or "default"
+
+
+def _registry_model_key(requested_model: str | None = None) -> str:
+    """Resolve the internal model key used for registry/family lookups.
+
+    ``--served-model-name`` is a public API alias. Registry lookups need the
+    loaded artifact path/name so they can read config.json/jang_config.json and
+    avoid false warnings like ``alias/config.json`` missing.
+    """
+    return _model_path or _model_name or requested_model or ""
 
 
 def _get_raw_model_from_engine():

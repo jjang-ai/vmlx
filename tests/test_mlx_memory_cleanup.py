@@ -3,7 +3,7 @@ import ast
 from pathlib import Path
 
 
-def test_clear_mlx_memory_cache_prefers_metal_api():
+def test_clear_mlx_memory_cache_prefers_top_level_api():
     from vmlx_engine.mlx_memory import clear_mlx_memory_cache
 
     calls = []
@@ -12,18 +12,18 @@ def test_clear_mlx_memory_cache_prefers_metal_api():
         clear_cache=lambda: calls.append("top"),
     )
 
-    assert clear_mlx_memory_cache(mx=fake_mx) == "mx.metal.clear_cache"
-    assert calls == ["metal"]
+    assert clear_mlx_memory_cache(mx=fake_mx) == "mx.clear_cache"
+    assert calls == ["top"]
 
 
-def test_clear_mlx_memory_cache_falls_back_to_top_level_api():
+def test_clear_mlx_memory_cache_falls_back_to_metal_api():
     from vmlx_engine.mlx_memory import clear_mlx_memory_cache
 
     calls = []
-    fake_mx = SimpleNamespace(clear_cache=lambda: calls.append("top"))
+    fake_mx = SimpleNamespace(metal=SimpleNamespace(clear_cache=lambda: calls.append("metal")))
 
-    assert clear_mlx_memory_cache(mx=fake_mx) == "mx.clear_cache"
-    assert calls == ["top"]
+    assert clear_mlx_memory_cache(mx=fake_mx) == "mx.metal.clear_cache"
+    assert calls == ["metal"]
 
 
 def test_clear_mlx_memory_cache_logs_missing_api(caplog):
@@ -39,12 +39,12 @@ def test_clear_mlx_memory_cache_logs_api_failure(caplog):
     from vmlx_engine.mlx_memory import clear_mlx_memory_cache
 
     def boom():
-        raise RuntimeError("metal cache failed")
+        raise RuntimeError("top cache failed")
 
-    fake_mx = SimpleNamespace(metal=SimpleNamespace(clear_cache=boom))
+    fake_mx = SimpleNamespace(clear_cache=boom)
 
     assert clear_mlx_memory_cache(mx=fake_mx) is None
-    assert "MLX memory cache cleanup via mx.metal.clear_cache failed" in caplog.text
+    assert "MLX memory cache cleanup via mx.clear_cache failed" in caplog.text
 
 
 def test_runtime_paths_do_not_call_removed_clear_memory_cache_directly():
@@ -57,6 +57,8 @@ def test_runtime_paths_do_not_call_removed_clear_memory_cache_directly():
         repo_root / "vmlx_engine" / "reranker.py",
         repo_root / "vmlx_engine" / "scheduler.py",
         repo_root / "vmlx_engine" / "server.py",
+        repo_root / "vmlx_engine" / "speculative.py",
+        repo_root / "vmlx_engine" / "worker.py",
     ]
 
     offenders = []
@@ -65,6 +67,22 @@ def test_runtime_paths_do_not_call_removed_clear_memory_cache_directly():
         for node in ast.walk(tree):
             if isinstance(node, ast.Attribute) and node.attr == "clear_memory_cache":
                 offenders.append(f"{path.relative_to(repo_root)}:{node.lineno}")
+
+    assert offenders == []
+
+
+def test_runtime_paths_do_not_call_deprecated_metal_clear_cache_directly():
+    repo_root = Path(__file__).resolve().parents[1]
+    runtime_paths = [
+        repo_root / "vmlx_engine" / "speculative.py",
+        repo_root / "vmlx_engine" / "worker.py",
+    ]
+
+    offenders = []
+    for path in runtime_paths:
+        source = path.read_text(encoding="utf-8")
+        if "mx.metal.clear_cache()" in source or "metal.clear_cache()" in source:
+            offenders.append(str(path.relative_to(repo_root)))
 
     assert offenders == []
 

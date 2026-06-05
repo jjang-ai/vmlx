@@ -8197,6 +8197,7 @@ class TestJangVLMFallbacks:
         assert cfg.architecture_hints["runtime_scope"] == "source_gemma4_unified_vlm"
         assert cfg.architecture_hints["vl_runtime_available"] is True
         assert cfg.architecture_hints["audio_runtime_available"] is True
+        assert cfg.architecture_hints["default_enable_thinking"] is False
 
     def test_batched_model_wrapper_does_not_inject_pixel_values_for_gemma4_text_wrapper(
         self,

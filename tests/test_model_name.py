@@ -175,6 +175,24 @@ class TestResolveModelName:
             server._served_model_name = orig_served
             server._model_name = orig_model
 
+    def test_registry_model_key_uses_loaded_path_not_served_alias(self):
+        """Registry/family detection must not probe served aliases as paths."""
+        import vmlx_engine.server as server
+
+        orig_served = server._served_model_name
+        orig_model = server._model_name
+        orig_path = server._model_path
+        try:
+            server._served_model_name = "alias"
+            server._model_name = "Org/Actual-Model"
+            server._model_path = "/models/actual-model"
+            assert server._resolve_model_name() == "alias"
+            assert server._registry_model_key("alias") == "/models/actual-model"
+        finally:
+            server._served_model_name = orig_served
+            server._model_name = orig_model
+            server._model_path = orig_path
+
 
 # =============================================================================
 # /v1/models Endpoint Tests

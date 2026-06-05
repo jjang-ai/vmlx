@@ -578,6 +578,7 @@ class ModelConfigRegistry:
                 hints["runtime_scope"] = "text_runtime_no_gemma4_unified_vlm"
                 hints["vl_runtime_available"] = False
                 hints["audio_runtime_available"] = False
+                hints["default_enable_thinking"] = False
                 updates["is_mllm"] = False
                 updates["architecture_hints"] = hints
             elif is_gemma4_unified_text_runtime and gemma4_unified_runtime_ready:
@@ -585,6 +586,7 @@ class ModelConfigRegistry:
                 hints["runtime_scope"] = "source_gemma4_unified_vlm"
                 hints["vl_runtime_available"] = True
                 hints["audio_runtime_available"] = True
+                hints["default_enable_thinking"] = False
                 updates["is_mllm"] = True
                 updates["architecture_hints"] = hints
             elif _is_step3p7_text_bridge(local_model_config):

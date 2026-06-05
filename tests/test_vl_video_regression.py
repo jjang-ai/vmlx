@@ -1046,6 +1046,59 @@ class TestIssueGuards:
 
         assert decision.should_reject is False
 
+    def test_vlm_image_prefill_default_single_buffer_guard_scales_on_high_memory(self, monkeypatch):
+        monkeypatch.delenv("VMLX_VLM_IMAGE_PREFILL_BUFFER_GB", raising=False)
+        monkeypatch.delenv("VMLX_VLM_IMAGE_PREFILL_BUFFER_FRACTION", raising=False)
+        monkeypatch.delenv("VMLX_VLM_IMAGE_PREFILL_BUFFER_MAX_GB", raising=False)
+
+        from vmlx_engine.mllm_batch_generator import (
+            _resolve_vlm_image_prefill_single_buffer_limit,
+            _vlm_image_prefill_budget,
+        )
+
+        gib = 1024**3
+        max_working_set = 96 * gib
+        single_buffer_limit = _resolve_vlm_image_prefill_single_buffer_limit(max_working_set)
+
+        assert single_buffer_limit > 10 * gib
+
+        decision = _vlm_image_prefill_budget(
+            has_images=True,
+            seq_len=12_953,
+            num_attention_heads=32,
+            active_memory_bytes=20 * gib,
+            max_working_set_bytes=max_working_set,
+            reject_pct=98.0,
+            single_buffer_limit_bytes=single_buffer_limit,
+            guard_enabled=True,
+        )
+
+        assert decision.should_reject is False
+
+    def test_vlm_image_prefill_explicit_single_buffer_guard_preserves_old_limit(self, monkeypatch):
+        monkeypatch.setenv("VMLX_VLM_IMAGE_PREFILL_BUFFER_GB", "8")
+
+        from vmlx_engine.mllm_batch_generator import _resolve_vlm_image_prefill_single_buffer_limit
+
+        assert _resolve_vlm_image_prefill_single_buffer_limit(96 * 1024**3) == 8 * 1024**3
+
+    def test_vlm_image_prefill_budget_error_logs_without_internal_traceback(self):
+        import inspect
+
+        import vmlx_engine.mllm_batch_generator as _m
+
+        src = inspect.getsource(_m.MLLMBatchGenerator._process_prompts)
+        start = src.index("_err_code = (")
+        end = src.index("self._prefill_errors.append", start)
+        branch = src[start:end]
+
+        assert "if _err_code == VLMImagePrefillBudgetError.code:" in branch
+        budget_branch = branch.split(
+            "if _err_code == VLMImagePrefillBudgetError.code:", 1
+        )[1].split("else:", 1)[0]
+        assert "logger.warning(" in budget_branch
+        assert "_tb.format_exc()" not in budget_branch
+
     def test_vmlx156_image_path_clears_allocator_cache_before_one_shot_forward(self):
         import inspect
         import vmlx_engine.mllm_batch_generator as _m
@@ -1179,8 +1232,8 @@ class TestIssueGuards:
 
         generate_mod = importlib.import_module("mlx_vlm.generate")
         monkeypatch.setattr(generate_mod, "prepare_inputs", _expanded_inputs)
-        monkeypatch.setenv("VMLINUX_VLM_IMAGE_PREFILL_GUARD", "1")
-        monkeypatch.setenv("VMLINUX_VLM_IMAGE_PREFILL_BUFFER_GB", "8")
+        monkeypatch.setenv("VMLX_VLM_IMAGE_PREFILL_GUARD", "1")
+        monkeypatch.setenv("VMLX_VLM_IMAGE_PREFILL_BUFFER_GB", "8")
 
         with pytest.raises(RuntimeError, match="VLM image prefill rejected"):
             model._guard_simple_image_prefill(

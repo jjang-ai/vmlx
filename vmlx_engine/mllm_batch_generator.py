@@ -415,6 +415,46 @@ def _vlm_image_prefill_budget(
     )
 
 
+def _parse_positive_float_env(name: str) -> Optional[float]:
+    try:
+        value = float(os.environ.get(name, ""))
+    except (TypeError, ValueError):
+        return None
+    return value if value > 0 else None
+
+
+def _resolve_vlm_image_prefill_single_buffer_limit(
+    max_working_set_bytes: int,
+) -> int:
+    """Resolve the one-shot VLM image attention-buffer guard.
+
+    The old fixed 8GB default was appropriate for smaller Apple Silicon
+    machines, but it incorrectly rejected Gemma 4 12B image prompts on high-RAM
+    M-series systems even when the Metal working-set budget had enough headroom.
+    Keep explicit env overrides exact, otherwise scale the default guard with
+    the effective Metal working set while preserving an 8GB floor.
+    """
+    gib = 1024**3
+    explicit_gb = _parse_positive_float_env("VMLX_VLM_IMAGE_PREFILL_BUFFER_GB")
+    if explicit_gb is not None:
+        return int(explicit_gb * gib)
+
+    floor = 8 * gib
+    max_ws = max(0, int(max_working_set_bytes or 0))
+    if max_ws <= 0:
+        return floor
+
+    fraction = _parse_positive_float_env("VMLX_VLM_IMAGE_PREFILL_BUFFER_FRACTION")
+    if fraction is None:
+        fraction = 0.16
+    fraction = min(max(fraction, 0.01), 0.50)
+
+    cap_gb = _parse_positive_float_env("VMLX_VLM_IMAGE_PREFILL_BUFFER_MAX_GB")
+    cap = int((cap_gb if cap_gb is not None else 24.0) * gib)
+
+    return min(cap, max(floor, int(max_ws * fraction)))
+
+
 def _raise_if_image_prefill_exceeds_budget(
     *,
     has_images: bool,
@@ -437,19 +477,13 @@ def _raise_if_image_prefill_exceeds_budget(
         )
     except (TypeError, ValueError):
         reject_pct = get_metal_ws_guard_threshold(98.0)
-    try:
-        single_buffer_limit = int(
-            float(os.environ.get("VMLX_VLM_IMAGE_PREFILL_BUFFER_GB", "8"))
-            * 1024**3
-        )
-    except (TypeError, ValueError):
-        single_buffer_limit = 8 * 1024**3
 
     try:
         active, max_ws = get_effective_metal_working_set_bytes(mx)
     except Exception:
         active = 0
         max_ws = 0
+    single_buffer_limit = _resolve_vlm_image_prefill_single_buffer_limit(max_ws)
 
     decision = _vlm_image_prefill_budget(
         has_images=has_images,
@@ -5605,7 +5639,6 @@ class MLLMBatchGenerator:
                 # the client saw `{"content": null, "finish_reason": "stop",
                 # "prompt_tokens": 0}` and had no way to distinguish "empty
                 # completion" from "prefill crashed".
-                import traceback as _tb
                 _err_code = (
                     VLMImagePrefillBudgetError.code
                     if isinstance(prefill_err, VLMImagePrefillBudgetError)
@@ -5616,11 +5649,19 @@ class MLLMBatchGenerator:
                     if _err_code == VLMImagePrefillBudgetError.code
                     else f"{type(prefill_err).__name__}: {prefill_err}"
                 )
-                logger.error(
-                    f"Prefill failed for {req.request_id}: {_err_detail}\n"
-                    f"{_tb.format_exc()}\n"
-                    f"— other requests in batch will continue"
-                )
+                if _err_code == VLMImagePrefillBudgetError.code:
+                    logger.warning(
+                        f"Prefill rejected for {req.request_id}: {_err_detail} "
+                        f"— other requests in batch will continue"
+                    )
+                else:
+                    import traceback as _tb
+
+                    logger.error(
+                        f"Prefill failed for {req.request_id}: {_err_detail}\n"
+                        f"{_tb.format_exc()}\n"
+                        f"— other requests in batch will continue"
+                    )
                 self._prefill_errors.append(MLLMBatchResponse(
                     uid=req.uid,
                     request_id=req.request_id,
