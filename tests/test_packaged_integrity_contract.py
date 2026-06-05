@@ -36,7 +36,9 @@ def _result(name: str, returncode: int, stdout_tail: list[str], passed: int | No
 
 def _expected_open_digest_line() -> str:
     return "[FAIL] objective proof digest: " + "; ".join(
-        runner.EXPECTED_OPEN_REQUIREMENTS
+        item
+        for item in runner.EXPECTED_OPEN_REQUIREMENTS
+        if item not in runner.SUITE_DEFERRED_RELEASE_OPEN_REQUIREMENTS
     )
 
 

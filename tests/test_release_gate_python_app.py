@@ -158,7 +158,7 @@ def test_release_gate_objective_digest_default_tracks_current_release_matrix():
         "--out",
         str(
             Path.cwd()
-            / "build/current-objective-proof-audit-20260602-cache-detail-zero-cached.json"
+            / "build/current-objective-proof-audit-gemma4-release-boundary-20260604.json"
         ),
     ]
 

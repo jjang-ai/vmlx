@@ -47,7 +47,13 @@ EXPECTED_OPEN_REQUIREMENTS = [
     "Gemma4 26B CRACK mixed-SWA app-engine speed floor is release-cleared",
     "Cross-family live multi-turn smoke matrix is release-cleared",
     "MiniMax-M2.7-JANGTQ_K reporter parity/root cause is release-cleared",
+    "Real Electron UI cross-family live model matrix is release-cleared",
+    "DSV4 long-output/code/file-generation quality is release-cleared",
 ]
+DEFERRED_RELEASE_OPEN_REQUIREMENTS = {
+    "Real Electron UI cross-family live model matrix is release-cleared",
+    "DSV4 long-output/code/file-generation quality is release-cleared",
+}
 
 CURRENT_OBJECTIVE_DIGEST_ARTIFACT = (
     "build/current-objective-proof-audit-gemma4-release-boundary-20260604.json"
@@ -340,9 +346,14 @@ def _release_gate_failure_is_expected(step: dict[str, Any]) -> bool:
         return True
     text = "\n".join(step.get("stdout_tail", []))
     fail_lines = [line for line in text.splitlines() if line.startswith("[FAIL]")]
+    expected_effective_open = [
+        item
+        for item in EXPECTED_OPEN_REQUIREMENTS
+        if item not in DEFERRED_RELEASE_OPEN_REQUIREMENTS
+    ]
     expected_digest = (
         "[FAIL] objective proof digest: "
-        + "; ".join(EXPECTED_OPEN_REQUIREMENTS)
+        + "; ".join(expected_effective_open)
     )
     expected_release_ready_prefix = "[FAIL] release-ready manifest: exit=1;"
     if not (
@@ -718,7 +729,20 @@ def build_suite_artifact(
                     current_path,
                     _build_summary(steps, root, current_step=name),
                 )
+            print(f"[current-suite] start {name}", flush=True)
             steps[name] = _run_step(name, cmd, root)
+            step = steps[name]
+            print(
+                "[current-suite] done "
+                f"{name} rc={step.get('returncode')} "
+                f"elapsed={step.get('elapsed_sec')}",
+                flush=True,
+            )
+            if current_suite_artifact_path:
+                current_path = current_suite_artifact_path
+                if not current_path.is_absolute():
+                    current_path = root / current_path
+                _write_json(current_path, _build_summary(steps, root))
 
     return _build_summary(steps, root)
 

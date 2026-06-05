@@ -28,7 +28,9 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from tests.cross_matrix.run_current_regression_suite import (
+    DEFERRED_RELEASE_OPEN_REQUIREMENTS as SUITE_DEFERRED_RELEASE_OPEN_REQUIREMENTS,
     EXPECTED_OPEN_REQUIREMENTS as SUITE_EXPECTED_OPEN_REQUIREMENTS,
+    CURRENT_OBJECTIVE_DIGEST_ARTIFACT as SUITE_CURRENT_OBJECTIVE_DIGEST_ARTIFACT,
 )
 
 
@@ -37,7 +39,7 @@ DEFAULT_OUT = Path(
 )
 EXPECTED_OPEN_REQUIREMENTS = SUITE_EXPECTED_OPEN_REQUIREMENTS
 CURRENT_OBJECTIVE_DIGEST_ARTIFACT = Path(
-    "build/current-objective-proof-audit-20260602-cache-detail-zero-cached.json"
+    SUITE_CURRENT_OBJECTIVE_DIGEST_ARTIFACT
 )
 MIN_RELEASE_GATE_UNIT_TESTS = 34
 PACKAGED_RENDERER_ASAR = Path(
@@ -634,7 +636,11 @@ def release_gate_failure_is_expected(step: dict[str, Any]) -> bool:
     fail_lines = [line for line in text.splitlines() if line.startswith("[FAIL]")]
     expected_digest = (
         "[FAIL] objective proof digest: "
-        + "; ".join(EXPECTED_OPEN_REQUIREMENTS)
+        + "; ".join(
+            item
+            for item in EXPECTED_OPEN_REQUIREMENTS
+            if item not in SUITE_DEFERRED_RELEASE_OPEN_REQUIREMENTS
+        )
     )
     forbidden = (
         "bundled python import gate: FAIL",

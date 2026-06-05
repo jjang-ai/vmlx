@@ -317,6 +317,70 @@ def test_current_regression_suite_checkpoints_each_started_step(
     assert before_second["completed_steps"] == ["first_contract"]
 
 
+def test_current_regression_suite_prints_step_progress(tmp_path, monkeypatch, capsys):
+    from tests.cross_matrix import run_current_regression_suite as suite
+
+    _write_known_open_objective_digest(tmp_path)
+    monkeypatch.setattr(
+        suite,
+        "CURRENT_SUITE_COMMANDS",
+        {"first_contract": [sys.executable, "-c", "print('first')"]},
+    )
+    monkeypatch.setattr(
+        suite,
+        "_run_step",
+        lambda name, cmd, cwd: {
+            "name": name,
+            "command": cmd,
+            "returncode": 0,
+            "elapsed_sec": 1.25,
+            "stdout_tail": [],
+        },
+    )
+
+    suite.build_suite_artifact(tmp_path, include_release_gate=False)
+
+    out = capsys.readouterr().out
+    assert "[current-suite] start first_contract" in out
+    assert "[current-suite] done first_contract rc=0 elapsed=1.25" in out
+
+
+def test_current_regression_suite_updates_partial_artifact_after_each_step(
+    tmp_path,
+    monkeypatch,
+):
+    from tests.cross_matrix import run_current_regression_suite as suite
+
+    _write_known_open_objective_digest(tmp_path)
+    current_suite_artifact = tmp_path / "current-suite.json"
+    monkeypatch.setattr(
+        suite,
+        "CURRENT_SUITE_COMMANDS",
+        {"first_contract": [sys.executable, "-c", "print('first')"]},
+    )
+    monkeypatch.setattr(
+        suite,
+        "_run_step",
+        lambda name, cmd, cwd: {
+            "name": name,
+            "command": cmd,
+            "returncode": 0,
+            "elapsed_sec": 1.25,
+            "stdout_tail": [],
+        },
+    )
+
+    suite.build_suite_artifact(
+        tmp_path,
+        include_release_gate=False,
+        current_suite_artifact_path=current_suite_artifact,
+    )
+
+    partial = json.loads(current_suite_artifact.read_text(encoding="utf-8"))
+    assert partial["current_step"] is None
+    assert partial["completed_steps"] == ["first_contract"]
+
+
 def test_current_regression_suite_refreshes_release_boundary_artifacts():
     from tests.cross_matrix import run_current_regression_suite as suite
     from tests.cross_matrix import release_regression_manifest as manifest
@@ -588,11 +652,10 @@ def test_current_regression_suite_fails_on_new_unexpected_open_requirement(tmp_p
         tmp_path / suite.CURRENT_OBJECTIVE_DIGEST_ARTIFACT,
         {
             "requirements": [
-                {"requirement": "Ling/Bailing multilingual output quality is release-cleared", "status": "pass"},
-                {"requirement": "DSV4 default-cache multi-tool agent loop is proven", "status": "pass"},
-                {"requirement": "Gemma4 26B CRACK mixed-SWA app-engine speed floor is release-cleared", "status": "pass"},
-                {"requirement": "Real Electron UI cross-family live model matrix is release-cleared", "status": "open"},
-                {"requirement": "DSV4 long-output/code/file-generation quality is release-cleared", "status": "open"},
+                *(
+                    {"requirement": requirement, "status": "open"}
+                    for requirement in suite.EXPECTED_OPEN_REQUIREMENTS
+                ),
                 {"requirement": "New untracked blocker", "status": "open"},
             ]
         },

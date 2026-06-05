@@ -14672,10 +14672,12 @@ def test_release_regression_manifest_tracks_gemma4_crack_language_visible_qualit
     assert "generic TurboQuant KV off" in joined
     assert "source now proves native mixed-SWA cache telemetry as paged+mixed_swa" in joined
     assert "clears the sustained 512-token speed-floor prompt" in joined
-    assert "Current installed app proves source-hash parity, paged+mixed_swa cache telemetry" in joined
+    assert "Current installed-app speed clearance requires source-hash parity, paged+mixed_swa cache telemetry" in joined
     assert "stream UI TPS above 80 tok/s for cold and cache-hit rows" in joined
-    assert "cold wall decode includes TTFT and remains tracked separately" in joined
+    assert "cold-wall TTFT tracking" in joined
     assert "decode_tok_s_stream" in joined
+    assert "does not supersede older sub-floor rows until the current issue115 speed-floor artifact exists and passes" in joined
+    assert "Current installed app proves source-hash parity" not in joined
     assert "installed app speed remains a release risk" not in joined
     assert "wall decode samples are below 80 tok/s" not in joined
     assert "installed repeat still remains below or unstable" not in joined
@@ -14739,6 +14741,13 @@ def test_release_regression_manifest_clears_gemma4_ui_speed_without_hiding_cold_
     current_artifact = Path(
         "build/current-runtime-memory-stress-gemma4-26b-jang4m-chat-thinkingoff-speed-floor-issue115-installed-app-20260601.json"
     )
+    if not current_artifact.exists():
+        assert str(current_artifact) in joined
+        assert "Current installed-app speed clearance requires" in joined
+        assert "does not supersede older sub-floor rows until the current issue115 speed-floor artifact exists and passes" in joined
+        assert "Current installed app proves source-hash parity" not in joined
+        return
+
     payload = json.loads(current_artifact.read_text())
     stream_tps = [
         result["stream_speed"]["decode_tok_s_stream"]

@@ -302,6 +302,17 @@ def _issue165_checks(root: Path) -> dict[str, bool]:
     engine_tests = _read(root / "tests/test_engine_audit.py")
     tool_runner = _read(root / "tests/cross_matrix/run_tool_call_contract.py")
     return {
+        "tool_call_contract_source_checks_pass": (
+            not tool_contract.get("failed")
+            and not tool_contract.get("missing_markers")
+            and tool_checks.get("schema_valid_dsml_tool_call_preserved") is True
+            and tool_checks.get(
+                "dsv4_default_cache_degraded_dsml_shapes_repaired_when_schema_valid"
+            )
+            is True
+            and tool_checks.get("tool_choice_none_does_not_fallback_to_raw_dsml")
+            is True
+        ),
         "tool_call_contract_passes": (
             tool_contract.get("status") == "pass"
             and not tool_contract.get("failed")
@@ -609,7 +620,9 @@ def _issue115_checks(root: Path) -> dict[str, bool]:
         "gemma4_installed_speed_risk_tracked": (
             "Gemma4 26B mixed-SWA UI/app-engine speed is not cleared" in release_manifest
             and "stream UI TPS above 80 tok/s for cold and cache-hit rows" in release_manifest
-            and "cold wall decode includes TTFT and remains tracked separately" in release_manifest
+            and "cold-wall TTFT tracking" in release_manifest
+            and "does not supersede older sub-floor rows until the current issue115 speed-floor artifact exists and passes"
+            in release_manifest
             and "test_release_regression_manifest_clears_gemma4_ui_speed_without_hiding_cold_wall_ttft"
             in release_tests
         ),
@@ -850,13 +863,59 @@ def build_audit(root: Path) -> dict[str, Any]:
                 "165": "installed_app_dsml_parser_hash_guarded",
             }
             installed_key = installed_hash_checks[number]
+            open_keys = {installed_key}
+            if number == "165":
+                open_keys.add("tool_call_contract_passes")
             required_source_checks = {
-                key: value for key, value in checks.items() if key != installed_key
+                key: value for key, value in checks.items() if key not in open_keys
             }
             issue["focused_source_slice"] = (
                 "open"
                 if all(required_source_checks.values())
-                and checks.get(installed_key) is not True
+                and any(checks.get(key) is not True for key in open_keys)
+                else "pass"
+                if all(checks.values())
+                else "fail"
+            )
+        elif number == "117":
+            open_keys = {
+                "issue179_root_cause_audit_passes",
+                "issue179_root_cause_audit_open",
+                "issue179_cancel_probe_present",
+            }
+            required_source_checks = {
+                key: value for key, value in checks.items() if key not in open_keys
+            }
+            issue["focused_source_slice"] = (
+                "open"
+                if all(required_source_checks.values())
+                and any(checks.get(key) is not True for key in open_keys)
+                else "pass"
+                if all(checks.values())
+                else "fail"
+            )
+            if issue["focused_source_slice"] == "open":
+                issue["release_clearance"] = (
+                    "open_minimax_k_issue179_reporter_parity_required"
+                )
+        elif number in {"115", "119"}:
+            open_keys = {
+                "115": {
+                    "gemma4_current_installed_ui_speed_gate_passes",
+                    "gemma4_cold_wall_includes_ttft_tracked",
+                    "qwen35_installed_app_speed_gate_passes",
+                },
+                "119": {
+                    "gemma26_memory_stress_artifact_present",
+                },
+            }[number]
+            required_source_checks = {
+                key: value for key, value in checks.items() if key not in open_keys
+            }
+            issue["focused_source_slice"] = (
+                "open"
+                if all(required_source_checks.values())
+                and any(checks.get(key) is not True for key in open_keys)
                 else "pass"
                 if all(checks.values())
                 else "fail"
