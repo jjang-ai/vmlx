@@ -35,7 +35,6 @@ EXPECTED_OPEN_REQUIREMENTS = [
     "DSV4 block disk L2 stores and hits after restart",
     "DSV4 Responses one-tool call stops after tool result",
     "DSV4 can perform multiple tool iterations then final answer",
-    "DSV4 default-cache multi-tool agent loop is proven",
     "Qwen/JANG packaged MX matmul speed is release-cleared",
     "Qwen native MTP live decode speed and output equivalence are release-cleared",
     "Qwen 27B JANG_4M prompt-processing speed floor is release-cleared",

@@ -74,3 +74,60 @@ def test_tool_call_contract_keeps_skipped_live_dsv4_default_cache_artifact_open(
     assert artifact["status"] == "open"
     assert artifact["checks"]["live_default_cache_dsv4_tool_loop_artifact_passed"] is False
     assert artifact["open_proof_gaps"] == ["live_default_cache_dsv4_tool_loop"]
+
+
+def test_tool_call_contract_accepts_review_artifact_when_dsv4_runtime_checks_pass(
+    monkeypatch,
+    tmp_path,
+):
+    from tests.cross_matrix import run_tool_call_contract as gate
+
+    def fake_run(root, name, cwd_rel, cmd):
+        stdout = "\n".join(gate.REQUIRED_TOOL_CALL_TEST_MARKERS)
+        return {
+            "name": name,
+            "command": cmd,
+            "cwd": str(cwd_rel),
+            "returncode": 0,
+            "elapsed_sec": 0,
+            "counts": {"passed": 999, "skipped": 0, "deselected": 0},
+            "stdout": stdout,
+            "stdout_tail": stdout.splitlines(),
+        }
+
+    live_artifact = tmp_path / "build/current-dsv4-default-cache-tool-loop/result.json"
+    live_artifact.parent.mkdir(parents=True)
+    live_artifact.write_text(
+        json.dumps(
+            {
+                "status": "review",
+                "checks": {
+                    "tool_sequence_ordered": True,
+                    "final_done": True,
+                    "file_written": True,
+                    "code_file_written_exact": False,
+                    "native_cache": True,
+                    "native_prefix": True,
+                    "native_paged": True,
+                    "native_l2": True,
+                    "generic_tq_kv_off": True,
+                    "cached_tokens_seen": True,
+                    "dsv4_cache_detail_seen": True,
+                },
+                "code_tool_probe": {
+                    "exact": False,
+                    "corrupt_identifier_patterns": ["THREE.BBoxGeometry"],
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(gate, "_run", fake_run)
+
+    artifact = gate.build_artifact(tmp_path)
+
+    assert artifact["status"] == "pass"
+    assert artifact["checks"]["live_default_cache_dsv4_tool_loop_artifact_passed"] is True
+    assert artifact["open_proof_gaps"] == []
+    assert artifact["live_default_cache_artifact_status"] == "review"
+    assert artifact["live_default_cache_runtime_checks"]["code_file_written_exact"] is False

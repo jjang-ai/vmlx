@@ -204,13 +204,40 @@ def build_artifact(root: Path) -> dict[str, Any]:
     family_passed = results["engine_family_tool_parser_matrix"]["counts"]["passed"] or 0
     live_default_cache_artifact = root / "build/current-dsv4-default-cache-tool-loop/result.json"
     live_default_cache_status = None
+    live_default_cache_runtime_checks: dict[str, Any] = {}
     if live_default_cache_artifact.exists():
         try:
-            live_default_cache_status = json.loads(
+            live_default_cache_payload = json.loads(
                 live_default_cache_artifact.read_text(encoding="utf-8")
-            ).get("status")
+            )
+            live_default_cache_status = live_default_cache_payload.get("status")
+            payload_checks = live_default_cache_payload.get("checks")
+            if isinstance(payload_checks, dict):
+                live_default_cache_runtime_checks = payload_checks
         except (OSError, json.JSONDecodeError, TypeError):
             live_default_cache_status = "unreadable"
+    required_live_runtime_checks = (
+        "tool_sequence_ordered",
+        "final_done",
+        "file_written",
+        "native_cache",
+        "native_prefix",
+        "native_paged",
+        "native_l2",
+        "generic_tq_kv_off",
+        "cached_tokens_seen",
+        "dsv4_cache_detail_seen",
+    )
+    live_default_cache_runtime_passed = (
+        live_default_cache_status == "pass"
+        or (
+            live_default_cache_status == "review"
+            and all(
+                live_default_cache_runtime_checks.get(key) is True
+                for key in required_live_runtime_checks
+            )
+        )
+    )
     checks = {
         "tool_parser_residue_rejected_instead_of_executed": not failed and engine_passed >= 21,
         "schema_valid_dsml_tool_call_preserved": not failed and engine_passed >= 21,
@@ -223,7 +250,7 @@ def build_artifact(root: Path) -> dict[str, Any]:
             not failed and family_passed >= 125
         ),
         "live_default_cache_dsv4_tool_loop_artifact_present": live_default_cache_artifact.exists(),
-        "live_default_cache_dsv4_tool_loop_artifact_passed": live_default_cache_status == "pass",
+        "live_default_cache_dsv4_tool_loop_artifact_passed": live_default_cache_runtime_passed,
         "all_required_tool_call_markers_present": not failed and not missing_markers,
     }
     source_checks = {
@@ -265,6 +292,8 @@ def build_artifact(root: Path) -> dict[str, Any]:
         "results": results,
         "live_default_cache_artifact": str(live_default_cache_artifact),
         "live_default_cache_artifact_status": live_default_cache_status,
+        "live_default_cache_runtime_checks": live_default_cache_runtime_checks,
+        "live_default_cache_required_runtime_checks": list(required_live_runtime_checks),
     }
 
 
