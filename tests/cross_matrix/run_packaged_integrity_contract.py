@@ -23,14 +23,19 @@ import time
 from pathlib import Path
 from typing import Any
 
+REPO_ROOT = Path(__file__).resolve().parents[2]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from tests.cross_matrix.run_current_regression_suite import (
+    EXPECTED_OPEN_REQUIREMENTS as SUITE_EXPECTED_OPEN_REQUIREMENTS,
+)
+
 
 DEFAULT_OUT = Path(
     "build/current-packaged-integrity-contract-gemma4-release-boundary-after-ui-e2e-fixes-dmg-build-20260604.json"
 )
-EXPECTED_OPEN_REQUIREMENTS = [
-    "Real Electron UI cross-family live model matrix is release-cleared",
-    "DSV4 long-output/code/file-generation quality is release-cleared",
-]
+EXPECTED_OPEN_REQUIREMENTS = SUITE_EXPECTED_OPEN_REQUIREMENTS
 CURRENT_OBJECTIVE_DIGEST_ARTIFACT = Path(
     "build/current-objective-proof-audit-20260602-cache-detail-zero-cached.json"
 )
@@ -631,21 +636,25 @@ def release_gate_failure_is_expected(step: dict[str, Any]) -> bool:
         "[FAIL] objective proof digest: "
         + "; ".join(EXPECTED_OPEN_REQUIREMENTS)
     )
-    expected_release_ready_prefix = "[FAIL] release-ready manifest: exit=1;"
     forbidden = (
         "bundled python import gate: FAIL",
+        "[FAIL] bundled python import gate:",
         "panel typecheck: FAIL",
+        "[FAIL] panel typecheck:",
         "panel request/type tests: FAIL",
+        "[FAIL] panel request/type tests:",
         "version triple: FAIL",
+        "[FAIL] version triple:",
+        "[FAIL] twine check dist:",
+        "[FAIL] packaged app checks:",
         "Traceback (most recent call last):",
         "ModuleNotFoundError:",
         "FileNotFoundError:",
         "No such file or directory",
     )
     return (
-        len(fail_lines) == 2
+        len(fail_lines) == 1
         and fail_lines[0] == expected_digest
-        and fail_lines[1].startswith(expected_release_ready_prefix)
         and not any(item in text for item in forbidden)
     )
 

@@ -13,7 +13,7 @@ def test_packaged_integrity_known_open_rows_match_current_suite():
 
 def test_packaged_integrity_default_out_tracks_current_release_proof_artifact():
     assert runner.DEFAULT_OUT == Path(
-        "build/current-packaged-integrity-contract-20260602-developer-id-staged-signing.json"
+        "build/current-packaged-integrity-contract-gemma4-release-boundary-after-ui-e2e-fixes-dmg-build-20260604.json"
     )
 
 
@@ -45,10 +45,10 @@ def _expected_release_ready_line() -> str:
 
 
 def _expected_release_gate_failure_tail() -> list[str]:
-    return [_expected_open_digest_line(), _expected_release_ready_line()]
+    return [_expected_open_digest_line()]
 
 
-def test_packaged_integrity_accepts_release_gate_open_digest_and_release_ready_failures():
+def test_packaged_integrity_accepts_release_gate_objective_digest_only_failure():
     step = _result(
         "release_gate_skip_app",
         1,
@@ -66,7 +66,6 @@ def test_packaged_integrity_rejects_release_ready_manifest_crash_as_expected_fai
             _expected_open_digest_line(),
             "Traceback (most recent call last):",
             "ModuleNotFoundError: No module named 'tests.cross_matrix'",
-            _expected_release_ready_line(),
         ],
     )
 
@@ -85,7 +84,6 @@ def test_packaged_integrity_rejects_stale_objective_digest_refresh_log(tmp_path)
         [
             f"[PASS] objective proof digest refresh: 0.1s; log={log}",
             _expected_open_digest_line(),
-            _expected_release_ready_line(),
         ],
     )
 
@@ -104,7 +102,6 @@ def test_packaged_integrity_accepts_current_objective_digest_refresh_log(tmp_pat
         [
             f"[PASS] objective proof digest refresh: 0.1s; log={log}",
             _expected_open_digest_line(),
-            _expected_release_ready_line(),
         ],
     )
 

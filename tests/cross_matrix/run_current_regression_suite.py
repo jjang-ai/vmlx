@@ -29,8 +29,24 @@ DEFAULT_STEP_TIMEOUT_SEC = 900.0
 STEP_TIMEOUT_RETURNCODE = 124
 
 EXPECTED_OPEN_REQUIREMENTS = [
-    "Real Electron UI cross-family live model matrix is release-cleared",
-    "DSV4 long-output/code/file-generation quality is release-cleared",
+    "DSV4 Flash prefix/paged/L2 cache is enabled by default from app launch",
+    "DSV4 cache is native SWA+CSA/HCA composite, not generic KV/TurboQuant KV",
+    "DSV4 same-process cache hit improves latency/TTFT and records paged+dsv4 hit",
+    "DSV4 block disk L2 stores and hits after restart",
+    "DSV4 Responses one-tool call stops after tool result",
+    "DSV4 can perform multiple tool iterations then final answer",
+    "DSV4 default-cache multi-tool agent loop is proven",
+    "App maxToolIterations cap is enforced for DSV4 tool loop",
+    "Server default max output and max context are distinct and map to correct CLI flags",
+    "Cross-family cache architecture is classified per family",
+    "Qwen/JANG packaged MX matmul speed is release-cleared",
+    "Qwen native MTP live decode speed and output equivalence are release-cleared",
+    "Qwen 27B JANG_4M prompt-processing speed floor is release-cleared",
+    "Ling/Bailing multilingual output quality is release-cleared",
+    "Gemma4 26B CRACK Responses visible-content and language quality is release-cleared",
+    "Gemma4 26B CRACK mixed-SWA app-engine speed floor is release-cleared",
+    "Cross-family live multi-turn smoke matrix is release-cleared",
+    "MiniMax-M2.7-JANGTQ_K reporter parity/root cause is release-cleared",
 ]
 
 CURRENT_OBJECTIVE_DIGEST_ARTIFACT = (
