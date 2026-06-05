@@ -423,8 +423,8 @@ class TestHelperFunctions:
         }))
         assert not is_mllm_model(str(llm_dir))
 
-    def test_step37_source_vlm_runtime_does_not_launch_text_only(self, tmp_path):
-        """Step3.7 JANG_2L text bridge must not override the source VLM runtime."""
+    def test_step37_advertised_vlm_runtime_launches_text_only_by_default(self, tmp_path):
+        """Step3.7 advertised vision must not route into the unsafe MLLM path."""
         import json
 
         from vmlx_engine.api import utils as api_utils
@@ -459,10 +459,111 @@ class TestHelperFunctions:
         api_utils.resolve_to_local_path.cache_clear()
         api_utils._IS_MLLM_CACHE.clear()
 
-        assert api_utils.is_mllm_model(str(step_dir), force_mllm=False) is True
-        assert api_utils.is_mllm_model(str(step_dir), force_mllm=True) is True
+        assert api_utils.is_mllm_model(str(step_dir), force_mllm=False) is False
+        assert api_utils.is_mllm_model(str(step_dir), force_mllm=True) is False
         engine = BatchedEngine(str(step_dir), force_mllm=True)
-        assert engine.is_mllm is True
+        assert engine.is_mllm is False
+
+    @pytest.mark.asyncio
+    async def test_step37_text_only_media_rejection_recovers_on_next_text_request(
+        self, monkeypatch, tmp_path
+    ):
+        """Step3.7 media rejection must not poison later text requests."""
+        import json
+
+        import pytest
+        import vmlx_engine.server as server
+        from fastapi import HTTPException
+        from vmlx_engine.api.models import ChatCompletionRequest, Message
+        from vmlx_engine.engine.base import GenerationOutput
+
+        (tmp_path / "config.json").write_text(
+            json.dumps(
+                {
+                    "model_type": "step3p7",
+                    "text_config": {"model_type": "step3p5"},
+                    "vision_config": {"hidden_size": 1024},
+                    "image_token_id": 151655,
+                }
+            )
+        )
+        (tmp_path / "jang_config.json").write_text(
+            json.dumps(
+                {
+                    "format": "jang",
+                    "architecture": {
+                        "family": "step3p7",
+                        "has_vision": True,
+                    },
+                }
+            )
+        )
+
+        class _Engine:
+            is_mllm = False
+            preserve_native_tool_format = False
+
+            def __init__(self):
+                self.chat_calls = []
+
+            async def chat(self, *, messages, **kwargs):
+                self.chat_calls.append({"messages": messages, "kwargs": kwargs})
+                return GenerationOutput(
+                    text="TEXT_OK",
+                    prompt_tokens=3,
+                    completion_tokens=1,
+                    finish_reason="stop",
+                )
+
+        engine = _Engine()
+        monkeypatch.setattr(server, "_engine", engine)
+        monkeypatch.setattr(server, "_served_model_name", "step37-text-only")
+        monkeypatch.setattr(server, "_model_name", "step37-text-only")
+        monkeypatch.setattr(server, "_model_path", str(tmp_path))
+        monkeypatch.setattr(server, "_model_type", "step3p7")
+        monkeypatch.setattr(server, "_reasoning_parser", None)
+        monkeypatch.setattr(server, "_mcp_manager", None)
+        monkeypatch.setattr(server, "_loaded_omni_modalities", lambda: None)
+
+        with pytest.raises(HTTPException) as exc:
+            await server.create_chat_completion(
+                ChatCompletionRequest(
+                    model="step37-text-only",
+                    messages=[
+                        Message(
+                            role="user",
+                            content=[
+                                {"type": "text", "text": "describe image"},
+                                {
+                                    "type": "image_url",
+                                    "image_url": {
+                                        "url": "data:image/png;base64,AAAA"
+                                    },
+                                },
+                            ],
+                        )
+                    ],
+                    max_tokens=8,
+                ),
+                fastapi_request=None,
+            )
+
+        assert exc.value.status_code == 400
+        assert "unsupported media modality" in exc.value.detail
+        assert "text-only" in exc.value.detail
+        assert engine.chat_calls == []
+
+        response = await server.create_chat_completion(
+            ChatCompletionRequest(
+                model="step37-text-only",
+                messages=[Message(role="user", content="text still works")],
+                max_tokens=8,
+            ),
+            fastapi_request=None,
+        )
+
+        assert response.choices[0].message.content == "TEXT_OK"
+        assert len(engine.chat_calls) == 1
 
 
 class TestOllamaCompatibilityProbe:
