@@ -298,6 +298,49 @@ def _is_gemma4_unified_text_runtime_path(local_path: str) -> bool:
         return False
 
 
+def _is_step3p7_advertised_vlm_path(local_path: str) -> bool:
+    """Return True when Step3p7 metadata advertises media/VLM routing.
+
+    Step3p7 text weights are usable through the step3p5-normalized text
+    runtime, but the VLM route is not production-cleared. Some JANG bundles
+    still ship ``vision_config`` plus ``jang_config.architecture.has_vision``
+    set to true, which otherwise routes through MLLM and can crash mid-request.
+    Treat explicit ``has_vision=false`` as the text-only model-card override.
+    """
+    try:
+        cfg_path = os.path.join(local_path, "config.json")
+        if not os.path.isfile(cfg_path):
+            return False
+        with open(cfg_path) as f:
+            config = json.load(f)
+
+        architectures = config.get("architectures") or []
+        if isinstance(architectures, str):
+            architectures = [architectures]
+        values = [
+            config.get("model_type"),
+            (config.get("text_config") or {}).get("model_type"),
+            *architectures,
+        ]
+        is_step3p7 = any("step3p7" in str(value or "").lower() for value in values)
+        if not is_step3p7:
+            return False
+
+        jang_path = os.path.join(local_path, "jang_config.json")
+        if os.path.isfile(jang_path):
+            with open(jang_path) as f:
+                jang_config = json.load(f)
+            arch = jang_config.get("architecture", {}) or {}
+            if arch.get("has_vision") is False:
+                return False
+            if arch.get("has_vision") is True:
+                return True
+
+        return _config_declares_media(config)
+    except Exception:
+        return False
+
+
 def _has_native_mtp_vl_artifact(local_path: str) -> bool:
     """Return True for real artifact-backed Qwen native-MTP VL bundles.
 
@@ -471,6 +514,23 @@ def is_mllm_model(model_name: str, force_mllm: bool = False) -> bool:
             )
         return False
 
+    if _is_step3p7_advertised_vlm_path(local_path):
+        if force_mllm:
+            _logger.warning(
+                "is_mllm_model(%s): Step3p7 advertised VLM metadata "
+                "overrides force_mllm — Step3p7 VLM is not production-cleared "
+                "in this runtime; routing text-only to avoid MLLM crashes",
+                model_name,
+            )
+        else:
+            _logger.warning(
+                "is_mllm_model(%s): tier=step3p7_advertised_vlm_text_only "
+                "result=False — Step3p7 VLM metadata is present but the VLM "
+                "runtime is not production-cleared",
+                model_name,
+            )
+        return False
+
     if force_mllm:
         # Not cached — force_mllm is cheap + callers may toggle at runtime.
         _logger.info("is_mllm_model(%s): tier=force_mllm result=True", model_name)
@@ -504,6 +564,15 @@ def is_mllm_model(model_name: str, force_mllm: bool = False) -> bool:
                                     "hybrid has vision metadata but current "
                                     "mlx_vlm M-RoPE path is unsafe — forcing "
                                     "text-only",
+                                    model_name,
+                                )
+                                return False
+                            if _is_step3p7_advertised_vlm_path(local_path):
+                                _logger.warning(
+                                    "is_mllm_model(%s): Step3p7 JANG metadata "
+                                    "advertises vision, but Step3p7 VLM is not "
+                                    "production-cleared in this runtime — "
+                                    "routing text-only",
                                     model_name,
                                 )
                                 return False
