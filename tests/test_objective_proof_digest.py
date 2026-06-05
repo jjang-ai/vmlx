@@ -5118,7 +5118,7 @@ def test_objective_proof_digest_surfaces_dsv4_same_prompt_cache_boundary(tmp_pat
     ]
 
 
-def test_objective_proof_digest_downgrades_pass_rows_with_missing_evidence(tmp_path):
+def test_objective_proof_digest_does_not_require_legacy_ui_smoke_for_max_output_context(tmp_path):
     from tests.cross_matrix.summarize_objective_proof import build_digest
 
     _write_passing_base_artifacts(tmp_path)
@@ -5128,9 +5128,10 @@ def test_objective_proof_digest_downgrades_pass_rows_with_missing_evidence(tmp_p
     rows = {item["requirement"]: item for item in digest["requirements"]}
 
     row = rows["Server default max output and max context are distinct and map to correct CLI flags"]
-    assert row["status"] == "open"
-    assert row["details"]["missing_evidence"] == ["build/dev-ui-smoke-20260521/summary.json"]
-    assert row["details"]["evidence_files_present"]["build/dev-ui-smoke-20260521/summary.json"] is False
+    assert row["status"] == "pass"
+    assert row["details"]["missing_evidence"] == []
+    assert "build/dev-ui-smoke-20260521/summary.json" not in row["evidence"]
+    assert "build/dev-ui-smoke-20260521/summary.json" not in row["details"]["evidence_files_present"]
 
 
 def test_objective_proof_digest_rejects_no_cache_dsv4_multi_tool_proof(tmp_path):

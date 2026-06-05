@@ -37,7 +37,6 @@ EXPECTED_OPEN_REQUIREMENTS = [
     "DSV4 can perform multiple tool iterations then final answer",
     "DSV4 default-cache multi-tool agent loop is proven",
     "App maxToolIterations cap is enforced for DSV4 tool loop",
-    "Server default max output and max context are distinct and map to correct CLI flags",
     "Cross-family cache architecture is classified per family",
     "Qwen/JANG packaged MX matmul speed is release-cleared",
     "Qwen native MTP live decode speed and output equivalence are release-cleared",

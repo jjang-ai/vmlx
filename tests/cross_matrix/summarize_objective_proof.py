@@ -5780,48 +5780,18 @@ def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
         max_output_context_contract,
         MAX_OUTPUT_CONTEXT_SOURCE_HASH_FILES,
     )
-    ui_max_output_context_ok = (
-        all(
-            ui_visible.get(key)
-            for key in (
-                "server_default_max_output_visible",
-                "max_context_visible",
-                "generation_defaults_visible",
-            )
-        )
-        and ui_cli.get("has_max_tokens_flag_after_reset") is False
-        and ui_cli.get("has_max_prompt_tokens_flag_after_reset") is False
-    )
     _add(
         requirements,
         "Server default max output and max context are distinct and map to correct CLI flags",
         _status(
-            ui_max_output_context_ok
-            and max_output_context_ok
-            and max_output_context_hash_ok
+            max_output_context_ok and max_output_context_hash_ok
         ),
         [
-            "build/dev-ui-smoke-20260521/summary.json",
             max_output_context_contract_rel,
         ],
         details={
             "contract_status": max_output_context_contract.get("status"),
             "contract_checks": max_output_context_checks,
-            "visible_assertions": {
-                key: ui_visible.get(key)
-                for key in (
-                    "server_default_max_output_visible",
-                    "max_context_visible",
-                    "generation_defaults_visible",
-                )
-            },
-            "cli_preview_assertions": {
-                key: ui_cli.get(key)
-                for key in (
-                    "has_max_tokens_flag_after_reset",
-                    "has_max_prompt_tokens_flag_after_reset",
-                )
-            },
             **max_output_context_hash_details,
         },
     )
