@@ -104,3 +104,28 @@ def test_step37_crash_falsification_contract_rejects_missing_mixed_swa_l2_cache(
 
     assert payload["status"] == "fail"
     assert "bundled_smoke_native_cache_not_step37_mixed_swa_l2" in payload["failures"]
+
+
+def test_step37_crash_falsification_contract_accepts_packaged_textonly_guard_proof(tmp_path):
+    _write_json(
+        tmp_path / contract.PACKAGED_TEXTONLY_GUARD_PROOF,
+        {
+            "pass": True,
+            "assertions": {
+                "chat_text_before_media_http_200": True,
+                "chat_media_rejected_http_400": True,
+                "chat_media_rejection_mentions_text_only": True,
+                "chat_text_after_media_http_200": True,
+                "responses_media_rejected_http_400": True,
+                "responses_media_rejection_mentions_text_only": True,
+                "responses_text_after_media_http_200": True,
+                "server_health_after_http_200": True,
+            },
+        },
+    )
+
+    payload = contract.build_contract(tmp_path)
+
+    assert payload["status"] == "pass"
+    assert payload["failures"] == []
+    assert payload["evidence"]["packaged_textonly_guard"]["pass"] is True

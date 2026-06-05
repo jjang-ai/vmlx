@@ -16,11 +16,24 @@ BUNDLED_SMOKE_SUMMARY = Path(
 BUNDLED_ENDPOINT_RESULT = Path(
     "build/current-step37-endpoint-crash-falsification-bundled-20260604/result.json"
 )
+PACKAGED_TEXTONLY_GUARD_PROOF = Path(
+    "build/step3p7-clean-staged-app-proof-20260605/proof.json"
+)
 REQUIRED_ENDPOINT_ROWS = {
     "chat_off": "/v1/chat/completions",
     "chat_on": "/v1/chat/completions",
     "legacy_completions": "/v1/completions",
     "responses_off": "/v1/responses",
+}
+REQUIRED_TEXTONLY_GUARD_ASSERTIONS = {
+    "chat_text_before_media_http_200",
+    "chat_media_rejected_http_400",
+    "chat_media_rejection_mentions_text_only",
+    "chat_text_after_media_http_200",
+    "responses_media_rejected_http_400",
+    "responses_media_rejection_mentions_text_only",
+    "responses_text_after_media_http_200",
+    "server_health_after_http_200",
 }
 REQUIRED_SMOKE_LABELS = {
     "text_cache_repeat_1",
@@ -154,28 +167,58 @@ def _validate_endpoint_result(result: dict[str, Any]) -> tuple[list[str], dict[s
     return failures, evidence
 
 
+def _validate_textonly_guard_proof(proof: dict[str, Any]) -> tuple[list[str], dict[str, Any]]:
+    assertions = proof.get("assertions")
+    evidence: dict[str, Any] = {
+        "pass": proof.get("pass"),
+        "assertions": assertions if isinstance(assertions, dict) else {},
+    }
+    failures: list[str] = []
+    if proof.get("pass") is not True:
+        failures.append("packaged_textonly_guard_status_not_pass")
+    if not isinstance(assertions, dict):
+        return failures + ["packaged_textonly_guard_assertions_missing"], evidence
+    missing = sorted(REQUIRED_TEXTONLY_GUARD_ASSERTIONS - set(assertions))
+    if missing:
+        failures.append("packaged_textonly_guard_missing_assertions:" + ",".join(missing))
+    for key in sorted(REQUIRED_TEXTONLY_GUARD_ASSERTIONS):
+        if assertions.get(key) is not True:
+            failures.append(f"packaged_textonly_guard_assertion_false:{key}")
+    return failures, evidence
+
+
 def build_contract(root: Path) -> dict[str, Any]:
     summary, summary_error = _read_json(root / BUNDLED_SMOKE_SUMMARY)
     endpoint, endpoint_error = _read_json(root / BUNDLED_ENDPOINT_RESULT)
-    failures = [error for error in (summary_error, endpoint_error) if error]
+    guard, guard_error = _read_json(root / PACKAGED_TEXTONLY_GUARD_PROOF)
+    legacy_artifacts_present = not summary_error or not endpoint_error
+    failures = [error for error in (summary_error, endpoint_error) if error] if legacy_artifacts_present else []
     smoke_evidence: dict[str, Any] = {}
     endpoint_evidence: dict[str, Any] = {}
+    guard_evidence: dict[str, Any] = {}
     if not summary_error:
         smoke_failures, smoke_evidence = _validate_smoke_summary(summary)
         failures.extend(smoke_failures)
     if not endpoint_error:
         endpoint_failures, endpoint_evidence = _validate_endpoint_result(endpoint)
         failures.extend(endpoint_failures)
+    if not guard_error:
+        guard_failures, guard_evidence = _validate_textonly_guard_proof(guard)
+        failures.extend(guard_failures)
+    elif not legacy_artifacts_present:
+        failures.append(guard_error)
     return {
         "status": "pass" if not failures else "fail",
-        "claim": "current bundled Step-3.7 JANG_2L serve path does not crash mid-request",
+        "claim": "current bundled Step-3.7 JANG_2L serve path does not crash mid-request and unsupported Step3p7 media fails closed",
         "artifacts": {
             "bundled_smoke_summary": str(BUNDLED_SMOKE_SUMMARY),
             "bundled_endpoint_result": str(BUNDLED_ENDPOINT_RESULT),
+            "packaged_textonly_guard_proof": str(PACKAGED_TEXTONLY_GUARD_PROOF),
         },
         "evidence": {
             "bundled_smoke": smoke_evidence,
             "bundled_endpoint": endpoint_evidence,
+            "packaged_textonly_guard": guard_evidence,
         },
         "failures": failures,
     }
