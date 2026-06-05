@@ -216,6 +216,33 @@ def build_audit(root: Path) -> dict[str, Any]:
         "installed_app_cache_selection_telemetry_proven": installed_app_cache_selection_telemetry_proven,
         "installed_live_ttft_and_cold_paged_tq_proven": live_issue177_ttft_proven,
     }
+    issue175_source_checks = {
+        key: value
+        for key, value in issue175_checks.items()
+        if key
+        not in {
+            "installed_app_memory_clear_runtime_proven",
+            "installed_app_live_memory_stress_proven",
+        }
+    }
+    issue176_source_checks = {
+        key: value
+        for key, value in issue176_checks.items()
+        if key
+        not in {
+            "installed_app_promoted_block_cleanup_proven",
+            "installed_app_live_memory_pressure_proven",
+        }
+    }
+    issue177_source_checks = {
+        key: value
+        for key, value in issue177_checks.items()
+        if key
+        not in {
+            "installed_app_cache_selection_telemetry_proven",
+            "installed_live_ttft_and_cold_paged_tq_proven",
+        }
+    }
     issue178_checks = {
         "serve_cli_lora_paths": "--lora-paths" in cli,
         "serve_cli_lora_scales": "--lora-scales" in cli,
@@ -275,16 +302,20 @@ def build_audit(root: Path) -> dict[str, Any]:
     }
 
     issue179_open = (
-        issue179_checks.get("local_installed_live_cancel_probe_proven") is True
-        and issue179_checks.get("local_reporter_prompt_reproduction_clean") is True
-        and issue179_checks.get("responses_cancel_route_tested") is True
-        and issue179_checks.get("not_proven_empty") is False
+        issue179_checks.get("responses_cancel_route_tested") is True
+        and not all(issue179_checks.values())
     )
 
     issues = {
         "175": {
             "title": "`mx.clear_memory_cache()` silently fails on MLX 0.31+",
-            "focused_source_slice": "pass" if all(issue175_checks.values()) else "fail",
+            "focused_source_slice": (
+                "pass"
+                if all(issue175_checks.values())
+                else "open"
+                if all(issue175_source_checks.values())
+                else "fail"
+            ),
             "checks": issue175_checks,
             "release_clearance": (
                 "installed_app_memory_clear_runtime_live_stress_proven"
@@ -299,7 +330,13 @@ def build_audit(root: Path) -> dict[str, Any]:
         },
         "176": {
             "title": "Promoted paged-cache blocks can retain parent KV buffers",
-            "focused_source_slice": "pass" if all(issue176_checks.values()) else "fail",
+            "focused_source_slice": (
+                "pass"
+                if all(issue176_checks.values())
+                else "open"
+                if all(issue176_source_checks.values())
+                else "fail"
+            ),
             "checks": issue176_checks,
             "release_clearance": (
                 "installed_app_promoted_block_cleanup_live_pressure_proven"
@@ -314,7 +351,13 @@ def build_audit(root: Path) -> dict[str, Any]:
         },
         "177": {
             "title": "Cache path selection can regress TTFT with paged/TurboQuant caches",
-            "focused_source_slice": "pass" if all(issue177_checks.values()) else "fail",
+            "focused_source_slice": (
+                "pass"
+                if all(issue177_checks.values())
+                else "open"
+                if all(issue177_source_checks.values())
+                else "fail"
+            ),
             "checks": issue177_checks,
             "release_clearance": (
                 "installed_app_cache_selection_live_ttft_proven"
@@ -358,9 +401,27 @@ def build_audit(root: Path) -> dict[str, Any]:
     open_packaged_proofs = [
         number
         for number, issue in issues.items()
-        if issue.get("release_clearance", "").startswith("open_")
+        if issue["focused_source_slice"] == "open"
+        or issue.get("release_clearance", "").startswith("open_")
     ]
     status = "fail" if failures else "open" if open_packaged_proofs else "pass"
+    release_boundary = (
+        "Issue #175-#179 source/runtime guardrails are present, but installed/live "
+        "runtime proof gaps remain. Issue #179 is release-cleared only when the "
+        "root-cause audit proves the reporter hash is stale/unknown, current/public "
+        "route markers are present, local reproduction is clean, and no proof gaps "
+        "remain. The broader release still requires the live model matrix, real "
+        "Electron UI matrix, and DSV4 exactness rows."
+        if status == "open"
+        else (
+            "Issue #175-#179 focused installed/live runtime boundaries are "
+            "proven. Issue #179 is release-cleared when the root-cause audit "
+            "proves the reporter hash is stale/unknown, current/public route "
+            "markers are present, local reproduction is clean, and no proof "
+            "gaps remain. The broader release still requires the live model "
+            "matrix, real Electron UI matrix, and DSV4 exactness rows."
+        )
+    )
     return {
         "artifact": "",
         "status": status,
@@ -369,15 +430,7 @@ def build_audit(root: Path) -> dict[str, Any]:
         "open_packaged_proofs": open_packaged_proofs,
         "open_release_rows": OPEN_RELEASE_ROWS,
         "required_live_proof_axes": REQUIRED_LIVE_PROOF_AXES,
-        "release_boundary": (
-            "Issue #175-#179 focused installed/live runtime boundaries are "
-            "proven. Issue #179 is release-cleared when the root-cause audit "
-            "proves the reporter hash is stale/unknown, current/public route "
-            "markers are present, local reproduction is clean, and no proof "
-            "gaps remain. The "
-            "broader release still requires the live model matrix, real "
-            "Electron UI matrix, and DSV4 exactness rows."
-        ),
+        "release_boundary": release_boundary,
     }
 
 
