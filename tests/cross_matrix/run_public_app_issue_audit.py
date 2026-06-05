@@ -66,6 +66,9 @@ ISSUE179_ROOT_CAUSE_AUDIT = Path(
 ISSUE179_RESPONSES_CANCEL_PROOF = Path(
     "build/current-issue179-minimax-k-responses-cancel-probe-20260602-local-ready-live.json"
 )
+ISSUE179_RESPONSES_CANCEL_PREFLIGHT = Path(
+    "build/current-issue179-minimax-k-responses-cancel-probe-memory-preflight-20260602-local-ready-check.json"
+)
 
 
 def _read(path: Path) -> str:
@@ -340,6 +343,7 @@ def _issue165_checks(root: Path) -> dict[str, bool]:
 
 def _issue117_checks(root: Path) -> dict[str, bool]:
     issue179 = _load_json(root / ISSUE179_ROOT_CAUSE_AUDIT)
+    cancel_preflight = _load_json(root / ISSUE179_RESPONSES_CANCEL_PREFLIGHT)
     release_manifest = _read(root / "tests/cross_matrix/release_regression_manifest.py")
     parser_contract = _read(root / "tests/cross_matrix/run_parser_registry_contract.py")
     minimax_real_ui = (
@@ -353,6 +357,13 @@ def _issue117_checks(root: Path) -> dict[str, bool]:
         "issue179_cancel_probe_present": (
             root / ISSUE179_RESPONSES_CANCEL_PROOF
         ).exists(),
+        "issue179_cancel_probe_memory_preflight_present": (
+            cancel_preflight.get("status")
+            in {"ready_to_launch", "skipped", "skipped_active_heavy_process"}
+            and cancel_preflight.get("did_not_launch") is True
+            and cancel_preflight.get("launch_decision")
+            in {"launch_allowed", "do_not_launch"}
+        ),
         "minimax_live_ui_artifacts_indexed": (
             minimax_real_ui.exists()
             and "MiniMax-M2.7-Small-JANGTQ" in _read(minimax_real_ui)
@@ -835,7 +846,11 @@ def build_audit(root: Path) -> dict[str, Any]:
             required_pass_checks = {
                 key: value
                 for key, value in checks.items()
-                if key != "issue179_root_cause_audit_open"
+                if key
+                not in {
+                    "issue179_root_cause_audit_open",
+                    "issue179_cancel_probe_memory_preflight_present",
+                }
             }
             issue["focused_source_slice"] = (
                 "pass" if all(required_pass_checks.values()) else "fail"
@@ -851,6 +866,7 @@ def build_audit(root: Path) -> dict[str, Any]:
                 not in {
                     "issue179_root_cause_audit_passes",
                     "issue179_root_cause_audit_open",
+                    "issue179_cancel_probe_present",
                 }
             }
             issue["focused_source_slice"] = (
@@ -882,6 +898,7 @@ def build_audit(root: Path) -> dict[str, Any]:
                 "issue179_root_cause_audit_passes",
                 "issue179_root_cause_audit_open",
                 "issue179_cancel_probe_present",
+                "issue179_cancel_probe_memory_preflight_present",
             }
             required_source_checks = {
                 key: value for key, value in checks.items() if key not in open_keys

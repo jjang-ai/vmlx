@@ -596,6 +596,21 @@ def test_current_regression_suite_runs_issue179_root_cause_pytest():
     assert "reporter_server_hash_parity" in joined
 
 
+def test_current_regression_suite_runs_issue179_root_cause_audit_artifact_step():
+    from tests.cross_matrix import release_regression_manifest as manifest
+    from tests.cross_matrix import run_current_regression_suite as suite
+
+    command = suite.CURRENT_SUITE_COMMANDS["issue179_minimax_k_root_cause_audit"]
+    joined = " ".join(command)
+
+    assert "tests/cross_matrix/run_issue179_minimax_k_root_cause_audit.py" in command
+    assert "--out" in command
+    assert command[command.index("--out") + 1] == (
+        manifest.CURRENT_ISSUE179_MINIMAX_K_ROOT_CAUSE_AUDIT_ARTIFACT
+    )
+    assert "run_issue179_reporter_parity_metadata.py" not in joined
+
+
 def test_current_regression_suite_runs_issue179_cancel_probe_memory_preflight_pytest():
     from tests.cross_matrix import run_current_regression_suite as suite
 
@@ -604,6 +619,20 @@ def test_current_regression_suite_runs_issue179_cancel_probe_memory_preflight_py
 
     assert "tests/test_issue179_responses_cancel_probe.py" in command
     assert "issue179_memory_preflight" in joined
+
+
+def test_current_regression_suite_runs_issue179_cancel_probe_memory_preflight_artifact_step():
+    from tests.cross_matrix import release_regression_manifest as manifest
+    from tests.cross_matrix import run_current_regression_suite as suite
+
+    command = suite.CURRENT_SUITE_COMMANDS["issue179_cancel_probe_memory_preflight"]
+
+    assert "tests/cross_matrix/run_issue179_responses_cancel_probe.py" in command
+    assert "--memory-preflight-only" in command
+    assert "--out" in command
+    assert command[command.index("--out") + 1] == (
+        manifest.CURRENT_ISSUE179_MINIMAX_K_LIVE_PROBE_MEMORY_PREFLIGHT_ARTIFACT
+    )
 
 
 def test_current_regression_suite_hashes_dirty_contract_unit_sources():

@@ -6225,12 +6225,13 @@ def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
     direct_issue179_not_proven = [
         str(item) for item in direct_issue179_audit.get("not_proven", []) if str(item)
     ]
-    if (
-        direct_issue179_audit.get("status") == "pass"
-        and not direct_issue179_not_proven
-    ):
+    if direct_issue179_audit.get("status") in {"open", "pass"}:
         issue179_audit = direct_issue179_audit
-        issue179_blocker = None
+        if (
+            direct_issue179_audit.get("status") == "pass"
+            and not direct_issue179_not_proven
+        ):
+            issue179_blocker = None
     else:
         issue179_audit = current_sweep.get("issue179_minimax_k_root_cause_audit")
         if not isinstance(issue179_audit, dict):

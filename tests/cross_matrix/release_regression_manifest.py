@@ -5244,6 +5244,7 @@ def _validate_current_public_app_issue_audit(root: Path) -> dict[str, Any]:
                 not in {
                     "issue179_root_cause_audit_passes",
                     "issue179_root_cause_audit_open",
+                    "issue179_cancel_probe_present",
                 }
             }
             if not all(value is True for value in required_open_checks.values()):

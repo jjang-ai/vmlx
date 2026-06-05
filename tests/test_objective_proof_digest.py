@@ -150,6 +150,49 @@ def test_objective_digest_uses_current_minimax_issue179_artifact_without_blocker
     assert "reporter installed app bundle hash" in row["caveat"]
 
 
+def test_objective_digest_prefers_current_issue179_open_artifact_over_stale_manifest_sweep(
+    tmp_path,
+):
+    from tests.cross_matrix import release_regression_manifest as manifest
+    from tests.cross_matrix import summarize_objective_proof as objective
+
+    _write_json(
+        tmp_path,
+        objective.CURRENT_RELEASE_REGRESSION_MANIFEST_REL,
+        {
+            "release_blockers": [],
+            "current_proof_sweep": {
+                "issue179_minimax_k_root_cause_audit": {
+                    "status": "missing",
+                    "not_proven": [],
+                }
+            },
+        },
+    )
+    _write_json(
+        tmp_path,
+        manifest.CURRENT_ISSUE179_MINIMAX_K_ROOT_CAUSE_AUDIT_ARTIFACT,
+        {
+            "status": "open",
+            "not_proven": ["reporter parity metadata capture is still missing"],
+            "release_boundary": "#179 remains open on reporter parity.",
+        },
+    )
+
+    digest = objective.build_digest(tmp_path)
+    rows = {item["requirement"]: item for item in digest["requirements"]}
+    row = rows[
+        "MiniMax-M2.7-JANGTQ_K reporter parity/root cause is release-cleared"
+    ]
+
+    assert row["status"] == "open"
+    assert row["details"]["audit_status"] == "open"
+    assert row["details"]["not_proven"] == [
+        "reporter parity metadata capture is still missing"
+    ]
+    assert "reporter parity metadata capture" in row["caveat"]
+
+
 def _write_passing_base_artifacts(tmp_path: Path) -> None:
     _write_json(
         tmp_path,

@@ -159,8 +159,71 @@ def test_public_app_issue_audit_uses_current_manifest_artifact():
     assert str(gate.ISSUE179_RESPONSES_CANCEL_PROOF) == (
         "build/current-issue179-minimax-k-responses-cancel-probe-20260602-local-ready-live.json"
     )
+    assert str(gate.ISSUE179_RESPONSES_CANCEL_PREFLIGHT) == (
+        manifest.CURRENT_ISSUE179_MINIMAX_K_LIVE_PROBE_MEMORY_PREFLIGHT_ARTIFACT
+    )
     assert str(gate.PACKAGED_INTEGRITY_CONTRACT) == (
         manifest.CURRENT_POST_BUDGET_EDGE_ARTIFACTS["packaged-release-integrity"]
+    )
+
+
+def test_public_app_issue117_open_boundary_uses_preflight_without_live_cancel_probe(
+    monkeypatch,
+    tmp_path,
+):
+    from tests.cross_matrix import run_public_app_issue_audit as gate
+
+    root = tmp_path
+    root_cause = Path("build/issue179-root-cause.json")
+    live_cancel = Path("build/issue179-live-cancel.json")
+    preflight = Path("build/issue179-memory-preflight.json")
+    monkeypatch.setattr(gate, "ISSUE179_ROOT_CAUSE_AUDIT", root_cause)
+    monkeypatch.setattr(gate, "ISSUE179_RESPONSES_CANCEL_PROOF", live_cancel)
+    monkeypatch.setattr(gate, "ISSUE179_RESPONSES_CANCEL_PREFLIGHT", preflight)
+
+    (root / root_cause).parent.mkdir(parents=True, exist_ok=True)
+    (root / root_cause).write_text('{"status": "open"}', encoding="utf-8")
+    (root / preflight).write_text(
+        '{"status": "ready_to_launch", "did_not_launch": true,'
+        '"launch_decision": "launch_allowed"}',
+        encoding="utf-8",
+    )
+    (root / "tests/cross_matrix").mkdir(parents=True, exist_ok=True)
+    (root / "tests/cross_matrix/release_regression_manifest.py").write_text(
+        "current-real-ui-live-model-minimax-m27-small",
+        encoding="utf-8",
+    )
+    (root / "tests/cross_matrix/run_parser_registry_contract.py").write_text(
+        "passes MiniMax through the registered minimax_m2 reasoning parser\n"
+        "uses the registered MiniMax reasoning parser even when bundle sidecars say qwen3",
+        encoding="utf-8",
+    )
+    note = (
+        root
+        / "docs/internal/agent-notes/current-real-ui-live-model-minimax-m27-small-responses-stricttools-cachecontrols-20260530-proof.json"
+    )
+    note.parent.mkdir(parents=True, exist_ok=True)
+    note.write_text(
+        '{"modelName":"MiniMax-M2.7-Small-JANGTQ",'
+        '"provenSurfaces":["cache_hit_telemetry","parser_leak_check","language_leak_check"]}',
+        encoding="utf-8",
+    )
+
+    audit = gate.build_audit(root)
+
+    assert not (root / live_cancel).exists()
+    assert "117" in audit["focused_open"]
+    assert "117" not in audit["focused_failures"]
+    assert audit["issues"]["117"]["focused_source_slice"] == "open"
+    assert audit["issues"]["117"]["checks"]["issue179_cancel_probe_present"] is False
+    assert (
+        audit["issues"]["117"]["checks"][
+            "issue179_cancel_probe_memory_preflight_present"
+        ]
+        is True
+    )
+    assert audit["issues"]["117"]["release_clearance"] == (
+        "open_minimax_k_issue179_reporter_parity_required"
     )
 
 
