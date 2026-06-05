@@ -10003,7 +10003,7 @@ async def create_completion(request: CompletionRequest):
                     request,
                 )
                 decision = _resolve_dsv4_thinking_policy(
-                    requested_enable_thinking=None,
+                    requested_enable_thinking=True,
                     effort_requested=False,
                     tools_present=False,
                     tool_choice=None,

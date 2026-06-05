@@ -17,6 +17,7 @@ import re
 import shlex
 import uuid
 from typing import Any, Dict, List, Optional, Tuple, Union
+import xml.etree.ElementTree as ET
 
 from jsonschema import validate, ValidationError
 
@@ -1488,7 +1489,193 @@ def validate_json_schema(
         return False, str(e.message)
 
 
-def extract_json_from_text(text: str) -> Optional[Dict[str, Any]]:
+def _response_format_to_dict(
+    response_format: Optional[Union[ResponseFormat, Dict[str, Any]]],
+) -> Optional[Dict[str, Any]]:
+    if response_format is None:
+        return None
+    if isinstance(response_format, ResponseFormat):
+        rf_dict = {"type": response_format.type, "json_schema": None}
+        if response_format.json_schema:
+            rf_dict["json_schema"] = {
+                "name": response_format.json_schema.name,
+                "description": response_format.json_schema.description,
+                "schema": response_format.json_schema.schema_,
+                "strict": response_format.json_schema.strict,
+            }
+        return rf_dict
+    return response_format
+
+
+def _balanced_json_substrings(text: str) -> List[str]:
+    candidates: List[str] = []
+    for opener, closer in (("{", "}"), ("[", "]")):
+        starts = [i for i, ch in enumerate(text) if ch == opener]
+        for start in starts:
+            depth = 0
+            in_string = False
+            escape = False
+            for i in range(start, len(text)):
+                ch = text[i]
+                if escape:
+                    escape = False
+                    continue
+                if ch == "\\" and in_string:
+                    escape = True
+                    continue
+                if ch == '"':
+                    in_string = not in_string
+                    continue
+                if in_string:
+                    continue
+                if ch == opener:
+                    depth += 1
+                elif ch == closer:
+                    depth -= 1
+                    if depth == 0:
+                        candidates.append(text[start : i + 1])
+                        break
+    return candidates
+
+
+def _json_candidates_from_text(text: str) -> List[str]:
+    stripped = text.strip()
+    candidates: List[str] = [stripped]
+
+    code_block_pattern = r"```(?:json|JSON)?\s*([\s\S]*?)\s*```"
+    candidates.extend(match.strip() for match in re.findall(code_block_pattern, stripped))
+    candidates.extend(_balanced_json_substrings(stripped))
+    for marker in ("{", "["):
+        idx = stripped.find(marker)
+        if idx >= 0:
+            candidates.append(stripped[idx:].strip())
+
+    deduped: List[str] = []
+    seen = set()
+    for candidate in candidates:
+        if candidate and candidate not in seen:
+            seen.add(candidate)
+            deduped.append(candidate)
+    return deduped
+
+
+def _schema_object_properties(schema: Dict[str, Any]) -> Dict[str, Any]:
+    if not isinstance(schema, dict):
+        return {}
+    if schema.get("type") == "object" and isinstance(schema.get("properties"), dict):
+        return schema["properties"]
+    return {}
+
+
+def _array_property_names(schema: Optional[Dict[str, Any]]) -> List[str]:
+    props = _schema_object_properties(schema or {})
+    return [
+        name
+        for name, spec in props.items()
+        if isinstance(spec, dict) and spec.get("type") == "array"
+    ]
+
+
+def _replace_python_json_literals(candidate: str) -> str:
+    def repl(match: re.Match[str]) -> str:
+        value = match.group(0)
+        return {"True": "true", "False": "false", "None": "null"}[value]
+
+    return re.sub(r"(?<![\w\"])(True|False|None)(?![\w\"])", repl, candidate)
+
+
+def _close_obvious_json(candidate: str) -> str:
+    in_string = False
+    escape = False
+    stack: List[str] = []
+    for ch in candidate:
+        if escape:
+            escape = False
+            continue
+        if ch == "\\" and in_string:
+            escape = True
+            continue
+        if ch == '"':
+            in_string = not in_string
+            continue
+        if in_string:
+            continue
+        if ch in "{[":
+            stack.append("}" if ch == "{" else "]")
+        elif ch in "}]":
+            if stack and stack[-1] == ch:
+                stack.pop()
+            else:
+                return candidate
+    if in_string:
+        return candidate
+    return candidate + "".join(reversed(stack))
+
+
+def _repair_adjacent_array_strings(
+    candidate: str, schema: Optional[Dict[str, Any]]
+) -> str:
+    for field in _array_property_names(schema):
+        field_pattern = re.escape(json.dumps(field))
+        pattern = re.compile(
+            rf"({field_pattern}\s*:\s*)"
+            r'"([^"\\]*(?:\\.[^"\\]*)*)"'
+            r'((?:\s*,\s*"[^"\\]*(?:\\.[^"\\]*)*")+)',
+            flags=re.DOTALL,
+        )
+
+        def repl(match: re.Match[str]) -> str:
+            first = match.group(2)
+            tail = match.group(3)
+            pieces = [first]
+            pieces.extend(
+                m.group(1)
+                for m in re.finditer(r'\s*,\s*"([^"\\]*(?:\\.[^"\\]*)*)"', tail)
+            )
+            values = []
+            for piece in pieces:
+                try:
+                    values.append(json.loads(f'"{piece}"'))
+                except json.JSONDecodeError:
+                    values.append(piece)
+            return f"{match.group(1)}{json.dumps(values, ensure_ascii=False)}"
+
+        candidate = pattern.sub(repl, candidate)
+    return candidate
+
+
+def _repair_json_candidate(
+    candidate: str, schema: Optional[Dict[str, Any]] = None
+) -> str:
+    repaired = candidate.strip()
+    repaired = _repair_adjacent_array_strings(repaired, schema)
+    repaired = re.sub(r",\s*([}\]])", r"\1", repaired)
+    repaired = _replace_python_json_literals(repaired)
+    repaired = _close_obvious_json(repaired)
+    return repaired
+
+
+def _coerce_json_schema_value(value: Any, schema: Any) -> Any:
+    if not isinstance(schema, dict):
+        return value
+    schema_type = schema.get("type")
+    if schema_type == "object" and isinstance(value, dict):
+        props = schema.get("properties") if isinstance(schema.get("properties"), dict) else {}
+        return {
+            key: _coerce_json_schema_value(item, props.get(key, {}))
+            for key, item in value.items()
+        }
+    if schema_type == "array":
+        if isinstance(value, list):
+            items_schema = schema.get("items", {})
+            return [_coerce_json_schema_value(item, items_schema) for item in value]
+        return [value]
+    return value
+
+
+def extract_json_from_text(
+    text: str, schema: Optional[Dict[str, Any]] = None
+) -> Optional[Dict[str, Any]]:
     """
     Extract JSON from model output text.
 
@@ -1503,38 +1690,42 @@ def extract_json_from_text(text: str) -> Optional[Dict[str, Any]]:
     Returns:
         Parsed JSON data, or None if no valid JSON found
     """
-    text = text.strip()
-
-    # Strategy 1: Try to parse entire text as JSON
-    try:
-        return json.loads(text)
-    except json.JSONDecodeError:
-        pass
-
-    # Strategy 2: Extract from markdown code blocks
-    # Match ```json ... ``` or ``` ... ```
-    code_block_pattern = r"```(?:json)?\s*([\s\S]*?)\s*```"
-    matches = re.findall(code_block_pattern, text)
-    for match in matches:
-        try:
-            return json.loads(match.strip())
-        except json.JSONDecodeError:
-            continue
-
-    # Strategy 3: Find JSON object or array in text
-    # Look for { ... } or [ ... ]
-    json_patterns = [
-        r"(\{[\s\S]*\})",  # Object
-        r"(\[[\s\S]*\])",  # Array
-    ]
-    for pattern in json_patterns:
-        match = re.search(pattern, text)
-        if match:
+    for candidate in _json_candidates_from_text(text):
+        for attempt in (candidate, _repair_json_candidate(candidate, schema)):
             try:
-                return json.loads(match.group(1))
+                parsed = json.loads(attempt)
             except json.JSONDecodeError:
                 continue
+            return _coerce_json_schema_value(parsed, schema)
 
+    return None
+
+
+def extract_xml_from_text(text: str, root_tag: Optional[str] = None) -> Optional[str]:
+    """Extract a parseable XML block from model output text.
+
+    This is intentionally conservative: it strips markdown fences and prose,
+    returns a canonical XML string, and fails closed if no valid XML block can
+    be parsed. It does not invent missing nested tags.
+    """
+    candidates = [text.strip()]
+    candidates.extend(match.strip() for match in re.findall(r"```(?:xml|XML)?\s*([\s\S]*?)\s*```", text))
+    tags = [root_tag] if root_tag else re.findall(r"<([A-Za-z_][\w:.-]*)\b[^>]*>", text)
+    for tag in tags:
+        if tag.startswith("/"):
+            continue
+        match = re.search(rf"(<{re.escape(tag)}\b[\s\S]*?</{re.escape(tag)}>)", text)
+        if match:
+            candidates.append(match.group(1).strip())
+
+    for candidate in candidates:
+        try:
+            root = ET.fromstring(candidate)
+        except ET.ParseError:
+            continue
+        if root_tag and root.tag != root_tag:
+            continue
+        return ET.tostring(root, encoding="unicode")
     return None
 
 
@@ -1562,17 +1753,9 @@ def parse_json_output(
         return text, None, True, None
 
     # Normalize response_format to dict
-    if isinstance(response_format, ResponseFormat):
-        rf_dict = {"type": response_format.type, "json_schema": None}
-        if response_format.json_schema:
-            rf_dict["json_schema"] = {
-                "name": response_format.json_schema.name,
-                "description": response_format.json_schema.description,
-                "schema": response_format.json_schema.schema_,
-                "strict": response_format.json_schema.strict,
-            }
-    else:
-        rf_dict = response_format
+    rf_dict = _response_format_to_dict(response_format)
+    if rf_dict is None:
+        return text, None, True, None
 
     format_type = rf_dict.get("type", "text")
 
@@ -1580,8 +1763,11 @@ def parse_json_output(
     if format_type == "text":
         return text, None, True, None
 
+    json_schema_spec = rf_dict.get("json_schema", {}) if isinstance(rf_dict, dict) else {}
+    schema = json_schema_spec.get("schema", {}) if isinstance(json_schema_spec, dict) else {}
+
     # json_object or json_schema - extract JSON
-    parsed = extract_json_from_text(text)
+    parsed = extract_json_from_text(text, schema if format_type == "json_schema" else None)
 
     if parsed is None:
         return text, None, False, "Failed to extract valid JSON from output"
@@ -1592,9 +1778,6 @@ def parse_json_output(
 
     # json_schema - validate against schema
     if format_type == "json_schema":
-        json_schema_spec = rf_dict.get("json_schema", {})
-        schema = json_schema_spec.get("schema", {})
-
         if schema:
             is_valid, error = validate_json_schema(parsed, schema)
             if not is_valid:

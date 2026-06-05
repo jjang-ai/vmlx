@@ -10,6 +10,7 @@ import pytest
 from vmlx_engine.api.tool_calling import (
     validate_json_schema,
     extract_json_from_text,
+    extract_xml_from_text,
     parse_json_output,
     build_json_system_prompt,
 )
@@ -126,6 +127,62 @@ class TestExtractJsonFromText:
         result = extract_json_from_text(text)
         assert result == {"outer": {"inner": {"deep": "value"}}}
 
+    def test_repairs_markdown_trailing_comma_and_python_literals(self):
+        text = """```json
+{"ok": True, "missing": None, "items": ["a", "b",],}
+```"""
+        result = extract_json_from_text(text)
+        assert result == {"ok": True, "missing": None, "items": ["a", "b"]}
+
+    def test_repairs_missing_closing_brace(self):
+        result = extract_json_from_text('prefix {"name": "clip", "score": 7')
+        assert result == {"name": "clip", "score": 7}
+
+    def test_repairs_adjacent_string_fragments_for_schema_array(self):
+        schema = {
+            "type": "object",
+            "properties": {
+                "visible_text": {"type": "array", "items": {"type": "string"}}
+            },
+            "required": ["visible_text"],
+        }
+        text = '{"visible_text": "CLIPFARM STRESS STREAM", "0-15 M00 ALERT START"}'
+        result = extract_json_from_text(text, schema)
+        assert result == {
+            "visible_text": ["CLIPFARM STRESS STREAM", "0-15 M00 ALERT START"]
+        }
+
+    def test_coerces_schema_string_field_to_array(self):
+        schema = {
+            "type": "object",
+            "properties": {
+                "visible_text": {"type": "array", "items": {"type": "string"}}
+            },
+        }
+        result = extract_json_from_text('{"visible_text": "single"}', schema)
+        assert result == {"visible_text": ["single"]}
+
+
+class TestExtractXmlFromText:
+    """Tests for conservative XML extraction from model output."""
+
+    def test_extracts_xml_from_markdown(self):
+        text = """Result:
+```xml
+<catalog><visible_text>CLIPFARM</visible_text></catalog>
+```"""
+        assert (
+            extract_xml_from_text(text, root_tag="catalog")
+            == "<catalog><visible_text>CLIPFARM</visible_text></catalog>"
+        )
+
+    def test_extracts_xml_from_surrounding_text(self):
+        text = "before <tool><name>x</name></tool> after"
+        assert extract_xml_from_text(text, root_tag="tool") == "<tool><name>x</name></tool>"
+
+    def test_xml_fails_closed_when_invalid(self):
+        assert extract_xml_from_text("before <tool><name>x</tool> after") is None
+
 
 class TestParseJsonOutput:
     """Tests for parse_json_output function."""
@@ -205,6 +262,55 @@ class TestParseJsonOutput:
         assert parsed == {"name": 123}
         assert is_valid is False
         assert "validation failed" in error.lower()
+
+    def test_json_schema_repairs_qwen_adjacent_string_array(self):
+        text = '{"visible_text": "CLIPFARM STRESS STREAM", "0-15 M00 ALERT START"}'
+        response_format = {
+            "type": "json_schema",
+            "json_schema": {
+                "name": "clip",
+                "schema": {
+                    "type": "object",
+                    "properties": {
+                        "visible_text": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                        }
+                    },
+                    "required": ["visible_text"],
+                },
+            },
+        }
+        cleaned, parsed, is_valid, error = parse_json_output(text, response_format)
+        assert cleaned == text
+        assert parsed == {
+            "visible_text": ["CLIPFARM STRESS STREAM", "0-15 M00 ALERT START"]
+        }
+        assert is_valid is True
+        assert error is None
+
+    def test_json_schema_coerces_string_to_array(self):
+        response_format = {
+            "type": "json_schema",
+            "json_schema": {
+                "name": "clip",
+                "schema": {
+                    "type": "object",
+                    "properties": {
+                        "visible_text": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                        }
+                    },
+                },
+            },
+        }
+        _, parsed, is_valid, error = parse_json_output(
+            '{"visible_text": "CLIPFARM"}', response_format
+        )
+        assert parsed == {"visible_text": ["CLIPFARM"]}
+        assert is_valid is True
+        assert error is None
 
     def test_response_format_model(self):
         """Test with ResponseFormat Pydantic model."""
@@ -324,6 +430,67 @@ class TestInjectJsonInstruction:
         # Original should be unchanged
         assert len(original) == 1
         assert original[0]["content"] == original_content
+
+
+class TestStructuredOutputApiRepair:
+    """Route-level tests proving repair is used by API response handling."""
+
+    @pytest.mark.asyncio
+    async def test_chat_completion_repairs_and_canonicalizes_schema_json(
+        self, monkeypatch
+    ):
+        import vmlx_engine.server as server
+        from vmlx_engine.api.models import ChatCompletionRequest, Message
+        from vmlx_engine.engine.base import GenerationOutput
+
+        class _Engine:
+            is_mllm = False
+            preserve_native_tool_format = False
+
+            async def chat(self, *, messages, **kwargs):
+                return GenerationOutput(
+                    text='{"visible_text": "CLIPFARM STRESS STREAM", "0-15 M00 ALERT START"}',
+                    prompt_tokens=5,
+                    completion_tokens=8,
+                    finish_reason="stop",
+                )
+
+        monkeypatch.setattr(server, "_engine", _Engine())
+        monkeypatch.setattr(server, "_served_model_name", "loaded-model")
+        monkeypatch.setattr(server, "_model_name", "loaded-model")
+        monkeypatch.setattr(server, "_model_path", None)
+        monkeypatch.setattr(server, "_model_type", "llm")
+        monkeypatch.setattr(server, "_reasoning_parser", None)
+        monkeypatch.setattr(server, "_mcp_manager", None)
+        monkeypatch.setattr(server, "_max_prompt_tokens", None)
+
+        response = await server.create_chat_completion(
+            ChatCompletionRequest(
+                model="loaded-model",
+                messages=[Message(role="user", content="return clip metadata")],
+                response_format={
+                    "type": "json_schema",
+                    "json_schema": {
+                        "name": "clip",
+                        "schema": {
+                            "type": "object",
+                            "properties": {
+                                "visible_text": {
+                                    "type": "array",
+                                    "items": {"type": "string"},
+                                }
+                            },
+                            "required": ["visible_text"],
+                        },
+                    },
+                },
+            ),
+            fastapi_request=None,
+        )
+
+        assert json.loads(response.choices[0].message.content) == {
+            "visible_text": ["CLIPFARM STRESS STREAM", "0-15 M00 ALERT START"]
+        }
 
 
 # Integration test - run only if model available
