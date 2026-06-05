@@ -76,3 +76,39 @@ def test_local_generation_metadata_audit_accepts_template_budget_support(tmp_pat
     assert row["thinking_budget"]["template_mentions_thinking"] is True
     assert row["thinking_budget"]["template_mentions_budget"] is True
     assert "thinking_budget_override_forwarded_but_template_does_not_enforce" not in row["notes"]
+
+
+def test_local_generation_metadata_audit_reports_step3p7_advertised_media_guard(tmp_path):
+    from tests.cross_matrix.run_local_generation_metadata_audit import audit_model
+
+    (tmp_path / "config.json").write_text(
+        json.dumps(
+            {
+                "model_type": "step3p7",
+                "architectures": ["Step3p7ForConditionalGeneration"],
+                "vision_config": {"hidden_size": 4096},
+                "image_token_id": 128001,
+            }
+        ),
+        encoding="utf-8",
+    )
+    (tmp_path / "jang_config.json").write_text(
+        json.dumps(
+            {
+                "architecture": {
+                    "type": "step3p7",
+                    "text_model_type": "step3p5",
+                    "has_vision": True,
+                    "has_audio": False,
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    row = audit_model(str(tmp_path))
+
+    assert row["media_metadata"]["advertised_vision"] is True
+    assert row["runtime_route"]["engine_is_mllm_default"] is False
+    assert row["runtime_route"]["engine_is_mllm_force"] is False
+    assert "step3p7_advertised_media_guarded_text_only" in row["notes"]

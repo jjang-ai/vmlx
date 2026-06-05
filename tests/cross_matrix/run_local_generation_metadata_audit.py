@@ -180,6 +180,43 @@ def _registry_row(model_path: Path) -> dict[str, Any]:
     }
 
 
+def _media_metadata_row(cfg: dict[str, Any], jang: dict[str, Any]) -> dict[str, Any]:
+    architecture = _nested(jang, "architecture") or {}
+    config_has_vision = isinstance(cfg.get("vision_config"), dict)
+    config_has_audio = isinstance(cfg.get("audio_config"), dict)
+    jang_has_vision = architecture.get("has_vision") if isinstance(architecture, dict) else None
+    jang_has_audio = architecture.get("has_audio") if isinstance(architecture, dict) else None
+    return {
+        "config_has_vision_config": config_has_vision,
+        "config_has_audio_config": config_has_audio,
+        "config_has_image_token_id": cfg.get("image_token_id") is not None,
+        "config_has_video_token_id": cfg.get("video_token_id") is not None,
+        "config_has_audio_token_id": cfg.get("audio_token_id") is not None,
+        "jang_has_vision": jang_has_vision if isinstance(jang_has_vision, bool) else None,
+        "jang_has_audio": jang_has_audio if isinstance(jang_has_audio, bool) else None,
+        "advertised_vision": bool(
+            config_has_vision
+            or cfg.get("image_token_id") is not None
+            or cfg.get("video_token_id") is not None
+            or jang_has_vision is True
+        ),
+        "advertised_audio": bool(
+            config_has_audio
+            or cfg.get("audio_token_id") is not None
+            or jang_has_audio is True
+        ),
+    }
+
+
+def _runtime_route_row(model_path: Path) -> dict[str, Any]:
+    from vmlx_engine.api.utils import is_mllm_model
+
+    return {
+        "engine_is_mllm_default": bool(is_mllm_model(str(model_path))),
+        "engine_is_mllm_force": bool(is_mllm_model(str(model_path), force_mllm=True)),
+    }
+
+
 def _engine_resolved_row(model_path: Path, enable_thinking: bool | None) -> dict[str, Any]:
     import vmlx_engine.server as server
 
@@ -233,6 +270,8 @@ def audit_model(path_text: str) -> dict[str, Any]:
     jang = _read_json(path / "jang_config.json")
     tokenizer_config = _read_json(path / "tokenizer_config.json")
     registry = _registry_row(path)
+    media_metadata = _media_metadata_row(cfg, jang)
+    runtime_route = _runtime_route_row(path)
     family = str(registry.get("family") or "")
     caps = _nested(jang, "capabilities") or {}
     sampling = _nested(jang, "chat", "sampling_defaults") or {}
@@ -270,6 +309,8 @@ def audit_model(path_text: str) -> dict[str, Any]:
             "jang_sampling_defaults": sampling if isinstance(sampling, dict) else {},
             "jang_reasoning": _nested(jang, "chat", "reasoning") or {},
         },
+        "media_metadata": media_metadata,
+        "runtime_route": runtime_route,
         "resolved_chat": resolved_chat,
         "resolved_thinking": resolved_thinking,
         "sources": {
@@ -299,6 +340,13 @@ def audit_model(path_text: str) -> dict[str, Any]:
         and not row["thinking_budget"]["template_mentions_budget"]
     ):
         notes.append("thinking_budget_override_forwarded_but_template_does_not_enforce")
+    if (
+        row["model_type"] == "step3p7"
+        and media_metadata["advertised_vision"]
+        and runtime_route["engine_is_mllm_default"] is False
+        and runtime_route["engine_is_mllm_force"] is False
+    ):
+        notes.append("step3p7_advertised_media_guarded_text_only")
     if resolved_chat["max_tokens"] > 8192:
         notes.append("resolved_default_output_cap_above_8192")
     if resolved_chat["top_k"] < 0:
