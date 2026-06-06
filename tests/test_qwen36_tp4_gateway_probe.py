@@ -203,6 +203,7 @@ def test_rank_snapshot_uses_gateway_host_as_jump(monkeypatch):
     assert calls[0][0] == "test-host.local"
     assert "ssh -o BatchMode=yes" in calls[0][1]
     assert "adlab-n1-raw" in calls[0][1]
+    assert "/rank0" in calls[0][1]
     assert snapshots[0]["snapshot"]["requests"]["exists"] is True
     assert snapshots[0]["snapshot"]["worker_processes"]["count"] == 1
     assert snapshots[0]["snapshot"]["unmatched_recent_request_ids"] == []

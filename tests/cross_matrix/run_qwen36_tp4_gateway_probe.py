@@ -166,24 +166,25 @@ def _rank_dir_snapshot(host: str, targets: list[dict[str, Any]], *, timeout: flo
             "python3 -c "
             + shlex.quote(
                 "import json, pathlib, subprocess, sys\n"
-                "req=pathlib.Path(sys.argv[1]); resp=pathlib.Path(sys.argv[2]); rank=str(sys.argv[3])\n"
+                "req=pathlib.Path(sys.argv[1]); resp=pathlib.Path(sys.argv[2]); rank=str(sys.argv[3]); serve_dir=str(sys.argv[4])\n"
                 "def snap(p):\n"
                 " files=sorted([x for x in p.glob('*') if x.is_file()], key=lambda x: x.stat().st_mtime, reverse=True)[:5] if p.exists() else []\n"
                 " return {'exists': p.exists(), 'file_count': len(list(p.glob('*'))) if p.exists() else 0, 'newest': [{'name': f.name, 'size': f.stat().st_size} for f in files]}\n"
                 "def ps_rows():\n"
                 " try:\n"
-                "  out=subprocess.check_output(['ps','ax','-o','pid=,state=,etime=,comm=,command='], text=True, errors='replace')\n"
+                "  out=subprocess.check_output(['ps','eww','-axo','pid=,state=,etime=,command='], text=True, errors='replace')\n"
                 " except Exception as exc:\n"
-                "  return {'error': str(exc), 'rows': []}\n"
-                " rows=[]\n"
+                "  return {'error': str(exc), 'count': 0, 'rows': [], 'other_count': 0, 'other_rows': []}\n"
+                " exact_rows=[]; other_rows=[]\n"
                 " for line in out.splitlines():\n"
-                "  parts=line.split(None, 4)\n"
-                "  if len(parts) < 5:\n"
+                "  if 'TPRankWorker' not in line:\n"
                 "   continue\n"
-                "  comm=pathlib.Path(parts[3]).name\n"
-                "  if comm == 'TPRankWorker':\n"
-                "   rows.append(line.strip())\n"
-                " return {'count': len(rows), 'rows': rows[:8]}\n"
+                "  stripped=line.strip()\n"
+                "  if ('TP_SERVE_DIR=' + serve_dir) in line:\n"
+                "   exact_rows.append(stripped)\n"
+                "  else:\n"
+                "   other_rows.append(stripped)\n"
+                " return {'count': len(exact_rows), 'rows': exact_rows[:8], 'other_count': len(other_rows), 'other_rows': other_rows[:8]}\n"
                 "req_files=sorted([x for x in req.glob('*.json') if x.is_file()], key=lambda x: x.stat().st_mtime, reverse=True)[:8] if req.exists() else []\n"
                 "resp_names={x.name for x in resp.glob('*.json') if x.is_file()} if resp.exists() else set()\n"
                 "expected=[(x.stem, f'{x.stem}-rank{rank}.json') for x in req_files]\n"
@@ -198,6 +199,8 @@ def _rank_dir_snapshot(host: str, targets: list[dict[str, Any]], *, timeout: flo
             + shlex.quote(str(resp_dir))
             + " "
             + shlex.quote(str(rank))
+            + " "
+            + shlex.quote(str(target.get("path") or ""))
         )
         if remote_host and remote_host != host:
             script = "ssh -o BatchMode=yes -o ConnectTimeout=5 " + shlex.quote(remote_host) + " " + shlex.quote(rank_script)
