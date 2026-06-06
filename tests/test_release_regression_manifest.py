@@ -144,7 +144,7 @@ def _write_current_objective_digest(
     open_requirements: list[str] | None = None,
     missing_evidence: list[str] | None = None,
 ) -> None:
-    artifact = root / "build/current-objective-proof-after-bundle-refresh-20260606.json"
+    artifact = root / "build/current-objective-proof-after-issue179-reporter-hash-refresh-20260606.json"
     artifact.parent.mkdir(parents=True, exist_ok=True)
     open_rows = (
         EXPECTED_CURRENT_OPEN_REQUIREMENTS
@@ -10026,7 +10026,7 @@ def test_release_regression_manifest_rejects_stale_issue179_objective_digest_row
     tmp_path,
 ):
     _write_current_objective_digest(tmp_path)
-    path = tmp_path / "build/current-objective-proof-after-bundle-refresh-20260606.json"
+    path = tmp_path / "build/current-objective-proof-after-issue179-reporter-hash-refresh-20260606.json"
     payload = json.loads(path.read_text(encoding="utf-8"))
     unexpected_requirement = "Unexpected MiniMax stale reporter row is release-cleared"
     payload["requirements"].append(
@@ -14497,7 +14497,7 @@ def test_release_regression_manifest_tracks_packaged_integrity_with_runner_artif
     assert "Version triples" in joined
     assert "bundled Python hash parity" in joined
     assert "objective proof digest" in joined
-    assert "current-objective-proof-after-bundle-refresh-20260606.json" in joined
+    assert "current-objective-proof-after-issue179-reporter-hash-refresh-20260606.json" in joined
     assert "objective-gate-enforced" in joined
     assert "verify-bundled" in joined
 
@@ -14565,7 +14565,7 @@ def test_release_regression_manifest_tracks_current_updater_and_i18n_rechecks():
 
     ling = rows["ling-bailing-multilingual-quality-live"]
     ling_joined = " ".join(ling["commands"] + ling["artifacts"] + ling["proves"])
-    assert "current-objective-proof-after-bundle-refresh-20260606.json" in ling_joined
+    assert "current-objective-proof-after-issue179-reporter-hash-refresh-20260606.json" in ling_joined
 
 
 def test_release_regression_manifest_tracks_live_only_boundaries():

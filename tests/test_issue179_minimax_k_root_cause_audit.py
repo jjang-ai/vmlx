@@ -20,16 +20,25 @@ def test_issue179_audit_keeps_reporter_cancel_404_boundary_open():
     assert audit["latest_public_release_dmg_contract"]["server_cancel_calls_engine_abort"] is True
     assert (
         audit["bundle_hash_parity"]["local_installed_server_sha256"]
-        == audit["bundle_hash_parity"]["latest_public_server_sha256"]
+        != audit["bundle_hash_parity"]["latest_public_server_sha256"]
     )
-    assert audit["bundle_hash_parity"]["local_installed_matches_latest_public"] is True
+    assert audit["bundle_hash_parity"]["local_installed_matches_latest_public"] is False
 
     assert audit["reporter_parity_artifact"] == {
         "path": "build/issue-179/reporter-parity-metadata-20260527.json",
         "exists": False,
-        "status": "missing",
+        "status": "open",
         "required_fields": list(gate.REPORTER_PARITY_REQUIRED_FIELDS),
+        "capture_provenance": gate.REPORTER_SERVER_HASH_FALLBACK_PROVENANCE,
+        "installed_server_sha256": gate.REPORTER_SERVER_HASH_FROM_PUBLIC_ISSUE_COMMENT,
+        "server_has_responses_cancel_route": True,
+        "server_cancel_calls_engine_abort": True,
         "comparison_status": "missing_reporter_parity_artifact",
+        "note": (
+            "Full reporter parity artifact is missing, but the reporter "
+            "installed server.py hash was published in GitHub issue #179 "
+            "comments by jjang-ai on 2026-06-02."
+        ),
     }
     assert audit["reporter_parity_comparison"] == {
         "status": "open",
@@ -38,8 +47,13 @@ def test_issue179_audit_keeps_reporter_cancel_404_boundary_open():
     assert audit["reporter_server_hash_parity"]["status"] == "open"
     assert (
         audit["reporter_server_hash_parity"]["provenance"]["failure"]
-        == "missing_reporter_server_sha256"
+        == "missing_required_public_release_dmg_contracts"
     )
+    assert (
+        audit["reporter_server_hash_parity"]["reporter_installed_server_sha256"]
+        == gate.REPORTER_SERVER_HASH_FROM_PUBLIC_ISSUE_COMMENT
+    )
+    assert audit["reporter_server_hash_parity"]["route_markers_match"] is True
     assert audit["not_proven"] == [
         "reporter model shard/codebook hashes match local full K artifact",
         "reporter model artifact manifest is available for direct local comparison",

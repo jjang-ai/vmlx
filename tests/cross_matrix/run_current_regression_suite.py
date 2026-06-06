@@ -41,7 +41,7 @@ DEFERRED_RELEASE_OPEN_REQUIREMENTS = {
 }
 
 CURRENT_OBJECTIVE_DIGEST_ARTIFACT = (
-    "build/current-objective-proof-after-mimo-native-thinking-off-audit-20260606.json"
+    "build/current-objective-proof-after-issue179-reporter-hash-refresh-20260606.json"
 )
 
 CURRENT_SUITE_SOURCE_HASH_FILES = (
@@ -636,7 +636,7 @@ CURRENT_SUITE_COMMANDS: dict[str, list[str]] = {
         sys.executable,
         "tests/cross_matrix/run_issue179_minimax_k_root_cause_audit.py",
         "--out",
-        "build/current-issue179-minimax-k-root-cause-audit-after-public-v1556-scan-20260606.json",
+        "build/current-issue179-minimax-k-root-cause-audit-after-reporter-hash-refresh-20260606.json",
     ],
     "issue179_cancel_probe_memory_preflight": [
         sys.executable,
@@ -707,7 +707,7 @@ CURRENT_SUITE_COMMANDS: dict[str, list[str]] = {
         "--require-current-proof-sweep",
         "--require-release-ready",
         "--out",
-        "build/current-release-regression-manifest-after-mimo-native-thinking-off-audit-20260606.json",
+        "build/current-release-regression-manifest-after-issue179-reporter-hash-refresh-20260606.json",
     ],
 }
 
