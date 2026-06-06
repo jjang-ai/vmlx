@@ -334,6 +334,29 @@ class TestHelperFunctions:
         assert body["error"]["code"] == "vlm_image_prefill_too_large"
         assert "Reduce image resolution" in body["error"]["message"]
 
+    def test_unsupported_media_modality_response_is_client_error(self):
+        """Unwired family media bridges are typed client errors, not 500s."""
+        import json
+
+        from vmlx_engine import server
+        from vmlx_engine.errors import UnsupportedMediaModalityError
+
+        response = server._unsupported_media_modality_response_from_error(
+            UnsupportedMediaModalityError(
+                "vision",
+                "MiMo-V2.5 JANG_2L vision input is not wired in this Python runtime.",
+                family="mimo_v2",
+                request_id="mimo-media",
+            )
+        )
+
+        body = json.loads(response.body)
+        assert response.status_code == 400
+        assert body["error"]["code"] == "unsupported_media_modality"
+        assert body["error"]["modality"] == "vision"
+        assert body["error"]["family"] == "mimo_v2"
+        assert "not wired" in body["error"]["message"]
+
     def test_prompt_limit_guard_counts_vlm_media_parts(self, monkeypatch):
         from vmlx_engine import server
         from vmlx_engine.api.models import Message

@@ -112,7 +112,11 @@ from typing import Any, Callable, Deque, Dict, List, Optional, Tuple
 import mlx.core as mx
 import mlx.nn as nn
 
-from .errors import PromptTooLongError, VLMImagePrefillBudgetError
+from .errors import (
+    PromptTooLongError,
+    UnsupportedMediaModalityError,
+    VLMImagePrefillBudgetError,
+)
 from .vision_embedding_cache import VisionEmbeddingCache
 from .utils.memory_limits import (
     get_effective_metal_working_set_bytes,
@@ -5639,17 +5643,21 @@ class MLLMBatchGenerator:
                 # the client saw `{"content": null, "finish_reason": "stop",
                 # "prompt_tokens": 0}` and had no way to distinguish "empty
                 # completion" from "prefill crashed".
-                _err_code = (
-                    VLMImagePrefillBudgetError.code
-                    if isinstance(prefill_err, VLMImagePrefillBudgetError)
-                    else None
-                )
+                if isinstance(prefill_err, VLMImagePrefillBudgetError):
+                    _err_code = VLMImagePrefillBudgetError.code
+                elif isinstance(prefill_err, UnsupportedMediaModalityError):
+                    _err_code = UnsupportedMediaModalityError.code
+                else:
+                    _err_code = None
                 _err_detail = (
                     str(prefill_err)
-                    if _err_code == VLMImagePrefillBudgetError.code
+                    if _err_code
                     else f"{type(prefill_err).__name__}: {prefill_err}"
                 )
-                if _err_code == VLMImagePrefillBudgetError.code:
+                if _err_code in {
+                    VLMImagePrefillBudgetError.code,
+                    UnsupportedMediaModalityError.code,
+                }:
                     logger.warning(
                         f"Prefill rejected for {req.request_id}: {_err_detail} "
                         f"— other requests in batch will continue"

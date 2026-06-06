@@ -23,7 +23,11 @@ from typing import Any
 
 from ..api.tool_calling import check_and_inject_fallback_tools, convert_tools_for_template
 from ..api.utils import clean_output_text, extract_multimodal_content, is_mllm_model
-from ..errors import PromptTooLongError, VLMImagePrefillBudgetError
+from ..errors import (
+    PromptTooLongError,
+    UnsupportedMediaModalityError,
+    VLMImagePrefillBudgetError,
+)
 from ..model_config_registry import get_model_config_registry
 from ..utils.chat_template_kwargs import (
     build_chat_template_kwargs,
@@ -51,6 +55,17 @@ def _raise_prompt_too_long_from_output(output: Any) -> None:
             detail = detail[len(prefix):]
         raise VLMImagePrefillBudgetError(
             detail,
+            request_id=getattr(output, "request_id", None),
+        )
+    if getattr(output, "error_code", None) == UnsupportedMediaModalityError.code:
+        detail = str(getattr(output, "error", None) or "unsupported media modality")
+        prefix = f"{UnsupportedMediaModalityError.__name__}: "
+        if detail.startswith(prefix):
+            detail = detail[len(prefix):]
+        raise UnsupportedMediaModalityError(
+            getattr(output, "error_modality", None) or "media",
+            detail,
+            family=getattr(output, "error_family", None),
             request_id=getattr(output, "request_id", None),
         )
     error = getattr(output, "error", None)

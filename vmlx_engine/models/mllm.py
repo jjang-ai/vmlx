@@ -35,6 +35,7 @@ import requests
 
 from vmlx_engine.mlx_memory import clear_mlx_memory_cache
 from vmlx_engine.mllm_cache import MLLMPrefixCacheManager
+from vmlx_engine.errors import UnsupportedMediaModalityError
 
 logger = logging.getLogger(__name__)
 
@@ -282,9 +283,11 @@ def _register_mimo_v2_mlx_vlm_runtime() -> None:
             from mlx_vlm.models.base import InputEmbeddingsFeatures
 
             if pixel_values is not None:
-                raise ValueError(
+                raise UnsupportedMediaModalityError(
+                    "vision",
                     "MiMo-V2.5 JANG_2L vision weights are preserved, but the "
-                    "current Python runtime only wires the text decode path."
+                    "current Python runtime only wires the text decode path.",
+                    family="mimo_v2",
                 )
             return InputEmbeddingsFeatures(
                 inputs_embeds=self.language_model.model.embed_tokens(input_ids)
@@ -292,8 +295,10 @@ def _register_mimo_v2_mlx_vlm_runtime() -> None:
 
         def __call__(self, input_ids, pixel_values=None, mask=None, cache=None, **kwargs):
             if pixel_values is not None:
-                raise ValueError(
-                    "MiMo-V2.5 JANG_2L vision input is not wired in this Python runtime."
+                raise UnsupportedMediaModalityError(
+                    "vision",
+                    "MiMo-V2.5 JANG_2L vision input is not wired in this Python runtime.",
+                    family="mimo_v2",
                 )
             return self.language_model(input_ids, cache=cache, mask=mask)
 

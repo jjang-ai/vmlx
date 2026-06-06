@@ -6526,6 +6526,63 @@ class TestStartupCompatibilityGuards:
         assert output.encoder_outputs is None
         sys.modules.pop("mlx_vlm.models.mimo_v2", None)
 
+    def test_mllm_mimo_v2_media_forward_raises_typed_unsupported_modality(
+        self, tmp_path, monkeypatch
+    ):
+        from vmlx_engine.errors import UnsupportedMediaModalityError
+        from vmlx_engine.models import mllm
+
+        model_dir = tmp_path / "MiMo-V2.5-JANG_2L"
+        model_dir.mkdir()
+        (model_dir / "config.json").write_text(
+            '{"model_type":"mimo_v2","vision_config":{},"audio_config":{}}',
+            encoding="utf-8",
+        )
+
+        class FakeTextConfig:
+            model_type = "mimo_v2"
+
+            @classmethod
+            def from_dict(cls, params):
+                return cls()
+
+        class FakeTextModel:
+            def __init__(self, config):
+                self.model = SimpleNamespace(embed_tokens=lambda input_ids: input_ids)
+                self.layers = []
+
+            def __call__(self, input_ids, cache=None, mask=None):
+                return input_ids
+
+            def make_cache(self):
+                return []
+
+            def sanitize(self, weights):
+                return weights
+
+            def load_weights(self, weights, strict=True):
+                return None
+
+        def fake_import_module(name):
+            if name == "jang_tools.mimo_v2.mlx_model":
+                return SimpleNamespace(Model=FakeTextModel, ModelArgs=FakeTextConfig)
+            raise ImportError(name)
+
+        monkeypatch.setattr(mllm.importlib, "import_module", fake_import_module)
+
+        sys.modules.pop("mlx_vlm.models.mimo_v2", None)
+        mllm._register_local_mlx_vlm_runtime_if_needed(model_dir)
+        module = sys.modules["mlx_vlm.models.mimo_v2"]
+        model = module.Model(module.ModelConfig.from_dict({"model_type": "mimo_v2"}))
+
+        with pytest.raises(UnsupportedMediaModalityError) as exc:
+            model("ids", pixel_values="pixels")
+
+        assert exc.value.modality == "vision"
+        assert exc.value.family == "mimo_v2"
+        assert exc.value.code == "unsupported_media_modality"
+        sys.modules.pop("mlx_vlm.models.mimo_v2", None)
+
     def test_mllm_registers_step3p7_source_runtime_before_mlx_vlm_resolution(
         self, tmp_path
     ):

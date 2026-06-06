@@ -32,3 +32,26 @@ class VLMImagePrefillBudgetError(RuntimeError):
         self.detail = str(detail)
         self.request_id = request_id
         super().__init__(self.detail)
+
+
+class UnsupportedMediaModalityError(RuntimeError):
+    """Raised when a loaded family advertises media but lacks that runtime path."""
+
+    code = "unsupported_media_modality"
+
+    def __init__(
+        self,
+        modality: str,
+        detail: str,
+        *,
+        family: str | None = None,
+        request_id: str | None = None,
+    ):
+        self.modality = str(modality or "media")
+        self.family = family
+        self.detail = str(detail)
+        self.request_id = request_id
+        prefix = f"unsupported media modality {self.modality}"
+        if family:
+            prefix += f" for {family}"
+        super().__init__(f"{prefix}: {self.detail}")
