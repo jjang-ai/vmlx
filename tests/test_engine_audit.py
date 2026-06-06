@@ -10750,8 +10750,72 @@ class TestTurboQuantKVTelemetry:
             "ssm_policy": "native_companion_state",
             "rederive": "async_clean_prefill_on_miss_or_warm_pass",
         }
+
+    def test_native_cache_status_reports_nemotron_h_registered_hybrid_subtype(self):
+        from types import SimpleNamespace
+        from vmlx_engine.server import _native_cache_status
+
+        cfg = SimpleNamespace(cache_subtype="nemotron_h_ssm_attention")
+        scheduler = SimpleNamespace(
+            config=SimpleNamespace(kv_cache_quantization="q4"),
+            _model_type_for_runtime="nemotron_h",
+            _is_hybrid=True,
+            _uses_dsv4_cache=False,
+            _uses_zaya_cache=False,
+            _hybrid_kv_positions=[2, 5, 8],
+            _hybrid_live_tq_policy=None,
+            _hybrid_live_tq_attention_layers=[],
+            _hybrid_live_tq_companion_layers=[],
+            _kv_cache_bits=4,
+            _kv_cache_group_size=64,
+            _ssm_state_cache=SimpleNamespace(_store={"lfm": object()}),
+            block_aware_cache=object(),
+            paged_cache_manager=SimpleNamespace(_disk_store=object()),
+        )
+
+        status = _native_cache_status(scheduler, family="nemotron_h", cfg=cfg)
+
+        assert status["family"] == "nemotron_h"
+        assert status["schema"] == "hybrid_ssm_v1"
+        assert status["cache_type"] == "hybrid_ssm_typed"
+        assert status["generic_turboquant_kv"] == {
+            "enabled": False,
+            "reason": "hybrid_ssm_state",
+        }
+
+    def test_native_cache_status_reports_lfm2_moe_registered_hybrid_subtype(self):
+        from types import SimpleNamespace
+        from vmlx_engine.server import _native_cache_status
+
+        cfg = SimpleNamespace(cache_subtype="lfm2_moe_hybrid_ssm")
+        scheduler = SimpleNamespace(
+            config=SimpleNamespace(kv_cache_quantization="q4"),
+            _model_type_for_runtime="lfm2_moe",
+            _is_hybrid=True,
+            _uses_dsv4_cache=False,
+            _uses_zaya_cache=False,
+            _hybrid_kv_positions=[1, 3, 7],
+            _hybrid_live_tq_policy=None,
+            _hybrid_live_tq_attention_layers=[],
+            _hybrid_live_tq_companion_layers=[],
+            _kv_cache_bits=4,
+            _kv_cache_group_size=64,
+            _ssm_state_cache=SimpleNamespace(_store={"lfm": object()}),
+            block_aware_cache=object(),
+            paged_cache_manager=SimpleNamespace(_disk_store=object()),
+        )
+
+        status = _native_cache_status(scheduler, family="lfm2_moe", cfg=cfg)
+
+        assert status["family"] == "lfm2_moe"
+        assert status["schema"] == "hybrid_ssm_v1"
+        assert status["cache_type"] == "hybrid_ssm_typed"
+        assert status["generic_turboquant_kv"] == {
+            "enabled": False,
+            "reason": "hybrid_ssm_state",
+        }
         assert status["ssm_entries"] == 1
-        assert status["kv_layer_indices"] == [7, 15, 23, 31]
+        assert status["kv_layer_indices"] == [1, 3, 7]
 
     def test_native_cache_status_ignores_legacy_hybrid_tq_override(self, monkeypatch):
         from types import SimpleNamespace

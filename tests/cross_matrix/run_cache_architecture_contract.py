@@ -99,6 +99,9 @@ REQUIRED_CACHE_TEST_MARKERS = (
     # being collapsed into generic SSM or plain attention labels.
     "test_native_cache_status_reports_mixed_swa_kv",
     "test_native_cache_status_reports_step37_full_sliding_kv_from_registry_subtype",
+    "test_native_cache_status_reports_mimo_v2_asymmetric_swa_from_registry_subtype",
+    "test_native_cache_status_reports_nemotron_h_registered_hybrid_subtype",
+    "test_native_cache_status_reports_lfm2_moe_registered_hybrid_subtype",
     "test_mllm_mixed_swa_cache_detail_does_not_report_ssm",
     "test_mllm_rotating_kv_cache_is_kv_like_for_mixed_swa",
     "test_mllm_ensure_batch_cache_preserves_rotating_cache_type",
@@ -229,6 +232,8 @@ REQUIRED_CACHE_FAMILY_MATRIX: dict[str, dict[str, tuple[str, ...]]] = {
             "test_hybrid_ssm_auto_mode_disables_live_tq_but_keeps_stored_kv_q4",
             "test_accepts_scheduler_owned_ssm_l2_store",
             "test_scheduler_creates_matching_ssm_companion_l2_for_block_disk",
+            "test_native_cache_status_reports_nemotron_h_registered_hybrid_subtype",
+            "test_native_cache_status_reports_lfm2_moe_registered_hybrid_subtype",
         ),
         "api_checks": (
             "hybrid_ssm_partial_reuse",
