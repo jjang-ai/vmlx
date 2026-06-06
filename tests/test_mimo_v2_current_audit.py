@@ -209,6 +209,7 @@ def test_mimo_current_audit_separates_clean_artifact_from_runtime_blockers(
     assert result["component_ok"]["exact_cache_prompt_following"] is False
     assert result["component_ok"]["decode_speed_target"] is False
     assert result["component_ok"]["system_prompt_first_token_stop"] is False
+    assert result["component_ok"]["source_vs_quant_first_divergence"] is False
     assert result["component_ok"]["manual_sink_does_not_clear_length_generation"] is True
     assert result["component_ok"]["disable_sink_does_not_clear_length_generation"] is True
     assert result["diagnostics"]["all_local_smoke"]["tool_protocol_pass"] is True
@@ -228,4 +229,5 @@ def test_mimo_current_audit_separates_clean_artifact_from_runtime_blockers(
         "mimo_exact_cache_prompt_following_blocked",
         "mimo_decode_speed_below_release_target",
         "mimo_system_prompt_first_token_stop_blocked",
+        "mimo_source_vs_quant_first_divergence_missing_or_failed",
     ]

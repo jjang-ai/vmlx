@@ -837,10 +837,13 @@ CURRENT_MIMO_V2_JANG2L_TOOL_DIALECT_ARTIFACT = (
     "build/current-mimo-v2-jang2l-tool-dialect-failure-20260606.json"
 )
 CURRENT_MIMO_V2_JANG2L_CURRENT_AUDIT_ARTIFACT = (
-    "build/current-mimo-v2-jang2l-current-audit-after-metadata-truth-smoke-20260606.json"
+    "build/current-mimo-v2-jang2l-current-audit-after-source-vs-quant-required-20260606.json"
 )
 CURRENT_MIMO_V2_JANG2L_METADATA_TRUTH_ARTIFACT = (
     "build/current-mimo-v25-jang2l-local-metadata-truth-patch-20260606.json"
+)
+CURRENT_MIMO_V2_JANG2L_SOURCE_VS_QUANT_ARTIFACT = (
+    "build/current-mimo-v2-jang2l-source-vs-quant-first-divergence-20260606.json"
 )
 CURRENT_DIAGNOSTIC_LIVE_SMOKE_ARTIFACTS = {
     "zaya_text_mxfp4_toolprobe": {
@@ -5546,6 +5549,7 @@ def _validate_current_mimo_v2_jang2l_root_cause(root: Path) -> dict[str, Any]:
     tool_dialect_artifact = CURRENT_MIMO_V2_JANG2L_TOOL_DIALECT_ARTIFACT
     current_audit_artifact = CURRENT_MIMO_V2_JANG2L_CURRENT_AUDIT_ARTIFACT
     metadata_truth_artifact = CURRENT_MIMO_V2_JANG2L_METADATA_TRUTH_ARTIFACT
+    source_vs_quant_artifact = CURRENT_MIMO_V2_JANG2L_SOURCE_VS_QUANT_ARTIFACT
     result: dict[str, Any] = {
         "status": "missing",
         "artifacts": {
@@ -5556,10 +5560,12 @@ def _validate_current_mimo_v2_jang2l_root_cause(root: Path) -> dict[str, Any]:
             "tool_dialect": tool_dialect_artifact,
             "current_audit": current_audit_artifact,
             "metadata_truth": metadata_truth_artifact,
+            "source_vs_quant_first_divergence": source_vs_quant_artifact,
         },
         "missing": [],
         "failures": [],
         "metadata_truth_passed": False,
+        "source_vs_quant_first_divergence_passed": False,
         "structural_verify_passed": False,
         "text_cache_narrow_pass": False,
         "switchglu_selected_expert_parity_passed": False,
@@ -5580,6 +5586,7 @@ def _validate_current_mimo_v2_jang2l_root_cause(root: Path) -> dict[str, Any]:
     tool_dialect_path = root / tool_dialect_artifact
     current_audit_path = root / current_audit_artifact
     metadata_truth_path = root / metadata_truth_artifact
+    source_vs_quant_path = root / source_vs_quant_artifact
     for path, artifact in (
         (structural_path, structural_artifact),
         (text_cache_path, text_cache_artifact),
@@ -5588,6 +5595,7 @@ def _validate_current_mimo_v2_jang2l_root_cause(root: Path) -> dict[str, Any]:
         (tool_dialect_path, tool_dialect_artifact),
         (current_audit_path, current_audit_artifact),
         (metadata_truth_path, metadata_truth_artifact),
+        (source_vs_quant_path, source_vs_quant_artifact),
     ):
         if not path.exists():
             result["missing"].append(artifact)
@@ -5602,6 +5610,7 @@ def _validate_current_mimo_v2_jang2l_root_cause(root: Path) -> dict[str, Any]:
         tool_dialect_payload = json.loads(tool_dialect_path.read_text(encoding="utf-8"))
         current_audit_payload = json.loads(current_audit_path.read_text(encoding="utf-8"))
         metadata_truth_payload = json.loads(metadata_truth_path.read_text(encoding="utf-8"))
+        source_vs_quant_payload = json.loads(source_vs_quant_path.read_text(encoding="utf-8"))
     except Exception as exc:  # noqa: BLE001 - report validation failure
         result["status"] = f"load_error:{type(exc).__name__}"
         result["failures"].append("json_load_error")
@@ -5617,6 +5626,32 @@ def _validate_current_mimo_v2_jang2l_root_cause(root: Path) -> dict[str, Any]:
     )
     if not result["metadata_truth_passed"]:
         result["failures"].append("mimo_metadata_truth_not_pass")
+
+    source_vs_quant_rows = source_vs_quant_payload.get("rows")
+    if not isinstance(source_vs_quant_rows, list):
+        source_vs_quant_rows = []
+    source_vs_quant_allowed = {
+        "source_and_quant_match",
+        "quant_diverges_from_source",
+        "source_also_fails",
+    }
+    result["source_vs_quant_first_divergence_passed"] = (
+        source_vs_quant_payload.get("status") == "pass"
+        and source_vs_quant_payload.get("remote_evidence_only") is not True
+        and bool(source_vs_quant_payload.get("source_model_path"))
+        and bool(source_vs_quant_payload.get("quant_model_path"))
+        and bool(source_vs_quant_rows)
+        and all(
+            isinstance(item, dict)
+            and bool(item.get("prompt_name"))
+            and item.get("classification") in source_vs_quant_allowed
+            and "source_output" in item
+            and "quant_output" in item
+            for item in source_vs_quant_rows
+        )
+    )
+    if not result["source_vs_quant_first_divergence_passed"]:
+        result["failures"].append("mimo_source_vs_quant_first_divergence_missing")
 
     current_audit_component_ok = current_audit_payload.get("component_ok")
     if not isinstance(current_audit_component_ok, dict):
@@ -5716,19 +5751,31 @@ def _validate_current_mimo_v2_jang2l_root_cause(root: Path) -> dict[str, Any]:
 
     audit_long_prompt_open = current_audit_component_ok.get("long_prompt_coherence") is False
     audit_tool_protocol_open = current_audit_component_ok.get("tool_protocol") is False
+    audit_source_vs_quant_open = (
+        current_audit_component_ok.get("source_vs_quant_first_divergence") is False
+    )
     if audit_long_prompt_open:
         result["prompt_length_coherence_blocked"] = True
     if audit_tool_protocol_open:
         result["tool_protocol_blocked"] = True
+    if audit_source_vs_quant_open:
+        result["source_vs_quant_first_divergence_passed"] = False
+        if "mimo_source_vs_quant_first_divergence_missing" not in result["failures"]:
+            result["failures"].append("mimo_source_vs_quant_first_divergence_missing")
 
-    if result["prompt_length_coherence_blocked"] or result["tool_protocol_blocked"]:
+    if (
+        result["prompt_length_coherence_blocked"]
+        or result["tool_protocol_blocked"]
+        or not result["source_vs_quant_first_divergence_passed"]
+    ):
         result["status"] = "open"
         result["root_cause_candidate"] = (
-            "mimo_v2_jang2l_quantized_profile_or_full_forward_quality_pending"
+            "mimo_v2_jang2l_quantized_profile_or_full_forward_quality_pending_source_vs_quant"
         )
         result["release_boundary"] = (
             "local artifact/runtime has narrow text-cache proof but fails long-prompt "
-            "coherence and/or tool protocol; do not release-clear MiMo"
+            "coherence, tool protocol, and/or local source-vs-quant first-divergence "
+            "proof; do not release-clear MiMo"
         )
     elif not result["failures"]:
         result["status"] = "pass"

@@ -31,6 +31,7 @@ from tests.cross_matrix.release_regression_manifest import (
     CURRENT_MIMO_V2_JANG2L_TOOL_DIALECT_ARTIFACT,
     CURRENT_MIMO_V2_JANG2L_CURRENT_AUDIT_ARTIFACT,
     CURRENT_MIMO_V2_JANG2L_METADATA_TRUTH_ARTIFACT,
+    CURRENT_MIMO_V2_JANG2L_SOURCE_VS_QUANT_ARTIFACT,
     CURRENT_OBJECTIVE_DIGEST_ARTIFACT,
     CURRENT_REAL_UI_DSV4_MEMORY_PREFLIGHT_ARTIFACT,
     CURRENT_REAL_UI_LIVE_MODEL_PROOF_ARTIFACTS,
@@ -3288,8 +3289,32 @@ def _write_passing_mimo_v2_root_cause_artifacts(root: Path) -> None:
                     "cache_vs_nocache_next_token": True,
                     "long_prompt_coherence": True,
                     "tool_protocol": True,
+                    "source_vs_quant_first_divergence": True,
                 },
                 "blockers": [],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    source_vs_quant_path = root / CURRENT_MIMO_V2_JANG2L_SOURCE_VS_QUANT_ARTIFACT
+    source_vs_quant_path.parent.mkdir(parents=True, exist_ok=True)
+    source_vs_quant_path.write_text(
+        json.dumps(
+            {
+                "status": "pass",
+                "remote_evidence_only": False,
+                "source_model_path": "/Users/example/models/MiMo-V2.5-source",
+                "quant_model_path": "/Users/example/.mlxstudio/models/JANGQ-AI/MiMo-V2.5-JANG_2L",
+                "rows": [
+                    {
+                        "prompt_name": "short_exact_ack",
+                        "classification": "source_and_quant_match",
+                        "source_output": "ACK",
+                        "quant_output": "ACK",
+                        "first_divergence": None,
+                    }
+                ],
             }
         )
         + "\n",
@@ -11371,6 +11396,7 @@ def test_release_regression_manifest_requires_mimo_v2_root_cause_artifacts(
 
     assert result["status"] == "pass"
     assert result["metadata_truth_passed"] is True
+    assert result["source_vs_quant_first_divergence_passed"] is True
     assert result["structural_verify_passed"] is True
     assert result["text_cache_narrow_pass"] is True
     assert result["switchglu_selected_expert_parity_passed"] is True
@@ -11400,6 +11426,7 @@ def test_current_mimo_v2_proof_artifact_constants_are_local_only():
         CURRENT_MIMO_V2_JANG2L_TEXT_CACHE_ARTIFACT,
         CURRENT_MIMO_V2_JANG2L_TOOL_DIALECT_ARTIFACT,
         CURRENT_MIMO_V2_JANG2L_METADATA_TRUTH_ARTIFACT,
+        CURRENT_MIMO_V2_JANG2L_SOURCE_VS_QUANT_ARTIFACT,
     )
 
     artifacts = [
@@ -11410,6 +11437,7 @@ def test_current_mimo_v2_proof_artifact_constants_are_local_only():
         CURRENT_MIMO_V2_JANG2L_TOOL_DIALECT_ARTIFACT,
         CURRENT_MIMO_V2_JANG2L_CURRENT_AUDIT_ARTIFACT,
         CURRENT_MIMO_V2_JANG2L_METADATA_TRUTH_ARTIFACT,
+        CURRENT_MIMO_V2_JANG2L_SOURCE_VS_QUANT_ARTIFACT,
     ]
 
     assert all(artifact.startswith("build/current-") for artifact in artifacts)
@@ -11445,6 +11473,7 @@ def test_release_regression_manifest_rejects_missing_mimo_v2_root_cause_artifact
         CURRENT_MIMO_V2_JANG2L_TOOL_DIALECT_ARTIFACT,
         CURRENT_MIMO_V2_JANG2L_CURRENT_AUDIT_ARTIFACT,
         CURRENT_MIMO_V2_JANG2L_METADATA_TRUTH_ARTIFACT,
+        CURRENT_MIMO_V2_JANG2L_SOURCE_VS_QUANT_ARTIFACT,
     ]
 
 

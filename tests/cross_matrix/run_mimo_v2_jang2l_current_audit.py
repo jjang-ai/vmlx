@@ -24,7 +24,7 @@ from typing import Any
 DEFAULT_MODEL_PATH = Path("/Users/example/.mlxstudio/models/JANGQ-AI/MiMo-V2.5-JANG_2L")
 DEFAULT_MANIFEST = Path("build/current-mimo-http-tb5-manifest-20260606.tsv")
 DEFAULT_OUT = Path(
-    "build/current-mimo-v2-jang2l-current-audit-after-first-token-stop-20260606.json"
+    "build/current-mimo-v2-jang2l-current-audit-after-source-vs-quant-required-20260606.json"
 )
 
 STRUCTURAL_ARTIFACT = Path("build/current-mimo-jang2l-local-structural-verify-20260606.json")
@@ -58,6 +58,9 @@ RENDERED_PROMPT_ARTIFACT = Path(
 )
 FIRST_TOKEN_ARTIFACT = Path(
     "build/current-mimo-v2-jang2l-first-token-probe-registered-20260606.json"
+)
+SOURCE_VS_QUANT_ARTIFACT = Path(
+    "build/current-mimo-v2-jang2l-source-vs-quant-first-divergence-20260606.json"
 )
 CLEANUP_LOG = Path("build/current-mimo-stale-local-cleanup-20260606.txt")
 
@@ -277,6 +280,7 @@ def _mimo_prompt_shape_first_token_evidence(
         for item in results
         if isinstance(item, dict) and item.get("name") is not None
     }
+
     failing = by_name.get("long_cache_system_exact") or {}
     folded = by_name.get("long_cache_no_system_exact") or {}
     short_system = by_name.get("short_system_exact") or {}
@@ -364,6 +368,31 @@ def _mimo_prompt_shape_first_token_evidence(
     }
 
 
+def _source_vs_quant_first_divergence_pass(data: dict[str, Any]) -> bool:
+    if data.get("status") != "pass" or data.get("remote_evidence_only") is True:
+        return False
+    if not data.get("source_model_path") or not data.get("quant_model_path"):
+        return False
+    rows = data.get("rows")
+    if not isinstance(rows, list) or not rows:
+        return False
+    allowed = {
+        "source_and_quant_match",
+        "quant_diverges_from_source",
+        "source_also_fails",
+    }
+    for row in rows:
+        if not isinstance(row, dict):
+            return False
+        if not row.get("prompt_name"):
+            return False
+        if row.get("classification") not in allowed:
+            return False
+        if "source_output" not in row or "quant_output" not in row:
+            return False
+    return True
+
+
 def build_audit(root: Path, model_path: Path, manifest: Path) -> dict[str, Any]:
     model_parent = model_path.parent
     manifest_check = _verify_manifest(model_parent, manifest)
@@ -387,6 +416,7 @@ def build_audit(root: Path, model_path: Path, manifest: Path) -> dict[str, Any]:
     prompt_shape = _artifact(root / PROMPT_SHAPE_SWEEP_ARTIFACT)
     rendered_prompt = _artifact(root / RENDERED_PROMPT_ARTIFACT)
     first_token = _artifact(root / FIRST_TOKEN_ARTIFACT)
+    source_vs_quant = _artifact(root / SOURCE_VS_QUANT_ARTIFACT)
 
     structural_pass = structural.get("status") == "pass"
     text_cache_pass = text_cache.get("exists") and _text_cache_narrow_pass(text_cache["data"])
@@ -449,6 +479,9 @@ def build_audit(root: Path, model_path: Path, manifest: Path) -> dict[str, Any]:
         }
     )
     prompt_shape_blocked = bool(prompt_shape_evidence.get("blocked"))
+    source_vs_quant_pass = source_vs_quant.get("exists") and _source_vs_quant_first_divergence_pass(
+        source_vs_quant["data"]
+    )
 
     stale_present = [item for item in stale_state if item["exists"]]
     release_clearance = (
@@ -462,6 +495,7 @@ def build_audit(root: Path, model_path: Path, manifest: Path) -> dict[str, Any]:
         and not exact_cache_blocked
         and not speed_blocked
         and not prompt_shape_blocked
+        and source_vs_quant_pass
         and not stale_present
     )
 
@@ -489,6 +523,8 @@ def build_audit(root: Path, model_path: Path, manifest: Path) -> dict[str, Any]:
         blockers.append("mimo_decode_speed_below_release_target")
     if prompt_shape_blocked:
         blockers.append("mimo_system_prompt_first_token_stop_blocked")
+    if not source_vs_quant_pass:
+        blockers.append("mimo_source_vs_quant_first_divergence_missing_or_failed")
 
     return {
         "status": status,
@@ -512,6 +548,7 @@ def build_audit(root: Path, model_path: Path, manifest: Path) -> dict[str, Any]:
             "exact_cache_prompt_following": not bool(exact_cache_blocked),
             "decode_speed_target": not bool(speed_blocked),
             "system_prompt_first_token_stop": not bool(prompt_shape_blocked),
+            "source_vs_quant_first_divergence": bool(source_vs_quant_pass),
             "manual_sink_does_not_clear_length_generation": bool(sink_mode_fails),
             "disable_sink_does_not_clear_length_generation": bool(disable_sink_fails),
         },
@@ -529,11 +566,21 @@ def build_audit(root: Path, model_path: Path, manifest: Path) -> dict[str, Any]:
             "prompt_shape_sweep": str(PROMPT_SHAPE_SWEEP_ARTIFACT),
             "rendered_prompt_compare": str(RENDERED_PROMPT_ARTIFACT),
             "first_token_probe": str(FIRST_TOKEN_ARTIFACT),
+            "source_vs_quant_first_divergence": str(SOURCE_VS_QUANT_ARTIFACT),
         },
         "diagnostics": {
             "cache_vs_nocache_next_token_match": bool(cache_match),
             "all_local_smoke": smoke_evidence,
             "prompt_shape_first_token": prompt_shape_evidence,
+            "source_vs_quant_first_divergence": (
+                source_vs_quant.get("data")
+                if source_vs_quant.get("exists")
+                else {
+                    "status": "missing",
+                    "artifact": str(SOURCE_VS_QUANT_ARTIFACT),
+                    "classification": "missing_local_source_vs_quant_first_divergence",
+                }
+            ),
             "manual_sink_sdpa_clears_length_generation": False if sink_mode_fails else None,
             "disable_sink_clears_length_generation": False if disable_sink_fails else None,
             "sink_boundary": (
@@ -544,9 +591,9 @@ def build_audit(root: Path, model_path: Path, manifest: Path) -> dict[str, Any]:
         },
         "release_boundary": (
             "MiMo local artifact integrity is clean, but release remains blocked "
-            "until long-prompt coherence, exact cache prompt-following, and decode "
-            "speed pass without fake parser injection, forced fallback, or cache "
-            "disabling."
+            "until long-prompt coherence, exact cache prompt-following, decode "
+            "speed, and local source-vs-quant first-divergence proof pass without "
+            "fake parser injection, forced fallback, or cache disabling."
         ),
     }
 
