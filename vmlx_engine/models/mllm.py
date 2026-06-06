@@ -1932,6 +1932,41 @@ class MLXMultimodalLM:
             collapsed["content"] = "".join(text_parts)
             normalized.append(collapsed)
 
+        if model_type == "mimo_v2":
+            leading_system_parts: list[str] = []
+            folded: list[dict] = []
+            folded_into_user = False
+            for message in normalized:
+                role = str(message.get("role") or "").lower()
+                if not folded and role in {"system", "developer"}:
+                    text = str(message.get("content") or "").strip()
+                    if text:
+                        leading_system_parts.append(text)
+                    continue
+                if (
+                    leading_system_parts
+                    and not folded_into_user
+                    and role == "user"
+                ):
+                    combined = dict(message)
+                    user_text = str(combined.get("content") or "").strip()
+                    combined["content"] = "\n\n".join(
+                        part for part in [*leading_system_parts, user_text] if part
+                    )
+                    folded.append(combined)
+                    folded_into_user = True
+                    continue
+                folded.append(message)
+            if leading_system_parts and not folded_into_user:
+                folded.insert(
+                    0,
+                    {
+                        "role": "user",
+                        "content": "\n\n".join(leading_system_parts),
+                    },
+                )
+            normalized = folded
+
         return normalized
 
     def _synthesizes_thinking_prompt_when_enabled(self) -> bool:

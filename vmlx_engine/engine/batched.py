@@ -229,6 +229,37 @@ class BatchedEngine(BaseEngine):
             normalized.append(collapsed)
         return normalized
 
+    @staticmethod
+    def _fold_leading_system_into_first_user(
+        messages: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        leading_system_parts: list[str] = []
+        folded: list[dict[str, Any]] = []
+        folded_into_user = False
+        for message in messages:
+            role = str(message.get("role") or "").lower()
+            if not folded and role in {"system", "developer"}:
+                text = str(message.get("content") or "").strip()
+                if text:
+                    leading_system_parts.append(text)
+                continue
+            if leading_system_parts and not folded_into_user and role == "user":
+                combined = dict(message)
+                user_text = str(combined.get("content") or "").strip()
+                combined["content"] = "\n\n".join(
+                    part for part in [*leading_system_parts, user_text] if part
+                )
+                folded.append(combined)
+                folded_into_user = True
+                continue
+            folded.append(message)
+        if leading_system_parts and not folded_into_user:
+            folded.insert(
+                0,
+                {"role": "user", "content": "\n\n".join(leading_system_parts)},
+            )
+        return folded
+
     def _mimo_text_only_chat_template(
         self,
         messages: list[dict[str, Any]],
@@ -258,15 +289,18 @@ class BatchedEngine(BaseEngine):
         if tools:
             template_kwargs["tools"] = tools
 
+        rendered_messages = self._fold_leading_system_into_first_user(
+            self._collapse_text_only_content_lists(messages)
+        )
         prompt = get_chat_template(
             processor,
-            self._collapse_text_only_content_lists(messages),
+            rendered_messages,
             add_generation_prompt=not skip_generation_prompt,
             **template_kwargs,
         )
         return check_and_inject_fallback_tools(
             prompt,
-            messages,
+            rendered_messages,
             tools,
             processor,
             dict(template_kwargs, tokenize=False, add_generation_prompt=not skip_generation_prompt),

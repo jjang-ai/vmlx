@@ -74,7 +74,7 @@ def test_mimo_current_audit_separates_clean_artifact_from_runtime_blockers(
     )
     _write_json(
         tmp_path
-        / "build/current-all-local-model-smoke-mimo-v25-jang2l-tools-nomedia-after-metadata-truth-20260606/summary.json",
+        / "build/current-all-local-model-smoke-mimo-v25-jang2l-tools-nomedia-after-stop-token-cache-fix-20260606/summary.json",
         {
             "status": "fail",
             "results": [

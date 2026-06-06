@@ -8240,6 +8240,8 @@ def test_objective_proof_digest_keeps_cross_family_live_smoke_open_on_non_mimo_g
         "dsv4",
         "gemma4",
         "minimax",
+        "zaya_text",
+        "zaya_vl",
     ]
     assert row["details"]["missing_required_family_keys"] == [
         "hy3",
@@ -8249,8 +8251,6 @@ def test_objective_proof_digest_keeps_cross_family_live_smoke_open_on_non_mimo_g
         "nemotron",
         "qwen36",
         "step3p7",
-        "zaya_text",
-        "zaya_vl",
     ]
     assert row["details"]["non_mimo_status"] == "open"
     assert row["details"]["non_mimo_missing_required_family_keys"] == [
@@ -8260,8 +8260,6 @@ def test_objective_proof_digest_keeps_cross_family_live_smoke_open_on_non_mimo_g
         "nemotron",
         "qwen36",
         "step3p7",
-        "zaya_text",
-        "zaya_vl",
     ]
     assert row["details"]["non_mimo_not_pass_artifacts"] == []
     assert row["details"]["not_pass_required_family_artifacts"] == {}

@@ -6554,6 +6554,48 @@ class TestStartupCompatibilityGuards:
         assert output.encoder_outputs is None
         sys.modules.pop("mlx_vlm.models.mimo_v2", None)
 
+    def test_mllm_mimo_v2_text_only_folds_leading_system_into_user_prompt(self):
+        from vmlx_engine.models.mllm import MLXMultimodalLM
+
+        model = MLXMultimodalLM("mimo-v2-test")
+        model.config = {"model_type": "mimo_v2"}
+
+        normalized = model._normalize_text_only_messages_for_processor(
+            [
+                {"role": "system", "content": [{"type": "text", "text": "Output ACK."}]},
+                {"role": "user", "content": [{"type": "text", "text": "Say it now."}]},
+            ],
+            has_media=False,
+        )
+
+        assert normalized == [
+            {"role": "user", "content": "Output ACK.\n\nSay it now."}
+        ]
+
+    def test_mllm_mimo_v2_text_only_system_fold_does_not_touch_media_turns(self):
+        from vmlx_engine.models.mllm import MLXMultimodalLM
+
+        model = MLXMultimodalLM("mimo-v2-test")
+        model.config = {"model_type": "mimo_v2"}
+        messages = [
+            {"role": "system", "content": [{"type": "text", "text": "Use image."}]},
+            {
+                "role": "user",
+                "content": [
+                    {"type": "image"},
+                    {"type": "text", "text": "Describe it."},
+                ],
+            },
+        ]
+
+        assert (
+            model._normalize_text_only_messages_for_processor(
+                messages,
+                has_media=True,
+            )
+            is messages
+        )
+
     def test_mllm_mimo_v2_media_forward_raises_typed_unsupported_modality(
         self, tmp_path, monkeypatch
     ):
@@ -6610,6 +6652,34 @@ class TestStartupCompatibilityGuards:
         assert exc.value.family == "mimo_v2"
         assert exc.value.code == "unsupported_media_modality"
         sys.modules.pop("mlx_vlm.models.mimo_v2", None)
+
+    def test_mimo_v2_thinking_off_suppresses_scheduler_stop_tokens_first_only(self):
+        import mlx.core as mx
+
+        from vmlx_engine.mllm_batch_generator import MLLMBatchGenerator
+
+        generator = MLLMBatchGenerator.__new__(MLLMBatchGenerator)
+        generator.processor = SimpleNamespace(
+            encode=lambda token, add_special_tokens=False: [],
+            eos_token_id=None,
+        )
+        generator.stop_tokens = {3}
+        generator._mimo_v2_thinking_off_token_ids = None
+        request = SimpleNamespace(output_tokens=[])
+
+        processors = generator._mimo_v2_thinking_off_logits_processors(request)
+        logits = mx.zeros((1, 6))
+        processed = logits
+        for processor in processors:
+            processed = processor(mx.array([]), processed)
+        assert mx.isinf(processed[0, 3]).item()
+        assert processed[0, 3].item() < 0
+
+        request.output_tokens = [1]
+        processed_after_first = logits
+        for processor in processors:
+            processed_after_first = processor(mx.array([1]), processed_after_first)
+        assert processed_after_first[0, 3].item() == 0
 
     def test_mllm_registers_step3p7_source_runtime_before_mlx_vlm_resolution(
         self, tmp_path

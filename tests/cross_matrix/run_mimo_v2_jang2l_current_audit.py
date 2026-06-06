@@ -24,7 +24,7 @@ from typing import Any
 DEFAULT_MODEL_PATH = Path("/Users/example/.mlxstudio/models/JANGQ-AI/MiMo-V2.5-JANG_2L")
 DEFAULT_MANIFEST = Path("build/current-mimo-http-manifest-20260606.tsv")
 DEFAULT_OUT = Path(
-    "build/current-mimo-v2-jang2l-current-audit-after-native-thinking-off-20260606.json"
+    "build/current-mimo-v2-jang2l-current-audit-after-system-fold-cache-proof-20260606.json"
 )
 
 STRUCTURAL_ARTIFACT = Path("build/current-mimo-jang2l-local-structural-verify-20260606.json")
@@ -39,7 +39,7 @@ TOOL_FAILURE_ARTIFACT = Path(
     "build/current-mimo-v2-jang2l-tool-dialect-failure-20260606.json"
 )
 ALL_LOCAL_SMOKE_ARTIFACT = Path(
-    "build/current-all-local-model-smoke-mimo-v25-jang2l-tools-nomedia-after-metadata-truth-20260606/summary.json"
+    "build/current-all-local-model-smoke-mimo-v25-jang2l-tools-nomedia-after-stop-token-cache-fix-20260606/summary.json"
 )
 CACHE_VS_NOCACHE_ARTIFACT = Path(
     "build/current-mimo-v2-jang2l-cache-vs-nocache-next-token-20260606.json"

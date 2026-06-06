@@ -5896,6 +5896,11 @@ class MLLMBatchGenerator:
             eos_id = getattr(tokenizer, "eos_token_id", None)
             if isinstance(eos_id, int):
                 eos_ids.add(eos_id)
+            for token_id in getattr(self, "stop_tokens", set()) or set():
+                try:
+                    eos_ids.add(int(token_id))
+                except Exception:
+                    continue
             token_ids = {
                 "think_ids": think_ids,
                 "eos_ids": eos_ids,

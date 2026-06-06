@@ -1767,7 +1767,13 @@ def test_batched_engine_mimo_text_only_preserves_thinking_off_template(monkeypat
     engine._model_family_name = lambda: "mimo_v2"
     engine._model_tool_parser_name = lambda: "xml_function"
 
-    messages = [{"role": "user", "content": [{"type": "text", "text": "Say ACK."}]}]
+    messages = [
+        {
+            "role": "system",
+            "content": [{"type": "text", "text": "Output exactly ACK."}],
+        },
+        {"role": "user", "content": [{"type": "text", "text": "Say ACK."}]},
+    ]
     with_gen = engine._apply_chat_template(
         messages,
         enable_thinking=False,
@@ -1782,7 +1788,9 @@ def test_batched_engine_mimo_text_only_preserves_thinking_off_template(monkeypat
     assert seen[0]["kwargs"]["enable_thinking"] is False
     assert seen[0]["add_generation_prompt"] is True
     assert seen[1]["add_generation_prompt"] is False
-    assert seen[0]["messages"][-1]["content"] == "Say ACK."
+    assert seen[0]["messages"] == [
+        {"role": "user", "content": "Output exactly ACK.\n\nSay ACK."}
+    ]
     assert "<think></think>" in with_gen
     assert with_gen.endswith("<|im_start|>assistant\n<think></think>")
-    assert without_gen == "<|im_start|>user\nSay ACK.\n"
+    assert without_gen == "<|im_start|>user\nOutput exactly ACK.\n\nSay ACK.\n"
