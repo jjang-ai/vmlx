@@ -20,7 +20,7 @@ from typing import Any
 
 
 DEFAULT_OUT = Path(
-    "build/current-issue179-minimax-k-root-cause-audit-20260602-post-v1552-public-dmg-scan.json"
+    "build/current-issue179-minimax-k-root-cause-audit-after-public-v1556-scan-20260606.json"
 )
 REPORTER_LOG = Path("build/issue-179/vmlx-logs-490f58c0-2026-05-27.log")
 REPORTER_SCREENSHOT = Path("build/issue-179/minimax-garbage-screenshot.png")
@@ -84,6 +84,8 @@ REQUIRED_PUBLIC_RELEASE_CONTRACTS = {
     ("v1.5.50", "vMLX-1.5.50-tahoe-arm64.dmg"),
     ("v1.5.52", "vMLX-1.5.52-sequoia-arm64.dmg"),
     ("v1.5.52", "vMLX-1.5.52-tahoe-arm64.dmg"),
+    ("v1.5.56", "vMLX-1.5.56-sequoia-arm64.dmg"),
+    ("v1.5.56", "vMLX-1.5.56-tahoe-arm64.dmg"),
 }
 PUBLIC_RELEASE_TAG_RE = re.compile(r"^v(\d+)\.(\d+)\.(\d+)$")
 

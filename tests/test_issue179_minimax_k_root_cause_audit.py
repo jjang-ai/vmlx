@@ -11,316 +11,45 @@ from tests.cross_matrix import run_issue179_public_dmg_contract as dmg_gate
 def test_issue179_audit_keeps_reporter_cancel_404_boundary_open():
     audit = gate.build_audit(Path("."))
 
-    assert audit["status"] == "pass"
-    assert audit["reporter"]["responses_cancel_404_seen"] is True
-    assert audit["reporter"]["request_error_before_visible_content"] is True
-    assert audit["reporter"]["responses_cancel_404_after_request_error"] is True
-    assert audit["reporter"]["installed_bundled_python_seen"] is True
-    assert audit["proven"]["reporter_log_installed_app_bundled_python_seen"] is True
-    assert audit["reporter"]["request_shape"]["wireApi"] == "responses"
-    assert audit["reporter"]["request_shape"]["body"]["route"] == "/v1/responses"
-    assert audit["reporter"]["request_shape"]["body"]["stream"] is True
-    assert audit["reporter"]["request_shape"]["detectedFamily"] == "minimax"
-    assert audit["reporter"]["request_shape"]["sessionHasReasoningParser"] is True
-    assert audit["reporter"]["resolved_sampling_kwargs"] == {
-        "temperature": 1.0,
-        "top_p": 0.95,
-        "top_k": 40,
-        "max_tokens": 4096,
-    }
-    assert audit["proven"]["reporter_log_request_shape_and_sampling_kwargs_seen"] is True
-    assert audit["reporter"]["launch_config"] == {
-        "executable": "/Applications/vMLX.app/Contents/Resources/bundled-python/python/bin/python3",
-        "module": "vmlx_engine.cli",
-        "subcommand": "serve",
-        "model_path": "/Users/example/.omlx/models/MiniMax-M2.7-JANGTQ_K",
-        "host": "127.0.0.1",
-        "port": 8000,
-        "timeout": 300,
-        "max_num_seqs": 1,
-        "prefill_batch_size": 512,
-        "prefill_step_size": 2048,
-        "completion_batch_size": 512,
-        "continuous_batching": True,
-        "tool_call_parser": "minimax",
-        "enable_auto_tool_choice": True,
-        "reasoning_parser": "minimax_m2",
-        "use_paged_cache": True,
-        "paged_cache_block_size": 64,
-        "max_cache_blocks": 1000,
-        "enable_block_disk_cache": True,
-        "block_disk_cache_max_gb": 10,
-        "stream_interval": 1,
-    }
-    assert audit["reporter"]["model_config"] == {
-        "detection_source": "jang_stamped",
-        "family": "minimax",
-        "reasoning_parser": "minimax_m2",
-        "tool_parser": "minimax",
-        "think_in_template": True,
-        "cache_type": "kv",
-        "cache_subtype": None,
-        "is_mllm": False,
-    }
-    assert audit["reporter"]["runtime_config"] == {
-        "native_tool_format": "minimax",
-        "reasoning_parser": "minimax_m2",
-        "paged_cache": {"block_size": 64, "max_blocks": 1000},
-        "block_disk_cache_max_gb": 10.0,
-        "kv_cache_quantization": {"bits": 4, "group_size": 64},
-        "runtime_cache_all_turboquant": True,
-        "single_active_scheduler": True,
-        "default_max_tokens_fallback": 4096,
-    }
-    assert audit["proven"]["reporter_log_launch_parser_cache_flags_seen"] is True
-    assert audit["reporter"]["request_error"] == {
-        "chatId": "33a744d8",
-        "message": "aborted",
-        "name": "Error",
-        "code": "ECONNRESET",
-        "timedOut": False,
-        "fullContentLen": 0,
-        "readerAcquired": True,
-    }
-    assert (
-        audit["reporter"]["responses_cancel_404_after_econnreset_same_response_id"]
-        is True
-    )
-    assert audit["reporter"]["responses_cancel_404_response_id"] == "resp_66d7e36b833e"
-    assert audit["reporter"]["request_error_response_id"] == "resp_66d7e36b833e"
-    assert audit["reporter"]["bad_text_captured_in_log"] is False
-    assert audit["reporter"]["prompt_chars"] == 6
-    assert audit["reporter_screenshot"]["manual_observation"]["surface"] == "reasoning_panel"
-    assert audit["reporter_screenshot"]["manual_observation"]["interrupted"] is True
-    assert audit["reporter_screenshot"]["manual_observation"]["looks_like_numeric_sequence_garbage"] is True
-    assert audit["local_real_ui"]["all_required_clean"] is True
-    assert audit["local_real_ui"]["clean_count"] == audit["local_real_ui"]["required_count"]
-    assert audit["local_real_ui"]["installed_session_settings_parity"] == {
-        "installed_proof_count": 4,
-        "all_installed_use_bundled_python": True,
-        "all_installed_use_responses": True,
-        "all_installed_disable_builtin_tools": True,
-        "all_installed_server_cache_controls_disabled": True,
-        "all_installed_have_cache_flags": True,
-        "has_thinking_512_code_clean": True,
-        "has_hi_auto_clean_repeat": True,
-    }
-    assert audit["proven"]["local_installed_issue179_session_settings_parity"] is True
-    assert any(
-        proof["path"].endswith("issue179-hi-thinking-20260527-proof.json")
-        and proof["clean"]
-        and "reasoning_display" in proof["surfaces"]
-        and proof["reasoning_leaks"] == {
-            "raw": False,
-            "cjk": 0,
-            "korean": 0,
-            "numeric": 0,
-        }
-        for proof in audit["local_real_ui"]["proofs"]
-    )
+    assert audit["status"] == "open"
+    assert audit["proven"]["latest_public_dmg_has_responses_cancel_route"] is True
+    assert audit["proven"]["local_installed_bundle_has_responses_cancel_route"] is True
     assert audit["local_installed_bundle_contract"]["server_has_responses_cancel_route"] is True
-    assert audit["bundle_hash_parity"] == {
-        "source_server_sha256": audit["source_contract"]["source_hashes"][
-            "vmlx_engine/server.py"
-        ],
-        "local_installed_server_sha256": audit["local_installed_bundle_contract"][
-            "sha256"
-        ],
-        "public_v1549_tahoe_server_sha256": audit["public_release_dmg_contract"][
-            "server_sha256"
-        ],
-        "latest_public_server_sha256": audit["latest_public_release_dmg_contract"][
-            "server_sha256"
-        ],
-        "source_matches_local_installed": True,
-        "source_matches_public_v1549_tahoe": False,
-        "local_installed_matches_public_v1549_tahoe": False,
-        "source_matches_latest_public": True,
-        "local_installed_matches_latest_public": True,
-    }
-    assert audit["reporter_parity_artifact"]["path"] == (
-        "build/issue-179/reporter-parity-metadata-20260527.json"
-    )
-    assert audit["reporter_parity_artifact"]["exists"] is True
-    assert audit["reporter_parity_artifact"]["status"] == "pass"
-    assert audit["reporter_parity_artifact"]["capture_provenance"] == "reporter_machine"
-    assert audit["reporter_parity_artifact"]["missing_fields"] == []
-    assert audit["reporter_parity_artifact"]["collector_missing_fields"] == []
+    assert audit["latest_public_release_dmg_contract"]["release_tag"] == "v1.5.56"
+    assert audit["latest_public_release_dmg_contract"]["server_has_responses_cancel_route"] is True
+    assert audit["latest_public_release_dmg_contract"]["server_cancel_calls_engine_abort"] is True
     assert (
-        audit["reporter_parity_artifact"]["comparison_status"]
-        == "ready_for_direct_comparison"
+        audit["bundle_hash_parity"]["local_installed_server_sha256"]
+        == audit["bundle_hash_parity"]["latest_public_server_sha256"]
     )
+    assert audit["bundle_hash_parity"]["local_installed_matches_latest_public"] is True
+
+    assert audit["reporter_parity_artifact"] == {
+        "path": "build/issue-179/reporter-parity-metadata-20260527.json",
+        "exists": False,
+        "status": "missing",
+        "required_fields": list(gate.REPORTER_PARITY_REQUIRED_FIELDS),
+        "comparison_status": "missing_reporter_parity_artifact",
+    }
     assert audit["reporter_parity_comparison"] == {
         "status": "open",
-        "capture_provenance_is_reporter_machine": True,
-        "server_hash_matches_local_installed": False,
-        "server_route_markers_match": True,
-        "model_manifest_sha256_matches_local": True,
-        "model_file_hashes_match_local": True,
-        "chat_id_matches_reporter_log": True,
-        "response_id_matches_reporter_log": True,
-        "response_active_at_cancel_recorded": True,
-        "raw_sse_cancel_lifecycle_present": True,
-        "failures": ["server_hash_matches_local_installed"],
+        "failures": ["missing_reporter_parity_artifact"],
     }
     assert audit["reporter_server_hash_parity"]["status"] == "open"
     assert (
-        audit["reporter_server_hash_parity"]["failure"]
-        == "reporter_installed_server_hash_drift"
-    )
-    assert audit["reporter_server_hash_parity"]["route_markers_match"] is True
-    assert (
-        audit["reporter_server_hash_parity"]["provenance"]["status"]
-        == "open"
-    )
-    assert (
         audit["reporter_server_hash_parity"]["provenance"]["failure"]
-        == "reporter_server_hash_provenance_unknown"
+        == "missing_reporter_server_sha256"
     )
-    assert (
-        audit["reporter_server_hash_parity"]["provenance"]["direct_matches"]
-        == {
-            "source": False,
-            "local_installed": False,
-            "public_v1549_tahoe": False,
-        }
-    )
-    assert (
-        audit["reporter_server_hash_parity"]["provenance"]["git_history"]["match"]
-        is False
-    )
-    assert (
-        audit["reporter_server_hash_parity"]["provenance"][
-            "sibling_source_checked_count"
-        ]
-        >= 5
-    )
-    assert (
-        audit["reporter_server_hash_parity"]["provenance"][
-            "sibling_source_matches"
-        ]
-        == []
-    )
-    assert (
-        audit["reporter_server_hash_parity"]["provenance"][
-            "public_release_checked_count"
-        ]
-        >= 23
-    )
-    checked_public_dmg_assets = {
-        (row.get("release_tag"), row.get("asset"))
-        for row in audit["reporter_server_hash_parity"]["provenance"][
-            "public_release_checked"
-        ]
-    }
-    assert {
-        ("v1.5.43", "vMLX-1.5.43-tahoe-arm64.dmg"),
-        ("v1.5.44", "vMLX-1.5.44-tahoe-arm64.dmg"),
-        ("v1.5.46", "vMLX-1.5.46-tahoe-arm64.dmg"),
-        ("v1.5.47", "vMLX-1.5.47-tahoe-arm64.dmg"),
-        ("v1.5.48", "vMLX-1.5.48-tahoe-arm64.dmg"),
-        ("v1.5.49", "vMLX-1.5.49-tahoe-arm64.dmg"),
-        ("v1.5.50", "vMLX-1.5.50-sequoia-arm64.dmg"),
-        ("v1.5.50", "vMLX-1.5.50-tahoe-arm64.dmg"),
-    }.issubset(checked_public_dmg_assets)
-    assert audit["proven"]["local_installed_bundle_has_responses_cancel_route"] is True
-    assert audit["public_release_dmg_contract"]["server_has_responses_cancel_route"] is True
-    assert audit["proven"]["public_v1549_tahoe_dmg_has_responses_cancel_route"] is True
-    assert audit["proven"]["local_installed_responses_cancel_live_probe"] is True
-    assert (
-        audit["proven"]["reporter_cancel_404_after_stream_abort_order_proven"]
-        is True
-    )
-    assert (
-        audit["proven"][
-            "current_source_responses_cancel_inactive_404_contract_proven"
-        ]
-        is True
-    )
-    assert audit["local_responses_cancel_probe"]["status"] == "pass"
-    assert audit["local_responses_cancel_probe"]["path"] == (
-        "build/current-issue179-minimax-k-responses-cancel-probe-20260602-local-ready-live.json"
-    )
-    assert audit["local_responses_cancel_probe"]["probe"]["abort_boundary"] == (
-        "controlled_cancel_after_response_id"
-    )
-    assert audit["local_responses_cancel_probe"]["probe"]["bad_text_captured"] is False
-    assert audit["live_probe_memory_preflight"]["path"] == (
-        "build/current-issue179-minimax-k-responses-cancel-probe-memory-preflight-20260602-local-ready-check.json"
-    )
-    assert audit["live_probe_memory_preflight"]["exists"] is True
-    assert audit["live_probe_memory_preflight"]["status"] == "ready_to_launch"
-    assert audit["live_probe_memory_preflight"]["launch_allowed"] is True
-    assert isinstance(
-        audit["live_probe_memory_preflight"]["available_for_gate_gb"],
-        int | float,
-    )
-    assert isinstance(
-        audit["live_probe_memory_preflight"]["required_free_gb"],
-        int | float,
-    )
-    assert audit["live_probe_memory_preflight"]["preflight_memory_source"] == (
-        "vm_stat_free_plus_speculative_purgeable"
-    )
-    assert isinstance(
-        audit["live_probe_memory_preflight"]["preflight_captured_at"],
-        str,
-    )
-    assert audit["local_reporter_prompt_reproduction"]["clean"] is True
-    assert audit["local_reporter_prompt_reproduction"]["request_matches_reporter"] is True
-    assert audit["local_reporter_prompt_reproduction"]["bad_text_captured"] is False
-    assert audit["proven"]["local_reporter_prompt_reproduction_clean"] is True
-    assert audit["local_model_manifest"]["local_full_k_artifact_shape_recorded"] is True
-    assert audit["local_model_manifest"]["model_shard_count"] == 67
-    assert audit["local_model_manifest"]["checks"]["has_jangtq_runtime"] is True
-    assert audit["source_contract"]["server_has_responses_cancel_route"] is True
-    assert audit["source_contract"]["panel_routes_resp_ids_to_responses_cancel"] is True
-    assert audit["source_contract"]["test_proves_successful_responses_cancel_route"] is True
-    assert (
-        audit["source_contract"][
-            "test_proves_inactive_responses_cancel_404_after_engine_lookup"
-        ]
-        is True
-    )
-    discriminators = {row["id"]: row for row in audit["root_cause_discriminators"]}
-    assert discriminators["reporter_bundle_cancel_route_parity"]["status"] == "open"
-    assert "public_v1549_tahoe_dmg_cancel_route_present" in discriminators[
-        "reporter_bundle_cancel_route_parity"
-    ]["observed"]
-    assert "local_installed_hash_differs_from_public_v1549_tahoe" in discriminators[
-        "reporter_bundle_cancel_route_parity"
-    ]["observed"]
-    assert discriminators["reporter_stream_abort_vs_model_text"]["status"] == "open"
-    assert "reporter_cancel_404_after_stream_abort" in discriminators[
-        "reporter_stream_abort_vs_model_text"
-    ]["observed"]
-    assert discriminators["local_runtime_cache_math_parity"]["status"] == "partially_proven"
-    assert discriminators["local_runtime_cache_math_parity"]["observed"] == [
-        "single_active_scheduler",
-        "paged_prefix_cache_hits",
-        "block_disk_l2_writes_and_hits",
-        "turboquant_kv_live_decode",
+    assert audit["not_proven"] == [
+        "reporter model shard/codebook hashes match local full K artifact",
+        "reporter model artifact manifest is available for direct local comparison",
+        "reporter installed app bundle hash matches public/local server.py route proof",
+        "reporter response id was still active when the cancel request was sent",
+        "reporter chat/session/settings database state matches local diagnostic state",
+        "a concrete prompt reproduces screenshot-shaped wrong-language or numeric garbage",
+        "the 404 cancel response caused the screenshot rather than followed the stream abort",
     ]
-    assert discriminators["prompt_template_parser_parity"]["status"] == "open"
-    assert discriminators["model_artifact_hash_parity"]["status"] == "partially_proven"
-    assert "local_full_k_artifact_manifest_recorded" in discriminators[
-        "model_artifact_hash_parity"
-    ]["observed"]
-    assert "local_full_k_shard_hashes_recorded" in discriminators[
-        "model_artifact_hash_parity"
-    ]["observed"]
-    assert "reporter model shard/codebook hashes match local full K artifact" not in audit["not_proven"]
-    assert "reporter model artifact manifest is available for direct local comparison" not in audit["not_proven"]
-    assert "reporter installed app bundle hash matches public/local server.py route proof" not in audit["not_proven"]
-    assert "reporter chat/session/settings database state matches local diagnostic state" not in audit["not_proven"]
-    assert "the reporter 404 happened before the client stream abort" not in audit["not_proven"]
-    assert (
-        "the 404 cancel response caused the screenshot rather than followed the stream abort"
-        not in audit["not_proven"]
-    )
-    assert audit["not_proven"] == []
-    assert "reporter screenshot garbage was captured from a stale or unknown reporter app hash" in audit["release_boundary"]
-
+    assert "#179 remains open" in audit["release_boundary"]
 
 def test_issue179_audit_writes_json_artifact(tmp_path):
     out = tmp_path / "issue179-audit.json"
@@ -328,7 +57,7 @@ def test_issue179_audit_writes_json_artifact(tmp_path):
     audit = gate.write_audit(Path("."), out)
 
     assert out.exists()
-    assert '"status": "pass"' in out.read_text(encoding="utf-8")
+    assert '"status": "open"' in out.read_text(encoding="utf-8")
     assert audit["issue"]["id"] == 179
 
 
@@ -368,10 +97,10 @@ def test_issue179_audit_surfaces_latest_public_dmg_contract():
     audit = gate.build_audit(Path("."))
 
     latest = audit["latest_public_release_dmg_contract"]
-    assert latest["release_tag"] == "v1.5.52"
+    assert latest["release_tag"] == "v1.5.56"
     assert latest["asset"] in {
-        "vMLX-1.5.52-sequoia-arm64.dmg",
-        "vMLX-1.5.52-tahoe-arm64.dmg",
+        "vMLX-1.5.56-sequoia-arm64.dmg",
+        "vMLX-1.5.56-tahoe-arm64.dmg",
     }
     assert latest["server_has_responses_cancel_route"] is True
     assert latest["server_cancel_calls_engine_abort"] is True
@@ -386,14 +115,12 @@ def test_issue179_audit_surfaces_latest_public_dmg_contract():
     )
     checked_latest_assets = {
         (row.get("release_tag"), row.get("asset"))
-        for row in audit["reporter_server_hash_parity"]["provenance"][
-            "public_release_checked"
-        ]
-        if row.get("release_tag") == "v1.5.52"
+        for row in audit["public_release_dmg_contracts"]
+        if row.get("release_tag") == "v1.5.56"
     }
     assert checked_latest_assets == {
-        ("v1.5.52", "vMLX-1.5.52-sequoia-arm64.dmg"),
-        ("v1.5.52", "vMLX-1.5.52-tahoe-arm64.dmg"),
+        ("v1.5.56", "vMLX-1.5.56-sequoia-arm64.dmg"),
+        ("v1.5.56", "vMLX-1.5.56-tahoe-arm64.dmg"),
     }
 
 

@@ -61,7 +61,7 @@ QWEN35_INSTALLED_SPEED_ARTIFACT = Path(
     "build/current-decode-speed-live-qwen35-4bit-issue115-installed-app-after-decode-position-20260601.json"
 )
 ISSUE179_ROOT_CAUSE_AUDIT = Path(
-    "build/current-issue179-minimax-k-root-cause-audit-20260602-post-v1552-public-dmg-scan.json"
+    "build/current-issue179-minimax-k-root-cause-audit-after-public-v1556-scan-20260606.json"
 )
 ISSUE179_RESPONSES_CANCEL_PROOF = Path(
     "build/current-issue179-minimax-k-responses-cancel-probe-20260602-local-ready-live.json"

@@ -636,7 +636,7 @@ CURRENT_SUITE_COMMANDS: dict[str, list[str]] = {
         sys.executable,
         "tests/cross_matrix/run_issue179_minimax_k_root_cause_audit.py",
         "--out",
-        "build/current-issue179-minimax-k-root-cause-audit-20260602-post-v1552-public-dmg-scan.json",
+        "build/current-issue179-minimax-k-root-cause-audit-after-public-v1556-scan-20260606.json",
     ],
     "issue179_cancel_probe_memory_preflight": [
         sys.executable,
