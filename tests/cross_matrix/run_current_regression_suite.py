@@ -30,11 +30,9 @@ STEP_TIMEOUT_RETURNCODE = 124
 
 EXPECTED_OPEN_REQUIREMENTS = [
     "DSV4 Flash prefix/paged/L2 cache is enabled by default from app launch",
-    "DSV4 cache is native SWA+CSA/HCA composite, not generic KV/TurboQuant KV",
     "DSV4 same-process cache hit improves latency/TTFT and records paged+dsv4 hit",
     "DSV4 block disk L2 stores and hits after restart",
     "DSV4 Responses one-tool call stops after tool result",
-    "DSV4 can perform multiple tool iterations then final answer",
     "Qwen/JANG packaged MX matmul speed is release-cleared",
     "Qwen native MTP live decode speed and output equivalence are release-cleared",
     "Qwen 27B JANG_4M prompt-processing speed floor is release-cleared",

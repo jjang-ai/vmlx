@@ -76,6 +76,19 @@ def test_current_regression_suite_does_not_keep_proven_dsv4_default_cache_tool_l
     )
 
 
+def test_current_regression_suite_does_not_keep_proven_dsv4_native_cache_or_multi_tool_open():
+    from tests.cross_matrix import run_current_regression_suite as suite
+
+    assert (
+        "DSV4 cache is native SWA+CSA/HCA composite, not generic KV/TurboQuant KV"
+        not in suite.EXPECTED_OPEN_REQUIREMENTS
+    )
+    assert (
+        "DSV4 can perform multiple tool iterations then final answer"
+        not in suite.EXPECTED_OPEN_REQUIREMENTS
+    )
+
+
 def test_current_regression_suite_preserves_expected_open_requirement_details(
     tmp_path,
     monkeypatch,

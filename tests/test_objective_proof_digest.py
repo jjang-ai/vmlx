@@ -5508,6 +5508,57 @@ def test_objective_proof_digest_accepts_default_cache_tool_loop_mechanics_despit
     assert row["details"]["tool_loop_checks"]["code_file_written_exact"] is False
 
 
+def test_objective_proof_digest_uses_current_default_cache_artifact_for_native_cache_row(
+    tmp_path,
+):
+    from tests.cross_matrix.summarize_objective_proof import build_digest
+
+    _write_passing_base_artifacts(tmp_path)
+    (
+        tmp_path / "build/dev-ui-dsv4-live-cache-proof-20260521/result.json"
+    ).unlink()
+
+    digest = build_digest(tmp_path)
+    rows = {item["requirement"]: item for item in digest["requirements"]}
+
+    row = rows[
+        "DSV4 cache is native SWA+CSA/HCA composite, not generic KV/TurboQuant KV"
+    ]
+    assert row["status"] == "pass"
+    assert "build/current-dsv4-default-cache-tool-loop/result.json" in row["evidence"]
+    assert row["details"]["current_default_cache_native_cache_type"] == (
+        "native_composite"
+    )
+    assert row["details"]["current_default_cache_generic_turboquant_kv"] == {
+        "enabled": False
+    }
+
+
+def test_objective_proof_digest_uses_current_default_cache_artifact_for_multi_tool_row(
+    tmp_path,
+):
+    from tests.cross_matrix.summarize_objective_proof import build_digest
+
+    _write_passing_base_artifacts(tmp_path)
+    (
+        tmp_path
+        / "build/v1546-current-bundled-dsv4-two-tool-proof-20260521001426/result.json"
+    ).unlink()
+
+    digest = build_digest(tmp_path)
+    rows = {item["requirement"]: item for item in digest["requirements"]}
+
+    row = rows["DSV4 can perform multiple tool iterations then final answer"]
+    assert row["status"] == "pass"
+    assert "build/current-dsv4-default-cache-tool-loop/result.json" in row["evidence"]
+    assert row["details"]["current_default_cache_executed_tool_names"] == [
+        "list_directory",
+        "write_file",
+        "write_file",
+    ]
+    assert row["details"]["current_default_cache_final_text"] == "DONE"
+
+
 def test_objective_proof_digest_surfaces_default_cache_tool_loop_dry_run_controls(
     tmp_path,
 ):

@@ -5311,6 +5311,18 @@ def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
         and default_reasoning_parser_ok
         and default_tool_required_checks_ok
     )
+    current_default_native_cache_ok = (
+        "--disable-prefix-cache" not in default_tool_cmd
+        and "--dsv4-enable-prefix-cache" in default_tool_cmd
+        and "--use-paged-cache" in default_tool_cmd
+        and "--enable-block-disk-cache" in default_tool_cmd
+        and default_tool_native.get("cache_type") == "native_composite"
+        and default_tool_native.get("prefix") is True
+        and default_tool_native.get("paged") is True
+        and default_tool_native.get("block_disk_l2") is True
+        and (default_tool_native.get("generic_turboquant_kv") or {}).get("enabled")
+        is False
+    )
     thinking_tool_rounds = default_cache_tool_loop_thinking_on.get("rounds") or []
     thinking_tool_executed = [
         tool
@@ -5621,18 +5633,45 @@ def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
         requirements,
         "DSV4 cache is native SWA+CSA/HCA composite, not generic KV/TurboQuant KV",
         _status(
-            native.get("cache_type") == "native_composite"
-            and native.get("prefix") is True
-            and native.get("paged") is True
-            and native.get("block_disk_l2") is True
-            and (native.get("generic_turboquant_kv") or {}).get("enabled") is False
+            (
+                native.get("cache_type") == "native_composite"
+                and native.get("prefix") is True
+                and native.get("paged") is True
+                and native.get("block_disk_l2") is True
+                and (native.get("generic_turboquant_kv") or {}).get("enabled") is False
+            )
+            or current_default_native_cache_ok
         ),
-        ["build/dev-ui-dsv4-live-cache-proof-20260521/result.json"],
+        (
+            ["build/dev-ui-dsv4-live-cache-proof-20260521/result.json"]
+            if (
+                native.get("cache_type") == "native_composite"
+                and native.get("prefix") is True
+                and native.get("paged") is True
+                and native.get("block_disk_l2") is True
+                and (native.get("generic_turboquant_kv") or {}).get("enabled")
+                is False
+            )
+            else [DSV4_DEFAULT_CACHE_TOOL_LOOP_REL]
+        ),
         details={
             "cache_type": native.get("cache_type"),
             "components": native.get("components"),
             "generic_turboquant_kv": native.get("generic_turboquant_kv"),
             "cache_store_policy": native.get("cache_store_policy"),
+            "current_default_cache_native_cache_type": default_tool_native.get(
+                "cache_type"
+            ),
+            "current_default_cache_components": default_tool_native.get(
+                "components"
+            ),
+            "current_default_cache_generic_turboquant_kv": (
+                default_tool_native.get("generic_turboquant_kv")
+            ),
+            "current_default_cache_store_policy": (
+                default_tool_native.get("cache_store_policy")
+            ),
+            "current_default_cache_native_cache_ok": current_default_native_cache_ok,
         },
     )
     cached_details = (((turn2.get("body") or {}).get("usage") or {}).get("prompt_tokens_details") or {})
@@ -5683,13 +5722,44 @@ def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
     _add(
         requirements,
         "DSV4 can perform multiple tool iterations then final answer",
-        _status(two_tool_names == ["list_directory", "write_file"] and final_text == "DONE"),
-        ["build/v1546-current-bundled-dsv4-two-tool-proof-20260521001426/result.json"],
+        _status(
+            (two_tool_names == ["list_directory", "write_file"] and final_text == "DONE")
+            or (
+                default_tool_names == [
+                    "list_directory",
+                    "write_file",
+                    "write_file",
+                ]
+                and default_tool_final_text == "DONE"
+                and default_tool_required_checks_ok
+            )
+        ),
+        (
+            [
+                "build/v1546-current-bundled-dsv4-two-tool-proof-20260521001426/result.json"
+            ]
+            if two_tool_names == ["list_directory", "write_file"]
+            and final_text == "DONE"
+            else [DSV4_DEFAULT_CACHE_TOOL_LOOP_REL]
+        ),
         caveat=(
             "This proof used --disable-prefix-cache, so it proves DSML multi-tool "
             "loop behavior separately from default-on cache."
+            if two_tool_names == ["list_directory", "write_file"]
+            and final_text == "DONE"
+            and default_tool_names
+            != ["list_directory", "write_file", "write_file"]
+            else None
         ),
-        details={"executed_tools": executed_tools, "final_text": final_text},
+        details={
+            "executed_tools": executed_tools,
+            "final_text": final_text,
+            "current_default_cache_executed_tool_names": default_tool_names,
+            "current_default_cache_final_text": default_tool_final_text,
+            "current_default_cache_required_checks_ok": (
+                default_tool_required_checks_ok
+            ),
+        },
     )
     _add(
         requirements,
