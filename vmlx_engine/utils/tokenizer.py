@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import importlib
 from pathlib import Path
 
 from .chat_templates import DEFAULT_CHATML_TEMPLATE, NEMOTRON_CHAT_TEMPLATE
@@ -20,6 +21,29 @@ logger = logging.getLogger(__name__)
 
 
 _NEMOTRON_QUANT_ROOT_KEYS = frozenset({"group_size", "bits", "mode"})
+
+
+def _register_mimo_v2_runtime_for_mlx_lm() -> bool:
+    """Register MiMo-V2.5's JANG runtime before generic mlx-lm resolution.
+
+    The MiMo JANG_2L bundle is model-owned via ``config.json::model_type =
+    mimo_v2`` and ships its runtime through ``jang_tools.mimo_v2.mlx_register``.
+    Generic ``mlx_lm.load`` resolves ``mlx_lm.models.mimo_v2`` before weights
+    are inspected, so every non-JANG-loader load boundary must install the
+    registration first. This is the same runtime module the packaged bundle
+    already hash-gates; it is not a fallback decoder or forced behavior guard.
+    """
+    try:
+        importlib.import_module("jang_tools.mimo_v2.mlx_register")
+        importlib.import_module("mlx_lm.models.mimo_v2")
+        return True
+    except ImportError as _e:
+        logger.debug(
+            "jang_tools.mimo_v2 runtime registration skipped: %s. "
+            "MiMo-V2.5 bundles require bundled/current jang_tools.mimo_v2.",
+            _e,
+        )
+        return False
 
 
 def _sanitize_nemotron_quantization_config_for_load(config: dict) -> tuple[dict | None, list[str]]:
@@ -836,6 +860,12 @@ def load_model_with_fallback(model_name: str, tokenizer_config: dict = None, ski
         logger.debug(
             "jang_tools.dsv4 not installed — DSV4 bundles will need "
             "`pip install jang-tools` (or jang_tools >= 2.5.x with dsv4 submodule)"
+        )
+
+    if _register_mimo_v2_runtime_for_mlx_lm():
+        logger.debug(
+            "MiMo-V2.5 (mimo_v2) registered with mlx_lm.models before "
+            "generic mlx_lm.load resolution"
         )
 
     tokenizer_config = tokenizer_config or {}

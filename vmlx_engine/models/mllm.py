@@ -202,6 +202,7 @@ def _register_mimo_v2_mlx_vlm_runtime() -> None:
             super().__init__()
             self.config = config
             self.language_model = TextModel(config.text_config)
+            self._mimo_v2_quantized_for_load = False
 
         @property
         def layers(self):
@@ -227,12 +228,36 @@ def _register_mimo_v2_mlx_vlm_runtime() -> None:
             return self.language_model(input_ids, cache=cache, mask=mask)
 
         def load_weights(self, weights, strict=True):
-            filtered = []
+            filtered = {}
             for key, value in weights:
                 if key.startswith(("visual.", "audio_encoder.", "speech_embeddings.", "model.mtp.")):
                     continue
-                filtered.append((key, value))
-            return self.language_model.load_weights(filtered, strict=strict)
+                filtered[key] = value
+
+            if hasattr(self.language_model, "sanitize"):
+                filtered = self.language_model.sanitize(filtered)
+
+            quantization = getattr(self.config.text_config, "quantization", None)
+            if isinstance(quantization, dict) and not self._mimo_v2_quantized_for_load:
+
+                def class_predicate(path, module):
+                    if not hasattr(module, "to_quantized"):
+                        return False
+                    override = quantization.get(path)
+                    if isinstance(override, dict):
+                        return override
+                    return f"{path}.scales" in filtered
+
+                nn.quantize(
+                    self.language_model,
+                    group_size=quantization.get("group_size"),
+                    bits=quantization.get("bits"),
+                    mode=quantization.get("mode", "affine"),
+                    class_predicate=class_predicate,
+                )
+                self._mimo_v2_quantized_for_load = True
+
+            return self.language_model.load_weights(list(filtered.items()), strict=strict)
 
         def sanitize(self, weights):
             return self.language_model.sanitize(weights)

@@ -6144,6 +6144,44 @@ class TestStartupCompatibilityGuards:
 
         assert seen == ["jang_tools.mimo_v2.mlx_register", "mlx_lm.models.mimo_v2"]
 
+    def test_load_model_with_fallback_registers_mimo_v2_before_mlx_lm_resolution(
+        self, monkeypatch
+    ):
+        from vmlx_engine.utils import tokenizer
+
+        seen = []
+
+        def fake_import_module(name):
+            seen.append(name)
+            if name == "jang_tools.mimo_v2.mlx_register":
+                return SimpleNamespace()
+            if name == "mlx_lm.models.mimo_v2":
+                return SimpleNamespace(Model=object, ModelArgs=object)
+            raise ImportError(name)
+
+        monkeypatch.setattr(tokenizer.importlib, "import_module", fake_import_module)
+
+        assert tokenizer._register_mimo_v2_runtime_for_mlx_lm() is True
+        assert seen == ["jang_tools.mimo_v2.mlx_register", "mlx_lm.models.mimo_v2"]
+
+    def test_load_model_with_fallback_mimo_v2_registration_fails_closed(
+        self, monkeypatch
+    ):
+        from vmlx_engine.utils import tokenizer
+
+        seen = []
+
+        def fake_import_module(name):
+            seen.append(name)
+            if name == "jang_tools.mimo_v2.mlx_register":
+                return SimpleNamespace()
+            raise ImportError(name)
+
+        monkeypatch.setattr(tokenizer.importlib, "import_module", fake_import_module)
+
+        assert tokenizer._register_mimo_v2_runtime_for_mlx_lm() is False
+        assert seen == ["jang_tools.mimo_v2.mlx_register", "mlx_lm.models.mimo_v2"]
+
     def test_mllm_registers_mimo_v2_before_mlx_vlm_resolution(
         self, tmp_path, monkeypatch
     ):
@@ -6195,6 +6233,117 @@ class TestStartupCompatibilityGuards:
             "bits": 8,
             "group_size": 64,
         }
+        sys.modules.pop("mlx_vlm.models.mimo_v2", None)
+
+    def test_mllm_mimo_v2_load_weights_sanitizes_and_quantizes_affine_sidecars(
+        self, tmp_path, monkeypatch
+    ):
+        from vmlx_engine.models import mllm
+
+        model_dir = tmp_path / "MiMo-V2.5-JANG_2L"
+        model_dir.mkdir()
+        (model_dir / "config.json").write_text(
+            '{"model_type":"mimo_v2","vision_config":{},"audio_config":{}}',
+            encoding="utf-8",
+        )
+
+        events = []
+
+        class FakeTextConfig:
+            model_type = "mimo_v2"
+
+            def __init__(self, **kwargs):
+                self.quantization = kwargs.get("quantization")
+
+            @classmethod
+            def from_dict(cls, params):
+                return cls(**params)
+
+        class FakeTextModel:
+            def __init__(self, config):
+                self.config = config
+
+            def sanitize(self, weights):
+                events.append(("sanitize", sorted(weights)))
+                return {
+                    "model.layers.0.self_attn.qkv_proj.weight": object(),
+                    "model.layers.0.self_attn.qkv_proj.scales": object(),
+                    "model.layers.0.self_attn.qkv_proj.biases": object(),
+                }
+
+            def load_weights(self, weights, strict=True):
+                events.append(("load", sorted(key for key, _ in weights), strict))
+                return None
+
+        def fake_import_module(name):
+            if name == "jang_tools.mimo_v2.mlx_model":
+                return SimpleNamespace(Model=FakeTextModel, ModelArgs=FakeTextConfig)
+            raise ImportError(name)
+
+        quantize_calls = []
+
+        def fake_quantize(model, **kwargs):
+            quantize_calls.append(kwargs)
+
+        monkeypatch.setattr(mllm.importlib, "import_module", fake_import_module)
+        import mlx.nn as nn
+
+        monkeypatch.setattr(nn, "quantize", fake_quantize)
+
+        sys.modules.pop("mlx_vlm.models.mimo_v2", None)
+        mllm._register_local_mlx_vlm_runtime_if_needed(model_dir)
+        module = sys.modules["mlx_vlm.models.mimo_v2"]
+        cfg = module.ModelConfig.from_dict(
+            {
+                "model_type": "mimo_v2",
+                "quantization": {"bits": 8, "group_size": 64, "mode": "affine"},
+            }
+        )
+        model = module.Model(cfg)
+        model.load_weights(
+            [
+                ("visual.blocks.0.weight", object()),
+                ("model.mtp.layers.0.weight", object()),
+                ("model.layers.0.self_attn.qkv_proj.weight", object()),
+                ("model.layers.0.self_attn.qkv_proj.scales", object()),
+                ("model.layers.0.self_attn.qkv_proj.biases", object()),
+            ],
+            strict=True,
+        )
+
+        assert events[0] == (
+            "sanitize",
+            [
+                "model.layers.0.self_attn.qkv_proj.biases",
+                "model.layers.0.self_attn.qkv_proj.scales",
+                "model.layers.0.self_attn.qkv_proj.weight",
+            ],
+        )
+        assert events[1] == (
+            "load",
+            [
+                "model.layers.0.self_attn.qkv_proj.biases",
+                "model.layers.0.self_attn.qkv_proj.scales",
+                "model.layers.0.self_attn.qkv_proj.weight",
+            ],
+            True,
+        )
+        assert quantize_calls
+        assert quantize_calls[0]["group_size"] == 64
+        assert quantize_calls[0]["bits"] == 8
+        assert quantize_calls[0]["mode"] == "affine"
+        assert quantize_calls[0]["class_predicate"](
+            "model.layers.0.self_attn.qkv_proj",
+            SimpleNamespace(to_quantized=lambda **_: None),
+        ) is True
+        assert quantize_calls[0]["class_predicate"](
+            "model.layers.0.self_attn.o_proj",
+            SimpleNamespace(to_quantized=lambda **_: None),
+        ) is False
+        assert quantize_calls[0]["class_predicate"](
+            "model.layers.0.self_attn.qkv_proj",
+            SimpleNamespace(),
+        ) is False
         sys.modules.pop("mlx_vlm.models.mimo_v2", None)
 
     def test_mllm_registers_step3p7_source_runtime_before_mlx_vlm_resolution(
