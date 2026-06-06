@@ -9,9 +9,11 @@ All notable changes to vMLX Engine will be documented in this file.
 - Kept the Qwen3.5 dense native-MTP GatedDeltaNet patch compatible with `gdn_sink` propagation; current source and installed-app Qwen35/Qwen27 MXFP8 MTP smokes completed without the reported `gdn_sink` crash. Qwen35 speed is healthy in the smoke, while Qwen27 speed/equivalence remains open.
 - Added packaged Qwen27 MTP speed evidence: MXFP8-MTP is stable but slow under model-owned stochastic defaults, clears decode only under the explicit deterministic native-MTP policy, and still has prompt-processing rows below target; JANG_4M-MTP decodes faster but also has a PP nuance.
 - Recorded current Gemma4 12B JANG_4M source and installed-app speed gates above the 45 tok/s default target. Installed-app topk64 remains a nuance because its median was below target even though the top-k primary-regression threshold did not fire.
+- Recorded installed-app Gemma4 12B JANG_4M VLM recovery evidence: a small image request succeeds with cache stack enabled, and a forced image-prefill rejection returns HTTP 413 without poisoning the next text request.
 
 ### Notes
 - Future release notes for the current runtime/model/UI/API issue wave must credit GitHub `@Hornsan1` for reporting many of these issues.
+- JANGQ/JANG tools MiMo V2 support is on `jjang-ai/jangq` main at `d1316c3`; the local `/Users/example/jang` checkout still needs untracked-overlap cleanup before it can be safely fast-forwarded.
 
 ## [1.5.49] - 2026-05-23
 
