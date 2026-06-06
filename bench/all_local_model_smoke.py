@@ -226,6 +226,7 @@ def classify_model_dir(model_dir: Path) -> dict[str, Any]:
         "supports_tools": supports_tools,
         "has_mtp": has_mtp,
         "cache_family": cache_family,
+        "capabilities": capabilities,
         "has_jang_config": bool(jang),
         "namespace": "dealign.ai" if "dealign.ai" in str(model_dir) else ("JANGQ" if "JANGQ" in str(model_dir) else "other"),
     }
@@ -1154,6 +1155,14 @@ def run_model_row(
         write_json(row_dir / "cache_before.json", result["cache_before"])
 
         capability_body = capabilities if isinstance(capabilities, dict) else None
+        if not (
+            isinstance(capability_body, dict)
+            and isinstance(capability_body.get("modalities"), list)
+        ):
+            row_capabilities = row.get("capabilities")
+            capability_body = (
+                row_capabilities if isinstance(row_capabilities, dict) else capability_body
+            )
         probe_options = probe_options_from_capabilities(
             row,
             capability_body,

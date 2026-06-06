@@ -209,6 +209,10 @@ def test_classify_model_reads_mimo_v2_embedded_config_capabilities(tmp_path):
           },
           "capabilities": {
             "family": "mimo_v2",
+            "modalities": ["text"],
+            "preserved_modalities": ["vision", "audio"],
+            "unwired_modalities": ["vision", "audio"],
+            "multimodal_status": "weights_preserved_text_runtime",
             "cache_type": "kv",
             "reasoning": {
               "supported": true,
@@ -228,8 +232,17 @@ def test_classify_model_reads_mimo_v2_embedded_config_capabilities(tmp_path):
 
     assert row["model_type"] == "mimo_v2"
     assert row["is_mllm"] is True
+    assert row["capabilities"]["modalities"] == ["text"]
+    assert row["capabilities"]["preserved_modalities"] == ["vision", "audio"]
+    assert row["capabilities"]["unwired_modalities"] == ["vision", "audio"]
     assert row["supports_thinking"] is True
     assert row["supports_tools"] is True
+    assert mod.probe_options_from_capabilities(
+        row,
+        row["capabilities"],
+        include_media=True,
+        include_video=True,
+    ) == {"include_media": False, "include_video": False}
 
 
 def test_classify_model_marks_mimo_v2_without_jang_config_as_xml_tool_family(tmp_path):
