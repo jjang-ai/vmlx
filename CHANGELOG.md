@@ -10,10 +10,11 @@ All notable changes to vMLX Engine will be documented in this file.
 - Added packaged Qwen27 MTP speed evidence: MXFP8-MTP is stable but slow under model-owned stochastic defaults, clears decode only under the explicit deterministic native-MTP policy, and still has prompt-processing rows below target; JANG_4M-MTP decodes faster but also has a PP nuance.
 - Recorded current Gemma4 12B JANG_4M source and installed-app speed gates above the 45 tok/s default target. Installed-app topk64 remains a nuance because its median was below target even though the top-k primary-regression threshold did not fire.
 - Recorded installed-app Gemma4 12B JANG_4M VLM recovery evidence: a small image request succeeds with cache stack enabled, and a forced image-prefill rejection returns HTTP 413 without poisoning the next text request.
+- Refreshed no-heavy VL/media, API/cache, cache-architecture, Step3.7 crash-class, and admin sleep contracts after the Gemma4 VLM recovery proof; all five current artifacts pass and remain scoped as route/policy evidence, not full live model-family clearance.
 
 ### Notes
 - Future release notes for the current runtime/model/UI/API issue wave must credit GitHub `@Hornsan1` for reporting many of these issues.
-- JANGQ/JANG tools MiMo V2 support is on `jjang-ai/jangq` main at `d1316c3`; the local `/Users/example/jang` checkout still needs untracked-overlap cleanup before it can be safely fast-forwarded.
+- JANGQ/JANG tools MiMo V2 support is on `jjang-ai/jangq` main at `d1316c3`; the local `/Users/example/jang` checkout is now aligned to that commit, with the prior local equivalent head and overlapping untracked files preserved in backups.
 
 ## [1.5.49] - 2026-05-23
 
