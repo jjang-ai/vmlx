@@ -1612,6 +1612,65 @@ def test_simple_engine_routes_mimo_text_only_chat_through_language_model():
     assert output.finish_reason == "stop"
 
 
+def test_simple_engine_mimo_llm_path_uses_plain_template_prefix():
+    """Non-MLLM MiMo text path must avoid the native closed thinking-off rail."""
+    import asyncio
+    from types import SimpleNamespace
+
+    from vmlx_engine.engine.simple import SimpleEngine
+
+    seen = []
+
+    class _Tokenizer:
+        def apply_chat_template(self, messages, **kwargs):
+            seen.append(dict(kwargs))
+            if kwargs.get("enable_thinking") is False:
+                return "<|im_start|>assistant\n<think></think>"
+            return "<|im_start|>assistant\n"
+
+        def encode(self, text):
+            return list(range(len(str(text).split())))
+
+    class _Model:
+        tokenizer = _Tokenizer()
+
+        def generate(self, **kwargs):
+            assert kwargs["prompt"] == "<|im_start|>assistant\n"
+            return SimpleNamespace(
+                text="ACK",
+                tokens=[1],
+                prompt_tokens=0,
+                completion_tokens=1,
+                finish_reason="stop",
+            )
+
+    engine = SimpleEngine.__new__(SimpleEngine)
+    engine._loaded = True
+    engine._is_mllm = False
+    engine._model_name = "JANGQ-AI/MiMo-V2.5-JANG_2L"
+    engine._model = _Model()
+    engine._generation_lock = asyncio.Lock()
+    engine._model_family_name = lambda: "mimo_v2"
+    engine._model_tool_parser_name = lambda: "xml_function"
+
+    async def _run_model_call(fn, /, *args, **kwargs):
+        return fn(*args, **kwargs)
+
+    engine._run_model_call = _run_model_call
+
+    output = asyncio.run(
+        engine.chat(
+            [{"role": "user", "content": "Reply exactly ACK."}],
+            max_tokens=8,
+            temperature=0.0,
+            enable_thinking=False,
+        )
+    )
+
+    assert seen[-1]["enable_thinking"] is True
+    assert output.text == "ACK"
+
+
 def test_batched_engine_mimo_text_only_uses_plain_template_prefix(monkeypatch):
     """Continuous batching must not use MiMo's closed thinking-off prompt rail."""
     import mlx_vlm.prompt_utils as prompt_utils

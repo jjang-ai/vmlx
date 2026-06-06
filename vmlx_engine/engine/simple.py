@@ -111,6 +111,27 @@ class SimpleEngine(BaseEngine):
         except Exception:
             return None
 
+    def _chat_template_enable_thinking_for_render(
+        self, requested_enable_thinking: bool | None
+    ) -> bool | None:
+        """Return the template kwarg that should be used for prompt rendering.
+
+        MiMo-V2.5's shipped tokenizer renders ``enable_thinking=False`` as a
+        closed ``<think></think>`` assistant rail. Current local JANG_2L proof
+        artifacts show that shape can first-token-stop or produce empty visible
+        output on long/cache/tool rows. The release contract is still
+        thinking-off at the API layer; only the native prompt rendering uses
+        MiMo's plain assistant prefix, matching the MLLM and batched text-only
+        MiMo routes.
+        """
+
+        if (
+            requested_enable_thinking is False
+            and self._model_family_name() == "mimo_v2"
+        ):
+            return True
+        return requested_enable_thinking
+
     def _messages_are_text_only(self, messages: list[dict[str, Any]]) -> bool:
         for message in messages:
             content = message.get("content")
@@ -696,7 +717,9 @@ class SimpleEngine(BaseEngine):
                                     fn["arguments"] = {}
 
                     tpl_kwargs = build_chat_template_kwargs(
-                        enable_thinking=thinking_enabled,
+                        enable_thinking=self._chat_template_enable_thinking_for_render(
+                            thinking_enabled
+                        ),
                         extra=extra_ct_kwargs,
                         tokenize=False,
                         add_generation_prompt=not skip_gen_prompt,
@@ -989,7 +1012,9 @@ class SimpleEngine(BaseEngine):
             # skip_gen_prompt: when prompt_suffix provides the full assistant prefix
             # (e.g. Harmony analysis channel), don't let the template add its own
             template_kwargs = build_chat_template_kwargs(
-                enable_thinking=thinking_enabled,
+                enable_thinking=self._chat_template_enable_thinking_for_render(
+                    thinking_enabled
+                ),
                 extra=extra_ct_kwargs,
                 tokenize=False,
                 add_generation_prompt=not skip_gen_prompt,
