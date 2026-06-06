@@ -6346,6 +6346,124 @@ class TestStartupCompatibilityGuards:
         ) is False
         sys.modules.pop("mlx_vlm.models.mimo_v2", None)
 
+    def test_mllm_mimo_v2_language_model_accepts_mlx_vlm_inputs_embeds_contract(
+        self, tmp_path, monkeypatch
+    ):
+        from vmlx_engine.models import mllm
+
+        model_dir = tmp_path / "MiMo-V2.5-JANG_2L"
+        model_dir.mkdir()
+        (model_dir / "config.json").write_text(
+            '{"model_type":"mimo_v2","vision_config":{},"audio_config":{}}',
+            encoding="utf-8",
+        )
+
+        class FakeTextConfig:
+            model_type = "mimo_v2"
+
+            @classmethod
+            def from_dict(cls, params):
+                return cls()
+
+        class FakeBackbone:
+            def __call__(self, input_ids=None, inputs_embeds=None, cache=None, mask=None):
+                return f"hidden:{inputs_embeds}"
+
+        class FakeTextModel:
+            def __init__(self, config):
+                self.model = FakeBackbone()
+                self.lm_head = lambda hidden: f"logits:{hidden}"
+                self.layers = []
+
+            def __call__(self, input_ids, cache=None, mask=None):
+                return f"raw:{input_ids}"
+
+            def make_cache(self):
+                return []
+
+            def sanitize(self, weights):
+                return weights
+
+            def load_weights(self, weights, strict=True):
+                return None
+
+        def fake_import_module(name):
+            if name == "jang_tools.mimo_v2.mlx_model":
+                return SimpleNamespace(Model=FakeTextModel, ModelArgs=FakeTextConfig)
+            raise ImportError(name)
+
+        monkeypatch.setattr(mllm.importlib, "import_module", fake_import_module)
+
+        sys.modules.pop("mlx_vlm.models.mimo_v2", None)
+        mllm._register_local_mlx_vlm_runtime_if_needed(model_dir)
+        module = sys.modules["mlx_vlm.models.mimo_v2"]
+        model = module.Model(module.ModelConfig.from_dict({"model_type": "mimo_v2"}))
+
+        assert model.language_model("ids") == "raw:ids"
+        output = model.language_model("ids", inputs_embeds="embeds")
+        assert output.logits == "logits:hidden:embeds"
+        assert output.cross_attention_states is None
+        assert output.encoder_outputs is None
+        sys.modules.pop("mlx_vlm.models.mimo_v2", None)
+
+    def test_mllm_mimo_v2_language_model_preserves_existing_output_object(
+        self, tmp_path, monkeypatch
+    ):
+        from vmlx_engine.models import mllm
+
+        model_dir = tmp_path / "MiMo-V2.5-JANG_2L"
+        model_dir.mkdir()
+        (model_dir / "config.json").write_text(
+            '{"model_type":"mimo_v2","vision_config":{},"audio_config":{}}',
+            encoding="utf-8",
+        )
+
+        class FakeTextConfig:
+            model_type = "mimo_v2"
+
+            @classmethod
+            def from_dict(cls, params):
+                return cls()
+
+        class FakeTextModel:
+            def __init__(self, config):
+                self.model = SimpleNamespace(embed_tokens=lambda input_ids: input_ids)
+                self.layers = []
+
+            def __call__(self, input_ids, inputs_embeds=None, cache=None, mask=None):
+                return SimpleNamespace(
+                    logits=f"logits:{inputs_embeds}",
+                    cross_attention_states=None,
+                    encoder_outputs=None,
+                )
+
+            def make_cache(self):
+                return []
+
+            def sanitize(self, weights):
+                return weights
+
+            def load_weights(self, weights, strict=True):
+                return None
+
+        def fake_import_module(name):
+            if name == "jang_tools.mimo_v2.mlx_model":
+                return SimpleNamespace(Model=FakeTextModel, ModelArgs=FakeTextConfig)
+            raise ImportError(name)
+
+        monkeypatch.setattr(mllm.importlib, "import_module", fake_import_module)
+
+        sys.modules.pop("mlx_vlm.models.mimo_v2", None)
+        mllm._register_local_mlx_vlm_runtime_if_needed(model_dir)
+        module = sys.modules["mlx_vlm.models.mimo_v2"]
+        model = module.Model(module.ModelConfig.from_dict({"model_type": "mimo_v2"}))
+
+        output = model.language_model("ids", inputs_embeds="embeds")
+        assert output.logits == "logits:embeds"
+        assert output.cross_attention_states is None
+        assert output.encoder_outputs is None
+        sys.modules.pop("mlx_vlm.models.mimo_v2", None)
+
     def test_mllm_registers_step3p7_source_runtime_before_mlx_vlm_resolution(
         self, tmp_path
     ):

@@ -129,6 +129,76 @@ def _register_mimo_v2_mlx_vlm_runtime() -> None:
     TextConfig = getattr(text_runtime, "ModelArgs")
     TextModel = getattr(text_runtime, "Model")
 
+    _INPUTS_EMBEDS_UNSET = object()
+
+    class _MiMoV2CausalLMOutput:
+        def __init__(self, logits):
+            self.logits = logits
+            self.cross_attention_states = None
+            self.encoder_outputs = None
+
+    class _MiMoV2LanguageModelCompat(nn.Module):
+        """Adapt jang_tools' mlx-lm MiMo model to mlx-vlm's language-model API."""
+
+        def __init__(self, inner):
+            super().__init__()
+            self.inner = inner
+
+        @property
+        def model(self):
+            return self.inner.model
+
+        @property
+        def layers(self):
+            return self.inner.layers
+
+        def make_cache(self):
+            return self.inner.make_cache()
+
+        def sanitize(self, weights):
+            return self.inner.sanitize(weights)
+
+        def load_weights(self, weights, strict=True):
+            return self.inner.load_weights(weights, strict=strict)
+
+        def __call__(
+            self,
+            input_ids=None,
+            *,
+            inputs_embeds=_INPUTS_EMBEDS_UNSET,
+            cache=None,
+            mask=None,
+            **kwargs,
+        ):
+            mllm_style_call = inputs_embeds is not _INPUTS_EMBEDS_UNSET
+            if mllm_style_call:
+                try:
+                    logits = self.inner(
+                        input_ids,
+                        inputs_embeds=inputs_embeds,
+                        cache=cache,
+                        mask=mask,
+                        **kwargs,
+                    )
+                except TypeError as exc:
+                    if "inputs_embeds" not in str(exc):
+                        raise
+                    if inputs_embeds is None:
+                        logits = self.inner(input_ids, cache=cache, mask=mask, **kwargs)
+                    else:
+                        logits = self.inner.model(
+                            input_ids=None,
+                            inputs_embeds=inputs_embeds,
+                            cache=cache,
+                            mask=mask,
+                            **kwargs,
+                        )
+                        logits = self.inner.lm_head(logits)
+                if hasattr(logits, "logits"):
+                    return logits
+                return _MiMoV2CausalLMOutput(logits)
+            return self.inner(input_ids, cache=cache, mask=mask, **kwargs)
+
     class VisionConfig:
         @classmethod
         def from_dict(cls, params):
@@ -201,7 +271,7 @@ def _register_mimo_v2_mlx_vlm_runtime() -> None:
         def __init__(self, config: ModelConfig):
             super().__init__()
             self.config = config
-            self.language_model = TextModel(config.text_config)
+            self.language_model = _MiMoV2LanguageModelCompat(TextModel(config.text_config))
             self._mimo_v2_quantized_for_load = False
 
         @property
@@ -249,7 +319,7 @@ def _register_mimo_v2_mlx_vlm_runtime() -> None:
                     return f"{path}.scales" in filtered
 
                 nn.quantize(
-                    self.language_model,
+                    self.language_model.inner,
                     group_size=quantization.get("group_size"),
                     bits=quantization.get("bits"),
                     mode=quantization.get("mode", "affine"),

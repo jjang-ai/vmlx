@@ -4,6 +4,9 @@ All notable changes to vMLX Engine will be documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+- Fixed the vMLX MiMo-V2.5 MLLM language-model adapter so `mlx_vlm` text turns can pass `inputs_embeds` and receive a `.logits` output object instead of failing with HTTP 500. MiMo long-output quality remains a separate blocker.
+
 ### Notes
 - Future release notes for the current runtime/model/UI/API issue wave must credit GitHub `@Hornsan1` for reporting many of these issues.
 
