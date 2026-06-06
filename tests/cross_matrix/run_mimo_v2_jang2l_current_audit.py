@@ -36,6 +36,9 @@ LENGTH_SWEEP_ARTIFACT = Path(
 TOOL_FAILURE_ARTIFACT = Path(
     "build/current-mimo-v2-jang2l-tool-dialect-failure-20260606.json"
 )
+ALL_LOCAL_SMOKE_ARTIFACT = Path(
+    "build/current-all-local-model-smoke-mimo-v25-jang2l-tools-nomedia-after-xml-function-template-fix-20260606/summary.json"
+)
 CACHE_VS_NOCACHE_ARTIFACT = Path(
     "build/current-mimo-v2-jang2l-cache-vs-nocache-next-token-20260606.json"
 )
@@ -186,6 +189,60 @@ def _tool_protocol_blocked(data: dict[str, Any]) -> bool:
     )
 
 
+def _all_local_smoke_evidence(data: dict[str, Any]) -> dict[str, Any]:
+    results = data.get("results")
+    result = results[0] if isinstance(results, list) and results else data
+    if not isinstance(result, dict):
+        return {
+            "exists": True,
+            "tool_protocol_pass": False,
+            "exact_cache_blocked": True,
+            "speed_blocked": True,
+        }
+
+    requests = result.get("requests")
+    failures = result.get("failures")
+    if not isinstance(requests, list):
+        requests = []
+    if not isinstance(failures, list):
+        failures = []
+
+    tool_protocol_pass = False
+    for request in requests:
+        if not isinstance(request, dict) or request.get("label") != "tool_required":
+            continue
+        tool_calls = request.get("tool_calls")
+        validation_failures = request.get("validation_failures")
+        if not isinstance(validation_failures, list):
+            validation_failures = []
+        if isinstance(tool_calls, list) and tool_calls and not validation_failures:
+            tool_protocol_pass = True
+
+    exact_cache_blocked = any(
+        isinstance(failure, dict)
+        and failure.get("label") in {"text_cache_repeat_1", "text_cache_repeat_2"}
+        for failure in failures
+    )
+    generation_tps = (
+        result.get("cache_after", {})
+        .get("body", {})
+        .get("scheduler_stats", {})
+        .get("batch_generator", {})
+        .get("generation_tps")
+    )
+    speed_blocked = not (
+        isinstance(generation_tps, (int, float)) and generation_tps >= 40.0
+    )
+    return {
+        "exists": True,
+        "tool_protocol_pass": tool_protocol_pass,
+        "exact_cache_blocked": exact_cache_blocked,
+        "speed_blocked": speed_blocked,
+        "generation_tps": generation_tps,
+        "failures": failures,
+    }
+
+
 def _all_sink_diagnostic_cases_fail(data: dict[str, Any]) -> bool:
     cases = data.get("cases")
     if not isinstance(cases, list) or not cases:
@@ -212,6 +269,7 @@ def build_audit(root: Path, model_path: Path, manifest: Path) -> dict[str, Any]:
     switchglu = _artifact(root / SWITCHGLU_ARTIFACT)
     length_sweep = _artifact(root / LENGTH_SWEEP_ARTIFACT)
     tool_failure = _artifact(root / TOOL_FAILURE_ARTIFACT)
+    all_local_smoke = _artifact(root / ALL_LOCAL_SMOKE_ARTIFACT)
     cache_vs_nocache = _artifact(root / CACHE_VS_NOCACHE_ARTIFACT)
     sink_mode_length = _artifact(root / SINK_MODE_LENGTH_DIAGNOSTIC_ARTIFACT)
     disable_sink_length = _artifact(root / DISABLE_SINK_LENGTH_DIAGNOSTIC_ARTIFACT)
@@ -241,9 +299,21 @@ def build_audit(root: Path, model_path: Path, manifest: Path) -> dict[str, Any]:
     length_blocked = length_sweep.get("exists") and _length_sweep_blocked(
         length_sweep["data"]
     )
-    tool_blocked = tool_failure.get("exists") and _tool_protocol_blocked(
-        tool_failure["data"]
+    smoke_evidence = (
+        _all_local_smoke_evidence(all_local_smoke["data"])
+        if all_local_smoke.get("exists")
+        else {"exists": False}
     )
+    if smoke_evidence.get("exists"):
+        tool_blocked = not bool(smoke_evidence.get("tool_protocol_pass"))
+        exact_cache_blocked = bool(smoke_evidence.get("exact_cache_blocked"))
+        speed_blocked = bool(smoke_evidence.get("speed_blocked"))
+    else:
+        tool_blocked = tool_failure.get("exists") and _tool_protocol_blocked(
+            tool_failure["data"]
+        )
+        exact_cache_blocked = False
+        speed_blocked = True
     sink_mode_fails = sink_mode_length.get("exists") and _all_sink_diagnostic_cases_fail(
         sink_mode_length["data"]
     )
@@ -260,6 +330,8 @@ def build_audit(root: Path, model_path: Path, manifest: Path) -> dict[str, Any]:
         and cache_match
         and not length_blocked
         and not tool_blocked
+        and not exact_cache_blocked
+        and not speed_blocked
         and not stale_present
     )
 
@@ -281,6 +353,10 @@ def build_audit(root: Path, model_path: Path, manifest: Path) -> dict[str, Any]:
         blockers.append("mimo_long_prompt_coherence_blocked")
     if tool_blocked:
         blockers.append("mimo_tool_protocol_blocked")
+    if exact_cache_blocked:
+        blockers.append("mimo_exact_cache_prompt_following_blocked")
+    if speed_blocked:
+        blockers.append("mimo_decode_speed_below_release_target")
 
     return {
         "status": status,
@@ -301,6 +377,8 @@ def build_audit(root: Path, model_path: Path, manifest: Path) -> dict[str, Any]:
             "cache_vs_nocache_next_token": bool(cache_match),
             "long_prompt_coherence": not bool(length_blocked),
             "tool_protocol": not bool(tool_blocked),
+            "exact_cache_prompt_following": not bool(exact_cache_blocked),
+            "decode_speed_target": not bool(speed_blocked),
             "manual_sink_does_not_clear_length_generation": bool(sink_mode_fails),
             "disable_sink_does_not_clear_length_generation": bool(disable_sink_fails),
         },
@@ -311,12 +389,14 @@ def build_audit(root: Path, model_path: Path, manifest: Path) -> dict[str, Any]:
             "switchglu": str(SWITCHGLU_ARTIFACT),
             "length_sweep": str(LENGTH_SWEEP_ARTIFACT),
             "tool_failure": str(TOOL_FAILURE_ARTIFACT),
+            "all_local_smoke": str(ALL_LOCAL_SMOKE_ARTIFACT),
             "cache_vs_nocache": str(CACHE_VS_NOCACHE_ARTIFACT),
             "sink_mode_length_diagnostic": str(SINK_MODE_LENGTH_DIAGNOSTIC_ARTIFACT),
             "disable_sink_length_diagnostic": str(DISABLE_SINK_LENGTH_DIAGNOSTIC_ARTIFACT),
         },
         "diagnostics": {
             "cache_vs_nocache_next_token_match": bool(cache_match),
+            "all_local_smoke": smoke_evidence,
             "manual_sink_sdpa_clears_length_generation": False if sink_mode_fails else None,
             "disable_sink_clears_length_generation": False if disable_sink_fails else None,
             "sink_boundary": (
@@ -327,8 +407,9 @@ def build_audit(root: Path, model_path: Path, manifest: Path) -> dict[str, Any]:
         },
         "release_boundary": (
             "MiMo local artifact integrity is clean, but release remains blocked "
-            "until long-prompt coherence and API tool protocol pass without fake "
-            "parser injection, forced fallback, or cache disabling."
+            "until long-prompt coherence, exact cache prompt-following, and decode "
+            "speed pass without fake parser injection, forced fallback, or cache "
+            "disabling."
         ),
     }
 

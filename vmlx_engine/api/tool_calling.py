@@ -143,13 +143,14 @@ def check_and_inject_fallback_tools(
     # shipped template includes only an `example_function_name` exemplar; live
     # tests showed it could answer with a fake directory listing instead of a
     # native tool call even when the user explicitly said to use the tool.
+    parser_id = (tool_parser_id or "").strip().lower()
     is_dsv4_prompt = "<｜User｜>" in prompt or "<｜Assistant｜>" in prompt
     is_qwen_native_tool_prompt = (
-        "<|im_start|>" in prompt
+        parser_id not in {"xml_function", "mimo_xml_function"}
+        and "<|im_start|>" in prompt
         and "<tools>" in prompt
         and "<function=example_function_name>" in prompt
     )
-    parser_id = (tool_parser_id or "").strip().lower()
     is_zaya_native_tool_prompt = (
         parser_id in {"zaya_xml", "zaya", "zyphra"}
         or (
@@ -168,9 +169,15 @@ def check_and_inject_fallback_tools(
     ):
         return prompt
     is_lfm2_native_tool_prompt = parser_id in {"lfm2", "liquid"}
+    is_xml_function_native_tool_prompt = parser_id in {
+        "xml_function",
+        "mimo_xml_function",
+    }
     is_step3p5_native_tool_prompt = (
         parser_id in {"step3p5", "step", "stepfun"}
         or (
+            not is_xml_function_native_tool_prompt
+            and
             "<tool_call>" in prompt
             and "<function=example_function_name>" in prompt
             and "<tools>" in prompt
@@ -202,6 +209,13 @@ def check_and_inject_fallback_tools(
         and "<|tool_call_end|>" in instruction_prompt
         and all(f"{name}(" in instruction_prompt for name in tool_names)
     )
+    _xml_function_has_native_tool_schema = (
+        is_xml_function_native_tool_prompt
+        and "<tool_call>" in instruction_prompt
+        and "<function=example_function_name>" in instruction_prompt
+        and "<tools>" in instruction_prompt
+        and all(f"<name>{name}</name>" in instruction_prompt for name in tool_names)
+    )
     _step3p5_has_concrete_tool_examples = (
         is_step3p5_native_tool_prompt
         and all(f"<function={name}>" in instruction_prompt for name in tool_names)
@@ -211,6 +225,7 @@ def check_and_inject_fallback_tools(
         and (not is_qwen_native_tool_prompt or _qwen_has_concrete_tool_examples)
         and (not is_zaya_native_tool_prompt or _zaya_has_concrete_tool_examples)
         and (not is_lfm2_native_tool_prompt or _lfm2_has_concrete_tool_examples)
+        and (not is_xml_function_native_tool_prompt or _xml_function_has_native_tool_schema)
         and (not is_step3p5_native_tool_prompt or _step3p5_has_concrete_tool_examples)
     ):
         return prompt
@@ -713,6 +728,40 @@ def check_and_inject_fallback_tools(
                 else ""
             )
         )
+    elif is_xml_function_native_tool_prompt:
+        xml_function_prompt_tools = _requested_tools(template_tools)
+        xml_function_lines = [
+            "You have access to MiMo XML function tools. When the user asks for one, "
+            "call it instead of explaining what you would do.",
+            "",
+        ]
+        for tool in xml_function_prompt_tools:
+            func = _tool_func(tool)
+            name = func.get("name", "") or "unknown_tool"
+            params = func.get("parameters", {}) or {}
+            props = params.get("properties", {}) if isinstance(params, dict) else {}
+            if props:
+                xml_function_lines.append(f"{name} fields: {', '.join(str(p) for p in props)}")
+            else:
+                xml_function_lines.append(f"{name} fields: none")
+        tool_prompt = (
+            "\n".join(xml_function_lines).rstrip()
+            + "\n\nWhen a tool call is needed, emit ONLY this native XML function shape. "
+            "Do not emit JSON, markdown, prose, fake results, or a different XML dialect.\n"
+            "If the user explicitly asks to use a tool, emit the tool call first; do not answer as if the tool result already exists.\n"
+            "Fill fields from the user's request exactly. "
+            "If the user says `with value blue-cat`, put only `blue-cat` in `value`.\n"
+            + _render_xml_examples(
+                xml_function_prompt_tools,
+                "<tool_call>",
+                "</tool_call>",
+            )
+            + (
+                "\n\nFor a request to list the current directory, set path to \".\" exactly."
+                if _has_directory_path_tool(xml_function_prompt_tools)
+                else ""
+            )
+        )
     elif is_step3p5_native_tool_prompt:
         step3p5_lines = [
             "You have access to these tools. When the user asks to use one, "
@@ -818,6 +867,15 @@ def check_and_inject_fallback_tools(
             return "<｜DSML｜invoke" in rendered
         if is_qwen_native_tool_prompt:
             return "<tool_call>" in rendered
+        if is_xml_function_native_tool_prompt:
+            return (
+                "<tool_call>" in rendered
+                and all(name in rendered for name in tool_names)
+                and (
+                    "<function=example_function_name>" in rendered
+                    or any(f"<function={name}>" in rendered for name in tool_names)
+                )
+            )
         if is_step3p5_native_tool_prompt:
             return all(f"<function={name}>" in rendered for name in tool_names)
         return True

@@ -70,6 +70,43 @@ def test_mimo_current_audit_separates_clean_artifact_from_runtime_blockers(tmp_p
         {"status": "fail", "runtime_observations": [{"result": "fail_incomplete_marker"}]},
     )
     _write_json(
+        tmp_path
+        / "build/current-all-local-model-smoke-mimo-v25-jang2l-tools-nomedia-after-xml-function-template-fix-20260606/summary.json",
+        {
+            "status": "fail",
+            "results": [
+                {
+                    "status": "probe_failed",
+                    "failures": [
+                        {"label": "text_cache_repeat_1", "reason": "empty_visible"},
+                    ],
+                    "requests": [
+                        {
+                            "label": "tool_required",
+                            "tool_calls": [
+                                {
+                                    "type": "function",
+                                    "function": {
+                                        "name": "record_fact",
+                                        "arguments": "{\"value\":\"blue-cat\"}",
+                                    },
+                                }
+                            ],
+                            "validation_failures": [],
+                        }
+                    ],
+                    "cache_after": {
+                        "body": {
+                            "scheduler_stats": {
+                                "batch_generator": {"generation_tps": 1.8}
+                            }
+                        }
+                    },
+                }
+            ],
+        },
+    )
+    _write_json(
         tmp_path / "build/current-mimo-v2-jang2l-sink-mode-length-diagnostic-20260606.json",
         {
             "status": "fail",
@@ -96,13 +133,17 @@ def test_mimo_current_audit_separates_clean_artifact_from_runtime_blockers(tmp_p
     assert result["component_ok"]["text_cache_narrow"] is True
     assert result["component_ok"]["cache_vs_nocache_next_token"] is True
     assert result["component_ok"]["long_prompt_coherence"] is False
-    assert result["component_ok"]["tool_protocol"] is False
+    assert result["component_ok"]["tool_protocol"] is True
+    assert result["component_ok"]["exact_cache_prompt_following"] is False
+    assert result["component_ok"]["decode_speed_target"] is False
     assert result["component_ok"]["manual_sink_does_not_clear_length_generation"] is True
     assert result["component_ok"]["disable_sink_does_not_clear_length_generation"] is True
+    assert result["diagnostics"]["all_local_smoke"]["tool_protocol_pass"] is True
     assert result["diagnostics"]["manual_sink_sdpa_clears_length_generation"] is False
     assert result["diagnostics"]["disable_sink_clears_length_generation"] is False
     assert "sink-kernel-only" in result["diagnostics"]["sink_boundary"]
     assert result["blockers"] == [
         "mimo_long_prompt_coherence_blocked",
-        "mimo_tool_protocol_blocked",
+        "mimo_exact_cache_prompt_following_blocked",
+        "mimo_decode_speed_below_release_target",
     ]

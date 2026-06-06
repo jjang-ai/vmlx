@@ -63,7 +63,7 @@ from tests.cross_matrix.release_regression_manifest import (
 
 DEFAULT_OUT = Path("build/current-objective-proof-audit-20260602-cache-detail-zero-cached.json")
 CURRENT_RELEASE_REGRESSION_MANIFEST_REL = (
-    "build/current-release-regression-manifest-after-dsv4-smoke-refresh-20260606.json"
+    "build/current-release-regression-manifest-after-mimo-xml-function-template-fix-20260606.json"
 )
 DSV4_QUALITY_CLEARANCE_REL = "build/current-dsv4-long-output-quality-clearance-20260521.json"
 DSV4_CURRENT_IDENTIFIER_CANARY_REL = (
@@ -375,13 +375,13 @@ MIMO_V2_JANG2L_TOOL_DIALECT_REL = (
     "build/current-mimo-v2-jang2l-tool-dialect-failure-20260606.json"
 )
 MIMO_V2_JANG2L_CURRENT_AUDIT_REL = (
-    "build/current-mimo-v2-jang2l-current-audit-20260606.json"
+    "build/current-mimo-v2-jang2l-current-audit-after-xml-function-template-fix-20260606.json"
 )
 MIMO_V2_JANG2L_CONSERVATIVE_DIAGNOSTIC_REL = (
     "build/current-mimo-conservative-diagnostic-20260606/summary.json"
 )
 MIMO_V2_JANG2L_NOMEDIA_TOOL_CACHE_REL = (
-    "build/current-all-local-model-smoke-mimo-v25-jang2l-tools-nomedia-after-harness-tighten-20260606/summary.json"
+    "build/current-all-local-model-smoke-mimo-v25-jang2l-tools-nomedia-after-xml-function-template-fix-20260606/summary.json"
 )
 ALL_LOCAL_MODEL_SMOKE_DSV4_JANGTQ_K_REL = (
     "build/current-all-local-model-smoke-dsv4-jangtq-k-tools-cache-20260606/summary.json"
@@ -4968,6 +4968,7 @@ def _mimo_v2_jang2l_quality_detail(root: Path) -> tuple[bool, dict[str, Any]]:
 
     audit_long_prompt_open = current_audit_component_ok.get("long_prompt_coherence") is False
     audit_tool_protocol_open = current_audit_component_ok.get("tool_protocol") is False
+    audit_decode_speed_open = current_audit_component_ok.get("decode_speed_target") is False
     if audit_long_prompt_open:
         prompt_length_coherence_blocked = True
     if audit_tool_protocol_open:
@@ -5032,7 +5033,9 @@ def _mimo_v2_jang2l_quality_detail(root: Path) -> tuple[bool, dict[str, Any]]:
         isinstance(nomedia_by_label.get("reasoning_on"), dict)
         and not nomedia_by_label["reasoning_on"].get("validation_failures")
     )
-    if nomedia_tool_cache.get("status") == "fail" and not nomedia_tool_pass:
+    if nomedia_tool_pass:
+        tool_protocol_blocked = audit_tool_protocol_open
+    elif nomedia_tool_cache.get("status") == "fail":
         tool_protocol_blocked = True
     if nomedia_tool_cache.get("status") == "fail" and not nomedia_exact_cache_pass:
         prompt_length_coherence_blocked = True
@@ -5046,6 +5049,7 @@ def _mimo_v2_jang2l_quality_detail(root: Path) -> tuple[bool, dict[str, Any]]:
         and switchglu_parity_pass
         and not prompt_length_coherence_blocked
         and not tool_protocol_blocked
+        and not audit_decode_speed_open
     )
     return ok, {
         "artifacts": artifacts,
@@ -5061,6 +5065,7 @@ def _mimo_v2_jang2l_quality_detail(root: Path) -> tuple[bool, dict[str, Any]]:
         "prompt_length_coherence_blocked": prompt_length_coherence_blocked,
         "prompt_length_corrupt_cases": corrupt_length_cases,
         "tool_protocol_blocked": tool_protocol_blocked,
+        "decode_speed_blocked": audit_decode_speed_open,
         "conservative_tool_failures": conservative_tool_failures,
         "nomedia_tool_cache_status": nomedia_tool_cache.get("status"),
         "nomedia_exact_cache_pass": nomedia_exact_cache_pass,
@@ -6944,7 +6949,7 @@ def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
         caveat=(
             None
             if mimo_quality_ok
-            else "MiMo V2.5 JANG_2L has current structural, narrow text/cache, and selected-expert parity evidence, but current local artifacts still show long-prompt corruption and tool protocol failure. Do not release-clear MiMo from short smokes."
+            else "MiMo V2.5 JANG_2L has current structural, narrow text/cache, selected-expert parity, and source XML tool-call evidence, but current local artifacts still show long-prompt corruption, exact-cache prompt-following failure, and decode speed below target. Do not release-clear MiMo from short smokes."
         ),
         details=mimo_quality_details,
     )

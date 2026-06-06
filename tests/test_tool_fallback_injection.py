@@ -240,3 +240,93 @@ def test_fallback_with_empty_name_tools(mock_messages):
     # Should return prompt unchanged (no valid tool names to check)
     assert result == "prompt"
     mock_tokenizer.apply_chat_template.assert_not_called()
+
+
+def test_mimo_xml_function_native_template_does_not_trigger_step_fallback(mock_messages):
+    """MiMo XML-function templates should not be rewritten as Step/JSON fallback."""
+    mock_tokenizer = MagicMock()
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "record_fact",
+                "description": "Record a fact.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"value": {"type": "string"}},
+                },
+            },
+        },
+    ]
+    original_prompt = """
+<|im_start|>system
+You may call one or more functions to assist with the user query.
+<tools>
+<function>
+<name>record_fact</name>
+<description>Record a fact.</description>
+</function>
+</tools>
+For each function call, return xml:
+<tool_call>
+<function=example_function_name>
+<parameter=example_parameter_1>value_1</parameter>
+</function>
+</tool_call>
+<|im_end|>
+<|im_start|>user
+Record blue-cat.
+<|im_end|>
+"""
+
+    result = check_and_inject_fallback_tools(
+        prompt=original_prompt,
+        messages=mock_messages,
+        template_tools=tools,
+        tokenizer=mock_tokenizer,
+        template_kwargs={"tools": tools},
+        tool_parser_id="xml_function",
+    )
+
+    assert result == original_prompt
+    mock_tokenizer.apply_chat_template.assert_not_called()
+
+
+def test_mimo_xml_function_fallback_matches_parser_dialect(mock_messages):
+    """If MiMo fallback is needed, it must instruct native XML, not JSON."""
+    mock_tokenizer = MagicMock()
+    messages = [{"role": "user", "content": "Use record_fact with value blue-cat."}]
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "record_fact",
+                "description": "Record a fact.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"value": {"type": "string"}},
+                    "required": ["value"],
+                },
+            },
+        },
+    ]
+
+    def mock_apply(modified_messages, **kwargs):
+        return modified_messages[0]["content"]
+
+    mock_tokenizer.apply_chat_template.side_effect = mock_apply
+
+    result = check_and_inject_fallback_tools(
+        prompt="<|im_start|>user\nRecord blue-cat.<|im_end|>",
+        messages=messages,
+        template_tools=tools,
+        tokenizer=mock_tokenizer,
+        template_kwargs={"tools": tools},
+        tool_parser_id="xml_function",
+    )
+
+    assert "native XML function shape" in result
+    assert "<tool_call>" in result
+    assert "<function=record_fact>" in result
+    assert "<parameter=value>" in result
+    assert '"name": "FUNCTION_NAME"' not in result
