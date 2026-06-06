@@ -23,7 +23,7 @@ from typing import Any
 
 
 DEFAULT_OUT = Path(
-    "build/current-regression-suite-after-mimo-scope-removal-20260604.json"
+    "build/current-regression-suite-after-mimo-active-scope-20260606.json"
 )
 DEFAULT_STEP_TIMEOUT_SEC = 900.0
 STEP_TIMEOUT_RETURNCODE = 124
@@ -33,6 +33,7 @@ EXPECTED_OPEN_REQUIREMENTS = [
     "Gemma4 26B CRACK Responses visible-content and language quality is release-cleared",
     "Gemma4 26B CRACK mixed-SWA app-engine speed floor is release-cleared",
     "Cross-family live multi-turn smoke matrix is release-cleared",
+    "MiMo V2.5 JANG_2L runtime/tool/long-prompt quality is release-cleared",
     "MiniMax-M2.7-JANGTQ_K reporter parity/root cause is release-cleared",
     "Real Electron UI cross-family live model matrix is release-cleared",
     "DSV4 long-output/code/file-generation quality is release-cleared",
@@ -709,7 +710,7 @@ CURRENT_SUITE_COMMANDS: dict[str, list[str]] = {
         "--require-current-proof-sweep",
         "--require-release-ready",
         "--out",
-        "build/current-release-regression-manifest-after-mimo-scope-removal-20260604.json",
+        "build/current-release-regression-manifest-after-mimo-active-scope-20260606.json",
     ],
 }
 

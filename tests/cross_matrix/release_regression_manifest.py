@@ -24,7 +24,7 @@ from tests.cross_matrix.run_current_regression_suite import (
 )
 
 CURRENT_RELEASE_REGRESSION_MANIFEST_ARTIFACT = (
-    "build/current-release-regression-manifest-after-mimo-scope-removal-20260604.json"
+    "build/current-release-regression-manifest-after-mimo-active-scope-20260606.json"
 )
 
 EXPECTED_CURRENT_MODEL_ARTIFACT_CHECKS = (
@@ -384,7 +384,7 @@ CURRENT_POST_BUDGET_EDGE_ARTIFACTS = {
 }
 
 CURRENT_REGRESSION_SUITE_ARTIFACT = (
-    "build/current-regression-suite-after-mimo-scope-removal-20260604.json"
+    "build/current-regression-suite-after-mimo-active-scope-20260606.json"
 )
 CURRENT_ISSUE175_179_RELEASE_BOUNDARY_AUDIT_ARTIFACT = (
     "build/current-issue175-179-release-boundary-audit-20260531-post-install-sync.json"
@@ -821,23 +821,20 @@ CURRENT_COVERED_LIVE_TOOL_SMOKE_ARTIFACTS = {
     "minimax_m27_tq_k": "build/current-all-local-model-smoke-minimax-small-jangtq-bundled-toolprobe-20260525/summary.json",
     "zaya_vl_jangtq4": "build/current-all-local-model-smoke-zaya-vl-jangtq4-true-bundled-toolprobe-media-sentinel-20260525/summary.json",
 }
-CURRENT_MIMO_V2_JANG2L_SINK_AB_ARTIFACT = (
-    "build/current-mimo-v2-jang2l-sink-ab-local.json"
+CURRENT_MIMO_V2_JANG2L_STRUCTURAL_VERIFY_ARTIFACT = (
+    "build/current-mimo-jang2l-local-structural-verify-20260606.json"
 )
-CURRENT_MIMO_V2_JANG2L_ROUTER_TOPK_PARITY_ARTIFACT = (
-    "build/current-mimo-v2-jang2l-router-topk-parity-local.json"
+CURRENT_MIMO_V2_JANG2L_TEXT_CACHE_ARTIFACT = (
+    "build/current-mimo-jang2l-live-text-cache-smoke-20260606.json"
 )
-CURRENT_MIMO_V2_JANG2L_MOE_OUTPUT_PARITY_ARTIFACT = (
-    "build/current-mimo-v2-jang2l-moe-output-parity-local.json"
+CURRENT_MIMO_V2_JANG2L_SWITCHGLU_PARITY_ARTIFACT = (
+    "build/current-mimo-v2-jang2l-quantized-switchglu-parity-20260606.json"
 )
-CURRENT_MIMO_V2_JANG2L_HOST_AVAILABILITY_ARTIFACT = (
-    "build/current-mimo-v2-jang2l-host-availability-local.json"
+CURRENT_MIMO_V2_JANG2L_LENGTH_SWEEP_ARTIFACT = (
+    "build/current-mimo-v2-jang2l-direct-length-sweep-20260606.json"
 )
-CURRENT_MIMO_V2_JANG2L_PROFILE_DIAGNOSTIC_ARTIFACT = (
-    "build/current-mimo-v2-jang2l-layer1-expert-quant-profile-diagnostic-20260527.json"
-)
-CURRENT_MIMO_V2_JANG2L_NOCACHE_NO_KVQ_ARTIFACT = (
-    "build/current-mimo-v2-jang2l-installed-nocache-no-kvq-after-swa-runtime-sync-20260527.json"
+CURRENT_MIMO_V2_JANG2L_TOOL_DIALECT_ARTIFACT = (
+    "build/current-mimo-v2-jang2l-tool-dialect-failure-20260606.json"
 )
 CURRENT_DIAGNOSTIC_LIVE_SMOKE_ARTIFACTS = {
     "zaya_text_mxfp4_toolprobe": {
@@ -1154,6 +1151,7 @@ EXPECTED_CURRENT_OPEN_REQUIREMENTS = [
     "Gemma4 26B CRACK Responses visible-content and language quality is release-cleared",
     "Gemma4 26B CRACK mixed-SWA app-engine speed floor is release-cleared",
     "Cross-family live multi-turn smoke matrix is release-cleared",
+    "MiMo V2.5 JANG_2L runtime/tool/long-prompt quality is release-cleared",
     "MiniMax-M2.7-JANGTQ_K reporter parity/root cause is release-cleared",
     "Real Electron UI cross-family live model matrix is release-cleared",
     "DSV4 long-output/code/file-generation quality is release-cleared",
@@ -2251,6 +2249,7 @@ def validate_current_proof_sweep_artifacts(root: Path) -> dict[str, Any]:
     live_tool_smoke_summaries = _validate_current_covered_live_tool_smoke_artifacts(
         root
     )
+    mimo_v2_jang2l_root_cause = _validate_current_mimo_v2_jang2l_root_cause(root)
     diagnostic_live_smoke_summaries = (
         _validate_current_diagnostic_live_smoke_artifacts(root)
     )
@@ -2622,7 +2621,7 @@ def validate_current_proof_sweep_artifacts(root: Path) -> dict[str, Any]:
         live_smoke_summaries=live_smoke_summaries,
         live_tool_smoke_summaries=live_tool_smoke_summaries,
         mimo_v2_jang2l_sink_ab={},
-        mimo_v2_jang2l_root_cause={},
+        mimo_v2_jang2l_root_cause=mimo_v2_jang2l_root_cause,
         issue175_179_release_boundary_audit=issue175_179_release_boundary_audit,
         installed_app_runtime_parity_audit=installed_app_runtime_parity_audit,
         issue179_minimax_k_root_cause_audit=issue179_minimax_k_root_cause_audit,
@@ -2680,6 +2679,10 @@ def validate_current_proof_sweep_artifacts(root: Path) -> dict[str, Any]:
         "release_surface_matrix": release_surface_matrix_ok,
         "live_smoke_summaries": live_smoke_summaries_ok,
         "live_tool_smoke_summaries": live_tool_smoke_summaries_ok,
+        "mimo_v2_jang2l_root_cause": (
+            mimo_v2_jang2l_root_cause.get("status") == "pass"
+            and mimo_v2_jang2l_root_cause.get("local_release_clearance") is True
+        ),
         "diagnostic_live_smoke_summaries": diagnostic_live_smoke_summaries_ok,
         "dev_ui_proof": dev_ui_proof_ok,
         "real_ui_live_model_proof": real_ui_live_model_proof_ok,
@@ -2733,6 +2736,7 @@ def validate_current_proof_sweep_artifacts(root: Path) -> dict[str, Any]:
         "release_surface_matrix": release_surface_matrix,
         "live_smoke_summaries": live_smoke_summaries,
         "live_tool_smoke_summaries": live_tool_smoke_summaries,
+        "mimo_v2_jang2l_root_cause": mimo_v2_jang2l_root_cause,
         "diagnostic_live_smoke_summaries": diagnostic_live_smoke_summaries,
         "dev_ui_proof": dev_ui_proof,
         "real_ui_live_model_proof": real_ui_live_model_proof,
@@ -2928,6 +2932,48 @@ def _current_release_blocker_ledger(
             deferred_release_gaps.append(blocker)
         else:
             blockers.append(blocker)
+
+    if (
+        isinstance(mimo_v2_jang2l_root_cause, dict)
+        and mimo_v2_jang2l_root_cause
+        and "status" in mimo_v2_jang2l_root_cause
+        and (
+            mimo_v2_jang2l_root_cause.get("status") != "pass"
+            or mimo_v2_jang2l_root_cause.get("local_release_clearance") is not True
+        )
+    ):
+        blockers.append(
+            {
+                "id": "mimo_v2_jang2l_runtime_quality_open",
+                "status": "open",
+                "evidence": ",".join(
+                    str(path)
+                    for path in (
+                        mimo_v2_jang2l_root_cause.get("artifacts") or {}
+                    ).values()
+                )
+                or CURRENT_MIMO_V2_JANG2L_LENGTH_SWEEP_ARTIFACT,
+                "next_proof": (
+                    "Pass current local MiMo JANG_2L long-prompt coherence, "
+                    "tool protocol/continuation, cache, and API proof before "
+                    "including MiMo in a production release."
+                ),
+                "details": {
+                    key: mimo_v2_jang2l_root_cause.get(key)
+                    for key in (
+                        "status",
+                        "structural_verify_passed",
+                        "text_cache_narrow_pass",
+                        "switchglu_selected_expert_parity_passed",
+                        "prompt_length_coherence_blocked",
+                        "tool_protocol_blocked",
+                        "root_cause_candidate",
+                        "release_boundary",
+                    )
+                    if key in mimo_v2_jang2l_root_cause
+                },
+            }
+        )
 
     if isinstance(release_surface_matrix, dict) and (
         "staged_source_version_not_public"
@@ -5376,7 +5422,7 @@ def _validate_app_runtime_parity_audit(
 
 
 def _validate_current_mimo_v2_jang2l_sink_ab(root: Path) -> dict[str, Any]:
-    artifact = CURRENT_MIMO_V2_JANG2L_SINK_AB_ARTIFACT
+    artifact = CURRENT_MIMO_V2_JANG2L_LENGTH_SWEEP_ARTIFACT
     path = root / artifact
     result: dict[str, Any] = {
         "artifact": artifact,
@@ -5429,7 +5475,7 @@ def _mimo_sink_output_coherent(text: str) -> bool:
 
 
 def _validate_current_mimo_v2_jang2l_host_availability(root: Path) -> dict[str, Any]:
-    artifact = CURRENT_MIMO_V2_JANG2L_HOST_AVAILABILITY_ARTIFACT
+    artifact = CURRENT_MIMO_V2_JANG2L_STRUCTURAL_VERIFY_ARTIFACT
     path = root / artifact
     result: dict[str, Any] = {
         "artifact": artifact,
@@ -5486,42 +5532,43 @@ def _remote_evidence_artifacts(*artifacts: str) -> list[str]:
 
 
 def _validate_current_mimo_v2_jang2l_root_cause(root: Path) -> dict[str, Any]:
-    router_artifact = CURRENT_MIMO_V2_JANG2L_ROUTER_TOPK_PARITY_ARTIFACT
-    moe_artifact = CURRENT_MIMO_V2_JANG2L_MOE_OUTPUT_PARITY_ARTIFACT
-    profile_artifact = CURRENT_MIMO_V2_JANG2L_PROFILE_DIAGNOSTIC_ARTIFACT
-    nocache_artifact = CURRENT_MIMO_V2_JANG2L_NOCACHE_NO_KVQ_ARTIFACT
-    remote_artifacts = _remote_evidence_artifacts(router_artifact, moe_artifact)
+    structural_artifact = CURRENT_MIMO_V2_JANG2L_STRUCTURAL_VERIFY_ARTIFACT
+    text_cache_artifact = CURRENT_MIMO_V2_JANG2L_TEXT_CACHE_ARTIFACT
+    switchglu_artifact = CURRENT_MIMO_V2_JANG2L_SWITCHGLU_PARITY_ARTIFACT
+    length_sweep_artifact = CURRENT_MIMO_V2_JANG2L_LENGTH_SWEEP_ARTIFACT
+    tool_dialect_artifact = CURRENT_MIMO_V2_JANG2L_TOOL_DIALECT_ARTIFACT
     result: dict[str, Any] = {
         "status": "missing",
         "artifacts": {
-            "router_topk_parity": router_artifact,
-            "moe_output_parity": moe_artifact,
-            "profile_diagnostic": profile_artifact,
-            "nocache_no_kvq_probe": nocache_artifact,
+            "structural_verify": structural_artifact,
+            "text_cache": text_cache_artifact,
+            "switchglu_parity": switchglu_artifact,
+            "length_sweep": length_sweep_artifact,
+            "tool_dialect": tool_dialect_artifact,
         },
         "missing": [],
         "failures": [],
-        "router_topk_exact": False,
-        "moe_expert_distortion_seen": False,
-        "profile_diagnostic_seen": False,
-        "nocache_no_kvq_incoherent": False,
-        "max_moe_rel_l2": None,
-        "min_moe_cosine": None,
-        "profile_rel_l2": {},
-        "remote_artifacts": remote_artifacts,
-        "remote_evidence_only": bool(remote_artifacts),
-        "local_release_clearance": not remote_artifacts,
+        "structural_verify_passed": False,
+        "text_cache_narrow_pass": False,
+        "switchglu_selected_expert_parity_passed": False,
+        "prompt_length_coherence_blocked": False,
+        "tool_protocol_blocked": False,
+        "remote_artifacts": [],
+        "remote_evidence_only": False,
+        "local_release_clearance": False,
     }
 
-    router_path = root / router_artifact
-    moe_path = root / moe_artifact
-    profile_path = root / profile_artifact
-    nocache_path = root / nocache_artifact
+    structural_path = root / structural_artifact
+    text_cache_path = root / text_cache_artifact
+    switchglu_path = root / switchglu_artifact
+    length_sweep_path = root / length_sweep_artifact
+    tool_dialect_path = root / tool_dialect_artifact
     for path, artifact in (
-        (router_path, router_artifact),
-        (moe_path, moe_artifact),
-        (profile_path, profile_artifact),
-        (nocache_path, nocache_artifact),
+        (structural_path, structural_artifact),
+        (text_cache_path, text_cache_artifact),
+        (switchglu_path, switchglu_artifact),
+        (length_sweep_path, length_sweep_artifact),
+        (tool_dialect_path, tool_dialect_artifact),
     ):
         if not path.exists():
             result["missing"].append(artifact)
@@ -5529,147 +5576,109 @@ def _validate_current_mimo_v2_jang2l_root_cause(root: Path) -> dict[str, Any]:
         return result
 
     try:
-        router_payload = json.loads(router_path.read_text(encoding="utf-8"))
-        moe_payload = json.loads(moe_path.read_text(encoding="utf-8"))
-        profile_payload = json.loads(profile_path.read_text(encoding="utf-8"))
-        nocache_payload = json.loads(nocache_path.read_text(encoding="utf-8"))
+        structural_payload = json.loads(structural_path.read_text(encoding="utf-8"))
+        text_cache_payload = json.loads(text_cache_path.read_text(encoding="utf-8"))
+        switchglu_payload = json.loads(switchglu_path.read_text(encoding="utf-8"))
+        length_sweep_payload = json.loads(length_sweep_path.read_text(encoding="utf-8"))
+        tool_dialect_payload = json.loads(tool_dialect_path.read_text(encoding="utf-8"))
     except Exception as exc:  # noqa: BLE001 - report validation failure
         result["status"] = f"load_error:{type(exc).__name__}"
         result["failures"].append("json_load_error")
         return result
 
-    topk_exact_rows = router_payload.get("topk_exact_rows")
-    if not isinstance(topk_exact_rows, list) or not topk_exact_rows:
-        result["failures"].append("missing_router_topk_exact_rows")
-    elif not all(item is True for item in topk_exact_rows):
-        result["failures"].append("router_topk_mismatch")
+    result["structural_verify_passed"] = structural_payload.get("status") == "pass"
+    if not result["structural_verify_passed"]:
+        result["failures"].append("mimo_structural_verify_not_pass")
 
-    for key in (
-        "weight_max_abs_diff",
-        "bias_max_abs_diff",
-        "topk_weight_max_abs_diff",
-        "score_max_abs_diff",
-    ):
-        value = router_payload.get(key)
-        if not isinstance(value, (int, float)):
-            result["failures"].append(f"missing_router_metric:{key}")
-        elif float(value) != 0.0:
-            result["failures"].append(f"nonzero_router_metric:{key}")
+    text_cache_requests = text_cache_payload.get("requests")
+    if not isinstance(text_cache_requests, list):
+        text_cache_requests = []
+    text_cache_contents = [
+        str(item.get("content") or "")
+        for item in text_cache_requests
+        if isinstance(item, dict)
+    ]
+    cached_token_counts = []
+    for item in text_cache_requests:
+        if not isinstance(item, dict):
+            continue
+        usage = item.get("usage")
+        details = usage.get("prompt_tokens_details") if isinstance(usage, dict) else None
+        cached_tokens = details.get("cached_tokens") if isinstance(details, dict) else None
+        if isinstance(cached_tokens, int):
+            cached_token_counts.append(cached_tokens)
+    result["text_cache_narrow_pass"] = (
+        len(text_cache_contents) >= 2
+        and all(content == "cache ok" for content in text_cache_contents[:2])
+        and any(count > 0 for count in cached_token_counts)
+    )
+    if not result["text_cache_narrow_pass"]:
+        result["failures"].append("mimo_text_cache_narrow_pass_missing")
 
-    result["router_topk_exact"] = not any(
-        failure.startswith("missing_router")
-        or failure.startswith("router_topk")
-        or failure.startswith("nonzero_router")
-        for failure in result["failures"]
+    max_abs_diff = switchglu_payload.get("max_abs_diff")
+    mean_abs_diff = switchglu_payload.get("mean_abs_diff")
+    result["switchglu_selected_expert_parity_passed"] = (
+        isinstance(max_abs_diff, (int, float))
+        and float(max_abs_diff) <= 0.002
+        and isinstance(mean_abs_diff, (int, float))
+        and float(mean_abs_diff) <= 0.001
+    )
+    if not result["switchglu_selected_expert_parity_passed"]:
+        result["failures"].append("mimo_switchglu_selected_expert_parity_missing")
+
+    length_cases = length_sweep_payload.get("cases")
+    if not isinstance(length_cases, list):
+        length_cases = []
+    corrupt_cases = [
+        {
+            "prompt_tokens": item.get("prompt_tokens"),
+            "status": item.get("status"),
+            "output": item.get("output"),
+        }
+        for item in length_cases
+        if isinstance(item, dict)
+        and isinstance(item.get("prompt_tokens"), int)
+        and item.get("prompt_tokens") >= 148
+        and "fail" in str(item.get("status") or "")
+    ]
+    result["prompt_length_coherence_blocked"] = (
+        length_sweep_payload.get("status") == "fail" and bool(corrupt_cases)
+    )
+    result["prompt_length_corrupt_cases"] = corrupt_cases
+
+    tool_observations = tool_dialect_payload.get("runtime_observations")
+    if not isinstance(tool_observations, list):
+        tool_observations = []
+    no_structured_tool_calls = any(
+        isinstance(item, dict)
+        and item.get("http_status") == 200
+        and item.get("tool_calls") is None
+        for item in tool_observations
+    )
+    required_rejected = any(
+        isinstance(item, dict)
+        and item.get("http_status") == 400
+        and "did not produce any tool calls" in str(item.get("error") or "")
+        for item in tool_observations
+    )
+    result["tool_protocol_blocked"] = (
+        tool_dialect_payload.get("status") == "fail"
+        and no_structured_tool_calls
+        and required_rejected
     )
 
-    row_stats = moe_payload.get("row_stats")
-    if not isinstance(row_stats, list) or not row_stats:
-        result["failures"].append("missing_moe_row_stats")
-        return result
-
-    rel_l2_values: list[float] = []
-    cosine_values: list[float] = []
-    for row in row_stats:
-        if not isinstance(row, dict):
-            result["failures"].append("invalid_moe_row_stat")
-            continue
-        rel_l2 = row.get("rel_l2")
-        cosine = row.get("cosine")
-        if not isinstance(rel_l2, (int, float)):
-            result["failures"].append("missing_moe_rel_l2")
-            continue
-        if not isinstance(cosine, (int, float)):
-            result["failures"].append("missing_moe_cosine")
-            continue
-        rel_l2_values.append(float(rel_l2))
-        cosine_values.append(float(cosine))
-
-    if rel_l2_values:
-        result["max_moe_rel_l2"] = max(rel_l2_values)
-    if cosine_values:
-        result["min_moe_cosine"] = min(cosine_values)
-
-    result["moe_expert_distortion_seen"] = (
-        bool(rel_l2_values)
-        and max(rel_l2_values) >= 0.30
-        and bool(cosine_values)
-        and min(cosine_values) <= 0.95
-    )
-    if not result["moe_expert_distortion_seen"]:
-        result["failures"].append("moe_expert_distortion_not_observed")
-
-    profiles = profile_payload.get("profiles")
-    if not isinstance(profiles, list) or not profiles:
-        result["failures"].append("missing_profile_diagnostic_profiles")
-    else:
-        rel_l2_by_profile: dict[str, float] = {}
-        for item in profiles:
-            if not isinstance(item, dict):
-                continue
-            profile = item.get("profile")
-            rel_l2 = item.get("rel_l2_vs_source")
-            if isinstance(profile, str) and isinstance(rel_l2, (int, float)):
-                rel_l2_by_profile[profile] = float(rel_l2)
-        result["profile_rel_l2"] = {
-            profile: rel_l2_by_profile[profile]
-            for profile in ("source", "2L")
-            if profile in rel_l2_by_profile
-        }
-        for profile in ("2L",):
-            if profile not in rel_l2_by_profile:
-                result["failures"].append(f"missing_profile_rel_l2:{profile}")
-        profile_diagnostic_seen = (
-            rel_l2_by_profile.get("2L", 0.0) >= 0.15
+    if result["prompt_length_coherence_blocked"] or result["tool_protocol_blocked"]:
+        result["status"] = "open"
+        result["root_cause_candidate"] = (
+            "mimo_v2_jang2l_quantized_profile_or_full_forward_quality_pending"
         )
-        result["profile_diagnostic_seen"] = profile_diagnostic_seen
-        if not profile_diagnostic_seen:
-            result["failures"].append("mimo_profile_diagnostic_boundary_not_observed")
-
-    if nocache_payload.get("mode") != "disable_prefix_cache_kv_quant_none_after_swa_runtime_sync":
-        result["failures"].append("mimo_nocache_no_kvq_wrong_mode")
-    caps = nocache_payload.get("capabilities")
-    if not isinstance(caps, dict):
-        result["failures"].append("mimo_nocache_no_kvq_missing_capabilities")
-    else:
-        if caps.get("reasoning_parser") != "think_xml":
-            result["failures"].append("mimo_nocache_no_kvq_wrong_reasoning_parser")
-        if caps.get("tool_parser") != "xml_function":
-            result["failures"].append("mimo_nocache_no_kvq_wrong_tool_parser")
-    requests = nocache_payload.get("requests")
-    if not isinstance(requests, list) or not requests:
-        result["failures"].append("mimo_nocache_no_kvq_missing_requests")
-    else:
-        by_label = {
-            item.get("label"): item
-            for item in requests
-            if isinstance(item, dict) and isinstance(item.get("label"), str)
-        }
-        for label in ("ack", "recall_check", "reasoning"):
-            if label not in by_label:
-                result["failures"].append(f"mimo_nocache_no_kvq_missing_label:{label}")
-        ack_text = str((by_label.get("ack") or {}).get("content_head") or "")
-        recall_text = str((by_label.get("recall_check") or {}).get("content_head") or "")
-        reasoning_text = str((by_label.get("reasoning") or {}).get("content_head") or "")
-        result["nocache_no_kvq_incoherent"] = (
-            "ACK" not in ack_text
-            and "blue" not in recall_text.lower()
-            and "cat" not in recall_text.lower()
-            and "FINAL=OK" not in reasoning_text
-            and any("-" in text or "}" in text or "0" in text for text in (ack_text, recall_text, reasoning_text))
+        result["release_boundary"] = (
+            "local artifact/runtime has narrow text-cache proof but fails long-prompt "
+            "coherence and/or tool protocol; do not release-clear MiMo"
         )
-        if not result["nocache_no_kvq_incoherent"]:
-            result["failures"].append("mimo_nocache_no_kvq_incoherence_not_observed")
-
-    if not result["failures"]:
-        result["root_cause_candidate"] = "mimo_v2_jang2l_2bit_routed_expert_distortion"
-        if remote_artifacts:
-            result["status"] = "open"
-            result["release_boundary"] = (
-                "remote evidence retained as context; local-only reproduction required"
-            )
-        else:
-            result["status"] = "pass"
+    elif not result["failures"]:
+        result["status"] = "pass"
+        result["local_release_clearance"] = True
     else:
         result["status"] = "fail"
     return result

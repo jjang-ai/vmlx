@@ -26,7 +26,7 @@ from tests.cross_matrix.release_regression_manifest import (
 
 
 DEFAULT_OUT = Path(
-    "build/current-release-regression-manifest-after-mimo-scope-removal-20260604.json"
+    "build/current-release-regression-manifest-after-mimo-active-scope-20260606.json"
 )
 PREPACKAGE_ALLOWED_BLOCKERS = {
     "packaged_app_developer_id_signing_blocked",

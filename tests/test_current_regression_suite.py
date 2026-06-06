@@ -179,6 +179,14 @@ def test_current_regression_suite_preserves_expected_open_requirement_details(
                     },
                 },
                 {
+                    "requirement": "MiMo V2.5 JANG_2L runtime/tool/long-prompt quality is release-cleared",
+                    "status": "open",
+                    "details": {
+                        "prompt_length_coherence_blocked": True,
+                        "tool_protocol_blocked": True,
+                    },
+                },
+                {
                     "requirement": "Real Electron UI cross-family live model matrix is release-cleared",
                     "status": "open",
                     "details": {
@@ -793,6 +801,7 @@ def test_current_regression_suite_fails_on_step_failure_even_if_digest_is_expect
                 {"requirement": "DSV4 default-cache multi-tool agent loop is proven", "status": "pass"},
                 {"requirement": "Gemma4 26B CRACK mixed-SWA app-engine speed floor is release-cleared", "status": "pass"},
                 {"requirement": "Cross-family live multi-turn smoke matrix is release-cleared", "status": "open"},
+                {"requirement": "MiMo V2.5 JANG_2L runtime/tool/long-prompt quality is release-cleared", "status": "open"},
                 {"requirement": "Real Electron UI cross-family live model matrix is release-cleared", "status": "open"},
                 {"requirement": "DSV4 long-output/code/file-generation quality is release-cleared", "status": "open"},
             ]
@@ -1041,7 +1050,7 @@ def test_current_regression_suite_refreshes_release_regression_manifest(monkeypa
     )
     assert any(
         name == "release_regression_manifest"
-        and "build/current-release-regression-manifest-after-mimo-scope-removal-20260604.json"
+        and "build/current-release-regression-manifest-after-mimo-active-scope-20260606.json"
         in cmd
         for name, cmd in seen_steps
     )

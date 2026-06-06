@@ -24,11 +24,11 @@ from tests.cross_matrix.release_regression_manifest import (
     CURRENT_ISSUE179_MINIMAX_K_ROOT_CAUSE_AUDIT_ARTIFACT,
     CURRENT_ISSUE181_183_RUNTIME_AUDIT_ARTIFACT,
     CURRENT_PUBLIC_APP_ISSUE_AUDIT_ARTIFACT,
-    CURRENT_MIMO_V2_JANG2L_MOE_OUTPUT_PARITY_ARTIFACT,
-    CURRENT_MIMO_V2_JANG2L_NOCACHE_NO_KVQ_ARTIFACT,
-    CURRENT_MIMO_V2_JANG2L_PROFILE_DIAGNOSTIC_ARTIFACT,
-    CURRENT_MIMO_V2_JANG2L_ROUTER_TOPK_PARITY_ARTIFACT,
-    CURRENT_MIMO_V2_JANG2L_SINK_AB_ARTIFACT,
+    CURRENT_MIMO_V2_JANG2L_LENGTH_SWEEP_ARTIFACT,
+    CURRENT_MIMO_V2_JANG2L_STRUCTURAL_VERIFY_ARTIFACT,
+    CURRENT_MIMO_V2_JANG2L_SWITCHGLU_PARITY_ARTIFACT,
+    CURRENT_MIMO_V2_JANG2L_TEXT_CACHE_ARTIFACT,
+    CURRENT_MIMO_V2_JANG2L_TOOL_DIALECT_ARTIFACT,
     CURRENT_OBJECTIVE_DIGEST_ARTIFACT,
     CURRENT_REAL_UI_DSV4_MEMORY_PREFLIGHT_ARTIFACT,
     CURRENT_REAL_UI_LIVE_MODEL_PROOF_ARTIFACTS,
@@ -3207,77 +3207,63 @@ def _write_expected_diagnostic_live_smoke_artifacts(root: Path) -> None:
 
 
 def _write_passing_mimo_v2_root_cause_artifacts(root: Path) -> None:
-    router_path = root / CURRENT_MIMO_V2_JANG2L_ROUTER_TOPK_PARITY_ARTIFACT
-    router_path.parent.mkdir(parents=True, exist_ok=True)
-    router_path.write_text(
-        json.dumps(
-            {
-                "weight_max_abs_diff": 0.0,
-                "bias_max_abs_diff": 0.0,
-                "topk_weight_max_abs_diff": 0.0,
-                "score_max_abs_diff": 0.0,
-                "topk_exact_rows": [True, True],
-            }
-        )
-        + "\n",
+    structural_path = root / CURRENT_MIMO_V2_JANG2L_STRUCTURAL_VERIFY_ARTIFACT
+    structural_path.parent.mkdir(parents=True, exist_ok=True)
+    structural_path.write_text(
+        json.dumps({"status": "pass", "files": 173}) + "\n",
         encoding="utf-8",
     )
-    moe_path = root / CURRENT_MIMO_V2_JANG2L_MOE_OUTPUT_PARITY_ARTIFACT
-    moe_path.parent.mkdir(parents=True, exist_ok=True)
-    moe_path.write_text(
+    text_cache_path = root / CURRENT_MIMO_V2_JANG2L_TEXT_CACHE_ARTIFACT
+    text_cache_path.parent.mkdir(parents=True, exist_ok=True)
+    text_cache_path.write_text(
         json.dumps(
             {
-                "row_stats": [
-                    {"rel_l2": 0.603, "cosine": 0.813},
-                    {"rel_l2": 0.437, "cosine": 0.901},
-                ]
-            }
-        )
-        + "\n",
-        encoding="utf-8",
-    )
-    profile_path = root / CURRENT_MIMO_V2_JANG2L_PROFILE_DIAGNOSTIC_ARTIFACT
-    profile_path.parent.mkdir(parents=True, exist_ok=True)
-    profile_path.write_text(
-        json.dumps(
-            {
-                "profiles": [
-                    {"profile": "source", "rel_l2_vs_source": 0.0},
-                    {"profile": "2L", "rel_l2_vs_source": 0.178},
-                ]
-            }
-        )
-        + "\n",
-        encoding="utf-8",
-    )
-    nocache_path = root / CURRENT_MIMO_V2_JANG2L_NOCACHE_NO_KVQ_ARTIFACT
-    nocache_path.parent.mkdir(parents=True, exist_ok=True)
-    nocache_path.write_text(
-        json.dumps(
-                {
-                    "status": "pass",
-                    "mode": "disable_prefix_cache_kv_quant_none_after_swa_runtime_sync",
-                    "capabilities": {
-                    "family": "mimo_v2",
-                    "reasoning_parser": "think_xml",
-                    "tool_parser": "xml_function",
-                },
                 "requests": [
+                    {"content": "cache ok", "usage": {}},
                     {
-                        "label": "ack",
-                        "response": {"code": 200},
-                        "content_head": "- - - - -} -} -}- - - - - -",
+                        "content": "cache ok",
+                        "usage": {
+                            "prompt_tokens_details": {
+                                "cached_tokens": 28,
+                                "cache_detail": "paged",
+                            }
+                        },
                     },
-                    {
-                        "label": "recall_check",
-                        "response": {"code": 200},
-                        "content_head": "-00 - - -.. - - - - -0 - - -",
-                    },
-                    {
-                        "label": "reasoning",
-                        "response": {"code": 200},
-                        "content_head": ". - - - - - - -000 - - -",
-                    },
+                ]
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    switchglu_path = root / CURRENT_MIMO_V2_JANG2L_SWITCHGLU_PARITY_ARTIFACT
+    switchglu_path.parent.mkdir(parents=True, exist_ok=True)
+    switchglu_path.write_text(
+        json.dumps({"max_abs_diff": 0.0007, "mean_abs_diff": 0.00009}) + "\n",
+        encoding="utf-8",
+    )
+    length_sweep_path = root / CURRENT_MIMO_V2_JANG2L_LENGTH_SWEEP_ARTIFACT
+    length_sweep_path.parent.mkdir(parents=True, exist_ok=True)
+    length_sweep_path.write_text(
+        json.dumps(
+            {
+                "status": "pass",
+                "cases": [
+                    {"prompt_tokens": 60, "status": "pass", "output": "length ok"},
+                    {"prompt_tokens": 180, "status": "pass", "output": "length ok"},
+                ],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    tool_path = root / CURRENT_MIMO_V2_JANG2L_TOOL_DIALECT_ARTIFACT
+    tool_path.parent.mkdir(parents=True, exist_ok=True)
+    tool_path.write_text(
+        json.dumps(
+            {
+                "status": "pass",
+                "runtime_observations": [
+                    {"http_status": 200, "tool_calls": [{"id": "call_1"}]},
                 ],
             }
         )
@@ -3287,7 +3273,7 @@ def _write_passing_mimo_v2_root_cause_artifacts(root: Path) -> None:
 
 
 def _write_open_mimo_v2_sink_ab_artifact(root: Path) -> None:
-    path = root / CURRENT_MIMO_V2_JANG2L_SINK_AB_ARTIFACT
+    path = root / CURRENT_MIMO_V2_JANG2L_LENGTH_SWEEP_ARTIFACT
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
         json.dumps(
@@ -3833,7 +3819,7 @@ def test_release_regression_manifest_current_sweep_uses_latest_live_smoke_artifa
     assert "current-regression-suite-20260528-installed-aggregate-stale.json" not in joined
     assert "current-regression-suite-20260528-epipe-aggregate-guard.json" not in joined
     assert "current-regression-suite-20260528-dsv4-continue-refresh.json" not in joined
-    assert "current-regression-suite-after-mimo-scope-removal-20260604.json" in joined
+    assert "current-regression-suite-after-mimo-active-scope-20260606.json" in joined
     assert "current-regression-suite-gemma4-release-boundary-after-ui-e2e-fixes-dmg-build-20260604.json" not in joined
     assert "current-regression-suite-20260602-v1553-installed-tahoe-refresh.json" not in joined
     assert "current-regression-suite-20260602-vm-stat-gate-validation.json" not in joined
@@ -8549,6 +8535,7 @@ def test_release_regression_manifest_validates_current_proof_sweep_artifacts(tmp
     _write_passing_real_ui_dsv4_memory_preflight_artifact(tmp_path)
     _write_passing_issue179_minimax_k_live_probe_memory_preflight(tmp_path)
     _write_passing_step37_vlm_runtime_audit(tmp_path)
+    _write_passing_mimo_v2_root_cause_artifacts(tmp_path)
 
     result = validate_current_proof_sweep_artifacts(tmp_path)
 
@@ -8572,8 +8559,8 @@ def test_release_regression_manifest_validates_current_proof_sweep_artifacts(tmp
     assert result["component_ok"]["real_ui_full_model_matrix"] is True
     assert result["component_ok"]["real_ui_dsv4"] is True
     assert result["component_ok"]["objective_digest"] is True
-    assert not any("mimo_v2" in key.lower() for key in result["component_ok"])
-    assert "mimo_v2_jang2l_root_cause" not in result
+    assert result["component_ok"]["mimo_v2_jang2l_root_cause"] is True
+    assert result["mimo_v2_jang2l_root_cause"]["status"] == "pass"
     assert result["objective_digest"]["status"] == "pass"
     assert result["missing"] == []
     assert result["not_pass"] == []
@@ -8812,8 +8799,8 @@ def test_release_regression_manifest_validates_current_proof_sweep_artifacts(tmp
         "missing": [],
         "failures": [],
     }
-    assert "mimo_v2_jang2l_root_cause" not in result
-    assert not any("mimo_v2" in key.lower() for key in result["component_ok"])
+    assert result["mimo_v2_jang2l_root_cause"]["status"] == "pass"
+    assert result["component_ok"]["mimo_v2_jang2l_root_cause"] is True
     ledger = result["release_blocker_ledger"]
     assert ledger["status"] == "pass"
     assert ledger["deferred_release_families"] == [
@@ -8906,13 +8893,18 @@ def test_release_regression_manifest_validates_current_proof_sweep_artifacts(tmp
     assert real_ui_details["top_memory_processes"]
 
 
-def test_release_blocker_ledger_excludes_mimo_from_current_release_scope():
+def test_release_blocker_ledger_tracks_mimo_as_current_release_blocker():
     ledger = _current_release_blocker_ledger(
         regression_suite={"open_requirements": []},
         live_smoke_summaries={"status": "pass", "missing": [], "not_pass": []},
         live_tool_smoke_summaries={"status": "pass", "missing": [], "not_pass": []},
         mimo_v2_jang2l_sink_ab={"status": "open"},
-        mimo_v2_jang2l_root_cause={"remote_evidence_only": False},
+        mimo_v2_jang2l_root_cause={
+            "status": "open",
+            "local_release_clearance": False,
+            "artifacts": {"length_sweep": CURRENT_MIMO_V2_JANG2L_LENGTH_SWEEP_ARTIFACT},
+            "prompt_length_coherence_blocked": True,
+        },
         issue175_179_release_boundary_audit={"status": "open", "issues": {}},
         installed_app_runtime_parity_audit={"status": "pass"},
         issue179_minimax_k_root_cause_audit={"status": "open"},
@@ -8920,7 +8912,7 @@ def test_release_blocker_ledger_excludes_mimo_from_current_release_scope():
     )
 
     blocker_ids = [blocker["id"] for blocker in ledger["blockers"]]
-    assert not any("mimo" in blocker_id for blocker_id in blocker_ids)
+    assert "mimo_v2_jang2l_runtime_quality_open" in blocker_ids
     assert not any(
         item["family"] == "mimo_v2"
         for item in ledger["deferred_release_families"]
@@ -8959,11 +8951,13 @@ def test_release_blocker_ledger_does_not_use_remote_max2_artifacts_as_release_ev
         live_tool_smoke_summaries={"status": "pass", "missing": [], "not_pass": []},
         mimo_v2_jang2l_sink_ab={"status": "open"},
         mimo_v2_jang2l_root_cause={
+            "status": "open",
+            "local_release_clearance": False,
             "remote_evidence_only": True,
             "remote_artifacts": [
-                CURRENT_MIMO_V2_JANG2L_ROUTER_TOPK_PARITY_ARTIFACT,
-                CURRENT_MIMO_V2_JANG2L_MOE_OUTPUT_PARITY_ARTIFACT,
+                "remote-max2:mimo-v25-tp4-live-proof.md",
             ],
+            "artifacts": {"length_sweep": CURRENT_MIMO_V2_JANG2L_LENGTH_SWEEP_ARTIFACT},
         },
         issue175_179_release_boundary_audit={"status": "pass", "issues": {}},
         installed_app_runtime_parity_audit={"status": "pass"},
@@ -8971,11 +8965,11 @@ def test_release_blocker_ledger_does_not_use_remote_max2_artifacts_as_release_ev
         real_ui_live_model_matrix={"status": "pass", "missing_families": []},
     )
 
-    assert ledger["status"] == "pass"
+    assert ledger["status"] == "open"
     for blocker in ledger["blockers"]:
         assert "remote-max2" not in blocker["evidence"]
     blockers = {blocker["id"]: blocker for blocker in ledger["blockers"]}
-    assert blockers == {}
+    assert set(blockers) == {"mimo_v2_jang2l_runtime_quality_open"}
     assert ledger["deferred_release_families"] == [{"family": "dsv4", "reason": "deferred_per_20260602_emergency_release_scope"}]
 
 
@@ -8989,8 +8983,8 @@ def test_release_blocker_ledger_tracks_missing_local_mimo_root_cause_artifacts()
             "status": "missing",
             "remote_evidence_only": False,
             "missing": [
-                CURRENT_MIMO_V2_JANG2L_ROUTER_TOPK_PARITY_ARTIFACT,
-                CURRENT_MIMO_V2_JANG2L_MOE_OUTPUT_PARITY_ARTIFACT,
+                CURRENT_MIMO_V2_JANG2L_LENGTH_SWEEP_ARTIFACT,
+                CURRENT_MIMO_V2_JANG2L_TOOL_DIALECT_ARTIFACT,
             ],
         },
         issue175_179_release_boundary_audit={"status": "pass", "issues": {}},
@@ -9000,7 +8994,7 @@ def test_release_blocker_ledger_tracks_missing_local_mimo_root_cause_artifacts()
     )
 
     blockers = {blocker["id"]: blocker for blocker in ledger["blockers"]}
-    assert "mimo_root_cause_local_proof_missing" not in blockers
+    assert "mimo_v2_jang2l_runtime_quality_open" in blockers
     assert ledger["deferred_release_families"] == [{"family": "dsv4", "reason": "deferred_per_20260602_emergency_release_scope"}]
 
 
@@ -11328,143 +11322,71 @@ def test_release_regression_manifest_requires_mimo_v2_root_cause_artifacts(
     tmp_path,
 ):
     from tests.cross_matrix.release_regression_manifest import (
-        CURRENT_MIMO_V2_JANG2L_MOE_OUTPUT_PARITY_ARTIFACT,
-        CURRENT_MIMO_V2_JANG2L_NOCACHE_NO_KVQ_ARTIFACT,
-        CURRENT_MIMO_V2_JANG2L_PROFILE_DIAGNOSTIC_ARTIFACT,
-        CURRENT_MIMO_V2_JANG2L_ROUTER_TOPK_PARITY_ARTIFACT,
         _validate_current_mimo_v2_jang2l_root_cause,
     )
 
-    assert "after-swa-runtime-sync" in CURRENT_MIMO_V2_JANG2L_NOCACHE_NO_KVQ_ARTIFACT
-
-    router_path = tmp_path / CURRENT_MIMO_V2_JANG2L_ROUTER_TOPK_PARITY_ARTIFACT
-    router_path.parent.mkdir(parents=True, exist_ok=True)
-    router_path.write_text(
-        json.dumps(
-            {
-                "weight_max_abs_diff": 0.0,
-                "bias_max_abs_diff": 0.0,
-                "topk_weight_max_abs_diff": 0.0,
-                "score_max_abs_diff": 0.0,
-                "topk_exact_rows": [True, True],
-            }
-        ),
-        encoding="utf-8",
-    )
-    moe_path = tmp_path / CURRENT_MIMO_V2_JANG2L_MOE_OUTPUT_PARITY_ARTIFACT
-    moe_path.parent.mkdir(parents=True, exist_ok=True)
-    moe_path.write_text(
-        json.dumps(
-            {
-                "row_stats": [
-                    {"rel_l2": 0.603, "cosine": 0.813},
-                    {"rel_l2": 0.437, "cosine": 0.901},
-                ]
-            }
-        ),
-        encoding="utf-8",
-    )
-    profile_path = tmp_path / CURRENT_MIMO_V2_JANG2L_PROFILE_DIAGNOSTIC_ARTIFACT
-    profile_path.parent.mkdir(parents=True, exist_ok=True)
-    profile_path.write_text(
-        json.dumps(
-            {
-                "profiles": [
-                    {"profile": "source", "rel_l2_vs_source": 0.0},
-                    {"profile": "2L", "rel_l2_vs_source": 0.178},
-                ]
-            }
-        ),
-        encoding="utf-8",
-    )
-    nocache_path = tmp_path / CURRENT_MIMO_V2_JANG2L_NOCACHE_NO_KVQ_ARTIFACT
-    nocache_path.parent.mkdir(parents=True, exist_ok=True)
-    nocache_path.write_text(
-        json.dumps(
-            {
-                "mode": "disable_prefix_cache_kv_quant_none_after_swa_runtime_sync",
-                "capabilities": {
-                    "reasoning_parser": "think_xml",
-                    "tool_parser": "xml_function",
-                },
-                "requests": [
-                    {"label": "ack", "content_head": "- - - - -"},
-                    {"label": "recall_check", "content_head": "-00 - - -"},
-                    {"label": "reasoning", "content_head": ". - - -000"},
-                ],
-            }
-        ),
-        encoding="utf-8",
-    )
+    _write_passing_mimo_v2_root_cause_artifacts(tmp_path)
 
     result = _validate_current_mimo_v2_jang2l_root_cause(tmp_path)
 
     assert result["status"] == "pass"
-    assert result["router_topk_exact"] is True
-    assert result["moe_expert_distortion_seen"] is True
-    assert result["profile_diagnostic_seen"] is True
-    assert result["nocache_no_kvq_incoherent"] is True
+    assert result["structural_verify_passed"] is True
+    assert result["text_cache_narrow_pass"] is True
+    assert result["switchglu_selected_expert_parity_passed"] is True
+    assert result["prompt_length_coherence_blocked"] is False
+    assert result["tool_protocol_blocked"] is False
     assert result["remote_evidence_only"] is False
     assert result["remote_artifacts"] == []
     assert result["local_release_clearance"] is True
-    assert result["profile_rel_l2"] == {
-        "source": 0.0,
-        "2L": 0.178,
-    }
-    assert result["root_cause_candidate"] == (
-        "mimo_v2_jang2l_2bit_routed_expert_distortion"
-    )
 
 
-def test_current_proof_sweep_excludes_mimo_root_cause_artifacts():
+def test_current_proof_sweep_includes_mimo_root_cause_artifacts():
     from tests.cross_matrix.release_regression_manifest import (
         validate_current_proof_sweep_artifacts,
     )
 
     result = validate_current_proof_sweep_artifacts(Path.cwd())
 
-    assert "mimo_v2_jang2l_root_cause" not in result
-    assert "mimo_v2_jang2l_root_cause" not in result["component_ok"]
+    assert "mimo_v2_jang2l_root_cause" in result
+    assert "mimo_v2_jang2l_root_cause" in result["component_ok"]
 
 
 def test_current_mimo_v2_proof_artifact_constants_are_local_only():
     from tests.cross_matrix.release_regression_manifest import (
-        CURRENT_MIMO_V2_JANG2L_HOST_AVAILABILITY_ARTIFACT,
-        CURRENT_MIMO_V2_JANG2L_MOE_OUTPUT_PARITY_ARTIFACT,
-        CURRENT_MIMO_V2_JANG2L_ROUTER_TOPK_PARITY_ARTIFACT,
-        CURRENT_MIMO_V2_JANG2L_SINK_AB_ARTIFACT,
+        CURRENT_MIMO_V2_JANG2L_LENGTH_SWEEP_ARTIFACT,
+        CURRENT_MIMO_V2_JANG2L_STRUCTURAL_VERIFY_ARTIFACT,
+        CURRENT_MIMO_V2_JANG2L_SWITCHGLU_PARITY_ARTIFACT,
+        CURRENT_MIMO_V2_JANG2L_TEXT_CACHE_ARTIFACT,
+        CURRENT_MIMO_V2_JANG2L_TOOL_DIALECT_ARTIFACT,
     )
 
     artifacts = [
-        CURRENT_MIMO_V2_JANG2L_HOST_AVAILABILITY_ARTIFACT,
-        CURRENT_MIMO_V2_JANG2L_SINK_AB_ARTIFACT,
-        CURRENT_MIMO_V2_JANG2L_ROUTER_TOPK_PARITY_ARTIFACT,
-        CURRENT_MIMO_V2_JANG2L_MOE_OUTPUT_PARITY_ARTIFACT,
+        CURRENT_MIMO_V2_JANG2L_LENGTH_SWEEP_ARTIFACT,
+        CURRENT_MIMO_V2_JANG2L_STRUCTURAL_VERIFY_ARTIFACT,
+        CURRENT_MIMO_V2_JANG2L_SWITCHGLU_PARITY_ARTIFACT,
+        CURRENT_MIMO_V2_JANG2L_TEXT_CACHE_ARTIFACT,
+        CURRENT_MIMO_V2_JANG2L_TOOL_DIALECT_ARTIFACT,
     ]
 
     assert all(artifact.startswith("build/current-") for artifact in artifacts)
     assert not any("/remote-" in artifact for artifact in artifacts)
 
 
-def test_current_proof_sweep_tracks_mimo_host_availability_artifact():
+def test_current_proof_sweep_tracks_mimo_root_cause_component():
     from tests.cross_matrix.release_regression_manifest import (
         validate_current_proof_sweep_artifacts,
     )
 
     result = validate_current_proof_sweep_artifacts(Path.cwd())
 
-    assert "mimo_v2_jang2l_host_availability" not in result
-    assert "mimo_v2_jang2l_host_availability" not in result["component_ok"]
+    assert "mimo_v2_jang2l_root_cause" in result
+    assert "mimo_v2_jang2l_root_cause" in result["component_ok"]
 
 
 def test_release_regression_manifest_rejects_missing_mimo_v2_root_cause_artifacts(
     tmp_path,
 ):
     from tests.cross_matrix.release_regression_manifest import (
-        CURRENT_MIMO_V2_JANG2L_MOE_OUTPUT_PARITY_ARTIFACT,
-        CURRENT_MIMO_V2_JANG2L_NOCACHE_NO_KVQ_ARTIFACT,
-        CURRENT_MIMO_V2_JANG2L_PROFILE_DIAGNOSTIC_ARTIFACT,
-        CURRENT_MIMO_V2_JANG2L_ROUTER_TOPK_PARITY_ARTIFACT,
         _validate_current_mimo_v2_jang2l_root_cause,
     )
 
@@ -11472,10 +11394,11 @@ def test_release_regression_manifest_rejects_missing_mimo_v2_root_cause_artifact
 
     assert result["status"] == "missing"
     assert result["missing"] == [
-        CURRENT_MIMO_V2_JANG2L_ROUTER_TOPK_PARITY_ARTIFACT,
-        CURRENT_MIMO_V2_JANG2L_MOE_OUTPUT_PARITY_ARTIFACT,
-        CURRENT_MIMO_V2_JANG2L_PROFILE_DIAGNOSTIC_ARTIFACT,
-        CURRENT_MIMO_V2_JANG2L_NOCACHE_NO_KVQ_ARTIFACT,
+        CURRENT_MIMO_V2_JANG2L_STRUCTURAL_VERIFY_ARTIFACT,
+        CURRENT_MIMO_V2_JANG2L_TEXT_CACHE_ARTIFACT,
+        CURRENT_MIMO_V2_JANG2L_SWITCHGLU_PARITY_ARTIFACT,
+        CURRENT_MIMO_V2_JANG2L_LENGTH_SWEEP_ARTIFACT,
+        CURRENT_MIMO_V2_JANG2L_TOOL_DIALECT_ARTIFACT,
     ]
 
 
@@ -11658,7 +11581,7 @@ def test_release_regression_manifest_runner_default_out_tracks_current_release_p
     from tests.cross_matrix import run_release_regression_manifest as runner
 
     assert runner.DEFAULT_OUT == Path(
-        "build/current-release-regression-manifest-after-mimo-scope-removal-20260604.json"
+        "build/current-release-regression-manifest-after-mimo-active-scope-20260606.json"
     )
 
 
@@ -13725,6 +13648,9 @@ def test_release_regression_manifest_runner_embeds_current_proof_validation(tmp_
     expected_step37_vlm_runtime_audit = validate_current_proof_sweep_artifacts(
         tmp_path
     )["step37_vlm_runtime_audit"]
+    expected_mimo_v2_jang2l_root_cause = validate_current_proof_sweep_artifacts(
+        tmp_path
+    )["mimo_v2_jang2l_root_cause"]
     expected_objective_digest = validate_current_proof_sweep_artifacts(
         tmp_path
     )["objective_digest"]
@@ -13755,6 +13681,7 @@ def test_release_regression_manifest_runner_embeds_current_proof_validation(tmp_
             "open_requirement_detail_failures": [],
         },
         "objective_digest": expected_objective_digest,
+        "mimo_v2_jang2l_root_cause": expected_mimo_v2_jang2l_root_cause,
         "model_family_matrix": {
             "artifact": model_family_artifact,
             "status": "pass",
@@ -13963,7 +13890,7 @@ def test_release_regression_manifest_runner_fails_when_current_proof_sweep_fails
                 "status": "open",
                 "blockers": [
                     {
-                        "id": "mimo_root_cause_local_proof_missing",
+                        "id": "mimo_v2_jang2l_runtime_quality_open",
                         "status": "open",
                     },
                 ],
@@ -14080,7 +14007,7 @@ def test_release_regression_manifest_artifact_exposes_top_level_release_blockers
                 "status": "open",
                 "blockers": [
                     {
-                        "id": "mimo_root_cause_local_proof_missing",
+                        "id": "mimo_v2_jang2l_runtime_quality_open",
                         "status": "open",
                     },
                     {
@@ -14099,7 +14026,7 @@ def test_release_regression_manifest_artifact_exposes_top_level_release_blockers
     assert [
         blocker["id"] for blocker in artifact["release_blockers"]
     ] == [
-        "mimo_root_cause_local_proof_missing",
+        "mimo_v2_jang2l_runtime_quality_open",
         "real_ui_dsv4_memory_blocked",
     ]
     assert artifact["release_blockers"] == artifact["release_clearance"]["blockers"]

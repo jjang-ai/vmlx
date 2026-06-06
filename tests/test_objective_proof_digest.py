@@ -1190,6 +1190,7 @@ def test_objective_proof_digest_keeps_dsv4_long_quality_open(tmp_path):
         "Ling/Bailing multilingual output quality is release-cleared",
         "Gemma4 26B CRACK mixed-SWA app-engine speed floor is release-cleared",
         "Cross-family live multi-turn smoke matrix is release-cleared",
+        "MiMo V2.5 JANG_2L runtime/tool/long-prompt quality is release-cleared",
         "MiniMax-M2.7-JANGTQ_K reporter parity/root cause is release-cleared",
         "Real Electron UI cross-family live model matrix is release-cleared",
         "DSV4 long-output/code/file-generation quality is release-cleared",
@@ -8218,7 +8219,7 @@ def test_objective_proof_digest_keeps_cross_family_live_smoke_open_on_non_mimo_g
     }
 
 
-def test_objective_proof_digest_accepts_cross_family_live_smoke_when_only_mimo_is_deferred(
+def test_objective_proof_digest_keeps_cross_family_live_smoke_open_when_only_mimo_is_red(
     tmp_path,
 ):
     from tests.cross_matrix.summarize_objective_proof import (
@@ -8322,7 +8323,7 @@ def test_objective_proof_digest_accepts_cross_family_live_smoke_when_only_mimo_i
     rows = {item["requirement"]: item for item in digest["requirements"]}
     row = rows["Cross-family live multi-turn smoke matrix is release-cleared"]
 
-    assert row["status"] == "pass"
+    assert row["status"] == "open"
     assert row["details"]["non_mimo_status"] == "pass"
     assert row["details"]["release_boundary"] == (
         "non_mimo_live_smoke_clear_mimo_v2_deferred"
@@ -8336,6 +8337,10 @@ def test_objective_proof_digest_accepts_cross_family_live_smoke_when_only_mimo_i
     assert row["details"]["missing_required_family_keys"] == ["mimo_v2"]
     assert row["details"]["non_mimo_missing_required_family_keys"] == []
     assert row["details"]["non_mimo_not_pass_artifacts"] == []
+    mimo_row = rows[
+        "MiMo V2.5 JANG_2L runtime/tool/long-prompt quality is release-cleared"
+    ]
+    assert mimo_row["status"] == "open"
 
 
 def test_all_local_smoke_digest_revalidates_cjk_visible_text_from_stale_artifacts(
@@ -10089,6 +10094,7 @@ def test_objective_proof_digest_accepts_dsv4_quality_clearance_artifact(tmp_path
         "Ling/Bailing multilingual output quality is release-cleared",
         "Gemma4 26B CRACK mixed-SWA app-engine speed floor is release-cleared",
         "Cross-family live multi-turn smoke matrix is release-cleared",
+        "MiMo V2.5 JANG_2L runtime/tool/long-prompt quality is release-cleared",
         "MiniMax-M2.7-JANGTQ_K reporter parity/root cause is release-cleared",
         "Real Electron UI cross-family live model matrix is release-cleared",
     ]

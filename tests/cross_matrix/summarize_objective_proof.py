@@ -63,7 +63,7 @@ from tests.cross_matrix.release_regression_manifest import (
 
 DEFAULT_OUT = Path("build/current-objective-proof-audit-20260602-cache-detail-zero-cached.json")
 CURRENT_RELEASE_REGRESSION_MANIFEST_REL = (
-    "build/current-release-regression-manifest-after-mimo-scope-removal-20260604.json"
+    "build/current-release-regression-manifest-after-mimo-active-scope-20260606.json"
 )
 DSV4_QUALITY_CLEARANCE_REL = "build/current-dsv4-long-output-quality-clearance-20260521.json"
 DSV4_CURRENT_IDENTIFIER_CANARY_REL = (
@@ -340,6 +340,21 @@ ALL_LOCAL_MODEL_SMOKE_MINIMAX_SMALL_JANGTQ_REL = (
 )
 ALL_LOCAL_MODEL_SMOKE_MIMO_V2_JANG2L_REL = (
     "build/current-all-local-model-smoke-mimo-v2-jang2l-bundled-20260527/summary.json"
+)
+MIMO_V2_JANG2L_STRUCTURAL_VERIFY_REL = (
+    "build/current-mimo-jang2l-local-structural-verify-20260606.json"
+)
+MIMO_V2_JANG2L_TEXT_CACHE_REL = (
+    "build/current-mimo-jang2l-live-text-cache-smoke-20260606.json"
+)
+MIMO_V2_JANG2L_SWITCHGLU_PARITY_REL = (
+    "build/current-mimo-v2-jang2l-quantized-switchglu-parity-20260606.json"
+)
+MIMO_V2_JANG2L_LENGTH_SWEEP_REL = (
+    "build/current-mimo-v2-jang2l-direct-length-sweep-20260606.json"
+)
+MIMO_V2_JANG2L_TOOL_DIALECT_REL = (
+    "build/current-mimo-v2-jang2l-tool-dialect-failure-20260606.json"
 )
 ALL_LOCAL_MODEL_SMOKE_DSV4_JANGTQ_K_REL = (
     "build/current-all-local-model-smoke-dsv4-jangtq-k-bundled-cachehit-20260524/summary.json"
@@ -4735,6 +4750,121 @@ def _all_local_model_smoke_detail(
     }
 
 
+def _mimo_v2_jang2l_quality_detail(root: Path) -> tuple[bool, dict[str, Any]]:
+    artifacts = {
+        "structural_verify": MIMO_V2_JANG2L_STRUCTURAL_VERIFY_REL,
+        "text_cache": MIMO_V2_JANG2L_TEXT_CACHE_REL,
+        "switchglu_parity": MIMO_V2_JANG2L_SWITCHGLU_PARITY_REL,
+        "length_sweep": MIMO_V2_JANG2L_LENGTH_SWEEP_REL,
+        "tool_dialect": MIMO_V2_JANG2L_TOOL_DIALECT_REL,
+    }
+    payloads = {key: _load(root, rel) for key, rel in artifacts.items()}
+    missing = [
+        rel
+        for rel in artifacts.values()
+        if not (root / rel).exists()
+    ]
+    structural_pass = payloads["structural_verify"].get("status") == "pass"
+
+    text_requests = payloads["text_cache"].get("requests")
+    if not isinstance(text_requests, list):
+        text_requests = []
+    text_outputs = [
+        str(item.get("content") or "")
+        for item in text_requests
+        if isinstance(item, dict)
+    ]
+    cached_tokens = []
+    for item in text_requests:
+        if not isinstance(item, dict):
+            continue
+        usage = item.get("usage")
+        details = usage.get("prompt_tokens_details") if isinstance(usage, dict) else None
+        value = details.get("cached_tokens") if isinstance(details, dict) else None
+        if isinstance(value, int):
+            cached_tokens.append(value)
+    text_cache_narrow_pass = (
+        len(text_outputs) >= 2
+        and all(output == "cache ok" for output in text_outputs[:2])
+        and any(value > 0 for value in cached_tokens)
+    )
+
+    switchglu_max_abs_diff = payloads["switchglu_parity"].get("max_abs_diff")
+    switchglu_mean_abs_diff = payloads["switchglu_parity"].get("mean_abs_diff")
+    switchglu_parity_pass = (
+        isinstance(switchglu_max_abs_diff, (int, float))
+        and float(switchglu_max_abs_diff) <= 0.002
+        and isinstance(switchglu_mean_abs_diff, (int, float))
+        and float(switchglu_mean_abs_diff) <= 0.001
+    )
+
+    length_cases = payloads["length_sweep"].get("cases")
+    if not isinstance(length_cases, list):
+        length_cases = []
+    corrupt_length_cases = [
+        {
+            "prompt_tokens": item.get("prompt_tokens"),
+            "status": item.get("status"),
+            "output": item.get("output"),
+        }
+        for item in length_cases
+        if isinstance(item, dict)
+        and isinstance(item.get("prompt_tokens"), int)
+        and item.get("prompt_tokens") >= 148
+        and "fail" in str(item.get("status") or "")
+    ]
+    prompt_length_coherence_blocked = (
+        payloads["length_sweep"].get("status") == "fail"
+        and bool(corrupt_length_cases)
+    )
+
+    tool_observations = payloads["tool_dialect"].get("runtime_observations")
+    if not isinstance(tool_observations, list):
+        tool_observations = []
+    tool_protocol_blocked = (
+        payloads["tool_dialect"].get("status") == "fail"
+        and any(
+            isinstance(item, dict)
+            and item.get("http_status") == 200
+            and item.get("tool_calls") is None
+            for item in tool_observations
+        )
+        and any(
+            isinstance(item, dict)
+            and item.get("http_status") == 400
+            and "did not produce any tool calls" in str(item.get("error") or "")
+            for item in tool_observations
+        )
+    )
+
+    ok = (
+        not missing
+        and structural_pass
+        and text_cache_narrow_pass
+        and switchglu_parity_pass
+        and not prompt_length_coherence_blocked
+        and not tool_protocol_blocked
+    )
+    return ok, {
+        "artifacts": artifacts,
+        "missing": missing,
+        "structural_verify_passed": structural_pass,
+        "text_cache_narrow_pass": text_cache_narrow_pass,
+        "switchglu_selected_expert_parity_passed": switchglu_parity_pass,
+        "switchglu_max_abs_diff": switchglu_max_abs_diff,
+        "switchglu_mean_abs_diff": switchglu_mean_abs_diff,
+        "prompt_length_coherence_blocked": prompt_length_coherence_blocked,
+        "prompt_length_corrupt_cases": corrupt_length_cases,
+        "tool_protocol_blocked": tool_protocol_blocked,
+        "status": "pass" if ok else "open",
+        "release_boundary": (
+            "mimo_v2_jang2l_current_local_runtime_cleared"
+            if ok
+            else "mimo_v2_jang2l_current_local_runtime_quality_open"
+        ),
+    }
+
+
 def _zaya_vl_jangtq4_diagnostics(
     root: Path,
     external_ack_probe: dict[str, Any],
@@ -6556,10 +6686,7 @@ def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
             ),
         },
     )
-    all_local_smoke_release_ok = all_local_smoke_ok or bool(
-        all_local_smoke_details.get("mimo_v2_deferred")
-        and all_local_smoke_details.get("non_mimo_status") == "pass"
-    )
+    all_local_smoke_release_ok = all_local_smoke_ok
     _add(
         requirements,
         "Cross-family live multi-turn smoke matrix is release-cleared",
@@ -6579,13 +6706,28 @@ def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
         caveat=(
             None
             if all_local_smoke_ok
-            else (
-                "Current non-MiMo live all-local smoke coverage is clear; MiMo-V2 remains deferred and must not be claimed fixed from this row."
-                if all_local_smoke_release_ok
-                else "Current live all-local smoke coverage is incomplete. Do not claim broad family support until DSV4, Gemma4, Hy3, Ling/Bailing, MiniMax, MiMo-V2, Nemotron, Qwen3.6, ZAYA text, and ZAYA-VL live rows pass cache, recall, visible-output, and gibberish checks."
-            )
+            else "Current live all-local smoke coverage is incomplete. Do not claim broad family support until DSV4, Gemma4, Hy3, Ling/Bailing, MiniMax, MiMo-V2, Nemotron, Qwen3.6, ZAYA text, and ZAYA-VL live rows pass cache, recall, visible-output, and gibberish checks."
         ),
         details=all_local_smoke_details,
+    )
+    mimo_quality_ok, mimo_quality_details = _mimo_v2_jang2l_quality_detail(root)
+    _add(
+        requirements,
+        "MiMo V2.5 JANG_2L runtime/tool/long-prompt quality is release-cleared",
+        _status(mimo_quality_ok),
+        [
+            MIMO_V2_JANG2L_STRUCTURAL_VERIFY_REL,
+            MIMO_V2_JANG2L_TEXT_CACHE_REL,
+            MIMO_V2_JANG2L_SWITCHGLU_PARITY_REL,
+            MIMO_V2_JANG2L_LENGTH_SWEEP_REL,
+            MIMO_V2_JANG2L_TOOL_DIALECT_REL,
+        ],
+        caveat=(
+            None
+            if mimo_quality_ok
+            else "MiMo V2.5 JANG_2L has current structural, narrow text/cache, and selected-expert parity evidence, but current local artifacts still show long-prompt corruption and tool protocol failure. Do not release-clear MiMo from short smokes."
+        ),
+        details=mimo_quality_details,
     )
     release_blockers = release_manifest.get("release_blockers")
     if not isinstance(release_blockers, list):
