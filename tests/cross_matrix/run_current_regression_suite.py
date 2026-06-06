@@ -23,7 +23,7 @@ from typing import Any
 
 
 DEFAULT_OUT = Path(
-    "build/current-regression-suite-after-gemma26-minimaxk-mimo-rerun-final-20260606.json"
+    "build/current-regression-suite-after-unsupported-media-package-refresh-20260606.json"
 )
 DEFAULT_STEP_TIMEOUT_SEC = 900.0
 STEP_TIMEOUT_RETURNCODE = 124
@@ -616,7 +616,7 @@ CURRENT_SUITE_COMMANDS: dict[str, list[str]] = {
         sys.executable,
         "tests/cross_matrix/run_packaged_integrity_contract.py",
         "--out",
-        "build/current-packaged-integrity-contract-gemma4-release-boundary-after-ui-e2e-fixes-dmg-build-20260604.json",
+        "build/current-packaged-integrity-contract-after-unsupported-media-staged-app-20260606.json",
     ],
     "installed_app_runtime_parity_audit": [
         sys.executable,
