@@ -1517,3 +1517,38 @@ class TestMllmModelDumpExcludeNone:
         assert image_count == 1, f"Expected 1 image, got {image_count}"
         assert len(text_parts) == 1
         assert text_parts[0] == "What is this?"
+
+
+
+def test_mimo_v2_thinking_false_uses_plain_template_prefix(monkeypatch):
+    """MiMo's native closed-think-off prompt first-token-stops on long/system rows."""
+    import mlx_vlm.prompt_utils as prompt_utils
+
+    from vmlx_engine.models.mllm import MLXMultimodalLM
+
+    seen = []
+
+    def fake_get_chat_template(processor, messages, add_generation_prompt=True, **kwargs):
+        seen.append(dict(kwargs))
+        if kwargs.get("enable_thinking") is False:
+            return "<|im_start|>assistant\n<think></think>"
+        return "<|im_start|>assistant\n"
+
+    monkeypatch.setattr(prompt_utils, "get_chat_template", fake_get_chat_template)
+
+    model = MLXMultimodalLM.__new__(MLXMultimodalLM)
+    model.processor = object()
+    model.config = {"model_type": "mimo_v2"}
+    model.model_name = "JANGQ-AI/MiMo-V2.5-JANG_2L"
+
+    prompt = model._apply_chat_template(
+        [
+            {"role": "system", "content": "Output exactly ACK."},
+            {"role": "user", "content": "Now output exactly ACK."},
+        ],
+        enable_thinking=False,
+    )
+
+    assert seen[-1]["enable_thinking"] is True
+    assert "<think></think>" not in prompt
+    assert prompt.endswith("assistant\n")
