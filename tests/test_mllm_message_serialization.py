@@ -1520,8 +1520,8 @@ class TestMllmModelDumpExcludeNone:
 
 
 
-def test_mimo_v2_thinking_false_uses_plain_template_prefix(monkeypatch):
-    """MiMo's native closed-think-off prompt first-token-stops on long/system rows."""
+def test_mimo_v2_thinking_false_uses_native_closed_think_template(monkeypatch):
+    """MiMo thinking-off must use the model-owned closed-think prompt rail."""
     import mlx_vlm.prompt_utils as prompt_utils
 
     from vmlx_engine.models.mllm import MLXMultimodalLM
@@ -1549,9 +1549,9 @@ def test_mimo_v2_thinking_false_uses_plain_template_prefix(monkeypatch):
         enable_thinking=False,
     )
 
-    assert seen[-1]["enable_thinking"] is True
-    assert "<think></think>" not in prompt
-    assert prompt.endswith("assistant\n")
+    assert seen[-1]["enable_thinking"] is False
+    assert "<think></think>" in prompt
+    assert prompt.endswith("<think></think>")
 
 
 def test_simple_engine_routes_mimo_text_only_chat_through_language_model():
@@ -1675,8 +1675,8 @@ def test_simple_engine_mimo_text_only_generate_suppresses_think_tags(monkeypatch
     assert float(second_token[0, 9]) == 0.0
 
 
-def test_simple_engine_mimo_llm_path_uses_plain_template_prefix():
-    """Non-MLLM MiMo text path must avoid the native closed thinking-off rail."""
+def test_simple_engine_mimo_llm_path_preserves_thinking_off_template():
+    """Non-MLLM MiMo text path must not rewrite thinking-off to thinking-on."""
     import asyncio
     from types import SimpleNamespace
 
@@ -1698,7 +1698,7 @@ def test_simple_engine_mimo_llm_path_uses_plain_template_prefix():
         tokenizer = _Tokenizer()
 
         def generate(self, **kwargs):
-            assert kwargs["prompt"] == "<|im_start|>assistant\n"
+            assert kwargs["prompt"] == "<|im_start|>assistant\n<think></think>"
             return SimpleNamespace(
                 text="ACK",
                 tokens=[1],
@@ -1730,12 +1730,12 @@ def test_simple_engine_mimo_llm_path_uses_plain_template_prefix():
         )
     )
 
-    assert seen[-1]["enable_thinking"] is True
+    assert seen[-1]["enable_thinking"] is False
     assert output.text == "ACK"
 
 
-def test_batched_engine_mimo_text_only_uses_plain_template_prefix(monkeypatch):
-    """Continuous batching must not use MiMo's closed thinking-off prompt rail."""
+def test_batched_engine_mimo_text_only_preserves_thinking_off_template(monkeypatch):
+    """Continuous batching must not rewrite MiMo thinking-off prompts."""
     import mlx_vlm.prompt_utils as prompt_utils
 
     from vmlx_engine.engine.batched import BatchedEngine
@@ -1752,6 +1752,8 @@ def test_batched_engine_mimo_text_only_uses_plain_template_prefix(monkeypatch):
         )
         rendered = "<|im_start|>user\n" + messages[-1]["content"] + "\n"
         if add_generation_prompt:
+            if kwargs.get("enable_thinking") is False:
+                return rendered + "<|im_start|>assistant\n<think></think>"
             return rendered + "<|im_start|>assistant\n"
         return rendered
 
@@ -1777,10 +1779,10 @@ def test_batched_engine_mimo_text_only_uses_plain_template_prefix(monkeypatch):
         skip_generation_prompt=True,
     )
 
-    assert seen[0]["kwargs"]["enable_thinking"] is True
+    assert seen[0]["kwargs"]["enable_thinking"] is False
     assert seen[0]["add_generation_prompt"] is True
     assert seen[1]["add_generation_prompt"] is False
     assert seen[0]["messages"][-1]["content"] == "Say ACK."
-    assert "<think></think>" not in with_gen
-    assert with_gen.endswith("<|im_start|>assistant\n")
+    assert "<think></think>" in with_gen
+    assert with_gen.endswith("<|im_start|>assistant\n<think></think>")
     assert without_gen == "<|im_start|>user\nSay ACK.\n"

@@ -238,15 +238,13 @@ class BatchedEngine(BaseEngine):
         extra_template_kwargs: dict | None,
         skip_generation_prompt: bool,
     ) -> str:
-        """Render MiMo text-only chats with the native plain assistant prefix.
+        """Render MiMo text-only chats with the native request thinking mode.
 
-        MiMo V2.5's native ``enable_thinking=false`` template emits a closed
-        ``<think></think>`` rail that live JANG_2L probes showed can make long
-        and cached text prompts first-token-stop. The simple engine already
-        routes text-only MiMo through the language model with the native plain
-        prompt. Continuous batching must render the same prompt while still
-        honoring ``skip_generation_prompt`` so gen-prefix stripping and cache
-        keys remain real.
+        Continuous batching still routes text-only MiMo through the language
+        model for cache and memory reasons, but it must not rewrite
+        ``enable_thinking=false`` to the thinking-on template rail. Live JANG_2L
+        proof showed that the rewrite leaks reasoning-style text into visible
+        content; any first-token EOS issue is handled by the MiMo logits policy.
         """
         from mlx_vlm.prompt_utils import get_chat_template
 
@@ -255,7 +253,8 @@ class BatchedEngine(BaseEngine):
             raise RuntimeError("MiMo text-only batching requires a processor")
 
         template_kwargs = dict(extra_template_kwargs or {})
-        template_kwargs["enable_thinking"] = True
+        if enable_thinking is not None:
+            template_kwargs["enable_thinking"] = enable_thinking
         if tools:
             template_kwargs["tools"] = tools
 

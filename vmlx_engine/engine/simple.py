@@ -116,20 +116,14 @@ class SimpleEngine(BaseEngine):
     ) -> bool | None:
         """Return the template kwarg that should be used for prompt rendering.
 
-        MiMo-V2.5's shipped tokenizer renders ``enable_thinking=False`` as a
-        closed ``<think></think>`` assistant rail. Current local JANG_2L proof
-        artifacts show that shape can first-token-stop or produce empty visible
-        output on long/cache/tool rows. The release contract is still
-        thinking-off at the API layer; only the native prompt rendering uses
-        MiMo's plain assistant prefix, matching the MLLM and batched text-only
-        MiMo routes.
+        Do not silently flip a request's thinking mode at render time. MiMo's
+        shipped template owns a distinct thinking-off prompt rail, and live
+        JANG_2L continuous-batching proof showed that rendering the thinking-on
+        rail and suppressing tags at decode leaks reasoning text into visible
+        content. First-token EOS handling belongs at the logits boundary, not in
+        a hidden prompt-mode rewrite.
         """
 
-        if (
-            requested_enable_thinking is False
-            and self._model_family_name() == "mimo_v2"
-        ):
-            return True
         return requested_enable_thinking
 
     def _messages_are_text_only(self, messages: list[dict[str, Any]]) -> bool:

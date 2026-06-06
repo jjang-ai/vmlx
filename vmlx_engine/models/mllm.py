@@ -2059,23 +2059,8 @@ class MLXMultimodalLM:
                 model_type = str(getattr(config, "model_type", "") or "").lower()
         except Exception:
             model_type = ""
-        template_enable_thinking = enable_thinking
-        if model_type == "mimo_v2" and enable_thinking is False:
-            # MiMo V2.5's shipped native chat template renders
-            # enable_thinking=false as:
-            #
-            #   <|im_start|>assistant
-            #   <think></think>
-            #
-            # Live local JANG_2L probes show that prompt shape makes the model
-            # select <|im_end|> as the first token on cache/long system prompts.
-            # Render the native plain assistant prefix instead and let the
-            # server-side think_xml parser/suppression keep the API-visible
-            # "thinking off" contract. This is a family compatibility fix, not
-            # synthetic output or prompt folding.
-            template_enable_thinking = True
-        if template_enable_thinking is not None:
-            template_kwargs["enable_thinking"] = template_enable_thinking
+        if enable_thinking is not None:
+            template_kwargs["enable_thinking"] = enable_thinking
         if tools:
             template_kwargs["tools"] = tools
 
