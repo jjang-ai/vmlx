@@ -377,6 +377,9 @@ MIMO_V2_JANG2L_TOOL_DIALECT_REL = (
 MIMO_V2_JANG2L_CURRENT_AUDIT_REL = (
     "build/current-mimo-v2-jang2l-current-audit-after-first-token-stop-20260606.json"
 )
+MIMO_V2_JANG2L_METADATA_TRUTH_REL = (
+    "build/current-mimo-v25-jang2l-local-metadata-truth-patch-20260606.json"
+)
 MIMO_V2_JANG2L_CONSERVATIVE_DIAGNOSTIC_REL = (
     "build/current-mimo-conservative-diagnostic-20260606/summary.json"
 )
@@ -4857,6 +4860,7 @@ def _mimo_v2_jang2l_quality_detail(root: Path) -> tuple[bool, dict[str, Any]]:
         "length_sweep": MIMO_V2_JANG2L_LENGTH_SWEEP_REL,
         "tool_dialect": MIMO_V2_JANG2L_TOOL_DIALECT_REL,
         "current_audit": MIMO_V2_JANG2L_CURRENT_AUDIT_REL,
+        "metadata_truth": MIMO_V2_JANG2L_METADATA_TRUTH_REL,
         "conservative_diagnostic": MIMO_V2_JANG2L_CONSERVATIVE_DIAGNOSTIC_REL,
         "nomedia_tool_cache": MIMO_V2_JANG2L_NOMEDIA_TOOL_CACHE_REL,
     }
@@ -4876,6 +4880,14 @@ def _mimo_v2_jang2l_quality_detail(root: Path) -> tuple[bool, dict[str, Any]]:
     )
 
     structural_pass = payloads["structural_verify"].get("status") == "pass"
+    metadata_truth = payloads["metadata_truth"]
+    metadata_truth_pass = (
+        metadata_truth.get("status") == "pass"
+        and metadata_truth.get("runtime_modalities") == ["text"]
+        and metadata_truth.get("preserved_modalities") == ["vision", "audio"]
+        and metadata_truth.get("unwired_modalities") == ["vision", "audio"]
+        and metadata_truth.get("multimodal_status") == "weights_preserved_text_runtime"
+    )
 
     text_requests = payloads["text_cache"].get("requests")
     if not isinstance(text_requests, list):
@@ -5045,6 +5057,7 @@ def _mimo_v2_jang2l_quality_detail(root: Path) -> tuple[bool, dict[str, Any]]:
         and manifest_integrity_passed
         and stale_local_state_absent
         and structural_pass
+        and metadata_truth_pass
         and text_cache_narrow_pass
         and switchglu_parity_pass
         and not prompt_length_coherence_blocked
@@ -5058,6 +5071,7 @@ def _mimo_v2_jang2l_quality_detail(root: Path) -> tuple[bool, dict[str, Any]]:
         "manifest_integrity_passed": manifest_integrity_passed,
         "stale_local_state_absent": stale_local_state_absent,
         "structural_verify_passed": structural_pass,
+        "metadata_truth_passed": metadata_truth_pass,
         "text_cache_narrow_pass": text_cache_narrow_pass,
         "switchglu_selected_expert_parity_passed": switchglu_parity_pass,
         "switchglu_max_abs_diff": switchglu_max_abs_diff,

@@ -839,6 +839,9 @@ CURRENT_MIMO_V2_JANG2L_TOOL_DIALECT_ARTIFACT = (
 CURRENT_MIMO_V2_JANG2L_CURRENT_AUDIT_ARTIFACT = (
     "build/current-mimo-v2-jang2l-current-audit-after-first-token-stop-20260606.json"
 )
+CURRENT_MIMO_V2_JANG2L_METADATA_TRUTH_ARTIFACT = (
+    "build/current-mimo-v25-jang2l-local-metadata-truth-patch-20260606.json"
+)
 CURRENT_DIAGNOSTIC_LIVE_SMOKE_ARTIFACTS = {
     "zaya_text_mxfp4_toolprobe": {
         "artifact": "build/current-all-local-model-smoke-zaya-text-bundled-toolprobe-20260525/summary.json",
@@ -5542,6 +5545,7 @@ def _validate_current_mimo_v2_jang2l_root_cause(root: Path) -> dict[str, Any]:
     length_sweep_artifact = CURRENT_MIMO_V2_JANG2L_LENGTH_SWEEP_ARTIFACT
     tool_dialect_artifact = CURRENT_MIMO_V2_JANG2L_TOOL_DIALECT_ARTIFACT
     current_audit_artifact = CURRENT_MIMO_V2_JANG2L_CURRENT_AUDIT_ARTIFACT
+    metadata_truth_artifact = CURRENT_MIMO_V2_JANG2L_METADATA_TRUTH_ARTIFACT
     result: dict[str, Any] = {
         "status": "missing",
         "artifacts": {
@@ -5551,9 +5555,11 @@ def _validate_current_mimo_v2_jang2l_root_cause(root: Path) -> dict[str, Any]:
             "length_sweep": length_sweep_artifact,
             "tool_dialect": tool_dialect_artifact,
             "current_audit": current_audit_artifact,
+            "metadata_truth": metadata_truth_artifact,
         },
         "missing": [],
         "failures": [],
+        "metadata_truth_passed": False,
         "structural_verify_passed": False,
         "text_cache_narrow_pass": False,
         "switchglu_selected_expert_parity_passed": False,
@@ -5573,6 +5579,7 @@ def _validate_current_mimo_v2_jang2l_root_cause(root: Path) -> dict[str, Any]:
     length_sweep_path = root / length_sweep_artifact
     tool_dialect_path = root / tool_dialect_artifact
     current_audit_path = root / current_audit_artifact
+    metadata_truth_path = root / metadata_truth_artifact
     for path, artifact in (
         (structural_path, structural_artifact),
         (text_cache_path, text_cache_artifact),
@@ -5580,6 +5587,7 @@ def _validate_current_mimo_v2_jang2l_root_cause(root: Path) -> dict[str, Any]:
         (length_sweep_path, length_sweep_artifact),
         (tool_dialect_path, tool_dialect_artifact),
         (current_audit_path, current_audit_artifact),
+        (metadata_truth_path, metadata_truth_artifact),
     ):
         if not path.exists():
             result["missing"].append(artifact)
@@ -5593,10 +5601,22 @@ def _validate_current_mimo_v2_jang2l_root_cause(root: Path) -> dict[str, Any]:
         length_sweep_payload = json.loads(length_sweep_path.read_text(encoding="utf-8"))
         tool_dialect_payload = json.loads(tool_dialect_path.read_text(encoding="utf-8"))
         current_audit_payload = json.loads(current_audit_path.read_text(encoding="utf-8"))
+        metadata_truth_payload = json.loads(metadata_truth_path.read_text(encoding="utf-8"))
     except Exception as exc:  # noqa: BLE001 - report validation failure
         result["status"] = f"load_error:{type(exc).__name__}"
         result["failures"].append("json_load_error")
         return result
+
+    result["metadata_truth_passed"] = (
+        metadata_truth_payload.get("status") == "pass"
+        and metadata_truth_payload.get("runtime_modalities") == ["text"]
+        and metadata_truth_payload.get("preserved_modalities") == ["vision", "audio"]
+        and metadata_truth_payload.get("unwired_modalities") == ["vision", "audio"]
+        and metadata_truth_payload.get("multimodal_status")
+        == "weights_preserved_text_runtime"
+    )
+    if not result["metadata_truth_passed"]:
+        result["failures"].append("mimo_metadata_truth_not_pass")
 
     current_audit_component_ok = current_audit_payload.get("component_ok")
     if not isinstance(current_audit_component_ok, dict):

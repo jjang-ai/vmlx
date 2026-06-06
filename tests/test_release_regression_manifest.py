@@ -30,6 +30,7 @@ from tests.cross_matrix.release_regression_manifest import (
     CURRENT_MIMO_V2_JANG2L_TEXT_CACHE_ARTIFACT,
     CURRENT_MIMO_V2_JANG2L_TOOL_DIALECT_ARTIFACT,
     CURRENT_MIMO_V2_JANG2L_CURRENT_AUDIT_ARTIFACT,
+    CURRENT_MIMO_V2_JANG2L_METADATA_TRUTH_ARTIFACT,
     CURRENT_OBJECTIVE_DIGEST_ARTIFACT,
     CURRENT_REAL_UI_DSV4_MEMORY_PREFLIGHT_ARTIFACT,
     CURRENT_REAL_UI_LIVE_MODEL_PROOF_ARTIFACTS,
@@ -3289,6 +3290,21 @@ def _write_passing_mimo_v2_root_cause_artifacts(root: Path) -> None:
                     "tool_protocol": True,
                 },
                 "blockers": [],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    metadata_truth_path = root / CURRENT_MIMO_V2_JANG2L_METADATA_TRUTH_ARTIFACT
+    metadata_truth_path.parent.mkdir(parents=True, exist_ok=True)
+    metadata_truth_path.write_text(
+        json.dumps(
+            {
+                "status": "pass",
+                "runtime_modalities": ["text"],
+                "preserved_modalities": ["vision", "audio"],
+                "unwired_modalities": ["vision", "audio"],
+                "multimodal_status": "weights_preserved_text_runtime",
             }
         )
         + "\n",
@@ -11354,6 +11370,7 @@ def test_release_regression_manifest_requires_mimo_v2_root_cause_artifacts(
     result = _validate_current_mimo_v2_jang2l_root_cause(tmp_path)
 
     assert result["status"] == "pass"
+    assert result["metadata_truth_passed"] is True
     assert result["structural_verify_passed"] is True
     assert result["text_cache_narrow_pass"] is True
     assert result["switchglu_selected_expert_parity_passed"] is True
@@ -11382,6 +11399,7 @@ def test_current_mimo_v2_proof_artifact_constants_are_local_only():
         CURRENT_MIMO_V2_JANG2L_SWITCHGLU_PARITY_ARTIFACT,
         CURRENT_MIMO_V2_JANG2L_TEXT_CACHE_ARTIFACT,
         CURRENT_MIMO_V2_JANG2L_TOOL_DIALECT_ARTIFACT,
+        CURRENT_MIMO_V2_JANG2L_METADATA_TRUTH_ARTIFACT,
     )
 
     artifacts = [
@@ -11391,6 +11409,7 @@ def test_current_mimo_v2_proof_artifact_constants_are_local_only():
         CURRENT_MIMO_V2_JANG2L_TEXT_CACHE_ARTIFACT,
         CURRENT_MIMO_V2_JANG2L_TOOL_DIALECT_ARTIFACT,
         CURRENT_MIMO_V2_JANG2L_CURRENT_AUDIT_ARTIFACT,
+        CURRENT_MIMO_V2_JANG2L_METADATA_TRUTH_ARTIFACT,
     ]
 
     assert all(artifact.startswith("build/current-") for artifact in artifacts)
@@ -11425,6 +11444,7 @@ def test_release_regression_manifest_rejects_missing_mimo_v2_root_cause_artifact
         CURRENT_MIMO_V2_JANG2L_LENGTH_SWEEP_ARTIFACT,
         CURRENT_MIMO_V2_JANG2L_TOOL_DIALECT_ARTIFACT,
         CURRENT_MIMO_V2_JANG2L_CURRENT_AUDIT_ARTIFACT,
+        CURRENT_MIMO_V2_JANG2L_METADATA_TRUTH_ARTIFACT,
     ]
 
 
