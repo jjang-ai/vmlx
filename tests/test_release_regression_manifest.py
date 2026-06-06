@@ -14378,7 +14378,7 @@ def test_release_regression_manifest_tracks_tool_calls_with_runner_artifact():
     joined = " ".join(row["commands"] + row["artifacts"] + row["proves"])
 
     assert "run_tool_call_contract.py" in joined
-    assert "current-tool-call-contract-after-mimo-tool-blocker-20260606.json" in joined
+    assert "current-tool-call-contract-after-xml-function-repair-20260606.json" in joined
     assert "Tool parser residue" in joined
     assert "DSV4" in joined
     assert "maxToolIterations" in joined

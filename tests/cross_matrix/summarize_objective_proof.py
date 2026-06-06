@@ -190,7 +190,7 @@ DSV4_BATCH_GENERATOR_WARMUP_ABLATION_REL = (
 )
 API_CACHE_CONTRACT_REL = "build/current-noheavy-api-cache-contract-after-mimo-modality-truth-20260606.json"
 CACHE_ARCHITECTURE_CONTRACT_REL = "build/current-cache-architecture-contract-after-mimo-head-fix-20260606.json"
-TOOL_CALL_CONTRACT_REL = "build/current-tool-call-contract-after-mimo-tool-blocker-20260606.json"
+TOOL_CALL_CONTRACT_REL = "build/current-tool-call-contract-after-xml-function-repair-20260606.json"
 PANEL_SETTINGS_CONTRACT_REL = "build/current-panel-settings-contract-proof-20260601-cache-ui-storage-quant.json"
 MAX_OUTPUT_CONTEXT_CONTRACT_REL = "build/current-max-output-context-contract-after-mimo-modality-truth-20260606.json"
 MAX_OUTPUT_CONTEXT_CONTRACT_FALLBACK_REL = "build/current-max-output-context-contract-20260521.json"
