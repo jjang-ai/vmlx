@@ -1196,3 +1196,31 @@ def test_probe_options_allow_image_but_not_video_when_capability_missing_video()
     )
 
     assert options == {"include_media": True, "include_video": False}
+
+
+def test_probe_options_ignore_preserved_unwired_media_capabilities():
+    mod = load_module()
+    row = {"is_mllm": True, "supports_video": True}
+
+    options = mod.probe_options_from_capabilities(
+        row,
+        {
+            "modalities": ["text", "vision", "video"],
+            "media": {
+                "runtime_modalities": ["text"],
+                "preserved_modalities": ["vision", "image", "video", "audio"],
+                "unwired_modalities": ["vision", "image", "video", "audio"],
+                "status_by_modality": {
+                    "text": "runtime_supported",
+                    "vision": "preserved_unwired",
+                    "image": "preserved_unwired",
+                    "video": "preserved_unwired",
+                    "audio": "preserved_unwired",
+                },
+            },
+        },
+        include_media=True,
+        include_video=True,
+    )
+
+    assert options == {"include_media": False, "include_video": False}

@@ -740,7 +740,12 @@ def probe_options_from_capabilities(
 ) -> dict[str, bool]:
     if not include_media:
         return {"include_media": False, "include_video": False}
-    modalities_raw = (capabilities or {}).get("modalities")
+    media = (capabilities or {}).get("media") if isinstance(capabilities, dict) else None
+    modalities_raw = None
+    if isinstance(media, dict) and isinstance(media.get("runtime_modalities"), list):
+        modalities_raw = media.get("runtime_modalities")
+    if modalities_raw is None:
+        modalities_raw = (capabilities or {}).get("modalities")
     modalities = {
         str(item).lower()
         for item in modalities_raw
@@ -1157,7 +1162,15 @@ def run_model_row(
         capability_body = capabilities if isinstance(capabilities, dict) else None
         if not (
             isinstance(capability_body, dict)
-            and isinstance(capability_body.get("modalities"), list)
+            and (
+                isinstance(capability_body.get("modalities"), list)
+                or isinstance(
+                    (capability_body.get("media") or {}).get("runtime_modalities")
+                    if isinstance(capability_body.get("media"), dict)
+                    else None,
+                    list,
+                )
+            )
         ):
             row_capabilities = row.get("capabilities")
             capability_body = (
