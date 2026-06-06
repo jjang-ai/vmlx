@@ -354,7 +354,22 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
   const effectiveMaxNumSeqs = dsv4Active ? 1 : config.maxNumSeqs
   const effectivePrefillBatchSize = dsv4Active ? 1 : config.prefillBatchSize
   const effectiveCompletionBatchSize = dsv4Active ? 1 : config.completionBatchSize
-  const showVideoControls = !dsv4Active && !detectedForceTextOnly && multimodalActive
+  const detectedRuntimeVideoCapable = [
+    'qwen3-vl',
+    'qwen3.5',
+    'qwen3.5-moe',
+    'qwen2-vl',
+    'gemma4',
+    'nemotron-h',
+    'mistral3',
+    'mistral4',
+    'pixtral',
+    'kimi-k25',
+  ].includes(normalizedDetectedFamily || '')
+  const showVideoControls = !dsv4Active && !detectedForceTextOnly && multimodalActive && (
+    detectedRuntimeVideoCapable ||
+    (!normalizedDetectedFamily && config.isMultimodal === true)
+  )
   const nativeMtpSupported = !!detectedNativeMtp?.supported
   const omniBackendVisible = normalizedDetectedFamily === 'nemotron-h' && multimodalActive
   const nativeMtpMode = config.nativeMtpMode || DEFAULT_CONFIG.nativeMtpMode || 'deterministic'

@@ -828,9 +828,27 @@ function applyJangCapabilities(
   }
   if (!caps || typeof caps !== 'object') return next
 
+  const runtimeModalities = Array.isArray(caps.modalities)
+    ? caps.modalities.map((item: any) => String(item || '').toLowerCase()).filter(Boolean)
+    : []
+  const unwiredModalities = Array.isArray(caps.unwired_modalities)
+    ? caps.unwired_modalities.map((item: any) => String(item || '').toLowerCase()).filter(Boolean)
+    : []
+  const capsRuntimeHasMedia = runtimeModalities.some((item: string) =>
+    item === 'vision' || item === 'image' || item === 'video' || item === 'audio' || item === 'omni',
+  )
+  const capsRuntimeTextOnly = runtimeModalities.length > 0 && !capsRuntimeHasMedia
+  const capsHasUnwiredMedia = unwiredModalities.some((item: string) =>
+    item === 'vision' || item === 'image' || item === 'video' || item === 'audio' || item === 'omni',
+  )
+
   if (next.family === 'mimo_v2') {
     next.toolParser = 'xml_function'
     next.enableAutoToolChoice = caps.supports_tools !== false
+    if (capsRuntimeTextOnly || capsHasUnwiredMedia) {
+      next.isMultimodal = false
+      next.forceTextOnly = true
+    }
   } else if (typeof caps.tool_parser === 'string') {
     next.toolParser = caps.tool_parser === 'none' ? undefined : caps.tool_parser
     if (next.toolParser && caps.supports_tools !== false) {
@@ -903,6 +921,17 @@ function applyJangCapabilities(
 
 function resolveJangMultimodal(jangCfg: any, parsedConfig: any): boolean {
   const hasMediaConfig = configDeclaresMedia(parsedConfig)
+  const capsModalities = Array.isArray(jangCfg?.capabilities?.modalities)
+    ? jangCfg.capabilities.modalities.map((item: any) => String(item || '').toLowerCase()).filter(Boolean)
+    : []
+  if (
+    capsModalities.length > 0 &&
+    !capsModalities.some((item: string) =>
+      item === 'vision' || item === 'image' || item === 'video' || item === 'audio' || item === 'omni',
+    )
+  ) {
+    return false
+  }
   const modality =
     jangCfg?.capabilities?.modality ??
     jangCfg?.modality ??

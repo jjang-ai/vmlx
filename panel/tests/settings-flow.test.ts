@@ -3239,6 +3239,22 @@ describe('Settings → CLI Round-Trip Completeness', () => {
         expect(source).not.toContain('label="Default Max Tokens"')
     })
 
+    it('video sampling controls are gated to runtime video-capable families', () => {
+        const source = readFileSync('src/renderer/src/components/sessions/SessionConfigForm.tsx', 'utf8')
+        const allowlistStart = source.indexOf('const detectedRuntimeVideoCapable = [')
+        const allowlistEnd = source.indexOf('].includes(normalizedDetectedFamily)', allowlistStart)
+        const allowlist = source.slice(allowlistStart, allowlistEnd)
+
+        expect(allowlist).toContain("'qwen3-vl'")
+        expect(allowlist).toContain("'qwen3.5'")
+        expect(allowlist).toContain("'gemma4'")
+        expect(allowlist).toContain("'nemotron-h'")
+        expect(allowlist).not.toContain("'mimo_v2'")
+        expect(allowlist).not.toContain("'step-3.7-flash'")
+        expect(source).toContain('detectedRuntimeVideoCapable ||')
+        expect(source).toContain('!detectedForceTextOnly && multimodalActive')
+    })
+
     it('Max Context Tokens can be manually typed while Auto is active', () => {
         const source = readFileSync('src/renderer/src/components/sessions/SessionConfigForm.tsx', 'utf8')
         const sliderStart = source.indexOf('export function SliderField')
