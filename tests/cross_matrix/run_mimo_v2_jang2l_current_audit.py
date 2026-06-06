@@ -39,7 +39,7 @@ TOOL_FAILURE_ARTIFACT = Path(
     "build/current-mimo-v2-jang2l-tool-dialect-failure-20260606.json"
 )
 ALL_LOCAL_SMOKE_ARTIFACT = Path(
-    "build/current-all-local-model-smoke-mimo-v25-jang2l-tools-nomedia-after-xml-function-template-fix-20260606/summary.json"
+    "build/current-all-local-model-smoke-mimo-v25-jang2l-tools-nomedia-after-metadata-truth-20260606/summary.json"
 )
 CACHE_VS_NOCACHE_ARTIFACT = Path(
     "build/current-mimo-v2-jang2l-cache-vs-nocache-next-token-20260606.json"
