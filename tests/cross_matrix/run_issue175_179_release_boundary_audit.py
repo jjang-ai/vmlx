@@ -27,7 +27,7 @@ ISSUE175_177_LIVE_RUNTIME_AUDIT_ARTIFACT = Path(
     "build/current-issue175-177-live-runtime-audit-20260601-local-refresh.json"
 )
 ISSUE179_MINIMAX_K_ROOT_CAUSE_AUDIT_ARTIFACT = Path(
-    "build/current-issue179-minimax-k-root-cause-audit-after-live-refresh-20260606.json"
+    "build/current-issue179-minimax-k-root-cause-audit-after-public-v1556-scan-20260606.json"
 )
 
 OPEN_RELEASE_ROWS = [

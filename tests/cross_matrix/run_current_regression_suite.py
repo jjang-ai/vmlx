@@ -636,7 +636,7 @@ CURRENT_SUITE_COMMANDS: dict[str, list[str]] = {
         sys.executable,
         "tests/cross_matrix/run_issue179_minimax_k_root_cause_audit.py",
         "--out",
-        "build/current-issue179-minimax-k-root-cause-audit-after-live-refresh-20260606.json",
+        "build/current-issue179-minimax-k-root-cause-audit-after-public-v1556-scan-20260606.json",
     ],
     "issue179_cancel_probe_memory_preflight": [
         sys.executable,
@@ -649,7 +649,7 @@ CURRENT_SUITE_COMMANDS: dict[str, list[str]] = {
         sys.executable,
         "tests/cross_matrix/run_issue175_179_release_boundary_audit.py",
         "--out",
-        "build/current-issue175-179-release-boundary-audit-after-minimax-live-refresh-20260606.json",
+        "build/current-issue175-179-release-boundary-audit-after-public-v1556-scan-20260606.json",
     ],
     "issue181_183_runtime_audit": [
         sys.executable,
@@ -661,7 +661,7 @@ CURRENT_SUITE_COMMANDS: dict[str, list[str]] = {
         sys.executable,
         "tests/cross_matrix/run_public_app_issue_audit.py",
         "--out",
-        "build/current-public-app-issue-audit-after-minimax-live-refresh-20260606.json",
+        "build/current-public-app-issue-audit-after-public-v1556-scan-20260606.json",
     ],
     "focused_regression_pytest": [
         sys.executable,
