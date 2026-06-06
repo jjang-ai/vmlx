@@ -8899,6 +8899,24 @@ class TestTurboQuantKVTelemetry:
                 model,
             ) is True
 
+    def test_mimo_v2_registry_subtype_marks_scheduler_mixed_attention(self):
+        """MiMo V2 has asymmetric full/SWA KV heads and must not use generic cache handling."""
+        from vmlx_engine.mllm_scheduler import MLLMScheduler
+        from vmlx_engine.scheduler import Scheduler
+
+        model = SimpleNamespace(
+            config=SimpleNamespace(
+                model_type="mimo_v2",
+                cache_subtype="mimo_v2_asymmetric_swa",
+            )
+        )
+
+        assert Scheduler._model_has_mixed_attention(model) is True
+        assert MLLMScheduler._model_has_mixed_attention(
+            object.__new__(MLLMScheduler),
+            model,
+        ) is True
+
     def test_mllm_ensure_batch_cache_preserves_rotating_cache_type(self):
         """Gemma4 decode must keep sliding-window layers on BatchRotatingKVCache."""
         from mlx_lm.models.cache import KVCache, RotatingKVCache
@@ -10630,6 +10648,37 @@ class TestTurboQuantKVTelemetry:
         assert status["family"] == "step-3.7-flash"
         assert status["schema"] == "mixed_swa_kv_v1"
         assert status["cache_type"] == "mixed_swa_kv"
+        assert status["storage_quantization"]["applies_to"] == (
+            "full_and_sliding_attention_kv"
+        )
+        assert status["storage_quantization"]["metadata_policy"] == (
+            "preserve_rotating_window_metadata"
+        )
+
+    def test_native_cache_status_reports_mimo_v2_asymmetric_swa_from_registry_subtype(self):
+        from types import SimpleNamespace
+        from vmlx_engine.server import _native_cache_status
+
+        cfg = SimpleNamespace(cache_subtype="mimo_v2_asymmetric_swa")
+        scheduler = SimpleNamespace(
+            _model_type_for_runtime="mimo_v2",
+            _tq_active=False,
+            _kv_cache_bits=4,
+            _kv_cache_group_size=64,
+            block_aware_cache=object(),
+            paged_cache_manager=SimpleNamespace(_disk_store=object()),
+        )
+
+        status = _native_cache_status(
+            scheduler,
+            family="mimo_v2",
+            cfg=cfg,
+        )
+
+        assert status["family"] == "mimo_v2"
+        assert status["schema"] == "mixed_swa_kv_v1"
+        assert status["cache_type"] == "mixed_swa_kv"
+        assert status["cache_subtype"] == "mimo_v2_asymmetric_swa"
         assert status["storage_quantization"]["applies_to"] == (
             "full_and_sliding_attention_kv"
         )

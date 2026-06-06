@@ -5981,7 +5981,8 @@ def _native_cache_status(scheduler=None, *, family: str | None = None, cfg=None)
 
     if (
         getattr(scheduler, "_mixed_attention_cache_model", False)
-        or cache_subtype in {"mixed_swa_kv", "step3p7_full_sliding_kv"}
+        or cache_subtype
+        in {"mixed_swa_kv", "step3p7_full_sliding_kv", "mimo_v2_asymmetric_swa"}
     ):
         tq_enabled = bool(getattr(scheduler, "_tq_active", False))
         try:

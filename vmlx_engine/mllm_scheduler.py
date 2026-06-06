@@ -1521,7 +1521,12 @@ class MLLMScheduler:
             if sliding_window is None:
                 sliding_window = _cfg_value(text_cfg, "sliding_window")
             if (
-                cache_subtype in {"mixed_swa_kv", "step3p7_full_sliding_kv"}
+                cache_subtype
+                in {
+                    "mixed_swa_kv",
+                    "step3p7_full_sliding_kv",
+                    "mimo_v2_asymmetric_swa",
+                }
                 or (
                     model_type == "step3p7"
                     and text_model_type == "step3p5"
