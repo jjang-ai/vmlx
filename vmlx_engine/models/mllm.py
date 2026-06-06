@@ -1858,6 +1858,66 @@ class MLXMultimodalLM:
 
         return chat_messages, all_image_urls, videos, audio_inputs
 
+    def _normalize_text_only_messages_for_processor(
+        self,
+        chat_messages: list[dict],
+        *,
+        has_media: bool,
+    ) -> list[dict]:
+        """Use family-native plain text turns when a VLM request has no media.
+
+        ZAYA1-VL's local processor has two distinct template modes: rich list
+        content is required for real image/video turns, while text-only turns
+        render correctly as plain strings. Feeding a no-media ZAYA1-VL request
+        through the generic rich-content MLLM shape makes the template path look
+        like a multimodal prompt and weakens exact text, multi-turn, and
+        reasoning probes. Keep media turns untouched; only collapse text-only
+        content lists that contain text fragments and no modality markers.
+        """
+
+        if has_media:
+            return chat_messages
+
+        config = getattr(self, "config", None)
+        if isinstance(config, dict):
+            model_type = str(config.get("model_type", "") or "").lower()
+        else:
+            model_type = str(getattr(config, "model_type", "") or "").lower()
+        if model_type != "zaya1_vl":
+            return chat_messages
+
+        normalized: list[dict] = []
+        for message in chat_messages:
+            content = message.get("content")
+            if not isinstance(content, list):
+                normalized.append(message)
+                continue
+
+            text_parts: list[str] = []
+            contains_media_marker = False
+            for item in content:
+                if isinstance(item, str):
+                    text_parts.append(item)
+                    continue
+                if not isinstance(item, dict):
+                    text_parts.append(str(item))
+                    continue
+                item_type = str(item.get("type", "") or "").lower()
+                if item_type and item_type != "text":
+                    contains_media_marker = True
+                    break
+                text_parts.append(str(item.get("text") or item.get("content") or ""))
+
+            if contains_media_marker:
+                normalized.append(message)
+                continue
+
+            collapsed = dict(message)
+            collapsed["content"] = "".join(text_parts)
+            normalized.append(collapsed)
+
+        return normalized
+
     def _synthesizes_thinking_prompt_when_enabled(self) -> bool:
         """Return True for MLLM families whose template needs an explicit open rail.
 
@@ -2518,6 +2578,10 @@ class MLXMultimodalLM:
 
         # Extract text, images, videos, and audio from messages
         chat_messages, all_image_urls, videos, audio_inputs = self._extract_multimodal_messages(messages)
+        chat_messages = self._normalize_text_only_messages_for_processor(
+            chat_messages,
+            has_media=bool(all_image_urls or videos or audio_inputs),
+        )
 
         logger.info(f"MLLM.chat() called with {len(messages)} messages")
 
@@ -2846,6 +2910,10 @@ class MLXMultimodalLM:
 
         # Extract text, images, videos, and audio from messages
         chat_messages, all_image_urls, videos, audio_inputs = self._extract_multimodal_messages(messages)
+        chat_messages = self._normalize_text_only_messages_for_processor(
+            chat_messages,
+            has_media=bool(all_image_urls or videos or audio_inputs),
+        )
 
         # Process images
         all_images = []

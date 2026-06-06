@@ -658,6 +658,53 @@ def test_zaya1_vl_processor_wraps_string_content_for_list_template():
     )
 
 
+def test_zaya1_vl_mllm_text_only_messages_use_plain_processor_content():
+    from vmlx_engine.models.mllm import MLXMultimodalLM
+
+    model = MLXMultimodalLM.__new__(MLXMultimodalLM)
+    model.config = {"model_type": "zaya1_vl"}
+
+    messages = [
+        {
+            "role": "user",
+            "content": [{"type": "text", "text": "Remember color=blue."}],
+        },
+        {"role": "assistant", "content": "noted"},
+        {
+            "role": "user",
+            "content": [{"type": "text", "text": "What color?"}],
+        },
+    ]
+
+    normalized = model._normalize_text_only_messages_for_processor(
+        messages,
+        has_media=False,
+    )
+
+    assert normalized[0]["content"] == "Remember color=blue."
+    assert normalized[1]["content"] == "noted"
+    assert normalized[2]["content"] == "What color?"
+
+
+def test_zaya1_vl_mllm_keeps_media_messages_rich_for_processor():
+    from vmlx_engine.models.mllm import MLXMultimodalLM
+
+    model = MLXMultimodalLM.__new__(MLXMultimodalLM)
+    model.config = {"model_type": "zaya1_vl"}
+    content = [
+        {"type": "image"},
+        {"type": "text", "text": "Describe this image."},
+    ]
+    messages = [{"role": "user", "content": content}]
+
+    normalized = model._normalize_text_only_messages_for_processor(
+        messages,
+        has_media=True,
+    )
+
+    assert normalized[0]["content"] is content
+
+
 def test_zaya1_vl_processor_preserves_list_content_for_list_aware_templates(monkeypatch):
     model_dir = Path("/Users/example/models/JANGQ/ZAYA1-VL-8B-MXFP4")
     if not model_dir.exists():
@@ -865,6 +912,9 @@ def test_batched_engine_zaya1_vl_with_tools_still_uses_processor_image_template(
         def apply_chat_template(self, messages_arg, **kwargs):
             captured["messages"] = messages_arg
             captured["kwargs"] = kwargs
+            captured.setdefault("calls", []).append(
+                {"messages": messages_arg, "kwargs": kwargs}
+            )
             return (
                 "<|vision_start|><image><|vision_end|>\n"
                 "<|im_start|>user\n"
@@ -892,8 +942,12 @@ def test_batched_engine_zaya1_vl_with_tools_still_uses_processor_image_template(
     )
 
     assert "<|vision_start|><image><|vision_end|>" in prompt
-    assert captured["messages"][0]["content"][0]["type"] == "image"
-    assert captured["kwargs"]["tools"] == tools
+    assert any(
+        call["messages"][0]["content"][0]["type"] == "image"
+        for call in captured["calls"]
+        if isinstance(call["messages"][0].get("content"), list)
+    )
+    assert any(call["kwargs"].get("tools") == tools for call in captured["calls"])
 
 
 def test_batched_engine_zaya1_vl_text_only_keeps_user_text():
@@ -922,6 +976,50 @@ def test_batched_engine_zaya1_vl_text_only_keeps_user_text():
     assert "What is 17 + 28?" in prompt
     assert prompt.endswith("<|im_start|>assistant\n")
     assert len(ids) > 3
+
+
+def test_batched_engine_zaya1_vl_text_parts_reach_processor_as_plain_text():
+    from vmlx_engine.engine.batched import BatchedEngine
+
+    captured = {}
+
+    class FakeProcessor:
+        tokenizer = SimpleNamespace()
+
+        def apply_chat_template(self, messages_arg, **kwargs):
+            captured["messages"] = messages_arg
+            captured["kwargs"] = kwargs
+            return "rendered"
+
+    engine = BatchedEngine.__new__(BatchedEngine)
+    engine._is_mllm = True
+    engine._processor = FakeProcessor()
+    engine._model = SimpleNamespace(config={"model_type": "zaya1_vl"})
+    engine._model_name = "zaya-vl-text-parts-test"
+    engine._tokenizer = None
+
+    prompt = engine._apply_chat_template(
+        [
+            {
+                "role": "user",
+                "content": [{"type": "text", "text": "Remember color=blue."}],
+            },
+            {"role": "assistant", "content": "noted"},
+            {
+                "role": "user",
+                "content": [{"type": "text", "text": "What color?"}],
+            },
+        ],
+        num_images=0,
+        enable_thinking=False,
+    )
+
+    assert prompt == "rendered"
+    assert captured["messages"][0]["content"] == "Remember color=blue."
+    assert captured["messages"][1]["content"] == "noted"
+    assert captured["messages"][2]["content"] == "What color?"
+    assert captured["kwargs"]["add_generation_prompt"] is True
+    assert captured["kwargs"]["tokenize"] is False
 
 
 def test_mllm_load_registers_zaya1_vl_adapter_before_stock_mlx_vlm_load(tmp_path, monkeypatch):

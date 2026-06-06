@@ -1014,6 +1014,17 @@ class BatchedEngine(BaseEngine):
                         direct_messages, _, _, _ = (
                             MLXMultimodalLM._extract_multimodal_messages(messages_arg)
                         )
+                        if (
+                            mllm_model_type == "zaya1_vl"
+                            and num_images == 0
+                            and num_videos == 0
+                        ):
+                            normalizer = MLXMultimodalLM.__new__(MLXMultimodalLM)
+                            normalizer.config = {"model_type": "zaya1_vl"}
+                            direct_messages = normalizer._normalize_text_only_messages_for_processor(
+                                direct_messages,
+                                has_media=False,
+                            )
                         if direct_messages:
                             return direct_messages
                     except Exception:
