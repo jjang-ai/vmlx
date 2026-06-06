@@ -1730,6 +1730,18 @@ def _bundle_supports_video_frame_fallback(bundle_path: str | None) -> bool:
     )
 
 
+def _bundle_is_mimo_v2_text_only_runtime(bundle_path: str | None) -> bool:
+    """Return True for MiMo-V2 bundles whose Python runtime is text-only.
+
+    MiMo-V2.5 artifacts preserve visual/audio/video sidecars, but the current
+    Python adapter in ``vmlx_engine.models.mllm`` intentionally raises for
+    ``pixel_values``. Keep runtime capabilities and media rejection honest until
+    the actual multimodal forward path is wired and proven.
+    """
+    cfg = _read_bundle_json(bundle_path, "config.json")
+    return str((cfg or {}).get("model_type") or "").lower() == "mimo_v2"
+
+
 def _bundle_declares_native_audio(bundle_path: str | None) -> bool:
     cfg = _read_bundle_json(bundle_path, "config.json")
     if not cfg:
@@ -1784,6 +1796,8 @@ def _loaded_mllm_modalities() -> list[str] | None:
     ) if engine is not None else False
     if not engine_is_mllm:
         return None
+    if _bundle_is_mimo_v2_text_only_runtime(_model_path or _model_name):
+        return ["text"]
     modalities = ["text", "vision"]
     if _bundle_declares_native_audio(_model_path or _model_name):
         modalities.append("audio")
@@ -7334,7 +7348,11 @@ async def model_capabilities(model_id: str) -> dict:
         else registry_is_mllm
     )
     modalities = _loaded_runtime_modalities()
-    if modalities == ["text"] and engine_is_mllm:
+    if (
+        modalities == ["text"]
+        and engine_is_mllm
+        and family != "mimo_v2"
+    ):
         modalities = ["text", "vision"]
     supports_thinking_explicit = getattr(cfg, "supports_thinking", None) if cfg is not None else None
     supports_thinking = (

@@ -4167,6 +4167,68 @@ class TestMediaDiagnostics:
 
         assert server._loaded_runtime_modalities() == ["text", "vision"]
 
+    def test_mimo_v2_runtime_modalities_stay_text_only_until_vl_is_wired(
+        self, monkeypatch, tmp_path
+    ):
+        import vmlx_engine.server as server
+
+        (tmp_path / "config.json").write_text(
+            json.dumps(
+                {
+                    "model_type": "mimo_v2",
+                    "vision_config": {"model_type": "mimo_v2_vision"},
+                    "audio_config": {"model_type": "mimo_v2_audio"},
+                    "image_token_id": 151655,
+                    "video_token_id": 151656,
+                }
+            )
+        )
+        monkeypatch.setattr(server, "_engine", SimpleNamespace(is_mllm=True))
+        monkeypatch.setattr(server, "_model_path", str(tmp_path))
+        monkeypatch.setattr(server, "_model_name", "mimo-v2-test")
+        monkeypatch.setattr(server, "_loaded_omni_modalities", lambda: None)
+
+        assert server._loaded_runtime_modalities() == ["text"]
+
+    @pytest.mark.asyncio
+    async def test_mimo_v2_capabilities_do_not_advertise_unwired_vl(
+        self, monkeypatch, tmp_path
+    ):
+        import vmlx_engine.server as server
+
+        (tmp_path / "config.json").write_text(
+            json.dumps(
+                {
+                    "model_type": "mimo_v2",
+                    "vision_config": {"model_type": "mimo_v2_vision"},
+                    "audio_config": {"model_type": "mimo_v2_audio"},
+                    "image_token_id": 151655,
+                    "video_token_id": 151656,
+                }
+            )
+        )
+
+        class _Engine:
+            is_mllm = True
+
+        class _Scheduler:
+            config = SimpleNamespace(enable_prefix_cache=False)
+            block_aware_cache = None
+            paged_cache_manager = None
+            memory_aware_cache = None
+            prefix_cache = None
+
+        monkeypatch.setattr(server, "_engine", _Engine())
+        monkeypatch.setattr(server, "_get_scheduler", lambda: _Scheduler())
+        monkeypatch.setattr(server, "_model_path", str(tmp_path))
+        monkeypatch.setattr(server, "_model_name", "mimo-v2-test")
+        monkeypatch.setattr(server, "_loaded_omni_modalities", lambda: None)
+
+        caps = await server.model_capabilities("mimo-v2-test")
+
+        assert caps["family"] == "mimo_v2"
+        assert caps["modalities"] == ["text"]
+
     def test_qwen_vl_runtime_modalities_keep_explicit_video(
         self, monkeypatch, tmp_path
     ):
