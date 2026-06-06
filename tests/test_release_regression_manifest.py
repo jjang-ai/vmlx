@@ -49,6 +49,7 @@ from tests.cross_matrix.release_regression_manifest import (
     EXPECTED_CURRENT_NOHEAVY_API_CACHE_CHECKS,
     EXPECTED_CURRENT_OPEN_REQUIREMENTS,
     EXPECTED_CURRENT_PACKAGED_INTEGRITY_CHECKS,
+    DEFERRED_RELEASE_OPEN_REQUIREMENTS,
     EXPECTED_CURRENT_MODEL_FAMILY_ROWS,
     EXPECTED_CURRENT_PARSER_REGISTRY_CHECKS,
     EXPECTED_CURRENT_REASONING_TEMPLATE_CHECKS,
@@ -2092,6 +2093,30 @@ def _write_passing_issue179_minimax_k_live_probe_memory_preflight(root: Path) ->
                 "active_heavy_process_count": 0,
                 "launch_blockers": ["insufficient_memory"],
                 "preflight_captured_at": "2026-06-01T170000-0700",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+
+def _write_passing_step37_vlm_runtime_audit(root: Path) -> None:
+    path = root / CURRENT_STEP37_VLM_RUNTIME_AUDIT_ARTIFACT
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(
+            {
+                "status": "pass",
+                "model_type": "step3p7",
+                "text_model_type": "step3p5",
+                "has_vision_config": True,
+                "jang_has_vision": True,
+                "root_cause": "step37_vlm_runtime_present_or_not_applicable",
+                "release_clearance": "audit_does_not_block_release",
+                "mlx_vlm_step3p7_importable": True,
+                "mlx_vlm_step3p7_runtime_available": True,
+                "mlx_vlm_step3p7_runtime": "available",
+                "local_bridge_kind": "native_or_not_applicable",
             }
         )
         + "\n",
@@ -8522,6 +8547,8 @@ def test_release_regression_manifest_validates_current_proof_sweep_artifacts(tmp
     _write_passing_real_ui_live_model_proof_artifacts(tmp_path)
     _write_passing_dsv4_source_memory_preflight_artifact(tmp_path)
     _write_passing_real_ui_dsv4_memory_preflight_artifact(tmp_path)
+    _write_passing_issue179_minimax_k_live_probe_memory_preflight(tmp_path)
+    _write_passing_step37_vlm_runtime_audit(tmp_path)
 
     result = validate_current_proof_sweep_artifacts(tmp_path)
 
@@ -8536,12 +8563,12 @@ def test_release_regression_manifest_validates_current_proof_sweep_artifacts(tmp
             or value.get("status") not in {"pass", "open"}
         )
     }
-    assert result["status"] == "pass", json.dumps(bad_components, indent=2, sort_keys=True)
-    assert result["failed_components"] == []
+    assert result["status"] == "fail", json.dumps(bad_components, indent=2, sort_keys=True)
+    assert result["failed_components"] == ["no_open_objective_requirements"]
     assert result["component_ok"]["no_release_blockers"] is True
     assert result["component_ok"]["packaged_app_developer_id_signing"] is True
     assert result["component_ok"]["dsv4_long_output_code_exactness"] is True
-    assert result["component_ok"]["no_open_objective_requirements"] is True
+    assert result["component_ok"]["no_open_objective_requirements"] is False
     assert result["component_ok"]["real_ui_full_model_matrix"] is True
     assert result["component_ok"]["real_ui_dsv4"] is True
     assert result["component_ok"]["objective_digest"] is True
@@ -9942,9 +9969,10 @@ def test_release_regression_manifest_rejects_stale_issue179_objective_digest_row
     _write_current_objective_digest(tmp_path)
     path = tmp_path / "build/current-objective-proof-audit-gemma4-release-boundary-20260604.json"
     payload = json.loads(path.read_text(encoding="utf-8"))
+    unexpected_requirement = "Unexpected MiniMax stale reporter row is release-cleared"
     payload["requirements"].append(
         {
-            "requirement": "MiniMax-M2.7-JANGTQ_K reporter parity/root cause is release-cleared",
+            "requirement": unexpected_requirement,
             "status": "open",
             "details": {"evidence_files_present": True, "missing_evidence": []},
         }
@@ -9954,9 +9982,7 @@ def test_release_regression_manifest_rejects_stale_issue179_objective_digest_row
     result = validate_current_proof_sweep_artifacts(tmp_path)
 
     assert result["status"] == "fail"
-    assert result["objective_digest"]["unexpected_open_requirements"] == [
-        "MiniMax-M2.7-JANGTQ_K reporter parity/root cause is release-cleared"
-    ]
+    assert result["objective_digest"]["unexpected_open_requirements"] == [unexpected_requirement]
 
 
 def test_release_regression_manifest_rejects_missing_dsv4_source_preflight_boundary(
@@ -13652,6 +13678,8 @@ def test_release_regression_manifest_runner_embeds_current_proof_validation(tmp_
     _write_passing_dev_ui_proof_artifacts(tmp_path)
     _write_passing_real_ui_live_model_proof_artifacts(tmp_path)
     _write_passing_real_ui_dsv4_memory_preflight_artifact(tmp_path)
+    _write_passing_issue179_minimax_k_live_probe_memory_preflight(tmp_path)
+    _write_passing_step37_vlm_runtime_audit(tmp_path)
 
     expected_real_ui_live_model_proof = validate_current_proof_sweep_artifacts(
         tmp_path
@@ -13709,7 +13737,7 @@ def test_release_regression_manifest_runner_embeds_current_proof_validation(tmp_
     artifact = build_manifest_artifact(tmp_path)
 
     assert artifact["current_proof_sweep"] == {
-        "status": "pass",
+        "status": "fail",
         "component_ok": expected_component_ok,
         "failed_components": [
             name for name, ok in expected_component_ok.items() if not ok
@@ -14004,6 +14032,7 @@ def test_release_regression_manifest_release_ready_allows_only_deferred_sweep_fa
     tmp_path,
 ):
     from tests.cross_matrix import run_release_regression_manifest as runner
+    deferred_open_requirements = sorted(DEFERRED_RELEASE_OPEN_REQUIREMENTS)
 
     monkeypatch.setattr(
         runner,
@@ -14013,7 +14042,7 @@ def test_release_regression_manifest_release_ready_allows_only_deferred_sweep_fa
             "failed_components": ["regression_suite"],
             "regression_suite": {
                 "status": "open",
-                "open_requirements": EXPECTED_CURRENT_OPEN_REQUIREMENTS,
+                "open_requirements": deferred_open_requirements,
             },
             "release_blocker_ledger": {
                 "status": "pass",
@@ -14029,9 +14058,7 @@ def test_release_regression_manifest_release_ready_allows_only_deferred_sweep_fa
     assert artifact["release_clearance"]["status"] == "pass"
     assert artifact["release_clearance"]["proof_sweep_failure_is_deferred"] is True
     assert artifact["release_clearance"]["effective_open_requirements"] == []
-    assert artifact["release_clearance"]["deferred_open_requirements"] == (
-        EXPECTED_CURRENT_OPEN_REQUIREMENTS
-    )
+    assert artifact["release_clearance"]["deferred_open_requirements"] == deferred_open_requirements
 
 
 def test_release_regression_manifest_artifact_exposes_top_level_release_blockers(

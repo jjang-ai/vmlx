@@ -1150,6 +1150,15 @@ def _live_smoke_cache_validation_failures(request: dict[str, Any]) -> list[str]:
 
 
 EXPECTED_CURRENT_OPEN_REQUIREMENTS = [
+    "DSV4 block disk L2 stores and hits after restart",
+    "Qwen/JANG packaged MX matmul speed is release-cleared",
+    "Qwen native MTP live decode speed and output equivalence are release-cleared",
+    "Qwen 27B JANG_4M prompt-processing speed floor is release-cleared",
+    "Ling/Bailing multilingual output quality is release-cleared",
+    "Gemma4 26B CRACK Responses visible-content and language quality is release-cleared",
+    "Gemma4 26B CRACK mixed-SWA app-engine speed floor is release-cleared",
+    "Cross-family live multi-turn smoke matrix is release-cleared",
+    "MiniMax-M2.7-JANGTQ_K reporter parity/root cause is release-cleared",
     "Real Electron UI cross-family live model matrix is release-cleared",
     "DSV4 long-output/code/file-generation quality is release-cleared",
 ]
