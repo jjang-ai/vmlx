@@ -367,6 +367,14 @@ def _text_payload(model: str, prompt: str, max_tokens: int, *, thinking: bool = 
     }
 
 
+def _is_zaya_row(row: dict[str, Any]) -> bool:
+    blob = " ".join(
+        str(row.get(key, "")).lower()
+        for key in ("name", "served_name", "model_type", "path", "cache_family")
+    )
+    return "zaya" in blob
+
+
 def _exact_ack_cache_payload(model: str, prompt: str, max_tokens: int) -> dict[str, Any]:
     payload = _text_payload(model, prompt, max_tokens, thinking=False)
     payload["messages"] = [
@@ -377,6 +385,15 @@ def _exact_ack_cache_payload(model: str, prompt: str, max_tokens: int) -> dict[s
         {"role": "user", "content": prompt},
     ]
     return payload
+
+
+def _zaya_cache_payload(model: str, prompt: str, max_tokens: int) -> dict[str, Any]:
+    return _text_payload(
+        model,
+        prompt,
+        max_tokens,
+        thinking=False,
+    )
 
 
 def _required_tool_payload(model: str, max_tokens: int, *, prompt_style: str = "natural") -> dict[str, Any]:
@@ -453,6 +470,12 @@ def _tool_prompt_style(row: dict[str, Any]) -> str:
 
 
 def _cache_probe_prompt(row: dict[str, Any]) -> str:
+    if _is_zaya_row(row):
+        return (
+            "ZAYA typed CCA cache probe. Read the stable sequence: "
+            "blue green blue amber violet. Which color word repeats? "
+            "Answer exactly one lowercase word."
+        )
     base = (
         "Cache probe fixed prefix. Read these stable words: alpha beta gamma delta "
         "epsilon zeta eta theta iota kappa lambda mu nu xi omicron pi rho sigma tau."
@@ -464,6 +487,16 @@ def _cache_probe_prompt(row: dict[str, Any]) -> str:
         "DSV4 native cache probe. Keep this deterministic prefix unchanged and "
         f"answer according to the system instruction only. {anchors}"
     )
+
+
+def _cache_probe_expected(row: dict[str, Any]) -> str:
+    return "blue" if _is_zaya_row(row) else "ACK"
+
+
+def _cache_probe_payload(row: dict[str, Any], model: str, prompt: str, max_tokens: int) -> dict[str, Any]:
+    if _is_zaya_row(row):
+        return _zaya_cache_payload(model, prompt, max_tokens)
+    return _exact_ack_cache_payload(model, prompt, max_tokens)
 
 
 def _no_media_payload(
@@ -508,15 +541,18 @@ def build_probe_payloads(
 ) -> list[dict[str, Any]]:
     model = row["served_name"]
     cache_prompt = _cache_probe_prompt(row)
+    cache_expected = _cache_probe_expected(row)
     strict_max_tokens = _lfm_strict_probe_max_tokens(row, max_tokens)
     probes: list[dict[str, Any]] = [
         {
             "label": "text_cache_repeat_1",
-            "payload": _exact_ack_cache_payload(model, cache_prompt, strict_max_tokens),
+            "payload": _cache_probe_payload(row, model, cache_prompt, strict_max_tokens),
+            "expected_content": cache_expected,
         },
         {
             "label": "text_cache_repeat_2",
-            "payload": _exact_ack_cache_payload(model, cache_prompt, strict_max_tokens),
+            "payload": _cache_probe_payload(row, model, cache_prompt, strict_max_tokens),
+            "expected_content": cache_expected,
         },
         {
             "label": "text_multiturn_recall",
@@ -752,6 +788,7 @@ def validate_probe_response(
     content: str,
     reasoning: str = "",
     tool_calls: list[dict[str, Any]] | None = None,
+    expected_content: str | None = None,
 ) -> list[dict[str, Any]]:
     """Apply semantic gates so nonempty incoherent output cannot pass."""
     visible = str(content or "")
@@ -827,12 +864,12 @@ def validate_probe_response(
                         "actual": parsed_args,
                     }
                 )
-    elif label.startswith("text_cache_repeat") and stripped != "ACK":
+    elif label.startswith("text_cache_repeat") and stripped != (expected_content or "ACK"):
         failures.append(
             {
                 "label": label,
                 "reason": "expected_exact_ack_missing",
-                "expected": "ACK",
+                "expected": expected_content or "ACK",
             }
         )
     elif label == "text_multiturn_recall":
@@ -914,7 +951,19 @@ def collect_probe_failures(requests: list[dict[str, Any]]) -> list[dict[str, Any
         content = str(req.get("content") or "")
         reasoning = str(req.get("reasoning") or req.get("reasoning_head") or "")
         tool_calls = req.get("tool_calls") if isinstance(req.get("tool_calls"), list) else []
-        for failure in validate_probe_response(label, code, content, reasoning, tool_calls=tool_calls):
+        expected_content = (
+            str(req.get("expected_content"))
+            if req.get("expected_content") is not None
+            else None
+        )
+        for failure in validate_probe_response(
+            label,
+            code,
+            content,
+            reasoning,
+            tool_calls=tool_calls,
+            expected_content=expected_content,
+        ):
             failure.setdefault("content_head", req.get("content_head", content[:280]))
             if "reasoning_chars" not in failure and "reasoning_chars" in req:
                 failure["reasoning_chars"] = req["reasoning_chars"]
@@ -1095,8 +1144,15 @@ def run_model_row(
                 "cache_stats_code": code_stats,
                 "cache_summary": summarize_cache(cache_stats),
             }
+            if probe.get("expected_content") is not None:
+                request_record["expected_content"] = probe["expected_content"]
             request_record["validation_failures"] = validate_probe_response(
-                label, code, content, reasoning, tool_calls=tool_calls
+                label,
+                code,
+                content,
+                reasoning,
+                tool_calls=tool_calls,
+                expected_content=probe.get("expected_content"),
             )
             result["requests"].append(request_record)
             write_json(

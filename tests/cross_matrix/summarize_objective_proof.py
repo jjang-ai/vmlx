@@ -63,7 +63,7 @@ from tests.cross_matrix.release_regression_manifest import (
 
 DEFAULT_OUT = Path("build/current-objective-proof-audit-20260602-cache-detail-zero-cached.json")
 CURRENT_RELEASE_REGRESSION_MANIFEST_REL = (
-    "build/current-release-regression-manifest-after-cross-family-smoke-refresh-20260606.json"
+    "build/current-release-regression-manifest-after-zaya-cache-contract-refresh-20260606.json"
 )
 DSV4_QUALITY_CLEARANCE_REL = "build/current-dsv4-long-output-quality-clearance-20260521.json"
 DSV4_CURRENT_IDENTIFIER_CANARY_REL = (
@@ -318,7 +318,7 @@ ALL_LOCAL_MODEL_SMOKE_ZAYA_TEXT_REL = (
     "build/current-all-local-model-smoke-zaya-text-bundled-20260524/summary.json"
 )
 ALL_LOCAL_MODEL_SMOKE_ZAYA_TEXT_VL_CURRENT_REL = (
-    "build/current-all-local-model-smoke-zaya-text-vl-tools-media-20260606/summary.json"
+    "build/current-all-local-model-smoke-zaya-text-vl-tools-media-after-cache-contract-20260606/summary.json"
 )
 ALL_LOCAL_MODEL_SMOKE_ZAYA_VL_REL = (
     "build/current-all-local-model-smoke-zaya-vl-bundled-20260524/summary.json"

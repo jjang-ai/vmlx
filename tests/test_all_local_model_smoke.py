@@ -413,6 +413,29 @@ def test_repeat_cache_probe_uses_deterministic_exact_output_instruction():
     assert "Reply exactly: ACK" not in prompt
 
 
+def test_zaya_repeat_cache_probe_uses_family_native_color_contract():
+    mod = load_module()
+    row = {
+        "served_name": "zaya1-8b-mxfp4",
+        "name": "ZAYA1-8B-MXFP4",
+        "model_type": "zaya",
+        "cache_family": "zaya_cca",
+        "is_mllm": False,
+        "supports_video": False,
+        "supports_thinking": False,
+    }
+
+    probes = mod.build_probe_payloads(row, max_tokens=32, include_reasoning=True)
+    repeat = next(probe for probe in probes if probe["label"] == "text_cache_repeat_1")
+    messages = repeat["payload"]["messages"]
+
+    assert repeat["expected_content"] == "blue"
+    assert len(messages) == 1
+    assert messages[0]["role"] == "user"
+    assert "Which color word repeats" in messages[0]["content"]
+    assert "Output exactly ACK" not in messages[0]["content"]
+
+
 def test_dsv4_repeat_cache_probe_crosses_native_block_threshold():
     mod = load_module()
     row = {
@@ -656,6 +679,34 @@ def test_validate_probe_response_rejects_non_bare_ack_for_cache_repeat():
             "label": "text_cache_repeat_2",
             "reason": "expected_exact_ack_missing",
             "expected": "ACK",
+        }
+    ]
+
+
+def test_validate_probe_response_accepts_family_specific_cache_expected_content():
+    mod = load_module()
+
+    assert (
+        mod.validate_probe_response(
+            "text_cache_repeat_2",
+            200,
+            "blue",
+            "",
+            expected_content="blue",
+        )
+        == []
+    )
+    assert mod.validate_probe_response(
+        "text_cache_repeat_2",
+        200,
+        "green",
+        "",
+        expected_content="blue",
+    ) == [
+        {
+            "label": "text_cache_repeat_2",
+            "reason": "expected_exact_ack_missing",
+            "expected": "blue",
         }
     ]
 
