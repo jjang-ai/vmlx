@@ -513,7 +513,19 @@ def _no_media_payload(
     model: str,
     media_kind: str,
     max_tokens: int,
+    *,
+    row: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    if row is not None and _is_zaya_row(row):
+        return _text_payload(
+            model,
+            (
+                f"If a {media_kind} file is attached to this current message, "
+                "answer ATTACHED. Otherwise answer NONE."
+            ),
+            max_tokens,
+            thinking=False,
+        )
     sentinel = media_kind.upper()
     payload = _text_payload(
         model,
@@ -634,7 +646,7 @@ def build_probe_payloads(
                 },
                 {
                     "label": "text_no_media_after_image",
-                    "payload": _no_media_payload(model, "image", max_tokens),
+                    "payload": _no_media_payload(model, "image", max_tokens, row=row),
                 },
                 {
                     "label": "vl_blue_image_repeat",
@@ -684,7 +696,12 @@ def build_probe_payloads(
                         },
                         {
                             "label": "text_no_media_after_video",
-                            "payload": _no_media_payload(model, "video", max_tokens),
+                            "payload": _no_media_payload(
+                                model,
+                                "video",
+                                max_tokens,
+                                row=row,
+                            ),
                         },
                     ]
                 )

@@ -63,7 +63,7 @@ from tests.cross_matrix.release_regression_manifest import (
 
 DEFAULT_OUT = Path("build/current-objective-proof-audit-20260602-cache-detail-zero-cached.json")
 CURRENT_RELEASE_REGRESSION_MANIFEST_REL = (
-    "build/current-release-regression-manifest-after-zaya-reasoning-budget-refresh-20260606.json"
+    "build/current-release-regression-manifest-after-zaya-vl-no-media-refresh-20260606.json"
 )
 DSV4_QUALITY_CLEARANCE_REL = "build/current-dsv4-long-output-quality-clearance-20260521.json"
 DSV4_CURRENT_IDENTIFIER_CANARY_REL = (
@@ -326,6 +326,9 @@ ALL_LOCAL_MODEL_SMOKE_ZAYA_VL_REL = (
 ALL_LOCAL_MODEL_SMOKE_ZAYA_VL_JANGTQ4_REL = (
     "build/current-all-local-model-smoke-zaya-vl-jangtq4-true-bundled-toolprobe-media-sentinel-20260525/summary.json"
 )
+ALL_LOCAL_MODEL_SMOKE_ZAYA_VL_CURRENT_REL = (
+    "build/current-all-local-model-smoke-zaya-vl-mxfp4-after-no-media-contract-20260606/summary.json"
+)
 ALL_LOCAL_MODEL_SMOKE_NEMOTRON_OMNI_JANGTQ_REL = (
     "build/current-all-local-model-smoke-nemotron-omni-jangtq-video-bundled-20260526-rerun/summary.json"
 )
@@ -424,7 +427,11 @@ ALL_LOCAL_MODEL_SMOKE_ARTIFACTS_BY_FAMILY = {
     "qwen36": [ALL_LOCAL_MODEL_SMOKE_QWEN35_MXFP8_MTP_CURRENT_REL, ALL_LOCAL_MODEL_SMOKE_LIVE_SLICE_CURRENT_REL, ALL_LOCAL_MODEL_SMOKE_QWEN36_MXFP4_CRACK_REL],
     "step3p7": [ALL_LOCAL_MODEL_SMOKE_LIVE_SLICE_CURRENT_REL],
     "zaya_text": [ALL_LOCAL_MODEL_SMOKE_ZAYA_TEXT_VL_CURRENT_REL, ALL_LOCAL_MODEL_SMOKE_ZAYA_TEXT_REL],
-    "zaya_vl": [ALL_LOCAL_MODEL_SMOKE_ZAYA_TEXT_VL_CURRENT_REL, ALL_LOCAL_MODEL_SMOKE_ZAYA_VL_JANGTQ4_REL],
+    "zaya_vl": [
+        ALL_LOCAL_MODEL_SMOKE_ZAYA_VL_CURRENT_REL,
+        ALL_LOCAL_MODEL_SMOKE_ZAYA_TEXT_VL_CURRENT_REL,
+        ALL_LOCAL_MODEL_SMOKE_ZAYA_VL_JANGTQ4_REL,
+    ],
 }
 GEMMA4_MIXED_SWA_SPEED_FLOOR_TOK_S = 80.0
 GEMMA4_MIXED_SWA_STREAMING_MIN_COMPLETION_TOKENS = 256
@@ -5399,6 +5406,10 @@ def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
             _load(root, ALL_LOCAL_MODEL_SMOKE_ZAYA_TEXT_VL_CURRENT_REL),
         ),
         (
+            ALL_LOCAL_MODEL_SMOKE_ZAYA_VL_CURRENT_REL,
+            _load(root, ALL_LOCAL_MODEL_SMOKE_ZAYA_VL_CURRENT_REL),
+        ),
+        (
             ALL_LOCAL_MODEL_SMOKE_LING_HY3_NEMOTRON_CURRENT_REL,
             _load(root, ALL_LOCAL_MODEL_SMOKE_LING_HY3_NEMOTRON_CURRENT_REL),
         ),
@@ -7013,6 +7024,7 @@ def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
             "docs/internal/agent-notes/2026-05-26-live-chat-tools-reasoning-chat-settings.png",
             "docs/internal/agent-notes/2026-05-26-live-chat-tools-reasoning-server-cache-settings.png",
             ALL_LOCAL_MODEL_SMOKE_ZAYA_TEXT_REL,
+            ALL_LOCAL_MODEL_SMOKE_ZAYA_VL_CURRENT_REL,
             ALL_LOCAL_MODEL_SMOKE_ZAYA_VL_JANGTQ4_REL,
             ALL_LOCAL_MODEL_SMOKE_NEMOTRON_OMNI_JANGTQ_REL,
             ALL_LOCAL_MODEL_SMOKE_GEMMA4_26B_CRACK_REL,

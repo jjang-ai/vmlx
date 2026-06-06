@@ -507,6 +507,30 @@ def test_no_media_probe_uses_system_scoped_attachment_contract():
     assert "Do you currently see" not in video_messages[1]["content"]
 
 
+def test_zaya_vl_no_media_probe_uses_attached_none_contract():
+    mod = load_module()
+    row = {
+        "served_name": "zaya1-vl-8b-mxfp4",
+        "is_mllm": True,
+        "supports_video": False,
+        "supports_thinking": True,
+        "model_type": "zaya1_vl",
+        "cache_family": "zaya_cca",
+    }
+
+    probes = mod.build_probe_payloads(row, max_tokens=32, include_reasoning=True)
+    image_probe = next(
+        probe for probe in probes if probe["label"] == "text_no_media_after_image"
+    )
+    image_messages = image_probe["payload"]["messages"]
+
+    assert len(image_messages) == 1
+    assert image_messages[0]["role"] == "user"
+    assert "answer ATTACHED. Otherwise answer NONE" in image_messages[0]["content"]
+    assert "answer exactly IMAGE" not in image_messages[0]["content"]
+    assert "zero image attachments" not in image_messages[0]["content"]
+
+
 def test_video_probe_uses_effective_probe_option_not_static_inventory_flag():
     mod = load_module()
     row = {
