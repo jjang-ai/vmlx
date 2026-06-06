@@ -942,12 +942,12 @@ def _write_passing_base_artifacts(tmp_path: Path) -> None:
     }
     _write_json(
         tmp_path,
-        "build/current-decode-speed-live-qwen27-jang4m-source-keepalloc-20260522.json",
+        "build/current-decode-speed-live-qwen27-jang4m-source-20260606.json",
         speed_base,
     )
     _write_json(
         tmp_path,
-        "build/current-decode-speed-live-qwen27-jang4m-packaged-tahoe-dmg-20260522.json",
+        "build/current-decode-speed-live-qwen27-jang4m-installed-app-deterministic-pp-20260606.json",
         speed_base,
     )
     mtp_speed_base = {
@@ -1051,7 +1051,7 @@ def _write_passing_base_artifacts(tmp_path: Path) -> None:
     )
     _write_json(
         tmp_path,
-        "build/current-decode-speed-live-qwen27-jang4m-mtp-default-after-norm-shift-20260523.json",
+        "build/current-decode-speed-live-qwen27-jang4m-mtp-installed-app-deterministic-pp-20260606.json",
         mtp_speed_base,
     )
     _write_json(
@@ -1086,7 +1086,7 @@ def _write_passing_base_artifacts(tmp_path: Path) -> None:
     )
     _write_json(
         tmp_path,
-        "build/current-native-mtp-speed-ab-qwen27-jang4m-mtp-20260523/result.json",
+        "build/current-native-mtp-speed-ab-qwen27-jang4m-mtp-installed-app-20260606/result.json",
         {
             "speedup_vs_baseline": 1.83,
             "output_equivalence": {
@@ -9057,7 +9057,7 @@ def test_objective_proof_digest_accepts_qwen_jang_speed_when_source_and_packaged
     assert row["details"]["packaged"]["status"] == "pass"
     assert row["details"]["source"]["min_pp_wall_tok_s"] >= 600
     assert row["details"]["packaged"]["min_pp_wall_tok_s"] >= 600
-    assert "packaged-tahoe-dmg" in QWEN_JANG_PACKAGED_SPEED_REL
+    assert "installed-app-deterministic-pp" in QWEN_JANG_PACKAGED_SPEED_REL
 
 
 def test_objective_proof_digest_keeps_qwen_prefill_review_as_historical_diagnostic(tmp_path):

@@ -1150,9 +1150,6 @@ def _live_smoke_cache_validation_failures(request: dict[str, Any]) -> list[str]:
 
 
 EXPECTED_CURRENT_OPEN_REQUIREMENTS = [
-    "Qwen/JANG packaged MX matmul speed is release-cleared",
-    "Qwen native MTP live decode speed and output equivalence are release-cleared",
-    "Qwen 27B JANG_4M prompt-processing speed floor is release-cleared",
     "Ling/Bailing multilingual output quality is release-cleared",
     "Gemma4 26B CRACK Responses visible-content and language quality is release-cleared",
     "Gemma4 26B CRACK mixed-SWA app-engine speed floor is release-cleared",
@@ -1592,7 +1589,7 @@ _ROWS: list[dict[str, Any]] = [
         ],
         "commands": [
             ".venv/bin/python tests/cross_matrix/run_native_mtp_contract.py --out build/current-native-mtp-contract-gemma4-release-boundary-20260604.json",
-            ".venv/bin/python bench/native_mtp_speed_ab.py /Users/example/models/JANGQ/Qwen3.6-27B-JANG_4M-MTP --served-name qwen27-jang4m-mtp-ab --port 8798 --cache off --max-num-seqs 1 --max-tokens 320 --repeats 1 --warmup 0 --load-timeout-s 420 --out build/current-native-mtp-speed-ab-qwen27-jang4m-mtp-20260523 --disable-prompt-reuse",
+            "VMLINUX_BENCH_PYTHON=/Applications/vMLX.app/Contents/Resources/bundled-python/python/bin/python3.12 .venv/bin/python bench/native_mtp_speed_ab.py /Users/example/models/JANGQ/Qwen3.6-27B-JANG_4M-MTP --served-name qwen27-jang4m-mtp-ab --port 8814 --cache off --max-num-seqs 1 --max-tokens 320 --repeats 1 --warmup 0 --load-timeout-s 600 --out build/current-native-mtp-speed-ab-qwen27-jang4m-mtp-installed-app-20260606 --disable-prompt-reuse",
         ],
         "artifacts": [
             "build/current-native-mtp-contract-gemma4-release-boundary-20260604.json",
@@ -1602,7 +1599,7 @@ _ROWS: list[dict[str, Any]] = [
             "build/current-native-mtp-contract-20260523-post-budget-edge.json",
             "build/current-native-mtp-contract-20260522-dsv4-additional-args.json",
             "build/current-native-mtp-contract-20260522-config-only.json",
-            "build/current-native-mtp-speed-ab-qwen27-jang4m-mtp-20260523/result.json",
+            "build/current-native-mtp-speed-ab-qwen27-jang4m-mtp-installed-app-20260606/result.json",
         ],
     },
     {
@@ -2173,21 +2170,21 @@ _ROWS: list[dict[str, Any]] = [
         ],
         "commands": [
             ".venv/bin/python tests/cross_matrix/run_decode_speed_gate.py --rows qwen27_jang4m --port 8790 --out build/current-decode-speed-live-qwen27-jang4m-20260522-hybrid-tq-review.json --timeout 420",
-            ".venv/bin/python tests/cross_matrix/run_decode_speed_gate.py --rows qwen27_jang4m --port 8791 --python .venv/bin/python --out build/current-decode-speed-live-qwen27-jang4m-source-keepalloc-20260522.json --timeout 420 --serve-extra-arg=--prefill-keep-alloc",
-            ".venv/bin/python tests/cross_matrix/run_decode_speed_gate.py --rows qwen27_jang4m --python /Volumes/vMLX-Tahoe-Speed-Proof/vMLX.app/Contents/Resources/bundled-python/python/bin/python3 --port 8794 --timeout 360 --out build/current-decode-speed-live-qwen27-jang4m-packaged-tahoe-dmg-20260522.json",
+            ".venv/bin/python tests/cross_matrix/run_decode_speed_gate.py --rows qwen27_jang4m --python .venv/bin/python --port 8810 --timeout 600 --prefill-step-size 2048 --out build/current-decode-speed-live-qwen27-jang4m-source-20260606.json",
+            ".venv/bin/python tests/cross_matrix/run_decode_speed_gate.py --rows qwen27_jang4m --python /Applications/vMLX.app/Contents/Resources/bundled-python/python/bin/python3.12 --port 8812 --timeout 600 --prefill-step-size 2048 --out build/current-decode-speed-live-qwen27-jang4m-installed-app-deterministic-pp-20260606.json",
             ".venv/bin/python tests/cross_matrix/run_decode_speed_gate.py --rows qwen27_jang4m --port 8799 --timeout 420 --out build/current-decode-speed-live-qwen27-jang4m-text-baseline-20260523.json --serve-extra-arg=--disable-prefix-cache",
             "VMLINUX_MLLM_PREFILL_TRACE=1 .venv/bin/python tests/cross_matrix/run_decode_speed_gate.py --rows qwen27_jang4m_mtp --port 8798 --timeout 420 --out build/current-decode-speed-live-qwen27-jang4m-mtp-prefill-trace3-20260523.json --serve-extra-arg=--disable-prefix-cache",
             ".venv/bin/python tests/cross_matrix/run_decode_speed_gate.py --rows qwen27_jang4m --python .venv/bin/python --port 8796 --timeout 600 --prefill-step-size 2048 --out build/current-decode-speed-live-qwen27-jang4m-text-baseline-source-isolated-20260523.json --serve-extra-arg=--disable-prefix-cache",
             ".venv/bin/python tests/cross_matrix/run_decode_speed_gate.py --rows qwen27_jang4m_mtp --python .venv/bin/python --port 8796 --timeout 600 --prefill-step-size 2048 --out build/current-decode-speed-live-qwen27-jang4m-mtp-prefill2048-source-isolated-20260523.json",
             ".venv/bin/python tests/cross_matrix/run_decode_speed_gate.py --rows qwen27_jang4m_mtp --python panel/bundled-python/python/bin/python3 --port 8796 --timeout 600 --prefill-step-size 2048 --out build/current-decode-speed-live-qwen27-jang4m-mtp-prefill2048-cacheon-isolated-20260523.json",
             "VMLINUX_MLLM_PREFILL_TRACE=1 .venv/bin/python tests/cross_matrix/run_decode_speed_gate.py --rows qwen27_jang4m_mtp --python .venv/bin/python --port 8796 --timeout 600 --prefill-step-size 2048 --out build/current-decode-speed-live-qwen27-jang4m-mtp-prefill-trace-isolated-20260523.json",
-            ".venv/bin/python tests/cross_matrix/run_decode_speed_gate.py --rows qwen27_jang4m_mtp --python .venv/bin/python --port 8801 --timeout 420 --prefill-step-size 2048 --out build/current-decode-speed-live-qwen27-jang4m-mtp-default-after-norm-shift-20260523.json",
+            ".venv/bin/python tests/cross_matrix/run_decode_speed_gate.py --rows qwen27_jang4m_mtp --python /Applications/vMLX.app/Contents/Resources/bundled-python/python/bin/python3.12 --port 8813 --timeout 600 --prefill-step-size 2048 --serve-extra-arg=--native-mtp-sampling-policy --serve-extra-arg=deterministic-defaults --out build/current-decode-speed-live-qwen27-jang4m-mtp-installed-app-deterministic-pp-20260606.json",
         ],
         "artifacts": [
             "build/current-decode-speed-live-qwen27-jang4m-20260522-hybrid-tq-review.json",
-            "build/current-decode-speed-live-qwen27-jang4m-source-keepalloc-20260522.json",
+            "build/current-decode-speed-live-qwen27-jang4m-source-20260606.json",
             "build/current-decode-speed-live-qwen27-jang4m-packaged-keepalloc-20260522.json",
-            "build/current-decode-speed-live-qwen27-jang4m-packaged-tahoe-dmg-20260522.json",
+            "build/current-decode-speed-live-qwen27-jang4m-installed-app-deterministic-pp-20260606.json",
             "build/current-decode-speed-live-qwen27-jang4m-text-baseline-20260523.json",
             "build/current-decode-speed-live-qwen27-jang4m-mtp-source-bypass-fix-20260523.json",
             "build/current-decode-speed-live-qwen27-jang4m-mtp-prefill-trace3-20260523.json",
@@ -2195,7 +2192,7 @@ _ROWS: list[dict[str, Any]] = [
             "build/current-decode-speed-live-qwen27-jang4m-mtp-prefill2048-source-isolated-20260523.json",
             "build/current-decode-speed-live-qwen27-jang4m-mtp-prefill2048-cacheon-isolated-20260523.json",
             "build/current-decode-speed-live-qwen27-jang4m-mtp-prefill-trace-isolated-20260523.json",
-            "build/current-decode-speed-live-qwen27-jang4m-mtp-default-after-norm-shift-20260523.json",
+            "build/current-decode-speed-live-qwen27-jang4m-mtp-installed-app-deterministic-pp-20260606.json",
         ],
     },
 ]

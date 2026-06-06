@@ -29,9 +29,6 @@ DEFAULT_STEP_TIMEOUT_SEC = 900.0
 STEP_TIMEOUT_RETURNCODE = 124
 
 EXPECTED_OPEN_REQUIREMENTS = [
-    "Qwen/JANG packaged MX matmul speed is release-cleared",
-    "Qwen native MTP live decode speed and output equivalence are release-cleared",
-    "Qwen 27B JANG_4M prompt-processing speed floor is release-cleared",
     "Ling/Bailing multilingual output quality is release-cleared",
     "Gemma4 26B CRACK Responses visible-content and language quality is release-cleared",
     "Gemma4 26B CRACK mixed-SWA app-engine speed floor is release-cleared",

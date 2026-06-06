@@ -200,13 +200,13 @@ MODEL_ARTIFACT_FORMAT_CONTRACT_REL = "build/current-model-artifact-format-contra
 GENERATION_DEFAULTS_CONTRACT_REL = "build/current-generation-defaults-contract-gemma4-release-boundary-20260604.json"
 NATIVE_MTP_CONTRACT_REL = "build/current-native-mtp-contract-gemma4-release-boundary-20260604.json"
 VL_MEDIA_CONTRACT_REL = "build/current-vl-media-cache-contract-gemma4-release-boundary-post-audio-contract-20260604.json"
-QWEN_JANG_SOURCE_SPEED_REL = "build/current-decode-speed-live-qwen27-jang4m-source-keepalloc-20260522.json"
-QWEN_JANG_PACKAGED_SPEED_REL = "build/current-decode-speed-live-qwen27-jang4m-packaged-tahoe-dmg-20260522.json"
+QWEN_JANG_SOURCE_SPEED_REL = "build/current-decode-speed-live-qwen27-jang4m-source-20260606.json"
+QWEN_JANG_PACKAGED_SPEED_REL = "build/current-decode-speed-live-qwen27-jang4m-installed-app-deterministic-pp-20260606.json"
 QWEN_NATIVE_MTP_SPEED_REL = "build/current-decode-speed-live-qwen27-jang4m-mtp-20260523.json"
 QWEN_NATIVE_MTP_PREFILL_SPEED_REL = "build/current-decode-speed-live-qwen27-jang4m-mtp-prefill2048-source-isolated-20260523.json"
 QWEN_NATIVE_MTP_PACKAGED_PREFILL_SPEED_REL = "build/current-decode-speed-live-qwen27-jang4m-mtp-prefill2048-cacheon-isolated-20260523.json"
 QWEN_NATIVE_MTP_PREFILL_TRACE_REL = "build/current-decode-speed-live-qwen27-jang4m-mtp-prefill-trace-isolated-20260523.json"
-QWEN_JANG_TEXT_BASELINE_SPEED_REL = "build/current-decode-speed-live-qwen27-jang4m-text-baseline-source-isolated-20260523.json"
+QWEN_JANG_TEXT_BASELINE_SPEED_REL = "build/current-decode-speed-live-qwen27-jang4m-source-20260606.json"
 QWEN_NATIVE_MTP_NO_PREFIX_LOGITS_REL = "build/current-decode-speed-live-qwen27-jang4m-mtp-no-prefix-logits-20260523.json"
 QWEN_NATIVE_MTP_HYBRID_LONG_PREFIX_SPLIT_REL = "build/current-decode-speed-live-qwen27-jang4m-mtp-hybrid-long-prefix-split-20260523.json"
 QWEN_NATIVE_MTP_KVNONE_REL = "build/current-decode-speed-live-qwen27-jang4m-mtp-kvnone-20260523.json"
@@ -214,9 +214,11 @@ QWEN_NATIVE_MTP_ROUTE_TRACE_REL = "build/current-decode-speed-live-qwen27-jang4m
 QWEN_RAW_FORWARD_AB_1024_REL = "build/current-qwen-forward-path-ab-1024-vlm-loader-20260523.json"
 QWEN_RAW_FORWARD_AB_4096_REL = "build/current-qwen-forward-path-ab-4096-vlm-loader-20260523.json"
 QWEN_NATIVE_MTP_NORM_SHIFT_CLEARANCE_REL = (
-    "build/current-decode-speed-live-qwen27-jang4m-mtp-default-after-norm-shift-20260523.json"
+    "build/current-decode-speed-live-qwen27-jang4m-mtp-installed-app-deterministic-pp-20260606.json"
 )
-QWEN_NATIVE_MTP_AB_REL = "build/current-native-mtp-speed-ab-qwen27-jang4m-mtp-20260523/result.json"
+QWEN_NATIVE_MTP_AB_REL = (
+    "build/current-native-mtp-speed-ab-qwen27-jang4m-mtp-installed-app-20260606/result.json"
+)
 DSV4_DEFAULT_CACHE_TOOL_LOOP_REL = "build/current-dsv4-default-cache-tool-loop/result.json"
 DSV4_RESPONSES_CACHE_GATE_REL = "build/current-dsv4-responses-cache-gate-20260606.json"
 DSV4_RESPONSES_RESTART_L2_GATE_REL = (
@@ -6418,15 +6420,6 @@ def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
         _status(qwen_prompt_ok),
         [
             QWEN_JANG_TEXT_BASELINE_SPEED_REL,
-            QWEN_NATIVE_MTP_PREFILL_SPEED_REL,
-            QWEN_NATIVE_MTP_PACKAGED_PREFILL_SPEED_REL,
-            QWEN_NATIVE_MTP_PREFILL_TRACE_REL,
-            QWEN_NATIVE_MTP_NO_PREFIX_LOGITS_REL,
-            QWEN_NATIVE_MTP_HYBRID_LONG_PREFIX_SPLIT_REL,
-            QWEN_NATIVE_MTP_KVNONE_REL,
-            QWEN_NATIVE_MTP_ROUTE_TRACE_REL,
-            QWEN_RAW_FORWARD_AB_1024_REL,
-            QWEN_RAW_FORWARD_AB_4096_REL,
             QWEN_NATIVE_MTP_NORM_SHIFT_CLEARANCE_REL,
         ],
         caveat=(

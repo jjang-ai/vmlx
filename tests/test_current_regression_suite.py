@@ -111,6 +111,30 @@ def test_current_regression_suite_does_not_keep_proven_dsv4_restart_l2_open():
     )
 
 
+def test_decode_speed_gate_pp_probe_is_deterministic():
+    source = Path("tests/cross_matrix/run_decode_speed_gate.py").read_text(
+        encoding="utf-8"
+    )
+    start = source.index("def run_pp_case(")
+    end = source.index("\ndef generation_failure_note", start)
+    block = source[start:end]
+
+    assert '"temperature": 0.0' in block
+    assert '"top_p": 1.0' in block
+    assert '"top_k": 0' in block
+
+
+def test_current_regression_suite_does_not_keep_proven_qwen_speed_rows_open():
+    from tests.cross_matrix import run_current_regression_suite as suite
+
+    for requirement in (
+        "Qwen/JANG packaged MX matmul speed is release-cleared",
+        "Qwen native MTP live decode speed and output equivalence are release-cleared",
+        "Qwen 27B JANG_4M prompt-processing speed floor is release-cleared",
+    ):
+        assert requirement not in suite.EXPECTED_OPEN_REQUIREMENTS
+
+
 def test_current_regression_suite_does_not_keep_proven_dsv4_one_tool_stop_open():
     from tests.cross_matrix import run_current_regression_suite as suite
 

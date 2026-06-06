@@ -14451,9 +14451,9 @@ def test_release_regression_manifest_tracks_qwen_jang_live_speed_review():
     assert row["domain"] == "performance"
     assert row["mode"] == "live"
     assert "current-decode-speed-live-qwen27-jang4m-20260522-hybrid-tq-review.json" in joined
-    assert "current-decode-speed-live-qwen27-jang4m-source-keepalloc-20260522.json" in joined
+    assert "current-decode-speed-live-qwen27-jang4m-source-20260606.json" in joined
     assert "current-decode-speed-live-qwen27-jang4m-packaged-keepalloc-20260522.json" in joined
-    assert "current-decode-speed-live-qwen27-jang4m-packaged-tahoe-dmg-20260522.json" in joined
+    assert "current-decode-speed-live-qwen27-jang4m-installed-app-deterministic-pp-20260606.json" in joined
     assert "current-decode-speed-live-qwen27-jang4m-text-baseline-20260523.json" in joined
     assert "current-decode-speed-live-qwen27-jang4m-mtp-source-bypass-fix-20260523.json" in joined
     assert "current-decode-speed-live-qwen27-jang4m-mtp-prefill-trace3-20260523.json" in joined
@@ -14461,7 +14461,7 @@ def test_release_regression_manifest_tracks_qwen_jang_live_speed_review():
     assert "current-decode-speed-live-qwen27-jang4m-mtp-prefill2048-source-isolated-20260523.json" in joined
     assert "current-decode-speed-live-qwen27-jang4m-mtp-prefill2048-cacheon-isolated-20260523.json" in joined
     assert "current-decode-speed-live-qwen27-jang4m-mtp-prefill-trace-isolated-20260523.json" in joined
-    assert "current-decode-speed-live-qwen27-jang4m-mtp-default-after-norm-shift-20260523.json" in joined
+    assert "current-decode-speed-live-qwen27-jang4m-mtp-installed-app-deterministic-pp-20260606.json" in joined
     assert "MLX and MLX-metal wheel tags" in joined
     assert "selective live TurboQuant for Qwen attention KV layers" in joined
     assert "Post norm-format loader fix live Qwen MTP/VLM default-cache row clears coherency" in joined
@@ -15170,7 +15170,7 @@ def test_release_regression_manifest_tracks_native_mtp_with_runner_artifact():
     assert "indexed mtp.* tensors" in joined
     assert "decode speed and output equivalence" in joined
     assert "prompt-processing floor" in joined
-    assert "current-native-mtp-speed-ab-qwen27-jang4m-mtp-20260523/result.json" in joined
+    assert "current-native-mtp-speed-ab-qwen27-jang4m-mtp-installed-app-20260606/result.json" in joined
     assert "same-artifact AR-vs-MTP" in joined
     assert "MTP decode is not the MLLM prefill bottleneck" in joined
     assert "prefill" in joined
