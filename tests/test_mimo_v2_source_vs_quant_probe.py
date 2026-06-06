@@ -153,6 +153,45 @@ def test_preflight_records_missing_source_and_endpoint_state(tmp_path, monkeypat
     ]
 
 
+def test_preflight_checks_remote_source_path(monkeypatch, tmp_path):
+    quant_model = tmp_path / "MiMo-V2.5-JANG_2L"
+    quant_model.mkdir()
+
+    monkeypatch.setattr(
+        probe,
+        "_get_json",
+        lambda url, *, timeout: (None, None, "URLError: refused"),
+    )
+    monkeypatch.setattr(
+        probe.subprocess,
+        "check_output",
+        lambda *args, **kwargs: '{"exists": true, "is_dir": true}\n',
+    )
+
+    result = probe.preflight(
+        source_base_url=None,
+        quant_base_url=None,
+        source_model_path="/Volumes/ModelDrive/jangq-ai/sources/MiMo-V2.5",
+        quant_model_path=str(quant_model),
+        source_host="test-host.local",
+        timeout=1,
+    )
+
+    assert result["status"] == "missing_prerequisites"
+    assert result["paths"]["source"] == {
+        "path": "/Volumes/ModelDrive/jangq-ai/sources/MiMo-V2.5",
+        "host": "test-host.local",
+        "exists": True,
+        "is_dir": True,
+        "remote": True,
+    }
+    assert result["paths"]["quant"]["exists"] is True
+    assert result["blockers"] == [
+        "missing_or_unhealthy_source_endpoint",
+        "missing_or_unhealthy_quant_endpoint",
+    ]
+
+
 def test_main_preflight_writes_missing_prerequisites_artifact(tmp_path, monkeypatch):
     out = tmp_path / "preflight.json"
     monkeypatch.setattr(

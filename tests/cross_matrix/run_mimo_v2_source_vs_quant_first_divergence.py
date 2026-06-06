@@ -13,6 +13,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import shlex
+import subprocess
 import time
 import urllib.error
 import urllib.request
@@ -254,6 +256,8 @@ def preflight(
     quant_base_url: str | None,
     source_model_path: str | None,
     quant_model_path: str | None,
+    source_host: str | None = None,
+    quant_host: str | None = None,
     timeout: float,
 ) -> dict[str, Any]:
     endpoints: dict[str, Any] = {}
@@ -276,20 +280,66 @@ def preflight(
         }
 
     paths: dict[str, Any] = {}
-    for name, value in (("source", source_model_path), ("quant", quant_model_path)):
+    for name, value, host in (
+        ("source", source_model_path, source_host),
+        ("quant", quant_model_path, quant_host),
+    ):
         if not value:
             paths[name] = {
                 "path": None,
+                "host": host,
                 "exists": False,
                 "error": "missing_model_path",
             }
             continue
-        path = Path(value)
-        paths[name] = {
-            "path": value,
-            "exists": path.exists(),
-            "is_dir": path.is_dir() if path.exists() else False,
-        }
+        if host:
+            quoted = shlex.quote(value)
+            cmd = [
+                "ssh",
+                "-o",
+                "BatchMode=yes",
+                "-o",
+                f"ConnectTimeout={max(1, int(timeout))}",
+                host,
+                (
+                    f"if test -d {quoted}; then echo '{{\"exists\":true,\"is_dir\":true}}'; "
+                    f"elif test -e {quoted}; then echo '{{\"exists\":true,\"is_dir\":false}}'; "
+                    "else echo '{\"exists\":false,\"is_dir\":false}'; fi"
+                ),
+            ]
+            try:
+                raw = subprocess.check_output(
+                    cmd,
+                    text=True,
+                    stderr=subprocess.STDOUT,
+                    timeout=timeout + 2,
+                )
+                remote = json.loads(raw.strip().splitlines()[-1])
+                paths[name] = {
+                    "path": value,
+                    "host": host,
+                    "exists": remote.get("exists") is True,
+                    "is_dir": remote.get("is_dir") is True,
+                    "remote": True,
+                }
+            except Exception as exc:  # noqa: BLE001 - diagnostic preflight
+                paths[name] = {
+                    "path": value,
+                    "host": host,
+                    "exists": False,
+                    "is_dir": False,
+                    "remote": True,
+                    "error": f"{type(exc).__name__}: {exc}",
+                }
+        else:
+            path = Path(value)
+            paths[name] = {
+                "path": value,
+                "host": None,
+                "exists": path.exists(),
+                "is_dir": path.is_dir() if path.exists() else False,
+                "remote": False,
+            }
 
     blockers: list[str] = []
     if not endpoints["source"]["healthy"]:
@@ -308,6 +358,8 @@ def preflight(
         "quant_model_path": quant_model_path,
         "source_base_url": source_base_url,
         "quant_base_url": quant_base_url,
+        "source_host": source_host,
+        "quant_host": quant_host,
         "blockers": blockers,
         "endpoints": endpoints,
         "paths": paths,
@@ -333,6 +385,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--quant-model", default="mimo-v2-jang2l")
     parser.add_argument("--source-model-path")
     parser.add_argument("--quant-model-path", default=DEFAULT_QUANT_MODEL_PATH)
+    parser.add_argument("--source-host")
+    parser.add_argument("--quant-host")
     parser.add_argument("--timeout", type=float, default=180.0)
     parser.add_argument("--out", type=Path, default=DEFAULT_OUT)
     parser.add_argument("--preflight-only", action="store_true")
@@ -344,6 +398,8 @@ def main(argv: list[str] | None = None) -> int:
             quant_base_url=args.quant_base_url,
             source_model_path=args.source_model_path,
             quant_model_path=args.quant_model_path,
+            source_host=args.source_host,
+            quant_host=args.quant_host,
             timeout=args.timeout,
         )
     else:
