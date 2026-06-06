@@ -380,6 +380,9 @@ MIMO_V2_JANG2L_CURRENT_AUDIT_REL = (
 MIMO_V2_JANG2L_CONSERVATIVE_DIAGNOSTIC_REL = (
     "build/current-mimo-conservative-diagnostic-20260606/summary.json"
 )
+MIMO_V2_JANG2L_NOMEDIA_TOOL_CACHE_REL = (
+    "build/current-all-local-model-smoke-mimo-v25-jang2l-tools-nomedia-after-harness-tighten-20260606/summary.json"
+)
 ALL_LOCAL_MODEL_SMOKE_DSV4_JANGTQ_K_REL = (
     "build/current-all-local-model-smoke-dsv4-jangtq-k-tools-cache-20260606/summary.json"
 )
@@ -4855,6 +4858,7 @@ def _mimo_v2_jang2l_quality_detail(root: Path) -> tuple[bool, dict[str, Any]]:
         "tool_dialect": MIMO_V2_JANG2L_TOOL_DIALECT_REL,
         "current_audit": MIMO_V2_JANG2L_CURRENT_AUDIT_REL,
         "conservative_diagnostic": MIMO_V2_JANG2L_CONSERVATIVE_DIAGNOSTIC_REL,
+        "nomedia_tool_cache": MIMO_V2_JANG2L_NOMEDIA_TOOL_CACHE_REL,
     }
     payloads = {key: _load(root, rel) for key, rel in artifacts.items()}
     missing = [
@@ -4969,6 +4973,70 @@ def _mimo_v2_jang2l_quality_detail(root: Path) -> tuple[bool, dict[str, Any]]:
     if audit_tool_protocol_open:
         tool_protocol_blocked = True
 
+    nomedia_tool_cache = payloads["nomedia_tool_cache"]
+    nomedia_results = nomedia_tool_cache.get("results")
+    if not isinstance(nomedia_results, list):
+        nomedia_results = []
+    nomedia_requests: list[dict[str, Any]] = []
+    nomedia_failures: list[dict[str, Any]] = []
+    nomedia_native_cache: dict[str, Any] = {}
+    for result in nomedia_results:
+        if not isinstance(result, dict):
+            continue
+        requests = result.get("requests")
+        if isinstance(requests, list):
+            nomedia_requests.extend(
+                item for item in requests if isinstance(item, dict)
+            )
+        failures = result.get("failures")
+        if isinstance(failures, list):
+            nomedia_failures.extend(
+                item for item in failures if isinstance(item, dict)
+            )
+        health_after = result.get("health_after")
+        health_body = (
+            health_after.get("body") if isinstance(health_after, dict) else None
+        )
+        native_cache = (
+            health_body.get("native_cache") if isinstance(health_body, dict) else None
+        )
+        if isinstance(native_cache, dict):
+            nomedia_native_cache = native_cache
+
+    nomedia_by_label = {
+        str(item.get("label")): item
+        for item in nomedia_requests
+        if item.get("label")
+    }
+    nomedia_cache_hit = any(
+        isinstance(item.get("cache_summary"), dict)
+        and item["cache_summary"].get("has_cache_hit") is True
+        for item in nomedia_requests
+    )
+    nomedia_tool_required = nomedia_by_label.get("tool_required") or {}
+    nomedia_tool_pass = (
+        nomedia_tool_required.get("code") == 200
+        and bool(nomedia_tool_required.get("tool_calls"))
+        and not nomedia_tool_required.get("validation_failures")
+    )
+    nomedia_exact_cache_pass = all(
+        isinstance(nomedia_by_label.get(label), dict)
+        and not nomedia_by_label[label].get("validation_failures")
+        for label in ("text_cache_repeat_1", "text_cache_repeat_2")
+    )
+    nomedia_recall_pass = (
+        isinstance(nomedia_by_label.get("text_multiturn_recall"), dict)
+        and not nomedia_by_label["text_multiturn_recall"].get("validation_failures")
+    )
+    nomedia_reasoning_pass = (
+        isinstance(nomedia_by_label.get("reasoning_on"), dict)
+        and not nomedia_by_label["reasoning_on"].get("validation_failures")
+    )
+    if nomedia_tool_cache.get("status") == "fail" and not nomedia_tool_pass:
+        tool_protocol_blocked = True
+    if nomedia_tool_cache.get("status") == "fail" and not nomedia_exact_cache_pass:
+        prompt_length_coherence_blocked = True
+
     ok = (
         not missing
         and manifest_integrity_passed
@@ -4994,6 +5062,14 @@ def _mimo_v2_jang2l_quality_detail(root: Path) -> tuple[bool, dict[str, Any]]:
         "prompt_length_corrupt_cases": corrupt_length_cases,
         "tool_protocol_blocked": tool_protocol_blocked,
         "conservative_tool_failures": conservative_tool_failures,
+        "nomedia_tool_cache_status": nomedia_tool_cache.get("status"),
+        "nomedia_exact_cache_pass": nomedia_exact_cache_pass,
+        "nomedia_cache_hit": nomedia_cache_hit,
+        "nomedia_recall_pass": nomedia_recall_pass,
+        "nomedia_reasoning_pass": nomedia_reasoning_pass,
+        "nomedia_tool_pass": nomedia_tool_pass,
+        "nomedia_failures": nomedia_failures,
+        "nomedia_native_cache": nomedia_native_cache,
         "status": "pass" if ok else "open",
         "release_boundary": (
             "mimo_v2_jang2l_current_local_runtime_cleared"
@@ -6863,6 +6939,7 @@ def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
             MIMO_V2_JANG2L_LENGTH_SWEEP_REL,
             MIMO_V2_JANG2L_TOOL_DIALECT_REL,
             MIMO_V2_JANG2L_CURRENT_AUDIT_REL,
+            MIMO_V2_JANG2L_NOMEDIA_TOOL_CACHE_REL,
         ],
         caveat=(
             None

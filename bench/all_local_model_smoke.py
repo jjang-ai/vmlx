@@ -143,6 +143,7 @@ def classify_model_dir(model_dir: Path) -> dict[str, Any]:
         or "hy3" in lower_blob
         or "hy_v3" in lower_blob
         or "minimax" in lower_blob
+        or model_type == "mimo_v2"
         or model_type == "zaya1_vl"
     )
     non_reasoning_family_blob = " ".join((name_lower, model_type.lower()))
@@ -168,12 +169,8 @@ def classify_model_dir(model_dir: Path) -> dict[str, Any]:
         supports_tools = bool(capabilities["supports_tools"])
     elif isinstance(tool_capabilities.get("supported"), bool):
         supports_tools = bool(tool_capabilities["supported"])
-    elif (
-        capabilities.get("tool_parser") is None
-        and tool_capabilities.get("parser") is None
-        and model_type == "mimo_v2"
-    ):
-        supports_tools = False
+    elif model_type == "mimo_v2":
+        supports_tools = True
 
     if model_type == "mimo_v2":
         cache_family = "mimo_v2_hybrid_swa"
@@ -1229,6 +1226,10 @@ def filter_rows(
             continue
         if not include_aux and (
             "/mtp_assistant" in haystack
+            or "/audio_tokenizer" in haystack
+            or "/audio-tokenizer" in haystack
+            or "/video_processor" in haystack
+            or "/video-processor" in haystack
             or "_upload_prep" in haystack
             or "/stage_jangq" in haystack
             or "/stage_osaurus" in haystack

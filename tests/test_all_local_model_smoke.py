@@ -229,9 +229,64 @@ def test_classify_model_reads_mimo_v2_embedded_config_capabilities(tmp_path):
     assert row["is_mllm"] is True
     assert row["supports_thinking"] is True
     assert row["supports_tools"] is True
+
+
+def test_classify_model_marks_mimo_v2_without_jang_config_as_xml_tool_family(tmp_path):
+    mod = load_module()
+    model_dir = tmp_path / "MiMo-V2.5-JANG_2L"
+    model_dir.mkdir()
+    (model_dir / "config.json").write_text(
+        """
+        {
+          "model_type": "mimo_v2",
+          "image_token_id": 151655,
+          "max_position_embeddings": 1048576
+        }
+        """,
+        encoding="utf-8",
+    )
+
+    row = mod.classify_model_dir(model_dir)
+
+    assert row["model_type"] == "mimo_v2"
+    assert row["supports_thinking"] is True
+    assert row["supports_tools"] is True
     assert row["has_mtp"] is False
     assert row["cache_family"] == "mimo_v2_hybrid_swa"
     assert row["has_jang_config"] is False
+
+
+def test_filter_rows_excludes_mimo_audio_tokenizer_sidecar_by_default(tmp_path):
+    mod = load_module()
+    model_dir = tmp_path / "MiMo-V2.5-JANG_2L"
+    audio_dir = model_dir / "audio_tokenizer"
+    audio_dir.mkdir(parents=True)
+
+    rows = [
+        {
+            "path": str(model_dir),
+            "name": model_dir.name,
+            "model_type": "mimo_v2",
+            "namespace": "JANGQ",
+        },
+        {
+            "path": str(audio_dir),
+            "name": "audio_tokenizer",
+            "model_type": "unknown",
+            "namespace": "JANGQ",
+        },
+    ]
+
+    filtered = mod.filter_rows(
+        rows,
+        only="MiMo-V2.5-JANG_2L",
+        skip=None,
+        include_dealign=True,
+        include_sources=False,
+        include_aux=False,
+    )
+
+    assert [row["name"] for row in filtered] == ["MiMo-V2.5-JANG_2L"]
 
 
 def test_classify_model_marks_deepseek_v4_composite_cache(tmp_path):
@@ -369,14 +424,15 @@ def test_probe_payloads_cover_repeat_text_reasoning_and_media():
     assert reasoning["payload"]["max_tokens"] >= 256
 
 
-def test_probe_payloads_skip_tool_probe_for_unproven_mimo_tools():
+def test_probe_payloads_include_tool_probe_for_mimo_xml_tools():
     mod = load_module()
     row = {
         "served_name": "mimo-v2",
         "is_mllm": True,
         "supports_video": False,
         "supports_thinking": True,
-        "supports_tools": False,
+        "supports_tools": True,
+        "model_type": "mimo_v2",
     }
 
     probes = mod.build_probe_payloads(
@@ -389,7 +445,7 @@ def test_probe_payloads_skip_tool_probe_for_unproven_mimo_tools():
     labels = [probe["label"] for probe in probes]
     assert "reasoning_on" in labels
     assert "vl_blue_image" in labels
-    assert "tool_required" not in labels
+    assert "tool_required" in labels
 
 
 def test_repeat_cache_probe_uses_deterministic_exact_output_instruction():
