@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Any
 
 
-DEFAULT_OUT = Path("build/current-parser-registry-contract-20260531-post-step-lfm-refresh.json")
+DEFAULT_OUT = Path("build/current-parser-registry-contract-after-mimo-modality-truth-20260606.json")
 
 SOURCE_HASH_FILES = (
     "vmlx_engine/cli.py",

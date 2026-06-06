@@ -384,7 +384,7 @@ CURRENT_POST_BUDGET_EDGE_ARTIFACTS = {
 }
 
 CURRENT_REGRESSION_SUITE_ARTIFACT = (
-    "build/current-regression-suite-after-mimo-current-audit-20260606.json"
+    "build/current-regression-suite-after-gemma26-minimaxk-mimo-rerun-final-20260606.json"
 )
 CURRENT_ISSUE175_179_RELEASE_BOUNDARY_AUDIT_ARTIFACT = (
     "build/current-issue175-179-release-boundary-audit-20260531-post-install-sync.json"
@@ -804,10 +804,10 @@ REQUIRED_REAL_UI_LIVE_MODEL_SURFACES_BY_FAMILY = {
 CURRENT_COVERED_LIVE_SMOKE_ARTIFACTS = {
     "zaya_text_mxfp4": "build/current-all-local-model-smoke-zaya-text-bundled-20260524/summary.json",
     "ling_flash_tq": "build/current-all-local-model-smoke-ling-bailing-jangtq-bundled-20260525-rerun/summary.json",
-    "gemma4_crack": "build/current-all-local-model-smoke-gemma4-26b-jang4m-crack-video-capfix-bundled-20260526/summary.json",
+    "gemma4_crack": "build/current-all-local-model-smoke-gemma26-jang4m-tools-media-continuation-20260606/summary.json",
     "qwen36_moe_crack": "build/current-all-local-model-smoke-qwen36-mxfp4-crack-bundled-20260525-rerun/summary.json",
     "hy3_preview_jangtq2": "build/current-all-local-model-smoke-hy3-jangtq2-bundled-toolprobe-20260525/summary.json",
-    "minimax_m27_tq_k": "build/current-all-local-model-smoke-minimax-small-jangtq-bundled-20260525-rerun/summary.json",
+    "minimax_m27_tq_k": "build/current-all-local-model-smoke-minimaxk-tools-continuation-20260606/summary.json",
     "nemotron_omni_tq2_system_nomedia": "build/current-all-local-model-smoke-nemotron-omni-jangtq-video-bundled-20260526-rerun/summary.json",
     "zaya_vl_jangtq4": "build/current-all-local-model-smoke-zaya-vl-jangtq4-true-bundled-toolprobe-media-sentinel-20260525/summary.json",
     "dsv4_jang_local": "build/current-all-local-model-smoke-dsv4-jangtq-k-bundled-cachehit-20260524/summary.json",
@@ -927,7 +927,7 @@ CURRENT_COVERED_LIVE_SMOKE_ROW_EXPECTATIONS: dict[str, dict[str, Any]] = {
         "cache_family": "hybrid_ssm",
     },
     "minimax_m27_tq_k": {
-        "name": "MiniMax-M2.7-Small-JANGTQ",
+        "name": "MiniMax-M2.7-JANGTQ_K-CRACK",
         "model_type": "minimax_m2",
         "is_mllm": False,
         "supports_video": False,
@@ -1673,7 +1673,7 @@ _ROWS: list[dict[str, Any]] = [
             ".venv/bin/python tests/cross_matrix/run_packaged_integrity_contract.py --jang-tools-source /Users/example/jang/.worktrees/vmlx-release-clean-b5f66a7/jang-tools --out build/current-packaged-integrity-contract-20260522-recheck-bundled-release-gate.json",
         ],
         "artifacts": [
-            "build/current-objective-proof-audit-gemma4-release-boundary-20260604.json",
+            "build/current-objective-proof-after-gemma26-minimaxk-mimo-rerun-20260606.json",
             "build/current-packaged-integrity-contract-gemma4-release-boundary-after-ui-e2e-fixes-dmg-build-20260604.json",
             "build/current-packaged-integrity-contract-20260601-dsv4-preflight-refresh.json",
             "build/current-packaged-integrity-contract-20260601-qwen3vl-minicpm-mpp-staged-refresh.json",
@@ -1838,12 +1838,12 @@ _ROWS: list[dict[str, Any]] = [
             "The clearance boundary is based on live artifacts, not a hidden sampler/repetition/default override",
         ],
         "commands": [
-            ".venv/bin/python tests/cross_matrix/summarize_objective_proof.py --out build/current-objective-proof-audit-gemma4-release-boundary-20260604.json",
+            ".venv/bin/python tests/cross_matrix/summarize_objective_proof.py --out build/current-objective-proof-after-gemma26-minimaxk-mimo-rerun-20260606.json",
             ".venv/bin/python tests/cross_matrix/run_production_family_audit.py --rows ling_flash_tq --live --py /Applications/vMLX.app/Contents/Resources/bundled-python/python/bin/python3.12 --out build/current-production-family-live-ling-bundled-current-20260606.json",
         ],
         "artifacts": [
             "build/current-production-family-live-ling-bundled-current-20260606.json",
-            "build/current-objective-proof-audit-gemma4-release-boundary-20260604.json",
+            "build/current-objective-proof-after-gemma26-minimaxk-mimo-rerun-20260606.json",
             "build/current-ling-jangtq-strict-russian-nocache-bundled-4850c9c2-20260524.json",
             "build/current-ling-mxfp4-crack-strict-russian-nocache-bundled-4850c9c2-20260524.json",
             "build/current-ling-jangtq-russian-prompt-variant-probe-20260524.json",
@@ -1979,7 +1979,7 @@ _ROWS: list[dict[str, Any]] = [
             "build/current-all-local-model-smoke-ling-bailing-jangtq-bundled-20260525-rerun/summary.json",
             "build/current-all-local-model-smoke-ling-bailing-jangtq-bundled-toolprobe-20260525/summary.json",
             "build/current-all-local-model-smoke-gemma4-26b-jang4m-crack-bundled-20260524/summary.json",
-            "build/current-all-local-model-smoke-gemma4-26b-jang4m-crack-video-capfix-bundled-20260526/summary.json",
+            "build/current-all-local-model-smoke-gemma26-jang4m-tools-media-continuation-20260606/summary.json",
             "build/current-all-local-model-smoke-gemma4-26b-jang4m-crack-bundled-toolprobe-currentmodality-20260526/summary.json",
             "build/current-all-local-model-smoke-qwen36-mxfp4-crack-bundled-20260524/summary.json",
             "build/current-all-local-model-smoke-qwen36-mxfp4-crack-bundled-20260525-rerun/summary.json",
@@ -1987,7 +1987,7 @@ _ROWS: list[dict[str, Any]] = [
             "build/current-all-local-model-smoke-hy3-jangtq2-bundled-20260524/summary.json",
             "build/current-all-local-model-smoke-hy3-jangtq2-bundled-toolprobe-20260525/summary.json",
             "build/current-all-local-model-smoke-minimax-small-jangtq-bundled-20260524/summary.json",
-            "build/current-all-local-model-smoke-minimax-small-jangtq-bundled-20260525-rerun/summary.json",
+            "build/current-all-local-model-smoke-minimaxk-tools-continuation-20260606/summary.json",
             "build/current-all-local-model-smoke-minimax-small-jangtq-bundled-toolprobe-20260525/summary.json",
             "build/current-all-local-model-smoke-dsv4-jangtq-k-bundled-cachehit-20260524/summary.json",
         ],

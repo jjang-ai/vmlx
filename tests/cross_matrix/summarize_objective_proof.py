@@ -324,7 +324,7 @@ ALL_LOCAL_MODEL_SMOKE_NEMOTRON_OMNI_JANGTQ_REL = (
     "build/current-all-local-model-smoke-nemotron-omni-jangtq-video-bundled-20260526-rerun/summary.json"
 )
 ALL_LOCAL_MODEL_SMOKE_GEMMA4_26B_CRACK_REL = (
-    "build/current-all-local-model-smoke-gemma4-26b-jang4m-crack-video-capfix-bundled-20260526/summary.json"
+    "build/current-all-local-model-smoke-gemma26-jang4m-tools-media-continuation-20260606/summary.json"
 )
 ALL_LOCAL_MODEL_SMOKE_LING_BAILING_JANGTQ_REL = (
     "build/current-all-local-model-smoke-ling-bailing-jangtq-bundled-20260525-rerun/summary.json"
@@ -336,10 +336,10 @@ ALL_LOCAL_MODEL_SMOKE_HY3_JANGTQ2_REL = (
     "build/current-all-local-model-smoke-hy3-jangtq2-bundled-toolprobe-20260525/summary.json"
 )
 ALL_LOCAL_MODEL_SMOKE_MINIMAX_SMALL_JANGTQ_REL = (
-    "build/current-all-local-model-smoke-minimax-small-jangtq-bundled-20260525-rerun/summary.json"
+    "build/current-all-local-model-smoke-minimaxk-tools-continuation-20260606/summary.json"
 )
 ALL_LOCAL_MODEL_SMOKE_MIMO_V2_JANG2L_REL = (
-    "build/current-all-local-model-smoke-mimo-v2-jang2l-bundled-20260527/summary.json"
+    "build/current-all-local-model-smoke-mimo-v25-jang2l-tools-media-rerun-20260606/summary.json"
 )
 MIMO_V2_JANG2L_STRUCTURAL_VERIFY_REL = (
     "build/current-mimo-jang2l-local-structural-verify-20260606.json"
@@ -358,6 +358,9 @@ MIMO_V2_JANG2L_TOOL_DIALECT_REL = (
 )
 MIMO_V2_JANG2L_CURRENT_AUDIT_REL = (
     "build/current-mimo-v2-jang2l-current-audit-20260606.json"
+)
+MIMO_V2_JANG2L_CONSERVATIVE_DIAGNOSTIC_REL = (
+    "build/current-mimo-conservative-diagnostic-20260606/summary.json"
 )
 ALL_LOCAL_MODEL_SMOKE_DSV4_JANGTQ_K_REL = (
     "build/current-all-local-model-smoke-dsv4-jangtq-k-bundled-cachehit-20260524/summary.json"
@@ -4767,6 +4770,7 @@ def _mimo_v2_jang2l_quality_detail(root: Path) -> tuple[bool, dict[str, Any]]:
         "length_sweep": MIMO_V2_JANG2L_LENGTH_SWEEP_REL,
         "tool_dialect": MIMO_V2_JANG2L_TOOL_DIALECT_REL,
         "current_audit": MIMO_V2_JANG2L_CURRENT_AUDIT_REL,
+        "conservative_diagnostic": MIMO_V2_JANG2L_CONSERVATIVE_DIAGNOSTIC_REL,
     }
     payloads = {key: _load(root, rel) for key, rel in artifacts.items()}
     missing = [
@@ -4855,6 +4859,24 @@ def _mimo_v2_jang2l_quality_detail(root: Path) -> tuple[bool, dict[str, Any]]:
             for item in tool_observations
         )
     )
+    conservative_diagnostic = payloads["conservative_diagnostic"]
+    conservative_rows = conservative_diagnostic.get("rows")
+    if not isinstance(conservative_rows, list):
+        conservative_rows = []
+    conservative_tool_failures = [
+        {
+            "name": item.get("name"),
+            "code": item.get("code"),
+            "elapsed_sec": item.get("elapsed_sec"),
+            "error": item.get("error"),
+        }
+        for item in conservative_rows
+        if isinstance(item, dict)
+        and str(item.get("name") or "").startswith("tool_required")
+        and item.get("tool_calls") in (None, [])
+    ]
+    if conservative_tool_failures:
+        tool_protocol_blocked = True
 
     audit_long_prompt_open = current_audit_component_ok.get("long_prompt_coherence") is False
     audit_tool_protocol_open = current_audit_component_ok.get("tool_protocol") is False
@@ -4887,6 +4909,7 @@ def _mimo_v2_jang2l_quality_detail(root: Path) -> tuple[bool, dict[str, Any]]:
         "prompt_length_coherence_blocked": prompt_length_coherence_blocked,
         "prompt_length_corrupt_cases": corrupt_length_cases,
         "tool_protocol_blocked": tool_protocol_blocked,
+        "conservative_tool_failures": conservative_tool_failures,
         "status": "pass" if ok else "open",
         "release_boundary": (
             "mimo_v2_jang2l_current_local_runtime_cleared"

@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Any
 
 
-DEFAULT_OUT = Path("build/current-vl-media-cache-contract-gemma4-release-boundary-post-audio-contract-20260604.json")
+DEFAULT_OUT = Path("build/current-vl-media-cache-contract-after-bundled-refresh-continuation-20260606.json")
 
 PYTEST_PATTERN = (
     "video_url or video_fallback or media_salt or mediaSalt or tool_replay "

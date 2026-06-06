@@ -5,7 +5,7 @@ def test_vl_media_cache_contract_default_out_tracks_current_release_proof_artifa
     from tests.cross_matrix import run_vl_media_cache_contract as gate
 
     assert gate.DEFAULT_OUT == Path(
-        "build/current-vl-media-cache-contract-gemma4-release-boundary-post-audio-contract-20260604.json"
+        "build/current-vl-media-cache-contract-after-bundled-refresh-continuation-20260606.json"
     )
 
 

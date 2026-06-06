@@ -142,7 +142,7 @@ def _write_current_objective_digest(
     open_requirements: list[str] | None = None,
     missing_evidence: list[str] | None = None,
 ) -> None:
-    artifact = root / "build/current-objective-proof-audit-gemma4-release-boundary-20260604.json"
+    artifact = root / "build/current-objective-proof-after-gemma26-minimaxk-mimo-rerun-20260606.json"
     artifact.parent.mkdir(parents=True, exist_ok=True)
     open_rows = (
         EXPECTED_CURRENT_OPEN_REQUIREMENTS
@@ -3712,7 +3712,7 @@ def test_release_regression_manifest_tracks_multifamily_live_workflow_gate():
         in joined
     )
     assert (
-        "current-all-local-model-smoke-gemma4-26b-jang4m-crack-video-capfix-bundled-20260526/summary.json"
+        "current-all-local-model-smoke-gemma26-jang4m-tools-media-continuation-20260606/summary.json"
         in joined
     )
     assert (
@@ -3751,7 +3751,7 @@ def test_release_regression_manifest_tracks_multifamily_live_workflow_gate():
         in joined
     )
     assert (
-        "current-all-local-model-smoke-minimax-small-jangtq-bundled-20260525-rerun/summary.json"
+        "current-all-local-model-smoke-minimaxk-tools-continuation-20260606/summary.json"
         in joined
     )
     assert (
@@ -3795,7 +3795,7 @@ def test_release_regression_manifest_tracks_covered_live_smoke_artifacts():
         in artifacts
     )
     assert (
-        "build/current-all-local-model-smoke-gemma4-26b-jang4m-crack-video-capfix-bundled-20260526/summary.json"
+        "build/current-all-local-model-smoke-gemma26-jang4m-tools-media-continuation-20260606/summary.json"
         in artifacts
     )
     assert (
@@ -3807,7 +3807,7 @@ def test_release_regression_manifest_tracks_covered_live_smoke_artifacts():
         in artifacts
     )
     assert (
-        "build/current-all-local-model-smoke-minimax-small-jangtq-bundled-20260525-rerun/summary.json"
+        "build/current-all-local-model-smoke-minimaxk-tools-continuation-20260606/summary.json"
         in artifacts
     )
     assert (
@@ -3843,7 +3843,7 @@ def test_release_regression_manifest_current_sweep_uses_latest_live_smoke_artifa
     assert "current-regression-suite-20260528-installed-aggregate-stale.json" not in joined
     assert "current-regression-suite-20260528-epipe-aggregate-guard.json" not in joined
     assert "current-regression-suite-20260528-dsv4-continue-refresh.json" not in joined
-    assert "current-regression-suite-after-mimo-current-audit-20260606.json" in joined
+    assert "current-regression-suite-after-gemma26-minimaxk-mimo-rerun-final-20260606.json" in joined
     assert "current-regression-suite-gemma4-release-boundary-after-ui-e2e-fixes-dmg-build-20260604.json" not in joined
     assert "current-regression-suite-20260602-v1553-installed-tahoe-refresh.json" not in joined
     assert "current-regression-suite-20260602-vm-stat-gate-validation.json" not in joined
@@ -4020,11 +4020,11 @@ def test_release_regression_manifest_current_sweep_uses_latest_live_smoke_artifa
     assert "current-packaged-integrity-contract-20260526-bundled-release-proof.json" not in joined
     assert "current-packaged-integrity-contract-20260525-additional-args-guard.json" not in joined
     assert "current-regression-suite-20260524-crossfamily-cleared-dsv4-open.json" not in joined
-    assert "current-generation-defaults-contract-gemma4-release-boundary-20260604.json" in joined
+    assert "current-generation-defaults-contract-after-mimo-modality-truth-20260606.json" in joined
     assert "current-generation-defaults-contract-20260602-step-greedy-display.json" not in joined
     assert "current-generation-defaults-contract-20260531-post-step-lfm-refresh.json" not in joined
     assert "current-generation-defaults-contract-20260526-settings-audit.json" not in joined
-    assert "current-max-output-context-contract-20260531-post-step-lfm-refresh.json" in joined
+    assert "current-max-output-context-contract-after-mimo-modality-truth-20260606.json" in joined
     assert "current-max-output-context-contract-20260526-settings-audit.json" not in joined
     assert "current-reasoning-template-contract-20260526-settings-audit.json" in joined
     assert "current-generation-defaults-contract-20260525-additional-args-guard.json" not in joined
@@ -9985,7 +9985,7 @@ def test_release_regression_manifest_rejects_stale_issue179_objective_digest_row
     tmp_path,
 ):
     _write_current_objective_digest(tmp_path)
-    path = tmp_path / "build/current-objective-proof-audit-gemma4-release-boundary-20260604.json"
+    path = tmp_path / "build/current-objective-proof-after-gemma26-minimaxk-mimo-rerun-20260606.json"
     payload = json.loads(path.read_text(encoding="utf-8"))
     unexpected_requirement = "Unexpected MiniMax stale reporter row is release-cleared"
     payload["requirements"].append(
@@ -14228,7 +14228,7 @@ def test_release_regression_manifest_tracks_generation_defaults_with_runner_arti
     joined = " ".join(row["commands"] + row["artifacts"] + row["proves"])
 
     assert "run_generation_defaults_contract.py" in joined
-    assert "current-generation-defaults-contract-gemma4-release-boundary-20260604.json" in joined
+    assert "current-generation-defaults-contract-after-mimo-modality-truth-20260606.json" in joined
     assert "current-generation-defaults-contract-20260602-step-greedy-display.json" not in joined
     assert "current-generation-defaults-contract-20260531-post-step-lfm-refresh.json" not in joined
     assert "current-generation-defaults-contract-20260526-settings-audit.json" not in joined
@@ -14299,7 +14299,7 @@ def test_release_regression_manifest_tracks_current_defaults_reasoning_api_reche
 
     generation = rows["generation-defaults-no-hidden-forcing"]
     generation_joined = " ".join(generation["commands"] + generation["artifacts"] + generation["proves"])
-    assert "current-generation-defaults-contract-gemma4-release-boundary-20260604.json" in generation_joined
+    assert "current-generation-defaults-contract-after-mimo-modality-truth-20260606.json" in generation_joined
     assert "current-generation-defaults-contract-20260602-step-greedy-display.json" not in generation_joined
     assert "current-generation-defaults-contract-20260531-post-step-lfm-refresh.json" not in generation_joined
     assert "current-generation-defaults-contract-20260526-settings-audit.json" not in generation_joined
@@ -14329,7 +14329,7 @@ def test_release_regression_manifest_tracks_tool_calls_with_runner_artifact():
     joined = " ".join(row["commands"] + row["artifacts"] + row["proves"])
 
     assert "run_tool_call_contract.py" in joined
-    assert "current-tool-call-contract-20260528-tool-parser-loop-matrix.json" in joined
+    assert "current-tool-call-contract-after-mimo-modality-truth-20260606.json" in joined
     assert "Tool parser residue" in joined
     assert "DSV4" in joined
     assert "maxToolIterations" in joined
@@ -14448,7 +14448,7 @@ def test_release_regression_manifest_tracks_packaged_integrity_with_runner_artif
     assert "Version triples" in joined
     assert "bundled Python hash parity" in joined
     assert "objective proof digest" in joined
-    assert "current-objective-proof-audit-gemma4-release-boundary-20260604.json" in joined
+    assert "current-objective-proof-after-gemma26-minimaxk-mimo-rerun-20260606.json" in joined
     assert "objective-gate-enforced" in joined
     assert "verify-bundled" in joined
 
@@ -14516,7 +14516,7 @@ def test_release_regression_manifest_tracks_current_updater_and_i18n_rechecks():
 
     ling = rows["ling-bailing-multilingual-quality-live"]
     ling_joined = " ".join(ling["commands"] + ling["artifacts"] + ling["proves"])
-    assert "current-objective-proof-audit-gemma4-release-boundary-20260604.json" in ling_joined
+    assert "current-objective-proof-after-gemma26-minimaxk-mimo-rerun-20260606.json" in ling_joined
 
 
 def test_release_regression_manifest_tracks_live_only_boundaries():
@@ -14959,7 +14959,7 @@ def test_release_regression_manifest_tracks_named_model_family_detection_with_ru
 
     assert row["domain"] == "model_family_detection"
     assert "run_model_family_detection_contract.py" in joined
-    assert "current-model-family-detection-contract-20260602-v1554-attention-matmul-refresh.json" in joined
+    assert "current-model-family-detection-contract-after-mimo-modality-truth-20260606.json" in joined
     assert "current-model-family-detection-contract-20260602-step-jangtq-boundary.json" not in joined
     assert "current-model-family-detection-contract-20260531-post-step-lfm-refresh.json" not in joined
     assert "current-model-family-detection-contract-20260522-plain-kv-cache-health.json" in joined
@@ -15055,7 +15055,7 @@ def test_release_regression_manifest_tracks_vl_media_with_runner_artifact():
     joined = " ".join(row["commands"] + row["artifacts"] + row["proves"])
 
     assert "run_vl_media_cache_contract.py" in joined
-    assert "current-vl-media-cache-contract-gemma4-release-boundary-post-audio-contract-20260604.json" in joined
+    assert "current-vl-media-cache-contract-after-bundled-refresh-continuation-20260606.json" in joined
     assert "current-vl-media-cache-contract-20260601-qwen3vl-frame-list-fallback.json" not in joined
     assert "current-vl-media-cache-contract-20260522-panel-family.json" in joined
     assert "VLM media request serialization" in joined
@@ -15074,7 +15074,7 @@ def test_release_regression_manifest_tracks_cache_architecture_with_runner_artif
     joined = " ".join(row["commands"] + row["artifacts"] + row["proves"])
 
     assert "run_cache_architecture_contract.py" in joined
-    assert "current-cache-architecture-contract-20260602-v1554-attention-matmul-refresh.json" in joined
+    assert "current-cache-architecture-contract-after-mimo-modality-truth-20260606.json" in joined
     assert "current-cache-architecture-contract-20260602-step-jangtq-boundary.json" not in joined
     assert "current-cache-architecture-contract-20260601-zaya-dsv4-terminal-disk-guard.json" not in joined
     assert "current-cache-architecture-contract-20260601-step37-mixed-swa-ui-storage-quant.json" not in joined

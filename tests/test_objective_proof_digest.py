@@ -7888,7 +7888,7 @@ def test_objective_proof_digest_keeps_cross_family_live_smoke_open_on_non_mimo_g
     )
     _write_json(
         tmp_path,
-        "build/current-all-local-model-smoke-gemma4-26b-jang4m-crack-video-capfix-bundled-20260526/summary.json",
+        "build/current-all-local-model-smoke-minimaxk-tools-continuation-20260606/summary.json",
         {
             "completed": 1,
             "row_count": 1,
@@ -8116,7 +8116,7 @@ def test_objective_proof_digest_keeps_cross_family_live_smoke_open_on_non_mimo_g
     )
     _write_json(
         tmp_path,
-        "build/current-all-local-model-smoke-minimax-small-jangtq-bundled-20260525-rerun/summary.json",
+        "build/current-all-local-model-smoke-gemma26-jang4m-tools-media-continuation-20260606/summary.json",
         {
             "completed": 1,
             "row_count": 1,
@@ -8124,7 +8124,7 @@ def test_objective_proof_digest_keeps_cross_family_live_smoke_open_on_non_mimo_g
                 {
                     "status": "pass",
                     "row": {
-                        "name": "MiniMax-M2.7-Small-JANGTQ",
+                        "name": "MiniMax-M2.7-JANGTQ_K-CRACK",
                         "model_type": "minimax_m2",
                         "cache_family": "hybrid_ssm",
                         "is_mllm": False,
@@ -8245,7 +8245,7 @@ def test_objective_proof_digest_keeps_cross_family_live_smoke_open_on_non_mimo_g
     }
     assert row["details"]["blocking_required_family_artifacts"] == {
         "mimo_v2": [
-            "build/current-all-local-model-smoke-mimo-v2-jang2l-bundled-20260527/summary.json"
+            "build/current-all-local-model-smoke-mimo-v25-jang2l-tools-media-rerun-20260606/summary.json"
         ],
         "nemotron": [
             "build/current-all-local-model-smoke-nemotron-omni-jangtq-video-bundled-20260526-rerun/summary.json"
@@ -8318,7 +8318,7 @@ def test_objective_proof_digest_keeps_cross_family_live_smoke_open_when_only_mim
         )
     _write_json(
         tmp_path,
-        "build/current-all-local-model-smoke-mimo-v2-jang2l-bundled-20260527/summary.json",
+        "build/current-all-local-model-smoke-mimo-v25-jang2l-tools-media-rerun-20260606/summary.json",
         {
             "status": "fail",
             "completed": 1,
@@ -8365,7 +8365,7 @@ def test_objective_proof_digest_keeps_cross_family_live_smoke_open_when_only_mim
     assert row["details"]["mimo_v2_deferred"] is True
     assert row["details"]["not_pass_required_family_artifacts"] == {
         "mimo_v2": [
-            "build/current-all-local-model-smoke-mimo-v2-jang2l-bundled-20260527/summary.json"
+            "build/current-all-local-model-smoke-mimo-v25-jang2l-tools-media-rerun-20260606/summary.json"
         ],
     }
     assert row["details"]["missing_required_family_keys"] == ["mimo_v2"]
@@ -8542,7 +8542,7 @@ def test_objective_digest_includes_current_real_ui_unblocked_non_mimo_matrix(
             "build/current-real-ui-dsv4-memory-preflight-20260530-local-refresh.json"
         ],
         "mimo_v2": [
-            "build/current-all-local-model-smoke-mimo-v2-jang2l-bundled-20260527/summary.json"
+            "build/current-all-local-model-smoke-mimo-v25-jang2l-tools-media-rerun-20260606/summary.json"
         ],
     }
     assert row["details"]["real_ui_live_model_matrix"][

@@ -23,7 +23,7 @@ from typing import Any
 
 
 DEFAULT_OUT = Path(
-    "build/current-regression-suite-after-mimo-current-audit-20260606.json"
+    "build/current-regression-suite-after-gemma26-minimaxk-mimo-rerun-final-20260606.json"
 )
 DEFAULT_STEP_TIMEOUT_SEC = 900.0
 STEP_TIMEOUT_RETURNCODE = 124
@@ -43,7 +43,7 @@ DEFERRED_RELEASE_OPEN_REQUIREMENTS = {
 }
 
 CURRENT_OBJECTIVE_DIGEST_ARTIFACT = (
-    "build/current-objective-proof-audit-gemma4-release-boundary-20260604.json"
+    "build/current-objective-proof-after-gemma26-minimaxk-mimo-rerun-20260606.json"
 )
 
 CURRENT_SUITE_SOURCE_HASH_FILES = (

@@ -26,7 +26,7 @@ from pathlib import Path
 from typing import Any
 
 
-DEFAULT_OUT = Path("build/current-api-cache-contract-proof-20260602-cache-detail-zero-cached.json")
+DEFAULT_OUT = Path("build/current-noheavy-api-cache-contract-after-mimo-modality-truth-20260606.json")
 SOURCE_HASH_FILES = (
     "vmlx_engine/server.py",
     "vmlx_engine/tool_parsers/dsml_tool_parser.py",

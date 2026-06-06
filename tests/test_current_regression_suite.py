@@ -906,7 +906,7 @@ def test_noheavy_api_cache_contract_default_out_tracks_current_suite_artifact():
     from tests.cross_matrix import run_noheavy_api_cache_contract as gate
 
     assert gate.DEFAULT_OUT == Path(
-        "build/current-api-cache-contract-proof-20260602-cache-detail-zero-cached.json"
+        "build/current-noheavy-api-cache-contract-after-mimo-modality-truth-20260606.json"
     )
 
 
@@ -1481,7 +1481,7 @@ def test_current_regression_suite_refreshes_current_objective_digest_artifact(
 
     assert artifact["status"] == "pass"
     assert suite.CURRENT_OBJECTIVE_DIGEST_ARTIFACT == (
-        "build/current-objective-proof-audit-gemma4-release-boundary-20260604.json"
+        "build/current-objective-proof-after-gemma26-minimaxk-mimo-rerun-20260606.json"
     )
     assert any(
         name == "objective_digest"
@@ -1643,7 +1643,7 @@ def test_current_regression_suite_runs_model_family_detection_contracts(monkeypa
         for _name, cmd in seen_steps
     )
     assert any(
-        "build/current-model-family-detection-contract-20260602-v1554-attention-matmul-refresh.json"
+        "build/current-model-family-detection-contract-after-mimo-modality-truth-20260606.json"
         in " ".join(cmd)
         for _name, cmd in seen_steps
     )
@@ -1740,7 +1740,7 @@ def test_current_regression_suite_runs_cache_architecture_contracts(monkeypatch,
         for _name, cmd in seen_steps
     )
     assert any(
-        "build/current-cache-architecture-contract-20260602-v1554-attention-matmul-refresh.json"
+        "build/current-cache-architecture-contract-after-mimo-modality-truth-20260606.json"
         in " ".join(cmd)
         for _name, cmd in seen_steps
     )
@@ -1791,7 +1791,7 @@ def test_current_regression_suite_runs_generation_defaults_contracts(monkeypatch
         for _name, cmd in seen_steps
     )
     assert any(
-        "build/current-generation-defaults-contract-gemma4-release-boundary-20260604.json"
+        "build/current-generation-defaults-contract-after-mimo-modality-truth-20260606.json"
         in " ".join(cmd)
         for _name, cmd in seen_steps
     )
@@ -1878,7 +1878,7 @@ def test_current_regression_suite_runs_tool_call_contracts(monkeypatch, tmp_path
     assert any(name == "tool_call_contracts" for name, _cmd in seen_steps)
     assert any(
         "run_tool_call_contract.py" in " ".join(cmd)
-        and "current-tool-call-contract-20260528-tool-parser-loop-matrix.json" in " ".join(cmd)
+        and "current-tool-call-contract-after-mimo-modality-truth-20260606.json" in " ".join(cmd)
         for _name, cmd in seen_steps
     )
 

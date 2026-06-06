@@ -21,7 +21,7 @@ from pathlib import Path
 from typing import Any
 
 
-DEFAULT_OUT = Path("build/current-generation-defaults-contract-gemma4-release-boundary-20260604.json")
+DEFAULT_OUT = Path("build/current-generation-defaults-contract-after-mimo-modality-truth-20260606.json")
 
 SOURCE_HASH_FILES = (
     "vmlx_engine/server.py",

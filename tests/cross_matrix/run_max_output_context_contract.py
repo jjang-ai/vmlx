@@ -21,7 +21,7 @@ from typing import Any
 
 
 DEFAULT_OUT = Path(
-    "build/current-max-output-context-contract-20260531-post-step-lfm-refresh.json"
+    "build/current-max-output-context-contract-after-mimo-modality-truth-20260606.json"
 )
 
 SOURCE_HASH_FILES = (

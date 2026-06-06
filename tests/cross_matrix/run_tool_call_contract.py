@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Any
 
 
-DEFAULT_OUT = Path("build/current-tool-call-contract-20260528-tool-parser-loop-matrix.json")
+DEFAULT_OUT = Path("build/current-tool-call-contract-after-mimo-modality-truth-20260606.json")
 
 DSML_PATTERN = (
     "visible_text_around_invoke_preserved_no_dsml_leak "
