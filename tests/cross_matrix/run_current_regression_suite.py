@@ -602,7 +602,7 @@ CURRENT_SUITE_COMMANDS: dict[str, list[str]] = {
         sys.executable,
         "tests/cross_matrix/run_vl_media_cache_contract.py",
         "--out",
-        "build/current-vl-media-cache-contract-after-bundled-refresh-continuation-20260606.json",
+        "build/current-vl-media-cache-contract-after-gemma4-prefill-guard-proof-20260606.json",
     ],
     "step37_crash_falsification_contract": [
         sys.executable,

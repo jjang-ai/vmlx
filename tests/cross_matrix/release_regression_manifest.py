@@ -378,7 +378,7 @@ CURRENT_POST_BUDGET_EDGE_ARTIFACTS = {
     "model-family-detection-noheavy": "build/current-model-family-detection-contract-after-mimo-modality-truth-20260606.json",
     "native-mtp-d3-effect-policy": "build/current-native-mtp-contract-after-qwen-gdn-sink-proof-20260606.json",
     "mcp-policy-ui-gateway": "build/current-mcp-policy-contract-20260531-post-step-lfm-refresh.json",
-    "vl-media-cache-tool-followup": "build/current-vl-media-cache-contract-after-bundled-refresh-continuation-20260606.json",
+    "vl-media-cache-tool-followup": "build/current-vl-media-cache-contract-after-gemma4-prefill-guard-proof-20260606.json",
     "packaged-release-integrity": "build/current-packaged-integrity-contract-after-bundled-refresh-20260606.json",
     "public-release-surface-preflight": "build/current-release-surface-contract-20260602-v154-live-public-after-site-fix.json",
 }
@@ -1644,10 +1644,10 @@ _ROWS: list[dict[str, Any]] = [
             "Still-image live rows do not imply video/audio/Omni clearance",
         ],
         "commands": [
-            ".venv/bin/python tests/cross_matrix/run_vl_media_cache_contract.py --out build/current-vl-media-cache-contract-after-bundled-refresh-continuation-20260606.json",
+            ".venv/bin/python tests/cross_matrix/run_vl_media_cache_contract.py --out build/current-vl-media-cache-contract-after-gemma4-prefill-guard-proof-20260606.json",
         ],
         "artifacts": [
-            "build/current-vl-media-cache-contract-after-bundled-refresh-continuation-20260606.json",
+            "build/current-vl-media-cache-contract-after-gemma4-prefill-guard-proof-20260606.json",
             "build/current-vl-media-cache-contract-20260531-post-step-lfm-refresh.json",
             "build/current-vl-media-cache-contract-20260527-after-think-xml-registry-fix.json",
             "build/current-vl-media-cache-contract-20260527-issues-175-178-bundled-sync.json",

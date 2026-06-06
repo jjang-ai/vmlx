@@ -15107,7 +15107,7 @@ def test_release_regression_manifest_tracks_vl_media_with_runner_artifact():
     joined = " ".join(row["commands"] + row["artifacts"] + row["proves"])
 
     assert "run_vl_media_cache_contract.py" in joined
-    assert "current-vl-media-cache-contract-after-bundled-refresh-continuation-20260606.json" in joined
+    assert "current-vl-media-cache-contract-after-gemma4-prefill-guard-proof-20260606.json" in joined
     assert "current-vl-media-cache-contract-20260601-qwen3vl-frame-list-fallback.json" not in joined
     assert "current-vl-media-cache-contract-20260522-panel-family.json" in joined
     assert "VLM media request serialization" in joined
