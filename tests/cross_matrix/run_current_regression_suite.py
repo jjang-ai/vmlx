@@ -622,7 +622,7 @@ CURRENT_SUITE_COMMANDS: dict[str, list[str]] = {
         "--app",
         "panel/release/sequoia-app/mac-arm64/vMLX.app",
         "--out",
-        "build/current-installed-app-runtime-parity-audit-gemma4-release-boundary-after-install-20260604.json",
+        "build/current-installed-app-runtime-parity-audit-after-minimax-live-refresh-20260606.json",
     ],
     "staged_app_runtime_parity_audit": [
         sys.executable,

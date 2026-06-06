@@ -3912,7 +3912,7 @@ def test_release_regression_manifest_current_sweep_uses_latest_live_smoke_artifa
     assert "current-regression-suite-20260528-signing-detail-ledger.json" not in joined
     assert "current-installed-app-runtime-parity-audit-gemma4-release-boundary-after-install-20260604.json" in joined
     assert "current-installed-app-runtime-parity-audit-gemma4-release-boundary-after-install-20260604.json" in row_text
-    assert "run_installed_app_runtime_parity_audit.py --app panel/release/sequoia-app/mac-arm64/vMLX.app --out build/current-installed-app-runtime-parity-audit-gemma4-release-boundary-after-install-20260604.json" in row_text
+    assert "run_installed_app_runtime_parity_audit.py --app panel/release/sequoia-app/mac-arm64/vMLX.app --out build/current-installed-app-runtime-parity-audit-after-minimax-live-refresh-20260606.json" in row_text
     assert "current-installed-app-runtime-parity-audit-20260602-developer-id-installed-signing.json" not in joined
     assert "current-installed-app-runtime-parity-audit-20260602-developer-id-installed-signing.json" not in row_text
     assert "current-installed-app-runtime-parity-audit-20260602-performance-health-epipe.json" not in joined
