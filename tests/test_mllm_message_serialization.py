@@ -1552,3 +1552,61 @@ def test_mimo_v2_thinking_false_uses_plain_template_prefix(monkeypatch):
     assert seen[-1]["enable_thinking"] is True
     assert "<think></think>" not in prompt
     assert prompt.endswith("assistant\n")
+
+
+def test_simple_engine_routes_mimo_text_only_chat_through_language_model():
+    """Text-only MiMo must avoid the MLLM/VLM generate path that OOMs long prompts."""
+    import asyncio
+    from types import SimpleNamespace
+
+    from vmlx_engine.engine.base import GenerationOutput
+    from vmlx_engine.engine.simple import SimpleEngine
+
+    class _Processor:
+        pass
+
+    class _Model:
+        processor = _Processor()
+
+        def chat(self, **_kwargs):  # pragma: no cover - would be the old OOM-prone route
+            raise AssertionError("MiMo text-only chat must not use MLLM.chat")
+
+        def _apply_chat_template(self, messages, enable_thinking=None, tools=None):
+            assert enable_thinking is False
+            assert tools is None
+            return "rendered mimo prompt"
+
+    engine = SimpleEngine.__new__(SimpleEngine)
+    engine._loaded = True
+    engine._is_mllm = True
+    engine._model_name = "JANGQ-AI/MiMo-V2.5-JANG_2L"
+    engine._model = _Model()
+    engine._generation_lock = asyncio.Lock()
+
+    async def _run_model_call(fn, /, *args, **kwargs):
+        return fn(*args, **kwargs)
+
+    def _generate(**kwargs):
+        assert kwargs["prompt"] == "rendered mimo prompt"
+        return GenerationOutput(
+            text="BLUE-CAT-742.",
+            raw_text="BLUE-CAT-742.",
+            prompt_tokens=12,
+            completion_tokens=4,
+            finish_reason="stop",
+        )
+
+    engine._run_model_call = _run_model_call
+    engine._mimo_text_only_generate = _generate
+
+    output = asyncio.run(
+        engine.chat(
+            [{"role": "user", "content": "What is the sentinel?"}],
+            max_tokens=16,
+            temperature=0.0,
+            enable_thinking=False,
+        )
+    )
+
+    assert output.text == "BLUE-CAT-742."
+    assert output.finish_reason == "stop"

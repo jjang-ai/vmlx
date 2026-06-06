@@ -111,6 +111,117 @@ class SimpleEngine(BaseEngine):
         except Exception:
             return None
 
+    def _messages_are_text_only(self, messages: list[dict[str, Any]]) -> bool:
+        for message in messages:
+            content = message.get("content")
+            if isinstance(content, str) or content is None:
+                continue
+            if not isinstance(content, list):
+                return False
+            for part in content:
+                if isinstance(part, str):
+                    continue
+                if not isinstance(part, dict):
+                    return False
+                part_type = str(part.get("type", "") or "").lower()
+                if part_type and part_type != "text":
+                    return False
+                if any(key in part for key in ("image", "image_url", "video", "video_url", "audio", "audio_url")):
+                    return False
+        return True
+
+    def _mimo_text_only_prompt(
+        self,
+        messages: list[dict[str, Any]],
+        *,
+        enable_thinking: bool | None,
+        template_tools: list[dict] | None,
+    ) -> tuple[str, Any]:
+        processor = getattr(self._model, "processor", None)
+        tokenizer = (
+            getattr(processor, "tokenizer", None)
+            if processor is not None
+            else None
+        ) or processor
+        if tokenizer is None:
+            raise RuntimeError("MiMo text-only route requires a processor tokenizer")
+        apply_template = getattr(self._model, "_apply_chat_template", None)
+        if not callable(apply_template):
+            raise RuntimeError("MiMo text-only route requires MLLM chat template support")
+        return apply_template(
+            messages,
+            enable_thinking=enable_thinking,
+            tools=template_tools,
+        ), tokenizer
+
+    def _mimo_text_only_generate(
+        self,
+        *,
+        prompt: str,
+        tokenizer: Any,
+        max_tokens: int,
+        temperature: float,
+        top_p: float,
+        stop: list[str] | None,
+        kwargs: dict[str, Any],
+    ) -> GenerationOutput:
+        language_model = getattr(getattr(self._model, "model", None), "language_model", None)
+        if language_model is None:
+            raise RuntimeError("MiMo text-only route requires language_model")
+
+        from mlx_lm import generate
+        from mlx_lm.sample_utils import make_logits_processors
+        from ..sampling import make_sampler
+
+        top_k = int(kwargs.pop("top_k", 0) or 0)
+        min_p = float(kwargs.pop("min_p", 0.0) or 0.0)
+        repetition_penalty = float(kwargs.pop("repetition_penalty", 1.0) or 1.0)
+        kwargs.pop("use_cache", None)
+        kwargs.pop("tools", None)
+
+        sampler = make_sampler(temp=temperature, top_p=top_p, min_p=min_p, top_k=top_k)
+        logits_processors = None
+        if repetition_penalty and repetition_penalty != 1.0:
+            logits_processors = make_logits_processors(
+                repetition_penalty=repetition_penalty,
+            )
+
+        output_text = generate(
+            language_model,
+            tokenizer,
+            prompt=prompt,
+            max_tokens=max_tokens,
+            sampler=sampler,
+            logits_processors=logits_processors,
+            verbose=False,
+        )
+        finish_reason = "length"
+        if stop and output_text:
+            for stop_seq in stop:
+                index = output_text.find(stop_seq)
+                if index >= 0:
+                    output_text = output_text[:index]
+                    finish_reason = "stop"
+                    break
+        try:
+            tokens = tokenizer.encode(output_text)
+        except Exception:
+            tokens = []
+        if finish_reason != "stop":
+            finish_reason = "length" if len(tokens) >= max_tokens else "stop"
+        try:
+            prompt_tokens = len(tokenizer.encode(prompt))
+        except Exception:
+            prompt_tokens = 0
+        return GenerationOutput(
+            text=clean_output_text(output_text),
+            raw_text=output_text,
+            tokens=tokens,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=len(tokens),
+            finish_reason=finish_reason,
+        )
+
     @property
     def tokenizer(self) -> Any:
         """Get the tokenizer."""
@@ -505,6 +616,36 @@ class SimpleEngine(BaseEngine):
 
         async with self._generation_lock:
             if self._is_mllm:
+                if (
+                    self._model_family_name() == "mimo_v2"
+                    and self._messages_are_text_only(messages)
+                    and not images
+                    and not videos
+                ):
+                    prompt, tokenizer = self._mimo_text_only_prompt(
+                        messages,
+                        enable_thinking=thinking_enabled,
+                        template_tools=template_tools,
+                    )
+                    if prompt_suffix:
+                        prompt += prompt_suffix
+                    self._raise_if_prompt_over_limit(
+                        prompt,
+                        max_prompt_tokens,
+                        source="rendered MiMo text-only chat prompt",
+                    )
+                    output = await self._run_model_call(
+                        self._mimo_text_only_generate,
+                        prompt=prompt,
+                        tokenizer=tokenizer,
+                        max_tokens=max_tokens,
+                        temperature=temperature,
+                        top_p=top_p,
+                        stop=None,
+                        kwargs=dict(kwargs),
+                    )
+                    return output
+
                 # For MLLM, use the chat method which handles images/videos
                 # Run in thread pool to allow asyncio timeout to work
                 mllm_kwargs = dict(kwargs)
