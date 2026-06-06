@@ -436,6 +436,25 @@ def test_zaya_repeat_cache_probe_uses_family_native_color_contract():
     assert "Output exactly ACK" not in messages[0]["content"]
 
 
+def test_zaya_reasoning_probe_gets_budget_for_visible_final_answer():
+    mod = load_module()
+    row = {
+        "served_name": "zaya1-8b-mxfp4",
+        "name": "ZAYA1-8B-MXFP4",
+        "model_type": "zaya",
+        "cache_family": "zaya_cca",
+        "is_mllm": False,
+        "supports_video": False,
+        "supports_thinking": True,
+    }
+
+    probes = mod.build_probe_payloads(row, max_tokens=48, include_reasoning=True)
+    reasoning = next(probe for probe in probes if probe["label"] == "reasoning_on")
+
+    assert reasoning["payload"]["enable_thinking"] is True
+    assert reasoning["payload"]["max_tokens"] >= 512
+
+
 def test_dsv4_repeat_cache_probe_crosses_native_block_threshold():
     mod = load_module()
     row = {

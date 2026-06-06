@@ -23,7 +23,7 @@ from typing import Any
 
 
 DEFAULT_OUT = Path(
-    "build/current-regression-suite-after-zaya-cache-contract-refresh-20260606.json"
+    "build/current-regression-suite-after-zaya-reasoning-budget-refresh-20260606.json"
 )
 DEFAULT_STEP_TIMEOUT_SEC = 900.0
 STEP_TIMEOUT_RETURNCODE = 124
@@ -41,7 +41,7 @@ DEFERRED_RELEASE_OPEN_REQUIREMENTS = {
 }
 
 CURRENT_OBJECTIVE_DIGEST_ARTIFACT = (
-    "build/current-objective-proof-after-zaya-cache-contract-refresh-20260606.json"
+    "build/current-objective-proof-after-zaya-reasoning-budget-refresh-20260606.json"
 )
 
 CURRENT_SUITE_SOURCE_HASH_FILES = (
@@ -707,7 +707,7 @@ CURRENT_SUITE_COMMANDS: dict[str, list[str]] = {
         "--require-current-proof-sweep",
         "--require-release-ready",
         "--out",
-        "build/current-release-regression-manifest-after-zaya-cache-contract-refresh-20260606.json",
+        "build/current-release-regression-manifest-after-zaya-reasoning-budget-refresh-20260606.json",
     ],
 }
 

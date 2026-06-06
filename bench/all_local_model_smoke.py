@@ -459,6 +459,16 @@ def _lfm_strict_probe_max_tokens(row: dict[str, Any], max_tokens: int) -> int:
     return max(512, max_tokens) if _is_lfm_row(row) else max_tokens
 
 
+def _reasoning_probe_max_tokens(row: dict[str, Any], max_tokens: int) -> int:
+    # ZAYA's qwen3-style reasoning rail is valid, but a 256-token probe can
+    # stop before the closing </think> and visible final answer. Keep the
+    # validation strict; give this family enough budget to prove the advertised
+    # thinking mode instead of misclassifying it as empty-visible.
+    if _is_zaya_row(row):
+        return max(512, max_tokens)
+    return max(256, max_tokens)
+
+
 def _tool_prompt_style(row: dict[str, Any]) -> str:
     blob = " ".join(
         str(row.get(key, "")).lower()
@@ -584,7 +594,7 @@ def build_probe_payloads(
                 "payload": _text_payload(
                     model,
                     "Think briefly, then answer visibly with exactly: FINAL=OK",
-                    max(256, max_tokens),
+                    _reasoning_probe_max_tokens(row, max_tokens),
                     thinking=True,
                 ),
             }

@@ -717,7 +717,7 @@ def check_objective_proof_digest(
 ) -> None:
     """Refresh and enforce the objective proof digest before release checks pass."""
     digest_path = digest_path or (
-        ROOT / "build/current-objective-proof-after-zaya-cache-contract-refresh-20260606.json"
+        ROOT / "build/current-objective-proof-after-zaya-reasoning-budget-refresh-20260606.json"
     )
     proc = gate.run(
         "objective proof digest refresh",

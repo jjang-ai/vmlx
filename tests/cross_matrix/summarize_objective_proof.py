@@ -63,7 +63,7 @@ from tests.cross_matrix.release_regression_manifest import (
 
 DEFAULT_OUT = Path("build/current-objective-proof-audit-20260602-cache-detail-zero-cached.json")
 CURRENT_RELEASE_REGRESSION_MANIFEST_REL = (
-    "build/current-release-regression-manifest-after-zaya-cache-contract-refresh-20260606.json"
+    "build/current-release-regression-manifest-after-zaya-reasoning-budget-refresh-20260606.json"
 )
 DSV4_QUALITY_CLEARANCE_REL = "build/current-dsv4-long-output-quality-clearance-20260521.json"
 DSV4_CURRENT_IDENTIFIER_CANARY_REL = (
@@ -318,7 +318,7 @@ ALL_LOCAL_MODEL_SMOKE_ZAYA_TEXT_REL = (
     "build/current-all-local-model-smoke-zaya-text-bundled-20260524/summary.json"
 )
 ALL_LOCAL_MODEL_SMOKE_ZAYA_TEXT_VL_CURRENT_REL = (
-    "build/current-all-local-model-smoke-zaya-text-vl-tools-media-after-cache-contract-20260606/summary.json"
+    "build/current-all-local-model-smoke-zaya-text-vl-tools-media-after-reasoning-budget-20260606/summary.json"
 )
 ALL_LOCAL_MODEL_SMOKE_ZAYA_VL_REL = (
     "build/current-all-local-model-smoke-zaya-vl-bundled-20260524/summary.json"
@@ -4636,15 +4636,26 @@ def _all_local_model_smoke_detail(
         labels: list[str] = []
         cache_hit_observed = False
         family_keys: set[str] = set()
+        family_statuses: dict[str, list[str]] = {}
+        family_labels: dict[str, set[str]] = {}
+        family_validation_failures: dict[str, list[dict[str, Any]]] = {}
+        family_cache_hit_observed: dict[str, bool] = {}
         required_labels_by_family: dict[str, set[str]] = {}
         for item in results:
             if not isinstance(item, dict):
                 continue
             row = item.get("row")
+            key = None
             if isinstance(row, dict):
                 key = _smoke_family_key(row)
                 if key:
                     family_keys.add(key)
+                    family_statuses.setdefault(key, []).append(
+                        str(item.get("status") or "open")
+                    )
+                    family_labels.setdefault(key, set())
+                    family_validation_failures.setdefault(key, [])
+                    family_cache_hit_observed.setdefault(key, False)
                     required = required_labels_by_family.setdefault(
                         key,
                         set(SMOKE_REQUIRED_REQUEST_LABELS_BY_FAMILY.get(key, ())),
@@ -4657,17 +4668,31 @@ def _all_local_model_smoke_detail(
                 label = request.get("label")
                 if isinstance(label, str):
                     labels.append(label)
+                    if key:
+                        family_labels.setdefault(key, set()).add(label)
                 failures = request.get("validation_failures")
                 if isinstance(failures, list):
-                    validation_failures.extend(
+                    typed_failures = [
                         failure for failure in failures if isinstance(failure, dict)
-                    )
-                for failure in _smoke_semantic_failures_from_request(request):
+                    ]
+                    validation_failures.extend(typed_failures)
+                    if key:
+                        family_validation_failures.setdefault(key, []).extend(
+                            typed_failures
+                        )
+                semantic_failures = _smoke_semantic_failures_from_request(request)
+                for failure in semantic_failures:
                     if failure not in validation_failures:
                         validation_failures.append(failure)
+                    if key and failure not in family_validation_failures.setdefault(
+                        key, []
+                    ):
+                        family_validation_failures[key].append(failure)
                 cache_summary = request.get("cache_summary")
                 if isinstance(cache_summary, dict) and cache_summary.get("has_cache_hit") is True:
                     cache_hit_observed = True
+                    if key:
+                        family_cache_hit_observed[key] = True
         missing_required_labels = sorted(
             {
                 label
@@ -4676,11 +4701,36 @@ def _all_local_model_smoke_detail(
                 if label not in labels
             }
         )
+        missing_required_labels_by_family = {
+            family: sorted(
+                label
+                for label in required_labels
+                if label not in family_labels.get(family, set())
+            )
+            for family, required_labels in required_labels_by_family.items()
+        }
+        missing_required_labels_by_family = {
+            family: labels
+            for family, labels in missing_required_labels_by_family.items()
+            if labels
+        }
         missing_cache_hit_family_keys = sorted(
             family
             for family in family_keys
-            if family in SMOKE_REQUIRED_CACHE_HIT_FAMILIES and not cache_hit_observed
+            if family in SMOKE_REQUIRED_CACHE_HIT_FAMILIES
+            and not family_cache_hit_observed.get(family, False)
         )
+        passing_family_keys = sorted(
+            family
+            for family in family_keys
+            if present
+            and family_statuses.get(family)
+            and all(status == "pass" for status in family_statuses[family])
+            and not family_validation_failures.get(family)
+            and family not in missing_required_labels_by_family
+            and family not in missing_cache_hit_family_keys
+        )
+        failing_family_keys = sorted(family_keys.difference(passing_family_keys))
         artifact_pass = (
             present
             and payload.get("completed") == payload.get("row_count")
@@ -4690,8 +4740,7 @@ def _all_local_model_smoke_detail(
             and not missing_required_labels
             and not missing_cache_hit_family_keys
         )
-        if artifact_pass:
-            covered.update(family_keys)
+        covered.update(passing_family_keys)
         detail = {
             "artifact": rel,
             "artifact_present": present,
@@ -4699,8 +4748,11 @@ def _all_local_model_smoke_detail(
             "completed": payload.get("completed"),
             "row_count": payload.get("row_count"),
             "family_keys": sorted(family_keys),
+            "passing_family_keys": passing_family_keys,
+            "failing_family_keys": failing_family_keys,
             "request_labels": sorted(set(labels)),
             "missing_required_labels": missing_required_labels,
+            "missing_required_labels_by_family": missing_required_labels_by_family,
             "missing_cache_hit_family_keys": missing_cache_hit_family_keys,
             "cache_hit_observed": cache_hit_observed,
             "validation_failures": validation_failures,
@@ -4724,15 +4776,12 @@ def _all_local_model_smoke_detail(
     non_mimo_not_pass = [
         item["artifact"]
         for item in artifact_details
-        if any(family != "mimo_v2" for family in item["family_keys"])
-        and item["status"] != "pass"
+        if any(family != "mimo_v2" for family in item["failing_family_keys"])
     ]
     not_pass_required_family_artifacts: dict[str, list[str]] = {}
     for item in artifact_details:
-        if item["status"] == "pass":
-            continue
         artifact = str(item["artifact"])
-        for family in item["family_keys"]:
+        for family in item["failing_family_keys"]:
             if family in ALL_LOCAL_MODEL_SMOKE_REQUIRED_FAMILIES:
                 not_pass_required_family_artifacts.setdefault(family, []).append(artifact)
     expected_artifact_by_family: dict[str, list[str]] = {}

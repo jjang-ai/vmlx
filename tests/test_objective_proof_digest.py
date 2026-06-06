@@ -8373,7 +8373,7 @@ def test_objective_proof_digest_keeps_cross_family_live_smoke_open_when_only_mim
             "ling_bailing",
             "nemotron",
         ),
-        "build/current-all-local-model-smoke-zaya-text-vl-tools-media-after-cache-contract-20260606/summary.json": (
+        "build/current-all-local-model-smoke-zaya-text-vl-tools-media-after-reasoning-budget-20260606/summary.json": (
             "zaya_text",
             "zaya_vl",
         ),
