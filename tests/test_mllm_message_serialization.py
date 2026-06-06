@@ -1610,3 +1610,55 @@ def test_simple_engine_routes_mimo_text_only_chat_through_language_model():
 
     assert output.text == "BLUE-CAT-742."
     assert output.finish_reason == "stop"
+
+
+def test_batched_engine_mimo_text_only_uses_plain_template_prefix(monkeypatch):
+    """Continuous batching must not use MiMo's closed thinking-off prompt rail."""
+    import mlx_vlm.prompt_utils as prompt_utils
+
+    from vmlx_engine.engine.batched import BatchedEngine
+
+    seen = []
+
+    def fake_get_chat_template(processor, messages, add_generation_prompt=True, **kwargs):
+        seen.append(
+            {
+                "messages": messages,
+                "add_generation_prompt": add_generation_prompt,
+                "kwargs": dict(kwargs),
+            }
+        )
+        rendered = "<|im_start|>user\n" + messages[-1]["content"] + "\n"
+        if add_generation_prompt:
+            return rendered + "<|im_start|>assistant\n"
+        return rendered
+
+    monkeypatch.setattr(prompt_utils, "get_chat_template", fake_get_chat_template)
+
+    engine = BatchedEngine.__new__(BatchedEngine)
+    engine._is_mllm = True
+    engine._processor = object()
+    engine._model = object()
+    engine._model_name = "JANGQ-AI/MiMo-V2.5-JANG_2L"
+    engine._model_family_name = lambda: "mimo_v2"
+    engine._model_tool_parser_name = lambda: "xml_function"
+
+    messages = [{"role": "user", "content": [{"type": "text", "text": "Say ACK."}]}]
+    with_gen = engine._apply_chat_template(
+        messages,
+        enable_thinking=False,
+        skip_generation_prompt=False,
+    )
+    without_gen = engine._apply_chat_template(
+        messages,
+        enable_thinking=False,
+        skip_generation_prompt=True,
+    )
+
+    assert seen[0]["kwargs"]["enable_thinking"] is True
+    assert seen[0]["add_generation_prompt"] is True
+    assert seen[1]["add_generation_prompt"] is False
+    assert seen[0]["messages"][-1]["content"] == "Say ACK."
+    assert "<think></think>" not in with_gen
+    assert with_gen.endswith("<|im_start|>assistant\n")
+    assert without_gen == "<|im_start|>user\nSay ACK.\n"

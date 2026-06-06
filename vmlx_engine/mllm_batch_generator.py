@@ -3014,6 +3014,21 @@ class MLLMBatchGenerator:
 
         # Get language model for text generation
         self.language_model = getattr(model, "language_model", model)
+        try:
+            _cfg = getattr(model, "config", None)
+            _text_cfg = getattr(_cfg, "text_config", None)
+            self._model_type = str(
+                getattr(_text_cfg, "model_type", None)
+                or getattr(_cfg, "model_type", None)
+                or (
+                    _cfg.get("model_type")
+                    if isinstance(_cfg, dict)
+                    else ""
+                )
+                or ""
+            ).lower()
+        except Exception:
+            self._model_type = ""
 
         # Check if this is actually a VLM with separate language model
         self.is_vlm = hasattr(model, "language_model")
@@ -3995,6 +4010,22 @@ class MLLMBatchGenerator:
         # None for text-only models routed through MLLM path (e.g., smelt) and
         # silently skipped chunking, falling through to the OOM-prone
         # single-shot `self.model(input_ids, **kwargs)` at the bottom.
+        if not has_images and self._model_type == "mimo_v2":
+            lm = self.language_model
+            if lm is not None and cache is not None:
+                # MiMo V2.5 uses a mixed full-attention/sliding-window KV
+                # layout. Live JANG_2L probes showed the generic MLLM
+                # split-prefill optimization (prefix without logits, final
+                # token with logits) diverges from the stable mlx-lm/simple
+                # route and leaks incorrect visible text. Keep MiMo text
+                # prefill one-shot so cache positions and rotating-window
+                # metadata advance exactly as the model runtime expects.
+                output = lm(input_ids, cache=cache)
+                request.vision_encoded = True
+                if hasattr(output, "logits"):
+                    return output.logits
+                return output
+
         if not has_images and (not _hybrid_blocks_chunk or _native_mtp_hybrid_text_split):
             lm = self.language_model
             if lm is not None and cache is not None:

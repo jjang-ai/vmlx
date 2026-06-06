@@ -24,7 +24,7 @@ from typing import Any
 DEFAULT_MODEL_PATH = Path("/Users/example/.mlxstudio/models/JANGQ-AI/MiMo-V2.5-JANG_2L")
 DEFAULT_MANIFEST = Path("build/current-mimo-http-manifest-20260606.tsv")
 DEFAULT_OUT = Path(
-    "build/current-mimo-v2-jang2l-current-audit-after-text-route-fix-20260606.json"
+    "build/current-mimo-v2-jang2l-current-audit-after-cb-oneshot-prefill-20260606.json"
 )
 
 STRUCTURAL_ARTIFACT = Path("build/current-mimo-jang2l-local-structural-verify-20260606.json")
@@ -67,6 +67,9 @@ SYNCED_LONG_TOOL_CACHE_ARTIFACT = Path(
 )
 TEXT_ROUTE_ARTIFACT = Path(
     "build/current-mimo-v2-jang2l-text-route-live-proof-20260606.json"
+)
+CB_ONESHOT_PREFILL_ARTIFACT = Path(
+    "build/current-mimo-v2-jang2l-cb-cache-after-mimo-oneshot-prefill-20260606.json"
 )
 CLEANUP_LOG = Path("build/current-mimo-stale-local-cleanup-20260606.txt")
 
@@ -474,6 +477,78 @@ def _text_route_evidence(data: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _cb_oneshot_prefill_evidence(data: dict[str, Any]) -> dict[str, Any]:
+    rows = data.get("rows")
+    rows = rows if isinstance(rows, list) else []
+    by_name = {
+        str(row.get("name")): row
+        for row in rows
+        if isinstance(row, dict) and row.get("name") is not None
+    }
+
+    def _response(name: str) -> dict[str, Any]:
+        row = by_name.get(name) or {}
+        response = row.get("response")
+        return response if isinstance(response, dict) else {}
+
+    def _health(name: str) -> dict[str, Any]:
+        row = by_name.get(name) or {}
+        health = row.get("health")
+        payload = health.get("json") if isinstance(health, dict) else {}
+        return payload if isinstance(payload, dict) else {}
+
+    cache1 = _response("cache_repeat_1")
+    cache2 = _response("cache_repeat_2")
+    tool = _response("tool_call")
+    long_prompt = _response("long_prompt")
+    cache2_health = _health("cache_repeat_2_health")
+    tool_health = _health("tool_health")
+
+    scheduler = cache2_health.get("scheduler")
+    scheduler = scheduler if isinstance(scheduler, dict) else {}
+    cache = cache2_health.get("cache")
+    cache = cache if isinstance(cache, dict) else {}
+    totals = cache.get("totals")
+    totals = totals if isinstance(totals, dict) else {}
+    bg = scheduler.get("batch_generator")
+    bg = bg if isinstance(bg, dict) else {}
+
+    tool_scheduler = tool_health.get("scheduler")
+    tool_scheduler = tool_scheduler if isinstance(tool_scheduler, dict) else {}
+    tool_bg = tool_scheduler.get("batch_generator")
+    tool_bg = tool_bg if isinstance(tool_bg, dict) else {}
+
+    cache_exact_pass = (
+        cache1.get("ok") is True
+        and cache2.get("ok") is True
+        and cache1.get("content") == "ACK-CACHE-742"
+        and cache2.get("content") == "ACK-CACHE-742"
+    )
+    cache_reproved = (
+        isinstance(scheduler.get("cache_hit_tokens"), (int, float))
+        and scheduler.get("cache_hit_tokens") >= 37
+        and isinstance(totals.get("l2_block_tokens_on_disk"), (int, float))
+        and totals.get("l2_block_tokens_on_disk") >= 37
+    )
+    generation_tps = tool_bg.get("generation_tps", bg.get("generation_tps"))
+    return {
+        "exists": True,
+        "cache_exact_pass": bool(cache_exact_pass),
+        "prefix_paged_l2_cache_reproved": bool(cache_reproved),
+        "tool_protocol_blocked": not bool(tool.get("tool_calls")),
+        "tool_content_head": str(tool.get("content") or "")[:200],
+        "long_prompt_crashed": long_prompt.get("ok") is False
+        and "RemoteDisconnected" in str(long_prompt.get("error") or ""),
+        "long_prompt_error": long_prompt.get("error"),
+        "speed_blocked": not (
+            isinstance(generation_tps, (int, float)) and generation_tps >= 40.0
+        ),
+        "generation_tps": generation_tps,
+        "cache1_elapsed_s": cache1.get("elapsed"),
+        "cache2_elapsed_s": cache2.get("elapsed"),
+    }
+
+
 def build_audit(root: Path, model_path: Path, manifest: Path) -> dict[str, Any]:
     model_parent = model_path.parent
     manifest_check = _verify_manifest(model_parent, manifest)
@@ -500,6 +575,7 @@ def build_audit(root: Path, model_path: Path, manifest: Path) -> dict[str, Any]:
     source_vs_quant = _artifact(root / SOURCE_VS_QUANT_ARTIFACT)
     synced_long_tool_cache = _artifact(root / SYNCED_LONG_TOOL_CACHE_ARTIFACT)
     text_route = _artifact(root / TEXT_ROUTE_ARTIFACT)
+    cb_oneshot_prefill = _artifact(root / CB_ONESHOT_PREFILL_ARTIFACT)
 
     structural_pass = structural.get("status") == "pass"
     text_cache_pass = text_cache.get("exists") and _text_cache_narrow_pass(text_cache["data"])
@@ -570,6 +646,21 @@ def build_audit(root: Path, model_path: Path, manifest: Path) -> dict[str, Any]:
                 text_route_evidence.get("cache_release_exact_pass")
             )
         speed_blocked = speed_blocked or bool(text_route_evidence.get("speed_blocked"))
+    cb_evidence = (
+        _cb_oneshot_prefill_evidence(cb_oneshot_prefill["data"])
+        if cb_oneshot_prefill.get("exists")
+        and isinstance(cb_oneshot_prefill.get("data"), dict)
+        else {"exists": False}
+    )
+    if cb_evidence.get("exists"):
+        if cb_evidence.get("cache_exact_pass"):
+            exact_cache_blocked = False
+            prompt_shape_blocked = False
+        if cb_evidence.get("prefix_paged_l2_cache_reproved"):
+            text_route_evidence["cache_l2_not_reproved"] = False
+        tool_blocked = bool(cb_evidence.get("tool_protocol_blocked"))
+        length_blocked = length_blocked or bool(cb_evidence.get("long_prompt_crashed"))
+        speed_blocked = speed_blocked or bool(cb_evidence.get("speed_blocked"))
     sink_mode_fails = sink_mode_length.get("exists") and _all_sink_diagnostic_cases_fail(
         sink_mode_length["data"]
     )
@@ -698,6 +789,7 @@ def build_audit(root: Path, model_path: Path, manifest: Path) -> dict[str, Any]:
             "source_vs_quant_first_divergence": str(SOURCE_VS_QUANT_ARTIFACT),
             "synced_long_tool_cache": str(SYNCED_LONG_TOOL_CACHE_ARTIFACT),
             "text_route_live_proof": str(TEXT_ROUTE_ARTIFACT),
+            "cb_oneshot_prefill_live_proof": str(CB_ONESHOT_PREFILL_ARTIFACT),
         },
         "diagnostics": {
             "cache_vs_nocache_next_token_match": bool(cache_match),
@@ -705,6 +797,7 @@ def build_audit(root: Path, model_path: Path, manifest: Path) -> dict[str, Any]:
             "prompt_shape_first_token": prompt_shape_evidence,
             "synced_long_tool_cache": synced_evidence,
             "text_route": text_route_evidence,
+            "cb_oneshot_prefill": cb_evidence,
             "source_vs_quant_first_divergence": (
                 source_vs_quant.get("data")
                 if source_vs_quant.get("exists")

@@ -179,6 +179,101 @@ class BatchedEngine(BaseEngine):
         except Exception:
             return None
 
+    def _messages_are_text_only(self, messages: list[dict[str, Any]]) -> bool:
+        for message in messages:
+            content = message.get("content")
+            if isinstance(content, str) or content is None:
+                continue
+            if not isinstance(content, list):
+                return False
+            for part in content:
+                if isinstance(part, str):
+                    continue
+                if not isinstance(part, dict):
+                    return False
+                part_type = str(part.get("type", "") or "").lower()
+                if part_type and part_type != "text":
+                    return False
+                if any(
+                    key in part
+                    for key in (
+                        "image",
+                        "image_url",
+                        "video",
+                        "video_url",
+                        "audio",
+                        "audio_url",
+                    )
+                ):
+                    return False
+        return True
+
+    @staticmethod
+    def _collapse_text_only_content_lists(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        normalized: list[dict[str, Any]] = []
+        for message in messages:
+            content = message.get("content")
+            if not isinstance(content, list):
+                normalized.append(message)
+                continue
+            text_parts: list[str] = []
+            for part in content:
+                if isinstance(part, str):
+                    text_parts.append(part)
+                elif isinstance(part, dict):
+                    text_parts.append(str(part.get("text") or part.get("content") or ""))
+                else:
+                    text_parts.append(str(part))
+            collapsed = dict(message)
+            collapsed["content"] = "".join(text_parts)
+            normalized.append(collapsed)
+        return normalized
+
+    def _mimo_text_only_chat_template(
+        self,
+        messages: list[dict[str, Any]],
+        tools: list[dict] | None,
+        *,
+        enable_thinking: bool,
+        extra_template_kwargs: dict | None,
+        skip_generation_prompt: bool,
+    ) -> str:
+        """Render MiMo text-only chats with the native plain assistant prefix.
+
+        MiMo V2.5's native ``enable_thinking=false`` template emits a closed
+        ``<think></think>`` rail that live JANG_2L probes showed can make long
+        and cached text prompts first-token-stop. The simple engine already
+        routes text-only MiMo through the language model with the native plain
+        prompt. Continuous batching must render the same prompt while still
+        honoring ``skip_generation_prompt`` so gen-prefix stripping and cache
+        keys remain real.
+        """
+        from mlx_vlm.prompt_utils import get_chat_template
+
+        processor = self._processor or getattr(self._model, "processor", None)
+        if processor is None:
+            raise RuntimeError("MiMo text-only batching requires a processor")
+
+        template_kwargs = dict(extra_template_kwargs or {})
+        template_kwargs["enable_thinking"] = True
+        if tools:
+            template_kwargs["tools"] = tools
+
+        prompt = get_chat_template(
+            processor,
+            self._collapse_text_only_content_lists(messages),
+            add_generation_prompt=not skip_generation_prompt,
+            **template_kwargs,
+        )
+        return check_and_inject_fallback_tools(
+            prompt,
+            messages,
+            tools,
+            processor,
+            dict(template_kwargs, tokenize=False, add_generation_prompt=not skip_generation_prompt),
+            tool_parser_id=self._model_tool_parser_name(),
+        )
+
     def _video_frame_fallback_messages(
         self,
         messages: list[dict[str, Any]],
@@ -978,6 +1073,21 @@ class BatchedEngine(BaseEngine):
                 )
             except Exception:
                 mllm_model_type = None
+
+        if (
+            self._is_mllm
+            and self._model_family_name() == "mimo_v2"
+            and num_images == 0
+            and num_videos == 0
+            and self._messages_are_text_only(messages)
+        ):
+            return self._mimo_text_only_chat_template(
+                messages,
+                tools,
+                enable_thinking=enable_thinking,
+                extra_template_kwargs=extra_template_kwargs,
+                skip_generation_prompt=skip_generation_prompt,
+            )
 
         if (
             self._is_mllm
