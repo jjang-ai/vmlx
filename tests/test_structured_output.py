@@ -12,6 +12,7 @@ from vmlx_engine.api.tool_calling import (
     extract_json_from_text,
     extract_xml_from_text,
     parse_json_output,
+    repair_json_output,
     build_json_system_prompt,
 )
 from vmlx_engine.api.models import ResponseFormat, ResponseFormatJsonSchema
@@ -337,6 +338,89 @@ class TestParseJsonOutput:
         cleaned, parsed, is_valid, error = parse_json_output(text, response_format)
         assert parsed == {"colors": ["red", "blue"]}
         assert is_valid is True
+
+
+class TestRepairJsonOutput:
+    """Tests for raw-vs-repaired structured output diagnostics."""
+
+    def test_reports_markdown_extraction_as_repair(self):
+        report = repair_json_output(
+            """Result:
+```json
+{"ok": true}
+```""",
+            {"type": "json_object"},
+        )
+        assert report["parsed"] == {"ok": True}
+        assert report["is_valid"] is True
+        assert report["raw_json_ok"] is False
+        assert report["repair_needed"] is True
+        assert "extract_json_block" in report["repair_actions"]
+
+    def test_reports_syntax_repair_for_trailing_comma_and_python_literals(self):
+        report = repair_json_output(
+            '{"ok": True, "items": ["a", "b",],}',
+            {"type": "json_object"},
+        )
+        assert report["parsed"] == {"ok": True, "items": ["a", "b"]}
+        assert report["is_valid"] is True
+        assert report["raw_json_ok"] is False
+        assert report["repair_needed"] is True
+        assert "syntax_repair" in report["repair_actions"]
+
+    def test_reports_adjacent_string_array_repair_against_schema(self):
+        response_format = {
+            "type": "json_schema",
+            "json_schema": {
+                "name": "clip",
+                "schema": {
+                    "type": "object",
+                    "properties": {
+                        "visible_text": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                        }
+                    },
+                    "required": ["visible_text"],
+                },
+            },
+        }
+        report = repair_json_output(
+            '{"visible_text": "CLIPFARM STRESS STREAM", "0-15 M00 ALERT START"}',
+            response_format,
+        )
+        assert report["parsed"] == {
+            "visible_text": ["CLIPFARM STRESS STREAM", "0-15 M00 ALERT START"]
+        }
+        assert report["is_valid"] is True
+        assert report["raw_json_ok"] is False
+        assert report["repair_needed"] is True
+        assert "syntax_repair" in report["repair_actions"]
+
+    def test_reports_schema_type_coercion_when_raw_json_is_wrong_shape(self):
+        response_format = {
+            "type": "json_schema",
+            "json_schema": {
+                "name": "clip",
+                "schema": {
+                    "type": "object",
+                    "properties": {
+                        "visible_text": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                        }
+                    },
+                    "required": ["visible_text"],
+                },
+            },
+        }
+        report = repair_json_output('{"visible_text": "CLIPFARM"}', response_format)
+        assert report["parsed"] == {"visible_text": ["CLIPFARM"]}
+        assert report["is_valid"] is True
+        assert report["raw_json_ok"] is True
+        assert report["raw_schema_ok"] is False
+        assert report["repair_needed"] is True
+        assert "schema_type_coercion" in report["repair_actions"]
 
 
 class TestBuildJsonSystemPrompt:

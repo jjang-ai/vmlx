@@ -1731,6 +1731,85 @@ def _coerce_json_schema_value(value: Any, schema: Any) -> Any:
     return value
 
 
+def _validate_parsed_json_for_schema(
+    parsed: Any,
+    schema: Optional[Dict[str, Any]],
+) -> Tuple[bool, Optional[str]]:
+    if not schema:
+        return True, None
+    return validate_json_schema(parsed, schema)
+
+
+def _parse_json_with_repair_report(
+    text: str,
+    schema: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    stripped = text.strip()
+    report: Dict[str, Any] = {
+        "raw_json_ok": False,
+        "raw_schema_ok": None,
+        "repair_needed": False,
+        "repair_actions": [],
+        "candidate": None,
+        "repaired_text": None,
+        "parsed": None,
+        "is_valid": False,
+        "error": "Failed to extract valid JSON from output",
+    }
+
+    try:
+        raw_parsed = json.loads(stripped)
+        report["raw_json_ok"] = True
+        raw_schema_ok, raw_schema_error = _validate_parsed_json_for_schema(
+            raw_parsed, schema
+        )
+        report["raw_schema_ok"] = raw_schema_ok
+        if not raw_schema_ok:
+            report["repair_actions"].append("schema_type_coercion")
+            report["error"] = f"JSON Schema validation failed: {raw_schema_error}"
+    except json.JSONDecodeError:
+        pass
+
+    for candidate in _json_candidates_from_text(text):
+        attempts: List[Tuple[str, str]] = [("raw_candidate", candidate)]
+        repaired_candidate = _repair_json_candidate(candidate, schema)
+        if repaired_candidate != candidate:
+            attempts.append(("syntax_repair", repaired_candidate))
+
+        for action, attempt in attempts:
+            try:
+                parsed = json.loads(attempt)
+            except json.JSONDecodeError:
+                continue
+
+            coerced = _coerce_json_schema_value(parsed, schema)
+            schema_ok, schema_error = _validate_parsed_json_for_schema(coerced, schema)
+            actions: List[str] = []
+            if candidate.strip() != stripped:
+                actions.append("extract_json_block")
+            if action == "syntax_repair":
+                actions.append("syntax_repair")
+            if coerced != parsed:
+                actions.append("schema_type_coercion")
+
+            report.update(
+                {
+                    "repair_needed": bool(actions)
+                    or not report["raw_json_ok"]
+                    or report.get("raw_schema_ok") is False,
+                    "repair_actions": list(dict.fromkeys(report["repair_actions"] + actions)),
+                    "candidate": candidate,
+                    "repaired_text": attempt,
+                    "parsed": coerced,
+                    "is_valid": schema_ok,
+                    "error": None if schema_ok else f"JSON Schema validation failed: {schema_error}",
+                }
+            )
+            return report
+
+    return report
+
+
 def extract_json_from_text(
     text: str, schema: Optional[Dict[str, Any]] = None
 ) -> Optional[Dict[str, Any]]:
@@ -1748,14 +1827,9 @@ def extract_json_from_text(
     Returns:
         Parsed JSON data, or None if no valid JSON found
     """
-    for candidate in _json_candidates_from_text(text):
-        for attempt in (candidate, _repair_json_candidate(candidate, schema)):
-            try:
-                parsed = json.loads(attempt)
-            except json.JSONDecodeError:
-                continue
-            return _coerce_json_schema_value(parsed, schema)
-
+    report = _parse_json_with_repair_report(text, schema)
+    if report.get("parsed") is not None:
+        return report.get("parsed")
     return None
 
 
@@ -1845,6 +1919,58 @@ def parse_json_output(
 
     # Unknown format type - treat as text
     return text, None, True, None
+
+
+def repair_json_output(
+    text: str,
+    response_format: Optional[Union[ResponseFormat, Dict[str, Any]]] = None,
+) -> Dict[str, Any]:
+    """Parse/repair JSON output and return raw-vs-repaired diagnostics.
+
+    This is a post-generation repair report for benchmark/catalog/API callers.
+    It is not grammar-constrained or guided decoding: invalid JSON is detected
+    and repaired after the model emits text, while raw parse failure remains
+    visible through ``raw_json_ok`` and ``repair_needed``.
+    """
+    rf_dict = _response_format_to_dict(response_format)
+    if rf_dict is None or rf_dict.get("type", "text") == "text":
+        return {
+            "cleaned_text": text,
+            "parsed": None,
+            "is_valid": True,
+            "error": None,
+            "raw_json_ok": None,
+            "raw_schema_ok": None,
+            "repair_needed": False,
+            "repair_actions": [],
+            "repaired_text": None,
+        }
+
+    format_type = rf_dict.get("type", "text")
+    json_schema_spec = rf_dict.get("json_schema", {}) if isinstance(rf_dict, dict) else {}
+    schema = json_schema_spec.get("schema", {}) if isinstance(json_schema_spec, dict) else {}
+    schema_for_repair = schema if format_type == "json_schema" else None
+
+    report = _parse_json_with_repair_report(text, schema_for_repair)
+    if format_type == "json_object" and report.get("parsed") is not None:
+        report["is_valid"] = True
+        report["error"] = None
+    elif format_type == "json_schema" and report.get("parsed") is not None and schema:
+        is_valid, error = validate_json_schema(report["parsed"], schema)
+        report["is_valid"] = is_valid
+        report["error"] = None if is_valid else f"JSON Schema validation failed: {error}"
+
+    return {
+        "cleaned_text": text,
+        "parsed": report.get("parsed"),
+        "is_valid": bool(report.get("is_valid")),
+        "error": report.get("error"),
+        "raw_json_ok": report.get("raw_json_ok"),
+        "raw_schema_ok": report.get("raw_schema_ok"),
+        "repair_needed": bool(report.get("repair_needed")),
+        "repair_actions": report.get("repair_actions", []),
+        "repaired_text": report.get("repaired_text"),
+    }
 
 
 def build_json_system_prompt(
