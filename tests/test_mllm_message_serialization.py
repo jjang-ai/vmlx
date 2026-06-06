@@ -1588,6 +1588,7 @@ def test_simple_engine_routes_mimo_text_only_chat_through_language_model():
 
     def _generate(**kwargs):
         assert kwargs["prompt"] == "rendered mimo prompt"
+        assert kwargs["enable_thinking"] is False
         return GenerationOutput(
             text="BLUE-CAT-742.",
             raw_text="BLUE-CAT-742.",
@@ -1610,6 +1611,59 @@ def test_simple_engine_routes_mimo_text_only_chat_through_language_model():
 
     assert output.text == "BLUE-CAT-742."
     assert output.finish_reason == "stop"
+
+
+def test_simple_engine_mimo_text_only_generate_suppresses_think_tags(monkeypatch):
+    """MiMo API thinking-off blocks native thinking tags at decode time."""
+    import math
+
+    import mlx.core as mx
+    import mlx_lm
+
+    from vmlx_engine.engine.simple import SimpleEngine
+
+    captured = {}
+
+    def fake_generate(*_args, logits_processors=None, **_kwargs):
+        captured["logits_processors"] = logits_processors
+        return "ACK"
+
+    monkeypatch.setattr(mlx_lm, "generate", fake_generate)
+
+    class _Tokenizer:
+        def encode(self, text, add_special_tokens=False):
+            if text == "<think>":
+                return [1]
+            if text == "</think>":
+                return [2]
+            return [3]
+
+    engine = SimpleEngine.__new__(SimpleEngine)
+    engine._model = type(
+        "_Outer",
+        (),
+        {"model": type("_Inner", (), {"language_model": object()})()},
+    )()
+
+    output = engine._mimo_text_only_generate(
+        prompt="prompt",
+        tokenizer=_Tokenizer(),
+        max_tokens=4,
+        temperature=0.0,
+        top_p=1.0,
+        stop=None,
+        enable_thinking=False,
+        kwargs={},
+    )
+
+    assert output.text == "ACK"
+    assert len(captured["logits_processors"]) == 1
+    logits = mx.zeros((1, 4))
+    suppressed = captured["logits_processors"][0](mx.array([[0]]), logits)
+    assert math.isinf(float(suppressed[0, 1])) and float(suppressed[0, 1]) < 0
+    assert math.isinf(float(suppressed[0, 2])) and float(suppressed[0, 2]) < 0
+    assert float(suppressed[0, 0]) == 0.0
+    assert float(suppressed[0, 3]) == 0.0
 
 
 def test_simple_engine_mimo_llm_path_uses_plain_template_prefix():

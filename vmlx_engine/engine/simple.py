@@ -184,6 +184,7 @@ class SimpleEngine(BaseEngine):
         temperature: float,
         top_p: float,
         stop: list[str] | None,
+        enable_thinking: bool | None,
         kwargs: dict[str, Any],
     ) -> GenerationOutput:
         language_model = getattr(getattr(self._model, "model", None), "language_model", None)
@@ -201,11 +202,18 @@ class SimpleEngine(BaseEngine):
         kwargs.pop("tools", None)
 
         sampler = make_sampler(temp=temperature, top_p=top_p, min_p=min_p, top_k=top_k)
-        logits_processors = None
+        logits_processors = self._mimo_thinking_off_logits_processors(
+            tokenizer,
+            enable_thinking=enable_thinking,
+        )
         if repetition_penalty and repetition_penalty != 1.0:
-            logits_processors = make_logits_processors(
-                repetition_penalty=repetition_penalty,
+            logits_processors.extend(
+                make_logits_processors(
+                    repetition_penalty=repetition_penalty,
+                )
             )
+        if not logits_processors:
+            logits_processors = None
 
         output_text = generate(
             language_model,
@@ -242,6 +250,50 @@ class SimpleEngine(BaseEngine):
             completion_tokens=len(tokens),
             finish_reason=finish_reason,
         )
+
+    def _mimo_thinking_off_logits_processors(
+        self,
+        tokenizer: Any,
+        *,
+        enable_thinking: bool | None,
+    ) -> list[Any]:
+        """Suppress MiMo native thinking tags when API thinking is disabled.
+
+        MiMo's stable text prompt for thinking-off serving is the plain
+        assistant prefix; its native ``enable_thinking=False`` template closes
+        ``<think></think>`` before generation and can first-token-stop. Because
+        the stable render does not itself prevent tag emission, the decode loop
+        must make the native thinking delimiters unavailable for the requested
+        API rail. This is a logits-boundary policy, not output injection.
+        """
+
+        if enable_thinking is not False:
+            return []
+
+        token_ids: set[int] = set()
+        for token in ("<think>", "</think>"):
+            try:
+                encoded = tokenizer.encode(token, add_special_tokens=False)
+            except TypeError:
+                encoded = tokenizer.encode(token)
+            except Exception:
+                encoded = []
+            if len(encoded) == 1:
+                try:
+                    token_ids.add(int(encoded[0]))
+                except Exception:
+                    continue
+
+        if not token_ids:
+            return []
+
+        def _suppress_mimo_thinking_tags(_, logits):
+            import mlx.core as mx
+
+            indices = mx.array(sorted(token_ids))
+            return logits.at[:, indices].add(-float("inf"))
+
+        return [_suppress_mimo_thinking_tags]
 
     @property
     def tokenizer(self) -> Any:
@@ -663,6 +715,7 @@ class SimpleEngine(BaseEngine):
                         temperature=temperature,
                         top_p=top_p,
                         stop=None,
+                        enable_thinking=thinking_enabled,
                         kwargs=dict(kwargs),
                     )
                     return output
