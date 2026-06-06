@@ -71,6 +71,9 @@ TEXT_ROUTE_ARTIFACT = Path(
 CB_ONESHOT_PREFILL_ARTIFACT = Path(
     "build/current-mimo-v2-jang2l-cb-cache-after-mimo-oneshot-prefill-20260606.json"
 )
+TOOL_SOURCE_PREFLIGHT_ARTIFACT = Path(
+    "build/current-mimo-v2-jang2l-tool-source-preflight-20260606.json"
+)
 CLEANUP_LOG = Path("build/current-mimo-stale-local-cleanup-20260606.txt")
 
 STALE_TARGETS = [
@@ -576,6 +579,7 @@ def build_audit(root: Path, model_path: Path, manifest: Path) -> dict[str, Any]:
     synced_long_tool_cache = _artifact(root / SYNCED_LONG_TOOL_CACHE_ARTIFACT)
     text_route = _artifact(root / TEXT_ROUTE_ARTIFACT)
     cb_oneshot_prefill = _artifact(root / CB_ONESHOT_PREFILL_ARTIFACT)
+    tool_source_preflight = _artifact(root / TOOL_SOURCE_PREFLIGHT_ARTIFACT)
 
     structural_pass = structural.get("status") == "pass"
     text_cache_pass = text_cache.get("exists") and _text_cache_narrow_pass(text_cache["data"])
@@ -790,6 +794,7 @@ def build_audit(root: Path, model_path: Path, manifest: Path) -> dict[str, Any]:
             "synced_long_tool_cache": str(SYNCED_LONG_TOOL_CACHE_ARTIFACT),
             "text_route_live_proof": str(TEXT_ROUTE_ARTIFACT),
             "cb_oneshot_prefill_live_proof": str(CB_ONESHOT_PREFILL_ARTIFACT),
+            "tool_source_preflight": str(TOOL_SOURCE_PREFLIGHT_ARTIFACT),
         },
         "diagnostics": {
             "cache_vs_nocache_next_token_match": bool(cache_match),
@@ -798,6 +803,14 @@ def build_audit(root: Path, model_path: Path, manifest: Path) -> dict[str, Any]:
             "synced_long_tool_cache": synced_evidence,
             "text_route": text_route_evidence,
             "cb_oneshot_prefill": cb_evidence,
+            "tool_source_preflight": (
+                tool_source_preflight.get("data")
+                if tool_source_preflight.get("exists")
+                else {
+                    "status": "missing",
+                    "artifact": str(TOOL_SOURCE_PREFLIGHT_ARTIFACT),
+                }
+            ),
             "source_vs_quant_first_divergence": (
                 source_vs_quant.get("data")
                 if source_vs_quant.get("exists")
