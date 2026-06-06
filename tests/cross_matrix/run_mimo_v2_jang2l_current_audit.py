@@ -22,7 +22,7 @@ from typing import Any
 
 
 DEFAULT_MODEL_PATH = Path("/Users/example/.mlxstudio/models/JANGQ-AI/MiMo-V2.5-JANG_2L")
-DEFAULT_MANIFEST = Path("build/current-mimo-http-tb5-manifest-20260606.tsv")
+DEFAULT_MANIFEST = Path("build/current-mimo-http-manifest-20260606.tsv")
 DEFAULT_OUT = Path(
     "build/current-mimo-v2-jang2l-current-audit-after-source-vs-quant-required-20260606.json"
 )
@@ -61,6 +61,9 @@ FIRST_TOKEN_ARTIFACT = Path(
 )
 SOURCE_VS_QUANT_ARTIFACT = Path(
     "build/current-mimo-v2-jang2l-source-vs-quant-first-divergence-20260606.json"
+)
+SYNCED_LONG_TOOL_CACHE_ARTIFACT = Path(
+    "build/current-mimo-v25-jang2l-synced-long-tool-cache-proof-20260606.json"
 )
 CLEANUP_LOG = Path("build/current-mimo-stale-local-cleanup-20260606.txt")
 
@@ -368,6 +371,47 @@ def _mimo_prompt_shape_first_token_evidence(
     }
 
 
+def _synced_long_tool_cache_evidence(data: dict[str, Any]) -> dict[str, Any]:
+    checks = data.get("checks")
+    if not isinstance(checks, list):
+        checks = []
+    by_name = {
+        str(item.get("name")): item
+        for item in checks
+        if isinstance(item, dict) and item.get("name") is not None
+    }
+    failed = data.get("failed_checks")
+    if not isinstance(failed, list):
+        failed = []
+    long_row = by_name.get("long_prompt_recall") or {}
+    tool_row = by_name.get("tool_required") or {}
+    cache_rows = [by_name.get("cache_repeat_1") or {}, by_name.get("cache_repeat_2") or {}]
+    long_failed = any(
+        isinstance(item, dict) and item.get("label") == "long_prompt_recall"
+        for item in failed
+    )
+    tool_failed = any(
+        isinstance(item, dict) and item.get("label") == "tool_required"
+        for item in failed
+    ) or not bool(tool_row.get("tool_calls"))
+    cache_exact_pass = all(
+        isinstance(row, dict) and row.get("text") == "ACK-CACHE-742"
+        for row in cache_rows
+    )
+    return {
+        "exists": True,
+        "verdict": data.get("verdict"),
+        "long_prompt_blocked": bool(long_failed),
+        "tool_protocol_blocked": bool(tool_failed),
+        "short_cache_exact_pass": bool(cache_exact_pass),
+        "long_prompt_elapsed_s": long_row.get("elapsed_s"),
+        "tool_elapsed_s": tool_row.get("elapsed_s"),
+        "long_prompt_text_head": str(long_row.get("text") or "")[:200],
+        "tool_text_head": str(tool_row.get("text") or "")[:200],
+        "failed_checks": failed,
+    }
+
+
 def _source_vs_quant_first_divergence_pass(data: dict[str, Any]) -> bool:
     if data.get("status") != "pass" or data.get("remote_evidence_only") is True:
         return False
@@ -417,6 +461,7 @@ def build_audit(root: Path, model_path: Path, manifest: Path) -> dict[str, Any]:
     rendered_prompt = _artifact(root / RENDERED_PROMPT_ARTIFACT)
     first_token = _artifact(root / FIRST_TOKEN_ARTIFACT)
     source_vs_quant = _artifact(root / SOURCE_VS_QUANT_ARTIFACT)
+    synced_long_tool_cache = _artifact(root / SYNCED_LONG_TOOL_CACHE_ARTIFACT)
 
     structural_pass = structural.get("status") == "pass"
     text_cache_pass = text_cache.get("exists") and _text_cache_narrow_pass(text_cache["data"])
@@ -448,6 +493,12 @@ def build_audit(root: Path, model_path: Path, manifest: Path) -> dict[str, Any]:
         if all_local_smoke.get("exists")
         else {"exists": False}
     )
+    synced_evidence = (
+        _synced_long_tool_cache_evidence(synced_long_tool_cache["data"])
+        if synced_long_tool_cache.get("exists")
+        and isinstance(synced_long_tool_cache.get("data"), dict)
+        else {"exists": False}
+    )
     if smoke_evidence.get("exists"):
         tool_blocked = not bool(smoke_evidence.get("tool_protocol_pass"))
         exact_cache_blocked = bool(smoke_evidence.get("exact_cache_blocked"))
@@ -458,6 +509,12 @@ def build_audit(root: Path, model_path: Path, manifest: Path) -> dict[str, Any]:
         )
         exact_cache_blocked = False
         speed_blocked = True
+    if synced_evidence.get("exists"):
+        tool_blocked = tool_blocked or bool(synced_evidence.get("tool_protocol_blocked"))
+        length_blocked = length_blocked or bool(synced_evidence.get("long_prompt_blocked"))
+        exact_cache_blocked = exact_cache_blocked and not bool(
+            synced_evidence.get("short_cache_exact_pass")
+        )
     sink_mode_fails = sink_mode_length.get("exists") and _all_sink_diagnostic_cases_fail(
         sink_mode_length["data"]
     )
@@ -567,11 +624,13 @@ def build_audit(root: Path, model_path: Path, manifest: Path) -> dict[str, Any]:
             "rendered_prompt_compare": str(RENDERED_PROMPT_ARTIFACT),
             "first_token_probe": str(FIRST_TOKEN_ARTIFACT),
             "source_vs_quant_first_divergence": str(SOURCE_VS_QUANT_ARTIFACT),
+            "synced_long_tool_cache": str(SYNCED_LONG_TOOL_CACHE_ARTIFACT),
         },
         "diagnostics": {
             "cache_vs_nocache_next_token_match": bool(cache_match),
             "all_local_smoke": smoke_evidence,
             "prompt_shape_first_token": prompt_shape_evidence,
+            "synced_long_tool_cache": synced_evidence,
             "source_vs_quant_first_divergence": (
                 source_vs_quant.get("data")
                 if source_vs_quant.get("exists")
