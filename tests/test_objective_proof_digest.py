@@ -8166,7 +8166,7 @@ def test_objective_proof_digest_keeps_cross_family_live_smoke_open_on_non_mimo_g
     )
     _write_json(
         tmp_path,
-        "build/current-all-local-model-smoke-dsv4-jangtq-k-bundled-cachehit-20260524/summary.json",
+        "build/current-all-local-model-smoke-dsv4-jangtq-k-tools-cache-20260606/summary.json",
         {
             "completed": 1,
             "row_count": 1,
@@ -8856,7 +8856,7 @@ def test_objective_proof_digest_requires_dsv4_smoke_cache_hit(tmp_path):
     _write_passing_base_artifacts(tmp_path)
     _write_json(
         tmp_path,
-        "build/current-all-local-model-smoke-dsv4-jangtq-k-bundled-cachehit-20260524/summary.json",
+        "build/current-all-local-model-smoke-dsv4-jangtq-k-tools-cache-20260606/summary.json",
         {
             "completed": 1,
             "row_count": 1,

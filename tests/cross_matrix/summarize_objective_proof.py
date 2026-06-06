@@ -63,7 +63,7 @@ from tests.cross_matrix.release_regression_manifest import (
 
 DEFAULT_OUT = Path("build/current-objective-proof-audit-20260602-cache-detail-zero-cached.json")
 CURRENT_RELEASE_REGRESSION_MANIFEST_REL = (
-    "build/current-release-regression-manifest-after-mimo-sink-falsification-20260606.json"
+    "build/current-release-regression-manifest-after-dsv4-smoke-refresh-20260606.json"
 )
 DSV4_QUALITY_CLEARANCE_REL = "build/current-dsv4-long-output-quality-clearance-20260521.json"
 DSV4_CURRENT_IDENTIFIER_CANARY_REL = (
@@ -381,7 +381,7 @@ MIMO_V2_JANG2L_CONSERVATIVE_DIAGNOSTIC_REL = (
     "build/current-mimo-conservative-diagnostic-20260606/summary.json"
 )
 ALL_LOCAL_MODEL_SMOKE_DSV4_JANGTQ_K_REL = (
-    "build/current-all-local-model-smoke-dsv4-jangtq-k-bundled-cachehit-20260524/summary.json"
+    "build/current-all-local-model-smoke-dsv4-jangtq-k-tools-cache-20260606/summary.json"
 )
 NEMOTRON_OMNI_NO_MEDIA_DIAGNOSTIC_REL = (
     "build/current-nemotron-omni-no-media-carryover-diagnostic-20260524b/result.json"
