@@ -89,6 +89,15 @@ def test_current_regression_suite_does_not_keep_proven_dsv4_native_cache_or_mult
     )
 
 
+def test_current_regression_suite_does_not_keep_proven_dsv4_same_process_cache_hit_open():
+    from tests.cross_matrix import run_current_regression_suite as suite
+
+    assert (
+        "DSV4 same-process cache hit improves latency/TTFT and records paged+dsv4 hit"
+        not in suite.EXPECTED_OPEN_REQUIREMENTS
+    )
+
+
 def test_current_regression_suite_preserves_expected_open_requirement_details(
     tmp_path,
     monkeypatch,

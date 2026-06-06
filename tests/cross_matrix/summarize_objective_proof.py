@@ -218,6 +218,7 @@ QWEN_NATIVE_MTP_NORM_SHIFT_CLEARANCE_REL = (
 )
 QWEN_NATIVE_MTP_AB_REL = "build/current-native-mtp-speed-ab-qwen27-jang4m-mtp-20260523/result.json"
 DSV4_DEFAULT_CACHE_TOOL_LOOP_REL = "build/current-dsv4-default-cache-tool-loop/result.json"
+DSV4_RESPONSES_CACHE_GATE_REL = "build/current-dsv4-responses-cache-gate-20260606.json"
 DSV4_DEFAULT_CACHE_TOOL_LOOP_THINKING_ON_REL = (
     "build/current-dsv4-default-cache-tool-loop-thinking-on-20260525.json"
 )
@@ -4934,6 +4935,7 @@ def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
         root, "build/v1546-current-bundled-dsv4-two-tool-proof-20260521001426/result.json"
     )
     default_cache_tool_loop = _load(root, DSV4_DEFAULT_CACHE_TOOL_LOOP_REL)
+    dsv4_responses_cache_gate = _load(root, DSV4_RESPONSES_CACHE_GATE_REL)
     default_cache_tool_loop_thinking_on = _load(
         root, DSV4_DEFAULT_CACHE_TOOL_LOOP_THINKING_ON_REL
     )
@@ -5675,11 +5677,85 @@ def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
         },
     )
     cached_details = (((turn2.get("body") or {}).get("usage") or {}).get("prompt_tokens_details") or {})
+    responses_cache_cases = (
+        dsv4_responses_cache_gate.get("cases")
+        if isinstance(dsv4_responses_cache_gate.get("cases"), dict)
+        else {}
+    )
+    responses_cached_follow = (
+        responses_cache_cases.get("previous_response_follow")
+        if isinstance(responses_cache_cases.get("previous_response_follow"), dict)
+        else {}
+    )
+    responses_stream_follow = (
+        responses_cache_cases.get("stream_previous_response_follow")
+        if isinstance(responses_cache_cases.get("stream_previous_response_follow"), dict)
+        else {}
+    )
+    responses_no_cache = (
+        responses_cache_cases.get("explicit_no_cache_full_prompt")
+        if isinstance(responses_cache_cases.get("explicit_no_cache_full_prompt"), dict)
+        else {}
+    )
+    responses_cached_follow_details = (
+        (responses_cached_follow.get("usage") or {}).get("input_tokens_details")
+        or (responses_cached_follow.get("usage") or {}).get("prompt_tokens_details")
+        or {}
+    )
+    responses_stream_follow_details = (
+        (responses_stream_follow.get("usage") or {}).get("input_tokens_details")
+        or (responses_stream_follow.get("usage") or {}).get("prompt_tokens_details")
+        or {}
+    )
+    responses_no_cache_details = (
+        (responses_no_cache.get("usage") or {}).get("input_tokens_details")
+        or (responses_no_cache.get("usage") or {}).get("prompt_tokens_details")
+        or {}
+    )
+    responses_cached_tokens = int(
+        responses_cached_follow_details.get("cached_tokens") or 0
+    )
+    responses_stream_cached_tokens = int(
+        responses_stream_follow_details.get("cached_tokens") or 0
+    )
+    responses_no_cache_tokens = int(
+        responses_no_cache_details.get("cached_tokens") or 0
+    )
+    responses_cached_wall = responses_cached_follow.get("wall_seconds")
+    responses_no_cache_wall = responses_no_cache.get("wall_seconds")
+    responses_stream_ttft = responses_stream_follow.get("ttft_seconds")
+    current_responses_cache_hit_ok = (
+        dsv4_responses_cache_gate.get("status") == "pass"
+        and responses_cached_tokens > 0
+        and "dsv4" in str(responses_cached_follow_details.get("cache_detail") or "")
+        and responses_stream_cached_tokens > 0
+        and "dsv4" in str(responses_stream_follow_details.get("cache_detail") or "")
+        and isinstance(responses_stream_ttft, (int, float))
+        and responses_stream_ttft > 0
+        and responses_no_cache_tokens == 0
+        and isinstance(responses_cached_wall, (int, float))
+        and isinstance(responses_no_cache_wall, (int, float))
+        and responses_cached_wall < responses_no_cache_wall
+    )
     _add(
         requirements,
         "DSV4 same-process cache hit improves latency/TTFT and records paged+dsv4 hit",
-        _status(cache_checks.get("hotFasterTtft") and cache_checks.get("sameProcessHitDsv4")),
-        ["build/current-dsv4-cache-proof-digest-20260521.json", "build/dev-ui-dsv4-live-cache-proof-20260521/result.json"],
+        _status(
+            (
+                cache_checks.get("hotFasterTtft")
+                and cache_checks.get("sameProcessHitDsv4")
+            )
+            or current_responses_cache_hit_ok
+        ),
+        (
+            [
+                "build/current-dsv4-cache-proof-digest-20260521.json",
+                "build/dev-ui-dsv4-live-cache-proof-20260521/result.json",
+            ]
+            if cache_checks.get("hotFasterTtft")
+            and cache_checks.get("sameProcessHitDsv4")
+            else [DSV4_RESPONSES_CACHE_GATE_REL]
+        ),
         details={
             "cold_ttft_sec": (cache.get("timings") or {}).get("cold_ttft_sec"),
             "hot_ttft_sec": (cache.get("timings") or {}).get("hot_ttft_sec"),
@@ -5687,6 +5763,22 @@ def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
             "dev_hot_elapsed_sec": turn2.get("elapsed_sec"),
             "dev_cached_tokens": cached_details.get("cached_tokens"),
             "dev_cache_detail": cached_details.get("cache_detail"),
+            "current_responses_cache_gate_status": (
+                dsv4_responses_cache_gate.get("status")
+            ),
+            "current_responses_cached_tokens": responses_cached_tokens,
+            "current_responses_cache_detail": (
+                responses_cached_follow_details.get("cache_detail")
+            ),
+            "current_responses_stream_cached_tokens": responses_stream_cached_tokens,
+            "current_responses_stream_cache_detail": (
+                responses_stream_follow_details.get("cache_detail")
+            ),
+            "current_responses_stream_ttft_sec": responses_stream_ttft,
+            "current_responses_cached_wall_sec": responses_cached_wall,
+            "current_responses_no_cache_wall_sec": responses_no_cache_wall,
+            "current_responses_no_cache_tokens": responses_no_cache_tokens,
+            "current_responses_cache_hit_ok": current_responses_cache_hit_ok,
         },
     )
     _add(

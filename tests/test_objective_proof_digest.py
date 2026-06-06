@@ -5559,6 +5559,63 @@ def test_objective_proof_digest_uses_current_default_cache_artifact_for_multi_to
     assert row["details"]["current_default_cache_final_text"] == "DONE"
 
 
+def test_objective_proof_digest_uses_current_responses_cache_gate_for_same_process_hit(
+    tmp_path,
+):
+    from tests.cross_matrix.summarize_objective_proof import build_digest
+
+    _write_passing_base_artifacts(tmp_path)
+    (tmp_path / "build/current-dsv4-cache-proof-digest-20260521.json").unlink()
+    (tmp_path / "build/dev-ui-dsv4-live-cache-proof-20260521/result.json").unlink()
+    _write_json(
+        tmp_path,
+        "build/current-dsv4-responses-cache-gate-20260606.json",
+        {
+            "status": "pass",
+            "cases": {
+                "previous_response_follow": {
+                    "wall_seconds": 0.8,
+                    "usage": {
+                        "input_tokens_details": {
+                            "cached_tokens": 5195,
+                            "cache_detail": "paged+dsv4",
+                        }
+                    },
+                },
+                "stream_previous_response_follow": {
+                    "wall_seconds": 0.87,
+                    "ttft_seconds": 0.33,
+                    "usage": {
+                        "input_tokens_details": {
+                            "cached_tokens": 5195,
+                            "cache_detail": "paged+dsv4",
+                        }
+                    },
+                },
+                "explicit_no_cache_full_prompt": {
+                    "wall_seconds": 22.17,
+                    "usage": {"input_tokens_details": None},
+                },
+            },
+        },
+    )
+
+    digest = build_digest(tmp_path)
+    rows = {item["requirement"]: item for item in digest["requirements"]}
+
+    row = rows[
+        "DSV4 same-process cache hit improves latency/TTFT and records paged+dsv4 hit"
+    ]
+    assert row["status"] == "pass"
+    assert row["evidence"] == ["build/current-dsv4-responses-cache-gate-20260606.json"]
+    assert row["details"]["current_responses_cache_gate_status"] == "pass"
+    assert row["details"]["current_responses_cached_tokens"] == 5195
+    assert row["details"]["current_responses_cache_detail"] == "paged+dsv4"
+    assert row["details"]["current_responses_stream_ttft_sec"] == 0.33
+    assert row["details"]["current_responses_cached_wall_sec"] == 0.8
+    assert row["details"]["current_responses_no_cache_wall_sec"] == 22.17
+
+
 def test_objective_proof_digest_surfaces_default_cache_tool_loop_dry_run_controls(
     tmp_path,
 ):
