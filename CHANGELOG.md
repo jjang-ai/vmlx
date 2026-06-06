@@ -14,6 +14,7 @@ All notable changes to vMLX Engine will be documented in this file.
 - Fixed MiMo V2.5 JANG_2L VLM paged-prefix cache hits for asymmetric full/SWA KV heads. MiMo full-attention layers use `num_key_value_heads=4`, while SWA `RotatingKVCache` layers use `swa_num_key_value_heads=8`; the VLM cache store path was slicing every layer down to the primary count, causing second-turn cache hits to fail with a 4-head vs 8-head concatenate error. The runtime now preserves all config-declared valid KV head counts, paged cache schema is bumped to `paged_n1_keys_v6`, and the live MiMo cache-stack repro now passes with a 25-token paged cache hit.
 - Refreshed API surface, tool-call, reasoning/template, panel tool security, MCP/gateway policy, release-surface, and cancellation contracts after the MiMo tool blocker. Streaming detokenizer tests remain skipped in the current environment and are not counted as streaming proof.
 - Added a live source-level streaming API proof with Gemma4 12B JANG_4M under continuous batching, paged prefix cache, block-disk L2, and q8 KV: the streamed Chat Completions response emitted visible chunks and final `[DONE]`.
+- Added installed-app streaming API parity evidence for the current `/Applications/vMLX.app` bundled runtime with Gemma4 12B JANG_4M: streaming Chat Completions emitted visible chunks and final `[DONE]`.
 
 ### Notes
 - Future release notes for the current runtime/model/UI/API issue wave must credit GitHub `@Hornsan1` for reporting many of these issues.
