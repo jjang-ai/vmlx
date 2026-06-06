@@ -17,6 +17,7 @@ All notable changes to vMLX Engine will be documented in this file.
 - Future release notes for the current runtime/model/UI/API issue wave must credit GitHub `@Hornsan1` for reporting many of these issues.
 - JANGQ/JANG tools MiMo V2 support is on `jjang-ai/jangq` main at `d1316c3`; the local `/Users/example/jang` checkout is now aligned to that commit, with the prior local equivalent head and overlapping untracked files preserved in backups.
 - Local MiMo V2.5 JANG_2L was refreshed from max2 over the TB-routed HTTP endpoint and verified byte-for-byte by manifest. This is still not full MiMo release clearance: live text/cache now works, but tool behavior, VL/audio/video, and performance remain separate proof rows.
+- MiMo V2.5 JANG_2L tool behavior remains a release blocker: a forced XML-function tool call stayed HTTP 200 but produced raw malformed `<tool_call>` text and punctuation garbage with zero parsed tool calls.
 
 ## [1.5.49] - 2026-05-23
 
