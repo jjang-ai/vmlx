@@ -5369,6 +5369,17 @@ def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
         and (default_tool_native.get("generic_turboquant_kv") or {}).get("enabled")
         is False
     )
+    panel_settings_raw_checks = (
+        panel_settings_contract.get("checks")
+        if isinstance(panel_settings_contract.get("checks"), dict)
+        else {}
+    )
+    current_app_launch_default_cache_ok = (
+        panel_settings_contract.get("status") == "pass"
+        and panel_settings_raw_checks.get("dsv4_default_native_prefix_on") is True
+        and panel_settings_raw_checks.get("dsv4_generic_kv_flags_suppressed") is True
+        and current_default_native_cache_ok
+    )
     thinking_tool_rounds = default_cache_tool_loop_thinking_on.get("rounds") or []
     thinking_tool_executed = [
         tool
@@ -5652,7 +5663,8 @@ def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
         requirements,
         "DSV4 Flash prefix/paged/L2 cache is enabled by default from app launch",
         _status(
-            all(
+            current_app_launch_default_cache_ok
+            or all(
                 cache_checks.get(key)
                 for key in (
                     "persistedDefaultOn",
@@ -5663,16 +5675,57 @@ def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
                 )
             )
         ),
-        ["build/current-dsv4-cache-proof-digest-20260521.json", "build/dev-ui-smoke-20260521/summary.json"],
+        (
+            [PANEL_SETTINGS_CONTRACT_REL, DSV4_DEFAULT_CACHE_TOOL_LOOP_REL]
+            if current_app_launch_default_cache_ok
+            else [
+                "build/current-dsv4-cache-proof-digest-20260521.json",
+                "build/dev-ui-smoke-20260521/summary.json",
+            ]
+        ),
         details={
-            key: cache_checks.get(key)
-            for key in (
-                "persistedDefaultOn",
-                "launchHasDsv4EnablePrefix",
-                "launchHasUsePagedCache",
-                "launchHasBlockDisk",
-                "launchNoDisablePrefix",
-            )
+            **{
+                key: cache_checks.get(key)
+                for key in (
+                    "persistedDefaultOn",
+                    "launchHasDsv4EnablePrefix",
+                    "launchHasUsePagedCache",
+                    "launchHasBlockDisk",
+                    "launchNoDisablePrefix",
+                )
+            },
+            "current_panel_settings_status": panel_settings_contract.get("status"),
+            "current_panel_settings_dsv4_default_native_prefix_on": (
+                panel_settings_raw_checks.get("dsv4_default_native_prefix_on")
+            ),
+            "current_panel_settings_dsv4_generic_kv_flags_suppressed": (
+                panel_settings_raw_checks.get("dsv4_generic_kv_flags_suppressed")
+            ),
+            "current_default_cache_launch_has_dsv4_enable_prefix_cache": (
+                "--dsv4-enable-prefix-cache" in default_tool_cmd
+            ),
+            "current_default_cache_launch_has_use_paged_cache": (
+                "--use-paged-cache" in default_tool_cmd
+            ),
+            "current_default_cache_launch_has_block_disk_cache": (
+                "--enable-block-disk-cache" in default_tool_cmd
+            ),
+            "current_default_cache_launch_has_disable_prefix_cache": (
+                "--disable-prefix-cache" in default_tool_cmd
+            ),
+            "current_default_cache_native_cache_type": default_tool_native.get(
+                "cache_type"
+            ),
+            "current_default_cache_native_prefix": default_tool_native.get("prefix"),
+            "current_default_cache_native_paged": default_tool_native.get("paged"),
+            "current_default_cache_native_block_disk_l2": default_tool_native.get(
+                "block_disk_l2"
+            ),
+            "current_default_cache_generic_turboquant_kv": (
+                default_tool_native.get("generic_turboquant_kv")
+            ),
+            "current_default_native_cache_ok": current_default_native_cache_ok,
+            "current_app_launch_default_cache_ok": current_app_launch_default_cache_ok,
         },
     )
     _add(

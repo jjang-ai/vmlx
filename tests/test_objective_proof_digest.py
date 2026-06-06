@@ -5265,6 +5265,43 @@ def test_objective_proof_digest_does_not_require_legacy_ui_smoke_for_max_output_
     assert "build/dev-ui-smoke-20260521/summary.json" not in row["details"]["evidence_files_present"]
 
 
+def test_objective_proof_digest_uses_current_panel_and_dsv4_default_cache_artifacts(
+    tmp_path,
+):
+    from tests.cross_matrix.summarize_objective_proof import (
+        DSV4_DEFAULT_CACHE_TOOL_LOOP_REL,
+    )
+    from tests.cross_matrix.summarize_objective_proof import PANEL_SETTINGS_CONTRACT_REL
+    from tests.cross_matrix.summarize_objective_proof import build_digest
+
+    _write_passing_base_artifacts(tmp_path)
+    (tmp_path / "build/current-dsv4-cache-proof-digest-20260521.json").unlink()
+    (tmp_path / "build/dev-ui-smoke-20260521/summary.json").unlink()
+
+    digest = build_digest(tmp_path)
+    rows = {item["requirement"]: item for item in digest["requirements"]}
+
+    row = rows[
+        "DSV4 Flash prefix/paged/L2 cache is enabled by default from app launch"
+    ]
+    assert row["status"] == "pass"
+    assert row["evidence"] == [
+        PANEL_SETTINGS_CONTRACT_REL,
+        DSV4_DEFAULT_CACHE_TOOL_LOOP_REL,
+    ]
+    assert row["details"]["current_panel_settings_status"] == "pass"
+    assert (
+        row["details"]["current_panel_settings_dsv4_default_native_prefix_on"]
+        is True
+    )
+    assert row["details"]["current_default_native_cache_ok"] is True
+    assert row["details"]["current_app_launch_default_cache_ok"] is True
+    assert (
+        "build/current-dsv4-cache-proof-digest-20260521.json"
+        not in row["evidence"]
+    )
+
+
 def test_objective_proof_digest_does_not_require_legacy_dsv4_app_tool_cap_artifact(tmp_path):
     from tests.cross_matrix import run_tool_call_contract as tool_contract
     from tests.cross_matrix.summarize_objective_proof import build_digest

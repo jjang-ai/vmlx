@@ -71,6 +71,10 @@ def test_current_regression_suite_does_not_keep_proven_dsv4_default_cache_tool_l
     from tests.cross_matrix import run_current_regression_suite as suite
 
     assert (
+        "DSV4 Flash prefix/paged/L2 cache is enabled by default from app launch"
+        not in suite.EXPECTED_OPEN_REQUIREMENTS
+    )
+    assert (
         "DSV4 default-cache multi-tool agent loop is proven"
         not in suite.EXPECTED_OPEN_REQUIREMENTS
     )
