@@ -2032,6 +2032,8 @@ class MLLMScheduler:
             video_fps=kwargs.get("video_fps"),
             video_max_frames=kwargs.get("video_max_frames"),
         )
+        if "enable_thinking" in kwargs:
+            request.enable_thinking = kwargs.get("enable_thinking")
         _max_prompt_tokens = int(kwargs.get("max_prompt_tokens", 0) or 0)
         if _max_prompt_tokens > 0:
             request._max_prompt_tokens = _max_prompt_tokens
@@ -2214,6 +2216,7 @@ class MLLMScheduler:
                 min_p=request.sampling_params.min_p,
                 repetition_penalty=request.sampling_params.repetition_penalty,
                 max_prompt_tokens=int(getattr(request, "_max_prompt_tokens", 0) or 0),
+                enable_thinking=getattr(request, "enable_thinking", None),
                 video_fps=request.video_fps,
                 video_max_frames=request.video_max_frames,
             )

@@ -122,6 +122,96 @@ class TestMLLMBatchRequest:
         assert req.output_tokens == []
 
 
+def test_mimo_batched_thinking_off_sampler_suppresses_tags_and_first_eos():
+    """MiMo continuous-batching path must mirror SimpleEngine thinking-off policy."""
+    from types import SimpleNamespace
+
+    import mlx.core as mx
+
+    from vmlx_engine.mllm_batch_generator import MLLMBatchGenerator, MLLMBatchRequest
+
+    class _Tokenizer:
+        eos_token_id = 9
+
+        def encode(self, text, add_special_tokens=False):
+            if text == "<think>":
+                return [1]
+            if text == "</think>":
+                return [2]
+            if text == "<|im_end|>":
+                return [9]
+            return [3]
+
+    generator = MLLMBatchGenerator.__new__(MLLMBatchGenerator)
+    generator._model_type = "mimo_v2"
+    generator.processor = SimpleNamespace(tokenizer=_Tokenizer())
+
+    req = MLLMBatchRequest(
+        uid=0,
+        request_id="mimo",
+        prompt="prompt",
+        temperature=0.0,
+        enable_thinking=False,
+    )
+    req.input_ids = mx.array([[101, 102]])
+
+    sampler = generator._make_request_sampler(req)
+    logits = mx.zeros((1, 10))
+    logits = logits.at[:, 1].add(50.0)
+    logits = logits.at[:, 2].add(60.0)
+    logits = logits.at[:, 9].add(70.0)
+    logits = logits.at[:, 4].add(10.0)
+
+    first = sampler(logits)
+    assert int(first.item()) == 4
+
+    req.output_tokens.append(4)
+    second_logits = mx.zeros((1, 10))
+    second_logits = second_logits.at[:, 9].add(70.0)
+    second = sampler(second_logits)
+    assert int(second.item()) == 9
+
+
+def test_mimo_batched_thinking_on_sampler_does_not_suppress_eos():
+    """The MiMo EOS policy is only for explicit API thinking-off requests."""
+    from types import SimpleNamespace
+
+    import mlx.core as mx
+
+    from vmlx_engine.mllm_batch_generator import MLLMBatchGenerator, MLLMBatchRequest
+
+    class _Tokenizer:
+        eos_token_id = 9
+
+        def encode(self, text, add_special_tokens=False):
+            if text == "<think>":
+                return [1]
+            if text == "</think>":
+                return [2]
+            if text == "<|im_end|>":
+                return [9]
+            return [3]
+
+    generator = MLLMBatchGenerator.__new__(MLLMBatchGenerator)
+    generator._model_type = "mimo_v2"
+    generator.processor = SimpleNamespace(tokenizer=_Tokenizer())
+
+    req = MLLMBatchRequest(
+        uid=0,
+        request_id="mimo",
+        prompt="prompt",
+        temperature=0.0,
+        enable_thinking=True,
+    )
+    req.input_ids = mx.array([[101, 102]])
+
+    sampler = generator._make_request_sampler(req)
+    logits = mx.zeros((1, 10))
+    logits = logits.at[:, 9].add(70.0)
+
+    assert int(sampler(logits).item()) == 9
+
+
 class TestMLLMBatchResponse:
     """Tests for MLLMBatchResponse dataclass."""
 

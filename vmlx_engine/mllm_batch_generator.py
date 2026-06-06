@@ -2279,6 +2279,7 @@ class MLLMBatchRequest:
     min_p: float = 0.0
     repetition_penalty: float = 1.0
     max_prompt_tokens: int = 0
+    enable_thinking: Optional[bool] = None
 
     # Video processing parameters (per-request overrides)
     video_fps: Optional[float] = None
@@ -5813,11 +5814,19 @@ class MLLMBatchGenerator:
             min_p=request.min_p if request.min_p > 0 else 0.0,
         )
 
+        logits_processors = []
+
+        if self._model_type == "mimo_v2" and request.enable_thinking is False:
+            logits_processors.extend(self._mimo_v2_thinking_off_logits_processors(request))
+
         # Apply repetition penalty if set for this request
         rep_penalty = getattr(request, "repetition_penalty", 1.0)
         if rep_penalty is not None and rep_penalty != 1.0:
             from mlx_lm.sample_utils import make_logits_processors
-            logits_procs = make_logits_processors(repetition_penalty=rep_penalty)
+
+            logits_processors.extend(make_logits_processors(repetition_penalty=rep_penalty))
+
+        if logits_processors:
             # Use _original_token_ids (saved before cache fetch trims input_ids)
             # so repetition penalty covers the full prompt, not just uncached tokens.
             prompt_list = getattr(request, '_original_token_ids', None)
@@ -5826,21 +5835,96 @@ class MLLMBatchGenerator:
                 prompt_list = ids[0].tolist() if ids is not None and ids.ndim > 1 else (
                     ids.tolist() if ids is not None else []
                 )
-            def sampler_with_penalty(logits, _req=request, _prompt_list=prompt_list):
+
+            def sampler_with_processors(logits, _req=request, _prompt_list=prompt_list):
                 # Build full token sequence (prompt + generated) so penalty
-                # applies to already-generated tokens, not just the prompt.
+                # applies to already-generated tokens, not just the prompt,
+                # and MiMo can distinguish first-token EOS from natural stop.
                 all_tokens = mx.array(_prompt_list + _req.output_tokens)
                 processed = logits
-                for proc in logits_procs:
+                for proc in logits_processors:
                     processed = proc(all_tokens, processed)
                 return base_sampler(processed)
+
             if _native_mtp_sampler_accepts_logits(base_sampler):
-                sampler_with_penalty._vmlx_accepts_logits = True
-            request._cached_sampler = sampler_with_penalty
-            return sampler_with_penalty
+                sampler_with_processors._vmlx_accepts_logits = True
+            request._cached_sampler = sampler_with_processors
+            return sampler_with_processors
 
         request._cached_sampler = base_sampler
         return base_sampler
+
+    def _mimo_v2_thinking_off_logits_processors(
+        self,
+        request: MLLMBatchRequest,
+    ) -> list[Callable[[mx.array, mx.array], mx.array]]:
+        """Return MiMo V2 thinking-off decode processors for batched MLLM.
+
+        Mirrors SimpleEngine's MiMo policy for the continuous-batching/cache
+        route: suppress native thinking delimiters whenever API thinking is
+        off, and suppress the primary EOS marker only before the first
+        generated token. The first-token test must use request output state,
+        not the processor's token vector, because batched processors see prompt
+        tokens too. This avoids the proven first-token ``<|im_end|>`` stop
+        without preventing natural stop later.
+        """
+
+        token_ids = getattr(self, "_mimo_v2_thinking_off_token_ids", None)
+        if token_ids is None:
+            tokenizer = getattr(self.processor, "tokenizer", self.processor)
+
+            def _encode_single(token: str) -> Optional[int]:
+                try:
+                    encoded = tokenizer.encode(token, add_special_tokens=False)
+                except TypeError:
+                    encoded = tokenizer.encode(token)
+                except Exception:
+                    encoded = []
+                if len(encoded) != 1:
+                    return None
+                try:
+                    return int(encoded[0])
+                except Exception:
+                    return None
+
+            think_ids = {
+                token_id
+                for token_id in (_encode_single("<think>"), _encode_single("</think>"))
+                if token_id is not None
+            }
+            eos_ids = {token_id for token_id in (_encode_single("<|im_end|>"),) if token_id is not None}
+            eos_id = getattr(tokenizer, "eos_token_id", None)
+            if isinstance(eos_id, int):
+                eos_ids.add(eos_id)
+            token_ids = {
+                "think_ids": think_ids,
+                "eos_ids": eos_ids,
+            }
+            self._mimo_v2_thinking_off_token_ids = token_ids
+        think_ids = token_ids["think_ids"]
+        eos_ids = token_ids["eos_ids"]
+
+        processors: list[Callable[[mx.array, mx.array], mx.array]] = []
+        if think_ids:
+
+            def _suppress_thinking_tags(_, logits):
+                indices = mx.array(sorted(think_ids))
+                return logits.at[:, indices].add(-float("inf"))
+
+            processors.append(_suppress_thinking_tags)
+
+        if eos_ids:
+
+            def _suppress_first_token_eos(tokens, logits, _request=request):
+                first_generation_token = len(getattr(_request, "output_tokens", [])) == 0
+                if not first_generation_token:
+                    return logits
+                indices = mx.array(sorted(eos_ids))
+                return logits.at[:, indices].add(-float("inf"))
+
+            processors.append(_suppress_first_token_eos)
+
+        return processors
 
     def _native_mtp_disabled_reason_for_request(self, request: MLLMBatchRequest) -> Optional[str]:
         """Return a per-request native-MTP gate reason, or None when enabled."""

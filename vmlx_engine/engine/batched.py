@@ -1512,6 +1512,7 @@ class BatchedEngine(BaseEngine):
                 video_max_frames=kwargs.get("video_max_frames"),
                 num_messages=kwargs.get("num_messages", 1),
                 gen_prompt_len=kwargs.get("gen_prompt_len", 0),
+                enable_thinking=kwargs.get("enable_thinking"),
                 bypass_prefix_cache=bypass_prefix_cache,
                 max_prompt_tokens=max_prompt_tokens,
             )
@@ -1691,6 +1692,7 @@ class BatchedEngine(BaseEngine):
             videos=all_videos if all_videos else None,
             gen_prompt_len=gen_prompt_len,
             encode_add_special_tokens=False,
+            enable_thinking=thinking_enabled,
             **kwargs,
         )
 
@@ -1807,6 +1809,7 @@ class BatchedEngine(BaseEngine):
             request_id=request_id,
             gen_prompt_len=gen_prompt_len,
             encode_add_special_tokens=False,
+            enable_thinking=thinking_enabled,
             **kwargs,
         ):
             yield output
