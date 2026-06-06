@@ -558,11 +558,7 @@ def _package_signing_preflight(root: Path) -> dict[str, Any]:
         "User interaction is not allowed" in line
         for line in result["simple_developer_id_sign_tail"]
     )
-    if developer_id_signed and hardened_runtime_enabled and verify.returncode == 0:
-        result["status"] = "pass"
-        result["signing_blocker_reason"] = None
-        result["signing_blocker_reasons"] = []
-    elif simple_sign.returncode != 0 and (
+    if simple_sign.returncode != 0 and (
         keychain_user_interaction_blocked or codesign_user_interaction_blocked
     ):
         result["signing_blocker_reason"] = (
@@ -586,6 +582,10 @@ def _package_signing_preflight(root: Path) -> dict[str, Any]:
             "Rebuild or reseal the packaged app after bundled runtime sync so codesign --verify --deep --strict passes before notarization.",
             "Rerun the packaged integrity contract and require package_signing_preflight.status=pass before notarization.",
         ]
+    elif developer_id_signed and hardened_runtime_enabled and verify.returncode == 0:
+        result["status"] = "pass"
+        result["signing_blocker_reason"] = None
+        result["signing_blocker_reasons"] = []
     elif simple_sign.returncode != 0:
         result["signing_blocker_reason"] = "developer_id_private_key_unusable"
         result["signing_blocker_reasons"] = ["developer_id_private_key_unusable"]

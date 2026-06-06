@@ -905,6 +905,66 @@ def test_package_signing_preflight_classifies_codesign_user_interaction_failure(
     assert preflight["manual_remediation_required"] is True
 
 
+def test_package_signing_preflight_rejects_signed_old_app_when_new_signing_unusable(
+    monkeypatch, tmp_path
+):
+    app = tmp_path / runner.PACKAGED_APP
+    app.mkdir(parents=True)
+
+    def fake_run(cmd, **_kwargs):
+        command = " ".join(str(part) for part in cmd)
+        if cmd[:3] == ["codesign", "-dv", "--verbose=4"]:
+            return runner.subprocess.CompletedProcess(
+                cmd,
+                0,
+                "\n".join(
+                    [
+                        "CodeDirectory v=20500 size=472 flags=0x10000(runtime) hashes=4+7 location=embedded",
+                        "Authority=Developer ID Application: ShieldStack LLC (55KGF2S5AY)",
+                        "Authority=Developer ID Certification Authority",
+                        "Authority=Apple Root CA",
+                        "TeamIdentifier=55KGF2S5AY",
+                    ]
+                ),
+            )
+        if cmd[:2] == ["codesign", "--verify"]:
+            return runner.subprocess.CompletedProcess(cmd, 0, "valid on disk\n")
+        if cmd[:3] == ["security", "find-identity", "-v"]:
+            return runner.subprocess.CompletedProcess(
+                cmd,
+                0,
+                '  1) D4DBBCB52F666D03F0A5154BFFEA2227BEE8FC7C "Developer ID Application: ShieldStack LLC (55KGF2S5AY)"\n',
+            )
+        if cmd[:2] == ["security", "show-keychain-info"]:
+            return runner.subprocess.CompletedProcess(
+                cmd,
+                36,
+                "security: SecKeychainCopySettings: User interaction is not allowed.\n",
+            )
+        if "codesign --force --sign" in command:
+            return runner.subprocess.CompletedProcess(
+                cmd,
+                1,
+                "codesign-probe: errSecInternalComponent\n",
+            )
+        raise AssertionError(command)
+
+    monkeypatch.setattr(runner.subprocess, "run", fake_run)
+
+    preflight = runner._package_signing_preflight(tmp_path)
+
+    assert preflight["developer_id_signed"] is True
+    assert preflight["hardened_runtime_enabled"] is True
+    assert preflight["codesign_verify_rc"] == 0
+    assert preflight["simple_developer_id_sign_rc"] == 1
+    assert preflight["status"] == "open"
+    assert (
+        preflight["signing_blocker_reason"]
+        == "developer_id_keychain_user_interaction_not_allowed"
+    )
+    assert preflight["manual_remediation_required"] is True
+
+
 def test_package_signing_preflight_rejects_developer_id_without_hardened_runtime(
     monkeypatch, tmp_path
 ):
