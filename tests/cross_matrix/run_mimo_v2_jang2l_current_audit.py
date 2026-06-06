@@ -24,7 +24,7 @@ from typing import Any
 DEFAULT_MODEL_PATH = Path("/Users/example/.mlxstudio/models/JANGQ-AI/MiMo-V2.5-JANG_2L")
 DEFAULT_MANIFEST = Path("build/current-mimo-http-manifest-20260606.tsv")
 DEFAULT_OUT = Path(
-    "build/current-mimo-v2-jang2l-current-audit-after-mllm-inputs-embeds-fix-20260606.json"
+    "build/current-mimo-v2-jang2l-current-audit-after-native-thinking-off-20260606.json"
 )
 
 STRUCTURAL_ARTIFACT = Path("build/current-mimo-jang2l-local-structural-verify-20260606.json")
@@ -70,6 +70,9 @@ TEXT_ROUTE_ARTIFACT = Path(
 )
 CB_ONESHOT_PREFILL_ARTIFACT = Path(
     "build/current-mimo-v2-jang2l-cb-cache-after-mimo-oneshot-prefill-20260606.json"
+)
+CB_NATIVE_THINKING_OFF_ARTIFACT = Path(
+    "build/current-mimo-v2-jang2l-cb-cache-after-native-thinking-off-live-20260606.json"
 )
 TOOL_SOURCE_PREFLIGHT_ARTIFACT = Path(
     "build/current-mimo-v2-jang2l-tool-source-preflight-20260606.json"
@@ -555,6 +558,80 @@ def _cb_oneshot_prefill_evidence(data: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _cb_native_thinking_off_evidence(data: dict[str, Any]) -> dict[str, Any]:
+    summary = data.get("summary")
+    summary = summary if isinstance(summary, dict) else {}
+    rows = data.get("rows")
+    rows = rows if isinstance(rows, list) else []
+    by_name = {
+        str(row.get("name")): row
+        for row in rows
+        if isinstance(row, dict) and row.get("name") is not None
+    }
+
+    def _row_speed(name: str) -> float | None:
+        row = by_name.get(name) or {}
+        usage = row.get("usage")
+        usage = usage if isinstance(usage, dict) else {}
+        tokens = usage.get("completion_tokens")
+        elapsed = row.get("elapsed_s")
+        if not isinstance(tokens, (int, float)) or not isinstance(elapsed, (int, float)):
+            return None
+        if elapsed <= 0:
+            return None
+        return float(tokens) / float(elapsed)
+
+    speeds = [
+        value
+        for value in (
+            _row_speed("exact_repeat_1"),
+            _row_speed("exact_repeat_2"),
+        )
+        if value is not None
+    ]
+    speed_max = max(speeds) if speeds else None
+    memory_pressure = any(
+        isinstance(row, dict)
+        and row.get("ok") is False
+        and (
+            "503" in str(row.get("error") or "")
+            or "Service Unavailable" in str(row.get("error") or "")
+        )
+        for row in rows
+    ) or "working-set pressure reject" in str(data.get("log_tail") or "")
+    native_cache = summary.get("native_cache")
+    native_cache = native_cache if isinstance(native_cache, dict) else {}
+    return {
+        "exists": True,
+        "status": data.get("status"),
+        "cache_exact_pass": bool(
+            summary.get("exact_repeat_1") and summary.get("exact_repeat_2")
+        ),
+        "no_think_tags": bool(summary.get("no_think_tags")),
+        "prefix_paged_l2_cache_reproved": (
+            isinstance(summary.get("cache_hit_tokens"), (int, float))
+            and summary.get("cache_hit_tokens") > 0
+            and isinstance(summary.get("l2_tokens_on_disk"), (int, float))
+            and summary.get("l2_tokens_on_disk") > 0
+        ),
+        "mixed_swa_native_cache": native_cache.get("cache_type") == "mixed_swa_kv",
+        "storage_quantization_q8": (
+            isinstance(native_cache.get("storage_quantization"), dict)
+            and native_cache["storage_quantization"].get("enabled") is True
+            and native_cache["storage_quantization"].get("bits") == 8
+        ),
+        "memory_pressure_blocked": bool(memory_pressure),
+        "speed_blocked": not (
+            isinstance(speed_max, (int, float)) and speed_max >= 40.0
+        ),
+        "speed_max_tps": speed_max,
+        "texts": summary.get("texts"),
+        "finish_reasons": summary.get("finish_reasons"),
+        "cache_hit_tokens": summary.get("cache_hit_tokens"),
+        "l2_tokens_on_disk": summary.get("l2_tokens_on_disk"),
+    }
+
+
 def build_audit(root: Path, model_path: Path, manifest: Path) -> dict[str, Any]:
     model_parent = model_path.parent
     manifest_check = _verify_manifest(model_parent, manifest)
@@ -582,6 +659,7 @@ def build_audit(root: Path, model_path: Path, manifest: Path) -> dict[str, Any]:
     synced_long_tool_cache = _artifact(root / SYNCED_LONG_TOOL_CACHE_ARTIFACT)
     text_route = _artifact(root / TEXT_ROUTE_ARTIFACT)
     cb_oneshot_prefill = _artifact(root / CB_ONESHOT_PREFILL_ARTIFACT)
+    cb_native_thinking_off = _artifact(root / CB_NATIVE_THINKING_OFF_ARTIFACT)
     tool_source_preflight = _artifact(root / TOOL_SOURCE_PREFLIGHT_ARTIFACT)
     mllm_inputs_embeds_interface = _artifact(root / MLLM_INPUTS_EMBEDS_INTERFACE_ARTIFACT)
 
@@ -669,6 +747,22 @@ def build_audit(root: Path, model_path: Path, manifest: Path) -> dict[str, Any]:
         tool_blocked = bool(cb_evidence.get("tool_protocol_blocked"))
         length_blocked = length_blocked or bool(cb_evidence.get("long_prompt_crashed"))
         speed_blocked = speed_blocked or bool(cb_evidence.get("speed_blocked"))
+    cb_native_evidence = (
+        _cb_native_thinking_off_evidence(cb_native_thinking_off["data"])
+        if cb_native_thinking_off.get("exists")
+        and isinstance(cb_native_thinking_off.get("data"), dict)
+        else {"exists": False}
+    )
+    memory_pressure_blocked = False
+    if cb_native_evidence.get("exists"):
+        if cb_native_evidence.get("cache_exact_pass"):
+            exact_cache_blocked = False
+        if cb_native_evidence.get("prefix_paged_l2_cache_reproved"):
+            text_route_evidence["cache_l2_not_reproved"] = False
+        if cb_native_evidence.get("memory_pressure_blocked"):
+            prompt_shape_blocked = False
+            memory_pressure_blocked = True
+        speed_blocked = speed_blocked or bool(cb_native_evidence.get("speed_blocked"))
     sink_mode_fails = sink_mode_length.get("exists") and _all_sink_diagnostic_cases_fail(
         sink_mode_length["data"]
     )
@@ -690,6 +784,8 @@ def build_audit(root: Path, model_path: Path, manifest: Path) -> dict[str, Any]:
         }
     )
     prompt_shape_blocked = bool(prompt_shape_evidence.get("blocked"))
+    if memory_pressure_blocked:
+        prompt_shape_blocked = False
     source_vs_quant_pass = source_vs_quant.get("exists") and _source_vs_quant_first_divergence_pass(
         source_vs_quant["data"]
     )
@@ -713,6 +809,7 @@ def build_audit(root: Path, model_path: Path, manifest: Path) -> dict[str, Any]:
         and not exact_cache_blocked
         and not speed_blocked
         and not prompt_shape_blocked
+        and not memory_pressure_blocked
         and source_vs_quant_pass
         and mllm_inputs_embeds_interface_pass
         and not bool(text_route_evidence.get("cache_l2_not_reproved"))
@@ -744,6 +841,8 @@ def build_audit(root: Path, model_path: Path, manifest: Path) -> dict[str, Any]:
         blockers.append("mimo_decode_speed_below_release_target")
     if prompt_shape_blocked:
         blockers.append("mimo_system_prompt_first_token_stop_blocked")
+    if memory_pressure_blocked:
+        blockers.append("mimo_cb_system_prompt_working_set_pressure_blocked")
     if not source_vs_quant_pass:
         blockers.append("mimo_source_vs_quant_first_divergence_missing_or_failed")
     if not mllm_inputs_embeds_interface_pass:
@@ -775,6 +874,7 @@ def build_audit(root: Path, model_path: Path, manifest: Path) -> dict[str, Any]:
             "exact_cache_prompt_following": not bool(exact_cache_blocked),
             "decode_speed_target": not bool(speed_blocked),
             "system_prompt_first_token_stop": not bool(prompt_shape_blocked),
+            "cb_system_prompt_working_set_pressure": not bool(memory_pressure_blocked),
             "source_vs_quant_first_divergence": bool(source_vs_quant_pass),
             "mllm_inputs_embeds_interface": bool(mllm_inputs_embeds_interface_pass),
             "text_route_long_prompt": bool(
@@ -807,6 +907,7 @@ def build_audit(root: Path, model_path: Path, manifest: Path) -> dict[str, Any]:
             "synced_long_tool_cache": str(SYNCED_LONG_TOOL_CACHE_ARTIFACT),
             "text_route_live_proof": str(TEXT_ROUTE_ARTIFACT),
             "cb_oneshot_prefill_live_proof": str(CB_ONESHOT_PREFILL_ARTIFACT),
+            "cb_native_thinking_off_live_proof": str(CB_NATIVE_THINKING_OFF_ARTIFACT),
             "tool_source_preflight": str(TOOL_SOURCE_PREFLIGHT_ARTIFACT),
             "mllm_inputs_embeds_interface": str(MLLM_INPUTS_EMBEDS_INTERFACE_ARTIFACT),
         },
@@ -817,6 +918,7 @@ def build_audit(root: Path, model_path: Path, manifest: Path) -> dict[str, Any]:
             "synced_long_tool_cache": synced_evidence,
             "text_route": text_route_evidence,
             "cb_oneshot_prefill": cb_evidence,
+            "cb_native_thinking_off": cb_native_evidence,
             "tool_source_preflight": (
                 tool_source_preflight.get("data")
                 if tool_source_preflight.get("exists")
@@ -853,9 +955,10 @@ def build_audit(root: Path, model_path: Path, manifest: Path) -> dict[str, Any]:
         },
         "release_boundary": (
             "MiMo local artifact integrity is clean, but release remains blocked "
-            "until long-prompt coherence, exact cache prompt-following, decode "
-            "speed, and local source-vs-quant first-divergence proof pass without "
-            "fake parser injection, forced fallback, or cache disabling."
+            "until long-prompt coherence, tool protocol, decode speed, CB system "
+            "prompt working-set pressure, local source-vs-quant first-divergence, "
+            "and media wiring proof pass without fake parser injection, hidden "
+            "thinking-mode rewrites, forced fallback, or cache disabling."
         ),
     }
 

@@ -196,6 +196,61 @@ def test_mimo_current_audit_separates_clean_artifact_from_runtime_blockers(
             ],
         },
     )
+    _write_json(
+        tmp_path / "build/current-mimo-v2-mllm-inputs-embeds-interface-fix-20260606.json",
+        {"status": "pass"},
+    )
+    _write_json(
+        tmp_path
+        / "build/current-mimo-v2-jang2l-cb-cache-after-native-thinking-off-live-20260606.json",
+        {
+            "status": "open",
+            "summary": {
+                "exact_repeat_1": True,
+                "exact_repeat_2": True,
+                "no_think_tags": True,
+                "cache_hit_tokens": 33,
+                "l2_tokens_on_disk": 33,
+                "native_cache": {
+                    "cache_type": "mixed_swa_kv",
+                    "storage_quantization": {"enabled": True, "bits": 8},
+                },
+                "texts": {
+                    "exact_repeat_1": "ACK-CB-742",
+                    "exact_repeat_2": "ACK-CB-742",
+                    "first_token_system_probe": "",
+                },
+                "finish_reasons": {
+                    "exact_repeat_1": "stop",
+                    "exact_repeat_2": "stop",
+                    "first_token_system_probe": None,
+                },
+            },
+            "rows": [
+                {
+                    "name": "exact_repeat_1",
+                    "ok": True,
+                    "elapsed_s": 22.0,
+                    "usage": {"completion_tokens": 8},
+                    "text": "ACK-CB-742",
+                },
+                {
+                    "name": "exact_repeat_2",
+                    "ok": True,
+                    "elapsed_s": 5.0,
+                    "usage": {"completion_tokens": 8},
+                    "text": "ACK-CB-742",
+                },
+                {
+                    "name": "first_token_system_probe",
+                    "ok": False,
+                    "error": "<HTTPError 503: 'Service Unavailable'>",
+                    "text": "",
+                },
+            ],
+            "log_tail": "Metal working-set pressure reject: 98.5% of 107.5GB",
+        },
+    )
 
     result = audit.build_audit(tmp_path, model_path, manifest)
 
@@ -206,9 +261,10 @@ def test_mimo_current_audit_separates_clean_artifact_from_runtime_blockers(
     assert result["component_ok"]["cache_vs_nocache_next_token"] is True
     assert result["component_ok"]["long_prompt_coherence"] is False
     assert result["component_ok"]["tool_protocol"] is True
-    assert result["component_ok"]["exact_cache_prompt_following"] is False
+    assert result["component_ok"]["exact_cache_prompt_following"] is True
     assert result["component_ok"]["decode_speed_target"] is False
-    assert result["component_ok"]["system_prompt_first_token_stop"] is False
+    assert result["component_ok"]["system_prompt_first_token_stop"] is True
+    assert result["component_ok"]["cb_system_prompt_working_set_pressure"] is False
     assert result["component_ok"]["source_vs_quant_first_divergence"] is False
     assert result["component_ok"]["manual_sink_does_not_clear_length_generation"] is True
     assert result["component_ok"]["disable_sink_does_not_clear_length_generation"] is True
@@ -221,13 +277,21 @@ def test_mimo_current_audit_separates_clean_artifact_from_runtime_blockers(
     assert result["diagnostics"]["prompt_shape_first_token"]["failing_top_token"][
         "text"
     ] == "<|im_end|>"
+    assert result["diagnostics"]["cb_native_thinking_off"][
+        "cache_exact_pass"
+    ] is True
+    assert result["diagnostics"]["cb_native_thinking_off"][
+        "prefix_paged_l2_cache_reproved"
+    ] is True
+    assert result["diagnostics"]["cb_native_thinking_off"][
+        "memory_pressure_blocked"
+    ] is True
     assert result["diagnostics"]["manual_sink_sdpa_clears_length_generation"] is False
     assert result["diagnostics"]["disable_sink_clears_length_generation"] is False
     assert "sink-kernel-only" in result["diagnostics"]["sink_boundary"]
     assert result["blockers"] == [
         "mimo_long_prompt_coherence_blocked",
-        "mimo_exact_cache_prompt_following_blocked",
         "mimo_decode_speed_below_release_target",
-        "mimo_system_prompt_first_token_stop_blocked",
+        "mimo_cb_system_prompt_working_set_pressure_blocked",
         "mimo_source_vs_quant_first_divergence_missing_or_failed",
     ]

@@ -378,7 +378,7 @@ MIMO_V2_JANG2L_TOOL_DIALECT_REL = (
     "build/current-mimo-v2-jang2l-tool-dialect-failure-20260606.json"
 )
 MIMO_V2_JANG2L_CURRENT_AUDIT_REL = (
-    "build/current-mimo-v2-jang2l-current-audit-after-mllm-inputs-embeds-fix-20260606.json"
+    "build/current-mimo-v2-jang2l-current-audit-after-native-thinking-off-20260606.json"
 )
 MIMO_V2_JANG2L_METADATA_TRUTH_REL = (
     "build/current-mimo-v25-jang2l-local-metadata-truth-patch-20260606.json"
@@ -4982,6 +4982,19 @@ def _mimo_v2_jang2l_quality_detail(root: Path) -> tuple[bool, dict[str, Any]]:
     audit_long_prompt_open = current_audit_component_ok.get("long_prompt_coherence") is False
     audit_tool_protocol_open = current_audit_component_ok.get("tool_protocol") is False
     audit_decode_speed_open = current_audit_component_ok.get("decode_speed_target") is False
+    audit_exact_cache_pass = (
+        current_audit_component_ok.get("exact_cache_prompt_following") is True
+    )
+    audit_prefix_l2_pass = (
+        current_audit_component_ok.get("prefix_paged_l2_cache_reproved") is True
+    )
+    audit_working_set_open = (
+        current_audit_component_ok.get("cb_system_prompt_working_set_pressure") is False
+    )
+    audit_source_vs_quant_pass = (
+        current_audit_component_ok.get("source_vs_quant_first_divergence") is True
+    )
+    audit_media_wired = current_audit_component_ok.get("mimo_media_wired") is True
     if audit_long_prompt_open:
         prompt_length_coherence_blocked = True
     if audit_tool_protocol_open:
@@ -5063,7 +5076,12 @@ def _mimo_v2_jang2l_quality_detail(root: Path) -> tuple[bool, dict[str, Any]]:
         and switchglu_parity_pass
         and not prompt_length_coherence_blocked
         and not tool_protocol_blocked
+        and audit_exact_cache_pass
+        and audit_prefix_l2_pass
         and not audit_decode_speed_open
+        and not audit_working_set_open
+        and audit_source_vs_quant_pass
+        and audit_media_wired
     )
     return ok, {
         "artifacts": artifacts,
@@ -5080,7 +5098,12 @@ def _mimo_v2_jang2l_quality_detail(root: Path) -> tuple[bool, dict[str, Any]]:
         "prompt_length_coherence_blocked": prompt_length_coherence_blocked,
         "prompt_length_corrupt_cases": corrupt_length_cases,
         "tool_protocol_blocked": tool_protocol_blocked,
+        "exact_cache_prompt_following_passed": audit_exact_cache_pass,
+        "prefix_paged_l2_cache_reproved": audit_prefix_l2_pass,
         "decode_speed_blocked": audit_decode_speed_open,
+        "cb_system_prompt_working_set_pressure_blocked": audit_working_set_open,
+        "source_vs_quant_first_divergence_passed": audit_source_vs_quant_pass,
+        "mimo_media_wired": audit_media_wired,
         "conservative_tool_failures": conservative_tool_failures,
         "nomedia_tool_cache_status": nomedia_tool_cache.get("status"),
         "nomedia_exact_cache_pass": nomedia_exact_cache_pass,
@@ -6964,7 +6987,7 @@ def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
         caveat=(
             None
             if mimo_quality_ok
-            else "MiMo V2.5 JANG_2L has current structural, narrow text/cache, selected-expert parity, and source XML tool-call evidence, but current local artifacts still show long-prompt corruption, exact-cache prompt-following failure, and decode speed below target. Do not release-clear MiMo from short smokes."
+            else "MiMo V2.5 JANG_2L has current structural, narrow text/cache, selected-expert parity, exact CB cache/L2 proof, and native thinking-off prompt proof, but current local artifacts still show long-prompt/tool failures, decode speed below target, CB working-set pressure, missing source-vs-quant classification, and unwired VL/audio/video. Do not release-clear MiMo from short smokes."
         ),
         details=mimo_quality_details,
     )
