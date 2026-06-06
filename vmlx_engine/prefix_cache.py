@@ -1484,6 +1484,25 @@ class BlockAwarePrefixCache:
                 self._misses += 1
                 return None, tokens
 
+            if self._dsv4_l2_chain_has_disk_backed_terminal_state(cached_blocks):
+                _reject_table = BlockTable(
+                    request_id=request_id,
+                    block_ids=[cb.block_id for cb in cached_blocks],
+                    num_tokens=sum(getattr(cb, "token_count", 0) for cb in cached_blocks),
+                )
+                self.paged_cache.release_request_refs(_reject_table)
+                logger.warning(
+                    "Ignoring DSV4 disk-backed terminal paged hit for %s: "
+                    "current restart-L2 live proof showed Metal timeout after "
+                    "reconstructing DeepseekV4Cache terminal state from block "
+                    "disk. Same-process resident DSV4 paged hits remain "
+                    "enabled; disk-backed DSV4 terminal restore is fail-closed "
+                    "until restart reconstruction is fixed.",
+                    request_id,
+                )
+                self._misses += 1
+                return None, tokens
+
             if self._zaya_l2_chain_missing_terminal_state(cached_blocks, _disk_store):
                 _reject_table = BlockTable(
                     request_id=request_id,
@@ -1532,6 +1551,15 @@ class BlockAwarePrefixCache:
                     "Ignoring DSV4 prefix-index hit for %s: matched blocks "
                     "contain DeepseekV4Cache pending markers but no terminal "
                     "deepseek_v4 composite state.",
+                    request_id,
+                )
+                self._misses += 1
+                return None, tokens
+            if self._dsv4_l2_chain_has_disk_backed_terminal_state(matched_blocks):
+                logger.warning(
+                    "Ignoring DSV4 disk-backed terminal prefix-index hit for "
+                    "%s: restart-L2 DeepseekV4Cache terminal restore is not "
+                    "yet safe for decode.",
                     request_id,
                 )
                 self._misses += 1
@@ -1613,6 +1641,29 @@ class BlockAwarePrefixCache:
                 elif tag == "deepseek_v4":
                     saw_terminal = True
         return saw_pending and not saw_terminal
+
+    @staticmethod
+    def _dsv4_l2_chain_has_disk_backed_terminal_state(
+        cached_blocks: List[Any],
+    ) -> bool:
+        """True when a DSV4 terminal composite block was restored from L2 disk.
+
+        Current live restart proof shows that exact DSV4 terminal replay after
+        restart can reconstruct the terminal ``DeepseekV4Cache`` state and then
+        crash inside Metal during decode. Until the restart reconstruction path
+        is fixed, fail closed for disk-backed DSV4 terminal blocks. This leaves
+        same-process resident DSV4 paged hits active and avoids pretending that
+        a disabled or hidden forced mode is a cache pass.
+        """
+        for block in cached_blocks or []:
+            if not getattr(block, "cache_data_from_disk", False):
+                continue
+            for entry in getattr(block, "cache_data", None) or []:
+                if not isinstance(entry, (tuple, list)) or not entry:
+                    continue
+                if entry[0] == "deepseek_v4":
+                    return True
+        return False
 
     @staticmethod
     def _zaya_l2_chain_missing_terminal_state(

@@ -60,6 +60,19 @@ def test_packaged_integrity_accepts_release_gate_objective_digest_only_failure()
     assert runner.release_gate_failure_is_expected(step)
 
 
+def test_packaged_integrity_accepts_release_gate_known_objectives_plus_manifest_failure():
+    step = _result(
+        "release_gate_skip_app",
+        1,
+        [
+            _expected_open_digest_line(),
+            _expected_release_ready_line(),
+        ],
+    )
+
+    assert runner.release_gate_failure_is_expected(step)
+
+
 def test_packaged_integrity_rejects_release_ready_manifest_crash_as_expected_failure():
     step = _result(
         "release_gate_skip_app",

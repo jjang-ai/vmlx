@@ -219,6 +219,9 @@ QWEN_NATIVE_MTP_NORM_SHIFT_CLEARANCE_REL = (
 QWEN_NATIVE_MTP_AB_REL = "build/current-native-mtp-speed-ab-qwen27-jang4m-mtp-20260523/result.json"
 DSV4_DEFAULT_CACHE_TOOL_LOOP_REL = "build/current-dsv4-default-cache-tool-loop/result.json"
 DSV4_RESPONSES_CACHE_GATE_REL = "build/current-dsv4-responses-cache-gate-20260606.json"
+DSV4_RESPONSES_RESTART_L2_GATE_REL = (
+    "build/current-dsv4-responses-restart-l2-gate-20260606.json"
+)
 DSV4_RESPONSES_ONE_TOOL_STOP_REL = (
     "build/current-dsv4-responses-one-tool-stop-20260606.json"
 )
@@ -4939,6 +4942,9 @@ def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
     )
     default_cache_tool_loop = _load(root, DSV4_DEFAULT_CACHE_TOOL_LOOP_REL)
     dsv4_responses_cache_gate = _load(root, DSV4_RESPONSES_CACHE_GATE_REL)
+    dsv4_responses_restart_l2_gate = _load(
+        root, DSV4_RESPONSES_RESTART_L2_GATE_REL
+    )
     dsv4_responses_one_tool_stop = _load(root, DSV4_RESPONSES_ONE_TOOL_STOP_REL)
     default_cache_tool_loop_thinking_on = _load(
         root, DSV4_DEFAULT_CACHE_TOOL_LOOP_THINKING_ON_REL
@@ -5775,6 +5781,70 @@ def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
         and isinstance(responses_no_cache_wall, (int, float))
         and responses_cached_wall < responses_no_cache_wall
     )
+    restart_l2_checks = (
+        dsv4_responses_restart_l2_gate.get("checks")
+        if isinstance(dsv4_responses_restart_l2_gate.get("checks"), dict)
+        else {}
+    )
+    restart_l2_before = (
+        dsv4_responses_restart_l2_gate.get("before_restart")
+        if isinstance(dsv4_responses_restart_l2_gate.get("before_restart"), dict)
+        else {}
+    )
+    restart_l2_after = (
+        dsv4_responses_restart_l2_gate.get("after_restart")
+        if isinstance(dsv4_responses_restart_l2_gate.get("after_restart"), dict)
+        else {}
+    )
+    restart_l2_before_block = (
+        (restart_l2_before.get("cache_stats") or {}).get("block_disk_cache")
+        if isinstance(restart_l2_before.get("cache_stats"), dict)
+        else {}
+    )
+    if not isinstance(restart_l2_before_block, dict):
+        restart_l2_before_block = {}
+    restart_l2_after_block = (
+        (restart_l2_after.get("cache_stats") or {}).get("block_disk_cache")
+        if isinstance(restart_l2_after.get("cache_stats"), dict)
+        else {}
+    )
+    if not isinstance(restart_l2_after_block, dict):
+        restart_l2_after_block = {}
+    restart_l2_after_response = (
+        restart_l2_after.get("response")
+        if isinstance(restart_l2_after.get("response"), dict)
+        else {}
+    )
+    restart_l2_after_usage_details = (
+        (restart_l2_after_response.get("usage") or {}).get("input_tokens_details")
+        or (restart_l2_after_response.get("usage") or {}).get("prompt_tokens_details")
+        or {}
+    )
+    if not isinstance(restart_l2_after_usage_details, dict):
+        restart_l2_after_usage_details = {}
+    restart_l2_cached_tokens = int(
+        restart_l2_after_usage_details.get("cached_tokens") or 0
+    )
+    restart_l2_cache_detail = str(
+        restart_l2_after_usage_details.get("cache_detail") or ""
+    )
+    current_restart_l2_ok = (
+        dsv4_responses_restart_l2_gate.get("status") == "pass"
+        and restart_l2_checks.get("native_cache") is True
+        and restart_l2_checks.get("native_prefix") is True
+        and restart_l2_checks.get("native_paged") is True
+        and restart_l2_checks.get("native_l2") is True
+        and restart_l2_checks.get("generic_tq_kv_off") is True
+        and restart_l2_checks.get("disk_write_before_restart") is True
+        and restart_l2_checks.get("restart_l2_disk_hit") is True
+        and restart_l2_checks.get("restart_dsv4_cache_hit") is True
+        and restart_l2_checks.get("same_block_disk_cache_dir") is True
+        and restart_l2_checks.get("fresh_run_nonce") is True
+        and restart_l2_cached_tokens > 0
+        and "dsv4" in restart_l2_cache_detail
+        and int(restart_l2_before_block.get("disk_writes") or 0) > 0
+        and int(restart_l2_after_block.get("disk_hits") or 0) > 0
+    )
     _add(
         requirements,
         "DSV4 same-process cache hit improves latency/TTFT and records paged+dsv4 hit",
@@ -5823,14 +5893,55 @@ def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
         requirements,
         "DSV4 block disk L2 stores and hits after restart",
         _status(
-            cache_checks.get("blockDiskWrite")
+            (
+                cache_checks.get("blockDiskWrite")
+                and cache_checks.get("restartL2DiskHit")
+                and cache_checks.get("restartDsv4CacheHit")
+            )
+            or current_restart_l2_ok
+        ),
+        (
+            ["build/current-dsv4-cache-proof-digest-20260521.json"]
+            if cache_checks.get("blockDiskWrite")
             and cache_checks.get("restartL2DiskHit")
             and cache_checks.get("restartDsv4CacheHit")
+            else [DSV4_RESPONSES_RESTART_L2_GATE_REL]
         ),
-        ["build/current-dsv4-cache-proof-digest-20260521.json"],
         details={
             "after_hot_block_disk": (cache.get("stats_after_hot") or {}).get("block_disk_cache"),
             "after_restart_block_disk": (cache.get("stats_after_restart") or {}).get("block_disk_cache"),
+            "current_restart_l2_gate_status": (
+                dsv4_responses_restart_l2_gate.get("status")
+            ),
+            "current_restart_l2_checks": {
+                key: restart_l2_checks.get(key)
+                for key in (
+                    "native_cache",
+                    "native_prefix",
+                    "native_paged",
+                    "native_l2",
+                    "generic_tq_kv_off",
+                    "disk_write_before_restart",
+                    "restart_l2_disk_hit",
+                    "restart_dsv4_cache_hit",
+                    "same_block_disk_cache_dir",
+                    "fresh_run_nonce",
+                    "server_restarted",
+                    "store_turn_fresh",
+                )
+            },
+            "current_restart_cache_dir": (
+                dsv4_responses_restart_l2_gate.get("cache_dir")
+            ),
+            "current_restart_before_block_disk": restart_l2_before_block,
+            "current_restart_after_block_disk": restart_l2_after_block,
+            "current_restart_cached_tokens": restart_l2_cached_tokens,
+            "current_restart_cache_detail": restart_l2_cache_detail,
+            "current_restart_l2_disk_hits": restart_l2_after_block.get("disk_hits"),
+            "current_restart_l2_disk_writes_before": restart_l2_before_block.get(
+                "disk_writes"
+            ),
+            "current_restart_l2_ok": current_restart_l2_ok,
         },
     )
     _add(

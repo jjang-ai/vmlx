@@ -642,6 +642,7 @@ def release_gate_failure_is_expected(step: dict[str, Any]) -> bool:
             if item not in SUITE_DEFERRED_RELEASE_OPEN_REQUIREMENTS
         )
     )
+    expected_release_ready_prefix = "[FAIL] release-ready manifest: exit=1;"
     forbidden = (
         "bundled python import gate: FAIL",
         "[FAIL] bundled python import gate:",
@@ -658,11 +659,10 @@ def release_gate_failure_is_expected(step: dict[str, Any]) -> bool:
         "FileNotFoundError:",
         "No such file or directory",
     )
-    return (
-        len(fail_lines) == 1
-        and fail_lines[0] == expected_digest
-        and not any(item in text for item in forbidden)
-    )
+    expected_fail_lines = [expected_digest]
+    if len(fail_lines) == 2 and fail_lines[1].startswith(expected_release_ready_prefix):
+        expected_fail_lines.append(fail_lines[1])
+    return fail_lines == expected_fail_lines and not any(item in text for item in forbidden)
 
 
 def dry_release_gate_used_current_objective_digest(step: dict[str, Any]) -> bool:

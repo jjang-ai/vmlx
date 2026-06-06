@@ -5616,6 +5616,75 @@ def test_objective_proof_digest_uses_current_responses_cache_gate_for_same_proce
     assert row["details"]["current_responses_no_cache_wall_sec"] == 22.17
 
 
+def test_objective_proof_digest_uses_current_responses_restart_l2_gate(
+    tmp_path,
+):
+    from tests.cross_matrix.summarize_objective_proof import build_digest
+
+    _write_passing_base_artifacts(tmp_path)
+    (tmp_path / "build/current-dsv4-cache-proof-digest-20260521.json").unlink()
+    _write_json(
+        tmp_path,
+        "build/current-dsv4-responses-restart-l2-gate-20260606.json",
+        {
+            "status": "pass",
+            "checks": {
+                "native_cache": True,
+                "native_prefix": True,
+                "native_paged": True,
+                "native_l2": True,
+                "generic_tq_kv_off": True,
+                "disk_write_before_restart": True,
+                "restart_l2_disk_hit": True,
+                "restart_dsv4_cache_hit": True,
+                "same_block_disk_cache_dir": True,
+                "fresh_run_nonce": True,
+            },
+            "cache_dir": "build/dsv4-restart-l2-cache/proof",
+            "before_restart": {
+                "cache_stats": {
+                    "block_disk_cache": {
+                        "disk_writes": 7,
+                        "disk_hits": 0,
+                        "blocks_on_disk": 7,
+                    }
+                }
+            },
+            "after_restart": {
+                "response": {
+                    "usage": {
+                        "input_tokens_details": {
+                            "cached_tokens": 2048,
+                            "cache_detail": "paged+dsv4",
+                        }
+                    },
+                    "wall_seconds": 1.25,
+                },
+                "cache_stats": {
+                    "block_disk_cache": {
+                        "disk_writes": 0,
+                        "disk_hits": 6,
+                        "blocks_on_disk": 7,
+                    }
+                },
+            },
+        },
+    )
+
+    digest = build_digest(tmp_path)
+    rows = {item["requirement"]: item for item in digest["requirements"]}
+
+    row = rows["DSV4 block disk L2 stores and hits after restart"]
+    assert row["status"] == "pass"
+    assert row["evidence"] == [
+        "build/current-dsv4-responses-restart-l2-gate-20260606.json"
+    ]
+    assert row["details"]["current_restart_l2_gate_status"] == "pass"
+    assert row["details"]["current_restart_cached_tokens"] == 2048
+    assert row["details"]["current_restart_cache_detail"] == "paged+dsv4"
+    assert row["details"]["current_restart_l2_disk_hits"] == 6
+
+
 def test_objective_proof_digest_uses_current_one_tool_stop_gate(
     tmp_path,
 ):

@@ -91,6 +91,7 @@ CURRENT_SUITE_SOURCE_HASH_FILES = (
     "tests/cross_matrix/run_cache_architecture_contract.py",
     "tests/cross_matrix/run_current_regression_suite.py",
     "tests/cross_matrix/run_dsv4_default_cache_tool_loop_gate.py",
+    "tests/cross_matrix/run_dsv4_responses_restart_l2_gate.py",
     "tests/cross_matrix/run_dsv4_responses_one_tool_stop_gate.py",
     "tests/cross_matrix/run_dsv4_route_mode_code_exactness.py",
     "tests/cross_matrix/run_generation_defaults_contract.py",

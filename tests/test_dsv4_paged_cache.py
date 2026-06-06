@@ -742,6 +742,34 @@ def test_dsv4_disk_only_pending_chain_without_terminal_is_a_miss():
     assert remaining == tokens + [15]
 
 
+def test_dsv4_disk_backed_terminal_chain_is_a_miss_until_restart_l2_is_safe():
+    from vmlx_engine.paged_cache import PagedCacheManager, compute_block_hash
+    from vmlx_engine.prefix_cache import BlockAwarePrefixCache
+
+    paged = PagedCacheManager(block_size=4, max_blocks=8)
+    pc = BlockAwarePrefixCache(model=None, paged_cache_manager=paged)
+
+    tokens = [11, 12, 13, 14]
+    block = paged.allocate_block()
+    block.token_count = len(tokens)
+    block.cache_data = [(
+        "deepseek_v4",
+        ("local", "compressor", "indexer"),
+        ("0", "128", "7", "7"),
+        "DeepseekV4Cache",
+        {"compress_ratio": 4, "sliding_window": 128},
+    )]
+    block.cache_data_from_disk = True
+    block_hash = compute_block_hash(None, tokens)
+    block.block_hash = block_hash
+    paged.cached_block_hash_to_block.insert(block_hash, block)
+
+    table, remaining = pc.fetch_cache("dsv4-disk-terminal", tokens + [15])
+
+    assert table is None
+    assert remaining == tokens + [15]
+
+
 def test_dsv4_paged_reconstruct_returns_deepseek_cache_not_ssm_partial():
     from jang_tools.dsv4.mlx_model import DeepseekV4Cache
     from vmlx_engine.paged_cache import PagedCacheManager

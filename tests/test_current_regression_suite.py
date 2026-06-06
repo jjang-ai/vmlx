@@ -98,6 +98,15 @@ def test_current_regression_suite_does_not_keep_proven_dsv4_same_process_cache_h
     )
 
 
+def test_current_regression_suite_keeps_unproven_dsv4_restart_l2_open():
+    from tests.cross_matrix import run_current_regression_suite as suite
+
+    assert (
+        "DSV4 block disk L2 stores and hits after restart"
+        in suite.EXPECTED_OPEN_REQUIREMENTS
+    )
+
+
 def test_current_regression_suite_does_not_keep_proven_dsv4_one_tool_stop_open():
     from tests.cross_matrix import run_current_regression_suite as suite
 
@@ -219,6 +228,7 @@ def test_current_regression_suite_hashes_dsv4_generation_boundary_sources():
         "vmlx_engine/utils/dsv4_batch_generator.py",
         "tests/cross_matrix/run_dsv4_route_mode_code_exactness.py",
         "tests/cross_matrix/run_dsv4_default_cache_tool_loop_gate.py",
+        "tests/cross_matrix/run_dsv4_responses_restart_l2_gate.py",
         "tests/cross_matrix/run_gemma4_12b_speed_gate.py",
         "tests/test_dsv4_route_mode_code_exactness.py",
         "tests/test_dsv4_default_cache_tool_loop_gate.py",
