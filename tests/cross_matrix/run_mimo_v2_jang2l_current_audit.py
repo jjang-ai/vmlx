@@ -39,6 +39,12 @@ TOOL_FAILURE_ARTIFACT = Path(
 CACHE_VS_NOCACHE_ARTIFACT = Path(
     "build/current-mimo-v2-jang2l-cache-vs-nocache-next-token-20260606.json"
 )
+SINK_MODE_LENGTH_DIAGNOSTIC_ARTIFACT = Path(
+    "build/current-mimo-v2-jang2l-sink-mode-length-diagnostic-20260606.json"
+)
+DISABLE_SINK_LENGTH_DIAGNOSTIC_ARTIFACT = Path(
+    "build/current-mimo-v2-jang2l-disable-sink-length-diagnostic-20260606.json"
+)
 CLEANUP_LOG = Path("build/current-mimo-stale-local-cleanup-20260606.txt")
 
 STALE_TARGETS = [
@@ -180,6 +186,16 @@ def _tool_protocol_blocked(data: dict[str, Any]) -> bool:
     )
 
 
+def _all_sink_diagnostic_cases_fail(data: dict[str, Any]) -> bool:
+    cases = data.get("cases")
+    if not isinstance(cases, list) or not cases:
+        return False
+    return all(
+        isinstance(case, dict) and case.get("passes_length_ok") is False
+        for case in cases
+    )
+
+
 def build_audit(root: Path, model_path: Path, manifest: Path) -> dict[str, Any]:
     model_parent = model_path.parent
     manifest_check = _verify_manifest(model_parent, manifest)
@@ -197,6 +213,8 @@ def build_audit(root: Path, model_path: Path, manifest: Path) -> dict[str, Any]:
     length_sweep = _artifact(root / LENGTH_SWEEP_ARTIFACT)
     tool_failure = _artifact(root / TOOL_FAILURE_ARTIFACT)
     cache_vs_nocache = _artifact(root / CACHE_VS_NOCACHE_ARTIFACT)
+    sink_mode_length = _artifact(root / SINK_MODE_LENGTH_DIAGNOSTIC_ARTIFACT)
+    disable_sink_length = _artifact(root / DISABLE_SINK_LENGTH_DIAGNOSTIC_ARTIFACT)
 
     structural_pass = structural.get("status") == "pass"
     text_cache_pass = text_cache.get("exists") and _text_cache_narrow_pass(text_cache["data"])
@@ -225,6 +243,12 @@ def build_audit(root: Path, model_path: Path, manifest: Path) -> dict[str, Any]:
     )
     tool_blocked = tool_failure.get("exists") and _tool_protocol_blocked(
         tool_failure["data"]
+    )
+    sink_mode_fails = sink_mode_length.get("exists") and _all_sink_diagnostic_cases_fail(
+        sink_mode_length["data"]
+    )
+    disable_sink_fails = disable_sink_length.get("exists") and _all_sink_diagnostic_cases_fail(
+        disable_sink_length["data"]
     )
 
     stale_present = [item for item in stale_state if item["exists"]]
@@ -277,6 +301,8 @@ def build_audit(root: Path, model_path: Path, manifest: Path) -> dict[str, Any]:
             "cache_vs_nocache_next_token": bool(cache_match),
             "long_prompt_coherence": not bool(length_blocked),
             "tool_protocol": not bool(tool_blocked),
+            "manual_sink_does_not_clear_length_generation": bool(sink_mode_fails),
+            "disable_sink_does_not_clear_length_generation": bool(disable_sink_fails),
         },
         "blockers": blockers,
         "artifacts": {
@@ -286,6 +312,18 @@ def build_audit(root: Path, model_path: Path, manifest: Path) -> dict[str, Any]:
             "length_sweep": str(LENGTH_SWEEP_ARTIFACT),
             "tool_failure": str(TOOL_FAILURE_ARTIFACT),
             "cache_vs_nocache": str(CACHE_VS_NOCACHE_ARTIFACT),
+            "sink_mode_length_diagnostic": str(SINK_MODE_LENGTH_DIAGNOSTIC_ARTIFACT),
+            "disable_sink_length_diagnostic": str(DISABLE_SINK_LENGTH_DIAGNOSTIC_ARTIFACT),
+        },
+        "diagnostics": {
+            "cache_vs_nocache_next_token_match": bool(cache_match),
+            "manual_sink_sdpa_clears_length_generation": False if sink_mode_fails else None,
+            "disable_sink_clears_length_generation": False if disable_sink_fails else None,
+            "sink_boundary": (
+                "Manual sink SDPA and disabling SWA sink do not clear the current "
+                "MiMo length-generation failures; do not classify the blocker as "
+                "an MLX sink-kernel-only issue."
+            ),
         },
         "release_boundary": (
             "MiMo local artifact integrity is clean, but release remains blocked "

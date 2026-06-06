@@ -69,6 +69,24 @@ def test_mimo_current_audit_separates_clean_artifact_from_runtime_blockers(tmp_p
         tmp_path / "build/current-mimo-v2-jang2l-tool-dialect-failure-20260606.json",
         {"status": "fail", "runtime_observations": [{"result": "fail_incomplete_marker"}]},
     )
+    _write_json(
+        tmp_path / "build/current-mimo-v2-jang2l-sink-mode-length-diagnostic-20260606.json",
+        {
+            "status": "fail",
+            "cases": [
+                {"manual_sink": False, "passes_length_ok": False},
+                {"manual_sink": True, "passes_length_ok": False},
+            ],
+        },
+    )
+    _write_json(
+        tmp_path
+        / "build/current-mimo-v2-jang2l-disable-sink-length-diagnostic-20260606.json",
+        {
+            "status": "fail",
+            "cases": [{"passes_length_ok": False, "contains_corrupt_repetition": True}],
+        },
+    )
 
     result = build_audit(tmp_path, model_path, manifest)
 
@@ -79,6 +97,11 @@ def test_mimo_current_audit_separates_clean_artifact_from_runtime_blockers(tmp_p
     assert result["component_ok"]["cache_vs_nocache_next_token"] is True
     assert result["component_ok"]["long_prompt_coherence"] is False
     assert result["component_ok"]["tool_protocol"] is False
+    assert result["component_ok"]["manual_sink_does_not_clear_length_generation"] is True
+    assert result["component_ok"]["disable_sink_does_not_clear_length_generation"] is True
+    assert result["diagnostics"]["manual_sink_sdpa_clears_length_generation"] is False
+    assert result["diagnostics"]["disable_sink_clears_length_generation"] is False
+    assert "sink-kernel-only" in result["diagnostics"]["sink_boundary"]
     assert result["blockers"] == [
         "mimo_long_prompt_coherence_blocked",
         "mimo_tool_protocol_blocked",
