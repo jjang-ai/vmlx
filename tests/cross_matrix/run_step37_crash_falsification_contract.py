@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 
-DEFAULT_OUT = Path("build/current-step37-crash-falsification-contract-20260604.json")
+DEFAULT_OUT = Path("build/current-step37-crash-falsification-contract-after-gemma4-vl-refresh-20260606.json")
 BUNDLED_SMOKE_SUMMARY = Path(
     "build/current-step37-crash-falsification-bundled-20260604/summary.json"
 )

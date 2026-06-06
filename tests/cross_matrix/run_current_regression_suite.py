@@ -608,7 +608,7 @@ CURRENT_SUITE_COMMANDS: dict[str, list[str]] = {
         sys.executable,
         "tests/cross_matrix/run_step37_crash_falsification_contract.py",
         "--out",
-        "build/current-step37-crash-falsification-contract-20260604.json",
+        "build/current-step37-crash-falsification-contract-after-gemma4-vl-refresh-20260606.json",
     ],
     "packaged_integrity_contracts": [
         sys.executable,

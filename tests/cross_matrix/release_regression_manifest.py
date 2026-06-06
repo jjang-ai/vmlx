@@ -426,7 +426,7 @@ CURRENT_REAL_UI_DSV4_MEMORY_PREFLIGHT_ARTIFACT = (
     "build/current-real-ui-dsv4-memory-preflight-after-lfm-step-manifest-fix-20260604.json"
 )
 CURRENT_STEP37_VLM_RUNTIME_AUDIT_ARTIFACT = (
-    "build/current-step37-vlm-runtime-audit-20260530-source-runtime-route.json"
+    "build/current-step37-vlm-runtime-audit-after-gemma4-vl-refresh-20260606.json"
 )
 DEFERRED_RELEASE_FAMILIES = {
     "dsv4": "deferred_per_20260602_emergency_release_scope",
