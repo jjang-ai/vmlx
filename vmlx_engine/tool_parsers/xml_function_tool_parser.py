@@ -59,12 +59,73 @@ class XMLFunctionToolParser(ToolParser):
         except (json.JSONDecodeError, ValueError):
             return value
 
+    @staticmethod
+    def _request_tool_names(request: dict[str, Any] | None) -> set[str]:
+        if not isinstance(request, dict):
+            return set()
+        tools = request.get("tools")
+        if not isinstance(tools, list):
+            return set()
+        names: set[str] = set()
+        for tool in tools:
+            if not isinstance(tool, dict):
+                continue
+            fn = tool.get("function")
+            if isinstance(fn, dict) and isinstance(fn.get("name"), str):
+                names.add(fn["name"])
+        return names
+
+    @classmethod
+    def _parse_functions(
+        cls, text: str, *, allowed_names: set[str] | None = None
+    ) -> list[dict[str, Any]]:
+        tool_calls: list[dict[str, Any]] = []
+        for func_name, body in cls.FUNCTION_PATTERN.findall(text):
+            name = func_name.strip()
+            if allowed_names is not None and name not in allowed_names:
+                continue
+            arguments: dict[str, Any] = {}
+            for param_name, param_value in cls.PARAM_PATTERN.findall(body):
+                arguments[param_name.strip()] = cls._coerce_value(param_value)
+            tool_calls.append(
+                {
+                    "id": generate_tool_id(),
+                    "name": name,
+                    "arguments": json.dumps(arguments, ensure_ascii=False),
+                }
+            )
+        return tool_calls
+
+    @classmethod
+    def _strip_repaired_function_blocks(cls, text: str) -> str:
+        cleaned = cls.FUNCTION_PATTERN.sub("", text)
+        cleaned = cleaned.replace("</tool_call>", "")
+        cleaned = re.sub(r"```(?:xml|XML)?", "", cleaned)
+        cleaned = cleaned.replace("```", "")
+        return cleaned.strip()
+
     def extract_tool_calls(
         self,
         model_output: str,
         request: dict[str, Any] | None = None,
     ) -> ExtractedToolCallInformation:
         if "<tool_call>" not in model_output:
+            allowed_names = self._request_tool_names(request)
+            if (
+                allowed_names
+                and "</tool_call>" in model_output
+                and "<function=" in model_output
+            ):
+                repaired_calls = self._parse_functions(
+                    model_output, allowed_names=allowed_names
+                )
+                if repaired_calls:
+                    cleaned_text = self._strip_repaired_function_blocks(model_output)
+                    return ExtractedToolCallInformation(
+                        tools_called=True,
+                        tool_calls=repaired_calls,
+                        content=cleaned_text if cleaned_text else None,
+                    )
             return ExtractedToolCallInformation(
                 tools_called=False,
                 tool_calls=[],
@@ -73,17 +134,7 @@ class XMLFunctionToolParser(ToolParser):
 
         tool_calls: list[dict[str, Any]] = []
         for block in self.TOOL_CALL_PATTERN.findall(model_output):
-            for func_name, body in self.FUNCTION_PATTERN.findall(block):
-                arguments: dict[str, Any] = {}
-                for param_name, param_value in self.PARAM_PATTERN.findall(body):
-                    arguments[param_name.strip()] = self._coerce_value(param_value)
-                tool_calls.append(
-                    {
-                        "id": generate_tool_id(),
-                        "name": func_name.strip(),
-                        "arguments": json.dumps(arguments, ensure_ascii=False),
-                    }
-                )
+            tool_calls.extend(self._parse_functions(block))
 
         cleaned_text = self.TOOL_CALL_PATTERN.sub("", model_output).strip()
         if tool_calls:

@@ -113,3 +113,87 @@ Done.
         for alias in ("xml_function", "mimo_xml_function"):
             cls = ToolParserManager.get_tool_parser(alias)
             assert cls is XMLFunctionToolParser
+
+    def test_repairs_missing_opening_tool_call_when_schema_allows_function(self, parser):
+        text = """```xml
+<function=get_weather>
+<parameter=city>San Francisco</parameter>
+</function>
+</tool_call>
+```"""
+
+        out = parser.extract_tool_calls(
+            text,
+            request={
+                "tools": [
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": "get_weather",
+                            "parameters": {
+                                "type": "object",
+                                "properties": {"city": {"type": "string"}},
+                                "required": ["city"],
+                            },
+                        },
+                    }
+                ]
+            },
+        )
+
+        assert out.tools_called is True
+        assert out.tool_calls[0]["name"] == "get_weather"
+        assert json.loads(out.tool_calls[0]["arguments"]) == {
+            "city": "San Francisco"
+        }
+        assert out.content is None
+
+    def test_missing_opening_tool_call_repair_rejects_unknown_function(self, parser):
+        text = """
+<function=delete_everything>
+<parameter=path>/</parameter>
+</function>
+</tool_call>
+"""
+
+        out = parser.extract_tool_calls(
+            text,
+            request={
+                "tools": [
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": "list_directory",
+                            "parameters": {
+                                "type": "object",
+                                "properties": {"path": {"type": "string"}},
+                            },
+                        },
+                    }
+                ]
+            },
+        )
+
+        assert out.tools_called is False
+        assert out.tool_calls == []
+        assert out.content == text
+
+    def test_bare_incomplete_tool_call_still_fails_closed(self, parser):
+        out = parser.extract_tool_calls(
+            "<tool_call>",
+            request={
+                "tools": [
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": "get_weather",
+                            "parameters": {"type": "object"},
+                        },
+                    }
+                ]
+            },
+        )
+
+        assert out.tools_called is False
+        assert out.tool_calls == []
+        assert out.content == "<tool_call>"
