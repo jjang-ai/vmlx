@@ -157,7 +157,7 @@ def test_public_app_issue_audit_uses_current_manifest_artifact():
         manifest.CURRENT_ISSUE179_MINIMAX_K_ROOT_CAUSE_AUDIT_ARTIFACT
     )
     assert str(gate.ISSUE179_RESPONSES_CANCEL_PROOF) == (
-        "build/current-issue179-minimax-k-responses-cancel-probe-20260602-local-ready-live.json"
+        "build/current-issue179-minimax-k-responses-cancel-probe-20260606-live-refresh.json"
     )
     assert str(gate.ISSUE179_RESPONSES_CANCEL_PREFLIGHT) == (
         manifest.CURRENT_ISSUE179_MINIMAX_K_LIVE_PROBE_MEMORY_PREFLIGHT_ARTIFACT

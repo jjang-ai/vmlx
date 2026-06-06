@@ -19,7 +19,7 @@ from typing import Any
 
 
 DEFAULT_OUT = Path(
-    "build/current-public-app-issue-audit-gemma4-release-boundary-after-install-20260604.json"
+    "build/current-public-app-issue-audit-after-public-v1556-scan-20260606.json"
 )
 INSTALLED_APP_ASAR = Path("/Applications/vMLX.app/Contents/Resources/app.asar")
 INSTALLED_APP = Path("/Applications/vMLX.app")
@@ -32,13 +32,13 @@ TOOL_CALL_CONTRACT = Path(
     "build/current-tool-call-contract-20260528-tool-parser-loop-matrix.json"
 )
 INSTALLED_APP_RUNTIME_PARITY = Path(
-    "build/current-installed-app-runtime-parity-audit-gemma4-release-boundary-after-install-20260604.json"
+    "build/current-installed-app-runtime-parity-audit-after-installed-app-rebuild-20260606.json"
 )
 REASONING_TEMPLATE_CONTRACT = Path(
     "build/current-reasoning-template-contract-20260526-settings-audit.json"
 )
 PACKAGED_INTEGRITY_CONTRACT = Path(
-    "build/current-packaged-integrity-contract-after-unsupported-media-staged-app-20260606.json"
+    "build/current-packaged-integrity-contract-after-installed-app-rebuild-20260606.json"
 )
 GEMMA4_INSTALLED_SPEED_ARTIFACTS = (
     Path(

@@ -15,10 +15,10 @@ from typing import Any
 
 
 DEFAULT_OUT = Path(
-    "build/current-issue175-179-release-boundary-audit-20260531-post-install-sync.json"
+    "build/current-issue175-179-release-boundary-audit-after-public-v1556-scan-20260606.json"
 )
 INSTALLED_APP_RUNTIME_PARITY_AUDIT_ARTIFACT = Path(
-    "build/current-installed-app-runtime-parity-audit-gemma4-release-boundary-after-install-20260604.json"
+    "build/current-installed-app-runtime-parity-audit-after-installed-app-rebuild-20260606.json"
 )
 ISSUE175_177_INSTALLED_RUNTIME_AUDIT_ARTIFACT = Path(
     "build/current-issue175-177-installed-runtime-audit-20260602-v1554-installed-tahoe.json"

@@ -23,12 +23,15 @@ from typing import Any
 
 
 DEFAULT_OUT = Path(
-    "build/current-regression-suite-after-mimo-xml-function-template-fix-20260606.json"
+    "build/current-regression-suite-after-installed-app-rebuild-20260606.json"
 )
 DEFAULT_STEP_TIMEOUT_SEC = 900.0
 STEP_TIMEOUT_RETURNCODE = 124
 
 EXPECTED_OPEN_REQUIREMENTS = [
+    "Cross-family cache architecture is classified per family",
+    "High-risk model family parser, artifact, and launch policy gates are current",
+    "Generation defaults, Native MTP, and VL media gates are current",
     "Cross-family live multi-turn smoke matrix is release-cleared",
     "MiMo V2.5 JANG_2L runtime/tool/long-prompt quality is release-cleared",
     "MiniMax-M2.7-JANGTQ_K reporter parity/root cause is release-cleared",
@@ -41,7 +44,7 @@ DEFERRED_RELEASE_OPEN_REQUIREMENTS = {
 }
 
 CURRENT_OBJECTIVE_DIGEST_ARTIFACT = (
-    "build/current-objective-proof-after-mimo-xml-function-template-fix-20260606.json"
+    "build/current-objective-proof-after-installed-app-rebuild-20260606.json"
 )
 
 CURRENT_SUITE_SOURCE_HASH_FILES = (
@@ -614,7 +617,7 @@ CURRENT_SUITE_COMMANDS: dict[str, list[str]] = {
         sys.executable,
         "tests/cross_matrix/run_packaged_integrity_contract.py",
         "--out",
-        "build/current-packaged-integrity-contract-after-unsupported-media-staged-app-20260606.json",
+        "build/current-packaged-integrity-contract-after-installed-app-rebuild-20260606.json",
     ],
     "installed_app_runtime_parity_audit": [
         sys.executable,
@@ -622,7 +625,7 @@ CURRENT_SUITE_COMMANDS: dict[str, list[str]] = {
         "--app",
         "panel/release/sequoia-app/mac-arm64/vMLX.app",
         "--out",
-        "build/current-installed-app-runtime-parity-audit-after-minimax-live-refresh-20260606.json",
+        "build/current-installed-app-runtime-parity-audit-after-installed-app-rebuild-20260606.json",
     ],
     "staged_app_runtime_parity_audit": [
         sys.executable,
@@ -707,7 +710,7 @@ CURRENT_SUITE_COMMANDS: dict[str, list[str]] = {
         "--require-current-proof-sweep",
         "--require-release-ready",
         "--out",
-        "build/current-release-regression-manifest-after-mimo-xml-function-template-fix-20260606.json",
+        "build/current-release-regression-manifest-after-installed-app-rebuild-20260606.json",
     ],
 }
 
