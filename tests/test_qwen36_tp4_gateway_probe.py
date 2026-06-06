@@ -52,6 +52,23 @@ def test_classify_probe_reports_generation_timeout():
     assert probe.classify_probe(result) == "gateway_generation_timeout"
 
 
+def test_classify_probe_reports_rank_response_missing_timeout():
+    result = {
+        "chat": {
+            "ssh": {"timed_out": False},
+            "json": {"http_status": None, "error": "timeout: timed out"},
+        },
+        "rank_snapshots": [
+            {
+                "rank": 0,
+                "snapshot": {"unmatched_recent_request_ids": ["tp4-new"]},
+            }
+        ],
+    }
+
+    assert probe.classify_probe(result) == "rank_response_missing_timeout"
+
+
 def test_classify_probe_requires_exact_visible_output():
     result = {
         "chat": {
@@ -118,3 +135,40 @@ def test_run_probe_uses_rank_snapshots_on_timeout(monkeypatch):
     assert result["classification"] == "gateway_generation_timeout"
     assert result["rank_targets"][0]["host"] == "rank-host"
     assert result["rank_snapshots"][0]["rank"] == 0
+
+
+def test_rank_snapshot_uses_gateway_host_as_jump(monkeypatch):
+    calls = []
+
+    def fake_run_ssh(host, command, *, timeout):
+        calls.append((host, command))
+        return {
+            "timed_out": False,
+            "returncode": 0,
+            "stdout": (
+                '{"requests":{"exists":true,"file_count":1,"newest":[]},'
+                '"responses":{"exists":true,"file_count":0,"newest":[]},'
+                '"unmatched_recent_request_ids":[]}\n'
+            ),
+        }
+
+    monkeypatch.setattr(probe, "run_ssh", fake_run_ssh)
+
+    snapshots = probe._rank_dir_snapshot(
+        "test-host.local",
+        [
+            {
+                "rank": 0,
+                "host": "adlab-n1-raw",
+                "requests_dir": "/rank0/requests",
+                "responses_dir": "/rank0/responses",
+            }
+        ],
+        timeout=1,
+    )
+
+    assert calls[0][0] == "test-host.local"
+    assert "ssh -o BatchMode=yes" in calls[0][1]
+    assert "adlab-n1-raw" in calls[0][1]
+    assert snapshots[0]["snapshot"]["requests"]["exists"] is True
+    assert snapshots[0]["snapshot"]["unmatched_recent_request_ids"] == []
