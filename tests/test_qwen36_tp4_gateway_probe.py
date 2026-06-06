@@ -61,12 +61,44 @@ def test_classify_probe_reports_rank_response_missing_timeout():
         "rank_snapshots": [
             {
                 "rank": 0,
-                "snapshot": {"unmatched_recent_request_ids": ["tp4-new"]},
+                "snapshot": {
+                    "worker_processes": {"count": 1, "rows": ["123 S 00:01 TPRankWorker /path/TPRankWorker"]},
+                    "unmatched_recent_request_ids": ["tp4-new"],
+                },
             }
         ],
     }
 
     assert probe.classify_probe(result) == "rank_response_missing_timeout"
+
+
+def test_classify_probe_reports_stale_ready_without_rank_workers():
+    result = {
+        "chat": {
+            "ssh": {"timed_out": False},
+            "json": {"http_status": None, "error": "timeout: timed out"},
+        },
+        "rank_snapshots": [
+            {
+                "rank": 0,
+                "snapshot": {
+                    "ready_files": ["rank0.ready.json"],
+                    "worker_processes": {"count": 0, "rows": []},
+                    "unmatched_recent_request_ids": ["tp4-new"],
+                },
+            },
+            {
+                "rank": 1,
+                "snapshot": {
+                    "ready_files": ["rank1.ready.json"],
+                    "worker_processes": {"count": 0, "rows": []},
+                    "unmatched_recent_request_ids": ["tp4-new"],
+                },
+            },
+        ],
+    }
+
+    assert probe.classify_probe(result) == "stale_ready_no_rank_workers"
 
 
 def test_classify_probe_requires_exact_visible_output():
@@ -148,6 +180,7 @@ def test_rank_snapshot_uses_gateway_host_as_jump(monkeypatch):
             "stdout": (
                 '{"requests":{"exists":true,"file_count":1,"newest":[]},'
                 '"responses":{"exists":true,"file_count":0,"newest":[]},'
+                '"worker_processes":{"count":1,"rows":["123 S 00:01 TPRankWorker /path/TPRankWorker"]},'
                 '"unmatched_recent_request_ids":[]}\n'
             ),
         }
@@ -171,4 +204,5 @@ def test_rank_snapshot_uses_gateway_host_as_jump(monkeypatch):
     assert "ssh -o BatchMode=yes" in calls[0][1]
     assert "adlab-n1-raw" in calls[0][1]
     assert snapshots[0]["snapshot"]["requests"]["exists"] is True
+    assert snapshots[0]["snapshot"]["worker_processes"]["count"] == 1
     assert snapshots[0]["snapshot"]["unmatched_recent_request_ids"] == []

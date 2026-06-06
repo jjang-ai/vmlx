@@ -165,17 +165,32 @@ def _rank_dir_snapshot(host: str, targets: list[dict[str, Any]], *, timeout: flo
         rank_script = (
             "python3 -c "
             + shlex.quote(
-                "import json, pathlib, sys\n"
+                "import json, pathlib, subprocess, sys\n"
                 "req=pathlib.Path(sys.argv[1]); resp=pathlib.Path(sys.argv[2]); rank=str(sys.argv[3])\n"
                 "def snap(p):\n"
                 " files=sorted([x for x in p.glob('*') if x.is_file()], key=lambda x: x.stat().st_mtime, reverse=True)[:5] if p.exists() else []\n"
                 " return {'exists': p.exists(), 'file_count': len(list(p.glob('*'))) if p.exists() else 0, 'newest': [{'name': f.name, 'size': f.stat().st_size} for f in files]}\n"
+                "def ps_rows():\n"
+                " try:\n"
+                "  out=subprocess.check_output(['ps','ax','-o','pid=,state=,etime=,comm=,command='], text=True, errors='replace')\n"
+                " except Exception as exc:\n"
+                "  return {'error': str(exc), 'rows': []}\n"
+                " rows=[]\n"
+                " for line in out.splitlines():\n"
+                "  parts=line.split(None, 4)\n"
+                "  if len(parts) < 5:\n"
+                "   continue\n"
+                "  comm=pathlib.Path(parts[3]).name\n"
+                "  if comm == 'TPRankWorker':\n"
+                "   rows.append(line.strip())\n"
+                " return {'count': len(rows), 'rows': rows[:8]}\n"
                 "req_files=sorted([x for x in req.glob('*.json') if x.is_file()], key=lambda x: x.stat().st_mtime, reverse=True)[:8] if req.exists() else []\n"
                 "resp_names={x.name for x in resp.glob('*.json') if x.is_file()} if resp.exists() else set()\n"
                 "expected=[(x.stem, f'{x.stem}-rank{rank}.json') for x in req_files]\n"
                 "unmatched=[rid for rid, expected_name in expected if expected_name not in resp_names]\n"
                 "matched=[rid for rid, expected_name in expected if expected_name in resp_names]\n"
-                "print(json.dumps({'requests': snap(req), 'responses': snap(resp), 'recent_request_ids': [x.stem for x in req_files], 'matched_recent_request_ids': matched, 'unmatched_recent_request_ids': unmatched}))\n"
+                "ready_files=sorted([x.name for x in resp.glob(f'rank{rank}.ready.json')]) if resp.exists() else []\n"
+                "print(json.dumps({'requests': snap(req), 'responses': snap(resp), 'ready_files': ready_files, 'worker_processes': ps_rows(), 'recent_request_ids': [x.stem for x in req_files], 'matched_recent_request_ids': matched, 'unmatched_recent_request_ids': unmatched}))\n"
             )
             + " "
             + shlex.quote(str(req_dir))
@@ -209,17 +224,45 @@ def rank_snapshots_show_unmatched_responses(result: dict[str, Any]) -> bool:
     return False
 
 
+def rank_snapshots_show_no_worker_processes(result: dict[str, Any]) -> bool:
+    snapshots = result.get("rank_snapshots")
+    if not isinstance(snapshots, list) or not snapshots:
+        return False
+    saw_snapshot = False
+    for item in snapshots:
+        if not isinstance(item, dict):
+            continue
+        snapshot = item.get("snapshot")
+        if not isinstance(snapshot, dict):
+            continue
+        saw_snapshot = True
+        worker_processes = snapshot.get("worker_processes")
+        if not isinstance(worker_processes, dict):
+            return False
+        try:
+            count = int(worker_processes.get("count") or 0)
+        except (TypeError, ValueError):
+            return False
+        if count > 0:
+            return False
+    return saw_snapshot
+
+
 def classify_probe(result: dict[str, Any]) -> str:
     chat = result.get("chat", {})
     ssh = chat.get("ssh") if isinstance(chat, dict) else {}
     payload = chat.get("json") if isinstance(chat, dict) else None
     if isinstance(ssh, dict) and ssh.get("timed_out"):
+        if rank_snapshots_show_no_worker_processes(result):
+            return "stale_ready_no_rank_workers"
         if rank_snapshots_show_unmatched_responses(result):
             return "rank_response_missing_timeout"
         return "gateway_generation_timeout"
     if isinstance(payload, dict) and payload.get("http_status") is None:
         error = str(payload.get("error") or "").lower()
         if "timeout" in error or "timed out" in error:
+            if rank_snapshots_show_no_worker_processes(result):
+                return "stale_ready_no_rank_workers"
             if rank_snapshots_show_unmatched_responses(result):
                 return "rank_response_missing_timeout"
             return "gateway_generation_timeout"
