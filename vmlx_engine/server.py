@@ -1843,6 +1843,98 @@ def _loaded_runtime_modalities() -> list[str]:
     return ["text"]
 
 
+def _artifact_media_modalities(bundle_path: str | None) -> dict[str, list[str]]:
+    """Return artifact-declared versus runtime-wired media capability facts.
+
+    The top-level ``modalities`` field in ``/capabilities`` is intentionally the
+    runtime-proven surface. This helper preserves the lower-level truth needed by
+    UI/release probes: some bundles carry vision/audio sidecars that are not
+    wired through the current Python runtime and must not be scheduled as live
+    media support.
+    """
+    cfg = _read_bundle_json(bundle_path, "config.json")
+    jang = _read_bundle_json(bundle_path, "jang_config.json")
+    caps = jang.get("capabilities") if isinstance(jang.get("capabilities"), dict) else {}
+    declared: set[str] = {"text"}
+    preserved: set[str] = set()
+    unwired: set[str] = set()
+
+    cap_modalities = caps.get("modalities") if isinstance(caps, dict) else None
+    if isinstance(cap_modalities, list):
+        declared.update(str(item).lower() for item in cap_modalities if item)
+    cap_modality = caps.get("modality") if isinstance(caps, dict) else None
+    if cap_modality:
+        declared.add(str(cap_modality).lower())
+
+    for key, target in (
+        ("preserved_modalities", preserved),
+        ("unwired_modalities", unwired),
+    ):
+        values = caps.get(key) if isinstance(caps, dict) else None
+        if isinstance(values, list):
+            target.update(str(item).lower() for item in values if item)
+
+    model_type = str((cfg or {}).get("model_type") or "").lower()
+    if isinstance(cfg.get("vision_config"), dict):
+        declared.add("vision")
+    if isinstance(cfg.get("audio_config"), dict):
+        declared.add("audio")
+    if _bundle_declares_native_video(bundle_path) or _bundle_supports_video_frame_fallback(bundle_path):
+        declared.add("video")
+
+    if model_type == "mimo_v2":
+        if isinstance(cfg.get("vision_config"), dict):
+            preserved.add("vision")
+            unwired.add("vision")
+        if isinstance(cfg.get("audio_config"), dict):
+            preserved.add("audio")
+            unwired.add("audio")
+        if "video" in declared:
+            preserved.add("video")
+            unwired.add("video")
+
+    def _ordered(values: set[str]) -> list[str]:
+        if "image" in values:
+            values.add("vision")
+        if "vision" in values:
+            values.add("image")
+        order = ["text", "vision", "image", "video", "audio"]
+        return [item for item in order if item in values] + sorted(values - set(order))
+
+    return {
+        "declared_modalities": _ordered(declared),
+        "preserved_modalities": _ordered(preserved),
+        "unwired_modalities": _ordered(unwired),
+    }
+
+
+def _loaded_media_capability_status(modalities: list[str]) -> dict:
+    bundle_path = _model_path or _model_name
+    artifact = _artifact_media_modalities(bundle_path)
+    runtime = set(_normalize_modality_set(modalities))
+    declared = set(_normalize_modality_set(artifact["declared_modalities"]))
+    preserved = set(_normalize_modality_set(artifact["preserved_modalities"]))
+    unwired = set(_normalize_modality_set(artifact["unwired_modalities"]))
+    known = {"text", "vision", "image", "video", "audio"} | runtime | declared | preserved | unwired
+    status_by_modality: dict[str, str] = {}
+    for modality in sorted(known):
+        if modality in runtime:
+            status_by_modality[modality] = "runtime_supported"
+        elif modality in unwired:
+            status_by_modality[modality] = "preserved_unwired"
+        elif modality in declared:
+            status_by_modality[modality] = "declared_not_runtime_supported"
+        else:
+            status_by_modality[modality] = "not_advertised"
+    return {
+        "runtime_modalities": modalities,
+        "declared_modalities": artifact["declared_modalities"],
+        "preserved_modalities": artifact["preserved_modalities"],
+        "unwired_modalities": artifact["unwired_modalities"],
+        "status_by_modality": status_by_modality,
+    }
+
+
 def _normalize_modality_set(modalities: set[str] | list[str] | tuple[str, ...]) -> set[str]:
     normalized = {str(m).lower() for m in modalities or []}
     if "vision" in normalized:
@@ -7467,6 +7559,7 @@ async def model_capabilities(model_id: str) -> dict:
         "experimental_modes": [],
         "reasoning_efforts": reasoning_efforts,
         "modalities": modalities,
+        "media": _loaded_media_capability_status(modalities),
         "cache": {
             "prefix": prefix_cache_enabled,
             "type": cache_type,

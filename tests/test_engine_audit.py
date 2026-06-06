@@ -4228,6 +4228,14 @@ class TestMediaDiagnostics:
 
         assert caps["family"] == "mimo_v2"
         assert caps["modalities"] == ["text"]
+        assert caps["media"]["runtime_modalities"] == ["text"]
+        assert caps["media"]["preserved_modalities"] == ["vision", "image", "video", "audio"]
+        assert caps["media"]["unwired_modalities"] == ["vision", "image", "video", "audio"]
+        assert caps["media"]["status_by_modality"]["vision"] == "preserved_unwired"
+        assert caps["media"]["status_by_modality"]["image"] == "preserved_unwired"
+        assert caps["media"]["status_by_modality"]["video"] == "preserved_unwired"
+        assert caps["media"]["status_by_modality"]["audio"] == "preserved_unwired"
+        assert caps["media"]["status_by_modality"]["text"] == "runtime_supported"
 
     def test_qwen_vl_runtime_modalities_keep_explicit_video(
         self, monkeypatch, tmp_path
