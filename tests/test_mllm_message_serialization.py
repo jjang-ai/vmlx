@@ -1631,11 +1631,15 @@ def test_simple_engine_mimo_text_only_generate_suppresses_think_tags(monkeypatch
     monkeypatch.setattr(mlx_lm, "generate", fake_generate)
 
     class _Tokenizer:
+        eos_token_id = 9
+
         def encode(self, text, add_special_tokens=False):
             if text == "<think>":
                 return [1]
             if text == "</think>":
                 return [2]
+            if text == "<|im_end|>":
+                return [9]
             return [3]
 
     engine = SimpleEngine.__new__(SimpleEngine)
@@ -1657,13 +1661,18 @@ def test_simple_engine_mimo_text_only_generate_suppresses_think_tags(monkeypatch
     )
 
     assert output.text == "ACK"
-    assert len(captured["logits_processors"]) == 1
-    logits = mx.zeros((1, 4))
+    assert len(captured["logits_processors"]) == 2
+    logits = mx.zeros((1, 10))
     suppressed = captured["logits_processors"][0](mx.array([[0]]), logits)
     assert math.isinf(float(suppressed[0, 1])) and float(suppressed[0, 1]) < 0
     assert math.isinf(float(suppressed[0, 2])) and float(suppressed[0, 2]) < 0
     assert float(suppressed[0, 0]) == 0.0
     assert float(suppressed[0, 3]) == 0.0
+
+    first_token = captured["logits_processors"][1](mx.array([198]), logits)
+    second_token = captured["logits_processors"][1](mx.array([198, 4032]), logits)
+    assert math.isinf(float(first_token[0, 9])) and float(first_token[0, 9]) < 0
+    assert float(second_token[0, 9]) == 0.0
 
 
 def test_simple_engine_mimo_llm_path_uses_plain_template_prefix():

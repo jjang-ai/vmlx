@@ -264,7 +264,10 @@ class SimpleEngine(BaseEngine):
         ``<think></think>`` before generation and can first-token-stop. Because
         the stable render does not itself prevent tag emission, the decode loop
         must make the native thinking delimiters unavailable for the requested
-        API rail. This is a logits-boundary policy, not output injection.
+        API rail. Current first-token probes also show the primary EOS marker
+        as the top token for failing system+long rows, so EOS is suppressed
+        only for the first generated token. This is a logits-boundary policy,
+        not output injection.
         """
 
         if enable_thinking is not False:
@@ -284,16 +287,51 @@ class SimpleEngine(BaseEngine):
                 except Exception:
                     continue
 
-        if not token_ids:
-            return []
+        processors = []
+        if token_ids:
 
-        def _suppress_mimo_thinking_tags(_, logits):
-            import mlx.core as mx
+            def _suppress_mimo_thinking_tags(_, logits):
+                import mlx.core as mx
 
-            indices = mx.array(sorted(token_ids))
-            return logits.at[:, indices].add(-float("inf"))
+                indices = mx.array(sorted(token_ids))
+                return logits.at[:, indices].add(-float("inf"))
 
-        return [_suppress_mimo_thinking_tags]
+            processors.append(_suppress_mimo_thinking_tags)
+
+        eos_token_ids: set[int] = set()
+        for token in ("<|im_end|>",):
+            try:
+                encoded = tokenizer.encode(token, add_special_tokens=False)
+            except TypeError:
+                encoded = tokenizer.encode(token)
+            except Exception:
+                encoded = []
+            if len(encoded) == 1:
+                try:
+                    eos_token_ids.add(int(encoded[0]))
+                except Exception:
+                    continue
+        eos_id = getattr(tokenizer, "eos_token_id", None)
+        if isinstance(eos_id, int):
+            eos_token_ids.add(eos_id)
+
+        if eos_token_ids:
+
+            def _suppress_mimo_first_token_eos(tokens, logits):
+                import mlx.core as mx
+
+                try:
+                    first_generation_token = int(tokens.shape[0]) <= 1
+                except Exception:
+                    first_generation_token = False
+                if not first_generation_token:
+                    return logits
+                indices = mx.array(sorted(eos_token_ids))
+                return logits.at[:, indices].add(-float("inf"))
+
+            processors.append(_suppress_mimo_first_token_eos)
+
+        return processors
 
     @property
     def tokenizer(self) -> Any:
