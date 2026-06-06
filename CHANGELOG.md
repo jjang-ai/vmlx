@@ -7,6 +7,7 @@ All notable changes to vMLX Engine will be documented in this file.
 ### Fixed
 - Fixed the vMLX MiMo-V2.5 MLLM language-model adapter so `mlx_vlm` text turns can pass `inputs_embeds` and receive a `.logits` output object instead of failing with HTTP 500. MiMo long-output quality remains a separate blocker.
 - Kept the Qwen3.5 dense native-MTP GatedDeltaNet patch compatible with `gdn_sink` propagation; current source coverage verifies the patched dense GatedDeltaNet and DecoderLayer signatures accept the kwarg, and source-server Qwen35/Qwen27 MXFP8 MTP smokes completed without the reported `gdn_sink` crash. Full packaged Qwen35/27 MTP speed/equivalence proof remains open.
+- Recorded a current Gemma4 12B JANG_4M source speed gate above the 45 tok/s target with no top-k primary regression; packaged installed-app speed parity remains open.
 
 ### Notes
 - Future release notes for the current runtime/model/UI/API issue wave must credit GitHub `@Hornsan1` for reporting many of these issues.
