@@ -4,6 +4,9 @@ All notable changes to vMLX Engine will be documented in this file.
 
 ## [Unreleased]
 
+### Notes
+- Future release notes for the current runtime/model/UI/API issue wave must credit GitHub `@Hornsan1` for reporting many of these issues.
+
 ## [1.5.49] - 2026-05-23
 
 ### Fixed
