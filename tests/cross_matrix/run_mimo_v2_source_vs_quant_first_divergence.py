@@ -23,6 +23,7 @@ from typing import Any
 DEFAULT_OUT = Path(
     "build/current-mimo-v2-jang2l-source-vs-quant-first-divergence-20260606.json"
 )
+DEFAULT_QUANT_MODEL_PATH = "/Users/example/.mlxstudio/models/JANGQ-AI/MiMo-V2.5-JANG_2L"
 
 PROMPTS: tuple[dict[str, Any], ...] = (
     {
@@ -97,6 +98,15 @@ def _post_json(
         except json.JSONDecodeError:
             payload = {"error": raw}
         return int(exc.code), payload, time.perf_counter() - started
+
+
+def _get_json(url: str, *, timeout: float) -> tuple[int | None, dict[str, Any] | None, str | None]:
+    try:
+        with urllib.request.urlopen(url, timeout=timeout) as resp:
+            payload = json.loads(resp.read().decode("utf-8", "replace"))
+            return int(resp.status), payload, None
+    except Exception as exc:  # noqa: BLE001 - diagnostic preflight
+        return None, None, f"{type(exc).__name__}: {exc}"
 
 
 def _extract_chat_content(payload: dict[str, Any]) -> str:
@@ -238,31 +248,130 @@ def run_probe(
     }
 
 
+def preflight(
+    *,
+    source_base_url: str | None,
+    quant_base_url: str | None,
+    source_model_path: str | None,
+    quant_model_path: str | None,
+    timeout: float,
+) -> dict[str, Any]:
+    endpoints: dict[str, Any] = {}
+    for name, base_url in (("source", source_base_url), ("quant", quant_base_url)):
+        if not base_url:
+            endpoints[name] = {
+                "base_url": None,
+                "health_http_status": None,
+                "healthy": False,
+                "error": "missing_base_url",
+            }
+            continue
+        status, payload, error = _get_json(base_url.rstrip("/") + "/health", timeout=timeout)
+        endpoints[name] = {
+            "base_url": base_url,
+            "health_http_status": status,
+            "healthy": status == 200,
+            "health": payload,
+            "error": error,
+        }
+
+    paths: dict[str, Any] = {}
+    for name, value in (("source", source_model_path), ("quant", quant_model_path)):
+        if not value:
+            paths[name] = {
+                "path": None,
+                "exists": False,
+                "error": "missing_model_path",
+            }
+            continue
+        path = Path(value)
+        paths[name] = {
+            "path": value,
+            "exists": path.exists(),
+            "is_dir": path.is_dir() if path.exists() else False,
+        }
+
+    blockers: list[str] = []
+    if not endpoints["source"]["healthy"]:
+        blockers.append("missing_or_unhealthy_source_endpoint")
+    if not endpoints["quant"]["healthy"]:
+        blockers.append("missing_or_unhealthy_quant_endpoint")
+    if not paths["source"]["exists"]:
+        blockers.append("missing_source_model_path")
+    if not paths["quant"]["exists"]:
+        blockers.append("missing_quant_model_path")
+
+    return {
+        "status": "pass" if not blockers else "missing_prerequisites",
+        "remote_evidence_only": False,
+        "source_model_path": source_model_path,
+        "quant_model_path": quant_model_path,
+        "source_base_url": source_base_url,
+        "quant_base_url": quant_base_url,
+        "blockers": blockers,
+        "endpoints": endpoints,
+        "paths": paths,
+        "rows": [],
+        "summary": {
+            "source_and_quant_match": 0,
+            "quant_diverges_from_source": 0,
+            "source_also_fails": 0,
+            "request_failed": 0,
+        },
+        "release_boundary": (
+            "This is preflight evidence only. It cannot clear MiMo release "
+            "until source and quant endpoints both run and prompt rows execute."
+        ),
+    }
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--source-base-url", required=True)
-    parser.add_argument("--quant-base-url", required=True)
+    parser.add_argument("--source-base-url")
+    parser.add_argument("--quant-base-url")
     parser.add_argument("--source-model", default="mimo-v2-source")
     parser.add_argument("--quant-model", default="mimo-v2-jang2l")
-    parser.add_argument("--source-model-path", required=True)
-    parser.add_argument("--quant-model-path", required=True)
+    parser.add_argument("--source-model-path")
+    parser.add_argument("--quant-model-path", default=DEFAULT_QUANT_MODEL_PATH)
     parser.add_argument("--timeout", type=float, default=180.0)
     parser.add_argument("--out", type=Path, default=DEFAULT_OUT)
+    parser.add_argument("--preflight-only", action="store_true")
     args = parser.parse_args(argv)
 
-    result = run_probe(
-        source_base_url=args.source_base_url,
-        quant_base_url=args.quant_base_url,
-        source_model=args.source_model,
-        quant_model=args.quant_model,
-        source_model_path=args.source_model_path,
-        quant_model_path=args.quant_model_path,
-        timeout=args.timeout,
-    )
+    if args.preflight_only:
+        result = preflight(
+            source_base_url=args.source_base_url,
+            quant_base_url=args.quant_base_url,
+            source_model_path=args.source_model_path,
+            quant_model_path=args.quant_model_path,
+            timeout=args.timeout,
+        )
+    else:
+        missing = [
+            name
+            for name, value in (
+                ("--source-base-url", args.source_base_url),
+                ("--quant-base-url", args.quant_base_url),
+                ("--source-model-path", args.source_model_path),
+                ("--quant-model-path", args.quant_model_path),
+            )
+            if not value
+        ]
+        if missing:
+            parser.error("missing required arguments unless --preflight-only: " + ", ".join(missing))
+        result = run_probe(
+            source_base_url=args.source_base_url,
+            quant_base_url=args.quant_base_url,
+            source_model=args.source_model,
+            quant_model=args.quant_model,
+            source_model_path=args.source_model_path,
+            quant_model_path=args.quant_model_path,
+            timeout=args.timeout,
+        )
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n")
     print(json.dumps(result, indent=2, sort_keys=True))
-    return 0 if result["status"] == "pass" else 1
+    return 0 if result["status"] in {"pass", "missing_prerequisites"} else 1
 
 
 if __name__ == "__main__":

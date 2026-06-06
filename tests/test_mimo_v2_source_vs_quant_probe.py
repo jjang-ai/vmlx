@@ -119,3 +119,64 @@ def test_run_probe_writes_release_gate_compatible_rows(monkeypatch):
     assert row["first_divergence"]["char_index"] == 0
     assert json.dumps(result)
     assert len(calls) == 2
+
+
+def test_preflight_records_missing_source_and_endpoint_state(tmp_path, monkeypatch):
+    quant_model = tmp_path / "MiMo-V2.5-JANG_2L"
+    quant_model.mkdir()
+
+    def fake_get(url, *, timeout):
+        if "quant" in url:
+            return 200, {"status": "ok"}, None
+        return None, None, "URLError: refused"
+
+    monkeypatch.setattr(probe, "_get_json", fake_get)
+
+    result = probe.preflight(
+        source_base_url="http://source:8000",
+        quant_base_url="http://quant:8001",
+        source_model_path="/missing/source",
+        quant_model_path=str(quant_model),
+        timeout=1,
+    )
+
+    assert result["status"] == "missing_prerequisites"
+    assert result["remote_evidence_only"] is False
+    assert result["rows"] == []
+    assert result["endpoints"]["source"]["healthy"] is False
+    assert result["endpoints"]["quant"]["healthy"] is True
+    assert result["paths"]["source"]["exists"] is False
+    assert result["paths"]["quant"]["exists"] is True
+    assert result["blockers"] == [
+        "missing_or_unhealthy_source_endpoint",
+        "missing_source_model_path",
+    ]
+
+
+def test_main_preflight_writes_missing_prerequisites_artifact(tmp_path, monkeypatch):
+    out = tmp_path / "preflight.json"
+    monkeypatch.setattr(
+        probe,
+        "_get_json",
+        lambda url, *, timeout: (None, None, "URLError: refused"),
+    )
+
+    rc = probe.main(
+        [
+            "--preflight-only",
+            "--out",
+            str(out),
+            "--quant-model-path",
+            "/missing/quant",
+        ]
+    )
+
+    assert rc == 0
+    payload = json.loads(out.read_text())
+    assert payload["status"] == "missing_prerequisites"
+    assert payload["blockers"] == [
+        "missing_or_unhealthy_source_endpoint",
+        "missing_or_unhealthy_quant_endpoint",
+        "missing_source_model_path",
+        "missing_quant_model_path",
+    ]
