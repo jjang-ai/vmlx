@@ -473,6 +473,26 @@ class TestBatchedEngineVideoTemplate:
 
         assert "gdn_sink" in inspect.signature(GatedDeltaNet.__call__).parameters
         assert "gdn_sink" in inspect.signature(DecoderLayer.__call__).parameters
+        patched_gdn = inspect.getsource(GatedDeltaNet.__call__)
+        assert "gdn_sink.append" in patched_gdn
+        assert "conv_in" in patched_gdn
+        assert "gdn_sink=gdn_sink" in inspect.getsource(DecoderLayer.__call__)
+
+    def test_qwen35_dense_mtp_patch_propagates_gdn_sink_past_decoder(self):
+        import inspect
+
+        from vmlx_engine.patches.mlx_lm_mtp import qwen35_model
+
+        patched_backbone = inspect.getsource(qwen35_model._patch_qwen3_5_text_model)
+        patched_text = inspect.getsource(qwen35_model._patch_text_model)
+        patched_outer = inspect.getsource(qwen35_model._patch_outer_model)
+
+        assert "gdn_sink: Optional[list] = None" in patched_backbone
+        assert "gdn_sink=gdn_sink" in patched_backbone
+        assert "gdn_sink: Optional[list] = None" in patched_text
+        assert "gdn_sink=gdn_sink" in patched_text
+        assert "gdn_sink: Optional[list] = None" in patched_outer
+        assert "gdn_sink=gdn_sink" in patched_outer
 
     def test_step37_video_frame_fallback_uses_contact_sheet(self, monkeypatch, tmp_path):
         from PIL import Image
