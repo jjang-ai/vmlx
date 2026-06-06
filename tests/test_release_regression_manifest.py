@@ -14586,7 +14586,7 @@ def test_release_regression_manifest_tracks_fresh_dsv4_live_failure_artifact():
 
     assert "current-dsv4-route-mode-code-exactness-chat-off-user-ram-override-20260606.json" in joined
     assert "current-dsv4-route-mode-code-exactness-chat-on-user-ram-override-20260606.json" in joined
-    assert "current-dsv4-route-mode-code-exactness-ab-route-user-ram-override-20260606.json" in joined
+    assert "current-dsv4-route-mode-code-exactness-bundled-after-bundle-refresh-20260606.json" in joined
     assert "current-dsv4-jangtq-k-route-mode-code-exactness-20260524.json" in joined
     assert "current-dsv4-route-mode-code-exactness-source-explicit-off-subset-20260524-1418.json" in joined
     assert "current-dsv4-route-mode-code-exactness-current-generated-only-subset-20260524.json" in joined
