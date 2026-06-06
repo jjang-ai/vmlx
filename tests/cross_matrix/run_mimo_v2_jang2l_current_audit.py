@@ -24,7 +24,7 @@ from typing import Any
 DEFAULT_MODEL_PATH = Path("/Users/example/.mlxstudio/models/JANGQ-AI/MiMo-V2.5-JANG_2L")
 DEFAULT_MANIFEST = Path("build/current-mimo-http-manifest-20260606.tsv")
 DEFAULT_OUT = Path(
-    "build/current-mimo-v2-jang2l-current-audit-after-cb-oneshot-prefill-20260606.json"
+    "build/current-mimo-v2-jang2l-current-audit-after-mllm-inputs-embeds-fix-20260606.json"
 )
 
 STRUCTURAL_ARTIFACT = Path("build/current-mimo-jang2l-local-structural-verify-20260606.json")
@@ -73,6 +73,9 @@ CB_ONESHOT_PREFILL_ARTIFACT = Path(
 )
 TOOL_SOURCE_PREFLIGHT_ARTIFACT = Path(
     "build/current-mimo-v2-jang2l-tool-source-preflight-20260606.json"
+)
+MLLM_INPUTS_EMBEDS_INTERFACE_ARTIFACT = Path(
+    "build/current-mimo-v2-mllm-inputs-embeds-interface-fix-20260606.json"
 )
 CLEANUP_LOG = Path("build/current-mimo-stale-local-cleanup-20260606.txt")
 
@@ -580,6 +583,7 @@ def build_audit(root: Path, model_path: Path, manifest: Path) -> dict[str, Any]:
     text_route = _artifact(root / TEXT_ROUTE_ARTIFACT)
     cb_oneshot_prefill = _artifact(root / CB_ONESHOT_PREFILL_ARTIFACT)
     tool_source_preflight = _artifact(root / TOOL_SOURCE_PREFLIGHT_ARTIFACT)
+    mllm_inputs_embeds_interface = _artifact(root / MLLM_INPUTS_EMBEDS_INTERFACE_ARTIFACT)
 
     structural_pass = structural.get("status") == "pass"
     text_cache_pass = text_cache.get("exists") and _text_cache_narrow_pass(text_cache["data"])
@@ -689,6 +693,11 @@ def build_audit(root: Path, model_path: Path, manifest: Path) -> dict[str, Any]:
     source_vs_quant_pass = source_vs_quant.get("exists") and _source_vs_quant_first_divergence_pass(
         source_vs_quant["data"]
     )
+    mllm_inputs_embeds_interface_pass = (
+        mllm_inputs_embeds_interface.get("exists")
+        and isinstance(mllm_inputs_embeds_interface.get("data"), dict)
+        and mllm_inputs_embeds_interface["data"].get("status") == "pass"
+    )
     if text_route_evidence.get("exists") and text_route_evidence.get("cache_visible_pass"):
         prompt_shape_blocked = False
 
@@ -705,6 +714,7 @@ def build_audit(root: Path, model_path: Path, manifest: Path) -> dict[str, Any]:
         and not speed_blocked
         and not prompt_shape_blocked
         and source_vs_quant_pass
+        and mllm_inputs_embeds_interface_pass
         and not bool(text_route_evidence.get("cache_l2_not_reproved"))
         and not bool(text_route_evidence.get("media_unwired"))
         and not stale_present
@@ -736,6 +746,8 @@ def build_audit(root: Path, model_path: Path, manifest: Path) -> dict[str, Any]:
         blockers.append("mimo_system_prompt_first_token_stop_blocked")
     if not source_vs_quant_pass:
         blockers.append("mimo_source_vs_quant_first_divergence_missing_or_failed")
+    if not mllm_inputs_embeds_interface_pass:
+        blockers.append("mimo_mllm_inputs_embeds_interface_missing_or_failed")
     if text_route_evidence.get("cache_l2_not_reproved"):
         blockers.append("mimo_prefix_paged_l2_cache_not_reproved")
     if text_route_evidence.get("media_unwired"):
@@ -764,6 +776,7 @@ def build_audit(root: Path, model_path: Path, manifest: Path) -> dict[str, Any]:
             "decode_speed_target": not bool(speed_blocked),
             "system_prompt_first_token_stop": not bool(prompt_shape_blocked),
             "source_vs_quant_first_divergence": bool(source_vs_quant_pass),
+            "mllm_inputs_embeds_interface": bool(mllm_inputs_embeds_interface_pass),
             "text_route_long_prompt": bool(
                 text_route_evidence.get("long_prompt_recall_pass")
                 and text_route_evidence.get("long_prompt_oom_cleared")
@@ -795,6 +808,7 @@ def build_audit(root: Path, model_path: Path, manifest: Path) -> dict[str, Any]:
             "text_route_live_proof": str(TEXT_ROUTE_ARTIFACT),
             "cb_oneshot_prefill_live_proof": str(CB_ONESHOT_PREFILL_ARTIFACT),
             "tool_source_preflight": str(TOOL_SOURCE_PREFLIGHT_ARTIFACT),
+            "mllm_inputs_embeds_interface": str(MLLM_INPUTS_EMBEDS_INTERFACE_ARTIFACT),
         },
         "diagnostics": {
             "cache_vs_nocache_next_token_match": bool(cache_match),
@@ -809,6 +823,15 @@ def build_audit(root: Path, model_path: Path, manifest: Path) -> dict[str, Any]:
                 else {
                     "status": "missing",
                     "artifact": str(TOOL_SOURCE_PREFLIGHT_ARTIFACT),
+                }
+            ),
+            "mllm_inputs_embeds_interface": (
+                mllm_inputs_embeds_interface.get("data")
+                if mllm_inputs_embeds_interface.get("exists")
+                else {
+                    "status": "missing",
+                    "artifact": str(MLLM_INPUTS_EMBEDS_INTERFACE_ARTIFACT),
+                    "classification": "missing_mimo_mllm_inputs_embeds_interface_proof",
                 }
             ),
             "source_vs_quant_first_divergence": (

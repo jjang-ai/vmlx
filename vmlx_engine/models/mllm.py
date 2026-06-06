@@ -293,14 +293,30 @@ def _register_mimo_v2_mlx_vlm_runtime() -> None:
                 inputs_embeds=self.language_model.model.embed_tokens(input_ids)
             )
 
-        def __call__(self, input_ids, pixel_values=None, mask=None, cache=None, **kwargs):
+        def __call__(
+            self,
+            input_ids,
+            pixel_values=None,
+            inputs_embeds=_INPUTS_EMBEDS_UNSET,
+            mask=None,
+            cache=None,
+            **kwargs,
+        ):
             if pixel_values is not None:
                 raise UnsupportedMediaModalityError(
                     "vision",
                     "MiMo-V2.5 JANG_2L vision input is not wired in this Python runtime.",
                     family="mimo_v2",
                 )
-            return self.language_model(input_ids, cache=cache, mask=mask)
+            if inputs_embeds is not _INPUTS_EMBEDS_UNSET:
+                return self.language_model(
+                    input_ids,
+                    inputs_embeds=inputs_embeds,
+                    cache=cache,
+                    mask=mask,
+                    **kwargs,
+                )
+            return self.language_model(input_ids, cache=cache, mask=mask, **kwargs)
 
         def load_weights(self, weights, strict=True):
             filtered = {}
