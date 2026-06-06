@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Any
 
 
-DEFAULT_OUT = Path("build/current-native-mtp-contract-after-mimo-modality-truth-20260606.json")
+DEFAULT_OUT = Path("build/current-native-mtp-contract-after-qwen-gdn-sink-proof-20260606.json")
 
 SOURCE_HASH_FILES = (
     "vmlx_engine/native_mtp.py",

@@ -376,7 +376,7 @@ CURRENT_POST_BUDGET_EDGE_ARTIFACTS = {
     "jang-model-compat-runtime-boundary": "build/current-jang-model-compat-contract-20260528-pr155-runtime-boundary.json",
     "model-artifact-format-detection": "build/current-model-artifact-format-contract-after-mimo-modality-truth-20260606.json",
     "model-family-detection-noheavy": "build/current-model-family-detection-contract-after-mimo-modality-truth-20260606.json",
-    "native-mtp-d3-effect-policy": "build/current-native-mtp-contract-after-mimo-modality-truth-20260606.json",
+    "native-mtp-d3-effect-policy": "build/current-native-mtp-contract-after-qwen-gdn-sink-proof-20260606.json",
     "mcp-policy-ui-gateway": "build/current-mcp-policy-contract-20260531-post-step-lfm-refresh.json",
     "vl-media-cache-tool-followup": "build/current-vl-media-cache-contract-after-bundled-refresh-continuation-20260606.json",
     "packaged-release-integrity": "build/current-packaged-integrity-contract-after-bundled-refresh-20260606.json",
@@ -1592,11 +1592,11 @@ _ROWS: list[dict[str, Any]] = [
             "The same-artifact AR-vs-MTP live A/B proves MTP decode is not the MLLM prefill bottleneck; native MTP D3 is faster than the AR baseline with identical output",
         ],
         "commands": [
-            ".venv/bin/python tests/cross_matrix/run_native_mtp_contract.py --out build/current-native-mtp-contract-after-mimo-modality-truth-20260606.json",
+            ".venv/bin/python tests/cross_matrix/run_native_mtp_contract.py --out build/current-native-mtp-contract-after-qwen-gdn-sink-proof-20260606.json",
             "VMLINUX_BENCH_PYTHON=/Applications/vMLX.app/Contents/Resources/bundled-python/python/bin/python3.12 .venv/bin/python bench/native_mtp_speed_ab.py /Users/example/models/JANGQ/Qwen3.6-27B-JANG_4M-MTP --served-name qwen27-jang4m-mtp-ab --port 8814 --cache off --max-num-seqs 1 --max-tokens 320 --repeats 1 --warmup 0 --load-timeout-s 600 --out build/current-native-mtp-speed-ab-qwen27-jang4m-mtp-installed-app-20260606 --disable-prompt-reuse",
         ],
         "artifacts": [
-            "build/current-native-mtp-contract-after-mimo-modality-truth-20260606.json",
+            "build/current-native-mtp-contract-after-qwen-gdn-sink-proof-20260606.json",
             "build/current-native-mtp-contract-20260527-after-think-xml-registry-fix.json",
             "build/current-native-mtp-contract-20260527-issues-175-178-bundled-sync.json",
             "build/current-native-mtp-contract-20260524-after-ling-topk-policy.json",
