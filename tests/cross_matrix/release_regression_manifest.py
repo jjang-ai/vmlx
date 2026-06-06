@@ -24,7 +24,7 @@ from tests.cross_matrix.run_current_regression_suite import (
 )
 
 CURRENT_RELEASE_REGRESSION_MANIFEST_ARTIFACT = (
-    "build/current-release-regression-manifest-after-mimo-active-scope-20260606.json"
+    "build/current-release-regression-manifest-after-mimo-current-audit-20260606.json"
 )
 
 EXPECTED_CURRENT_MODEL_ARTIFACT_CHECKS = (
@@ -384,7 +384,7 @@ CURRENT_POST_BUDGET_EDGE_ARTIFACTS = {
 }
 
 CURRENT_REGRESSION_SUITE_ARTIFACT = (
-    "build/current-regression-suite-after-mimo-active-scope-20260606.json"
+    "build/current-regression-suite-after-mimo-current-audit-20260606.json"
 )
 CURRENT_ISSUE175_179_RELEASE_BOUNDARY_AUDIT_ARTIFACT = (
     "build/current-issue175-179-release-boundary-audit-20260531-post-install-sync.json"
@@ -836,6 +836,9 @@ CURRENT_MIMO_V2_JANG2L_LENGTH_SWEEP_ARTIFACT = (
 CURRENT_MIMO_V2_JANG2L_TOOL_DIALECT_ARTIFACT = (
     "build/current-mimo-v2-jang2l-tool-dialect-failure-20260606.json"
 )
+CURRENT_MIMO_V2_JANG2L_CURRENT_AUDIT_ARTIFACT = (
+    "build/current-mimo-v2-jang2l-current-audit-20260606.json"
+)
 CURRENT_DIAGNOSTIC_LIVE_SMOKE_ARTIFACTS = {
     "zaya_text_mxfp4_toolprobe": {
         "artifact": "build/current-all-local-model-smoke-zaya-text-bundled-toolprobe-20260525/summary.json",
@@ -1147,7 +1150,6 @@ def _live_smoke_cache_validation_failures(request: dict[str, Any]) -> list[str]:
 
 
 EXPECTED_CURRENT_OPEN_REQUIREMENTS = [
-    "Ling/Bailing multilingual output quality is release-cleared",
     "Gemma4 26B CRACK Responses visible-content and language quality is release-cleared",
     "Gemma4 26B CRACK mixed-SWA app-engine speed floor is release-cleared",
     "Cross-family live multi-turn smoke matrix is release-cleared",
@@ -1837,10 +1839,11 @@ _ROWS: list[dict[str, Any]] = [
         ],
         "commands": [
             ".venv/bin/python tests/cross_matrix/summarize_objective_proof.py --out build/current-objective-proof-audit-gemma4-release-boundary-20260604.json",
-            "uv run --extra dev python tests/cross_matrix/run_production_family_audit.py --rows ling_flash_tq --live --out build/current-production-family-audit-ling-flash-tq-live-installed149-20260524-codex.json",
+            ".venv/bin/python tests/cross_matrix/run_production_family_audit.py --rows ling_flash_tq --live --py /Applications/vMLX.app/Contents/Resources/bundled-python/python/bin/python3.12 --out build/current-production-family-live-ling-bundled-current-20260606.json",
         ],
         "artifacts": [
-            "build/current-production-family-audit-ling-flash-tq-live-installed149-20260524-codex.json",
+            "build/current-production-family-live-ling-bundled-current-20260606.json",
+            "build/current-objective-proof-audit-gemma4-release-boundary-20260604.json",
             "build/current-ling-jangtq-strict-russian-nocache-bundled-4850c9c2-20260524.json",
             "build/current-ling-mxfp4-crack-strict-russian-nocache-bundled-4850c9c2-20260524.json",
             "build/current-ling-jangtq-russian-prompt-variant-probe-20260524.json",
@@ -1854,7 +1857,6 @@ _ROWS: list[dict[str, Any]] = [
             "build/current-ling-jangtq-continuous-control-bundled-after-mpp-fix-20260524.json",
             "build/current-production-family-live-ling-bundled-after-mpp-fix-20260524.json",
             "build/current-production-family-live-ling-bundled-after-topk-policy-20260524.json",
-            "build/current-objective-proof-audit-gemma4-release-boundary-20260604.json",
         ],
     },
     {
@@ -5537,6 +5539,7 @@ def _validate_current_mimo_v2_jang2l_root_cause(root: Path) -> dict[str, Any]:
     switchglu_artifact = CURRENT_MIMO_V2_JANG2L_SWITCHGLU_PARITY_ARTIFACT
     length_sweep_artifact = CURRENT_MIMO_V2_JANG2L_LENGTH_SWEEP_ARTIFACT
     tool_dialect_artifact = CURRENT_MIMO_V2_JANG2L_TOOL_DIALECT_ARTIFACT
+    current_audit_artifact = CURRENT_MIMO_V2_JANG2L_CURRENT_AUDIT_ARTIFACT
     result: dict[str, Any] = {
         "status": "missing",
         "artifacts": {
@@ -5545,6 +5548,7 @@ def _validate_current_mimo_v2_jang2l_root_cause(root: Path) -> dict[str, Any]:
             "switchglu_parity": switchglu_artifact,
             "length_sweep": length_sweep_artifact,
             "tool_dialect": tool_dialect_artifact,
+            "current_audit": current_audit_artifact,
         },
         "missing": [],
         "failures": [],
@@ -5553,6 +5557,9 @@ def _validate_current_mimo_v2_jang2l_root_cause(root: Path) -> dict[str, Any]:
         "switchglu_selected_expert_parity_passed": False,
         "prompt_length_coherence_blocked": False,
         "tool_protocol_blocked": False,
+        "manifest_integrity_passed": False,
+        "stale_local_state_absent": False,
+        "current_audit_status": None,
         "remote_artifacts": [],
         "remote_evidence_only": False,
         "local_release_clearance": False,
@@ -5563,12 +5570,14 @@ def _validate_current_mimo_v2_jang2l_root_cause(root: Path) -> dict[str, Any]:
     switchglu_path = root / switchglu_artifact
     length_sweep_path = root / length_sweep_artifact
     tool_dialect_path = root / tool_dialect_artifact
+    current_audit_path = root / current_audit_artifact
     for path, artifact in (
         (structural_path, structural_artifact),
         (text_cache_path, text_cache_artifact),
         (switchglu_path, switchglu_artifact),
         (length_sweep_path, length_sweep_artifact),
         (tool_dialect_path, tool_dialect_artifact),
+        (current_audit_path, current_audit_artifact),
     ):
         if not path.exists():
             result["missing"].append(artifact)
@@ -5581,10 +5590,26 @@ def _validate_current_mimo_v2_jang2l_root_cause(root: Path) -> dict[str, Any]:
         switchglu_payload = json.loads(switchglu_path.read_text(encoding="utf-8"))
         length_sweep_payload = json.loads(length_sweep_path.read_text(encoding="utf-8"))
         tool_dialect_payload = json.loads(tool_dialect_path.read_text(encoding="utf-8"))
+        current_audit_payload = json.loads(current_audit_path.read_text(encoding="utf-8"))
     except Exception as exc:  # noqa: BLE001 - report validation failure
         result["status"] = f"load_error:{type(exc).__name__}"
         result["failures"].append("json_load_error")
         return result
+
+    current_audit_component_ok = current_audit_payload.get("component_ok")
+    if not isinstance(current_audit_component_ok, dict):
+        current_audit_component_ok = {}
+    result["current_audit_status"] = current_audit_payload.get("status")
+    result["manifest_integrity_passed"] = (
+        current_audit_component_ok.get("manifest_integrity") is True
+    )
+    result["stale_local_state_absent"] = (
+        current_audit_component_ok.get("stale_local_state_absent") is True
+    )
+    if not result["manifest_integrity_passed"]:
+        result["failures"].append("mimo_manifest_integrity_not_pass")
+    if not result["stale_local_state_absent"]:
+        result["failures"].append("mimo_stale_local_state_present")
 
     result["structural_verify_passed"] = structural_payload.get("status") == "pass"
     if not result["structural_verify_passed"]:
@@ -5666,6 +5691,13 @@ def _validate_current_mimo_v2_jang2l_root_cause(root: Path) -> dict[str, Any]:
         and no_structured_tool_calls
         and required_rejected
     )
+
+    audit_long_prompt_open = current_audit_component_ok.get("long_prompt_coherence") is False
+    audit_tool_protocol_open = current_audit_component_ok.get("tool_protocol") is False
+    if audit_long_prompt_open:
+        result["prompt_length_coherence_blocked"] = True
+    if audit_tool_protocol_open:
+        result["tool_protocol_blocked"] = True
 
     if result["prompt_length_coherence_blocked"] or result["tool_protocol_blocked"]:
         result["status"] = "open"

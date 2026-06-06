@@ -196,6 +196,37 @@ def test_objective_digest_prefers_current_issue179_open_artifact_over_stale_mani
 def _write_passing_base_artifacts(tmp_path: Path) -> None:
     _write_json(
         tmp_path,
+        "build/current-production-family-live-ling-bundled-current-20260606.json",
+        {
+            "rows": [
+                {
+                    "live": {
+                        "status": "PASS",
+                        "checks": [
+                            {
+                                "name": "ling_multilingual_loop_trigger",
+                                "ok": True,
+                                "detail": {
+                                    "content_chars": 214,
+                                    "finish": "stop",
+                                    "head": "1 Создаю базовый холст через HTML.",
+                                    "quality": {
+                                        "cjk_chars": 0,
+                                        "cyrillic_chars": 160,
+                                        "latin_chars": 11,
+                                        "word_count": 21,
+                                    },
+                                },
+                            }
+                        ],
+                        "requests": [],
+                    }
+                }
+            ]
+        },
+    )
+    _write_json(
+        tmp_path,
         "build/current-dsv4-cache-proof-digest-20260521.json",
         {
             "checks": {
@@ -1182,12 +1213,11 @@ def test_objective_proof_digest_keeps_dsv4_long_quality_open(tmp_path):
     ] == "pass"
     assert rows["Ling/Bailing multilingual output quality is release-cleared"][
         "status"
-    ] == "open"
+    ] == "pass"
     open_requirements = [
         item["requirement"] for item in digest["requirements"] if item["status"] == "open"
     ]
     assert open_requirements == [
-        "Ling/Bailing multilingual output quality is release-cleared",
         "Gemma4 26B CRACK mixed-SWA app-engine speed floor is release-cleared",
         "Cross-family live multi-turn smoke matrix is release-cleared",
         "MiMo V2.5 JANG_2L runtime/tool/long-prompt quality is release-cleared",
@@ -1446,8 +1476,12 @@ def test_objective_proof_digest_tracks_ling_multilingual_cjk_leakage(tmp_path):
     rows = {item["requirement"]: item for item in digest["requirements"]}
 
     ling = rows["Ling/Bailing multilingual output quality is release-cleared"]
-    assert ling["status"] == "open"
+    assert ling["status"] == "pass"
     assert ling["details"]["max_cjk_chars"] == 17
+    assert ling["details"]["clearance_artifacts"] == [
+        "build/current-production-family-live-ling-bundled-current-20260606.json"
+    ]
+    assert ling["details"]["clearance_artifacts_with_cjk"] == []
     assert ling["details"]["artifacts_with_cjk"] == [
         "build/current-ling-jangtq-strict-russian-nocache-bundled-4850c9c2-20260524.json",
         "build/current-ling-mxfp4-crack-strict-russian-nocache-bundled-4850c9c2-20260524.json",
@@ -10091,7 +10125,6 @@ def test_objective_proof_digest_accepts_dsv4_quality_clearance_artifact(tmp_path
         item["requirement"] for item in digest["requirements"] if item["status"] == "open"
     ]
     assert open_requirements == [
-        "Ling/Bailing multilingual output quality is release-cleared",
         "Gemma4 26B CRACK mixed-SWA app-engine speed floor is release-cleared",
         "Cross-family live multi-turn smoke matrix is release-cleared",
         "MiMo V2.5 JANG_2L runtime/tool/long-prompt quality is release-cleared",

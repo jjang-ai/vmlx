@@ -29,6 +29,7 @@ from tests.cross_matrix.release_regression_manifest import (
     CURRENT_MIMO_V2_JANG2L_SWITCHGLU_PARITY_ARTIFACT,
     CURRENT_MIMO_V2_JANG2L_TEXT_CACHE_ARTIFACT,
     CURRENT_MIMO_V2_JANG2L_TOOL_DIALECT_ARTIFACT,
+    CURRENT_MIMO_V2_JANG2L_CURRENT_AUDIT_ARTIFACT,
     CURRENT_OBJECTIVE_DIGEST_ARTIFACT,
     CURRENT_REAL_UI_DSV4_MEMORY_PREFLIGHT_ARTIFACT,
     CURRENT_REAL_UI_LIVE_MODEL_PROOF_ARTIFACTS,
@@ -3270,6 +3271,29 @@ def _write_passing_mimo_v2_root_cause_artifacts(root: Path) -> None:
         + "\n",
         encoding="utf-8",
     )
+    current_audit_path = root / CURRENT_MIMO_V2_JANG2L_CURRENT_AUDIT_ARTIFACT
+    current_audit_path.parent.mkdir(parents=True, exist_ok=True)
+    current_audit_path.write_text(
+        json.dumps(
+            {
+                "status": "pass",
+                "local_release_clearance": True,
+                "component_ok": {
+                    "manifest_integrity": True,
+                    "stale_local_state_absent": True,
+                    "structural_verify": True,
+                    "text_cache_narrow": True,
+                    "switchglu_selected_expert_parity": True,
+                    "cache_vs_nocache_next_token": True,
+                    "long_prompt_coherence": True,
+                    "tool_protocol": True,
+                },
+                "blockers": [],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
 
 
 def _write_open_mimo_v2_sink_ab_artifact(root: Path) -> None:
@@ -3819,7 +3843,7 @@ def test_release_regression_manifest_current_sweep_uses_latest_live_smoke_artifa
     assert "current-regression-suite-20260528-installed-aggregate-stale.json" not in joined
     assert "current-regression-suite-20260528-epipe-aggregate-guard.json" not in joined
     assert "current-regression-suite-20260528-dsv4-continue-refresh.json" not in joined
-    assert "current-regression-suite-after-mimo-active-scope-20260606.json" in joined
+    assert "current-regression-suite-after-mimo-current-audit-20260606.json" in joined
     assert "current-regression-suite-gemma4-release-boundary-after-ui-e2e-fixes-dmg-build-20260604.json" not in joined
     assert "current-regression-suite-20260602-v1553-installed-tahoe-refresh.json" not in joined
     assert "current-regression-suite-20260602-vm-stat-gate-validation.json" not in joined
@@ -11366,6 +11390,7 @@ def test_current_mimo_v2_proof_artifact_constants_are_local_only():
         CURRENT_MIMO_V2_JANG2L_SWITCHGLU_PARITY_ARTIFACT,
         CURRENT_MIMO_V2_JANG2L_TEXT_CACHE_ARTIFACT,
         CURRENT_MIMO_V2_JANG2L_TOOL_DIALECT_ARTIFACT,
+        CURRENT_MIMO_V2_JANG2L_CURRENT_AUDIT_ARTIFACT,
     ]
 
     assert all(artifact.startswith("build/current-") for artifact in artifacts)
@@ -11399,6 +11424,7 @@ def test_release_regression_manifest_rejects_missing_mimo_v2_root_cause_artifact
         CURRENT_MIMO_V2_JANG2L_SWITCHGLU_PARITY_ARTIFACT,
         CURRENT_MIMO_V2_JANG2L_LENGTH_SWEEP_ARTIFACT,
         CURRENT_MIMO_V2_JANG2L_TOOL_DIALECT_ARTIFACT,
+        CURRENT_MIMO_V2_JANG2L_CURRENT_AUDIT_ARTIFACT,
     ]
 
 
@@ -11581,7 +11607,7 @@ def test_release_regression_manifest_runner_default_out_tracks_current_release_p
     from tests.cross_matrix import run_release_regression_manifest as runner
 
     assert runner.DEFAULT_OUT == Path(
-        "build/current-release-regression-manifest-after-mimo-active-scope-20260606.json"
+        "build/current-release-regression-manifest-after-mimo-current-audit-20260606.json"
     )
 
 
@@ -14582,6 +14608,8 @@ def test_release_regression_manifest_tracks_ling_multilingual_quality_clearance_
     assert row["mode"] == "live"
     assert row["heavy"] is True
     assert "Ling/Bailing multilingual output quality is release-cleared" in joined
+    assert "current-production-family-live-ling-bundled-current-20260606.json" in joined
+    assert "run_production_family_audit.py --rows ling_flash_tq --live --py /Applications/vMLX.app/Contents/Resources/bundled-python/python/bin/python3.12" in joined
     assert "current-ling-jangtq-strict-russian-nocache-bundled-4850c9c2-20260524.json" in joined
     assert "current-ling-mxfp4-crack-strict-russian-nocache-bundled-4850c9c2-20260524.json" in joined
     assert "current-ling-jangtq-russian-prompt-variant-probe-20260524.json" in joined

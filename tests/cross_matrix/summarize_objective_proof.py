@@ -63,7 +63,7 @@ from tests.cross_matrix.release_regression_manifest import (
 
 DEFAULT_OUT = Path("build/current-objective-proof-audit-20260602-cache-detail-zero-cached.json")
 CURRENT_RELEASE_REGRESSION_MANIFEST_REL = (
-    "build/current-release-regression-manifest-after-mimo-active-scope-20260606.json"
+    "build/current-release-regression-manifest-after-mimo-current-audit-20260606.json"
 )
 DSV4_QUALITY_CLEARANCE_REL = "build/current-dsv4-long-output-quality-clearance-20260521.json"
 DSV4_CURRENT_IDENTIFIER_CANARY_REL = (
@@ -249,7 +249,7 @@ DSV4_DEFAULT_CACHE_TOOL_LOOP_DRYRUN_CONTROLS_REL = (
     "build/current-dsv4-default-cache-tool-loop-dryrun-controls-20260525.json"
 )
 LING_INSTALLED_LIVE_AUDIT_REL = (
-    "build/current-production-family-audit-ling-flash-tq-live-installed149-20260524-codex.json"
+    "build/current-production-family-live-ling-bundled-current-20260606.json"
 )
 LING_JANGTQ_STRICT_RUSSIAN_NOCACHE_REL = (
     "build/current-ling-jangtq-strict-russian-nocache-bundled-4850c9c2-20260524.json"
@@ -355,6 +355,9 @@ MIMO_V2_JANG2L_LENGTH_SWEEP_REL = (
 )
 MIMO_V2_JANG2L_TOOL_DIALECT_REL = (
     "build/current-mimo-v2-jang2l-tool-dialect-failure-20260606.json"
+)
+MIMO_V2_JANG2L_CURRENT_AUDIT_REL = (
+    "build/current-mimo-v2-jang2l-current-audit-20260606.json"
 )
 ALL_LOCAL_MODEL_SMOKE_DSV4_JANGTQ_K_REL = (
     "build/current-all-local-model-smoke-dsv4-jangtq-k-bundled-cachehit-20260524/summary.json"
@@ -874,6 +877,14 @@ def _ling_request_rows(payload: dict[str, Any]) -> list[dict[str, Any]]:
         for request in live.get("requests") or []:
             if isinstance(request, dict):
                 rows.append(request)
+        for check in live.get("checks") or []:
+            if not isinstance(check, dict):
+                continue
+            detail = check.get("detail")
+            if isinstance(detail, dict):
+                row = dict(detail)
+                row.setdefault("name", check.get("name"))
+                rows.append(row)
     return rows
 
 
@@ -933,9 +944,7 @@ def _ling_multilingual_quality_detail(
         ),
     }
     clearance_artifacts = {
-        LING_SIMPLE_AFTER_MPP_FIX_REL,
-        LING_CONTINUOUS_AFTER_MPP_FIX_REL,
-        LING_BUNDLED_AFTER_TOPK_POLICY_LIVE_REL,
+        LING_INSTALLED_LIVE_AUDIT_REL,
     }
     artifact_statuses: dict[str, Any] = {}
     artifacts_with_cjk: list[str] = []
@@ -4757,6 +4766,7 @@ def _mimo_v2_jang2l_quality_detail(root: Path) -> tuple[bool, dict[str, Any]]:
         "switchglu_parity": MIMO_V2_JANG2L_SWITCHGLU_PARITY_REL,
         "length_sweep": MIMO_V2_JANG2L_LENGTH_SWEEP_REL,
         "tool_dialect": MIMO_V2_JANG2L_TOOL_DIALECT_REL,
+        "current_audit": MIMO_V2_JANG2L_CURRENT_AUDIT_REL,
     }
     payloads = {key: _load(root, rel) for key, rel in artifacts.items()}
     missing = [
@@ -4764,6 +4774,15 @@ def _mimo_v2_jang2l_quality_detail(root: Path) -> tuple[bool, dict[str, Any]]:
         for rel in artifacts.values()
         if not (root / rel).exists()
     ]
+    current_audit = payloads["current_audit"]
+    current_audit_component_ok = current_audit.get("component_ok")
+    if not isinstance(current_audit_component_ok, dict):
+        current_audit_component_ok = {}
+    manifest_integrity_passed = current_audit_component_ok.get("manifest_integrity") is True
+    stale_local_state_absent = (
+        current_audit_component_ok.get("stale_local_state_absent") is True
+    )
+
     structural_pass = payloads["structural_verify"].get("status") == "pass"
 
     text_requests = payloads["text_cache"].get("requests")
@@ -4837,8 +4856,17 @@ def _mimo_v2_jang2l_quality_detail(root: Path) -> tuple[bool, dict[str, Any]]:
         )
     )
 
+    audit_long_prompt_open = current_audit_component_ok.get("long_prompt_coherence") is False
+    audit_tool_protocol_open = current_audit_component_ok.get("tool_protocol") is False
+    if audit_long_prompt_open:
+        prompt_length_coherence_blocked = True
+    if audit_tool_protocol_open:
+        tool_protocol_blocked = True
+
     ok = (
         not missing
+        and manifest_integrity_passed
+        and stale_local_state_absent
         and structural_pass
         and text_cache_narrow_pass
         and switchglu_parity_pass
@@ -4848,6 +4876,9 @@ def _mimo_v2_jang2l_quality_detail(root: Path) -> tuple[bool, dict[str, Any]]:
     return ok, {
         "artifacts": artifacts,
         "missing": missing,
+        "current_audit_status": current_audit.get("status"),
+        "manifest_integrity_passed": manifest_integrity_passed,
+        "stale_local_state_absent": stale_local_state_absent,
         "structural_verify_passed": structural_pass,
         "text_cache_narrow_pass": text_cache_narrow_pass,
         "switchglu_selected_expert_parity_passed": switchglu_parity_pass,
@@ -6596,19 +6627,6 @@ def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
         _status(ling_quality_ok),
         [
             LING_INSTALLED_LIVE_AUDIT_REL,
-            LING_JANGTQ_STRICT_RUSSIAN_NOCACHE_REL,
-            LING_MXFP4_STRICT_RUSSIAN_NOCACHE_REL,
-            LING_JANGTQ_RUSSIAN_PROMPT_VARIANT_REL,
-            LING_JANGTQ_SOURCE_PREFILL_STREAM_REL,
-            LING_JANGTQ_BUNDLED_COMPAT_PREFILL_STREAM_REL,
-            LING_JANGTQ_BUNDLED_NATIVE_PREFILL_STREAM_REL,
-            LING_BUNDLED_NATIVE_LIVE_RERUN_REL,
-            LING_JANGTQ_COLD_SKIPCACHE_REPEAT_REL,
-            LING_JANGTQ_BATCHGEN_TEMP0_REPEAT_REL,
-            LING_SIMPLE_AFTER_MPP_FIX_REL,
-            LING_CONTINUOUS_AFTER_MPP_FIX_REL,
-            LING_BUNDLED_AFTER_MPP_FIX_LIVE_REL,
-            LING_BUNDLED_AFTER_TOPK_POLICY_LIVE_REL,
         ],
         caveat=(
             None
@@ -6721,6 +6739,7 @@ def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
             MIMO_V2_JANG2L_SWITCHGLU_PARITY_REL,
             MIMO_V2_JANG2L_LENGTH_SWEEP_REL,
             MIMO_V2_JANG2L_TOOL_DIALECT_REL,
+            MIMO_V2_JANG2L_CURRENT_AUDIT_REL,
         ],
         caveat=(
             None

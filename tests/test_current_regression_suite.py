@@ -1050,7 +1050,7 @@ def test_current_regression_suite_refreshes_release_regression_manifest(monkeypa
     )
     assert any(
         name == "release_regression_manifest"
-        and "build/current-release-regression-manifest-after-mimo-active-scope-20260606.json"
+        and "build/current-release-regression-manifest-after-mimo-current-audit-20260606.json"
         in cmd
         for name, cmd in seen_steps
     )
