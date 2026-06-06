@@ -63,7 +63,7 @@ from tests.cross_matrix.release_regression_manifest import (
 
 DEFAULT_OUT = Path("build/current-objective-proof-audit-20260602-cache-detail-zero-cached.json")
 CURRENT_RELEASE_REGRESSION_MANIFEST_REL = (
-    "build/current-release-regression-manifest-after-mimo-current-audit-20260606.json"
+    "build/current-release-regression-manifest-after-cross-family-smoke-refresh-20260606.json"
 )
 DSV4_QUALITY_CLEARANCE_REL = "build/current-dsv4-long-output-quality-clearance-20260521.json"
 DSV4_CURRENT_IDENTIFIER_CANARY_REL = (
@@ -317,6 +317,9 @@ GEMMA4_LOCAL_METADATA_AUDIT_REL = (
 ALL_LOCAL_MODEL_SMOKE_ZAYA_TEXT_REL = (
     "build/current-all-local-model-smoke-zaya-text-bundled-20260524/summary.json"
 )
+ALL_LOCAL_MODEL_SMOKE_ZAYA_TEXT_VL_CURRENT_REL = (
+    "build/current-all-local-model-smoke-zaya-text-vl-tools-media-20260606/summary.json"
+)
 ALL_LOCAL_MODEL_SMOKE_ZAYA_VL_REL = (
     "build/current-all-local-model-smoke-zaya-vl-bundled-20260524/summary.json"
 )
@@ -325,6 +328,9 @@ ALL_LOCAL_MODEL_SMOKE_ZAYA_VL_JANGTQ4_REL = (
 )
 ALL_LOCAL_MODEL_SMOKE_NEMOTRON_OMNI_JANGTQ_REL = (
     "build/current-all-local-model-smoke-nemotron-omni-jangtq-video-bundled-20260526-rerun/summary.json"
+)
+ALL_LOCAL_MODEL_SMOKE_LING_HY3_NEMOTRON_CURRENT_REL = (
+    "build/current-all-local-model-smoke-ling-hy3-nemotron-tools-media-20260606/summary.json"
 )
 ALL_LOCAL_MODEL_SMOKE_GEMMA4_26B_CRACK_REL = (
     "build/current-all-local-model-smoke-gemma26-jang4m-tools-media-continuation-20260606/summary.json"
@@ -335,11 +341,17 @@ ALL_LOCAL_MODEL_SMOKE_LING_BAILING_JANGTQ_REL = (
 ALL_LOCAL_MODEL_SMOKE_QWEN36_MXFP4_CRACK_REL = (
     "build/current-all-local-model-smoke-qwen36-mxfp4-crack-bundled-20260525-rerun/summary.json"
 )
+ALL_LOCAL_MODEL_SMOKE_QWEN35_MXFP8_MTP_CURRENT_REL = (
+    "build/current-all-local-model-smoke-qwen35-mxfp8-mtp-tools-media-20260606/summary.json"
+)
 ALL_LOCAL_MODEL_SMOKE_HY3_JANGTQ2_REL = (
     "build/current-all-local-model-smoke-hy3-jangtq2-bundled-toolprobe-20260525/summary.json"
 )
 ALL_LOCAL_MODEL_SMOKE_MINIMAX_SMALL_JANGTQ_REL = (
     "build/current-all-local-model-smoke-minimaxk-tools-continuation-20260606/summary.json"
+)
+ALL_LOCAL_MODEL_SMOKE_LIVE_SLICE_CURRENT_REL = (
+    "build/current-all-local-model-smoke-live-slice-tools-media-continuation-20260606/summary.json"
 )
 ALL_LOCAL_MODEL_SMOKE_MIMO_V2_JANG2L_REL = (
     "build/current-all-local-model-smoke-mimo-v25-jang2l-tools-media-rerun-20260606/summary.json"
@@ -390,25 +402,29 @@ ALL_LOCAL_MODEL_SMOKE_REQUIRED_FAMILIES = (
     "dsv4",
     "gemma4",
     "hy3",
+    "lfm",
     "ling_bailing",
     "minimax",
     "mimo_v2",
     "nemotron",
     "qwen36",
+    "step3p7",
     "zaya_text",
     "zaya_vl",
 )
 ALL_LOCAL_MODEL_SMOKE_ARTIFACTS_BY_FAMILY = {
     "dsv4": [ALL_LOCAL_MODEL_SMOKE_DSV4_JANGTQ_K_REL],
-    "gemma4": [ALL_LOCAL_MODEL_SMOKE_GEMMA4_26B_CRACK_REL],
-    "hy3": [ALL_LOCAL_MODEL_SMOKE_HY3_JANGTQ2_REL],
-    "ling_bailing": [ALL_LOCAL_MODEL_SMOKE_LING_BAILING_JANGTQ_REL],
-    "minimax": [ALL_LOCAL_MODEL_SMOKE_MINIMAX_SMALL_JANGTQ_REL],
+    "gemma4": [ALL_LOCAL_MODEL_SMOKE_LIVE_SLICE_CURRENT_REL, ALL_LOCAL_MODEL_SMOKE_GEMMA4_26B_CRACK_REL],
+    "hy3": [ALL_LOCAL_MODEL_SMOKE_LING_HY3_NEMOTRON_CURRENT_REL, ALL_LOCAL_MODEL_SMOKE_HY3_JANGTQ2_REL],
+    "lfm": [ALL_LOCAL_MODEL_SMOKE_LIVE_SLICE_CURRENT_REL],
+    "ling_bailing": [ALL_LOCAL_MODEL_SMOKE_LING_HY3_NEMOTRON_CURRENT_REL, ALL_LOCAL_MODEL_SMOKE_LING_BAILING_JANGTQ_REL],
+    "minimax": [ALL_LOCAL_MODEL_SMOKE_LIVE_SLICE_CURRENT_REL, ALL_LOCAL_MODEL_SMOKE_MINIMAX_SMALL_JANGTQ_REL],
     "mimo_v2": [ALL_LOCAL_MODEL_SMOKE_MIMO_V2_JANG2L_REL],
-    "nemotron": [ALL_LOCAL_MODEL_SMOKE_NEMOTRON_OMNI_JANGTQ_REL],
-    "qwen36": [ALL_LOCAL_MODEL_SMOKE_QWEN36_MXFP4_CRACK_REL],
-    "zaya_text": [ALL_LOCAL_MODEL_SMOKE_ZAYA_TEXT_REL],
-    "zaya_vl": [ALL_LOCAL_MODEL_SMOKE_ZAYA_VL_JANGTQ4_REL],
+    "nemotron": [ALL_LOCAL_MODEL_SMOKE_LING_HY3_NEMOTRON_CURRENT_REL, ALL_LOCAL_MODEL_SMOKE_NEMOTRON_OMNI_JANGTQ_REL],
+    "qwen36": [ALL_LOCAL_MODEL_SMOKE_QWEN35_MXFP8_MTP_CURRENT_REL, ALL_LOCAL_MODEL_SMOKE_LIVE_SLICE_CURRENT_REL, ALL_LOCAL_MODEL_SMOKE_QWEN36_MXFP4_CRACK_REL],
+    "step3p7": [ALL_LOCAL_MODEL_SMOKE_LIVE_SLICE_CURRENT_REL],
+    "zaya_text": [ALL_LOCAL_MODEL_SMOKE_ZAYA_TEXT_VL_CURRENT_REL, ALL_LOCAL_MODEL_SMOKE_ZAYA_TEXT_REL],
+    "zaya_vl": [ALL_LOCAL_MODEL_SMOKE_ZAYA_TEXT_VL_CURRENT_REL, ALL_LOCAL_MODEL_SMOKE_ZAYA_VL_JANGTQ4_REL],
 }
 GEMMA4_MIXED_SWA_SPEED_FLOOR_TOK_S = 80.0
 GEMMA4_MIXED_SWA_STREAMING_MIN_COMPLETION_TOKENS = 256
@@ -4522,6 +4538,10 @@ def _smoke_family_key(row: dict[str, Any]) -> str | None:
         return "nemotron"
     if "qwen3.6" in blob or "qwen3_5" in blob or "qwen36" in blob:
         return "qwen36"
+    if "lfm2" in blob or "lfm2.5" in blob:
+        return "lfm"
+    if "step-3.7" in blob or "step3p7" in blob or model_type == "step3p7":
+        return "step3p7"
     if "zaya1-vl" in blob or model_type == "zaya1_vl":
         return "zaya_vl"
     if "zaya" in blob:
@@ -4549,6 +4569,7 @@ SMOKE_REQUIRED_REQUEST_LABELS_BY_FAMILY = {
     "minimax": ("reasoning_on",),
     "mimo_v2": ("reasoning_on",),
     "qwen36": ("reasoning_on",),
+    "step3p7": ("reasoning_on",),
 }
 SMOKE_REQUIRED_CACHE_HIT_FAMILIES = set(ALL_LOCAL_MODEL_SMOKE_REQUIRED_FAMILIES)
 SMOKE_UNEXPECTED_CJK_RE = re.compile(
@@ -5320,30 +5341,25 @@ def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
     gemma4_chat_visible_nocache = _load(root, GEMMA4_CHAT_VISIBLE_NOCACHE_REL)
     gemma4_local_metadata_audit = _load(root, GEMMA4_LOCAL_METADATA_AUDIT_REL)
     all_local_model_smoke_payloads = [
-        (ALL_LOCAL_MODEL_SMOKE_ZAYA_TEXT_REL, _load(root, ALL_LOCAL_MODEL_SMOKE_ZAYA_TEXT_REL)),
         (
-            ALL_LOCAL_MODEL_SMOKE_ZAYA_VL_JANGTQ4_REL,
-            _load(root, ALL_LOCAL_MODEL_SMOKE_ZAYA_VL_JANGTQ4_REL),
+            ALL_LOCAL_MODEL_SMOKE_LIVE_SLICE_CURRENT_REL,
+            _load(root, ALL_LOCAL_MODEL_SMOKE_LIVE_SLICE_CURRENT_REL),
         ),
         (
-            ALL_LOCAL_MODEL_SMOKE_NEMOTRON_OMNI_JANGTQ_REL,
-            _load(root, ALL_LOCAL_MODEL_SMOKE_NEMOTRON_OMNI_JANGTQ_REL),
+            ALL_LOCAL_MODEL_SMOKE_ZAYA_TEXT_VL_CURRENT_REL,
+            _load(root, ALL_LOCAL_MODEL_SMOKE_ZAYA_TEXT_VL_CURRENT_REL),
+        ),
+        (
+            ALL_LOCAL_MODEL_SMOKE_LING_HY3_NEMOTRON_CURRENT_REL,
+            _load(root, ALL_LOCAL_MODEL_SMOKE_LING_HY3_NEMOTRON_CURRENT_REL),
+        ),
+        (
+            ALL_LOCAL_MODEL_SMOKE_QWEN35_MXFP8_MTP_CURRENT_REL,
+            _load(root, ALL_LOCAL_MODEL_SMOKE_QWEN35_MXFP8_MTP_CURRENT_REL),
         ),
         (
             ALL_LOCAL_MODEL_SMOKE_GEMMA4_26B_CRACK_REL,
             _load(root, ALL_LOCAL_MODEL_SMOKE_GEMMA4_26B_CRACK_REL),
-        ),
-        (
-            ALL_LOCAL_MODEL_SMOKE_LING_BAILING_JANGTQ_REL,
-            _load(root, ALL_LOCAL_MODEL_SMOKE_LING_BAILING_JANGTQ_REL),
-        ),
-        (
-            ALL_LOCAL_MODEL_SMOKE_QWEN36_MXFP4_CRACK_REL,
-            _load(root, ALL_LOCAL_MODEL_SMOKE_QWEN36_MXFP4_CRACK_REL),
-        ),
-        (
-            ALL_LOCAL_MODEL_SMOKE_HY3_JANGTQ2_REL,
-            _load(root, ALL_LOCAL_MODEL_SMOKE_HY3_JANGTQ2_REL),
         ),
         (
             ALL_LOCAL_MODEL_SMOKE_MINIMAX_SMALL_JANGTQ_REL,
@@ -6767,18 +6783,7 @@ def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
         requirements,
         "Cross-family live multi-turn smoke matrix is release-cleared",
         _status(all_local_smoke_release_ok),
-        [
-            ALL_LOCAL_MODEL_SMOKE_ZAYA_TEXT_REL,
-            ALL_LOCAL_MODEL_SMOKE_ZAYA_VL_JANGTQ4_REL,
-            ALL_LOCAL_MODEL_SMOKE_NEMOTRON_OMNI_JANGTQ_REL,
-            ALL_LOCAL_MODEL_SMOKE_GEMMA4_26B_CRACK_REL,
-            ALL_LOCAL_MODEL_SMOKE_LING_BAILING_JANGTQ_REL,
-            ALL_LOCAL_MODEL_SMOKE_QWEN36_MXFP4_CRACK_REL,
-            ALL_LOCAL_MODEL_SMOKE_HY3_JANGTQ2_REL,
-            ALL_LOCAL_MODEL_SMOKE_MINIMAX_SMALL_JANGTQ_REL,
-            ALL_LOCAL_MODEL_SMOKE_MIMO_V2_JANG2L_REL,
-            ALL_LOCAL_MODEL_SMOKE_DSV4_JANGTQ_K_REL,
-        ],
+        [rel for rel, _payload in all_local_model_smoke_payloads],
         caveat=(
             None
             if all_local_smoke_ok

@@ -1050,7 +1050,7 @@ def test_current_regression_suite_refreshes_release_regression_manifest(monkeypa
     )
     assert any(
         name == "release_regression_manifest"
-        and "build/current-release-regression-manifest-after-mimo-current-audit-20260606.json"
+        and "build/current-release-regression-manifest-after-cross-family-smoke-refresh-20260606.json"
         in cmd
         for name, cmd in seen_steps
     )
@@ -1481,7 +1481,7 @@ def test_current_regression_suite_refreshes_current_objective_digest_artifact(
 
     assert artifact["status"] == "pass"
     assert suite.CURRENT_OBJECTIVE_DIGEST_ARTIFACT == (
-        "build/current-objective-proof-after-gemma26-installed-speed-visible-20260606.json"
+        "build/current-objective-proof-after-cross-family-smoke-refresh-20260606.json"
     )
     assert any(
         name == "objective_digest"

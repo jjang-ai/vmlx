@@ -1440,7 +1440,7 @@ def test_objective_proof_digest_tracks_ling_multilingual_cjk_leakage(tmp_path):
     )
     _write_json(
         tmp_path,
-        "build/current-dsv4-route-mode-code-exactness-memory-preflight-after-lfm-step-manifest-fix-20260604.json",
+        "build/current-dsv4-route-mode-code-exactness-memory-preflight-cross-family-20260606.json",
         {
             "status": "pass",
             "reason": "sufficient_free_memory",
@@ -2637,7 +2637,7 @@ def test_objective_proof_digest_surfaces_dsv4_chatmax_prompt_trigger_probe(tmp_p
     )
     _write_json(
         tmp_path,
-        "build/current-dsv4-route-mode-code-exactness-memory-preflight-after-lfm-step-manifest-fix-20260604.json",
+        "build/current-dsv4-route-mode-code-exactness-memory-preflight-cross-family-20260606.json",
         {
             "status": "pass",
             "reason": "sufficient_free_memory",
@@ -3693,7 +3693,7 @@ def test_objective_proof_digest_summarizes_dsv4_exact_code_root_boundary(
     )
     _write_json(
         tmp_path,
-        "build/current-dsv4-route-mode-code-exactness-memory-preflight-after-lfm-step-manifest-fix-20260604.json",
+        "build/current-dsv4-route-mode-code-exactness-memory-preflight-cross-family-20260606.json",
         {
             "status": "skipped",
             "reason": "insufficient_free_memory",
@@ -3821,7 +3821,7 @@ def test_objective_proof_digest_summarizes_dsv4_exact_code_root_boundary(
     assert summary["current_primary_failure"] == "direct_off_exact_code_generation"
     assert summary["source_full_output_preflight"]["artifact_present"] is True
     assert summary["source_full_output_preflight"]["artifact"] == (
-        "build/current-dsv4-route-mode-code-exactness-memory-preflight-after-lfm-step-manifest-fix-20260604.json"
+        "build/current-dsv4-route-mode-code-exactness-memory-preflight-cross-family-20260606.json"
     )
     assert summary["source_full_output_preflight"]["status"] == "skipped"
     assert summary["source_full_output_preflight"]["reason"] == "insufficient_free_memory"
@@ -3855,7 +3855,7 @@ def test_objective_proof_digest_summarizes_dsv4_exact_code_root_boundary(
     assert summary["source_full_output_clearance_missing"] is True
     joined_evidence = "\n".join(quality["evidence"])
     assert (
-        "current-dsv4-route-mode-code-exactness-memory-preflight-after-lfm-step-manifest-fix-20260604.json"
+        "current-dsv4-route-mode-code-exactness-memory-preflight-cross-family-20260606.json"
         in joined_evidence
     )
     assert (
@@ -8225,32 +8225,32 @@ def test_objective_proof_digest_keeps_cross_family_live_smoke_open_on_non_mimo_g
     assert row["details"]["covered_family_keys"] == [
         "dsv4",
         "gemma4",
-        "hy3",
-        "ling_bailing",
         "minimax",
+    ]
+    assert row["details"]["missing_required_family_keys"] == [
+        "hy3",
+        "lfm",
+        "ling_bailing",
+        "mimo_v2",
+        "nemotron",
         "qwen36",
+        "step3p7",
         "zaya_text",
         "zaya_vl",
     ]
-    assert row["details"]["missing_required_family_keys"] == ["mimo_v2", "nemotron"]
     assert row["details"]["non_mimo_status"] == "open"
-    assert row["details"]["non_mimo_missing_required_family_keys"] == ["nemotron"]
-    assert row["details"]["non_mimo_not_pass_artifacts"] == [
-        "build/current-all-local-model-smoke-nemotron-omni-jangtq-video-bundled-20260526-rerun/summary.json"
+    assert row["details"]["non_mimo_missing_required_family_keys"] == [
+        "hy3",
+        "lfm",
+        "ling_bailing",
+        "nemotron",
+        "qwen36",
+        "step3p7",
+        "zaya_text",
+        "zaya_vl",
     ]
-    assert row["details"]["not_pass_required_family_artifacts"] == {
-        "nemotron": [
-            "build/current-all-local-model-smoke-nemotron-omni-jangtq-video-bundled-20260526-rerun/summary.json"
-        ],
-    }
-    assert row["details"]["blocking_required_family_artifacts"] == {
-        "mimo_v2": [
-            "build/current-all-local-model-smoke-mimo-v25-jang2l-tools-media-rerun-20260606/summary.json"
-        ],
-        "nemotron": [
-            "build/current-all-local-model-smoke-nemotron-omni-jangtq-video-bundled-20260526-rerun/summary.json"
-        ],
-    }
+    assert row["details"]["non_mimo_not_pass_artifacts"] == []
+    assert row["details"]["not_pass_required_family_artifacts"] == {}
 
 
 def test_objective_proof_digest_keeps_cross_family_live_smoke_open_when_only_mimo_is_red(
@@ -8266,14 +8266,16 @@ def test_objective_proof_digest_keeps_cross_family_live_smoke_open_when_only_mim
         "dsv4": ("DeepSeek-V4-Flash-JANGTQ-K", "deepseek_v4"),
         "gemma4": ("Gemma-4-26B-A4B-JANG_4M-CRACK", "gemma4"),
         "hy3": ("Hy3-JANGTQ2", "hy3"),
+        "lfm": ("LFM2.5-8B-A1B-MXFP4-CRACK", "lfm2_moe"),
         "ling_bailing": ("Ling-Bailing-JANGTQ", "ling"),
         "minimax": ("MiniMax-Small-JANGTQ", "minimax"),
         "nemotron": ("Nemotron-Omni-Nano-JANGTQ-CRACK", "nemotron_h"),
         "qwen36": ("Qwen3.6-27B-MXFP4-CRACK", "qwen3_5"),
+        "step3p7": ("Step-3.7-Flash-JANG_2L-CRACK", "step3p7"),
         "zaya_text": ("ZAYA1-8B-MXFP4", "zaya"),
         "zaya_vl": ("ZAYA1-VL-8B-JANGTQ4", "zaya1_vl"),
     }
-    reasoning_families = {"dsv4", "gemma4", "hy3", "minimax", "qwen36"}
+    reasoning_families = {"dsv4", "gemma4", "hy3", "minimax", "qwen36", "step3p7"}
     for family, (name, model_type) in family_rows.items():
         requests = [
             {
@@ -8313,6 +8315,83 @@ def test_objective_proof_digest_keeps_cross_family_live_smoke_open_when_only_mim
                         },
                         "requests": requests,
                     }
+                ],
+            },
+        )
+    def smoke_result(
+        family: str,
+        name: str,
+        model_type: str,
+    ) -> dict[str, object]:
+        requests = [
+            {
+                "label": "text_cache_repeat_2",
+                "validation_failures": [],
+                "content": "ACK",
+                "cache_summary": {
+                    "has_cache_hit": True,
+                    "cache_hit_tokens": 48,
+                },
+            },
+            {
+                "label": "text_multiturn_recall",
+                "validation_failures": [],
+                "content": "color=blue and animal=cat",
+                "cache_summary": {"has_cache_hit": True},
+            },
+        ]
+        if family in reasoning_families:
+            requests.append(
+                {
+                    "label": "reasoning_on",
+                    "validation_failures": [],
+                    "content": "FINAL=OK",
+                    "reasoning_chars": 24,
+                    "cache_summary": {"has_cache_hit": True},
+                }
+            )
+        return {
+            "status": "pass",
+            "row": {
+                "name": name,
+                "model_type": model_type,
+                "cache_family": f"{family}_cache",
+            },
+            "requests": requests,
+        }
+
+    for rel, grouped_families in {
+        "build/current-all-local-model-smoke-live-slice-tools-media-continuation-20260606/summary.json": (
+            "gemma4",
+            "lfm",
+            "minimax",
+            "qwen36",
+            "step3p7",
+        ),
+        "build/current-all-local-model-smoke-ling-hy3-nemotron-tools-media-20260606/summary.json": (
+            "hy3",
+            "ling_bailing",
+            "nemotron",
+        ),
+        "build/current-all-local-model-smoke-zaya-text-vl-tools-media-20260606/summary.json": (
+            "zaya_text",
+            "zaya_vl",
+        ),
+    }.items():
+        _write_json(
+            tmp_path,
+            rel,
+            {
+                "status": "pass",
+                "completed": len(grouped_families),
+                "row_count": len(grouped_families),
+                "results": [
+                    smoke_result(
+                        family,
+                        family_rows[family][0],
+                        family_rows[family][1],
+                    )
+                    for family in grouped_families
                 ],
             },
         )
@@ -9783,13 +9862,13 @@ def test_objective_proof_digest_accepts_dsv4_quality_clearance_artifact(tmp_path
             },
             "artifacts": {
                 "identifier_gate": "build/current-dsv4-identifier-count-ablation-20260521/result.json",
-                "full_output_gate": "build/current-dsv4-route-mode-code-exactness-memory-preflight-after-lfm-step-manifest-fix-20260604.json",
+                "full_output_gate": "build/current-dsv4-route-mode-code-exactness-memory-preflight-cross-family-20260606.json",
             },
         },
     )
     _write_json(
         tmp_path,
-        "build/current-dsv4-route-mode-code-exactness-memory-preflight-after-lfm-step-manifest-fix-20260604.json",
+        "build/current-dsv4-route-mode-code-exactness-memory-preflight-cross-family-20260606.json",
         {
             "status": "pass",
             "reason": "sufficient_free_memory",
@@ -10294,7 +10373,7 @@ def test_objective_proof_digest_reports_missing_current_dsv4_clearance_artifacts
             },
             "artifacts": {
                 "identifier_gate": "build/current-dsv4-identifier-count-ablation-20260521/result.json",
-                "full_output_gate": "build/current-dsv4-route-mode-code-exactness-memory-preflight-after-lfm-step-manifest-fix-20260604.json",
+                "full_output_gate": "build/current-dsv4-route-mode-code-exactness-memory-preflight-cross-family-20260606.json",
             },
         },
     )
@@ -10307,7 +10386,7 @@ def test_objective_proof_digest_reports_missing_current_dsv4_clearance_artifacts
     assert quality["details"]["legacy_clearance_artifacts"] == {}
     assert quality["details"]["missing_clearance_artifacts"] == [
         "build/current-dsv4-identifier-count-ablation-20260521/result.json",
-        "build/current-dsv4-route-mode-code-exactness-memory-preflight-after-lfm-step-manifest-fix-20260604.json",
+        "build/current-dsv4-route-mode-code-exactness-memory-preflight-cross-family-20260606.json",
     ]
 
 
