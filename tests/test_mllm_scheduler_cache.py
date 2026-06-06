@@ -34,6 +34,46 @@ def test_mllm_scheduler_does_not_shadow_hashlib_in_init():
     assert "hashlib.sha256" in source
 
 
+def test_mimo_v2_cache_extraction_preserves_swa_kv_heads():
+    """MiMo full/SWA layers have different legal KV head counts.
+
+    The primary config has num_key_value_heads=4, while rotating SWA layers use
+    swa_num_key_value_heads=8. Prefix-cache storage must not normalize the SWA
+    layer down to 4 heads, or the next cache hit crashes when RotatingKVCache
+    tries to concatenate 4-head cached state with 8-head live suffix KV.
+    """
+    import mlx.core as mx
+
+    class FullKV:
+        state = (
+            mx.zeros((1, 4, 5, 192), mx.float32),
+            mx.zeros((1, 4, 5, 192), mx.float32),
+        )
+        meta_state = (5,)
+
+    class RotatingKVCache:
+        state = (
+            mx.zeros((1, 8, 5, 192), mx.float32),
+            mx.zeros((1, 8, 5, 192), mx.float32),
+        )
+        meta_state = (128, 0, 5, 5)
+
+    scheduler = MLLMScheduler.__new__(MLLMScheduler)
+    scheduler.model = SimpleNamespace(
+        config=SimpleNamespace(
+            model_type="mimo_v2",
+            num_key_value_heads=4,
+            swa_num_key_value_heads=8,
+        )
+    )
+
+    extracted = scheduler._extract_cache_states([FullKV(), RotatingKVCache()])
+
+    assert extracted[0]["state"][0].shape[1] == 4
+    assert extracted[1]["class_name"] == "RotatingKVCache"
+    assert extracted[1]["state"][0].shape[1] == 8
+
+
 def test_mllm_scheduler_clamps_active_turboquant_kv_to_single_sequence():
     """VLM TurboQuant KV must not advertise multi-seq batching it cannot run."""
 

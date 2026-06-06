@@ -56,7 +56,12 @@ logger = logging.getLogger(__name__)
 # 2026-05-25 v5 bump: mixed-SWA same-process cache hits keep resident
 # rotating/full-attention block data so immediate repeats cannot hit
 # partially written or stale disk-only blocks with crossed layer shapes.
-PAGED_CACHE_SCHEMA_VERSION = "paged_n1_keys_v5"
+# 2026-06-06 v6 bump: MiMo V2 asymmetric full/SWA KV uses
+# num_key_value_heads=4 for full layers and swa_num_key_value_heads=8 for
+# rotating SWA layers. Older VLM extraction sliced all layers to the primary
+# count before storage, so old L2 blocks can restore invalid 4-head rotating
+# caches. Miss them cleanly.
+PAGED_CACHE_SCHEMA_VERSION = "paged_n1_keys_v6"
 
 
 def runtime_cache_fingerprint() -> str:
@@ -1343,10 +1348,16 @@ class BlockAwarePrefixCache:
                     cfg = getattr(model_obj, attr, None)
                     if cfg is None:
                         continue
-                    # Gemma 4 global KV heads (full_attention layers)
+                    # Mixed full/SWA KV heads. Gemma 4 exposes global KV
+                    # heads for full-attention layers; MiMo V2 exposes
+                    # swa_num_key_value_heads for rotating SWA layers.
                     for field in (
                         'num_global_key_value_heads',
                         'global_num_key_value_heads',
+                        'swa_num_key_value_heads',
+                        'num_swa_key_value_heads',
+                        'sliding_num_key_value_heads',
+                        'local_num_key_value_heads',
                     ):
                         val = getattr(cfg, field, None)
                         if val is None:

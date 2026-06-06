@@ -17,6 +17,25 @@ def test_cache_architecture_contract_hashes_real_tq_disk_store_source():
     assert Path("vmlx_engine/tq_disk_store.py").is_file()
 
 
+def test_block_prefix_cache_allowed_heads_include_mimo_swa_kv_heads():
+    from types import SimpleNamespace
+
+    from vmlx_engine.prefix_cache import BlockAwarePrefixCache
+
+    cache = BlockAwarePrefixCache.__new__(BlockAwarePrefixCache)
+    cache.model = SimpleNamespace(
+        config=SimpleNamespace(
+            model_type="mimo_v2",
+            num_key_value_heads=4,
+            swa_num_key_value_heads=8,
+        )
+    )
+    cache._n_kv_heads = None
+    cache._allowed_n_kv_heads = None
+
+    assert cache._get_allowed_n_kv_heads() == {4, 8}
+
+
 def test_cache_architecture_contract_api_child_artifact_is_current():
     from tests.cross_matrix import run_cache_architecture_contract as gate
 

@@ -11,10 +11,12 @@ All notable changes to vMLX Engine will be documented in this file.
 - Recorded current Gemma4 12B JANG_4M source and installed-app speed gates above the 45 tok/s default target. Installed-app topk64 remains a nuance because its median was below target even though the top-k primary-regression threshold did not fire.
 - Recorded installed-app Gemma4 12B JANG_4M VLM recovery evidence: a small image request succeeds with cache stack enabled, and a forced image-prefill rejection returns HTTP 413 without poisoning the next text request.
 - Refreshed no-heavy VL/media, API/cache, cache-architecture, Step3.7 crash-class, and admin sleep contracts after the Gemma4 VLM recovery proof; all five current artifacts pass and remain scoped as route/policy evidence, not full live model-family clearance.
+- Fixed MiMo V2.5 JANG_2L VLM paged-prefix cache hits for asymmetric full/SWA KV heads. MiMo full-attention layers use `num_key_value_heads=4`, while SWA `RotatingKVCache` layers use `swa_num_key_value_heads=8`; the VLM cache store path was slicing every layer down to the primary count, causing second-turn cache hits to fail with a 4-head vs 8-head concatenate error. The runtime now preserves all config-declared valid KV head counts, paged cache schema is bumped to `paged_n1_keys_v6`, and the live MiMo cache-stack repro now passes with a 25-token paged cache hit.
 
 ### Notes
 - Future release notes for the current runtime/model/UI/API issue wave must credit GitHub `@Hornsan1` for reporting many of these issues.
 - JANGQ/JANG tools MiMo V2 support is on `jjang-ai/jangq` main at `d1316c3`; the local `/Users/example/jang` checkout is now aligned to that commit, with the prior local equivalent head and overlapping untracked files preserved in backups.
+- Local MiMo V2.5 JANG_2L was refreshed from max2 over the TB-routed HTTP endpoint and verified byte-for-byte by manifest. This is still not full MiMo release clearance: live text/cache now works, but tool behavior, VL/audio/video, and performance remain separate proof rows.
 
 ## [1.5.49] - 2026-05-23
 

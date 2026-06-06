@@ -1628,7 +1628,66 @@ class MLLMScheduler:
         self._n_kv_heads_cached = n_kv
         return n_kv
 
-    def _normalize_gqa_state(self, state, n_kv: int):
+    def _detect_allowed_n_kv_heads(self) -> Set[int]:
+        """Return every config-declared KV head count that can appear by layer.
+
+        MiMo V2 and Gemma-style VLMs can mix full-attention and sliding-window
+        attention layers with different KV head counts. Storage-time GQA
+        normalization must only trim inflated batch-merge heads, not legitimate
+        per-layer SWA heads.
+        """
+        if hasattr(self, "_allowed_n_kv_heads_cached"):
+            return self._allowed_n_kv_heads_cached
+
+        allowed: Set[int] = set()
+        primary = self._detect_n_kv_heads()
+        if primary > 0:
+            allowed.add(primary)
+
+        try:
+            candidates = [self.model]
+            lm = getattr(self.model, "language_model", None)
+            if lm is not None and lm not in candidates:
+                candidates.append(lm)
+            for obj in list(candidates):
+                inner = getattr(obj, "model", None)
+                if inner is not None and inner not in candidates:
+                    candidates.append(inner)
+
+            for obj in candidates:
+                for attr in ("args", "config", "text_config"):
+                    cfg = getattr(obj, attr, None)
+                    if cfg is None:
+                        continue
+                    for field in (
+                        "num_key_value_heads",
+                        "num_kv_heads",
+                        "num_global_key_value_heads",
+                        "global_num_key_value_heads",
+                        "swa_num_key_value_heads",
+                        "num_swa_key_value_heads",
+                        "sliding_num_key_value_heads",
+                        "local_num_key_value_heads",
+                    ):
+                        val = getattr(cfg, field, None)
+                        if val is None:
+                            tc = getattr(cfg, "text_config", None)
+                            if tc is not None:
+                                val = getattr(tc, field, None)
+                        if isinstance(val, int) and val > 0:
+                            allowed.add(val)
+        except Exception:
+            pass
+
+        self._allowed_n_kv_heads_cached = allowed
+        return allowed
+
+    def _normalize_gqa_state(
+        self,
+        state,
+        n_kv: int,
+        allowed_n_kv_heads: Optional[Set[int]] = None,
+    ):
         """Normalize GQA head inflation in a cache state tuple.
 
         Returns the state with inflated heads sliced down to n_kv.
@@ -1638,11 +1697,17 @@ class MLLMScheduler:
             return state
         keys, values = state
         if hasattr(keys, 'shape') and len(keys.shape) == 4:
-            if keys.shape[1] > n_kv:
+            actual_h = int(keys.shape[1])
+            if allowed_n_kv_heads and actual_h in allowed_n_kv_heads:
+                return state
+            if actual_h > n_kv:
                 return (keys[:, :n_kv, :, :], values[:, :n_kv, :, :])
         elif (isinstance(keys, (tuple, list)) and len(keys) >= 1
                 and hasattr(keys[0], 'shape') and len(keys[0].shape) == 4
                 and keys[0].shape[1] > n_kv):
+            actual_h = int(keys[0].shape[1])
+            if allowed_n_kv_heads and actual_h in allowed_n_kv_heads:
+                return state
             return (
                 tuple(t[:, :n_kv, :, :] for t in keys),
                 tuple(t[:, :n_kv, :, :] for t in values),
@@ -1671,6 +1736,7 @@ class MLLMScheduler:
             _CacheList = None
 
         n_kv = self._detect_n_kv_heads()
+        allowed_n_kv_heads = self._detect_allowed_n_kv_heads()
         extracted = []
         for i, layer_cache in enumerate(raw_cache):
             try:
@@ -1690,7 +1756,11 @@ class MLLMScheduler:
                                 "class_name": type(sc).__name__,
                             })
                         elif hasattr(sc, "state") and hasattr(sc, "meta_state"):
-                            sub_state = self._normalize_gqa_state(sc.state, n_kv)
+                            sub_state = self._normalize_gqa_state(
+                                sc.state,
+                                n_kv,
+                                allowed_n_kv_heads=allowed_n_kv_heads,
+                            )
                             sub_caches.append({
                                 "state": sub_state,
                                 "meta_state": sc.meta_state,
@@ -1727,7 +1797,11 @@ class MLLMScheduler:
                         })
                     continue
                 elif hasattr(layer_cache, "state") and hasattr(layer_cache, "meta_state"):
-                    state = self._normalize_gqa_state(layer_cache.state, n_kv)
+                    state = self._normalize_gqa_state(
+                        layer_cache.state,
+                        n_kv,
+                        allowed_n_kv_heads=allowed_n_kv_heads,
+                    )
                     meta = layer_cache.meta_state
                     cls_name = type(layer_cache).__name__
                     # Ensure QuantizedKVCache meta includes group_size and bits.
