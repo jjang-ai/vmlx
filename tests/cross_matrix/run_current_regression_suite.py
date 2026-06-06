@@ -23,15 +23,12 @@ from typing import Any
 
 
 DEFAULT_OUT = Path(
-    "build/current-regression-suite-after-installed-app-rebuild-20260606.json"
+    "build/current-regression-suite-after-noheavy-pointer-refresh-20260606.json"
 )
 DEFAULT_STEP_TIMEOUT_SEC = 900.0
 STEP_TIMEOUT_RETURNCODE = 124
 
 EXPECTED_OPEN_REQUIREMENTS = [
-    "Cross-family cache architecture is classified per family",
-    "High-risk model family parser, artifact, and launch policy gates are current",
-    "Generation defaults, Native MTP, and VL media gates are current",
     "Cross-family live multi-turn smoke matrix is release-cleared",
     "MiMo V2.5 JANG_2L runtime/tool/long-prompt quality is release-cleared",
     "MiniMax-M2.7-JANGTQ_K reporter parity/root cause is release-cleared",
@@ -44,7 +41,7 @@ DEFERRED_RELEASE_OPEN_REQUIREMENTS = {
 }
 
 CURRENT_OBJECTIVE_DIGEST_ARTIFACT = (
-    "build/current-objective-proof-after-installed-app-rebuild-20260606.json"
+    "build/current-objective-proof-after-mimo-xml-function-template-fix-20260606.json"
 )
 
 CURRENT_SUITE_SOURCE_HASH_FILES = (
@@ -426,7 +423,7 @@ def _step_is_ok(name: str, step: dict[str, Any], root: Path) -> bool:
     if name == "tool_call_contracts":
         if step["returncode"] == 0:
             return True
-        path = root / "build/current-tool-call-contract-after-mimo-modality-truth-20260606.json"
+        path = root / "build/current-tool-call-contract-after-mimo-tool-blocker-20260606.json"
         try:
             artifact = json.loads(path.read_text(encoding="utf-8"))
         except Exception:
@@ -495,7 +492,7 @@ CURRENT_SUITE_COMMANDS: dict[str, list[str]] = {
         sys.executable,
         "tests/cross_matrix/run_cache_architecture_contract.py",
         "--out",
-        "build/current-cache-architecture-contract-after-mimo-modality-truth-20260606.json",
+        "build/current-cache-architecture-contract-after-mimo-head-fix-20260606.json",
     ],
     "noheavy_panel_settings_contract": [
         sys.executable,
@@ -513,13 +510,13 @@ CURRENT_SUITE_COMMANDS: dict[str, list[str]] = {
         sys.executable,
         "tests/cross_matrix/run_parser_registry_contract.py",
         "--out",
-        "build/current-parser-registry-contract-after-mimo-modality-truth-20260606.json",
+        "build/current-parser-registry-contract-during-mimo-sync-20260606.json",
     ],
     "generation_defaults_contracts": [
         sys.executable,
         "tests/cross_matrix/run_generation_defaults_contract.py",
         "--out",
-        "build/current-generation-defaults-contract-after-mimo-modality-truth-20260606.json",
+        "build/current-generation-defaults-contract-during-mimo-sync-20260606.json",
     ],
     "reasoning_template_contracts": [
         sys.executable,
@@ -543,7 +540,7 @@ CURRENT_SUITE_COMMANDS: dict[str, list[str]] = {
         sys.executable,
         "tests/cross_matrix/run_tool_call_contract.py",
         "--out",
-        "build/current-tool-call-contract-after-mimo-modality-truth-20260606.json",
+        "build/current-tool-call-contract-after-mimo-tool-blocker-20260606.json",
     ],
     "mcp_policy_contracts": [
         sys.executable,
@@ -617,7 +614,7 @@ CURRENT_SUITE_COMMANDS: dict[str, list[str]] = {
         sys.executable,
         "tests/cross_matrix/run_packaged_integrity_contract.py",
         "--out",
-        "build/current-packaged-integrity-contract-after-installed-app-rebuild-20260606.json",
+        "build/current-packaged-integrity-contract-after-noheavy-pointer-refresh-20260606.json",
     ],
     "installed_app_runtime_parity_audit": [
         sys.executable,
@@ -710,7 +707,7 @@ CURRENT_SUITE_COMMANDS: dict[str, list[str]] = {
         "--require-current-proof-sweep",
         "--require-release-ready",
         "--out",
-        "build/current-release-regression-manifest-after-installed-app-rebuild-20260606.json",
+        "build/current-release-regression-manifest-after-noheavy-pointer-refresh-20260606.json",
     ],
 }
 

@@ -38,7 +38,7 @@ REASONING_TEMPLATE_CONTRACT = Path(
     "build/current-reasoning-template-contract-20260526-settings-audit.json"
 )
 PACKAGED_INTEGRITY_CONTRACT = Path(
-    "build/current-packaged-integrity-contract-after-installed-app-rebuild-20260606.json"
+    "build/current-packaged-integrity-contract-after-noheavy-pointer-refresh-20260606.json"
 )
 GEMMA4_INSTALLED_SPEED_ARTIFACTS = (
     Path(

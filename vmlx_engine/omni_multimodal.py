@@ -91,7 +91,17 @@ def _ensure_vendored_cradio_dynamic_module(
     init_src = src_root / "__init__.py"
     if init_src.is_file():
         shutil.copy2(init_src, cache_base / "__init__.py")
-    shutil.copytree(src_revision, dst_revision, dirs_exist_ok=True)
+    shutil.copytree(
+        src_revision,
+        dst_revision,
+        dirs_exist_ok=True,
+        ignore=shutil.ignore_patterns("__pycache__", "*.pyc", "*.pyo"),
+    )
+    pycache = dst_revision / "__pycache__"
+    if pycache.exists():
+        shutil.rmtree(pycache)
+    for bytecode in dst_revision.rglob("*.py[co]"):
+        bytecode.unlink(missing_ok=True)
     return {
         "installed": True,
         "source": str(src_revision),

@@ -1050,7 +1050,7 @@ def test_current_regression_suite_refreshes_release_regression_manifest(monkeypa
     )
     assert any(
         name == "release_regression_manifest"
-        and "build/current-release-regression-manifest-after-installed-app-rebuild-20260606.json"
+        and "build/current-release-regression-manifest-after-noheavy-pointer-refresh-20260606.json"
         in cmd
         for name, cmd in seen_steps
     )
@@ -1481,7 +1481,7 @@ def test_current_regression_suite_refreshes_current_objective_digest_artifact(
 
     assert artifact["status"] == "pass"
     assert suite.CURRENT_OBJECTIVE_DIGEST_ARTIFACT == (
-        "build/current-objective-proof-after-installed-app-rebuild-20260606.json"
+        "build/current-objective-proof-after-mimo-xml-function-template-fix-20260606.json"
     )
     assert any(
         name == "objective_digest"
@@ -1740,7 +1740,7 @@ def test_current_regression_suite_runs_cache_architecture_contracts(monkeypatch,
         for _name, cmd in seen_steps
     )
     assert any(
-        "build/current-cache-architecture-contract-after-mimo-modality-truth-20260606.json"
+        "build/current-cache-architecture-contract-after-mimo-head-fix-20260606.json"
         in " ".join(cmd)
         for _name, cmd in seen_steps
     )
@@ -1791,7 +1791,7 @@ def test_current_regression_suite_runs_generation_defaults_contracts(monkeypatch
         for _name, cmd in seen_steps
     )
     assert any(
-        "build/current-generation-defaults-contract-after-mimo-modality-truth-20260606.json"
+        "build/current-generation-defaults-contract-during-mimo-sync-20260606.json"
         in " ".join(cmd)
         for _name, cmd in seen_steps
     )
@@ -1878,7 +1878,7 @@ def test_current_regression_suite_runs_tool_call_contracts(monkeypatch, tmp_path
     assert any(name == "tool_call_contracts" for name, _cmd in seen_steps)
     assert any(
         "run_tool_call_contract.py" in " ".join(cmd)
-        and "current-tool-call-contract-after-mimo-modality-truth-20260606.json" in " ".join(cmd)
+        and "current-tool-call-contract-after-mimo-tool-blocker-20260606.json" in " ".join(cmd)
         for _name, cmd in seen_steps
     )
 

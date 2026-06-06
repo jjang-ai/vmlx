@@ -63,7 +63,7 @@ from tests.cross_matrix.release_regression_manifest import (
 
 DEFAULT_OUT = Path("build/current-objective-proof-audit-20260602-cache-detail-zero-cached.json")
 CURRENT_RELEASE_REGRESSION_MANIFEST_REL = (
-    "build/current-release-regression-manifest-after-installed-app-rebuild-20260606.json"
+    "build/current-release-regression-manifest-after-noheavy-pointer-refresh-20260606.json"
 )
 DSV4_QUALITY_CLEARANCE_REL = "build/current-dsv4-long-output-quality-clearance-20260521.json"
 DSV4_CURRENT_IDENTIFIER_CANARY_REL = (
@@ -189,17 +189,17 @@ DSV4_BATCH_GENERATOR_WARMUP_ABLATION_REL = (
     "build/current-dsv4-jang-batch-generator-warmup-ablation-20260524.json"
 )
 API_CACHE_CONTRACT_REL = "build/current-noheavy-api-cache-contract-after-mimo-modality-truth-20260606.json"
-CACHE_ARCHITECTURE_CONTRACT_REL = "build/current-cache-architecture-contract-after-mimo-modality-truth-20260606.json"
-TOOL_CALL_CONTRACT_REL = "build/current-tool-call-contract-after-mimo-modality-truth-20260606.json"
+CACHE_ARCHITECTURE_CONTRACT_REL = "build/current-cache-architecture-contract-after-mimo-head-fix-20260606.json"
+TOOL_CALL_CONTRACT_REL = "build/current-tool-call-contract-after-mimo-tool-blocker-20260606.json"
 PANEL_SETTINGS_CONTRACT_REL = "build/current-panel-settings-contract-proof-20260601-cache-ui-storage-quant.json"
 MAX_OUTPUT_CONTEXT_CONTRACT_REL = "build/current-max-output-context-contract-after-mimo-modality-truth-20260606.json"
 MAX_OUTPUT_CONTEXT_CONTRACT_FALLBACK_REL = "build/current-max-output-context-contract-20260521.json"
 MODEL_FAMILY_CONTRACT_REL = "build/current-model-family-detection-contract-after-mimo-modality-truth-20260606.json"
-PARSER_REGISTRY_CONTRACT_REL = "build/current-parser-registry-contract-after-mimo-modality-truth-20260606.json"
+PARSER_REGISTRY_CONTRACT_REL = "build/current-parser-registry-contract-during-mimo-sync-20260606.json"
 MODEL_ARTIFACT_FORMAT_CONTRACT_REL = "build/current-model-artifact-format-contract-after-mimo-modality-truth-20260606.json"
-GENERATION_DEFAULTS_CONTRACT_REL = "build/current-generation-defaults-contract-after-mimo-modality-truth-20260606.json"
+GENERATION_DEFAULTS_CONTRACT_REL = "build/current-generation-defaults-contract-during-mimo-sync-20260606.json"
 NATIVE_MTP_CONTRACT_REL = "build/current-native-mtp-contract-after-mimo-modality-truth-20260606.json"
-VL_MEDIA_CONTRACT_REL = "build/current-vl-media-cache-contract-after-mimo-first-token-stop-20260606.json"
+VL_MEDIA_CONTRACT_REL = "build/current-vl-media-cache-contract-after-bundled-refresh-continuation-20260606.json"
 QWEN_JANG_SOURCE_SPEED_REL = "build/current-decode-speed-live-qwen27-jang4m-source-20260606.json"
 QWEN_JANG_PACKAGED_SPEED_REL = "build/current-decode-speed-live-qwen27-jang4m-installed-app-deterministic-pp-20260606.json"
 QWEN_NATIVE_MTP_SPEED_REL = "build/current-decode-speed-live-qwen27-jang4m-mtp-20260523.json"
