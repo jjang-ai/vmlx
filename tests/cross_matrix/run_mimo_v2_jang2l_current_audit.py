@@ -23,7 +23,9 @@ from typing import Any
 
 DEFAULT_MODEL_PATH = Path("/Users/example/.mlxstudio/models/JANGQ-AI/MiMo-V2.5-JANG_2L")
 DEFAULT_MANIFEST = Path("build/current-mimo-http-tb5-manifest-20260606.tsv")
-DEFAULT_OUT = Path("build/current-mimo-v2-jang2l-current-audit-20260606.json")
+DEFAULT_OUT = Path(
+    "build/current-mimo-v2-jang2l-current-audit-after-first-token-stop-20260606.json"
+)
 
 STRUCTURAL_ARTIFACT = Path("build/current-mimo-jang2l-local-structural-verify-20260606.json")
 TEXT_CACHE_ARTIFACT = Path("build/current-mimo-jang2l-live-text-cache-smoke-20260606.json")
@@ -47,6 +49,15 @@ SINK_MODE_LENGTH_DIAGNOSTIC_ARTIFACT = Path(
 )
 DISABLE_SINK_LENGTH_DIAGNOSTIC_ARTIFACT = Path(
     "build/current-mimo-v2-jang2l-disable-sink-length-diagnostic-20260606.json"
+)
+PROMPT_SHAPE_SWEEP_ARTIFACT = Path(
+    "build/current-mimo-v2-jang2l-prompt-shape-sweep-20260606.json"
+)
+RENDERED_PROMPT_ARTIFACT = Path(
+    "build/current-mimo-v2-jang2l-rendered-prompt-compare-20260606.json"
+)
+FIRST_TOKEN_ARTIFACT = Path(
+    "build/current-mimo-v2-jang2l-first-token-probe-registered-20260606.json"
 )
 CLEANUP_LOG = Path("build/current-mimo-stale-local-cleanup-20260606.txt")
 
@@ -253,6 +264,106 @@ def _all_sink_diagnostic_cases_fail(data: dict[str, Any]) -> bool:
     )
 
 
+def _mimo_prompt_shape_first_token_evidence(
+    prompt_shape: dict[str, Any],
+    rendered_prompt: dict[str, Any],
+    first_token: dict[str, Any],
+) -> dict[str, Any]:
+    results = prompt_shape.get("results")
+    if not isinstance(results, list):
+        results = []
+    by_name = {
+        str(item.get("name")): item
+        for item in results
+        if isinstance(item, dict) and item.get("name") is not None
+    }
+    failing = by_name.get("long_cache_system_exact") or {}
+    folded = by_name.get("long_cache_no_system_exact") or {}
+    short_system = by_name.get("short_system_exact") or {}
+
+    rendered_rows = rendered_prompt.get("rows")
+    if not isinstance(rendered_rows, list):
+        rendered_rows = []
+    rendered_by_name = {
+        str(item.get("name")): item
+        for item in rendered_rows
+        if isinstance(item, dict) and item.get("name") is not None
+    }
+    failing_rendered = rendered_by_name.get("long_cache_system_exact") or {}
+
+    first_rows = first_token.get("rows")
+    if not isinstance(first_rows, list):
+        first_rows = []
+    first_by_name = {
+        str(item.get("name")): item
+        for item in first_rows
+        if isinstance(item, dict) and item.get("name") is not None
+    }
+    failing_top = (first_by_name.get("failing_system_long") or {}).get("top")
+    folded_top = (first_by_name.get("working_folded_long") or {}).get("top")
+    short_top = (first_by_name.get("working_short_system") or {}).get("top")
+    if not isinstance(failing_top, list):
+        failing_top = []
+    if not isinstance(folded_top, list):
+        folded_top = []
+    if not isinstance(short_top, list):
+        short_top = []
+
+    failing_top0 = failing_top[0] if failing_top and isinstance(failing_top[0], dict) else {}
+    folded_top0 = folded_top[0] if folded_top and isinstance(folded_top[0], dict) else {}
+    short_top0 = short_top[0] if short_top and isinstance(short_top[0], dict) else {}
+    ack_in_failing_rank = None
+    for index, item in enumerate(failing_top, start=1):
+        if isinstance(item, dict) and item.get("text") == "ACK":
+            ack_in_failing_rank = index
+            break
+
+    failing_empty_stop = (
+        failing.get("content") == ""
+        and failing.get("finish_reason") == "stop"
+        and (failing.get("completion_tokens") == 1)
+    )
+    folded_ack = folded.get("content") == "ACK"
+    short_ack = short_system.get("content") == "ACK"
+    rendered_valid_generation_prefix = (
+        failing_rendered.get("contains_empty_think_generation_prefix") is True
+    )
+    first_token_stop = (
+        failing_top0.get("text") == "<|im_end|>"
+        and failing_top0.get("is_special") is True
+    )
+    working_first_tokens_ack = (
+        folded_top0.get("text") == "ACK" and short_top0.get("text") == "ACK"
+    )
+
+    blocked = (
+        failing_empty_stop
+        and folded_ack
+        and short_ack
+        and rendered_valid_generation_prefix
+        and first_token_stop
+        and working_first_tokens_ack
+    )
+    return {
+        "blocked": bool(blocked),
+        "classification": (
+            "decode_loop_or_model_artifact_first_token_stop"
+            if blocked
+            else "insufficient_prompt_shape_evidence"
+        ),
+        "failing_empty_stop": bool(failing_empty_stop),
+        "folded_user_ack": bool(folded_ack),
+        "short_system_ack": bool(short_ack),
+        "rendered_valid_generation_prefix": bool(rendered_valid_generation_prefix),
+        "failing_top_token": failing_top0,
+        "working_folded_top_token": folded_top0,
+        "working_short_system_top_token": short_top0,
+        "ack_rank_in_failing_prompt": ack_in_failing_rank,
+        "failing_prompt_tokens": failing.get("prompt_tokens"),
+        "folded_prompt_tokens": folded.get("prompt_tokens"),
+    }
+
+
 def build_audit(root: Path, model_path: Path, manifest: Path) -> dict[str, Any]:
     model_parent = model_path.parent
     manifest_check = _verify_manifest(model_parent, manifest)
@@ -273,6 +384,9 @@ def build_audit(root: Path, model_path: Path, manifest: Path) -> dict[str, Any]:
     cache_vs_nocache = _artifact(root / CACHE_VS_NOCACHE_ARTIFACT)
     sink_mode_length = _artifact(root / SINK_MODE_LENGTH_DIAGNOSTIC_ARTIFACT)
     disable_sink_length = _artifact(root / DISABLE_SINK_LENGTH_DIAGNOSTIC_ARTIFACT)
+    prompt_shape = _artifact(root / PROMPT_SHAPE_SWEEP_ARTIFACT)
+    rendered_prompt = _artifact(root / RENDERED_PROMPT_ARTIFACT)
+    first_token = _artifact(root / FIRST_TOKEN_ARTIFACT)
 
     structural_pass = structural.get("status") == "pass"
     text_cache_pass = text_cache.get("exists") and _text_cache_narrow_pass(text_cache["data"])
@@ -320,6 +434,21 @@ def build_audit(root: Path, model_path: Path, manifest: Path) -> dict[str, Any]:
     disable_sink_fails = disable_sink_length.get("exists") and _all_sink_diagnostic_cases_fail(
         disable_sink_length["data"]
     )
+    prompt_shape_evidence = (
+        _mimo_prompt_shape_first_token_evidence(
+            prompt_shape["data"],
+            rendered_prompt["data"],
+            first_token["data"],
+        )
+        if prompt_shape.get("exists")
+        and rendered_prompt.get("exists")
+        and first_token.get("exists")
+        else {
+            "blocked": False,
+            "classification": "missing_prompt_shape_first_token_artifact",
+        }
+    )
+    prompt_shape_blocked = bool(prompt_shape_evidence.get("blocked"))
 
     stale_present = [item for item in stale_state if item["exists"]]
     release_clearance = (
@@ -332,6 +461,7 @@ def build_audit(root: Path, model_path: Path, manifest: Path) -> dict[str, Any]:
         and not tool_blocked
         and not exact_cache_blocked
         and not speed_blocked
+        and not prompt_shape_blocked
         and not stale_present
     )
 
@@ -357,6 +487,8 @@ def build_audit(root: Path, model_path: Path, manifest: Path) -> dict[str, Any]:
         blockers.append("mimo_exact_cache_prompt_following_blocked")
     if speed_blocked:
         blockers.append("mimo_decode_speed_below_release_target")
+    if prompt_shape_blocked:
+        blockers.append("mimo_system_prompt_first_token_stop_blocked")
 
     return {
         "status": status,
@@ -379,6 +511,7 @@ def build_audit(root: Path, model_path: Path, manifest: Path) -> dict[str, Any]:
             "tool_protocol": not bool(tool_blocked),
             "exact_cache_prompt_following": not bool(exact_cache_blocked),
             "decode_speed_target": not bool(speed_blocked),
+            "system_prompt_first_token_stop": not bool(prompt_shape_blocked),
             "manual_sink_does_not_clear_length_generation": bool(sink_mode_fails),
             "disable_sink_does_not_clear_length_generation": bool(disable_sink_fails),
         },
@@ -393,10 +526,14 @@ def build_audit(root: Path, model_path: Path, manifest: Path) -> dict[str, Any]:
             "cache_vs_nocache": str(CACHE_VS_NOCACHE_ARTIFACT),
             "sink_mode_length_diagnostic": str(SINK_MODE_LENGTH_DIAGNOSTIC_ARTIFACT),
             "disable_sink_length_diagnostic": str(DISABLE_SINK_LENGTH_DIAGNOSTIC_ARTIFACT),
+            "prompt_shape_sweep": str(PROMPT_SHAPE_SWEEP_ARTIFACT),
+            "rendered_prompt_compare": str(RENDERED_PROMPT_ARTIFACT),
+            "first_token_probe": str(FIRST_TOKEN_ARTIFACT),
         },
         "diagnostics": {
             "cache_vs_nocache_next_token_match": bool(cache_match),
             "all_local_smoke": smoke_evidence,
+            "prompt_shape_first_token": prompt_shape_evidence,
             "manual_sink_sdpa_clears_length_generation": False if sink_mode_fails else None,
             "disable_sink_clears_length_generation": False if disable_sink_fails else None,
             "sink_boundary": (

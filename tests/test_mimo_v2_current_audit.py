@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from tests.cross_matrix.run_mimo_v2_jang2l_current_audit import build_audit
+from tests.cross_matrix import run_mimo_v2_jang2l_current_audit as audit
 
 
 def _write_json(path: Path, data: dict) -> None:
@@ -11,7 +11,10 @@ def _write_json(path: Path, data: dict) -> None:
     path.write_text(json.dumps(data) + "\n")
 
 
-def test_mimo_current_audit_separates_clean_artifact_from_runtime_blockers(tmp_path):
+def test_mimo_current_audit_separates_clean_artifact_from_runtime_blockers(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(audit, "STALE_TARGETS", [])
     model_parent = tmp_path / "models" / "JANGQ-AI"
     model_path = model_parent / "MiMo-V2.5-JANG_2L"
     model_path.mkdir(parents=True)
@@ -124,8 +127,77 @@ def test_mimo_current_audit_separates_clean_artifact_from_runtime_blockers(tmp_p
             "cases": [{"passes_length_ok": False, "contains_corrupt_repetition": True}],
         },
     )
+    _write_json(
+        tmp_path / "build/current-mimo-v2-jang2l-prompt-shape-sweep-20260606.json",
+        {
+            "status": "fail",
+            "results": [
+                {
+                    "name": "long_cache_system_exact",
+                    "content": "",
+                    "finish_reason": "stop",
+                    "prompt_tokens": 60,
+                    "completion_tokens": 1,
+                },
+                {
+                    "name": "long_cache_no_system_exact",
+                    "content": "ACK",
+                    "finish_reason": "stop",
+                    "prompt_tokens": 66,
+                    "completion_tokens": 2,
+                },
+                {
+                    "name": "short_system_exact",
+                    "content": "ACK",
+                    "finish_reason": "stop",
+                    "prompt_tokens": 23,
+                    "completion_tokens": 2,
+                },
+            ],
+        },
+    )
+    _write_json(
+        tmp_path / "build/current-mimo-v2-jang2l-rendered-prompt-compare-20260606.json",
+        {
+            "rows": [
+                {
+                    "name": "long_cache_system_exact",
+                    "contains_empty_think_generation_prefix": True,
+                    "rendered": "<|im_start|>assistant\n<think></think>",
+                }
+            ]
+        },
+    )
+    _write_json(
+        tmp_path
+        / "build/current-mimo-v2-jang2l-first-token-probe-registered-20260606.json",
+        {
+            "status": "pass",
+            "rows": [
+                {
+                    "name": "failing_system_long",
+                    "top": [
+                        {
+                            "token_id": 151645,
+                            "text": "<|im_end|>",
+                            "is_special": True,
+                        },
+                        {"token_id": 4032, "text": "ACK", "is_special": False},
+                    ],
+                },
+                {
+                    "name": "working_folded_long",
+                    "top": [{"token_id": 4032, "text": "ACK", "is_special": False}],
+                },
+                {
+                    "name": "working_short_system",
+                    "top": [{"token_id": 4032, "text": "ACK", "is_special": False}],
+                },
+            ],
+        },
+    )
 
-    result = build_audit(tmp_path, model_path, manifest)
+    result = audit.build_audit(tmp_path, model_path, manifest)
 
     assert result["status"] == "open"
     assert result["local_release_clearance"] is False
@@ -136,9 +208,18 @@ def test_mimo_current_audit_separates_clean_artifact_from_runtime_blockers(tmp_p
     assert result["component_ok"]["tool_protocol"] is True
     assert result["component_ok"]["exact_cache_prompt_following"] is False
     assert result["component_ok"]["decode_speed_target"] is False
+    assert result["component_ok"]["system_prompt_first_token_stop"] is False
     assert result["component_ok"]["manual_sink_does_not_clear_length_generation"] is True
     assert result["component_ok"]["disable_sink_does_not_clear_length_generation"] is True
     assert result["diagnostics"]["all_local_smoke"]["tool_protocol_pass"] is True
+    assert result["diagnostics"]["prompt_shape_first_token"]["blocked"] is True
+    assert (
+        result["diagnostics"]["prompt_shape_first_token"]["classification"]
+        == "decode_loop_or_model_artifact_first_token_stop"
+    )
+    assert result["diagnostics"]["prompt_shape_first_token"]["failing_top_token"][
+        "text"
+    ] == "<|im_end|>"
     assert result["diagnostics"]["manual_sink_sdpa_clears_length_generation"] is False
     assert result["diagnostics"]["disable_sink_clears_length_generation"] is False
     assert "sink-kernel-only" in result["diagnostics"]["sink_boundary"]
@@ -146,4 +227,5 @@ def test_mimo_current_audit_separates_clean_artifact_from_runtime_blockers(tmp_p
         "mimo_long_prompt_coherence_blocked",
         "mimo_exact_cache_prompt_following_blocked",
         "mimo_decode_speed_below_release_target",
+        "mimo_system_prompt_first_token_stop_blocked",
     ]
