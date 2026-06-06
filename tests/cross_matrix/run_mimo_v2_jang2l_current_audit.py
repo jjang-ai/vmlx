@@ -24,7 +24,7 @@ from typing import Any
 DEFAULT_MODEL_PATH = Path("/Users/example/.mlxstudio/models/JANGQ-AI/MiMo-V2.5-JANG_2L")
 DEFAULT_MANIFEST = Path("build/current-mimo-http-manifest-20260606.tsv")
 DEFAULT_OUT = Path(
-    "build/current-mimo-v2-jang2l-current-audit-after-synced-long-tool-cache-proof-20260606.json"
+    "build/current-mimo-v2-jang2l-current-audit-after-text-route-fix-20260606.json"
 )
 
 STRUCTURAL_ARTIFACT = Path("build/current-mimo-jang2l-local-structural-verify-20260606.json")
@@ -64,6 +64,9 @@ SOURCE_VS_QUANT_ARTIFACT = Path(
 )
 SYNCED_LONG_TOOL_CACHE_ARTIFACT = Path(
     "build/current-mimo-v25-jang2l-synced-long-tool-cache-proof-20260606.json"
+)
+TEXT_ROUTE_ARTIFACT = Path(
+    "build/current-mimo-v2-jang2l-text-route-live-proof-20260606.json"
 )
 CLEANUP_LOG = Path("build/current-mimo-stale-local-cleanup-20260606.txt")
 
@@ -437,6 +440,40 @@ def _source_vs_quant_first_divergence_pass(data: dict[str, Any]) -> bool:
     return True
 
 
+def _text_route_evidence(data: dict[str, Any]) -> dict[str, Any]:
+    rows = data.get("live_rows")
+    rows = rows if isinstance(rows, dict) else {}
+    long_row = rows.get("long_prompt_first_request")
+    long_row = long_row if isinstance(long_row, dict) else {}
+    cache1 = rows.get("cache_repeat_1")
+    cache1 = cache1 if isinstance(cache1, dict) else {}
+    cache2 = rows.get("cache_repeat_2")
+    cache2 = cache2 if isinstance(cache2, dict) else {}
+    tool_row = rows.get("tool_required")
+    tool_row = tool_row if isinstance(tool_row, dict) else {}
+    blockers = data.get("remaining_blockers")
+    blockers = blockers if isinstance(blockers, list) else []
+    return {
+        "exists": True,
+        "status": data.get("status"),
+        "fix_status": data.get("fix_status"),
+        "long_prompt_recall_pass": bool(long_row.get("sentinel_recall_pass")),
+        "long_prompt_oom_cleared": bool(long_row.get("oom_cleared")),
+        "cache_visible_pass": bool(cache1.get("empty_visible_cleared"))
+        and bool(cache2.get("empty_visible_cleared")),
+        "cache_release_exact_pass": bool(cache1.get("exact_expected_ack_cache_742"))
+        and bool(cache2.get("exact_expected_ack_cache_742")),
+        "tool_call_pass": bool(tool_row.get("tool_call_pass")),
+        "speed_blocked": "decode_speed_below_release_target" in blockers,
+        "cache_l2_not_reproved": "prefix_paged_l2_cache_hit_not_reproved_on_continuous_batching_route"
+        in blockers,
+        "source_vs_quant_missing": "source_vs_quant_first_divergence_missing" in blockers,
+        "media_unwired": "mimo_vl_audio_video_unwired" in blockers,
+        "remaining_blockers": blockers,
+        "release_boundary": data.get("release_boundary"),
+    }
+
+
 def build_audit(root: Path, model_path: Path, manifest: Path) -> dict[str, Any]:
     model_parent = model_path.parent
     manifest_check = _verify_manifest(model_parent, manifest)
@@ -462,6 +499,7 @@ def build_audit(root: Path, model_path: Path, manifest: Path) -> dict[str, Any]:
     first_token = _artifact(root / FIRST_TOKEN_ARTIFACT)
     source_vs_quant = _artifact(root / SOURCE_VS_QUANT_ARTIFACT)
     synced_long_tool_cache = _artifact(root / SYNCED_LONG_TOOL_CACHE_ARTIFACT)
+    text_route = _artifact(root / TEXT_ROUTE_ARTIFACT)
 
     structural_pass = structural.get("status") == "pass"
     text_cache_pass = text_cache.get("exists") and _text_cache_narrow_pass(text_cache["data"])
@@ -515,6 +553,23 @@ def build_audit(root: Path, model_path: Path, manifest: Path) -> dict[str, Any]:
         exact_cache_blocked = exact_cache_blocked and not bool(
             synced_evidence.get("short_cache_exact_pass")
         )
+    text_route_evidence = (
+        _text_route_evidence(text_route["data"])
+        if text_route.get("exists") and isinstance(text_route.get("data"), dict)
+        else {"exists": False}
+    )
+    if text_route_evidence.get("exists"):
+        if text_route_evidence.get("tool_call_pass"):
+            tool_blocked = False
+        if text_route_evidence.get("long_prompt_recall_pass") and text_route_evidence.get(
+            "long_prompt_oom_cleared"
+        ):
+            length_blocked = False
+        if text_route_evidence.get("cache_visible_pass"):
+            exact_cache_blocked = exact_cache_blocked and not bool(
+                text_route_evidence.get("cache_release_exact_pass")
+            )
+        speed_blocked = speed_blocked or bool(text_route_evidence.get("speed_blocked"))
     sink_mode_fails = sink_mode_length.get("exists") and _all_sink_diagnostic_cases_fail(
         sink_mode_length["data"]
     )
@@ -539,6 +594,8 @@ def build_audit(root: Path, model_path: Path, manifest: Path) -> dict[str, Any]:
     source_vs_quant_pass = source_vs_quant.get("exists") and _source_vs_quant_first_divergence_pass(
         source_vs_quant["data"]
     )
+    if text_route_evidence.get("exists") and text_route_evidence.get("cache_visible_pass"):
+        prompt_shape_blocked = False
 
     stale_present = [item for item in stale_state if item["exists"]]
     release_clearance = (
@@ -553,6 +610,8 @@ def build_audit(root: Path, model_path: Path, manifest: Path) -> dict[str, Any]:
         and not speed_blocked
         and not prompt_shape_blocked
         and source_vs_quant_pass
+        and not bool(text_route_evidence.get("cache_l2_not_reproved"))
+        and not bool(text_route_evidence.get("media_unwired"))
         and not stale_present
     )
 
@@ -582,6 +641,10 @@ def build_audit(root: Path, model_path: Path, manifest: Path) -> dict[str, Any]:
         blockers.append("mimo_system_prompt_first_token_stop_blocked")
     if not source_vs_quant_pass:
         blockers.append("mimo_source_vs_quant_first_divergence_missing_or_failed")
+    if text_route_evidence.get("cache_l2_not_reproved"):
+        blockers.append("mimo_prefix_paged_l2_cache_not_reproved")
+    if text_route_evidence.get("media_unwired"):
+        blockers.append("mimo_vl_audio_video_unwired")
 
     return {
         "status": status,
@@ -606,6 +669,15 @@ def build_audit(root: Path, model_path: Path, manifest: Path) -> dict[str, Any]:
             "decode_speed_target": not bool(speed_blocked),
             "system_prompt_first_token_stop": not bool(prompt_shape_blocked),
             "source_vs_quant_first_divergence": bool(source_vs_quant_pass),
+            "text_route_long_prompt": bool(
+                text_route_evidence.get("long_prompt_recall_pass")
+                and text_route_evidence.get("long_prompt_oom_cleared")
+            ),
+            "text_route_tool_call": bool(text_route_evidence.get("tool_call_pass")),
+            "prefix_paged_l2_cache_reproved": not bool(
+                text_route_evidence.get("cache_l2_not_reproved")
+            ),
+            "mimo_media_wired": not bool(text_route_evidence.get("media_unwired")),
             "manual_sink_does_not_clear_length_generation": bool(sink_mode_fails),
             "disable_sink_does_not_clear_length_generation": bool(disable_sink_fails),
         },
@@ -625,12 +697,14 @@ def build_audit(root: Path, model_path: Path, manifest: Path) -> dict[str, Any]:
             "first_token_probe": str(FIRST_TOKEN_ARTIFACT),
             "source_vs_quant_first_divergence": str(SOURCE_VS_QUANT_ARTIFACT),
             "synced_long_tool_cache": str(SYNCED_LONG_TOOL_CACHE_ARTIFACT),
+            "text_route_live_proof": str(TEXT_ROUTE_ARTIFACT),
         },
         "diagnostics": {
             "cache_vs_nocache_next_token_match": bool(cache_match),
             "all_local_smoke": smoke_evidence,
             "prompt_shape_first_token": prompt_shape_evidence,
             "synced_long_tool_cache": synced_evidence,
+            "text_route": text_route_evidence,
             "source_vs_quant_first_divergence": (
                 source_vs_quant.get("data")
                 if source_vs_quant.get("exists")
