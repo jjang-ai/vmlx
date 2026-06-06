@@ -425,7 +425,7 @@ def _step_is_ok(name: str, step: dict[str, Any], root: Path) -> bool:
     if name == "tool_call_contracts":
         if step["returncode"] == 0:
             return True
-        path = root / "build/current-tool-call-contract-20260528-tool-parser-loop-matrix.json"
+        path = root / "build/current-tool-call-contract-after-mimo-modality-truth-20260606.json"
         try:
             artifact = json.loads(path.read_text(encoding="utf-8"))
         except Exception:
@@ -488,13 +488,13 @@ CURRENT_SUITE_COMMANDS: dict[str, list[str]] = {
         sys.executable,
         "tests/cross_matrix/run_noheavy_api_cache_contract.py",
         "--out",
-        "build/current-api-cache-contract-proof-20260602-cache-detail-zero-cached.json",
+        "build/current-noheavy-api-cache-contract-after-mimo-modality-truth-20260606.json",
     ],
     "cache_architecture_contracts": [
         sys.executable,
         "tests/cross_matrix/run_cache_architecture_contract.py",
         "--out",
-        "build/current-cache-architecture-contract-20260602-v1554-attention-matmul-refresh.json",
+        "build/current-cache-architecture-contract-after-mimo-modality-truth-20260606.json",
     ],
     "noheavy_panel_settings_contract": [
         sys.executable,
@@ -506,19 +506,19 @@ CURRENT_SUITE_COMMANDS: dict[str, list[str]] = {
         sys.executable,
         "tests/cross_matrix/run_max_output_context_contract.py",
         "--out",
-        "build/current-max-output-context-contract-20260531-post-step-lfm-refresh.json",
+        "build/current-max-output-context-contract-after-mimo-modality-truth-20260606.json",
     ],
     "parser_registry_contracts": [
         sys.executable,
         "tests/cross_matrix/run_parser_registry_contract.py",
         "--out",
-        "build/current-parser-registry-contract-20260531-post-step-lfm-refresh.json",
+        "build/current-parser-registry-contract-after-mimo-modality-truth-20260606.json",
     ],
     "generation_defaults_contracts": [
         sys.executable,
         "tests/cross_matrix/run_generation_defaults_contract.py",
         "--out",
-        "build/current-generation-defaults-contract-gemma4-release-boundary-20260604.json",
+        "build/current-generation-defaults-contract-after-mimo-modality-truth-20260606.json",
     ],
     "reasoning_template_contracts": [
         sys.executable,
@@ -542,7 +542,7 @@ CURRENT_SUITE_COMMANDS: dict[str, list[str]] = {
         sys.executable,
         "tests/cross_matrix/run_tool_call_contract.py",
         "--out",
-        "build/current-tool-call-contract-20260528-tool-parser-loop-matrix.json",
+        "build/current-tool-call-contract-after-mimo-modality-truth-20260606.json",
     ],
     "mcp_policy_contracts": [
         sys.executable,
@@ -586,25 +586,25 @@ CURRENT_SUITE_COMMANDS: dict[str, list[str]] = {
         sys.executable,
         "tests/cross_matrix/run_model_artifact_format_contract.py",
         "--out",
-        "build/current-model-artifact-format-contract-20260531-post-step-lfm-refresh.json",
+        "build/current-model-artifact-format-contract-after-mimo-modality-truth-20260606.json",
     ],
     "model_family_detection_contracts": [
         sys.executable,
         "tests/cross_matrix/run_model_family_detection_contract.py",
         "--out",
-        "build/current-model-family-detection-contract-20260602-v1554-attention-matmul-refresh.json",
+        "build/current-model-family-detection-contract-after-mimo-modality-truth-20260606.json",
     ],
     "native_mtp_contracts": [
         sys.executable,
         "tests/cross_matrix/run_native_mtp_contract.py",
         "--out",
-        "build/current-native-mtp-contract-gemma4-release-boundary-20260604.json",
+        "build/current-native-mtp-contract-after-mimo-modality-truth-20260606.json",
     ],
     "vl_media_cache_contracts": [
         sys.executable,
         "tests/cross_matrix/run_vl_media_cache_contract.py",
         "--out",
-        "build/current-vl-media-cache-contract-gemma4-release-boundary-post-audio-contract-20260604.json",
+        "build/current-vl-media-cache-contract-after-bundled-refresh-continuation-20260606.json",
     ],
     "step37_crash_falsification_contract": [
         sys.executable,
