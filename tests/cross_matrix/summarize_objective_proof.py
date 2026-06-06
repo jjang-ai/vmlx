@@ -293,6 +293,9 @@ LING_BUNDLED_AFTER_TOPK_POLICY_LIVE_REL = (
 GEMMA4_RESPONSES_VISIBLE_CONTRACT_REL = (
     "build/current-runtime-memory-stress-gemma4-26b-jang4m-responses-thinkingon-app-visible-512-nocache-20260524.json"
 )
+GEMMA4_RESPONSES_VISIBLE_CURRENT_REL = (
+    "build/current-runtime-memory-stress-gemma4-26b-jang4m-responses-thinkingon-app-visible-512-nocache-20260606.json"
+)
 GEMMA4_RESPONSES_UNSUPPORTED_THINKING_BUDGET_REL = (
     "build/current-runtime-memory-stress-gemma4-26b-jang4m-responses-thinkingbudget16-visible-contract-20260524.json"
 )
@@ -416,6 +419,9 @@ GEMMA4_MIXED_SWA_SPEED_ARTIFACT_RELS = (
     "build/current-runtime-memory-stress-gemma4-26b-jang4m-chat-thinkingoff-speed-floor-installed-app-nocache-20260525.json",
     "build/current-runtime-memory-stress-gemma4-26b-jang4m-chat-thinkingoff-speed-floor-prompt-cachehit-512-installed-app-repeat-20260525.json",
     "build/current-runtime-memory-stress-gemma4-26b-jang4m-chat-thinkingoff-speed-floor-prompt-cachehit-512-installed-app-trace-20260525.json",
+)
+GEMMA4_MIXED_SWA_SPEED_CURRENT_RELS = (
+    "build/current-runtime-memory-stress-gemma4-26b-jang4m-chat-thinkingoff-speed-floor-installed-app-20260606.json",
 )
 GEMMA4_MIXED_SWA_SUSTAINED_CACHEHIT_DIAGNOSTIC_REL = (
     "build/current-runtime-memory-stress-gemma4-26b-jang4m-chat-thinkingoff-speed-floor-installed-app-triple-cachehit-trace-20260525.json"
@@ -3562,6 +3568,7 @@ def _gemma4_metadata_budget_unsupported(payload: dict[str, Any]) -> bool:
 def _gemma4_visible_content_detail(
     payload: dict[str, Any],
     root: Path,
+    artifact_rel: str = GEMMA4_RESPONSES_VISIBLE_CONTRACT_REL,
     responses_nocache_payload: dict[str, Any] | None = None,
     responses_512_payload: dict[str, Any] | None = None,
     thinking_off_payload: dict[str, Any] | None = None,
@@ -3569,7 +3576,7 @@ def _gemma4_visible_content_detail(
     metadata_payload: dict[str, Any] | None = None,
     unsupported_budget_payload: dict[str, Any] | None = None,
 ) -> tuple[bool, dict[str, Any]]:
-    path_present = _path_present(root, GEMMA4_RESPONSES_VISIBLE_CONTRACT_REL)
+    path_present = _path_present(root, artifact_rel)
     contract = payload.get("response_contract")
     if not isinstance(contract, dict):
         contract = {}
@@ -3640,7 +3647,7 @@ def _gemma4_visible_content_detail(
         and primary_visible_ok
     )
     return ok, {
-        "artifact": GEMMA4_RESPONSES_VISIBLE_CONTRACT_REL,
+        "artifact": artifact_rel,
         "artifact_present": path_present,
         "artifact_status": payload.get("status"),
         "reason": payload.get("reason"),
@@ -5294,7 +5301,16 @@ def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
     ling_installed_live = _load(root, LING_INSTALLED_LIVE_AUDIT_REL)
     ling_jangtq_strict_russian = _load(root, LING_JANGTQ_STRICT_RUSSIAN_NOCACHE_REL)
     ling_mxfp4_strict_russian = _load(root, LING_MXFP4_STRICT_RUSSIAN_NOCACHE_REL)
-    gemma4_responses_visible_contract = _load(root, GEMMA4_RESPONSES_VISIBLE_CONTRACT_REL)
+    (
+        gemma4_responses_visible_contract_rel,
+        gemma4_responses_visible_contract,
+    ) = _load_first_present(
+        root,
+        (
+            GEMMA4_RESPONSES_VISIBLE_CURRENT_REL,
+            GEMMA4_RESPONSES_VISIBLE_CONTRACT_REL,
+        ),
+    )
     gemma4_responses_unsupported_thinking_budget = _load(
         root, GEMMA4_RESPONSES_UNSUPPORTED_THINKING_BUDGET_REL
     )
@@ -5358,17 +5374,30 @@ def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
     nemotron_omni_no_media_system_negative = _load(
         root, NEMOTRON_OMNI_NO_MEDIA_SYSTEM_NEGATIVE_REL
     )
+    gemma4_mixed_swa_speed_rels = (
+        GEMMA4_MIXED_SWA_SPEED_CURRENT_RELS
+        if all(_path_present(root, rel) for rel in GEMMA4_MIXED_SWA_SPEED_CURRENT_RELS)
+        else GEMMA4_MIXED_SWA_SPEED_ARTIFACT_RELS
+    )
     gemma4_mixed_swa_speed_payloads = [
         (rel, _load(root, rel))
-        for rel in GEMMA4_MIXED_SWA_SPEED_ARTIFACT_RELS
+        for rel in gemma4_mixed_swa_speed_rels
     ]
     gemma4_mixed_swa_sustained_cachehit = _load(
         root,
-        GEMMA4_MIXED_SWA_SUSTAINED_CACHEHIT_DIAGNOSTIC_REL,
+        (
+            GEMMA4_MIXED_SWA_SPEED_CURRENT_RELS[0]
+            if gemma4_mixed_swa_speed_rels == GEMMA4_MIXED_SWA_SPEED_CURRENT_RELS
+            else GEMMA4_MIXED_SWA_SUSTAINED_CACHEHIT_DIAGNOSTIC_REL
+        ),
     )
     gemma4_mixed_swa_short_nocache_repeat = _load(
         root,
-        GEMMA4_MIXED_SWA_SHORT_NOCACHE_REPEAT_DIAGNOSTIC_REL,
+        (
+            GEMMA4_MIXED_SWA_SPEED_CURRENT_RELS[0]
+            if gemma4_mixed_swa_speed_rels == GEMMA4_MIXED_SWA_SPEED_CURRENT_RELS
+            else GEMMA4_MIXED_SWA_SHORT_NOCACHE_REPEAT_DIAGNOSTIC_REL
+        ),
     )
     gemma4_mixed_swa_short_nocache_scheduler_trace = _load(
         root,
@@ -6661,6 +6690,7 @@ def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
     gemma4_visible_ok, gemma4_visible_details = _gemma4_visible_content_detail(
         gemma4_responses_visible_contract,
         root,
+        gemma4_responses_visible_contract_rel,
         gemma4_responses_visible_nocache,
         gemma4_responses_visible_512_nocache,
         gemma4_responses_thinking_off_nocache,
@@ -6668,11 +6698,10 @@ def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
         gemma4_local_metadata_audit,
         gemma4_responses_unsupported_thinking_budget,
     )
-    _add(
-        requirements,
-        "Gemma4 26B CRACK Responses visible-content and language quality is release-cleared",
-        _status(gemma4_visible_ok),
-        [
+    gemma4_visible_evidence = (
+        [gemma4_responses_visible_contract_rel]
+        if gemma4_responses_visible_contract_rel == GEMMA4_RESPONSES_VISIBLE_CURRENT_REL
+        else [
             GEMMA4_RESPONSES_VISIBLE_CONTRACT_REL,
             GEMMA4_RESPONSES_UNSUPPORTED_THINKING_BUDGET_REL,
             GEMMA4_RESPONSES_VISIBLE_NOCACHE_REL,
@@ -6680,7 +6709,13 @@ def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
             GEMMA4_RESPONSES_THINKING_OFF_NOCACHE_REL,
             GEMMA4_CHAT_VISIBLE_NOCACHE_REL,
             GEMMA4_LOCAL_METADATA_AUDIT_REL,
-        ],
+        ]
+    )
+    _add(
+        requirements,
+        "Gemma4 26B CRACK Responses visible-content and language quality is release-cleared",
+        _status(gemma4_visible_ok),
+        gemma4_visible_evidence,
         caveat=(
             None
             if gemma4_visible_ok
@@ -6701,7 +6736,7 @@ def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
         requirements,
         "Gemma4 26B CRACK mixed-SWA app-engine speed floor is release-cleared",
         _status(gemma4_speed_ok),
-        list(GEMMA4_MIXED_SWA_SPEED_ARTIFACT_RELS),
+        list(gemma4_mixed_swa_speed_rels),
         caveat=(
             None
             if gemma4_speed_ok

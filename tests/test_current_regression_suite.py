@@ -1481,7 +1481,7 @@ def test_current_regression_suite_refreshes_current_objective_digest_artifact(
 
     assert artifact["status"] == "pass"
     assert suite.CURRENT_OBJECTIVE_DIGEST_ARTIFACT == (
-        "build/current-objective-proof-after-gemma26-minimaxk-mimo-rerun-20260606.json"
+        "build/current-objective-proof-after-gemma26-installed-speed-visible-20260606.json"
     )
     assert any(
         name == "objective_digest"

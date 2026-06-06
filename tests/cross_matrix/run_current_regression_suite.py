@@ -23,14 +23,12 @@ from typing import Any
 
 
 DEFAULT_OUT = Path(
-    "build/current-regression-suite-after-unsupported-media-package-refresh-20260606.json"
+    "build/current-regression-suite-after-gemma26-installed-speed-visible-20260606.json"
 )
 DEFAULT_STEP_TIMEOUT_SEC = 900.0
 STEP_TIMEOUT_RETURNCODE = 124
 
 EXPECTED_OPEN_REQUIREMENTS = [
-    "Gemma4 26B CRACK Responses visible-content and language quality is release-cleared",
-    "Gemma4 26B CRACK mixed-SWA app-engine speed floor is release-cleared",
     "Cross-family live multi-turn smoke matrix is release-cleared",
     "MiMo V2.5 JANG_2L runtime/tool/long-prompt quality is release-cleared",
     "MiniMax-M2.7-JANGTQ_K reporter parity/root cause is release-cleared",
@@ -43,7 +41,7 @@ DEFERRED_RELEASE_OPEN_REQUIREMENTS = {
 }
 
 CURRENT_OBJECTIVE_DIGEST_ARTIFACT = (
-    "build/current-objective-proof-after-gemma26-minimaxk-mimo-rerun-20260606.json"
+    "build/current-objective-proof-after-gemma26-installed-speed-visible-20260606.json"
 )
 
 CURRENT_SUITE_SOURCE_HASH_FILES = (
