@@ -1866,10 +1866,10 @@ class MLXMultimodalLM:
     ) -> list[dict]:
         """Use family-native plain text turns when a VLM request has no media.
 
-        ZAYA1-VL's local processor has two distinct template modes: rich list
+        Some local processor templates have two distinct modes: rich list
         content is required for real image/video turns, while text-only turns
-        render correctly as plain strings. Feeding a no-media ZAYA1-VL request
-        through the generic rich-content MLLM shape makes the template path look
+        render correctly as plain strings. Feeding a no-media request through
+        the generic rich-content MLLM shape can make the template path look
         like a multimodal prompt and weakens exact text, multi-turn, and
         reasoning probes. Keep media turns untouched; only collapse text-only
         content lists that contain text fragments and no modality markers.
@@ -1883,7 +1883,7 @@ class MLXMultimodalLM:
             model_type = str(config.get("model_type", "") or "").lower()
         else:
             model_type = str(getattr(config, "model_type", "") or "").lower()
-        if model_type != "zaya1_vl":
+        if model_type not in {"zaya1_vl", "mimo_v2"}:
             return chat_messages
 
         normalized: list[dict] = []

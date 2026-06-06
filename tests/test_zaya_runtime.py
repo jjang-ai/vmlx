@@ -705,6 +705,51 @@ def test_zaya1_vl_mllm_keeps_media_messages_rich_for_processor():
     assert normalized[0]["content"] is content
 
 
+def test_mimo_v2_mllm_text_only_messages_use_plain_processor_content():
+    from vmlx_engine.models.mllm import MLXMultimodalLM
+
+    model = MLXMultimodalLM.__new__(MLXMultimodalLM)
+    model.config = {"model_type": "mimo_v2"}
+
+    messages = [
+        {
+            "role": "system",
+            "content": [{"type": "text", "text": "Output exactly ACK."}],
+        },
+        {
+            "role": "user",
+            "content": [{"type": "text", "text": "Say ACK."}],
+        },
+    ]
+
+    normalized = model._normalize_text_only_messages_for_processor(
+        messages,
+        has_media=False,
+    )
+
+    assert normalized[0]["content"] == "Output exactly ACK."
+    assert normalized[1]["content"] == "Say ACK."
+
+
+def test_mimo_v2_mllm_keeps_media_messages_rich_for_processor():
+    from vmlx_engine.models.mllm import MLXMultimodalLM
+
+    model = MLXMultimodalLM.__new__(MLXMultimodalLM)
+    model.config = {"model_type": "mimo_v2"}
+    content = [
+        {"type": "image"},
+        {"type": "text", "text": "Describe this image."},
+    ]
+    messages = [{"role": "user", "content": content}]
+
+    normalized = model._normalize_text_only_messages_for_processor(
+        messages,
+        has_media=True,
+    )
+
+    assert normalized[0]["content"] is content
+
+
 def test_zaya1_vl_processor_preserves_list_content_for_list_aware_templates(monkeypatch):
     model_dir = Path("/Users/example/models/JANGQ/ZAYA1-VL-8B-MXFP4")
     if not model_dir.exists():
