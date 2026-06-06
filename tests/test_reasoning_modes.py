@@ -106,6 +106,29 @@ def test_dsv4_reasoning_effort_preserves_requested_rails(monkeypatch):
     )
 
 
+def test_dsv4_thinking_disabled_uses_official_chat_closed_thinking_rail():
+    """DSV4 non-think mode is the model-owned ``</think>`` chat rail.
+
+    Exact-code failures on that rail must be fixed or classified directly;
+    silently switching explicit thinking-disabled requests to the thinking rail
+    would be a hidden force-on workaround.
+    """
+    from vmlx_engine.loaders import dsv4_chat_encoder
+
+    assert dsv4_chat_encoder._resolve_mode_and_effort(False, None) == (
+        "chat",
+        None,
+    )
+    assert dsv4_chat_encoder._resolve_mode_and_effort(None, None) == (
+        "chat",
+        None,
+    )
+    assert dsv4_chat_encoder._resolve_mode_and_effort(True, None) == (
+        "thinking",
+        None,
+    )
+
+
 def test_invalid_thinking_mode_rejected():
     from vmlx_engine.api.models import ChatCompletionRequest
 
