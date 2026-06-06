@@ -7532,7 +7532,7 @@ def test_objective_proof_digest_keeps_cross_family_live_smoke_open_on_non_mimo_g
     )
     _write_json(
         tmp_path,
-        "build/current-all-local-model-smoke-zaya-vl-jangtq4-true-bundled-toolprobe-media-sentinel-20260525/summary.json",
+        "build/current-all-local-model-smoke-zaya-vl-mxfp4-after-thinking-capability-truth-20260606/summary.json",
         {
             "completed": 1,
             "row_count": 1,

@@ -63,7 +63,7 @@ from tests.cross_matrix.release_regression_manifest import (
 
 DEFAULT_OUT = Path("build/current-objective-proof-audit-20260602-cache-detail-zero-cached.json")
 CURRENT_RELEASE_REGRESSION_MANIFEST_REL = (
-    "build/current-release-regression-manifest-after-noheavy-pointer-refresh-20260606.json"
+    "build/current-release-regression-manifest-after-bundled-refresh-20260606.json"
 )
 DSV4_QUALITY_CLEARANCE_REL = "build/current-dsv4-long-output-quality-clearance-20260521.json"
 DSV4_CURRENT_IDENTIFIER_CANARY_REL = (
@@ -127,6 +127,9 @@ DSV4_CURRENT_SOURCE_BUNDLE_DEFAULTS_DRYRUN_REL = (
 )
 DSV4_CURRENT_SOURCE_MEMORY_PREFLIGHT_REL = (
     CURRENT_DSV4_SOURCE_MEMORY_PREFLIGHT_ARTIFACT
+)
+DSV4_CURRENT_REAL_UI_MEMORY_PREFLIGHT_REL = (
+    CURRENT_REAL_UI_DSV4_MEMORY_PREFLIGHT_ARTIFACT
 )
 DSV4_CURRENT_JANGTQK_DIRECT_OFF_RECHECK_REL = (
     "build/current-dsv4-route-mode-code-exactness-jangtqk-direct-off-recheck-20260525.json"
@@ -324,7 +327,7 @@ ALL_LOCAL_MODEL_SMOKE_ZAYA_VL_REL = (
     "build/current-all-local-model-smoke-zaya-vl-bundled-20260524/summary.json"
 )
 ALL_LOCAL_MODEL_SMOKE_ZAYA_VL_JANGTQ4_REL = (
-    "build/current-all-local-model-smoke-zaya-vl-jangtq4-true-bundled-toolprobe-media-sentinel-20260525/summary.json"
+    "build/current-all-local-model-smoke-zaya-vl-mxfp4-after-thinking-capability-truth-20260606/summary.json"
 )
 ALL_LOCAL_MODEL_SMOKE_ZAYA_VL_CURRENT_REL = (
     "build/current-all-local-model-smoke-zaya-vl-mxfp4-after-thinking-capability-truth-20260606/summary.json"
@@ -432,11 +435,9 @@ ALL_LOCAL_MODEL_SMOKE_ARTIFACTS_BY_FAMILY = {
     "nemotron": [ALL_LOCAL_MODEL_SMOKE_LING_HY3_NEMOTRON_CURRENT_REL, ALL_LOCAL_MODEL_SMOKE_NEMOTRON_OMNI_JANGTQ_REL],
     "qwen36": [ALL_LOCAL_MODEL_SMOKE_QWEN35_MXFP8_MTP_CURRENT_REL, ALL_LOCAL_MODEL_SMOKE_LIVE_SLICE_CURRENT_REL, ALL_LOCAL_MODEL_SMOKE_QWEN36_MXFP4_CRACK_REL],
     "step3p7": [ALL_LOCAL_MODEL_SMOKE_LIVE_SLICE_CURRENT_REL],
-    "zaya_text": [ALL_LOCAL_MODEL_SMOKE_ZAYA_TEXT_VL_CURRENT_REL, ALL_LOCAL_MODEL_SMOKE_ZAYA_TEXT_REL],
+    "zaya_text": [ALL_LOCAL_MODEL_SMOKE_ZAYA_TEXT_REL],
     "zaya_vl": [
         ALL_LOCAL_MODEL_SMOKE_ZAYA_VL_CURRENT_REL,
-        ALL_LOCAL_MODEL_SMOKE_ZAYA_TEXT_VL_CURRENT_REL,
-        ALL_LOCAL_MODEL_SMOKE_ZAYA_VL_JANGTQ4_REL,
     ],
 }
 GEMMA4_MIXED_SWA_SPEED_FLOOR_TOK_S = 80.0
@@ -5497,8 +5498,8 @@ def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
             _load(root, ALL_LOCAL_MODEL_SMOKE_LIVE_SLICE_CURRENT_REL),
         ),
         (
-            ALL_LOCAL_MODEL_SMOKE_ZAYA_TEXT_VL_CURRENT_REL,
-            _load(root, ALL_LOCAL_MODEL_SMOKE_ZAYA_TEXT_VL_CURRENT_REL),
+            ALL_LOCAL_MODEL_SMOKE_ZAYA_TEXT_REL,
+            _load(root, ALL_LOCAL_MODEL_SMOKE_ZAYA_TEXT_REL),
         ),
         (
             ALL_LOCAL_MODEL_SMOKE_ZAYA_VL_CURRENT_REL,
@@ -7434,6 +7435,7 @@ def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
             DSV4_CURRENT_SOURCE_TOKEN_TAIL_AB_EXACTNESS_REL,
             DSV4_CURRENT_SOURCE_REP1_DIRECT_ONLY_REL,
             DSV4_CURRENT_SOURCE_MEMORY_PREFLIGHT_REL,
+            DSV4_CURRENT_REAL_UI_MEMORY_PREFLIGHT_REL,
             DSV4_CURRENT_ROUTE_MODE_DRYRUN_REL,
             DSV4_CURRENT_ROUTE_MODE_DRYRUN_IDENTIFIER_CANDIDATES_REL,
             DSV4_CURRENT_ROUTE_MODE_DRYRUN_COHESIVE_AUDIT_REL,
