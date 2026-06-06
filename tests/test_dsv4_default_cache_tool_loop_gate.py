@@ -319,3 +319,18 @@ def test_dsv4_default_cache_tool_loop_response_diagnostics_capture_incomplete_st
             },
         ],
     }
+
+
+def test_dsv4_responses_one_tool_stop_gate_keeps_tools_available_on_final_turn():
+    import inspect
+    from tests.cross_matrix import run_dsv4_responses_one_tool_stop_gate as gate
+
+    src = inspect.getsource(gate.run)
+
+    assert "No more tools. Reply exactly DONE." in src
+    assert '"previous_response_id": round1.get("id")' in src
+    assert '"tools": TOOLS' in src
+    assert '"tool_choice": "auto"' in src
+    assert "round2_no_function_calls" in src
+    assert "round2_tools_still_available" in src
+    assert "native_cache" in src

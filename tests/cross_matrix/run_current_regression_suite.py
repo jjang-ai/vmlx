@@ -31,7 +31,6 @@ STEP_TIMEOUT_RETURNCODE = 124
 EXPECTED_OPEN_REQUIREMENTS = [
     "DSV4 Flash prefix/paged/L2 cache is enabled by default from app launch",
     "DSV4 block disk L2 stores and hits after restart",
-    "DSV4 Responses one-tool call stops after tool result",
     "Qwen/JANG packaged MX matmul speed is release-cleared",
     "Qwen native MTP live decode speed and output equivalence are release-cleared",
     "Qwen 27B JANG_4M prompt-processing speed floor is release-cleared",
@@ -92,6 +91,7 @@ CURRENT_SUITE_SOURCE_HASH_FILES = (
     "tests/cross_matrix/run_cache_architecture_contract.py",
     "tests/cross_matrix/run_current_regression_suite.py",
     "tests/cross_matrix/run_dsv4_default_cache_tool_loop_gate.py",
+    "tests/cross_matrix/run_dsv4_responses_one_tool_stop_gate.py",
     "tests/cross_matrix/run_dsv4_route_mode_code_exactness.py",
     "tests/cross_matrix/run_generation_defaults_contract.py",
     "tests/cross_matrix/run_gemma4_12b_speed_gate.py",

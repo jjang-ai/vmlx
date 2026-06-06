@@ -98,6 +98,15 @@ def test_current_regression_suite_does_not_keep_proven_dsv4_same_process_cache_h
     )
 
 
+def test_current_regression_suite_does_not_keep_proven_dsv4_one_tool_stop_open():
+    from tests.cross_matrix import run_current_regression_suite as suite
+
+    assert (
+        "DSV4 Responses one-tool call stops after tool result"
+        not in suite.EXPECTED_OPEN_REQUIREMENTS
+    )
+
+
 def test_current_regression_suite_preserves_expected_open_requirement_details(
     tmp_path,
     monkeypatch,

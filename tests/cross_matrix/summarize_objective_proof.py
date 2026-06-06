@@ -219,6 +219,9 @@ QWEN_NATIVE_MTP_NORM_SHIFT_CLEARANCE_REL = (
 QWEN_NATIVE_MTP_AB_REL = "build/current-native-mtp-speed-ab-qwen27-jang4m-mtp-20260523/result.json"
 DSV4_DEFAULT_CACHE_TOOL_LOOP_REL = "build/current-dsv4-default-cache-tool-loop/result.json"
 DSV4_RESPONSES_CACHE_GATE_REL = "build/current-dsv4-responses-cache-gate-20260606.json"
+DSV4_RESPONSES_ONE_TOOL_STOP_REL = (
+    "build/current-dsv4-responses-one-tool-stop-20260606.json"
+)
 DSV4_DEFAULT_CACHE_TOOL_LOOP_THINKING_ON_REL = (
     "build/current-dsv4-default-cache-tool-loop-thinking-on-20260525.json"
 )
@@ -4936,6 +4939,7 @@ def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
     )
     default_cache_tool_loop = _load(root, DSV4_DEFAULT_CACHE_TOOL_LOOP_REL)
     dsv4_responses_cache_gate = _load(root, DSV4_RESPONSES_CACHE_GATE_REL)
+    dsv4_responses_one_tool_stop = _load(root, DSV4_RESPONSES_ONE_TOOL_STOP_REL)
     default_cache_tool_loop_thinking_on = _load(
         root, DSV4_DEFAULT_CACHE_TOOL_LOOP_THINKING_ON_REL
     )
@@ -5200,6 +5204,40 @@ def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
     round2_body = ((dev_tool.get("round2") or {}).get("body") or {})
     round1_calls = _function_calls(round1_body)
     round2_calls = _function_calls(round2_body)
+    one_tool_stop_checks = (
+        dsv4_responses_one_tool_stop.get("checks")
+        if isinstance(dsv4_responses_one_tool_stop.get("checks"), dict)
+        else {}
+    )
+    one_tool_round1 = (
+        dsv4_responses_one_tool_stop.get("round1")
+        if isinstance(dsv4_responses_one_tool_stop.get("round1"), dict)
+        else {}
+    )
+    one_tool_round2 = (
+        dsv4_responses_one_tool_stop.get("round2")
+        if isinstance(dsv4_responses_one_tool_stop.get("round2"), dict)
+        else {}
+    )
+    one_tool_round1_calls = (
+        one_tool_round1.get("function_calls")
+        if isinstance(one_tool_round1.get("function_calls"), list)
+        else []
+    )
+    one_tool_round2_calls = (
+        one_tool_round2.get("function_calls")
+        if isinstance(one_tool_round2.get("function_calls"), list)
+        else []
+    )
+    current_one_tool_stop_ok = (
+        dsv4_responses_one_tool_stop.get("status") == "pass"
+        and one_tool_stop_checks.get("round1_exactly_one_tool") is True
+        and one_tool_stop_checks.get("round1_tool_is_list_directory") is True
+        and one_tool_stop_checks.get("round2_tools_still_available") is True
+        and one_tool_stop_checks.get("round2_no_function_calls") is True
+        and one_tool_stop_checks.get("round2_final_done") is True
+        and one_tool_stop_checks.get("previous_response_id_used") is True
+    )
     two_tool_rounds = two_tool.get("rounds") or []
     executed_tools = [
         tool
@@ -5799,16 +5837,40 @@ def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
         requirements,
         "DSV4 Responses one-tool call stops after tool result",
         _status(
-            len(round1_calls) == 1
-            and round1_calls[0].get("name") == "list_directory"
-            and not round2_calls
-            and round2_body.get("output_text") == "DONE"
+            (
+                len(round1_calls) == 1
+                and round1_calls[0].get("name") == "list_directory"
+                and not round2_calls
+                and round2_body.get("output_text") == "DONE"
+            )
+            or current_one_tool_stop_ok
         ),
-        ["build/dev-ui-dsv4-live-tool-proof-20260521/result.json"],
+        (
+            ["build/dev-ui-dsv4-live-tool-proof-20260521/result.json"]
+            if (
+                len(round1_calls) == 1
+                and round1_calls[0].get("name") == "list_directory"
+                and not round2_calls
+                and round2_body.get("output_text") == "DONE"
+            )
+            else [DSV4_RESPONSES_ONE_TOOL_STOP_REL]
+        ),
         details={
             "round1_calls": round1_calls,
             "round2_output_text": round2_body.get("output_text"),
             "round2_function_calls": round2_calls,
+            "current_one_tool_gate_status": (
+                dsv4_responses_one_tool_stop.get("status")
+            ),
+            "current_one_tool_checks": one_tool_stop_checks,
+            "current_one_tool_round1_calls": one_tool_round1_calls,
+            "current_one_tool_round2_function_calls": one_tool_round2_calls,
+            "current_one_tool_round2_output_text": one_tool_round2.get(
+                "output_text"
+            ),
+            "current_one_tool_tools_still_available": one_tool_round2.get(
+                "tools_still_available"
+            ),
         },
     )
     _add(

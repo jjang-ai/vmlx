@@ -5616,6 +5616,56 @@ def test_objective_proof_digest_uses_current_responses_cache_gate_for_same_proce
     assert row["details"]["current_responses_no_cache_wall_sec"] == 22.17
 
 
+def test_objective_proof_digest_uses_current_one_tool_stop_gate(
+    tmp_path,
+):
+    from tests.cross_matrix.summarize_objective_proof import build_digest
+
+    _write_passing_base_artifacts(tmp_path)
+    (tmp_path / "build/dev-ui-dsv4-live-tool-proof-20260521/result.json").unlink()
+    _write_json(
+        tmp_path,
+        "build/current-dsv4-responses-one-tool-stop-20260606.json",
+        {
+            "status": "pass",
+            "checks": {
+                "round1_exactly_one_tool": True,
+                "round1_tool_is_list_directory": True,
+                "round2_tools_still_available": True,
+                "round2_no_function_calls": True,
+                "round2_final_done": True,
+                "previous_response_id_used": True,
+            },
+            "round1": {
+                "function_calls": [
+                    {"type": "function_call", "name": "list_directory"}
+                ],
+            },
+            "round2": {
+                "function_calls": [],
+                "output_text": "DONE",
+                "tools_still_available": True,
+            },
+        },
+    )
+
+    digest = build_digest(tmp_path)
+    rows = {item["requirement"]: item for item in digest["requirements"]}
+
+    row = rows["DSV4 Responses one-tool call stops after tool result"]
+    assert row["status"] == "pass"
+    assert row["evidence"] == [
+        "build/current-dsv4-responses-one-tool-stop-20260606.json"
+    ]
+    assert row["details"]["current_one_tool_gate_status"] == "pass"
+    assert row["details"]["current_one_tool_round1_calls"] == [
+        {"type": "function_call", "name": "list_directory"}
+    ]
+    assert row["details"]["current_one_tool_round2_function_calls"] == []
+    assert row["details"]["current_one_tool_round2_output_text"] == "DONE"
+    assert row["details"]["current_one_tool_tools_still_available"] is True
+
+
 def test_objective_proof_digest_surfaces_default_cache_tool_loop_dry_run_controls(
     tmp_path,
 ):
