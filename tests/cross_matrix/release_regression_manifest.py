@@ -1787,8 +1787,12 @@ _ROWS: list[dict[str, Any]] = [
             ".venv/bin/python tests/cross_matrix/run_dsv4_route_mode_code_exactness.py --dry-run --cases chat_off_rep1,chat_off_no_punct_rep1,responses_off_rep1,responses_off_no_punct_rep1 --model /Users/example/models/JANGQ/DeepSeek-V4-Flash-JANGTQ-K --out build/current-dsv4-route-mode-code-exactness-dryrun-20260528-current-cohesive-audit.json",
             ".venv/bin/python tests/cross_matrix/run_dsv4_route_mode_code_exactness.py --dry-run --cases chat_off_rep1,chat_off_no_punct_rep1,responses_off_rep1,responses_off_no_punct_rep1 --model /Users/example/models/JANGQ/DeepSeek-V4-Flash-JANGTQ-K --out build/current-dsv4-route-mode-code-exactness-direct-off-no-punct-dryrun-20260525.json",
             ".venv/bin/python tests/cross_matrix/run_dsv4_route_mode_code_exactness.py --cases chat_off_rep1,chat_off_no_punct_rep1,responses_off_rep1,responses_off_no_punct_rep1 --model /Users/example/models/JANGQ/DeepSeek-V4-Flash-JANGTQ-K --min-free-gb 120 --out build/current-dsv4-route-mode-code-exactness-direct-off-no-punct-preflight-20260525.json",
+            ".venv/bin/python tests/cross_matrix/run_dsv4_route_mode_code_exactness.py --allow-user-ram-override --min-free-gb 100 --cases chat_off_no_punct_rep1,responses_off,responses_on --request-timeout 240 --timeout 900 --out build/current-dsv4-route-mode-code-exactness-ab-route-user-ram-override-20260606.json",
         ],
         "artifacts": [
+            "build/current-dsv4-route-mode-code-exactness-chat-off-user-ram-override-20260606.json",
+            "build/current-dsv4-route-mode-code-exactness-chat-on-user-ram-override-20260606.json",
+            "build/current-dsv4-route-mode-code-exactness-ab-route-user-ram-override-20260606.json",
             "build/current-dsv4-jangtq-k-route-mode-code-exactness-20260524.json",
             "build/current-dsv4-route-mode-code-exactness-source-rep1-prefill-logits-eval-20260525.json",
             "build/current-dsv4-route-mode-code-exactness-source-thinking-ab-prefill-logits-eval-20260525.json",

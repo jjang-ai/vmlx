@@ -114,7 +114,7 @@ DSV4_CURRENT_SOURCE_REP1_RAIL_EXACTNESS_REL = (
     "build/current-dsv4-route-mode-code-exactness-source-thinking-ab-prefill-logits-eval-20260525.json"
 )
 DSV4_CURRENT_SOURCE_TOKEN_TAIL_AB_EXACTNESS_REL = (
-    "build/current-dsv4-route-mode-code-exactness-token-tail-source-ab-20260525.json"
+    "build/current-dsv4-route-mode-code-exactness-ab-route-user-ram-override-20260606.json"
 )
 DSV4_CURRENT_SOURCE_REP1_DIRECT_ONLY_REL = (
     "build/current-dsv4-route-mode-code-exactness-source-rep1-prefill-logits-eval-20260525.json"

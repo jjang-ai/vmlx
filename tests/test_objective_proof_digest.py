@@ -2856,7 +2856,7 @@ def test_objective_proof_digest_surfaces_current_source_dsv4_token_tail_ab(tmp_p
     _write_passing_base_artifacts(tmp_path)
     _write_json(
         tmp_path,
-        "build/current-dsv4-route-mode-code-exactness-token-tail-source-ab-20260525.json",
+        "build/current-dsv4-route-mode-code-exactness-ab-route-user-ram-override-20260606.json",
         {
             "status": "fail",
             "selected_cases": [
@@ -3088,7 +3088,7 @@ def test_objective_proof_digest_surfaces_current_source_dsv4_token_tail_ab(tmp_p
     ]
     assert quality["status"] == "open"
     assert token_tail["artifact"].endswith(
-        "current-dsv4-route-mode-code-exactness-token-tail-source-ab-20260525.json"
+        "current-dsv4-route-mode-code-exactness-ab-route-user-ram-override-20260606.json"
     )
     assert token_tail["status"] == "fail"
     assert token_tail["failed_cases"] == ["chat_off_rep1", "responses_off_rep1"]
@@ -3108,7 +3108,7 @@ def test_objective_proof_digest_summarizes_dsv4_direct_off_exactness_boundary(
     _write_passing_base_artifacts(tmp_path)
     _write_json(
         tmp_path,
-        "build/current-dsv4-route-mode-code-exactness-token-tail-source-ab-20260525.json",
+        "build/current-dsv4-route-mode-code-exactness-ab-route-user-ram-override-20260606.json",
         {
             "status": "fail",
             "selected_cases": [
@@ -3301,6 +3301,7 @@ def test_objective_proof_digest_summarizes_dsv4_direct_off_exactness_boundary(
     assert summary["requested_thinking_exact_routes"] == ["chat", "responses"]
     assert summary["requested_thinking_exact_spans_chat_and_responses"] is True
     assert "legacy_completion_raw" in summary["all_direct_off_failed_cases"]
+    assert "build/current-dsv4-route-mode-code-exactness-ab-route-user-ram-override-20260606.json" in summary["direct_off_failure_artifacts"]
     assert "build/current-dsv4-route-mode-code-exactness-jangtqk-direct-off-recheck-20260525.json" in summary["direct_off_failure_artifacts"]
     assert "chat_on" in summary["all_requested_thinking_exact_cases"]
     assert summary["hidden_force_on_would_be_false_clearance"] is True
@@ -3565,7 +3566,7 @@ def test_objective_proof_digest_summarizes_dsv4_exact_code_root_boundary(
     )
     _write_json(
         tmp_path,
-        "build/current-dsv4-route-mode-code-exactness-token-tail-source-ab-20260525.json",
+        "build/current-dsv4-route-mode-code-exactness-ab-route-user-ram-override-20260606.json",
         {
             "status": "fail",
             "cases": [
@@ -10131,7 +10132,7 @@ def test_objective_proof_digest_accepts_dsv4_quality_clearance_artifact(tmp_path
         "build/current-dsv4-route-mode-code-exactness-current-thinking-on-subset-20260524.json",
         "build/current-dsv4-route-mode-code-exactness-current-rep1-controls-20260524-2104.json",
         "build/current-dsv4-route-mode-code-exactness-source-thinking-ab-prefill-logits-eval-20260525.json",
-        "build/current-dsv4-route-mode-code-exactness-token-tail-source-ab-20260525.json",
+        "build/current-dsv4-route-mode-code-exactness-ab-route-user-ram-override-20260606.json",
         "build/current-dsv4-route-mode-code-exactness-source-rep1-prefill-logits-eval-20260525.json",
     ):
         _write_json(
