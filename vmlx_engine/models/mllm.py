@@ -1921,11 +1921,14 @@ class MLXMultimodalLM:
     def _synthesizes_thinking_prompt_when_enabled(self) -> bool:
         """Return True for MLLM families whose template needs an explicit open rail.
 
-        ZAYA1-VL bundles declare qwen3 reasoning support in the registry but
-        their mlx-vlm chat template can be a plain ``assistant: `` suffix. In
-        that case an explicit per-chat/API ``enable_thinking=true`` must open
-        the qwen3 rail in the prompt. This is intentionally family-gated; most
-        VLM templates either own their think rail or do not support reasoning.
+        Some MLLM bundles declare qwen3 reasoning support while their mlx-vlm
+        chat template can be a plain ``assistant: `` suffix. In that case an
+        explicit per-chat/API ``enable_thinking=true`` may need to open the
+        qwen3 rail in the prompt. This is intentionally family-gated; most VLM
+        templates either own their think rail or do not support reasoning. The
+        current ZAYA1-VL plain-template artifacts are registry-demoted to
+        ``supports_thinking=False`` because live proof produced hidden-only
+        output under the synthetic rail.
         """
 
         config = getattr(self, "config", None)
@@ -2079,9 +2082,10 @@ class MLXMultimodalLM:
                 f"Failed to apply chat template: {e}, using last user message"
             )
 
-        # ZAYA1-VL's processor template can be plain while the model is still
+        # Some processor templates can be plain while the model is still
         # qwen3-reasoning capable. Honor explicit thinking-on by opening the
-        # rail in the assistant generation prompt; Auto/Off remain plain.
+        # rail in the assistant generation prompt only for registry-approved
+        # families; Auto/Off remain plain.
         if (
             enable_thinking is True
             and formatted_prompt

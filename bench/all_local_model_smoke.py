@@ -33,6 +33,29 @@ def read_json(path: Path) -> dict[str, Any]:
     return data if isinstance(data, dict) else {}
 
 
+def _bundle_template_has_thinking_control(model_dir: Path) -> bool:
+    """Return True if the local bundle owns an explicit thinking template rail."""
+    candidates: list[str] = []
+    tokenizer_config = read_json(model_dir / "tokenizer_config.json")
+    template = tokenizer_config.get("chat_template")
+    if isinstance(template, str):
+        candidates.append(template)
+    for rel in ("chat_template.jinja", "chat_template.json"):
+        path = model_dir / rel
+        try:
+            if path.is_file():
+                candidates.append(path.read_text(encoding="utf-8", errors="replace"))
+        except Exception:
+            pass
+    joined = "\n".join(candidates).lower()
+    return bool(
+        "enable_thinking" in joined
+        or "reasoning_effort" in joined
+        or "<think" in joined
+        or "</think" in joined
+    )
+
+
 def sanitize_name(name: str) -> str:
     cleaned = re.sub(r"[^A-Za-z0-9_.-]+", "-", name).strip("-._")
     return cleaned[:96] or "model"
@@ -158,6 +181,8 @@ def classify_model_dir(model_dir: Path) -> dict[str, Any]:
         supports_thinking = bool(capabilities["supports_thinking"])
     elif isinstance(reasoning_capabilities.get("supported"), bool):
         supports_thinking = bool(reasoning_capabilities["supported"])
+    if model_type == "zaya1_vl" and not _bundle_template_has_thinking_control(model_dir):
+        supports_thinking = False
 
     supports_tools = True
     tool_capabilities = (

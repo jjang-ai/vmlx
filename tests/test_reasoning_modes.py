@@ -1017,15 +1017,16 @@ def test_unknown_config_can_fall_back_to_tokenizer_vocab_thinking_seed():
     )
 
 
-def test_zaya_vl_mllm_thinking_on_synthesizes_open_think_for_plain_template(
+def test_zaya_vl_mllm_plain_template_does_not_synthesize_hidden_only_think(
     tmp_path, monkeypatch
 ):
-    """ZAYA1-VL is reasoning-capable even when the processor template is plain.
+    """Plain-template ZAYA1-VL must not synthesize a fake thinking rail.
 
-    Some ZAYA1-VL/JANGTQ and MXFP4 bundles declare qwen3 reasoning in
-    jang_config, but their mlx-vlm processor template only emits
-    ``assistant: ``. An explicit per-chat/API thinking-on request must open
-    the qwen3 rail in the prompt, while thinking-off must stay plain.
+    Current ZAYA1-VL/JANGTQ and MXFP4 bundles can still declare qwen3
+    reasoning in metadata, but their mlx-vlm processor template only emits
+    ``assistant: ``. Live proof showed that opening a synthetic qwen3 rail
+    produces hidden-only output and EOS, so runtime capability truth demotes
+    these artifacts until a real VLM thinking contract is uploaded.
     """
     from vmlx_engine.models.mllm import MLXMultimodalLM
 
@@ -1060,9 +1061,7 @@ def test_zaya_vl_mllm_thinking_on_synthesizes_open_think_for_plain_template(
     lm.model_name = str(bundle)
 
     messages = [{"role": "user", "content": "hi"}]
-    assert lm._apply_chat_template(messages, enable_thinking=True).endswith(
-        "assistant: <think>\n"
-    )
+    assert lm._apply_chat_template(messages, enable_thinking=True).endswith("assistant: ")
     assert "<think>" not in lm._apply_chat_template(messages, enable_thinking=False)
 
 
@@ -1125,10 +1124,10 @@ def test_step37_mllm_thinking_off_closes_forced_processor_think(
     assert rendered.endswith("<think>\n</think>\n\n")
 
 
-def test_zaya_vl_synthetic_mllm_think_prompt_seed_is_request_dependent(
+def test_zaya_vl_synthetic_mllm_think_prompt_seed_is_disabled_for_plain_template(
     tmp_path,
 ):
-    """Server reasoning parser seeding must match the synthetic MLLM prompt."""
+    """Server reasoning parser seeding must match ZAYA1-VL capability truth."""
     from vmlx_engine import server
 
     bundle = tmp_path / "zaya-vl"
@@ -1152,7 +1151,7 @@ def test_zaya_vl_synthetic_mllm_think_prompt_seed_is_request_dependent(
         model_key=str(bundle),
         enable_thinking=True,
         engine=engine,
-    ) is True
+    ) is False
     assert server._synthetic_mllm_think_prompt_starts(
         model_key=str(bundle),
         enable_thinking=False,

@@ -1240,8 +1240,9 @@ export class SessionManager extends EventEmitter {
           }
           // v1.5.25 ZAYA recovery: early ZAYA builds were misdetected as Qwen
           // tool parsers. Preserve only explicit "None" (`''`) choices, but
-          // keep reasoning on the registry path because ZAYA/ZAYA1-VL declare a
-          // qwen3-compatible thinking rail and per-chat On/Off must work.
+          // keep reasoning on the registry path for text ZAYA; current ZAYA1-VL
+          // plain-template bundles intentionally resolve reasoningParser to auto because
+          // live proof shows their synthetic thinking rail is hidden-only.
           if (isZayaCcaFamily(freshFamily)) {
             if (config.toolCallParser !== '') {
               config.toolCallParser = freshConfig.toolParser || 'auto'

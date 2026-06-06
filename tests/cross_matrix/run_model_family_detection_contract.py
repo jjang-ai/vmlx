@@ -103,7 +103,7 @@ REQUIRED_ROWS = (
     "zaya_text_cca_tools_reasoning",
     "zaya_stale_stamp_reasoning_policy",
     "zaya1_vl_cca_multimodal",
-    "zaya1_vl_jangtq_profiles_reasoning_policy",
+    "zaya1_vl_jangtq_profiles_no_reasoning_capability_truth",
     "ling_bailing_hybrid_plain_content",
     "nemotron_h_hybrid_text_not_stale_omni",
     "nemotron_h_registry_hybrid_cache",
@@ -157,10 +157,10 @@ ROW_MARKERS: dict[str, tuple[str, ...]] = {
         "test_zaya1_vl_registered_with_full_contract",
         "detects ZAYA1-VL as multimodal CCA hybrid",
     ),
-    "zaya1_vl_jangtq_profiles_reasoning_policy": (
-        "keeps ZAYA1-VL JANGTQ_K on the opt-in qwen3 reasoning rail while preserving VL and typed CCA detection",
-        "keeps ZAYA1-VL JANGTQ2 on the opt-in qwen3 reasoning rail",
-        "keeps ZAYA1-VL JANGTQ4 on the opt-in qwen3 reasoning rail",
+    "zaya1_vl_jangtq_profiles_no_reasoning_capability_truth": (
+        "keeps ZAYA1-VL JANGTQ_K multimodal while suppressing the stale reasoning rail",
+        "keeps ZAYA1-VL JANGTQ2 multimodal without a reasoning rail",
+        "keeps ZAYA1-VL JANGTQ4 multimodal without a reasoning rail",
     ),
     "ling_bailing_hybrid_plain_content": (
         "test_ling_is_not_a_reasoning_model",

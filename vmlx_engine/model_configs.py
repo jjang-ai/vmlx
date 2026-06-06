@@ -117,9 +117,13 @@ def register_all(registry=None):
             cache_subtype="zaya_cca",
             eos_tokens=["<|im_end|>"],
             tool_parser="zaya_xml",
-            reasoning_parser="qwen3",
+            # Current ZAYA1-VL bundles have a plain VLM template and live proof
+            # showed synthetic qwen3 thinking returns hidden-only output. Keep
+            # vision/tools/cache enabled, but do not expose reasoning until the
+            # uploaded artifact has a real VLM thinking contract.
+            reasoning_parser=None,
             think_in_template=False,
-            supports_thinking=True,
+            supports_thinking=False,
             supports_native_tools=True,
             is_mllm=True,
             architecture_hints={"default_enable_thinking": False},

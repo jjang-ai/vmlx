@@ -129,9 +129,10 @@
 - **Old SQLite rows stop poisoning new requests**: generic historical sampling
   values are reset once, and `model_settings` no longer stores sampling or
   reasoning mode.
-- **ZAYA1-VL reasoning-on works through the VLM path**: explicit thinking-on
-  opens a qwen3 `<think>` rail for ZAYA1-VL bundles whose processor template is
-  otherwise plain.
+- **ZAYA1-VL no longer exposes unproved reasoning mode**: current uploaded
+  ZAYA1-VL bundles use a plain VLM template and live proof showed hidden-only
+  output, so the panel and runtime suppress reasoning until the model upload
+  ships a real VLM thinking template and passes visible-output proof.
 - **DSV4 DSML parser recovers degraded `<param>` arguments** instead of
   accepting canonical parser output with `{}` required args or raw markup.
 

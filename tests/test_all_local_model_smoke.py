@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 from pathlib import Path
 
 
@@ -77,7 +78,7 @@ def test_classify_model_does_not_infer_zaya_vl_video_from_vl_name_or_token(tmp_p
 
     assert row["is_mllm"] is True
     assert row["supports_video"] is False
-    assert row["supports_thinking"] is True
+    assert row["supports_thinking"] is False
 
 
 def test_classify_model_keeps_zaya_text_non_reasoning(tmp_path):
@@ -569,12 +570,13 @@ def test_zaya_vl_no_media_probe_uses_attached_none_contract():
         "served_name": "zaya1-vl-8b-mxfp4",
         "is_mllm": True,
         "supports_video": False,
-        "supports_thinking": True,
+        "supports_thinking": False,
         "model_type": "zaya1_vl",
         "cache_family": "zaya_cca",
     }
 
     probes = mod.build_probe_payloads(row, max_tokens=32, include_reasoning=True)
+    assert "reasoning_on" not in {probe["label"] for probe in probes}
     image_probe = next(
         probe for probe in probes if probe["label"] == "text_no_media_after_image"
     )
@@ -585,6 +587,48 @@ def test_zaya_vl_no_media_probe_uses_attached_none_contract():
     assert "answer ATTACHED. Otherwise answer NONE" in image_messages[0]["content"]
     assert "answer exactly IMAGE" not in image_messages[0]["content"]
     assert "zero image attachments" not in image_messages[0]["content"]
+
+
+def test_classify_zaya_vl_plain_template_does_not_claim_thinking(tmp_path):
+    mod = load_module()
+    model_dir = tmp_path / "ZAYA1-VL-8B-MXFP4"
+    model_dir.mkdir()
+    (model_dir / "config.json").write_text(
+        json.dumps(
+            {
+                "model_type": "zaya1_vl",
+                "vision_config": {"model_type": "qwen2_5_vl"},
+                "capabilities": {
+                    "family": "zaya1_vl",
+                    "reasoning_parser": "qwen3",
+                    "supports_thinking": True,
+                    "supports_tools": True,
+                },
+            }
+        )
+    )
+    (model_dir / "jang_config.json").write_text(
+        json.dumps(
+            {
+                "capabilities": {
+                    "family": "zaya1_vl",
+                    "reasoning_parser": "qwen3",
+                    "supports_thinking": True,
+                    "supports_tools": True,
+                }
+            }
+        )
+    )
+    (model_dir / "tokenizer_config.json").write_text(
+        json.dumps({"chat_template": "{% for message in messages %}assistant: {% endfor %}"})
+    )
+
+    row = mod.classify_model_dir(model_dir)
+
+    assert row["model_type"] == "zaya1_vl"
+    assert row["is_mllm"] is True
+    assert row["supports_tools"] is True
+    assert row["supports_thinking"] is False
 
 
 def test_video_probe_uses_effective_probe_option_not_static_inventory_flag():

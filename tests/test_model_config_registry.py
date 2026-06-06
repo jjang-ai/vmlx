@@ -496,7 +496,7 @@ class TestModelConfigRegistry:
         assert result.think_in_template is False
         assert result.architecture_hints.get("default_enable_thinking") is False
 
-    def test_zaya1_vl_vision_config_beats_stale_text_modality_stamp(
+    def test_zaya1_vl_vision_config_beats_stale_text_modality_stamp_without_reasoning_claim(
         self, empty_registry, tmp_path
     ):
         """Old or hand-edited stamps must not demote a real ZAYA1-VL bundle.
@@ -504,6 +504,8 @@ class TestModelConfigRegistry:
         ZAYA1-VL has `vision_config` in config.json. A stale
         `capabilities.modality=text` stamp can exist on local copies, but the
         registry must not use that stale stamp to turn off MLLM routing.
+        The current VLM template has no real thinking rail, so do not expose a
+        reasoning mode from stale or optimistic converter metadata.
         """
         import json
 
@@ -552,9 +554,9 @@ class TestModelConfigRegistry:
         assert result.family_name == "zaya1_vl"
         assert result.is_mllm is True
         assert result.cache_subtype == "zaya_cca"
-        assert result.reasoning_parser == "qwen3"
+        assert result.reasoning_parser is None
         assert result.think_in_template is False
-        assert result.supports_thinking is True
+        assert result.supports_thinking is False
 
     def test_zaya_jangtq2_profile_keeps_supports_thinking_true(
         self, empty_registry, tmp_path
@@ -2015,13 +2017,14 @@ class TestModelConfigComprehensiveChecks:
             "the engine wires it through the LLM batch generator instead of "
             "MLLM batch generator and image inputs break."
         )
-        assert config.supports_thinking is True, (
-            "Per Eric 2026-05-10 honest-flag directive: ZAYA1-VL does reason "
-            "supports_thinking=True; callers opt in via enable_thinking=True."
+        assert config.supports_thinking is False, (
+            "Current ZAYA1-VL plain-template artifacts do not have a "
+            "release-proven VLM thinking rail; callers must not see a "
+            "reasoning mode until the model upload/template is fixed."
         )
-        assert config.reasoning_parser == "qwen3", (
-            "ZAYA1-VL uses qwen3-style <think> blocks in output, so the qwen3 "
-            "reasoning parser is the authoritative extractor."
+        assert config.reasoning_parser is None, (
+            "Do not attach the qwen3 parser to current ZAYA1-VL: live proof "
+            "showed the synthetic rail returns hidden-only text."
         )
 
     def test_mimo_v2_registered_with_jang2l_contract(self, registry):

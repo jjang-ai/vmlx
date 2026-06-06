@@ -454,13 +454,17 @@ class ModelConfigRegistry:
             # stamp wins because it describes the emitted artifact. Keep
             # Keep family reasoning policy separate from quantization bit
             # metadata. Bit width is used for kernel/cache selection and
-            # observability, not for hidden runtime guards. ZAYA/ZAYA1-VL are
-            # reasoning-capable qwen3-parser families, but their template does
-            # not start in an open think rail, so stale converter stamps must
-            # not resurrect think_in_template=True. Ling/Bailing is the one
-            # explicit no-reasoning contract here: stale JANG sidecars
-            # advertise an experimental system-message switch, but the app/API
-            # should not expose it as a reasoning-capable model.
+            # observability, not for hidden runtime guards. Text ZAYA is a
+            # reasoning-capable qwen3-parser family, but its template does not
+            # start in an open think rail, so stale converter stamps must not
+            # resurrect think_in_template=True. ZAYA1-VL currently ships a
+            # plain VLM tokenizer template and live-proven hidden-only output
+            # when vMLX synthesizes an open qwen3 rail, so runtime
+            # capabilities must not advertise reasoning until the artifact
+            # ships a real VLM thinking template/model behavior. Ling/Bailing
+            # is the other explicit no-reasoning contract here: stale JANG
+            # sidecars advertise an experimental system-message switch, but
+            # the app/API should not expose it as a reasoning-capable model.
             from dataclasses import replace
             updates: Dict[str, Any] = {}
             rp = caps.get("reasoning_parser")
@@ -475,7 +479,8 @@ class ModelConfigRegistry:
             has_config_media = _config_declares_media(local_model_config)
             base_supports_thinking = getattr(base, "supports_thinking", None)
             is_ling_family = base.family_name == "ling"
-            is_zaya_family = base.family_name in {"zaya", "zaya1_vl"}
+            is_zaya_family = base.family_name == "zaya"
+            is_zaya1_vl_family = base.family_name == "zaya1_vl"
             is_hy3_family = base.family_name == "hy_v3"
             is_minimax_family = base.family_name == "minimax"
             is_mimo_v2_family = base.family_name == "mimo_v2"
@@ -498,12 +503,26 @@ class ModelConfigRegistry:
             preserve_template_metadata_when_no_thinking = False
 
             if is_zaya_family:
-                # ZAYA and ZAYA1-VL are reasoning-capable, but the honest
-                # prompt contract is still not "starts inside <think>".
+                # Text ZAYA is reasoning-capable, but the honest prompt
+                # contract is still not "starts inside <think>".
                 # enable_thinking=False renders a closed empty block. Do not
                 # let stale converter stamps resurrect think_in_template=True.
                 updates["supports_thinking"] = True
                 updates["reasoning_parser"] = "qwen3"
+                updates["think_in_template"] = False
+                zaya_hints = dict(getattr(base, "architecture_hints", None) or {})
+                zaya_hints["default_enable_thinking"] = False
+                updates["architecture_hints"] = zaya_hints
+            elif is_zaya1_vl_family:
+                # The current ZAYA1-VL VLM template is plain:
+                # `... assistant:` with no enable_thinking branch or
+                # model-owned think rail. Live MXFP4 proof shows a synthesized
+                # `<think>` rail returns hidden-only text and EOS. Keep vision,
+                # tools, and typed CCA cache active, but do not advertise
+                # reasoning until the uploaded artifact has a real VLM thinking
+                # contract.
+                updates["supports_thinking"] = False
+                updates["reasoning_parser"] = None
                 updates["think_in_template"] = False
                 zaya_hints = dict(getattr(base, "architecture_hints", None) or {})
                 zaya_hints["default_enable_thinking"] = False
@@ -549,6 +568,7 @@ class ModelConfigRegistry:
                 rp is not None
                 and not (
                     is_zaya_family
+                    or is_zaya1_vl_family
                     or is_ling_family
                     or is_hy3_family
                     or is_minimax_family
@@ -559,7 +579,12 @@ class ModelConfigRegistry:
                 updates["reasoning_parser"] = rp if rp != "none" else None
             if tp is not None and not is_mimo_v2_family:
                 updates["tool_parser"] = tp if tp != "none" else None
-            if isinstance(tin, bool) and not (is_zaya_family or is_ling_family or is_hy3_family) and (
+            if isinstance(tin, bool) and not (
+                is_zaya_family
+                or is_zaya1_vl_family
+                or is_ling_family
+                or is_hy3_family
+            ) and (
                 base_supports_thinking is not False or preserve_template_metadata_when_no_thinking
             ):
                 updates["think_in_template"] = tin

@@ -289,7 +289,7 @@ describe('detectModelConfigFromDir JANG multimodal detection', () => {
     expect(detected.defaultEnableThinking).toBe(false)
   })
 
-  it('detects ZAYA1-VL as multimodal CCA hybrid with opt-in qwen3 reasoning parser', () => {
+  it('detects ZAYA1-VL as multimodal CCA hybrid without a reasoning claim', () => {
     const dir = makeModelDir(
       {
         model_type: 'zaya1_vl',
@@ -315,14 +315,14 @@ describe('detectModelConfigFromDir JANG multimodal detection', () => {
     expect(detected.cacheType).toBe('hybrid')
     expect(detected.usePagedCache).toBe(true)
     expect(detected.toolParser).toBe('zaya_xml')
-    expect(detected.reasoningParser).toBe('qwen3')
-    expect(detected.supportsThinking).toBe(true)
+    expect(detected.reasoningParser).toBeUndefined()
+    expect(detected.supportsThinking).toBe(false)
     expect(detected.thinkInTemplate).toBe(false)
     expect(detected.defaultEnableThinking).toBe(false)
     expect(detected.isMultimodal).toBe(true)
   })
 
-  it('keeps ZAYA1-VL JANGTQ_K on the opt-in qwen3 reasoning rail while preserving VL and typed CCA detection', () => {
+  it('keeps ZAYA1-VL JANGTQ_K multimodal while suppressing the stale reasoning rail', () => {
     const dir = makeModelDir(
       {
         model_type: 'zaya1_vl',
@@ -357,14 +357,14 @@ describe('detectModelConfigFromDir JANG multimodal detection', () => {
     expect(detected.cacheType).toBe('hybrid')
     expect(detected.usePagedCache).toBe(true)
     expect(detected.toolParser).toBe('zaya_xml')
-    expect(detected.reasoningParser).toBe('qwen3')
-    expect(detected.supportsThinking).toBe(true)
+    expect(detected.reasoningParser).toBeUndefined()
+    expect(detected.supportsThinking).toBe(false)
     expect(detected.thinkInTemplate).toBe(false)
     expect(detected.isMultimodal).toBe(true)
     expect(detected.isTurboQuant).toBe(true)
   })
 
-  it('keeps ZAYA1-VL JANGTQ2 on the opt-in qwen3 reasoning rail', () => {
+  it('keeps ZAYA1-VL JANGTQ2 multimodal without a reasoning rail', () => {
     const dir = makeModelDir(
       {
         model_type: 'zaya1_vl',
@@ -392,14 +392,14 @@ describe('detectModelConfigFromDir JANG multimodal detection', () => {
     const detected = detectModelConfigFromDir(dir)
 
     expect(detected.family).toBe('zaya1-vl')
-    expect(detected.reasoningParser).toBe('qwen3')
-    expect(detected.supportsThinking).toBe(true)
+    expect(detected.reasoningParser).toBeUndefined()
+    expect(detected.supportsThinking).toBe(false)
     expect(detected.thinkInTemplate).toBe(false)
     expect(detected.isMultimodal).toBe(true)
     expect(detected.isTurboQuant).toBe(true)
   })
 
-  it('keeps ZAYA1-VL JANGTQ4 on the opt-in qwen3 reasoning rail', () => {
+  it('keeps ZAYA1-VL JANGTQ4 multimodal without a reasoning rail', () => {
     const dir = makeModelDir(
       {
         model_type: 'zaya1_vl',
@@ -427,8 +427,8 @@ describe('detectModelConfigFromDir JANG multimodal detection', () => {
     const detected = detectModelConfigFromDir(dir)
 
     expect(detected.family).toBe('zaya1-vl')
-    expect(detected.reasoningParser).toBe('qwen3')
-    expect(detected.supportsThinking).toBe(true)
+    expect(detected.reasoningParser).toBeUndefined()
+    expect(detected.supportsThinking).toBe(false)
     expect(detected.thinkInTemplate).toBe(false)
     expect(detected.isMultimodal).toBe(true)
     expect(detected.isTurboQuant).toBe(true)
@@ -460,8 +460,8 @@ describe('detectModelConfigFromDir JANG multimodal detection', () => {
     expect(detected.cacheType).toBe('hybrid')
     expect(detected.usePagedCache).toBe(true)
     expect(detected.toolParser).toBe('zaya_xml')
-    expect(detected.reasoningParser).toBe('qwen3')
-    expect(detected.supportsThinking).toBe(true)
+    expect(detected.reasoningParser).toBeUndefined()
+    expect(detected.supportsThinking).toBe(false)
     expect(detected.thinkInTemplate).toBe(false)
     expect(detected.isMultimodal).toBe(true)
   })

@@ -7486,11 +7486,15 @@ class TestZayaCCACachePolicy:
             assert caps.get("family") == expected_family
             assert caps.get("cache_type") == "hybrid"
             assert caps.get("tool_parser") == "zaya_xml"
-            assert caps.get("reasoning_parser") == "qwen3"
+            if model_type == "zaya1_vl":
+                assert caps.get("reasoning_parser") == "qwen3"
+            else:
+                assert caps.get("reasoning_parser") == "qwen3"
             assert caps.get("think_in_template") is False
-            # Per Eric 2026-05-10 honest-flag directive: ZAYA AND ZAYA1-VL are
-            # reasoning-capable and use qwen3 parsing, while default prompts
-            # are not stamped as starting inside an open think rail.
+            # Text ZAYA remains reasoning-capable. Current ZAYA1-VL artifacts
+            # still carry optimistic converter metadata, but runtime
+            # capabilities demote their plain VLM template because live proof
+            # produced hidden-only output under the synthetic qwen3 rail.
             assert caps.get("supports_thinking") is True
             assert cfg.get("zaya_expert_layout") == "split_switch_mlp"
             assert caps.get("modality") == ("vision" if model_type == "zaya1_vl" else "text")
@@ -7502,11 +7506,15 @@ class TestZayaCCACachePolicy:
             assert rcfg.tool_parser == "zaya_xml"
             assert rcfg.think_in_template is False
             # Bit profile is still audited for kernel/cache metadata below, but
-            # it must not change ZAYA reasoning policy. Low-bit artifact quality
-            # warnings live with model distribution notes, not hidden vMLX
-            # runtime guards.
-            assert rcfg.reasoning_parser == "qwen3"
-            assert rcfg.supports_thinking is True
+            # it must not change the family capability boundary. Text ZAYA
+            # keeps qwen3; ZAYA1-VL stays no-reasoning until its uploaded
+            # artifact has a real VLM thinking contract.
+            if model_type == "zaya1_vl":
+                assert rcfg.reasoning_parser is None
+                assert rcfg.supports_thinking is False
+            else:
+                assert rcfg.reasoning_parser == "qwen3"
+                assert rcfg.supports_thinking is True
             assert rcfg.is_mllm is (model_type == "zaya1_vl")
 
             if jcfg.get("weight_format") == "mxtq":

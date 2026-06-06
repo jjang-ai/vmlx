@@ -104,9 +104,11 @@ function registerFamily(familyName: string, config: Omit<ModelConfig, 'familyNam
 // the typed CCA cache contract.
 registerFamily('zaya', { cacheType: 'hybrid', toolParser: 'zaya_xml', reasoningParser: 'qwen3', supportsThinking: true, thinkInTemplate: false, defaultEnableThinking: false, usePagedCache: true, enableAutoToolChoice: true, description: 'ZAYA CCA hybrid MoE', priority: 3 })
 // ZAYA1-VL is detected separately so the UI does not fall through to generic
-// VLM defaults. The Python runtime uses a typed CCA cache contract, so panel
-// sessions must start on paged cache instead of the legacy prefix-cache backend.
-registerFamily('zaya1-vl', { cacheType: 'hybrid', toolParser: 'zaya_xml', reasoningParser: 'qwen3', supportsThinking: true, thinkInTemplate: false, defaultEnableThinking: false, usePagedCache: true, enableAutoToolChoice: true, isMultimodal: true, description: 'ZAYA1-VL CCA hybrid vision-language', priority: 3 })
+// VLM defaults. Current plain-template ZAYA1-VL bundles are vision/tool/cache
+// capable, but live proof shows the synthetic qwen3 thinking rail produces
+// hidden-only output, so the panel must not expose a reasoning mode until the
+// artifact ships a real VLM thinking contract.
+registerFamily('zaya1-vl', { cacheType: 'hybrid', toolParser: 'zaya_xml', supportsThinking: false, thinkInTemplate: false, defaultEnableThinking: false, usePagedCache: true, enableAutoToolChoice: true, isMultimodal: true, description: 'ZAYA1-VL CCA hybrid vision-language', priority: 3 })
 
 // Qwen
 // Qwen 3.5 dense and MoE share model_types with VL variants — VL detection
@@ -835,9 +837,14 @@ function applyJangCapabilities(
       next.enableAutoToolChoice = true
     }
   }
-  if (next.family === 'zaya' || next.family === 'zaya1-vl') {
+  if (next.family === 'zaya') {
     next.reasoningParser = 'qwen3'
     next.supportsThinking = true
+    next.thinkInTemplate = false
+    next.defaultEnableThinking = false
+  } else if (next.family === 'zaya1-vl') {
+    next.reasoningParser = undefined
+    next.supportsThinking = false
     next.thinkInTemplate = false
     next.defaultEnableThinking = false
   } else if (next.family === 'hy3') {

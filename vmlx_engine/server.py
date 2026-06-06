@@ -1314,11 +1314,13 @@ def _synthetic_mllm_think_prompt_starts(
 ) -> bool:
     """Return True when vMLX opens a qwen3 think rail for a plain MLLM template.
 
-    ZAYA1-VL's processor template can end with ``assistant: `` even though the
-    model bundle declares qwen3 reasoning support. The MLLM wrapper opens
+    Some MLLM processor templates can end with ``assistant: `` even though the
+    model bundle declares qwen3 reasoning support. The MLLM wrapper may open
     ``<think>`` only for explicit thinking-on requests, so the streaming and
     non-streaming parsers must seed ``think_in_prompt`` for that same bounded
-    case. This is not a generic VLM heuristic.
+    case. This is not a generic VLM heuristic. Current ZAYA1-VL plain-template
+    bundles are demoted by the registry to ``supports_thinking=False`` until a
+    real VLM thinking template/model behavior is uploaded.
     """
     if enable_thinking is not True:
         return False

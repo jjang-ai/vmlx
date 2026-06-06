@@ -19,7 +19,7 @@ def test_family_detection_contract_pins_named_release_rows():
         "zaya_text_cca_tools_reasoning",
         "zaya_stale_stamp_reasoning_policy",
         "zaya1_vl_cca_multimodal",
-        "zaya1_vl_jangtq_profiles_reasoning_policy",
+        "zaya1_vl_jangtq_profiles_no_reasoning_capability_truth",
         "ling_bailing_hybrid_plain_content",
         "nemotron_h_hybrid_text_not_stale_omni",
         "nemotron_h_registry_hybrid_cache",
@@ -627,7 +627,7 @@ def test_decode_speed_gate_build_command_preserves_row_parser_modality_policy():
         "dsv4_k": {"mllm": False, "tool": "dsml", "reasoning": "deepseek_r1"},
         "qwen27_jang4m": {"mllm": False, "tool": "qwen", "reasoning": "qwen3"},
         "qwen27_mxfp8_mtp": {"mllm": True, "tool": "qwen", "reasoning": "qwen3"},
-        "zaya_vl_jangtq4": {"mllm": True, "tool": "zaya_xml", "reasoning": "qwen3"},
+        "zaya_vl_jangtq4": {"mllm": True, "tool": "zaya_xml", "reasoning": None},
         "ling_mxfp4": {"mllm": False, "tool": "deepseek", "reasoning": None},
         "nemotron_omni_nano_jangtq4": {
             "mllm": False,
