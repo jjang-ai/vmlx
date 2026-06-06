@@ -1150,7 +1150,6 @@ def _live_smoke_cache_validation_failures(request: dict[str, Any]) -> list[str]:
 
 
 EXPECTED_CURRENT_OPEN_REQUIREMENTS = [
-    "DSV4 block disk L2 stores and hits after restart",
     "Qwen/JANG packaged MX matmul speed is release-cleared",
     "Qwen native MTP live decode speed and output equivalence are release-cleared",
     "Qwen 27B JANG_4M prompt-processing speed floor is release-cleared",

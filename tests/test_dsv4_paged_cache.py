@@ -742,7 +742,7 @@ def test_dsv4_disk_only_pending_chain_without_terminal_is_a_miss():
     assert remaining == tokens + [15]
 
 
-def test_dsv4_disk_backed_terminal_chain_is_a_miss_until_restart_l2_is_safe():
+def test_dsv4_disk_backed_terminal_chain_with_composite_state_is_a_hit():
     from vmlx_engine.paged_cache import PagedCacheManager, compute_block_hash
     from vmlx_engine.prefix_cache import BlockAwarePrefixCache
 
@@ -766,8 +766,10 @@ def test_dsv4_disk_backed_terminal_chain_is_a_miss_until_restart_l2_is_safe():
 
     table, remaining = pc.fetch_cache("dsv4-disk-terminal", tokens + [15])
 
-    assert table is None
-    assert remaining == tokens + [15]
+    assert table is not None
+    assert table.block_ids == [block.block_id]
+    assert table.num_tokens == len(tokens)
+    assert remaining == [15]
 
 
 def test_dsv4_paged_reconstruct_returns_deepseek_cache_not_ssm_partial():

@@ -29,7 +29,6 @@ DEFAULT_STEP_TIMEOUT_SEC = 900.0
 STEP_TIMEOUT_RETURNCODE = 124
 
 EXPECTED_OPEN_REQUIREMENTS = [
-    "DSV4 block disk L2 stores and hits after restart",
     "Qwen/JANG packaged MX matmul speed is release-cleared",
     "Qwen native MTP live decode speed and output equivalence are release-cleared",
     "Qwen 27B JANG_4M prompt-processing speed floor is release-cleared",

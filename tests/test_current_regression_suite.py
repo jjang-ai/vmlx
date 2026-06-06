@@ -102,12 +102,12 @@ def test_current_regression_suite_does_not_keep_proven_dsv4_same_process_cache_h
     )
 
 
-def test_current_regression_suite_keeps_unproven_dsv4_restart_l2_open():
+def test_current_regression_suite_does_not_keep_proven_dsv4_restart_l2_open():
     from tests.cross_matrix import run_current_regression_suite as suite
 
     assert (
         "DSV4 block disk L2 stores and hits after restart"
-        in suite.EXPECTED_OPEN_REQUIREMENTS
+        not in suite.EXPECTED_OPEN_REQUIREMENTS
     )
 
 
