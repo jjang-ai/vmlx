@@ -555,6 +555,25 @@ def test_zaya_reasoning_probe_gets_budget_for_visible_final_answer():
     assert reasoning["payload"]["max_tokens"] >= 512
 
 
+def test_nemotron_reasoning_probe_gets_budget_for_visible_final_answer():
+    mod = load_module()
+    row = {
+        "served_name": "nemotron-omni-nano-mxfp4-crack",
+        "name": "Nemotron-Omni-Nano-MXFP4-CRACK",
+        "model_type": "nemotron_h",
+        "cache_family": "hybrid_ssm",
+        "is_mllm": True,
+        "supports_video": False,
+        "supports_thinking": True,
+    }
+
+    probes = mod.build_probe_payloads(row, max_tokens=48, include_reasoning=True)
+    reasoning = next(probe for probe in probes if probe["label"] == "reasoning_on")
+
+    assert reasoning["payload"]["enable_thinking"] is True
+    assert reasoning["payload"]["max_tokens"] >= 512
+
+
 def test_dsv4_repeat_cache_probe_crosses_native_block_threshold():
     mod = load_module()
     row = {

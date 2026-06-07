@@ -477,6 +477,14 @@ def _is_lfm_row(row: dict[str, Any]) -> bool:
     return "lfm2" in blob
 
 
+def _is_nemotron_row(row: dict[str, Any]) -> bool:
+    blob = " ".join(
+        str(row.get(key, "")).lower()
+        for key in ("name", "served_name", "model_type", "path")
+    )
+    return "nemotron" in blob or "nemo" in blob
+
+
 def _lfm_strict_probe_max_tokens(row: dict[str, Any], max_tokens: int) -> int:
     # LFM2 often emits an internal direct-answer prelude before the final terse
     # answer even when thinking is disabled. The API parser returns the final
@@ -491,7 +499,7 @@ def _reasoning_probe_max_tokens(row: dict[str, Any], max_tokens: int) -> int:
     # stop before the closing </think> and visible final answer. Keep the
     # validation strict; give this family enough budget to prove the advertised
     # thinking mode instead of misclassifying it as empty-visible.
-    if _is_zaya_row(row):
+    if _is_zaya_row(row) or _is_nemotron_row(row):
         return max(512, max_tokens)
     return max(256, max_tokens)
 
