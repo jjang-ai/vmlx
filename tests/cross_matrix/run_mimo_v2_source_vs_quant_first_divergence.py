@@ -23,7 +23,7 @@ from typing import Any
 
 
 DEFAULT_OUT = Path(
-    "build/current-mimo-v2-jang2l-source-vs-quant-first-divergence-after-tool-row-20260607.json"
+    "build/current-mimo-v2-jangtq2-source-vs-quant-first-divergence-preflight-20260607.json"
 )
 DEFAULT_SOURCE_BASE_URL = "http://test-host.local:8126"
 DEFAULT_QUANT_BASE_URL = "http://127.0.0.1:8897"

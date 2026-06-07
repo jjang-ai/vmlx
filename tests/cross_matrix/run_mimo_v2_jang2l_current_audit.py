@@ -25,7 +25,7 @@ from typing import Any
 DEFAULT_MODEL_PATH = Path("/Users/example/.mlxstudio/models/JANGQ-AI/MiMo-V2.5-JANGTQ_2")
 DEFAULT_MANIFEST = Path("build/current-mimo-jangtq2-local-manifest-20260607.tsv")
 DEFAULT_OUT = Path(
-    "build/current-mimo-v2-jang2l-current-audit-after-jangtq2-packaged-speed-proof-20260607.json"
+    "build/current-mimo-v2-jang2l-current-audit-after-jangtq2-source-quant-preflight-refresh-20260607.json"
 )
 
 STRUCTURAL_ARTIFACT = Path("build/current-mimo-jang2l-local-structural-verify-20260606.json")
@@ -61,7 +61,7 @@ FIRST_TOKEN_ARTIFACT = Path(
     "build/current-mimo-v2-jang2l-first-token-probe-registered-20260606.json"
 )
 SOURCE_VS_QUANT_ARTIFACT = Path(
-    "build/current-mimo-v2-jang2l-source-vs-quant-first-divergence-after-tool-row-20260607.json"
+    "build/current-mimo-v2-jangtq2-source-vs-quant-first-divergence-preflight-20260607.json"
 )
 SYNCED_LONG_TOOL_CACHE_ARTIFACT = Path(
     "build/current-mimo-v25-jang2l-synced-long-tool-cache-proof-20260606.json"
@@ -74,9 +74,6 @@ CB_ONESHOT_PREFILL_ARTIFACT = Path(
 )
 CB_NATIVE_THINKING_OFF_ARTIFACT = Path(
     "build/current-mimo-v2-jang2l-cb-cache-after-native-thinking-off-live-20260606.json"
-)
-TOOL_SOURCE_PREFLIGHT_ARTIFACT = Path(
-    "build/current-mimo-v2-jang2l-tool-source-preflight-20260606.json"
 )
 MLLM_INPUTS_EMBEDS_INTERFACE_ARTIFACT = Path(
     "build/current-mimo-v2-mllm-inputs-embeds-interface-fix-20260606.json"
@@ -819,7 +816,6 @@ def build_audit(root: Path, model_path: Path, manifest: Path) -> dict[str, Any]:
     text_route = _artifact(root / TEXT_ROUTE_ARTIFACT)
     cb_oneshot_prefill = _artifact(root / CB_ONESHOT_PREFILL_ARTIFACT)
     cb_native_thinking_off = _artifact(root / CB_NATIVE_THINKING_OFF_ARTIFACT)
-    tool_source_preflight = _artifact(root / TOOL_SOURCE_PREFLIGHT_ARTIFACT)
     mllm_inputs_embeds_interface = _artifact(root / MLLM_INPUTS_EMBEDS_INTERFACE_ARTIFACT)
     latest_decode_speed = _artifact(root / LATEST_DECODE_SPEED_ARTIFACT)
 
@@ -1083,7 +1079,6 @@ def build_audit(root: Path, model_path: Path, manifest: Path) -> dict[str, Any]:
             "text_route_live_proof": str(TEXT_ROUTE_ARTIFACT),
             "cb_oneshot_prefill_live_proof": str(CB_ONESHOT_PREFILL_ARTIFACT),
             "cb_native_thinking_off_live_proof": str(CB_NATIVE_THINKING_OFF_ARTIFACT),
-            "tool_source_preflight": str(TOOL_SOURCE_PREFLIGHT_ARTIFACT),
             "mllm_inputs_embeds_interface": str(MLLM_INPUTS_EMBEDS_INTERFACE_ARTIFACT),
             "latest_decode_speed": str(LATEST_DECODE_SPEED_ARTIFACT),
         },
@@ -1095,14 +1090,6 @@ def build_audit(root: Path, model_path: Path, manifest: Path) -> dict[str, Any]:
             "text_route": text_route_evidence,
             "cb_oneshot_prefill": cb_evidence,
             "cb_native_thinking_off": cb_native_evidence,
-            "tool_source_preflight": (
-                tool_source_preflight.get("data")
-                if tool_source_preflight.get("exists")
-                else {
-                    "status": "missing",
-                    "artifact": str(TOOL_SOURCE_PREFLIGHT_ARTIFACT),
-                }
-            ),
             "mllm_inputs_embeds_interface": (
                 mllm_inputs_embeds_interface.get("data")
                 if mllm_inputs_embeds_interface.get("exists")

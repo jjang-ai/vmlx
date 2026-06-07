@@ -3363,7 +3363,7 @@ def _write_passing_mimo_v2_root_cause_artifacts(root: Path) -> None:
                 "status": "pass",
                 "remote_evidence_only": False,
                 "source_model_path": "/Users/example/models/MiMo-V2.5-source",
-                "quant_model_path": "/Users/example/.mlxstudio/models/JANGQ-AI/MiMo-V2.5-JANG_2L",
+                "quant_model_path": "/Users/example/.mlxstudio/models/JANGQ-AI/MiMo-V2.5-JANGTQ_2",
                 "rows": [
                     {
                         "prompt_name": "short_exact_ack",
