@@ -158,6 +158,41 @@ def test_classify_model_routes_step3p7_advertised_vision_text_only(tmp_path):
     assert row["cache_family"] == "swa_rotating"
 
 
+def test_classify_model_marks_gemma4_unified_as_mixed_swa_cache(tmp_path):
+    mod = load_module()
+    model_dir = tmp_path / "gemma-4-12B-it-JANG_4M"
+    model_dir.mkdir()
+    (model_dir / "config.json").write_text(
+        """
+        {
+          "model_type": "gemma4_unified",
+          "vision_config": {"model_type": "siglip"},
+          "audio_config": {"model_type": "gemma4_audio"}
+        }
+        """,
+        encoding="utf-8",
+    )
+    (model_dir / "jang_config.json").write_text(
+        """
+        {
+          "capabilities": {
+            "supports_thinking": true,
+            "supports_tools": true
+          }
+        }
+        """,
+        encoding="utf-8",
+    )
+
+    row = mod.classify_model_dir(model_dir)
+
+    assert row["model_type"] == "gemma4_unified"
+    assert row["is_mllm"] is True
+    assert row["supports_tools"] is True
+    assert row["supports_thinking"] is True
+    assert row["cache_family"] == "swa_rotating"
+
+
 def test_classify_model_preserves_hy3_and_minimax_reasoning_probe_coverage(tmp_path):
     mod = load_module()
 
@@ -1046,6 +1081,31 @@ def test_validate_probe_response_accepts_expected_tool_call():
     )
 
     assert failures == []
+
+
+def test_validate_probe_response_rejects_tool_visible_text_leak():
+    mod = load_module()
+
+    failures = mod.validate_probe_response(
+        "tool_required",
+        200,
+        "thought",
+        "",
+        tool_calls=[
+            {
+                "function": {
+                    "name": "record_fact",
+                    "arguments": '{"value":"blue-cat"}',
+                }
+            }
+        ],
+    )
+
+    assert {
+        "label": "tool_required",
+        "reason": "tool_visible_text_leak",
+        "content": "thought",
+    } in failures
 
 
 def test_validate_probe_response_rejects_runaway_reasoning_loop():

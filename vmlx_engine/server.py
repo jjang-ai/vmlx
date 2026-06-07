@@ -800,6 +800,17 @@ def _finalize_visible_text_for_request(text: str, request: Any) -> str:
     return text
 
 
+def _drop_tool_visible_channel_marker(
+    text: str | None,
+    tool_calls: list | None,
+) -> str | None:
+    if not text or not tool_calls:
+        return text
+    if text.strip().lower() in {"thought", "analysis"}:
+        return None
+    return text
+
+
 _RESPONSES_EXACT_REPLY_RE = re.compile(
     r"reply exactly:\s*[\"'“”`]?([A-Za-z0-9_=-]+)[\"'“”`]?",
     re.IGNORECASE,
@@ -11028,6 +11039,7 @@ async def create_chat_completion(
     response_content = clean_output_text(cleaned_text) if cleaned_text else None
     if response_content:
         response_content = _finalize_visible_text_for_request(response_content, request)
+    response_content = _drop_tool_visible_channel_marker(response_content, tool_calls)
     response_warnings = _chat_completion_warnings_for_reasoning_only(
         response_content,
         reasoning_text,
@@ -12620,6 +12632,7 @@ async def create_response(
     )
     if final_text:
         final_text = _finalize_visible_text_for_request(final_text, request)
+    final_text = _drop_tool_visible_channel_marker(final_text, tool_calls) or ""
     if final_text:
         output_items.append(
             ResponsesOutputMessage(

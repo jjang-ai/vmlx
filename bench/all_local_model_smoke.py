@@ -202,6 +202,8 @@ def classify_model_dir(model_dir: Path) -> dict[str, Any]:
 
     if model_type == "mimo_v2":
         cache_family = "mimo_v2_hybrid_swa"
+    elif model_type in {"gemma4", "gemma4_unified"}:
+        cache_family = "swa_rotating"
     elif "deepseek_v4" in lower_blob or "deepseek-v4" in name.lower():
         cache_family = "deepseek_v4_composite"
     elif "zaya" in lower_blob:
@@ -903,6 +905,14 @@ def validate_probe_response(
     if label == "tool_required":
         expected_tool = "record_fact"
         expected_value = "blue-cat"
+        if stripped:
+            failures.append(
+                {
+                    "label": label,
+                    "reason": "tool_visible_text_leak",
+                    "content": stripped[:160],
+                }
+            )
         matching_call = None
         for call in tool_calls or []:
             function = call.get("function") if isinstance(call, dict) else None

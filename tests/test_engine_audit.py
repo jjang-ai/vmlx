@@ -7072,6 +7072,8 @@ class TestStartupCompatibilityGuards:
         assert 'if is_xml_function_native_tool_prompt:\n        for msg in messages_copy:' in source
         assert ") and not is_xml_function_native_tool_prompt:" in source
         assert "raw_preview={tool_required_preview!r}" in server_source
+        assert "def _drop_tool_visible_channel_marker(" in server_source
+        assert 'text.strip().lower() in {"thought", "analysis"}' in server_source
 
     def test_cli_tool_parser_choices_include_registry_only_parsers(self):
         """Explicit CLI settings must accept parsers used by auto detection.
