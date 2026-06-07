@@ -22,7 +22,7 @@ from typing import Any
 
 
 DEFAULT_OUT = Path(
-    "build/current-cache-architecture-contract-after-mimo-head-fix-20260606.json"
+    "build/current-cache-architecture-contract-after-mllm-tight-memory-guard-20260607.json"
 )
 API_CACHE_CONTRACT_ARTIFACT = Path(
     "build/current-api-cache-contract-cache-architecture-check-20260528-named-family-registry-matrix.json"

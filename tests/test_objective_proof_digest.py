@@ -18,7 +18,7 @@ def test_objective_proof_digest_default_out_tracks_current_release_proof_artifac
     from tests.cross_matrix import summarize_objective_proof as objective
 
     assert objective.DEFAULT_OUT == Path(
-        "build/current-objective-proof-audit-20260602-cache-detail-zero-cached.json"
+        "build/current-objective-proof-after-mllm-tight-memory-guard-20260607.json"
     )
 
 
@@ -1453,7 +1453,7 @@ def test_objective_proof_digest_tracks_ling_multilingual_cjk_leakage(tmp_path):
     )
     _write_json(
         tmp_path,
-        "build/current-dsv4-route-mode-code-exactness-memory-preflight-cross-family-20260606.json",
+        "build/current-dsv4-route-mode-code-exactness-preflight-after-mimo-ledger-20260607.json",
         {
             "status": "pass",
             "reason": "sufficient_free_memory",
@@ -2650,7 +2650,7 @@ def test_objective_proof_digest_surfaces_dsv4_chatmax_prompt_trigger_probe(tmp_p
     )
     _write_json(
         tmp_path,
-        "build/current-dsv4-route-mode-code-exactness-memory-preflight-cross-family-20260606.json",
+        "build/current-dsv4-route-mode-code-exactness-preflight-after-mimo-ledger-20260607.json",
         {
             "status": "pass",
             "reason": "sufficient_free_memory",
@@ -3707,7 +3707,7 @@ def test_objective_proof_digest_summarizes_dsv4_exact_code_root_boundary(
     )
     _write_json(
         tmp_path,
-        "build/current-dsv4-route-mode-code-exactness-memory-preflight-cross-family-20260606.json",
+        "build/current-dsv4-route-mode-code-exactness-preflight-after-mimo-ledger-20260607.json",
         {
             "status": "skipped",
             "reason": "insufficient_free_memory",
@@ -3835,7 +3835,7 @@ def test_objective_proof_digest_summarizes_dsv4_exact_code_root_boundary(
     assert summary["current_primary_failure"] == "direct_off_exact_code_generation"
     assert summary["source_full_output_preflight"]["artifact_present"] is True
     assert summary["source_full_output_preflight"]["artifact"] == (
-        "build/current-dsv4-route-mode-code-exactness-memory-preflight-cross-family-20260606.json"
+        "build/current-dsv4-route-mode-code-exactness-preflight-after-mimo-ledger-20260607.json"
     )
     assert summary["source_full_output_preflight"]["status"] == "skipped"
     assert summary["source_full_output_preflight"]["reason"] == "insufficient_free_memory"
@@ -3869,7 +3869,7 @@ def test_objective_proof_digest_summarizes_dsv4_exact_code_root_boundary(
     assert summary["source_full_output_clearance_missing"] is True
     joined_evidence = "\n".join(quality["evidence"])
     assert (
-        "current-dsv4-route-mode-code-exactness-memory-preflight-cross-family-20260606.json"
+        "current-dsv4-route-mode-code-exactness-preflight-after-mimo-ledger-20260607.json"
         in joined_evidence
     )
     assert (
@@ -9874,13 +9874,13 @@ def test_objective_proof_digest_accepts_dsv4_quality_clearance_artifact(tmp_path
             },
             "artifacts": {
                 "identifier_gate": "build/current-dsv4-identifier-count-ablation-20260521/result.json",
-                "full_output_gate": "build/current-dsv4-route-mode-code-exactness-memory-preflight-cross-family-20260606.json",
+                "full_output_gate": "build/current-dsv4-route-mode-code-exactness-preflight-after-mimo-ledger-20260607.json",
             },
         },
     )
     _write_json(
         tmp_path,
-        "build/current-dsv4-route-mode-code-exactness-memory-preflight-cross-family-20260606.json",
+        "build/current-dsv4-route-mode-code-exactness-preflight-after-mimo-ledger-20260607.json",
         {
             "status": "pass",
             "reason": "sufficient_free_memory",
@@ -10386,7 +10386,7 @@ def test_objective_proof_digest_reports_missing_current_dsv4_clearance_artifacts
             },
             "artifacts": {
                 "identifier_gate": "build/current-dsv4-identifier-count-ablation-20260521/result.json",
-                "full_output_gate": "build/current-dsv4-route-mode-code-exactness-memory-preflight-cross-family-20260606.json",
+                "full_output_gate": "build/current-dsv4-route-mode-code-exactness-preflight-after-mimo-ledger-20260607.json",
             },
         },
     )
@@ -10399,7 +10399,7 @@ def test_objective_proof_digest_reports_missing_current_dsv4_clearance_artifacts
     assert quality["details"]["legacy_clearance_artifacts"] == {}
     assert quality["details"]["missing_clearance_artifacts"] == [
         "build/current-dsv4-identifier-count-ablation-20260521/result.json",
-        "build/current-dsv4-route-mode-code-exactness-memory-preflight-cross-family-20260606.json",
+        "build/current-dsv4-route-mode-code-exactness-preflight-after-mimo-ledger-20260607.json",
     ]
 
 

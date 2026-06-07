@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Any
 
 
-DEFAULT_OUT = Path("build/current-tool-call-contract-after-xml-function-repair-20260606.json")
+DEFAULT_OUT = Path("build/current-tool-call-contract-after-jangtq2-objective-refresh-20260607.json")
 
 DSML_PATTERN = (
     "visible_text_around_invoke_preserved_no_dsml_leak "

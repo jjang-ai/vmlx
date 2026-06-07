@@ -7043,7 +7043,7 @@ class MLLMBatchGenerator:
                 # All requests done — release Metal cache to reclaim GPU memory.
                 # Without this, MLX holds freed buffers in its allocator free-list
                 # indefinitely, causing apparent memory bloat after long prefills.
-                if self._tight_memory_prefill_drain:
+                if getattr(self, "_tight_memory_prefill_drain", False):
                     self._drain_tight_memory_allocator("after_batch_finish")
                 else:
                     try:

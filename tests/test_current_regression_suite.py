@@ -936,7 +936,7 @@ def test_noheavy_api_cache_contract_default_out_tracks_current_suite_artifact():
     from tests.cross_matrix import run_noheavy_api_cache_contract as gate
 
     assert gate.DEFAULT_OUT == Path(
-        "build/current-noheavy-api-cache-contract-after-mimo-modality-truth-20260606.json"
+        "build/current-noheavy-api-cache-contract-after-jangtq2-objective-refresh-20260607.json"
     )
 
 
@@ -1511,7 +1511,7 @@ def test_current_regression_suite_refreshes_current_objective_digest_artifact(
 
     assert artifact["status"] == "pass"
     assert suite.CURRENT_OBJECTIVE_DIGEST_ARTIFACT == (
-        "build/current-objective-proof-after-mimo-jangtq2-source-quant-preflight-refresh-20260607.json"
+        "build/current-objective-proof-after-mllm-tight-memory-guard-20260607.json"
     )
     assert any(
         name == "objective_digest"
@@ -1673,7 +1673,7 @@ def test_current_regression_suite_runs_model_family_detection_contracts(monkeypa
         for _name, cmd in seen_steps
     )
     assert any(
-        "build/current-model-family-detection-contract-after-mimo-modality-truth-20260606.json"
+        "build/current-model-family-detection-contract-after-jangtq2-objective-refresh-20260607.json"
         in " ".join(cmd)
         for _name, cmd in seen_steps
     )
@@ -1770,7 +1770,7 @@ def test_current_regression_suite_runs_cache_architecture_contracts(monkeypatch,
         for _name, cmd in seen_steps
     )
     assert any(
-        "build/current-cache-architecture-contract-after-mimo-head-fix-20260606.json"
+        "build/current-cache-architecture-contract-after-mllm-tight-memory-guard-20260607.json"
         in " ".join(cmd)
         for _name, cmd in seen_steps
     )
@@ -1821,7 +1821,7 @@ def test_current_regression_suite_runs_generation_defaults_contracts(monkeypatch
         for _name, cmd in seen_steps
     )
     assert any(
-        "build/current-generation-defaults-contract-during-mimo-sync-20260606.json"
+        "build/current-generation-defaults-contract-after-jangtq2-objective-refresh-20260607.json"
         in " ".join(cmd)
         for _name, cmd in seen_steps
     )

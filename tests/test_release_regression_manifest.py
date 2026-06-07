@@ -144,7 +144,7 @@ def _write_current_objective_digest(
     open_requirements: list[str] | None = None,
     missing_evidence: list[str] | None = None,
 ) -> None:
-    artifact = root / "build/current-objective-proof-after-mimo-jangtq2-source-quant-preflight-refresh-20260607.json"
+    artifact = root / "build/current-objective-proof-after-mllm-tight-memory-guard-20260607.json"
     artifact.parent.mkdir(parents=True, exist_ok=True)
     open_rows = (
         EXPECTED_CURRENT_OPEN_REQUIREMENTS
@@ -10086,7 +10086,7 @@ def test_release_regression_manifest_rejects_stale_issue179_objective_digest_row
     tmp_path,
 ):
     _write_current_objective_digest(tmp_path)
-    path = tmp_path / "build/current-objective-proof-after-mimo-jangtq2-source-quant-preflight-refresh-20260607.json"
+    path = tmp_path / "build/current-objective-proof-after-mllm-tight-memory-guard-20260607.json"
     payload = json.loads(path.read_text(encoding="utf-8"))
     unexpected_requirement = "Unexpected MiniMax stale reporter row is release-cleared"
     payload["requirements"].append(
@@ -14596,7 +14596,7 @@ def test_release_regression_manifest_tracks_tool_calls_with_runner_artifact():
     joined = " ".join(row["commands"] + row["artifacts"] + row["proves"])
 
     assert "run_tool_call_contract.py" in joined
-    assert "current-tool-call-contract-after-xml-function-repair-20260606.json" in joined
+    assert "current-tool-call-contract-after-jangtq2-objective-refresh-20260607.json" in joined
     assert "Tool parser residue" in joined
     assert "DSV4" in joined
     assert "maxToolIterations" in joined
@@ -14715,7 +14715,7 @@ def test_release_regression_manifest_tracks_packaged_integrity_with_runner_artif
     assert "Version triples" in joined
     assert "bundled Python hash parity" in joined
     assert "objective proof digest" in joined
-    assert "current-objective-proof-after-mimo-jangtq2-source-quant-preflight-refresh-20260607.json" in joined
+    assert "current-objective-proof-after-mllm-tight-memory-guard-20260607.json" in joined
     assert "objective-gate-enforced" in joined
     assert "verify-bundled" in joined
 
@@ -14783,7 +14783,7 @@ def test_release_regression_manifest_tracks_current_updater_and_i18n_rechecks():
 
     ling = rows["ling-bailing-multilingual-quality-live"]
     ling_joined = " ".join(ling["commands"] + ling["artifacts"] + ling["proves"])
-    assert "current-objective-proof-after-mimo-jangtq2-source-quant-preflight-refresh-20260607.json" in ling_joined
+    assert "current-objective-proof-after-mllm-tight-memory-guard-20260607.json" in ling_joined
 
 
 def test_release_regression_manifest_tracks_live_only_boundaries():
@@ -14829,7 +14829,7 @@ def test_release_regression_manifest_tracks_fresh_dsv4_live_failure_artifact():
     assert "current-dsv4-jang-thinking-off-logit-probe-20260524.json" in joined
     assert "current-dsv4-jang-live-api-copy-framing-canary-20260524.json" in joined
     assert "current-dsv4-route-mode-code-exactness-preflight-after-mimo-ledger-20260607.json" in joined
-    assert "current-dsv4-route-mode-code-exactness-memory-preflight-cross-family-20260606.json" not in joined
+    assert "current-dsv4-route-mode-code-exactness-preflight-after-mimo-ledger-20260607.json" not in joined
     assert "current-dsv4-route-mode-code-exactness-memory-preflight-20260603-second-local-check.json" not in joined
     assert "current-dsv4-route-mode-code-exactness-memory-preflight-20260602-developer-id-local-recheck.json" not in joined
     assert "current-dsv4-route-mode-code-exactness-memory-preflight-20260601-post-epipe-fix.json" not in joined
@@ -15345,7 +15345,7 @@ def test_release_regression_manifest_tracks_cache_architecture_with_runner_artif
     joined = " ".join(row["commands"] + row["artifacts"] + row["proves"])
 
     assert "run_cache_architecture_contract.py" in joined
-    assert "current-cache-architecture-contract-after-mimo-head-fix-20260606.json" in joined
+    assert "current-cache-architecture-contract-after-mllm-tight-memory-guard-20260607.json" in joined
     assert "current-cache-architecture-contract-20260602-step-jangtq-boundary.json" not in joined
     assert "current-cache-architecture-contract-20260601-zaya-dsv4-terminal-disk-guard.json" not in joined
     assert "current-cache-architecture-contract-20260601-step37-mixed-swa-ui-storage-quant.json" not in joined

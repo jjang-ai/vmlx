@@ -41,7 +41,7 @@ DEFERRED_RELEASE_OPEN_REQUIREMENTS = {
 }
 
 CURRENT_OBJECTIVE_DIGEST_ARTIFACT = (
-    "build/current-objective-proof-after-mimo-jangtq2-source-quant-preflight-refresh-20260607.json"
+    "build/current-objective-proof-after-mllm-tight-memory-guard-20260607.json"
 )
 
 CURRENT_SUITE_SOURCE_HASH_FILES = (
@@ -423,7 +423,7 @@ def _step_is_ok(name: str, step: dict[str, Any], root: Path) -> bool:
     if name == "tool_call_contracts":
         if step["returncode"] == 0:
             return True
-        path = root / "build/current-tool-call-contract-after-xml-function-repair-20260606.json"
+        path = root / "build/current-tool-call-contract-after-jangtq2-objective-refresh-20260607.json"
         try:
             artifact = json.loads(path.read_text(encoding="utf-8"))
         except Exception:
@@ -486,13 +486,13 @@ CURRENT_SUITE_COMMANDS: dict[str, list[str]] = {
         sys.executable,
         "tests/cross_matrix/run_noheavy_api_cache_contract.py",
         "--out",
-        "build/current-noheavy-api-cache-contract-after-mimo-modality-truth-20260606.json",
+        "build/current-noheavy-api-cache-contract-after-jangtq2-objective-refresh-20260607.json",
     ],
     "cache_architecture_contracts": [
         sys.executable,
         "tests/cross_matrix/run_cache_architecture_contract.py",
         "--out",
-        "build/current-cache-architecture-contract-after-mimo-head-fix-20260606.json",
+        "build/current-cache-architecture-contract-after-mllm-tight-memory-guard-20260607.json",
     ],
     "noheavy_panel_settings_contract": [
         sys.executable,
@@ -504,19 +504,19 @@ CURRENT_SUITE_COMMANDS: dict[str, list[str]] = {
         sys.executable,
         "tests/cross_matrix/run_max_output_context_contract.py",
         "--out",
-        "build/current-max-output-context-contract-after-mimo-modality-truth-20260606.json",
+        "build/current-max-output-context-contract-after-jangtq2-objective-refresh-20260607.json",
     ],
     "parser_registry_contracts": [
         sys.executable,
         "tests/cross_matrix/run_parser_registry_contract.py",
         "--out",
-        "build/current-parser-registry-contract-during-mimo-sync-20260606.json",
+        "build/current-parser-registry-contract-after-jangtq2-objective-refresh-20260607.json",
     ],
     "generation_defaults_contracts": [
         sys.executable,
         "tests/cross_matrix/run_generation_defaults_contract.py",
         "--out",
-        "build/current-generation-defaults-contract-during-mimo-sync-20260606.json",
+        "build/current-generation-defaults-contract-after-jangtq2-objective-refresh-20260607.json",
     ],
     "reasoning_template_contracts": [
         sys.executable,
@@ -540,7 +540,7 @@ CURRENT_SUITE_COMMANDS: dict[str, list[str]] = {
         sys.executable,
         "tests/cross_matrix/run_tool_call_contract.py",
         "--out",
-        "build/current-tool-call-contract-after-xml-function-repair-20260606.json",
+        "build/current-tool-call-contract-after-jangtq2-objective-refresh-20260607.json",
     ],
     "mcp_policy_contracts": [
         sys.executable,
@@ -584,25 +584,25 @@ CURRENT_SUITE_COMMANDS: dict[str, list[str]] = {
         sys.executable,
         "tests/cross_matrix/run_model_artifact_format_contract.py",
         "--out",
-        "build/current-model-artifact-format-contract-after-mimo-modality-truth-20260606.json",
+        "build/current-model-artifact-format-contract-after-mllm-tight-memory-guard-20260607.json",
     ],
     "model_family_detection_contracts": [
         sys.executable,
         "tests/cross_matrix/run_model_family_detection_contract.py",
         "--out",
-        "build/current-model-family-detection-contract-after-mimo-modality-truth-20260606.json",
+        "build/current-model-family-detection-contract-after-jangtq2-objective-refresh-20260607.json",
     ],
     "native_mtp_contracts": [
         sys.executable,
         "tests/cross_matrix/run_native_mtp_contract.py",
         "--out",
-        "build/current-native-mtp-contract-after-qwen-gdn-sink-proof-20260606.json",
+        "build/current-native-mtp-contract-after-mllm-tight-memory-guard-20260607.json",
     ],
     "vl_media_cache_contracts": [
         sys.executable,
         "tests/cross_matrix/run_vl_media_cache_contract.py",
         "--out",
-        "build/current-vl-media-cache-contract-after-gemma4-prefill-guard-proof-20260606.json",
+        "build/current-vl-media-cache-contract-after-mllm-tight-memory-guard-20260607.json",
     ],
     "step37_crash_falsification_contract": [
         sys.executable,

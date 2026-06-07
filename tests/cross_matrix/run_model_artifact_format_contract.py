@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Any
 
 
-DEFAULT_OUT = Path("build/current-model-artifact-format-contract-after-mimo-modality-truth-20260606.json")
+DEFAULT_OUT = Path("build/current-model-artifact-format-contract-after-mllm-tight-memory-guard-20260607.json")
 
 SOURCE_HASH_FILES = (
     "vmlx_engine/model_config_registry.py",
