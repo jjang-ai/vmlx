@@ -191,6 +191,54 @@ def _install_mimo_v2_compiled_router_if_missing(text_runtime: Any) -> bool:
     return True
 
 
+def _install_mimo_v2_rotating_cache_keep_patch_if_needed(text_runtime: Any) -> bool:
+    """Patch stale MiMo SWA cache construction to match full-forward windows.
+
+    The bundled MiMo text runtime builds SWA layers with
+    `RotatingKVCache(max_size=sliding_window, keep=4)`. That preserves the
+    first four prompt tokens during incremental decode, but MiMo full-forward
+    uses a plain sliding-window mask without a keep prefix. Live required-tool
+    probes showed the mismatch directly:
+
+    - full forward after `<parameter=value>blue` ranks `-cat` first;
+    - incremental decode with `keep=4` ranks newline/punctuation first;
+    - incremental decode with `keep=0` ranks `-cat` first.
+
+    This patch changes only the MiMo cache constructor. It does not synthesize
+    tool calls or alter model weights/logits outside the cache layout.
+    """
+
+    model_cls = getattr(text_runtime, "Model", None)
+    rotating_cls = getattr(text_runtime, "RotatingKVCache", None)
+    kv_cls = getattr(text_runtime, "KVCache", None)
+    if (
+        model_cls is None
+        or rotating_cls is None
+        or kv_cls is None
+        or getattr(model_cls, "_vmlx_mimo_keep0_cache_patched", False)
+    ):
+        return False
+
+    original_make_cache = model_cls.make_cache
+
+    def _vmlx_mimo_keep0_make_cache(self):
+        caches = []
+        for layer in self.model.layers:
+            if getattr(layer, "is_swa", False):
+                caches.append(
+                    rotating_cls(max_size=self.args.sliding_window, keep=0)
+                )
+            else:
+                caches.append(kv_cls())
+        return caches
+
+    model_cls._vmlx_original_make_cache = original_make_cache
+    model_cls.make_cache = _vmlx_mimo_keep0_make_cache
+    model_cls._vmlx_mimo_keep0_cache_patched = True
+    logger.info("Installed vMLX MiMo-V2 keep=0 rotating-cache patch")
+    return True
+
+
 def _register_mimo_v2_mlx_vlm_runtime() -> None:
     module_name = "mlx_vlm.models.mimo_v2"
     if module_name in sys.modules:
@@ -198,6 +246,7 @@ def _register_mimo_v2_mlx_vlm_runtime() -> None:
 
     text_runtime = importlib.import_module("jang_tools.mimo_v2.mlx_model")
     _install_mimo_v2_compiled_router_if_missing(text_runtime)
+    _install_mimo_v2_rotating_cache_keep_patch_if_needed(text_runtime)
 
     import mlx.nn as nn
 
