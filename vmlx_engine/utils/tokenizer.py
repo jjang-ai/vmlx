@@ -158,6 +158,13 @@ def _apply_turboquant_to_model(model, model_path: str):
             "mixed_swa_kv_v1 cache contract."
         )
         return
+    if "mimo" in str(model_path or "").lower():
+        logger.info(
+            "  TurboQuant skipped: MiMo model path/name requires native "
+            "asymmetric full/SWA RotatingKVCache metadata; flat generic TQ-KV "
+            "would violate the mixed_swa_kv_v1 cache contract."
+        )
+        return
 
     # MLA models (DeepSeek V2/V3, GLM-5.1, Mistral 4) use CacheList(KVCache, KVCache)
     # per layer. TQ flat cache breaks CacheList structure → BatchGenerator fails.
