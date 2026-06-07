@@ -3150,8 +3150,11 @@ def _current_release_blocker_ledger(
     if not isinstance(public_issues, dict):
         public_issues = {}
     issue115 = public_issues.get("115")
-    if isinstance(issue115, dict) and issue115.get("release_clearance") == (
-        "tracked_as_performance_regression_release_blocker"
+    if (
+        isinstance(issue115, dict)
+        and issue115.get("focused_source_slice") == "open"
+        and issue115.get("release_clearance")
+        == "mapped_to_current_installed_app_gemma_qwen_speed_gate"
     ):
         blockers.append(
             {
@@ -3167,6 +3170,30 @@ def _current_release_blocker_ledger(
                     "repo": issue115.get("repo"),
                     "title": issue115.get("title"),
                     "checks": issue115.get("checks"),
+                },
+            }
+        )
+    issue119 = public_issues.get("119")
+    if (
+        isinstance(issue119, dict)
+        and issue119.get("focused_source_slice") == "open"
+        and issue119.get("release_clearance")
+        == "source_and_live_gemma26_memory_runtime_guarded_release_package_pending"
+    ):
+        blockers.append(
+            {
+                "id": "issue119_gemma26_memory_stress_open",
+                "status": "open",
+                "evidence": CURRENT_PUBLIC_APP_ISSUE_AUDIT_ARTIFACT,
+                "next_proof": (
+                    "Refresh and pass the current Gemma4 26B installed-app "
+                    "memory stress artifact, including mixed-SWA cache telemetry "
+                    "and post-request health."
+                ),
+                "details": {
+                    "repo": issue119.get("repo"),
+                    "title": issue119.get("title"),
+                    "checks": issue119.get("checks"),
                 },
             }
         )
@@ -5288,6 +5315,19 @@ def _validate_current_public_app_issue_audit(root: Path) -> dict[str, Any]:
             and issue_slice == "open"
             and issue_clearance == "open_minimax_k_issue179_reporter_parity_required"
         )
+        issue115_known_open = (
+            number == "115"
+            and status == "open"
+            and issue_slice == "open"
+            and issue_clearance == "mapped_to_current_installed_app_gemma_qwen_speed_gate"
+        )
+        issue119_known_open = (
+            number == "119"
+            and status == "open"
+            and issue_slice == "open"
+            and issue_clearance
+            == "source_and_live_gemma26_memory_runtime_guarded_release_package_pending"
+        )
         issue117_known_pass = (
             number == "117"
             and status == "pass"
@@ -5295,7 +5335,12 @@ def _validate_current_public_app_issue_audit(root: Path) -> dict[str, Any]:
             and issue_clearance
             == "mapped_to_minimax_k_issue179_live_reporter_prompt_boundary"
         )
-        if issue_slice != "pass" and not issue117_known_open:
+        if (
+            issue_slice != "pass"
+            and not issue117_known_open
+            and not issue115_known_open
+            and not issue119_known_open
+        ):
             result["failures"].append(f"unexpected_issue_slice:{number}")
         expected_clearance_values = (
             clearance if isinstance(clearance, set) else {clearance}
@@ -5334,9 +5379,35 @@ def _validate_current_public_app_issue_audit(root: Path) -> dict[str, Any]:
                 result["failures"].append(
                     f"missing_issue_check:{number}:issue179_root_cause_audit_open"
                 )
+        elif issue115_known_open:
+            required_open_checks = {
+                key: value
+                for key, value in checks.items()
+                if key
+                not in {
+                    "gemma4_current_installed_ui_speed_gate_passes",
+                    "gemma4_cold_wall_includes_ttft_tracked",
+                    "qwen35_installed_app_speed_gate_passes",
+                }
+            }
+            if not all(value is True for value in required_open_checks.values()):
+                result["failures"].append(f"failed_issue_checks:{number}")
+        elif issue119_known_open:
+            required_open_checks = {
+                key: value
+                for key, value in checks.items()
+                if key != "gemma26_memory_stress_artifact_present"
+            }
+            if not all(value is True for value in required_open_checks.values()):
+                result["failures"].append(f"failed_issue_checks:{number}")
         elif not all(value is True for value in checks.values()):
             result["failures"].append(f"failed_issue_checks:{number}")
         for check in required_checks.get(number, ()):
+            if issue115_known_open and check in {
+                "gemma4_current_installed_ui_speed_gate_passes",
+                "gemma4_cold_wall_includes_ttft_tracked",
+            }:
+                continue
             if checks.get(check) is not True:
                 result["failures"].append(f"missing_issue_check:{number}:{check}")
 

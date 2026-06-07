@@ -1798,6 +1798,36 @@ def test_release_regression_manifest_accepts_public_app_issue179_open_boundary(
     assert result["failures"] == []
 
 
+def test_release_regression_manifest_accepts_public_issue115_and_119_open_boundaries(
+    tmp_path,
+):
+    _write_expected_public_app_issue_audit(tmp_path)
+    path = tmp_path / CURRENT_PUBLIC_APP_ISSUE_AUDIT_ARTIFACT
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["status"] = "open"
+    payload["focused_open"] = ["115", "119"]
+    payload["issues"]["115"]["focused_source_slice"] = "open"
+    payload["issues"]["115"]["checks"][
+        "gemma4_current_installed_ui_speed_gate_passes"
+    ] = False
+    payload["issues"]["115"]["checks"][
+        "gemma4_cold_wall_includes_ttft_tracked"
+    ] = False
+    payload["issues"]["115"]["checks"][
+        "qwen35_installed_app_speed_gate_passes"
+    ] = False
+    payload["issues"]["119"]["focused_source_slice"] = "open"
+    payload["issues"]["119"]["checks"][
+        "gemma26_memory_stress_artifact_present"
+    ] = False
+    path.write_text(json.dumps(payload) + "\n", encoding="utf-8")
+
+    result = _validate_current_public_app_issue_audit(tmp_path)
+
+    assert result["status"] == "open"
+    assert result["failures"] == []
+
+
 def test_release_regression_manifest_rejects_public_issue118_without_installed_app_download_guard(
     tmp_path,
 ):
@@ -1878,14 +1908,14 @@ def test_release_regression_manifest_rejects_public_issue116_without_thinking_of
     assert "missing_issue:116" in result["failures"]
 
 
-def test_release_regression_manifest_does_not_block_on_issue115_after_current_speed_proofs():
+def test_release_regression_manifest_blocks_on_open_public_issue115_speed_proofs():
     sweep = validate_current_proof_sweep_artifacts(Path("."))
     blockers = {
         blocker["id"]: blocker
         for blocker in sweep["release_blocker_ledger"]["blockers"]
     }
 
-    assert "issue115_installed_app_performance_regression_open" not in blockers
+    assert "issue115_installed_app_performance_regression_open" in blockers
 
 
 def test_release_regression_manifest_rejects_public_issue169_without_installed_runtime_flavor(
