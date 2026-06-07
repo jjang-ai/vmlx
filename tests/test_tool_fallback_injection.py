@@ -378,3 +378,60 @@ def test_mimo_xml_function_direct_fallback_stays_inside_chatml_system():
     assert "You have access to MiMo XML function tools" in result
     assert result.index("You have access to MiMo XML function tools") < result.index("<|im_end|>")
     assert not result.startswith("You have access to MiMo XML function tools")
+
+
+def test_mimo_xml_function_fallback_prefers_chatml_system_turn():
+    """MiMo XML fallback should teach tools in system scope, not user scope."""
+    mock_tokenizer = MagicMock()
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "record_fact",
+                "description": "Record a fact.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"value": {"type": "string"}},
+                    "required": ["value"],
+                },
+            },
+        },
+    ]
+    messages = [
+        {
+            "role": "user",
+            "content": "Use the record_fact tool exactly once with value blue-cat.",
+        },
+    ]
+
+    def mock_apply(modified_messages, **kwargs):
+        system = modified_messages[0]["content"]
+        user = modified_messages[1]["content"]
+        return (
+            "<|im_start|>system\n"
+            f"{system}<|im_end|>"
+            "<|im_start|>user\n"
+            f"{user}<|im_end|>"
+            "<|im_start|>assistant\n<think></think>"
+        )
+
+    mock_tokenizer.apply_chat_template.side_effect = mock_apply
+
+    result = check_and_inject_fallback_tools(
+        prompt="<|im_start|>system\nYou are MiMo.<|im_end|>"
+        "<|im_start|>user\nUse the record_fact tool exactly once with value blue-cat.<|im_end|>"
+        "<|im_start|>assistant\n<think></think>",
+        messages=messages,
+        template_tools=tools,
+        tokenizer=mock_tokenizer,
+        template_kwargs={"add_generation_prompt": True, "enable_thinking": False},
+        tool_parser_id="xml_function",
+    )
+
+    system_end = result.index("<|im_end|>")
+    user_start = result.index("<|im_start|>user")
+    assert "You have access to MiMo XML function tools" in result[:system_end]
+    assert "<function=record_fact>" in result[:system_end]
+    assert "<parameter=value>" in result[:system_end]
+    assert "blue-cat" in result[:system_end]
+    assert "You have access to MiMo XML function tools" not in result[user_start:]

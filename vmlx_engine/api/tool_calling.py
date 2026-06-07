@@ -939,12 +939,6 @@ def check_and_inject_fallback_tools(
     # Inject into messages
     messages_copy = [dict(m) for m in messages]
     injected = False
-    if is_xml_function_native_tool_prompt:
-        for msg in messages_copy:
-            if msg.get("role") == "user":
-                _prepend_tool_prompt_to_message(msg, tool_prompt)
-                injected = True
-                break
     for msg in messages_copy:
         if injected:
             break
