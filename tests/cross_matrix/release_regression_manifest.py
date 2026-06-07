@@ -5301,6 +5301,11 @@ def _validate_current_public_app_issue_audit(root: Path) -> dict[str, Any]:
             "minimax_small_stricttools_real_ui_indexed",
             "minimax_small_numeric_garbage_guarded",
         ),
+        "119": (
+            "gemma26_memory_stress_artifact_present",
+            "gemma26_memory_stress_native_cache_health",
+            "gemma26_memory_stress_mixed_swa_cache_hits",
+        ),
     }
     for number, clearance in expected_clearance.items():
         issue = issues.get(number)
@@ -5396,7 +5401,12 @@ def _validate_current_public_app_issue_audit(root: Path) -> dict[str, Any]:
             required_open_checks = {
                 key: value
                 for key, value in checks.items()
-                if key != "gemma26_memory_stress_artifact_present"
+                if key
+                not in {
+                    "gemma26_memory_stress_artifact_present",
+                    "gemma26_memory_stress_native_cache_health",
+                    "gemma26_memory_stress_mixed_swa_cache_hits",
+                }
             }
             if not all(value is True for value in required_open_checks.values()):
                 result["failures"].append(f"failed_issue_checks:{number}")
@@ -5406,6 +5416,12 @@ def _validate_current_public_app_issue_audit(root: Path) -> dict[str, Any]:
             if issue115_known_open and check in {
                 "gemma4_current_installed_ui_speed_gate_passes",
                 "gemma4_cold_wall_includes_ttft_tracked",
+            }:
+                continue
+            if issue119_known_open and check in {
+                "gemma26_memory_stress_artifact_present",
+                "gemma26_memory_stress_native_cache_health",
+                "gemma26_memory_stress_mixed_swa_cache_hits",
             }:
                 continue
             if checks.get(check) is not True:

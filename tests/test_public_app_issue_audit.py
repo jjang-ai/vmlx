@@ -142,6 +142,18 @@ def test_public_app_issue_audit_tracks_open_app_runtime_issue_slices():
         audit["issues"]["119"]["checks"]["gemma26_memory_stress_artifact_present"],
         bool,
     )
+    assert isinstance(
+        audit["issues"]["119"]["checks"][
+            "gemma26_memory_stress_native_cache_health"
+        ],
+        bool,
+    )
+    assert isinstance(
+        audit["issues"]["119"]["checks"][
+            "gemma26_memory_stress_mixed_swa_cache_hits"
+        ],
+        bool,
+    )
     assert audit["issues"]["119"]["checks"]["gemma26_real_ui_artifacts_indexed"] is True
     assert audit["issues"]["119"]["release_clearance"] == (
         "source_and_live_gemma26_memory_runtime_guarded_release_package_pending"

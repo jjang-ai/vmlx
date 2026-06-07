@@ -57,6 +57,7 @@ GEMMA4_INSTALLED_SPEED_ARTIFACTS = (
 GEMMA4_CURRENT_INSTALLED_SPEED_ARTIFACT = Path(
     "build/current-runtime-memory-stress-gemma4-26b-jang4m-chat-thinkingoff-speed-floor-issue115-installed-app-20260601.json"
 )
+GEMMA4_CURRENT_MEMORY_STRESS_ARTIFACT = GEMMA4_CURRENT_INSTALLED_SPEED_ARTIFACT
 QWEN35_INSTALLED_SPEED_ARTIFACT = Path(
     "build/current-decode-speed-live-qwen35-4bit-issue115-installed-app-after-decode-position-20260601.json"
 )
@@ -705,11 +706,59 @@ def _issue118_checks(root: Path) -> dict[str, bool]:
     }
 
 
-def _issue119_checks(root: Path) -> dict[str, bool]:
-    stress = _load_json(
-        root
-        / "build/current-runtime-memory-stress-gemma4-26b-jang4m-chat-thinkingoff-cachehit-256-installed-app-after-mixed-swa-telemetry-20260524.json"
+def _gemma26_current_memory_stress_gate(root: Path) -> dict[str, bool]:
+    payload = _load_json(root / GEMMA4_CURRENT_MEMORY_STRESS_ARTIFACT)
+    results = payload.get("results")
+    if not isinstance(results, list) or len(results) < 3:
+        return {
+            "artifact_passes": False,
+            "native_cache_health": False,
+            "mixed_swa_cache_hits": False,
+        }
+
+    health = payload.get("health_ready")
+    native_cache = health.get("native_cache") if isinstance(health, dict) else {}
+    native_cache_health = (
+        isinstance(native_cache, dict)
+        and native_cache.get("family") == "gemma4"
+        and native_cache.get("schema") == "mixed_swa_kv_v1"
+        and native_cache.get("prefix") is True
+        and native_cache.get("paged") is True
+        and native_cache.get("block_disk_l2") is True
+        and (native_cache.get("generic_turboquant_kv") or {}).get("enabled") is False
+        and (native_cache.get("storage_quantization") or {}).get("enabled") is True
     )
+
+    mixed_swa_hits = 0
+    for result in results:
+        if not isinstance(result, dict) or result.get("status") != "ok":
+            return {
+                "artifact_passes": False,
+                "native_cache_health": native_cache_health,
+                "mixed_swa_cache_hits": False,
+            }
+        stream_speed = result.get("stream_speed")
+        speed = result.get("speed")
+        if not isinstance(stream_speed, dict) or not isinstance(speed, dict):
+            continue
+        stream_cached = int(stream_speed.get("cached_tokens") or 0)
+        wall_cached = int(speed.get("cached_tokens") or 0)
+        if (
+            stream_cached > 0
+            and wall_cached > 0
+            and speed.get("cache_detail") == "paged+mixed_swa"
+        ):
+            mixed_swa_hits += 1
+
+    return {
+        "artifact_passes": payload.get("status") == "pass",
+        "native_cache_health": native_cache_health,
+        "mixed_swa_cache_hits": mixed_swa_hits >= 2,
+    }
+
+
+def _issue119_checks(root: Path) -> dict[str, bool]:
+    memory_gate = _gemma26_current_memory_stress_gate(root)
     gemma_responses = (
         root
         / "docs/internal/agent-notes/current-real-ui-live-model-gemma4-responses-stricttools-max768-visible-20260531-proof.json"
@@ -723,7 +772,13 @@ def _issue119_checks(root: Path) -> dict[str, bool]:
     objective = _read(root / "tests/cross_matrix/summarize_objective_proof.py")
     production = _read(root / "tests/cross_matrix/run_production_family_audit.py")
     return {
-        "gemma26_memory_stress_artifact_present": stress.get("status") == "pass",
+        "gemma26_memory_stress_artifact_present": memory_gate["artifact_passes"],
+        "gemma26_memory_stress_native_cache_health": memory_gate[
+            "native_cache_health"
+        ],
+        "gemma26_memory_stress_mixed_swa_cache_hits": memory_gate[
+            "mixed_swa_cache_hits"
+        ],
         "gemma26_real_ui_artifacts_indexed": (
             gemma_responses.exists()
             and gemma_cache.exists()
@@ -924,6 +979,8 @@ def build_audit(root: Path) -> dict[str, Any]:
                 },
                 "119": {
                     "gemma26_memory_stress_artifact_present",
+                    "gemma26_memory_stress_native_cache_health",
+                    "gemma26_memory_stress_mixed_swa_cache_hits",
                 },
             }[number]
             required_source_checks = {

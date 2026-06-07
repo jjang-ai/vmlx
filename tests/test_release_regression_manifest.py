@@ -1757,7 +1757,11 @@ def _write_expected_public_app_issue_audit(root: Path) -> None:
                         "release_clearance": (
                             "source_and_live_gemma26_memory_runtime_guarded_release_package_pending"
                         ),
-                        "checks": {"gemma26_memory_stress_artifact_present": True},
+                        "checks": {
+                            "gemma26_memory_stress_artifact_present": True,
+                            "gemma26_memory_stress_native_cache_health": True,
+                            "gemma26_memory_stress_mixed_swa_cache_hits": True,
+                        },
                     },
                 },
             }
@@ -1819,6 +1823,12 @@ def test_release_regression_manifest_accepts_public_issue115_and_119_open_bounda
     payload["issues"]["119"]["focused_source_slice"] = "open"
     payload["issues"]["119"]["checks"][
         "gemma26_memory_stress_artifact_present"
+    ] = False
+    payload["issues"]["119"]["checks"][
+        "gemma26_memory_stress_native_cache_health"
+    ] = False
+    payload["issues"]["119"]["checks"][
+        "gemma26_memory_stress_mixed_swa_cache_hits"
     ] = False
     path.write_text(json.dumps(payload) + "\n", encoding="utf-8")
 
