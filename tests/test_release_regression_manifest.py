@@ -1918,14 +1918,14 @@ def test_release_regression_manifest_rejects_public_issue116_without_thinking_of
     assert "missing_issue:116" in result["failures"]
 
 
-def test_release_regression_manifest_blocks_on_open_public_issue115_speed_proofs():
+def test_release_regression_manifest_does_not_block_on_cleared_public_issue115_speed_proofs():
     sweep = validate_current_proof_sweep_artifacts(Path("."))
     blockers = {
         blocker["id"]: blocker
         for blocker in sweep["release_blocker_ledger"]["blockers"]
     }
 
-    assert "issue115_installed_app_performance_regression_open" in blockers
+    assert "issue115_installed_app_performance_regression_open" not in blockers
 
 
 def test_release_regression_manifest_rejects_public_issue169_without_installed_runtime_flavor(

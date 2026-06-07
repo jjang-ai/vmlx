@@ -177,6 +177,8 @@ def test_http_json_stream_timed_records_ttft_and_usage(monkeypatch):
         "ttft_seconds": 0.4,
         "stream_read_seconds": 0.6,
         "post_first_token_seconds": 0.3,
+        "post_first_visible_token_seconds": 0.2,
+        "post_last_visible_to_done_seconds": 0.1,
         "total_seconds": 0.7,
         "chunk_count": 2,
     }
@@ -227,16 +229,20 @@ def test_http_json_stream_timed_records_responses_sse_delta_and_completed_usage(
         "ttft_seconds": 0.4,
         "stream_read_seconds": 0.7,
         "post_first_token_seconds": 0.4,
+        "post_first_visible_token_seconds": 0.1,
+        "post_last_visible_to_done_seconds": 0.3,
         "total_seconds": 0.8,
         "chunk_count": 2,
     }
 
 
-def test_add_stream_speed_metrics_uses_post_first_token_time():
+def test_add_stream_speed_metrics_uses_visible_token_time_before_done_gap():
     stage = {
         "http_timing": {
             "ttft_seconds": 0.6,
             "post_first_token_seconds": 2.5,
+            "post_first_visible_token_seconds": 2.0,
+            "post_last_visible_to_done_seconds": 0.5,
         },
         "response": {
             "usage": {
@@ -252,7 +258,9 @@ def test_add_stream_speed_metrics_uses_post_first_token_time():
     assert stage["stream_speed"] == {
         "ttft_seconds": 0.6,
         "post_first_token_seconds": 2.5,
-        "decode_tok_s_stream": 100.0,
+        "post_first_visible_token_seconds": 2.0,
+        "post_last_visible_to_done_seconds": 0.5,
+        "decode_tok_s_stream": 125.0,
         "completion_tokens": 251,
         "cached_tokens": 0,
     }

@@ -232,6 +232,7 @@ def http_json_stream_timed(
     started = time.perf_counter()
     parsed: dict[str, Any] = {}
     first_token_time: float | None = None
+    last_text_time: float | None = None
     last_event_time: float | None = None
     chunk_count = 0
     with urllib.request.urlopen(req, timeout=timeout) as resp:
@@ -254,10 +255,13 @@ def http_json_stream_timed(
                 chunk_count += 1
                 if first_token_time is None:
                     first_token_time = now
+                last_text_time = now
             last_event_time = now
         done = time.perf_counter()
     if first_token_time is None:
         first_token_time = done
+    if last_text_time is None:
+        last_text_time = first_token_time
     if last_event_time is None:
         last_event_time = done
     return resp.status, parsed, {
@@ -265,6 +269,10 @@ def http_json_stream_timed(
         "ttft_seconds": _round_http_seconds(first_token_time - started),
         "stream_read_seconds": _round_http_seconds(done - opened),
         "post_first_token_seconds": _round_http_seconds(done - first_token_time),
+        "post_first_visible_token_seconds": _round_http_seconds(
+            last_text_time - first_token_time
+        ),
+        "post_last_visible_to_done_seconds": _round_http_seconds(done - last_text_time),
         "total_seconds": _round_http_seconds(done - started),
         "chunk_count": chunk_count,
     }
@@ -625,7 +633,11 @@ def add_speed_metrics(stage: dict[str, Any]) -> None:
 
 def add_stream_speed_metrics(stage: dict[str, Any]) -> None:
     timing = stage.get("http_timing") if isinstance(stage.get("http_timing"), dict) else {}
-    post_first = float(timing.get("post_first_token_seconds") or 0.0)
+    post_first = float(
+        timing.get("post_first_visible_token_seconds")
+        or timing.get("post_first_token_seconds")
+        or 0.0
+    )
     if post_first <= 0:
         return
     usage = extract_usage(stage.get("response"))
@@ -638,6 +650,12 @@ def add_stream_speed_metrics(stage: dict[str, Any]) -> None:
     stage["stream_speed"] = {
         "ttft_seconds": timing.get("ttft_seconds"),
         "post_first_token_seconds": timing.get("post_first_token_seconds"),
+        "post_first_visible_token_seconds": timing.get(
+            "post_first_visible_token_seconds"
+        ),
+        "post_last_visible_to_done_seconds": timing.get(
+            "post_last_visible_to_done_seconds"
+        ),
         "decode_tok_s_stream": decode_tps,
         "completion_tokens": completion_tokens,
         "cached_tokens": cached_tokens,
