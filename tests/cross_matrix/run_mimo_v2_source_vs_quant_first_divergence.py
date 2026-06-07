@@ -23,7 +23,7 @@ from typing import Any
 
 
 DEFAULT_OUT = Path(
-    "build/current-mimo-v2-jang2l-source-vs-quant-first-divergence-20260606.json"
+    "build/current-mimo-v2-jang2l-source-vs-quant-first-divergence-after-tool-row-20260607.json"
 )
 DEFAULT_QUANT_MODEL_PATH = "/Users/example/.mlxstudio/models/JANGQ-AI/MiMo-V2.5-JANG_2L"
 
@@ -71,6 +71,36 @@ PROMPTS: tuple[dict[str, Any], ...] = (
         ],
         "expected": "ACK",
         "max_tokens": 16,
+    },
+    {
+        "name": "xml_tool_required_record_fact",
+        "messages": [
+            {
+                "role": "user",
+                "content": (
+                    "Use the record_fact tool exactly once with value blue-cat. "
+                    "Do not answer in visible text."
+                ),
+            },
+        ],
+        "tools": [
+            {
+                "type": "function",
+                "function": {
+                    "name": "record_fact",
+                    "description": "Record a fact.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"value": {"type": "string"}},
+                        "required": ["value"],
+                    },
+                },
+            },
+        ],
+        "tool_choice": "required",
+        "expected_tool": "record_fact",
+        "expected_arguments": {"value": "blue-cat"},
+        "max_tokens": 96,
     },
 )
 
@@ -136,6 +166,60 @@ def _extract_finish_reason(payload: dict[str, Any]) -> str | None:
     return finish if isinstance(finish, str) else None
 
 
+def _extract_tool_calls(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    choices = payload.get("choices")
+    if not isinstance(choices, list) or not choices:
+        return []
+    first = choices[0]
+    if not isinstance(first, dict):
+        return []
+    message = first.get("message")
+    if not isinstance(message, dict):
+        return []
+    calls = message.get("tool_calls")
+    if not isinstance(calls, list):
+        return []
+    return [call for call in calls if isinstance(call, dict)]
+
+
+def _tool_signature(tool_calls: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    signature: list[dict[str, Any]] = []
+    for call in tool_calls:
+        function = call.get("function")
+        if not isinstance(function, dict):
+            continue
+        signature.append(
+            {
+                "name": function.get("name"),
+                "arguments": function.get("arguments"),
+            }
+        )
+    return signature
+
+
+def _tool_call_matches(
+    tool_calls: list[dict[str, Any]],
+    *,
+    expected_tool: str,
+    expected_arguments: dict[str, Any] | None = None,
+) -> bool:
+    for call in tool_calls:
+        function = call.get("function")
+        if not isinstance(function, dict):
+            continue
+        if function.get("name") != expected_tool:
+            continue
+        if expected_arguments is None:
+            return True
+        raw_args = function.get("arguments")
+        try:
+            parsed = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
+        except json.JSONDecodeError:
+            return False
+        return parsed == expected_arguments
+    return False
+
+
 def first_divergence(a: str, b: str) -> dict[str, Any] | None:
     if a == b:
         return None
@@ -167,6 +251,34 @@ def classify_row(
     return "quant_diverges_from_source"
 
 
+def classify_tool_row(
+    *,
+    source_tool_calls: list[dict[str, Any]],
+    quant_tool_calls: list[dict[str, Any]],
+    expected_tool: str,
+    expected_arguments: dict[str, Any] | None,
+    source_status: int,
+    quant_status: int,
+) -> str:
+    if source_status != 200 or quant_status != 200:
+        return "request_failed"
+    source_ok = _tool_call_matches(
+        source_tool_calls,
+        expected_tool=expected_tool,
+        expected_arguments=expected_arguments,
+    )
+    quant_ok = _tool_call_matches(
+        quant_tool_calls,
+        expected_tool=expected_tool,
+        expected_arguments=expected_arguments,
+    )
+    if not source_ok:
+        return "source_also_fails"
+    if quant_ok and _tool_signature(source_tool_calls) == _tool_signature(quant_tool_calls):
+        return "source_and_quant_match"
+    return "quant_diverges_from_source"
+
+
 def run_probe(
     *,
     source_base_url: str,
@@ -186,6 +298,10 @@ def run_probe(
             "temperature": 0,
             "max_tokens": max_tokens,
         }
+        if isinstance(prompt.get("tools"), list):
+            common["tools"] = prompt["tools"]
+        if prompt.get("tool_choice") is not None:
+            common["tool_choice"] = prompt["tool_choice"]
         source_status, source_payload, source_elapsed = _post_json(
             source_base_url.rstrip("/") + "/v1/chat/completions",
             {"model": source_model, **common},
@@ -198,21 +314,51 @@ def run_probe(
         )
         source_output = _extract_chat_content(source_payload)
         quant_output = _extract_chat_content(quant_payload)
+        source_tool_calls = _extract_tool_calls(source_payload)
+        quant_tool_calls = _extract_tool_calls(quant_payload)
         expected = prompt.get("expected")
+        expected_tool = prompt.get("expected_tool")
+        expected_arguments = prompt.get("expected_arguments")
+        if isinstance(expected_tool, str):
+            classification = classify_tool_row(
+                source_tool_calls=source_tool_calls,
+                quant_tool_calls=quant_tool_calls,
+                expected_tool=expected_tool,
+                expected_arguments=(
+                    expected_arguments if isinstance(expected_arguments, dict) else None
+                ),
+                source_status=source_status,
+                quant_status=quant_status,
+            )
+            divergence = (
+                None
+                if _tool_signature(source_tool_calls) == _tool_signature(quant_tool_calls)
+                else {
+                    "source_tool_calls": _tool_signature(source_tool_calls),
+                    "quant_tool_calls": _tool_signature(quant_tool_calls),
+                }
+            )
+        else:
+            classification = classify_row(
+                source_output=source_output,
+                quant_output=quant_output,
+                expected=expected if isinstance(expected, str) else None,
+                source_status=source_status,
+                quant_status=quant_status,
+            )
+            divergence = first_divergence(source_output, quant_output)
         rows.append(
             {
                 "prompt_name": prompt["name"],
                 "expected": expected,
-                "classification": classify_row(
-                    source_output=source_output,
-                    quant_output=quant_output,
-                    expected=expected if isinstance(expected, str) else None,
-                    source_status=source_status,
-                    quant_status=quant_status,
-                ),
-                "first_divergence": first_divergence(source_output, quant_output),
+                "expected_tool": expected_tool,
+                "expected_arguments": expected_arguments,
+                "classification": classification,
+                "first_divergence": divergence,
                 "source_output": source_output,
                 "quant_output": quant_output,
+                "source_tool_calls": _tool_signature(source_tool_calls),
+                "quant_tool_calls": _tool_signature(quant_tool_calls),
                 "source_http_status": source_status,
                 "quant_http_status": quant_status,
                 "source_finish_reason": _extract_finish_reason(source_payload),

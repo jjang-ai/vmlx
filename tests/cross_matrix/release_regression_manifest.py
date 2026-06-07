@@ -843,7 +843,7 @@ CURRENT_MIMO_V2_JANG2L_METADATA_TRUTH_ARTIFACT = (
     "build/current-mimo-v25-jang2l-local-metadata-truth-patch-20260606.json"
 )
 CURRENT_MIMO_V2_JANG2L_SOURCE_VS_QUANT_ARTIFACT = (
-    "build/current-mimo-v2-jang2l-source-vs-quant-first-divergence-20260606.json"
+    "build/current-mimo-v2-jang2l-source-vs-quant-first-divergence-after-tool-row-20260607.json"
 )
 CURRENT_DIAGNOSTIC_LIVE_SMOKE_ARTIFACTS = {
     "zaya_text_mxfp4_toolprobe": {

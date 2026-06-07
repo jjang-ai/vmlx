@@ -68,6 +68,63 @@ def test_classify_row_distinguishes_source_and_quant_failure_modes():
     )
 
 
+def test_classify_tool_row_distinguishes_source_and_quant_tool_failures():
+    source_calls = [
+        {
+            "function": {
+                "name": "record_fact",
+                "arguments": json.dumps({"value": "blue-cat"}),
+            }
+        }
+    ]
+    quant_calls = []
+
+    assert (
+        probe.classify_tool_row(
+            source_tool_calls=source_calls,
+            quant_tool_calls=source_calls,
+            expected_tool="record_fact",
+            expected_arguments={"value": "blue-cat"},
+            source_status=200,
+            quant_status=200,
+        )
+        == "source_and_quant_match"
+    )
+    assert (
+        probe.classify_tool_row(
+            source_tool_calls=source_calls,
+            quant_tool_calls=quant_calls,
+            expected_tool="record_fact",
+            expected_arguments={"value": "blue-cat"},
+            source_status=200,
+            quant_status=200,
+        )
+        == "quant_diverges_from_source"
+    )
+    assert (
+        probe.classify_tool_row(
+            source_tool_calls=quant_calls,
+            quant_tool_calls=quant_calls,
+            expected_tool="record_fact",
+            expected_arguments={"value": "blue-cat"},
+            source_status=200,
+            quant_status=200,
+        )
+        == "source_also_fails"
+    )
+    assert (
+        probe.classify_tool_row(
+            source_tool_calls=source_calls,
+            quant_tool_calls=source_calls,
+            expected_tool="record_fact",
+            expected_arguments={"value": "blue-cat"},
+            source_status=500,
+            quant_status=200,
+        )
+        == "request_failed"
+    )
+
+
 def test_run_probe_writes_release_gate_compatible_rows(monkeypatch):
     calls = []
 
@@ -119,6 +176,82 @@ def test_run_probe_writes_release_gate_compatible_rows(monkeypatch):
     assert row["first_divergence"]["char_index"] == 0
     assert json.dumps(result)
     assert len(calls) == 2
+
+
+def test_run_probe_records_required_tool_divergence(monkeypatch):
+    calls = []
+
+    def fake_post(url, body, *, timeout):
+        calls.append((url, body, timeout))
+        is_source = "source" in url
+        tool_calls = []
+        if is_source:
+            tool_calls = [
+                {
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {
+                        "name": "record_fact",
+                        "arguments": json.dumps({"value": "blue-cat"}),
+                    },
+                }
+            ]
+        payload = {
+            "choices": [
+                {
+                    "message": {"content": "", "tool_calls": tool_calls},
+                    "finish_reason": "tool_calls" if tool_calls else "stop",
+                }
+            ],
+            "usage": {"completion_tokens": 1},
+        }
+        return 200, payload, 0.123
+
+    monkeypatch.setattr(probe, "_post_json", fake_post)
+
+    result = probe.run_probe(
+        source_base_url="http://source:8000",
+        quant_base_url="http://quant:8001",
+        source_model="source",
+        quant_model="quant",
+        source_model_path="/models/source",
+        quant_model_path="/models/quant",
+        timeout=1,
+        prompts=(
+            {
+                "name": "xml_tool_required_record_fact",
+                "messages": [{"role": "user", "content": "Use record_fact."}],
+                "tools": [
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": "record_fact",
+                            "parameters": {
+                                "type": "object",
+                                "properties": {"value": {"type": "string"}},
+                            },
+                        },
+                    }
+                ],
+                "tool_choice": "required",
+                "expected_tool": "record_fact",
+                "expected_arguments": {"value": "blue-cat"},
+                "max_tokens": 16,
+            },
+        ),
+    )
+
+    row = result["rows"][0]
+    assert row["classification"] == "quant_diverges_from_source"
+    assert row["expected_tool"] == "record_fact"
+    assert row["expected_arguments"] == {"value": "blue-cat"}
+    assert row["source_tool_calls"] == [
+        {"name": "record_fact", "arguments": json.dumps({"value": "blue-cat"})}
+    ]
+    assert row["quant_tool_calls"] == []
+    assert row["first_divergence"]["source_tool_calls"] == row["source_tool_calls"]
+    assert calls[0][1]["tool_choice"] == "required"
+    assert calls[0][1]["tools"][0]["function"]["name"] == "record_fact"
 
 
 def test_preflight_records_missing_source_and_endpoint_state(tmp_path, monkeypatch):

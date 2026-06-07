@@ -60,7 +60,7 @@ FIRST_TOKEN_ARTIFACT = Path(
     "build/current-mimo-v2-jang2l-first-token-probe-registered-20260606.json"
 )
 SOURCE_VS_QUANT_ARTIFACT = Path(
-    "build/current-mimo-v2-jang2l-source-vs-quant-first-divergence-20260606.json"
+    "build/current-mimo-v2-jang2l-source-vs-quant-first-divergence-after-tool-row-20260607.json"
 )
 SYNCED_LONG_TOOL_CACHE_ARTIFACT = Path(
     "build/current-mimo-v25-jang2l-synced-long-tool-cache-proof-20260606.json"
