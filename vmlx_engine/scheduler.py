@@ -5949,6 +5949,55 @@ class Scheduler:
                                                 request._extracted_cache_from_prompt_snapshot = True
                                         else:
                                             cache_for_extract = None
+                                    elif self._model_has_mixed_attention(self.model):
+                                        # Mixed full/sliding-window attention
+                                        # models (Step3p7, Gemma4, MiMo, etc.)
+                                        # use RotatingKVCache for SWA layers.
+                                        # Once the live cache has advanced
+                                        # through decode, prompt-boundary rewind
+                                        # is unsafe when the rotating window has
+                                        # wrapped. Use the same N-1 clean
+                                        # prompt-boundary prefill contract as
+                                        # other path-dependent cache families
+                                        # instead of trimming live post-decode
+                                        # state.
+                                        mixed_prompt_tokens = list(
+                                            request.prompt_token_ids
+                                        )
+                                        _gpl_mixed = (
+                                            getattr(request, "_gen_prompt_len", 0)
+                                            or 0
+                                        )
+                                        if 0 < _gpl_mixed < len(mixed_prompt_tokens):
+                                            mixed_prompt_tokens = mixed_prompt_tokens[
+                                                :-_gpl_mixed
+                                            ]
+                                        mixed_key_tokens = (
+                                            mixed_prompt_tokens[:-1]
+                                            if len(mixed_prompt_tokens) > 1
+                                            else []
+                                        )
+                                        if mixed_key_tokens:
+                                            logger.info(
+                                                "Mixed-SWA prefix cache store using "
+                                                "clean prompt-boundary re-prefill "
+                                                "(%d cache-key tokens from %d "
+                                                "prompt tokens).",
+                                                len(mixed_key_tokens),
+                                                len(mixed_prompt_tokens),
+                                            )
+                                            cache_for_extract = (
+                                                self._prefill_for_prompt_only_cache(
+                                                    mixed_key_tokens
+                                                )
+                                            )
+                                            if cache_for_extract is not None:
+                                                request._extracted_cache_key_tokens = (
+                                                    list(mixed_key_tokens)
+                                                )
+                                                request._extracted_cache_from_prompt_snapshot = True
+                                        else:
+                                            cache_for_extract = None
                                     else:
                                         # Paged cache: truncate to N-1 tokens so the
                                         # last prompt token can be re-fed on cache hit.
@@ -6490,6 +6539,18 @@ class Scheduler:
                                                             # RotatingKVCache with wrapped
                                                             # buffer: cannot safely truncate.
                                                             # Skip this store entirely.
+                                                            logger.info(
+                                                                "Skipping paged cache store for %s: "
+                                                                "cannot rebuild %s metadata after "
+                                                                "truncation (target=%d, safe=%d, "
+                                                                "prompt_tokens=%d, gen_prompt_len=%d)",
+                                                                request_id,
+                                                                cls_name,
+                                                                target,
+                                                                safe,
+                                                                len(prompt_tokens),
+                                                                gen_prompt_len,
+                                                            )
                                                             trunc_ok = False
                                                             break
                                                         truncated_dicts.append(
@@ -6525,6 +6586,18 @@ class Scheduler:
                                                                 safe,
                                                             )
                                                             if new_meta is None:
+                                                                logger.info(
+                                                                    "Skipping paged cache store for %s: "
+                                                                    "cannot rebuild %s quantized metadata "
+                                                                    "after truncation (target=%d, safe=%d, "
+                                                                    "prompt_tokens=%d, gen_prompt_len=%d)",
+                                                                    request_id,
+                                                                    cls_name,
+                                                                    target,
+                                                                    safe,
+                                                                    len(prompt_tokens),
+                                                                    gen_prompt_len,
+                                                                )
                                                                 trunc_ok = False
                                                                 break
                                                             truncated_dicts.append(
@@ -6583,6 +6656,15 @@ class Scheduler:
                         finally:
                             # Clear extracted cache reference to help GC
                             request._extracted_cache = None
+                    else:
+                        logger.info(
+                            "Skipping paged cache store for %s: no extracted cache "
+                            "(prompt_tokens=%d, gen_prompt_len=%d, block_cache_enabled=%s)",
+                            request_id,
+                            len(request.prompt_token_ids or []),
+                            int(getattr(request, "_gen_prompt_len", 0) or 0),
+                            self.block_aware_cache is not None,
+                        )
                     # NOTE: Tracking cleanup (pop + detach) moved above the
                     # _skip_cache_store guard so it runs unconditionally.
 
