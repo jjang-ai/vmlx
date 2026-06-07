@@ -297,3 +297,57 @@ Pages purgeable:                           0.
     assert result["available_for_gate_gb"] == 80.1
     assert result["memory_gap_gb"] == 1.9
     assert result["launch_allowed"] is False
+
+
+def test_issue179_probe_keeps_minimax_defaults_for_original_row():
+    args = SimpleNamespace(
+        python=Path("/python"),
+        model=Path("/models/MiniMax-M2.7-JANGTQ_K"),
+        served_model="models/MiniMax-M2.7-JANGTQ_K",
+        prompt="Hi",
+        max_tokens=4096,
+        temperature=1.0,
+        top_p=0.95,
+        top_k=40,
+        tool_call_parser="minimax",
+        reasoning_parser="minimax_m2",
+    )
+
+    cmd = probe.build_server_command(args, 8123)
+    body = probe.build_stream_request_body(args)
+
+    assert cmd[cmd.index("--tool-call-parser") + 1] == "minimax"
+    assert cmd[cmd.index("--reasoning-parser") + 1] == "minimax_m2"
+    assert body["temperature"] == 1.0
+    assert body["top_p"] == 0.95
+    assert body["top_k"] == 40
+
+
+def test_issue179_probe_allows_qwen_deterministic_mtp_cancel_row():
+    args = SimpleNamespace(
+        python=Path("/python"),
+        model=Path("/models/Qwen3.6-27B-MXFP4-MTP"),
+        served_model="qwen27-mxfp4-mtp-cancel",
+        prompt="Continue until cancelled.",
+        max_tokens=1024,
+        temperature=0.0,
+        top_p=1.0,
+        top_k=0,
+        tool_call_parser="qwen",
+        reasoning_parser="qwen3",
+    )
+
+    cmd = probe.build_server_command(args, 8902)
+    body = probe.build_stream_request_body(args)
+
+    assert cmd[cmd.index("--tool-call-parser") + 1] == "qwen"
+    assert cmd[cmd.index("--reasoning-parser") + 1] == "qwen3"
+    assert body == {
+        "model": "qwen27-mxfp4-mtp-cancel",
+        "input": "Continue until cancelled.",
+        "stream": True,
+        "max_output_tokens": 1024,
+        "temperature": 0.0,
+        "top_p": 1.0,
+        "top_k": 0,
+    }

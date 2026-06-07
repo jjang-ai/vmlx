@@ -474,11 +474,8 @@ def _wait_healthy(port: int, timeout: float) -> dict[str, Any]:
     raise TimeoutError(f"server did not become healthy: {last_error}")
 
 
-def run_live_probe(args: argparse.Namespace) -> dict[str, Any]:
-    port = args.port or _free_port()
-    log_path = args.out.with_suffix(".server.log")
-    log_path.parent.mkdir(parents=True, exist_ok=True)
-    cmd = [
+def build_server_command(args: argparse.Namespace, port: int) -> list[str]:
+    return [
         str(args.python),
         "-B",
         "-s",
@@ -502,10 +499,10 @@ def run_live_probe(args: argparse.Namespace) -> dict[str, Any]:
         "512",
         "--continuous-batching",
         "--tool-call-parser",
-        "minimax",
+        args.tool_call_parser,
         "--enable-auto-tool-choice",
         "--reasoning-parser",
-        "minimax_m2",
+        args.reasoning_parser,
         "--use-paged-cache",
         "--paged-cache-block-size",
         "64",
@@ -517,6 +514,25 @@ def run_live_probe(args: argparse.Namespace) -> dict[str, Any]:
         "--stream-interval",
         "1",
     ]
+
+
+def build_stream_request_body(args: argparse.Namespace) -> dict[str, Any]:
+    return {
+        "model": args.served_model,
+        "input": args.prompt,
+        "stream": True,
+        "max_output_tokens": args.max_tokens,
+        "temperature": args.temperature,
+        "top_p": args.top_p,
+        "top_k": args.top_k,
+    }
+
+
+def run_live_probe(args: argparse.Namespace) -> dict[str, Any]:
+    port = args.port or _free_port()
+    log_path = args.out.with_suffix(".server.log")
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    cmd = build_server_command(args, port)
     env = os.environ.copy()
     env.update(
         {
@@ -543,15 +559,7 @@ def run_live_probe(args: argparse.Namespace) -> dict[str, Any]:
             cancel_status = None
             cancel_body = ""
             stream_error = None
-            body = {
-                "model": args.served_model,
-                "input": args.prompt,
-                "stream": True,
-                "max_output_tokens": args.max_tokens,
-                "temperature": 1.0,
-                "top_p": 0.95,
-                "top_k": 40,
-            }
+            body = build_stream_request_body(args)
             conn = http.client.HTTPConnection("127.0.0.1", port, timeout=args.request_timeout)
             try:
                 conn.request(
@@ -657,6 +665,11 @@ def main() -> int:
     parser.add_argument("--served-model", default="models/MiniMax-M2.7-JANGTQ_K")
     parser.add_argument("--prompt", default="Hi")
     parser.add_argument("--max-tokens", type=int, default=4096)
+    parser.add_argument("--temperature", type=float, default=1.0)
+    parser.add_argument("--top-p", type=float, default=0.95)
+    parser.add_argument("--top-k", type=int, default=40)
+    parser.add_argument("--tool-call-parser", default="minimax")
+    parser.add_argument("--reasoning-parser", default="minimax_m2")
     parser.add_argument("--port", type=int, default=0)
     parser.add_argument("--load-timeout", type=float, default=180.0)
     parser.add_argument("--request-timeout", type=float, default=120.0)
