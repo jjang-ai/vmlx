@@ -121,6 +121,43 @@ def test_classify_model_does_not_infer_nemotron_omni_video_from_name_only(tmp_pa
     assert row["supports_video"] is False
 
 
+def test_classify_model_routes_step3p7_advertised_vision_text_only(tmp_path):
+    mod = load_module()
+    model_dir = tmp_path / "Step-3.7-Flash-JANG_2L-CRACK"
+    model_dir.mkdir()
+    (model_dir / "config.json").write_text(
+        """
+        {
+          "model_type": "step3p7",
+          "vision_config": {"model_type": "step3p7_vision"},
+          "video_token_id": 123456
+        }
+        """,
+        encoding="utf-8",
+    )
+    (model_dir / "jang_config.json").write_text(
+        """
+        {
+          "architecture": {"has_vision": true},
+          "capabilities": {
+            "supports_thinking": true,
+            "supports_tools": true
+          }
+        }
+        """,
+        encoding="utf-8",
+    )
+
+    row = mod.classify_model_dir(model_dir)
+
+    assert row["model_type"] == "step3p7"
+    assert row["is_mllm"] is False
+    assert row["supports_video"] is False
+    assert row["supports_thinking"] is True
+    assert row["supports_tools"] is True
+    assert row["cache_family"] == "swa_rotating"
+
+
 def test_classify_model_preserves_hy3_and_minimax_reasoning_probe_coverage(tmp_path):
     mod = load_module()
 

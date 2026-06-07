@@ -140,6 +140,8 @@ def classify_model_dir(model_dir: Path) -> dict[str, Any]:
         or "omni" in name.lower()
         or model_type in {"gemma4", "zaya1_vl", "qwen2_5_vl", "qwen3_5_vl"}
     )
+    if model_type == "step3p7":
+        is_mllm = False
     name_lower = name.lower()
     name_has_mtp = "mtp" in name_lower and "nomtp" not in name_lower and "no-mtp" not in name_lower
     has_mtp = (
@@ -205,6 +207,8 @@ def classify_model_dir(model_dir: Path) -> dict[str, Any]:
     elif "zaya" in lower_blob:
         cache_family = "zaya_cca"
     elif "laguna" in lower_blob:
+        cache_family = "swa_rotating"
+    elif model_type == "step3p7":
         cache_family = "swa_rotating"
     elif any(key in lower_blob for key in ("qwen3.6", "qwen3_5", "ling", "nemotron", "mamba", "ssm")):
         cache_family = "hybrid_ssm"
