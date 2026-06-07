@@ -717,7 +717,7 @@ def check_objective_proof_digest(
 ) -> None:
     """Refresh and enforce the objective proof digest before release checks pass."""
     digest_path = digest_path or (
-        ROOT / "build/current-objective-proof-after-mimo-xml-function-template-fix-20260606.json"
+        ROOT / "build/current-objective-proof-after-mllm-tight-memory-guard-20260607.json"
     )
     proc = gate.run(
         "objective proof digest refresh",
