@@ -13,4 +13,13 @@ describe('failed media message rollback', () => {
     expect(chatSource).toContain('!wasAborted')
     expect(chatSource).toContain('db.deleteMessage(userMessage.id)')
   })
+
+  it('also removes media turns that complete with empty warning responses', () => {
+    expect(chatSource).toContain('mediaWarningWithoutVisibleActivity')
+    expect(chatSource).toContain('finalResponseWarnings.length > 0')
+    expect(chatSource).toContain('rolled_back_empty_warning_media_user_message')
+    expect(chatSource).toContain('Media request failed before visible output')
+    expect(chatSource).toContain('Do not persist the failed media user turn')
+    expect(chatSource).toContain('text-only prompt replays the same image')
+  })
 })

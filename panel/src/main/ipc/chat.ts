@@ -3542,6 +3542,35 @@ export function registerChatHandlers(
             `[CHAT] Responses warning(s): ${finalResponseWarnings.join(" | ")}`,
           );
         }
+        const mediaWarningWithoutVisibleActivity =
+          hasMediaAttachments &&
+          !fullContent &&
+          !finalReasoningContent &&
+          finalReasoningSegments.length === 0 &&
+          collectedToolStatuses.length === 0 &&
+          finalResponseWarnings &&
+          finalResponseWarnings.length > 0;
+        if (mediaWarningWithoutVisibleActivity) {
+          // Responses can complete with an empty-warning payload instead of
+          // throwing when a VLM image prefill guard rejects before generation.
+          // Do not persist the failed media user turn; otherwise the next
+          // text-only prompt replays the same image and repeats the guard until
+          // the user manually rolls back.
+          try {
+            db.deleteMessage(userMessage.id);
+            pushChatSessionLog(
+              chatSession?.id || resolvedSession?.id,
+              `[CHAT_DIAG] rolled_back_empty_warning_media_user_message=${JSON.stringify({
+                chatId: chatId.slice(0, 8),
+                messageId: userMessage.id.slice(0, 8),
+                warnings: finalResponseWarnings,
+              })}`,
+            );
+          } catch (_) {}
+          throw new Error(
+            `Media request failed before visible output: ${finalResponseWarnings.join(" | ")}`,
+          );
+        }
 
         // 2026-05-03: persist model-visible tool context separately from
         // the UI-display tool_calls_json. Without this, history replay drops
