@@ -243,6 +243,18 @@ ROWS: dict[str, Row] = {
         expected_min_tps=18.0,
         expected_min_pp=400.0,
     ),
+    "mimo_v25_jang2l": Row(
+        "mimo_v25_jang2l",
+        "/Users/example/.mlxstudio/models/JANGQ-AI/MiMo-V2.5-JANG_2L",
+        is_mllm=True,
+        tool_parser="xml_function",
+        reasoning_parser="think_xml",
+        max_tokens=96,
+        expected_min_tps=40.0,
+        expected_min_pp=400.0,
+        pp_targets=[512, 1024],
+        extra_args=["--completion-batch-size", "64"],
+    ),
     "nemotron_jangtq": Row(
         "nemotron_jangtq",
         "/Users/example/models/dealign.ai/Nemotron-Omni-Nano-JANGTQ-CRACK",
@@ -824,6 +836,13 @@ def run_row(
             env=env,
             cwd=str(SAFE_SERVER_CWD),
         )
+    health0: dict[str, Any] | None = None
+    warm: dict[str, Any] | None = None
+    coherency: dict[str, Any] | None = None
+    pp_rows: list[dict[str, Any]] = []
+    bundle: dict[str, Any] | None = None
+    greedy: dict[str, Any] | None = None
+    health1: dict[str, Any] | None = None
     try:
         health0 = wait_health(port, proc, timeout_s)
         url = f"http://127.0.0.1:{port}/v1/chat/completions"
@@ -853,7 +872,8 @@ def run_row(
             },
             prompt=COHERENCY_PROMPT,
         )
-        pp_rows = [run_pp_case(url, row.name, target) for target in row.pp_targets]
+        for target in row.pp_targets:
+            pp_rows.append(run_pp_case(url, row.name, target))
         bundle = run_case(
             port,
             row.name,
@@ -958,7 +978,15 @@ def run_row(
             "registry": registry_metadata,
             "runtime_wheels": runtime_wheels,
             "cmd": cmd,
+            "prefill_step_size": prefill_step_size,
             "log_path": str(log_path),
+            "health_before": health0,
+            "health_after": health1,
+            "warm_usage": warm.get("usage") if isinstance(warm, dict) else None,
+            "coherency": coherency,
+            "pp_rows": pp_rows,
+            "bundle_sampling": bundle,
+            "greedy_topk0": greedy,
             "log_tail": log_path.read_text(errors="replace")[-12000:] if log_path.exists() else "",
         }
     finally:

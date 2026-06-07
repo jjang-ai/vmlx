@@ -124,6 +124,36 @@ def test_decode_speed_gate_pp_probe_is_deterministic():
     assert '"top_k": 0' in block
 
 
+def test_decode_speed_gate_tracks_mimo_v25_jang2l_release_floor():
+    from tests.cross_matrix.run_decode_speed_gate import ROWS
+
+    row = ROWS["mimo_v25_jang2l"]
+
+    assert row.path == "/Users/example/.mlxstudio/models/JANGQ-AI/MiMo-V2.5-JANG_2L"
+    assert row.is_mllm is True
+    assert row.tool_parser == "xml_function"
+    assert row.reasoning_parser == "think_xml"
+    assert row.max_tokens == 96
+    assert row.expected_min_tps == 40.0
+    assert row.expected_min_pp == 400.0
+    assert row.pp_targets == [512, 1024]
+    assert row.extra_args == ["--completion-batch-size", "64"]
+
+
+def test_decode_speed_gate_error_artifact_preserves_partial_live_rows():
+    source = Path("tests/cross_matrix/run_decode_speed_gate.py").read_text(
+        encoding="utf-8"
+    )
+    error_block = source[source.index("except Exception as exc") :]
+
+    assert '"health_before": health0' in error_block
+    assert '"warm_usage": warm.get("usage")' in error_block
+    assert '"coherency": coherency' in error_block
+    assert '"pp_rows": pp_rows' in error_block
+    assert '"bundle_sampling": bundle' in error_block
+    assert '"greedy_topk0": greedy' in error_block
+
+
 def test_current_regression_suite_does_not_keep_proven_qwen_speed_rows_open():
     from tests.cross_matrix import run_current_regression_suite as suite
 
