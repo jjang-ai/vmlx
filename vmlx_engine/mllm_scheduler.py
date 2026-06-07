@@ -307,6 +307,7 @@ class MLLMRequest:
     # Video processing parameters (per-request overrides)
     video_fps: Optional[float] = None
     video_max_frames: Optional[int] = None
+    extra_kwargs: Dict[str, Any] = field(default_factory=dict)
 
     # Error recovery
     _retry_count: int = 0
@@ -2032,6 +2033,11 @@ class MLLMScheduler:
             video_fps=kwargs.get("video_fps"),
             video_max_frames=kwargs.get("video_max_frames"),
         )
+        request.extra_kwargs = {
+            key: value
+            for key, value in kwargs.items()
+            if isinstance(key, str) and key.startswith("_vmlx_")
+        }
         if "enable_thinking" in kwargs:
             request.enable_thinking = kwargs.get("enable_thinking")
         _max_prompt_tokens = int(kwargs.get("max_prompt_tokens", 0) or 0)
@@ -2220,6 +2226,8 @@ class MLLMScheduler:
                 video_fps=request.video_fps,
                 video_max_frames=request.video_max_frames,
             )
+            if request.extra_kwargs:
+                batch_req.extra_kwargs.update(request.extra_kwargs)
             # Forward gen_prompt_len so the batch generator can strip it
             # from cache fetch keys to match the store key (which also strips).
             _gpl = getattr(request, '_gen_prompt_len', 0)

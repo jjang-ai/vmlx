@@ -1383,6 +1383,78 @@ def _native_mtp_depth() -> int:
     return depth
 
 
+def _native_mtp_tool_choice_requires_tools(tool_choice: Any) -> bool:
+    if isinstance(tool_choice, dict):
+        return True
+    if isinstance(tool_choice, str):
+        return tool_choice in {"required", "auto"}
+    return False
+
+
+def _native_mtp_request_has_tools(request: Any) -> bool:
+    if request is None:
+        return False
+
+    prompt = getattr(request, "prompt", None)
+    if isinstance(prompt, str) and any(
+        marker in prompt
+        for marker in (
+            "<tools>",
+            "<tool_call>",
+            '"type": "function"',
+            "'type': 'function'",
+            "You have access to the following tools",
+            "[Calling tool:",
+        )
+    ):
+        return True
+
+    for attr in ("tools", "_vmlx_effective_tools"):
+        if getattr(request, attr, None):
+            return True
+    if _native_mtp_tool_choice_requires_tools(getattr(request, "tool_choice", None)):
+        return True
+
+    extra = getattr(request, "extra_kwargs", None)
+    if not isinstance(extra, dict):
+        return False
+    if extra.get("_vmlx_tools_present"):
+        return True
+    if extra.get("tools") or extra.get("_vmlx_effective_tools"):
+        return True
+    if _native_mtp_tool_choice_requires_tools(extra.get("tool_choice")):
+        return True
+
+    template_kwargs = extra.get("chat_template_kwargs")
+    if isinstance(template_kwargs, dict):
+        if template_kwargs.get("tools"):
+            return True
+        if _native_mtp_tool_choice_requires_tools(template_kwargs.get("tool_choice")):
+            return True
+
+    return False
+
+
+def _native_mtp_depth_for_request(request: Any) -> int:
+    depth = _native_mtp_depth()
+    if depth <= 1 or not _native_mtp_request_has_tools(request):
+        return depth
+
+    request_id = getattr(request, "request_id", "<unknown>")
+    logged_depth = getattr(request, "_native_mtp_tool_depth_cap_logged", None)
+    if logged_depth != depth:
+        logger.info(
+            "MLLM native MTP depth capped to D1 for request=%s because tools are present (configured D%d)",
+            request_id,
+            depth,
+        )
+        try:
+            setattr(request, "_native_mtp_tool_depth_cap_logged", depth)
+        except Exception:
+            pass
+    return 1
+
+
 def _native_mtp_logprobs(logits_2d: mx.array) -> mx.array:
     return logits_2d - mx.logsumexp(logits_2d, axis=-1, keepdims=True)
 
@@ -3312,6 +3384,11 @@ class MLLMBatchGenerator:
             request: Request to preprocess
         """
         tic = time.perf_counter()
+        preserved_private_kwargs = {
+            key: value
+            for key, value in (request.extra_kwargs or {}).items()
+            if isinstance(key, str) and key.startswith("_vmlx_")
+        }
 
         # FAST PATH: text-only requests skip VLM processor entirely.
         # For API-driven workloads (e.g. MMLU benchmarks with 14k short requests),
@@ -3341,7 +3418,7 @@ class MLLMBatchGenerator:
                 request.pixel_values = None
                 request.attention_mask = None
                 request.image_grid_thw = None
-                request.extra_kwargs = {}
+                request.extra_kwargs = dict(preserved_private_kwargs)
                 self._raise_if_prompt_over_limit(
                     request,
                     source="tokenized VLM text prompt",
@@ -3513,6 +3590,7 @@ class MLLMBatchGenerator:
             for k, v in inputs.items()
             if k not in ["input_ids", "pixel_values", "pixel_values_videos", "attention_mask"]
         }
+        request.extra_kwargs.update(preserved_private_kwargs)
         request.image_grid_thw = _ensure_mx_array(
             request.extra_kwargs.pop("image_grid_thw", None), mx.int32
         )
@@ -6081,7 +6159,7 @@ class MLLMBatchGenerator:
 
         next_tok, next_lp = _native_mtp_sample_one(logits[:, -1, :], sampler)
         mtp_cache = self.language_model.make_mtp_cache()
-        depth = _native_mtp_depth()
+        depth = _native_mtp_depth_for_request(request)
         drafts, draft_lps, draft_ids = self._draft_native_mtp_tokens(
             request,
             hidden[:, -1:, :],

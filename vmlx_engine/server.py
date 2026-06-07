@@ -7897,6 +7897,7 @@ async def create_anthropic_message(
     if chat_req.tools:
         from .api.tool_calling import convert_tools_for_template
         _msg_kwargs["tools"] = convert_tools_for_template(chat_req.tools)
+        _msg_kwargs["_vmlx_tools_present"] = True
 
     # Forward extra chat_template_kwargs to engine (exclude enable_thinking, already handled)
     if _ct_kwargs:
@@ -8696,6 +8697,7 @@ async def ollama_chat(fastapi_request: Request):
     if chat_req.tools:
         from .api.tool_calling import convert_tools_for_template
         chat_kwargs["tools"] = convert_tools_for_template(chat_req.tools)
+        chat_kwargs["_vmlx_tools_present"] = True
 
     # Extract messages (same logic as create_chat_completion)
     if engine.is_mllm:
@@ -10782,6 +10784,7 @@ async def create_chat_completion(
     # Pass merged tools to engine (normalize all to template format)
     if all_tools:
         chat_kwargs["tools"] = convert_tools_for_template(all_tools)
+        chat_kwargs["_vmlx_tools_present"] = True
 
     # Inject Harmony analysis prefix for GPT-OSS models when thinking is enabled.
     # The suffix replaces the template's generation prompt (<|start|>assistant<|message|>)
@@ -12248,12 +12251,14 @@ async def create_response(
     # Pass merged tools to engine
     if all_tools:
         chat_kwargs["tools"] = convert_tools_for_template(all_tools)
+        chat_kwargs["_vmlx_tools_present"] = True
     elif not _suppress_tools and _is_dsv4_resp_msgs and any(
         isinstance(m, dict) and m.get("role") == "tool" for m in messages
     ):
         historical_tools = _synthesize_tools_from_message_tool_calls(messages)
         if historical_tools:
             chat_kwargs["tools"] = historical_tools
+            chat_kwargs["_vmlx_tools_present"] = True
             logger.info(
                 "DSV4 (Responses): synthesized %d historical tool schema(s) "
                 "for tool-result continuation prompt context",

@@ -2863,6 +2863,62 @@ class TestNativeMtpAutodetect:
 
         assert _native_mtp_depth() == 3
 
+    def test_native_mtp_tool_request_caps_depth_to_one(self, monkeypatch, caplog):
+        from vmlx_engine.mllm_batch_generator import _native_mtp_depth_for_request
+
+        monkeypatch.delenv("VMLINUX_NATIVE_MTP_DEPTH", raising=False)
+        monkeypatch.setenv("VMLX_NATIVE_MTP_DEPTH", "3")
+
+        req = SimpleNamespace(
+            request_id="tool-depth-cap",
+            extra_kwargs={
+                "tools": [{"type": "function", "function": {"name": "record_fact"}}],
+                "tool_choice": "required",
+            },
+        )
+
+        with caplog.at_level("INFO"):
+            assert _native_mtp_depth_for_request(req) == 1
+
+        assert "MLLM native MTP depth capped to D1 for request=tool-depth-cap" in caplog.text
+
+    def test_native_mtp_tool_present_metadata_caps_depth_to_one(self, monkeypatch):
+        from vmlx_engine.mllm_batch_generator import _native_mtp_depth_for_request
+
+        monkeypatch.delenv("VMLINUX_NATIVE_MTP_DEPTH", raising=False)
+        monkeypatch.setenv("VMLINUX_NATIVE_MTP_DEPTH", "3")
+
+        req = SimpleNamespace(
+            request_id="tool-present-metadata",
+            extra_kwargs={"_vmlx_tools_present": True},
+        )
+
+        assert _native_mtp_depth_for_request(req) == 1
+
+    def test_native_mtp_rendered_tool_prompt_caps_depth_to_one(self, monkeypatch):
+        from vmlx_engine.mllm_batch_generator import _native_mtp_depth_for_request
+
+        monkeypatch.delenv("VMLINUX_NATIVE_MTP_DEPTH", raising=False)
+        monkeypatch.setenv("VMLINUX_NATIVE_MTP_DEPTH", "3")
+
+        req = SimpleNamespace(
+            request_id="rendered-tool-prompt",
+            prompt='<tools>[{"type": "function", "function": {"name": "record_fact"}}]</tools>',
+            extra_kwargs={},
+        )
+
+        assert _native_mtp_depth_for_request(req) == 1
+
+    def test_native_mtp_non_tool_request_keeps_configured_depth(self, monkeypatch):
+        from vmlx_engine.mllm_batch_generator import _native_mtp_depth_for_request
+
+        monkeypatch.delenv("VMLINUX_NATIVE_MTP_DEPTH", raising=False)
+        monkeypatch.setenv("VMLINUX_NATIVE_MTP_DEPTH", "3")
+
+        req = SimpleNamespace(request_id="plain-depth", extra_kwargs={})
+
+        assert _native_mtp_depth_for_request(req) == 3
+
     def test_mllm_native_mtp_active_row_does_not_extend_standard_batch(self):
         import mlx.core as mx
 

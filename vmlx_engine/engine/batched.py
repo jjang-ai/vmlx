@@ -1422,6 +1422,7 @@ class BatchedEngine(BaseEngine):
                 bypass_prefix_cache=bypass_prefix_cache,
                 request_id=request_id,
                 max_prompt_tokens=max_prompt_tokens,
+                _vmlx_tools_present=bool(kwargs.get("_vmlx_tools_present")),
             )
             _raise_prompt_too_long_from_output(output)
 
@@ -1548,6 +1549,7 @@ class BatchedEngine(BaseEngine):
                 enable_thinking=kwargs.get("enable_thinking"),
                 bypass_prefix_cache=bypass_prefix_cache,
                 max_prompt_tokens=max_prompt_tokens,
+                _vmlx_tools_present=bool(kwargs.get("_vmlx_tools_present")),
             )
 
             async for output in self._mllm_scheduler.stream_outputs(request_id):
@@ -1713,6 +1715,8 @@ class BatchedEngine(BaseEngine):
         # Single-turn API requests (1-2 messages: system+user) with short output
         # skip cache storage to reduce per-request overhead.
         kwargs["num_messages"] = len(messages)
+        if template_tools:
+            kwargs["_vmlx_tools_present"] = True
         if segment_boundaries:
             kwargs["segment_boundaries"] = segment_boundaries
 
@@ -1829,6 +1833,8 @@ class BatchedEngine(BaseEngine):
 
         # Pass message count for cache skip heuristic (Phase 2 optimization).
         kwargs["num_messages"] = len(messages)
+        if template_tools:
+            kwargs["_vmlx_tools_present"] = True
         if segment_boundaries:
             kwargs["segment_boundaries"] = segment_boundaries
 
