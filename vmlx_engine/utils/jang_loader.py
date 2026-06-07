@@ -991,6 +991,21 @@ def _patch_turboquant_make_cache(model, jang_cfg: dict, model_config: dict):
         )
         return
 
+    def _is_mimo_v2_config(cfg: dict) -> bool:
+        candidates = [cfg]
+        text_cfg = cfg.get("text_config") if isinstance(cfg.get("text_config"), dict) else None
+        if text_cfg is not None:
+            candidates.append(text_cfg)
+        return any(str(candidate.get("model_type", "")).lower() == "mimo_v2" for candidate in candidates)
+
+    if _is_mimo_v2_config(model_config):
+        logger.info(
+            "  TurboQuant KV skipped: MiMo-V2 uses native asymmetric full/SWA "
+            "RotatingKVCache metadata; flat generic TQ-KV would violate the "
+            "mixed_swa_kv_v1 cache contract."
+        )
+        return
+
     def _has_mixed_attention_layout(cfg: dict) -> bool:
         candidates = [cfg]
         text_cfg = cfg.get("text_config") if isinstance(cfg.get("text_config"), dict) else None

@@ -7197,6 +7197,77 @@ class TestStartupCompatibilityGuards:
             "RotatingKVCache",
         ]
 
+    def test_jang_loader_skips_turboquant_for_mimo_v2_by_config(self, monkeypatch):
+        """MiMo must not flatten mixed full/SWA cache even if cache probing is stale."""
+        from vmlx_engine.utils.jang_loader import _patch_turboquant_make_cache
+
+        class FakeCache:
+            pass
+
+        class FakeModel:
+            layers = [object()] * 48
+
+            def make_cache(self):
+                return [FakeCache()] * 48
+
+        model = FakeModel()
+        monkeypatch.setenv("VMLINUX_FORCE_TQ_AUTO", "1")
+        monkeypatch.delenv("VMLINUX_DISABLE_TQ_KV", raising=False)
+
+        _patch_turboquant_make_cache(
+            model,
+            {},
+            {
+                "model_type": "mimo_v2",
+                "num_hidden_layers": 48,
+                "head_dim": 192,
+                "v_head_dim": 128,
+                "num_attention_heads": 64,
+                "num_key_value_heads": 4,
+            },
+        )
+
+        assert model.make_cache.__func__ is FakeModel.make_cache
+        assert [type(c).__name__ for c in model.make_cache()] == ["FakeCache"] * 48
+
+    def test_tokenizer_skips_turboquant_for_mimo_v2_by_config(
+        self,
+        tmp_path,
+        monkeypatch,
+    ):
+        """Standard auto-TQ path must also preserve MiMo native mixed-SWA cache."""
+        from vmlx_engine.utils.tokenizer import _apply_turboquant_to_model
+
+        (tmp_path / "config.json").write_text(
+            json.dumps(
+                {
+                    "model_type": "mimo_v2",
+                    "num_hidden_layers": 48,
+                    "head_dim": 192,
+                    "v_head_dim": 128,
+                    "num_attention_heads": 64,
+                    "num_key_value_heads": 4,
+                }
+            )
+        )
+
+        class FakeCache:
+            pass
+
+        class FakeModel:
+            layers = [object()] * 48
+
+            def make_cache(self):
+                return [FakeCache()] * 48
+
+        model = FakeModel()
+        monkeypatch.delenv("VMLINUX_DISABLE_TQ_KV", raising=False)
+
+        _apply_turboquant_to_model(model, str(tmp_path))
+
+        assert model.make_cache.__func__ is FakeModel.make_cache
+        assert [type(c).__name__ for c in model.make_cache()] == ["FakeCache"] * 48
+
     def test_vmlx_env_prefix_is_canonical_for_ssm_cache_budget(self):
         """New cache env knobs should use VMLX_, with typo fallback only."""
         cli_source = Path("./vmlx_engine/cli.py").read_text()

@@ -142,6 +142,18 @@ def _apply_turboquant_to_model(model, model_path: str):
         config = json.loads(config_path.read_text())
         text_cfg = config.get("text_config", config)
 
+        if any(
+            str(candidate.get("model_type", "")).lower() == "mimo_v2"
+            for candidate in (config, text_cfg)
+            if isinstance(candidate, dict)
+        ):
+            logger.info(
+                "  TurboQuant skipped: MiMo-V2 uses native asymmetric full/SWA "
+                "RotatingKVCache metadata; flat generic TQ-KV would violate the "
+                "mixed_swa_kv_v1 cache contract."
+            )
+            return
+
         # Use the model's native cache contract, not len(model.layers).
         # Ling/Bailing appends MTP heads to model.layers but normal generation
         # intentionally skips them. Counting layers here creates an unused KV
