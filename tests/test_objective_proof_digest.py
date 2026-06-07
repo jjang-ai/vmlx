@@ -3877,7 +3877,7 @@ def test_objective_proof_digest_summarizes_dsv4_exact_code_root_boundary(
         not in joined_evidence
     )
     assert (
-        "current-dsv4-route-mode-code-exactness-dryrun-20260528-current-cohesive-audit.json"
+        "current-dsv4-route-mode-code-exactness-bundled-after-bundle-refresh-20260606.json"
         in joined_evidence
     )
     assert "true_bundled_jangtqk_direct_off_recheck" in summary[
