@@ -4692,6 +4692,26 @@ def _validate_current_issue179_minimax_k_root_cause_audit(root: Path) -> dict[st
             result["failures"].append("local_reporter_prompt_bad_text_captured")
     result["local_reporter_prompt_reproduction"] = local_reporter_prompt
 
+    local_cancel_probe = payload.get("local_responses_cancel_probe")
+    if not isinstance(local_cancel_probe, dict):
+        result["failures"].append("missing_local_responses_cancel_probe")
+    else:
+        if local_cancel_probe.get("status") != "pass":
+            result["failures"].append("local_responses_cancel_probe_not_pass")
+        if local_cancel_probe.get("response_id_seen") is not True:
+            result["failures"].append("local_responses_cancel_probe_missing_response_id")
+        if local_cancel_probe.get("cancel_status") != 200:
+            result["failures"].append("local_responses_cancel_probe_cancel_not_200")
+        probe = local_cancel_probe.get("probe")
+        if not isinstance(probe, dict):
+            result["failures"].append("local_responses_cancel_probe_missing_probe")
+        else:
+            if probe.get("cancel_route_present") is not True:
+                result["failures"].append("local_responses_cancel_route_not_present")
+            if probe.get("bad_text_captured") is not False:
+                result["failures"].append("local_responses_cancel_bad_text_captured")
+    result["local_responses_cancel_probe"] = local_cancel_probe
+
     reporter_parity = payload.get("reporter_parity_artifact")
     required_reporter_parity_fields = {
         "capture_provenance",

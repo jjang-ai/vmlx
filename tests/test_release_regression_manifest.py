@@ -1988,6 +1988,18 @@ def _write_expected_issue179_minimax_k_root_cause_audit(root: Path) -> None:
                     },
                     "clean": True,
                 },
+                "local_responses_cancel_probe": {
+                    "path": "build/current-issue179-minimax-k-responses-cancel-probe-after-mimo-dsv4-ledger-20260607.json",
+                    "exists": True,
+                    "status": "pass",
+                    "response_id_seen": True,
+                    "cancel_status": 200,
+                    "probe": {
+                        "abort_boundary": "controlled_cancel_after_response_id",
+                        "bad_text_captured": False,
+                        "cancel_route_present": True,
+                    },
+                },
                 "reporter_parity_artifact": {
                     "path": "build/issue-179/reporter-parity-metadata-20260527.json",
                     "exists": True,
@@ -2258,6 +2270,36 @@ def test_current_proof_sweep_rejects_issue179_missing_reporter_parity_artifact_c
     ]
 
     assert "missing_reporter_parity_artifact_contract" in result["failures"]
+
+
+def test_current_proof_sweep_rejects_issue179_missing_local_responses_cancel_probe(tmp_path):
+    _write_expected_issue179_minimax_k_root_cause_audit(tmp_path)
+    path = tmp_path / CURRENT_ISSUE179_MINIMAX_K_ROOT_CAUSE_AUDIT_ARTIFACT
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload.pop("local_responses_cancel_probe")
+    path.write_text(json.dumps(payload) + "\n", encoding="utf-8")
+
+    result = validate_current_proof_sweep_artifacts(tmp_path)[
+        "issue179_minimax_k_root_cause_audit"
+    ]
+
+    assert "missing_local_responses_cancel_probe" in result["failures"]
+
+
+def test_current_proof_sweep_rejects_issue179_failed_local_responses_cancel_probe(tmp_path):
+    _write_expected_issue179_minimax_k_root_cause_audit(tmp_path)
+    path = tmp_path / CURRENT_ISSUE179_MINIMAX_K_ROOT_CAUSE_AUDIT_ARTIFACT
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["local_responses_cancel_probe"]["cancel_status"] = 404
+    payload["local_responses_cancel_probe"]["probe"]["bad_text_captured"] = True
+    path.write_text(json.dumps(payload) + "\n", encoding="utf-8")
+
+    result = validate_current_proof_sweep_artifacts(tmp_path)[
+        "issue179_minimax_k_root_cause_audit"
+    ]
+
+    assert "local_responses_cancel_probe_cancel_not_200" in result["failures"]
+    assert "local_responses_cancel_bad_text_captured" in result["failures"]
 
 
 def test_current_proof_sweep_rejects_issue179_missing_reporter_parity_comparison(tmp_path):
