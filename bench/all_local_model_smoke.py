@@ -432,13 +432,15 @@ def _zaya_cache_payload(model: str, prompt: str, max_tokens: int) -> dict[str, A
 def _required_tool_payload(model: str, max_tokens: int, *, prompt_style: str = "natural") -> dict[str, Any]:
     if prompt_style == "json_call":
         tool_prompt = (
-            "Call function record_fact with JSON arguments "
-            '{"value":"blue-cat"}. Return no prose.'
+            "Call function record_fact with exactly these JSON arguments and "
+            'no other value: {"value":"blue-cat"}. The string blue-cat is a '
+            "literal value; include the hyphen and the letters cat. Return no prose."
         )
     else:
         tool_prompt = (
-            "Use the record_fact tool exactly once with value blue-cat. "
-            "Do not answer in visible text."
+            "Use the record_fact tool exactly once. Its value argument must be "
+            'the literal string "blue-cat"; include the hyphen and the letters '
+            "cat. Do not answer in visible text."
         )
     return {
         "model": model,
@@ -483,8 +485,9 @@ def _tool_result_continuation_payload(model: str, max_tokens: int) -> dict[str, 
             {
                 "role": "user",
                 "content": (
-                    "Use the record_fact tool exactly once with value blue-cat. "
-                    "Do not answer in visible text."
+                    "Use the record_fact tool exactly once. Its value argument "
+                    'must be the literal string "blue-cat"; include the hyphen '
+                    "and the letters cat. Do not answer in visible text."
                 ),
             },
             {
@@ -511,7 +514,8 @@ def _tool_result_continuation_payload(model: str, max_tokens: int) -> dict[str, 
                 "role": "user",
                 "content": (
                     "The tool has completed. Do not call another tool. "
-                    "Reply with exactly: STORED blue-cat"
+                    'Reply with exactly: STORED blue-cat. Include the hyphen '
+                    "and the letters cat."
                 ),
             },
         ],
@@ -549,7 +553,9 @@ def _strict_json_payload(model: str, max_tokens: int) -> dict[str, Any]:
             {
                 "role": "user",
                 "content": (
-                    "Return exactly this JSON object and nothing else: "
+                    "Return exactly this JSON object and nothing else, preserving "
+                    "the literal string blue-cat including the hyphen and the "
+                    "letters cat: "
                     "{\"status\":\"ok\",\"value\":\"blue-cat\",\"count\":3}"
                 ),
             }
