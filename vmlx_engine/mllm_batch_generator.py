@@ -4146,6 +4146,23 @@ class MLLMBatchGenerator:
         # None for text-only models routed through MLLM path (e.g., smelt) and
         # silently skipped chunking, falling through to the OOM-prone
         # single-shot `self.model(input_ids, **kwargs)` at the bottom.
+        _tight_text_prefill_step_size = self.prefill_step_size
+        if (
+            not has_images
+            and cache is not None
+            and bool(getattr(self, "_tight_memory_prefill_drain", False))
+        ):
+            try:
+                _tight_text_prefill_step_size = max(
+                    16,
+                    min(
+                        int(self.prefill_step_size),
+                        int(os.environ.get("VMLINUX_TIGHT_MEMORY_PREFILL_STEP_SIZE", "128")),
+                    ),
+                )
+            except Exception:
+                _tight_text_prefill_step_size = min(int(self.prefill_step_size), 128)
+
         if not has_images and self._model_type == "mimo_v2":
             lm = self.language_model
             if lm is not None and cache is not None:
@@ -4233,12 +4250,24 @@ class MLLMBatchGenerator:
                             )
                             _materialize_prefill_cache_state(cache)
                     elif final_start > 0:
-                        _call_lm_prefix_without_logits(
-                            lm,
-                            input_ids[:, :final_start],
-                            _lm_kwargs_for(0, final_start),
-                        )
-                        _materialize_prefill_cache_state(cache)
+                        _processed_prefix = 0
+                        while _processed_prefix < final_start:
+                            _prefix_end = min(
+                                final_start,
+                                _processed_prefix + _tight_text_prefill_step_size,
+                            )
+                            _call_lm_prefix_without_logits(
+                                lm,
+                                input_ids[:, _processed_prefix:_prefix_end],
+                                _lm_kwargs_for(_processed_prefix, _prefix_end),
+                            )
+                            _materialize_prefill_cache_state(cache)
+                            _processed_prefix = _prefix_end
+                            if (
+                                _tight_text_prefill_step_size < self.prefill_step_size
+                                and not os.environ.get("VMLX_PREFILL_KEEP_ALLOC")
+                            ):
+                                mx.clear_cache()
                     output = lm(
                         input_ids[:, final_start:],
                         **_lm_kwargs_for(final_start, seq_len),
@@ -4255,7 +4284,13 @@ class MLLMBatchGenerator:
         # have been verified cache-aware (Qwen3.5 GatedDeltaNet + attention).
         if (
             not has_images
-            and seq_len > self.prefill_step_size * 2
+            and (
+                seq_len > self.prefill_step_size * 2
+                or (
+                    _tight_text_prefill_step_size < self.prefill_step_size
+                    and seq_len > _tight_text_prefill_step_size + 1
+                )
+            )
             and (not _hybrid_blocks_chunk or _native_mtp_hybrid_text_split)
         ):
             # Use language_model directly for chunked text prefill
@@ -4298,7 +4333,7 @@ class MLLMBatchGenerator:
                     "VMLX_PREFILL_KEEP_ALLOC", ""
                 ).lower() in {"1", "true", "yes", "on"}
                 while processed < seq_len - 1:  # -1: keep last token for final logits
-                    chunk_size = min(self.prefill_step_size, seq_len - 1 - processed)
+                    chunk_size = min(_tight_text_prefill_step_size, seq_len - 1 - processed)
                     while (
                         _boundary_idx < len(_sorted_boundaries)
                         and (

@@ -34,6 +34,18 @@ def test_mllm_scheduler_does_not_shadow_hashlib_in_init():
     assert "hashlib.sha256" in source
 
 
+def test_mllm_tight_memory_text_prefill_chunks_short_tool_prompts():
+    """Tight-memory text-only MLLM prefill must not fall back to one-shot LM."""
+    import inspect
+    import vmlx_engine.mllm_batch_generator as mbg
+
+    source = inspect.getsource(mbg)
+
+    assert "VMLINUX_TIGHT_MEMORY_PREFILL_STEP_SIZE" in source
+    assert "seq_len > _tight_text_prefill_step_size + 1" in source
+    assert "chunk_size = min(_tight_text_prefill_step_size" in source
+
+
 def test_mimo_v2_cache_extraction_preserves_swa_kv_heads():
     """MiMo full/SWA layers have different legal KV head counts.
 
