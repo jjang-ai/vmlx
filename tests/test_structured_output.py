@@ -6,6 +6,8 @@ Tests the JSON parsing, validation, and response_format handling.
 """
 
 import json
+from pathlib import Path
+
 import pytest
 from vmlx_engine.api.tool_calling import (
     validate_json_schema,
@@ -575,6 +577,20 @@ class TestStructuredOutputApiRepair:
         assert json.loads(response.choices[0].message.content) == {
             "visible_text": ["CLIPFARM STRESS STREAM", "0-15 M00 ALERT START"]
         }
+        assert response.warnings
+        assert "structured output JSON was repaired after generation" in response.warnings[0]
+        assert "syntax_repair" in response.warnings[0]
+        assert "not guided or constrained decoding" in response.warnings[0]
+
+    def test_server_wires_structured_repair_warnings_for_chat_and_responses(self):
+        source = Path("vmlx_engine/server.py").read_text(encoding="utf-8")
+
+        assert "repair_json_output" in source
+        assert "_structured_output_repair_warning" in source
+        assert "structured_output_warnings" in source
+        assert "warnings=response_warnings" in source
+        assert "structured_output_warnings," in source
+        assert "This is post-generation repair, not guided or constrained decoding" in source
 
 
 # Integration test - run only if model available

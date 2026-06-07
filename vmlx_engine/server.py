@@ -116,6 +116,7 @@ from .api.tool_calling import (
     build_json_system_prompt,
     convert_tools_for_template,
     parse_json_output,
+    repair_json_output,
     parse_tool_calls,
 )
 from .api.utils import (
@@ -10999,10 +11000,18 @@ async def create_chat_completion(
         )
     )
 
+    structured_output_warnings: list[str] | None = None
+
     # Process response_format if specified
     if response_format and not tool_calls:
-        cleaned_text, parsed_json, is_valid, error = parse_json_output(
+        _structured_report = repair_json_output(
             cleaned_text or content_for_parsing, response_format
+        )
+        parsed_json = _structured_report.get("parsed")
+        is_valid = bool(_structured_report.get("is_valid"))
+        error = _structured_report.get("error")
+        structured_output_warnings = _structured_output_repair_warning(
+            _structured_report
         )
         if parsed_json is not None:
             # Return JSON as string
@@ -11045,10 +11054,13 @@ async def create_chat_completion(
     if response_content:
         response_content = _finalize_visible_text_for_request(response_content, request)
     response_content = _drop_tool_visible_channel_marker(response_content, tool_calls)
-    response_warnings = _chat_completion_warnings_for_reasoning_only(
-        response_content,
-        reasoning_text,
-        tool_calls,
+    response_warnings = _merge_responses_warnings(
+        _chat_completion_warnings_for_reasoning_only(
+            response_content,
+            reasoning_text,
+            tool_calls,
+        ),
+        structured_output_warnings,
     )
 
     response = ChatCompletionResponse(
@@ -11332,6 +11344,22 @@ def _merge_responses_warnings(*warning_lists: list[str] | None) -> list[str] | N
             seen.add(text)
             merged.append(text)
     return merged or None
+
+
+def _structured_output_repair_warning(report: dict | None) -> list[str] | None:
+    if not isinstance(report, dict) or report.get("repair_needed") is not True:
+        return None
+    actions = [
+        str(action)
+        for action in report.get("repair_actions", [])
+        if str(action).strip()
+    ]
+    action_text = ", ".join(actions) if actions else "unknown"
+    return [
+        "structured output JSON was repaired after generation "
+        f"before returning it to the client; repair_actions={action_text}. "
+        "This is post-generation repair, not guided or constrained decoding."
+    ]
 
 
 def _responses_get_history(response_id: str | None) -> list[dict]:
@@ -12576,6 +12604,8 @@ async def create_response(
             cleaned_text = ""
             reasoning_text = clean_output_text(_tc_cleaned).strip() or None
 
+    structured_output_warnings: list[str] | None = None
+
     # Process text format (json_schema with strict) if specified — mirrors Chat Completions behavior
     _text_format = request.text if hasattr(request, "text") else None
     if _text_format and hasattr(_text_format, "model_dump"):
@@ -12591,8 +12621,14 @@ async def create_response(
         if _rf_type in ("json_schema", "json_object"):
             response_format = _text_format
             _out_text = cleaned_text or content_for_parsing
-            _out_text, parsed_json, is_valid, error = parse_json_output(
+            _structured_report = repair_json_output(
                 _out_text, response_format
+            )
+            parsed_json = _structured_report.get("parsed")
+            is_valid = bool(_structured_report.get("is_valid"))
+            error = _structured_report.get("error")
+            structured_output_warnings = _structured_output_repair_warning(
+                _structured_report
             )
             if parsed_json is not None:
                 cleaned_text = json.dumps(parsed_json)
@@ -12681,6 +12717,7 @@ async def create_response(
         warnings=_merge_responses_warnings(
             _chain_warnings_for_previous_response_id(request.previous_response_id),
             _current_response_warnings_for_reasoning_only(_reasoning_only),
+            structured_output_warnings,
         ),
     )
     _responses_store_history(
