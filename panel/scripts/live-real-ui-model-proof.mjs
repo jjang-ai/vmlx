@@ -32,6 +32,14 @@ const promptOneOverride = process.env.VMLINUX_REAL_UI_PROMPT_1
 const promptTwoOverride = process.env.VMLINUX_REAL_UI_PROMPT_2
   || process.env.VMLX_REAL_UI_PROMPT_2
 const requestMaxTokens = Number(process.env.VMLINUX_REAL_UI_MAX_TOKENS || process.env.VMLX_REAL_UI_MAX_TOKENS || '96')
+const requestMaxPromptTokensRaw = process.env.VMLINUX_REAL_UI_MAX_PROMPT_TOKENS
+  || process.env.VMLX_REAL_UI_MAX_PROMPT_TOKENS
+  || process.env.VMLINUX_REAL_UI_MAX_CONTEXT_TOKENS
+  || process.env.VMLX_REAL_UI_MAX_CONTEXT_TOKENS
+  || ''
+const requestMaxPromptTokens = requestMaxPromptTokensRaw
+  ? Number(requestMaxPromptTokensRaw)
+  : null
 
 function envBool(name, fallback = false) {
   const value = process.env[name] ?? process.env[name.replace('VMLINUX_', 'VMLX_')]
@@ -449,6 +457,9 @@ function startRealServer(port, outDir) {
     '--default-enable-thinking',
     'false',
   ]
+  if (Number.isFinite(requestMaxPromptTokens) && requestMaxPromptTokens > 0) {
+    args.push('--max-prompt-tokens', String(Math.floor(requestMaxPromptTokens)))
+  }
   if (builtinToolsEnabled) {
     args.push('--enable-auto-tool-choice', '--tool-call-parser', 'auto')
   }
@@ -1424,6 +1435,7 @@ async function main() {
           promptOne,
           promptTwo,
           requestMaxTokens,
+          requestMaxPromptTokens,
           maxToolIterations,
           toolResultMaxChars,
           wireApi,
@@ -1650,6 +1662,7 @@ async function main() {
         promptOne,
         promptTwo,
         requestMaxTokens,
+        requestMaxPromptTokens,
         maxToolIterations,
         toolResultMaxChars,
         wireApi,

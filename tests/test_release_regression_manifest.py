@@ -4385,6 +4385,7 @@ def test_release_regression_manifest_real_ui_script_records_request_contract():
     assert "promptOne" in result_block
     assert "promptTwo" in result_block
     assert "requestMaxTokens" in result_block
+    assert "requestMaxPromptTokens" in result_block
     assert "maxToolIterations" in result_block
     assert "toolResultMaxChars" in result_block
     assert "imageExpectRegex" in result_block
@@ -4405,6 +4406,7 @@ def test_release_regression_manifest_real_ui_script_records_request_contract_on_
     assert "promptOne" in failure_block
     assert "promptTwo" in failure_block
     assert "requestMaxTokens" in failure_block
+    assert "requestMaxPromptTokens" in failure_block
     assert "maxToolIterations" in failure_block
     assert "toolResultMaxChars" in failure_block
     assert "wireApi" in failure_block
