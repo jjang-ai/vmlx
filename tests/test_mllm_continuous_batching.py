@@ -212,6 +212,149 @@ def test_mimo_batched_thinking_on_sampler_does_not_suppress_eos():
     assert int(sampler(logits).item()) == 9
 
 
+def test_mimo_required_tool_sampler_forces_xml_function_prefix():
+    """MiMo required tools should constrain only the native XML scaffold."""
+    from types import SimpleNamespace
+
+    import mlx.core as mx
+
+    from vmlx_engine.mllm_batch_generator import MLLMBatchGenerator, MLLMBatchRequest
+
+    target = "<tool_call>\n<function=record_fact>\n<parameter=value>"
+    target_ids = [5, 6, 7]
+
+    class _Tokenizer:
+        eos_token_id = 99
+
+        def encode(self, text, add_special_tokens=False):
+            if text == target:
+                return list(target_ids)
+            if text == "<think>":
+                return [1]
+            if text == "</think>":
+                return [2]
+            if text == "<|im_end|>":
+                return [99]
+            return [3]
+
+    generator = MLLMBatchGenerator.__new__(MLLMBatchGenerator)
+    generator._model_type = "mimo_v2"
+    generator.processor = SimpleNamespace(tokenizer=_Tokenizer())
+
+    req = MLLMBatchRequest(
+        uid=0,
+        request_id="mimo-tool",
+        prompt="prompt",
+        temperature=0.0,
+        enable_thinking=False,
+    )
+    req.input_ids = mx.array([[101, 102]])
+    req.extra_kwargs = {
+        "_vmlx_tool_choice": "required",
+        "_vmlx_template_tools": [
+            {
+                "type": "function",
+                "function": {
+                    "name": "record_fact",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"value": {"type": "string"}},
+                        "required": ["value"],
+                    },
+                },
+            }
+        ],
+    }
+
+    sampler = generator._make_request_sampler(req)
+    logits = mx.zeros((1, 120))
+    logits = logits.at[:, 42].add(100.0)
+    assert int(sampler(logits).item()) == 5
+
+    req._sampler_current_input_token = 5
+    logits = mx.zeros((1, 120))
+    logits = logits.at[:, 42].add(100.0)
+    assert int(sampler(logits).item()) == 6
+
+    req.output_tokens.append(5)
+    req.output_tokens.extend([6, 7])
+    req._sampler_current_input_token = None
+    logits = mx.zeros((1, 120))
+    logits = logits.at[:, 42].add(100.0)
+    assert int(sampler(logits).item()) == 42
+
+
+def test_mimo_auto_tool_sampler_does_not_force_xml_prefix():
+    """MiMo XML prefix forcing is only for tool_choice=required."""
+    from types import SimpleNamespace
+
+    import mlx.core as mx
+
+    from vmlx_engine.mllm_batch_generator import MLLMBatchGenerator, MLLMBatchRequest
+
+    class _Tokenizer:
+        eos_token_id = 99
+
+        def encode(self, text, add_special_tokens=False):
+            if text.startswith("<tool_call>"):
+                return [5, 6, 7]
+            if text == "<think>":
+                return [1]
+            if text == "</think>":
+                return [2]
+            if text == "<|im_end|>":
+                return [99]
+            return [3]
+
+    generator = MLLMBatchGenerator.__new__(MLLMBatchGenerator)
+    generator._model_type = "mimo_v2"
+    generator.processor = SimpleNamespace(tokenizer=_Tokenizer())
+
+    req = MLLMBatchRequest(
+        uid=0,
+        request_id="mimo-auto-tool",
+        prompt="prompt",
+        temperature=0.0,
+        enable_thinking=False,
+    )
+    req.input_ids = mx.array([[101, 102]])
+    req.extra_kwargs = {
+        "tool_choice": "auto",
+        "_vmlx_template_tools": [
+            {
+                "type": "function",
+                "function": {
+                    "name": "record_fact",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"value": {"type": "string"}},
+                        "required": ["value"],
+                    },
+                },
+            }
+        ],
+    }
+
+    sampler = generator._make_request_sampler(req)
+    logits = mx.zeros((1, 120))
+    logits = logits.at[:, 42].add(100.0)
+    assert int(sampler(logits).item()) == 42
+
+
+def test_mllm_prefill_keeps_extra_kwargs_for_decode_processors():
+    """Request policy metadata must survive prefill into decode sampling."""
+    import inspect
+
+    from vmlx_engine.mllm_batch_generator import MLLMBatchGenerator
+
+    source = inspect.getsource(MLLMBatchGenerator._process_prompts)
+    cleanup_index = source.index("req.pixel_values = None")
+    sampler_index = source.index("req_sampler = self._make_request_sampler(req)")
+    normal_prefill_cleanup = source[cleanup_index:sampler_index]
+    assert "req.extra_kwargs = {}" not in normal_prefill_cleanup
+    assert "_vmlx_tool_choice" in normal_prefill_cleanup
+
+
 class TestMLLMBatchResponse:
     """Tests for MLLMBatchResponse dataclass."""
 

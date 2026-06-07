@@ -1423,6 +1423,8 @@ class BatchedEngine(BaseEngine):
                 request_id=request_id,
                 max_prompt_tokens=max_prompt_tokens,
                 _vmlx_tools_present=bool(kwargs.get("_vmlx_tools_present")),
+                _vmlx_template_tools=kwargs.get("_vmlx_template_tools"),
+                _vmlx_tool_choice=kwargs.get("tool_choice"),
             )
             _raise_prompt_too_long_from_output(output)
 
@@ -1550,6 +1552,8 @@ class BatchedEngine(BaseEngine):
                 bypass_prefix_cache=bypass_prefix_cache,
                 max_prompt_tokens=max_prompt_tokens,
                 _vmlx_tools_present=bool(kwargs.get("_vmlx_tools_present")),
+                _vmlx_template_tools=kwargs.get("_vmlx_template_tools"),
+                _vmlx_tool_choice=kwargs.get("tool_choice"),
             )
 
             async for output in self._mllm_scheduler.stream_outputs(request_id):
@@ -1717,6 +1721,7 @@ class BatchedEngine(BaseEngine):
         kwargs["num_messages"] = len(messages)
         if template_tools:
             kwargs["_vmlx_tools_present"] = True
+            kwargs["_vmlx_template_tools"] = template_tools
         if segment_boundaries:
             kwargs["segment_boundaries"] = segment_boundaries
 
@@ -1835,6 +1840,7 @@ class BatchedEngine(BaseEngine):
         kwargs["num_messages"] = len(messages)
         if template_tools:
             kwargs["_vmlx_tools_present"] = True
+            kwargs["_vmlx_template_tools"] = template_tools
         if segment_boundaries:
             kwargs["segment_boundaries"] = segment_boundaries
 

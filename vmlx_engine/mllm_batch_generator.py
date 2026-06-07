@@ -5332,7 +5332,22 @@ class MLLMBatchGenerator:
                 req.pixel_values = None
                 req.attention_mask = None
                 req.image_grid_thw = None
-                req.extra_kwargs = {}
+                # Keep small request-policy metadata for decode-time processors.
+                # MiMo required-tool guided decoding needs `_vmlx_tool_choice`
+                # and `_vmlx_template_tools` after prefill; clearing
+                # `extra_kwargs` here made the sampler blind to tool policy.
+                keep_extra_keys = {
+                    "_vmlx_tool_choice",
+                    "_vmlx_template_tools",
+                    "_vmlx_tools_present",
+                    "tool_choice",
+                    "tools",
+                }
+                req.extra_kwargs = {
+                    key: value
+                    for key, value in (req.extra_kwargs or {}).items()
+                    if key in keep_extra_keys
+                }
 
                 # All post-prefill materialization (logits eval, sampler,
                 # cache state submission, .item()) MUST run inside the
@@ -5902,6 +5917,8 @@ class MLLMBatchGenerator:
 
         if self._model_type == "mimo_v2" and request.enable_thinking is False:
             logits_processors.extend(self._mimo_v2_thinking_off_logits_processors(request))
+        if self._model_type == "mimo_v2":
+            logits_processors.extend(self._mimo_v2_required_tool_prefix_processors(request))
 
         # Apply repetition penalty if set for this request
         rep_penalty = getattr(request, "repetition_penalty", 1.0)
@@ -6014,6 +6031,149 @@ class MLLMBatchGenerator:
             processors.append(_suppress_first_token_eos)
 
         return processors
+
+    def _mimo_v2_required_tool_prefix_processors(
+        self,
+        request: MLLMBatchRequest,
+    ) -> list[Callable[[mx.array, mx.array], mx.array]]:
+        """Constrain MiMo required-tool decode to the native XML prefix.
+
+        This is guided decoding for the structural XML scaffold only. It does
+        not infer tool arguments from user text and does not synthesize a tool
+        call after generation. Once the model has emitted:
+
+            <tool_call>
+            <function=name>
+            <parameter=field>
+
+        the processor releases logits so the model must still generate the
+        parameter value and closing XML itself.
+        """
+
+        extra = getattr(request, "extra_kwargs", {}) or {}
+        if (
+            extra.get("_vmlx_tools_present")
+            or extra.get("_vmlx_template_tools")
+            or extra.get("_vmlx_tool_choice")
+            or extra.get("tool_choice")
+        ):
+            logger.debug(
+                "MiMo required XML tool prefix inputs for %s: keys=%s choice=%r tools=%d",
+                request.request_id,
+                sorted(str(key) for key in extra.keys()),
+                extra.get("tool_choice", extra.get("_vmlx_tool_choice")),
+                len(extra.get("_vmlx_template_tools") or extra.get("tools") or []),
+            )
+        tool_choice = extra.get("tool_choice", extra.get("_vmlx_tool_choice"))
+        if isinstance(tool_choice, dict):
+            required = tool_choice.get("type") == "required"
+        else:
+            required = str(tool_choice or "").lower() == "required"
+        if not required:
+            return []
+
+        tools = extra.get("_vmlx_template_tools") or extra.get("tools") or []
+        if not tools:
+            return []
+
+        tokenizer = getattr(self.processor, "tokenizer", self.processor)
+
+        def _function_payload(tool: Any) -> dict[str, Any]:
+            if not isinstance(tool, dict):
+                return {}
+            nested = tool.get("function")
+            if isinstance(nested, dict):
+                return nested
+            if tool.get("type") == "function":
+                return tool
+            return {}
+
+        def _encode_prefix(text: str) -> list[int]:
+            try:
+                encoded = tokenizer.encode(text, add_special_tokens=False)
+            except TypeError:
+                encoded = tokenizer.encode(text)
+            except Exception:
+                return []
+            out: list[int] = []
+            for token_id in encoded:
+                try:
+                    out.append(int(token_id))
+                except Exception:
+                    return []
+            return out
+
+        target_prefixes: list[list[int]] = []
+        for tool in tools:
+            fn = _function_payload(tool)
+            name = fn.get("name")
+            if not isinstance(name, str) or not name:
+                continue
+            params = fn.get("parameters") if isinstance(fn.get("parameters"), dict) else {}
+            props = params.get("properties", {}) if isinstance(params, dict) else {}
+            required_fields = params.get("required", []) if isinstance(params, dict) else []
+            ordered_fields = [
+                field for field in required_fields
+                if isinstance(field, str) and field in props
+            ]
+            if not ordered_fields:
+                ordered_fields = [field for field in props if isinstance(field, str)]
+            if not ordered_fields:
+                ordered_fields = ["value"]
+            for field in ordered_fields[:1]:
+                prefix = _encode_prefix(
+                    f"<tool_call>\n<function={name}>\n<parameter={field}>"
+                )
+                if prefix:
+                    target_prefixes.append(prefix)
+
+        if not target_prefixes:
+            logger.debug(
+                "MiMo required XML tool prefix constraint inactive for %s: "
+                "no encodable target prefixes from %d tool(s)",
+                request.request_id,
+                len(tools),
+            )
+            return []
+
+        logger.debug(
+            "MiMo required XML tool prefix constraint active for %s: "
+            "%d target prefix(es), first length=%d",
+            request.request_id,
+            len(target_prefixes),
+            len(target_prefixes[0]),
+        )
+
+        def _force_xml_tool_prefix(_, logits, _request=request, _targets=target_prefixes):
+            output = [int(token_id) for token_id in getattr(_request, "output_tokens", [])]
+            current_input = getattr(_request, "_sampler_current_input_token", None)
+            if current_input is not None:
+                try:
+                    current_input = int(current_input)
+                    if not output or output[-1] != current_input:
+                        output.append(current_input)
+                except Exception:
+                    pass
+            allowed: set[int] = set()
+            for target in _targets:
+                if len(output) >= len(target):
+                    continue
+                if output == target[: len(output)]:
+                    allowed.add(int(target[len(output)]))
+            if not allowed:
+                return logits
+            vocab = int(logits.shape[-1])
+            valid = sorted(token_id for token_id in allowed if 0 <= token_id < vocab)
+            if not valid:
+                return logits
+            columns = mx.arange(vocab)
+            mask = columns == int(valid[0])
+            for token_id in valid[1:]:
+                mask = mask | (columns == int(token_id))
+            masked_out = mx.full(logits.shape, -float("inf"), dtype=logits.dtype)
+            return mx.where(mask.reshape(1, -1), logits, masked_out)
+
+        return [_force_xml_tool_prefix]
 
     def _native_mtp_disabled_reason_for_request(self, request: MLLMBatchRequest) -> Optional[str]:
         """Return a per-request native-MTP gate reason, or None when enabled."""
@@ -6434,6 +6594,15 @@ class MLLMBatchGenerator:
         # full-vocab logsoftmax every decode token on the default fast path.
         batch = self.active_batch
         if batch and len(batch.requests) == logits.shape[0]:
+            try:
+                current_input_tokens = input_tokens[:, -1].tolist()
+            except Exception:
+                current_input_tokens = []
+            for req, token_id in zip(batch.requests, current_input_tokens):
+                try:
+                    req._sampler_current_input_token = int(token_id)
+                except Exception:
+                    pass
             if _batch_shares_sampler_params(batch.requests):
                 shared_sampler = self._make_request_sampler(batch.requests[0])
                 sampled = shared_sampler(logits)

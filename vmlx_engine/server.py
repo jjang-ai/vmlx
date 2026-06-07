@@ -10722,6 +10722,8 @@ async def create_chat_completion(
     # Handle tool_choice: "none" suppresses tools entirely, "auto"/None is default,
     # "required" or specific tool dict are handled post-generation.
     _tool_choice = request.tool_choice
+    if _tool_choice is not None:
+        chat_kwargs["tool_choice"] = _tool_choice
     _suppress_tools = _tool_choice == "none"
 
     # response_format = json_object / json_schema implies the output IS the
@@ -12162,6 +12164,8 @@ async def create_response(
     # Handle tool_choice: "none" suppresses tools entirely, "auto"/None is default,
     # "required" or specific tool dict are handled post-generation.
     _tool_choice = request.tool_choice
+    if _tool_choice is not None:
+        chat_kwargs["tool_choice"] = _tool_choice
     _suppress_tools = _tool_choice == "none"
 
     # response_format = json_object / json_schema implies the output IS the
