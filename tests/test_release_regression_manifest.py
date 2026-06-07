@@ -3289,7 +3289,18 @@ def _write_passing_mimo_v2_root_cause_artifacts(root: Path) -> None:
                     "cache_vs_nocache_next_token": True,
                     "long_prompt_coherence": True,
                     "tool_protocol": True,
+                    "decode_speed_target": True,
+                    "cb_system_prompt_working_set_pressure": True,
                     "source_vs_quant_first_divergence": True,
+                    "mimo_media_wired": True,
+                },
+                "latest_decode_speed_evidence": {
+                    "status": "pass",
+                    "bundle_decode_tps": 42.0,
+                    "greedy_decode_tps": 43.0,
+                    "coherency_exact": True,
+                    "generic_turboquant_kv_enabled": False,
+                    "native_cache_type": "mixed_swa_kv",
                 },
                 "blockers": [],
             }
@@ -11407,6 +11418,43 @@ def test_release_regression_manifest_requires_mimo_v2_root_cause_artifacts(
     assert result["remote_evidence_only"] is False
     assert result["remote_artifacts"] == []
     assert result["local_release_clearance"] is True
+
+
+def test_mimo_v2_root_cause_exposes_decode_speed_and_media_blockers(tmp_path):
+    from tests.cross_matrix.release_regression_manifest import (
+        CURRENT_MIMO_V2_JANG2L_CURRENT_AUDIT_ARTIFACT,
+        _validate_current_mimo_v2_jang2l_root_cause,
+    )
+
+    _write_passing_mimo_v2_root_cause_artifacts(tmp_path)
+    current_audit_path = tmp_path / CURRENT_MIMO_V2_JANG2L_CURRENT_AUDIT_ARTIFACT
+    current_audit = json.loads(current_audit_path.read_text(encoding="utf-8"))
+    current_audit["status"] = "open"
+    current_audit["local_release_clearance"] = False
+    current_audit["component_ok"]["decode_speed_target"] = False
+    current_audit["component_ok"]["mimo_media_wired"] = False
+    current_audit["blockers"] = [
+        "mimo_decode_speed_below_release_target",
+        "mimo_vl_audio_video_unwired",
+    ]
+    current_audit["latest_decode_speed_evidence"] = {
+        "status": "review",
+        "bundle_decode_tps": 1.79,
+        "greedy_decode_tps": 1.83,
+        "coherency_exact": True,
+        "native_cache_type": "mixed_swa_kv",
+        "generic_turboquant_kv_enabled": False,
+    }
+    current_audit_path.write_text(json.dumps(current_audit) + "\n", encoding="utf-8")
+
+    result = _validate_current_mimo_v2_jang2l_root_cause(tmp_path)
+
+    assert result["status"] == "open"
+    assert result["decode_speed_target_blocked"] is True
+    assert result["media_unwired"] is True
+    assert result["latest_decode_speed_evidence"]["bundle_decode_tps"] == 1.79
+    assert "mimo_decode_speed_below_release_target" in result["failures"]
+    assert "mimo_media_unwired" in result["failures"]
 
 
 def test_current_proof_sweep_includes_mimo_root_cause_artifacts():

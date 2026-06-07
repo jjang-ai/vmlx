@@ -5571,9 +5571,14 @@ def _validate_current_mimo_v2_jang2l_root_cause(root: Path) -> dict[str, Any]:
         "switchglu_selected_expert_parity_passed": False,
         "prompt_length_coherence_blocked": False,
         "tool_protocol_blocked": False,
+        "decode_speed_target_blocked": False,
+        "cb_working_set_pressure_blocked": False,
+        "media_unwired": False,
         "manifest_integrity_passed": False,
         "stale_local_state_absent": False,
         "current_audit_status": None,
+        "current_audit_blockers": [],
+        "latest_decode_speed_evidence": None,
         "remote_artifacts": [],
         "remote_evidence_only": False,
         "local_release_clearance": False,
@@ -5751,13 +5756,33 @@ def _validate_current_mimo_v2_jang2l_root_cause(root: Path) -> dict[str, Any]:
 
     audit_long_prompt_open = current_audit_component_ok.get("long_prompt_coherence") is False
     audit_tool_protocol_open = current_audit_component_ok.get("tool_protocol") is False
+    audit_decode_speed_open = current_audit_component_ok.get("decode_speed_target") is False
+    audit_working_set_open = (
+        current_audit_component_ok.get("cb_system_prompt_working_set_pressure") is False
+    )
+    audit_media_unwired = current_audit_component_ok.get("mimo_media_wired") is False
     audit_source_vs_quant_open = (
         current_audit_component_ok.get("source_vs_quant_first_divergence") is False
     )
+    audit_blockers = current_audit_payload.get("blockers")
+    if isinstance(audit_blockers, list):
+        result["current_audit_blockers"] = [str(item) for item in audit_blockers]
+    latest_decode_speed = current_audit_payload.get("latest_decode_speed_evidence")
+    if isinstance(latest_decode_speed, dict):
+        result["latest_decode_speed_evidence"] = latest_decode_speed
     if audit_long_prompt_open:
         result["prompt_length_coherence_blocked"] = True
     if audit_tool_protocol_open:
         result["tool_protocol_blocked"] = True
+    if audit_decode_speed_open:
+        result["decode_speed_target_blocked"] = True
+        result["failures"].append("mimo_decode_speed_below_release_target")
+    if audit_working_set_open:
+        result["cb_working_set_pressure_blocked"] = True
+        result["failures"].append("mimo_cb_working_set_pressure_blocked")
+    if audit_media_unwired:
+        result["media_unwired"] = True
+        result["failures"].append("mimo_media_unwired")
     if audit_source_vs_quant_open:
         result["source_vs_quant_first_divergence_passed"] = False
         if "mimo_source_vs_quant_first_divergence_missing" not in result["failures"]:
@@ -5766,6 +5791,9 @@ def _validate_current_mimo_v2_jang2l_root_cause(root: Path) -> dict[str, Any]:
     if (
         result["prompt_length_coherence_blocked"]
         or result["tool_protocol_blocked"]
+        or result["decode_speed_target_blocked"]
+        or result["cb_working_set_pressure_blocked"]
+        or result["media_unwired"]
         or not result["source_vs_quant_first_divergence_passed"]
     ):
         result["status"] = "open"
@@ -5774,8 +5802,9 @@ def _validate_current_mimo_v2_jang2l_root_cause(root: Path) -> dict[str, Any]:
         )
         result["release_boundary"] = (
             "local artifact/runtime has narrow text-cache proof but fails long-prompt "
-            "coherence, tool protocol, and/or local source-vs-quant first-divergence "
-            "proof; do not release-clear MiMo"
+            "coherence, tool protocol, decode speed, working-set pressure, media "
+            "wiring, and/or local source-vs-quant first-divergence proof; do not "
+            "release-clear MiMo"
         )
     elif not result["failures"]:
         result["status"] = "pass"
