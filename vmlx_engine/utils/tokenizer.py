@@ -154,6 +154,13 @@ def _apply_turboquant_to_model(model, model_path: str):
             del native_cache
         except Exception:
             n_layers = len(model.layers)
+        if any(t in ("RotatingKVCache", "BatchRotatingKVCache") for t in native_cache_types):
+            logger.info(
+                "  TurboQuant skipped: native rotating/full attention cache layout "
+                "requires RotatingKVCache metadata; flat generic TQ-KV would violate "
+                "the mixed_swa_kv_v1 cache contract."
+            )
+            return
 
         layer_types, key_dim, val_dim = _detect_turboquant_layer_types(
             text_cfg, n_layers, root_cfg=config

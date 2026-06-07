@@ -1063,6 +1063,13 @@ def _patch_turboquant_make_cache(model, jang_cfg: dict, model_config: dict):
     except Exception:
         n_layers = len(model.layers)
         _native_cache_types = []
+    if any(t in ("RotatingKVCache", "BatchRotatingKVCache") for t in _native_cache_types):
+        logger.info(
+            "  TurboQuant KV skipped: native rotating/full attention cache layout "
+            "requires RotatingKVCache metadata; flat generic TQ-KV would violate "
+            "the mixed_swa_kv_v1 cache contract."
+        )
+        return
     # Use _tq_cfg (which may be auto-generated defaults) instead of re-reading jang_cfg
     tq_config = TurboQuantConfig.from_jang_config({"turboquant": _tq_cfg}, n_layers)
     if not tq_config:

@@ -1089,7 +1089,7 @@ class BlockCacheEntry:
     """Entry mapping a token sequence to cache blocks."""
 
     block_table: BlockTable
-    cache_data: List[Any]  # Actual KV cache data per block
+    cache_data: Optional[List[Any]]  # Legacy full-cache reference, if needed
     last_access: float
     cache_type: str = "assistant"  # "system" | "user" | "assistant" — segment ownership
 
@@ -2170,12 +2170,31 @@ class BlockAwarePrefixCache:
 
         # Store entry for request (for legacy compatibility)
         norm_type = cache_type if cache_type in ("system", "user", "assistant") else "assistant"
+        # Tensor-backed paged cache uses block.cache_data as the authoritative
+        # in-memory payload and block-disk L2 as the durable spill tier. Keeping
+        # the original full cache_data object here pins a second full KV copy
+        # after the request has finished, which can push large native
+        # RotatingKVCache models over the Metal working-set guard. Non-tensor
+        # callers keep the legacy reference for get_cache_for_generation().
+        entry_cache_data = None if is_tensor_data else cache_data
         self._request_tables[request_id] = BlockCacheEntry(
             block_table=block_table,
-            cache_data=cache_data,
+            cache_data=entry_cache_data,
             last_access=time.time(),
             cache_type=norm_type,
         )
+        if is_tensor_data:
+            cache_data = None
+            try:
+                import gc as _gc
+                _gc.collect()
+            except Exception:
+                pass
+            if HAS_MLX:
+                try:
+                    mx.clear_cache()
+                except Exception:
+                    pass
 
         # Track in per-type bucket for priority-aware eviction (F1 backport).
         # Drop old entry from any other bucket (request may have been re-stored
@@ -2597,6 +2616,10 @@ class BlockAwarePrefixCache:
         blocks, was_copied = self.paged_cache.get_blocks_for_generation(
             entry.block_table
         )
+        if entry.cache_data is None:
+            cache_data = self.reconstruct_cache(entry.block_table)
+            entry.last_access = time.time()
+            return cache_data, was_copied
 
         if was_copied:
             # Deep copy cache data for modified blocks

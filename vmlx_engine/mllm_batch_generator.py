@@ -4021,7 +4021,13 @@ class MLLMBatchGenerator:
                 # route and leaks incorrect visible text. Keep MiMo text
                 # prefill one-shot so cache positions and rotating-window
                 # metadata advance exactly as the model runtime expects.
-                output = lm(input_ids, cache=cache)
+                kwargs: Dict[str, Any] = {"cache": cache}
+                if _lm_supports_position_ids(lm):
+                    position_ids = _absolute_text_position_ids(input_ids, cache, lm)
+                    if position_ids is not None:
+                        kwargs["position_ids"] = position_ids
+                _seed_text_rope_delta_for_decode(lm, input_ids)
+                output = lm(input_ids, **kwargs)
                 request.vision_encoded = True
                 if hasattr(output, "logits"):
                     return output.logits

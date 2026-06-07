@@ -6681,6 +6681,23 @@ class TestStartupCompatibilityGuards:
             processed_after_first = processor(mx.array([1]), processed_after_first)
         assert processed_after_first[0, 3].item() == 0
 
+    def test_mimo_v2_cached_text_fast_path_uses_absolute_positions(self):
+        from pathlib import Path
+
+        source = Path("./vmlx_engine/mllm_batch_generator.py").read_text()
+        start = source.index('if not has_images and self._model_type == "mimo_v2":')
+        end = source.index(
+            "if not has_images and (not _hybrid_blocks_chunk",
+            start,
+        )
+        block = source[start:end]
+
+        assert "_absolute_text_position_ids(input_ids, cache, lm)" in block
+        assert 'kwargs["position_ids"] = position_ids' in block
+        assert "_seed_text_rope_delta_for_decode(lm, input_ids)" in block
+        assert "output = lm(input_ids, **kwargs)" in block
+        assert "output = lm(input_ids, cache=cache)" not in block
+
     def test_mllm_registers_step3p7_source_runtime_before_mlx_vlm_resolution(
         self, tmp_path
     ):
@@ -6907,6 +6924,41 @@ class TestStartupCompatibilityGuards:
 
         assert model.make_cache() == ["native"] * 32
 
+    def test_generic_turboquant_patcher_skips_native_rotating_cache(
+        self, tmp_path, monkeypatch
+    ):
+        """MiMo/Gemma-style rotating KV must not be flattened to generic TQ."""
+        from vmlx_engine.utils.tokenizer import _apply_turboquant_to_model
+
+        (tmp_path / "config.json").write_text(json.dumps({
+            "model_type": "mimo_v2",
+            "num_hidden_layers": 2,
+            "head_dim": 128,
+        }))
+
+        class KVCache:
+            pass
+
+        class RotatingKVCache:
+            pass
+
+        class FakeModel:
+            layers = [object()] * 2
+
+            def make_cache(self):
+                return [KVCache(), RotatingKVCache()]
+
+        model = FakeModel()
+        os.environ.pop("VMLX_DISABLE_TQ_KV", None)
+        monkeypatch.setenv("VMLX_FORCE_TQ_AUTO", "1")
+
+        _apply_turboquant_to_model(model, str(tmp_path))
+
+        assert [type(c).__name__ for c in model.make_cache()] == [
+            "KVCache",
+            "RotatingKVCache",
+        ]
+
     def test_jang_loader_skips_turboquant_for_gemma4_mixed_attention(self, monkeypatch):
         """Gemma4 sliding/full attention must keep native RotatingKVCache layout."""
         from vmlx_engine.utils.jang_loader import _patch_turboquant_make_cache
@@ -6943,6 +6995,44 @@ class TestStartupCompatibilityGuards:
         assert model.make_cache.__func__ is FakeModel.make_cache
         assert [type(c).__name__ for c in model.make_cache()] == ["FakeCache"] * 30
 
+    def test_jang_loader_skips_turboquant_for_native_rotating_cache(self, monkeypatch):
+        """MiMo V2 native KV+RotatingKVCache layout must stay intact."""
+        from vmlx_engine.utils.jang_loader import _patch_turboquant_make_cache
+
+        class KVCache:
+            pass
+
+        class RotatingKVCache:
+            pass
+
+        class FakeModel:
+            layers = [object()] * 2
+
+            def make_cache(self):
+                return [KVCache(), RotatingKVCache()]
+
+        model = FakeModel()
+        monkeypatch.setenv("VMLX_FORCE_TQ_AUTO", "1")
+        monkeypatch.delenv("VMLX_DISABLE_TQ_KV", raising=False)
+
+        _patch_turboquant_make_cache(
+            model,
+            {},
+            {
+                "model_type": "mimo_v2",
+                "num_hidden_layers": 2,
+                "head_dim": 128,
+                "num_attention_heads": 16,
+                "num_key_value_heads": 8,
+            },
+        )
+
+        assert model.make_cache.__func__ is FakeModel.make_cache
+        assert [type(c).__name__ for c in model.make_cache()] == [
+            "KVCache",
+            "RotatingKVCache",
+        ]
+
     def test_vmlx_env_prefix_is_canonical_for_ssm_cache_budget(self):
         """New cache env knobs should use VMLX_, with typo fallback only."""
         cli_source = Path("./vmlx_engine/cli.py").read_text()
@@ -6950,6 +7040,38 @@ class TestStartupCompatibilityGuards:
         assert "os.environ.get(name)" in cli_source
         assert '"VMLINUX_SSM_STATE_CACHE_MB"' in cli_source
         assert 'default=_env_int("VMLX_SSM_STATE_CACHE_MB", 512, "VMLINUX_SSM_STATE_CACHE_MB")' in cli_source
+
+    def test_metal_ws_pressure_guard_reclaims_cache_before_reject(self):
+        """Pressure guard must not 503 while MLX cache memory is reclaimable."""
+        server_source = Path("./vmlx_engine/server.py").read_text()
+        start = server_source.index("async def check_metal_working_set_pressure")
+        end = server_source.index("# Log throttle", start)
+        block = server_source[start:end]
+
+        assert "mx.clear_cache()" in block
+        assert "active_after, max_ws_after = get_effective_metal_working_set_bytes(mx)" in block
+        assert 'getattr(mx, "get_cache_memory", None)' in block
+        assert "non_cache_active = max(0, active - cache_bytes)" in block
+        assert "non_cache_pct = (non_cache_active / max_ws) * 100.0" in block
+        assert "get_metal_ws_guard_threshold(99.0)" in block
+        assert "default 99" in server_source
+        assert "pct = (active / max_ws) * 100.0" in block
+        assert "if pct < threshold_pct:\n                    return" in block
+
+    def test_xml_function_tool_fallback_requires_concrete_function_examples(self):
+        """MiMo/xml_function prompts need concrete <function=name> examples."""
+        source = Path("./vmlx_engine/api/tool_calling.py").read_text()
+        server_source = Path("./vmlx_engine/server.py").read_text()
+        start = source.index("_xml_function_has_native_tool_schema = (")
+        end = source.index("_step3p5_has_concrete_tool_examples", start)
+        block = source[start:end]
+
+        assert 'all(f"<name>{name}</name>" in instruction_prompt for name in tool_names)' in block
+        assert 'all(f"<function={name}>" in instruction_prompt for name in tool_names)' in block
+        assert '"<function=example_function_name>" not in source'
+        assert 'if is_xml_function_native_tool_prompt:\n        for msg in messages_copy:' in source
+        assert ") and not is_xml_function_native_tool_prompt:" in source
+        assert "raw_preview={tool_required_preview!r}" in server_source
 
     def test_cli_tool_parser_choices_include_registry_only_parsers(self):
         """Explicit CLI settings must accept parsers used by auto detection.
@@ -9366,6 +9488,14 @@ class TestTurboQuantKVTelemetry:
         assert restored[0].offset == 4
         assert block.cache_data is None
         assert block.cache_data_from_disk is False
+
+    def test_paged_cache_tensor_store_drops_full_request_cache_reference(self):
+        """Block-backed tensor stores must not retain a duplicate full KV cache."""
+        source = Path("./vmlx_engine/prefix_cache.py").read_text()
+        assert "entry_cache_data = None if is_tensor_data else cache_data" in source
+        assert "cache_data=entry_cache_data" in source
+        assert "if entry.cache_data is None:" in source
+        assert "cache_data = self.reconstruct_cache(entry.block_table)" in source
 
     def test_mllm_mixed_swa_store_uses_clean_prefill_not_post_generation_truncate(self):
         """Gemma4 rotating windows must store a clean N-1 prefix cache."""

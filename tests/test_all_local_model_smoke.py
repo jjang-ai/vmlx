@@ -395,6 +395,36 @@ def test_build_serve_command_uses_dsv4_native_composite_cache_flags(tmp_path):
     assert cmd[cmd.index("--paged-cache-block-size") + 1] == "256"
 
 
+def test_build_serve_command_appends_explicit_extra_serve_args(tmp_path, monkeypatch):
+    mod = load_module()
+    monkeypatch.setenv(
+        "VMLINUX_BENCH_EXTRA_SERVE_ARGS",
+        '--kv-cache-quantization none --log-level DEBUG --served-model-name "quoted name"',
+    )
+    row = {
+        "path": str(tmp_path / "model"),
+        "served_name": "model",
+        "is_mllm": False,
+        "cache_family": "full_kv",
+    }
+
+    cmd = mod.build_serve_command(
+        row,
+        port=8777,
+        out_dir=tmp_path / "out",
+        py=str(tmp_path / "python"),
+    )
+
+    assert cmd[-6:] == [
+        "--kv-cache-quantization",
+        "none",
+        "--log-level",
+        "DEBUG",
+        "--served-model-name",
+        "quoted name",
+    ]
+
+
 def test_server_process_cwd_avoids_repo_root_for_isolated_bundled_smoke(
     monkeypatch,
     tmp_path,

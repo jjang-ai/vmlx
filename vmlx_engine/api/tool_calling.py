@@ -215,6 +215,7 @@ def check_and_inject_fallback_tools(
         and "<function=example_function_name>" in instruction_prompt
         and "<tools>" in instruction_prompt
         and all(f"<name>{name}</name>" in instruction_prompt for name in tool_names)
+        and all(f"<function={name}>" in instruction_prompt for name in tool_names)
     )
     _step3p5_has_concrete_tool_examples = (
         is_step3p5_native_tool_prompt
@@ -871,10 +872,7 @@ def check_and_inject_fallback_tools(
             return (
                 "<tool_call>" in rendered
                 and all(name in rendered for name in tool_names)
-                and (
-                    "<function=example_function_name>" in rendered
-                    or any(f"<function={name}>" in rendered for name in tool_names)
-                )
+                and all(f"<function={name}>" in rendered for name in tool_names)
             )
         if is_step3p5_native_tool_prompt:
             return all(f"<function={name}>" in rendered for name in tool_names)
@@ -919,7 +917,15 @@ def check_and_inject_fallback_tools(
     # Inject into messages
     messages_copy = [dict(m) for m in messages]
     injected = False
+    if is_xml_function_native_tool_prompt:
+        for msg in messages_copy:
+            if msg.get("role") == "user":
+                _prepend_tool_prompt_to_message(msg, tool_prompt)
+                injected = True
+                break
     for msg in messages_copy:
+        if injected:
+            break
         if msg.get("role") == "system":
             _append_tool_prompt_to_message(msg, tool_prompt)
             injected = True
@@ -937,7 +943,7 @@ def check_and_inject_fallback_tools(
         is_zaya_native_tool_prompt
         and zaya_template_has_native_scaffold
         and not has_flat_responses_function_tools
-    ):
+    ) and not is_xml_function_native_tool_prompt:
         safe_kwargs.pop("tools", None)
 
     try:

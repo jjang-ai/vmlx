@@ -3306,7 +3306,9 @@ async def check_memory_pressure(request: Request):
 #
 # This guard reads `mx.get_active_memory()` (with mx.metal fallback per
 # vmlx#94) and rejects when `active / max_working_set` exceeds threshold
-# (default 98%, raised from 85% per Eric directive 2026-05-11). 98%
+    # (default 99%, raised from 85% per Eric directive 2026-05-11 and from 98%
+    # after MiMo V2.5 native rotating-cache probes on M5 Max showed safe
+    # same-process 98.5% occupancy for short follow-up requests). 99%
 # lets users effectively fill their unified memory with the model + cache,
 # while the 2% headroom still catches the genuine Metal command-buffer
 # OOM signature before MLX raises [METAL] Insufficient Memory and the
@@ -3314,7 +3316,7 @@ async def check_memory_pressure(request: Request):
 #
 # Knobs:
 # - VMLX_METAL_WS_GUARD=0       → disable entirely (accept hard-crash risk)
-# - VMLX_METAL_WS_REJECT_PCT=N  → tune threshold (default 98)
+    # - VMLX_METAL_WS_REJECT_PCT=N  → tune threshold (default 99)
 _last_metal_ws_log: float = 0.0
 
 
@@ -3336,7 +3338,7 @@ async def check_metal_working_set_pressure(request: Request):
         )
         if not is_metal_ws_guard_enabled():
             return
-        threshold_pct = get_metal_ws_guard_threshold(98.0)
+        threshold_pct = get_metal_ws_guard_threshold(99.0)
         active, max_ws = get_effective_metal_working_set_bytes(mx)
         if max_ws <= 0:
             return  # no limit exposed — skip
@@ -3346,6 +3348,37 @@ async def check_metal_working_set_pressure(request: Request):
     pct = (active / max_ws) * 100.0
     if pct < threshold_pct:
         return
+
+    # Before returning 503, reclaim MLX's allocator free-list and re-measure.
+    # Large native rotating-cache models (for example MiMo V2.5) can leave a
+    # few GB in cache_memory after a completed request. That memory is
+    # intentionally reclaimable; rejecting before this pass turns a healthy
+    # sequence of requests into a false pressure failure.
+    try:
+        if hasattr(mx, "clear_cache"):
+            mx.clear_cache()
+            active_after, max_ws_after = get_effective_metal_working_set_bytes(mx)
+            if max_ws_after > 0:
+                active = active_after
+                max_ws = max_ws_after
+                pct = (active / max_ws) * 100.0
+                if pct < threshold_pct:
+                    return
+    except Exception:
+        pass
+
+    try:
+        get_cache_memory = getattr(mx, "get_cache_memory", None)
+        if get_cache_memory is None and hasattr(mx, "metal"):
+            get_cache_memory = getattr(mx.metal, "get_cache_memory", None)
+        cache_bytes = int(get_cache_memory() if get_cache_memory is not None else 0)
+    except Exception:
+        cache_bytes = 0
+    if cache_bytes > 0:
+        non_cache_active = max(0, active - cache_bytes)
+        non_cache_pct = (non_cache_active / max_ws) * 100.0
+        if non_cache_pct < threshold_pct:
+            return
 
     # Log throttle (shared state with mlxstudio#63 is overkill — use own).
     global _last_metal_ws_log
@@ -3369,7 +3402,7 @@ async def check_metal_working_set_pressure(request: Request):
             f"accuracy or MMLU score. "
             f"Retry after the GPU catches up, reduce concurrent load, "
             f"or try a smaller model / smaller quant. Tune via "
-            f"VMLX_METAL_WS_REJECT_PCT (default 98), "
+            f"VMLX_METAL_WS_REJECT_PCT (default 99), "
             f"set VMLX_METAL_WS_MAX_GB to raise/lower the working-set ceiling, "
             f"disable via VMLX_METAL_WS_GUARD=0."
         ),
@@ -10975,9 +11008,11 @@ async def create_chat_completion(
 
     # Enforce tool_choice="required": model MUST produce at least one tool call
     if _tool_choice == "required" and not tool_calls:
+        tool_required_preview = (_cc_parse_text or content_for_parsing or "")
+        tool_required_preview = tool_required_preview.replace("\n", "\\n")[:500]
         logger.warning(
             f"tool_choice='required' but model produced no tool calls. "
-            f"Returning error to client."
+            f"Returning error to client. raw_preview={tool_required_preview!r}"
         )
         raise HTTPException(
             status_code=400,

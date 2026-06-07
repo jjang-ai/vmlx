@@ -6,6 +6,7 @@ import base64
 import json
 import os
 import re
+import shlex
 import signal
 import struct
 import subprocess
@@ -300,6 +301,9 @@ def build_serve_command(
         cmd.append("--dsv4-enable-prefix-cache")
     if row.get("is_mllm"):
         cmd.append("--is-mllm")
+    extra_serve_args = os.environ.get("VMLINUX_BENCH_EXTRA_SERVE_ARGS", "").strip()
+    if extra_serve_args:
+        cmd.extend(shlex.split(extra_serve_args))
     return cmd
 
 
