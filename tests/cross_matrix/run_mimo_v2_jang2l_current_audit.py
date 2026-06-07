@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -677,6 +678,8 @@ def _latest_decode_speed_evidence(data: dict[str, Any]) -> dict[str, Any]:
         and bundle_tps >= 40.0
         and coherency_exact
     )
+    log_path = result.get("log_path")
+    log_trace = _decode_speed_log_trace(Path(str(log_path))) if log_path else {}
     return {
         "exists": True,
         "status": result.get("status"),
@@ -688,7 +691,97 @@ def _latest_decode_speed_evidence(data: dict[str, Any]) -> dict[str, Any]:
         "native_cache_type": native_cache.get("cache_type"),
         "generic_turboquant_kv_enabled": generic_tq.get("enabled"),
         "notes": result.get("notes"),
-        "log_path": result.get("log_path"),
+        "log_path": log_path,
+        **log_trace,
+    }
+
+
+def _decode_speed_log_trace(log_path: Path) -> dict[str, Any]:
+    if not log_path.exists():
+        return {
+            "log_trace_present": False,
+            "decode_bottleneck_classification": "missing_decode_speed_log",
+        }
+
+    fastpath_calls: list[int] = []
+    compiled_shapes: list[int] = []
+    decode_total_ms: list[float] = []
+    decode_step_ms: list[float] = []
+    decode_async_ms: list[float] = []
+    decode_materialize_ms: list[float] = []
+    avg_model_ms: list[float] = []
+    avg_sample_ms: list[float] = []
+    tight_memory_drains = 0
+
+    for line in log_path.read_text(encoding="utf-8", errors="replace").splitlines():
+        if "Tight-memory MLLM allocator drain" in line:
+            tight_memory_drains += 1
+        if "MiMo-V2 affine SwitchGLU decode fast path active" in line:
+            calls_match = re.search(r"\bcalls=(\d+)", line)
+            shapes_match = re.search(r"\bcompiled_shapes=(\d+)", line)
+            if calls_match:
+                fastpath_calls.append(int(calls_match.group(1)))
+            if shapes_match:
+                compiled_shapes.append(int(shapes_match.group(1)))
+        if "VMLINUX_DECODE_TRACE mllm" in line:
+            for key, target in (
+                ("avg_model_ms", avg_model_ms),
+                ("avg_sample_ms", avg_sample_ms),
+            ):
+                match = re.search(rf"\b{key}=([0-9.]+)", line)
+                if match:
+                    target.append(round(float(match.group(1)), 3))
+        if "VMLINUX_DECODE_TRACE_NEXT" in line:
+            for key, target in (
+                ("last_total_ms", decode_total_ms),
+                ("last_step_ms", decode_step_ms),
+                ("last_async_ms", decode_async_ms),
+                ("last_materialize_ms", decode_materialize_ms),
+            ):
+                match = re.search(rf"\b{key}=([0-9.]+)", line)
+                if match:
+                    target.append(round(float(match.group(1)), 3))
+
+    max_total_ms = max(decode_total_ms) if decode_total_ms else None
+    max_async_ms = max(decode_async_ms) if decode_async_ms else None
+    max_avg_model_ms = max(avg_model_ms) if avg_model_ms else None
+    fastpath_active = bool(fastpath_calls)
+    async_wait_dominates = bool(
+        max_total_ms is not None
+        and max_async_ms is not None
+        and max_total_ms > 0
+        and (max_async_ms / max_total_ms) >= 0.5
+    )
+    if fastpath_active and async_wait_dominates:
+        classification = "switchglu_fastpath_active_but_metal_async_wait_dominates"
+    elif async_wait_dominates:
+        classification = "metal_async_wait_dominates"
+    elif fastpath_active:
+        classification = "switchglu_fastpath_active_without_async_trace_blocker"
+    else:
+        classification = "switchglu_fastpath_not_observed"
+
+    return {
+        "log_trace_present": True,
+        "switchglu_fastpath_active": fastpath_active,
+        "switchglu_fastpath_call_markers": fastpath_calls,
+        "switchglu_fastpath_max_calls": max(fastpath_calls) if fastpath_calls else None,
+        "switchglu_fastpath_compiled_shapes": compiled_shapes,
+        "switchglu_fastpath_max_compiled_shapes": (
+            max(compiled_shapes) if compiled_shapes else None
+        ),
+        "decode_next_last_total_ms": decode_total_ms,
+        "decode_next_last_step_ms": decode_step_ms,
+        "decode_next_last_async_ms": decode_async_ms,
+        "decode_next_last_materialize_ms": decode_materialize_ms,
+        "avg_model_ms": avg_model_ms,
+        "avg_sample_ms": avg_sample_ms,
+        "max_decode_next_last_total_ms": max_total_ms,
+        "max_decode_next_last_async_ms": max_async_ms,
+        "max_avg_model_ms": max_avg_model_ms,
+        "async_decode_wait_dominates": async_wait_dominates,
+        "tight_memory_allocator_drains": tight_memory_drains,
+        "decode_bottleneck_classification": classification,
     }
 
 

@@ -837,7 +837,7 @@ CURRENT_MIMO_V2_JANG2L_TOOL_DIALECT_ARTIFACT = (
     "build/current-mimo-v2-jang2l-tool-dialect-failure-20260606.json"
 )
 CURRENT_MIMO_V2_JANG2L_CURRENT_AUDIT_ARTIFACT = (
-    "build/current-mimo-v2-jang2l-current-audit-after-fastpath-speed-proof-stale-clean-20260607.json"
+    "build/current-mimo-v2-jang2l-current-audit-after-fastpath-async-bottleneck-20260607.json"
 )
 CURRENT_MIMO_V2_JANG2L_METADATA_TRUTH_ARTIFACT = (
     "build/current-mimo-v25-jang2l-local-metadata-truth-patch-20260606.json"
@@ -5599,6 +5599,9 @@ def _validate_current_mimo_v2_jang2l_root_cause(root: Path) -> dict[str, Any]:
         "current_audit_status": None,
         "current_audit_blockers": [],
         "latest_decode_speed_evidence": None,
+        "decode_bottleneck_classification": None,
+        "switchglu_fastpath_active_but_slow": False,
+        "async_decode_wait_dominates": False,
         "remote_artifacts": [],
         "remote_evidence_only": False,
         "local_release_clearance": False,
@@ -5790,6 +5793,16 @@ def _validate_current_mimo_v2_jang2l_root_cause(root: Path) -> dict[str, Any]:
     latest_decode_speed = current_audit_payload.get("latest_decode_speed_evidence")
     if isinstance(latest_decode_speed, dict):
         result["latest_decode_speed_evidence"] = latest_decode_speed
+        result["decode_bottleneck_classification"] = latest_decode_speed.get(
+            "decode_bottleneck_classification"
+        )
+        result["async_decode_wait_dominates"] = (
+            latest_decode_speed.get("async_decode_wait_dominates") is True
+        )
+        result["switchglu_fastpath_active_but_slow"] = (
+            latest_decode_speed.get("switchglu_fastpath_active") is True
+            and latest_decode_speed.get("speed_blocked") is True
+        )
     if audit_long_prompt_open:
         result["prompt_length_coherence_blocked"] = True
     if audit_tool_protocol_open:

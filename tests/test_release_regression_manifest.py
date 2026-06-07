@@ -3343,6 +3343,11 @@ def _write_passing_mimo_v2_root_cause_artifacts(root: Path) -> None:
                     "coherency_exact": True,
                     "generic_turboquant_kv_enabled": False,
                     "native_cache_type": "mixed_swa_kv",
+                    "switchglu_fastpath_active": True,
+                    "async_decode_wait_dominates": False,
+                    "decode_bottleneck_classification": (
+                        "speed_floor_cleared_with_fastpath"
+                    ),
                 },
                 "blockers": [],
             }
@@ -11481,11 +11486,20 @@ def test_mimo_v2_root_cause_exposes_decode_speed_and_media_blockers(tmp_path):
     ]
     current_audit["latest_decode_speed_evidence"] = {
         "status": "review",
+        "speed_blocked": True,
         "bundle_decode_tps": 1.79,
         "greedy_decode_tps": 1.83,
         "coherency_exact": True,
         "native_cache_type": "mixed_swa_kv",
         "generic_turboquant_kv_enabled": False,
+        "switchglu_fastpath_active": True,
+        "switchglu_fastpath_max_calls": 4096,
+        "switchglu_fastpath_max_compiled_shapes": 2,
+        "max_decode_next_last_async_ms": 597.49,
+        "async_decode_wait_dominates": True,
+        "decode_bottleneck_classification": (
+            "switchglu_fastpath_active_but_metal_async_wait_dominates"
+        ),
     }
     current_audit_path.write_text(json.dumps(current_audit) + "\n", encoding="utf-8")
 
@@ -11495,8 +11509,67 @@ def test_mimo_v2_root_cause_exposes_decode_speed_and_media_blockers(tmp_path):
     assert result["decode_speed_target_blocked"] is True
     assert result["media_unwired"] is True
     assert result["latest_decode_speed_evidence"]["bundle_decode_tps"] == 1.79
+    assert result["switchglu_fastpath_active_but_slow"] is True
+    assert result["async_decode_wait_dominates"] is True
+    assert (
+        result["decode_bottleneck_classification"]
+        == "switchglu_fastpath_active_but_metal_async_wait_dominates"
+    )
     assert "mimo_decode_speed_below_release_target" in result["failures"]
     assert "mimo_media_unwired" in result["failures"]
+
+
+def test_mimo_v2_current_audit_extracts_fastpath_async_bottleneck(tmp_path):
+    from tests.cross_matrix.run_mimo_v2_jang2l_current_audit import (
+        _latest_decode_speed_evidence,
+    )
+
+    log_path = tmp_path / "mimo-speed.log"
+    log_path.write_text(
+        "\n".join(
+            [
+                "INFO:vmlx_engine.models.mllm:MiMo-V2 affine SwitchGLU decode fast path active: calls=4096 compiled_shapes=2",
+                "INFO:vmlx_engine.mllm_batch_generator:VMLINUX_DECODE_TRACE mllm steps=96 avg_model_ms=2.29 avg_sample_ms=0.38 last_model_ms=2.32 last_sample_ms=0.51 batch=1",
+                "INFO:vmlx_engine.mllm_batch_generator:VMLINUX_DECODE_TRACE_NEXT mllm steps=96 last_total_ms=506.89 last_step_ms=2.93 last_async_ms=503.95 last_materialize_ms=0.01 prompt_processing=False batch=1",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    evidence = _latest_decode_speed_evidence(
+        {
+            "results": [
+                {
+                    "status": "review",
+                    "log_path": str(log_path),
+                    "bundle_sampling": {"decode_tps_wall": 1.79},
+                    "greedy_topk0": {"decode_tps_wall": 1.83},
+                    "coherency": {
+                        "content_head": "READY\n17+28=45\nCERULEAN",
+                        "loopish": False,
+                    },
+                    "health_after": {
+                        "native_cache": {
+                            "cache_type": "mixed_swa_kv",
+                            "generic_turboquant_kv": {"enabled": False},
+                        }
+                    },
+                }
+            ]
+        }
+    )
+
+    assert evidence["speed_blocked"] is True
+    assert evidence["switchglu_fastpath_active"] is True
+    assert evidence["switchglu_fastpath_max_calls"] == 4096
+    assert evidence["switchglu_fastpath_max_compiled_shapes"] == 2
+    assert evidence["max_decode_next_last_async_ms"] == 503.95
+    assert evidence["async_decode_wait_dominates"] is True
+    assert (
+        evidence["decode_bottleneck_classification"]
+        == "switchglu_fastpath_active_but_metal_async_wait_dominates"
+    )
 
 
 def test_current_proof_sweep_includes_mimo_root_cause_artifacts():
