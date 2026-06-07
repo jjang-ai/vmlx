@@ -599,6 +599,18 @@ def _is_nemotron_row(row: dict[str, Any]) -> bool:
     return "nemotron" in blob or "nemo" in blob
 
 
+def _is_qwen36_moe_mtp_row(row: dict[str, Any]) -> bool:
+    blob = " ".join(
+        str(row.get(key, "")).lower()
+        for key in ("name", "served_name", "model_type", "path", "cache_family")
+    )
+    return (
+        ("qwen3.6" in blob or "qwen36" in blob or "qwen3_5_moe" in blob)
+        and ("35b" in blob or "moe" in blob or "a3b" in blob)
+        and "mtp" in blob
+    )
+
+
 def _lfm_strict_probe_max_tokens(row: dict[str, Any], max_tokens: int) -> int:
     # LFM2 often emits an internal direct-answer prelude before the final terse
     # answer even when thinking is disabled. The API parser returns the final
@@ -609,11 +621,11 @@ def _lfm_strict_probe_max_tokens(row: dict[str, Any], max_tokens: int) -> int:
 
 
 def _reasoning_probe_max_tokens(row: dict[str, Any], max_tokens: int) -> int:
-    # ZAYA's qwen3-style reasoning rail is valid, but a 256-token probe can
-    # stop before the closing </think> and visible final answer. Keep the
-    # validation strict; give this family enough budget to prove the advertised
-    # thinking mode instead of misclassifying it as empty-visible.
-    if _is_zaya_row(row) or _is_nemotron_row(row):
+    # ZAYA/Nemotron/Qwen3.6 MoE MTP thinking rails are valid, but a 256-token
+    # probe can stop before the closing </think> and visible final answer.
+    # Keep validation strict; give these families enough budget to prove the
+    # advertised thinking mode instead of misclassifying them as empty-visible.
+    if _is_zaya_row(row) or _is_nemotron_row(row) or _is_qwen36_moe_mtp_row(row):
         return max(512, max_tokens)
     return max(256, max_tokens)
 
