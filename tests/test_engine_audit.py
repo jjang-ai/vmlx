@@ -6501,6 +6501,126 @@ class TestStartupCompatibilityGuards:
             == "QuantizedSwitchLinear"
         )
 
+    def test_mllm_mimo_v2_runtime_quantizes_passthrough_decode_hotspots(
+        self, tmp_path
+    ):
+        from vmlx_engine.models import mllm
+
+        model_dir = tmp_path / "MiMo-V2.5-JANG_2L"
+        model_dir.mkdir()
+        config = {
+            "model_type": "mimo_v2",
+            "hidden_size": 32,
+            "intermediate_size": 64,
+            "moe_intermediate_size": 32,
+            "num_hidden_layers": 1,
+            "num_attention_heads": 4,
+            "num_key_value_heads": 2,
+            "vocab_size": 128,
+            "n_routed_experts": 4,
+            "num_experts_per_tok": 2,
+            "moe_layer_freq": [False],
+            "hybrid_layer_pattern": [0],
+            "full_attention_interval": 1,
+            "quantization": {
+                "bits": 8,
+                "group_size": 32,
+            },
+        }
+        (model_dir / "config.json").write_text(json.dumps(config), encoding="utf-8")
+
+        mllm._register_local_mlx_vlm_runtime_if_needed(model_dir)
+        module = sys.modules["mlx_vlm.models.mimo_v2"]
+        model = module.Model(module.ModelConfig.from_dict(config))
+
+        count = mllm._quantize_mimo_v2_passthrough_decode_hotspots(
+            model.language_model.inner,
+            config["quantization"],
+        )
+
+        assert count == 2
+        assert model.language_model.inner.lm_head.__class__.__name__ == "QuantizedLinear"
+        assert (
+            model.language_model.inner.model.embed_tokens.__class__.__name__
+            == "QuantizedEmbedding"
+        )
+
+    def test_mllm_mimo_v2_affine_switchglu_fast_path_matches_stock_decode(
+        self,
+    ):
+        import mlx.core as mx
+        import mlx.nn as nn
+        from mlx_lm.models.switch_layers import SwitchGLU
+
+        from vmlx_engine.models import mllm
+
+        switch = SwitchGLU(32, 32, 4, bias=False)
+        nn.quantize(switch, group_size=32, bits=4, mode="affine")
+        switch.eval()
+        x = mx.arange(32, dtype=mx.float32).reshape(1, 32) / 32.0
+        indices = mx.array([[0, 2]], dtype=mx.uint32)
+
+        original = SwitchGLU.__call__
+        expected = original(switch, x, indices)
+        mx.eval(expected)
+        installed = mllm._install_mimo_v2_affine_switchglu_decode_fast_path()
+        try:
+            actual = switch(x, indices)
+            mx.eval(actual)
+            fast_calls = getattr(SwitchGLU, "_vmlx_mimo_affine_decode_fast_calls", 0)
+            fallback_reasons = dict(
+                getattr(SwitchGLU, "_vmlx_mimo_affine_decode_fallback_reasons", {})
+            )
+        finally:
+            if installed:
+                SwitchGLU.__call__ = original
+                SwitchGLU._vmlx_mimo_affine_decode_fast_path = False
+                if hasattr(SwitchGLU, "_vmlx_mimo_original_affine_decode_call"):
+                    delattr(SwitchGLU, "_vmlx_mimo_original_affine_decode_call")
+                if hasattr(SwitchGLU, "_vmlx_mimo_affine_decode_fast_calls"):
+                    delattr(SwitchGLU, "_vmlx_mimo_affine_decode_fast_calls")
+                if hasattr(SwitchGLU, "_vmlx_mimo_affine_decode_fallback_reasons"):
+                    delattr(SwitchGLU, "_vmlx_mimo_affine_decode_fallback_reasons")
+
+        assert tuple(actual.shape) == tuple(expected.shape)
+        assert mx.allclose(actual, expected, rtol=1e-4, atol=1e-4).item()
+        assert fast_calls >= 1
+        assert fallback_reasons == {}
+
+    def test_mllm_inference_mode_reaches_mimo_python_list_switchglu(
+        self, tmp_path
+    ):
+        from vmlx_engine.models import mllm
+
+        model_dir = tmp_path / "MiMo-V2.5-JANG_2L"
+        model_dir.mkdir()
+        config = {
+            "model_type": "mimo_v2",
+            "hidden_size": 32,
+            "intermediate_size": 64,
+            "moe_intermediate_size": 32,
+            "num_hidden_layers": 2,
+            "num_attention_heads": 4,
+            "num_key_value_heads": 2,
+            "vocab_size": 128,
+            "n_routed_experts": 4,
+            "num_experts_per_tok": 2,
+            "moe_layer_freq": [False, True],
+            "hybrid_layer_pattern": [0, 1],
+            "full_attention_interval": 1,
+        }
+        (model_dir / "config.json").write_text(json.dumps(config), encoding="utf-8")
+
+        mllm._register_local_mlx_vlm_runtime_if_needed(model_dir)
+        module = sys.modules["mlx_vlm.models.mimo_v2"]
+        model = module.Model(module.ModelConfig.from_dict(config))
+        switch = model.language_model.inner.model.layers[1]["mlp"]["switch_mlp"]
+        switch.train(True)
+
+        mllm._set_vlm_inference_mode(model)
+
+        assert switch.training is False
+
     def test_mllm_installs_mimo_v2_compiled_router_for_stale_jang_tools(self):
         from vmlx_engine.models import mllm
 

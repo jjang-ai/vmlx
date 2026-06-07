@@ -209,6 +209,183 @@ def _install_mimo_v2_compiled_router_if_missing(text_runtime: Any) -> bool:
     return True
 
 
+def _install_mimo_v2_affine_switchglu_decode_fast_path() -> bool:
+    """Install an affine QuantizedSwitchLinear decode fast path for MiMo.
+
+    Stock `SwitchGLU.__call__` runs routed gate/up/down through three separate
+    `QuantizedSwitchLinear` module calls. On MiMo-V2 decode that is 47 MoE
+    layers * 3 gather_qmm dispatches per token, which matches the observed
+    ~600 ms/token even when the actual model graph is quantized. This path
+    keeps the same MLX affine `gather_qmm` math, but compiles the decode-shape
+    gate/up/SwiGLU/down sequence as one callable per shape.
+    """
+
+    try:
+        from mlx_lm.models.switch_layers import SwitchGLU
+        import mlx.core as mx
+    except Exception:
+        return False
+
+    if getattr(SwitchGLU, "_vmlx_mimo_affine_decode_fast_path", False):
+        return False
+
+    original_call = SwitchGLU.__call__
+    compiled: dict[tuple[Any, ...], Any] = {}
+
+    def _record_fallback(reason: str) -> None:
+        try:
+            reasons = SwitchGLU._vmlx_mimo_affine_decode_fallback_reasons
+            reasons[reason] = int(reasons.get(reason, 0)) + 1
+        except Exception:
+            pass
+
+    def _compiled_for(gp, up, dp, k: int):
+        key = (
+            int(gp.input_dims),
+            int(gp.output_dims),
+            int(getattr(gp, "bits", 0) or 0),
+            int(getattr(gp, "group_size", 0) or 0),
+            str(getattr(gp, "mode", "affine")),
+            int(getattr(up, "bits", 0) or 0),
+            int(getattr(up, "group_size", 0) or 0),
+            str(getattr(up, "mode", "affine")),
+            int(getattr(dp, "bits", 0) or 0),
+            int(getattr(dp, "group_size", 0) or 0),
+            str(getattr(dp, "mode", "affine")),
+            int(k),
+        )
+        fn = compiled.get(key)
+        if fn is not None:
+            return fn
+
+        def _mlp(
+            x_flat,
+            indices_flat,
+            gate_w,
+            gate_s,
+            gate_b,
+            up_w,
+            up_s,
+            up_b,
+            down_w,
+            down_s,
+            down_b,
+        ):
+            x_exp = mx.expand_dims(x_flat, (-2, -3))
+            idx = indices_flat.reshape(1, -1)
+            x_up = mx.gather_qmm(
+                x_exp,
+                up_w,
+                up_s,
+                up_b,
+                rhs_indices=idx,
+                transpose=True,
+                group_size=up.group_size,
+                bits=up.bits,
+                mode=up.mode,
+                sorted_indices=False,
+            )
+            x_gate = mx.gather_qmm(
+                x_exp,
+                gate_w,
+                gate_s,
+                gate_b,
+                rhs_indices=idx,
+                transpose=True,
+                group_size=gp.group_size,
+                bits=gp.bits,
+                mode=gp.mode,
+                sorted_indices=False,
+            )
+            x_act = (x_gate * mx.sigmoid(x_gate)) * x_up
+            x_out = mx.gather_qmm(
+                x_act,
+                down_w,
+                down_s,
+                down_b,
+                rhs_indices=idx,
+                transpose=True,
+                group_size=dp.group_size,
+                bits=dp.bits,
+                mode=dp.mode,
+                sorted_indices=False,
+            )
+            return x_out.squeeze(-2)
+
+        fn = mx.compile(_mlp)
+        compiled[key] = fn
+        return fn
+
+    def _fast_switchglu_call(self, x, indices):
+        gp = getattr(self, "gate_proj", None)
+        up = getattr(self, "up_proj", None)
+        dp = getattr(self, "down_proj", None)
+        required_attrs = ("weight", "scales", "group_size", "bits", "mode")
+        if not all(all(hasattr(module, attr) for attr in required_attrs) for module in (gp, up, dp)):
+            _record_fallback("missing_affine_quant_attrs")
+            return original_call(self, x, indices)
+        if getattr(self, "training", False):
+            _record_fallback("training_enabled")
+            return original_call(self, x, indices)
+        if getattr(indices, "ndim", 0) < 1 or int(getattr(indices, "size", 0) or 0) >= 64:
+            _record_fallback("prefill_or_large_indices")
+            return original_call(self, x, indices)
+
+        x_sq = x
+        while getattr(x_sq, "ndim", 0) > 2 and x_sq.shape[-2] == 1:
+            x_sq = x_sq.squeeze(-2)
+        x_flat = x_sq.reshape(-1, gp.input_dims)
+        if int(x_flat.shape[0]) != 1:
+            _record_fallback("batched_or_prefill_x")
+            return original_call(self, x, indices)
+        k = int(indices.shape[-1]) if getattr(indices, "shape", ()) else 1
+        if k <= 0:
+            _record_fallback("empty_indices")
+            return original_call(self, x, indices)
+
+        fn = _compiled_for(gp, up, dp, k)
+        try:
+            out = fn(
+                x_flat.astype(mx.float32),
+                indices.reshape(-1).astype(mx.uint32),
+                gp["weight"],
+                gp["scales"],
+                gp.get("biases"),
+                up["weight"],
+                up["scales"],
+                up.get("biases"),
+                dp["weight"],
+                dp["scales"],
+                dp.get("biases"),
+            )
+        except Exception:
+            _record_fallback("compiled_fast_path_error")
+            logger.exception("MiMo-V2 affine SwitchGLU decode fast path failed; falling back")
+            return original_call(self, x, indices)
+        try:
+            calls = int(getattr(SwitchGLU, "_vmlx_mimo_affine_decode_fast_calls", 0)) + 1
+            SwitchGLU._vmlx_mimo_affine_decode_fast_calls = calls
+            if calls in {1, 64, 512, 4096}:
+                logger.info(
+                    "MiMo-V2 affine SwitchGLU decode fast path active: calls=%d compiled_shapes=%d",
+                    calls,
+                    len(compiled),
+                )
+        except Exception:
+            pass
+        if out.dtype != x.dtype:
+            out = out.astype(x.dtype)
+        return out.reshape(*indices.shape[:-1], k, gp.input_dims)
+
+    SwitchGLU._vmlx_mimo_original_affine_decode_call = original_call
+    SwitchGLU._vmlx_mimo_affine_decode_fast_calls = 0
+    SwitchGLU._vmlx_mimo_affine_decode_fallback_reasons = {}
+    SwitchGLU.__call__ = _fast_switchglu_call
+    SwitchGLU._vmlx_mimo_affine_decode_fast_path = True
+    logger.info("Installed vMLX MiMo-V2 affine SwitchGLU decode fast path")
+    return True
+
+
 def _is_mimo_v2_runtime_object_or_name(model: Any, model_name: Any = None) -> bool:
     """Return true when an MLLM-loaded object is the MiMo-V2 runtime.
 
@@ -305,6 +482,40 @@ def _quantize_mimo_v2_runtime_modules(root: Any, filtered: dict, quantization: d
     return len(quantized_paths)
 
 
+def _quantize_mimo_v2_passthrough_decode_hotspots(root: Any, quantization: dict) -> int:
+    """Runtime-quantize MiMo decode-hot passthrough weights missing sidecars.
+
+    The MiMo JANG contract requires `lm_head` and embeddings to be 8-bit affine,
+    but some local bundles preserved them as bf16 without `.scales/.biases`.
+    `lm_head` is a 152k-vocab projection paid every decode token, so leaving it
+    bf16 makes the server appear to decode at ~1 tok/s even when the routed MoE
+    path is quantized. This converts only known MiMo hotspots after weights are
+    loaded, never generic model layers.
+    """
+
+    count = 0
+    group_size = int(quantization.get("group_size") or 64)
+    bits = int(quantization.get("bits") or 8)
+    mode = str(quantization.get("mode") or "affine")
+
+    lm_head = getattr(root, "lm_head", None)
+    if lm_head is not None and hasattr(lm_head, "to_quantized"):
+        root.lm_head = lm_head.to_quantized(group_size=group_size, bits=bits, mode=mode)
+        count += 1
+
+    backbone = getattr(root, "model", None)
+    embed_tokens = getattr(backbone, "embed_tokens", None)
+    if embed_tokens is not None and hasattr(embed_tokens, "to_quantized"):
+        backbone.embed_tokens = embed_tokens.to_quantized(
+            group_size=group_size,
+            bits=bits,
+            mode=mode,
+        )
+        count += 1
+
+    return count
+
+
 def _install_mimo_v2_rotating_cache_keep_patch_if_needed(text_runtime: Any) -> bool:
     """Patch stale MiMo SWA cache construction to match full-forward windows.
 
@@ -360,6 +571,7 @@ def _register_mimo_v2_mlx_vlm_runtime() -> None:
 
     text_runtime = importlib.import_module("jang_tools.mimo_v2.mlx_model")
     _install_mimo_v2_compiled_router_if_missing(text_runtime)
+    _install_mimo_v2_affine_switchglu_decode_fast_path()
     _install_mimo_v2_rotating_cache_keep_patch_if_needed(text_runtime)
 
     import mlx.nn as nn
@@ -575,7 +787,18 @@ def _register_mimo_v2_mlx_vlm_runtime() -> None:
                 logger.info("MiMo-V2 load quantized %d runtime modules", quantized_count)
                 self._mimo_v2_quantized_for_load = True
 
-            return self.language_model.load_weights(list(filtered.items()), strict=strict)
+            result = self.language_model.load_weights(list(filtered.items()), strict=strict)
+            if isinstance(quantization, dict):
+                hotspot_count = _quantize_mimo_v2_passthrough_decode_hotspots(
+                    self.language_model.inner,
+                    quantization,
+                )
+                if hotspot_count:
+                    logger.info(
+                        "MiMo-V2 load runtime-quantized %d passthrough decode hotspot modules",
+                        hotspot_count,
+                    )
+            return result
 
         def sanitize(self, weights):
             return self.language_model.sanitize(weights)
@@ -633,17 +856,45 @@ def reset_vlm_stream() -> None:
 def _set_vlm_inference_mode(model: Any) -> None:
     """Put mlx-vlm model copies in eval mode so inference kernels stay enabled."""
     seen: set[int] = set()
-    for candidate in (
+    stack = [
         model,
         getattr(model, "language_model", None),
         getattr(model, "model", None),
-    ):
+    ]
+    while stack:
+        candidate = stack.pop()
         if candidate is None or id(candidate) in seen:
             continue
         seen.add(id(candidate))
         eval_fn = getattr(candidate, "eval", None)
         if callable(eval_fn):
-            eval_fn()
+            try:
+                eval_fn()
+            except Exception:
+                pass
+        if hasattr(candidate, "training"):
+            try:
+                setattr(candidate, "training", False)
+            except Exception:
+                pass
+        children_fn = getattr(candidate, "children", None)
+        if callable(children_fn):
+            try:
+                children = children_fn()
+                if isinstance(children, dict):
+                    stack.extend(children.values())
+                else:
+                    stack.extend(children)
+            except Exception:
+                pass
+        for attr in ("inner", "language_model", "model", "layers"):
+            value = getattr(candidate, attr, None)
+            if isinstance(value, dict):
+                stack.extend(value.values())
+            elif isinstance(value, (list, tuple)):
+                stack.extend(value)
+            elif value is not None:
+                stack.append(value)
 
 
 class _MaybeVLMStream:

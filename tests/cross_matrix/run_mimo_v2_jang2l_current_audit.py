@@ -24,7 +24,7 @@ from typing import Any
 DEFAULT_MODEL_PATH = Path("/Users/example/.mlxstudio/models/JANGQ-AI/MiMo-V2.5-JANG_2L")
 DEFAULT_MANIFEST = Path("build/current-mimo-http-manifest-20260606.tsv")
 DEFAULT_OUT = Path(
-    "build/current-mimo-v2-jang2l-current-audit-after-system-fold-cache-proof-20260606.json"
+    "build/current-mimo-v2-jang2l-current-audit-after-fastpath-speed-proof-stale-clean-20260607.json"
 )
 
 STRUCTURAL_ARTIFACT = Path("build/current-mimo-jang2l-local-structural-verify-20260606.json")
@@ -79,6 +79,9 @@ TOOL_SOURCE_PREFLIGHT_ARTIFACT = Path(
 )
 MLLM_INPUTS_EMBEDS_INTERFACE_ARTIFACT = Path(
     "build/current-mimo-v2-mllm-inputs-embeds-interface-fix-20260606.json"
+)
+LATEST_DECODE_SPEED_ARTIFACT = Path(
+    "build/current-decode-speed-live-mimo-v25-jang2l-source-after-fastpath-counters-20260607.json"
 )
 CLEANUP_LOG = Path("build/current-mimo-stale-local-cleanup-20260606.txt")
 
@@ -632,6 +635,63 @@ def _cb_native_thinking_off_evidence(data: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _latest_decode_speed_evidence(data: dict[str, Any]) -> dict[str, Any]:
+    results = data.get("results")
+    result = results[0] if isinstance(results, list) and results else data
+    if not isinstance(result, dict):
+        return {
+            "exists": True,
+            "speed_blocked": True,
+            "classification": "invalid_decode_speed_artifact",
+        }
+
+    bundle = result.get("bundle_sampling")
+    bundle = bundle if isinstance(bundle, dict) else {}
+    greedy = result.get("greedy_topk0")
+    greedy = greedy if isinstance(greedy, dict) else {}
+    coherency = result.get("coherency")
+    coherency = coherency if isinstance(coherency, dict) else {}
+    pp_rows = result.get("pp_rows")
+    pp_rows = pp_rows if isinstance(pp_rows, list) else []
+    health = result.get("health_after")
+    health = health if isinstance(health, dict) else {}
+    native_cache = health.get("native_cache")
+    native_cache = native_cache if isinstance(native_cache, dict) else {}
+    generic_tq = native_cache.get("generic_turboquant_kv")
+    generic_tq = generic_tq if isinstance(generic_tq, dict) else {}
+
+    bundle_tps = bundle.get("decode_tps_wall")
+    greedy_tps = greedy.get("decode_tps_wall")
+    pp_speeds = [
+        row.get("pp_wall_tok_s")
+        for row in pp_rows
+        if isinstance(row, dict) and isinstance(row.get("pp_wall_tok_s"), (int, float))
+    ]
+    coherency_exact = (
+        coherency.get("content_head") == "READY\n17+28=45\nCERULEAN"
+        and coherency.get("loopish") is False
+    )
+    speed_pass = (
+        result.get("status") == "pass"
+        and isinstance(bundle_tps, (int, float))
+        and bundle_tps >= 40.0
+        and coherency_exact
+    )
+    return {
+        "exists": True,
+        "status": result.get("status"),
+        "speed_blocked": not speed_pass,
+        "bundle_decode_tps": bundle_tps,
+        "greedy_decode_tps": greedy_tps,
+        "pp_wall_tok_s": pp_speeds,
+        "coherency_exact": coherency_exact,
+        "native_cache_type": native_cache.get("cache_type"),
+        "generic_turboquant_kv_enabled": generic_tq.get("enabled"),
+        "notes": result.get("notes"),
+        "log_path": result.get("log_path"),
+    }
+
+
 def build_audit(root: Path, model_path: Path, manifest: Path) -> dict[str, Any]:
     model_parent = model_path.parent
     manifest_check = _verify_manifest(model_parent, manifest)
@@ -662,6 +722,7 @@ def build_audit(root: Path, model_path: Path, manifest: Path) -> dict[str, Any]:
     cb_native_thinking_off = _artifact(root / CB_NATIVE_THINKING_OFF_ARTIFACT)
     tool_source_preflight = _artifact(root / TOOL_SOURCE_PREFLIGHT_ARTIFACT)
     mllm_inputs_embeds_interface = _artifact(root / MLLM_INPUTS_EMBEDS_INTERFACE_ARTIFACT)
+    latest_decode_speed = _artifact(root / LATEST_DECODE_SPEED_ARTIFACT)
 
     structural_pass = structural.get("status") == "pass"
     text_cache_pass = text_cache.get("exists") and _text_cache_narrow_pass(text_cache["data"])
@@ -763,6 +824,15 @@ def build_audit(root: Path, model_path: Path, manifest: Path) -> dict[str, Any]:
             prompt_shape_blocked = False
             memory_pressure_blocked = True
         speed_blocked = speed_blocked or bool(cb_native_evidence.get("speed_blocked"))
+    latest_decode_speed_evidence = (
+        _latest_decode_speed_evidence(latest_decode_speed["data"])
+        if latest_decode_speed.get("exists")
+        and isinstance(latest_decode_speed.get("data"), dict)
+        else {"exists": False, "speed_blocked": True}
+    )
+    speed_blocked = speed_blocked or bool(
+        latest_decode_speed_evidence.get("speed_blocked")
+    )
     sink_mode_fails = sink_mode_length.get("exists") and _all_sink_diagnostic_cases_fail(
         sink_mode_length["data"]
     )
@@ -889,6 +959,7 @@ def build_audit(root: Path, model_path: Path, manifest: Path) -> dict[str, Any]:
             "manual_sink_does_not_clear_length_generation": bool(sink_mode_fails),
             "disable_sink_does_not_clear_length_generation": bool(disable_sink_fails),
         },
+        "latest_decode_speed_evidence": latest_decode_speed_evidence,
         "blockers": blockers,
         "artifacts": {
             "structural": str(STRUCTURAL_ARTIFACT),
@@ -910,6 +981,7 @@ def build_audit(root: Path, model_path: Path, manifest: Path) -> dict[str, Any]:
             "cb_native_thinking_off_live_proof": str(CB_NATIVE_THINKING_OFF_ARTIFACT),
             "tool_source_preflight": str(TOOL_SOURCE_PREFLIGHT_ARTIFACT),
             "mllm_inputs_embeds_interface": str(MLLM_INPUTS_EMBEDS_INTERFACE_ARTIFACT),
+            "latest_decode_speed": str(LATEST_DECODE_SPEED_ARTIFACT),
         },
         "diagnostics": {
             "cache_vs_nocache_next_token_match": bool(cache_match),
