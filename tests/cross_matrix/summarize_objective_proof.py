@@ -378,7 +378,7 @@ MIMO_V2_JANG2L_TOOL_DIALECT_REL = (
     "build/current-mimo-v2-jang2l-tool-dialect-failure-20260606.json"
 )
 MIMO_V2_JANG2L_CURRENT_AUDIT_REL = (
-    "build/current-mimo-v2-jang2l-current-audit-after-jangtq2-source-quant-preflight-refresh-20260607.json"
+    "build/current-mimo-v2-jang2l-current-audit-after-jangtq2-local-manifest-speed-refresh-20260607.json"
 )
 MIMO_V2_JANG2L_METADATA_TRUTH_REL = (
     "build/current-mimo-v25-jang2l-local-metadata-truth-patch-20260606.json"
@@ -387,7 +387,7 @@ MIMO_V2_JANG2L_CONSERVATIVE_DIAGNOSTIC_REL = (
     "build/current-mimo-conservative-diagnostic-20260606/summary.json"
 )
 MIMO_V2_JANG2L_NOMEDIA_TOOL_CACHE_REL = (
-    "build/current-all-local-model-smoke-mimo-v25-jang2l-tools-nomedia-after-stop-token-cache-fix-20260606/summary.json"
+    "build/current-all-local-model-smoke-mimo-v25-jangtq2-tools-nomedia-local-refresh-20260607/summary.json"
 )
 ALL_LOCAL_MODEL_SMOKE_DSV4_JANGTQ_K_REL = (
     "build/current-all-local-model-smoke-dsv4-jangtq-k-tools-cache-20260606/summary.json"
