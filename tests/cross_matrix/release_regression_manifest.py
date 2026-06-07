@@ -5678,6 +5678,7 @@ def _validate_current_mimo_v2_jang2l_root_cause(root: Path) -> dict[str, Any]:
         "switchglu_selected_expert_parity_passed": False,
         "prompt_length_coherence_blocked": False,
         "tool_protocol_blocked": False,
+        "artifact_exactness_blocked": False,
         "decode_speed_target_blocked": False,
         "cb_working_set_pressure_blocked": False,
         "media_unwired": False,
@@ -5866,6 +5867,9 @@ def _validate_current_mimo_v2_jang2l_root_cause(root: Path) -> dict[str, Any]:
 
     audit_long_prompt_open = current_audit_component_ok.get("long_prompt_coherence") is False
     audit_tool_protocol_open = current_audit_component_ok.get("tool_protocol") is False
+    audit_artifact_exactness_open = (
+        current_audit_component_ok.get("artifact_exactness") is False
+    )
     audit_decode_speed_open = current_audit_component_ok.get("decode_speed_target") is False
     audit_working_set_open = (
         current_audit_component_ok.get("cb_system_prompt_working_set_pressure") is False
@@ -5894,6 +5898,9 @@ def _validate_current_mimo_v2_jang2l_root_cause(root: Path) -> dict[str, Any]:
         result["prompt_length_coherence_blocked"] = True
     if audit_tool_protocol_open:
         result["tool_protocol_blocked"] = True
+    if audit_artifact_exactness_open:
+        result["artifact_exactness_blocked"] = True
+        result["failures"].append("mimo_jangtq2_artifact_exactness_blocked")
     if audit_decode_speed_open:
         result["decode_speed_target_blocked"] = True
         result["failures"].append("mimo_decode_speed_below_release_target")
@@ -5911,6 +5918,7 @@ def _validate_current_mimo_v2_jang2l_root_cause(root: Path) -> dict[str, Any]:
     if (
         result["prompt_length_coherence_blocked"]
         or result["tool_protocol_blocked"]
+        or result["artifact_exactness_blocked"]
         or result["decode_speed_target_blocked"]
         or result["cb_working_set_pressure_blocked"]
         or result["media_unwired"]
@@ -5923,8 +5931,8 @@ def _validate_current_mimo_v2_jang2l_root_cause(root: Path) -> dict[str, Any]:
         result["release_boundary"] = (
             "local artifact/runtime has narrow text-cache proof but fails long-prompt "
             "coherence, tool protocol, decode speed, working-set pressure, media "
-            "wiring, and/or local source-vs-quant first-divergence proof; do not "
-            "release-clear MiMo"
+            "wiring, current JANGTQ2 artifact exactness, and/or local "
+            "source-vs-quant first-divergence proof; do not release-clear MiMo"
         )
     elif not result["failures"]:
         result["status"] = "pass"

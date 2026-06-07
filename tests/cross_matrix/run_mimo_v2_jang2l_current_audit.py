@@ -256,6 +256,18 @@ def _all_local_smoke_evidence(data: dict[str, Any]) -> dict[str, Any]:
         and failure.get("label") in {"text_cache_repeat_1", "text_cache_repeat_2"}
         for failure in failures
     )
+    exactness_failures = [
+        failure
+        for failure in failures
+        if isinstance(failure, dict)
+        and failure.get("label")
+        in {
+            "tool_required",
+            "structured_json_exact",
+            "exact_code_whitespace",
+            "tool_result_continuation",
+        }
+    ]
     generation_tps = (
         result.get("cache_after", {})
         .get("body", {})
@@ -269,6 +281,8 @@ def _all_local_smoke_evidence(data: dict[str, Any]) -> dict[str, Any]:
     return {
         "exists": True,
         "tool_protocol_pass": tool_protocol_pass,
+        "artifact_exactness_pass": not bool(exactness_failures),
+        "artifact_exactness_failures": exactness_failures,
         "exact_cache_blocked": exact_cache_blocked,
         "speed_blocked": speed_blocked,
         "generation_tps": generation_tps,
@@ -857,12 +871,16 @@ def build_audit(root: Path, model_path: Path, manifest: Path) -> dict[str, Any]:
     )
     if smoke_evidence.get("exists"):
         tool_blocked = not bool(smoke_evidence.get("tool_protocol_pass"))
+        artifact_exactness_blocked = not bool(
+            smoke_evidence.get("artifact_exactness_pass")
+        )
         exact_cache_blocked = bool(smoke_evidence.get("exact_cache_blocked"))
         speed_blocked = bool(smoke_evidence.get("speed_blocked"))
     else:
         tool_blocked = tool_failure.get("exists") and _tool_protocol_blocked(
             tool_failure["data"]
         )
+        artifact_exactness_blocked = False
         exact_cache_blocked = False
         speed_blocked = True
     if synced_evidence.get("exists"):
@@ -976,6 +994,7 @@ def build_audit(root: Path, model_path: Path, manifest: Path) -> dict[str, Any]:
         and cache_match
         and not length_blocked
         and not tool_blocked
+        and not artifact_exactness_blocked
         and not exact_cache_blocked
         and not speed_blocked
         and not prompt_shape_blocked
@@ -1005,6 +1024,8 @@ def build_audit(root: Path, model_path: Path, manifest: Path) -> dict[str, Any]:
         blockers.append("mimo_long_prompt_coherence_blocked")
     if tool_blocked:
         blockers.append("mimo_tool_protocol_blocked")
+    if artifact_exactness_blocked:
+        blockers.append("mimo_jangtq2_artifact_exactness_blocked")
     if exact_cache_blocked:
         blockers.append("mimo_exact_cache_prompt_following_blocked")
     if speed_blocked:
@@ -1041,6 +1062,7 @@ def build_audit(root: Path, model_path: Path, manifest: Path) -> dict[str, Any]:
             "cache_vs_nocache_next_token": bool(cache_match),
             "long_prompt_coherence": not bool(length_blocked),
             "tool_protocol": not bool(tool_blocked),
+            "artifact_exactness": not bool(artifact_exactness_blocked),
             "exact_cache_prompt_following": not bool(exact_cache_blocked),
             "decode_speed_target": not bool(speed_blocked),
             "system_prompt_first_token_stop": not bool(prompt_shape_blocked),
@@ -1118,10 +1140,12 @@ def build_audit(root: Path, model_path: Path, manifest: Path) -> dict[str, Any]:
         },
         "release_boundary": (
             "MiMo local artifact integrity is clean, but release remains blocked "
-            "until long-prompt coherence, tool protocol, decode speed, CB system "
-            "prompt working-set pressure, local source-vs-quant first-divergence, "
-            "and media wiring proof pass without fake parser injection, hidden "
-            "thinking-mode rewrites, forced fallback, or cache disabling."
+            "until long-prompt coherence, tool protocol/artifact exactness, "
+            "decode speed, CB system prompt working-set pressure, local "
+            "source-vs-quant first-divergence or an equivalent current-artifact "
+            "classification, and media wiring proof pass without fake parser "
+            "injection, hidden thinking-mode rewrites, forced fallback, or cache "
+            "disabling."
         ),
     }
 
