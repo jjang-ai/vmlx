@@ -914,6 +914,28 @@ def check_and_inject_fallback_tools(
         else:
             msg["content"] = (content or "") + "\n\n" + text
 
+    def _splice_tool_prompt_into_rendered_chatml(rendered: str, text: str) -> str:
+        """Keep fallback tool instructions inside the first ChatML system turn.
+
+        MiMo-V2's Jinja template can drop synthetic system/user fallback
+        messages after re-render. Prefixing parser instructions before
+        ``<|im_start|>system`` leaves the model outside its native conversation
+        frame and was observed in live MiMo XML-tool probes. If we must fall
+        back to string surgery, keep the instructions within the rendered
+        ChatML system message instead of changing the prompt's outer framing.
+        """
+
+        marker = "<|im_start|>system\n"
+        start = rendered.find(marker)
+        if start < 0:
+            return text + "\n\n" + rendered
+        body_start = start + len(marker)
+        end = rendered.find("<|im_end|>", body_start)
+        insertion = "\n\n" + text
+        if end < 0:
+            return rendered[:body_start] + insertion.lstrip() + rendered[body_start:]
+        return rendered[:end] + insertion + rendered[end:]
+
     # Inject into messages
     messages_copy = [dict(m) for m in messages]
     injected = False
@@ -1015,8 +1037,10 @@ def check_and_inject_fallback_tools(
                 return new_prompt
         logger.warning(
             "Chat template dropped fallback tool schema after first-user "
-            "injection; prefixing rendered prompt directly."
+            "injection; applying rendered-prompt fallback."
         )
+        if is_xml_function_native_tool_prompt:
+            return _splice_tool_prompt_into_rendered_chatml(prompt, tool_prompt)
         return tool_prompt + "\n\n" + prompt
     except Exception as e:
         logger.error(f"Failed to apply template with injected tools: {e}")

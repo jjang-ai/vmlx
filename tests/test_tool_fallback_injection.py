@@ -330,3 +330,51 @@ def test_mimo_xml_function_fallback_matches_parser_dialect(mock_messages):
     assert "<function=record_fact>" in result
     assert "<parameter=value>" in result
     assert '"name": "FUNCTION_NAME"' not in result
+
+
+def test_mimo_xml_function_direct_fallback_stays_inside_chatml_system():
+    """If MiMo drops injected fallback messages, do not prefix outside ChatML."""
+    mock_tokenizer = MagicMock()
+    prompt = (
+        "<|im_start|>system\n"
+        "You are MiMo.<|im_end|>"
+        "<|im_start|>user\n"
+        "Use the record_fact tool exactly once with value blue-cat.<|im_end|>"
+        "<|im_start|>assistant\n"
+        "<think></think>"
+    )
+    mock_tokenizer.apply_chat_template.return_value = prompt
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "record_fact",
+                "description": "Record a fact.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"value": {"type": "string"}},
+                    "required": ["value"],
+                },
+            },
+        },
+    ]
+    messages = [
+        {
+            "role": "user",
+            "content": "Use the record_fact tool exactly once with value blue-cat.",
+        },
+    ]
+
+    result = check_and_inject_fallback_tools(
+        prompt=prompt,
+        messages=messages,
+        template_tools=tools,
+        tokenizer=mock_tokenizer,
+        template_kwargs={"add_generation_prompt": True, "enable_thinking": False},
+        tool_parser_id="xml_function",
+    )
+
+    assert result.startswith("<|im_start|>system\nYou are MiMo.")
+    assert "You have access to MiMo XML function tools" in result
+    assert result.index("You have access to MiMo XML function tools") < result.index("<|im_end|>")
+    assert not result.startswith("You have access to MiMo XML function tools")
