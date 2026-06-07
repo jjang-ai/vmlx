@@ -5,7 +5,7 @@ def test_generation_defaults_contract_default_out_tracks_current_release_proof_a
     from tests.cross_matrix import run_generation_defaults_contract as gate
 
     assert gate.DEFAULT_OUT == Path(
-        "build/current-generation-defaults-contract-gemma4-release-boundary-20260604.json"
+        "build/current-generation-defaults-contract-after-do-sample-false-mimo-20260607.json"
     )
 
 
@@ -36,6 +36,11 @@ def test_generation_defaults_contract_pins_named_default_edges():
     assert "test_effort_does_not_synthesize_max_tokens_when_unset" in required
     assert "surfaces Max Output Tokens separately from Max Context Tokens" in required
     assert "test_session_command_preview_mirrors_runtime_default_flags" in required
+    assert "test_panel_serve_flags_are_registered_engine_cli_flags" in required
+    assert "test_runtime_and_preview_additional_arg_filters_share_blocklists" in required
+    assert "test_panel_cli_flag_contract_covers_dsv4_cache_and_output_boundaries" in required
+    assert "test_command_preview_uses_runtime_numeric_sanitizers_for_core_flags" in required
+    assert "test_text_stale_value_flags_strip_their_values_in_preview_and_runtime" in required
     assert "test_local_generation_metadata_audit_flags_thinking_template_without_budget" in required
     assert "test_local_generation_metadata_audit_accepts_template_budget_support" in required
     assert "marks thinking-budget unsupported when the template has thinking but no budget variable" in required
@@ -46,6 +51,7 @@ def test_generation_defaults_contract_pins_named_default_edges():
     engine_command = gate.COMMANDS["engine_generation_defaults"][1]
     assert "--reporter=verbose" in panel_command
     assert "-vv" in engine_command
+    assert gate.COMMANDS["panel_cli_startup_contract"][1][-1] == "tests/test_panel_cli_flag_contract.py"
 
 
 def test_generation_defaults_contract_publishes_structured_family_matrix():
@@ -55,10 +61,12 @@ def test_generation_defaults_contract_publishes_structured_family_matrix():
         "standard_mlx_generation_config",
         "jang_chat_sampling_overrides",
         "disabled_top_k_sentinel",
+        "generation_config_do_sample_false",
         "dsv4_direct_chat_repetition_policy",
         "max_output_context_separation",
         "thinking_budget_template_support",
         "additional_args_no_override",
+        "cli_mlxstudio_startup_parity",
         "registered_family_max_token_contract",
     }
 
@@ -84,3 +92,10 @@ def test_generation_defaults_contract_publishes_structured_family_matrix():
     ]
     assert "panel_max_output_context_labels_are_separated" in output_context["checks"]
     assert "surfaces Max Output Tokens separately from Max Context Tokens" in output_context["markers"]
+
+    startup = gate.REQUIRED_GENERATION_DEFAULT_FAMILY_MATRIX[
+        "cli_mlxstudio_startup_parity"
+    ]
+    assert "cli_startup_flags_match_engine" in startup["checks"]
+    assert "mlxstudio_startup_preview_matches_runtime" in startup["checks"]
+    assert "startup_surface_independence_pinned" in startup["checks"]

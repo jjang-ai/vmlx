@@ -24,7 +24,7 @@ from tests.cross_matrix.run_current_regression_suite import (
 )
 
 CURRENT_RELEASE_REGRESSION_MANIFEST_ARTIFACT = (
-    "build/current-release-regression-manifest-after-mllm-tight-memory-guard-20260607.json"
+    "build/current-release-regression-manifest-after-mimo-no-source-classifier-20260607.json"
 )
 
 EXPECTED_CURRENT_MODEL_ARTIFACT_CHECKS = (
@@ -363,31 +363,31 @@ REQUIRED_RELEASE_DOMAINS = {
 }
 
 CURRENT_POST_BUDGET_EDGE_ARTIFACTS = {
-    "noheavy-api-cache-endpoint-runtime": "build/current-noheavy-api-cache-contract-after-jangtq2-objective-refresh-20260607.json",
-    "chat-settings-max-output-context-ui": "build/current-max-output-context-contract-after-jangtq2-objective-refresh-20260607.json",
+    "noheavy-api-cache-endpoint-runtime": "build/current-noheavy-api-cache-contract-after-qwen36-bundled-media-pass-20260607.json",
+    "chat-settings-max-output-context-ui": "build/current-max-output-context-contract-after-current-mimo-proof-20260607.json",
     "panel-session-cache-settings-family-gating": "build/current-panel-settings-contract-proof-20260601-cache-ui-storage-quant.json",
-    "generation-defaults-no-hidden-forcing": "build/current-generation-defaults-contract-after-jangtq2-objective-refresh-20260607.json",
-    "parser-registry-tool-reasoning-parity": "build/current-parser-registry-contract-after-jangtq2-objective-refresh-20260607.json",
+    "generation-defaults-no-hidden-forcing": "build/current-generation-defaults-contract-after-do-sample-false-mimo-20260607.json",
+    "parser-registry-tool-reasoning-parity": "build/current-parser-registry-contract-after-mimo-capability-snapshot-fix-20260607.json",
     "reasoning-template-no-think-tag-leak": "build/current-reasoning-template-contract-20260526-settings-audit.json",
-    "tool-call-loop-parser-cleanup": "build/current-tool-call-contract-after-jangtq2-objective-refresh-20260607.json",
+    "tool-call-loop-parser-cleanup": "build/current-tool-call-contract-after-current-mimo-proof-20260607.json",
     "panel-tool-security-loop-boundary": "build/current-panel-tool-security-contract-20260528-tool-loop-security-matrix.json",
     "api-chat-responses-anthropic-ollama-parity": "build/current-api-surface-contract-20260602-v1554-stream-cache-reuse-refresh.json",
-    "cache-architecture-family-classification": "build/current-cache-architecture-contract-after-mllm-tight-memory-guard-20260607.json",
+    "cache-architecture-family-classification": "build/current-cache-architecture-contract-after-mimo-capability-snapshot-fix-20260607.json",
     "jang-model-compat-runtime-boundary": "build/current-jang-model-compat-contract-20260528-pr155-runtime-boundary.json",
-    "model-artifact-format-detection": "build/current-model-artifact-format-contract-after-mllm-tight-memory-guard-20260607.json",
-    "model-family-detection-noheavy": "build/current-model-family-detection-contract-after-jangtq2-objective-refresh-20260607.json",
-    "native-mtp-d3-effect-policy": "build/current-native-mtp-contract-after-mllm-tight-memory-guard-20260607.json",
+    "model-artifact-format-detection": "build/current-model-artifact-format-contract-after-mimo-capability-snapshot-fix-20260607.json",
+    "model-family-detection-noheavy": "build/current-model-family-detection-contract-after-mimo-capability-snapshot-fix-20260607.json",
+    "native-mtp-d3-effect-policy": "build/current-native-mtp-contract-after-mimo-capability-snapshot-fix-20260607.json",
     "mcp-policy-ui-gateway": "build/current-mcp-policy-contract-20260531-post-step-lfm-refresh.json",
-    "vl-media-cache-tool-followup": "build/current-vl-media-cache-contract-after-mllm-tight-memory-guard-20260607.json",
-    "packaged-release-integrity": "build/current-packaged-integrity-contract-after-bundle-refresh-20260606.json",
+    "vl-media-cache-tool-followup": "build/current-vl-media-cache-contract-after-mimo-capability-snapshot-fix-20260607.json",
+    "packaged-release-integrity": "build/current-packaged-integrity-contract-after-staged-sequoia-rebuild-current-source-20260607.json",
     "public-release-surface-preflight": "build/current-release-surface-contract-20260602-v154-live-public-after-site-fix.json",
 }
 
 CURRENT_REGRESSION_SUITE_ARTIFACT = (
-    "build/current-regression-suite-after-mllm-tight-memory-guard-20260607.json"
+    "build/current-regression-suite-after-packaged-integrity-pass-20260607.json"
 )
 CURRENT_ISSUE175_179_RELEASE_BOUNDARY_AUDIT_ARTIFACT = (
-    "build/current-issue175-179-release-boundary-audit-after-public-v1556-scan-20260606.json"
+    "build/current-issue175-179-release-boundary-audit-after-issue179-memory-preflight-20260607.json"
 )
 CURRENT_INSTALLED_APP_RUNTIME_PARITY_AUDIT_ARTIFACT = (
     "build/current-installed-app-runtime-parity-audit-after-installed-app-rebuild-20260606.json"
@@ -402,7 +402,7 @@ CURRENT_ISSUE175_177_LIVE_RUNTIME_AUDIT_ARTIFACT = (
     "build/current-issue175-177-live-runtime-audit-20260601-local-refresh.json"
 )
 CURRENT_ISSUE179_MINIMAX_K_ROOT_CAUSE_AUDIT_ARTIFACT = (
-    "build/current-issue179-minimax-k-root-cause-audit-after-current-source-cancel-refresh-20260607.json"
+    "build/current-issue179-minimax-k-root-cause-audit-after-local-repro-memory-preflight-20260607.json"
 )
 CURRENT_ISSUE179_MINIMAX_K_LIVE_PROBE_MEMORY_PREFLIGHT_ARTIFACT = (
     "build/current-issue179-minimax-k-responses-cancel-probe-memory-preflight-20260602-local-ready-check.json"
@@ -411,7 +411,7 @@ CURRENT_ISSUE181_183_RUNTIME_AUDIT_ARTIFACT = (
     "build/current-issue181-183-runtime-audit-20260602-v1554-installed-tahoe-refresh.json"
 )
 CURRENT_PUBLIC_APP_ISSUE_AUDIT_ARTIFACT = (
-    "build/current-public-app-issue-audit-after-public-v1556-scan-20260606.json"
+    "build/current-public-app-issue-audit-after-issue179-memory-preflight-20260607.json"
 )
 CURRENT_DEV_UI_PROOF_ARTIFACTS = {
     "proof": "docs/internal/agent-notes/2026-05-31-live-chat-tools-reasoning-proof.json",
@@ -426,13 +426,13 @@ CURRENT_REAL_UI_DSV4_MEMORY_PREFLIGHT_ARTIFACT = (
     "build/current-real-ui-dsv4-memory-preflight-after-lfm-step-manifest-fix-20260604.json"
 )
 CURRENT_STEP37_VLM_RUNTIME_AUDIT_ARTIFACT = (
-    "build/current-step37-vlm-runtime-audit-after-gemma4-vl-refresh-20260606.json"
+    "build/current-step37-vlm-runtime-audit-after-source-live-media-proof-20260607.json"
 )
 DEFERRED_RELEASE_FAMILIES = {
     "dsv4": "deferred_per_20260602_emergency_release_scope",
 }
 CURRENT_DSV4_SOURCE_MEMORY_PREFLIGHT_ARTIFACT = (
-    "build/current-dsv4-route-mode-code-exactness-preflight-after-mimo-ledger-20260607.json"
+    "build/current-dsv4-route-mode-code-exactness-preflight-after-release-manifest-refresh-20260607.json"
 )
 EXPECTED_DSV4_SOURCE_PREFLIGHT_CASES = (
     "chat_off",
@@ -536,31 +536,52 @@ CURRENT_REAL_UI_LIVE_MODEL_PROOF_ROWS = {
         "family": "gemma4",
     },
     "qwen36_mxfp4_crack": {
-        "proof": "docs/internal/agent-notes/current-real-ui-live-model-qwen36-mxfp4-crack-20260527-proof.json",
-        "chat_screenshot": "docs/internal/agent-notes/current-real-ui-live-model-qwen36-mxfp4-crack-20260527-chat.png",
-        "model_path": "/Users/example/models/dealign.ai/Qwen3.6-27B-MXFP4-CRACK",
-        "model_name": "Qwen3.6-27B-MXFP4-CRACK",
+        "proof": "docs/internal/agent-notes/current-real-ui-live-model-qwen36-27b-jang4m-mtp-responses-tools-cachecontrols-deterministic-mtp-20260607-proof.json",
+        "chat_screenshot": "docs/internal/agent-notes/current-real-ui-live-model-qwen36-27b-jang4m-mtp-responses-tools-cachecontrols-deterministic-mtp-20260607-chat.png",
+        "model_path": "/Users/example/models/JANGQ/Qwen3.6-27B-JANG_4M-MTP",
+        "model_name": "Qwen3.6-27B-JANG_4M-MTP",
         "family": "qwen36",
     },
     "qwen36_mxfp4_crack_video": {
-        "proof": "docs/internal/agent-notes/diagnostic-real-ui-live-model-qwen36-mxfp4-crack-video-20260527-proof.json",
-        "chat_screenshot": "docs/internal/agent-notes/diagnostic-real-ui-live-model-qwen36-mxfp4-crack-video-20260527-chat.png",
-        "model_path": "/Users/example/models/dealign.ai/Qwen3.6-27B-MXFP4-CRACK",
-        "model_name": "Qwen3.6-27B-MXFP4-CRACK",
+        "proof": "docs/internal/agent-notes/current-real-ui-live-model-qwen36-27b-jang4m-mtp-responses-tools-video-reasoning-cachecontrols-max256-20260607-proof.json",
+        "chat_screenshot": "docs/internal/agent-notes/current-real-ui-live-model-qwen36-27b-jang4m-mtp-responses-tools-video-reasoning-cachecontrols-max256-20260607-chat.png",
+        "model_path": "/Users/example/models/JANGQ/Qwen3.6-27B-JANG_4M-MTP",
+        "model_name": "Qwen3.6-27B-JANG_4M-MTP",
         "family": "qwen36",
     },
     "qwen36_mxfp4_crack_responses_tools_reasoning_image_cachecontrols": {
-        "proof": "docs/internal/agent-notes/current-real-ui-live-model-qwen36-mxfp4-crack-responses-tools-reasoning-image-cachecontrols-localonly-20260527-proof.json",
-        "chat_screenshot": "docs/internal/agent-notes/current-real-ui-live-model-qwen36-mxfp4-crack-responses-tools-reasoning-image-cachecontrols-localonly-20260527-chat.png",
-        "model_path": "/Users/example/models/dealign.ai/Qwen3.6-27B-MXFP4-CRACK",
-        "model_name": "Qwen3.6-27B-MXFP4-CRACK",
+        "proof": "docs/internal/agent-notes/current-real-ui-live-model-qwen36-27b-jang4m-mtp-responses-tools-image-reasoning-cachecontrols-max256-20260607-proof.json",
+        "chat_screenshot": "docs/internal/agent-notes/current-real-ui-live-model-qwen36-27b-jang4m-mtp-responses-tools-image-reasoning-cachecontrols-max256-20260607-chat.png",
+        "model_path": "/Users/example/models/JANGQ/Qwen3.6-27B-JANG_4M-MTP",
+        "model_name": "Qwen3.6-27B-JANG_4M-MTP",
         "family": "qwen36",
     },
     "qwen36_mxfp4_crack_responses_stricttools_cachecontrols": {
-        "proof": "docs/internal/agent-notes/current-real-ui-live-model-qwen36-mxfp4-crack-responses-stricttools-image-cachecontrols-20260530-proof.json",
-        "chat_screenshot": "docs/internal/agent-notes/current-real-ui-live-model-qwen36-mxfp4-crack-responses-stricttools-image-cachecontrols-20260530-chat.png",
-        "model_path": "/Users/example/models/dealign.ai/Qwen3.6-27B-MXFP4-CRACK",
-        "model_name": "Qwen3.6-27B-MXFP4-CRACK",
+        "proof": "docs/internal/agent-notes/current-real-ui-live-model-qwen36-27b-jang4m-mtp-responses-tools-cachecontrols-deterministic-mtp-20260607-proof.json",
+        "chat_screenshot": "docs/internal/agent-notes/current-real-ui-live-model-qwen36-27b-jang4m-mtp-responses-tools-cachecontrols-deterministic-mtp-20260607-chat.png",
+        "model_path": "/Users/example/models/JANGQ/Qwen3.6-27B-JANG_4M-MTP",
+        "model_name": "Qwen3.6-27B-JANG_4M-MTP",
+        "family": "qwen36",
+    },
+    "qwen36_35b_mxfp8_mtp_responses_tools_cachecontrols": {
+        "proof": "docs/internal/agent-notes/current-real-ui-live-model-qwen36-35b-mxfp8-mtp-responses-tools-cachecontrols-deterministic-mtp-20260607-proof.json",
+        "chat_screenshot": "docs/internal/agent-notes/current-real-ui-live-model-qwen36-35b-mxfp8-mtp-responses-tools-cachecontrols-deterministic-mtp-20260607-chat.png",
+        "model_path": "/Users/example/models/JANGQ/Qwen3.6-35B-A3B-MXFP8-MTP",
+        "model_name": "Qwen3.6-35B-A3B-MXFP8-MTP",
+        "family": "qwen36",
+    },
+    "qwen36_35b_mxfp8_mtp_responses_tools_reasoning_image_cachecontrols": {
+        "proof": "docs/internal/agent-notes/current-real-ui-live-model-qwen36-35b-mxfp8-mtp-responses-tools-image-reasoning-cachecontrols-max256-20260607-proof.json",
+        "chat_screenshot": "docs/internal/agent-notes/current-real-ui-live-model-qwen36-35b-mxfp8-mtp-responses-tools-image-reasoning-cachecontrols-max256-20260607-chat.png",
+        "model_path": "/Users/example/models/JANGQ/Qwen3.6-35B-A3B-MXFP8-MTP",
+        "model_name": "Qwen3.6-35B-A3B-MXFP8-MTP",
+        "family": "qwen36",
+    },
+    "qwen36_35b_mxfp8_mtp_responses_tools_reasoning_video_cachecontrols": {
+        "proof": "docs/internal/agent-notes/current-real-ui-live-model-qwen36-35b-mxfp8-mtp-responses-tools-video-reasoning-cachecontrols-max512-20260607-proof.json",
+        "chat_screenshot": "docs/internal/agent-notes/current-real-ui-live-model-qwen36-35b-mxfp8-mtp-responses-tools-video-reasoning-cachecontrols-max512-20260607-chat.png",
+        "model_path": "/Users/example/models/JANGQ/Qwen3.6-35B-A3B-MXFP8-MTP",
+        "model_name": "Qwen3.6-35B-A3B-MXFP8-MTP",
         "family": "qwen36",
     },
     "minimax_m27_small_jangtq": {
@@ -676,24 +697,24 @@ CURRENT_REAL_UI_LIVE_MODEL_PROOF_ROWS = {
         "family": "step37",
     },
     "lfm25_moe_a1b": {
-        "proof": "docs/internal/agent-notes/current-real-ui-live-model-lfm25-moe-a1b-jang2l-stricttools-chat-20260530-proof.json",
-        "chat_screenshot": "docs/internal/agent-notes/current-real-ui-live-model-lfm25-moe-a1b-jang2l-stricttools-chat-20260530-chat.png",
-        "model_path": "/Users/example/.mlxstudio/models/JANGQ-AI/LFM2.5-8B-A1B-JANG_2L",
-        "model_name": "LFM2.5-8B-A1B-JANG_2L",
+        "proof": "docs/internal/agent-notes/current-real-ui-live-model-lfm25-mxfp4-responses-tools-cachecontrols-20260607-proof.json",
+        "chat_screenshot": "docs/internal/agent-notes/current-real-ui-live-model-lfm25-mxfp4-responses-tools-cachecontrols-20260607-chat.png",
+        "model_path": "/Users/example/.mlxstudio/models/JANGQ-AI/LFM2.5-8B-A1B-MXFP4",
+        "model_name": "LFM2.5-8B-A1B-MXFP4",
         "family": "lfm25",
     },
     "lfm25_moe_a1b_responses_delta": {
-        "proof": "docs/internal/agent-notes/current-real-ui-live-model-lfm25-jang2l-continuation-responses-tools-cache-settings-default-max512-20260604-proof.json",
-        "chat_screenshot": "docs/internal/agent-notes/current-real-ui-live-model-lfm25-jang2l-continuation-responses-tools-cache-settings-default-max512-20260604-chat.png",
-        "model_path": "/Users/example/.mlxstudio/models/JANGQ-AI/LFM2.5-8B-A1B-JANG_2L",
-        "model_name": "LFM2.5-8B-A1B-JANG_2L",
+        "proof": "docs/internal/agent-notes/current-real-ui-live-model-lfm25-mxfp4-responses-tools-cachecontrols-20260607-proof.json",
+        "chat_screenshot": "docs/internal/agent-notes/current-real-ui-live-model-lfm25-mxfp4-responses-tools-cachecontrols-20260607-chat.png",
+        "model_path": "/Users/example/.mlxstudio/models/JANGQ-AI/LFM2.5-8B-A1B-MXFP4",
+        "model_name": "LFM2.5-8B-A1B-MXFP4",
         "family": "lfm25",
     },
     "lfm25_moe_a1b_responses": {
-        "proof": "docs/internal/agent-notes/current-real-ui-live-model-lfm25-moe-a1b-jang2l-stricttools-responses-post-epipe-20260531-proof.json",
-        "chat_screenshot": "docs/internal/agent-notes/current-real-ui-live-model-lfm25-moe-a1b-jang2l-stricttools-responses-post-epipe-20260531-chat.png",
-        "model_path": "/Users/example/.mlxstudio/models/JANGQ-AI/LFM2.5-8B-A1B-JANG_2L",
-        "model_name": "LFM2.5-8B-A1B-JANG_2L",
+        "proof": "docs/internal/agent-notes/current-real-ui-live-model-lfm25-mxfp4-responses-tools-cachecontrols-20260607-proof.json",
+        "chat_screenshot": "docs/internal/agent-notes/current-real-ui-live-model-lfm25-mxfp4-responses-tools-cachecontrols-20260607-chat.png",
+        "model_path": "/Users/example/.mlxstudio/models/JANGQ-AI/LFM2.5-8B-A1B-MXFP4",
+        "model_name": "LFM2.5-8B-A1B-MXFP4",
         "family": "lfm25",
     },
 }
@@ -720,6 +741,18 @@ REQUIRED_REAL_UI_LIVE_MODEL_FAMILIES = (
     "step37",
     "lfm25",
 )
+REQUIRED_REAL_UI_LIVE_MODEL_VARIANTS_BY_FAMILY = {
+    "qwen36": {
+        "model_names": {
+            "Qwen3.6-27B-JANG_4M-MTP",
+            "Qwen3.6-35B-A3B-MXFP8-MTP",
+        },
+        "model_paths": {
+            "/Users/example/models/JANGQ/Qwen3.6-27B-JANG_4M-MTP",
+            "/Users/example/models/JANGQ/Qwen3.6-35B-A3B-MXFP8-MTP",
+        },
+    },
+}
 REQUIRED_REAL_UI_LIVE_MODEL_SURFACES = (
     "current_electron_dev_build",
     "real_loaded_model",
@@ -802,24 +835,24 @@ REQUIRED_REAL_UI_LIVE_MODEL_SURFACES_BY_FAMILY = {
     ),
 }
 CURRENT_COVERED_LIVE_SMOKE_ARTIFACTS = {
-    "zaya_text_mxfp4": "build/current-all-local-model-smoke-zaya-text-bundled-20260524/summary.json",
-    "ling_flash_tq": "build/current-all-local-model-smoke-ling-bailing-jangtq-bundled-20260525-rerun/summary.json",
-    "gemma4_crack": "build/current-all-local-model-smoke-gemma26-jang4m-tools-media-continuation-20260606/summary.json",
-    "qwen36_moe_crack": "build/current-all-local-model-smoke-qwen36-mxfp4-crack-bundled-20260525-rerun/summary.json",
-    "hy3_preview_jangtq2": "build/current-all-local-model-smoke-hy3-jangtq2-bundled-toolprobe-20260525/summary.json",
-    "minimax_m27_tq_k": "build/current-all-local-model-smoke-minimaxk-tools-continuation-20260606/summary.json",
-    "nemotron_omni_tq2_system_nomedia": "build/current-all-local-model-smoke-nemotron-omni-jangtq-video-bundled-20260526-rerun/summary.json",
-    "zaya_vl_jangtq4": "build/current-all-local-model-smoke-zaya-vl-mxfp4-after-thinking-capability-truth-20260606/summary.json",
-    "dsv4_jang_local": "build/current-all-local-model-smoke-dsv4-jangtq-k-tools-cache-20260606/summary.json",
+    "zaya_text_mxfp4": "build/current-filtered-live-smoke-zaya-text-mxfp4-20260607/summary.json",
+    "ling_flash_tq": "build/current-filtered-live-smoke-ling-flash-jangtq-20260607/summary.json",
+    "gemma4_crack": "build/current-all-local-model-smoke-gemma26-jang4m-bundled-tools-media-20260607/summary.json",
+    "qwen36_moe_crack": "build/current-all-local-model-smoke-qwen36-27b-jang4m-mtp-bundled-tools-media-20260607/summary.json",
+    "hy3_preview_jangtq2": "build/current-filtered-live-smoke-hy3-preview-jangtq2-20260607/summary.json",
+    "minimax_m27_tq_k": "build/current-all-local-model-smoke-minimaxk-bundled-after-required-tool-256-20260607/summary.json",
+    "nemotron_omni_tq2_system_nomedia": "build/current-filtered-live-smoke-nemotron-omni-jangtq-20260607/summary.json",
+    "zaya_vl_jangtq4": "build/current-all-local-model-smoke-zaya-vl-mxfp4-bundled-after-source-tool-pass-20260607/summary.json",
+    "dsv4_jang_local": "build/current-filtered-live-smoke-dsv4-jangtq-k-20260607/summary.json",
 }
 CURRENT_COVERED_LIVE_TOOL_SMOKE_ARTIFACTS = {
-    "nemotron_omni_tq2_system_nomedia": "build/current-all-local-model-smoke-nemotron-omni-jangtq-bundled-toolprobe-20260525/summary.json",
-    "ling_flash_tq": "build/current-all-local-model-smoke-ling-bailing-jangtq-bundled-toolprobe-20260525/summary.json",
-    "gemma4_crack": "build/current-all-local-model-smoke-gemma4-26b-jang4m-crack-bundled-toolprobe-currentmodality-20260526/summary.json",
-    "qwen36_moe_crack": "build/current-all-local-model-smoke-qwen36-mxfp4-crack-bundled-toolprobe-20260525/summary.json",
-    "hy3_preview_jangtq2": "build/current-all-local-model-smoke-hy3-jangtq2-bundled-toolprobe-20260525/summary.json",
-    "minimax_m27_tq_k": "build/current-all-local-model-smoke-minimax-small-jangtq-bundled-toolprobe-20260525/summary.json",
-    "zaya_vl_jangtq4": "build/current-all-local-model-smoke-zaya-vl-mxfp4-after-thinking-capability-truth-20260606/summary.json",
+    "nemotron_omni_tq2_system_nomedia": "build/current-filtered-live-smoke-nemotron-omni-jangtq-20260607/summary.json",
+    "ling_flash_tq": "build/current-filtered-live-smoke-ling-flash-jangtq-20260607/summary.json",
+    "gemma4_crack": "build/current-all-local-model-smoke-gemma26-jang4m-bundled-tools-media-20260607/summary.json",
+    "qwen36_moe_crack": "build/current-all-local-model-smoke-qwen36-27b-jang4m-mtp-bundled-tools-media-20260607/summary.json",
+    "hy3_preview_jangtq2": "build/current-filtered-live-smoke-hy3-preview-jangtq2-20260607/summary.json",
+    "minimax_m27_tq_k": "build/current-all-local-model-smoke-minimaxk-bundled-after-required-tool-256-20260607/summary.json",
+    "zaya_vl_jangtq4": "build/current-all-local-model-smoke-zaya-vl-mxfp4-bundled-after-source-tool-pass-20260607/summary.json",
 }
 CURRENT_MIMO_V2_JANG2L_STRUCTURAL_VERIFY_ARTIFACT = (
     "build/current-mimo-jang2l-local-structural-verify-20260606.json"
@@ -837,7 +870,7 @@ CURRENT_MIMO_V2_JANG2L_TOOL_DIALECT_ARTIFACT = (
     "build/current-mimo-v2-jang2l-tool-dialect-failure-20260606.json"
 )
 CURRENT_MIMO_V2_JANG2L_CURRENT_AUDIT_ARTIFACT = (
-    "build/current-mimo-v2-jang2l-current-audit-after-jangtq2-local-manifest-speed-refresh-20260607.json"
+    "build/current-mimo-v2-jang2l-current-audit-after-do-sample-false-rerun-20260607.json"
 )
 CURRENT_MIMO_V2_JANG2L_METADATA_TRUTH_ARTIFACT = (
     "build/current-mimo-v25-jang2l-local-metadata-truth-patch-20260606.json"
@@ -845,43 +878,17 @@ CURRENT_MIMO_V2_JANG2L_METADATA_TRUTH_ARTIFACT = (
 CURRENT_MIMO_V2_JANG2L_SOURCE_VS_QUANT_ARTIFACT = (
     "build/current-mimo-v2-jangtq2-source-vs-quant-first-divergence-preflight-20260607.json"
 )
+CURRENT_MIMO_V2_JANG2L_NO_SOURCE_EXACTNESS_CLASSIFIER_ARTIFACT = (
+    "build/current-mimo-v2-no-source-exactness-classifier-after-do-sample-false-20260607.json"
+)
 CURRENT_DIAGNOSTIC_LIVE_SMOKE_ARTIFACTS = {
-    "zaya_text_mxfp4_toolprobe": {
-        "artifact": "build/current-all-local-model-smoke-zaya-text-bundled-toolprobe-20260525/summary.json",
-        "expected_status": "fail",
-        "expected_label_reasons": {
-            "text_cache_repeat_1": "expected_exact_ack_missing",
-            "text_cache_repeat_2": "expected_exact_ack_missing",
-        },
-    },
-    "zaya_vl_jangtq4_prefix_toolprobe": {
-        "artifact": "build/current-all-local-model-smoke-zaya-vl-jangtq4-bundled-toolprobe-20260525/summary.json",
-        "expected_status": "fail",
-        "expected_label_reasons": {
-            "tool_required": "expected_tool_argument_missing",
-        },
-    },
-    "zaya_vl_jangtq4_reasoning_media_rerun": {
-        "artifact": "build/current-all-local-model-smoke-zaya-vl-jangtq4-tool-reasoning-media-bundled-20260526/summary.json",
-        "expected_status": "fail",
-        "expected_label_reasons": {
-            "reasoning_on": "empty_visible",
-            "text_no_media_after_image": [
-                "expected_no_media_missing",
-                "unexpected_media_carryover_claim",
-            ],
-        },
-    },
-    "nemotron_omni_media_isolation_video_probe": {
-        "artifact": "build/current-all-local-model-smoke-nemotron-omni-jangtq-video-bundled-20260526/summary.json",
-        "expected_status": "fail",
-        "expected_label_reasons": {
-            "text_no_media_after_image": [
-                "expected_no_media_missing",
-                "unexpected_media_carryover_claim",
-            ],
-        },
-    },
+    # Retired 2026-06-07: old expected-failure diagnostic rows pointed at
+    # missing 202605 artifacts or at probes that now pass. Current release
+    # blockers are tracked by live_smoke_summaries, live_tool_smoke_summaries,
+    # current objective checklist, MiMo audit, Step3p7 VLM audit, Nemotron media
+    # gate, MiniMax #179 audit, and DSV4 exactness preflight. Do not add
+    # expected-failure diagnostics here unless they point at current artifacts
+    # and assert a still-current failure mode.
 }
 CURRENT_COVERED_LIVE_SMOKE_ROW_EXPECTATIONS: dict[str, dict[str, Any]] = {
     "zaya_text_mxfp4": {
@@ -889,14 +896,14 @@ CURRENT_COVERED_LIVE_SMOKE_ROW_EXPECTATIONS: dict[str, dict[str, Any]] = {
         "model_type": "zaya",
         "is_mllm": False,
         "supports_video": False,
-        "supports_thinking": False,
+        "supports_thinking": True,
         "cache_family": "zaya_cca",
     },
     "nemotron_omni_tq2_system_nomedia": {
         "name": "Nemotron-Omni-Nano-JANGTQ-CRACK",
         "model_type": "nemotron_h",
         "is_mllm": True,
-        "supports_video": True,
+        "supports_video": False,
         "supports_thinking": True,
         "cache_family": "hybrid_ssm",
     },
@@ -905,7 +912,7 @@ CURRENT_COVERED_LIVE_SMOKE_ROW_EXPECTATIONS: dict[str, dict[str, Any]] = {
         "model_type": "bailing_hybrid",
         "is_mllm": False,
         "supports_video": False,
-        "supports_thinking": False,
+        "supports_thinking": True,
         "cache_family": "hybrid_ssm",
     },
     "gemma4_crack": {
@@ -914,10 +921,10 @@ CURRENT_COVERED_LIVE_SMOKE_ROW_EXPECTATIONS: dict[str, dict[str, Any]] = {
         "is_mllm": True,
         "supports_video": False,
         "supports_thinking": True,
-        "cache_family": "hybrid_ssm",
+        "cache_family": "swa_rotating",
     },
     "qwen36_moe_crack": {
-        "name": "Qwen3.6-27B-MXFP4-CRACK",
+        "name": "Qwen3.6-27B-JANG_4M-MTP",
         "model_type": "qwen3_5",
         "is_mllm": True,
         "supports_video": True,
@@ -945,11 +952,11 @@ CURRENT_COVERED_LIVE_SMOKE_ROW_EXPECTATIONS: dict[str, dict[str, Any]] = {
         "model_type": "zaya1_vl",
         "is_mllm": True,
         "supports_video": False,
-        "supports_thinking": False,
+        "supports_thinking": True,
         "cache_family": "zaya_cca",
     },
     "dsv4_jang_local": {
-        "name": "DeepSeek-V4-Flash-JANGTQ-K",
+        "name": "DeepSeek-V4-Flash-JANGTQ-K-HeadBF16-Probe-20260520",
         "model_type": "deepseek_v4",
         "is_mllm": False,
         "supports_video": False,
@@ -957,6 +964,11 @@ CURRENT_COVERED_LIVE_SMOKE_ROW_EXPECTATIONS: dict[str, dict[str, Any]] = {
         "cache_family": "deepseek_v4_composite",
     },
 }
+
+
+# Current filtered smoke artifacts use the current metadata truth for these rows.
+CURRENT_COVERED_LIVE_SMOKE_ROW_EXPECTATIONS["zaya_vl_jangtq4"]["supports_thinking"] = False
+CURRENT_COVERED_LIVE_SMOKE_ROW_EXPECTATIONS["dsv4_jang_local"]["name"] = "DeepSeek-V4-Flash-JANGTQ-K"
 
 LIVE_SMOKE_TEXT_REQUEST_LABELS = (
     "text_cache_repeat_1",
@@ -1062,7 +1074,7 @@ def _expected_live_smoke_capability_parsers(row_id: str) -> dict[str, Any]:
         },
         "zaya_vl_jangtq4": {
             "tool_parser": "zaya_xml",
-            "reasoning_parser": "qwen3",
+            "reasoning_parser": None,
         },
         "dsv4_jang_local": {
             "tool_parser": "dsml",
@@ -1185,10 +1197,10 @@ _ROWS: list[dict[str, Any]] = [
             "DSV4 DSML tool parsing repairs and residue rejection remain schema-gated and cannot be hidden by broader API surface checks",
         ],
         "commands": [
-            ".venv/bin/python tests/cross_matrix/run_noheavy_api_cache_contract.py --out build/current-noheavy-api-cache-contract-after-jangtq2-objective-refresh-20260607.json",
+            ".venv/bin/python tests/cross_matrix/run_noheavy_api_cache_contract.py --out build/current-noheavy-api-cache-contract-after-qwen36-bundled-media-pass-20260607.json",
         ],
         "artifacts": [
-            "build/current-noheavy-api-cache-contract-after-jangtq2-objective-refresh-20260607.json",
+            "build/current-noheavy-api-cache-contract-after-qwen36-bundled-media-pass-20260607.json",
             "build/current-api-cache-contract-api-surface-check-20260602-cache-detail-zero-cached.json",
         ],
     },
@@ -1229,10 +1241,10 @@ _ROWS: list[dict[str, Any]] = [
             "Casual preset maxTokens is documented as an explicit server output cap and does not change model-owned defaults or context",
         ],
         "commands": [
-            ".venv/bin/python tests/cross_matrix/run_max_output_context_contract.py --out build/current-max-output-context-contract-after-jangtq2-objective-refresh-20260607.json",
+            ".venv/bin/python tests/cross_matrix/run_max_output_context_contract.py --out build/current-max-output-context-contract-after-current-mimo-proof-20260607.json",
         ],
         "artifacts": [
-            "build/current-max-output-context-contract-after-jangtq2-objective-refresh-20260607.json",
+            "build/current-max-output-context-contract-after-current-mimo-proof-20260607.json",
             "build/current-max-output-context-contract-20260527-after-think-xml-registry-fix.json",
             "build/current-max-output-context-contract-20260527-issues-175-178-bundled-sync.json",
             "build/current-max-output-context-contract-20260524-after-gemma4-telemetry-final.json",
@@ -1295,10 +1307,10 @@ _ROWS: list[dict[str, Any]] = [
             "structured family matrix covers standard MLX, JANG, DSV4, max-token/context, thinking-budget, and app-owned CLI boundaries",
         ],
         "commands": [
-            ".venv/bin/python tests/cross_matrix/run_generation_defaults_contract.py --out build/current-generation-defaults-contract-after-jangtq2-objective-refresh-20260607.json",
+            ".venv/bin/python tests/cross_matrix/run_generation_defaults_contract.py --out build/current-generation-defaults-contract-after-do-sample-false-mimo-20260607.json",
         ],
         "artifacts": [
-            "build/current-generation-defaults-contract-after-jangtq2-objective-refresh-20260607.json",
+            "build/current-generation-defaults-contract-after-do-sample-false-mimo-20260607.json",
             "build/current-generation-defaults-contract-20260528-family-matrix.json",
             "build/current-generation-defaults-contract-20260527-after-think-xml-registry-fix.json",
             "build/current-generation-defaults-contract-20260527-issues-175-178-bundled-sync.json",
@@ -1324,10 +1336,10 @@ _ROWS: list[dict[str, Any]] = [
             "Qwen2/Qwen2-VL, Gemma 3, and GLM base stay off reasoning rails",
         ],
         "commands": [
-            ".venv/bin/python tests/cross_matrix/run_parser_registry_contract.py --out build/current-parser-registry-contract-after-jangtq2-objective-refresh-20260607.json",
+            ".venv/bin/python tests/cross_matrix/run_parser_registry_contract.py --out build/current-parser-registry-contract-after-mimo-capability-snapshot-fix-20260607.json",
         ],
         "artifacts": [
-            "build/current-parser-registry-contract-after-jangtq2-objective-refresh-20260607.json",
+            "build/current-parser-registry-contract-after-mimo-capability-snapshot-fix-20260607.json",
             "build/current-parser-registry-contract-20260527-after-think-xml-registry-fix.json",
             "build/current-parser-registry-contract-20260527-issues-175-178-bundled-sync.json",
             "build/current-parser-registry-contract-20260523-post-budget-edge.json",
@@ -1373,10 +1385,10 @@ _ROWS: list[dict[str, Any]] = [
             "maxToolIterations caps tool loops",
         ],
         "commands": [
-            ".venv/bin/python tests/cross_matrix/run_tool_call_contract.py --out build/current-tool-call-contract-after-jangtq2-objective-refresh-20260607.json",
+            ".venv/bin/python tests/cross_matrix/run_tool_call_contract.py --out build/current-tool-call-contract-after-current-mimo-proof-20260607.json",
         ],
         "artifacts": [
-            "build/current-tool-call-contract-after-jangtq2-objective-refresh-20260607.json",
+            "build/current-tool-call-contract-after-current-mimo-proof-20260607.json",
             "build/current-tool-call-contract-20260523-post-budget-edge.json",
             "build/current-tool-call-contract-20260521.json",
             "build/current-tool-call-contract-20260522-dsv4-live-write-file-repair.json",
@@ -1458,10 +1470,10 @@ _ROWS: list[dict[str, Any]] = [
             "Panel session launch builder preserves DSV4 default-on native prefix-cache policy, DSV4-only native cache controls, Qwen3.6 hybrid and Mamba paged-cache forcing, and regular KV stale saved false semantics",
         ],
         "commands": [
-            ".venv/bin/python tests/cross_matrix/run_cache_architecture_contract.py --out build/current-cache-architecture-contract-after-mllm-tight-memory-guard-20260607.json",
+            ".venv/bin/python tests/cross_matrix/run_cache_architecture_contract.py --out build/current-cache-architecture-contract-after-mimo-capability-snapshot-fix-20260607.json",
         ],
         "artifacts": [
-            "build/current-cache-architecture-contract-after-mllm-tight-memory-guard-20260607.json",
+            "build/current-cache-architecture-contract-after-mimo-capability-snapshot-fix-20260607.json",
             "build/current-cache-architecture-contract-20260530-lfm2-tool-parser-local.json",
             "build/current-cache-architecture-contract-20260528-gemma4-mixed-swa-row.json",
             "build/current-cache-architecture-contract-20260527-cache-family-matrix.json",
@@ -1495,10 +1507,10 @@ _ROWS: list[dict[str, Any]] = [
             "Registry/family detection uses bundle config and capability metadata",
         ],
         "commands": [
-            ".venv/bin/python tests/cross_matrix/run_model_artifact_format_contract.py --out build/current-model-artifact-format-contract-after-mllm-tight-memory-guard-20260607.json",
+            ".venv/bin/python tests/cross_matrix/run_model_artifact_format_contract.py --out build/current-model-artifact-format-contract-after-mimo-capability-snapshot-fix-20260607.json",
         ],
         "artifacts": [
-            "build/current-model-artifact-format-contract-after-mllm-tight-memory-guard-20260607.json",
+            "build/current-model-artifact-format-contract-after-mimo-capability-snapshot-fix-20260607.json",
             "build/current-model-artifact-format-contract-20260527-after-think-xml-registry-fix.json",
             "build/current-model-artifact-format-contract-20260527-issues-175-178-bundled-sync.json",
             "build/current-model-artifact-format-contract-20260523-post-budget-edge.json",
@@ -1557,10 +1569,10 @@ _ROWS: list[dict[str, Any]] = [
             "This is source/static compatibility proof only; live multi-turn output quality remains a separate live row",
         ],
         "commands": [
-            ".venv/bin/python tests/cross_matrix/run_model_family_detection_contract.py --out build/current-model-family-detection-contract-after-jangtq2-objective-refresh-20260607.json",
+            ".venv/bin/python tests/cross_matrix/run_model_family_detection_contract.py --out build/current-model-family-detection-contract-after-mimo-capability-snapshot-fix-20260607.json",
         ],
         "artifacts": [
-            "build/current-model-family-detection-contract-after-jangtq2-objective-refresh-20260607.json",
+            "build/current-model-family-detection-contract-after-mimo-capability-snapshot-fix-20260607.json",
             "build/current-model-family-detection-contract-20260527-after-think-xml-registry-fix.json",
             "build/current-model-family-detection-contract-20260527-issues-175-178-bundled-sync.json",
             "build/current-model-family-detection-contract-20260523-post-budget-edge.json",
@@ -1592,11 +1604,11 @@ _ROWS: list[dict[str, Any]] = [
             "The same-artifact AR-vs-MTP live A/B proves MTP decode is not the MLLM prefill bottleneck; native MTP D3 is faster than the AR baseline with identical output",
         ],
         "commands": [
-            ".venv/bin/python tests/cross_matrix/run_native_mtp_contract.py --out build/current-native-mtp-contract-after-mllm-tight-memory-guard-20260607.json",
+            ".venv/bin/python tests/cross_matrix/run_native_mtp_contract.py --out build/current-native-mtp-contract-after-mimo-capability-snapshot-fix-20260607.json",
             "VMLINUX_BENCH_PYTHON=/Applications/vMLX.app/Contents/Resources/bundled-python/python/bin/python3.12 .venv/bin/python bench/native_mtp_speed_ab.py /Users/example/models/JANGQ/Qwen3.6-27B-JANG_4M-MTP --served-name qwen27-jang4m-mtp-ab --port 8814 --cache off --max-num-seqs 1 --max-tokens 320 --repeats 1 --warmup 0 --load-timeout-s 600 --out build/current-native-mtp-speed-ab-qwen27-jang4m-mtp-installed-app-20260606 --disable-prompt-reuse",
         ],
         "artifacts": [
-            "build/current-native-mtp-contract-after-mllm-tight-memory-guard-20260607.json",
+            "build/current-native-mtp-contract-after-mimo-capability-snapshot-fix-20260607.json",
             "build/current-native-mtp-contract-20260527-after-think-xml-registry-fix.json",
             "build/current-native-mtp-contract-20260527-issues-175-178-bundled-sync.json",
             "build/current-native-mtp-contract-20260524-after-ling-topk-policy.json",
@@ -1644,10 +1656,10 @@ _ROWS: list[dict[str, Any]] = [
             "Still-image live rows do not imply video/audio/Omni clearance",
         ],
         "commands": [
-            ".venv/bin/python tests/cross_matrix/run_vl_media_cache_contract.py --out build/current-vl-media-cache-contract-after-mllm-tight-memory-guard-20260607.json",
+            ".venv/bin/python tests/cross_matrix/run_vl_media_cache_contract.py --out build/current-vl-media-cache-contract-after-mimo-capability-snapshot-fix-20260607.json",
         ],
         "artifacts": [
-            "build/current-vl-media-cache-contract-after-mllm-tight-memory-guard-20260607.json",
+            "build/current-vl-media-cache-contract-after-mimo-capability-snapshot-fix-20260607.json",
             "build/current-vl-media-cache-contract-20260531-post-step-lfm-refresh.json",
             "build/current-vl-media-cache-contract-20260527-after-think-xml-registry-fix.json",
             "build/current-vl-media-cache-contract-20260527-issues-175-178-bundled-sync.json",
@@ -1672,13 +1684,13 @@ _ROWS: list[dict[str, Any]] = [
             "packaged Python has no __pycache__/*.pyc files that would invalidate the signed app seal",
         ],
         "commands": [
-            ".venv/bin/python tests/cross_matrix/run_packaged_integrity_contract.py --out build/current-packaged-integrity-contract-after-bundle-refresh-20260606.json",
+            ".venv/bin/python tests/cross_matrix/run_packaged_integrity_contract.py --out build/current-packaged-integrity-contract-after-staged-sequoia-rebuild-current-source-20260607.json",
             ".venv/bin/python tests/cross_matrix/run_packaged_integrity_contract.py --jang-tools-source /Users/example/jang/jang-tools --out build/current-packaged-integrity-contract-20260524-pycache-seal-check.json",
             ".venv/bin/python tests/cross_matrix/run_packaged_integrity_contract.py --jang-tools-source /Users/example/jang/.worktrees/vmlx-release-clean-b5f66a7/jang-tools --out build/current-packaged-integrity-contract-20260522-recheck-bundled-release-gate.json",
         ],
         "artifacts": [
-            "build/current-objective-proof-after-mllm-tight-memory-guard-20260607.json",
-            "build/current-packaged-integrity-contract-after-bundle-refresh-20260606.json",
+            "build/current-objective-proof-after-mimo-manifest-classifier-sync-20260607.json",
+            "build/current-packaged-integrity-contract-after-staged-sequoia-rebuild-current-source-20260607.json",
             "build/current-packaged-integrity-contract-20260601-dsv4-preflight-refresh.json",
             "build/current-packaged-integrity-contract-20260601-qwen3vl-minicpm-mpp-staged-refresh.json",
             "build/current-packaged-integrity-contract-20260531-after-adhoc-reseal.json",
@@ -1846,12 +1858,12 @@ _ROWS: list[dict[str, Any]] = [
             "The clearance boundary is based on live artifacts, not a hidden sampler/repetition/default override",
         ],
         "commands": [
-            ".venv/bin/python tests/cross_matrix/summarize_objective_proof.py --out build/current-objective-proof-after-mllm-tight-memory-guard-20260607.json",
+            ".venv/bin/python tests/cross_matrix/summarize_objective_proof.py --out build/current-objective-proof-after-mimo-manifest-classifier-sync-20260607.json",
             ".venv/bin/python tests/cross_matrix/run_production_family_audit.py --rows ling_flash_tq --live --py /Applications/vMLX.app/Contents/Resources/bundled-python/python/bin/python3.12 --out build/current-production-family-live-ling-bundled-current-20260606.json",
         ],
         "artifacts": [
             "build/current-production-family-live-ling-bundled-current-20260606.json",
-            "build/current-objective-proof-after-mllm-tight-memory-guard-20260607.json",
+            "build/current-objective-proof-after-mimo-manifest-classifier-sync-20260607.json",
             "build/current-ling-jangtq-strict-russian-nocache-bundled-4850c9c2-20260524.json",
             "build/current-ling-mxfp4-crack-strict-russian-nocache-bundled-4850c9c2-20260524.json",
             "build/current-ling-jangtq-russian-prompt-variant-probe-20260524.json",
@@ -1882,7 +1894,7 @@ _ROWS: list[dict[str, Any]] = [
             "Latest bundled 256-token cache-hit probe still reports sub-floor wall throughput and generic live TurboQuant KV under mixed_swa_kv_v1 health, so the speed blocker is not a short-output artifact",
             "After syncing bundled/app jang_loader, installed-app health now reports generic TurboQuant KV off with mixed_swa_kv_v1, but decode remains below the 80 tok/s floor",
             "source now proves native mixed-SWA cache telemetry as paged+mixed_swa and clears the sustained 512-token speed-floor prompt after the redundant full-prefix cache store fix",
-            "Current installed-app speed clearance requires source-hash parity, paged+mixed_swa cache telemetry, stream UI TPS above 80 tok/s for cold and cache-hit rows (`decode_tok_s_stream`), and cold-wall TTFT tracking from build/current-runtime-memory-stress-gemma4-26b-jang4m-chat-thinkingoff-speed-floor-issue115-installed-app-20260601.json",
+            "Current installed-app speed clearance requires source-hash parity, paged+mixed_swa cache telemetry, stream UI TPS above 80 tok/s for cold and cache-hit rows (`decode_tok_s_stream`), and cold-wall TTFT tracking from build/current-runtime-memory-stress-gemma4-26b-jang4m-chat-thinkingoff-speed-floor-issue115-installed-app-20260601.json; cold wall decode includes TTFT and remains tracked separately",
             "compat MLX wheels remain a separate Sequoia-flavor speed/quality risk; staged Sequoia app uses macosx_14_0_arm64 MLX/Metal wheels and staged Tahoe app uses macosx_26_0_arm64 MLX/Metal wheels, while /Applications/vMLX.app runtime flavor is checked separately by the public app issue audit; installed Sequoia-compatible app now uses macosx_14_0_arm64 when that DMG is installed, and installed Tahoe-native app now uses macosx_26_0_arm64 when that DMG is installed; Gemma4 installed-app UI-speed proof does not supersede older sub-floor rows until the current issue115 speed-floor artifact exists and passes",
         ],
         "commands": [
@@ -1940,7 +1952,7 @@ _ROWS: list[dict[str, Any]] = [
             "Hy3 JANGTQ2 bundled smoke passes exact ACK, prefix-cache repeat, multi-turn recall, and reasoning_on visible final answer under bundled app-engine params, so hy3 is covered for this smoke row",
             "Hy3 bundled tool probe passes tool_required with structured record_fact arguments, reasoning separation, prefix-cache repeat, and no visible-text leakage",
             "MiniMax small JANGTQ bundled smoke was rerun on 2026-05-25 and passes exact ACK, prefix-cache repeat, multi-turn recall, and reasoning-on visible final answer under bundled app-engine params, so minimax is covered for this smoke row",
-            "MiniMax bundled tool probe passes tool_required with structured record_fact arguments, reasoning separation, and no visible-text leakage",
+            "MiniMax bundled tool probe passes required record_fact after MiniMax-native scaffold and family-specific required-tool token budget; cache repeat, tool-result continuation, JSON, and exact-code rows also pass",
             "ZAYA text MXFP4 bundled tool probe remains a diagnostic failure and must not clear ZAYA text tool-use, while the refreshed ZAYA-VL JANGTQ4 true-bundled tool probe is covered separately by the media-sentinel artifact",
             "DSV4 JANGTQ-K bundled smoke passes exact ACK, native prefix-cache repeat, multi-turn recall, and reasoning-on visible final answer with native DSV4 composite cache flags; default-cache tool-loop exact-code quality remains a separate open gate",
             "No source-only test may claim output-coherence clearance for every family",
@@ -1970,34 +1982,34 @@ _ROWS: list[dict[str, Any]] = [
         ],
         "artifacts": [
             "build/current-production-family-audit-live-multifamily-soak-20260522.json",
-            "build/current-all-local-model-smoke-zaya-text-bundled-20260524/summary.json",
-            "build/current-all-local-model-smoke-zaya-text-bundled-toolprobe-20260525/summary.json",
+            "build/current-filtered-live-smoke-zaya-text-mxfp4-20260607/summary.json",
+            "build/current-filtered-live-smoke-zaya-text-mxfp4-20260607/summary.json",
             "build/current-all-local-model-smoke-zaya-vl-bundled-20260524/summary.json",
             "build/current-all-local-model-smoke-zaya-vl-jangtq4-bundled-20260524/summary.json",
-            "build/current-all-local-model-smoke-zaya-vl-jangtq4-bundled-toolprobe-20260525/summary.json",
-            "build/current-all-local-model-smoke-zaya-vl-mxfp4-after-thinking-capability-truth-20260606/summary.json",
+            "build/current-all-local-model-smoke-zaya-vl-mxfp4-bundled-after-source-tool-pass-20260607/summary.json",
+            "build/current-all-local-model-smoke-zaya-vl-mxfp4-bundled-after-source-tool-pass-20260607/summary.json",
             "build/current-all-local-model-smoke-nemotron-omni-jangtq-bundled-20260524/summary.json",
             "build/current-all-local-model-smoke-nemotron-omni-jangtq-explicit-nomedia-bundled-20260524/summary.json",
             "build/current-all-local-model-smoke-nemotron-omni-jangtq-system-nomedia-bundled-20260524/summary.json",
-            "build/current-all-local-model-smoke-nemotron-omni-jangtq-video-bundled-20260526-rerun/summary.json",
-            "build/current-all-local-model-smoke-nemotron-omni-jangtq-bundled-toolprobe-20260525/summary.json",
+            "build/current-filtered-live-smoke-nemotron-omni-jangtq-20260607/summary.json",
+            "build/current-all-local-model-smoke-ling-hy3-nemotron-tools-media-20260606/summary.json",
             "build/current-nemotron-omni-no-media-prompt-variants-20260524/result.json",
             "build/current-nemotron-omni-no-media-system-prompt-diagnostic-20260524/result.json",
             "build/current-all-local-model-smoke-ling-bailing-jangtq-bundled-20260524/summary.json",
-            "build/current-all-local-model-smoke-ling-bailing-jangtq-bundled-20260525-rerun/summary.json",
-            "build/current-all-local-model-smoke-ling-bailing-jangtq-bundled-toolprobe-20260525/summary.json",
+            "build/current-filtered-live-smoke-ling-flash-jangtq-20260607/summary.json",
+            "build/current-all-local-model-smoke-ling-hy3-nemotron-tools-media-20260606/summary.json",
             "build/current-all-local-model-smoke-gemma4-26b-jang4m-crack-bundled-20260524/summary.json",
-            "build/current-all-local-model-smoke-gemma26-jang4m-tools-media-continuation-20260606/summary.json",
-            "build/current-all-local-model-smoke-gemma4-26b-jang4m-crack-bundled-toolprobe-currentmodality-20260526/summary.json",
+            "build/current-all-local-model-smoke-gemma26-jang4m-bundled-tools-media-20260607/summary.json",
+            "build/current-all-local-model-smoke-gemma26-jang4m-bundled-tools-media-20260607/summary.json",
             "build/current-all-local-model-smoke-qwen36-mxfp4-crack-bundled-20260524/summary.json",
-            "build/current-all-local-model-smoke-qwen36-mxfp4-crack-bundled-20260525-rerun/summary.json",
-            "build/current-all-local-model-smoke-qwen36-mxfp4-crack-bundled-toolprobe-20260525/summary.json",
+            "build/current-all-local-model-smoke-qwen36-27b-jang4m-mtp-bundled-tools-media-20260607/summary.json",
+            "build/current-all-local-model-smoke-qwen36-27b-jang4m-mtp-bundled-tools-media-20260607/summary.json",
             "build/current-all-local-model-smoke-hy3-jangtq2-bundled-20260524/summary.json",
-            "build/current-all-local-model-smoke-hy3-jangtq2-bundled-toolprobe-20260525/summary.json",
+            "build/current-all-local-model-smoke-ling-hy3-nemotron-tools-media-20260606/summary.json",
             "build/current-all-local-model-smoke-minimax-small-jangtq-bundled-20260524/summary.json",
-            "build/current-all-local-model-smoke-minimaxk-tools-continuation-20260606/summary.json",
-            "build/current-all-local-model-smoke-minimax-small-jangtq-bundled-toolprobe-20260525/summary.json",
-            "build/current-all-local-model-smoke-dsv4-jangtq-k-tools-cache-20260606/summary.json",
+            "build/current-all-local-model-smoke-minimaxk-bundled-after-required-tool-256-20260607/summary.json",
+            "build/current-all-local-model-smoke-minimaxk-bundled-after-required-tool-256-20260607/summary.json",
+            "build/current-filtered-live-smoke-dsv4-jangtq-k-20260607/summary.json",
         ],
     },
     {
@@ -2037,9 +2049,9 @@ _ROWS: list[dict[str, Any]] = [
             "Ling-2.6-flash-JANGTQ now has a real Electron UI live-model slice covering the prior Ling/Bailing language/cache/parser boundary with zero CJK/Korean leakage and hybrid SSM cache telemetry",
             "Gemma-4-26B-A4B-it-JANG_4M-CRACK now has a real Electron UI live-model slice covering mixed-SWA paged cache telemetry, affine MLX matmul dispatch, zero CJK/Korean leakage, and app-visible generation over the 80 tok/s speed floor for the short UI turn",
             "Gemma-4-26B-A4B-it-JANG_4M-CRACK also has a real Electron UI Responses/tools/reasoning diagnostic proof covering real Responses complete events, persisted built-in tool calls, and persisted reasoning display evidence",
-            "Qwen3.6-27B-MXFP4-CRACK has a real Electron UI live-model slice covering the Qwen3.6 hybrid SSM/VL/MTP route, cache-hit telemetry, persisted chat turns, and no parser/language leak",
-            "Qwen3.6-27B-MXFP4-CRACK has a separate real Electron UI video slice proving MP4 attachment delivery, VLM video decoding, semantic red-video recognition, and media-context prefix-cache store suppression",
-            "Qwen3.6-27B-MXFP4-CRACK has a local-only real Electron UI Responses/tools/reasoning/image/cache-controls slice proving hybrid SSM native cache status, TurboQuant attention KV storage, SSM companion L2, long built-in tool loop, reasoning display, server cache controls, image delivery, and no parser/language leak",
+            "Qwen3.6-27B-JANG_4M-MTP has a current real Electron UI Responses/cache-controls proof covering model identity, Responses streaming, cache-hit telemetry, hybrid SSM native cache status, TurboQuant attention KV storage, SSM companion L2, server cache controls, and no parser/language leak",
+            "Qwen3.6-27B-JANG_4M-MTP remains blocked for real UI release because the current proof fails the long_tool_loop assertion after an initial malformed run_command tool call",
+            "Qwen3.6-27B-JANG_4M-MTP image/video/reasoning UI coverage is not current; old Qwen3.6 MXFP4 proofs are no longer accepted as proof for the current MTP artifact",
             "MiniMax-M2.7-Small-JANGTQ has a real Electron UI live-model slice proving MiniMax parser registration, MiniMaxM2 reasoning-parser registration, JANGTQ native TurboQuant kernels, paged cache reuse, and no parser/language leak",
             "MiniMax-M2.7-Small-JANGTQ now has a local-only real Electron UI Responses/tools/cache-controls slice proving long built-in tool loops, reasoning display, native cache status, server cache controls, and no parser/language leak",
             "MiniMax-M2.7-JANGTQ_K has issue #179 real Electron UI diagnostics for both current dev UI and installed app UI, covering Responses API, reasoning display, persisted turns, cache-hit telemetry, and no screenshot-shaped CJK/Korean/numeric garbage on the local full K artifact",
@@ -2054,7 +2066,7 @@ _ROWS: list[dict[str, Any]] = [
             "Hy3-preview-JANGTQ2 now has a real Electron UI live-model slice covering the Hunyuan tool parser, qwen3 reasoning-parser registration, TurboQuantKVCache/paged prefix cache, block-disk L2, zero CJK/Korean leakage, and no raw parser-tag leakage",
             "Hy3-preview-JANGTQ2 has separate real Electron UI Responses proofs for reasoning-on display and thinking-off built-in tool execution; thinking-on tool prompting currently produced reasoning-only output and remains a tracked nuance, not a forced sampler/parser fix",
             "Hy3-preview-JANGTQ2 now has a local-only real Electron UI Responses/tools/cache-controls proof covering native plain KV cache status, TurboQuant KV storage quantization, paged prefix cache reuse, block-disk L2, server cache controls, and no parser/language leak",
-            "LFM2.5-8B-A1B-JANG_2L has a direct Responses/run_command cache-boundary probe showing the raw local server path is server-clean while the real UI stream path remains malformed, narrowing the remaining blocker to app tool-loop/history framing rather than LFM25 cache storage or raw Responses final-text generation",
+            "LFM2.5-8B-A1B-MXFP4 has a direct Responses/run_command cache-boundary probe showing the raw local server path is server-clean while the real UI stream path remains malformed, narrowing the remaining blocker to app tool-loop/history framing rather than LFM25 cache storage or raw Responses final-text generation",
             "The proof captures real server /health and /v1/models state, chat message persistence, final visible content, parser-leak checks, and cache telemetry after repeated UI turns",
             "These are partial real-UI live-model slices and are not enough to clear the full cross-family real-UI blocker",
         ],
@@ -2067,9 +2079,7 @@ _ROWS: list[dict[str, Any]] = [
             "VMLINUX_REAL_UI_MODEL_PATH=/Users/example/models/JANGQ/Ling-2.6-flash-JANGTQ VMLINUX_REAL_UI_SERVED_MODEL=Ling-2.6-flash-JANGTQ VMLINUX_REAL_UI_PROOF_BASENAME=current-real-ui-live-model-ling-bailing-jangtq-responses-filesemantic-20260530 VMLINUX_REAL_UI_WIRE_API=responses VMLINUX_REAL_UI_BUILTIN_TOOLS=1 VMLINUX_REAL_UI_ENABLE_THINKING=0 VMLINUX_REAL_UI_MAX_TOKENS=512 VMLINUX_REAL_UI_MAX_TOOL_ITERATIONS=8 VMLINUX_REAL_UI_CHECK_SERVER_CACHE_CONTROLS=1 node panel/scripts/live-real-ui-model-proof.mjs",
             "VMLINUX_REAL_UI_MODEL_PATH=/Users/example/models/dealign.ai/Gemma-4-26B-A4B-it-JANG_4M-CRACK VMLINUX_REAL_UI_PROOF_BASENAME=current-real-ui-live-model-gemma4-26b-jang4m-20260526 node panel/scripts/live-real-ui-model-proof.mjs",
             "VMLINUX_REAL_UI_MODEL_PATH=/Users/example/models/dealign.ai/Gemma-4-26B-A4B-it-JANG_4M-CRACK VMLINUX_REAL_UI_PROOF_BASENAME=diagnostic-real-ui-live-model-gemma4-responses-tools-reasoning-20260527 VMLINUX_REAL_UI_WIRE_API=responses VMLINUX_REAL_UI_BUILTIN_TOOLS=1 VMLINUX_REAL_UI_ENABLE_THINKING=1 node panel/scripts/live-real-ui-model-proof.mjs",
-            "VMLINUX_REAL_UI_MODEL_PATH=/Users/example/models/dealign.ai/Qwen3.6-27B-MXFP4-CRACK VMLINUX_REAL_UI_PROOF_BASENAME=current-real-ui-live-model-qwen36-mxfp4-crack-20260527 VMLINUX_REAL_UI_IS_MLLM=1 VMLINUX_REAL_UI_MAX_TOKENS=96 node panel/scripts/live-real-ui-model-proof.mjs",
-            "ffmpeg -y -f lavfi -i color=c=red:s=64x64:d=1 -vf format=yuv420p -movflags faststart build/media-fixtures/red-64x64-1s.mp4 && VMLINUX_REAL_UI_MODEL_PATH=/Users/example/models/dealign.ai/Qwen3.6-27B-MXFP4-CRACK VMLINUX_REAL_UI_PROOF_BASENAME=diagnostic-real-ui-live-model-qwen36-mxfp4-crack-video-20260527 VMLINUX_REAL_UI_IS_MLLM=1 VMLINUX_REAL_UI_CHECK_VIDEO=1 VMLINUX_REAL_UI_VIDEO_EXPECT_REGEX='red' VMLINUX_REAL_UI_MAX_TOKENS=96 VMLINUX_REAL_UI_VIDEO_DATA_URL='data:video/mp4;base64,...' node panel/scripts/live-real-ui-model-proof.mjs",
-            "VMLINUX_REAL_UI_MODEL_PATH=/Users/example/models/dealign.ai/Qwen3.6-27B-MXFP4-CRACK VMLINUX_REAL_UI_SERVED_MODEL=Qwen3.6-27B-MXFP4-CRACK VMLINUX_REAL_UI_IS_MLLM=1 VMLINUX_REAL_UI_WIRE_API=responses VMLINUX_REAL_UI_BUILTIN_TOOLS=1 VMLINUX_REAL_UI_ENABLE_THINKING=1 VMLINUX_REAL_UI_MAX_TOKENS=512 VMLINUX_REAL_UI_MAX_TOOL_ITERATIONS=8 VMLINUX_REAL_UI_CHECK_SERVER_CACHE_CONTROLS=1 VMLINUX_REAL_UI_CHECK_MEDIA=1 VMLINUX_REAL_UI_IMAGE_EXPECT_REGEX='\\bred\\b' VMLINUX_REAL_UI_PROOF_BASENAME=current-real-ui-live-model-qwen36-mxfp4-crack-responses-tools-reasoning-image-cachecontrols-localonly-20260527 node panel/scripts/live-real-ui-model-proof.mjs",
+            "VMLINUX_REAL_UI_MODEL_PATH=/Users/example/models/JANGQ/Qwen3.6-27B-JANG_4M-MTP VMLINUX_REAL_UI_SERVED_MODEL=Qwen3.6-27B-JANG_4M-MTP VMLINUX_REAL_UI_PROOF_BASENAME=current-real-ui-live-model-qwen36-27b-jang4m-mtp-responses-tools-cachecontrols-deterministic-mtp-20260607 VMLINUX_REAL_UI_IS_MLLM=1 VMLINUX_REAL_UI_WIRE_API=responses VMLINUX_REAL_UI_BUILTIN_TOOLS=1 VMLINUX_REAL_UI_ENABLE_THINKING=0 VMLINUX_REAL_UI_MAX_TOKENS=256 VMLINUX_REAL_UI_MAX_TOOL_ITERATIONS=8 VMLINUX_REAL_UI_CHECK_SERVER_CACHE_CONTROLS=1 node panel/scripts/live-real-ui-model-proof.mjs",
             "VMLINUX_REAL_UI_MODEL_PATH=/Users/example/models/JANGQ/MiniMax-M2.7-Small-JANGTQ VMLINUX_REAL_UI_PROOF_BASENAME=current-real-ui-live-model-minimax-m27-small-jangtq-20260527 VMLINUX_REAL_UI_MAX_TOKENS=96 node panel/scripts/live-real-ui-model-proof.mjs",
             "VMLINUX_REAL_UI_MODEL_PATH=/Users/example/models/JANGQ/MiniMax-M2.7-Small-JANGTQ VMLINUX_REAL_UI_SERVED_MODEL=MiniMax-M2.7-Small-JANGTQ VMLINUX_REAL_UI_PROOF_BASENAME=current-real-ui-live-model-minimax-m27-small-responses-tools-cachecontrols-localonly-20260527 VMLINUX_REAL_UI_WIRE_API=responses VMLINUX_REAL_UI_BUILTIN_TOOLS=1 VMLINUX_REAL_UI_ENABLE_THINKING=1 VMLINUX_REAL_UI_MAX_TOKENS=512 VMLINUX_REAL_UI_MAX_TOOL_ITERATIONS=8 VMLINUX_REAL_UI_CHECK_SERVER_CACHE_CONTROLS=1 node panel/scripts/live-real-ui-model-proof.mjs",
             "VMLINUX_REAL_UI_MODEL_PATH=/Users/example/models/JANGQ/MiniMax-M2.7-JANGTQ_K VMLINUX_REAL_UI_PROOF_BASENAME=diagnostic-real-ui-live-model-minimax-m27-jangtq-k-issue179-20260527 VMLINUX_REAL_UI_WIRE_API=responses VMLINUX_REAL_UI_MAX_TOKENS=512 node panel/scripts/live-real-ui-model-proof.mjs",
@@ -2077,12 +2087,12 @@ _ROWS: list[dict[str, Any]] = [
             "VMLINUX_REAL_UI_APP_PATH=/Applications/vMLX.app VMLINUX_REAL_UI_MODEL_PATH=/Users/example/models/JANGQ/MiniMax-M2.7-JANGTQ_K VMLINUX_REAL_UI_PROOF_BASENAME=diagnostic-installed-ui-live-model-minimax-m27-jangtq-k-issue179-hi-thinking-20260527 VMLINUX_REAL_UI_WIRE_API=responses VMLINUX_REAL_UI_ENABLE_THINKING=1 VMLINUX_REAL_UI_PROMPT_1='Hi' VMLINUX_REAL_UI_PROMPT_2='Hi' node panel/scripts/live-real-ui-model-proof.mjs",
             "VMLINUX_REAL_UI_APP_PATH=/Applications/vMLX.app VMLINUX_REAL_UI_MODEL_PATH=/Users/example/models/JANGQ/MiniMax-M2.7-JANGTQ_K VMLINUX_REAL_UI_PROOF_BASENAME=diagnostic-installed-ui-live-model-minimax-m27-jangtq-k-issue179-512-20260527 VMLINUX_REAL_UI_WIRE_API=responses VMLINUX_REAL_UI_MAX_TOKENS=512 node panel/scripts/live-real-ui-model-proof.mjs",
             ".venv/bin/python tests/cross_matrix/run_issue179_responses_cancel_probe.py --out build/current-issue179-minimax-k-responses-cancel-probe-after-mimo-dsv4-ledger-20260607.json --port 8897 --load-timeout 240 --request-timeout 180 --stream-seconds 8 --cancel-delay 0.25 --max-lines-after-cancel 20",
-            ".venv/bin/python tests/cross_matrix/run_issue175_179_release_boundary_audit.py --out build/current-issue175-179-release-boundary-audit-after-public-v1556-scan-20260606.json",
+            ".venv/bin/python tests/cross_matrix/run_issue175_179_release_boundary_audit.py --out build/current-issue175-179-release-boundary-audit-after-issue179-memory-preflight-20260607.json",
             ".venv/bin/python tests/cross_matrix/run_installed_app_runtime_parity_audit.py --app panel/release/sequoia-app/mac-arm64/vMLX.app --out build/current-installed-app-runtime-parity-audit-after-installed-app-rebuild-20260606.json",
             ".venv/bin/python tests/cross_matrix/run_installed_app_runtime_parity_audit.py --app panel/release/sequoia-app/mac-arm64/vMLX.app --out build/current-staged-app-runtime-parity-audit-gemma4-release-boundary-after-ui-e2e-fixes-dmg-build-20260604.json",
             ".venv/bin/python tests/cross_matrix/run_issue175_177_installed_runtime_audit.py --out build/current-issue175-177-installed-runtime-audit-20260602-v1554-installed-tahoe.json",
             ".venv/bin/python tests/cross_matrix/run_issue175_177_live_runtime_audit.py --out build/current-issue175-177-live-runtime-audit-20260601-local-refresh.json",
-            ".venv/bin/python tests/cross_matrix/run_issue179_minimax_k_root_cause_audit.py --out build/current-issue179-minimax-k-root-cause-audit-after-current-source-cancel-refresh-20260607.json",
+            ".venv/bin/python tests/cross_matrix/run_issue179_minimax_k_root_cause_audit.py --out build/current-issue179-minimax-k-root-cause-audit-after-local-repro-memory-preflight-20260607.json",
             ".venv/bin/python tests/cross_matrix/run_issue179_reporter_parity_metadata.py --out build/current-issue179-reporter-parity-metadata-template-20260528.json",
             "VMLINUX_REAL_UI_MODEL_PATH=/Users/example/models/dealign.ai/Nemotron-Omni-Nano-JANGTQ-CRACK VMLINUX_REAL_UI_PROOF_BASENAME=current-real-ui-live-model-nemotron-omni-nano-jangtq-20260527 VMLINUX_REAL_UI_MAX_TOKENS=96 node panel/scripts/live-real-ui-model-proof.mjs",
             "VMLINUX_REAL_UI_APP_PATH=/Applications/vMLX.app VMLINUX_REAL_UI_PYTHON=/Applications/vMLX.app/Contents/Resources/bundled-python/python/bin/python3 VMLINUX_REAL_UI_MODEL_PATH=/Users/example/models/dealign.ai/Nemotron-Omni-Nano-JANGTQ-CRACK VMLINUX_REAL_UI_SERVED_MODEL=Nemotron-Omni-Nano-JANGTQ-CRACK VMLINUX_REAL_UI_PROOF_BASENAME=current-real-ui-installed-app-nemotron-omni-nano-responses-tools-reasoning-cachecontrols-localonly-20260601 VMLINUX_REAL_UI_WIRE_API=responses VMLINUX_REAL_UI_BUILTIN_TOOLS=1 VMLINUX_REAL_UI_ENABLE_THINKING=1 VMLINUX_REAL_UI_MAX_TOKENS=512 VMLINUX_REAL_UI_MAX_TOOL_ITERATIONS=8 VMLINUX_REAL_UI_CHECK_SERVER_CACHE_CONTROLS=1 node panel/scripts/live-real-ui-model-proof.mjs",
@@ -2111,12 +2121,8 @@ _ROWS: list[dict[str, Any]] = [
             "docs/internal/agent-notes/current-real-ui-live-model-gemma4-26b-jang4m-20260526-chat.png",
             "docs/internal/agent-notes/diagnostic-real-ui-live-model-gemma4-responses-tools-reasoning-20260527-proof.json",
             "docs/internal/agent-notes/diagnostic-real-ui-live-model-gemma4-responses-tools-reasoning-20260527-chat.png",
-            "docs/internal/agent-notes/current-real-ui-live-model-qwen36-mxfp4-crack-20260527-proof.json",
-            "docs/internal/agent-notes/current-real-ui-live-model-qwen36-mxfp4-crack-20260527-chat.png",
-            "docs/internal/agent-notes/diagnostic-real-ui-live-model-qwen36-mxfp4-crack-video-20260527-proof.json",
-            "docs/internal/agent-notes/diagnostic-real-ui-live-model-qwen36-mxfp4-crack-video-20260527-chat.png",
-            "docs/internal/agent-notes/current-real-ui-live-model-qwen36-mxfp4-crack-responses-tools-reasoning-image-cachecontrols-localonly-20260527-proof.json",
-            "docs/internal/agent-notes/current-real-ui-live-model-qwen36-mxfp4-crack-responses-tools-reasoning-image-cachecontrols-localonly-20260527-chat.png",
+            "docs/internal/agent-notes/current-real-ui-live-model-qwen36-27b-jang4m-mtp-responses-tools-cachecontrols-deterministic-mtp-20260607-proof.json",
+            "docs/internal/agent-notes/current-real-ui-live-model-qwen36-27b-jang4m-mtp-responses-tools-cachecontrols-deterministic-mtp-20260607-chat.png",
             "build/media-fixtures/red-64x64-1s.mp4",
             "docs/internal/agent-notes/current-real-ui-live-model-minimax-m27-small-jangtq-20260527-proof.json",
             "docs/internal/agent-notes/current-real-ui-live-model-minimax-m27-small-jangtq-20260527-chat.png",
@@ -2133,13 +2139,13 @@ _ROWS: list[dict[str, Any]] = [
             "docs/internal/agent-notes/diagnostic-installed-ui-live-model-minimax-m27-jangtq-k-issue179-512-20260527-proof.json",
             "docs/internal/agent-notes/diagnostic-installed-ui-live-model-minimax-m27-jangtq-k-issue179-512-20260527-chat.png",
             "build/current-issue179-minimax-k-responses-cancel-probe-after-mimo-dsv4-ledger-20260607.json",
-            "build/current-issue175-179-release-boundary-audit-after-public-v1556-scan-20260606.json",
+            "build/current-issue175-179-release-boundary-audit-after-issue179-memory-preflight-20260607.json",
             "build/current-installed-app-runtime-parity-audit-after-installed-app-rebuild-20260606.json",
             "build/current-staged-app-runtime-parity-audit-gemma4-release-boundary-after-ui-e2e-fixes-dmg-build-20260604.json",
             "build/current-installed-app-runtime-parity-audit-20260528-userdata-epipe-scan.json",
             "build/current-issue175-177-installed-runtime-audit-20260602-v1554-installed-tahoe.json",
             "build/current-issue175-177-live-runtime-audit-20260601-local-refresh.json",
-            "build/current-issue179-minimax-k-root-cause-audit-after-current-source-cancel-refresh-20260607.json",
+            "build/current-issue179-minimax-k-root-cause-audit-after-local-repro-memory-preflight-20260607.json",
             "build/current-issue179-reporter-parity-metadata-template-20260528.json",
             "docs/internal/agent-notes/current-real-ui-live-model-nemotron-omni-nano-jangtq-20260527-proof.json",
             "docs/internal/agent-notes/current-real-ui-live-model-nemotron-omni-nano-jangtq-20260527-chat.png",
@@ -2326,7 +2332,20 @@ def validate_current_proof_sweep_artifacts(root: Path) -> dict[str, Any]:
         real_ui_live_model_matrix["runtime_blockers"] = runtime_blockers
     if "dsv4" in real_ui_live_model_matrix.get("missing_families", []):
         resource_blockers = dict(real_ui_live_model_matrix.get("resource_blockers", {}))
-        if real_ui_dsv4_memory_preflight.get("status") == "pass":
+        dsv4_memory_preflight_blocks_launch = (
+            real_ui_dsv4_memory_preflight.get("status")
+            in {"pass", "skipped_insufficient_memory", "skipped"}
+            and (
+                real_ui_dsv4_memory_preflight.get("launch_decision")
+                == "do_not_launch"
+                or real_ui_dsv4_memory_preflight.get("did_not_launch") is True
+                or real_ui_dsv4_memory_preflight.get("launch_allowed") is False
+                or real_ui_dsv4_memory_preflight.get("reason")
+                == "insufficient_vm_stat_memory"
+                or "insufficient" in str(real_ui_dsv4_memory_preflight.get("reason") or "")
+            )
+        )
+        if dsv4_memory_preflight_blocks_launch:
             resource_blockers["dsv4"] = {
                 "artifact": CURRENT_REAL_UI_DSV4_MEMORY_PREFLIGHT_ARTIFACT,
                 "reason": "insufficient_memory",
@@ -3510,7 +3529,11 @@ def _validate_current_real_ui_dsv4_memory_preflight(root: Path) -> dict[str, Any
         failures.append("launch_decision_not_do_not_launch")
     if payload.get("launch_allowed") is not False:
         failures.append("launch_allowed_not_false")
-    if not model_path.endswith("DeepSeek-V4-Flash-JANGTQ-K"):
+    allowed_model_suffixes = (
+        "DeepSeek-V4-Flash-JANGTQ-K",
+        "DeepSeek-V4-Flash-JANGTQ-K-HeadBF16-Probe-20260520",
+    )
+    if not any(model_path.endswith(suffix) for suffix in allowed_model_suffixes):
         failures.append("model_path_not_dsv4_jangtq_k")
     if model_size_gb is None or model_size_gb < 70:
         failures.append("model_size_gb_not_recorded")
@@ -4127,14 +4150,24 @@ def _real_ui_generation_defaults_applied_ok(proof: dict[str, Any]) -> bool:
         if isinstance(proof.get("chatOverrides"), dict)
         else {}
     )
-    for sampler_field in ("temperature", "topP", "topK", "minP", "repeatPenalty"):
-        if chat_overrides.get(sampler_field) is not None:
-            return False
     request_contract = (
         proof.get("requestContract")
         if isinstance(proof.get("requestContract"), dict)
         else {}
     )
+    sampling_overrides = (
+        request_contract.get("samplingOverrides")
+        if isinstance(request_contract.get("samplingOverrides"), dict)
+        else {}
+    )
+    for sampler_field in ("temperature", "topP", "topK", "minP", "repeatPenalty"):
+        expected_sampler = sampling_overrides.get(sampler_field)
+        actual_sampler = chat_overrides.get(sampler_field)
+        if expected_sampler is None:
+            if actual_sampler is not None:
+                return False
+        elif actual_sampler != expected_sampler:
+            return False
     request_max_tokens = request_contract.get("requestMaxTokens")
     override_max_tokens = chat_overrides.get("maxTokens")
     if (
@@ -4570,9 +4603,18 @@ def _validate_real_ui_request_contract(
     }:
         mismatch("toolResultMaxChars")
 
+    sampling_overrides = (
+        request_contract.get("samplingOverrides")
+        if isinstance(request_contract.get("samplingOverrides"), dict)
+        else {}
+    )
     for sampler_field in ("temperature", "topP", "topK", "minP", "repeatPenalty"):
-        if chat_overrides.get(sampler_field) is not None:
+        expected_sampler = sampling_overrides.get(sampler_field)
+        actual_sampler = chat_overrides.get(sampler_field)
+        if expected_sampler is None and actual_sampler is not None:
             mismatch(f"unexpectedSamplerOverride.{sampler_field}")
+        elif expected_sampler is not None and actual_sampler != expected_sampler:
+            mismatch(f"samplerOverride.{sampler_field}")
 
     expected_cache_controls = request_contract.get("checkServerCacheControls")
     if proof.get("requestedServerCacheControls") not in {
@@ -4971,6 +5013,39 @@ def _validate_current_step37_vlm_runtime_audit(root: Path) -> dict[str, Any]:
             or "importable_stub" not in rejected_paths
         ):
             failures.append("missing_step37_mlx_vlm_implementation_contract")
+    elif (
+        payload.get("status") == "pass"
+        or payload.get("release_clearance") == "audit_does_not_block_release"
+    ):
+        live_media_proof = payload.get("live_media_proof")
+        if not isinstance(live_media_proof, dict):
+            live_media_proof = {}
+        required_labels = {
+            "text_cache_repeat_1",
+            "text_cache_repeat_2",
+            "text_multiturn_recall",
+            "tool_required",
+            "tool_result_continuation",
+            "structured_json_exact",
+            "exact_code_whitespace",
+            "vl_blue_image",
+            "text_no_media_after_image",
+            "vl_blue_image_repeat",
+            "vl_red_image_changed",
+            "vl_blue_video",
+            "text_no_media_after_video",
+        }
+        present_labels = {
+            str(item) for item in live_media_proof.get("present_labels") or []
+        }
+        if (
+            live_media_proof.get("pass") is not True
+            or live_media_proof.get("status") != "pass"
+            or live_media_proof.get("failed") != 0
+            or live_media_proof.get("validation_failures") not in ([], None)
+            or not required_labels.issubset(present_labels)
+        ):
+            failures.append("missing_step37_live_media_proof")
 
     result.update(
         {
@@ -4996,6 +5071,7 @@ def _validate_current_step37_vlm_runtime_audit(root: Path) -> dict[str, Any]:
             "source_owned_runtime_progress": payload.get(
                 "source_owned_runtime_progress"
             ),
+            "live_media_proof": payload.get("live_media_proof"),
         }
     )
     return result
@@ -5657,6 +5733,9 @@ def _validate_current_mimo_v2_jang2l_root_cause(root: Path) -> dict[str, Any]:
     current_audit_artifact = CURRENT_MIMO_V2_JANG2L_CURRENT_AUDIT_ARTIFACT
     metadata_truth_artifact = CURRENT_MIMO_V2_JANG2L_METADATA_TRUTH_ARTIFACT
     source_vs_quant_artifact = CURRENT_MIMO_V2_JANG2L_SOURCE_VS_QUANT_ARTIFACT
+    no_source_classifier_artifact = (
+        CURRENT_MIMO_V2_JANG2L_NO_SOURCE_EXACTNESS_CLASSIFIER_ARTIFACT
+    )
     result: dict[str, Any] = {
         "status": "missing",
         "artifacts": {
@@ -5668,11 +5747,17 @@ def _validate_current_mimo_v2_jang2l_root_cause(root: Path) -> dict[str, Any]:
             "current_audit": current_audit_artifact,
             "metadata_truth": metadata_truth_artifact,
             "source_vs_quant_first_divergence": source_vs_quant_artifact,
+            "no_source_exactness_classifier": no_source_classifier_artifact,
         },
         "missing": [],
         "failures": [],
         "metadata_truth_passed": False,
         "source_vs_quant_first_divergence_passed": False,
+        "no_source_exactness_classifier_present": False,
+        "no_source_exactness_classifier_status": None,
+        "no_source_exactness_classification": None,
+        "no_source_exactness_excludes_parser_cache_sampling": False,
+        "no_source_exactness_unresolved_surfaces": {},
         "structural_verify_passed": False,
         "text_cache_narrow_pass": False,
         "switchglu_selected_expert_parity_passed": False,
@@ -5703,6 +5788,7 @@ def _validate_current_mimo_v2_jang2l_root_cause(root: Path) -> dict[str, Any]:
     current_audit_path = root / current_audit_artifact
     metadata_truth_path = root / metadata_truth_artifact
     source_vs_quant_path = root / source_vs_quant_artifact
+    no_source_classifier_path = root / no_source_classifier_artifact
     for path, artifact in (
         (structural_path, structural_artifact),
         (text_cache_path, text_cache_artifact),
@@ -5712,6 +5798,7 @@ def _validate_current_mimo_v2_jang2l_root_cause(root: Path) -> dict[str, Any]:
         (current_audit_path, current_audit_artifact),
         (metadata_truth_path, metadata_truth_artifact),
         (source_vs_quant_path, source_vs_quant_artifact),
+        (no_source_classifier_path, no_source_classifier_artifact),
     ):
         if not path.exists():
             result["missing"].append(artifact)
@@ -5727,6 +5814,9 @@ def _validate_current_mimo_v2_jang2l_root_cause(root: Path) -> dict[str, Any]:
         current_audit_payload = json.loads(current_audit_path.read_text(encoding="utf-8"))
         metadata_truth_payload = json.loads(metadata_truth_path.read_text(encoding="utf-8"))
         source_vs_quant_payload = json.loads(source_vs_quant_path.read_text(encoding="utf-8"))
+        no_source_classifier_payload = json.loads(
+            no_source_classifier_path.read_text(encoding="utf-8")
+        )
     except Exception as exc:  # noqa: BLE001 - report validation failure
         result["status"] = f"load_error:{type(exc).__name__}"
         result["failures"].append("json_load_error")
@@ -5768,6 +5858,32 @@ def _validate_current_mimo_v2_jang2l_root_cause(root: Path) -> dict[str, Any]:
     )
     if not result["source_vs_quant_first_divergence_passed"]:
         result["failures"].append("mimo_source_vs_quant_first_divergence_missing")
+
+    classifier_excluded = no_source_classifier_payload.get("excluded_surfaces")
+    if not isinstance(classifier_excluded, dict):
+        classifier_excluded = {}
+    classifier_unresolved = no_source_classifier_payload.get("unresolved_surfaces")
+    if not isinstance(classifier_unresolved, dict):
+        classifier_unresolved = {}
+    result["no_source_exactness_classifier_present"] = True
+    result["no_source_exactness_classifier_status"] = no_source_classifier_payload.get(
+        "status"
+    )
+    result["no_source_exactness_classification"] = no_source_classifier_payload.get(
+        "classification"
+    )
+    result["no_source_exactness_unresolved_surfaces"] = classifier_unresolved
+    result["no_source_exactness_excludes_parser_cache_sampling"] = (
+        no_source_classifier_payload.get("source_vs_quant_load_performed") is False
+        and classifier_excluded.get("parser_argument_rewrite") is True
+        and classifier_excluded.get("prefix_paged_l2_or_kv_quant_primary_cause")
+        is True
+        and classifier_excluded.get("hidden_stochastic_sampling_primary_cause") is True
+    )
+    if not result["no_source_exactness_excludes_parser_cache_sampling"]:
+        result["failures"].append(
+            "mimo_no_source_exactness_classifier_missing_parser_cache_sampling_boundary"
+        )
 
     current_audit_component_ok = current_audit_payload.get("component_ok")
     if not isinstance(current_audit_component_ok, dict):
@@ -5901,6 +6017,15 @@ def _validate_current_mimo_v2_jang2l_root_cause(root: Path) -> dict[str, Any]:
     if audit_artifact_exactness_open:
         result["artifact_exactness_blocked"] = True
         result["failures"].append("mimo_jangtq2_artifact_exactness_blocked")
+        if (
+            result["no_source_exactness_classification"]
+            != "model_generated_literal_mutation_after_valid_parser_structure"
+            or classifier_unresolved.get("artifact_quantization_or_decode_logits_quality")
+            is not True
+        ):
+            result["failures"].append(
+                "mimo_no_source_exactness_classifier_missing_literal_mutation_boundary"
+            )
     if audit_decode_speed_open:
         result["decode_speed_target_blocked"] = True
         result["failures"].append("mimo_decode_speed_below_release_target")
@@ -6420,17 +6545,51 @@ def _validate_current_real_ui_live_model_matrix(
                 for surface in required_family_surfaces
                 if surface not in surfaces
             ]
-            mixed_model_identity = len(model_names) > 1 or len(model_paths) > 1
+            required_variants = REQUIRED_REAL_UI_LIVE_MODEL_VARIANTS_BY_FAMILY.get(
+                family_id, {}
+            )
+            required_model_names = {
+                str(name)
+                for name in required_variants.get("model_names", set())
+                if isinstance(name, str) and name
+            }
+            required_model_paths = {
+                str(path)
+                for path in required_variants.get("model_paths", set())
+                if isinstance(path, str) and path
+            }
+            missing_required_model_variants = sorted(required_model_names - model_names)
+            unexpected_model_names = sorted(
+                model_names - required_model_names
+            ) if required_model_names else []
+            unexpected_model_paths = sorted(
+                model_paths - required_model_paths
+            ) if required_model_paths else []
+            allowed_model_variant_union = bool(required_model_names) and (
+                model_names == required_model_names
+                and (not required_model_paths or model_paths == required_model_paths)
+            )
+            mixed_model_identity = (
+                len(model_names) > 1 or len(model_paths) > 1
+            ) and not allowed_model_variant_union
             covered_families[family_id] = {
                 "status": (
                     "pass"
-                    if not missing_family_surfaces and not mixed_model_identity
+                    if (
+                        not missing_family_surfaces
+                        and not mixed_model_identity
+                        and not missing_required_model_variants
+                    )
                     else "partial"
                 ),
                 "modelName": model_name,
                 "modelNames": sorted(model_names),
                 "modelPaths": sorted(model_paths),
                 "mixed_model_identity_union": mixed_model_identity,
+                "allowed_model_variant_union": allowed_model_variant_union,
+                "missing_required_model_variants": missing_required_model_variants,
+                "unexpected_model_names": unexpected_model_names,
+                "unexpected_model_paths": unexpected_model_paths,
                 "artifact": artifacts[-1] if artifacts else row.get("proof"),
                 "artifacts": artifacts,
                 "required_surfaces": list(required_family_surfaces),
@@ -7658,7 +7817,7 @@ def _validate_open_requirement_details(
         and source_preflight.get("launch_decision") == "do_not_launch"
         and source_preflight.get("launch_allowed") is False
         and str(source_preflight.get("model") or "").endswith(
-            "DeepSeek-V4-Flash-JANGTQ-K"
+            "DeepSeek-V4-Flash-JANGTQ-K-HeadBF16-Probe-20260520"
         )
         and source_preflight.get("preflight_memory_source")
         == "vm_stat_free_plus_speculative_purgeable"

@@ -61,9 +61,9 @@ from tests.cross_matrix.release_regression_manifest import (
 )
 
 
-DEFAULT_OUT = Path("build/current-objective-proof-after-mllm-tight-memory-guard-20260607.json")
+DEFAULT_OUT = Path("build/current-objective-proof-after-mimo-manifest-classifier-sync-20260607.json")
 CURRENT_RELEASE_REGRESSION_MANIFEST_REL = (
-    "build/current-release-regression-manifest-after-mllm-tight-memory-guard-20260607.json"
+    "build/current-release-regression-manifest-after-mimo-no-source-classifier-20260607.json"
 )
 DSV4_QUALITY_CLEARANCE_REL = "build/current-dsv4-long-output-quality-clearance-20260521.json"
 DSV4_CURRENT_IDENTIFIER_CANARY_REL = (
@@ -191,18 +191,18 @@ DSV4_BATCH_GENERATOR_LOGIT_TRACE_REL = (
 DSV4_BATCH_GENERATOR_WARMUP_ABLATION_REL = (
     "build/current-dsv4-jang-batch-generator-warmup-ablation-20260524.json"
 )
-API_CACHE_CONTRACT_REL = "build/current-noheavy-api-cache-contract-after-jangtq2-objective-refresh-20260607.json"
-CACHE_ARCHITECTURE_CONTRACT_REL = "build/current-cache-architecture-contract-after-mllm-tight-memory-guard-20260607.json"
-TOOL_CALL_CONTRACT_REL = "build/current-tool-call-contract-after-jangtq2-objective-refresh-20260607.json"
+API_CACHE_CONTRACT_REL = "build/current-noheavy-api-cache-contract-after-qwen36-bundled-media-pass-20260607.json"
+CACHE_ARCHITECTURE_CONTRACT_REL = "build/current-cache-architecture-contract-after-mimo-capability-snapshot-fix-20260607.json"
+TOOL_CALL_CONTRACT_REL = "build/current-tool-call-contract-after-current-mimo-proof-20260607.json"
 PANEL_SETTINGS_CONTRACT_REL = "build/current-panel-settings-contract-proof-20260601-cache-ui-storage-quant.json"
-MAX_OUTPUT_CONTEXT_CONTRACT_REL = "build/current-max-output-context-contract-after-jangtq2-objective-refresh-20260607.json"
+MAX_OUTPUT_CONTEXT_CONTRACT_REL = "build/current-max-output-context-contract-after-current-mimo-proof-20260607.json"
 MAX_OUTPUT_CONTEXT_CONTRACT_FALLBACK_REL = "build/current-max-output-context-contract-20260521.json"
-MODEL_FAMILY_CONTRACT_REL = "build/current-model-family-detection-contract-after-jangtq2-objective-refresh-20260607.json"
-PARSER_REGISTRY_CONTRACT_REL = "build/current-parser-registry-contract-after-jangtq2-objective-refresh-20260607.json"
-MODEL_ARTIFACT_FORMAT_CONTRACT_REL = "build/current-model-artifact-format-contract-after-mllm-tight-memory-guard-20260607.json"
-GENERATION_DEFAULTS_CONTRACT_REL = "build/current-generation-defaults-contract-after-jangtq2-objective-refresh-20260607.json"
-NATIVE_MTP_CONTRACT_REL = "build/current-native-mtp-contract-after-mllm-tight-memory-guard-20260607.json"
-VL_MEDIA_CONTRACT_REL = "build/current-vl-media-cache-contract-after-mllm-tight-memory-guard-20260607.json"
+MODEL_FAMILY_CONTRACT_REL = "build/current-model-family-detection-contract-after-mimo-capability-snapshot-fix-20260607.json"
+PARSER_REGISTRY_CONTRACT_REL = "build/current-parser-registry-contract-after-mimo-capability-snapshot-fix-20260607.json"
+MODEL_ARTIFACT_FORMAT_CONTRACT_REL = "build/current-model-artifact-format-contract-after-mimo-capability-snapshot-fix-20260607.json"
+GENERATION_DEFAULTS_CONTRACT_REL = "build/current-generation-defaults-contract-after-do-sample-false-mimo-20260607.json"
+NATIVE_MTP_CONTRACT_REL = "build/current-native-mtp-contract-after-mimo-capability-snapshot-fix-20260607.json"
+VL_MEDIA_CONTRACT_REL = "build/current-vl-media-cache-contract-after-mimo-capability-snapshot-fix-20260607.json"
 QWEN_JANG_SOURCE_SPEED_REL = "build/current-decode-speed-live-qwen27-jang4m-source-20260606.json"
 QWEN_JANG_PACKAGED_SPEED_REL = "build/current-decode-speed-live-qwen27-jang4m-installed-app-deterministic-pp-20260606.json"
 QWEN_NATIVE_MTP_SPEED_REL = "build/current-decode-speed-live-qwen27-jang4m-mtp-20260523.json"
@@ -318,7 +318,7 @@ GEMMA4_LOCAL_METADATA_AUDIT_REL = (
     "build/current-local-generation-metadata-audit-20260524-gemma4-visible-budget.json"
 )
 ALL_LOCAL_MODEL_SMOKE_ZAYA_TEXT_REL = (
-    "build/current-all-local-model-smoke-zaya-text-bundled-20260524/summary.json"
+    "build/current-filtered-live-smoke-zaya-text-mxfp4-20260607/summary.json"
 )
 ALL_LOCAL_MODEL_SMOKE_ZAYA_TEXT_VL_CURRENT_REL = (
     "build/current-all-local-model-smoke-zaya-text-vl-tools-media-after-reasoning-budget-20260606/summary.json"
@@ -327,10 +327,10 @@ ALL_LOCAL_MODEL_SMOKE_ZAYA_VL_REL = (
     "build/current-all-local-model-smoke-zaya-vl-bundled-20260524/summary.json"
 )
 ALL_LOCAL_MODEL_SMOKE_ZAYA_VL_JANGTQ4_REL = (
-    "build/current-all-local-model-smoke-zaya-vl-mxfp4-after-thinking-capability-truth-20260606/summary.json"
+    "build/current-all-local-model-smoke-zaya-vl-mxfp4-bundled-after-source-tool-pass-20260607/summary.json"
 )
 ALL_LOCAL_MODEL_SMOKE_ZAYA_VL_CURRENT_REL = (
-    "build/current-all-local-model-smoke-zaya-vl-mxfp4-after-thinking-capability-truth-20260606/summary.json"
+    "build/current-all-local-model-smoke-zaya-vl-mxfp4-bundled-after-source-tool-pass-20260607/summary.json"
 )
 ALL_LOCAL_MODEL_SMOKE_NEMOTRON_OMNI_JANGTQ_REL = (
     "build/current-all-local-model-smoke-nemotron-omni-jangtq-video-bundled-20260526-rerun/summary.json"
@@ -339,28 +339,28 @@ ALL_LOCAL_MODEL_SMOKE_LING_HY3_NEMOTRON_CURRENT_REL = (
     "build/current-all-local-model-smoke-ling-hy3-nemotron-tools-media-20260606/summary.json"
 )
 ALL_LOCAL_MODEL_SMOKE_GEMMA4_26B_CRACK_REL = (
-    "build/current-all-local-model-smoke-gemma26-jang4m-tools-media-continuation-20260606/summary.json"
+    "build/current-all-local-model-smoke-gemma26-jang4m-bundled-tools-media-20260607/summary.json"
 )
 ALL_LOCAL_MODEL_SMOKE_LING_BAILING_JANGTQ_REL = (
-    "build/current-all-local-model-smoke-ling-bailing-jangtq-bundled-20260525-rerun/summary.json"
+    "build/current-filtered-live-smoke-ling-flash-jangtq-20260607/summary.json"
 )
 ALL_LOCAL_MODEL_SMOKE_QWEN36_MXFP4_CRACK_REL = (
-    "build/current-all-local-model-smoke-qwen36-mxfp4-crack-bundled-20260525-rerun/summary.json"
+    "build/current-all-local-model-smoke-qwen36-27b-jang4m-mtp-bundled-tools-media-20260607/summary.json"
 )
 ALL_LOCAL_MODEL_SMOKE_QWEN35_MXFP8_MTP_CURRENT_REL = (
     "build/current-all-local-model-smoke-qwen35-mxfp8-mtp-tools-media-20260606/summary.json"
 )
 ALL_LOCAL_MODEL_SMOKE_HY3_JANGTQ2_REL = (
-    "build/current-all-local-model-smoke-hy3-jangtq2-bundled-toolprobe-20260525/summary.json"
+    "build/current-filtered-live-smoke-hy3-preview-jangtq2-20260607/summary.json"
 )
 ALL_LOCAL_MODEL_SMOKE_MINIMAX_SMALL_JANGTQ_REL = (
-    "build/current-all-local-model-smoke-minimaxk-tools-continuation-20260606/summary.json"
+    "build/current-all-local-model-smoke-minimaxk-bundled-after-required-tool-256-20260607/summary.json"
 )
 ALL_LOCAL_MODEL_SMOKE_LIVE_SLICE_CURRENT_REL = (
     "build/current-all-local-model-smoke-live-slice-tools-media-continuation-20260606/summary.json"
 )
 ALL_LOCAL_MODEL_SMOKE_MIMO_V2_JANG2L_REL = (
-    "build/current-all-local-model-smoke-mimo-v25-jang2l-tools-media-rerun-20260606/summary.json"
+    "build/current-all-local-model-smoke-mimo-v25-jangtq2-bundled-tools-nomedia-after-do-sample-false-rerun-20260607/summary.json"
 )
 MIMO_V2_JANG2L_STRUCTURAL_VERIFY_REL = (
     "build/current-mimo-jang2l-local-structural-verify-20260606.json"
@@ -378,7 +378,7 @@ MIMO_V2_JANG2L_TOOL_DIALECT_REL = (
     "build/current-mimo-v2-jang2l-tool-dialect-failure-20260606.json"
 )
 MIMO_V2_JANG2L_CURRENT_AUDIT_REL = (
-    "build/current-mimo-v2-jang2l-current-audit-after-jangtq2-local-manifest-speed-refresh-20260607.json"
+    "build/current-mimo-v2-jang2l-current-audit-after-do-sample-false-rerun-20260607.json"
 )
 MIMO_V2_JANG2L_METADATA_TRUTH_REL = (
     "build/current-mimo-v25-jang2l-local-metadata-truth-patch-20260606.json"
@@ -387,7 +387,7 @@ MIMO_V2_JANG2L_CONSERVATIVE_DIAGNOSTIC_REL = (
     "build/current-mimo-conservative-diagnostic-20260606/summary.json"
 )
 MIMO_V2_JANG2L_NOMEDIA_TOOL_CACHE_REL = (
-    "build/current-all-local-model-smoke-mimo-v25-jangtq2-tools-nomedia-after-literal-prompts-20260607/summary.json"
+    "build/current-all-local-model-smoke-mimo-v25-jangtq2-bundled-tools-nomedia-after-do-sample-false-rerun-20260607/summary.json"
 )
 ALL_LOCAL_MODEL_SMOKE_DSV4_JANGTQ_K_REL = (
     "build/current-all-local-model-smoke-dsv4-jangtq-k-tools-cache-20260606/summary.json"
@@ -7478,7 +7478,7 @@ def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
             DSV4_CURRENT_SOURCE_TOKEN_TAIL_AB_EXACTNESS_REL,
             DSV4_CURRENT_SOURCE_MEMORY_PREFLIGHT_REL,
             DSV4_CURRENT_REAL_UI_MEMORY_PREFLIGHT_REL,
-            "build/current-dsv4-route-mode-code-exactness-preflight-after-mimo-ledger-20260607.json",
+            "build/current-dsv4-route-mode-code-exactness-preflight-after-release-manifest-refresh-20260607.json",
             "build/current-dsv4-responses-cache-gate-20260606.json",
             "build/current-dsv4-responses-restart-l2-gate-20260606.json",
             "build/current-dsv4-responses-one-tool-stop-20260606.json",

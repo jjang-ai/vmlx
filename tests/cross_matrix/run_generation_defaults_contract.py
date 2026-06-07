@@ -21,12 +21,13 @@ from pathlib import Path
 from typing import Any
 
 
-DEFAULT_OUT = Path("build/current-generation-defaults-contract-after-jangtq2-objective-refresh-20260607.json")
+DEFAULT_OUT = Path("build/current-generation-defaults-contract-after-do-sample-false-mimo-20260607.json")
 
 SOURCE_HASH_FILES = (
     "vmlx_engine/server.py",
     "vmlx_engine/cli.py",
     "tests/test_engine_audit.py",
+    "tests/test_reasoning_modes.py",
     "panel/src/main/ipc/models.ts",
     "panel/src/main/sessions.ts",
     "panel/src/renderer/src/components/sessions/ServerSettingsDrawer.tsx",
@@ -38,6 +39,7 @@ SOURCE_HASH_FILES = (
     "panel/src/shared/sessionConfigMigrations.ts",
     "panel/tests/generation-defaults.test.ts",
     "panel/tests/settings-flow.test.ts",
+    "tests/test_panel_cli_flag_contract.py",
     "tests/cross_matrix/run_generation_defaults_contract.py",
     "tests/cross_matrix/run_local_generation_metadata_audit.py",
     "tests/test_generation_defaults_contract.py",
@@ -49,6 +51,9 @@ REQUIRED_GENERATION_DEFAULT_TEST_MARKERS = (
     "uses standard MLX generation_config.json for non-JANG and VLM bundles",
     "lets JANG chat sampling metadata override generation_config.json",
     "normalizes disabled top_k sentinels to Off/0 for UI and requests",
+    "treats generation_config do_sample=false as effective greedy sampling",
+    "test_generation_config_do_sample_false_resolves_greedy_when_request_omits_sampling",
+    "test_jang_chat_sampling_overrides_generation_config_do_sample_false",
     "uses chat repetition penalty when bundle default reasoning mode is not thinking",
     "uses neutral generic repetition penalty for DSV4 direct chat defaults",
     # Panel/session must not copy metadata defaults into sticky hidden startup
@@ -73,6 +78,11 @@ REQUIRED_GENERATION_DEFAULT_TEST_MARKERS = (
     "surfaces Max Output Tokens separately from Max Context Tokens",
     # No hidden sampler/repetition floor in real launch command or preview.
     "test_session_command_preview_mirrors_runtime_default_flags",
+    "test_panel_serve_flags_are_registered_engine_cli_flags",
+    "test_runtime_and_preview_additional_arg_filters_share_blocklists",
+    "test_panel_cli_flag_contract_covers_dsv4_cache_and_output_boundaries",
+    "test_command_preview_uses_runtime_numeric_sanitizers_for_core_flags",
+    "test_text_stale_value_flags_strip_their_values_in_preview_and_runtime",
     "test_local_generation_metadata_audit_reports_high_risk_rows",
     "test_local_generation_metadata_audit_flags_thinking_template_without_budget",
     "test_local_generation_metadata_audit_accepts_template_budget_support",
@@ -102,6 +112,17 @@ REQUIRED_GENERATION_DEFAULT_FAMILY_MATRIX: dict[str, dict[str, tuple[str, ...]]]
         "checks": ("disabled_top_k_sentinels_normalize_to_off",),
         "markers": (
             "normalizes disabled top_k sentinels to Off/0 for UI and requests",
+        ),
+    },
+    "generation_config_do_sample_false": {
+        "checks": (
+            "generation_config_defaults_are_surfaced",
+            "no_hidden_sampler_forcing_or_repetition_floor",
+        ),
+        "markers": (
+            "treats generation_config do_sample=false as effective greedy sampling",
+            "test_generation_config_do_sample_false_resolves_greedy_when_request_omits_sampling",
+            "test_jang_chat_sampling_overrides_generation_config_do_sample_false",
         ),
     },
     "dsv4_direct_chat_repetition_policy": {
@@ -150,6 +171,20 @@ REQUIRED_GENERATION_DEFAULT_FAMILY_MATRIX: dict[str, dict[str, tuple[str, ...]]]
             "does not synthesize server --default sampling flags from UI/session config",
         ),
     },
+    "cli_mlxstudio_startup_parity": {
+        "checks": (
+            "cli_startup_flags_match_engine",
+            "mlxstudio_startup_preview_matches_runtime",
+            "startup_surface_independence_pinned",
+        ),
+        "markers": (
+            "test_panel_serve_flags_are_registered_engine_cli_flags",
+            "test_runtime_and_preview_additional_arg_filters_share_blocklists",
+            "test_panel_cli_flag_contract_covers_dsv4_cache_and_output_boundaries",
+            "test_command_preview_uses_runtime_numeric_sanitizers_for_core_flags",
+            "test_text_stale_value_flags_strip_their_values_in_preview_and_runtime",
+        ),
+    },
     "registered_family_max_token_contract": {
         "checks": ("omitted_max_tokens_without_bundle_default_is_bounded",),
         "markers": (
@@ -171,6 +206,7 @@ COMMANDS: dict[str, tuple[Path, list[str]]] = {
             "--testNamePattern",
             (
                 "generation_config|JANG chat sampling|disabled top_k|"
+                "do_sample=false|"
                 "repetition penalty|server --default sampling|"
                 "max_new_tokens|legacy session maxTokens|"
                 "Max Output Tokens|Max Context Tokens|"
@@ -188,12 +224,14 @@ COMMANDS: dict[str, tuple[Path, list[str]]] = {
             "-q",
             "-vv",
             "tests/test_engine_audit.py",
+            "tests/test_reasoning_modes.py",
             "-k",
             (
                 "generation_config or max_tokens_resolution_contract or sampling "
                 "or output_caps or reasoning_effort_preserves_bundle "
                 "or omitted_server_max_tokens or effort_does_not_synthesize "
-                "or session_command_preview_mirrors_runtime_default_flags"
+                "or session_command_preview_mirrors_runtime_default_flags "
+                "or do_sample_false"
             ),
         ],
     ),
@@ -206,6 +244,17 @@ COMMANDS: dict[str, tuple[Path, list[str]]] = {
             "-q",
             "-vv",
             "tests/test_local_generation_metadata_audit.py",
+        ],
+    ),
+    "panel_cli_startup_contract": (
+        Path("."),
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            "-q",
+            "-vv",
+            "tests/test_panel_cli_flag_contract.py",
         ],
     ),
 }
@@ -365,6 +414,21 @@ def build_artifact(root: Path) -> dict[str, Any]:
             and "does not copy model max_new_tokens into hidden startup maxTokens config" not in missing_markers
             and "database clears legacy session maxTokens before settings UI or launch can reuse them" not in missing_markers
             and "server startup generation defaults are model-owned and not editable sliders" not in missing_markers
+        ),
+        "cli_startup_flags_match_engine": (
+            not failed
+            and "test_panel_serve_flags_are_registered_engine_cli_flags" not in missing_markers
+            and "test_panel_cli_flag_contract_covers_dsv4_cache_and_output_boundaries" not in missing_markers
+        ),
+        "mlxstudio_startup_preview_matches_runtime": (
+            not failed
+            and "test_runtime_and_preview_additional_arg_filters_share_blocklists" not in missing_markers
+            and "test_command_preview_uses_runtime_numeric_sanitizers_for_core_flags" not in missing_markers
+        ),
+        "startup_surface_independence_pinned": (
+            not failed
+            and "test_text_stale_value_flags_strip_their_values_in_preview_and_runtime" not in missing_markers
+            and "test_session_command_preview_mirrors_runtime_default_flags" not in missing_markers
         ),
         "legacy_count_floor_still_nontrivial": (
             not failed and panel_passed >= 10 and engine_passed >= 25

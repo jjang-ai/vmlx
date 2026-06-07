@@ -18,7 +18,7 @@ def test_objective_proof_digest_default_out_tracks_current_release_proof_artifac
     from tests.cross_matrix import summarize_objective_proof as objective
 
     assert objective.DEFAULT_OUT == Path(
-        "build/current-objective-proof-after-mllm-tight-memory-guard-20260607.json"
+        "build/current-objective-proof-after-mimo-manifest-classifier-sync-20260607.json"
     )
 
 
@@ -1453,7 +1453,7 @@ def test_objective_proof_digest_tracks_ling_multilingual_cjk_leakage(tmp_path):
     )
     _write_json(
         tmp_path,
-        "build/current-dsv4-route-mode-code-exactness-preflight-after-mimo-ledger-20260607.json",
+        "build/current-dsv4-route-mode-code-exactness-preflight-after-release-manifest-refresh-20260607.json",
         {
             "status": "pass",
             "reason": "sufficient_free_memory",
@@ -2650,7 +2650,7 @@ def test_objective_proof_digest_surfaces_dsv4_chatmax_prompt_trigger_probe(tmp_p
     )
     _write_json(
         tmp_path,
-        "build/current-dsv4-route-mode-code-exactness-preflight-after-mimo-ledger-20260607.json",
+        "build/current-dsv4-route-mode-code-exactness-preflight-after-release-manifest-refresh-20260607.json",
         {
             "status": "pass",
             "reason": "sufficient_free_memory",
@@ -3707,7 +3707,7 @@ def test_objective_proof_digest_summarizes_dsv4_exact_code_root_boundary(
     )
     _write_json(
         tmp_path,
-        "build/current-dsv4-route-mode-code-exactness-preflight-after-mimo-ledger-20260607.json",
+        "build/current-dsv4-route-mode-code-exactness-preflight-after-release-manifest-refresh-20260607.json",
         {
             "status": "skipped",
             "reason": "insufficient_free_memory",
@@ -3835,7 +3835,7 @@ def test_objective_proof_digest_summarizes_dsv4_exact_code_root_boundary(
     assert summary["current_primary_failure"] == "direct_off_exact_code_generation"
     assert summary["source_full_output_preflight"]["artifact_present"] is True
     assert summary["source_full_output_preflight"]["artifact"] == (
-        "build/current-dsv4-route-mode-code-exactness-preflight-after-mimo-ledger-20260607.json"
+        "build/current-dsv4-route-mode-code-exactness-preflight-after-release-manifest-refresh-20260607.json"
     )
     assert summary["source_full_output_preflight"]["status"] == "skipped"
     assert summary["source_full_output_preflight"]["reason"] == "insufficient_free_memory"
@@ -3869,7 +3869,7 @@ def test_objective_proof_digest_summarizes_dsv4_exact_code_root_boundary(
     assert summary["source_full_output_clearance_missing"] is True
     joined_evidence = "\n".join(quality["evidence"])
     assert (
-        "current-dsv4-route-mode-code-exactness-preflight-after-mimo-ledger-20260607.json"
+        "current-dsv4-route-mode-code-exactness-preflight-after-release-manifest-refresh-20260607.json"
         in joined_evidence
     )
     assert (
@@ -7454,7 +7454,7 @@ def test_objective_proof_digest_keeps_cross_family_live_smoke_open_on_non_mimo_g
     _write_passing_base_artifacts(tmp_path)
     _write_json(
         tmp_path,
-        "build/current-all-local-model-smoke-zaya-text-bundled-20260524/summary.json",
+        "build/current-all-local-model-smoke-zaya-text-vl-tools-media-after-reasoning-budget-20260606/summary.json",
         {
             "completed": 1,
             "row_count": 1,
@@ -7545,7 +7545,7 @@ def test_objective_proof_digest_keeps_cross_family_live_smoke_open_on_non_mimo_g
     )
     _write_json(
         tmp_path,
-        "build/current-all-local-model-smoke-zaya-vl-mxfp4-after-thinking-capability-truth-20260606/summary.json",
+        "build/current-all-local-model-smoke-zaya-vl-mxfp4-bundled-after-source-tool-pass-20260607/summary.json",
         {
             "completed": 1,
             "row_count": 1,
@@ -7902,7 +7902,7 @@ def test_objective_proof_digest_keeps_cross_family_live_smoke_open_on_non_mimo_g
     )
     _write_json(
         tmp_path,
-        "build/current-all-local-model-smoke-minimaxk-tools-continuation-20260606/summary.json",
+        "build/current-all-local-model-smoke-minimaxk-bundled-after-required-tool-256-20260607/summary.json",
         {
             "completed": 1,
             "row_count": 1,
@@ -7964,7 +7964,7 @@ def test_objective_proof_digest_keeps_cross_family_live_smoke_open_on_non_mimo_g
     )
     _write_json(
         tmp_path,
-        "build/current-all-local-model-smoke-ling-bailing-jangtq-bundled-20260525-rerun/summary.json",
+        "build/current-filtered-live-smoke-ling-flash-jangtq-20260607/summary.json",
         {
             "completed": 1,
             "row_count": 1,
@@ -8006,7 +8006,7 @@ def test_objective_proof_digest_keeps_cross_family_live_smoke_open_on_non_mimo_g
     )
     _write_json(
         tmp_path,
-        "build/current-all-local-model-smoke-qwen36-mxfp4-crack-bundled-20260525-rerun/summary.json",
+        "build/current-all-local-model-smoke-qwen36-27b-jang4m-mtp-bundled-tools-media-20260607/summary.json",
         {
             "completed": 1,
             "row_count": 1,
@@ -8080,7 +8080,7 @@ def test_objective_proof_digest_keeps_cross_family_live_smoke_open_on_non_mimo_g
     )
     _write_json(
         tmp_path,
-        "build/current-all-local-model-smoke-hy3-jangtq2-bundled-toolprobe-20260525/summary.json",
+        "build/current-filtered-live-smoke-hy3-preview-jangtq2-20260607/summary.json",
         {
             "completed": 1,
             "row_count": 1,
@@ -8130,7 +8130,7 @@ def test_objective_proof_digest_keeps_cross_family_live_smoke_open_on_non_mimo_g
     )
     _write_json(
         tmp_path,
-        "build/current-all-local-model-smoke-gemma26-jang4m-tools-media-continuation-20260606/summary.json",
+        "build/current-all-local-model-smoke-gemma26-jang4m-bundled-tools-media-20260607/summary.json",
         {
             "completed": 1,
             "row_count": 1,
@@ -8171,6 +8171,49 @@ def test_objective_proof_digest_keeps_cross_family_live_smoke_open_on_non_mimo_g
                             "label": "reasoning_on",
                             "validation_failures": [],
                             "content": "FINAL=OK",
+                            "cache_summary": {"has_cache_hit": True},
+                        },
+                    ],
+                }
+            ],
+        },
+    )
+    _write_json(
+        tmp_path,
+        "build/current-filtered-live-smoke-zaya-text-mxfp4-20260607/summary.json",
+        {
+            "status": "pass",
+            "completed": 1,
+            "row_count": 1,
+            "results": [
+                {
+                    "status": "pass",
+                    "row": {
+                        "name": "ZAYA1-8B-MXFP4",
+                        "model_type": "zaya",
+                        "cache_family": "zaya_cca",
+                    },
+                    "requests": [
+                        {
+                            "label": "text_cache_repeat_2",
+                            "validation_failures": [],
+                            "content": "ACK",
+                            "cache_summary": {
+                                "has_cache_hit": True,
+                                "cache_hit_tokens": 48,
+                            },
+                        },
+                        {
+                            "label": "text_multiturn_recall",
+                            "validation_failures": [],
+                            "content": "color=blue and animal=cat",
+                            "cache_summary": {"has_cache_hit": True},
+                        },
+                        {
+                            "label": "reasoning_on",
+                            "validation_failures": [],
+                            "content": "FINAL=OK",
+                            "reasoning_chars": 24,
                             "cache_summary": {"has_cache_hit": True},
                         },
                     ],
@@ -8409,7 +8452,7 @@ def test_objective_proof_digest_keeps_cross_family_live_smoke_open_when_only_mim
         )
     _write_json(
         tmp_path,
-        "build/current-all-local-model-smoke-mimo-v25-jang2l-tools-media-rerun-20260606/summary.json",
+        "build/current-all-local-model-smoke-mimo-v25-jangtq2-bundled-tools-nomedia-after-do-sample-false-rerun-20260607/summary.json",
         {
             "status": "fail",
             "completed": 1,
@@ -8456,7 +8499,7 @@ def test_objective_proof_digest_keeps_cross_family_live_smoke_open_when_only_mim
     assert row["details"]["mimo_v2_deferred"] is True
     assert row["details"]["not_pass_required_family_artifacts"] == {
         "mimo_v2": [
-            "build/current-all-local-model-smoke-mimo-v25-jang2l-tools-media-rerun-20260606/summary.json"
+            "build/current-all-local-model-smoke-mimo-v25-jangtq2-bundled-tools-nomedia-after-do-sample-false-rerun-20260607/summary.json"
         ],
     }
     assert row["details"]["missing_required_family_keys"] == ["mimo_v2"]
@@ -8473,7 +8516,7 @@ def test_all_local_smoke_digest_revalidates_cjk_visible_text_from_stale_artifact
 ):
     from tests.cross_matrix.summarize_objective_proof import _all_local_model_smoke_detail
 
-    rel = "build/current-all-local-model-smoke-zaya-text-bundled-20260524/summary.json"
+    rel = "build/current-all-local-model-smoke-zaya-text-vl-tools-media-after-reasoning-budget-20260606/summary.json"
     _write_json(tmp_path, rel, {"present": True})
     ok, details = _all_local_model_smoke_detail(
         [
@@ -8633,7 +8676,7 @@ def test_objective_digest_includes_current_real_ui_unblocked_non_mimo_matrix(
             "build/current-real-ui-dsv4-memory-preflight-20260530-local-refresh.json"
         ],
         "mimo_v2": [
-            "build/current-all-local-model-smoke-mimo-v25-jang2l-tools-media-rerun-20260606/summary.json"
+            "build/current-all-local-model-smoke-mimo-v25-jangtq2-bundled-tools-nomedia-after-do-sample-false-rerun-20260607/summary.json"
         ],
     }
     assert row["details"]["real_ui_live_model_matrix"][
@@ -9874,13 +9917,13 @@ def test_objective_proof_digest_accepts_dsv4_quality_clearance_artifact(tmp_path
             },
             "artifacts": {
                 "identifier_gate": "build/current-dsv4-identifier-count-ablation-20260521/result.json",
-                "full_output_gate": "build/current-dsv4-route-mode-code-exactness-preflight-after-mimo-ledger-20260607.json",
+                "full_output_gate": "build/current-dsv4-route-mode-code-exactness-preflight-after-release-manifest-refresh-20260607.json",
             },
         },
     )
     _write_json(
         tmp_path,
-        "build/current-dsv4-route-mode-code-exactness-preflight-after-mimo-ledger-20260607.json",
+        "build/current-dsv4-route-mode-code-exactness-preflight-after-release-manifest-refresh-20260607.json",
         {
             "status": "pass",
             "reason": "sufficient_free_memory",
@@ -10386,7 +10429,7 @@ def test_objective_proof_digest_reports_missing_current_dsv4_clearance_artifacts
             },
             "artifacts": {
                 "identifier_gate": "build/current-dsv4-identifier-count-ablation-20260521/result.json",
-                "full_output_gate": "build/current-dsv4-route-mode-code-exactness-preflight-after-mimo-ledger-20260607.json",
+                "full_output_gate": "build/current-dsv4-route-mode-code-exactness-preflight-after-release-manifest-refresh-20260607.json",
             },
         },
     )
@@ -10399,7 +10442,7 @@ def test_objective_proof_digest_reports_missing_current_dsv4_clearance_artifacts
     assert quality["details"]["legacy_clearance_artifacts"] == {}
     assert quality["details"]["missing_clearance_artifacts"] == [
         "build/current-dsv4-identifier-count-ablation-20260521/result.json",
-        "build/current-dsv4-route-mode-code-exactness-preflight-after-mimo-ledger-20260607.json",
+        "build/current-dsv4-route-mode-code-exactness-preflight-after-release-manifest-refresh-20260607.json",
     ]
 
 

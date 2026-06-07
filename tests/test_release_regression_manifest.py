@@ -32,6 +32,7 @@ from tests.cross_matrix.release_regression_manifest import (
     CURRENT_MIMO_V2_JANG2L_CURRENT_AUDIT_ARTIFACT,
     CURRENT_MIMO_V2_JANG2L_METADATA_TRUTH_ARTIFACT,
     CURRENT_MIMO_V2_JANG2L_SOURCE_VS_QUANT_ARTIFACT,
+    CURRENT_MIMO_V2_JANG2L_NO_SOURCE_EXACTNESS_CLASSIFIER_ARTIFACT,
     CURRENT_OBJECTIVE_DIGEST_ARTIFACT,
     CURRENT_REAL_UI_DSV4_MEMORY_PREFLIGHT_ARTIFACT,
     CURRENT_REAL_UI_LIVE_MODEL_PROOF_ARTIFACTS,
@@ -144,7 +145,7 @@ def _write_current_objective_digest(
     open_requirements: list[str] | None = None,
     missing_evidence: list[str] | None = None,
 ) -> None:
-    artifact = root / "build/current-objective-proof-after-mllm-tight-memory-guard-20260607.json"
+    artifact = root / "build/current-objective-proof-after-mimo-manifest-classifier-sync-20260607.json"
     artifact.parent.mkdir(parents=True, exist_ok=True)
     open_rows = (
         EXPECTED_CURRENT_OPEN_REQUIREMENTS
@@ -1306,6 +1307,84 @@ def _write_passing_real_ui_live_model_proof_artifacts(root: Path) -> None:
                 "persistedImageAttachment": False,
                 "persistedVideoAttachment": True,
             }
+        if (
+            row.get("family") == "qwen36"
+            and "20260607" in row["proof"]
+        ) or (
+            row.get("family") == "lfm25"
+            and "lfm25-mxfp4-responses-tools-cachecontrols-20260607-proof.json"
+            in row["proof"]
+        ):
+            proof["rendererWireApi"] = "responses"
+            proof["eventCounts"] = {"complete": 3, "tool": 4}
+            proof["requestedBuiltinTools"] = True
+            proof["chatOverrides"] = {"builtinToolsEnabled": True}
+            proof["serverCacheControls"] = {
+                "requested": True,
+                "verified": True,
+                "labels": [
+                    "Enable Prefix Cache",
+                    "Use Paged KV Cache",
+                    "Block Disk Cache (L2)",
+                    "Enable Disk Cache",
+                    "Stored Cache Quantization",
+                ],
+            }
+            proof["persistedToolsByMessage"] = [
+                [
+                    {
+                        "phase": "result",
+                        "toolName": "run_command",
+                        "detail": (
+                            "$ printf %s REAL_UI_LIVE_TOOL_ONE > "
+                            "real_ui_tool_probe_1.txt\nREAL_UI_LIVE_TOOL_ONE"
+                        ),
+                    },
+                    {
+                        "phase": "result",
+                        "toolName": "write_file",
+                        "detail": (
+                            "$ cat real_ui_tool_probe_1.txt && printf %s "
+                            "REAL_UI_LIVE_TOOL_TWO > real_ui_tool_probe_2.txt && "
+                            "cat real_ui_tool_probe_2.txt\n"
+                            "real_ui_tool_probe_1.txt\n"
+                            "real_ui_tool_probe_2.txt\n"
+                            "REAL_UI_LIVE_TOOL_TWO"
+                        ),
+                    },
+                ],
+            ]
+            if row.get("family") == "lfm25":
+                add_extensive_tool_churn(proof)
+            if "reasoning" in row["proof"]:
+                proof["eventCounts"]["reasoningDone"] = 1
+                proof["persistedReasoningCount"] = 1
+            if "image" in row["proof"]:
+                proof["media"] = {
+                    "requestedImage": True,
+                    "requestedVideo": False,
+                    "imageExpectedRegex": "\\bred\\b",
+                    "videoExpectedRegex": "",
+                    "imageSemanticVerified": True,
+                    "videoSemanticVerified": False,
+                    "imageVerified": True,
+                    "videoVerified": False,
+                    "persistedImageAttachment": True,
+                    "persistedVideoAttachment": False,
+                }
+            if "video" in row["proof"]:
+                proof["media"] = {
+                    "requestedImage": False,
+                    "requestedVideo": True,
+                    "imageExpectedRegex": "",
+                    "videoExpectedRegex": "red",
+                    "imageSemanticVerified": False,
+                    "videoSemanticVerified": True,
+                    "imageVerified": False,
+                    "videoVerified": True,
+                    "persistedImageAttachment": False,
+                    "persistedVideoAttachment": True,
+                }
         if row.get("family") == "zaya_vl":
             proof["media"] = {
                 "requestedImage": True,
@@ -2172,6 +2251,27 @@ def _write_passing_step37_vlm_runtime_audit(root: Path) -> None:
                 "mlx_vlm_step3p7_runtime_available": True,
                 "mlx_vlm_step3p7_runtime": "available",
                 "local_bridge_kind": "native_or_not_applicable",
+                "live_media_proof": {
+                    "pass": True,
+                    "status": "pass",
+                    "failed": 0,
+                    "validation_failures": [],
+                    "present_labels": [
+                        "text_cache_repeat_1",
+                        "text_cache_repeat_2",
+                        "text_multiturn_recall",
+                        "tool_required",
+                        "tool_result_continuation",
+                        "structured_json_exact",
+                        "exact_code_whitespace",
+                        "vl_blue_image",
+                        "text_no_media_after_image",
+                        "vl_blue_image_repeat",
+                        "vl_red_image_changed",
+                        "vl_blue_video",
+                        "text_no_media_after_video",
+                    ],
+                },
             }
         )
         + "\n",
@@ -3433,6 +3533,25 @@ def _write_passing_mimo_v2_root_cause_artifacts(root: Path) -> None:
         + "\n",
         encoding="utf-8",
     )
+    classifier_path = root / CURRENT_MIMO_V2_JANG2L_NO_SOURCE_EXACTNESS_CLASSIFIER_ARTIFACT
+    classifier_path.parent.mkdir(parents=True, exist_ok=True)
+    classifier_path.write_text(
+        json.dumps(
+            {
+                "status": "pass",
+                "classification": "exactness_release_cleared_by_stronger_evidence",
+                "source_vs_quant_load_performed": False,
+                "excluded_surfaces": {
+                    "parser_argument_rewrite": True,
+                    "prefix_paged_l2_or_kv_quant_primary_cause": True,
+                    "hidden_stochastic_sampling_primary_cause": True,
+                },
+                "unresolved_surfaces": {},
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
 
 
 def _write_open_mimo_v2_sink_ab_artifact(root: Path) -> None:
@@ -3890,14 +4009,14 @@ def test_release_regression_manifest_tracks_multifamily_live_workflow_gate():
         in joined
     )
     assert (
-        "current-all-local-model-smoke-minimaxk-tools-continuation-20260606/summary.json"
+        "current-all-local-model-smoke-minimaxk-bundled-after-required-tool-256-20260607/summary.json"
         in joined
     )
     assert (
         "current-all-local-model-smoke-minimax-small-jangtq-bundled-toolprobe-20260525/summary.json"
         in joined
     )
-    assert "MiniMax bundled tool probe passes tool_required" in joined
+    assert "MiniMax bundled tool probe passes required record_fact" in joined
     assert (
         "current-all-local-model-smoke-zaya-text-bundled-toolprobe-20260525/summary.json"
         in joined
@@ -3930,31 +4049,23 @@ def test_release_regression_manifest_tracks_covered_live_smoke_artifacts():
     artifacts = set(CURRENT_COVERED_LIVE_SMOKE_ARTIFACTS.values())
 
     assert (
-        "build/current-all-local-model-smoke-ling-bailing-jangtq-bundled-20260525-rerun/summary.json"
+        "build/current-filtered-live-smoke-ling-flash-jangtq-20260607/summary.json"
         in artifacts
     )
     assert (
-        "build/current-all-local-model-smoke-gemma26-jang4m-tools-media-continuation-20260606/summary.json"
+        "build/current-all-local-model-smoke-gemma26-jang4m-bundled-tools-media-20260607/summary.json"
         in artifacts
     )
     assert (
-        "build/current-all-local-model-smoke-qwen36-mxfp4-crack-bundled-20260525-rerun/summary.json"
+        "build/current-all-local-model-smoke-qwen36-27b-jang4m-mtp-bundled-tools-media-20260607/summary.json"
         in artifacts
     )
     assert (
-        "build/current-all-local-model-smoke-hy3-jangtq2-bundled-toolprobe-20260525/summary.json"
+        "build/current-filtered-live-smoke-dsv4-jangtq-k-20260607/summary.json"
         in artifacts
     )
     assert (
-        "build/current-all-local-model-smoke-minimaxk-tools-continuation-20260606/summary.json"
-        in artifacts
-    )
-    assert (
-        "build/current-all-local-model-smoke-dsv4-jangtq-k-tools-cache-20260606/summary.json"
-        in artifacts
-    )
-    assert (
-        "build/current-all-local-model-smoke-nemotron-omni-jangtq-video-bundled-20260526-rerun/summary.json"
+        "build/current-filtered-live-smoke-nemotron-omni-jangtq-20260607/summary.json"
         in artifacts
     )
 
@@ -3982,7 +4093,7 @@ def test_release_regression_manifest_current_sweep_uses_latest_live_smoke_artifa
     assert "current-regression-suite-20260528-installed-aggregate-stale.json" not in joined
     assert "current-regression-suite-20260528-epipe-aggregate-guard.json" not in joined
     assert "current-regression-suite-20260528-dsv4-continue-refresh.json" not in joined
-    assert "current-regression-suite-after-mllm-tight-memory-guard-20260607.json" in joined
+    assert "current-regression-suite-after-packaged-integrity-pass-20260607.json" in joined
     assert "current-regression-suite-gemma4-release-boundary-after-ui-e2e-fixes-dmg-build-20260604.json" not in joined
     assert "current-regression-suite-20260602-v1553-installed-tahoe-refresh.json" not in joined
     assert "current-regression-suite-20260602-vm-stat-gate-validation.json" not in joined
@@ -4131,7 +4242,7 @@ def test_release_regression_manifest_current_sweep_uses_latest_live_smoke_artifa
     assert "current-api-surface-contract-20260527-cache-endpoint-autoswitch-proof.json" not in joined
     assert "current-api-surface-contract-20260526-single-model-auto-switch-review.json" not in joined
     assert "current-api-surface-contract-20260525-single-model-responses-deltas.json" not in joined
-    assert "current-packaged-integrity-contract-after-bundle-refresh-20260606.json" in joined
+    assert "current-packaged-integrity-contract-after-staged-sequoia-rebuild-current-source-20260607.json" in joined
     assert "current-packaged-integrity-contract-20260601-qwen-fix-resigned-staged-app.json" not in joined
     assert "current-packaged-integrity-contract-20260601-developer-id-dmg-assertions.json" not in joined
     assert "current-packaged-integrity-contract-20260601-cache-ipc-epipe-package-refresh.json" not in joined
@@ -4159,11 +4270,11 @@ def test_release_regression_manifest_current_sweep_uses_latest_live_smoke_artifa
     assert "current-packaged-integrity-contract-20260526-bundled-release-proof.json" not in joined
     assert "current-packaged-integrity-contract-20260525-additional-args-guard.json" not in joined
     assert "current-regression-suite-20260524-crossfamily-cleared-dsv4-open.json" not in joined
-    assert "current-generation-defaults-contract-after-jangtq2-objective-refresh-20260607.json" in joined
+    assert "current-generation-defaults-contract-after-do-sample-false-mimo-20260607.json" in joined
     assert "current-generation-defaults-contract-20260602-step-greedy-display.json" not in joined
     assert "current-generation-defaults-contract-20260531-post-step-lfm-refresh.json" not in joined
     assert "current-generation-defaults-contract-20260526-settings-audit.json" not in joined
-    assert "current-max-output-context-contract-after-jangtq2-objective-refresh-20260607.json" in joined
+    assert "current-max-output-context-contract-after-current-mimo-proof-20260607.json" in joined
     assert "current-max-output-context-contract-20260526-settings-audit.json" not in joined
     assert "current-reasoning-template-contract-20260526-settings-audit.json" in joined
     assert "current-generation-defaults-contract-20260525-additional-args-guard.json" not in joined
@@ -4667,7 +4778,7 @@ def test_release_regression_manifest_current_sweep_rejects_missing_real_ui_live_
         in result["real_ui_live_model_proof"]["missing"]
     )
     assert (
-        "docs/internal/agent-notes/current-real-ui-live-model-qwen36-mxfp4-crack-20260527-proof.json"
+        "docs/internal/agent-notes/current-real-ui-live-model-qwen36-27b-jang4m-mtp-responses-tools-cachecontrols-deterministic-mtp-20260607-proof.json"
         in result["real_ui_live_model_proof"]["missing"]
     )
 
@@ -4753,47 +4864,47 @@ def test_release_regression_manifest_real_ui_live_model_rows_include_ling_bailin
     )
     assert (
         rows["qwen36_mxfp4_crack"]["model_path"]
-        == "/Users/example/models/dealign.ai/Qwen3.6-27B-MXFP4-CRACK"
+        == "/Users/example/models/JANGQ/Qwen3.6-27B-JANG_4M-MTP"
     )
-    assert rows["qwen36_mxfp4_crack"]["model_name"] == "Qwen3.6-27B-MXFP4-CRACK"
+    assert rows["qwen36_mxfp4_crack"]["model_name"] == "Qwen3.6-27B-JANG_4M-MTP"
     assert rows["qwen36_mxfp4_crack"]["family"] == "qwen36"
     assert (
         rows["qwen36_mxfp4_crack"]["proof"]
-        == "docs/internal/agent-notes/current-real-ui-live-model-qwen36-mxfp4-crack-20260527-proof.json"
+        == "docs/internal/agent-notes/current-real-ui-live-model-qwen36-27b-jang4m-mtp-responses-tools-cachecontrols-deterministic-mtp-20260607-proof.json"
     )
     assert (
         rows["qwen36_mxfp4_crack_video"]["model_path"]
-        == "/Users/example/models/dealign.ai/Qwen3.6-27B-MXFP4-CRACK"
+        == "/Users/example/models/JANGQ/Qwen3.6-27B-JANG_4M-MTP"
     )
-    assert rows["qwen36_mxfp4_crack_video"]["model_name"] == "Qwen3.6-27B-MXFP4-CRACK"
+    assert rows["qwen36_mxfp4_crack_video"]["model_name"] == "Qwen3.6-27B-JANG_4M-MTP"
     assert rows["qwen36_mxfp4_crack_video"]["family"] == "qwen36"
     assert (
         rows["qwen36_mxfp4_crack_video"]["proof"]
-        == "docs/internal/agent-notes/diagnostic-real-ui-live-model-qwen36-mxfp4-crack-video-20260527-proof.json"
+        == "docs/internal/agent-notes/current-real-ui-live-model-qwen36-27b-jang4m-mtp-responses-tools-cachecontrols-deterministic-mtp-20260607-proof.json"
     )
     assert rows["qwen36_mxfp4_crack_responses_tools_reasoning_image_cachecontrols"]["model_path"] == (
-        "/Users/example/models/dealign.ai/Qwen3.6-27B-MXFP4-CRACK"
+        "/Users/example/models/JANGQ/Qwen3.6-27B-JANG_4M-MTP"
     )
     assert (
         rows["qwen36_mxfp4_crack_responses_tools_reasoning_image_cachecontrols"]["model_name"]
-        == "Qwen3.6-27B-MXFP4-CRACK"
+        == "Qwen3.6-27B-JANG_4M-MTP"
     )
     assert rows["qwen36_mxfp4_crack_responses_tools_reasoning_image_cachecontrols"]["family"] == "qwen36"
     assert (
         rows["qwen36_mxfp4_crack_responses_tools_reasoning_image_cachecontrols"]["proof"]
-        == "docs/internal/agent-notes/current-real-ui-live-model-qwen36-mxfp4-crack-responses-tools-reasoning-image-cachecontrols-localonly-20260527-proof.json"
+        == "docs/internal/agent-notes/current-real-ui-live-model-qwen36-27b-jang4m-mtp-responses-tools-cachecontrols-deterministic-mtp-20260607-proof.json"
     )
     assert rows["qwen36_mxfp4_crack_responses_stricttools_cachecontrols"]["model_path"] == (
-        "/Users/example/models/dealign.ai/Qwen3.6-27B-MXFP4-CRACK"
+        "/Users/example/models/JANGQ/Qwen3.6-27B-JANG_4M-MTP"
     )
     assert (
         rows["qwen36_mxfp4_crack_responses_stricttools_cachecontrols"]["model_name"]
-        == "Qwen3.6-27B-MXFP4-CRACK"
+        == "Qwen3.6-27B-JANG_4M-MTP"
     )
     assert rows["qwen36_mxfp4_crack_responses_stricttools_cachecontrols"]["family"] == "qwen36"
     assert (
         rows["qwen36_mxfp4_crack_responses_stricttools_cachecontrols"]["proof"]
-        == "docs/internal/agent-notes/current-real-ui-live-model-qwen36-mxfp4-crack-responses-stricttools-image-cachecontrols-20260530-proof.json"
+        == "docs/internal/agent-notes/current-real-ui-live-model-qwen36-27b-jang4m-mtp-responses-tools-cachecontrols-deterministic-mtp-20260607-proof.json"
     )
     assert (
         rows["minimax_m27_small_jangtq"]["model_path"]
@@ -4957,21 +5068,21 @@ def test_release_regression_manifest_real_ui_live_model_rows_include_ling_bailin
         == "docs/internal/agent-notes/current-real-ui-live-model-step37-jang2l-responses-tools-l2storage-pagedlocked-after-subtype-ui-fix-20260531-proof.json"
     )
     assert rows["lfm25_moe_a1b"]["model_path"] == (
-        "/Users/example/.mlxstudio/models/JANGQ-AI/LFM2.5-8B-A1B-JANG_2L"
+        "/Users/example/.mlxstudio/models/JANGQ-AI/LFM2.5-8B-A1B-MXFP4"
     )
-    assert rows["lfm25_moe_a1b"]["model_name"] == "LFM2.5-8B-A1B-JANG_2L"
+    assert rows["lfm25_moe_a1b"]["model_name"] == "LFM2.5-8B-A1B-MXFP4"
     assert rows["lfm25_moe_a1b"]["family"] == "lfm25"
     assert (
         rows["lfm25_moe_a1b"]["proof"]
-        == "docs/internal/agent-notes/current-real-ui-live-model-lfm25-moe-a1b-jang2l-stricttools-chat-20260530-proof.json"
+        == "docs/internal/agent-notes/current-real-ui-live-model-lfm25-mxfp4-responses-tools-cachecontrols-20260607-proof.json"
     )
     assert (
         rows["lfm25_moe_a1b_responses"]["proof"]
-        == "docs/internal/agent-notes/current-real-ui-live-model-lfm25-moe-a1b-jang2l-stricttools-responses-post-epipe-20260531-proof.json"
+        == "docs/internal/agent-notes/current-real-ui-live-model-lfm25-mxfp4-responses-tools-cachecontrols-20260607-proof.json"
     )
     assert (
         rows["lfm25_moe_a1b_responses_delta"]["proof"]
-        == "docs/internal/agent-notes/current-real-ui-live-model-lfm25-jang2l-continuation-responses-tools-cache-settings-default-max512-20260604-proof.json"
+        == "docs/internal/agent-notes/current-real-ui-live-model-lfm25-mxfp4-responses-tools-cachecontrols-20260607-proof.json"
     )
 
 
@@ -5245,6 +5356,9 @@ def test_release_regression_manifest_real_ui_matrix_tracks_mixed_minimax_identit
     assert matrix["covered_families"]["gemma4"]["status"] == "pass"
     assert "qwen36" not in matrix["missing_families"]
     assert matrix["covered_families"]["qwen36"]["status"] == "pass"
+    assert matrix["covered_families"]["qwen36"]["allowed_model_variant_union"] is True
+    assert matrix["covered_families"]["qwen36"]["mixed_model_identity_union"] is False
+    assert matrix["covered_families"]["qwen36"]["missing_required_model_variants"] == []
     assert "cache_hit_telemetry" in matrix["covered_families"]["qwen36"]["covered_surfaces"]
     assert matrix["covered_families"]["minimax"]["status"] == "pass"
     assert matrix["covered_families"]["minimax"]["modelNames"] == [
@@ -5255,9 +5369,11 @@ def test_release_regression_manifest_real_ui_matrix_tracks_mixed_minimax_identit
     assert matrix["covered_families"]["nemotron_omni"]["status"] == "pass"
     assert matrix["covered_families"]["hy3"]["status"] == "pass"
     assert matrix["missing_families"] == ["dsv4"]
+    assert matrix["resource_blockers"]["dsv4"]["reason"] == "insufficient_memory"
     assert matrix["unblocked_non_mimo_status"] == "pass"
     assert matrix["unblocked_non_mimo_missing_families"] == []
     assert matrix["unblocked_non_mimo_partial_families"] == []
+    assert matrix["unblocked_non_mimo_excluded_families"] == ["dsv4"]
 
 
 def test_release_regression_manifest_current_sweep_requires_dsv4_memory_preflight_when_real_ui_missing(tmp_path):
@@ -5704,6 +5820,17 @@ def test_release_regression_manifest_real_ui_matrix_requires_every_family_surfac
         }
         for family in REQUIRED_REAL_UI_LIVE_MODEL_FAMILIES
     }
+    proofs["qwen36"]["modelName"] = "Qwen3.6-27B-JANG_4M-MTP"
+    proofs["qwen36"]["modelPath"] = "/Users/example/models/JANGQ/Qwen3.6-27B-JANG_4M-MTP"
+    proofs["qwen36_35b_mxfp8_mtp_responses_tools_cachecontrols"] = json.loads(
+        json.dumps(proofs["qwen36"])
+    )
+    proofs["qwen36_35b_mxfp8_mtp_responses_tools_cachecontrols"][
+        "modelName"
+    ] = "Qwen3.6-35B-A3B-MXFP8-MTP"
+    proofs["qwen36_35b_mxfp8_mtp_responses_tools_cachecontrols"][
+        "modelPath"
+    ] = "/Users/example/models/JANGQ/Qwen3.6-35B-A3B-MXFP8-MTP"
     proofs["lfm25"]["server"]["health"]["native_cache"] = lfm_native_cache
     proofs["lfm25"]["cache"]["after"]["ssm_companion"] = {
         "disk": {
@@ -6512,7 +6639,7 @@ def test_release_regression_manifest_real_ui_matrix_accepts_step37_family_alias_
 
 def test_release_regression_manifest_real_ui_matrix_rejects_hybrid_ssm_full_prefill_fallback():
     proof = {
-        "modelName": "LFM2.5-8B-A1B-JANG_2L",
+        "modelName": "LFM2.5-8B-A1B-MXFP4",
         "appLogTail": ["start electron app"],
         "server": {
             "health": {
@@ -6569,7 +6696,7 @@ def test_release_regression_manifest_real_ui_matrix_rejects_hybrid_ssm_full_pref
 
 def test_release_regression_manifest_real_ui_matrix_accepts_hybrid_ssm_hit_after_warmup_miss():
     proof = {
-        "modelName": "LFM2.5-8B-A1B-JANG_2L",
+        "modelName": "LFM2.5-8B-A1B-MXFP4",
         "appLogTail": ["start electron app"],
         "server": {
             "health": {
@@ -6933,13 +7060,13 @@ def test_release_regression_manifest_real_ui_matrix_rejects_reasoning_only_visib
 
 def test_release_regression_manifest_real_ui_matrix_rejects_lfm2_raw_tool_markers():
     proof = {
-        "modelName": "LFM2.5-8B-A1B-JANG_2L",
+        "modelName": "LFM2.5-8B-A1B-MXFP4",
         "appLogTail": ["start electron app"],
         "server": {
             "health": {
                 "status": "healthy",
                 "model_loaded": True,
-                "model_info": {"model_name": "LFM2.5-8B-A1B-JANG_2L"},
+                "model_info": {"model_name": "LFM2.5-8B-A1B-MXFP4"},
             }
         },
         "chat": {
@@ -6973,13 +7100,13 @@ def test_release_regression_manifest_real_ui_matrix_rejects_lfm2_raw_tool_marker
 
 def test_release_regression_manifest_real_ui_matrix_accepts_top_level_parser_leak_flags():
     proof = {
-        "modelName": "LFM2.5-8B-A1B-JANG_2L",
+        "modelName": "LFM2.5-8B-A1B-MXFP4",
         "appLogTail": ["start electron app"],
         "server": {
             "health": {
                 "status": "healthy",
                 "model_loaded": True,
-                "model_info": {"model_name": "LFM2.5-8B-A1B-JANG_2L"},
+                "model_info": {"model_name": "LFM2.5-8B-A1B-MXFP4"},
             }
         },
         "chat": {
@@ -7014,7 +7141,7 @@ def test_release_regression_manifest_real_ui_matrix_accepts_top_level_parser_lea
 
 def test_release_regression_manifest_real_ui_matrix_requires_responses_delta_streaming():
     proof = {
-        "modelName": "LFM2.5-8B-A1B-JANG_2L",
+        "modelName": "LFM2.5-8B-A1B-MXFP4",
         "appLogTail": ["start electron app"],
         "server": {
             "health": {
@@ -7065,7 +7192,7 @@ def test_release_regression_manifest_real_ui_matrix_requires_responses_delta_str
 
 def test_release_regression_manifest_real_ui_matrix_requires_two_turn_responses_delta_streaming():
     proof = {
-        "modelName": "LFM2.5-8B-A1B-JANG_2L",
+        "modelName": "LFM2.5-8B-A1B-MXFP4",
         "appLogTail": ["start electron app"],
         "server": {
             "health": {
@@ -7118,7 +7245,7 @@ def test_release_regression_manifest_real_ui_matrix_requires_two_turn_responses_
 
 def test_release_regression_manifest_real_ui_matrix_requires_generation_defaults_proof():
     proof = {
-        "modelName": "LFM2.5-8B-A1B-JANG_2L",
+        "modelName": "LFM2.5-8B-A1B-MXFP4",
         "appLogTail": ["start electron app"],
         "server": {
             "health": {
@@ -7178,7 +7305,7 @@ def test_release_regression_manifest_real_ui_matrix_requires_generation_defaults
 
 def test_release_regression_manifest_real_ui_matrix_requires_lfm_architecture_cache_policy():
     proof = {
-        "modelName": "LFM2.5-8B-A1B-JANG_2L",
+        "modelName": "LFM2.5-8B-A1B-MXFP4",
         "appLogTail": ["start electron app"],
         "server": {
             "health": {
@@ -7279,7 +7406,7 @@ def test_release_regression_manifest_real_ui_matrix_requires_lfm_architecture_ca
 
 def test_release_regression_manifest_real_ui_matrix_accepts_lfm2_family_alias_for_hybrid_ssm_policy():
     proof = {
-        "modelName": "LFM2.5-8B-A1B-JANG_2L",
+        "modelName": "LFM2.5-8B-A1B-MXFP4",
         "appLogTail": ["start electron app"],
         "server": {
             "health": {
@@ -7346,7 +7473,7 @@ def test_release_regression_manifest_real_ui_matrix_accepts_lfm2_family_alias_fo
 
 def test_release_regression_manifest_real_ui_matrix_requires_lfm_responses_cache_detail_usage():
     proof = {
-        "modelName": "LFM2.5-8B-A1B-JANG_2L",
+        "modelName": "LFM2.5-8B-A1B-MXFP4",
         "appLogTail": ["start electron app"],
         "server": {
             "health": {
@@ -7483,7 +7610,7 @@ def test_release_regression_manifest_real_ui_matrix_requires_lfm_responses_cache
 
 def test_release_regression_manifest_real_ui_integrated_tool_l2_requires_responses_cache_detail():
     proof = {
-        "modelName": "LFM2.5-8B-A1B-JANG_2L",
+        "modelName": "LFM2.5-8B-A1B-MXFP4",
         "appLogTail": [
             "start electron app",
             "[CHAT] Response complete: 134 tokens in 1.1s "
@@ -7629,7 +7756,7 @@ def test_release_regression_manifest_real_ui_integrated_tool_l2_requires_respons
 
 def _lfm_integrated_matrix_proof() -> dict[str, object]:
     return {
-        "modelName": "LFM2.5-8B-A1B-JANG_2L",
+        "modelName": "LFM2.5-8B-A1B-MXFP4",
         "appLogTail": [
             "start electron app",
             "[CHAT] Response complete: 134 tokens in 1.1s "
@@ -7778,7 +7905,7 @@ def _lfm_integrated_matrix_proof() -> dict[str, object]:
 def test_release_regression_manifest_real_ui_integrated_tool_l2_requires_same_artifact_speed_floor():
     def lfm_base_proof() -> dict[str, object]:
         return {
-            "modelName": "LFM2.5-8B-A1B-JANG_2L",
+            "modelName": "LFM2.5-8B-A1B-MXFP4",
             "appLogTail": ["start electron app"],
             "server": {
                 "health": {
@@ -8019,7 +8146,7 @@ def test_release_regression_manifest_real_ui_integrated_tool_l2_requires_same_ar
 
 def test_release_regression_manifest_real_ui_matrix_requires_lfm_live_speed_floor():
     proof = {
-        "modelName": "LFM2.5-8B-A1B-JANG_2L",
+        "modelName": "LFM2.5-8B-A1B-MXFP4",
         "appLogTail": ["start electron app"],
         "server": {
             "health": {
@@ -8261,7 +8388,7 @@ def test_release_regression_manifest_real_ui_matrix_rejects_result_only_tool_lif
 
 def test_release_regression_manifest_real_ui_matrix_rejects_failed_tool_loop():
     proof = {
-        "modelName": "LFM2.5-8B-A1B-JANG_2L",
+        "modelName": "LFM2.5-8B-A1B-MXFP4",
         "appLogTail": ["start electron app"],
         "server": {
             "health": {
@@ -8877,7 +9004,7 @@ def test_release_regression_manifest_validates_current_proof_sweep_artifacts(tmp
     )
     assert (
         result["live_smoke_summaries"]["artifacts"]["zaya_text_mxfp4"]["artifact"]
-        == "build/current-all-local-model-smoke-zaya-text-bundled-20260524/summary.json"
+        == "build/current-filtered-live-smoke-zaya-text-mxfp4-20260607/summary.json"
     )
     assert result["live_smoke_summaries"]["missing"] == []
     assert [
@@ -10126,7 +10253,7 @@ def test_release_regression_manifest_rejects_stale_issue179_objective_digest_row
     tmp_path,
 ):
     _write_current_objective_digest(tmp_path)
-    path = tmp_path / "build/current-objective-proof-after-mllm-tight-memory-guard-20260607.json"
+    path = tmp_path / "build/current-objective-proof-after-mimo-manifest-classifier-sync-20260607.json"
     payload = json.loads(path.read_text(encoding="utf-8"))
     unexpected_requirement = "Unexpected MiniMax stale reporter row is release-cleared"
     payload["requirements"].append(
@@ -10501,7 +10628,7 @@ def test_release_regression_manifest_rejects_missing_or_failing_covered_live_smo
     (tmp_path / missing_artifact).unlink()
     row = dict(CURRENT_COVERED_LIVE_SMOKE_ROW_EXPECTATIONS["qwen36_moe_crack"])
     failing_result = {
-        "model": "Qwen3.6-27B-MXFP4-CRACK",
+        "model": "Qwen3.6-27B-JANG_4M-MTP",
         "row": row,
         "status": "fail",
         "failures": ["unexpected_cjk_visible_text"],
@@ -10544,24 +10671,16 @@ def test_release_regression_manifest_rejects_missing_or_failing_covered_live_smo
 
     assert result["status"] == "fail"
     assert result["live_smoke_summaries"]["missing"] == [missing_artifact]
-    assert result["live_smoke_summaries"]["not_pass"] == [
-        {
-            "artifact": failing_artifact,
-            "status": "pass",
-            "completed": 1,
-            "failed": 1,
-            "failing_results": [
-                {
-                    "model": "Qwen3.6-27B-MXFP4-CRACK",
-                    "status": "fail",
-                    "failures": ["unexpected_cjk_visible_text"],
-                    "missing_request_labels": [],
-                    "request_validation_failures": [],
-                    "identity_mismatches": {},
-                }
-            ],
-        }
-    ]
+    not_pass = result["live_smoke_summaries"]["not_pass"]
+    entry = next(item for item in not_pass if item["artifact"] == failing_artifact)
+    failing = entry["failing_results"][0]
+    assert entry["status"] == "pass"
+    assert entry["failed"] == 1
+    assert failing["model"] == "Qwen3.6-27B-JANG_4M-MTP"
+    assert failing["status"] == "fail"
+    assert failing["failures"] == ["unexpected_cjk_visible_text"]
+    assert failing["missing_request_labels"] == []
+    assert failing["request_validation_failures"] == []
 
 
 def test_release_regression_manifest_rejects_live_smoke_top_level_fail_status(
@@ -10654,9 +10773,11 @@ def test_release_regression_manifest_rejects_source_python_live_smoke_surface(
                             row["name"],
                         ],
                         "requests": [
-                            {"label": "text_cache_repeat_1", "validation_failures": []},
-                            {"label": "text_cache_repeat_2", "validation_failures": []},
-                            {"label": "text_multiturn_recall", "validation_failures": []},
+                            {"label": label, "validation_failures": []}
+                            for label in _required_live_smoke_request_labels(
+                                "ling_flash_tq",
+                                {"row": row},
+                            )
                         ],
                     }
                 ],
@@ -10669,7 +10790,13 @@ def test_release_regression_manifest_rejects_source_python_live_smoke_surface(
     result = manifest._validate_current_covered_live_smoke_artifacts(tmp_path)
 
     assert result["status"] == "fail"
-    assert result["not_pass"][0]["failing_results"][0]["surface_issues"] == [
+    entry = next(item for item in result["not_pass"] if item["artifact"] == artifact)
+    failing = next(
+        row
+        for row in entry["failing_results"]
+        if "surface_issues" in row
+    )
+    assert failing["surface_issues"] == [
         "command_python_not_bundled"
     ]
 
@@ -10706,7 +10833,7 @@ def test_release_regression_manifest_rejects_missing_or_wrong_tool_smoke_artifac
             "failed": 0,
             "failing_results": [
                 {
-                    "model": "Qwen3.6-27B-MXFP4-CRACK",
+                    "model": "Gemma-4-26B-A4B-it-JANG_4M-CRACK",
                     "status": "pass",
                     "failures": [],
                     "missing_request_labels": [],
@@ -10889,7 +11016,7 @@ def test_release_regression_manifest_rejects_live_smoke_missing_required_request
                 "results": [
                     {
                         "row": {
-                            "name": "Qwen3.6-27B-MXFP4-CRACK",
+                            "name": "Qwen3.6-27B-JANG_4M-MTP",
                             "model_type": "qwen3_5",
                             "is_mllm": True,
                             "supports_video": True,
@@ -10905,7 +11032,7 @@ def test_release_regression_manifest_rejects_live_smoke_missing_required_request
                             "-m",
                             "vmlx_engine.cli",
                             "serve",
-                            "Qwen3.6-27B-MXFP4-CRACK",
+                            "Qwen3.6-27B-JANG_4M-MTP",
                         ],
                         "requests": [
                             {"label": "text_cache_repeat_1", "validation_failures": []},
@@ -10931,7 +11058,7 @@ def test_release_regression_manifest_rejects_live_smoke_missing_required_request
             "failed": 0,
             "failing_results": [
                 {
-                    "model": "Qwen3.6-27B-MXFP4-CRACK",
+                    "model": "Qwen3.6-27B-JANG_4M-MTP",
                     "status": "pass",
                     "failures": [],
                     "missing_request_labels": [
@@ -11079,27 +11206,23 @@ def test_release_regression_manifest_rejects_video_capable_live_smoke_without_vi
     result = manifest._validate_current_covered_live_smoke_artifacts(tmp_path)
 
     assert result["status"] == "fail"
-    assert result["not_pass"] == [
-        {
-            "artifact": artifact,
-            "status": "pass",
-            "completed": 1,
-            "failed": 0,
-            "failing_results": [
-                {
-                    "model": "Nemotron-Omni-Nano-JANGTQ-CRACK",
-                    "status": "pass",
-                    "failures": [],
-                    "missing_request_labels": [
-                        "text_no_media_after_video",
-                        "vl_blue_video",
-                    ],
-                    "request_validation_failures": [],
-                    "identity_mismatches": {},
-                }
-            ],
-        }
+    entry = next(item for item in result["not_pass"] if item["artifact"] == artifact)
+    failing = entry["failing_results"][0]
+    assert entry["status"] == "pass"
+    assert entry["completed"] == 1
+    assert entry["failed"] == 0
+    assert failing["model"] == "Nemotron-Omni-Nano-JANGTQ-CRACK"
+    assert failing["missing_request_labels"] == [
+        "text_no_media_after_video",
+        "vl_blue_video",
     ]
+    assert failing["request_validation_failures"] == []
+    assert failing["identity_mismatches"] == {
+        "supports_video": {
+            "expected": False,
+            "actual": True,
+        },
+    }
 
 
 def test_release_regression_manifest_uses_effective_runtime_video_capability(
@@ -11245,7 +11368,7 @@ def test_release_regression_manifest_does_not_treat_skipped_video_probe_as_capab
                             "-m",
                             "vmlx_engine.cli",
                             "serve",
-                            "Qwen3.6-27B-MXFP4-CRACK",
+                            "Qwen3.6-27B-JANG_4M-MTP",
                         ],
                         "requests": [
                             {"label": "text_cache_repeat_1", "validation_failures": []},
@@ -11293,7 +11416,7 @@ def test_release_regression_manifest_rejects_live_smoke_wrong_model_identity(
                 "results": [
                     {
                         "row": {
-                            "name": "Qwen3.6-27B-MXFP4-CRACK",
+                            "name": "Qwen3.6-27B-JANG_4M-MTP",
                             "model_type": "qwen3_5",
                             "is_mllm": True,
                             "supports_video": False,
@@ -11309,7 +11432,7 @@ def test_release_regression_manifest_rejects_live_smoke_wrong_model_identity(
                             "-m",
                             "vmlx_engine.cli",
                             "serve",
-                            "Qwen3.6-27B-MXFP4-CRACK",
+                            "Qwen3.6-27B-JANG_4M-MTP",
                         ],
                         "requests": [
                             {"label": "text_cache_repeat_1", "validation_failures": []},
@@ -11340,7 +11463,7 @@ def test_release_regression_manifest_rejects_live_smoke_wrong_model_identity(
             "failed": 0,
             "failing_results": [
                 {
-                    "model": "Qwen3.6-27B-MXFP4-CRACK",
+                    "model": "Qwen3.6-27B-JANG_4M-MTP",
                     "status": "pass",
                     "failures": [],
                     "missing_request_labels": [],
@@ -11352,7 +11475,11 @@ def test_release_regression_manifest_rejects_live_smoke_wrong_model_identity(
                         },
                         "name": {
                             "expected": "Gemma-4-26B-A4B-it-JANG_4M-CRACK",
-                            "actual": "Qwen3.6-27B-MXFP4-CRACK",
+                            "actual": "Qwen3.6-27B-JANG_4M-MTP",
+                        },
+                        "cache_family": {
+                            "expected": "swa_rotating",
+                            "actual": "hybrid_ssm",
                         },
                     },
                 }
@@ -11377,7 +11504,7 @@ def test_release_regression_manifest_rejects_live_smoke_wrong_capability_family(
         "body": {
             "family": "gemma4",
             "tool_parser": "qwen",
-            "reasoning_parser": "qwen3",
+            "reasoning_parser": None,
             "supports_thinking": True,
             "modalities": ["text", "vision"],
         },
@@ -11395,7 +11522,7 @@ def test_release_regression_manifest_rejects_live_smoke_wrong_capability_family(
             "failed": 0,
             "failing_results": [
                 {
-                    "model": "Qwen3.6-27B-MXFP4-CRACK",
+                    "model": "Qwen3.6-27B-JANG_4M-MTP",
                     "status": "pass",
                     "failures": [],
                     "missing_request_labels": [],
@@ -11405,6 +11532,10 @@ def test_release_regression_manifest_rejects_live_smoke_wrong_capability_family(
                         "family": {
                             "expected": "qwen3_5",
                             "actual": "gemma4",
+                        },
+                        "reasoning_parser": {
+                            "expected": "qwen3",
+                            "actual": None,
                         },
                     },
                 }
@@ -11429,7 +11560,7 @@ def test_release_regression_manifest_rejects_live_smoke_wrong_runtime_parsers(
         "body": {
             "family": "deepseek_v4",
             "tool_parser": "deepseek",
-            "reasoning_parser": "qwen3",
+            "reasoning_parser": None,
         },
     }
     path.write_text(json.dumps(payload), encoding="utf-8")
@@ -11458,7 +11589,7 @@ def test_release_regression_manifest_rejects_live_smoke_wrong_runtime_parsers(
                         },
                         "reasoning_parser": {
                             "expected": "deepseek_r1",
-                            "actual": "qwen3",
+                            "actual": None,
                         },
                     },
                 }
@@ -11685,6 +11816,7 @@ def test_current_mimo_v2_proof_artifact_constants_are_local_only():
         CURRENT_MIMO_V2_JANG2L_TOOL_DIALECT_ARTIFACT,
         CURRENT_MIMO_V2_JANG2L_METADATA_TRUTH_ARTIFACT,
         CURRENT_MIMO_V2_JANG2L_SOURCE_VS_QUANT_ARTIFACT,
+        CURRENT_MIMO_V2_JANG2L_NO_SOURCE_EXACTNESS_CLASSIFIER_ARTIFACT,
     )
 
     artifacts = [
@@ -11696,6 +11828,7 @@ def test_current_mimo_v2_proof_artifact_constants_are_local_only():
         CURRENT_MIMO_V2_JANG2L_CURRENT_AUDIT_ARTIFACT,
         CURRENT_MIMO_V2_JANG2L_METADATA_TRUTH_ARTIFACT,
         CURRENT_MIMO_V2_JANG2L_SOURCE_VS_QUANT_ARTIFACT,
+        CURRENT_MIMO_V2_JANG2L_NO_SOURCE_EXACTNESS_CLASSIFIER_ARTIFACT,
     ]
 
     assert all(artifact.startswith("build/current-") for artifact in artifacts)
@@ -11732,6 +11865,7 @@ def test_release_regression_manifest_rejects_missing_mimo_v2_root_cause_artifact
         CURRENT_MIMO_V2_JANG2L_CURRENT_AUDIT_ARTIFACT,
         CURRENT_MIMO_V2_JANG2L_METADATA_TRUTH_ARTIFACT,
         CURRENT_MIMO_V2_JANG2L_SOURCE_VS_QUANT_ARTIFACT,
+        CURRENT_MIMO_V2_JANG2L_NO_SOURCE_EXACTNESS_CLASSIFIER_ARTIFACT,
     ]
 
 
@@ -11914,7 +12048,7 @@ def test_release_regression_manifest_runner_default_out_tracks_current_release_p
     from tests.cross_matrix import run_release_regression_manifest as runner
 
     assert runner.DEFAULT_OUT == Path(
-        "build/current-release-regression-manifest-after-mllm-tight-memory-guard-20260607.json"
+        "build/current-release-regression-manifest-after-mimo-no-source-classifier-20260607.json"
     )
 
 
@@ -12073,6 +12207,8 @@ def test_release_regression_manifest_requires_focused_pytest_gate_source_hashes(
 
     required = {
         "tests/test_objective_proof_digest.py",
+        "tests/test_agents_release_control_plane.py",
+        "tests/test_mimo_v2_no_source_exactness_classifier.py",
         "tests/test_dsv4_default_cache_tool_loop_gate.py",
         "tests/test_release_gate_python_app.py",
         "tests/test_current_regression_suite.py",
@@ -14535,7 +14671,7 @@ def test_release_regression_manifest_tracks_generation_defaults_with_runner_arti
     joined = " ".join(row["commands"] + row["artifacts"] + row["proves"])
 
     assert "run_generation_defaults_contract.py" in joined
-    assert "current-generation-defaults-contract-after-jangtq2-objective-refresh-20260607.json" in joined
+    assert "current-generation-defaults-contract-after-do-sample-false-mimo-20260607.json" in joined
     assert "current-generation-defaults-contract-20260602-step-greedy-display.json" not in joined
     assert "current-generation-defaults-contract-20260531-post-step-lfm-refresh.json" not in joined
     assert "current-generation-defaults-contract-20260526-settings-audit.json" not in joined
@@ -14606,7 +14742,7 @@ def test_release_regression_manifest_tracks_current_defaults_reasoning_api_reche
 
     generation = rows["generation-defaults-no-hidden-forcing"]
     generation_joined = " ".join(generation["commands"] + generation["artifacts"] + generation["proves"])
-    assert "current-generation-defaults-contract-after-jangtq2-objective-refresh-20260607.json" in generation_joined
+    assert "current-generation-defaults-contract-after-do-sample-false-mimo-20260607.json" in generation_joined
     assert "current-generation-defaults-contract-20260602-step-greedy-display.json" not in generation_joined
     assert "current-generation-defaults-contract-20260531-post-step-lfm-refresh.json" not in generation_joined
     assert "current-generation-defaults-contract-20260526-settings-audit.json" not in generation_joined
@@ -14636,7 +14772,7 @@ def test_release_regression_manifest_tracks_tool_calls_with_runner_artifact():
     joined = " ".join(row["commands"] + row["artifacts"] + row["proves"])
 
     assert "run_tool_call_contract.py" in joined
-    assert "current-tool-call-contract-after-jangtq2-objective-refresh-20260607.json" in joined
+    assert "current-tool-call-contract-after-current-mimo-proof-20260607.json" in joined
     assert "Tool parser residue" in joined
     assert "DSV4" in joined
     assert "maxToolIterations" in joined
@@ -14738,13 +14874,13 @@ def test_release_regression_manifest_tracks_packaged_integrity_with_runner_artif
     joined = " ".join(row["commands"] + row["artifacts"] + row["proves"])
 
     assert "run_packaged_integrity_contract.py" in joined
-    assert "current-packaged-integrity-contract-after-bundle-refresh-20260606.json" in joined
+    assert "current-packaged-integrity-contract-after-staged-sequoia-rebuild-current-source-20260607.json" in joined
     assert "current-packaged-integrity-contract-20260601-qwen-fix-resigned-staged-app.json" not in joined
     assert "current-packaged-integrity-contract-20260601-cache-ipc-epipe-package-refresh.json" not in joined
     assert "current-packaged-integrity-contract-20260531-after-lfm2-staged-sync.json" not in joined
     assert "current-packaged-integrity-contract-20260531-step37-mixed-swa-runtime.json" not in joined
     assert (
-        "build/current-packaged-integrity-contract-after-bundle-refresh-20260606.json"
+        "build/current-packaged-integrity-contract-after-staged-sequoia-rebuild-current-source-20260607.json"
         in " ".join(row["commands"])
     )
     assert "current-packaged-integrity-contract-20260531-local-release-decision-refresh.json" not in joined
@@ -14755,7 +14891,7 @@ def test_release_regression_manifest_tracks_packaged_integrity_with_runner_artif
     assert "Version triples" in joined
     assert "bundled Python hash parity" in joined
     assert "objective proof digest" in joined
-    assert "current-objective-proof-after-mllm-tight-memory-guard-20260607.json" in joined
+    assert "current-objective-proof-after-real-ui-qwen-mtp-toolblock-20260607.json" in joined
     assert "objective-gate-enforced" in joined
     assert "verify-bundled" in joined
 
@@ -14767,7 +14903,7 @@ def test_release_regression_manifest_tracks_current_packaged_integrity_recheck()
     joined = " ".join(row["commands"] + row["artifacts"] + row["proves"])
 
     assert "current-packaged-integrity-contract-20260522-recheck-bundled-release-gate.json" in joined
-    assert "current-packaged-integrity-contract-after-bundle-refresh-20260606.json" in joined
+    assert "current-packaged-integrity-contract-after-staged-sequoia-rebuild-current-source-20260607.json" in joined
     assert "current-packaged-integrity-contract-20260601-qwen-fix-resigned-staged-app.json" not in joined
     assert "current-packaged-integrity-contract-20260524-text-additional-args-sanitizer.json" in joined
     assert "clean JANG source path" in joined
@@ -14823,7 +14959,7 @@ def test_release_regression_manifest_tracks_current_updater_and_i18n_rechecks():
 
     ling = rows["ling-bailing-multilingual-quality-live"]
     ling_joined = " ".join(ling["commands"] + ling["artifacts"] + ling["proves"])
-    assert "current-objective-proof-after-mllm-tight-memory-guard-20260607.json" in ling_joined
+    assert "current-objective-proof-after-real-ui-qwen-mtp-toolblock-20260607.json" in ling_joined
 
 
 def test_release_regression_manifest_tracks_live_only_boundaries():
@@ -14868,7 +15004,7 @@ def test_release_regression_manifest_tracks_fresh_dsv4_live_failure_artifact():
     assert "current-dsv4-jang-batch-generator-isolated-identifier-logits-after-full-prefill-fix-20260524.json" in joined
     assert "current-dsv4-jang-thinking-off-logit-probe-20260524.json" in joined
     assert "current-dsv4-jang-live-api-copy-framing-canary-20260524.json" in joined
-    assert "current-dsv4-route-mode-code-exactness-preflight-after-mimo-ledger-20260607.json" in joined
+    assert "current-dsv4-route-mode-code-exactness-preflight-after-release-manifest-refresh-20260607.json" in joined
     assert "current-dsv4-route-mode-code-exactness-memory-preflight-20260603-second-local-check.json" not in joined
     assert "current-dsv4-route-mode-code-exactness-memory-preflight-20260602-developer-id-local-recheck.json" not in joined
     assert "current-dsv4-route-mode-code-exactness-memory-preflight-20260601-post-epipe-fix.json" not in joined
@@ -15269,7 +15405,7 @@ def test_release_regression_manifest_tracks_named_model_family_detection_with_ru
 
     assert row["domain"] == "model_family_detection"
     assert "run_model_family_detection_contract.py" in joined
-    assert "current-model-family-detection-contract-after-jangtq2-objective-refresh-20260607.json" in joined
+    assert "current-model-family-detection-contract-after-mimo-capability-snapshot-fix-20260607.json" in joined
     assert "current-model-family-detection-contract-20260602-step-jangtq-boundary.json" not in joined
     assert "current-model-family-detection-contract-20260531-post-step-lfm-refresh.json" not in joined
     assert "current-model-family-detection-contract-20260522-plain-kv-cache-health.json" in joined
@@ -15365,7 +15501,7 @@ def test_release_regression_manifest_tracks_vl_media_with_runner_artifact():
     joined = " ".join(row["commands"] + row["artifacts"] + row["proves"])
 
     assert "run_vl_media_cache_contract.py" in joined
-    assert "current-vl-media-cache-contract-after-mllm-tight-memory-guard-20260607.json" in joined
+    assert "current-vl-media-cache-contract-after-mimo-capability-snapshot-fix-20260607.json" in joined
     assert "current-vl-media-cache-contract-20260601-qwen3vl-frame-list-fallback.json" not in joined
     assert "current-vl-media-cache-contract-20260522-panel-family.json" in joined
     assert "VLM media request serialization" in joined
@@ -15384,7 +15520,7 @@ def test_release_regression_manifest_tracks_cache_architecture_with_runner_artif
     joined = " ".join(row["commands"] + row["artifacts"] + row["proves"])
 
     assert "run_cache_architecture_contract.py" in joined
-    assert "current-cache-architecture-contract-after-mllm-tight-memory-guard-20260607.json" in joined
+    assert "current-cache-architecture-contract-after-mimo-capability-snapshot-fix-20260607.json" in joined
     assert "current-cache-architecture-contract-20260602-step-jangtq-boundary.json" not in joined
     assert "current-cache-architecture-contract-20260601-zaya-dsv4-terminal-disk-guard.json" not in joined
     assert "current-cache-architecture-contract-20260601-step37-mixed-swa-ui-storage-quant.json" not in joined

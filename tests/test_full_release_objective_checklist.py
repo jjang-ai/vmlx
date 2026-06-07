@@ -1,0 +1,932 @@
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+from tests.cross_matrix import run_full_release_objective_checklist as checklist
+
+_build = checklist._build
+
+
+def _write_json(path: Path, data: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(data) + "\n")
+
+
+def _write_green_api_surface_artifact(tmp_path: Path) -> None:
+    _write_json(
+        tmp_path / checklist.API_SURFACE_CONTRACT,
+        {
+            "status": "pass",
+            "checks": {
+                "openai_chat_completions_sampling_defaults": True,
+                "openai_responses_sampling_defaults": True,
+                "legacy_completions_output_caps_override_server_default": True,
+                "chat_and_responses_output_caps_override_server_default": True,
+                "prompt_context_caps_stay_separate_from_output_caps": True,
+                "anthropic_adapter_bundle_defaults": True,
+                "ollama_adapter_streaming_done_behavior": True,
+                "chat_and_responses_streaming_cache_detail_usage": True,
+                "responses_previous_response_history": True,
+                "server_cache_and_tool_surfaces_named": True,
+                "plain_attention_kv_status": True,
+                "dsv4_native_cache_status": True,
+                "zaya_typed_cca_status": True,
+                "hybrid_ssm_partial_reuse": True,
+                "turboquant_kv_runtime_contract": True,
+                "turboquant_disk_roundtrip": True,
+                "no_generic_tq_on_hybrid_ssm": True,
+                "panel_request_builder_sampling_and_output_overrides": True,
+                "panel_ollama_gateway_omits_disabled_sentinels": True,
+                "panel_gateway_single_model_auto_switch_streaming": True,
+                "panel_gateway_single_model_auto_switch_cache_endpoints": True,
+                "panel_chat_override_policy_preserves_explicit_values": True,
+                "panel_gateway_streaming_disconnect_epipe_guard": True,
+                "panel_child_process_stdio_epipe_guard": True,
+                "panel_backend_stderr_split_epipe_guard": True,
+                "panel_gateway_ollama_proxy_response_error_guard": True,
+                "panel_ipc_backend_request_epipe_guard": True,
+                "panel_performance_health_epipe_guard": True,
+                "panel_session_lifecycle_epipe_guard": True,
+                "all_required_panel_api_markers_present": True,
+            },
+        },
+    )
+
+
+def _native_cache() -> dict:
+    return {
+        "schema": "hybrid_ssm_v1",
+        "cache_type": "hybrid_ssm_typed",
+        "prefix": True,
+        "paged": True,
+        "block_disk_l2": True,
+        "generic_turboquant_kv": {"enabled": True},
+        "attention_kv_storage_quantization": {"enabled": True, "bits": 4},
+    }
+
+
+def _mtp(depth: int = 2) -> dict:
+    return {
+        "runtime_active": True,
+        "runtime_available": True,
+        "runtime_supported": True,
+        "index_has_mtp_tensors": True,
+        "status": "native_runtime_active",
+        "effective_depth": depth,
+    }
+
+
+def _mixed_swa_native(family: str, subtype: str = "mixed_swa_kv") -> dict:
+    return {
+        "family": family,
+        "schema": "mixed_swa_kv_v1",
+        "cache_type": "mixed_swa_kv",
+        "cache_subtype": subtype,
+        "generic_turboquant_kv": {"enabled": False},
+        "storage_quantization": {"enabled": True, "bits": 4},
+        "prefix": True,
+        "paged": True,
+        "block_disk_l2": True,
+    }
+
+
+def _hybrid_ssm_native(family: str) -> dict:
+    return {
+        "family": family,
+        "schema": "hybrid_ssm_v1",
+        "cache_type": "hybrid_ssm_typed",
+        "generic_turboquant_kv": {"enabled": False},
+        "attention_kv_storage_quantization": {"enabled": True, "bits": 4},
+        "prefix": True,
+        "paged": True,
+        "block_disk_l2": True,
+        "ssm_entries": 3,
+    }
+
+
+def _smoke_artifact(
+    *,
+    mllm: bool,
+    tool_parser: str,
+    reasoning_parser: str,
+    cache_detail: str,
+    native: dict,
+    hybrid: bool = False,
+) -> dict:
+    scheduler_cache = {}
+    totals = {"l2_block_tokens_on_disk": 256}
+    block_disk = {"disk_writes": 3, "disk_hits": 2 if hybrid else 0}
+    if hybrid:
+        scheduler_cache["ssm_companion_cache"] = {
+            "disk": {"stores": 3, "total_tokens_on_disk": 256}
+        }
+        totals["l2_ssm_tokens_on_disk"] = 256
+    return {
+        "status": "pass",
+        "failures": [],
+        "row": {"is_mllm": mllm},
+        "capabilities": {
+            "body": {
+                "tool_parser": tool_parser,
+                "reasoning_parser": reasoning_parser,
+                "supports_tools": True,
+            }
+        },
+        "requests": [
+            {
+                "validation_failures": [],
+                "usage": {"prompt_tokens_details": None},
+                "cache_summary": {"has_cache_hit": False},
+                "tool_calls": [],
+            },
+            {
+                "validation_failures": [],
+                "usage": {
+                    "prompt_tokens_details": {
+                        "cached_tokens": 64,
+                        "cache_detail": cache_detail,
+                    }
+                },
+                "cache_summary": {"has_cache_hit": True},
+                "tool_calls": [],
+            },
+            {
+                "validation_failures": [],
+                "usage": {"prompt_tokens_details": None},
+                "cache_summary": {"has_cache_hit": True},
+                "tool_calls": [
+                    {
+                        "function": {
+                            "name": "record_fact",
+                            "arguments": '{"value": "blue-cat"}',
+                        }
+                    }
+                ],
+            },
+        ],
+        "cache_after": {
+            "body": {
+                "native_cache": native,
+                "block_disk_cache": block_disk,
+                "scheduler_cache": scheduler_cache,
+                "cache_totals": totals,
+            }
+        },
+    }
+
+
+def _write_green_family_smokes(tmp_path: Path) -> None:
+    _write_json(
+        tmp_path
+        / "build/current-all-local-model-smoke-gemma4-12b-jang4m-tools-nomedia-after-cache-family-fix-20260606/JANGQ_gemma-4-12B-it-JANG_4M/result.json",
+        _smoke_artifact(
+            mllm=True,
+            tool_parser="gemma4",
+            reasoning_parser="gemma4",
+            cache_detail="paged+mixed_swa",
+            native=_mixed_swa_native("gemma4"),
+        ),
+    )
+    _write_json(
+        tmp_path
+        / "build/current-gemma4-12b-jang4m-media-smoke-after-vlm-prefill-guard-20260607.json",
+        {
+            "status": "pass",
+            "checks": {"all_rows_passed": True, "at_least_one_row_ran": True},
+            "rows": {
+                "jang4m_image": {
+                    "status": "pass",
+                    "failures": [],
+                    "chat": {"code": 200, "content": "Red"},
+                    "checks": {
+                        "vision_advertised": True,
+                        "red_detected": True,
+                        "no_channel_leak": True,
+                    },
+                }
+            },
+        },
+    )
+    _write_json(
+        tmp_path
+        / "build/current-all-local-model-smoke-step37-jang2l-crack-tools-nomedia-textonly-harness-20260606/other_Step-3.7-Flash-JANG_2L-CRACK/result.json",
+        _smoke_artifact(
+            mllm=False,
+            tool_parser="step3p5",
+            reasoning_parser="qwen3",
+            cache_detail="paged",
+            native=_mixed_swa_native("step3p7", "step3p7_full_sliding_kv"),
+        ),
+    )
+    step_progress = {
+        "config_layer_available": True,
+        "model_layer_available": True,
+        "vision_layer_available": True,
+        "projector_layer_available": True,
+        "processor_layer_available": True,
+        "image_embeds_merge_available": True,
+        "pixel_values_processor_available": True,
+        "vision_patch_embed_available": True,
+        "vision_abs_posemb_resize_available": True,
+        "vision_transformer_blocks_available": True,
+        "vision_downsamplers_available": True,
+        "pixel_values_to_projector_available": True,
+        "placeholder_projected_token_count_available": True,
+        "release_clearance": "source_runtime_surface_present_needs_live_proof",
+    }
+    _write_json(
+        tmp_path / checklist.STEP37_VLM_RUNTIME_AUDIT,
+        {
+            "status": "pass",
+            "mlx_vlm_step3p7_runtime_available": True,
+            "release_clearance": "audit_does_not_block_release",
+            "mlx_vlm_step3p7_runtime": {
+                "has_model": True,
+                "has_vision_model": True,
+                "has_language_model": True,
+                "has_model_config": True,
+                "has_processor": True,
+            },
+            "source_owned_runtime_progress": step_progress,
+            "mlx_vlm_implementation_contract": {
+                "explicitly_rejected_clearance_paths": [
+                    "text_only_bridge",
+                    "importable_stub",
+                ]
+            },
+        },
+    )
+    for rel in [
+        "build/current-all-local-model-smoke-lfm25-mxfp4-tools-nomedia-20260606/JANGQ_LFM2.5-8B-A1B-MXFP4/result.json",
+        "build/current-all-local-model-smoke-lfm25-mxfp8-tools-nomedia-20260606/JANGQ_LFM2.5-8B-A1B-MXFP8/result.json",
+    ]:
+        _write_json(
+            tmp_path / rel,
+            _smoke_artifact(
+                mllm=False,
+                tool_parser="lfm2",
+                reasoning_parser="qwen3",
+                cache_detail="paged+ssm",
+                native=_hybrid_ssm_native("lfm2"),
+                hybrid=True,
+            ),
+        )
+    _write_json(
+        tmp_path
+        / "build/current-all-local-model-smoke-nemotron-omni-mxfp4-tools-nomedia-after-reasoning-budget-20260606/dealign.ai_Nemotron-Omni-Nano-MXFP4-CRACK/result.json",
+        _smoke_artifact(
+            mllm=True,
+            tool_parser="nemotron",
+            reasoning_parser="deepseek_r1",
+            cache_detail="paged+ssm",
+            native=_hybrid_ssm_native("nemotron_h"),
+            hybrid=True,
+        ),
+    )
+    _write_json(
+        tmp_path / "build/current-nemotron-omni-mxfp4-media-gate-20260607/SUMMARY.json",
+        {
+            "status": "PASS",
+            "passed": True,
+            "requests": [
+                {"name": "turn1_memory", "code": 200, "content": "noted"},
+                {"name": "image_blue", "code": 200, "content": "Blue"},
+                {"name": "video_blue", "code": 200, "content": "Blue"},
+                {"name": "audio_blue", "code": 200, "content": "Blue."},
+                {
+                    "name": "turn2_recall",
+                    "code": 200,
+                    "content": "color=blue, animal=cat",
+                    "usage": {
+                        "prompt_tokens_details": {
+                            "cached_tokens": 24,
+                            "cache_detail": "paged+ssm",
+                        }
+                    },
+                },
+            ],
+            "checks": [
+                {"name": "capabilities_available", "ok": True},
+                {"name": "cache_stats_initial_available", "ok": True},
+                {"name": "turn1_memory_http_ok", "ok": True},
+                {"name": "turn1_noted_exact_or_contains", "ok": True},
+                {"name": "image_blue_http_ok", "ok": True},
+                {"name": "image_blue_mentions_blue", "ok": True},
+                {"name": "video_blue_http_ok", "ok": True},
+                {"name": "video_blue_mentions_blue", "ok": True},
+                {"name": "audio_blue_http_ok", "ok": True},
+                {"name": "audio_blue_mentions_blue", "ok": True},
+                {"name": "turn2_recall_http_ok", "ok": True},
+                {"name": "turn2_recall_color_animal", "ok": True},
+                {"name": "cache_stats_final_available", "ok": True},
+            ],
+            "cache_final": {
+                "scheduler_stats": {"cache_hit_tokens": 24},
+                "native_cache": _hybrid_ssm_native("nemotron_h"),
+                "block_disk_cache": {"disk_writes": 2, "disk_hits": 3},
+                "cache_totals": {
+                    "l2_block_tokens_on_disk": 73,
+                    "l2_ssm_tokens_on_disk": 73,
+                },
+                "ssm_companion": {
+                    "disk": {"stores": 2, "total_tokens_on_disk": 73}
+                },
+            },
+            "log_tail": 'POST /v1/chat/completions HTTP/1.1" 200 OK',
+        },
+    )
+
+
+def _write_green_panel_settings_artifact(tmp_path: Path) -> None:
+    checks = {
+        "panel_settings_contract_count": True,
+        "dsv4_default_native_prefix_on": True,
+        "dsv4_explicit_prefix_off_disables_native_flags": True,
+        "dsv4_l2_explicit_off_preserves_prefix": True,
+        "dsv4_generic_kv_flags_suppressed": True,
+        "dsv4_pool_quant_controls_are_dsv4_only": True,
+        "max_output_context_cli_split": True,
+        "chat_max_output_is_per_chat_override": True,
+        "non_dsv4_cache_toggles_preserved": True,
+        "i18n_max_output_context_copy": True,
+        "lazy_mmap_launch_memory_admission": True,
+        "minimax_reasoning_parser_detection": True,
+        "native_mtp_d3_default_policy": True,
+        "model_family_parser_registry": True,
+        "engine_cache_architecture_registry": True,
+        "panel_emitted_flags_are_registered_engine_cli_flags": True,
+        "panel_typecheck": True,
+    }
+    _write_json(
+        tmp_path
+        / "build/current-panel-settings-contract-proof-20260601-cache-ui-storage-quant.json",
+        {
+            "status": "pass",
+            "checks": checks,
+            "missing_source_markers": [],
+            "commands": {
+                "panel_settings_contracts": {
+                    "returncode": 0,
+                    "counts": {"test_files_passed": 6, "tests_passed": 314},
+                }
+            },
+        },
+    )
+
+
+def _write_qwen_green_artifacts(tmp_path: Path) -> None:
+    _write_json(
+        tmp_path
+        / "build/current-qwen27-mxfp4-mtp-responses-cancel-mtp-deterministic-20260607.json",
+        {
+            "status": "pass",
+            "request": {"stream": True},
+            "probe": {"cancel_route_present": True, "bad_text_captured": False},
+            "raw": {"response_id": "resp_ok", "cancel_status": 200, "stream_error": None},
+            "health_before": {"mtp": _mtp(), "native_cache": _native_cache()},
+        },
+    )
+    _write_json(
+        tmp_path / "build/current-qwen27-mxfp4-mtp-api-parity-20260607/summary.json",
+        {
+            "checks": {
+                "responses_text": {"code": 200, "text_head": "ACK"},
+                "responses_tool_required": {"code": 200, "has_record_fact": True},
+                "anthropic_messages": {"code": 200, "text_head": "ACK"},
+                "ollama_chat": {"code": 200, "text_head": "ACK"},
+                "chat_stream_sse": {"has_ack": True},
+            },
+            "health_after": {
+                "native_cache": _native_cache(),
+                "mtp": _mtp(),
+                "scheduler": {"cache_hit_tokens": 36},
+                "cache": {
+                    "block_disk_cache": {"disk_writes": 4, "disk_hits": 12},
+                    "ssm_companion": {
+                        "disk": {"stores": 7, "total_tokens_on_disk": 277}
+                    },
+                },
+            },
+        },
+    )
+    _write_json(
+        tmp_path
+        / "build/current-qwen27-mxfp4-mtp-restart-l2-restore-20260607/summary.json",
+        {
+            "status": "pass",
+            "phases": {
+                "phase1": {
+                    "block_disk_cache": {"disk_writes": 1},
+                    "ssm_companion_disk": {"stores": 1},
+                },
+                "phase2": {
+                    "cache_hit_tokens": 63,
+                    "usage": {
+                        "prompt_tokens_details": {"cache_detail": "paged+ssm+disk"}
+                    },
+                    "block_disk_cache": {"disk_hits": 1},
+                    "native_cache": _native_cache(),
+                    "mtp": _mtp(),
+                },
+            },
+        },
+    )
+    video_surfaces = [
+        "installed_app_ui",
+        "video_where_supported",
+        "reasoning_display",
+        "responses_api",
+        "responses_delta_streaming",
+        "responses_cache_detail_usage",
+        "tool_l2_cache_integrated",
+        "native_cache_status",
+        "l2_disk_storage",
+        "parser_leak_check",
+        "language_leak_check",
+    ]
+    _write_json(
+        tmp_path
+        / "docs/internal/agent-notes/current-real-ui-installed-app-qwen36-27b-jang4m-mtp-responses-tools-video-reasoning-cachecontrols-max512-20260607-proof.json",
+        {
+            "status": "pass",
+            "uiLaunchMode": "installed-app",
+            "installedAppPath": "/Applications/vMLX.app",
+            "modelPath": "/Users/example/models/JANGQ/Qwen3.6-27B-JANG_4M-MTP",
+            "requestedVideo": True,
+            "visibleAssistantTurnsComplete": True,
+            "provenSurfaces": video_surfaces,
+            "server": {
+                "health": {
+                    "model_loaded": True,
+                    "native_cache": _native_cache(),
+                    "mtp": _mtp(depth=3),
+                    "scheduler": {
+                        "last_cache_execution": {
+                            "cached_tokens": 2807,
+                            "cache_detail": "paged+ssm",
+                        },
+                        "batch_generator": {"num_images_processed": 6},
+                    },
+                    "cache": {
+                        "block_disk_cache": {"disk_writes": 73},
+                        "ssm_companion": {"disk": {"stores": 9}},
+                    },
+                }
+            },
+        },
+    )
+    _write_json(
+        tmp_path
+        / "build/current-qwen27-jang4m-mtp-installed-long-context-cache-tail-20260607.json",
+        {
+            "status": "pass",
+            "checks": {
+                "cold_visible_tail_markers": True,
+                "warm_visible_tail_markers": True,
+            },
+            "phases": {
+                "cold": {
+                    "response": {"usage": {"input_tokens": 31647}},
+                },
+                "warm": {
+                    "response": {"usage": {"input_tokens": 31647}},
+                    "health": {
+                        "scheduler": {
+                            "last_cache_execution": {
+                                "cached_tokens": 31646,
+                                "cache_detail": "paged+ssm",
+                            }
+                        },
+                        "native_cache": _native_cache(),
+                        "mtp": _mtp(depth=3),
+                        "turboquant_kv_cache": {"enabled": True},
+                    },
+                    "cache_stats": {
+                        "block_disk_cache": {
+                            "disk_writes": 495,
+                            "disk_hits": 1485,
+                            "total_tokens_on_disk": 31646,
+                        },
+                        "ssm_companion": {
+                            "disk": {
+                                "stores": 2,
+                                "total_tokens_on_disk": 63262,
+                            }
+                        },
+                    },
+                },
+            },
+        },
+    )
+    _write_json(
+        tmp_path
+        / "build/current-qwen35-mxfp8-mtp-responses-long-tool-cache-deterministic-20260607/00_startup.json",
+        {
+            "health": {
+                "model_loaded": True,
+                "model_name": "JANGQ/Qwen3.6-35B-A3B-MXFP8-MTP",
+                "native_cache": _native_cache(),
+                "mtp": _mtp(depth=3),
+                "routing": {"trained_active_experts": 8, "effective_active_experts": 8},
+            }
+        },
+    )
+    row = {
+        "cached_tokens": 128,
+        "scheduler_stats": {"last_cache_execution": {"cache_detail": "paged+ssm"}},
+        "block_disk_cache": {"disk_hits": 2, "disk_writes": 2},
+        "ssm_companion": {"disk": {"total_tokens_on_disk": 100}},
+    }
+    _write_json(
+        tmp_path
+        / "build/current-qwen35-mxfp8-mtp-responses-long-tool-cache-after-historical-tool-required-20260607/SUMMARY.json",
+        {
+            "overall_pass": True,
+            "turns": 3,
+            "rows": [{}, row, row],
+            "acceptance": {
+                "previous_response_id_used": True,
+                "cache_reuse_each_turn_after_first": True,
+                "tool_call_each_required_turn": True,
+                "tool_evidence_each_required_turn": True,
+                "no_tool_markup_leak": True,
+                "no_loop_like_tail": True,
+                "final_turn_tools_disabled": True,
+                "final_turn_visible_output": True,
+            },
+        },
+    )
+    _write_json(
+        tmp_path
+        / "docs/internal/agent-notes/current-real-ui-installed-app-qwen36-35b-mxfp8-mtp-responses-tools-video-reasoning-cachecontrols-max512-20260607-proof.json",
+        {
+            "status": "pass",
+            "uiLaunchMode": "installed-app",
+            "installedAppPath": "/Applications/vMLX.app",
+            "modelPath": "/Users/example/models/JANGQ/Qwen3.6-35B-A3B-MXFP8-MTP",
+            "requestedVideo": True,
+            "visibleAssistantTurnsComplete": True,
+            "provenSurfaces": video_surfaces,
+            "server": {
+                "health": {
+                    "model_loaded": True,
+                    "native_cache": _native_cache(),
+                    "mtp": _mtp(depth=3),
+                    "scheduler": {
+                        "last_cache_execution": {
+                            "cached_tokens": 2807,
+                            "cache_detail": "paged+ssm",
+                        },
+                        "batch_generator": {"num_images_processed": 6},
+                    },
+                    "cache": {
+                        "block_disk_cache": {"disk_writes": 73},
+                        "ssm_companion": {"disk": {"stores": 9}},
+                    },
+                }
+            },
+        },
+    )
+    _write_json(
+        tmp_path
+        / "build/current-qwen35-mxfp8-mtp-restart-l2-restore-20260607/summary.json",
+        {
+            "status": "pass",
+            "phases": {
+                "phase1": {
+                    "cache_stats": {
+                        "block_disk_cache": {"disk_writes": 27},
+                        "ssm_companion": {
+                            "disk": {"stores": 2, "total_tokens_on_disk": 3359}
+                        },
+                    }
+                },
+                "phase2": {
+                    "response": {
+                        "usage": {
+                            "prompt_tokens_details": {
+                                "cached_tokens": 1695,
+                                "cache_detail": "paged+ssm+disk",
+                            }
+                        }
+                    },
+                    "cache_stats": {
+                        "block_disk_cache": {"disk_hits": 27},
+                        "ssm_companion": {"disk": {"hits": 1}},
+                    },
+                    "health": {
+                        "native_cache": _native_cache(),
+                        "mtp": _mtp(depth=3),
+                    },
+                },
+            },
+        },
+    )
+
+
+def _write_issue179_green_artifact(tmp_path: Path) -> None:
+    _write_json(
+        tmp_path
+        / "build/current-issue179-minimax-k-root-cause-audit-after-qwen-installed-video-wiring-20260607.json",
+        {
+            "status": "pass",
+            "proven": {
+                "current_source_responses_cancel_contract_proven": True,
+                "current_source_responses_cancel_inactive_404_contract_proven": True,
+                "latest_public_dmg_has_responses_cancel_route": True,
+                "local_installed_bundle_has_responses_cancel_route": True,
+                "local_installed_responses_cancel_live_probe": True,
+                "local_real_ui_diagnostics_clean": True,
+                "local_installed_issue179_session_settings_parity": True,
+                "local_reporter_prompt_reproduction_clean": True,
+                "reporter_log_has_abort_before_visible_content": True,
+            },
+            "local_responses_cancel_probe": {
+                "status": "pass",
+                "response_id_seen": True,
+                "cancel_status": 200,
+                "probe": {
+                    "cancel_route_present": True,
+                    "bad_text_captured": False,
+                },
+            },
+            "local_real_ui": {
+                "all_required_clean": True,
+                "clean_count": 5,
+                "required_count": 5,
+                "installed_session_settings_parity": {
+                    "all_installed_use_responses": True,
+                },
+            },
+            "reporter_parity_comparison": {"status": "pass", "failures": []},
+            "reporter_server_hash_parity": {"status": "pass"},
+            "local_reporter_prompt_reproduction": {"clean": True},
+        },
+    )
+
+
+def _write_dsv4_green_artifact(tmp_path: Path) -> None:
+    selected_cases = [
+        "chat_off",
+        "chat_off_rep1",
+        "chat_off_no_punct_rep1",
+        "chat_off_bundle_defaults",
+        "chat_on",
+        "chat_on_rep1",
+        "chat_max",
+        "responses_off",
+        "responses_off_rep1",
+        "responses_off_no_punct_rep1",
+        "responses_off_bundle_defaults",
+        "responses_on",
+        "responses_on_rep1",
+        "legacy_completion_raw",
+    ]
+    _write_json(
+        tmp_path
+        / "build/current-dsv4-route-mode-code-exactness-preflight-after-release-manifest-refresh-20260607.json",
+        {
+            "status": "pass",
+            "reason": None,
+            "floor_valid": True,
+            "conservative_floor_valid": True,
+            "active_heavy_process_count": 0,
+            "active_heavy_processes": [],
+            "launch_allowed": True,
+            "available_for_gate_gb": 130.0,
+            "required_available_gb": 120.0,
+            "did_not_launch": False,
+            "launch_decision": "launch_allowed",
+            "launch_blockers": [],
+            "case_count": len(selected_cases),
+            "selected_cases": selected_cases,
+        },
+    )
+
+
+def test_full_release_objective_checklist_keeps_open_rows_visible(tmp_path):
+    _write_json(
+        tmp_path / checklist.RELEASE_MANIFEST,
+        {
+            "status": "open",
+            "prepackage_ready": False,
+            "release_ready": False,
+            "current_proof_sweep": {
+                "component_ok": {
+                    "packaged_integrity_matrix": True,
+                    "real_ui_full_model_matrix": False,
+                    "real_ui_live_model_proof": False,
+                }
+            },
+        },
+    )
+    _write_json(
+        tmp_path / checklist.NOHEAVY_API_CACHE,
+        {
+            "status": "pass",
+            "checks": {
+                "responses_sampling_kwargs": True,
+                "streaming_cache_detail_usage": True,
+                "responses_previous_response_history": True,
+                "cache_stats_reuse_skip_telemetry": True,
+                "cache_reuse_endpoints": True,
+                "request_output_caps_override_server_default": True,
+                "prompt_context_caps_stay_separate_from_output_caps": True,
+                "json_response_format_stream_validation": True,
+                "responses_text_format_json_schema_preserved": True,
+                "anthropic_bundle_defaults": True,
+                "ollama_adapter_surface": True,
+            },
+        },
+    )
+    _write_green_api_surface_artifact(tmp_path)
+    _write_json(
+        tmp_path / checklist.TOOL_CALL_CONTRACT,
+        {
+            "status": "pass",
+            "checks": {
+                "tool_parser_residue_rejected_instead_of_executed": True,
+                "schema_valid_dsml_tool_call_preserved": True,
+                "dsv4_default_cache_degraded_dsml_shapes_repaired_when_schema_valid": True,
+                "dsv4_tool_preamble_suppressed_and_not_stored_without_call": True,
+                "tool_choice_none_does_not_fallback_to_raw_dsml": True,
+                "family_tool_parser_matrix_covers_no_leak_and_alias_edges": True,
+                "panel_max_tool_iterations_caps_tool_loops": True,
+                "all_required_tool_call_markers_present": True,
+            },
+        },
+    )
+    _write_green_panel_settings_artifact(tmp_path)
+    _write_json(
+        tmp_path
+        / "build/current-mimo-v2-jang2l-current-audit-after-do-sample-false-rerun-20260607.json",
+        {
+            "status": "open",
+            "local_release_clearance": False,
+            "blockers": ["mimo_tool_protocol_blocked"],
+            "component_ok": {
+                "manifest_integrity": True,
+                "decode_speed_target": True,
+                "api_cache_responses_contract": True,
+                "prefix_paged_l2_cache_reproved": True,
+                "long_prompt_coherence": False,
+                "tool_protocol": False,
+                "artifact_exactness": False,
+                "cb_system_prompt_working_set_pressure": False,
+                "source_vs_quant_first_divergence": False,
+                "media_weights_preserved": True,
+                "media_runtime_capabilities_safe": True,
+                "media_model_metadata_text_only_contract": False,
+                "media_runtime_implementation": False,
+                "mimo_media_wired": False,
+            },
+        },
+    )
+    _write_json(
+        tmp_path / checklist.MIMO_NO_SOURCE_EXACTNESS_CLASSIFIER,
+        {
+            "status": "open",
+            "classification": "model_generated_literal_mutation_after_valid_parser_structure",
+            "source_vs_quant_load_performed": False,
+            "source_vs_quant_load_skipped_reason": "user_disallowed_source_vs_quant_due_ram",
+            "excluded_surfaces": {
+                "parser_argument_rewrite": True,
+                "prefix_paged_l2_or_kv_quant_primary_cause": True,
+                "hidden_stochastic_sampling_primary_cause": True,
+            },
+            "unresolved_surfaces": {
+                "artifact_quantization_or_decode_logits_quality": True,
+                "source_vs_quant_first_divergence": True,
+            },
+        },
+    )
+    _write_qwen_green_artifacts(tmp_path)
+
+    result = _build(tmp_path)
+
+    assert result["status"] == "open"
+    assert result["release_ready"] is False
+    failed_names = {row["name"] for row in result["failed"]}
+    assert "release_ready" in failed_names
+    assert "real_ui_live_model_matrix" in failed_names
+    assert "mimo_tool_protocol" in failed_names
+    assert "mimo_media_model_metadata_text_only_contract" in failed_names
+    assert "mimo_media_runtime_implementation" in failed_names
+    assert "mimo_mimo_media_wired" in failed_names
+    assert "mimo_no_source_classifier_tracks_exactness_boundary" not in failed_names
+    assert "gemma4_12b_media_rows_complete" in failed_names
+    assert "step37_real_vlm_runtime_complete" in failed_names
+    assert "nemotron_omni_media_rows_complete" in failed_names
+    assert "dsv4_exactness_preflight_artifact_exists" in failed_names
+    assert "dsv4_memory_preflight_resource_available" in failed_names
+    assert "dsv4_exact_code_file_long_output_complete" in failed_names
+
+
+def test_full_release_objective_checklist_can_pass_when_all_evidence_is_green(
+    tmp_path,
+):
+    _write_json(
+        tmp_path / checklist.RELEASE_MANIFEST,
+        {
+            "status": "pass",
+            "prepackage_ready": True,
+            "release_ready": True,
+            "current_proof_sweep": {
+                "component_ok": {
+                    "packaged_integrity_matrix": True,
+                    "real_ui_full_model_matrix": True,
+                    "real_ui_live_model_proof": True,
+                }
+            },
+        },
+    )
+    _write_json(
+        tmp_path / checklist.NOHEAVY_API_CACHE,
+        {
+            "status": "pass",
+            "checks": {
+                "responses_sampling_kwargs": True,
+                "openai_chat_sampling_kwargs": True,
+                "streaming_cache_detail_usage": True,
+                "responses_previous_response_history": True,
+                "cache_stats_reuse_skip_telemetry": True,
+                "cache_reuse_endpoints": True,
+                "legacy_completions_output_caps_override_server_default": True,
+                "request_output_caps_override_server_default": True,
+                "prompt_context_caps_stay_separate_from_output_caps": True,
+                "json_response_format_stream_validation": True,
+                "responses_text_format_json_schema_preserved": True,
+                "anthropic_bundle_defaults": True,
+                "ollama_adapter_surface": True,
+            },
+        },
+    )
+    _write_green_api_surface_artifact(tmp_path)
+    _write_json(
+        tmp_path / checklist.TOOL_CALL_CONTRACT,
+        {
+            "status": "pass",
+            "checks": {
+                "tool_parser_residue_rejected_instead_of_executed": True,
+                "schema_valid_dsml_tool_call_preserved": True,
+                "dsv4_default_cache_degraded_dsml_shapes_repaired_when_schema_valid": True,
+                "dsv4_tool_preamble_suppressed_and_not_stored_without_call": True,
+                "tool_choice_none_does_not_fallback_to_raw_dsml": True,
+                "family_tool_parser_matrix_covers_no_leak_and_alias_edges": True,
+                "panel_max_tool_iterations_caps_tool_loops": True,
+                "all_required_tool_call_markers_present": True,
+            },
+        },
+    )
+    _write_green_panel_settings_artifact(tmp_path)
+    _write_json(
+        tmp_path
+        / "build/current-mimo-v2-jang2l-current-audit-after-do-sample-false-rerun-20260607.json",
+        {
+            "status": "pass",
+            "local_release_clearance": True,
+            "component_ok": {
+                "manifest_integrity": True,
+                "decode_speed_target": True,
+                "api_cache_responses_contract": True,
+                "prefix_paged_l2_cache_reproved": True,
+                "long_prompt_coherence": True,
+                "tool_protocol": True,
+                "artifact_exactness": True,
+                "cb_system_prompt_working_set_pressure": True,
+                "source_vs_quant_first_divergence": True,
+                "media_weights_preserved": True,
+                "media_runtime_capabilities_safe": True,
+                "media_model_metadata_text_only_contract": True,
+                "media_runtime_implementation": True,
+                "mimo_media_wired": True,
+            },
+        },
+    )
+    _write_json(
+        tmp_path / checklist.MIMO_NO_SOURCE_EXACTNESS_CLASSIFIER,
+        {
+            "status": "pass",
+            "classification": "exactness_release_cleared_by_stronger_evidence",
+            "source_vs_quant_load_performed": False,
+            "excluded_surfaces": {
+                "parser_argument_rewrite": True,
+                "prefix_paged_l2_or_kv_quant_primary_cause": True,
+                "hidden_stochastic_sampling_primary_cause": True,
+            },
+            "unresolved_surfaces": {},
+        },
+    )
+    _write_issue179_green_artifact(tmp_path)
+    _write_dsv4_green_artifact(tmp_path)
+    _write_green_family_smokes(tmp_path)
+    _write_qwen_green_artifacts(tmp_path)
+
+    result = _build(tmp_path)
+
+    assert result["status"] == "open"
+    failed_names = {row["name"] for row in result["failed"]}
+    assert failed_names == {
+        "step37_real_vlm_runtime_complete",
+    }
