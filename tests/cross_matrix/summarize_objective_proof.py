@@ -378,7 +378,7 @@ MIMO_V2_JANG2L_TOOL_DIALECT_REL = (
     "build/current-mimo-v2-jang2l-tool-dialect-failure-20260606.json"
 )
 MIMO_V2_JANG2L_CURRENT_AUDIT_REL = (
-    "build/current-mimo-v2-jang2l-current-audit-after-fastpath-async-bottleneck-20260607.json"
+    "build/current-mimo-v2-jang2l-current-audit-after-jangtq2-source-quant-preflight-refresh-20260607.json"
 )
 MIMO_V2_JANG2L_METADATA_TRUTH_REL = (
     "build/current-mimo-v25-jang2l-local-metadata-truth-patch-20260606.json"
@@ -6971,6 +6971,21 @@ def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
         details=all_local_smoke_details,
     )
     mimo_quality_ok, mimo_quality_details = _mimo_v2_jang2l_quality_detail(root)
+    mimo_quality_open = []
+    if mimo_quality_details.get("prompt_length_coherence_blocked"):
+        mimo_quality_open.append("long-prompt/tool-context quality")
+    if mimo_quality_details.get("tool_protocol_blocked"):
+        mimo_quality_open.append("tool protocol")
+    if mimo_quality_details.get("decode_speed_blocked"):
+        mimo_quality_open.append("decode speed")
+    if mimo_quality_details.get("cb_system_prompt_working_set_pressure_blocked"):
+        mimo_quality_open.append("CB/system-prompt working-set pressure")
+    if not mimo_quality_details.get("source_vs_quant_first_divergence_passed"):
+        mimo_quality_open.append("source-vs-quant classification")
+    if not mimo_quality_details.get("mimo_media_wired"):
+        mimo_quality_open.append("VL/audio/video wiring")
+    if not mimo_quality_open:
+        mimo_quality_open.append("release qualification")
     _add(
         requirements,
         "MiMo V2.5 JANG_2L runtime/tool/long-prompt quality is release-cleared",
@@ -6987,7 +7002,14 @@ def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
         caveat=(
             None
             if mimo_quality_ok
-            else "MiMo V2.5 JANG_2L has current structural, narrow text/cache, selected-expert parity, exact CB cache/L2 proof, and native thinking-off prompt proof, but current local artifacts still show long-prompt/tool failures, decode speed below target, CB working-set pressure, missing source-vs-quant classification, and unwired VL/audio/video. Do not release-clear MiMo from short smokes."
+            else (
+                "MiMo V2.5 JANG_2L has current structural, narrow text/cache, "
+                "selected-expert parity, exact CB cache/L2 proof, native "
+                "thinking-off prompt proof, and the current JANGTQ2 packaged "
+                "decode-speed floor when the audit reports it. Remaining open "
+                f"items: {', '.join(mimo_quality_open)}. Do not release-clear "
+                "MiMo from short smokes or speed-only proof."
+            )
         ),
         details=mimo_quality_details,
     )

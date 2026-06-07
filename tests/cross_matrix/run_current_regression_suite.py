@@ -41,7 +41,7 @@ DEFERRED_RELEASE_OPEN_REQUIREMENTS = {
 }
 
 CURRENT_OBJECTIVE_DIGEST_ARTIFACT = (
-    "build/current-objective-proof-after-issue179-reporter-hash-refresh-20260606.json"
+    "build/current-objective-proof-after-mimo-jangtq2-source-quant-preflight-refresh-20260607.json"
 )
 
 CURRENT_SUITE_SOURCE_HASH_FILES = (

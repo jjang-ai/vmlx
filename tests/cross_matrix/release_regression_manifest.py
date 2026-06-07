@@ -1677,7 +1677,7 @@ _ROWS: list[dict[str, Any]] = [
             ".venv/bin/python tests/cross_matrix/run_packaged_integrity_contract.py --jang-tools-source /Users/example/jang/.worktrees/vmlx-release-clean-b5f66a7/jang-tools --out build/current-packaged-integrity-contract-20260522-recheck-bundled-release-gate.json",
         ],
         "artifacts": [
-            "build/current-objective-proof-after-issue179-reporter-hash-refresh-20260606.json",
+            "build/current-objective-proof-after-mimo-jangtq2-source-quant-preflight-refresh-20260607.json",
             "build/current-packaged-integrity-contract-after-bundle-refresh-20260606.json",
             "build/current-packaged-integrity-contract-20260601-dsv4-preflight-refresh.json",
             "build/current-packaged-integrity-contract-20260601-qwen3vl-minicpm-mpp-staged-refresh.json",
@@ -1846,12 +1846,12 @@ _ROWS: list[dict[str, Any]] = [
             "The clearance boundary is based on live artifacts, not a hidden sampler/repetition/default override",
         ],
         "commands": [
-            ".venv/bin/python tests/cross_matrix/summarize_objective_proof.py --out build/current-objective-proof-after-issue179-reporter-hash-refresh-20260606.json",
+            ".venv/bin/python tests/cross_matrix/summarize_objective_proof.py --out build/current-objective-proof-after-mimo-jangtq2-source-quant-preflight-refresh-20260607.json",
             ".venv/bin/python tests/cross_matrix/run_production_family_audit.py --rows ling_flash_tq --live --py /Applications/vMLX.app/Contents/Resources/bundled-python/python/bin/python3.12 --out build/current-production-family-live-ling-bundled-current-20260606.json",
         ],
         "artifacts": [
             "build/current-production-family-live-ling-bundled-current-20260606.json",
-            "build/current-objective-proof-after-issue179-reporter-hash-refresh-20260606.json",
+            "build/current-objective-proof-after-mimo-jangtq2-source-quant-preflight-refresh-20260607.json",
             "build/current-ling-jangtq-strict-russian-nocache-bundled-4850c9c2-20260524.json",
             "build/current-ling-mxfp4-crack-strict-russian-nocache-bundled-4850c9c2-20260524.json",
             "build/current-ling-jangtq-russian-prompt-variant-probe-20260524.json",
