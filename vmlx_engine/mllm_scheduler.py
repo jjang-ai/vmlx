@@ -2377,6 +2377,15 @@ class MLLMScheduler:
                     request._extracted_tokens = getattr(
                         finish_response, "prompt_token_ids", []
                     )
+                else:
+                    logger.info(
+                        "VLM finish response for %s had no prompt_cache "
+                        "(finish_reason=%s, prompt_tokens=%d); prefix cache "
+                        "store will be skipped",
+                        request_id,
+                        finish_response.finish_reason,
+                        len(getattr(finish_response, "prompt_token_ids", []) or []),
+                    )
 
                 finish_reason = finish_response.finish_reason
                 if finish_reason == "stop":
@@ -2544,6 +2553,15 @@ class MLLMScheduler:
                 if getattr(response, "prompt_cache", None) is not None:
                     request._extracted_cache = response.prompt_cache
                     request._extracted_tokens = getattr(response, "prompt_token_ids", [])
+                else:
+                    logger.info(
+                        "VLM finish response for %s had no prompt_cache "
+                        "(finish_reason=%s, prompt_tokens=%d); prefix cache "
+                        "store will be skipped",
+                        request_id,
+                        finish_reason,
+                        len(getattr(response, "prompt_token_ids", []) or []),
+                    )
 
                 if finish_reason == "stop":
                     request.status = RequestStatus.FINISHED_STOPPED
@@ -2710,6 +2728,29 @@ class MLLMScheduler:
                 )
                 if request is not None:
                     request._extracted_cache = None
+            if trace_enabled:
+                logger.info(
+                    "VMLINUX_MLLM_CLEANUP_STATE request_id=%s request_present=%s "
+                    "block_cache=%s skip_store=%s extracted_cache=%s "
+                    "extracted_tokens=%d prompt_tokens=%d completion_tokens=%d",
+                    request_id,
+                    request is not None,
+                    self.block_aware_cache is not None,
+                    _skip_cache_store,
+                    bool(
+                        request is not None
+                        and getattr(request, "_extracted_cache", None) is not None
+                    ),
+                    len(getattr(request, "_extracted_tokens", []) or [])
+                    if request is not None
+                    else 0,
+                    int(getattr(request, "num_prompt_tokens", 0) or 0)
+                    if request is not None
+                    else 0,
+                    int(getattr(request, "num_output_tokens", 0) or 0)
+                    if request is not None
+                    else 0,
+                )
 
             # --- Cache store: paged path ---
             if self.block_aware_cache is not None and not _skip_cache_store:
@@ -2750,6 +2791,28 @@ class MLLMScheduler:
                             _uses_mixed_attention_cache = bool(
                                 getattr(self, "_mixed_attention_cache_model", False)
                             )
+                            raw_for_layout = request._extracted_cache
+                            if callable(raw_for_layout):
+                                try:
+                                    raw_for_layout = raw_for_layout()
+                                    request._extracted_cache = raw_for_layout
+                                except Exception:
+                                    raw_for_layout = None
+                            if (
+                                not _uses_mixed_attention_cache
+                                and isinstance(raw_for_layout, list)
+                                and any(
+                                    type(layer).__name__ == "RotatingKVCache"
+                                    for layer in raw_for_layout
+                                )
+                            ):
+                                _uses_mixed_attention_cache = True
+                                logger.info(
+                                    "Detected mixed-SWA VLM cache layout for %s "
+                                    "from extracted RotatingKVCache layers; using "
+                                    "clean prompt-boundary store",
+                                    request_id,
+                                )
                             if truncated_tokens and cached_tokens >= len(truncated_tokens):
                                 logger.debug(
                                     "Skipping VLM paged cache store for %s: "
@@ -2806,7 +2869,17 @@ class MLLMScheduler:
                                 else:
                                     cache_blocks = raw() if callable(raw) else raw
                             if cache_blocks is None:
-                                logger.debug(f"No cache blocks to store for {request_id}")
+                                logger.info(
+                                    "Skipping VLM paged cache store for %s: "
+                                    "resolved extracted cache is empty "
+                                    "(mixed_swa=%s, zaya_cca=%s, prompt_tokens=%d, "
+                                    "cache_callable=%s)",
+                                    request_id,
+                                    _uses_mixed_attention_cache,
+                                    _uses_zaya_cache,
+                                    prompt_len,
+                                    callable(getattr(request, "_extracted_cache", None)),
+                                )
                             else:
                                 if _uses_zaya_cache or _uses_mixed_attention_cache:
                                     cache_blocks = list(cache_blocks)
@@ -2876,11 +2949,37 @@ class MLLMScheduler:
                                                 f"truncated to {len(truncated_tokens)} tokens"
                                                 f"{' with media side-key' if media_cache_allowed else ''}"
                                             )
+                                        else:
+                                            logger.info(
+                                                "Skipping VLM paged cache store for %s: "
+                                                "extracted cache produced no storable layer states "
+                                                "(raw_layers=%d, prompt_tokens=%d)",
+                                                request_id,
+                                                len(cache_blocks)
+                                                if isinstance(cache_blocks, list)
+                                                else -1,
+                                                prompt_len,
+                                            )
+                        else:
+                            logger.info(
+                                "Skipping VLM paged cache store for %s: "
+                                "finish response had cache but no prompt token ids",
+                                request_id,
+                            )
                     except Exception as e:
                         logger.warning(f"Failed to store VLM paged cache for {request_id}: {e}", exc_info=True)
                     finally:
                         if request is not None:
                             request._extracted_cache = None
+                elif request is not None:
+                    logger.info(
+                        "Skipping VLM paged cache store for %s: no extracted "
+                        "prompt cache on finished request (prompt_tokens=%d, "
+                        "completion_tokens=%d)",
+                        request_id,
+                        int(getattr(request, "num_prompt_tokens", 0) or 0),
+                        int(getattr(request, "num_output_tokens", 0) or 0),
+                    )
 
             # --- Cache store: memory-aware path ---
             elif self.memory_aware_cache is not None and not _skip_cache_store:

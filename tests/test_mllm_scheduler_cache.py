@@ -1563,3 +1563,33 @@ class TestMetalCacheLimit:
         source = inspect.getsource(MLLMBatchGenerator.close)
         assert "_old_cache_limit" in source
         assert "set_cache_limit" in source
+
+    def test_tight_memory_mllm_prefill_drains_allocator(self):
+        """Tight-memory MLLM rows must drain allocator state between prefills."""
+        import inspect
+        from vmlx_engine.mllm_batch_generator import MLLMBatchGenerator
+
+        init_source = inspect.getsource(MLLMBatchGenerator.__init__)
+        process_source = inspect.getsource(MLLMBatchGenerator._process_prompts)
+        next_source = inspect.getsource(MLLMBatchGenerator._next)
+        drain_source = inspect.getsource(
+            MLLMBatchGenerator._drain_tight_memory_allocator
+        )
+
+        assert "_tight_memory_prefill_drain = safety_limit < base_limit" in init_source
+        assert '_drain_tight_memory_allocator("before_prefill")' in process_source
+        assert '_drain_tight_memory_allocator("after_batch_finish")' in next_source
+        assert "clear_mlx_memory_cache" in drain_source
+        assert "mx.synchronize" in drain_source
+
+    def test_mllm_store_detects_rotating_cache_layout_from_live_cache(self):
+        """MiMo wrappers can hide cache_subtype; live RotatingKVCache must win."""
+        import inspect
+        from vmlx_engine.mllm_scheduler import MLLMScheduler
+
+        source = inspect.getsource(MLLMScheduler._cleanup_finished)
+
+        assert "RotatingKVCache" in source
+        assert "Detected mixed-SWA VLM cache layout" in source
+        assert "_uses_mixed_attention_cache = True" in source
+        assert "_prefill_for_clean_path_dependent_cache" in source

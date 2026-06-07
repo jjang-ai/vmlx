@@ -122,6 +122,7 @@ from .utils.memory_limits import (
     get_effective_metal_working_set_bytes,
     get_metal_ws_guard_threshold,
 )
+from .mlx_memory import clear_mlx_memory_cache
 
 logger = logging.getLogger(__name__)
 
@@ -3210,6 +3211,7 @@ class MLLMBatchGenerator:
         # Memory management
         self._old_wired_limit = None
         self._old_cache_limit = None
+        self._tight_memory_prefill_drain = False
         if mx.metal.is_available():
             # Use non-deprecated API when available (MLX ≥ 0.25)
             _set_cache = getattr(mx, 'set_cache_limit', None) or mx.metal.set_cache_limit
@@ -3249,6 +3251,7 @@ class MLLMBatchGenerator:
                     )
                     if max_ws > 0:
                         self._old_cache_limit = _set_cache(cache_limit)
+                        self._tight_memory_prefill_drain = safety_limit < base_limit
                         logger.info(
                             f"Metal cache limit set to {cache_limit / (1024**3):.2f}GB "
                             f"(max_ws={max_ws / (1024**3):.1f}GB, "
@@ -3270,6 +3273,60 @@ class MLLMBatchGenerator:
                     logger.debug(f"Metal cache limit not available: {e}")
             else:
                 logger.info("Disk-streaming mode: skipping wired limit + cache limit override")
+
+    def _drain_tight_memory_allocator(self, reason: str) -> Optional[str]:
+        """Synchronize and clear MLX allocator state on tight-memory MLLM paths.
+
+        Large MLLM/JANG bundles can leave only a few GB of Metal working-set
+        headroom after weights are resident. In that regime the normal bounded
+        allocator free-list is not enough between back-to-back prefills: stale
+        queued work or reusable buffers from request N can make request N+1 die
+        in Metal before Python can raise a recoverable prefill error.
+
+        This is a lifecycle drain only. It does not alter prompts, sampling,
+        cache keys, cache content, or model outputs.
+        """
+        if not self._tight_memory_prefill_drain:
+            return None
+        if os.environ.get("VMLINUX_MLLM_TIGHT_MEMORY_DRAIN", "1").lower() in {
+            "0",
+            "false",
+            "no",
+            "off",
+        }:
+            return None
+        try:
+            if MLLMBatchGenerator._stream is not None:
+                try:
+                    mx.synchronize(MLLMBatchGenerator._stream)
+                except RuntimeError as exc:
+                    if "There is no Stream" not in str(exc):
+                        raise
+                    mx.synchronize()
+            else:
+                mx.synchronize()
+        except Exception as exc:
+            logger.debug("Tight-memory MLLM prefill drain synchronize skipped: %s", exc)
+        method = clear_mlx_memory_cache(mx=mx, log=logger)
+        try:
+            active, max_ws = get_effective_metal_working_set_bytes(mx)
+            free = max(0, max_ws - active) if max_ws > 0 else 0
+            logger.info(
+                "Tight-memory MLLM allocator drain (%s): method=%s "
+                "active=%.1fGB max_ws=%.1fGB free=%.1fGB",
+                reason,
+                method or "none",
+                active / (1024**3),
+                max_ws / (1024**3) if max_ws else 0.0,
+                free / (1024**3),
+            )
+        except Exception:
+            logger.info(
+                "Tight-memory MLLM allocator drain (%s): method=%s",
+                reason,
+                method or "none",
+            )
+        return method
 
     def close(self) -> None:
         """Release resources and reset wired/cache limits."""
@@ -4432,6 +4489,8 @@ class MLLMBatchGenerator:
         prefill_traces: Dict[str, _MLLMPrefillTrace] = {}
         language_model_cls = type(self.language_model)
         language_model_class = f"{language_model_cls.__module__}.{language_model_cls.__qualname__}"
+
+        self._drain_tight_memory_allocator("before_prefill")
 
         for req in requests:
             trace = _MLLMPrefillTrace(
@@ -6931,10 +6990,13 @@ class MLLMBatchGenerator:
                 # All requests done — release Metal cache to reclaim GPU memory.
                 # Without this, MLX holds freed buffers in its allocator free-list
                 # indefinitely, causing apparent memory bloat after long prefills.
-                try:
-                    mx.clear_cache()
-                except Exception:
-                    pass
+                if self._tight_memory_prefill_drain:
+                    self._drain_tight_memory_allocator("after_batch_finish")
+                else:
+                    try:
+                        mx.clear_cache()
+                    except Exception:
+                        pass
 
         self._stats.generation_tokens += len(responses)
         return prefill_errors + responses
