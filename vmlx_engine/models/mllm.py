@@ -170,6 +170,24 @@ def _install_mimo_v2_compiled_router_if_missing(text_runtime: Any) -> bool:
             if int(x.shape[0]) != 1:
                 return original_call(self, x)
             x_fp32 = x.astype(mx.float32)
+            weight_source_id = id(self.weight)
+            weight_fp32 = getattr(self, "_vmlx_gate_weight_fp32", None)
+            if (
+                weight_fp32 is None
+                or getattr(self, "_vmlx_gate_weight_source_id", None) != weight_source_id
+            ):
+                weight_fp32 = self.weight.astype(mx.float32)
+                self._vmlx_gate_weight_fp32 = weight_fp32
+                self._vmlx_gate_weight_source_id = weight_source_id
+            bias_source_id = id(self.e_score_correction_bias)
+            bias_fp32 = getattr(self, "_vmlx_gate_bias_fp32", None)
+            if (
+                bias_fp32 is None
+                or getattr(self, "_vmlx_gate_bias_source_id", None) != bias_source_id
+            ):
+                bias_fp32 = self.e_score_correction_bias.astype(mx.float32)
+                self._vmlx_gate_bias_fp32 = bias_fp32
+                self._vmlx_gate_bias_source_id = bias_source_id
             router = _compiled_router(
                 int(self.top_k),
                 bool(self.norm_topk_prob),
@@ -177,8 +195,8 @@ def _install_mimo_v2_compiled_router_if_missing(text_runtime: Any) -> bool:
             )
             topk_indices, topk_weights = router(
                 x_fp32,
-                self.weight.astype(mx.float32),
-                self.e_score_correction_bias.astype(mx.float32),
+                weight_fp32,
+                bias_fp32,
             )
             return topk_indices, topk_weights.astype(x.dtype)
         except Exception:

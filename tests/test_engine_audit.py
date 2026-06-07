@@ -6453,6 +6453,42 @@ class TestStartupCompatibilityGuards:
         assert mllm._install_mimo_v2_compiled_router_if_missing(native_runtime) is False
         assert NewGate.__call__ is native_original
 
+    def test_mllm_mimo_v2_compiled_router_reuses_fp32_gate_cache(self):
+        import mlx.core as mx
+
+        from vmlx_engine.models import mllm
+
+        class FakeGate:
+            top_k = 2
+            norm_topk_prob = True
+            routed_scaling = 1.0
+
+            def __init__(self):
+                self.weight = mx.ones((4, 4), dtype=mx.float16)
+                self.e_score_correction_bias = mx.zeros((4,), dtype=mx.float16)
+
+            def __call__(self, x):
+                return "original"
+
+        stale_runtime = SimpleNamespace(MiMoV2MoEGate=FakeGate)
+
+        assert mllm._install_mimo_v2_compiled_router_if_missing(stale_runtime) is True
+
+        gate = FakeGate()
+        x = mx.ones((1, 4), dtype=mx.float16)
+        first = gate(x)
+        mx.eval(*first)
+        cached_weight = gate._vmlx_gate_weight_fp32
+        cached_bias = gate._vmlx_gate_bias_fp32
+
+        second = gate(x)
+        mx.eval(*second)
+
+        assert gate._vmlx_gate_weight_fp32 is cached_weight
+        assert gate._vmlx_gate_bias_fp32 is cached_bias
+        assert gate._vmlx_gate_weight_source_id == id(gate.weight)
+        assert gate._vmlx_gate_bias_source_id == id(gate.e_score_correction_bias)
+
     def test_mllm_mimo_v2_load_weights_sanitizes_and_quantizes_affine_sidecars(
         self, tmp_path, monkeypatch
     ):
