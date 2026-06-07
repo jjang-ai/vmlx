@@ -1080,7 +1080,7 @@ def test_current_regression_suite_refreshes_release_regression_manifest(monkeypa
     )
     assert any(
         name == "release_regression_manifest"
-        and "build/current-release-regression-manifest-after-noheavy-pointer-refresh-20260606.json"
+        and "build/current-release-regression-manifest-after-mllm-tight-memory-guard-20260607.json"
         in cmd
         for name, cmd in seen_steps
     )
@@ -1908,7 +1908,7 @@ def test_current_regression_suite_runs_tool_call_contracts(monkeypatch, tmp_path
     assert any(name == "tool_call_contracts" for name, _cmd in seen_steps)
     assert any(
         "run_tool_call_contract.py" in " ".join(cmd)
-        and "current-tool-call-contract-after-mimo-tool-blocker-20260606.json" in " ".join(cmd)
+        and "current-tool-call-contract-after-jangtq2-objective-refresh-20260607.json" in " ".join(cmd)
         for _name, cmd in seen_steps
     )
 

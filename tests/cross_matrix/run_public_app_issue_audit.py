@@ -38,7 +38,7 @@ REASONING_TEMPLATE_CONTRACT = Path(
     "build/current-reasoning-template-contract-20260526-settings-audit.json"
 )
 PACKAGED_INTEGRITY_CONTRACT = Path(
-    "build/current-packaged-integrity-contract-after-noheavy-pointer-refresh-20260606.json"
+    "build/current-packaged-integrity-contract-after-bundle-refresh-20260606.json"
 )
 GEMMA4_INSTALLED_SPEED_ARTIFACTS = (
     Path(
@@ -61,7 +61,7 @@ QWEN35_INSTALLED_SPEED_ARTIFACT = Path(
     "build/current-decode-speed-live-qwen35-4bit-issue115-installed-app-after-decode-position-20260601.json"
 )
 ISSUE179_ROOT_CAUSE_AUDIT = Path(
-    "build/current-issue179-minimax-k-root-cause-audit-after-reporter-hash-refresh-20260606.json"
+    "build/current-issue179-minimax-k-root-cause-audit-after-current-source-cancel-refresh-20260607.json"
 )
 ISSUE179_RESPONSES_CANCEL_PROOF = Path(
     "build/current-issue179-minimax-k-responses-cancel-probe-20260606-live-refresh.json"

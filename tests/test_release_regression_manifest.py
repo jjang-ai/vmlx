@@ -3942,7 +3942,7 @@ def test_release_regression_manifest_current_sweep_uses_latest_live_smoke_artifa
     assert "current-regression-suite-20260528-installed-aggregate-stale.json" not in joined
     assert "current-regression-suite-20260528-epipe-aggregate-guard.json" not in joined
     assert "current-regression-suite-20260528-dsv4-continue-refresh.json" not in joined
-    assert "current-regression-suite-after-bundled-refresh-20260606.json" in joined
+    assert "current-regression-suite-after-mllm-tight-memory-guard-20260607.json" in joined
     assert "current-regression-suite-gemma4-release-boundary-after-ui-e2e-fixes-dmg-build-20260604.json" not in joined
     assert "current-regression-suite-20260602-v1553-installed-tahoe-refresh.json" not in joined
     assert "current-regression-suite-20260602-vm-stat-gate-validation.json" not in joined
@@ -4119,11 +4119,11 @@ def test_release_regression_manifest_current_sweep_uses_latest_live_smoke_artifa
     assert "current-packaged-integrity-contract-20260526-bundled-release-proof.json" not in joined
     assert "current-packaged-integrity-contract-20260525-additional-args-guard.json" not in joined
     assert "current-regression-suite-20260524-crossfamily-cleared-dsv4-open.json" not in joined
-    assert "current-generation-defaults-contract-during-mimo-sync-20260606.json" in joined
+    assert "current-generation-defaults-contract-after-jangtq2-objective-refresh-20260607.json" in joined
     assert "current-generation-defaults-contract-20260602-step-greedy-display.json" not in joined
     assert "current-generation-defaults-contract-20260531-post-step-lfm-refresh.json" not in joined
     assert "current-generation-defaults-contract-20260526-settings-audit.json" not in joined
-    assert "current-max-output-context-contract-after-mimo-modality-truth-20260606.json" in joined
+    assert "current-max-output-context-contract-after-jangtq2-objective-refresh-20260607.json" in joined
     assert "current-max-output-context-contract-20260526-settings-audit.json" not in joined
     assert "current-reasoning-template-contract-20260526-settings-audit.json" in joined
     assert "current-generation-defaults-contract-20260525-additional-args-guard.json" not in joined
@@ -11874,7 +11874,7 @@ def test_release_regression_manifest_runner_default_out_tracks_current_release_p
     from tests.cross_matrix import run_release_regression_manifest as runner
 
     assert runner.DEFAULT_OUT == Path(
-        "build/current-release-regression-manifest-after-bundled-refresh-20260606.json"
+        "build/current-release-regression-manifest-after-mllm-tight-memory-guard-20260607.json"
     )
 
 
@@ -14495,7 +14495,7 @@ def test_release_regression_manifest_tracks_generation_defaults_with_runner_arti
     joined = " ".join(row["commands"] + row["artifacts"] + row["proves"])
 
     assert "run_generation_defaults_contract.py" in joined
-    assert "current-generation-defaults-contract-during-mimo-sync-20260606.json" in joined
+    assert "current-generation-defaults-contract-after-jangtq2-objective-refresh-20260607.json" in joined
     assert "current-generation-defaults-contract-20260602-step-greedy-display.json" not in joined
     assert "current-generation-defaults-contract-20260531-post-step-lfm-refresh.json" not in joined
     assert "current-generation-defaults-contract-20260526-settings-audit.json" not in joined
@@ -14566,7 +14566,7 @@ def test_release_regression_manifest_tracks_current_defaults_reasoning_api_reche
 
     generation = rows["generation-defaults-no-hidden-forcing"]
     generation_joined = " ".join(generation["commands"] + generation["artifacts"] + generation["proves"])
-    assert "current-generation-defaults-contract-during-mimo-sync-20260606.json" in generation_joined
+    assert "current-generation-defaults-contract-after-jangtq2-objective-refresh-20260607.json" in generation_joined
     assert "current-generation-defaults-contract-20260602-step-greedy-display.json" not in generation_joined
     assert "current-generation-defaults-contract-20260531-post-step-lfm-refresh.json" not in generation_joined
     assert "current-generation-defaults-contract-20260526-settings-audit.json" not in generation_joined
@@ -14829,7 +14829,6 @@ def test_release_regression_manifest_tracks_fresh_dsv4_live_failure_artifact():
     assert "current-dsv4-jang-thinking-off-logit-probe-20260524.json" in joined
     assert "current-dsv4-jang-live-api-copy-framing-canary-20260524.json" in joined
     assert "current-dsv4-route-mode-code-exactness-preflight-after-mimo-ledger-20260607.json" in joined
-    assert "current-dsv4-route-mode-code-exactness-preflight-after-mimo-ledger-20260607.json" not in joined
     assert "current-dsv4-route-mode-code-exactness-memory-preflight-20260603-second-local-check.json" not in joined
     assert "current-dsv4-route-mode-code-exactness-memory-preflight-20260602-developer-id-local-recheck.json" not in joined
     assert "current-dsv4-route-mode-code-exactness-memory-preflight-20260601-post-epipe-fix.json" not in joined
@@ -15230,7 +15229,7 @@ def test_release_regression_manifest_tracks_named_model_family_detection_with_ru
 
     assert row["domain"] == "model_family_detection"
     assert "run_model_family_detection_contract.py" in joined
-    assert "current-model-family-detection-contract-after-mimo-modality-truth-20260606.json" in joined
+    assert "current-model-family-detection-contract-after-jangtq2-objective-refresh-20260607.json" in joined
     assert "current-model-family-detection-contract-20260602-step-jangtq-boundary.json" not in joined
     assert "current-model-family-detection-contract-20260531-post-step-lfm-refresh.json" not in joined
     assert "current-model-family-detection-contract-20260522-plain-kv-cache-health.json" in joined
@@ -15326,7 +15325,7 @@ def test_release_regression_manifest_tracks_vl_media_with_runner_artifact():
     joined = " ".join(row["commands"] + row["artifacts"] + row["proves"])
 
     assert "run_vl_media_cache_contract.py" in joined
-    assert "current-vl-media-cache-contract-after-gemma4-prefill-guard-proof-20260606.json" in joined
+    assert "current-vl-media-cache-contract-after-mllm-tight-memory-guard-20260607.json" in joined
     assert "current-vl-media-cache-contract-20260601-qwen3vl-frame-list-fallback.json" not in joined
     assert "current-vl-media-cache-contract-20260522-panel-family.json" in joined
     assert "VLM media request serialization" in joined

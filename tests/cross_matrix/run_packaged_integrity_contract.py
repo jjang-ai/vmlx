@@ -35,7 +35,7 @@ from tests.cross_matrix.run_current_regression_suite import (
 
 
 DEFAULT_OUT = Path(
-    "build/current-packaged-integrity-contract-after-noheavy-pointer-refresh-20260606.json"
+    "build/current-packaged-integrity-contract-after-bundle-refresh-20260606.json"
 )
 EXPECTED_OPEN_REQUIREMENTS = SUITE_EXPECTED_OPEN_REQUIREMENTS
 CURRENT_OBJECTIVE_DIGEST_ARTIFACT = Path(

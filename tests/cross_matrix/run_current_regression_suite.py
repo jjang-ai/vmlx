@@ -23,7 +23,7 @@ from typing import Any
 
 
 DEFAULT_OUT = Path(
-    "build/current-regression-suite-after-mimo-native-thinking-off-audit-20260606.json"
+    "build/current-regression-suite-after-mllm-tight-memory-guard-20260607.json"
 )
 DEFAULT_STEP_TIMEOUT_SEC = 900.0
 STEP_TIMEOUT_RETURNCODE = 124
@@ -636,7 +636,7 @@ CURRENT_SUITE_COMMANDS: dict[str, list[str]] = {
         sys.executable,
         "tests/cross_matrix/run_issue179_minimax_k_root_cause_audit.py",
         "--out",
-        "build/current-issue179-minimax-k-root-cause-audit-after-reporter-hash-refresh-20260606.json",
+        "build/current-issue179-minimax-k-root-cause-audit-after-current-source-cancel-refresh-20260607.json",
     ],
     "issue179_cancel_probe_memory_preflight": [
         sys.executable,
@@ -707,7 +707,7 @@ CURRENT_SUITE_COMMANDS: dict[str, list[str]] = {
         "--require-current-proof-sweep",
         "--require-release-ready",
         "--out",
-        "build/current-release-regression-manifest-after-issue179-reporter-hash-refresh-20260606.json",
+        "build/current-release-regression-manifest-after-mllm-tight-memory-guard-20260607.json",
     ],
 }
 

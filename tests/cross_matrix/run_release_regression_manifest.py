@@ -26,7 +26,7 @@ from tests.cross_matrix.release_regression_manifest import (
 
 
 DEFAULT_OUT = Path(
-    "build/current-release-regression-manifest-after-noheavy-pointer-refresh-20260606.json"
+    "build/current-release-regression-manifest-after-mllm-tight-memory-guard-20260607.json"
 )
 PREPACKAGE_ALLOWED_BLOCKERS = {
     "packaged_app_developer_id_signing_blocked",
