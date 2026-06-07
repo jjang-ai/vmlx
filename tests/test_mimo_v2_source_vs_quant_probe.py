@@ -325,12 +325,31 @@ def test_preflight_checks_remote_source_path(monkeypatch, tmp_path):
     ]
 
 
+def test_default_source_quant_preflight_targets_are_current_mimo_paths():
+    assert probe.DEFAULT_SOURCE_BASE_URL == "http://test-host.local:8126"
+    assert probe.DEFAULT_QUANT_BASE_URL == "http://127.0.0.1:8897"
+    assert probe.DEFAULT_SOURCE_HOST == "test-host.local"
+    assert (
+        probe.DEFAULT_SOURCE_MODEL_PATH
+        == "/Volumes/ModelDrive/jangq-ai/sources/MiMo-V2.5"
+    )
+    assert (
+        probe.DEFAULT_QUANT_MODEL_PATH
+        == "/Users/example/.mlxstudio/models/JANGQ-AI/MiMo-V2.5-JANG_2L"
+    )
+
+
 def test_main_preflight_writes_missing_prerequisites_artifact(tmp_path, monkeypatch):
     out = tmp_path / "preflight.json"
     monkeypatch.setattr(
         probe,
         "_get_json",
         lambda url, *, timeout: (None, None, "URLError: refused"),
+    )
+    monkeypatch.setattr(
+        probe.subprocess,
+        "check_output",
+        lambda *args, **kwargs: '{"exists": false, "is_dir": false}\n',
     )
 
     rc = probe.main(

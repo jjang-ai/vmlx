@@ -25,6 +25,10 @@ from typing import Any
 DEFAULT_OUT = Path(
     "build/current-mimo-v2-jang2l-source-vs-quant-first-divergence-after-tool-row-20260607.json"
 )
+DEFAULT_SOURCE_BASE_URL = "http://test-host.local:8126"
+DEFAULT_QUANT_BASE_URL = "http://127.0.0.1:8897"
+DEFAULT_SOURCE_HOST = "test-host.local"
+DEFAULT_SOURCE_MODEL_PATH = "/Volumes/ModelDrive/jangq-ai/sources/MiMo-V2.5"
 DEFAULT_QUANT_MODEL_PATH = "/Users/example/.mlxstudio/models/JANGQ-AI/MiMo-V2.5-JANG_2L"
 
 PROMPTS: tuple[dict[str, Any], ...] = (
@@ -525,13 +529,13 @@ def preflight(
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--source-base-url")
-    parser.add_argument("--quant-base-url")
+    parser.add_argument("--source-base-url", default=DEFAULT_SOURCE_BASE_URL)
+    parser.add_argument("--quant-base-url", default=DEFAULT_QUANT_BASE_URL)
     parser.add_argument("--source-model", default="mimo-v2-source")
     parser.add_argument("--quant-model", default="mimo-v2-jang2l")
-    parser.add_argument("--source-model-path")
+    parser.add_argument("--source-model-path", default=DEFAULT_SOURCE_MODEL_PATH)
     parser.add_argument("--quant-model-path", default=DEFAULT_QUANT_MODEL_PATH)
-    parser.add_argument("--source-host")
+    parser.add_argument("--source-host", default=DEFAULT_SOURCE_HOST)
     parser.add_argument("--quant-host")
     parser.add_argument("--timeout", type=float, default=180.0)
     parser.add_argument("--out", type=Path, default=DEFAULT_OUT)
