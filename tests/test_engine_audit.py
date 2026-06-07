@@ -976,6 +976,102 @@ class TestServerSamplingResolution:
         assert "'top_k': 42" in log_text
         assert "'min_p': 0.04" in log_text
 
+    def test_all_top_k_resolution_sites_normalize_deterministic_filters(self):
+        """Route kwargs must not re-enable bundle top-p/top-k for greedy turns."""
+        source = Path("./vmlx_engine/server.py").read_text()
+        for match in re.finditer(r"(?<!def )_set_resolved_top_k\(", source):
+            snippet = source[match.end() : match.end() + 260]
+            assert "_normalize_deterministic_sampling_filters(" in snippet
+
+    def test_temperature_zero_omits_bundle_sampling_filters_at_route_layer(
+        self,
+        tmp_path,
+        monkeypatch,
+    ):
+        """Greedy requests stay unambiguous even when the bundle has chat defaults."""
+        from fastapi.testclient import TestClient
+
+        import vmlx_engine.server as server
+        from vmlx_engine.engine.base import GenerationOutput
+
+        (tmp_path / "generation_config.json").write_text(
+            json.dumps({"temperature": 0.7, "top_p": 0.95, "top_k": 64})
+        )
+
+        class FakeTokenizer:
+            has_thinking = False
+
+        class FakeEngine:
+            is_mllm = False
+            tokenizer = FakeTokenizer()
+            preserve_native_tool_format = False
+
+        captured: list[dict] = []
+
+        async def fake_await_chat(*args, **kwargs):
+            captured.append(dict(kwargs["chat_kwargs"]))
+            return GenerationOutput(
+                text="ok",
+                prompt_tokens=3,
+                completion_tokens=1,
+            )
+
+        monkeypatch.setattr(server, "_engine", FakeEngine())
+        monkeypatch.setattr(server, "_model_path", str(tmp_path))
+        monkeypatch.setattr(server, "_model_name", "bundle-model")
+        monkeypatch.setattr(server, "_reasoning_parser", None)
+        monkeypatch.setattr(server, "_mcp_manager", None)
+        monkeypatch.setattr(server, "_api_key", None, raising=False)
+        monkeypatch.setattr(server, "_default_temperature", None)
+        monkeypatch.setattr(server, "_default_top_p", None)
+        monkeypatch.setattr(server, "_default_top_k", None)
+        monkeypatch.setattr(server, "_default_min_p", None)
+        monkeypatch.setattr(server, "_default_repetition_penalty", None)
+        monkeypatch.setattr(
+            server,
+            "_await_chat_with_disconnect_abort",
+            fake_await_chat,
+        )
+        server._jang_sampling_defaults_cache.clear()
+        server._generation_defaults_cache.clear()
+
+        client = TestClient(server.app)
+        resp = client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "bundle-model",
+                "messages": [{"role": "user", "content": "hi"}],
+                "stream": False,
+                "max_tokens": 17,
+                "temperature": 0,
+            },
+        )
+
+        assert resp.status_code == 200
+        assert captured[0]["temperature"] == 0
+        assert captured[0]["top_p"] == 1.0
+        assert "top_k" not in captured[0]
+
+    def test_temperature_zero_preserves_explicit_sampling_filters(self):
+        """Explicit request filters are user intent, not inherited bundle noise."""
+        import vmlx_engine.server as server
+
+        monkeypatch_default_top_p = server._default_top_p
+        monkeypatch_default_top_k = server._default_top_k
+        try:
+            server._default_top_p = None
+            server._default_top_k = None
+            kwargs = {"temperature": 0.0, "top_p": 0.5, "top_k": 9}
+            server._normalize_deterministic_sampling_filters(
+                kwargs,
+                request_top_p=0.5,
+                request_top_k=9,
+            )
+            assert kwargs == {"temperature": 0.0, "top_p": 0.5, "top_k": 9}
+        finally:
+            server._default_top_p = monkeypatch_default_top_p
+            server._default_top_k = monkeypatch_default_top_k
+
     def test_request_output_caps_override_server_default_without_touching_context_cap(
         self,
         monkeypatch,

@@ -1130,6 +1130,35 @@ def _set_resolved_top_k(
         target.pop("top_k", None)
 
 
+def _normalize_deterministic_sampling_filters(
+    target: dict,
+    *,
+    request_top_p: float | None,
+    request_top_k: int | None,
+) -> None:
+    """Keep greedy requests from inheriting stochastic bundle filters.
+
+    Some bundles correctly declare chat-time sampling defaults such as
+    ``top_p=0.95`` and ``top_k=64``. Those defaults are valid for omitted
+    stochastic requests, but when the effective temperature is exactly zero the
+    request is greedy. In that case omitted bundle filters should not be
+    forwarded as active sampler knobs because logs, MTP policy checks, and
+    exact-output gates must see an unambiguous deterministic request.
+
+    Explicit request values and explicit server defaults are preserved.
+    """
+    try:
+        temperature = float(target.get("temperature", _FALLBACK_TEMPERATURE))
+    except Exception:
+        return
+    if temperature != 0.0:
+        return
+    if request_top_p is None and _default_top_p is None:
+        target["top_p"] = 1.0
+    if request_top_k is None and _default_top_k is None:
+        target.pop("top_k", None)
+
+
 def _resolve_min_p(request_value: float | None, model_name: str = "") -> float:
     """Resolve min_p: request > explicit CLI/session > bundle > disabled."""
     if request_value is not None:
@@ -7795,6 +7824,11 @@ async def create_anthropic_message(
         "max_prompt_tokens": _msg_max_prompt_tokens,
     }
     _set_resolved_top_k(_msg_kwargs, chat_req.top_k, chat_req.model)
+    _normalize_deterministic_sampling_filters(
+        _msg_kwargs,
+        request_top_p=chat_req.top_p,
+        request_top_k=chat_req.top_k,
+    )
     _set_resolved_min_p(_msg_kwargs, chat_req.min_p, chat_req.model)
     _rp = _resolve_repetition_penalty(chat_req.repetition_penalty, chat_req.model)
     if _rp is not None:
@@ -8590,6 +8624,11 @@ async def ollama_chat(fastapi_request: Request):
     if chat_req.stop:
         chat_kwargs["stop"] = chat_req.stop
     _set_resolved_top_k(chat_kwargs, chat_req.top_k, chat_req.model)
+    _normalize_deterministic_sampling_filters(
+        chat_kwargs,
+        request_top_p=chat_req.top_p,
+        request_top_k=chat_req.top_k,
+    )
     _set_resolved_min_p(chat_kwargs, chat_req.min_p, chat_req.model)
     _rp = _resolve_repetition_penalty(chat_req.repetition_penalty, chat_req.model)
     if _rp is not None:
@@ -10166,6 +10205,11 @@ async def create_completion(request: CompletionRequest):
                 "max_prompt_tokens": _completion_max_prompt_tokens,
             }
             _set_resolved_top_k(gen_kwargs, request.top_k, request.model)
+            _normalize_deterministic_sampling_filters(
+                gen_kwargs,
+                request_top_p=request.top_p,
+                request_top_k=request.top_k,
+            )
             _set_resolved_min_p(gen_kwargs, request.min_p, request.model)
             _rp = _resolve_repetition_penalty(request.repetition_penalty, request.model)
             if _rp is not None:
@@ -10559,6 +10603,11 @@ async def create_chat_completion(
         chat_kwargs["stop"] = request.stop
     # Extended sampling params (only pass if explicitly set)
     _set_resolved_top_k(chat_kwargs, request.top_k, request.model)
+    _normalize_deterministic_sampling_filters(
+        chat_kwargs,
+        request_top_p=request.top_p,
+        request_top_k=request.top_k,
+    )
     _set_resolved_min_p(chat_kwargs, request.min_p, request.model)
     _rp = _resolve_repetition_penalty(request.repetition_penalty, request.model)
     if _rp is not None:
@@ -12046,6 +12095,11 @@ async def create_response(
         chat_kwargs["stop"] = request.stop
     # Extended sampling params (only pass if explicitly set)
     _set_resolved_top_k(chat_kwargs, request.top_k, request.model)
+    _normalize_deterministic_sampling_filters(
+        chat_kwargs,
+        request_top_p=request.top_p,
+        request_top_k=request.top_k,
+    )
     _set_resolved_min_p(chat_kwargs, request.min_p, request.model)
     _rp = _resolve_repetition_penalty(request.repetition_penalty, request.model)
     if _rp is not None:
@@ -12797,6 +12851,11 @@ async def stream_completions_multi(
                 "max_prompt_tokens": _effective_max_prompt_tokens(request),
             }
             _set_resolved_top_k(gen_kwargs, request.top_k, request.model)
+            _normalize_deterministic_sampling_filters(
+                gen_kwargs,
+                request_top_p=request.top_p,
+                request_top_k=request.top_k,
+            )
             _set_resolved_min_p(gen_kwargs, request.min_p, request.model)
             _rp = _resolve_repetition_penalty(request.repetition_penalty, request.model)
             if _rp is not None:
