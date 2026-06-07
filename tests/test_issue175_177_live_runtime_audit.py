@@ -1,13 +1,162 @@
 # SPDX-License-Identifier: Apache-2.0
 """Contracts for live installed-app runtime evidence on issues #175-#177."""
 
+import json
 from pathlib import Path
 
 
-def test_issue175_177_live_runtime_audit_accepts_qwen_installed_cache_hit():
+def _write_json(path: Path, payload: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+
+def test_issue175_177_live_runtime_audit_accepts_qwen_installed_cache_hit(tmp_path):
     from tests.cross_matrix import run_issue175_177_live_runtime_audit as gate
 
-    audit = gate.build_audit(Path("."))
+    qwen_source = Path("qwen-live.json")
+    minimax_source = Path("minimax-live.json")
+    minimax_restart_source = Path("minimax-restart.json")
+    admin_sleep_source = Path("admin-sleep.json")
+    installed_python = (
+        "/Applications/vMLX.app/Contents/Resources/bundled-python/python/bin/python3"
+    )
+
+    _write_json(
+        tmp_path / qwen_source,
+        {
+            "status": "pass",
+            "python": installed_python,
+            "cache_proof_policy": {"capacity_projection_valid": True},
+            "results": [
+                {
+                    "http_timing": {"ttft_seconds": 2.0},
+                    "memory": {"metal_active_before_gb": 50.0},
+                    "response_rails": {"has_visible_content": True},
+                },
+                {
+                    "http_timing": {"ttft_seconds": 0.5},
+                    "memory": {"metal_active_after_gb": 49.5},
+                    "response_rails": {"has_visible_content": True},
+                    "usage_summary": {
+                        "cached_tokens": 128,
+                        "cache_detail": "paged+ssm",
+                    },
+                    "cache_capacity_projection": {
+                        "basis": "observed_block_disk_l2",
+                    },
+                    "after": {
+                        "cache_stats": {
+                            "body": {"block_disk_cache": {"disk_hits": 3}}
+                        }
+                    },
+                },
+            ],
+        },
+    )
+    _write_json(
+        tmp_path / minimax_source,
+        {
+            "status": "pass",
+            "python": installed_python,
+            "results": [
+                {
+                    "http_timing": {"ttft_seconds": 2.0},
+                    "response_rails": {"has_visible_content": True},
+                },
+                {
+                    "http_timing": {"ttft_seconds": 0.4},
+                    "response_rails": {"has_visible_content": True},
+                    "usage_summary": {
+                        "cached_tokens": 96,
+                        "cache_detail": "paged+tq",
+                    },
+                    "after": {
+                        "cache_stats": {
+                            "body": {"block_disk_cache": {"disk_hits": 2}}
+                        },
+                        "health": {
+                            "body": {
+                                "scheduler": {
+                                    "last_cache_selection": {"selected": "paged"},
+                                    "last_cache_execution": {
+                                        "cache_detail": "paged+tq",
+                                        "cached_tokens": 96,
+                                        "reconstruction_seconds": 0.01,
+                                        "dequantization_seconds": 0.02,
+                                        "total_worker_cache_seconds": 0.03,
+                                    },
+                                },
+                                "turboquant_kv_cache": {
+                                    "enabled": True,
+                                    "batch_api": "turboquant_kv_v1",
+                                },
+                            }
+                        },
+                    },
+                },
+            ],
+        },
+    )
+    _write_json(
+        tmp_path / minimax_restart_source,
+        {
+            "status": "pass",
+            "python": installed_python,
+            "results": [
+                {
+                    "http_timing": {"ttft_seconds": 0.8},
+                    "response_rails": {"has_visible_content": True},
+                    "usage_summary": {
+                        "cached_tokens": 80,
+                        "cache_detail": "paged+disk+tq",
+                    },
+                    "after": {
+                        "cache_stats": {
+                            "body": {"block_disk_cache": {"disk_hits": 4}}
+                        },
+                        "health": {
+                            "body": {
+                                "scheduler": {
+                                    "last_cache_selection": {
+                                        "selected": "paged",
+                                        "paged_cold_tokens": 80,
+                                    },
+                                    "last_cache_execution": {
+                                        "cache_detail": "paged",
+                                        "cached_tokens": 80,
+                                        "reconstruction_seconds": 0.01,
+                                        "dequantization_seconds": 0.02,
+                                        "total_worker_cache_seconds": 0.03,
+                                    },
+                                }
+                            }
+                        },
+                    },
+                }
+            ],
+        },
+    )
+    _write_json(
+        tmp_path / admin_sleep_source,
+        {
+            "status": "pass",
+            "classification": {"status": "pass"},
+            "health_deep_sleep": {
+                "body": {
+                    "model_loaded": False,
+                    "status": "standby_deep",
+                }
+            },
+        },
+    )
+
+    audit = gate.build_audit(
+        tmp_path,
+        source=qwen_source,
+        minimax_source=minimax_source,
+        minimax_restart_reader_source=minimax_restart_source,
+        admin_sleep_source=admin_sleep_source,
+    )
 
     assert audit["status"] == "pass"
     assert audit["checks"]["installed_app_qwen_live_probe_passed"] is True
