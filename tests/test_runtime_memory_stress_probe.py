@@ -182,6 +182,56 @@ def test_http_json_stream_timed_records_ttft_and_usage(monkeypatch):
     }
 
 
+def test_http_json_stream_timed_records_responses_sse_delta_and_completed_usage(monkeypatch):
+    import tests.cross_matrix.run_runtime_memory_stress_probe as probe
+
+    class FakeStreamResponse:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def __iter__(self):
+            return iter(
+                [
+                    b'data: {"type":"response.output_text.delta","delta":"A"}\n',
+                    b'data: {"type":"response.output_text.delta","delta":"B"}\n',
+                    (
+                        b'data: {"type":"response.completed","response":'
+                        b'{"status":"completed","usage":{"input_tokens":10,"output_tokens":2}}}\n'
+                    ),
+                    b"data: [DONE]\n",
+                ]
+            )
+
+    ticks = iter([10.0, 10.1, 10.4, 10.5, 10.6, 10.7, 10.8])
+
+    monkeypatch.setattr(probe.time, "perf_counter", lambda: next(ticks))
+    monkeypatch.setattr(probe.urllib.request, "urlopen", lambda req, timeout=0: FakeStreamResponse())
+
+    code, body, timing = http_json_stream_timed(
+        "POST",
+        "http://127.0.0.1/v1/responses",
+        {"stream": True},
+    )
+
+    assert code == 200
+    assert body["output_text"] == "AB"
+    assert body["status"] == "completed"
+    assert body["usage"] == {"input_tokens": 10, "output_tokens": 2}
+    assert timing == {
+        "open_seconds": 0.1,
+        "ttft_seconds": 0.4,
+        "stream_read_seconds": 0.7,
+        "post_first_token_seconds": 0.4,
+        "total_seconds": 0.8,
+        "chunk_count": 2,
+    }
+
+
 def test_add_stream_speed_metrics_uses_post_first_token_time():
     stage = {
         "http_timing": {

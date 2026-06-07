@@ -175,6 +175,10 @@ def http_json_timed(
 
 def _merge_stream_chunk(target: dict[str, Any], chunk: dict[str, Any]) -> bool:
     text_delta = ""
+    event_type = str(chunk.get("type") or "")
+    delta = chunk.get("delta")
+    if event_type in {"response.output_text.delta", "response.refusal.delta"} and isinstance(delta, str):
+        text_delta += delta
     choices = chunk.get("choices") if isinstance(chunk.get("choices"), list) else []
     if choices:
         first = choices[0] if isinstance(choices[0], dict) else {}
@@ -190,6 +194,8 @@ def _merge_stream_chunk(target: dict[str, Any], chunk: dict[str, Any]) -> bool:
     if isinstance(output_text, str):
         target["output_text"] = str(target.get("output_text") or "") + output_text
         text_delta += output_text
+    elif event_type in {"response.output_text.delta", "response.refusal.delta"} and text_delta:
+        target["output_text"] = str(target.get("output_text") or "") + text_delta
     output = chunk.get("output")
     if isinstance(output, list):
         target.setdefault("output", [])
@@ -197,6 +203,20 @@ def _merge_stream_chunk(target: dict[str, Any], chunk: dict[str, Any]) -> bool:
     usage = chunk.get("usage")
     if isinstance(usage, dict):
         target["usage"] = usage
+    response = chunk.get("response")
+    if event_type == "response.completed" and isinstance(response, dict):
+        completed_usage = response.get("usage")
+        if isinstance(completed_usage, dict):
+            target["usage"] = completed_usage
+        completed_text = response.get("output_text")
+        if isinstance(completed_text, str) and not target.get("output_text"):
+            target["output_text"] = completed_text
+        completed_output = response.get("output")
+        if isinstance(completed_output, list) and not target.get("output"):
+            target["output"] = completed_output
+        completed_status = response.get("status")
+        if completed_status is not None:
+            target["status"] = completed_status
     return bool(text_delta)
 
 
