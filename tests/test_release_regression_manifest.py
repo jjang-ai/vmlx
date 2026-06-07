@@ -14660,7 +14660,8 @@ def test_release_regression_manifest_tracks_fresh_dsv4_live_failure_artifact():
     assert "current-dsv4-jang-batch-generator-isolated-identifier-logits-after-full-prefill-fix-20260524.json" in joined
     assert "current-dsv4-jang-thinking-off-logit-probe-20260524.json" in joined
     assert "current-dsv4-jang-live-api-copy-framing-canary-20260524.json" in joined
-    assert "current-dsv4-route-mode-code-exactness-memory-preflight-cross-family-20260606.json" in joined
+    assert "current-dsv4-route-mode-code-exactness-preflight-after-mimo-ledger-20260607.json" in joined
+    assert "current-dsv4-route-mode-code-exactness-memory-preflight-cross-family-20260606.json" not in joined
     assert "current-dsv4-route-mode-code-exactness-memory-preflight-20260603-second-local-check.json" not in joined
     assert "current-dsv4-route-mode-code-exactness-memory-preflight-20260602-developer-id-local-recheck.json" not in joined
     assert "current-dsv4-route-mode-code-exactness-memory-preflight-20260601-post-epipe-fix.json" not in joined

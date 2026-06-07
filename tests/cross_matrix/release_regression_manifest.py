@@ -432,7 +432,7 @@ DEFERRED_RELEASE_FAMILIES = {
     "dsv4": "deferred_per_20260602_emergency_release_scope",
 }
 CURRENT_DSV4_SOURCE_MEMORY_PREFLIGHT_ARTIFACT = (
-    "build/current-dsv4-route-mode-code-exactness-memory-preflight-cross-family-20260606.json"
+    "build/current-dsv4-route-mode-code-exactness-preflight-after-mimo-ledger-20260607.json"
 )
 EXPECTED_DSV4_SOURCE_PREFLIGHT_CASES = (
     "chat_off",
