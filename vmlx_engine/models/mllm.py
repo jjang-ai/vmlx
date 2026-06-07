@@ -209,6 +209,102 @@ def _install_mimo_v2_compiled_router_if_missing(text_runtime: Any) -> bool:
     return True
 
 
+def _is_mimo_v2_runtime_object_or_name(model: Any, model_name: Any = None) -> bool:
+    """Return true when an MLLM-loaded object is the MiMo-V2 runtime.
+
+    MiMo-V2 has an asymmetric native SWA cache contract. The generic
+    TurboQuant-KV auto path flattens all layers into TurboQuantKVCache and
+    breaks both speed and correctness for this architecture, so the MLLM load
+    call site must skip it before invoking the generic tokenizer helper.
+    """
+
+    if "mimo" in str(model_name or "").lower():
+        return True
+
+    seen: set[int] = set()
+    stack = [model]
+    while stack:
+        current = stack.pop()
+        if current is None:
+            continue
+        current_id = id(current)
+        if current_id in seen:
+            continue
+        seen.add(current_id)
+
+        if str(getattr(current, "model_type", "") or "").lower() == "mimo_v2":
+            return True
+
+        for attr in ("config", "args", "text_config"):
+            value = getattr(current, attr, None)
+            if isinstance(value, dict):
+                if str(value.get("model_type", "") or "").lower() == "mimo_v2":
+                    return True
+                if str(value.get("architectures", "") or "").lower().find("mimo") >= 0:
+                    return True
+            elif value is not None:
+                if str(getattr(value, "model_type", "") or "").lower() == "mimo_v2":
+                    return True
+                stack.append(value)
+
+        for attr in ("inner", "language_model", "model"):
+            value = getattr(current, attr, None)
+            if value is not None:
+                stack.append(value)
+
+    return False
+
+
+def _quantize_mimo_v2_runtime_modules(root: Any, filtered: dict, quantization: dict) -> int:
+    """Quantize MiMo-V2 modules that live inside plain Python layer lists.
+
+    `jang_tools.mimo_v2` stores decoder layers in `model.layers`, a normal
+    Python list. MLX `nn.quantize(root, ...)` does not descend through that
+    list from the text model root, so the attention projections and SwitchGLU
+    expert projections stay unquantized unless vMLX walks each layer directly.
+    """
+
+    import mlx.nn as nn
+
+    quantized_paths: set[str] = set()
+
+    def params_for(path: str, module: Any):
+        if not path or not hasattr(module, "to_quantized"):
+            return False
+        override = quantization.get(path)
+        if isinstance(override, dict):
+            quantized_paths.add(path)
+            return dict(override)
+        if f"{path}.scales" in filtered:
+            quantized_paths.add(path)
+            return True
+        return False
+
+    def quantize_module(module: Any, prefix: str = "") -> None:
+        def class_predicate(path, child):
+            full_path = f"{prefix}.{path}" if prefix and path else (prefix or path)
+            return params_for(full_path, child)
+
+        nn.quantize(
+            module,
+            group_size=quantization.get("group_size"),
+            bits=quantization.get("bits"),
+            mode=quantization.get("mode", "affine"),
+            class_predicate=class_predicate,
+        )
+
+    backbone = getattr(root, "model", None)
+    layers = getattr(backbone, "layers", None)
+    if isinstance(layers, list):
+        for idx, layer in enumerate(layers):
+            quantize_module(layer, f"model.layers.{idx}")
+
+    # Quantize root-level leaves such as lm_head. Decoder layers are already
+    # handled above because they are not visible from root.leaf_modules().
+    quantize_module(root)
+    return len(quantized_paths)
+
+
 def _install_mimo_v2_rotating_cache_keep_patch_if_needed(text_runtime: Any) -> bool:
     """Patch stale MiMo SWA cache construction to match full-forward windows.
 
@@ -471,22 +567,12 @@ def _register_mimo_v2_mlx_vlm_runtime() -> None:
 
             quantization = getattr(self.config.text_config, "quantization", None)
             if isinstance(quantization, dict) and not self._mimo_v2_quantized_for_load:
-
-                def class_predicate(path, module):
-                    if not hasattr(module, "to_quantized"):
-                        return False
-                    override = quantization.get(path)
-                    if isinstance(override, dict):
-                        return override
-                    return f"{path}.scales" in filtered
-
-                nn.quantize(
+                quantized_count = _quantize_mimo_v2_runtime_modules(
                     self.language_model.inner,
-                    group_size=quantization.get("group_size"),
-                    bits=quantization.get("bits"),
-                    mode=quantization.get("mode", "affine"),
-                    class_predicate=class_predicate,
+                    filtered,
+                    quantization,
                 )
+                logger.info("MiMo-V2 load quantized %d runtime modules", quantized_count)
                 self._mimo_v2_quantized_for_load = True
 
             return self.language_model.load_weights(list(filtered.items()), strict=strict)
@@ -1579,8 +1665,13 @@ class MLXMultimodalLM:
             # TurboQuant: auto-enable for ALL MLX VLM models
             _lang = getattr(self.model, 'language_model', None)
             if _lang is not None and hasattr(_lang, 'layers'):
-                from ..utils.tokenizer import _apply_turboquant_to_model
-                _apply_turboquant_to_model(_lang, resolved_name)
+                if _is_mimo_v2_runtime_object_or_name(self.model, resolved_name):
+                    logger.info(
+                        "TurboQuant skipped for MiMo-V2 MLLM load: native asymmetric SWA cache required"
+                    )
+                else:
+                    from ..utils.tokenizer import _apply_turboquant_to_model
+                    _apply_turboquant_to_model(_lang, resolved_name)
 
             _set_vlm_inference_mode(self.model)
             self._loaded = True

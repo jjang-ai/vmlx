@@ -721,6 +721,17 @@ def cache_health_mismatches(
             )
         return mismatches
 
+    if cache_subtype == "mimo_v2_asymmetric_swa":
+        if health_cache_type != "mixed_swa_kv":
+            mismatches.append(
+                "registry mimo_v2_asymmetric_swa expected health cache_type=mixed_swa_kv"
+            )
+        if generic_tq_enabled is not False:
+            mismatches.append(
+                "registry mimo_v2_asymmetric_swa expected generic_turboquant_kv.enabled=false"
+            )
+        return mismatches
+
     if cache_type == "kv" and health_cache_type not in {"kv", "paged_kv"}:
         mismatches.append("registry kv cache expected health cache_type=kv-or-paged_kv")
         return mismatches

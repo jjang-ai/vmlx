@@ -6421,6 +6421,86 @@ class TestStartupCompatibilityGuards:
         }
         sys.modules.pop("mlx_vlm.models.mimo_v2", None)
 
+    def test_mllm_mimo_v2_turboquant_skip_detects_loaded_runtime_object(self):
+        from vmlx_engine.models import mllm
+
+        model = SimpleNamespace(
+            language_model=SimpleNamespace(
+                inner=SimpleNamespace(args=SimpleNamespace(model_type="mimo_v2"))
+            )
+        )
+
+        assert mllm._is_mimo_v2_runtime_object_or_name(model, "/models/opaque") is True
+
+    def test_mllm_mimo_v2_turboquant_skip_leaves_non_mimo_models_eligible(self):
+        from vmlx_engine.models import mllm
+
+        model = SimpleNamespace(
+            language_model=SimpleNamespace(
+                inner=SimpleNamespace(args=SimpleNamespace(model_type="qwen3_vl"))
+            )
+        )
+
+        assert mllm._is_mimo_v2_runtime_object_or_name(model, "/models/qwen3-vl") is False
+
+    def test_mllm_mimo_v2_quantizes_python_list_decoder_layers(
+        self, tmp_path, monkeypatch
+    ):
+        from vmlx_engine.models import mllm
+
+        model_dir = tmp_path / "MiMo-V2.5-JANG_2L"
+        model_dir.mkdir()
+        config = {
+            "model_type": "mimo_v2",
+            "hidden_size": 32,
+            "intermediate_size": 64,
+            "moe_intermediate_size": 32,
+            "num_hidden_layers": 2,
+            "num_attention_heads": 4,
+            "num_key_value_heads": 2,
+            "vocab_size": 128,
+            "n_routed_experts": 4,
+            "num_experts_per_tok": 2,
+            "moe_layer_freq": [False, True],
+            "hybrid_layer_pattern": [0, 1],
+            "full_attention_interval": 1,
+            "quantization": {
+                "bits": 8,
+                "group_size": 32,
+                "model.layers.1.self_attn.qkv_proj": {"bits": 4, "group_size": 32},
+                "model.layers.1.mlp.switch_mlp.gate_proj": {"bits": 3, "group_size": 32},
+                "model.layers.1.mlp.switch_mlp.up_proj": {"bits": 2, "group_size": 32},
+                "model.layers.1.mlp.switch_mlp.down_proj": {"bits": 2, "group_size": 32},
+            },
+        }
+        (model_dir / "config.json").write_text(json.dumps(config), encoding="utf-8")
+
+        mllm._register_local_mlx_vlm_runtime_if_needed(model_dir)
+        module = sys.modules["mlx_vlm.models.mimo_v2"]
+        model = module.Model(module.ModelConfig.from_dict(config))
+
+        count = mllm._quantize_mimo_v2_runtime_modules(
+            model.language_model.inner,
+            {},
+            config["quantization"],
+        )
+
+        layer = model.language_model.inner.model.layers[1]
+        assert count == 4
+        assert layer["self_attn"]["qkv_proj"].__class__.__name__ == "QuantizedLinear"
+        assert (
+            layer["mlp"]["switch_mlp"]["gate_proj"].__class__.__name__
+            == "QuantizedSwitchLinear"
+        )
+        assert (
+            layer["mlp"]["switch_mlp"]["up_proj"].__class__.__name__
+            == "QuantizedSwitchLinear"
+        )
+        assert (
+            layer["mlp"]["switch_mlp"]["down_proj"].__class__.__name__
+            == "QuantizedSwitchLinear"
+        )
+
     def test_mllm_installs_mimo_v2_compiled_router_for_stale_jang_tools(self):
         from vmlx_engine.models import mllm
 
@@ -6849,13 +6929,16 @@ class TestStartupCompatibilityGuards:
         from pathlib import Path
 
         source = Path("./vmlx_engine/mllm_batch_generator.py").read_text()
-        start = source.index('if not has_images and self._model_type == "mimo_v2":')
+        start = source.index("_mimo_tight_text_prefill_requires_chunking = (")
         end = source.index(
             "if not has_images and (not _hybrid_blocks_chunk",
             start,
         )
         block = source[start:end]
 
+        assert "_tight_text_prefill_step_size < self.prefill_step_size" in block
+        assert "seq_len > _tight_text_prefill_step_size + 1" in block
+        assert "and not _mimo_tight_text_prefill_requires_chunking" in block
         assert "_absolute_text_position_ids(input_ids, cache, lm)" in block
         assert 'kwargs["position_ids"] = position_ids' in block
         assert "_seed_text_rope_delta_for_decode(lm, input_ids)" in block

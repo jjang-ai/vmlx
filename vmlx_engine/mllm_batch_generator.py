@@ -4163,7 +4163,17 @@ class MLLMBatchGenerator:
             except Exception:
                 _tight_text_prefill_step_size = min(int(self.prefill_step_size), 128)
 
-        if not has_images and self._model_type == "mimo_v2":
+        _mimo_tight_text_prefill_requires_chunking = (
+            not has_images
+            and self._model_type == "mimo_v2"
+            and _tight_text_prefill_step_size < self.prefill_step_size
+            and seq_len > _tight_text_prefill_step_size + 1
+        )
+        if (
+            not has_images
+            and self._model_type == "mimo_v2"
+            and not _mimo_tight_text_prefill_requires_chunking
+        ):
             lm = self.language_model
             if lm is not None and cache is not None:
                 # MiMo V2.5 uses a mixed full-attention/sliding-window KV
@@ -4184,6 +4194,14 @@ class MLLMBatchGenerator:
                 if hasattr(output, "logits"):
                     return output.logits
                 return output
+        elif _mimo_tight_text_prefill_requires_chunking:
+            logger.info(
+                "MiMo-V2 text prefill using chunked path under tight memory: "
+                "seq_len=%d chunk=%d configured_step=%d",
+                seq_len,
+                _tight_text_prefill_step_size,
+                self.prefill_step_size,
+            )
 
         if not has_images and (not _hybrid_blocks_chunk or _native_mtp_hybrid_text_split):
             lm = self.language_model
