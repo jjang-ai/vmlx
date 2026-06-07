@@ -50,6 +50,14 @@ def _expected_release_gate_failure_tail() -> list[str]:
     return [_expected_open_digest_line()]
 
 
+def _signed_preflight() -> dict[str, object]:
+    return {
+        "status": "pass",
+        "signing_blocker_reason": None,
+        "signing_blocker_reasons": [],
+    }
+
+
 def test_packaged_integrity_accepts_release_gate_objective_digest_only_failure():
     step = _result(
         "release_gate_skip_app",
@@ -160,6 +168,7 @@ def test_packaged_integrity_accepts_current_release_gate_unit_count(monkeypatch,
     monkeypatch.setattr(runner, "_check_release_dmg_notarization_verifier_contract", lambda _root: True)
     monkeypatch.setattr(runner, "_check_release_dmg_notarization_submit_contract", lambda _root: True)
     monkeypatch.setattr(runner, "dry_release_gate_used_current_objective_digest", lambda _step: True)
+    monkeypatch.setattr(runner, "_package_signing_preflight", lambda _root: _signed_preflight())
 
     artifact = runner.build_artifact(tmp_path)
 
@@ -216,6 +225,7 @@ def test_packaged_integrity_sets_clean_jang_source_env_for_bundle_checks(monkeyp
     monkeypatch.setattr(runner, "_check_release_dmg_notarization_verifier_contract", lambda _root: True)
     monkeypatch.setattr(runner, "_check_release_dmg_notarization_submit_contract", lambda _root: True)
     monkeypatch.setattr(runner, "dry_release_gate_used_current_objective_digest", lambda _step: True)
+    monkeypatch.setattr(runner, "_package_signing_preflight", lambda _root: _signed_preflight())
 
     artifact = runner.build_artifact(tmp_path, jang_tools_source=clean_jang)
 
@@ -1060,7 +1070,7 @@ def test_package_signing_preflight_detects_runtime_flag_with_adhoc_signature(
     )
 
 
-def test_packaged_integrity_surfaces_signing_blocker_without_failing_integrity(
+def test_packaged_integrity_fails_when_signing_blocker_is_open(
     monkeypatch, tmp_path
 ):
     def fake_run(_root: Path, name: str, _cwd_rel: Path, _cmd: list[str]):
@@ -1098,7 +1108,8 @@ def test_packaged_integrity_surfaces_signing_blocker_without_failing_integrity(
 
     artifact = runner.build_artifact(tmp_path)
 
-    assert artifact["status"] == "pass"
+    assert artifact["status"] == "fail"
+    assert artifact["failed"] == ["packaged_app_developer_id_signing_blocked"]
     assert artifact["package_signing_preflight"]["status"] == "open"
     assert artifact["release_blockers"] == [
         {

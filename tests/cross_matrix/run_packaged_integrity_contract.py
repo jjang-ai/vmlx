@@ -771,9 +771,12 @@ def build_artifact(
         for name, result in results.items()
         if result["returncode"] != 0 and not (name == "release_gate_skip_app" and release_gate_ok)
     ]
+    failed.extend(blocker["id"] for blocker in release_blockers)
     return {
         "created_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
-        "status": "pass" if all(checks.values()) and not failed else "fail",
+        "status": (
+            "pass" if all(checks.values()) and not failed and not release_blockers else "fail"
+        ),
         "checks": checks,
         "failed": failed,
         "known_expected_release_gate_open_requirements": EXPECTED_OPEN_REQUIREMENTS,
