@@ -24,7 +24,7 @@ DEFAULT_MINIMAX_RESTART_READER_SOURCE = Path(
     "build/current-runtime-memory-stress-minimax-small-installed-issue177-restart-reader-synced-20260527.json"
 )
 DEFAULT_ADMIN_SLEEP_SOURCE = Path(
-    "build/current-issue175-admin-sleep-probe-installed-20260527.json"
+    "build/current-issue175-admin-sleep-probe-after-gemma4-vlm-recovery-20260606.json"
 )
 DEFAULT_OUT = Path(
     "build/current-issue175-177-live-runtime-audit-20260601-local-refresh.json"
