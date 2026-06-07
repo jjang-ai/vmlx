@@ -10590,6 +10590,11 @@ class TestTurboQuantKVTelemetry:
             "--tool-choice",
             "resolution_tool_choice",
             "--resolution-tool-choice",
+            "--temperature",
+            "--top-p",
+            "--top-k",
+            "--repetition-penalty",
+            "_request_sampling_fields",
             "no_tool_markup_leak",
             "_tool_markup_leak",
             "require_tool_evidence",
@@ -10835,6 +10840,36 @@ class TestTurboQuantKVTelemetry:
         )
         assert ungrounded["grounded"] is False
         assert "vmlx_engine/scheduler.py:2431" in ungrounded["markers"]
+
+    def test_responses_long_context_tool_cache_gate_can_force_deterministic_sampling(self):
+        import runpy
+        from types import SimpleNamespace
+
+        gate = runpy.run_path("./tests/cross_matrix/run_responses_long_tool_cache_gate.py")
+        request_sampling_fields = gate["_request_sampling_fields"]
+
+        assert request_sampling_fields(
+            SimpleNamespace(
+                temperature=None,
+                top_p=None,
+                top_k=None,
+                repetition_penalty=None,
+            )
+        ) == {}
+
+        assert request_sampling_fields(
+            SimpleNamespace(
+                temperature=0.0,
+                top_p=1.0,
+                top_k=0,
+                repetition_penalty=1.0,
+            )
+        ) == {
+            "temperature": 0.0,
+            "top_p": 1.0,
+            "top_k": 0,
+            "repetition_penalty": 1.0,
+        }
 
     def test_responses_long_context_tool_cache_gate_rejects_no_match_tool_evidence(self):
         import runpy

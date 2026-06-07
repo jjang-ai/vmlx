@@ -471,6 +471,26 @@ def _resolution_tools_enabled(resolution_tool_choice: str) -> bool:
     return resolution_tool_choice in {"auto", "required"}
 
 
+def _request_sampling_fields(args: argparse.Namespace) -> dict[str, Any]:
+    """Return explicit sampling overrides requested by the gate caller.
+
+    The live gate defaults to server/model sampling metadata. Some runtime
+    rows, especially native-MTP rows, need deterministic request sampling to
+    exercise the intended runtime path rather than silently skipping MTP.
+    """
+    fields: dict[str, Any] = {}
+    for arg_name, request_name in (
+        ("temperature", "temperature"),
+        ("top_p", "top_p"),
+        ("top_k", "top_k"),
+        ("repetition_penalty", "repetition_penalty"),
+    ):
+        value = getattr(args, arg_name, None)
+        if value is not None:
+            fields[request_name] = value
+    return fields
+
+
 def _overall_acceptance_pass(acceptance: dict[str, Any]) -> bool:
     requirement_keys = {
         "turns_completed",
@@ -501,6 +521,10 @@ def main() -> int:
     parser.add_argument("--turns", type=int, default=5)
     parser.add_argument("--target-chars-per-turn", type=int, default=10000)
     parser.add_argument("--max-output-tokens", type=int, default=1536)
+    parser.add_argument("--temperature", type=float)
+    parser.add_argument("--top-p", type=float)
+    parser.add_argument("--top-k", type=int)
+    parser.add_argument("--repetition-penalty", type=float)
     parser.add_argument("--timeout", type=int, default=900)
     parser.add_argument("--enable-thinking", action="store_true")
     parser.add_argument("--require-tool-call", action="store_true")
@@ -635,6 +659,7 @@ def main() -> int:
             "stream": False,
             "max_output_tokens": args.max_output_tokens,
             "enable_thinking": enable_thinking,
+            **_request_sampling_fields(args),
         }
         if tools_enabled:
             body["tools"] = TOOL_DEFINITIONS
@@ -720,6 +745,7 @@ def main() -> int:
                 "max_output_tokens": args.max_output_tokens,
                 "enable_thinking": enable_thinking,
                 "previous_response_id": previous_response_id,
+                **_request_sampling_fields(args),
             }
             current_body["tool_choice"] = args.resolution_tool_choice
             if _resolution_tools_enabled(args.resolution_tool_choice):
@@ -862,6 +888,7 @@ def main() -> int:
         "resolve_tool_calls_in_turn": bool(args.resolve_tool_calls_in_turn),
         "tool_choice_mode": args.tool_choice,
         "resolution_tool_choice": args.resolution_tool_choice,
+        "sampling": _request_sampling_fields(args),
         "require_tool_call_each_turn": bool(args.require_tool_call_each_turn),
         "require_tool_evidence": bool(args.require_tool_evidence),
         "require_cache_each_turn_after_first": bool(
