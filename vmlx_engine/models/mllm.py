@@ -118,12 +118,86 @@ def _register_step3p7_mlx_vlm_runtime() -> None:
     sys.modules[processor_module_name] = processor_module
 
 
+def _install_mimo_v2_compiled_router_if_missing(text_runtime: Any) -> bool:
+    """Install the MiMo single-token compiled router when jang-tools is stale.
+
+    Newer `jang_tools.mimo_v2.mlx_model` ships this optimization natively.
+    vMLX still has to tolerate older bundled environments because the app
+    resolves MiMo through the bundled Python package at runtime. This patch is
+    deliberately narrow: it only replaces the router's `__call__`, keeps the
+    model's selected experts/weights semantics unchanged, and falls back to the
+    original implementation for non-decode/batched shapes or compile failures.
+    """
+
+    if hasattr(text_runtime, "run_compiled_mimo_decode_router"):
+        return False
+
+    gate_cls = getattr(text_runtime, "MiMoV2MoEGate", None)
+    if gate_cls is None or getattr(gate_cls, "_vmlx_compiled_router_patched", False):
+        return False
+
+    try:
+        import mlx.core as mx
+    except Exception:
+        return False
+
+    original_call = gate_cls.__call__
+    router_cache: dict[tuple[int, bool, int], Any] = {}
+
+    def _compiled_router(top_k: int, norm_topk_prob: bool, routed_scaling: float):
+        scaling_milli = int(round(float(routed_scaling) * 1000.0))
+        key = (int(top_k), bool(norm_topk_prob), scaling_milli)
+        cached = router_cache.get(key)
+        if cached is not None:
+            return cached
+
+        def _router(x_fp32, weight_fp32, bias_fp32):
+            logits = x_fp32 @ weight_fp32.T
+            scores = mx.sigmoid(logits)
+            corrected = scores + bias_fp32.reshape(1, -1)
+            inds = mx.argpartition(-corrected, kth=top_k - 1, axis=-1)[..., :top_k]
+            weights = mx.take_along_axis(scores, inds, axis=-1)
+            if norm_topk_prob:
+                weights = weights / (mx.sum(weights, axis=-1, keepdims=True) + 1e-20)
+            return inds, weights * (float(scaling_milli) * 0.001)
+
+        compiled = mx.compile(_router)
+        router_cache[key] = compiled
+        return compiled
+
+    def _vmlx_compiled_router_call(self, x):
+        try:
+            if int(x.shape[0]) != 1:
+                return original_call(self, x)
+            x_fp32 = x.astype(mx.float32)
+            router = _compiled_router(
+                int(self.top_k),
+                bool(self.norm_topk_prob),
+                float(self.routed_scaling),
+            )
+            topk_indices, topk_weights = router(
+                x_fp32,
+                self.weight.astype(mx.float32),
+                self.e_score_correction_bias.astype(mx.float32),
+            )
+            return topk_indices, topk_weights.astype(x.dtype)
+        except Exception:
+            return original_call(self, x)
+
+    gate_cls._vmlx_original_call = original_call
+    gate_cls.__call__ = _vmlx_compiled_router_call
+    gate_cls._vmlx_compiled_router_patched = True
+    logger.info("Installed vMLX fallback compiled MiMo-V2 decode router")
+    return True
+
+
 def _register_mimo_v2_mlx_vlm_runtime() -> None:
     module_name = "mlx_vlm.models.mimo_v2"
     if module_name in sys.modules:
         return
 
     text_runtime = importlib.import_module("jang_tools.mimo_v2.mlx_model")
+    _install_mimo_v2_compiled_router_if_missing(text_runtime)
 
     import mlx.nn as nn
 

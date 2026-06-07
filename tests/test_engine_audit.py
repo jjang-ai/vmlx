@@ -6325,6 +6325,38 @@ class TestStartupCompatibilityGuards:
         }
         sys.modules.pop("mlx_vlm.models.mimo_v2", None)
 
+    def test_mllm_installs_mimo_v2_compiled_router_for_stale_jang_tools(self):
+        from vmlx_engine.models import mllm
+
+        class FakeGate:
+            top_k = 8
+            norm_topk_prob = True
+            routed_scaling = 1.0
+
+            def __call__(self, x):
+                return "original"
+
+        original = FakeGate.__call__
+        stale_runtime = SimpleNamespace(MiMoV2MoEGate=FakeGate)
+
+        assert mllm._install_mimo_v2_compiled_router_if_missing(stale_runtime) is True
+        assert FakeGate.__call__ is not original
+        assert FakeGate._vmlx_original_call is original
+        assert FakeGate._vmlx_compiled_router_patched is True
+
+        class NewGate:
+            def __call__(self, x):
+                return "native"
+
+        native_runtime = SimpleNamespace(
+            MiMoV2MoEGate=NewGate,
+            run_compiled_mimo_decode_router=object(),
+        )
+        native_original = NewGate.__call__
+
+        assert mllm._install_mimo_v2_compiled_router_if_missing(native_runtime) is False
+        assert NewGate.__call__ is native_original
+
     def test_mllm_mimo_v2_load_weights_sanitizes_and_quantizes_affine_sidecars(
         self, tmp_path, monkeypatch
     ):
