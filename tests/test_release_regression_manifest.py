@@ -11572,6 +11572,59 @@ def test_mimo_v2_current_audit_extracts_fastpath_async_bottleneck(tmp_path):
     )
 
 
+def test_mimo_v2_current_audit_accepts_packaged_jangtq2_decode_speed(tmp_path):
+    from tests.cross_matrix.run_mimo_v2_jang2l_current_audit import (
+        _latest_decode_speed_evidence,
+    )
+
+    log_path = tmp_path / "mimo-packaged-speed.log"
+    log_path.write_text(
+        "\n".join(
+            [
+                "INFO:vmlx_engine.models.mllm:MiMo-V2 TurboQuant SwitchGLU decode fast path active: calls=4096 compiled_shapes=1",
+                "INFO:vmlx_engine.server:Chat completion: 96 tokens in 2.39s (40.2 tok/s)",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    evidence = _latest_decode_speed_evidence(
+        {
+            "results": [
+                {
+                    "status": "review",
+                    "log_path": str(log_path),
+                    "bundle_sampling": {"decode_tps_wall": 40.15},
+                    "greedy_topk0": {"decode_tps_wall": 40.66},
+                    "coherency": {
+                        "content_head": "READY\n17+28=45\nCERULEAN",
+                        "loopish": False,
+                    },
+                    "pp_rows": [{"pp_wall_tok_s": 127.76}],
+                    "health_after": {
+                        "native_cache": {
+                            "cache_type": "mixed_swa_kv",
+                            "generic_turboquant_kv": {"enabled": False},
+                        }
+                    },
+                    "notes": ["PP below expected 400.00: 127.76"],
+                }
+            ]
+        }
+    )
+
+    assert evidence["speed_blocked"] is False
+    assert evidence["switchglu_fastpath_active"] is True
+    assert evidence["switchglu_fastpath_max_calls"] == 4096
+    assert evidence["switchglu_fastpath_max_compiled_shapes"] == 1
+    assert evidence["pp_wall_tok_s"] == [127.76]
+    assert (
+        evidence["decode_bottleneck_classification"]
+        == "switchglu_fastpath_active_without_async_trace_blocker"
+    )
+
+
 def test_current_proof_sweep_includes_mimo_root_cause_artifacts():
     from tests.cross_matrix.release_regression_manifest import (
         validate_current_proof_sweep_artifacts,

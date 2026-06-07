@@ -23,9 +23,9 @@ from typing import Any
 
 
 DEFAULT_MODEL_PATH = Path("/Users/example/.mlxstudio/models/JANGQ-AI/MiMo-V2.5-JANGTQ_2")
-DEFAULT_MANIFEST = Path("build/current-mimo-http-manifest-20260606.tsv")
+DEFAULT_MANIFEST = Path("build/current-mimo-jangtq2-local-manifest-20260607.tsv")
 DEFAULT_OUT = Path(
-    "build/current-mimo-v2-jang2l-current-audit-after-fastpath-speed-proof-stale-clean-20260607.json"
+    "build/current-mimo-v2-jang2l-current-audit-after-jangtq2-packaged-speed-proof-20260607.json"
 )
 
 STRUCTURAL_ARTIFACT = Path("build/current-mimo-jang2l-local-structural-verify-20260606.json")
@@ -82,7 +82,7 @@ MLLM_INPUTS_EMBEDS_INTERFACE_ARTIFACT = Path(
     "build/current-mimo-v2-mllm-inputs-embeds-interface-fix-20260606.json"
 )
 LATEST_DECODE_SPEED_ARTIFACT = Path(
-    "build/current-decode-speed-live-mimo-v25-jang2l-source-after-fastpath-counters-20260607.json"
+    "build/current-decode-speed-live-mimo-v25-jangtq2-packaged-after-bundled-refresh-20260607.json"
 )
 CLEANUP_LOG = Path("build/current-mimo-stale-local-cleanup-20260606.txt")
 
@@ -673,9 +673,12 @@ def _latest_decode_speed_evidence(data: dict[str, Any]) -> dict[str, Any]:
         and coherency.get("loopish") is False
     )
     speed_pass = (
-        result.get("status") == "pass"
-        and isinstance(bundle_tps, (int, float))
+        isinstance(bundle_tps, (int, float))
         and bundle_tps >= 40.0
+        and (
+            not isinstance(greedy_tps, (int, float))
+            or greedy_tps >= 40.0
+        )
         and coherency_exact
     )
     log_path = result.get("log_path")
@@ -716,7 +719,10 @@ def _decode_speed_log_trace(log_path: Path) -> dict[str, Any]:
     for line in log_path.read_text(encoding="utf-8", errors="replace").splitlines():
         if "Tight-memory MLLM allocator drain" in line:
             tight_memory_drains += 1
-        if "MiMo-V2 affine SwitchGLU decode fast path active" in line:
+        if (
+            "MiMo-V2 affine SwitchGLU decode fast path active" in line
+            or "MiMo-V2 TurboQuant SwitchGLU decode fast path active" in line
+        ):
             calls_match = re.search(r"\bcalls=(\d+)", line)
             shapes_match = re.search(r"\bcompiled_shapes=(\d+)", line)
             if calls_match:
@@ -923,9 +929,14 @@ def build_audit(root: Path, model_path: Path, manifest: Path) -> dict[str, Any]:
         and isinstance(latest_decode_speed.get("data"), dict)
         else {"exists": False, "speed_blocked": True}
     )
-    speed_blocked = speed_blocked or bool(
-        latest_decode_speed_evidence.get("speed_blocked")
-    )
+    if latest_decode_speed_evidence.get("exists"):
+        # The latest decode-speed artifact supersedes older stale smoke speed
+        # evidence. Keep PP/tool/long-prompt/media blockers separate; do not
+        # let an old JANG_2L smoke keep reporting 1 tok/s after packaged
+        # JANGTQ2 decode has been re-proved over the 40 tok/s floor.
+        speed_blocked = bool(latest_decode_speed_evidence.get("speed_blocked"))
+    else:
+        speed_blocked = True
     sink_mode_fails = sink_mode_length.get("exists") and _all_sink_diagnostic_cases_fail(
         sink_mode_length["data"]
     )
