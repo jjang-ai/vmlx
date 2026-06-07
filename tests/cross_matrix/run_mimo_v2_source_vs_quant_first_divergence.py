@@ -29,7 +29,7 @@ DEFAULT_SOURCE_BASE_URL = "http://test-host.local:8126"
 DEFAULT_QUANT_BASE_URL = "http://127.0.0.1:8897"
 DEFAULT_SOURCE_HOST = "test-host.local"
 DEFAULT_SOURCE_MODEL_PATH = "/Volumes/ModelDrive/jangq-ai/sources/MiMo-V2.5"
-DEFAULT_QUANT_MODEL_PATH = "/Users/example/.mlxstudio/models/JANGQ-AI/MiMo-V2.5-JANG_2L"
+DEFAULT_QUANT_MODEL_PATH = "/Users/example/.mlxstudio/models/JANGQ-AI/MiMo-V2.5-JANGTQ_2"
 
 PROMPTS: tuple[dict[str, Any], ...] = (
     {

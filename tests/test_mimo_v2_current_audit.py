@@ -16,13 +16,13 @@ def test_mimo_current_audit_separates_clean_artifact_from_runtime_blockers(
 ):
     monkeypatch.setattr(audit, "STALE_TARGETS", [])
     model_parent = tmp_path / "models" / "JANGQ-AI"
-    model_path = model_parent / "MiMo-V2.5-JANG_2L"
+    model_path = model_parent / "MiMo-V2.5-JANGTQ_2"
     model_path.mkdir(parents=True)
     (model_path / "config.json").write_text("{}")
     manifest = tmp_path / "build" / "current-mimo-http-tb5-manifest-20260606.tsv"
     manifest.parent.mkdir(parents=True)
     manifest.write_text(
-        f"{(model_path / 'config.json').stat().st_size}\tMiMo-V2.5-JANG_2L/config.json\n"
+        f"{(model_path / 'config.json').stat().st_size}\tMiMo-V2.5-JANGTQ_2/config.json\n"
     )
 
     _write_json(

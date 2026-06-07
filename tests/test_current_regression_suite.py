@@ -129,7 +129,7 @@ def test_decode_speed_gate_tracks_mimo_v25_jang2l_release_floor():
 
     row = ROWS["mimo_v25_jang2l"]
 
-    assert row.path == "/Users/example/.mlxstudio/models/JANGQ-AI/MiMo-V2.5-JANG_2L"
+    assert row.path == "/Users/example/.mlxstudio/models/JANGQ-AI/MiMo-V2.5-JANGTQ_2"
     assert row.is_mllm is True
     assert row.tool_parser == "xml_function"
     assert row.reasoning_parser == "think_xml"

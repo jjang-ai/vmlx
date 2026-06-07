@@ -22,7 +22,7 @@ from pathlib import Path
 from typing import Any
 
 
-DEFAULT_MODEL_PATH = Path("/Users/example/.mlxstudio/models/JANGQ-AI/MiMo-V2.5-JANG_2L")
+DEFAULT_MODEL_PATH = Path("/Users/example/.mlxstudio/models/JANGQ-AI/MiMo-V2.5-JANGTQ_2")
 DEFAULT_MANIFEST = Path("build/current-mimo-http-manifest-20260606.tsv")
 DEFAULT_OUT = Path(
     "build/current-mimo-v2-jang2l-current-audit-after-fastpath-speed-proof-stale-clean-20260607.json"

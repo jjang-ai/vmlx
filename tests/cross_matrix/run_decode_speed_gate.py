@@ -245,7 +245,7 @@ ROWS: dict[str, Row] = {
     ),
     "mimo_v25_jang2l": Row(
         "mimo_v25_jang2l",
-        "/Users/example/.mlxstudio/models/JANGQ-AI/MiMo-V2.5-JANG_2L",
+        "/Users/example/.mlxstudio/models/JANGQ-AI/MiMo-V2.5-JANGTQ_2",
         is_mllm=True,
         tool_parser="xml_function",
         reasoning_parser="think_xml",

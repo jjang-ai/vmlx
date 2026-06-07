@@ -335,7 +335,7 @@ def test_default_source_quant_preflight_targets_are_current_mimo_paths():
     )
     assert (
         probe.DEFAULT_QUANT_MODEL_PATH
-        == "/Users/example/.mlxstudio/models/JANGQ-AI/MiMo-V2.5-JANG_2L"
+        == "/Users/example/.mlxstudio/models/JANGQ-AI/MiMo-V2.5-JANGTQ_2"
     )
 
 
