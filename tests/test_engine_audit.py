@@ -10969,6 +10969,31 @@ class TestTurboQuantKVTelemetry:
         assert "must call exactly one provided tool" in instructions
         assert "When tools are not available, answer directly" in instructions
 
+    def test_responses_long_context_tool_cache_gate_no_match_returns_real_marker(self):
+        import json
+        import runpy
+        from pathlib import Path
+
+        gate = runpy.run_path("./tests/cross_matrix/run_responses_long_tool_cache_gate.py")
+        tool_output = gate["_tool_output"]
+
+        result = tool_output(
+            Path("."),
+            {
+                "name": "grep_repo",
+                "call_id": "call_no_match",
+                "arguments": json.dumps(
+                    {
+                        "pattern": "definitely_not_present_in_server_py_12345",
+                        "path": "vmlx_engine/server.py",
+                    }
+                ),
+            },
+        )
+
+        assert "no matches for" in result["output"]
+        assert "vmlx_engine/server.py:1:" in result["output"]
+
     def test_native_cache_status_reports_dsv4_separately_from_tq_kv(self, monkeypatch):
         from types import SimpleNamespace
         from vmlx_engine.server import _native_cache_status

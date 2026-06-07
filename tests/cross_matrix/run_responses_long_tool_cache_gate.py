@@ -121,6 +121,39 @@ def _read_chunk(path: Path, target_chars: int, offset: int) -> str:
     return chunk
 
 
+def _fallback_file_line_marker(repo_root: Path, target: Path) -> str:
+    """Return a real file:line marker for a readable file/tree fallback."""
+    try:
+        target.relative_to(repo_root)
+    except ValueError:
+        return ""
+    candidates: list[Path]
+    if target.is_file():
+        candidates = [target]
+    elif target.is_dir():
+        candidates = sorted(
+            (
+                p
+                for p in target.rglob("*")
+                if p.is_file()
+                and p.suffix in {".py", ".ts", ".tsx", ".md"}
+                and GENERATED_TOOL_SEARCH_PARTS.isdisjoint(p.parts)
+            ),
+            key=lambda p: _tool_search_sort_key(repo_root, p),
+        )
+    else:
+        candidates = []
+    for candidate in candidates:
+        try:
+            lines = candidate.read_text(errors="replace").splitlines()
+        except Exception:
+            continue
+        if lines:
+            rel = candidate.relative_to(repo_root)
+            return f"{rel}:1: {lines[0][:240]}"
+    return ""
+
+
 def _build_prompt(repo_root: Path, turn: int, target_chars_per_turn: int) -> str:
     file_rel = FIXTURE_FILES[(turn - 1) % len(FIXTURE_FILES)]
     file_path = repo_root / file_rel
@@ -306,7 +339,11 @@ def _tool_output(repo_root: Path, call: dict[str, Any]) -> dict[str, Any]:
                     if match_path is not None:
                         break
                 if match_path is None:
-                    output = f"{symbol} not found under {rel}"
+                    fallback = _fallback_file_line_marker(repo_root, target)
+                    if fallback:
+                        output = f"{symbol} not found under {rel}\n{fallback}"
+                    else:
+                        output = f"{symbol} not found under {rel}"
                 else:
                     start = max(0, match_index - context)
                     end = min(len(match_lines), match_index + context + 1)
@@ -334,7 +371,16 @@ def _tool_output(repo_root: Path, call: dict[str, Any]) -> dict[str, Any]:
                             break
             except Exception:
                 continue
-        output = "\n".join(output_lines) or "no matches"
+        if output_lines:
+            output = "\n".join(output_lines)
+        else:
+            target = (repo_root / rel).resolve()
+            fallback = _fallback_file_line_marker(repo_root, target)
+            output = (
+                f"no matches for {pattern!r} under {rel}\n{fallback}"
+                if fallback
+                else "no matches"
+            )
     else:
         output = f"unknown tool {name}; available tools are inspect_symbol and grep_repo"
     return {"type": "function_call_output", "call_id": call_id, "output": output[:12000]}
