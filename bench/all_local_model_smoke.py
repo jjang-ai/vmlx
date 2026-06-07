@@ -542,6 +542,47 @@ def _tool_result_continuation_payload(model: str, max_tokens: int) -> dict[str, 
     }
 
 
+def _strict_json_payload(model: str, max_tokens: int) -> dict[str, Any]:
+    return {
+        "model": model,
+        "messages": [
+            {
+                "role": "user",
+                "content": (
+                    "Return exactly this JSON object and nothing else: "
+                    "{\"status\":\"ok\",\"value\":\"blue-cat\",\"count\":3}"
+                ),
+            }
+        ],
+        "temperature": 0,
+        "max_tokens": max_tokens,
+        "stream": False,
+        "enable_thinking": False,
+    }
+
+
+def _exact_code_payload(model: str, max_tokens: int) -> dict[str, Any]:
+    return {
+        "model": model,
+        "messages": [
+            {
+                "role": "user",
+                "content": (
+                    "Output exactly these three Python lines, preserving spaces, "
+                    "newlines, punctuation, and capitalization. Do not use markdown.\n"
+                    "def add(a, b):\n"
+                    "    return a + b\n"
+                    "print(add(2, 3))"
+                ),
+            }
+        ],
+        "temperature": 0,
+        "max_tokens": max_tokens,
+        "stream": False,
+        "enable_thinking": False,
+    }
+
+
 def _is_lfm_row(row: dict[str, Any]) -> bool:
     blob = " ".join(
         str(row.get(key, "")).lower()
@@ -739,6 +780,24 @@ def build_probe_payloads(
                 ),
             }
         )
+    probes.append(
+        {
+            "label": "structured_json_exact",
+            "payload": _strict_json_payload(
+                model,
+                max(_lfm_strict_probe_max_tokens(row, max_tokens), 96),
+            ),
+        }
+    )
+    probes.append(
+        {
+            "label": "exact_code_whitespace",
+            "payload": _exact_code_payload(
+                model,
+                max(_lfm_strict_probe_max_tokens(row, max_tokens), 96),
+            ),
+        }
+    )
     if include_media and row.get("is_mllm"):
         image_content = [
             {"type": "text", "text": "What is the dominant color in this image? Reply one word."},
@@ -1052,6 +1111,40 @@ def validate_probe_response(
                     "label": label,
                     "reason": "raw_tool_markup_leak",
                     "content_head": stripped[:160],
+                }
+            )
+    elif label == "structured_json_exact":
+        expected_json = {"status": "ok", "value": "blue-cat", "count": 3}
+        try:
+            parsed_json = json.loads(stripped)
+        except Exception as exc:
+            parsed_json = None
+            failures.append(
+                {
+                    "label": label,
+                    "reason": "json_parse_failed",
+                    "error": f"{type(exc).__name__}: {exc}",
+                    "content_head": stripped[:160],
+                }
+            )
+        if parsed_json is not None and parsed_json != expected_json:
+            failures.append(
+                {
+                    "label": label,
+                    "reason": "json_exact_object_mismatch",
+                    "expected": expected_json,
+                    "actual": parsed_json,
+                }
+            )
+    elif label == "exact_code_whitespace":
+        expected_code = "def add(a, b):\n    return a + b\nprint(add(2, 3))"
+        if visible != expected_code:
+            failures.append(
+                {
+                    "label": label,
+                    "reason": "exact_code_whitespace_mismatch",
+                    "expected": expected_code,
+                    "actual_head": visible[:160],
                 }
             )
     elif label.startswith("text_cache_repeat") and stripped != (expected_content or "ACK"):
