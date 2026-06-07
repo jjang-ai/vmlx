@@ -226,11 +226,23 @@ def _install_mimo_v2_affine_switchglu_decode_fast_path() -> bool:
     except Exception:
         return False
 
+    try:
+        from jang_tools.turboquant.tq_kernel import TurboQuantSwitchLinear
+        from jang_tools.turboquant.fused_gate_up_kernel import make_fused_gate_up_swiglu_decode
+        from jang_tools.turboquant.gather_tq_kernel import make_gather_tq_decode_per_row
+        from jang_tools.turboquant.hadamard_kernel import hadamard_rotate_metal
+    except Exception:
+        TurboQuantSwitchLinear = None
+        make_fused_gate_up_swiglu_decode = None
+        make_gather_tq_decode_per_row = None
+        hadamard_rotate_metal = None
+
     if getattr(SwitchGLU, "_vmlx_mimo_affine_decode_fast_path", False):
         return False
 
     original_call = SwitchGLU.__call__
     compiled: dict[tuple[Any, ...], Any] = {}
+    tq_compiled: dict[tuple[Any, ...], Any] = {}
 
     def _record_fallback(reason: str) -> None:
         try:
@@ -316,10 +328,132 @@ def _install_mimo_v2_affine_switchglu_decode_fast_path() -> bool:
         compiled[key] = fn
         return fn
 
+    def _compiled_tq_for(gp, up, dp, k: int):
+        key = (
+            int(gp.in_features),
+            int(gp.out_features),
+            int(getattr(gp, "bits", 0) or 0),
+            int(getattr(up, "bits", 0) or 0),
+            int(getattr(dp, "bits", 0) or 0),
+            int(k),
+        )
+        fn = tq_compiled.get(key)
+        if fn is not None:
+            return fn
+
+        fused_gate_up = make_fused_gate_up_swiglu_decode(
+            gp.in_features,
+            gp.out_features,
+            gp.bits,
+            k,
+            swiglu_limit=0.0,
+        )
+        gather_down = make_gather_tq_decode_per_row(
+            gp.out_features,
+            gp.in_features,
+            dp.bits,
+            k,
+        )
+
+        def _mlp(
+            x_flat,
+            indices_flat,
+            gate_packed,
+            gate_norms,
+            up_packed,
+            up_norms,
+            down_packed,
+            down_norms,
+            gate_codebook,
+            down_codebook,
+            gate_signs,
+            down_signs,
+        ):
+            x_rot = hadamard_rotate_metal(x_flat, gate_signs)
+            x_act = fused_gate_up(
+                x_rot,
+                gate_packed,
+                gate_norms,
+                up_packed,
+                up_norms,
+                gate_codebook,
+                indices_flat,
+            )
+            x_act_rot = hadamard_rotate_metal(x_act, down_signs)
+            return gather_down(
+                x_act_rot,
+                down_packed,
+                down_norms,
+                down_codebook,
+                indices_flat,
+            )
+
+        fn = mx.compile(_mlp)
+        tq_compiled[key] = fn
+        return fn
+
     def _fast_switchglu_call(self, x, indices):
         gp = getattr(self, "gate_proj", None)
         up = getattr(self, "up_proj", None)
         dp = getattr(self, "down_proj", None)
+        if (
+            TurboQuantSwitchLinear is not None
+            and isinstance(gp, TurboQuantSwitchLinear)
+            and isinstance(up, TurboQuantSwitchLinear)
+            and isinstance(dp, TurboQuantSwitchLinear)
+        ):
+            if getattr(self, "training", False):
+                _record_fallback("tq_training_enabled")
+                return original_call(self, x, indices)
+            if getattr(indices, "ndim", 0) < 1 or int(getattr(indices, "size", 0) or 0) >= 64:
+                _record_fallback("tq_prefill_or_large_indices")
+                return original_call(self, x, indices)
+            x_sq = x
+            while getattr(x_sq, "ndim", 0) > 2 and x_sq.shape[-2] == 1:
+                x_sq = x_sq.squeeze(-2)
+            x_flat = x_sq.reshape(-1, gp.in_features)
+            if int(x_flat.shape[0]) != 1:
+                _record_fallback("tq_batched_or_prefill_x")
+                return original_call(self, x, indices)
+            k = int(indices.shape[-1]) if getattr(indices, "shape", ()) else 1
+            if k <= 0:
+                _record_fallback("tq_empty_indices")
+                return original_call(self, x, indices)
+            fn = _compiled_tq_for(gp, up, dp, k)
+            try:
+                out = fn(
+                    x_flat.astype(mx.float32),
+                    indices.reshape(-1).astype(mx.uint32),
+                    gp.packed,
+                    gp.norms,
+                    up.packed,
+                    up.norms,
+                    dp.packed,
+                    dp.norms,
+                    gp.codebook,
+                    dp.codebook,
+                    gp.signs,
+                    dp.signs,
+                )
+            except Exception:
+                _record_fallback("tq_compiled_fast_path_error")
+                logger.exception("MiMo-V2 TurboQuant SwitchGLU decode fast path failed; falling back")
+                return original_call(self, x, indices)
+            try:
+                calls = int(getattr(SwitchGLU, "_vmlx_mimo_tq_decode_fast_calls", 0)) + 1
+                SwitchGLU._vmlx_mimo_tq_decode_fast_calls = calls
+                if calls in {1, 64, 512, 4096}:
+                    logger.info(
+                        "MiMo-V2 TurboQuant SwitchGLU decode fast path active: calls=%d compiled_shapes=%d",
+                        calls,
+                        len(tq_compiled),
+                    )
+            except Exception:
+                pass
+            if out.dtype != x.dtype:
+                out = out.astype(x.dtype)
+            return out.reshape(*indices.shape[:-1], k, gp.in_features)
+
         required_attrs = ("weight", "scales", "group_size", "bits", "mode")
         if not all(all(hasattr(module, attr) for attr in required_attrs) for module in (gp, up, dp)):
             _record_fallback("missing_affine_quant_attrs")
@@ -379,6 +513,7 @@ def _install_mimo_v2_affine_switchglu_decode_fast_path() -> bool:
 
     SwitchGLU._vmlx_mimo_original_affine_decode_call = original_call
     SwitchGLU._vmlx_mimo_affine_decode_fast_calls = 0
+    SwitchGLU._vmlx_mimo_tq_decode_fast_calls = 0
     SwitchGLU._vmlx_mimo_affine_decode_fallback_reasons = {}
     SwitchGLU.__call__ = _fast_switchglu_call
     SwitchGLU._vmlx_mimo_affine_decode_fast_path = True
@@ -580,6 +715,99 @@ def _register_mimo_v2_mlx_vlm_runtime() -> None:
     TextModel = getattr(text_runtime, "Model")
 
     _INPUTS_EMBEDS_UNSET = object()
+
+    def _mimo_v2_get_module(root, dotted):
+        cur = root
+        for part in dotted.split("."):
+            cur = cur[int(part)] if part.isdigit() else getattr(cur, part)
+        return cur
+
+    def _mimo_v2_set_module(root, dotted, new_module):
+        parts = dotted.split(".")
+        cur = root
+        for part in parts[:-1]:
+            cur = cur[int(part)] if part.isdigit() else getattr(cur, part)
+        last = parts[-1]
+        if last.isdigit():
+            cur[int(last)] = new_module
+        else:
+            setattr(cur, last, new_module)
+
+    def _install_mimo_v2_prestacked_jangtq_modules(model, weights, *, seed=42):
+        """Bind prestacked MiMo JANGTQ tensors to TurboQuant switch modules.
+
+        The promoted MiMo-V2.5-JANGTQ_2 bundle stores routed experts directly as
+        ``model.layers.N.mlp.switch_mlp.{proj}.tq_{packed,norms,bits}``.
+        ``mlx_vlm.load`` calls this shim's ``load_weights`` path, which otherwise
+        rejects those keys as unknown parameters. Do not silence strict loading:
+        replace the corresponding SwitchLinear with TurboQuantSwitchLinear and
+        assign the actual packed/norm tensors from the artifact.
+        """
+        tq_groups = {}
+        for key, value in weights.items():
+            if key.endswith(".tq_packed"):
+                tq_groups.setdefault(key[: -len(".tq_packed")], {})["packed"] = value
+            elif key.endswith(".tq_norms"):
+                tq_groups.setdefault(key[: -len(".tq_norms")], {})["norms"] = value
+            elif key.endswith(".tq_bits"):
+                tq_groups.setdefault(key[: -len(".tq_bits")], {})["bits"] = value
+
+        if not tq_groups:
+            return 0
+
+        from jang_tools.turboquant.tq_kernel import TurboQuantSwitchLinear
+
+        installed = 0
+        for base, parts in sorted(tq_groups.items()):
+            if ".switch_mlp." not in base:
+                continue
+            missing = {"packed", "norms", "bits"} - set(parts)
+            if missing:
+                raise RuntimeError(
+                    f"MiMo-V2 prestacked JANGTQ group {base} missing {sorted(missing)}"
+                )
+
+            packed = parts["packed"]
+            norms = parts["norms"]
+            bits_tensor = parts["bits"]
+            try:
+                bits = int(bits_tensor[0].item())
+            except Exception:
+                bits = int(bits_tensor.item())
+            if bits <= 0 or 32 % bits != 0:
+                raise RuntimeError(f"MiMo-V2 prestacked JANGTQ group {base} has bad bits={bits}")
+            if len(packed.shape) != 3 or len(norms.shape) != 2:
+                raise RuntimeError(
+                    f"MiMo-V2 prestacked JANGTQ group {base} has bad shapes: "
+                    f"packed={packed.shape}, norms={norms.shape}"
+                )
+            if packed.shape[:2] != norms.shape:
+                raise RuntimeError(
+                    f"MiMo-V2 prestacked JANGTQ group {base} shape mismatch: "
+                    f"packed={packed.shape}, norms={norms.shape}"
+                )
+
+            # Fail loudly if the artifact names a module that the MiMo runtime
+            # does not expose. This distinguishes runtime incompatibility from
+            # corruption instead of silently dropping expert weights.
+            _mimo_v2_get_module(model, base)
+
+            num_experts, out_features, packed_cols = packed.shape
+            in_features = packed_cols * (32 // bits)
+            tq_module = TurboQuantSwitchLinear(
+                in_features=in_features,
+                out_features=out_features,
+                num_experts=num_experts,
+                bits=bits,
+                bias=False,
+                seed=seed,
+            )
+            tq_module.packed = packed
+            tq_module.norms = norms
+            _mimo_v2_set_module(model, base, tq_module)
+            installed += 1
+
+        return installed
 
     class _MiMoV2CausalLMOutput:
         def __init__(self, logits):
@@ -786,6 +1014,32 @@ def _register_mimo_v2_mlx_vlm_runtime() -> None:
                 )
                 logger.info("MiMo-V2 load quantized %d runtime modules", quantized_count)
                 self._mimo_v2_quantized_for_load = True
+
+            tq_count = _install_mimo_v2_prestacked_jangtq_modules(
+                self.language_model.inner,
+                filtered,
+                seed=int(getattr(self.config.text_config, "mxtq_seed", 42) or 42),
+            )
+            if tq_count:
+                logger.info(
+                    "MiMo-V2 load installed %d prestacked JANGTQ routed modules",
+                    tq_count,
+                )
+                strict_load_weights = {}
+                for key, value in filtered.items():
+                    if key.endswith(".tq_packed"):
+                        strict_load_weights[f"{key[: -len('.tq_packed')]}.packed"] = value
+                    elif key.endswith(".tq_norms"):
+                        strict_load_weights[f"{key[: -len('.tq_norms')]}.norms"] = value
+                    elif (
+                        key.endswith(".tq_bits")
+                        or key.startswith("codebook.")
+                        or key.startswith("signs.")
+                    ):
+                        continue
+                    else:
+                        strict_load_weights[key] = value
+                filtered = strict_load_weights
 
             result = self.language_model.load_weights(list(filtered.items()), strict=strict)
             if isinstance(quantization, dict):
