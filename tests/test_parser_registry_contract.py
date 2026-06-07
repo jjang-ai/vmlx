@@ -5,7 +5,7 @@ def test_parser_registry_contract_default_out_tracks_current_release_proof_artif
     from tests.cross_matrix import run_parser_registry_contract as gate
 
     assert gate.DEFAULT_OUT == Path(
-        "build/current-parser-registry-contract-after-mimo-modality-truth-20260606.json"
+        "build/current-parser-registry-contract-after-jangtq2-objective-refresh-20260607.json"
     )
 
 
