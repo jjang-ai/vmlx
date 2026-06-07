@@ -34,6 +34,34 @@ def test_mllm_scheduler_does_not_shadow_hashlib_in_init():
     assert "hashlib.sha256" in source
 
 
+def test_batched_template_tool_call_arguments_are_mappings():
+    """OpenAI tool-call history uses JSON strings; Jinja templates need dicts."""
+    from vmlx_engine.engine.batched import BatchedEngine
+
+    messages = [
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {
+                        "name": "record_fact",
+                        "arguments": "{\"value\":\"blue-cat\"}",
+                    },
+                }
+            ],
+        }
+    ]
+
+    normalized = BatchedEngine._normalize_tool_call_arguments_for_template(messages)
+
+    args = normalized[0]["tool_calls"][0]["function"]["arguments"]
+    assert args == {"value": "blue-cat"}
+    assert messages[0]["tool_calls"][0]["function"]["arguments"] == "{\"value\":\"blue-cat\"}"
+
+
 def test_mllm_tight_memory_text_prefill_chunks_short_tool_prompts():
     """Tight-memory text-only MLLM prefill must not fall back to one-shot LM."""
     import inspect

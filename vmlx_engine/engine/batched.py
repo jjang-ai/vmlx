@@ -260,6 +260,45 @@ class BatchedEngine(BaseEngine):
             )
         return folded
 
+    @staticmethod
+    def _normalize_tool_call_arguments_for_template(
+        messages: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        """Return messages whose assistant tool-call arguments are mappings."""
+        normalized: list[dict[str, Any]] = []
+        for message in messages:
+            if not isinstance(message, dict):
+                normalized.append(message)
+                continue
+            msg = dict(message)
+            tool_calls = msg.get("tool_calls")
+            if isinstance(tool_calls, list):
+                copied_calls: list[Any] = []
+                for tool_call in tool_calls:
+                    if not isinstance(tool_call, dict):
+                        copied_calls.append(tool_call)
+                        continue
+                    copied_call = dict(tool_call)
+                    function = copied_call.get("function")
+                    if isinstance(function, dict):
+                        copied_function = dict(function)
+                        arguments = copied_function.get("arguments")
+                        if isinstance(arguments, str):
+                            try:
+                                import json
+
+                                parsed = json.loads(arguments)
+                            except (json.JSONDecodeError, TypeError, ValueError):
+                                parsed = {}
+                            copied_function["arguments"] = (
+                                parsed if isinstance(parsed, dict) else {}
+                            )
+                        copied_call["function"] = copied_function
+                    copied_calls.append(copied_call)
+                msg["tool_calls"] = copied_calls
+            normalized.append(msg)
+        return normalized
+
     def _mimo_text_only_chat_template(
         self,
         messages: list[dict[str, Any]],
@@ -291,6 +330,9 @@ class BatchedEngine(BaseEngine):
 
         rendered_messages = self._fold_leading_system_into_first_user(
             self._collapse_text_only_content_lists(messages)
+        )
+        rendered_messages = self._normalize_tool_call_arguments_for_template(
+            rendered_messages
         )
         prompt = get_chat_template(
             processor,

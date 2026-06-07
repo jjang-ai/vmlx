@@ -475,6 +475,73 @@ def _required_tool_payload(model: str, max_tokens: int, *, prompt_style: str = "
     }
 
 
+def _tool_result_continuation_payload(model: str, max_tokens: int) -> dict[str, Any]:
+    call_id = "call_smoke_record_fact"
+    return {
+        "model": model,
+        "messages": [
+            {
+                "role": "user",
+                "content": (
+                    "Use the record_fact tool exactly once with value blue-cat. "
+                    "Do not answer in visible text."
+                ),
+            },
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": call_id,
+                        "type": "function",
+                        "function": {
+                            "name": "record_fact",
+                            "arguments": "{\"value\":\"blue-cat\"}",
+                        },
+                    }
+                ],
+            },
+            {
+                "role": "tool",
+                "tool_call_id": call_id,
+                "name": "record_fact",
+                "content": "{\"ok\":true,\"stored\":\"blue-cat\"}",
+            },
+            {
+                "role": "user",
+                "content": (
+                    "The tool has completed. Do not call another tool. "
+                    "Reply with exactly: STORED blue-cat"
+                ),
+            },
+        ],
+        "temperature": 0,
+        "max_tokens": max_tokens,
+        "stream": False,
+        "enable_thinking": False,
+        "tool_choice": "none",
+        "tools": [
+            {
+                "type": "function",
+                "function": {
+                    "name": "record_fact",
+                    "description": "Record one exact fact for a smoke test.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "value": {
+                                "type": "string",
+                                "description": "The exact value to record.",
+                            }
+                        },
+                        "required": ["value"],
+                    },
+                },
+            }
+        ],
+    }
+
+
 def _is_lfm_row(row: dict[str, Any]) -> bool:
     blob = " ".join(
         str(row.get(key, "")).lower()
@@ -660,6 +727,15 @@ def build_probe_payloads(
                     model,
                     max(_lfm_strict_probe_max_tokens(row, max_tokens), 96),
                     prompt_style=_tool_prompt_style(row),
+                ),
+            }
+        )
+        probes.append(
+            {
+                "label": "tool_result_continuation",
+                "payload": _tool_result_continuation_payload(
+                    model,
+                    max(_lfm_strict_probe_max_tokens(row, max_tokens), 96),
                 ),
             }
         )
@@ -945,6 +1021,39 @@ def validate_probe_response(
                         "actual": parsed_args,
                     }
                 )
+    elif label == "tool_result_continuation":
+        if tool_calls:
+            failures.append(
+                {
+                    "label": label,
+                    "reason": "unexpected_tool_call_after_tool_result",
+                    "tool_calls": tool_calls,
+                }
+            )
+        if stripped != "STORED blue-cat":
+            failures.append(
+                {
+                    "label": label,
+                    "reason": "expected_tool_result_summary_missing",
+                    "expected": "STORED blue-cat",
+                }
+            )
+        raw_markup_needles = (
+            "<tool_call",
+            "</tool_call",
+            "<function",
+            "</function",
+            "tool_calls",
+            "record_fact(",
+        )
+        if any(needle in stripped for needle in raw_markup_needles):
+            failures.append(
+                {
+                    "label": label,
+                    "reason": "raw_tool_markup_leak",
+                    "content_head": stripped[:160],
+                }
+            )
     elif label.startswith("text_cache_repeat") and stripped != (expected_content or "ACK"):
         failures.append(
             {
@@ -1341,7 +1450,7 @@ def main() -> int:
     parser.add_argument(
         "--include-tools",
         action="store_true",
-        help="Add an explicit Chat Completions tool_choice=required probe.",
+        help="Add explicit Chat Completions tool_choice=required and tool-result continuation probes.",
     )
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
