@@ -124,6 +124,41 @@ def _apply_turboquant_to_model(model, model_path: str):
     if not hasattr(model, "layers") or not model.layers:
         return
 
+    def _object_declares_mimo_v2(obj) -> bool:
+        seen: set[int] = set()
+        stack = [obj]
+        while stack:
+            current = stack.pop()
+            if current is None or id(current) in seen:
+                continue
+            seen.add(id(current))
+            model_type = getattr(current, "model_type", None)
+            if str(model_type or "").lower() == "mimo_v2":
+                return True
+            if isinstance(current, dict):
+                if str(current.get("model_type", "")).lower() == "mimo_v2":
+                    return True
+                text_cfg = current.get("text_config")
+                if isinstance(text_cfg, dict):
+                    stack.append(text_cfg)
+                continue
+            for attr in ("config", "args", "text_config", "inner", "language_model"):
+                try:
+                    value = getattr(current, attr, None)
+                except Exception:
+                    value = None
+                if value is not None:
+                    stack.append(value)
+        return False
+
+    if _object_declares_mimo_v2(model):
+        logger.info(
+            "  TurboQuant skipped: MiMo-V2 uses native asymmetric full/SWA "
+            "RotatingKVCache metadata; flat generic TQ-KV would violate the "
+            "mixed_swa_kv_v1 cache contract."
+        )
+        return
+
     # MLA models (DeepSeek V2/V3, GLM-5.1, Mistral 4) use CacheList(KVCache, KVCache)
     # per layer. TQ flat cache breaks CacheList structure → BatchGenerator fails.
     # Centralized via model_inspector.is_mla_model() so this stays in sync with

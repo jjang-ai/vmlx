@@ -7268,6 +7268,31 @@ class TestStartupCompatibilityGuards:
         assert model.make_cache.__func__ is FakeModel.make_cache
         assert [type(c).__name__ for c in model.make_cache()] == ["FakeCache"] * 48
 
+    def test_tokenizer_skips_turboquant_for_mimo_v2_by_loaded_model_object(
+        self,
+        monkeypatch,
+    ):
+        """MiMo skip must not depend on model_path being a local directory."""
+        from vmlx_engine.utils.tokenizer import _apply_turboquant_to_model
+
+        class FakeCache:
+            pass
+
+        class FakeModel:
+            layers = [object()] * 48
+            inner = SimpleNamespace(args=SimpleNamespace(model_type="mimo_v2"))
+
+            def make_cache(self):
+                return [FakeCache()] * 48
+
+        model = FakeModel()
+        monkeypatch.delenv("VMLINUX_DISABLE_TQ_KV", raising=False)
+
+        _apply_turboquant_to_model(model, "JANGQ-AI/MiMo-V2.5-JANG_2L")
+
+        assert model.make_cache.__func__ is FakeModel.make_cache
+        assert [type(c).__name__ for c in model.make_cache()] == ["FakeCache"] * 48
+
     def test_vmlx_env_prefix_is_canonical_for_ssm_cache_budget(self):
         """New cache env knobs should use VMLX_, with typo fallback only."""
         cli_source = Path("./vmlx_engine/cli.py").read_text()
