@@ -628,7 +628,7 @@ def _write_qwen_green_artifacts(tmp_path: Path) -> None:
 def _write_issue179_green_artifact(tmp_path: Path) -> None:
     _write_json(
         tmp_path
-        / "build/current-issue179-minimax-k-root-cause-audit-after-qwen-installed-video-wiring-20260607.json",
+        / "build/current-issue179-minimax-k-root-cause-audit-after-local-repro-memory-preflight-20260607.json",
         {
             "status": "pass",
             "proven": {
