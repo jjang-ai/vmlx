@@ -1682,7 +1682,7 @@ def test_current_regression_suite_runs_model_family_detection_contracts(monkeypa
         for _name, cmd in seen_steps
     )
     assert any(
-        "build/current-model-family-detection-contract-after-jangtq2-objective-refresh-20260607.json"
+        "build/current-model-family-detection-contract-after-mimo-capability-snapshot-fix-20260607.json"
         in " ".join(cmd)
         for _name, cmd in seen_steps
     )
@@ -1779,7 +1779,7 @@ def test_current_regression_suite_runs_cache_architecture_contracts(monkeypatch,
         for _name, cmd in seen_steps
     )
     assert any(
-        "build/current-cache-architecture-contract-after-mllm-tight-memory-guard-20260607.json"
+        "build/current-cache-architecture-contract-after-mimo-capability-snapshot-fix-20260607.json"
         in " ".join(cmd)
         for _name, cmd in seen_steps
     )
@@ -1917,7 +1917,7 @@ def test_current_regression_suite_runs_tool_call_contracts(monkeypatch, tmp_path
     assert any(name == "tool_call_contracts" for name, _cmd in seen_steps)
     assert any(
         "run_tool_call_contract.py" in " ".join(cmd)
-        and "current-tool-call-contract-after-jangtq2-objective-refresh-20260607.json" in " ".join(cmd)
+        and "current-tool-call-contract-after-current-mimo-proof-20260607.json" in " ".join(cmd)
         for _name, cmd in seen_steps
     )
 

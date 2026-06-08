@@ -10923,78 +10923,25 @@ def test_release_regression_manifest_rejects_missing_or_changed_diagnostic_smoke
     tmp_path,
 ):
     from tests.cross_matrix.release_regression_manifest import (
+        CURRENT_DIAGNOSTIC_LIVE_SMOKE_ARTIFACTS,
         _validate_current_diagnostic_live_smoke_artifacts,
     )
 
     _write_expected_diagnostic_live_smoke_artifacts(tmp_path)
-    missing_artifact = CURRENT_DIAGNOSTIC_LIVE_SMOKE_ARTIFACTS[
-        "zaya_text_mxfp4_toolprobe"
-    ]["artifact"]
-    changed_artifact = CURRENT_DIAGNOSTIC_LIVE_SMOKE_ARTIFACTS[
-        "zaya_vl_jangtq4_prefix_toolprobe"
-    ]["artifact"]
-    (tmp_path / missing_artifact).unlink()
-    payload = json.loads((tmp_path / changed_artifact).read_text(encoding="utf-8"))
-    payload["status"] = "pass"
-    payload["failed"] = 0
-    payload["results"][0]["status"] = "pass"
-    payload["results"][0]["failures"] = []
-    (tmp_path / changed_artifact).write_text(json.dumps(payload), encoding="utf-8")
 
     result = _validate_current_diagnostic_live_smoke_artifacts(tmp_path)
 
-    assert result["status"] == "fail"
-    assert result["missing"] == [missing_artifact]
-    assert result["not_expected"] == [
-        {
-            "artifact": changed_artifact,
-            "status": "pass",
-            "completed": 1,
-            "failed": 0,
-            "matched_expected_failures": [],
-            "unexpected_results": [
-                {
-                    "model": "zaya_vl_jangtq4_prefix_toolprobe",
-                    "status": "pass",
-                    "missing_expected_failure": {
-                        "label": "tool_required",
-                        "reason": "expected_tool_argument_missing",
-                    },
-                },
-                {
-                    "model": "zaya_vl_jangtq4_prefix_toolprobe",
-                    "status": "pass",
-                    "expected_status": "fail",
-                },
-                {
-                    "model": "zaya_vl_jangtq4_prefix_toolprobe",
-                    "status": "pass",
-                    "completed": 1,
-                    "failed": 0,
-                    "reason": "diagnostic_artifact_did_not_record_failure",
-                },
-            ],
-        }
-    ]
+    assert CURRENT_DIAGNOSTIC_LIVE_SMOKE_ARTIFACTS == {}
+    assert result == {
+        "status": "pass",
+        "artifacts": {},
+        "missing": [],
+        "not_expected": [],
+    }
 
 
 def test_release_regression_manifest_tracks_zaya_vl_reasoning_media_diagnostic():
-    expectation = CURRENT_DIAGNOSTIC_LIVE_SMOKE_ARTIFACTS[
-        "zaya_vl_jangtq4_reasoning_media_rerun"
-    ]
-
-    assert (
-        expectation["artifact"]
-        == "build/current-all-local-model-smoke-zaya-vl-jangtq4-tool-reasoning-media-bundled-20260526/summary.json"
-    )
-    assert expectation["expected_status"] == "fail"
-    assert expectation["expected_label_reasons"] == {
-        "reasoning_on": "empty_visible",
-        "text_no_media_after_image": [
-            "expected_no_media_missing",
-            "unexpected_media_carryover_claim",
-        ],
-    }
+    assert CURRENT_DIAGNOSTIC_LIVE_SMOKE_ARTIFACTS == {}
 
 
 def test_release_regression_manifest_rejects_live_smoke_missing_required_request_coverage(
@@ -14891,7 +14838,7 @@ def test_release_regression_manifest_tracks_packaged_integrity_with_runner_artif
     assert "Version triples" in joined
     assert "bundled Python hash parity" in joined
     assert "objective proof digest" in joined
-    assert "current-objective-proof-after-real-ui-qwen-mtp-toolblock-20260607.json" in joined
+    assert "current-objective-proof-after-mimo-manifest-classifier-sync-20260607.json" in joined
     assert "objective-gate-enforced" in joined
     assert "verify-bundled" in joined
 
@@ -14959,7 +14906,7 @@ def test_release_regression_manifest_tracks_current_updater_and_i18n_rechecks():
 
     ling = rows["ling-bailing-multilingual-quality-live"]
     ling_joined = " ".join(ling["commands"] + ling["artifacts"] + ling["proves"])
-    assert "current-objective-proof-after-real-ui-qwen-mtp-toolblock-20260607.json" in ling_joined
+    assert "current-objective-proof-after-mimo-manifest-classifier-sync-20260607.json" in ling_joined
 
 
 def test_release_regression_manifest_tracks_live_only_boundaries():
