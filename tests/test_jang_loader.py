@@ -221,6 +221,104 @@ class TestJangDetection:
             "lm_head": 8,
         }
 
+    def test_large_expert_bfloat16_compute_applies_to_397b_shape(self, tmp_path):
+        import mlx.core as mx
+        from vmlx_engine.utils.jang_loader import _apply_large_expert_bfloat16_compute
+
+        class _Model:
+            dtype = None
+
+            def set_dtype(self, dtype):
+                self.dtype = dtype
+
+        model = _Model()
+
+        assert _apply_large_expert_bfloat16_compute(
+            model,
+            tmp_path,
+            {
+                "model_type": "qwen3_5_moe",
+                "text_config": {
+                    "model_type": "qwen3_5_moe_text",
+                    "hidden_size": 4096,
+                    "num_experts": 512,
+                },
+            },
+        ) is True
+        assert model.dtype == mx.bfloat16
+
+    def test_jangtq_fast_paths_apply_large_expert_bfloat16_before_return(self):
+        source = Path("vmlx_engine/utils/jang_loader.py").read_text()
+
+        text_idx = source.index("model, tokenizer = _load_jangtq")
+        text_return_idx = source.index("return model, tokenizer", text_idx)
+        assert "_apply_large_expert_bfloat16_compute(" in source[text_idx:text_return_idx]
+
+        vlm_idx = source.index("_hydrate_jangtq_model(")
+        vlm_return_idx = source.index("return _vlm_model, _vlm_processor", vlm_idx)
+        assert "_apply_large_expert_bfloat16_compute(" in source[vlm_idx:vlm_return_idx]
+
+    def test_prepare_jangtq_vlm_first_forward_installs_split_and_warmup(self, monkeypatch):
+        import sys
+        import types
+        from vmlx_engine.utils import jang_loader
+
+        calls = []
+        fake = types.ModuleType("jang_tools.load_jangtq_kimi_vlm")
+
+        def _install(model):
+            calls.append("split")
+            model._jang_cb_split = True
+
+        def _warm(model):
+            calls.append("warm")
+            model._jang_warmed = True
+
+        fake._install_vl_command_buffer_split = _install
+        fake._warmup_jit_per_layer = _warm
+        monkeypatch.setitem(sys.modules, "jang_tools.load_jangtq_kimi_vlm", fake)
+
+        model = types.SimpleNamespace()
+        assert jang_loader._prepare_jangtq_vlm_first_forward(model) is True
+        assert calls == ["split", "warm"]
+        assert model._jang_cb_split is True
+        assert model._jang_warmed is True
+
+    def test_prepare_jangtq_vlm_first_forward_falls_back_to_prefill(self, monkeypatch):
+        import sys
+        import types
+        from vmlx_engine.utils import jang_loader
+
+        calls = []
+        fake = types.ModuleType("jang_tools.load_jangtq_kimi_vlm")
+
+        def _install(model):
+            calls.append("split")
+            model._jang_cb_split = True
+
+        def _warm(model):
+            calls.append("warm")
+            raise AttributeError("'NoneType' object has no attribute 'offset'")
+
+        fake._install_vl_command_buffer_split = _install
+        fake._warmup_jit_per_layer = _warm
+        monkeypatch.setitem(sys.modules, "jang_tools.load_jangtq_kimi_vlm", fake)
+        monkeypatch.setattr(
+            jang_loader,
+            "_warmup_jangtq_vlm_language_prefill",
+            lambda model, **kwargs: calls.append("prefill"),
+        )
+
+        assert jang_loader._prepare_jangtq_vlm_first_forward(types.SimpleNamespace()) is True
+        assert calls == ["split", "warm", "prefill"]
+
+    def test_jangtq_vlm_fast_path_prepares_first_forward_before_return(self):
+        source = Path("vmlx_engine/utils/jang_loader.py").read_text()
+
+        vlm_idx = source.index("_hydrate_jangtq_model(")
+        vlm_return_idx = source.index("return _vlm_model, _vlm_processor", vlm_idx)
+        assert "_prepare_jangtq_vlm_first_forward(" in source[vlm_idx:vlm_return_idx]
+
     def test_detects_jang_affine_weight_format(self, tmp_path):
         from vmlx_engine.utils.jang_loader import is_jang_model
 

@@ -196,6 +196,133 @@ def _prepare_runtime_weight_quantization(
     return config, bits, group_size
 
 
+def _apply_large_expert_bfloat16_compute(
+    model: Any,
+    path: Path,
+    config: dict | None = None,
+    *,
+    log_prefix: str = "  ",
+) -> bool:
+    """Use bfloat16 compute for 512-expert/MLA models that overflow fp16.
+
+    397B-class Qwen/N2 bundles have 512 routed experts at hidden size 4096.
+    Their shared/routed expert products can exceed float16 range even when the
+    quantized weights are valid. The affine JANG loader already applies this
+    rule; JANGTQ fast paths must apply the same compute dtype before returning.
+    """
+    try:
+        model_cfg = config if isinstance(config, dict) else {}
+        if not model_cfg:
+            model_cfg = json.loads((path / "config.json").read_text())
+        text_cfg = model_cfg.get("text_config", model_cfg)
+        if not isinstance(text_cfg, dict):
+            text_cfg = model_cfg
+        n_experts = (
+            text_cfg.get("num_experts")
+            or text_cfg.get("num_local_experts")
+            or text_cfg.get("n_routed_experts")
+            or 0
+        )
+        hidden = text_cfg.get("hidden_size") or 0
+        text_mt = text_cfg.get("model_type", model_cfg.get("model_type", ""))
+        is_mla = (text_cfg.get("kv_lora_rank") or 0) > 0
+        if (n_experts >= 512 and hidden >= 4096) or text_mt == "mistral4" or is_mla:
+            model.set_dtype(mx.bfloat16)
+            reason = "MLA" if is_mla else f"{n_experts} experts"
+            logger.info(
+                "%sbfloat16 enabled: %s, hidden=%s "
+                "(float16 overflow prevention)",
+                log_prefix,
+                reason,
+                hidden,
+            )
+            return True
+    except Exception as exc:
+        logger.warning("%sbfloat16 compute dtype setup skipped: %s", log_prefix, exc)
+    return False
+
+
+def _prepare_jangtq_vlm_first_forward(model: Any, *, log_prefix: str = "  ") -> bool:
+    """Prepare hydrated JANGTQ VLMs before the first server request.
+
+    The text-side jang_tools JANGTQ loader warms Metal kernels before returning.
+    The vMLX VLM fast path hydrates the same TurboQuant modules directly, so it
+    must run the matching VLM command-buffer split and warmup here. Otherwise a
+    397B-class cold first request can put vision/text prefill and shader JIT in
+    one Metal submission and trip the GPU watchdog.
+    """
+    prepared = False
+    try:
+        from jang_tools.load_jangtq_kimi_vlm import (
+            _install_vl_command_buffer_split,
+            _warmup_jit_per_layer,
+        )
+    except Exception as exc:
+        logger.warning("%sJANGTQ VLM warmup unavailable: %s", log_prefix, exc)
+        return False
+
+    try:
+        _install_vl_command_buffer_split(model)
+        if getattr(model, "_jang_cb_split", False):
+            prepared = True
+            logger.info("%sJANGTQ VLM command-buffer split installed", log_prefix)
+    except Exception as exc:
+        logger.warning("%sJANGTQ VLM command-buffer split skipped: %s", log_prefix, exc)
+
+    warmed = False
+    try:
+        _warmup_jit_per_layer(model)
+        warmed = True
+        prepared = True
+        logger.info("%sJANGTQ VLM text-backbone warmup complete", log_prefix)
+    except Exception as exc:
+        logger.warning(
+            "%sJANGTQ VLM layer warmup skipped: %s; trying full-model prefill warmup",
+            log_prefix,
+            exc,
+        )
+
+    if not warmed:
+        try:
+            _warmup_jangtq_vlm_language_prefill(model, log_prefix=log_prefix)
+            prepared = True
+        except Exception as exc:
+            logger.warning("%sJANGTQ VLM full-model warmup skipped: %s", log_prefix, exc)
+
+    return prepared
+
+
+def _warmup_jangtq_vlm_language_prefill(model: Any, *, log_prefix: str = "  ") -> None:
+    """Warm the language backbone for VLM skeletons whose layer API needs cache."""
+    from mlx_lm.models.cache import make_prompt_cache
+
+    lm = getattr(model, "language_model", None) or model
+    cache = make_prompt_cache(lm)
+    tiny_ids = mx.zeros((1, 16), dtype=mx.int32)
+    calls = (
+        lambda: lm(inputs=tiny_ids, cache=cache),
+        lambda: lm(tiny_ids, cache=cache),
+        lambda: lm(tiny_ids),
+    )
+    last_type_error = None
+    for call in calls:
+        try:
+            out = call()
+            if hasattr(out, "logits"):
+                mx.eval(out.logits)
+            else:
+                mx.eval(out)
+            mx.synchronize()
+            logger.info("%sJANGTQ VLM full-model 16-token prefill warmup complete", log_prefix)
+            return
+        except TypeError as exc:
+            last_type_error = exc
+            continue
+    if last_type_error is not None:
+        raise last_type_error
+    raise RuntimeError("no JANGTQ VLM warmup call variant executed")
+
+
 def _supported_routed_group_size(
     path: Path,
     jang_cfg: dict,
@@ -1799,6 +1926,12 @@ def _load_jang_v2(
             # so a failure in one (e.g. cache patching on an unsupported model)
             # does NOT discard a successful 60-GB load.
             _model_cfg_tq = json.loads((path / "config.json").read_text())
+            _apply_large_expert_bfloat16_compute(
+                model,
+                path,
+                _model_cfg_tq,
+                log_prefix="  JANGTQ fast path: ",
+            )
             if not skip_eval:
                 try:
                     _set_wired_limit_for_model(_tq_weight_files)
@@ -2888,6 +3021,16 @@ def _load_jang_v2_vlm(
         # the KV cache knows about the TQ layers.
         if not hasattr(_vlm_model, "config"):
             _vlm_model.config = config
+        _apply_large_expert_bfloat16_compute(
+            _vlm_model,
+            path,
+            config,
+            log_prefix="  JANGTQ VLM fast path: ",
+        )
+        _prepare_jangtq_vlm_first_forward(
+            _vlm_model,
+            log_prefix="  JANGTQ VLM fast path: ",
+        )
         _bind_mimo_v2_preserved_media_weights_from_index(_vlm_model, path)
         try:
             _lang = getattr(_vlm_model, "language_model", None)
