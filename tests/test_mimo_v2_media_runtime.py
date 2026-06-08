@@ -665,6 +665,7 @@ def test_mimo_v2_jangtq_fast_path_binds_indexed_media_weights(tmp_path, monkeypa
         "visual.merger.mlp.2.weight"
     ].tolist()
     assert model.visual.blocks[0].attn.head_dim == 6
+    assert model.visual.vision_head_dim == 6
     assert model.visual.blocks[0].attn.qkv.weight.tolist() == weights[
         "visual.blocks.0.attn.qkv.weight"
     ].tolist()

@@ -1027,6 +1027,11 @@ def _register_mimo_v2_mlx_vlm_runtime() -> None:
                 inferred_head_dim = int(value.shape[0]) // denom
                 attn.head_dim = inferred_head_dim
                 attn.scaling = inferred_head_dim**-0.5
+                try:
+                    visual = _mimo_v2_get_module(root, "visual")
+                    visual.vision_head_dim = inferred_head_dim
+                except Exception:
+                    pass
         parts = dotted.split(".")
         cur = root
         for part in parts[:-1]:
