@@ -844,6 +844,7 @@ def test_mimo_tool_protocol_is_separate_from_literal_argument_exactness(tmp_path
                 "requests": [
                     {
                         "label": "tool_required",
+                        "content": "",
                         "tool_calls": [
                             {
                                 "type": "function",
@@ -874,6 +875,7 @@ def test_mimo_tool_protocol_is_separate_from_literal_argument_exactness(tmp_path
                     },
                     {
                         "label": "mimo_tool_required_sentinel",
+                        "content": "",
                         "tool_calls": [
                             {
                                 "type": "function",
@@ -952,7 +954,56 @@ def test_mimo_tool_protocol_is_separate_from_literal_argument_exactness(tmp_path
         evidence["artifact_exactness_boundary"]["model_generated_literal_mutation"]
         is True
     )
+    assert evidence["artifact_exactness_boundary"]["empty_visible_output"] is False
     assert "tool_required" in evidence["artifact_exactness_boundary"]["failed_labels"]
+
+
+def test_mimo_all_local_smoke_evidence_classifies_empty_visible_output_separately():
+    from tests.cross_matrix import run_mimo_v2_jang2l_current_audit as audit
+
+    smoke = {
+        "status": "fail",
+        "results": [
+            {
+                "status": "probe_failed",
+                "requests": [
+                    {
+                        "label": "mimo_structured_json_sentinel",
+                        "code": 200,
+                        "content": "",
+                        "validation_failures": [
+                            {
+                                "label": "mimo_structured_json_sentinel",
+                                "reason": "empty_visible",
+                            }
+                        ],
+                    }
+                ],
+                "failures": [
+                    {
+                        "label": "mimo_structured_json_sentinel",
+                        "reason": "empty_visible",
+                    }
+                ],
+            }
+        ],
+    }
+
+    evidence = audit._all_local_smoke_evidence(smoke)
+
+    assert evidence["artifact_exactness_boundary"]["classification"] == (
+        "empty_visible_output_after_generation_stop"
+    )
+    assert (
+        evidence["artifact_exactness_boundary"][
+            "parser_structure_valid_for_failed_rows"
+        ]
+        is False
+    )
+    assert evidence["artifact_exactness_boundary"]["empty_visible_output"] is True
+    assert "empty visible output" in evidence["artifact_exactness_boundary"][
+        "release_boundary"
+    ]
 
 
 def test_mimo_object_media_rows_clear_live_media_e2e_separately_from_exactness():

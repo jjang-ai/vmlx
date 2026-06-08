@@ -738,11 +738,16 @@ def _artifact_exactness_boundary(
     examples: list[dict[str, Any]] = []
     parser_structure_valid = True
     literal_mutation = False
+    empty_visible_output = False
     for failure in failures:
         label = str(failure.get("label"))
         request = request_by_label.get(label) or {}
         expected = failure.get("expected")
         actual = failure.get("actual")
+        reason = str(failure.get("reason") or "")
+        content = request.get("content")
+        row_empty_visible = reason == "empty_visible"
+        empty_visible_output = empty_visible_output or row_empty_visible
         validation_failures = request.get("validation_failures")
         if isinstance(validation_failures, list):
             for request_failure in validation_failures:
@@ -750,6 +755,9 @@ def _artifact_exactness_boundary(
                     continue
                 if request_failure.get("label") != label:
                     continue
+                if request_failure.get("reason") == "empty_visible":
+                    row_empty_visible = True
+                    empty_visible_output = True
                 if expected is None:
                     expected = request_failure.get("expected")
                 if actual is None:
@@ -782,15 +790,15 @@ def _artifact_exactness_boundary(
                     break
         elif label in {"structured_json_exact", "mimo_structured_json_sentinel"}:
             structure_kind = "visible_json_object"
-            content = request.get("content")
-            try:
-                parsed = json.loads(content) if isinstance(content, str) else {}
-            except Exception:
-                parsed = {}
-            if isinstance(parsed, dict):
-                structure_valid = True
-                if actual is None:
-                    actual = parsed
+            if not row_empty_visible:
+                try:
+                    parsed = json.loads(content) if isinstance(content, str) else {}
+                except Exception:
+                    parsed = {}
+                if isinstance(parsed, dict):
+                    structure_valid = True
+                    if actual is None:
+                        actual = parsed
         elif label == "tool_result_continuation":
             structure_kind = "visible_tool_result_continuation_text"
             structure_valid = isinstance(request.get("content"), str)
@@ -804,7 +812,7 @@ def _artifact_exactness_boundary(
         examples.append(
             {
                 "label": label,
-                "reason": failure.get("reason"),
+                "reason": reason,
                 "structure_kind": structure_kind,
                 "parser_structure_valid": structure_valid,
                 "expected": expected,
@@ -815,24 +823,44 @@ def _artifact_exactness_boundary(
 
     if parser_structure_valid and literal_mutation:
         classification = "model_generated_literal_mutation_after_valid_parser_structure"
+    elif empty_visible_output:
+        classification = "empty_visible_output_after_generation_stop"
     elif parser_structure_valid:
         classification = "exactness_failure_after_valid_parser_structure"
     else:
         classification = "parser_or_output_structure_failure"
 
-    return {
-        "classification": classification,
-        "parser_structure_valid_for_failed_rows": parser_structure_valid,
-        "model_generated_literal_mutation": literal_mutation,
-        "failed_labels": [str(failure.get("label")) for failure in failures],
-        "examples": examples,
-        "release_boundary": (
+    if empty_visible_output:
+        release_boundary = (
+            "Do not clear MiMo exactness by JSON repair, parser rewrites, "
+            "cache-hit accounting, or hiding failed rows. empty visible output "
+            "after a 200 response/completion token means the remaining blocker "
+            "is generation stop/decode-loop/template interaction or artifact "
+            "quality, not JSON parser mutation."
+        )
+    elif literal_mutation:
+        release_boundary = (
             "Do not clear MiMo exactness by rewriting parsed tool arguments, "
             "repairing generated JSON values, disabling cache, or hiding the "
             "failed rows. Valid parser structure plus wrong literal values "
             "means the remaining blocker is model/runtime decode quality or "
             "artifact quantization, not XML/JSON parser mutation."
-        ),
+        )
+    else:
+        release_boundary = (
+            "Do not clear MiMo exactness by parser repair, prompt-only folding, "
+            "cache disabling, or hiding failed rows. The remaining blocker "
+            "requires runtime/model output proof for the failed exactness rows."
+        )
+
+    return {
+        "classification": classification,
+        "parser_structure_valid_for_failed_rows": parser_structure_valid,
+        "model_generated_literal_mutation": literal_mutation,
+        "empty_visible_output": empty_visible_output,
+        "failed_labels": [str(failure.get("label")) for failure in failures],
+        "examples": examples,
+        "release_boundary": release_boundary,
     }
 
 
