@@ -1339,6 +1339,70 @@ def _runtime_model_type(model: Any) -> str:
     return ""
 
 
+def _mimo_v2_token_trace_enabled() -> bool:
+    return os.environ.get("VMLINUX_MIMO_V2_TOKEN_TRACE", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
+def _trace_mimo_v2_generated_token(
+    generator: Any,
+    request: Any,
+    token_id: Any,
+    *,
+    phase: str,
+    finish_reason: str | None = None,
+) -> None:
+    """Log MiMo generated token IDs for root-cause diagnostics only.
+
+    This is opt-in instrumentation, not a decode policy. It is used to
+    distinguish runtime stop/control-token handling from model/artifact logits
+    quality when MiMo emits an empty one-token response.
+    """
+
+    if not _mimo_v2_token_trace_enabled():
+        return
+    if getattr(generator, "_model_type", "") != "mimo_v2":
+        return
+    try:
+        token_int = int(token_id)
+    except Exception:
+        token_int = token_id
+    tokenizer = getattr(generator.processor, "tokenizer", generator.processor)
+    decoded = None
+    if tokenizer is not None and isinstance(token_int, int):
+        try:
+            decoded = tokenizer.decode([token_int], skip_special_tokens=False)
+        except TypeError:
+            try:
+                decoded = tokenizer.decode([token_int])
+            except Exception:
+                decoded = None
+        except Exception:
+            decoded = None
+    stop_tokens = set(getattr(generator, "stop_tokens", set()) or set())
+    token_ids = getattr(generator, "_mimo_v2_thinking_off_token_ids", {}) or {}
+    logger.info(
+        "MiMo-V2 token trace: request=%s phase=%s token_id=%r decoded=%r "
+        "enable_thinking=%r output_len=%d is_stop=%s finish_reason=%r "
+        "think_ids=%s eos_ids=%s stop_tokens=%s",
+        getattr(request, "request_id", None),
+        phase,
+        token_int,
+        decoded,
+        getattr(request, "enable_thinking", None),
+        len(getattr(request, "output_tokens", []) or []),
+        token_int in stop_tokens if isinstance(token_int, int) else False,
+        finish_reason,
+        sorted(token_ids.get("think_ids", set()) or []),
+        sorted(token_ids.get("eos_ids", set()) or []),
+        sorted(stop_tokens),
+    )
+
+
 def _recompress_to_tq(cache: List[Any], language_model) -> List[Any]:
     """Re-wrap reconstructed KVCache layers into TurboQuantKVCache and compress.
 
@@ -5984,6 +6048,12 @@ class MLLMBatchGenerator:
                     if trace is not None:
                         trace.start("token_item")
                     _sampled_value = sampled.item()
+                    _trace_mimo_v2_generated_token(
+                        self,
+                        req,
+                        _sampled_value,
+                        phase="prefill_sample",
+                    )
                     if trace is not None:
                         trace.stop("token_item")
                     if trace is not None:
@@ -6274,6 +6344,12 @@ class MLLMBatchGenerator:
                             )
                             _native_mtp_async_eval(sampled, logprobs)
                             _sampled_value = sampled.item()
+                            _trace_mimo_v2_generated_token(
+                                self,
+                                req,
+                                _sampled_value,
+                                phase="prefill_sample",
+                            )
                         first_tokens.append(_sampled_value)
                         all_logprobs.append(logprobs.squeeze(0) if logprobs is not None else None)
                         succeeded_requests.append(req)
@@ -6322,6 +6398,12 @@ class MLLMBatchGenerator:
                                     )
                                     _native_mtp_async_eval(sampled, logprobs)
                                     _sampled_value = sampled.item()
+                                    _trace_mimo_v2_generated_token(
+                                        self,
+                                        req,
+                                        _sampled_value,
+                                        phase="prefill_sample",
+                                    )
                                 first_tokens.append(_sampled_value)
                                 all_logprobs.append(logprobs.squeeze(0) if logprobs is not None else None)
                                 succeeded_requests.append(req)
@@ -7445,6 +7527,14 @@ class MLLMBatchGenerator:
                 end_idx.append(i)
             else:
                 keep_idx.append(i)
+
+            _trace_mimo_v2_generated_token(
+                self,
+                req,
+                token,
+                phase="response_step",
+                finish_reason=finish_reason,
+            )
 
             if finish_reason is not None:
                 mtp_state_for_finish = getattr(req, "_native_mtp_state", None)

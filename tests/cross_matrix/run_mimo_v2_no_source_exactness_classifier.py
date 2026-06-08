@@ -46,7 +46,7 @@ DEFAULT_JANG2L_LITERAL_VARIANTS = Path(
     "build/current-mimo-v25-jang2l-exactness-tight64-parser-cache-skip-variant-probe-20260608/JANGQ_MiMo-V2.5-JANG_2L/result.json"
 )
 DEFAULT_JANG2L_JSON_SENTINEL_ISOLATION = Path(
-    "build/current-mimo-v25-jang2l-json-sentinel-isolation-20260608/JANGQ_MiMo-V2.5-JANG_2L/result.json"
+    "build/current-mimo-v25-jang2l-json-sentinel-after-enable-thinking-forward-20260608/summary.json"
 )
 
 EXACTNESS_REASONS = {
@@ -215,6 +215,49 @@ def _literal_variant_summary(artifact: dict[str, Any] | None) -> dict[str, Any]:
 
 
 def _json_sentinel_summary(artifact: dict[str, Any] | None) -> dict[str, Any]:
+    if isinstance(artifact, dict) and "parsed_content" in artifact:
+        content = artifact.get("content")
+        parsed = artifact.get("parsed_content")
+        expected = artifact.get("expected")
+        failed = artifact.get("pass") is not True
+        empty = str(content or "").strip() == ""
+        schema_mutation = (
+            isinstance(parsed, dict)
+            and isinstance(expected, dict)
+            and set(parsed.keys()) != set(expected.keys())
+        )
+        semantic_mismatch = (
+            isinstance(parsed, dict)
+            and isinstance(expected, dict)
+            and set(parsed.keys()) == set(expected.keys())
+            and parsed != expected
+        )
+        failure = {
+            "label": "current_json_sentinel",
+            "content": content,
+            "parsed": parsed,
+            "expected": expected,
+            "completion_tokens": (
+                artifact.get("usage", {}).get("completion_tokens")
+                if isinstance(artifact.get("usage"), dict)
+                else None
+            ),
+        }
+        return {
+            "exists": True,
+            "status": "pass" if artifact.get("pass") is True else "open",
+            "exact_json_pass": artifact.get("pass") is True,
+            "empty_output_labels": ["current_json_sentinel"] if failed and empty else [],
+            "schema_mutation_labels": (
+                ["current_json_sentinel"] if failed and schema_mutation else []
+            ),
+            "semantic_mismatch_labels": (
+                ["current_json_sentinel"] if failed and semantic_mismatch else []
+            ),
+            "failed_labels": ["current_json_sentinel"] if failed else [],
+            "failures": [failure] if failed else [],
+        }
+
     requests = artifact.get("requests") if isinstance(artifact, dict) else None
     if not isinstance(requests, list):
         return {
@@ -222,6 +265,7 @@ def _json_sentinel_summary(artifact: dict[str, Any] | None) -> dict[str, Any]:
             "exact_json_pass": None,
             "empty_output_labels": [],
             "schema_mutation_labels": [],
+            "semantic_mismatch_labels": [],
             "failed_labels": [],
             "failures": [],
         }
@@ -253,6 +297,14 @@ def _json_sentinel_summary(artifact: dict[str, Any] | None) -> dict[str, Any]:
         and isinstance(failure.get("expected"), dict)
         and set(failure["parsed"].keys()) != set(failure["expected"].keys())
     ]
+    semantic_mismatch_labels = [
+        failure["label"]
+        for failure in failures
+        if isinstance(failure.get("parsed"), dict)
+        and isinstance(failure.get("expected"), dict)
+        and set(failure["parsed"].keys()) == set(failure["expected"].keys())
+        and failure["parsed"] != failure["expected"]
+    ]
     return {
         "exists": True,
         "status": artifact.get("status"),
@@ -262,6 +314,7 @@ def _json_sentinel_summary(artifact: dict[str, Any] | None) -> dict[str, Any]:
         ),
         "empty_output_labels": empty_output_labels,
         "schema_mutation_labels": schema_mutation_labels,
+        "semantic_mismatch_labels": semantic_mismatch_labels,
         "failed_labels": [failure["label"] for failure in failures],
         "failures": failures,
     }
@@ -438,6 +491,8 @@ def build_classification(
             secondary_classification = "jang2l_json_sentinel_empty_output_open"
         elif jang2l_json_sentinel_summary["schema_mutation_labels"]:
             secondary_classification = "jang2l_json_sentinel_schema_mutation_open"
+        elif jang2l_json_sentinel_summary["semantic_mismatch_labels"]:
+            secondary_classification = "jang2l_json_sentinel_semantic_mismatch_open"
         else:
             secondary_classification = "jang2l_json_sentinel_exactness_open"
 
@@ -457,7 +512,7 @@ def build_classification(
         )
     if unresolved_surfaces["jang2l_json_sentinel_exactness"]:
         required_next_evidence.append(
-            "JANG_2L remains blocked on JSON sentinel exactness: empty one-token outputs and schema-key mutation must be explained without JSON repair or prompt-only folding"
+            "JANG_2L remains blocked on JSON sentinel exactness: exact semantic values must match after runtime thinking-off forwarding; do not repair semantic values or prompt-fold a fake pass"
         )
 
     return {

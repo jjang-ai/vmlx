@@ -414,3 +414,74 @@ def test_mimo_no_source_classifier_tracks_jang2l_json_sentinel_separately():
     assert artifact["jang2l_json_sentinel_summary"]["schema_mutation_labels"] == [
         "lower_value_control"
     ]
+
+
+def test_mimo_no_source_classifier_tracks_current_jang2l_json_semantic_mismatch():
+    audit = {
+        "component_ok": {
+            "api_cache_responses_contract": True,
+            "tool_protocol": True,
+            "exactness_cache_kv_quant_excluded": True,
+            "decode_speed_target": True,
+            "source_vs_quant_first_divergence": False,
+            "long_prompt_coherence": True,
+            "cb_system_prompt_working_set_pressure": True,
+            "mimo_media_wired": True,
+        }
+    }
+    smoke = {"results": []}
+    literal_variants = {
+        "status": "open",
+        "requests": [
+            {
+                "label": "plain_exact_blue_cat",
+                "pass": False,
+                "content": "blue cat",
+                "expected": "blue-cat",
+            },
+        ],
+    }
+    jang2l_literal_variants = {
+        "status": "open",
+        "requests": [
+            {
+                "label": "plain_exact_blue_cat",
+                "pass": True,
+                "content": "blue-cat",
+                "expected": "blue-cat",
+            },
+            {
+                "label": "tool_blue_cat",
+                "pass": True,
+                "parsed": {"value": "blue-cat"},
+                "expected": {"value": "blue-cat"},
+            },
+        ],
+    }
+    jang2l_json_sentinel = {
+        "http_status": 200,
+        "finish_reason": "stop",
+        "content": '{"status":"ok","value":"B7-CAT-09","count":1}',
+        "parsed_content": {"status": "ok", "value": "B7-CAT-09", "count": 1},
+        "expected": {"status": "ok", "value": "B7-CAT-09", "count": 3},
+        "usage": {"completion_tokens": 20},
+        "pass": False,
+    }
+
+    artifact = build_classification(
+        audit,
+        smoke,
+        literal_variants=literal_variants,
+        jang2l_literal_variants=jang2l_literal_variants,
+        jang2l_json_sentinel=jang2l_json_sentinel,
+    )
+
+    assert artifact["secondary_classification"] == (
+        "jang2l_json_sentinel_semantic_mismatch_open"
+    )
+    assert artifact["unresolved_surfaces"]["jang2l_json_sentinel_exactness"] is True
+    assert artifact["jang2l_json_sentinel_summary"]["empty_output_labels"] == []
+    assert artifact["jang2l_json_sentinel_summary"]["schema_mutation_labels"] == []
+    assert artifact["jang2l_json_sentinel_summary"]["semantic_mismatch_labels"] == [
+        "current_json_sentinel"
+    ]

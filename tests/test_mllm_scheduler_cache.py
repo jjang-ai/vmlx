@@ -22,6 +22,7 @@ from vmlx_engine.mllm_scheduler import MLLMSchedulerConfig, MLLMScheduler
 from vmlx_engine.mllm_batch_generator import (
     MLLMBatchGenerator,
     _prefix_hit_tail_and_cached_tokens as _mllm_prefix_hit_tail_and_cached_tokens,
+    _trace_mimo_v2_generated_token,
 )
 
 
@@ -116,6 +117,97 @@ def test_mimo_v2_generator_detects_inner_language_model_type_for_processors():
     request.output_tokens = [7]
     later_token = processors[1](mx.array([42, 7]), logits)
     assert float(later_token[0, 9]) == 0.0
+
+
+def test_mimo_v2_token_trace_is_opt_in_and_reports_decoded_stop(caplog, monkeypatch):
+    """MiMo token tracing must be diagnostic-only and include stop evidence."""
+    import logging
+
+    class Tokenizer:
+        def decode(self, ids, skip_special_tokens=False):
+            assert ids == [9]
+            assert skip_special_tokens is False
+            return "<|im_end|>"
+
+    generator = SimpleNamespace(
+        _model_type="mimo_v2",
+        processor=SimpleNamespace(tokenizer=Tokenizer()),
+        stop_tokens={9},
+        _mimo_v2_thinking_off_token_ids={
+            "think_ids": {1, 2},
+            "eos_ids": {9},
+        },
+    )
+    request = SimpleNamespace(
+        request_id="json-stop",
+        enable_thinking=False,
+        output_tokens=[],
+    )
+
+    caplog.set_level(logging.INFO, logger="vmlx_engine.mllm_batch_generator")
+    _trace_mimo_v2_generated_token(
+        generator,
+        request,
+        9,
+        phase="prefill_sample",
+        finish_reason="stop",
+    )
+    assert "MiMo-V2 token trace" not in caplog.text
+
+    monkeypatch.setenv("VMLINUX_MIMO_V2_TOKEN_TRACE", "1")
+    _trace_mimo_v2_generated_token(
+        generator,
+        request,
+        9,
+        phase="prefill_sample",
+        finish_reason="stop",
+    )
+
+    assert "MiMo-V2 token trace" in caplog.text
+    assert "request=json-stop" in caplog.text
+    assert "decoded='<|im_end|>'" in caplog.text
+    assert "is_stop=True" in caplog.text
+    assert "eos_ids=[9]" in caplog.text
+
+
+def test_batched_mllm_generate_forwards_enable_thinking_to_scheduler():
+    """Non-streaming batched MLLM requests must preserve thinking-off state."""
+    import asyncio
+
+    from vmlx_engine.engine.batched import BatchedEngine
+
+    captured = {}
+
+    class Scheduler:
+        async def generate(self, **kwargs):
+            captured.update(kwargs)
+            return SimpleNamespace(
+                output_text="ACK",
+                output_token_ids=[1],
+                prompt_tokens=1,
+                completion_tokens=1,
+                cached_tokens=0,
+                cache_detail="",
+                finish_reason="stop",
+            )
+
+    engine = BatchedEngine.__new__(BatchedEngine)
+    engine._loaded = True
+    engine._is_mllm = True
+    engine._mllm_scheduler = Scheduler()
+
+    output = asyncio.run(
+        engine.generate(
+            prompt="rendered",
+            max_tokens=8,
+            temperature=0,
+            top_p=1,
+            enable_thinking=False,
+        )
+    )
+
+    assert output.text == "ACK"
+    assert captured["enable_thinking"] is False
 
 
 def test_mimo_v2_cache_extraction_preserves_swa_kv_heads():

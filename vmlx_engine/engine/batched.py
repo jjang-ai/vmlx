@@ -1569,6 +1569,7 @@ class BatchedEngine(BaseEngine):
                 video_max_frames=kwargs.get("video_max_frames"),
                 num_messages=kwargs.get("num_messages", 1),
                 gen_prompt_len=kwargs.get("gen_prompt_len", 0),
+                enable_thinking=kwargs.get("enable_thinking"),
                 bypass_prefix_cache=bypass_prefix_cache,
                 request_id=request_id,
                 max_prompt_tokens=max_prompt_tokens,
