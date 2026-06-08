@@ -1221,6 +1221,17 @@ class TestIssueGuards:
         assert "mx.clear_cache()" in image_forward
         assert "output = self.model(input_ids, **kwargs)" in image_forward
 
+    def test_mimo_audio_media_prefill_uses_guard_before_wrapper_forward(self):
+        import inspect
+        import vmlx_engine.mllm_batch_generator as _m
+
+        src = inspect.getsource(_m.MLLMBatchGenerator._run_vision_encoding_inner)
+        wrapper_forward = src[src.index("output = self.model(input_ids, **kwargs)") - 900 :]
+
+        assert "has_audio_payload=has_audio_payload" in wrapper_forward
+        assert "_raise_if_image_prefill_exceeds_budget" in wrapper_forward
+        assert "output = self.model(input_ids, **kwargs)" in wrapper_forward
+
     def test_vmlx156_media_preprocess_tightens_allocator_cache_before_processor(self):
         """Retained image history must not enter mlx-vlm preprocessing with the
         text-decode allocator cache limit still active.

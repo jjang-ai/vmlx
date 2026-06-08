@@ -626,6 +626,7 @@ def _resolve_vlm_image_prefill_single_buffer_limit(
 def _raise_if_image_prefill_exceeds_budget(
     *,
     has_images: bool,
+    has_audio_payload: bool = False,
     seq_len: int,
     language_model: Any,
 ) -> None:
@@ -654,7 +655,7 @@ def _raise_if_image_prefill_exceeds_budget(
     single_buffer_limit = _resolve_vlm_image_prefill_single_buffer_limit(max_ws)
 
     decision = _vlm_image_prefill_budget(
-        has_images=has_images,
+        has_images=bool(has_images or has_audio_payload),
         seq_len=seq_len,
         num_attention_heads=_infer_attention_heads_for_hybrid_oom_guard(
             language_model
@@ -5219,6 +5220,7 @@ class MLLMBatchGenerator:
             mx.clear_cache()
         _raise_if_image_prefill_exceeds_budget(
             has_images=has_images,
+            has_audio_payload=has_audio_payload,
             seq_len=seq_len,
             language_model=self.language_model,
         )

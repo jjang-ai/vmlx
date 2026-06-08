@@ -25,7 +25,7 @@ from typing import Any
 DEFAULT_MODEL_PATH = Path("/Users/example/.mlxstudio/models/JANGQ-AI/MiMo-V2.5-JANGTQ_2")
 DEFAULT_MANIFEST = Path("build/current-mimo-jangtq2-local-manifest-20260607.tsv")
 DEFAULT_OUT = Path(
-    "build/current-mimo-v2-jang2l-current-audit-after-total-budget-prefill-guard-20260608.json"
+    "build/current-mimo-v2-jang2l-current-audit-after-audio-prefill-guard-20260608.json"
 )
 
 STRUCTURAL_ARTIFACT = Path("build/current-mimo-jang2l-local-structural-verify-20260606.json")
@@ -43,7 +43,7 @@ ALL_LOCAL_SMOKE_ARTIFACT = Path(
     "build/current-all-local-model-smoke-mimo-v25-jangtq2-media-l2-after-cache-cap-20260608/summary.json"
 )
 JANG2L_ALL_LOCAL_SMOKE_ARTIFACT = Path(
-    "build/current-all-local-model-smoke-mimo-v25-jang2l-nomedia-after-total-budget-prefill-guard-20260608/summary.json"
+    "build/current-all-local-model-smoke-mimo-v25-jang2l-media-l2-after-audio-prefill-guard-20260608/summary.json"
 )
 KVNONE_NOPREFIX_SMOKE_ARTIFACT = Path(
     "build/current-all-local-model-smoke-mimo-v25-jangtq2-bundled-tools-nomedia-kvnone-noprefix-20260607/summary.json"
@@ -476,6 +476,29 @@ def _all_local_smoke_evidence(data: dict[str, Any]) -> dict[str, Any]:
     else:
         audio_waveform_classification = "audio_waveform_e2e_missing_or_failed"
 
+    media_prefill_budget_labels = [
+        label
+        for label in [
+            "vl_blue_image",
+            "vl_blue_image_repeat",
+            "vl_red_image_changed",
+            "vl_blue_video",
+            "audio_blue",
+        ]
+        if isinstance(requests_by_label.get(label), dict)
+        and requests_by_label[label].get("code") == 413
+    ]
+    post_media_working_set_pressure_labels = [
+        label
+        for label in [
+            "text_no_media_after_image",
+            "text_no_media_after_video",
+            "text_no_media_after_audio",
+        ]
+        if isinstance(requests_by_label.get(label), dict)
+        and requests_by_label[label].get("code") == 503
+    ]
+
     tool_protocol_pass = False
     for request in requests:
         if not isinstance(request, dict) or request.get("label") != "tool_required":
@@ -654,6 +677,14 @@ def _all_local_smoke_evidence(data: dict[str, Any]) -> dict[str, Any]:
         "audio_waveform_e2e_classification": audio_waveform_classification,
         "audio_waveform_e2e_labels": audio_waveform_e2e_labels,
         "audio_waveform_e2e_failures": audio_waveform_failures,
+        "typed_media_prefill_budget_rejection": bool(media_prefill_budget_labels),
+        "typed_media_prefill_budget_rejection_labels": media_prefill_budget_labels,
+        "post_media_working_set_pressure_rejection": bool(
+            post_media_working_set_pressure_labels
+        ),
+        "post_media_working_set_pressure_rejection_labels": (
+            post_media_working_set_pressure_labels
+        ),
         "exact_cache_blocked": exact_cache_blocked,
         "speed_blocked": speed_blocked,
         "generation_tps": generation_tps,
@@ -2645,6 +2676,12 @@ def build_audit(root: Path, model_path: Path, manifest: Path) -> dict[str, Any]:
     mimo_jang2l_tight_memory_prompt_budget_blocked = bool(
         jang2l_smoke_evidence.get("typed_tight_memory_prompt_rejection")
     )
+    mimo_jang2l_media_prefill_budget_blocked = bool(
+        jang2l_smoke_evidence.get("typed_media_prefill_budget_rejection")
+    )
+    mimo_jang2l_post_media_working_set_pressure_blocked = bool(
+        jang2l_smoke_evidence.get("post_media_working_set_pressure_rejection")
+    )
     block_disk_l2_restart_restore_blocked = not bool(
         smoke_evidence.get("block_disk_l2_restart_cache_hit")
     )
@@ -2743,6 +2780,8 @@ def build_audit(root: Path, model_path: Path, manifest: Path) -> dict[str, Any]:
         and mimo_jang2l_live_media_l2
         and not mimo_jang2l_tool_long_prompt_metal_oom_blocked
         and not mimo_jang2l_tight_memory_prompt_budget_blocked
+        and not mimo_jang2l_media_prefill_budget_blocked
+        and not mimo_jang2l_post_media_working_set_pressure_blocked
         and not stale_present
     )
 
@@ -2802,6 +2841,10 @@ def build_audit(root: Path, model_path: Path, manifest: Path) -> dict[str, Any]:
         blockers.append("mimo_jang2l_tool_long_prompt_metal_oom_blocked")
     if mimo_jang2l_tight_memory_prompt_budget_blocked:
         blockers.append("mimo_jang2l_tight_memory_prompt_budget_blocked")
+    if mimo_jang2l_media_prefill_budget_blocked:
+        blockers.append("mimo_jang2l_media_prefill_budget_blocked")
+    if mimo_jang2l_post_media_working_set_pressure_blocked:
+        blockers.append("mimo_jang2l_post_media_working_set_pressure_blocked")
     if not media_runtime_wired:
         blockers.append("mimo_media_runtime_implementation_missing")
     if not media_metadata_ok:
@@ -2895,6 +2938,12 @@ def build_audit(root: Path, model_path: Path, manifest: Path) -> dict[str, Any]:
             ),
             "mimo_jang2l_tight_memory_prompt_budget": bool(
                 mimo_jang2l_tight_memory_prompt_budget_blocked
+            ),
+            "mimo_jang2l_media_prefill_budget": bool(
+                mimo_jang2l_media_prefill_budget_blocked
+            ),
+            "mimo_jang2l_post_media_working_set_pressure": bool(
+                mimo_jang2l_post_media_working_set_pressure_blocked
             ),
             "manual_sink_does_not_clear_length_generation": bool(sink_mode_fails),
             "disable_sink_does_not_clear_length_generation": bool(disable_sink_fails),
