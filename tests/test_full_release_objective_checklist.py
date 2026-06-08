@@ -781,6 +781,20 @@ def test_full_release_objective_checklist_keeps_open_rows_visible(tmp_path):
                 "media_runtime_implementation": False,
                 "mimo_media_wired": False,
             },
+            "diagnostics": {
+                "all_local_smoke": {
+                    "artifact_exactness_boundary": {
+                        "classification": "model_generated_literal_mutation_after_valid_parser_structure",
+                        "failed_labels": ["tool_required"],
+                    }
+                },
+                "jang2l_all_local_smoke": {
+                    "artifact_exactness_boundary": {
+                        "classification": "empty_visible_output_after_generation_stop",
+                        "failed_labels": ["mimo_structured_json_sentinel"],
+                    }
+                },
+            },
         },
     )
     _write_json(
@@ -820,6 +834,21 @@ def test_full_release_objective_checklist_keeps_open_rows_visible(tmp_path):
     assert "mimo_source_vs_quant_first_divergence" not in failed_names
     assert "mimo_source_vs_quant_requirement_satisfied" not in failed_names
     assert "mimo_no_source_classifier_tracks_exactness_boundary" not in failed_names
+    mimo_artifact_rows = [
+        row
+        for row in result["groups"]["mimo_v25_jangtq2"]
+        if row["name"] == "mimo_artifact_exactness"
+    ]
+    assert len(mimo_artifact_rows) == 1
+    assert mimo_artifact_rows[0]["detail"]["jangtq2_boundary"][
+        "classification"
+    ] == "model_generated_literal_mutation_after_valid_parser_structure"
+    assert mimo_artifact_rows[0]["detail"]["jang2l_boundary"]["classification"] == (
+        "empty_visible_output_after_generation_stop"
+    )
+    assert mimo_artifact_rows[0]["detail"]["classifier"]["classification"] == (
+        "jangtq2_compact_hyphen_decode_quality_open_not_cache_parser_template_tokenizer"
+    )
     mimo_exactness_rows = [
         row
         for row in result["groups"]["mimo_v25_jangtq2"]

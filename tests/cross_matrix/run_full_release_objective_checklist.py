@@ -282,6 +282,28 @@ def _mimo_checks(data: dict[str, Any], classifier: dict[str, Any]) -> list[dict[
     component_ok = component_ok if isinstance(component_ok, dict) else {}
     blockers = data.get("blockers")
     blockers = blockers if isinstance(blockers, list) else []
+    diagnostics = data.get("diagnostics")
+    diagnostics = diagnostics if isinstance(diagnostics, dict) else {}
+    all_local_smoke = diagnostics.get("all_local_smoke")
+    all_local_smoke = all_local_smoke if isinstance(all_local_smoke, dict) else {}
+    jang2l_smoke = diagnostics.get("jang2l_all_local_smoke")
+    jang2l_smoke = jang2l_smoke if isinstance(jang2l_smoke, dict) else {}
+    classifier_unresolved = classifier.get("unresolved_surfaces")
+    classifier_unresolved = (
+        classifier_unresolved if isinstance(classifier_unresolved, dict) else {}
+    )
+    artifact_exactness_detail = {
+        "blockers": blockers,
+        "jangtq2_boundary": all_local_smoke.get("artifact_exactness_boundary"),
+        "jang2l_boundary": jang2l_smoke.get("artifact_exactness_boundary"),
+        "classifier": {
+            "status": classifier.get("status"),
+            "classification": classifier.get("classification"),
+            "secondary_classification": classifier.get("secondary_classification"),
+            "unresolved_surfaces": classifier_unresolved,
+            "required_next_evidence": classifier.get("required_next_evidence"),
+        },
+    }
     required = [
         "manifest_integrity",
         "decode_speed_target",
@@ -312,10 +334,16 @@ def _mimo_checks(data: dict[str, Any], classifier: dict[str, Any]) -> list[dict[
             blockers,
         ),
     ]
-    rows.extend(
-        _check(f"mimo_{name}", component_ok.get(name) is True, str(MIMO_AUDIT))
-        for name in required
-    )
+    for name in required:
+        detail = artifact_exactness_detail if name == "artifact_exactness" else None
+        rows.append(
+            _check(
+                f"mimo_{name}",
+                component_ok.get(name) is True,
+                str(MIMO_AUDIT),
+                detail,
+            )
+        )
     rows.extend(_mimo_classifier_checks(data, classifier))
     return rows
 
