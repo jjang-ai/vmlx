@@ -15746,6 +15746,10 @@ def test_release_regression_manifest_tracks_native_mtp_with_runner_artifact():
     joined = " ".join(row["commands"] + row["artifacts"] + row["proves"])
 
     assert "run_native_mtp_contract.py" in joined
+    assert "current-native-mtp-contract-after-qwen-gdn-sink-refresh-20260608.json" in joined
+    assert "current-qwen36-mtp-gdn-sink-source-proof-20260606.json" in joined
+    assert "current-qwen35-dense-mtp-gdn-sink-fix-20260606.json" in joined
+    assert "gdn_sink" in joined
     assert "current-native-mtp-contract-20260522-config-only.json" in joined
     assert "current-native-mtp-contract-20260522-dsv4-additional-args.json" in joined
     assert "Native MTP D3" in joined

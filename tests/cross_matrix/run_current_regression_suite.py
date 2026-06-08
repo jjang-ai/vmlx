@@ -612,7 +612,7 @@ CURRENT_SUITE_COMMANDS: dict[str, list[str]] = {
         sys.executable,
         "tests/cross_matrix/run_native_mtp_contract.py",
         "--out",
-        "build/current-native-mtp-contract-after-mimo-capability-snapshot-fix-20260607.json",
+        "build/current-native-mtp-contract-after-qwen-gdn-sink-refresh-20260608.json",
     ],
     "vl_media_cache_contracts": [
         sys.executable,
