@@ -360,7 +360,7 @@ ALL_LOCAL_MODEL_SMOKE_LIVE_SLICE_CURRENT_REL = (
     "build/current-all-local-model-smoke-live-slice-tools-media-continuation-20260606/summary.json"
 )
 ALL_LOCAL_MODEL_SMOKE_MIMO_V2_JANG2L_REL = (
-    "build/current-all-local-model-smoke-mimo-v25-jangtq2-bundled-tools-nomedia-after-do-sample-false-rerun-20260607/summary.json"
+    "build/current-all-local-model-smoke-mimo-v25-jangtq2-object-media-e2e-20260608/summary.json"
 )
 MIMO_V2_JANG2L_STRUCTURAL_VERIFY_REL = (
     "build/current-mimo-jang2l-local-structural-verify-20260606.json"
@@ -378,7 +378,7 @@ MIMO_V2_JANG2L_TOOL_DIALECT_REL = (
     "build/current-mimo-v2-jang2l-tool-dialect-failure-20260606.json"
 )
 MIMO_V2_JANG2L_CURRENT_AUDIT_REL = (
-    "build/current-mimo-v2-jang2l-current-audit-after-do-sample-false-rerun-20260607.json"
+    "build/current-mimo-v2-jang2l-current-audit-after-raw-audio-request-ingestion-20260607.json"
 )
 MIMO_V2_JANG2L_METADATA_TRUTH_REL = (
     "build/current-mimo-v25-jang2l-local-metadata-truth-patch-20260606.json"
@@ -387,7 +387,7 @@ MIMO_V2_JANG2L_CONSERVATIVE_DIAGNOSTIC_REL = (
     "build/current-mimo-conservative-diagnostic-20260606/summary.json"
 )
 MIMO_V2_JANG2L_NOMEDIA_TOOL_CACHE_REL = (
-    "build/current-all-local-model-smoke-mimo-v25-jangtq2-bundled-tools-nomedia-after-do-sample-false-rerun-20260607/summary.json"
+    "build/current-all-local-model-smoke-mimo-v25-jangtq2-object-media-e2e-20260608/summary.json"
 )
 ALL_LOCAL_MODEL_SMOKE_DSV4_JANGTQ_K_REL = (
     "build/current-all-local-model-smoke-dsv4-jangtq-k-tools-cache-20260606/summary.json"
