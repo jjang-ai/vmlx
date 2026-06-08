@@ -1089,7 +1089,7 @@ def test_current_regression_suite_refreshes_release_regression_manifest(monkeypa
     )
     assert any(
         name == "release_regression_manifest"
-        and "build/current-release-regression-manifest-after-mimo-media-runtime-stamp-gate-20260608.json"
+        and "build/current-release-regression-manifest-after-mimo-model-upload-action-20260608.json"
         in cmd
         for name, cmd in seen_steps
     )
@@ -1520,7 +1520,7 @@ def test_current_regression_suite_refreshes_current_objective_digest_artifact(
 
     assert artifact["status"] == "pass"
     assert suite.CURRENT_OBJECTIVE_DIGEST_ARTIFACT == (
-        "build/current-objective-proof-after-jangtq2-live-release-smoke-20260608.json"
+        "build/current-objective-proof-after-mimo-model-upload-action-20260608.json"
     )
     assert any(
         name == "objective_digest"

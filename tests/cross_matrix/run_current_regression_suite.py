@@ -23,7 +23,7 @@ from typing import Any
 
 
 DEFAULT_OUT = Path(
-    "build/current-regression-suite-after-packaged-integrity-pass-20260607.json"
+    "build/current-regression-suite-after-mimo-model-upload-action-20260608.json"
 )
 DEFAULT_STEP_TIMEOUT_SEC = 900.0
 STEP_TIMEOUT_RETURNCODE = 124
@@ -41,7 +41,7 @@ DEFERRED_RELEASE_OPEN_REQUIREMENTS = {
 }
 
 CURRENT_OBJECTIVE_DIGEST_ARTIFACT = (
-    "build/current-objective-proof-after-jangtq2-live-release-smoke-20260608.json"
+    "build/current-objective-proof-after-mimo-model-upload-action-20260608.json"
 )
 
 CURRENT_SUITE_SOURCE_HASH_FILES = (
@@ -732,7 +732,7 @@ CURRENT_SUITE_COMMANDS: dict[str, list[str]] = {
         "--require-current-proof-sweep",
         "--require-release-ready",
         "--out",
-        "build/current-release-regression-manifest-after-mimo-media-runtime-stamp-gate-20260608.json",
+        "build/current-release-regression-manifest-after-mimo-model-upload-action-20260608.json",
     ],
     "full_release_objective_checklist": [
         sys.executable,
