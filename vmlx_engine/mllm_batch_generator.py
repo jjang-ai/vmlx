@@ -4575,11 +4575,11 @@ class MLLMBatchGenerator:
                     16,
                     min(
                         int(self.prefill_step_size),
-                        int(os.environ.get("VMLINUX_TIGHT_MEMORY_PREFILL_STEP_SIZE", "128")),
+                        int(os.environ.get("VMLINUX_TIGHT_MEMORY_PREFILL_STEP_SIZE", "64")),
                     ),
                 )
             except Exception:
-                _tight_text_prefill_step_size = min(int(self.prefill_step_size), 128)
+                _tight_text_prefill_step_size = min(int(self.prefill_step_size), 64)
 
         _mimo_tight_text_prefill_requires_chunking = (
             not has_images

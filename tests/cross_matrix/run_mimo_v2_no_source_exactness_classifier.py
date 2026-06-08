@@ -43,7 +43,7 @@ DEFAULT_JANGTQ2_LITERAL_VARIANTS = Path(
     "build/current-mimo-v25-jangtq2-exactness-variant-probe-20260608/JANGQ_MiMo-V2.5-JANGTQ_2/result.json"
 )
 DEFAULT_JANG2L_LITERAL_VARIANTS = Path(
-    "build/current-mimo-v25-jang2l-exactness-variant-probe-20260608/JANGQ_MiMo-V2.5-JANG_2L/result.json"
+    "build/current-mimo-v25-jang2l-exactness-tight64-parser-cache-skip-variant-probe-20260608/JANGQ_MiMo-V2.5-JANG_2L/result.json"
 )
 
 EXACTNESS_REASONS = {

@@ -60,6 +60,21 @@ class TestXMLFunctionToolParser:
         args = json.loads(out.tool_calls[0]["arguments"])
         assert args == {"query": "qwen parser edge"}
 
+    def test_hyphenated_literal_parameter_is_preserved(self, parser):
+        text = """
+<tool_call>
+<function=record_fact>
+<parameter=value>blue-cat</parameter>
+</function>
+</tool_call>
+"""
+
+        out = parser.extract_tool_calls(text)
+
+        assert out.tools_called is True
+        args = json.loads(out.tool_calls[0]["arguments"])
+        assert args == {"value": "blue-cat"}
+
     def test_visible_text_around_tool_call_has_no_xml_function_leak(self, parser):
         text = """
 I will write the file now.
@@ -168,6 +183,61 @@ Done.
                                 "type": "object",
                                 "properties": {"path": {"type": "string"}},
                             },
+                        },
+                    }
+                ]
+            },
+        )
+
+        assert out.tools_called is False
+        assert out.tool_calls == []
+        assert out.content == text
+
+    def test_repairs_missing_closing_tool_call_when_schema_allows_function(self, parser):
+        text = """<tool_call>
+<function=record_fact>
+<parameter=value>blue-cat</parameter>
+</function>"""
+
+        out = parser.extract_tool_calls(
+            text,
+            request={
+                "tools": [
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": "record_fact",
+                            "parameters": {
+                                "type": "object",
+                                "properties": {"value": {"type": "string"}},
+                                "required": ["value"],
+                            },
+                        },
+                    }
+                ]
+            },
+        )
+
+        assert out.tools_called is True
+        assert out.tool_calls[0]["name"] == "record_fact"
+        assert json.loads(out.tool_calls[0]["arguments"]) == {"value": "blue-cat"}
+        assert out.content is None
+
+    def test_missing_closing_tool_call_repair_rejects_unknown_function(self, parser):
+        text = """<tool_call>
+<function=delete_everything>
+<parameter=path>/</parameter>
+</function>"""
+
+        out = parser.extract_tool_calls(
+            text,
+            request={
+                "tools": [
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": "record_fact",
+                            "parameters": {"type": "object"},
                         },
                     }
                 ]

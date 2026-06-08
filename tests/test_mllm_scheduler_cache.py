@@ -70,6 +70,7 @@ def test_mllm_tight_memory_text_prefill_chunks_short_tool_prompts():
     source = inspect.getsource(mbg)
 
     assert "VMLINUX_TIGHT_MEMORY_PREFILL_STEP_SIZE" in source
+    assert 'os.environ.get("VMLINUX_TIGHT_MEMORY_PREFILL_STEP_SIZE", "64")' in source
     assert "seq_len > _tight_text_prefill_step_size + 1" in source
     assert "chunk_size = min(_tight_text_prefill_step_size" in source
 
@@ -1893,3 +1894,16 @@ class TestMetalCacheLimit:
         assert "Detected mixed-SWA VLM cache layout" in source
         assert "_uses_mixed_attention_cache = True" in source
         assert "_prefill_for_clean_path_dependent_cache" in source
+
+    def test_mllm_tight_memory_mixed_swa_skips_clean_prefill_store(self):
+        """Tight-memory MiMo must not launch a second clean prefill after output."""
+        import inspect
+        from vmlx_engine.mllm_scheduler import MLLMScheduler
+
+        source = inspect.getsource(MLLMScheduler._cleanup_finished)
+
+        assert "tight_memory_clean_store_disabled" in source
+        assert "_tight_memory_prefill_drain" in source
+        assert "VMLINUX_MLLM_TIGHT_MEMORY_CLEAN_PREFILL_STORE" in source
+        assert "tight-memory clean prompt" in source
+        assert "prefill disabled to avoid Metal OOM" in source

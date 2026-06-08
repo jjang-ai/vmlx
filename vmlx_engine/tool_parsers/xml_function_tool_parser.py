@@ -99,6 +99,7 @@ class XMLFunctionToolParser(ToolParser):
     @classmethod
     def _strip_repaired_function_blocks(cls, text: str) -> str:
         cleaned = cls.FUNCTION_PATTERN.sub("", text)
+        cleaned = cleaned.replace("<tool_call>", "")
         cleaned = cleaned.replace("</tool_call>", "")
         cleaned = re.sub(r"```(?:xml|XML)?", "", cleaned)
         cleaned = cleaned.replace("```", "")
@@ -137,6 +138,20 @@ class XMLFunctionToolParser(ToolParser):
             tool_calls.extend(self._parse_functions(block))
 
         cleaned_text = self.TOOL_CALL_PATTERN.sub("", model_output).strip()
+        if not tool_calls:
+            allowed_names = self._request_tool_names(request)
+            if allowed_names and "<function=" in model_output:
+                repaired_calls = self._parse_functions(
+                    model_output,
+                    allowed_names=allowed_names,
+                )
+                if repaired_calls:
+                    cleaned_text = self._strip_repaired_function_blocks(model_output)
+                    return ExtractedToolCallInformation(
+                        tools_called=True,
+                        tool_calls=repaired_calls,
+                        content=cleaned_text if cleaned_text else None,
+                    )
         if tool_calls:
             return ExtractedToolCallInformation(
                 tools_called=True,

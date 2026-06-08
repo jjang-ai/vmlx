@@ -2853,7 +2853,31 @@ class MLLMScheduler:
                                             "_prefill_for_clean_ssm",
                                             None,
                                         )
-                                    if truncated_tokens and callable(prefill_fn):
+                                    tight_memory_clean_store_disabled = (
+                                        _uses_mixed_attention_cache
+                                        and bool(
+                                            getattr(
+                                                self.batch_generator,
+                                                "_tight_memory_prefill_drain",
+                                                False,
+                                            )
+                                        )
+                                        and os.environ.get(
+                                            "VMLINUX_MLLM_TIGHT_MEMORY_CLEAN_PREFILL_STORE",
+                                            "0",
+                                        ).lower()
+                                        not in {"1", "true", "yes", "on"}
+                                    )
+                                    if tight_memory_clean_store_disabled:
+                                        logger.info(
+                                            "Skipping mixed-SWA VLM paged cache store "
+                                            "for %s: tight-memory clean prompt "
+                                            "prefill disabled to avoid Metal OOM "
+                                            "(prompt_tokens=%d)",
+                                            request_id,
+                                            prompt_len,
+                                        )
+                                    elif truncated_tokens and callable(prefill_fn):
                                         cache_blocks = prefill_fn(truncated_tokens)
                                     if cache_blocks is None:
                                         if _uses_zaya_cache:
