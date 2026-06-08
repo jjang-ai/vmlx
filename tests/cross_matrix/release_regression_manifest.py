@@ -5748,6 +5748,9 @@ def _validate_current_mimo_v2_jang2l_root_cause(root: Path) -> dict[str, Any]:
         "failures": [],
         "metadata_truth_passed": False,
         "source_vs_quant_first_divergence_passed": False,
+        "source_vs_quant_first_divergence_policy_skipped": False,
+        "source_vs_quant_policy_skip_reason": None,
+        "source_vs_quant_requirement_satisfied": False,
         "no_source_exactness_classifier_present": False,
         "no_source_exactness_classifier_status": None,
         "no_source_exactness_classification": None,
@@ -5851,9 +5854,6 @@ def _validate_current_mimo_v2_jang2l_root_cause(root: Path) -> dict[str, Any]:
             for item in source_vs_quant_rows
         )
     )
-    if not result["source_vs_quant_first_divergence_passed"]:
-        result["failures"].append("mimo_source_vs_quant_first_divergence_missing")
-
     classifier_excluded = no_source_classifier_payload.get("excluded_surfaces")
     if not isinstance(classifier_excluded, dict):
         classifier_excluded = {}
@@ -5879,6 +5879,25 @@ def _validate_current_mimo_v2_jang2l_root_cause(root: Path) -> dict[str, Any]:
         result["failures"].append(
             "mimo_no_source_exactness_classifier_missing_parser_cache_sampling_boundary"
         )
+    result["source_vs_quant_policy_skip_reason"] = no_source_classifier_payload.get(
+        "source_vs_quant_load_skipped_reason"
+    )
+    result["source_vs_quant_first_divergence_policy_skipped"] = (
+        no_source_classifier_payload.get("source_vs_quant_load_performed") is False
+        and result["source_vs_quant_policy_skip_reason"]
+        in {
+            "user_disallowed_source_vs_quant_due_ram",
+            "user_disallowed_source_vs_quant",
+            "source_vs_quant_skipped_by_policy",
+        }
+        and result["no_source_exactness_classifier_status"] in {"open", "pass"}
+        and result["no_source_exactness_excludes_parser_cache_sampling"] is True
+    )
+    if (
+        not result["source_vs_quant_first_divergence_passed"]
+        and not result["source_vs_quant_first_divergence_policy_skipped"]
+    ):
+        result["failures"].append("mimo_source_vs_quant_first_divergence_missing")
 
     current_audit_component_ok = current_audit_payload.get("component_ok")
     if not isinstance(current_audit_component_ok, dict):
@@ -6032,8 +6051,21 @@ def _validate_current_mimo_v2_jang2l_root_cause(root: Path) -> dict[str, Any]:
         result["failures"].append("mimo_media_unwired")
     if audit_source_vs_quant_open:
         result["source_vs_quant_first_divergence_passed"] = False
-        if "mimo_source_vs_quant_first_divergence_missing" not in result["failures"]:
+        if (
+            not result["source_vs_quant_first_divergence_policy_skipped"]
+            and "mimo_source_vs_quant_first_divergence_missing" not in result["failures"]
+        ):
             result["failures"].append("mimo_source_vs_quant_first_divergence_missing")
+    result["source_vs_quant_requirement_satisfied"] = (
+        result["source_vs_quant_first_divergence_passed"]
+        or result["source_vs_quant_first_divergence_policy_skipped"]
+    )
+    if result["source_vs_quant_first_divergence_policy_skipped"]:
+        result["current_audit_blockers"] = [
+            blocker
+            for blocker in result["current_audit_blockers"]
+            if blocker != "mimo_source_vs_quant_first_divergence_missing_or_failed"
+        ]
 
     if (
         result["prompt_length_coherence_blocked"]
@@ -6042,17 +6074,18 @@ def _validate_current_mimo_v2_jang2l_root_cause(root: Path) -> dict[str, Any]:
         or result["decode_speed_target_blocked"]
         or result["cb_working_set_pressure_blocked"]
         or result["media_unwired"]
-        or not result["source_vs_quant_first_divergence_passed"]
+        or not result["source_vs_quant_requirement_satisfied"]
     ):
         result["status"] = "open"
         result["root_cause_candidate"] = (
-            "mimo_v2_jang2l_quantized_profile_or_full_forward_quality_pending_source_vs_quant"
+            "mimo_v2_jang2l_quantized_profile_or_full_forward_quality_pending_exactness_media_or_policy_allowed_source_boundary"
         )
         result["release_boundary"] = (
             "local artifact/runtime has narrow text-cache proof but fails long-prompt "
             "coherence, tool protocol, decode speed, working-set pressure, media "
-            "wiring, current JANGTQ2 artifact exactness, and/or local "
-            "source-vs-quant first-divergence proof; do not release-clear MiMo"
+            "wiring, current JANGTQ2 artifact exactness, and/or the allowed "
+            "source-vs-quant/no-source classification boundary; do not "
+            "release-clear MiMo"
         )
     elif not result["failures"]:
         result["status"] = "pass"

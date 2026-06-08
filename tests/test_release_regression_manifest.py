@@ -11613,6 +11613,86 @@ def test_mimo_v2_root_cause_exposes_decode_speed_and_media_blockers(tmp_path):
     assert "mimo_media_unwired" in result["failures"]
 
 
+def test_mimo_v2_root_cause_accepts_policy_skipped_source_vs_quant_without_clearing_quality(
+    tmp_path,
+):
+    from tests.cross_matrix.release_regression_manifest import (
+        CURRENT_MIMO_V2_JANG2L_CURRENT_AUDIT_ARTIFACT,
+        CURRENT_MIMO_V2_JANG2L_NO_SOURCE_EXACTNESS_CLASSIFIER_ARTIFACT,
+        CURRENT_MIMO_V2_JANG2L_SOURCE_VS_QUANT_ARTIFACT,
+        _validate_current_mimo_v2_jang2l_root_cause,
+    )
+
+    _write_passing_mimo_v2_root_cause_artifacts(tmp_path)
+    source_vs_quant_path = tmp_path / CURRENT_MIMO_V2_JANG2L_SOURCE_VS_QUANT_ARTIFACT
+    source_vs_quant_path.write_text(
+        json.dumps(
+            {
+                "status": "missing_prerequisites",
+                "remote_evidence_only": False,
+                "source_model_path": "/Volumes/ModelDrive/jangq-ai/sources/MiMo-V2.5",
+                "quant_model_path": "/Users/example/.mlxstudio/models/JANGQ-AI/MiMo-V2.5-JANGTQ_2",
+                "rows": [],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    classifier_path = (
+        tmp_path / CURRENT_MIMO_V2_JANG2L_NO_SOURCE_EXACTNESS_CLASSIFIER_ARTIFACT
+    )
+    classifier_path.write_text(
+        json.dumps(
+            {
+                "status": "open",
+                "classification": "model_generated_literal_mutation_after_valid_parser_structure",
+                "source_vs_quant_load_performed": False,
+                "source_vs_quant_load_skipped_reason": "user_disallowed_source_vs_quant_due_ram",
+                "excluded_surfaces": {
+                    "parser_argument_rewrite": True,
+                    "prefix_paged_l2_or_kv_quant_primary_cause": True,
+                    "hidden_stochastic_sampling_primary_cause": True,
+                },
+                "unresolved_surfaces": {
+                    "artifact_quantization_or_decode_logits_quality": True,
+                    "source_vs_quant_first_divergence": True,
+                },
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    current_audit_path = tmp_path / CURRENT_MIMO_V2_JANG2L_CURRENT_AUDIT_ARTIFACT
+    current_audit = json.loads(current_audit_path.read_text(encoding="utf-8"))
+    current_audit["status"] = "open"
+    current_audit["local_release_clearance"] = False
+    current_audit["component_ok"]["source_vs_quant_first_divergence"] = False
+    current_audit["component_ok"]["artifact_exactness"] = False
+    current_audit["blockers"] = [
+        "mimo_jangtq2_artifact_exactness_blocked",
+        "mimo_source_vs_quant_first_divergence_missing_or_failed",
+    ]
+    current_audit_path.write_text(json.dumps(current_audit) + "\n", encoding="utf-8")
+
+    result = _validate_current_mimo_v2_jang2l_root_cause(tmp_path)
+
+    assert result["status"] == "open"
+    assert result["local_release_clearance"] is False
+    assert result["source_vs_quant_first_divergence_passed"] is False
+    assert result["source_vs_quant_first_divergence_policy_skipped"] is True
+    assert result["source_vs_quant_requirement_satisfied"] is True
+    assert (
+        result["source_vs_quant_policy_skip_reason"]
+        == "user_disallowed_source_vs_quant_due_ram"
+    )
+    assert "mimo_source_vs_quant_first_divergence_missing" not in result["failures"]
+    assert (
+        "mimo_source_vs_quant_first_divergence_missing_or_failed"
+        not in result["current_audit_blockers"]
+    )
+    assert "mimo_jangtq2_artifact_exactness_blocked" in result["failures"]
+
+
 def test_mimo_v2_current_audit_extracts_fastpath_async_bottleneck(tmp_path):
     from tests.cross_matrix.run_mimo_v2_jang2l_current_audit import (
         _latest_decode_speed_evidence,
