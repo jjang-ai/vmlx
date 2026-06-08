@@ -57,6 +57,9 @@ DEFAULT_JANGTQ2_TEMPLATE_DIAGNOSTIC = Path(
 DEFAULT_JANGTQ2_HYPHEN_DISTRIBUTION = Path(
     "build/current-mimo-v25-jangtq2-exactness-classification-20260608.json"
 )
+DEFAULT_JANGTQ2_CURRENT_ALL_LOCAL = Path(
+    "build/current-all-local-model-smoke-mimo-v25-jangtq2-media-l2-after-cache-cap-20260608/JANGQ_MiMo-V2.5-JANGTQ_2/result.json"
+)
 
 EXACTNESS_REASONS = {
     "expected_tool_argument_missing",
@@ -503,6 +506,141 @@ def _hyphen_distribution_summary(artifact: dict[str, Any] | None) -> dict[str, A
     }
 
 
+def _validation_failures(row: dict[str, Any]) -> list[dict[str, Any]]:
+    failures = row.get("validation_failures")
+    if not isinstance(failures, list):
+        failures = row.get("validation")
+    if not isinstance(failures, list):
+        return []
+    normalized: list[dict[str, Any]] = []
+    for failure in failures:
+        if isinstance(failure, dict):
+            normalized.append(failure)
+        elif isinstance(failure, str):
+            normalized.append({"reason": failure})
+    return normalized
+
+
+def _cached_tokens(row: dict[str, Any]) -> int:
+    usage = row.get("usage")
+    if not isinstance(usage, dict):
+        return 0
+    prompt_details = usage.get("prompt_tokens_details")
+    if isinstance(prompt_details, dict):
+        return int(prompt_details.get("cached_tokens") or 0)
+    return int(usage.get("cached_tokens") or 0)
+
+
+def _cache_detail(row: dict[str, Any]) -> str:
+    usage = row.get("usage")
+    if not isinstance(usage, dict):
+        return ""
+    prompt_details = usage.get("prompt_tokens_details")
+    if isinstance(prompt_details, dict):
+        return str(prompt_details.get("cache_detail") or "")
+    return str(usage.get("cache_detail") or "")
+
+
+def _disk_hits(row: dict[str, Any]) -> int:
+    cache_summary = row.get("cache_summary")
+    if isinstance(cache_summary, dict):
+        return int(cache_summary.get("disk_hits") or 0)
+    cache_stats = row.get("cache_stats")
+    if isinstance(cache_stats, dict):
+        return int(cache_stats.get("disk_hits") or 0)
+    return 0
+
+
+def _current_all_local_summary(artifact: dict[str, Any] | None) -> dict[str, Any]:
+    if not isinstance(artifact, dict):
+        return {
+            "exists": False,
+            "status": None,
+            "cache_l2_transport_green": None,
+            "media_transport_green": None,
+            "literal_mutation_labels": [],
+            "context_recall_failure_labels": [],
+            "literal_mutation_failures": [],
+        }
+
+    request_rows = artifact.get("requests")
+    requests = request_rows if isinstance(request_rows, list) else []
+    by_label = {
+        str(row.get("label")): row
+        for row in requests
+        if isinstance(row, dict) and row.get("label") is not None
+    }
+    l2_restart = artifact.get("l2_restart")
+    if not isinstance(l2_restart, dict):
+        l2_restart = by_label.get("text_cache_repeat_l2_restart", {})
+    if not isinstance(l2_restart, dict):
+        l2_restart = {}
+
+    first_cache = by_label.get("text_cache_repeat_1", {})
+    second_cache = by_label.get("text_cache_repeat_2", {})
+    cache_l2_transport_green = (
+        isinstance(first_cache, dict)
+        and isinstance(second_cache, dict)
+        and str(first_cache.get("content") or "").strip() == "ACK"
+        and str(second_cache.get("content") or "").strip() == "ACK"
+        and str(l2_restart.get("content") or "").strip() == "ACK"
+        and not _validation_failures(first_cache)
+        and not _validation_failures(second_cache)
+        and not _validation_failures(l2_restart)
+        and _cached_tokens(second_cache) > 0
+        and _cached_tokens(l2_restart) > 0
+        and "disk" in _cache_detail(l2_restart)
+        and _disk_hits(l2_restart) > 0
+    )
+
+    media_labels = [
+        label
+        for label in by_label
+        if label.startswith("vl_")
+        or label.startswith("video_")
+        or label.startswith("audio_")
+    ]
+    media_transport_green = bool(media_labels) and all(
+        not _validation_failures(by_label[label])
+        and str(by_label[label].get("content") or "").strip()
+        for label in media_labels
+    )
+
+    literal_reasons = EXACTNESS_REASONS
+    literal_mutation_failures = []
+    context_recall_failure_labels = []
+    for row in requests:
+        if not isinstance(row, dict):
+            continue
+        label = str(row.get("label") or "")
+        failures = _validation_failures(row)
+        if any(failure.get("reason") in literal_reasons for failure in failures):
+            literal_mutation_failures.append(
+                {
+                    "label": label,
+                    "content": row.get("content"),
+                    "tool_calls": row.get("tool_calls"),
+                    "failures": failures,
+                }
+            )
+        elif any(
+            failure.get("reason") == "expected_recall_missing" for failure in failures
+        ):
+            context_recall_failure_labels.append(label)
+
+    return {
+        "exists": True,
+        "status": artifact.get("status") or artifact.get("result"),
+        "cache_l2_transport_green": cache_l2_transport_green,
+        "media_transport_green": media_transport_green,
+        "literal_mutation_labels": [
+            failure["label"] for failure in literal_mutation_failures
+        ],
+        "context_recall_failure_labels": context_recall_failure_labels,
+        "literal_mutation_failures": literal_mutation_failures,
+    }
+
+
 def build_classification(
     audit: dict[str, Any],
     smoke: dict[str, Any],
@@ -518,6 +656,7 @@ def build_classification(
     jangtq2_logprob_diagnostic: dict[str, Any] | None = None,
     jangtq2_template_diagnostic: dict[str, Any] | None = None,
     jangtq2_hyphen_distribution: dict[str, Any] | None = None,
+    jangtq2_current_all_local: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     component_ok = audit.get("component_ok") if isinstance(audit.get("component_ok"), dict) else {}
     failures = _failures(smoke)
@@ -547,6 +686,9 @@ def build_classification(
     jangtq2_logprob_summary = _logprob_literal_summary(jangtq2_logprob_diagnostic)
     jangtq2_template_summary = _template_literal_summary(jangtq2_template_diagnostic)
     jangtq2_hyphen_summary = _hyphen_distribution_summary(jangtq2_hyphen_distribution)
+    jangtq2_current_all_local_summary = _current_all_local_summary(
+        jangtq2_current_all_local
+    )
 
     excluded_surfaces = {
         "prompt_template_literal_corruption": (
@@ -646,6 +788,10 @@ def build_classification(
             and jangtq2_hyphen_summary["chat_compact_hyphen_fails"] is True
             and jangtq2_hyphen_summary["completion_compact_hyphen_fails"] is True
             and jangtq2_hyphen_summary["spaced_hyphen_preserved"] is True
+        ),
+        "jangtq2_current_all_local_literal_mutation": (
+            jangtq2_current_all_local_summary["exists"] is True
+            and bool(jangtq2_current_all_local_summary["literal_mutation_labels"])
         ),
     }
 
@@ -751,6 +897,7 @@ def build_classification(
         "jang2l_json_sentinel_artifact": str(DEFAULT_JANG2L_JSON_SENTINEL_ISOLATION),
         "jangtq2_logprob_diagnostic_artifact": str(DEFAULT_JANGTQ2_LOGPROB_DIAGNOSTIC),
         "jangtq2_template_diagnostic_artifact": str(DEFAULT_JANGTQ2_TEMPLATE_DIAGNOSTIC),
+        "jangtq2_current_all_local_artifact": str(DEFAULT_JANGTQ2_CURRENT_ALL_LOCAL),
         "no_source_exactness": no_source_exactness,
         "literal_variant_summary": literal_variant_summary,
         "jang2l_literal_variant_summary": jang2l_literal_variant_summary,
@@ -758,6 +905,7 @@ def build_classification(
         "jangtq2_logprob_summary": jangtq2_logprob_summary,
         "jangtq2_template_summary": jangtq2_template_summary,
         "jangtq2_hyphen_distribution_summary": jangtq2_hyphen_summary,
+        "jangtq2_current_all_local_summary": jangtq2_current_all_local_summary,
         "no_source_runtime_diagnostics": no_source_runtime_diagnostics,
         "exactness_failures": exactness_failures,
         "excluded_surfaces": excluded_surfaces,
@@ -817,6 +965,11 @@ def main() -> int:
         type=Path,
         default=DEFAULT_JANGTQ2_HYPHEN_DISTRIBUTION,
     )
+    parser.add_argument(
+        "--jangtq2-current-all-local",
+        type=Path,
+        default=DEFAULT_JANGTQ2_CURRENT_ALL_LOCAL,
+    )
     parser.add_argument("--out", type=Path, default=DEFAULT_OUT)
     args = parser.parse_args()
 
@@ -867,6 +1020,11 @@ def main() -> int:
         if args.jangtq2_hyphen_distribution.exists()
         else None
     )
+    jangtq2_current_all_local = (
+        _load(args.jangtq2_current_all_local)
+        if args.jangtq2_current_all_local.exists()
+        else None
+    )
     artifact = build_classification(
         _load(args.audit),
         _load(args.smoke),
@@ -881,6 +1039,7 @@ def main() -> int:
         jangtq2_logprob_diagnostic=jangtq2_logprob_diagnostic,
         jangtq2_template_diagnostic=jangtq2_template_diagnostic,
         jangtq2_hyphen_distribution=jangtq2_hyphen_distribution,
+        jangtq2_current_all_local=jangtq2_current_all_local,
     )
     artifact["audit_artifact"] = str(args.audit)
     artifact["smoke_artifact"] = str(args.smoke)
@@ -902,6 +1061,9 @@ def main() -> int:
     )
     artifact["jangtq2_hyphen_distribution_artifact"] = str(
         args.jangtq2_hyphen_distribution
+    )
+    artifact["jangtq2_current_all_local_artifact"] = str(
+        args.jangtq2_current_all_local
     )
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(json.dumps(artifact, indent=2, sort_keys=True) + "\n", encoding="utf-8")

@@ -662,3 +662,102 @@ def test_mimo_no_source_classifier_tracks_current_jang2l_json_semantic_mismatch(
     assert artifact["jang2l_json_sentinel_summary"]["semantic_mismatch_labels"] == [
         "current_json_sentinel"
     ]
+
+
+def test_mimo_no_source_classifier_records_current_jangtq2_all_local_boundary():
+    audit = {
+        "component_ok": {
+            "api_cache_responses_contract": True,
+            "tool_protocol": True,
+            "exactness_cache_kv_quant_excluded": True,
+            "decode_speed_target": True,
+            "source_vs_quant_first_divergence": False,
+            "long_prompt_coherence": True,
+            "cb_system_prompt_working_set_pressure": True,
+            "mimo_media_wired": True,
+        }
+    }
+    smoke = {"results": []}
+    hyphen_distribution = {
+        "classification": "compact_hyphen_exactness_fails_in_served_artifact",
+        "not_caused_by": [
+            "prefix_cache",
+            "l2_disk_cache",
+            "tool_parser",
+            "chat_template_only",
+            "tokenizer_roundtrip",
+        ],
+        "requests": {
+            "chat_exact_blue_cat": {"code": 200, "text": "blue cat"},
+            "completion_repeat_blue_cat": {"code": 200, "text": "blue"},
+            "chat_hyphen_spaces": {"code": 200, "text": "blue - cat"},
+        },
+    }
+    current_all_local = {
+        "result": "probe_failed",
+        "requests": [
+            {
+                "label": "text_cache_repeat_1",
+                "content": "ACK",
+                "validation": [],
+                "usage": {"cached_tokens": 0},
+            },
+            {
+                "label": "text_cache_repeat_2",
+                "content": "ACK",
+                "validation": [],
+                "usage": {"cached_tokens": 67, "cache_detail": "paged"},
+            },
+            {
+                "label": "text_cache_repeat_l2_restart",
+                "content": "ACK",
+                "validation": [],
+                "usage": {"cached_tokens": 67, "cache_detail": "paged+disk"},
+                "cache_stats": {"disk_hits": 4},
+            },
+            {"label": "vl_blue_image", "content": "Blue.", "validation": []},
+            {"label": "video_blue_image", "content": "Blue.", "validation": []},
+            {"label": "audio_blue_wave", "content": "Blue.", "validation": []},
+            {
+                "label": "tool_required",
+                "parsed": {"value": "blue-1"},
+                "expected": {"value": "blue-cat"},
+                "validation": ["expected_tool_argument_missing"],
+            },
+            {
+                "label": "mimo_tool_required_sentinel",
+                "parsed": {"value": "B7CAT-09"},
+                "expected": {"value": "B7-CAT-09"},
+                "validation": ["expected_tool_argument_missing"],
+            },
+            {
+                "label": "structured_json_exact",
+                "parsed": {"status": "ok", "value": "bluecat", "count": 3},
+                "expected": {"status": "ok", "value": "blue-cat", "count": 3},
+                "validation": ["json_exact_object_mismatch"],
+            },
+        ],
+    }
+
+    artifact = build_classification(
+        audit,
+        smoke,
+        jangtq2_hyphen_distribution=hyphen_distribution,
+        jangtq2_current_all_local=current_all_local,
+    )
+
+    assert artifact["classification"] == (
+        "jangtq2_compact_hyphen_decode_quality_open_not_cache_parser_template_tokenizer"
+    )
+    assert artifact["jangtq2_current_all_local_summary"]["exists"] is True
+    assert artifact["jangtq2_current_all_local_summary"]["cache_l2_transport_green"] is True
+    assert artifact["jangtq2_current_all_local_summary"]["media_transport_green"] is True
+    assert artifact["jangtq2_current_all_local_summary"]["literal_mutation_labels"] == [
+        "tool_required",
+        "mimo_tool_required_sentinel",
+        "structured_json_exact",
+    ]
+    assert (
+        artifact["unresolved_surfaces"]["jangtq2_current_all_local_literal_mutation"]
+        is True
+    )
