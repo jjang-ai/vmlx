@@ -16,13 +16,13 @@ from typing import Any
 
 
 DEFAULT_AUDIT = Path(
-    "build/current-mimo-v2-jang2l-current-audit-after-object-media-e2e-20260608.json"
+    "build/current-mimo-v2-jang2l-current-audit-after-audio-waveform-smoke-wiring-20260608.json"
 )
 DEFAULT_SMOKE = Path(
     "build/current-all-local-model-smoke-mimo-v25-jangtq2-bundled-tools-nomedia-after-do-sample-false-rerun-20260607/summary.json"
 )
 DEFAULT_OUT = Path(
-    "build/current-mimo-v2-no-source-exactness-classifier-after-object-media-e2e-20260608.json"
+    "build/current-mimo-v2-no-source-exactness-classifier-after-audio-waveform-smoke-wiring-20260608.json"
 )
 DEFAULT_JANGTQ2_EXACTNESS = Path(
     "build/current-mimo-v25-jangtq2-exactness-isolation-20260608/result.json"

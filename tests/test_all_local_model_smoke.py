@@ -121,7 +121,7 @@ def test_classify_model_does_not_infer_nemotron_omni_video_from_name_only(tmp_pa
     assert row["supports_video"] is False
 
 
-def test_classify_model_routes_step3p7_advertised_vision_text_only(tmp_path):
+def test_classify_model_routes_step3p7_advertised_vision_when_source_runtime_exists(tmp_path):
     mod = load_module()
     model_dir = tmp_path / "Step-3.7-Flash-JANG_2L-CRACK"
     model_dir.mkdir()
@@ -151,7 +151,7 @@ def test_classify_model_routes_step3p7_advertised_vision_text_only(tmp_path):
     row = mod.classify_model_dir(model_dir)
 
     assert row["model_type"] == "step3p7"
-    assert row["is_mllm"] is False
+    assert row["is_mllm"] is True
     assert row["supports_video"] is False
     assert row["supports_thinking"] is True
     assert row["supports_tools"] is True
@@ -535,6 +535,13 @@ def test_probe_payloads_cover_repeat_text_reasoning_and_media():
     assert "text_no_media_after_image" in labels
     assert "vl_blue_video" in labels
     assert "text_no_media_after_video" in labels
+    assert "audio_blue" in labels
+    assert "text_no_media_after_audio" in labels
+    audio = next(probe for probe in probes if probe["label"] == "audio_blue")
+    content = audio["payload"]["messages"][0]["content"]
+    assert content[1]["type"] == "input_audio"
+    assert content[1]["input_audio"]["format"] == "wav"
+    assert content[1]["input_audio"]["data"]
     reasoning = next(probe for probe in probes if probe["label"] == "reasoning_on")
     assert reasoning["payload"]["enable_thinking"] is True
     assert reasoning["payload"]["max_tokens"] >= 256
@@ -733,6 +740,15 @@ def test_no_media_probe_uses_system_scoped_attachment_contract():
     assert "answer exactly VIDEO" in video_messages[1]["content"]
     assert "Do you currently see" not in image_messages[1]["content"]
     assert "Do you currently see" not in video_messages[1]["content"]
+
+    audio_probe = next(
+        probe for probe in probes if probe["label"] == "text_no_media_after_audio"
+    )
+    audio_messages = audio_probe["payload"]["messages"]
+    assert audio_messages[0]["role"] == "system"
+    assert "zero audio attachments" in audio_messages[0]["content"]
+    assert "Answer exactly NONE" in audio_messages[0]["content"]
+    assert "answer exactly AUDIO" in audio_messages[1]["content"]
 
 
 def test_zaya_vl_no_media_probe_uses_attached_none_contract():
@@ -1079,6 +1095,35 @@ def test_build_probe_payloads_can_include_required_tool_probe():
     assert "blue-cat" in payload["messages"][0]["content"]
 
 
+def test_build_probe_payloads_adds_mimo_literal_sentinel_probes():
+    mod = load_module()
+    row = {
+        "served_name": "mimo-v2.5-jangtq_2",
+        "cache_family": "mimo_v2_hybrid_swa",
+        "model_type": "mimo_v2",
+        "supports_thinking": True,
+        "supports_tools": True,
+        "is_mllm": True,
+    }
+
+    probes = mod.build_probe_payloads(
+        row,
+        max_tokens=48,
+        include_reasoning=False,
+        include_media=False,
+        include_video=False,
+        include_tools=True,
+    )
+    by_label = {probe["label"]: probe for probe in probes}
+
+    assert "mimo_tool_required_sentinel" in by_label
+    assert "mimo_structured_json_sentinel" in by_label
+    assert "B7-CAT-09" in by_label["mimo_tool_required_sentinel"]["payload"]["messages"][0]["content"]
+    assert "B7-CAT-09" in by_label["mimo_structured_json_sentinel"]["payload"]["messages"][0]["content"]
+    assert "tool_required" in by_label
+    assert "blue-cat" in by_label["tool_required"]["payload"]["messages"][0]["content"]
+
+
 def test_validate_probe_response_requires_expected_tool_call():
     mod = load_module()
 
@@ -1250,8 +1295,10 @@ def test_validate_probe_response_checks_media_color_and_no_media_carryover():
 
     assert mod.validate_probe_response("vl_blue_image", 200, "blue", "") == []
     assert mod.validate_probe_response("vl_red_image_changed", 200, "red", "") == []
+    assert mod.validate_probe_response("audio_blue", 200, "Blue.", "") == []
     assert mod.validate_probe_response("text_no_media_after_image", 200, "No.", "") == []
     assert mod.validate_probe_response("text_no_media_after_image", 200, "NONE", "") == []
+    assert mod.validate_probe_response("text_no_media_after_audio", 200, "NONE", "") == []
     assert (
         mod.validate_probe_response(
             "text_no_media_after_image",
@@ -1280,6 +1327,20 @@ def test_validate_probe_response_checks_media_color_and_no_media_carryover():
         "label": "text_no_media_after_image",
         "reason": "unexpected_media_carryover_claim",
         "media_kind": "image",
+    } in failures
+    failures = mod.validate_probe_response("audio_blue", 200, "red", "")
+    assert failures == [
+        {
+            "label": "audio_blue",
+            "reason": "expected_audio_transcript_missing",
+            "expected": "blue",
+        }
+    ]
+    failures = mod.validate_probe_response("text_no_media_after_audio", 200, "audio", "")
+    assert {
+        "label": "text_no_media_after_audio",
+        "reason": "unexpected_media_carryover_claim",
+        "media_kind": "audio",
     } in failures
 
 
@@ -1446,7 +1507,7 @@ def test_probe_options_obey_live_text_only_capabilities():
         include_video=True,
     )
 
-    assert options == {"include_media": False, "include_video": False}
+    assert options == {"include_media": False, "include_video": False, "include_audio": False}
 
 
 def test_probe_options_allow_image_but_not_video_when_capability_missing_video():
@@ -1460,7 +1521,21 @@ def test_probe_options_allow_image_but_not_video_when_capability_missing_video()
         include_video=True,
     )
 
-    assert options == {"include_media": True, "include_video": False}
+    assert options == {"include_media": True, "include_video": False, "include_audio": False}
+
+
+def test_probe_options_allow_audio_from_runtime_modalities():
+    mod = load_module()
+    row = {"is_mllm": True, "supports_video": False}
+
+    options = mod.probe_options_from_capabilities(
+        row,
+        {"modalities": ["text", "vision", "audio"]},
+        include_media=True,
+        include_video=True,
+    )
+
+    assert options == {"include_media": True, "include_video": False, "include_audio": True}
 
 
 def test_probe_options_ignore_preserved_unwired_media_capabilities():
@@ -1488,4 +1563,4 @@ def test_probe_options_ignore_preserved_unwired_media_capabilities():
         include_video=True,
     )
 
-    assert options == {"include_media": False, "include_video": False}
+    assert options == {"include_media": False, "include_video": False, "include_audio": False}

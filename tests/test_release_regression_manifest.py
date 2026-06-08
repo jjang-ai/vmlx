@@ -145,7 +145,7 @@ def _write_current_objective_digest(
     open_requirements: list[str] | None = None,
     missing_evidence: list[str] | None = None,
 ) -> None:
-    artifact = root / "build/current-objective-proof-after-mimo-object-media-e2e-20260608.json"
+    artifact = root / "build/current-objective-proof-after-mimo-audio-waveform-smoke-wiring-20260608.json"
     artifact.parent.mkdir(parents=True, exist_ok=True)
     open_rows = (
         EXPECTED_CURRENT_OPEN_REQUIREMENTS
@@ -10229,7 +10229,7 @@ def test_release_regression_manifest_rejects_stale_issue179_objective_digest_row
     tmp_path,
 ):
     _write_current_objective_digest(tmp_path)
-    path = tmp_path / "build/current-objective-proof-after-mimo-object-media-e2e-20260608.json"
+    path = tmp_path / "build/current-objective-proof-after-mimo-audio-waveform-smoke-wiring-20260608.json"
     payload = json.loads(path.read_text(encoding="utf-8"))
     unexpected_requirement = "Unexpected MiniMax stale reporter row is release-cleared"
     payload["requirements"].append(
@@ -11971,7 +11971,7 @@ def test_release_regression_manifest_runner_default_out_tracks_current_release_p
     from tests.cross_matrix import run_release_regression_manifest as runner
 
     assert runner.DEFAULT_OUT == Path(
-        "build/current-release-regression-manifest-after-mimo-object-media-e2e-20260608.json"
+        "build/current-release-regression-manifest-after-mimo-audio-waveform-smoke-wiring-20260608.json"
     )
 
 

@@ -880,6 +880,50 @@ def test_mimo_object_media_rows_clear_live_media_e2e_separately_from_exactness()
     assert evidence["artifact_exactness_pass"] is False
 
 
+def test_mimo_audio_waveform_rows_clear_audio_gate_separately_from_image_video():
+    from tests.cross_matrix import run_mimo_v2_jang2l_current_audit as audit
+
+    smoke = {
+        "status": "fail",
+        "results": [
+            {
+                "status": "probe_failed",
+                "requests": [
+                    {
+                        "label": "audio_blue",
+                        "code": 200,
+                        "content": "Blue.",
+                        "validation_failures": [],
+                    },
+                    {
+                        "label": "text_no_media_after_audio",
+                        "code": 200,
+                        "content": "NONE",
+                        "validation_failures": [],
+                    },
+                ],
+                "failures": [
+                    {
+                        "label": "mimo_tool_required_sentinel",
+                        "reason": "expected_tool_argument_missing",
+                    }
+                ],
+            }
+        ],
+    }
+
+    evidence = audit._all_local_smoke_evidence(smoke)
+
+    assert evidence["audio_waveform_e2e_pass"] is True
+    assert evidence["audio_waveform_e2e_status"] == "pass"
+    assert evidence["audio_waveform_e2e_labels"] == [
+        "audio_blue",
+        "text_no_media_after_audio",
+    ]
+    assert evidence["live_media_e2e_pass"] is False
+    assert evidence["artifact_exactness_pass"] is False
+
+
 def test_mimo_current_smoke_tool_protocol_beats_legacy_synced_tool_failure():
     source = Path("tests/cross_matrix/run_mimo_v2_jang2l_current_audit.py").read_text()
     assert source.count('if not smoke_evidence.get("exists"):') >= 2

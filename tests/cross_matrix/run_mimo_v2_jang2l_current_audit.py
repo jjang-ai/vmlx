@@ -25,7 +25,7 @@ from typing import Any
 DEFAULT_MODEL_PATH = Path("/Users/example/.mlxstudio/models/JANGQ-AI/MiMo-V2.5-JANGTQ_2")
 DEFAULT_MANIFEST = Path("build/current-mimo-jangtq2-local-manifest-20260607.tsv")
 DEFAULT_OUT = Path(
-    "build/current-mimo-v2-jang2l-current-audit-after-object-media-e2e-20260608.json"
+    "build/current-mimo-v2-jang2l-current-audit-after-audio-waveform-smoke-wiring-20260608.json"
 )
 
 STRUCTURAL_ARTIFACT = Path("build/current-mimo-jang2l-local-structural-verify-20260606.json")
@@ -284,6 +284,35 @@ def _all_local_smoke_evidence(data: dict[str, Any]) -> dict[str, Any]:
         live_media_e2e_labels.append(label)
     live_media_e2e_pass = len(live_media_e2e_labels) == len(media_labels)
 
+    audio_labels = [
+        "audio_blue",
+        "text_no_media_after_audio",
+    ]
+    audio_waveform_e2e_labels = []
+    audio_waveform_failures = []
+    for label in audio_labels:
+        request = requests_by_label.get(label)
+        if not isinstance(request, dict):
+            audio_waveform_failures.append({"label": label, "reason": "missing_request"})
+            continue
+        validation_failures = request.get("validation_failures")
+        if not isinstance(validation_failures, list):
+            validation_failures = []
+        if request.get("code") != 200:
+            audio_waveform_failures.append(
+                {"label": label, "reason": "http_status", "code": request.get("code")}
+            )
+            continue
+        if validation_failures:
+            audio_waveform_failures.extend(
+                failure
+                for failure in validation_failures
+                if isinstance(failure, dict)
+            )
+            continue
+        audio_waveform_e2e_labels.append(label)
+    audio_waveform_e2e_pass = len(audio_waveform_e2e_labels) == len(audio_labels)
+
     tool_protocol_pass = False
     for request in requests:
         if not isinstance(request, dict) or request.get("label") != "tool_required":
@@ -341,6 +370,12 @@ def _all_local_smoke_evidence(data: dict[str, Any]) -> dict[str, Any]:
         "live_media_e2e_status": "pass" if live_media_e2e_pass else "missing_or_failed",
         "live_media_e2e_labels": live_media_e2e_labels,
         "live_media_e2e_failures": live_media_failures,
+        "audio_waveform_e2e_pass": audio_waveform_e2e_pass,
+        "audio_waveform_e2e_status": (
+            "pass" if audio_waveform_e2e_pass else "missing_or_failed"
+        ),
+        "audio_waveform_e2e_labels": audio_waveform_e2e_labels,
+        "audio_waveform_e2e_failures": audio_waveform_failures,
         "exact_cache_blocked": exact_cache_blocked,
         "speed_blocked": speed_blocked,
         "generation_tps": generation_tps,
@@ -2059,7 +2094,7 @@ def build_audit(root: Path, model_path: Path, manifest: Path) -> dict[str, Any]:
     ) and not current_runtime_media_supported
     image_video_live_e2e_proven = bool(smoke_evidence.get("live_media_e2e_pass"))
     image_video_live_e2e_blocked = not image_video_live_e2e_proven
-    audio_waveform_live_e2e_proven = False
+    audio_waveform_live_e2e_proven = bool(smoke_evidence.get("audio_waveform_e2e_pass"))
     audio_waveform_live_e2e_blocked = not audio_waveform_live_e2e_proven
     if image_video_live_e2e_proven and current_runtime_media_supported:
         media_runtime_wired = True
@@ -2093,12 +2128,25 @@ def build_audit(root: Path, model_path: Path, manifest: Path) -> dict[str, Any]:
             "live_media_e2e_labels"
         )
     media_runtime_evidence["audio_waveform_live_e2e_status"] = (
-        "pass" if audio_waveform_live_e2e_proven else "missing"
+        "pass"
+        if audio_waveform_live_e2e_proven
+        else str(smoke_evidence.get("audio_waveform_e2e_status") or "missing")
     )
     media_runtime_evidence["audio_waveform_live_e2e_boundary"] = (
         "Object image/video live E2E does not clear audio waveform ingestion, "
         "tokenizer, audio-code splice, cache salt, and post-audio recovery proof."
     )
+    if audio_waveform_live_e2e_proven:
+        media_runtime_evidence["audio_waveform_live_e2e_boundary"] = (
+            "Live MiMo audio waveform and post-audio text recovery rows passed."
+        )
+        media_runtime_evidence["audio_waveform_live_e2e_labels"] = smoke_evidence.get(
+            "audio_waveform_e2e_labels"
+        )
+    else:
+        media_runtime_evidence["audio_waveform_live_e2e_failures"] = smoke_evidence.get(
+            "audio_waveform_e2e_failures"
+        )
     if text_route_evidence.get("media_unwired") and current_runtime_media_supported:
         media_runtime_evidence["text_route_media_unwired_superseded_by_source"] = True
     else:

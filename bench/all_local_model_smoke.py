@@ -3,9 +3,12 @@ from __future__ import annotations
 
 import argparse
 import base64
+import importlib.util
 import json
+import math
 import os
 import re
+import shutil
 import shlex
 import signal
 import struct
@@ -13,8 +16,10 @@ import subprocess
 import sys
 import tempfile
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
+import wave
 import zlib
 from pathlib import Path
 from typing import Any
@@ -24,6 +29,14 @@ ROOT = Path(__file__).resolve().parents[1]
 _PYTHON_ENV = Path(os.environ.get("VMLINUX_BENCH_PYTHON", sys.executable)).expanduser()
 PYTHON = _PYTHON_ENV if _PYTHON_ENV.is_absolute() else (ROOT / _PYTHON_ENV).resolve()
 DEFAULT_SKIP_TERMS = ("kimi",)
+
+
+def _step3p7_source_vlm_runtime_available() -> bool:
+    try:
+        spec = importlib.util.find_spec("vmlx_engine.models.step3p7_mlx_vlm")
+    except Exception:
+        return False
+    return spec is not None
 
 
 def read_json(path: Path) -> dict[str, Any]:
@@ -132,16 +145,20 @@ def classify_model_dir(model_dir: Path) -> dict[str, Any]:
         if isinstance(config.get("runtime"), dict)
         else {}
     )
+    has_config_media = _has_key_recursive(
+        config,
+        {"vision_config", "visual", "image_token_id", "video_token_id"},
+    )
 
     is_mllm = (
-        _has_key_recursive(config, {"vision_config", "visual", "image_token_id", "video_token_id"})
+        has_config_media
         or "-vl" in name.lower()
         or "vl-" in name.lower()
         or "omni" in name.lower()
         or model_type in {"gemma4", "zaya1_vl", "qwen2_5_vl", "qwen3_5_vl"}
     )
     if model_type == "step3p7":
-        is_mllm = False
+        is_mllm = bool(has_config_media and _step3p7_source_vlm_runtime_available())
     name_lower = name.lower()
     name_has_mtp = "mtp" in name_lower and "nomtp" not in name_lower and "no-mtp" not in name_lower
     has_mtp = (
@@ -186,6 +203,13 @@ def classify_model_dir(model_dir: Path) -> dict[str, Any]:
         supports_thinking = bool(reasoning_capabilities["supported"])
     if model_type == "zaya1_vl" and not _bundle_template_has_thinking_control(model_dir):
         supports_thinking = False
+    if model_type == "mimo_v2":
+        # MiMo-V2.5 artifacts may carry stale thinking metadata, but current
+        # live proof shows the model can emit hidden-only output with no
+        # visible final answer when thinking is enabled. Keep the smoke gate
+        # aligned with runtime capability truth: XML tools are supported, but
+        # reasoning/thinking is not release-exposed for MiMo yet.
+        supports_thinking = False
 
     supports_tools = True
     tool_capabilities = (
@@ -199,6 +223,16 @@ def classify_model_dir(model_dir: Path) -> dict[str, Any]:
         supports_tools = bool(tool_capabilities["supported"])
     elif model_type == "mimo_v2":
         supports_tools = True
+    if model_type == "mimo_v2":
+        capabilities = dict(capabilities)
+        reasoning = dict(capabilities.get("reasoning") or {})
+        reasoning.update({"default": False, "parser": None, "supported": False})
+        tools = dict(capabilities.get("tools") or {})
+        tools.update({"parser": "xml_function", "supported": True})
+        capabilities["reasoning"] = reasoning
+        capabilities["supports_thinking"] = False
+        capabilities["tools"] = tools
+        capabilities["supports_tools"] = True
 
     if model_type == "mimo_v2":
         cache_family = "mimo_v2_hybrid_swa"
@@ -421,6 +455,43 @@ def blue_video_data_url() -> str | None:
         except OSError:
             pass
     return "data:video/mp4;base64," + base64.b64encode(data).decode("ascii")
+
+
+def blue_audio_wav_base64() -> str:
+    """Return a small WAV fixture for input_audio smoke tests."""
+    tmp_dir = Path(tempfile.mkdtemp(prefix="vmlx-smoke-audio-"))
+    aiff = tmp_dir / "blue.aiff"
+    wav_path = tmp_dir / "blue.wav"
+    try:
+        try:
+            subprocess.run(
+                ["say", "-o", str(aiff), "blue"],
+                check=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+            subprocess.run(
+                ["afconvert", "-f", "WAVE", "-d", "LEI16@16000", str(aiff), str(wav_path)],
+                check=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+            return base64.b64encode(wav_path.read_bytes()).decode("ascii")
+        except Exception:
+            sample_rate = 16000
+            frame_count = int(sample_rate * 0.35)
+            with wave.open(str(wav_path), "wb") as handle:
+                handle.setnchannels(1)
+                handle.setsampwidth(2)
+                handle.setframerate(sample_rate)
+                data = bytearray()
+                for index in range(frame_count):
+                    value = int(0.20 * 32767 * math.sin(2.0 * math.pi * 440.0 * index / sample_rate))
+                    data.extend(struct.pack("<h", value))
+                handle.writeframes(bytes(data))
+            return base64.b64encode(wav_path.read_bytes()).decode("ascii")
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
 
 
 def _text_payload(model: str, prompt: str, max_tokens: int, *, thinking: bool = False) -> dict[str, Any]:
@@ -666,6 +737,14 @@ def _is_qwen36_moe_mtp_row(row: dict[str, Any]) -> bool:
     )
 
 
+def _is_minimax_row(row: dict[str, Any]) -> bool:
+    blob = " ".join(
+        str(row.get(key, "")).lower()
+        for key in ("name", "served_name", "model_type", "path", "family")
+    )
+    return "minimax" in blob
+
+
 def _lfm_strict_probe_max_tokens(row: dict[str, Any], max_tokens: int) -> int:
     # LFM2 often emits an internal direct-answer prelude before the final terse
     # answer even when thinking is disabled. The API parser returns the final
@@ -673,6 +752,18 @@ def _lfm_strict_probe_max_tokens(row: dict[str, Any], max_tokens: int) -> int:
     # can stop mid-prelude and create a false runtime failure. Keep the output
     # contract strict; only give LFM enough budget to reach its final answer.
     return max(512, max_tokens) if _is_lfm_row(row) else max_tokens
+
+
+def _required_tool_probe_max_tokens(row: dict[str, Any], max_tokens: int) -> int:
+    # MiniMax K's native tool template can need >96 decoded tokens to emit a
+    # complete <minimax:tool_call><invoke>...</invoke></minimax:tool_call>.
+    # Direct live proof with the same prompt produced a valid parsed
+    # record_fact call at 120 completion tokens. Keep other families at the
+    # existing stricter budget; avoid a false MiniMax failure from an
+    # artificially low cap.
+    if _is_minimax_row(row):
+        return max(256, _lfm_strict_probe_max_tokens(row, max_tokens))
+    return max(_lfm_strict_probe_max_tokens(row, max_tokens), 96)
 
 
 def _reasoning_probe_max_tokens(row: dict[str, Any], max_tokens: int) -> int:
@@ -775,6 +866,7 @@ def build_probe_payloads(
     include_reasoning: bool,
     include_media: bool = True,
     include_video: bool = True,
+    include_audio: bool = True,
     include_tools: bool = False,
 ) -> list[dict[str, Any]]:
     model = row["served_name"]
@@ -833,11 +925,23 @@ def build_probe_payloads(
                 "label": "tool_required",
                 "payload": _required_tool_payload(
                     model,
-                    max(_lfm_strict_probe_max_tokens(row, max_tokens), 96),
+                    _required_tool_probe_max_tokens(row, max_tokens),
                     prompt_style=_tool_prompt_style(row),
                 ),
             }
         )
+        if row.get("model_type") == "mimo_v2":
+            probes.append(
+                {
+                    "label": "mimo_tool_required_sentinel",
+                    "payload": _required_tool_payload(
+                        model,
+                        _required_tool_probe_max_tokens(row, max_tokens),
+                        prompt_style="json_call",
+                        expected_value="B7-CAT-09",
+                    ),
+                }
+            )
         probes.append(
             {
                 "label": "tool_result_continuation",
@@ -959,6 +1063,41 @@ def build_probe_payloads(
                         },
                     ]
                 )
+        if include_audio:
+            audio_content = [
+                {
+                    "type": "text",
+                    "text": "The audio says one color word. Transcribe the word only.",
+                },
+                {
+                    "type": "input_audio",
+                    "input_audio": {"data": blue_audio_wav_base64(), "format": "wav"},
+                },
+            ]
+            probes.extend(
+                [
+                    {
+                        "label": "audio_blue",
+                        "payload": {
+                            "model": model,
+                            "messages": [{"role": "user", "content": audio_content}],
+                            "temperature": 0,
+                            "max_tokens": max_tokens,
+                            "stream": False,
+                            "enable_thinking": False,
+                        },
+                    },
+                    {
+                        "label": "text_no_media_after_audio",
+                        "payload": _no_media_payload(
+                            model,
+                            "audio",
+                            max_tokens,
+                            row=row,
+                        ),
+                    },
+                ]
+            )
     return probes
 
 
@@ -970,7 +1109,7 @@ def probe_options_from_capabilities(
     include_video: bool,
 ) -> dict[str, bool]:
     if not include_media:
-        return {"include_media": False, "include_video": False}
+        return {"include_media": False, "include_video": False, "include_audio": False}
     media = (capabilities or {}).get("media") if isinstance(capabilities, dict) else None
     modalities_raw = None
     if isinstance(media, dict) and isinstance(media.get("runtime_modalities"), list):
@@ -982,15 +1121,21 @@ def probe_options_from_capabilities(
         for item in modalities_raw
         if isinstance(item, str)
     } if isinstance(modalities_raw, list) else set()
+    modality = (capabilities or {}).get("modality")
+    if isinstance(modality, str):
+        modalities.add(modality.lower())
     if modalities:
         allows_image = bool(modalities & {"vision", "image", "images"})
         allows_video = bool(modalities & {"video", "videos"})
+        allows_audio = bool(modalities & {"audio", "audios", "speech"})
     else:
         allows_image = bool(row.get("is_mllm"))
         allows_video = bool(row.get("supports_video"))
+        allows_audio = False
     return {
         "include_media": bool(include_media and allows_image),
         "include_video": bool(include_media and include_video and allows_image and allows_video),
+        "include_audio": bool(include_media and allows_image and allows_audio),
     }
 
 
@@ -1015,6 +1160,19 @@ def request_json(
                 return response.status, json.loads(raw.decode("utf-8")), elapsed
             except Exception:
                 return response.status, raw.decode("utf-8", "replace"), elapsed
+    except urllib.error.HTTPError as exc:
+        raw = exc.read()
+        elapsed = time.perf_counter() - t0
+        if not raw:
+            return exc.code, {"error": f"HTTPError: {exc}"}, elapsed
+        text = raw.decode("utf-8", "replace")
+        try:
+            body = json.loads(text)
+        except Exception:
+            body = {"error": f"HTTPError: {exc}", "body": text}
+        if isinstance(body, dict):
+            body.setdefault("error", f"HTTPError: {exc}")
+        return exc.code, body, elapsed
     except Exception as exc:
         return 0, {"error": f"{type(exc).__name__}: {exc}"}, time.perf_counter() - t0
 
@@ -1116,9 +1274,9 @@ def validate_probe_response(
     lower = stripped.lower()
     compact_lower = re.sub(r"\s+", "", lower)
     words = _word_set(stripped)
-    if label == "tool_required":
+    if label in {"tool_required", "mimo_tool_required_sentinel"}:
         expected_tool = "record_fact"
-        expected_value = "blue-cat"
+        expected_value = "B7-CAT-09" if label == "mimo_tool_required_sentinel" else "blue-cat"
         if stripped:
             failures.append(
                 {
@@ -1271,11 +1429,29 @@ def validate_probe_response(
     elif label in {"vl_blue_image", "vl_blue_image_repeat", "vl_blue_video"}:
         if "blue" not in words:
             failures.append({"label": label, "reason": "expected_color_missing", "expected": "blue"})
+    elif label == "audio_blue":
+        if "blue" not in words:
+            failures.append(
+                {
+                    "label": label,
+                    "reason": "expected_audio_transcript_missing",
+                    "expected": "blue",
+                }
+            )
     elif label == "vl_red_image_changed":
         if "red" not in words:
             failures.append({"label": label, "reason": "expected_color_missing", "expected": "red"})
-    elif label in {"text_no_media_after_image", "text_no_media_after_video"}:
-        media_kind = "video" if label.endswith("_video") else "image"
+    elif label in {
+        "text_no_media_after_image",
+        "text_no_media_after_video",
+        "text_no_media_after_audio",
+    }:
+        if label.endswith("_video"):
+            media_kind = "video"
+        elif label.endswith("_audio"):
+            media_kind = "audio"
+        else:
+            media_kind = "image"
         says_no = (
             "no" in words
             or "none" in words
@@ -1331,6 +1507,8 @@ def collect_probe_failures(requests: list[dict[str, Any]]) -> list[dict[str, Any
             expected_content=expected_content,
         ):
             failure.setdefault("content_head", req.get("content_head", content[:280]))
+            if req.get("error"):
+                failure.setdefault("error", req["error"])
             if "reasoning_chars" not in failure and "reasoning_chars" in req:
                 failure["reasoning_chars"] = req["reasoning_chars"]
             failures.append(failure)
@@ -1424,6 +1602,7 @@ def run_model_row(
     include_reasoning: bool,
     include_media: bool,
     include_video: bool,
+    include_audio: bool,
     include_tools: bool,
 ) -> dict[str, Any]:
     row_dir = out_root / sanitize_name(row["namespace"] + "_" + row["name"])
@@ -1484,15 +1663,16 @@ def run_model_row(
             )
         ):
             row_capabilities = row.get("capabilities")
-            capability_body = (
-                row_capabilities if isinstance(row_capabilities, dict) else capability_body
-            )
+            if isinstance(row_capabilities, dict):
+                capability_body = {**row_capabilities, **capability_body}
         probe_options = probe_options_from_capabilities(
             row,
             capability_body,
             include_media=include_media,
             include_video=include_video,
         )
+        if not include_audio:
+            probe_options["include_audio"] = False
         result["probe_options"] = probe_options
         for probe in build_probe_payloads(
             row,
@@ -1500,6 +1680,7 @@ def run_model_row(
             include_reasoning=include_reasoning,
             include_media=probe_options["include_media"],
             include_video=probe_options["include_video"],
+            include_audio=probe_options["include_audio"],
             include_tools=include_tools,
         ):
             label = probe["label"]
@@ -1526,6 +1707,10 @@ def run_model_row(
                 "cache_stats_code": code_stats,
                 "cache_summary": summarize_cache(cache_stats),
             }
+            if isinstance(resp, dict) and resp.get("error"):
+                request_record["error"] = resp["error"]
+            if isinstance(resp, dict) and resp.get("detail"):
+                request_record["response_detail"] = resp["detail"]
             if probe.get("expected_content") is not None:
                 request_record["expected_content"] = probe["expected_content"]
             request_record["validation_failures"] = validate_probe_response(
@@ -1623,6 +1808,7 @@ def main() -> int:
     parser.add_argument("--no-reasoning", action="store_true")
     parser.add_argument("--no-media", action="store_true")
     parser.add_argument("--no-video", action="store_true")
+    parser.add_argument("--no-audio", action="store_true")
     parser.add_argument(
         "--include-tools",
         action="store_true",
@@ -1667,6 +1853,7 @@ def main() -> int:
             include_reasoning=not args.no_reasoning,
             include_media=not args.no_media,
             include_video=not args.no_video,
+            include_audio=not args.no_audio,
             include_tools=args.include_tools,
         )
         results.append(result)
