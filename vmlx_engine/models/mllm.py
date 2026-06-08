@@ -605,11 +605,66 @@ def _quantize_mimo_v2_runtime_modules(root: Any, filtered: dict, quantization: d
             class_predicate=class_predicate,
         )
 
+    def _infer_affine_params(path: str, module: Any) -> dict[str, Any]:
+        override = quantization.get(path)
+        if isinstance(override, dict):
+            return dict(override)
+        group_size = int(quantization.get("group_size") or 64)
+        bits = int(quantization.get("bits") or 8)
+        weight = filtered.get(f"{path}.weight")
+        scales = filtered.get(f"{path}.scales")
+        module_weight = getattr(module, "weight", None)
+        try:
+            in_features = int(module_weight.shape[-1])
+            scale_cols = int(scales.shape[-1])
+            packed_cols = int(weight.shape[-1])
+            if scale_cols > 0:
+                inferred_group = in_features // scale_cols
+                if inferred_group > 0:
+                    group_size = inferred_group
+                    inferred_bits = int(round(32 * packed_cols / max(in_features, 1)))
+                    if inferred_bits in {2, 3, 4, 5, 6, 8}:
+                        bits = inferred_bits
+        except Exception:
+            pass
+        return {
+            "group_size": group_size,
+            "bits": bits,
+            "mode": quantization.get("mode", "affine"),
+        }
+
+    def quantize_known_affine_path(owner: Any, attr: str, path: str) -> None:
+        module = getattr(owner, attr, None)
+        if module is None or not hasattr(module, "to_quantized"):
+            return
+        if f"{path}.weight" not in filtered or f"{path}.scales" not in filtered:
+            return
+        params = _infer_affine_params(path, module)
+        setattr(owner, attr, module.to_quantized(**params))
+        quantized_paths.add(path)
+
     backbone = getattr(root, "model", None)
     layers = getattr(backbone, "layers", None)
     if isinstance(layers, list):
         for idx, layer in enumerate(layers):
             quantize_module(layer, f"model.layers.{idx}")
+            self_attn = getattr(layer, "self_attn", None)
+            if self_attn is not None:
+                # MiMo JANG_2L stores qkv_proj as MLX affine packed
+                # uint32/scales/biases. The module lives under a normal Python
+                # list in jang_tools, and some MLX quantize traversals miss it,
+                # leaving a plain Linear with packed-width weights such as
+                # [13568, 1024]. That crashes prefill against hidden size 4096.
+                # Patch it from the artifact sidecars before load_weights so
+                # the real affine QuantizedLinear receives the packed tensors.
+                for qkv_path in (
+                    f"model.layers.{idx}.self_attn.qkv_proj",
+                    f"language_model.model.layers.{idx}.self_attn.qkv_proj",
+                ):
+                    before = len(quantized_paths)
+                    quantize_known_affine_path(self_attn, "qkv_proj", qkv_path)
+                    if len(quantized_paths) != before:
+                        break
 
     # Quantize root-level leaves such as lm_head. Decoder layers are already
     # handled above because they are not visible from root.leaf_modules().
@@ -648,6 +703,228 @@ def _quantize_mimo_v2_passthrough_decode_hotspots(root: Any, quantization: dict)
         )
         count += 1
 
+    return count
+
+
+def _upgrade_mimo_v2_loaded_qkv_affine_modules(root: Any, quantization: dict) -> int:
+    """Upgrade loaded MiMo qkv packed-affine tensors inside Python layer lists.
+
+    MiMo stores decoder layers in a normal Python list, so generic
+    ``named_modules`` post-load repair does not reliably see qkv modules. If an
+    affine JANG bundle loaded packed uint32 qkv tensors into a plain Linear, the
+    first prefill crashes with hidden size 4096 vs packed width 1024. Walk the
+    list directly and splice in QuantizedLinear modules from the loaded sidecar
+    shapes.
+    """
+
+    import mlx.core as mx
+    import mlx.nn as nn
+
+    count = 0
+    default_bits = int(quantization.get("bits") or 8)
+    default_group_size = int(quantization.get("group_size") or 64)
+    default_mode = str(quantization.get("mode") or "affine")
+
+    backbone = getattr(root, "model", None)
+    layers = getattr(backbone, "layers", None)
+    if not isinstance(layers, list):
+        return 0
+
+    for layer in layers:
+        self_attn = getattr(layer, "self_attn", None)
+        module = getattr(self_attn, "qkv_proj", None)
+        if self_attn is None or module is None:
+            continue
+        if isinstance(module, nn.QuantizedLinear):
+            continue
+        w = getattr(module, "weight", None)
+        s = getattr(module, "scales", None)
+        if w is None or s is None:
+            continue
+        if getattr(w, "dtype", None) != mx.uint32:
+            continue
+
+        try:
+            packed_cols = int(w.shape[-1])
+            scale_cols = int(s.shape[-1])
+            inferred = None
+            for bits in (8, 6, 4, 3, 2):
+                real_cols = packed_cols * 32 // bits
+                if scale_cols > 0 and real_cols % scale_cols == 0:
+                    group_size = real_cols // scale_cols
+                    if group_size in (32, 64, 128):
+                        inferred = (bits, group_size, real_cols)
+                        break
+            if inferred is None:
+                bits = default_bits
+                group_size = default_group_size
+                real_cols = packed_cols * 32 // bits
+            else:
+                bits, group_size, real_cols = inferred
+            qmod = nn.QuantizedLinear(
+                input_dims=real_cols,
+                output_dims=int(w.shape[0]),
+                bias=False,
+                group_size=group_size,
+                bits=bits,
+                mode=default_mode,
+            )
+            qmod.weight = w
+            qmod.scales = s
+            b = getattr(module, "biases", None)
+            if b is not None:
+                qmod.biases = b
+            self_attn.qkv_proj = qmod
+            count += 1
+        except Exception:
+            logger.exception("MiMo-V2 qkv packed affine upgrade failed")
+    return count
+
+
+def _install_mimo_v2_pending_qkv_affine_modules(
+    root: Any,
+    pending: dict[str, dict[str, Any]],
+    quantization: dict,
+) -> int:
+    """Install qkv QuantizedLinear modules once split shard sidecars complete."""
+
+    import re
+    import mlx.nn as nn
+
+    default_bits = int(quantization.get("bits") or 8)
+    default_group_size = int(quantization.get("group_size") or 64)
+    default_mode = str(quantization.get("mode") or "affine")
+    backbone = getattr(root, "model", None)
+    layers = getattr(backbone, "layers", None)
+    if not isinstance(layers, list):
+        return 0
+
+    count = 0
+    for base, parts in list(pending.items()):
+        if "weight" not in parts or "scales" not in parts:
+            continue
+        match = re.match(r"^model\.layers\.(\d+)\.self_attn\.qkv_proj$", base)
+        if not match:
+            continue
+        layer_idx = int(match.group(1))
+        if layer_idx < 0 or layer_idx >= len(layers):
+            continue
+        self_attn = getattr(layers[layer_idx], "self_attn", None)
+        module = getattr(self_attn, "qkv_proj", None)
+        if self_attn is None or module is None or isinstance(module, nn.QuantizedLinear):
+            continue
+        weight = parts["weight"]
+        scales = parts["scales"]
+        try:
+            packed_cols = int(weight.shape[-1])
+            scale_cols = int(scales.shape[-1])
+            inferred = None
+            for bits in (8, 6, 4, 3, 2):
+                real_cols = packed_cols * 32 // bits
+                if scale_cols > 0 and real_cols % scale_cols == 0:
+                    group_size = real_cols // scale_cols
+                    if group_size in (32, 64, 128):
+                        inferred = (bits, group_size, real_cols)
+                        break
+            if inferred is None:
+                bits = default_bits
+                group_size = default_group_size
+                real_cols = packed_cols * 32 // bits
+            else:
+                bits, group_size, real_cols = inferred
+            qmod = nn.QuantizedLinear(
+                input_dims=real_cols,
+                output_dims=int(weight.shape[0]),
+                bias=False,
+                group_size=group_size,
+                bits=bits,
+                mode=default_mode,
+            )
+            qmod.weight = weight
+            qmod.scales = scales
+            if parts.get("biases") is not None:
+                qmod.biases = parts["biases"]
+            self_attn.qkv_proj = qmod
+            count += 1
+        except Exception:
+            logger.exception("MiMo-V2 pending qkv affine install failed for %s", base)
+    return count
+
+
+def _install_mimo_v2_pending_dense_mlp_affine_modules(
+    root: Any,
+    pending: dict[str, dict[str, Any]],
+    quantization: dict,
+) -> int:
+    """Install dense MiMo MLP QuantizedLinear modules from split shard sidecars."""
+
+    import re
+    import mlx.nn as nn
+
+    default_bits = int(quantization.get("bits") or 8)
+    default_group_size = int(quantization.get("group_size") or 64)
+    default_mode = str(quantization.get("mode") or "affine")
+    backbone = getattr(root, "model", None)
+    layers = getattr(backbone, "layers", None)
+    if not isinstance(layers, list):
+        return 0
+
+    count = 0
+    for base, parts in list(pending.items()):
+        if "weight" not in parts or "scales" not in parts:
+            continue
+        match = re.match(
+            r"^model\.layers\.(\d+)\.mlp\.(gate_proj|up_proj|down_proj)$",
+            base,
+        )
+        if not match:
+            continue
+        layer_idx = int(match.group(1))
+        attr = match.group(2)
+        if layer_idx < 0 or layer_idx >= len(layers):
+            continue
+        mlp = getattr(layers[layer_idx], "mlp", None)
+        module = getattr(mlp, attr, None)
+        if mlp is None or module is None or isinstance(module, nn.QuantizedLinear):
+            continue
+        weight = parts["weight"]
+        scales = parts["scales"]
+        try:
+            packed_cols = int(weight.shape[-1])
+            scale_cols = int(scales.shape[-1])
+            inferred = None
+            for bits in (8, 6, 4, 3, 2):
+                real_cols = packed_cols * 32 // bits
+                if scale_cols > 0 and real_cols % scale_cols == 0:
+                    group_size = real_cols // scale_cols
+                    if group_size in (32, 64, 128):
+                        inferred = (bits, group_size, real_cols)
+                        break
+            if inferred is None:
+                bits = default_bits
+                group_size = default_group_size
+                real_cols = packed_cols * 32 // bits
+            else:
+                bits, group_size, real_cols = inferred
+            qmod = nn.QuantizedLinear(
+                input_dims=real_cols,
+                output_dims=int(weight.shape[0]),
+                bias=False,
+                group_size=group_size,
+                bits=bits,
+                mode=default_mode,
+            )
+            qmod.weight = weight
+            qmod.scales = scales
+            if parts.get("biases") is not None:
+                qmod.biases = parts["biases"]
+            setattr(mlp, attr, qmod)
+            count += 1
+        except Exception:
+            logger.exception(
+                "MiMo-V2 pending dense MLP affine install failed for %s",
+                base,
+            )
     return count
 
 
@@ -1039,6 +1316,7 @@ def _register_mimo_v2_mlx_vlm_runtime() -> None:
             self.config = config
             self.language_model = _MiMoV2LanguageModelCompat(TextModel(config.text_config))
             self._mimo_v2_quantized_for_load = False
+            self._mimo_v2_pending_qkv_affine: dict[str, dict[str, Any]] = {}
 
         @property
         def layers(self):
@@ -1093,6 +1371,23 @@ def _register_mimo_v2_mlx_vlm_runtime() -> None:
             if hasattr(self.language_model, "sanitize"):
                 filtered = self.language_model.sanitize(filtered)
 
+            for key, value in filtered.items():
+                if not (
+                    ".self_attn.qkv_proj." in key
+                    or ".mlp.gate_proj." in key
+                    or ".mlp.up_proj." in key
+                    or ".mlp.down_proj." in key
+                ):
+                    continue
+                for suffix in ("weight", "scales", "biases"):
+                    marker = f".{suffix}"
+                    if key.endswith(marker):
+                        base = key[: -len(marker)]
+                        self._mimo_v2_pending_qkv_affine.setdefault(base, {})[
+                            suffix
+                        ] = value
+                        break
+
             quantization = getattr(self.config.text_config, "quantization", None)
             if isinstance(quantization, dict) and not self._mimo_v2_quantized_for_load:
                 quantized_count = _quantize_mimo_v2_runtime_modules(
@@ -1131,6 +1426,53 @@ def _register_mimo_v2_mlx_vlm_runtime() -> None:
 
             result = self.language_model.load_weights(list(filtered.items()), strict=strict)
             if isinstance(quantization, dict):
+                try:
+                    from vmlx_engine.utils.jang_loader import (
+                        _upgrade_modules_with_uint32_weights,
+                    )
+
+                    upgraded_count = _upgrade_modules_with_uint32_weights(
+                        self.language_model.inner,
+                        default_bits=int(quantization.get("bits") or 8),
+                        default_group_size=int(quantization.get("group_size") or 64),
+                        default_mode=str(quantization.get("mode") or "affine"),
+                    )
+                    if upgraded_count:
+                        logger.info(
+                            "MiMo-V2 load upgraded %d packed affine runtime modules after load",
+                            upgraded_count,
+                        )
+                except Exception:
+                    logger.exception("MiMo-V2 post-load packed affine upgrade failed")
+                pending_qkv_count = _install_mimo_v2_pending_qkv_affine_modules(
+                    self.language_model.inner,
+                    self._mimo_v2_pending_qkv_affine,
+                    quantization,
+                )
+                if pending_qkv_count:
+                    logger.info(
+                        "MiMo-V2 load installed %d split-shard affine qkv modules",
+                        pending_qkv_count,
+                    )
+                pending_mlp_count = _install_mimo_v2_pending_dense_mlp_affine_modules(
+                    self.language_model.inner,
+                    self._mimo_v2_pending_qkv_affine,
+                    quantization,
+                )
+                if pending_mlp_count:
+                    logger.info(
+                        "MiMo-V2 load installed %d split-shard affine dense MLP modules",
+                        pending_mlp_count,
+                    )
+                qkv_upgrade_count = _upgrade_mimo_v2_loaded_qkv_affine_modules(
+                    self.language_model.inner,
+                    quantization,
+                )
+                if qkv_upgrade_count:
+                    logger.info(
+                        "MiMo-V2 load upgraded %d packed affine qkv modules after load",
+                        qkv_upgrade_count,
+                    )
                 hotspot_count = _quantize_mimo_v2_passthrough_decode_hotspots(
                     self.language_model.inner,
                     quantization,
