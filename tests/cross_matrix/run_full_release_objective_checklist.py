@@ -17,7 +17,7 @@ from typing import Any
 
 
 DEFAULT_OUT = Path(
-    "build/current-full-release-objective-checklist-after-mimo-audio-prefill-guard-20260608.json"
+    "build/current-full-release-objective-checklist-after-mimo-model-upload-action-20260608.json"
 )
 
 MIMO_AUDIT = Path(
