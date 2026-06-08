@@ -1317,6 +1317,16 @@ def _register_mimo_v2_mlx_vlm_runtime() -> None:
             self.language_model = _MiMoV2LanguageModelCompat(TextModel(config.text_config))
             self._mimo_v2_quantized_for_load = False
             self._mimo_v2_pending_qkv_affine: dict[str, dict[str, Any]] = {}
+            self._mimo_v2_media_weights: dict[str, Any] = {}
+            self._mimo_v2_media_weight_counts = {
+                "visual": 0,
+                "audio_encoder": 0,
+                "speech_embeddings": 0,
+            }
+            self._mimo_v2_bind_media_weights = (
+                getattr(config, "multimodal_status", None)
+                != "weights_preserved_text_runtime"
+            )
 
         @property
         def layers(self):
@@ -1361,12 +1371,49 @@ def _register_mimo_v2_mlx_vlm_runtime() -> None:
                 )
             return self.language_model(input_ids, cache=cache, mask=mask, **kwargs)
 
+        def _bind_mimo_v2_media_weight(self, key, value):
+            """Bind preserved MiMo media tensors when media runtime is enabled.
+
+            Current text-only JANG_2L/JANGTQ_2 bundles intentionally advertise
+            `weights_preserved_text_runtime`, so they should not retain the
+            visual/audio tensor payload in memory. A future media-enabled MiMo
+            config must not silently drop those tensors: this store is the
+            load_weights boundary that real visual/audio modules consume before
+            the forward bridge can be considered wired.
+            """
+
+            if key.startswith("visual."):
+                group = "visual"
+            elif key.startswith("audio_encoder."):
+                group = "audio_encoder"
+            elif key.startswith("speech_embeddings."):
+                group = "speech_embeddings"
+            else:
+                return False
+            if not self._mimo_v2_bind_media_weights:
+                return True
+            self._mimo_v2_media_weights[key] = value
+            self._mimo_v2_media_weight_counts[group] += 1
+            return True
+
         def load_weights(self, weights, strict=True):
             filtered = {}
             for key, value in weights:
-                if key.startswith(("visual.", "audio_encoder.", "speech_embeddings.", "model.mtp.")):
+                if key.startswith("model.mtp."):
+                    continue
+                if key.startswith(("visual.", "audio_encoder.", "speech_embeddings.")):
+                    self._bind_mimo_v2_media_weight(key, value)
                     continue
                 filtered[key] = value
+            if self._mimo_v2_bind_media_weights and any(
+                self._mimo_v2_media_weight_counts.values()
+            ):
+                logger.info(
+                    "MiMo-V2 load bound preserved media weights: visual=%d audio_encoder=%d speech_embeddings=%d",
+                    self._mimo_v2_media_weight_counts["visual"],
+                    self._mimo_v2_media_weight_counts["audio_encoder"],
+                    self._mimo_v2_media_weight_counts["speech_embeddings"],
+                )
 
             if hasattr(self.language_model, "sanitize"):
                 filtered = self.language_model.sanitize(filtered)

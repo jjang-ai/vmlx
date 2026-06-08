@@ -19,6 +19,30 @@ def test_mimo_current_audit_separates_clean_artifact_from_runtime_blockers(
     model_path = model_parent / "MiMo-V2.5-JANGTQ_2"
     model_path.mkdir(parents=True)
     (model_path / "config.json").write_text("{}")
+    (tmp_path / "vmlx_engine/models").mkdir(parents=True)
+    (tmp_path / "vmlx_engine/models/mllm.py").write_text(
+        "\n".join(
+            [
+                "class _MiMoV2MediaConfig: pass",
+                "class VisionConfig(_MiMoV2MediaConfig): pass",
+                "class AudioConfig(_MiMoV2MediaConfig): pass",
+                'VisionConfig.from_dict(params.get("vision_config") or {})',
+                'AudioConfig.from_dict(params.get("audio_config") or {})',
+                'processor_config=params.get("processor_config") or {}',
+                "self.processor_config = dict(processor_config or {})",
+                "self.media_token_ids = {",
+                "self._mimo_v2_media_weights: dict[str, Any] = {}",
+                "def _bind_mimo_v2_media_weight(self, key, value):",
+                'key.startswith("visual.")',
+                'key.startswith("audio_encoder.")',
+                'key.startswith("speech_embeddings.")',
+                "self._mimo_v2_media_weights[key] = value",
+                "self._mimo_v2_media_weight_counts[group] += 1",
+                "MiMo-V2.5 JANG_2L vision input is not wired",
+                'key.startswith("model.mtp.")',
+            ]
+        )
+    )
     manifest = tmp_path / "build" / "current-mimo-http-tb5-manifest-20260606.tsv"
     manifest.parent.mkdir(parents=True)
     manifest.write_text(
@@ -297,6 +321,31 @@ def test_mimo_current_audit_separates_clean_artifact_from_runtime_blockers(
         "runtime_implementation_gap_with_model_metadata_overadvertising",
         "runtime_implementation_gap",
     }
+    assert result["diagnostics"]["mimo_media_runtime"]["config_parser_components"] == {
+        "vision_config": True,
+        "audio_config": True,
+        "processor_config": True,
+    }
+    assert result["diagnostics"]["mimo_media_runtime"]["load_weights_bindings"] == {
+        "visual": True,
+        "audio": True,
+    }
+    assert (
+        "VisionConfig parser"
+        not in result["diagnostics"]["mimo_media_runtime"]["missing_runtime_components"]
+    )
+    assert (
+        "AudioConfig parser"
+        not in result["diagnostics"]["mimo_media_runtime"]["missing_runtime_components"]
+    )
+    assert (
+        "visual.* load_weights binding"
+        not in result["diagnostics"]["mimo_media_runtime"]["missing_runtime_components"]
+    )
+    assert (
+        "audio_encoder.* and speech_embeddings.* load_weights binding"
+        not in result["diagnostics"]["mimo_media_runtime"]["missing_runtime_components"]
+    )
     assert (
         "mixed media/text inputs_embeds construction"
         in result["diagnostics"]["mimo_media_runtime"]["missing_runtime_components"]

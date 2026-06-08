@@ -25,7 +25,7 @@ from typing import Any
 DEFAULT_MODEL_PATH = Path("/Users/example/.mlxstudio/models/JANGQ-AI/MiMo-V2.5-JANGTQ_2")
 DEFAULT_MANIFEST = Path("build/current-mimo-jangtq2-local-manifest-20260607.tsv")
 DEFAULT_OUT = Path(
-    "build/current-mimo-v2-jang2l-current-audit-after-live-smokes-20260607.json"
+    "build/current-mimo-v2-jang2l-current-audit-after-media-load-binding-20260607.json"
 )
 
 STRUCTURAL_ARTIFACT = Path("build/current-mimo-jang2l-local-structural-verify-20260606.json")
@@ -859,7 +859,7 @@ def _mimo_media_runtime_evidence(
         marker in adapter_text
         for marker in (
             "MiMo-V2.5 JANG_2L vision input is not wired",
-            "key.startswith((\"visual.\", \"audio_encoder.\", \"speech_embeddings.\", \"model.mtp.\"))",
+            "key.startswith(\"model.mtp.\")",
             "class VisionModel",
             "class AudioModel",
         )
@@ -870,6 +870,46 @@ def _mimo_media_runtime_evidence(
             root
             / ".venv/lib/python3.13/site-packages/jang_tools/mimo_v2/mimo_v2_multimodal.py",
             Path("/Users/example/jang/jang-tools/jang_tools/mimo_v2/mimo_v2_multimodal.py"),
+        )
+    )
+    vision_config_parser_present = all(
+        marker in adapter_text
+        for marker in (
+            "class VisionConfig(_MiMoV2MediaConfig)",
+            "VisionConfig.from_dict(params.get(\"vision_config\") or {})",
+        )
+    )
+    audio_config_parser_present = all(
+        marker in adapter_text
+        for marker in (
+            "class AudioConfig(_MiMoV2MediaConfig)",
+            "AudioConfig.from_dict(params.get(\"audio_config\") or {})",
+        )
+    )
+    processor_config_parser_present = all(
+        marker in adapter_text
+        for marker in (
+            "processor_config=params.get(\"processor_config\") or {}",
+            "self.processor_config = dict(processor_config or {})",
+            "self.media_token_ids = {",
+        )
+    )
+    visual_load_weights_binding_present = all(
+        marker in adapter_text
+        for marker in (
+            "self._mimo_v2_media_weights: dict[str, Any] = {}",
+            "def _bind_mimo_v2_media_weight(self, key, value):",
+            "key.startswith(\"visual.\")",
+            "self._mimo_v2_media_weights[key] = value",
+        )
+    )
+    audio_load_weights_binding_present = all(
+        marker in adapter_text
+        for marker in (
+            "def _bind_mimo_v2_media_weight(self, key, value):",
+            "key.startswith(\"audio_encoder.\")",
+            "key.startswith(\"speech_embeddings.\")",
+            "self._mimo_v2_media_weight_counts[group] += 1",
         )
     )
     media_weights_preserved = bool(visual_count > 0 and audio_count > 0)
@@ -911,21 +951,42 @@ def _mimo_media_runtime_evidence(
         ),
         "runtime_explicitly_unwired": bool(runtime_explicitly_unwired),
         "missing_mimo_v2_multimodal_module": bool(missing_multimodal_module),
+        "config_parser_components": {
+            "vision_config": bool(vision_config_parser_present),
+            "audio_config": bool(audio_config_parser_present),
+            "processor_config": bool(processor_config_parser_present),
+        },
+        "load_weights_bindings": {
+            "visual": bool(visual_load_weights_binding_present),
+            "audio": bool(audio_load_weights_binding_present),
+        },
         "runtime_media_wired": False if runtime_gap else True,
-        "missing_runtime_components": [
-            "VisionConfig parser",
-            "AudioConfig parser",
-            "visual.* load_weights binding",
-            "audio_encoder.* and speech_embeddings.* load_weights binding",
-            "visual patch embedding and 28-block ViT forward",
-            "vision merger to 4096 hidden size",
-            "audio tokenizer/feature extraction bridge",
-            "audio local transformer/projection forward",
-            "mixed media/text inputs_embeds construction",
-            "media-aware prefix/L2 cache proof",
-        ]
-        if runtime_gap
-        else [],
+        "missing_runtime_components": (
+            [
+                component
+                for component, present in (
+                    ("VisionConfig parser", vision_config_parser_present),
+                    ("AudioConfig parser", audio_config_parser_present),
+                    ("Processor/media token config parser", processor_config_parser_present),
+                    ("visual.* load_weights binding", visual_load_weights_binding_present),
+                    (
+                        "audio_encoder.* and speech_embeddings.* load_weights binding",
+                        audio_load_weights_binding_present,
+                    ),
+                )
+                if not present
+            ]
+            + [
+                "visual patch embedding and 28-block ViT forward",
+                "vision merger to 4096 hidden size",
+                "audio tokenizer/feature extraction bridge",
+                "audio local transformer/projection forward",
+                "mixed media/text inputs_embeds construction",
+                "media-aware prefix/L2 cache proof",
+            ]
+            if runtime_gap
+            else []
+        ),
         "required_model_metadata_if_runtime_unwired": {
             "capabilities.modalities": ["text"],
             "capabilities.preserved_modalities": ["vision", "audio"],
