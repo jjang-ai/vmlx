@@ -24,6 +24,12 @@ DEFAULT_SMOKE = Path(
 DEFAULT_OUT = Path(
     "build/current-mimo-v2-no-source-exactness-classifier-after-do-sample-false-20260607.json"
 )
+DEFAULT_JANGTQ2_EXACTNESS = Path(
+    "build/current-mimo-v25-jangtq2-exactness-isolation-20260608/result.json"
+)
+DEFAULT_JANG2L_EXACTNESS = Path(
+    "build/current-mimo-v25-jang2l-exactness-isolation-20260608/result.json"
+)
 
 EXACTNESS_REASONS = {
     "expected_tool_argument_missing",
@@ -59,7 +65,71 @@ def _server_log_text(smoke: dict[str, Any]) -> str:
     return "\n".join(chunks)
 
 
-def build_classification(audit: dict[str, Any], smoke: dict[str, Any]) -> dict[str, Any]:
+def _choice_text(case: dict[str, Any], *, completion: bool = False) -> str:
+    body = case.get("body") if isinstance(case, dict) else None
+    if not isinstance(body, dict):
+        return ""
+    choices = body.get("choices")
+    if not isinstance(choices, list) or not choices:
+        return ""
+    choice = choices[0] if isinstance(choices[0], dict) else {}
+    if completion:
+        return str(choice.get("text") or "")
+    message = choice.get("message") if isinstance(choice.get("message"), dict) else {}
+    return str(message.get("content") or "")
+
+
+def _first_tool_arguments(case: dict[str, Any]) -> str:
+    body = case.get("body") if isinstance(case, dict) else None
+    if not isinstance(body, dict):
+        return ""
+    choices = body.get("choices")
+    if not isinstance(choices, list) or not choices:
+        return ""
+    message = choices[0].get("message") if isinstance(choices[0], dict) else None
+    if not isinstance(message, dict):
+        return ""
+    tool_calls = message.get("tool_calls")
+    if not isinstance(tool_calls, list) or not tool_calls:
+        return ""
+    first = tool_calls[0] if isinstance(tool_calls[0], dict) else {}
+    function = first.get("function") if isinstance(first.get("function"), dict) else {}
+    return str(function.get("arguments") or "")
+
+
+def _exactness_probe_summary(
+    jangtq2: dict[str, Any] | None,
+    jang2l: dict[str, Any] | None,
+) -> dict[str, Any]:
+    expected = "B7-CAT-09"
+    tq_cases = jangtq2.get("cases", {}) if isinstance(jangtq2, dict) else {}
+    j2_cases = jang2l.get("cases", {}) if isinstance(jang2l, dict) else {}
+    tq_copy = _choice_text(tq_cases.get("completion_copy_b7", {}), completion=True)
+    j2_copy = _choice_text(j2_cases.get("completion_copy_b7", {}), completion=True)
+    tq_tool_args = _first_tool_arguments(tq_cases.get("chat_tool_b7", {}))
+    j2_tool_args = _first_tool_arguments(j2_cases.get("chat_tool_b7", {}))
+    j2_tool_text = _choice_text(j2_cases.get("chat_tool_b7", {}))
+    return {
+        "expected_literal": expected,
+        "jangtq2_raw_completion_text": tq_copy,
+        "jangtq2_raw_completion_literal_preserved": tq_copy.strip() == expected,
+        "jangtq2_tool_arguments": tq_tool_args,
+        "jangtq2_tool_literal_preserved": expected in tq_tool_args,
+        "jang2l_raw_completion_text": j2_copy,
+        "jang2l_raw_completion_literal_preserved": j2_copy.strip() == expected,
+        "jang2l_tool_arguments": j2_tool_args,
+        "jang2l_tool_content_head": j2_tool_text[:240],
+        "jang2l_tool_call_parsed": bool(j2_tool_args),
+    }
+
+
+def build_classification(
+    audit: dict[str, Any],
+    smoke: dict[str, Any],
+    *,
+    jangtq2: dict[str, Any] | None = None,
+    jang2l: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     component_ok = audit.get("component_ok") if isinstance(audit.get("component_ok"), dict) else {}
     failures = _failures(smoke)
     exactness_failures = [
@@ -90,8 +160,19 @@ def build_classification(audit: dict[str, Any], smoke: dict[str, Any]) -> dict[s
         "decode_speed_target": bool(component_ok.get("decode_speed_target")),
     }
 
+    no_source_exactness = _exactness_probe_summary(jangtq2, jang2l)
+
     unresolved_surfaces = {
         "artifact_quantization_or_decode_logits_quality": bool(exactness_failures),
+        "jangtq2_raw_decode_or_artifact_quality": (
+            no_source_exactness["jangtq2_raw_completion_text"] != ""
+            and not no_source_exactness["jangtq2_raw_completion_literal_preserved"]
+        ),
+        "jang2l_chat_tool_quality": (
+            no_source_exactness["jang2l_raw_completion_text"] != ""
+            and no_source_exactness["jang2l_raw_completion_literal_preserved"]
+            and not no_source_exactness["jang2l_tool_call_parsed"]
+        ),
         "source_vs_quant_first_divergence": not bool(
             component_ok.get("source_vs_quant_first_divergence")
         ),
@@ -105,28 +186,46 @@ def build_classification(audit: dict[str, Any], smoke: dict[str, Any]) -> dict[s
     release_ready = False
     status = "open" if exactness_failures or any(unresolved_surfaces.values()) else "pass"
 
+    if (
+        unresolved_surfaces["jangtq2_raw_decode_or_artifact_quality"]
+        and unresolved_surfaces["jang2l_chat_tool_quality"]
+    ):
+        classification = "jangtq2_raw_decode_literal_corruption_jang2l_chat_tool_quality_open"
+    elif exactness_failures and parser_structure_valid:
+        classification = "model_generated_literal_mutation_after_valid_parser_structure"
+    else:
+        classification = "insufficient_evidence"
+
+    required_next_evidence = [
+        "do not repair semantic values in parser or JSON repair layer",
+        "either rerun source-vs-quant when RAM is authorized or provide a stronger artifact-only logits/quantization diagnosis",
+        "if artifact/quantization is confirmed, rebuild or reupload MiMo with a corrected quantization contract",
+        "if runtime decode is confirmed, fix the decode/kernel path and rerun the exact tool/JSON sentinel rows",
+    ]
+    if unresolved_surfaces["mimo_media_runtime"]:
+        required_next_evidence.append(
+            "MiMo media remains unwired until real VL/audio/video runtime and cache proof exist"
+        )
+    else:
+        required_next_evidence.append(
+            "MiMo media runtime wiring is no longer the exactness blocker; keep live media E2E, audio depth, and cache/UI proof as separate release gates"
+        )
+
     return {
         "status": status,
         "release_ready": release_ready,
-        "classification": (
-            "model_generated_literal_mutation_after_valid_parser_structure"
-            if exactness_failures and parser_structure_valid
-            else "insufficient_evidence"
-        ),
+        "classification": classification,
         "source_vs_quant_load_performed": False,
         "source_vs_quant_load_skipped_reason": "user_disallowed_source_vs_quant_due_ram",
         "audit_artifact": str(DEFAULT_AUDIT),
         "smoke_artifact": str(DEFAULT_SMOKE),
+        "jangtq2_exactness_artifact": str(DEFAULT_JANGTQ2_EXACTNESS),
+        "jang2l_exactness_artifact": str(DEFAULT_JANG2L_EXACTNESS),
+        "no_source_exactness": no_source_exactness,
         "exactness_failures": exactness_failures,
         "excluded_surfaces": excluded_surfaces,
         "unresolved_surfaces": unresolved_surfaces,
-        "required_next_evidence": [
-            "do not repair semantic values in parser or JSON repair layer",
-            "either rerun source-vs-quant when RAM is authorized or provide a stronger artifact-only logits/quantization diagnosis",
-            "if artifact/quantization is confirmed, rebuild or reupload MiMo with a corrected quantization contract",
-            "if runtime decode is confirmed, fix the decode/kernel path and rerun the exact tool/JSON sentinel rows",
-            "MiMo media remains unwired until real VL/audio/video runtime and cache proof exist",
-        ],
+        "required_next_evidence": required_next_evidence,
     }
 
 
@@ -134,12 +233,23 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--audit", type=Path, default=DEFAULT_AUDIT)
     parser.add_argument("--smoke", type=Path, default=DEFAULT_SMOKE)
+    parser.add_argument("--jangtq2-exactness", type=Path, default=DEFAULT_JANGTQ2_EXACTNESS)
+    parser.add_argument("--jang2l-exactness", type=Path, default=DEFAULT_JANG2L_EXACTNESS)
     parser.add_argument("--out", type=Path, default=DEFAULT_OUT)
     args = parser.parse_args()
 
-    artifact = build_classification(_load(args.audit), _load(args.smoke))
+    jangtq2 = _load(args.jangtq2_exactness) if args.jangtq2_exactness.exists() else None
+    jang2l = _load(args.jang2l_exactness) if args.jang2l_exactness.exists() else None
+    artifact = build_classification(
+        _load(args.audit),
+        _load(args.smoke),
+        jangtq2=jangtq2,
+        jang2l=jang2l,
+    )
     artifact["audit_artifact"] = str(args.audit)
     artifact["smoke_artifact"] = str(args.smoke)
+    artifact["jangtq2_exactness_artifact"] = str(args.jangtq2_exactness)
+    artifact["jang2l_exactness_artifact"] = str(args.jang2l_exactness)
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(json.dumps(artifact, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     print(args.out)

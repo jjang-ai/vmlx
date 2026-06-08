@@ -81,3 +81,62 @@ def test_mimo_no_source_classifier_refuses_parser_claim_without_actual_args():
     assert artifact["status"] == "open"
     assert artifact["classification"] == "insufficient_evidence"
     assert artifact["excluded_surfaces"]["parser_argument_rewrite"] is False
+
+
+def test_mimo_no_source_classifier_consumes_jangtq_and_jang2l_isolation_artifacts():
+    audit = {
+        "component_ok": {
+            "api_cache_responses_contract": True,
+            "tool_protocol": True,
+            "exactness_cache_kv_quant_excluded": True,
+            "decode_speed_target": True,
+            "source_vs_quant_first_divergence": False,
+            "long_prompt_coherence": False,
+            "cb_system_prompt_working_set_pressure": False,
+            "mimo_media_wired": True,
+        }
+    }
+    smoke = {"results": []}
+    jangtq2 = {
+        "cases": {
+            "completion_copy_b7": {
+                "body": {"choices": [{"text": "B7C9099"}]},
+            },
+            "chat_tool_b7": {
+                "body": {
+                    "choices": [
+                        {
+                            "message": {
+                                "tool_calls": [
+                                    {
+                                        "function": {
+                                            "arguments": '{"value":"B7CAT-09"}'
+                                        }
+                                    }
+                                ]
+                            }
+                        }
+                    ]
+                }
+            },
+        }
+    }
+    jang2l = {
+        "cases": {
+            "completion_copy_b7": {
+                "body": {"choices": [{"text": "B7-CAT-09"}]},
+            },
+            "chat_tool_b7": {
+                "body": {"choices": [{"message": {"content": "prose, no tool"}}]},
+            },
+        }
+    }
+
+    artifact = build_classification(audit, smoke, jangtq2=jangtq2, jang2l=jang2l)
+
+    assert artifact["status"] == "open"
+    assert artifact["classification"] == "jangtq2_raw_decode_literal_corruption_jang2l_chat_tool_quality_open"
+    assert artifact["no_source_exactness"]["jangtq2_raw_completion_literal_preserved"] is False
+    assert artifact["no_source_exactness"]["jang2l_raw_completion_literal_preserved"] is True
+    assert artifact["unresolved_surfaces"]["jangtq2_raw_decode_or_artifact_quality"] is True
+    assert artifact["unresolved_surfaces"]["jang2l_chat_tool_quality"] is True
