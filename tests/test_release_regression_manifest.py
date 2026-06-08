@@ -145,7 +145,7 @@ def _write_current_objective_digest(
     open_requirements: list[str] | None = None,
     missing_evidence: list[str] | None = None,
 ) -> None:
-    artifact = root / "build/current-objective-proof-after-mimo-recall-cap-guard-20260608.json"
+    artifact = root / CURRENT_OBJECTIVE_DIGEST_ARTIFACT
     artifact.parent.mkdir(parents=True, exist_ok=True)
     open_rows = (
         EXPECTED_CURRENT_OPEN_REQUIREMENTS
@@ -10311,7 +10311,7 @@ def test_release_regression_manifest_rejects_stale_issue179_objective_digest_row
     tmp_path,
 ):
     _write_current_objective_digest(tmp_path)
-    path = tmp_path / "build/current-objective-proof-after-mimo-recall-cap-guard-20260608.json"
+    path = tmp_path / CURRENT_OBJECTIVE_DIGEST_ARTIFACT
     payload = json.loads(path.read_text(encoding="utf-8"))
     unexpected_requirement = "Unexpected MiniMax stale reporter row is release-cleared"
     payload["requirements"].append(
@@ -10434,6 +10434,63 @@ def test_release_regression_manifest_accepts_vm_stat_dsv4_source_preflight_reaso
     source_preflight["free_plus_speculative_purgeable_gb"] = 84.58
     source_preflight["strict_vm_stat_memory_gap_gb"] = 35.42
     source_preflight["psutil_available_gap_gb"] = 0.0
+    regression_suite = tmp_path / CURRENT_REGRESSION_SUITE_ARTIFACT
+    regression_suite.parent.mkdir(parents=True, exist_ok=True)
+    regression_suite.write_text(
+        json.dumps(
+            {
+                "status": "pass",
+                "failed_steps": [],
+                "open_requirements": EXPECTED_CURRENT_OPEN_REQUIREMENTS,
+                "open_requirement_details": open_details,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    result = validate_current_proof_sweep_artifacts(tmp_path)
+
+    assert result["regression_suite"]["open_requirement_detail_failures"] == []
+
+
+def test_release_regression_manifest_accepts_current_memory_gated_dsv4_open_boundary(
+    tmp_path,
+):
+    for artifact in CURRENT_POST_BUDGET_EDGE_ARTIFACTS.values():
+        path = tmp_path / artifact
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text('{"status":"pass","failed":[]}\n', encoding="utf-8")
+    _write_passing_covered_live_smoke_artifacts(tmp_path)
+    _write_passing_covered_live_tool_smoke_artifacts(tmp_path)
+    open_details = _passing_open_requirement_details()
+    dsv4_row = open_details[
+        "DSV4 long-output/code/file-generation quality is release-cleared"
+    ]
+    details = dsv4_row["details"]
+    details["direct_off_exactness_boundary"] = {
+        "present": True,
+        "direct_off_release_blocker_active": True,
+        "requested_thinking_success_is_diagnostic_only": True,
+        "requested_thinking_success_clears_direct_off": False,
+        "hidden_force_on_would_be_false_clearance": True,
+        "all_direct_off_failed_routes": ["chat"],
+        "requested_thinking_exact_routes": ["responses"],
+    }
+    details["exact_code_root_boundary"] = {
+        "present": True,
+        "current_primary_failure": "insufficient_evidence",
+        "source_full_output_clearance_missing": True,
+        "requested_thinking_is_diagnostic_only": True,
+    }
+    source_preflight = details["current_source_full_output_preflight"]
+    source_preflight["reason"] = "insufficient_vm_stat_memory"
+    source_preflight["model"] = "/Users/example/models/JANGQ/DeepSeek-V4-Flash-JANGTQ-K"
+    source_preflight["available_gb"] = 115.76
+    source_preflight["available_for_gate_gb"] = 111.7
+    source_preflight["free_plus_speculative_purgeable_gb"] = 111.7
+    source_preflight["strict_vm_stat_memory_gap_gb"] = 8.3
+    source_preflight["psutil_available_gap_gb"] = 4.24
     regression_suite = tmp_path / CURRENT_REGRESSION_SUITE_ARTIFACT
     regression_suite.parent.mkdir(parents=True, exist_ok=True)
     regression_suite.write_text(

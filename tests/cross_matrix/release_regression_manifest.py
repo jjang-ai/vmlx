@@ -7996,6 +7996,13 @@ def _validate_open_requirement_details(
         and direct.get("requested_thinking_success_clears_direct_off") is False
         and direct.get("hidden_force_on_would_be_false_clearance") is True
     )
+    current_memory_gated_direct = (
+        direct.get("present") is True
+        and direct.get("direct_off_release_blocker_active") is True
+        and direct.get("requested_thinking_success_is_diagnostic_only") is True
+        and direct.get("requested_thinking_success_clears_direct_off") is False
+        and direct.get("hidden_force_on_would_be_false_clearance") is True
+    )
     required_root = (
         root.get("direct_off_route_wide_failure") is True
         and root.get("requested_thinking_is_diagnostic_only") is True
@@ -8006,7 +8013,16 @@ def _validate_open_requirement_details(
         and root.get("current_primary_failure")
         == "direct_off_exact_code_generation"
     )
-    if not (required_direct and required_root):
+    current_memory_gated_root = (
+        root.get("present") is True
+        and root.get("current_primary_failure") == "insufficient_evidence"
+        and root.get("source_full_output_clearance_missing") is True
+        and root.get("requested_thinking_is_diagnostic_only") is True
+    )
+    if not (
+        (required_direct and required_root)
+        or (current_memory_gated_direct and current_memory_gated_root)
+    ):
         failures.append(
             {
                 "requirement": requirement,
@@ -8040,7 +8056,10 @@ def _validate_open_requirement_details(
         and source_preflight.get("launch_decision") == "do_not_launch"
         and source_preflight.get("launch_allowed") is False
         and str(source_preflight.get("model") or "").endswith(
-            "DeepSeek-V4-Flash-JANGTQ-K-HeadBF16-Probe-20260520"
+            (
+                "DeepSeek-V4-Flash-JANGTQ-K-HeadBF16-Probe-20260520",
+                "DeepSeek-V4-Flash-JANGTQ-K",
+            )
         )
         and source_preflight.get("preflight_memory_source")
         == "vm_stat_free_plus_speculative_purgeable"

@@ -41,7 +41,7 @@ DEFERRED_RELEASE_OPEN_REQUIREMENTS = {
 }
 
 CURRENT_OBJECTIVE_DIGEST_ARTIFACT = (
-    "build/current-objective-proof-after-mimo-recall-cap-guard-20260608.json"
+    "build/current-objective-proof-after-mimo-model-upload-action-20260608.json"
 )
 
 CURRENT_SUITE_SOURCE_HASH_FILES = (
@@ -412,6 +412,7 @@ def _release_manifest_failure_is_expected(step: dict[str, Any], root: Path) -> b
         "real_ui_step37_vlm_runtime_missing",
         "real_ui_unblocked_non_mimo_missing",
         "real_ui_unblocked_non_mimo_partial",
+        "mimo_v2_jang2l_runtime_quality_open",
     }
     return (
         manifest.get("release_ready") is False

@@ -1306,6 +1306,7 @@ def test_current_regression_suite_allows_release_manifest_not_ready_for_known_op
                     {"id": "real_ui_step37_vlm_runtime_missing"},
                     {"id": "real_ui_unblocked_non_mimo_partial"},
                     {"id": "packaged_app_developer_id_signing_blocked"},
+                    {"id": "mimo_v2_jang2l_runtime_quality_open"},
                 ],
             },
         },
@@ -1520,7 +1521,7 @@ def test_current_regression_suite_refreshes_current_objective_digest_artifact(
 
     assert artifact["status"] == "pass"
     assert suite.CURRENT_OBJECTIVE_DIGEST_ARTIFACT == (
-        "build/current-objective-proof-after-mimo-recall-cap-guard-20260608.json"
+        "build/current-objective-proof-after-mimo-model-upload-action-20260608.json"
     )
     assert any(
         name == "objective_digest"
