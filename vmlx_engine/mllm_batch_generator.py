@@ -4068,6 +4068,16 @@ class MLLMBatchGenerator:
             kwargs["mask"] = request.attention_mask
         if request.image_grid_thw is not None:
             kwargs["image_grid_thw"] = request.image_grid_thw
+        if request.audio_codes is not None:
+            kwargs["audio_codes"] = request.audio_codes
+        if request.audio_embeds is not None:
+            kwargs["audio_embeds"] = request.audio_embeds
+        elif request.audio_features is not None:
+            # Some processors name already-computed audio embeddings
+            # `audio_features`. Treat them as precomputed embeddings for the
+            # model bridge. Raw waveform/mel-to-code tokenization is a separate
+            # runtime component and must not be implied by this alias.
+            kwargs["audio_embeds"] = request.audio_features
         if cache is not None:
             kwargs["cache"] = cache
 
@@ -4076,6 +4086,12 @@ class MLLMBatchGenerator:
             input_ids = input_ids[None, :]
 
         has_images = request.pixel_values is not None
+        has_audio_payload = (
+            request.audio_codes is not None
+            or request.audio_embeds is not None
+            or request.audio_features is not None
+        )
+        has_media_payload = has_images or has_audio_payload
         seq_len = input_ids.shape[1]
 
         # vmlx#89 / mlxstudio#83: opt-in chunked prefill for hybrid SSM models
@@ -4104,8 +4120,7 @@ class MLLMBatchGenerator:
         ) in ("1", "true", "True", "yes", "on")
         _native_mtp_hybrid_text_split = (
             _allow_native_mtp_hybrid_text_split
-            and
-            not has_images
+            and not has_media_payload
             and self._is_hybrid
             and _native_mtp_model_has_head(self.language_model)
             and _lm_supports_return_logits(self.language_model)
@@ -4123,7 +4138,7 @@ class MLLMBatchGenerator:
         _predicted_attn_bytes = _n_heads_guess * seq_len * seq_len * 2
         if (
             _hybrid_blocks_chunk
-            and not has_images
+            and not has_media_payload
             and _predicted_attn_bytes > _OOM_GUARD_BYTES
             and os.environ.get("VMLX_DISABLE_HYBRID_AUTO_CHUNK") not in ("1", "true", "True", "yes", "on")
         ):
@@ -4172,6 +4187,7 @@ class MLLMBatchGenerator:
         _tight_text_prefill_step_size = self.prefill_step_size
         if (
             not has_images
+            and not has_audio_payload
             and cache is not None
             and bool(getattr(self, "_tight_memory_prefill_drain", False))
         ):
@@ -4188,12 +4204,13 @@ class MLLMBatchGenerator:
 
         _mimo_tight_text_prefill_requires_chunking = (
             not has_images
+            and not has_audio_payload
             and self._model_type == "mimo_v2"
             and _tight_text_prefill_step_size < self.prefill_step_size
             and seq_len > _tight_text_prefill_step_size + 1
         )
         if (
-            not has_images
+            not has_media_payload
             and self._model_type == "mimo_v2"
             and not _mimo_tight_text_prefill_requires_chunking
         ):
@@ -4226,7 +4243,7 @@ class MLLMBatchGenerator:
                 self.prefill_step_size,
             )
 
-        if not has_images and (not _hybrid_blocks_chunk or _native_mtp_hybrid_text_split):
+        if not has_media_payload and (not _hybrid_blocks_chunk or _native_mtp_hybrid_text_split):
             lm = self.language_model
             if lm is not None and cache is not None:
                 _supports_position_ids = _lm_supports_position_ids(lm)
@@ -4324,7 +4341,7 @@ class MLLMBatchGenerator:
         # VMLX_ALLOW_HYBRID_CHUNKED_PREFILL=1 for hybrid architectures that
         # have been verified cache-aware (Qwen3.5 GatedDeltaNet + attention).
         if (
-            not has_images
+            not has_media_payload
             and (
                 seq_len > self.prefill_step_size * 2
                 or (
@@ -4449,7 +4466,7 @@ class MLLMBatchGenerator:
         # mlxstudio#83: use self.language_model (fallback-handled in __init__)
         # instead of getattr(self.model, 'language_model', None) which returns
         # None and silently falls through to the OOM-prone full-model forward.
-        if not has_images:
+        if not has_media_payload:
             lm = self.language_model
             if lm is not None and lm is not self.model:
                 # Qwen3.5/3.6-VL hybrid (and similar mRoPE VL models) cache

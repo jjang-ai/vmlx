@@ -227,6 +227,50 @@ def test_mllm_merge_preserves_turboquant_batch_api_cache():
     assert merged[0].extended == ["b"]
 
 
+def test_mllm_audio_payload_prefill_uses_model_wrapper_not_text_fast_path():
+    """Audio media must not be dropped by the text-only language-model shortcut."""
+    import mlx.core as mx
+    from vmlx_engine.mllm_batch_generator import MLLMBatchGenerator
+
+    class BadLanguageModel:
+        def __call__(self, *args, **kwargs):
+            raise AssertionError("audio media request used text-only language_model")
+
+    class CapturingModel:
+        def __init__(self):
+            self.kwargs = None
+
+        def __call__(self, input_ids, **kwargs):
+            self.kwargs = kwargs
+            return SimpleNamespace(logits=mx.zeros((1, input_ids.shape[-1], 4)))
+
+    model = CapturingModel()
+    generator = MLLMBatchGenerator.__new__(MLLMBatchGenerator)
+    generator.model = model
+    generator.language_model = BadLanguageModel()
+    generator._is_hybrid = False
+    generator._model_type = "mimo_v2"
+    generator.prefill_step_size = 128
+
+    request = SimpleNamespace(
+        input_ids=mx.array([1, 151669, 2]),
+        pixel_values=None,
+        attention_mask=None,
+        image_grid_thw=None,
+        audio_codes=mx.array([[1, 2], [3, 4]], dtype=mx.int32),
+        audio_embeds=None,
+        audio_features=None,
+        extra_kwargs={},
+        vision_encoded=False,
+    )
+
+    logits = generator._run_vision_encoding_inner(request, cache=[])
+
+    assert logits.shape == (1, 3, 4)
+    assert model.kwargs["audio_codes"].tolist() == [[1, 2], [3, 4]]
+    assert request.vision_encoded is True
+
+
 def test_mllm_exact_prefix_hit_with_generation_suffix_refeeds_last_prompt_token():
     """VLM memory/legacy hits store N-1 KV, so suffix-only prefill is wrong."""
 

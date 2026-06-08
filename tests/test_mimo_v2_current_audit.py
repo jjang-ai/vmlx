@@ -97,6 +97,11 @@ def test_mimo_current_audit_separates_clean_artifact_from_runtime_blockers(
                 "audio_features",
                 "cache_extra_keys=_cache_extra_keys",
                 "cache_extra_keys=_ssm_extra_keys",
+                'kwargs["audio_codes"] = request.audio_codes',
+                'kwargs["audio_embeds"] = request.audio_embeds',
+                'kwargs["audio_embeds"] = request.audio_features',
+                "has_media_payload = has_images or has_audio_payload",
+                "not has_media_payload",
             ]
         )
     )
@@ -108,6 +113,9 @@ def test_mimo_current_audit_separates_clean_artifact_from_runtime_blockers(
                 "test_mllm_audio_payloads_are_media_cache_context",
             ]
         )
+    )
+    (tmp_path / "tests/test_mllm_scheduler_cache.py").write_text(
+        "test_mllm_audio_payload_prefill_uses_model_wrapper_not_text_fast_path"
     )
     manifest = tmp_path / "build" / "current-mimo-http-tb5-manifest-20260606.tsv"
     manifest.parent.mkdir(parents=True)
@@ -416,6 +424,10 @@ def test_mimo_current_audit_separates_clean_artifact_from_runtime_blockers(
         is True
     )
     assert (
+        result["diagnostics"]["mimo_media_runtime"]["audio_payload_forwarding"]
+        is True
+    )
+    assert (
         "VisionConfig parser"
         not in result["diagnostics"]["mimo_media_runtime"]["missing_runtime_components"]
     )
@@ -473,6 +485,10 @@ def test_mimo_current_audit_separates_clean_artifact_from_runtime_blockers(
     )
     assert (
         "media-aware prefix/L2 cache proof"
+        not in result["diagnostics"]["mimo_media_runtime"]["missing_runtime_components"]
+    )
+    assert (
+        "audio payload forwarding through MLLM wrapper"
         not in result["diagnostics"]["mimo_media_runtime"]["missing_runtime_components"]
     )
     assert result["diagnostics"]["all_local_smoke"]["tool_protocol_pass"] is True
