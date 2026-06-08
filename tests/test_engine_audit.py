@@ -7017,6 +7017,164 @@ class TestStartupCompatibilityGuards:
         assert exc.value.code == "unsupported_media_modality"
         sys.modules.pop("mlx_vlm.models.mimo_v2", None)
 
+    def test_mllm_mimo_v2_splices_precomputed_media_embeddings(
+        self, tmp_path, monkeypatch
+    ):
+        import mlx.core as mx
+
+        from vmlx_engine.models import mllm
+
+        model_dir = tmp_path / "MiMo-V2.5-JANG_2L"
+        model_dir.mkdir()
+        (model_dir / "config.json").write_text(
+            '{"model_type":"mimo_v2","vision_config":{},"audio_config":{}}',
+            encoding="utf-8",
+        )
+
+        class FakeTextConfig:
+            model_type = "mimo_v2"
+
+            @classmethod
+            def from_dict(cls, params):
+                return cls()
+
+        def _embed_tokens(input_ids):
+            ids = mx.array(input_ids)
+            if ids.ndim == 1:
+                ids = ids[None, :]
+            ids = ids.astype(mx.float32)
+            return mx.stack([ids, ids + 0.5], axis=-1)
+
+        class FakeBackbone:
+            embed_tokens = staticmethod(_embed_tokens)
+
+        class FakeTextModel:
+            def __init__(self, config):
+                self.model = FakeBackbone()
+                self.layers = []
+
+            def __call__(self, input_ids, inputs_embeds=None, cache=None, mask=None):
+                return SimpleNamespace(logits=inputs_embeds)
+
+            def make_cache(self):
+                return []
+
+            def sanitize(self, weights):
+                return weights
+
+            def load_weights(self, weights, strict=True):
+                return None
+
+        real_import_module = importlib.import_module
+
+        def fake_import_module(name, package=None):
+            if name == "jang_tools.mimo_v2.mlx_model":
+                return SimpleNamespace(Model=FakeTextModel, ModelArgs=FakeTextConfig)
+            return real_import_module(name, package)
+
+        monkeypatch.setattr(mllm.importlib, "import_module", fake_import_module)
+
+        sys.modules.pop("mlx_vlm.models.mimo_v2", None)
+        mllm._register_local_mlx_vlm_runtime_if_needed(model_dir)
+        module = sys.modules["mlx_vlm.models.mimo_v2"]
+        model = module.Model(
+            module.ModelConfig.from_dict(
+                {
+                    "model_type": "mimo_v2",
+                    "processor_config": {
+                        "image_token_id": 151655,
+                        "video_token_id": 151656,
+                        "audio_token_id": 151669,
+                    },
+                }
+            )
+        )
+
+        input_ids = mx.array([[11, 151655, 22, 151656, 151669]])
+        features = model.get_input_embeddings(
+            input_ids=input_ids,
+            image_embeds=mx.array([[1.0, 1.5]]),
+            video_embeds=mx.array([[2.0, 2.5]]),
+            audio_embeds=mx.array([[3.0, 3.5]]),
+        )
+
+        assert features.inputs_embeds.tolist() == [
+            [
+                [11.0, 11.5],
+                [1.0, 1.5],
+                [22.0, 22.5],
+                [2.0, 2.5],
+                [3.0, 3.5],
+            ]
+        ]
+
+        output = model(
+            input_ids,
+            image_embeds=mx.array([[4.0, 4.5]]),
+            video_embeds=mx.array([[5.0, 5.5]]),
+            audio_embeds=mx.array([[6.0, 6.5]]),
+        )
+        assert output.logits.tolist()[0][1] == [4.0, 4.5]
+        assert output.logits.tolist()[0][3] == [5.0, 5.5]
+        assert output.logits.tolist()[0][4] == [6.0, 6.5]
+        sys.modules.pop("mlx_vlm.models.mimo_v2", None)
+
+    def test_mllm_mimo_v2_rejects_precomputed_media_count_mismatch(
+        self, tmp_path, monkeypatch
+    ):
+        import mlx.core as mx
+
+        from vmlx_engine.models import mllm
+
+        model_dir = tmp_path / "MiMo-V2.5-JANG_2L"
+        model_dir.mkdir()
+        (model_dir / "config.json").write_text(
+            '{"model_type":"mimo_v2","vision_config":{},"audio_config":{}}',
+            encoding="utf-8",
+        )
+
+        class FakeTextConfig:
+            model_type = "mimo_v2"
+
+            @classmethod
+            def from_dict(cls, params):
+                return cls()
+
+        class FakeTextModel:
+            def __init__(self, config):
+                self.model = SimpleNamespace(
+                    embed_tokens=lambda input_ids: mx.zeros((1, 3, 2))
+                )
+                self.layers = []
+
+        real_import_module = importlib.import_module
+
+        def fake_import_module(name, package=None):
+            if name == "jang_tools.mimo_v2.mlx_model":
+                return SimpleNamespace(Model=FakeTextModel, ModelArgs=FakeTextConfig)
+            return real_import_module(name, package)
+
+        monkeypatch.setattr(mllm.importlib, "import_module", fake_import_module)
+
+        sys.modules.pop("mlx_vlm.models.mimo_v2", None)
+        mllm._register_local_mlx_vlm_runtime_if_needed(model_dir)
+        module = sys.modules["mlx_vlm.models.mimo_v2"]
+        model = module.Model(
+            module.ModelConfig.from_dict(
+                {
+                    "model_type": "mimo_v2",
+                    "processor_config": {"image_token_id": 151655},
+                }
+            )
+        )
+
+        with pytest.raises(ValueError, match="image token count 1 does not match"):
+            model.get_input_embeddings(
+                input_ids=mx.array([[11, 151655, 22]]),
+                image_embeds=mx.array([[1.0, 1.5], [2.0, 2.5]]),
+            )
+        sys.modules.pop("mlx_vlm.models.mimo_v2", None)
+
     def test_mllm_mimo_v2_config_preserves_media_processor_contract(
         self, tmp_path, monkeypatch
     ):

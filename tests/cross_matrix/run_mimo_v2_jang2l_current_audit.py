@@ -25,7 +25,7 @@ from typing import Any
 DEFAULT_MODEL_PATH = Path("/Users/example/.mlxstudio/models/JANGQ-AI/MiMo-V2.5-JANGTQ_2")
 DEFAULT_MANIFEST = Path("build/current-mimo-jangtq2-local-manifest-20260607.tsv")
 DEFAULT_OUT = Path(
-    "build/current-mimo-v2-jang2l-current-audit-after-media-load-binding-20260607.json"
+    "build/current-mimo-v2-jang2l-current-audit-after-media-embedding-splice-20260607.json"
 )
 
 STRUCTURAL_ARTIFACT = Path("build/current-mimo-jang2l-local-structural-verify-20260606.json")
@@ -912,6 +912,16 @@ def _mimo_media_runtime_evidence(
             "self._mimo_v2_media_weight_counts[group] += 1",
         )
     )
+    mixed_inputs_embeds_present = all(
+        marker in adapter_text
+        for marker in (
+            "def _mimo_v2_replace_modal_embeddings(",
+            "image_embeds is not None",
+            "video_embeds is not None",
+            "audio_embeds is not None",
+            "token count",
+        )
+    )
     media_weights_preserved = bool(visual_count > 0 and audio_count > 0)
     metadata_overadvertises = bool(
         config_modalities != ["text"]
@@ -960,6 +970,7 @@ def _mimo_media_runtime_evidence(
             "visual": bool(visual_load_weights_binding_present),
             "audio": bool(audio_load_weights_binding_present),
         },
+        "mixed_inputs_embeds_splice": bool(mixed_inputs_embeds_present),
         "runtime_media_wired": False if runtime_gap else True,
         "missing_runtime_components": (
             [
@@ -973,6 +984,10 @@ def _mimo_media_runtime_evidence(
                         "audio_encoder.* and speech_embeddings.* load_weights binding",
                         audio_load_weights_binding_present,
                     ),
+                    (
+                        "mixed media/text inputs_embeds construction",
+                        mixed_inputs_embeds_present,
+                    ),
                 )
                 if not present
             ]
@@ -981,7 +996,6 @@ def _mimo_media_runtime_evidence(
                 "vision merger to 4096 hidden size",
                 "audio tokenizer/feature extraction bridge",
                 "audio local transformer/projection forward",
-                "mixed media/text inputs_embeds construction",
                 "media-aware prefix/L2 cache proof",
             ]
             if runtime_gap

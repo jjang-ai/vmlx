@@ -977,6 +977,8 @@ def _install_mimo_v2_rotating_cache_keep_patch_if_needed(text_runtime: Any) -> b
 
 
 def _register_mimo_v2_mlx_vlm_runtime() -> None:
+    import mlx.core as mx
+
     module_name = "mlx_vlm.models.mimo_v2"
     if module_name in sys.modules:
         return
@@ -1310,6 +1312,88 @@ def _register_mimo_v2_mlx_vlm_runtime() -> None:
     class AudioModel(VisionModel):
         pass
 
+    def _mimo_v2_flatten_modal_embeds(modal_embeds):
+        arr = mx.array(modal_embeds)
+        if arr.ndim == 1:
+            arr = arr[None, :]
+        elif arr.ndim == 3:
+            arr = mx.reshape(arr, (-1, arr.shape[-1]))
+        elif arr.ndim != 2:
+            raise ValueError(
+                f"MiMo-V2 modal embeddings must be rank 1, 2, or 3; got shape {arr.shape}"
+            )
+        return arr
+
+    def _mimo_v2_replace_modal_embeddings(
+        *,
+        input_ids,
+        inputs_embeds,
+        token_id,
+        modal_embeds,
+        modality: str,
+    ):
+        if modal_embeds is None:
+            return inputs_embeds
+        if token_id is None:
+            raise ValueError(f"MiMo-V2 {modality} token id is missing from config")
+
+        ids = mx.array(input_ids)
+        embeds = mx.array(inputs_embeds)
+        if ids.ndim == 1:
+            ids = ids[None, :]
+        if embeds.ndim == 2:
+            embeds = embeds[None, :, :]
+        if ids.ndim != 2 or embeds.ndim != 3:
+            raise ValueError(
+                f"MiMo-V2 {modality} splice expects input_ids rank 1/2 and "
+                f"inputs_embeds rank 2/3; got {ids.shape} and {embeds.shape}"
+            )
+        if ids.shape[0] != embeds.shape[0] or ids.shape[1] != embeds.shape[1]:
+            raise ValueError(
+                f"MiMo-V2 {modality} splice shape mismatch: input_ids {ids.shape}, "
+                f"inputs_embeds {embeds.shape}"
+            )
+
+        flat_modal = _mimo_v2_flatten_modal_embeds(modal_embeds)
+        hidden = embeds.shape[-1]
+        if flat_modal.shape[-1] != hidden:
+            raise ValueError(
+                f"MiMo-V2 {modality} embedding hidden size mismatch: "
+                f"{flat_modal.shape[-1]} != {hidden}"
+            )
+
+        ids_py = ids.tolist()
+        positions: list[tuple[int, int]] = []
+        for batch_idx, row in enumerate(ids_py):
+            for token_idx, value in enumerate(row):
+                if int(value) == int(token_id):
+                    positions.append((batch_idx, token_idx))
+
+        if len(positions) != flat_modal.shape[0]:
+            raise ValueError(
+                f"MiMo-V2 {modality} token count {len(positions)} does not match "
+                f"provided embeddings {flat_modal.shape[0]}"
+            )
+        if not positions:
+            return embeds
+
+        modal_index = 0
+        batch_rows = []
+        for batch_idx, row in enumerate(ids_py):
+            row_parts = []
+            last = 0
+            row_positions = [pos for b, pos in positions if b == batch_idx]
+            for pos in row_positions:
+                if pos > last:
+                    row_parts.append(embeds[batch_idx : batch_idx + 1, last:pos, :])
+                row_parts.append(flat_modal[modal_index : modal_index + 1][None, :, :])
+                modal_index += 1
+                last = pos + 1
+            if last < len(row):
+                row_parts.append(embeds[batch_idx : batch_idx + 1, last:, :])
+            batch_rows.append(mx.concatenate(row_parts, axis=1))
+        return mx.concatenate(batch_rows, axis=0)
+
     class Model(nn.Module):
         def __init__(self, config: ModelConfig):
             super().__init__()
@@ -1332,7 +1416,17 @@ def _register_mimo_v2_mlx_vlm_runtime() -> None:
         def layers(self):
             return self.language_model.layers
 
-        def get_input_embeddings(self, input_ids=None, pixel_values=None, **kwargs):
+        def get_input_embeddings(
+            self,
+            input_ids=None,
+            pixel_values=None,
+            image_embeds=None,
+            video_pixel_values=None,
+            video_embeds=None,
+            audio_codes=None,
+            audio_embeds=None,
+            **kwargs,
+        ):
             from mlx_vlm.models.base import InputEmbeddingsFeatures
 
             if pixel_values is not None:
@@ -1342,14 +1436,60 @@ def _register_mimo_v2_mlx_vlm_runtime() -> None:
                     "current Python runtime only wires the text decode path.",
                     family="mimo_v2",
                 )
+            if video_pixel_values is not None:
+                raise UnsupportedMediaModalityError(
+                    "video",
+                    "MiMo-V2.5 JANG_2L video weights are preserved, but the "
+                    "current Python runtime only accepts precomputed video embeddings.",
+                    family="mimo_v2",
+                )
+            if audio_codes is not None:
+                raise UnsupportedMediaModalityError(
+                    "audio",
+                    "MiMo-V2.5 JANG_2L audio weights are preserved, but the "
+                    "current Python runtime only accepts precomputed audio embeddings.",
+                    family="mimo_v2",
+                )
+            if input_ids is None:
+                raise ValueError("MiMo-V2 get_input_embeddings requires input_ids")
+            inputs_embeds = self.language_model.model.embed_tokens(input_ids)
+            if image_embeds is not None:
+                inputs_embeds = _mimo_v2_replace_modal_embeddings(
+                    input_ids=input_ids,
+                    inputs_embeds=inputs_embeds,
+                    token_id=getattr(self.config, "image_token_id", None),
+                    modal_embeds=image_embeds,
+                    modality="image",
+                )
+            if video_embeds is not None:
+                inputs_embeds = _mimo_v2_replace_modal_embeddings(
+                    input_ids=input_ids,
+                    inputs_embeds=inputs_embeds,
+                    token_id=getattr(self.config, "video_token_id", None),
+                    modal_embeds=video_embeds,
+                    modality="video",
+                )
+            if audio_embeds is not None:
+                inputs_embeds = _mimo_v2_replace_modal_embeddings(
+                    input_ids=input_ids,
+                    inputs_embeds=inputs_embeds,
+                    token_id=getattr(self.config, "audio_token_id", None),
+                    modal_embeds=audio_embeds,
+                    modality="audio",
+                )
             return InputEmbeddingsFeatures(
-                inputs_embeds=self.language_model.model.embed_tokens(input_ids)
+                inputs_embeds=inputs_embeds
             )
 
         def __call__(
             self,
             input_ids,
             pixel_values=None,
+            image_embeds=None,
+            video_pixel_values=None,
+            video_embeds=None,
+            audio_codes=None,
+            audio_embeds=None,
             inputs_embeds=_INPUTS_EMBEDS_UNSET,
             mask=None,
             cache=None,
@@ -1361,6 +1501,25 @@ def _register_mimo_v2_mlx_vlm_runtime() -> None:
                     "MiMo-V2.5 JANG_2L vision input is not wired in this Python runtime.",
                     family="mimo_v2",
                 )
+            if any(
+                item is not None
+                for item in (
+                    image_embeds,
+                    video_pixel_values,
+                    video_embeds,
+                    audio_codes,
+                    audio_embeds,
+                )
+            ):
+                inputs_embeds = self.get_input_embeddings(
+                    input_ids=input_ids,
+                    image_embeds=image_embeds,
+                    video_pixel_values=video_pixel_values,
+                    video_embeds=video_embeds,
+                    audio_codes=audio_codes,
+                    audio_embeds=audio_embeds,
+                ).inputs_embeds
+                input_ids = None
             if inputs_embeds is not _INPUTS_EMBEDS_UNSET:
                 return self.language_model(
                     input_ids,
