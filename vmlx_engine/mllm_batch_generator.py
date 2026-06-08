@@ -1946,7 +1946,7 @@ def _sample_mllm_prefill_logits(
     """Sample the first MLLM decode token without logprobs when possible."""
     if _native_mtp_sampler_accepts_logits(sampler):
         sampled = _native_mtp_ensure_uint32(sampler(logits_2d))
-        return sampled, None
+        return sampled, logits_2d if _mimo_v2_token_trace_enabled() else None
     logprobs = logits_2d - mx.logsumexp(logits_2d, axis=-1, keepdims=True)
     sampled = _native_mtp_ensure_uint32(sampler(logprobs))
     return sampled, logprobs
@@ -7329,6 +7329,8 @@ class MLLMBatchGenerator:
                     int(logits.shape[0]),
                 )
 
+        if _mimo_v2_token_trace_enabled():
+            return sampled, [logits[i] for i in range(int(logits.shape[0]))]
         return sampled, [None] * int(logits.shape[0])
 
     def _next(self) -> List[MLLMBatchResponse]:
