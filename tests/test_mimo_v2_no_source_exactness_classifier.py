@@ -163,6 +163,10 @@ def test_mimo_no_source_classifier_records_greedy_top1_literal_drift():
         "blue",
         "<|im_end|>",
     ]
+    assert any(
+        "wrong literal outputs are greedy top-1" in item
+        for item in artifact["required_next_evidence"]
+    )
 
 
 def test_mimo_no_source_classifier_consumes_jangtq_and_jang2l_isolation_artifacts():

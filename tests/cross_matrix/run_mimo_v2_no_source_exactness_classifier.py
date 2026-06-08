@@ -911,12 +911,24 @@ def build_classification(
         else:
             secondary_classification = "jang2l_json_sentinel_exactness_open"
 
+    artifact_only_logit_diagnosis_present = (
+        jangtq2_logprob_summary["wrong_literal_outputs_are_top1"] is True
+    )
     required_next_evidence = [
         "do not repair semantic values in parser or JSON repair layer",
-        "either rerun source-vs-quant when RAM is authorized or provide a stronger artifact-only logits/quantization diagnosis",
+    ]
+    if artifact_only_logit_diagnosis_present:
+        required_next_evidence.append(
+            "artifact-only logprob diagnostic already shows current JANGTQ_2 wrong literal outputs are greedy top-1; treat as artifact/logit quality unless a runtime decode bug is proven"
+        )
+    else:
+        required_next_evidence.append(
+            "either rerun source-vs-quant when RAM is authorized or provide a stronger artifact-only logits/quantization diagnosis"
+        )
+    required_next_evidence.extend([
         "if artifact/quantization is confirmed, rebuild or reupload MiMo with a corrected quantization contract",
         "if runtime decode is confirmed, fix the decode/kernel path and rerun the exact tool/JSON sentinel rows",
-    ]
+    ])
     if unresolved_surfaces["mimo_media_runtime"]:
         required_next_evidence.append(
             "MiMo media remains unwired until real VL/audio/video runtime and cache proof exist"
