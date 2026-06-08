@@ -2966,6 +2966,22 @@ def _current_release_blocker_ledger(
             or mimo_v2_jang2l_root_cause.get("local_release_clearance") is not True
         )
     ):
+        mimo_next_proof = (
+            "Pass current local MiMo JANG_2L long-prompt coherence, "
+            "tool protocol/continuation, cache, and API proof before "
+            "including MiMo in a production release."
+        )
+        if mimo_v2_jang2l_root_cause.get("artifact_exactness_blocked") is True:
+            mimo_next_proof = (
+                "Pass current local MiMo JANGTQ2 artifact exactness/value-drift "
+                "proof, or replace it with corrected artifact/runtime evidence, "
+                "before including MiMo in a production release."
+            )
+        elif isinstance(mimo_v2_jang2l_root_cause.get("release_boundary"), str):
+            mimo_next_proof = (
+                "Resolve MiMo release boundary: "
+                + str(mimo_v2_jang2l_root_cause.get("release_boundary"))
+            )
         blockers.append(
             {
                 "id": "mimo_v2_jang2l_runtime_quality_open",
@@ -2977,11 +2993,7 @@ def _current_release_blocker_ledger(
                     ).values()
                 )
                 or CURRENT_MIMO_V2_JANG2L_LENGTH_SWEEP_ARTIFACT,
-                "next_proof": (
-                    "Pass current local MiMo JANG_2L long-prompt coherence, "
-                    "tool protocol/continuation, cache, and API proof before "
-                    "including MiMo in a production release."
-                ),
+                "next_proof": mimo_next_proof,
                 "details": {
                     key: mimo_v2_jang2l_root_cause.get(key)
                     for key in (
@@ -2991,6 +3003,10 @@ def _current_release_blocker_ledger(
                         "switchglu_selected_expert_parity_passed",
                         "prompt_length_coherence_blocked",
                         "tool_protocol_blocked",
+                        "artifact_exactness_blocked",
+                        "decode_speed_target_blocked",
+                        "media_unwired",
+                        "source_vs_quant_requirement_satisfied",
                         "root_cause_candidate",
                         "release_boundary",
                     )
@@ -6025,9 +6041,13 @@ def _validate_current_mimo_v2_jang2l_root_cause(root: Path) -> dict[str, Any]:
             latest_decode_speed.get("switchglu_fastpath_active") is True
             and latest_decode_speed.get("speed_blocked") is True
         )
-    if audit_long_prompt_open:
+    if current_audit_component_ok.get("long_prompt_coherence") is True:
+        result["prompt_length_coherence_blocked"] = False
+    elif audit_long_prompt_open:
         result["prompt_length_coherence_blocked"] = True
-    if audit_tool_protocol_open:
+    if current_audit_component_ok.get("tool_protocol") is True:
+        result["tool_protocol_blocked"] = False
+    elif audit_tool_protocol_open:
         result["tool_protocol_blocked"] = True
     if audit_artifact_exactness_open:
         result["artifact_exactness_blocked"] = True
@@ -6087,12 +6107,29 @@ def _validate_current_mimo_v2_jang2l_root_cause(root: Path) -> dict[str, Any]:
         result["root_cause_candidate"] = (
             "mimo_v2_jang2l_quantized_profile_or_full_forward_quality_pending_exactness_media_or_policy_allowed_source_boundary"
         )
+        active_boundary_reasons: list[str] = []
+        if result["prompt_length_coherence_blocked"]:
+            active_boundary_reasons.append("long-prompt coherence")
+        if result["tool_protocol_blocked"]:
+            active_boundary_reasons.append("tool protocol")
+        if result["artifact_exactness_blocked"]:
+            active_boundary_reasons.append("current JANGTQ2 artifact exactness")
+        if result["decode_speed_target_blocked"]:
+            active_boundary_reasons.append("decode speed")
+        if result["cb_working_set_pressure_blocked"]:
+            active_boundary_reasons.append("working-set pressure")
+        if result["media_unwired"]:
+            active_boundary_reasons.append("media wiring")
+        if not result["source_vs_quant_requirement_satisfied"]:
+            active_boundary_reasons.append(
+                "source-vs-quant/no-source classification boundary"
+            )
+        if not active_boundary_reasons:
+            active_boundary_reasons.append("current MiMo runtime quality")
         result["release_boundary"] = (
-            "local artifact/runtime has narrow text-cache proof but fails long-prompt "
-            "coherence, tool protocol, decode speed, working-set pressure, media "
-            "wiring, current JANGTQ2 artifact exactness, and/or the allowed "
-            "source-vs-quant/no-source classification boundary; do not "
-            "release-clear MiMo"
+            "local artifact/runtime has narrow text-cache proof but still fails "
+            + ", ".join(active_boundary_reasons)
+            + "; do not release-clear MiMo"
         )
     elif not result["failures"]:
         result["status"] = "pass"

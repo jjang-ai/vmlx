@@ -9267,6 +9267,40 @@ def test_release_blocker_ledger_tracks_missing_local_mimo_root_cause_artifacts()
     assert ledger["deferred_release_families"] == [{"family": "dsv4", "reason": "deferred_per_20260602_emergency_release_scope"}]
 
 
+def test_release_blocker_ledger_reports_mimo_exactness_next_proof_without_stale_rows():
+    ledger = _current_release_blocker_ledger(
+        regression_suite={"open_requirements": []},
+        live_smoke_summaries={"status": "pass", "missing": [], "not_pass": []},
+        live_tool_smoke_summaries={"status": "pass", "missing": [], "not_pass": []},
+        mimo_v2_jang2l_sink_ab={"status": "pass"},
+        mimo_v2_jang2l_root_cause={
+            "status": "open",
+            "local_release_clearance": False,
+            "artifact_exactness_blocked": True,
+            "prompt_length_coherence_blocked": False,
+            "tool_protocol_blocked": False,
+            "decode_speed_target_blocked": False,
+            "media_unwired": False,
+            "source_vs_quant_requirement_satisfied": True,
+            "release_boundary": (
+                "local artifact/runtime has narrow text-cache proof but still "
+                "fails current JANGTQ2 artifact exactness; do not release-clear MiMo"
+            ),
+        },
+        issue175_179_release_boundary_audit={"status": "pass", "issues": {}},
+        installed_app_runtime_parity_audit={"status": "pass"},
+        issue179_minimax_k_root_cause_audit={"status": "pass"},
+        real_ui_live_model_matrix={"status": "pass", "missing_families": []},
+    )
+
+    blockers = {blocker["id"]: blocker for blocker in ledger["blockers"]}
+    next_proof = blockers["mimo_v2_jang2l_runtime_quality_open"]["next_proof"]
+    assert "JANGTQ2 artifact exactness" in next_proof
+    assert "long-prompt" not in next_proof
+    assert "tool protocol" not in next_proof
+    assert "cache" not in next_proof
+
+
 def test_release_blocker_ledger_tracks_packaged_signing_blocker():
     ledger = _current_release_blocker_ledger(
         regression_suite={"open_requirements": []},
@@ -11698,6 +11732,11 @@ def test_mimo_v2_root_cause_accepts_policy_skipped_source_vs_quant_without_clear
         "mimo_no_source_exactness_classifier_missing_literal_mutation_boundary"
         not in result["failures"]
     )
+    assert "media wiring" not in result["release_boundary"]
+    assert "decode speed" not in result["release_boundary"]
+    assert "tool protocol" not in result["release_boundary"]
+    assert "long-prompt coherence" not in result["release_boundary"]
+    assert "current JANGTQ2 artifact exactness" in result["release_boundary"]
 
 
 def test_mimo_v2_current_audit_extracts_fastpath_async_bottleneck(tmp_path):
