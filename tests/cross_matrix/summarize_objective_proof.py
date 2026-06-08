@@ -61,9 +61,9 @@ from tests.cross_matrix.release_regression_manifest import (
 )
 
 
-DEFAULT_OUT = Path("build/current-objective-proof-after-mimo-manifest-classifier-sync-20260607.json")
+DEFAULT_OUT = Path("build/current-objective-proof-after-mimo-tq-kv-boundary-20260607.json")
 CURRENT_RELEASE_REGRESSION_MANIFEST_REL = (
-    "build/current-release-regression-manifest-after-mimo-no-source-classifier-20260607.json"
+    "build/current-release-regression-manifest-after-mimo-tq-kv-boundary-20260607.json"
 )
 DSV4_QUALITY_CLEARANCE_REL = "build/current-dsv4-long-output-quality-clearance-20260521.json"
 DSV4_CURRENT_IDENTIFIER_CANARY_REL = (
@@ -192,7 +192,7 @@ DSV4_BATCH_GENERATOR_WARMUP_ABLATION_REL = (
     "build/current-dsv4-jang-batch-generator-warmup-ablation-20260524.json"
 )
 API_CACHE_CONTRACT_REL = "build/current-noheavy-api-cache-contract-after-qwen36-bundled-media-pass-20260607.json"
-CACHE_ARCHITECTURE_CONTRACT_REL = "build/current-cache-architecture-contract-after-mimo-capability-snapshot-fix-20260607.json"
+CACHE_ARCHITECTURE_CONTRACT_REL = "build/current-cache-architecture-contract-after-mimo-tq-kv-boundary-20260607.json"
 TOOL_CALL_CONTRACT_REL = "build/current-tool-call-contract-after-current-mimo-proof-20260607.json"
 PANEL_SETTINGS_CONTRACT_REL = "build/current-panel-settings-contract-proof-20260601-cache-ui-storage-quant.json"
 MAX_OUTPUT_CONTEXT_CONTRACT_REL = "build/current-max-output-context-contract-after-current-mimo-proof-20260607.json"

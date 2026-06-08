@@ -22,7 +22,7 @@ from typing import Any
 
 
 DEFAULT_OUT = Path(
-    "build/current-cache-architecture-contract-after-mllm-tight-memory-guard-20260607.json"
+    "build/current-cache-architecture-contract-after-mimo-tq-kv-boundary-20260607.json"
 )
 API_CACHE_CONTRACT_ARTIFACT = Path(
     "build/current-api-cache-contract-cache-architecture-check-20260528-named-family-registry-matrix.json"
@@ -83,6 +83,7 @@ REQUIRED_CACHE_TEST_MARKERS = (
     "test_memory_pressure_partially_reuses_hybrid_ssm_with_aligned_checkpoint",
     "test_hybrid_ssm_checkpoint_alignment_falls_back_to_exact_aligned_state",
     "test_hybrid_ssm_auto_mode_disables_live_tq_but_keeps_stored_kv_q4",
+    "test_mimo_v2_jang_loader_skips_generic_turboquant_kv_auto_mode",
     "test_accepts_scheduler_owned_ssm_l2_store",
     "test_scheduler_creates_matching_ssm_companion_l2_for_block_disk",
     # L2/block-disk must backfill paged cache for later partial reuse.
@@ -294,6 +295,17 @@ REQUIRED_CACHE_FAMILY_MATRIX: dict[str, dict[str, tuple[str, ...]]] = {
             "test_mllm_ensure_batch_cache_preserves_rotating_cache_type",
             "test_paged_cache_mixed_swa_reconstruct_preserves_full_kv_length",
             "test_paged_cache_mixed_swa_frugal_keeps_resident_blocks_for_immediate_hit",
+        ),
+        "api_checks": (),
+        "api_command_markers": (),
+        "panel_markers": (),
+    },
+    "mimo_v2_asymmetric_swa_kv": {
+        "checks": ("mimo_v2_asymmetric_swa_kv_status",),
+        "markers": (
+            "test_mimo_v2_jang_loader_skips_generic_turboquant_kv_auto_mode",
+            "test_native_cache_status_reports_mimo_v2_asymmetric_swa_from_registry_subtype",
+            "test_mimo_v2_cache_extraction_preserves_swa_kv_heads",
         ),
         "api_checks": (),
         "api_command_markers": (),
@@ -618,6 +630,12 @@ def build_artifact(root: Path) -> dict[str, Any]:
             and "test_paged_cache_mixed_swa_reconstruct_preserves_full_kv_length" not in missing_markers
             and "test_paged_cache_mixed_swa_frugal_keeps_resident_blocks_for_immediate_hit" not in missing_markers
             and "test_step37_registry_subtype_marks_scheduler_mixed_attention" not in missing_markers
+        ),
+        "mimo_v2_asymmetric_swa_kv_status": (
+            not failed
+            and "test_mimo_v2_jang_loader_skips_generic_turboquant_kv_auto_mode" not in missing_markers
+            and "test_native_cache_status_reports_mimo_v2_asymmetric_swa_from_registry_subtype" not in missing_markers
+            and "test_mimo_v2_cache_extraction_preserves_swa_kv_heads" not in missing_markers
         ),
         "dsv4_terminal_composite_contracts": (
             not failed

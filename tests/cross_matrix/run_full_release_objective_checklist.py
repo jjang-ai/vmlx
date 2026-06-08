@@ -17,11 +17,11 @@ from typing import Any
 
 
 DEFAULT_OUT = Path(
-    "build/current-full-release-objective-checklist-after-mimo-manifest-classifier-sync-20260607.json"
+    "build/current-full-release-objective-checklist-after-mimo-tq-kv-boundary-20260607.json"
 )
 
 MIMO_AUDIT = Path(
-    "build/current-mimo-v2-jang2l-current-audit-after-live-smokes-20260607.json"
+    "build/current-mimo-v2-jang2l-current-audit-after-media-parser-recognition-20260607.json"
 )
 MIMO_NO_SOURCE_EXACTNESS_CLASSIFIER = Path(
     "build/current-mimo-v2-jangtq2-no-source-exactness-classifier-after-runtime-repairs-20260607.json"
@@ -39,7 +39,7 @@ TOOL_CALL_CONTRACT = Path(
     "build/current-tool-call-contract-after-current-mimo-proof-20260607.json"
 )
 RELEASE_MANIFEST = Path(
-    "build/current-release-regression-manifest-after-mimo-no-source-classifier-20260607.json"
+    "build/current-release-regression-manifest-after-mimo-tq-kv-boundary-20260607.json"
 )
 ISSUE179_AUDIT = Path(
     "build/current-issue179-minimax-k-root-cause-audit-after-qwen-installed-video-wiring-20260607.json"

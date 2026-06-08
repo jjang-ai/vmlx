@@ -189,6 +189,38 @@ def test_hybrid_ssm_auto_mode_disables_live_tq_but_keeps_stored_kv_q4(tmp_path, 
     assert os.environ.get("VMLX_FORCE_TQ_AUTO") is None
 
 
+def test_mimo_v2_jang_loader_skips_generic_turboquant_kv_auto_mode(monkeypatch, caplog):
+    """MiMo asymmetric full/SWA cache must not be flattened to generic TQ-KV."""
+
+    import logging
+
+    from vmlx_engine.utils.jang_loader import _patch_turboquant_make_cache
+
+    class FakeModel:
+        layers = [object(), object()]
+
+        def make_cache(self):
+            return ["native-full", "native-swa"]
+
+    model = FakeModel()
+    original_make_cache = model.make_cache
+    monkeypatch.delenv("VMLX_DISABLE_TQ_KV", raising=False)
+    monkeypatch.setenv("VMLX_FORCE_TQ_AUTO", "1")
+    caplog.set_level(logging.INFO, logger="vmlx_engine.utils.jang_loader")
+
+    _patch_turboquant_make_cache(
+        model,
+        jang_cfg={},
+        model_config={
+            "model_type": "mimo_v2",
+            "cache_subtype": "mimo_v2_asymmetric_swa",
+        },
+    )
+
+    assert model.make_cache == original_make_cache
+    assert "TurboQuant KV skipped: MiMo-V2 uses native asymmetric full/SWA" in caplog.text
+
+
 def test_paged_cache_warns_memory_aware_budget_flags_are_ignored(
     tmp_path,
     monkeypatch,

@@ -24,7 +24,7 @@ from tests.cross_matrix.run_current_regression_suite import (
 )
 
 CURRENT_RELEASE_REGRESSION_MANIFEST_ARTIFACT = (
-    "build/current-release-regression-manifest-after-mimo-no-source-classifier-20260607.json"
+    "build/current-release-regression-manifest-after-mimo-tq-kv-boundary-20260607.json"
 )
 
 EXPECTED_CURRENT_MODEL_ARTIFACT_CHECKS = (
@@ -89,6 +89,7 @@ EXPECTED_CURRENT_CACHE_ARCHITECTURE_CHECKS = (
     "turboquant_kv_runtime_contract",
     "turboquant_disk_roundtrip",
     "gemma4_mixed_swa_kv_status",
+    "mimo_v2_asymmetric_swa_kv_status",
     "named_family_registry_cache_parser_contracts",
     "dsv4_terminal_composite_contracts",
     "dsv4_swa_hca_csa_component_contracts",
@@ -112,6 +113,7 @@ EXPECTED_CURRENT_CACHE_FAMILY_MATRIX_ROWS = (
     "qwen36_hybrid_tq",
     "qwen36_registry_hybrid_parser",
     "gemma4_mixed_swa_kv",
+    "mimo_v2_asymmetric_swa_kv",
     "step37_full_sliding_kv_registry",
     "lfm25_moe_hybrid_registry",
     "hy_v3_kv_registry",
@@ -372,7 +374,7 @@ CURRENT_POST_BUDGET_EDGE_ARTIFACTS = {
     "tool-call-loop-parser-cleanup": "build/current-tool-call-contract-after-current-mimo-proof-20260607.json",
     "panel-tool-security-loop-boundary": "build/current-panel-tool-security-contract-20260528-tool-loop-security-matrix.json",
     "api-chat-responses-anthropic-ollama-parity": "build/current-api-surface-contract-20260602-v1554-stream-cache-reuse-refresh.json",
-    "cache-architecture-family-classification": "build/current-cache-architecture-contract-after-mimo-capability-snapshot-fix-20260607.json",
+    "cache-architecture-family-classification": "build/current-cache-architecture-contract-after-mimo-tq-kv-boundary-20260607.json",
     "jang-model-compat-runtime-boundary": "build/current-jang-model-compat-contract-20260528-pr155-runtime-boundary.json",
     "model-artifact-format-detection": "build/current-model-artifact-format-contract-after-mimo-capability-snapshot-fix-20260607.json",
     "model-family-detection-noheavy": "build/current-model-family-detection-contract-after-mimo-capability-snapshot-fix-20260607.json",
@@ -1470,10 +1472,10 @@ _ROWS: list[dict[str, Any]] = [
             "Panel session launch builder preserves DSV4 default-on native prefix-cache policy, DSV4-only native cache controls, Qwen3.6 hybrid and Mamba paged-cache forcing, and regular KV stale saved false semantics",
         ],
         "commands": [
-            ".venv/bin/python tests/cross_matrix/run_cache_architecture_contract.py --out build/current-cache-architecture-contract-after-mimo-capability-snapshot-fix-20260607.json",
+            ".venv/bin/python tests/cross_matrix/run_cache_architecture_contract.py --out build/current-cache-architecture-contract-after-mimo-tq-kv-boundary-20260607.json",
         ],
         "artifacts": [
-            "build/current-cache-architecture-contract-after-mimo-capability-snapshot-fix-20260607.json",
+            "build/current-cache-architecture-contract-after-mimo-tq-kv-boundary-20260607.json",
             "build/current-cache-architecture-contract-20260530-lfm2-tool-parser-local.json",
             "build/current-cache-architecture-contract-20260528-gemma4-mixed-swa-row.json",
             "build/current-cache-architecture-contract-20260527-cache-family-matrix.json",
@@ -1689,7 +1691,7 @@ _ROWS: list[dict[str, Any]] = [
             ".venv/bin/python tests/cross_matrix/run_packaged_integrity_contract.py --jang-tools-source /Users/example/jang/.worktrees/vmlx-release-clean-b5f66a7/jang-tools --out build/current-packaged-integrity-contract-20260522-recheck-bundled-release-gate.json",
         ],
         "artifacts": [
-            "build/current-objective-proof-after-mimo-manifest-classifier-sync-20260607.json",
+            "build/current-objective-proof-after-mimo-tq-kv-boundary-20260607.json",
             "build/current-packaged-integrity-contract-after-staged-sequoia-rebuild-current-source-20260607.json",
             "build/current-packaged-integrity-contract-20260601-dsv4-preflight-refresh.json",
             "build/current-packaged-integrity-contract-20260601-qwen3vl-minicpm-mpp-staged-refresh.json",
@@ -1858,12 +1860,12 @@ _ROWS: list[dict[str, Any]] = [
             "The clearance boundary is based on live artifacts, not a hidden sampler/repetition/default override",
         ],
         "commands": [
-            ".venv/bin/python tests/cross_matrix/summarize_objective_proof.py --out build/current-objective-proof-after-mimo-manifest-classifier-sync-20260607.json",
+            ".venv/bin/python tests/cross_matrix/summarize_objective_proof.py --out build/current-objective-proof-after-mimo-tq-kv-boundary-20260607.json",
             ".venv/bin/python tests/cross_matrix/run_production_family_audit.py --rows ling_flash_tq --live --py /Applications/vMLX.app/Contents/Resources/bundled-python/python/bin/python3.12 --out build/current-production-family-live-ling-bundled-current-20260606.json",
         ],
         "artifacts": [
             "build/current-production-family-live-ling-bundled-current-20260606.json",
-            "build/current-objective-proof-after-mimo-manifest-classifier-sync-20260607.json",
+            "build/current-objective-proof-after-mimo-tq-kv-boundary-20260607.json",
             "build/current-ling-jangtq-strict-russian-nocache-bundled-4850c9c2-20260524.json",
             "build/current-ling-mxfp4-crack-strict-russian-nocache-bundled-4850c9c2-20260524.json",
             "build/current-ling-jangtq-russian-prompt-variant-probe-20260524.json",

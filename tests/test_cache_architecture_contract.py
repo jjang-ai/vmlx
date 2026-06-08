@@ -5,7 +5,7 @@ def test_cache_architecture_contract_default_out_tracks_current_release_proof_ar
     from tests.cross_matrix import run_cache_architecture_contract as gate
 
     assert gate.DEFAULT_OUT == Path(
-        "build/current-cache-architecture-contract-after-mimo-modality-truth-20260606.json"
+        "build/current-cache-architecture-contract-after-mimo-tq-kv-boundary-20260607.json"
     )
 
 
@@ -64,6 +64,7 @@ def test_cache_architecture_contract_pins_named_cache_edges():
     assert "test_prompt_disk_l2_hit_backfills_paged_cache_for_partial_reuse" in required_pytest
     assert "test_hybrid_ssm_checkpoint_alignment_falls_back_to_exact_aligned_state" in required_pytest
     assert "test_hybrid_ssm_auto_mode_disables_live_tq_but_keeps_stored_kv_q4" in required_pytest
+    assert "test_mimo_v2_jang_loader_skips_generic_turboquant_kv_auto_mode" in required_pytest
     assert "test_accepts_scheduler_owned_ssm_l2_store" in required_pytest
     assert "test_scheduler_creates_matching_ssm_companion_l2_for_block_disk" in required_pytest
     assert "test_qwen3_5_moe_linear_attention_keeps_selective_live_tq_and_stored_kv_q4" in required_pytest
@@ -132,6 +133,7 @@ def test_cache_architecture_contract_publishes_structured_family_matrix():
         "qwen36_hybrid_tq",
         "qwen36_registry_hybrid_parser",
         "gemma4_mixed_swa_kv",
+        "mimo_v2_asymmetric_swa_kv",
         "step37_full_sliding_kv_registry",
         "lfm25_moe_hybrid_registry",
         "hy_v3_kv_registry",
@@ -202,6 +204,18 @@ def test_cache_architecture_contract_publishes_structured_family_matrix():
         "test_step37_registry_subtype_marks_scheduler_mixed_attention"
         in gate.REQUIRED_CACHE_TEST_MARKERS
     )
+
+    mimo = gate.REQUIRED_CACHE_FAMILY_MATRIX["mimo_v2_asymmetric_swa_kv"]
+    assert "mimo_v2_asymmetric_swa_kv_status" in mimo["checks"]
+    assert (
+        "test_mimo_v2_jang_loader_skips_generic_turboquant_kv_auto_mode"
+        in mimo["markers"]
+    )
+    assert (
+        "test_native_cache_status_reports_mimo_v2_asymmetric_swa_from_registry_subtype"
+        in mimo["markers"]
+    )
+    assert "test_mimo_v2_cache_extraction_preserves_swa_kv_heads" in mimo["markers"]
 
     step37 = gate.REQUIRED_CACHE_FAMILY_MATRIX["step37_full_sliding_kv_registry"]
     assert "named_family_registry_cache_parser_contracts" in step37["checks"]
