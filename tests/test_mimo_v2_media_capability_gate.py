@@ -3,7 +3,7 @@ import sys
 import types
 
 
-def _write_mimo_bundle(path, *, audio_token=False):
+def _write_mimo_bundle(path, *, audio_token=False, media_runtime=False):
     (path / "audio_tokenizer").mkdir(parents=True, exist_ok=True)
     (path / "audio_tokenizer" / "model.safetensors").write_bytes(b"stub")
     (path / "config.json").write_text(
@@ -16,6 +16,29 @@ def _write_mimo_bundle(path, *, audio_token=False):
                 "image_token_id": 151655,
                 "video_token_id": 151656,
                 **({"audio_token_id": 151657} if audio_token else {}),
+                "capabilities": {
+                    "modalities": (
+                        ["text", "vision", "video", "audio"]
+                        if media_runtime and audio_token
+                        else ["text", "vision", "video"]
+                        if media_runtime
+                        else ["text"]
+                    ),
+                    "preserved_modalities": ["vision", "audio"],
+                    "unwired_modalities": [] if media_runtime else ["vision", "audio"],
+                    "multimodal_status": (
+                        "mimo_v2_multimodal_runtime"
+                        if media_runtime
+                        else "weights_preserved_text_runtime"
+                    ),
+                },
+                "runtime": {
+                    "multimodal_mode": (
+                        "mimo_v2_multimodal_runtime"
+                        if media_runtime
+                        else "weights_preserved_text_runtime"
+                    ),
+                },
             }
         ),
         encoding="utf-8",
@@ -40,7 +63,7 @@ def test_mimo_v2_runtime_modalities_are_component_and_token_gated(
 ):
     from vmlx_engine import server
 
-    _write_mimo_bundle(tmp_path, audio_token=False)
+    _write_mimo_bundle(tmp_path, audio_token=False, media_runtime=True)
     _install_fake_mimo_runtime(monkeypatch)
 
     assert server._mimo_v2_runtime_modalities(str(tmp_path)) == [
@@ -49,13 +72,25 @@ def test_mimo_v2_runtime_modalities_are_component_and_token_gated(
         "video",
     ]
 
-    _write_mimo_bundle(tmp_path, audio_token=True)
+    _write_mimo_bundle(tmp_path, audio_token=True, media_runtime=True)
     assert server._mimo_v2_runtime_modalities(str(tmp_path)) == [
         "text",
         "vision",
         "video",
         "audio",
     ]
+
+
+def test_mimo_v2_runtime_modalities_fail_closed_for_preserved_text_runtime(
+    tmp_path,
+    monkeypatch,
+):
+    from vmlx_engine import server
+
+    _write_mimo_bundle(tmp_path, audio_token=True, media_runtime=False)
+    _install_fake_mimo_runtime(monkeypatch)
+
+    assert server._mimo_v2_runtime_modalities(str(tmp_path)) == ["text"]
 
 
 def test_mimo_v2_runtime_modalities_register_local_runtime_when_missing(
@@ -65,7 +100,7 @@ def test_mimo_v2_runtime_modalities_register_local_runtime_when_missing(
     from vmlx_engine import server
     from vmlx_engine.models import mllm
 
-    _write_mimo_bundle(tmp_path, audio_token=False)
+    _write_mimo_bundle(tmp_path, audio_token=False, media_runtime=True)
     sys.modules.pop("mlx_vlm.models.mimo_v2", None)
 
     def register_fake_runtime():
@@ -90,7 +125,7 @@ def test_mimo_v2_runtime_modalities_use_processor_audio_token_id(
 ):
     from vmlx_engine import server
 
-    _write_mimo_bundle(tmp_path, audio_token=False)
+    _write_mimo_bundle(tmp_path, audio_token=False, media_runtime=True)
     cfg = json.loads((tmp_path / "config.json").read_text(encoding="utf-8"))
     cfg["processor_config"] = {"audio_token_id": 151669}
     (tmp_path / "config.json").write_text(json.dumps(cfg), encoding="utf-8")
@@ -128,7 +163,7 @@ def test_mimo_v2_media_capabilities_filter_runtime_supported_unwired_modalities(
 ):
     from vmlx_engine import server
 
-    _write_mimo_bundle(tmp_path, audio_token=False)
+    _write_mimo_bundle(tmp_path, audio_token=False, media_runtime=True)
     _install_fake_mimo_runtime(monkeypatch)
     monkeypatch.setattr(server, "_model_path", str(tmp_path))
     monkeypatch.setattr(server, "_model_name", None)

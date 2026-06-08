@@ -1068,12 +1068,12 @@ def test_mimo_source_capability_detector_accepts_runtime_media(monkeypatch, tmp_
             "image_token_id": 151655,
             "video_token_id": 151656,
             "capabilities": {
-                "modalities": ["text"],
+                "modalities": ["text", "vision", "video", "audio"],
                 "preserved_modalities": ["vision", "audio"],
-                "unwired_modalities": ["vision", "audio"],
-                "multimodal_status": "weights_preserved_text_runtime",
+                "unwired_modalities": [],
+                "multimodal_status": "mimo_v2_multimodal_runtime",
             },
-            "runtime": {"multimodal_mode": "weights_preserved_text_runtime"},
+            "runtime": {"multimodal_mode": "mimo_v2_multimodal_runtime"},
         },
     )
     monkeypatch.setitem(

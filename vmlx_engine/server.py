@@ -1817,14 +1817,50 @@ def _mimo_v2_runtime_module() -> Any | None:
         return None
 
 
+def _mimo_v2_media_runtime_enabled(cfg: dict[str, Any]) -> bool:
+    """Return True only for MiMo bundles that explicitly enable media runtime.
+
+    MiMo JANG/JANGTQ release bundles can preserve vision/audio/video weights
+    while intentionally stamping ``weights_preserved_text_runtime``. Runtime
+    classes being importable is not enough to advertise media: the artifact must
+    opt into the media bridge so stale token IDs or sidecars cannot route image,
+    video, or audio requests into an unproven forward path.
+    """
+    caps = cfg.get("capabilities") if isinstance(cfg.get("capabilities"), dict) else {}
+    runtime = cfg.get("runtime") if isinstance(cfg.get("runtime"), dict) else {}
+    text_runtime_values = {
+        "weights_preserved_text_runtime",
+        "text_runtime",
+        "text_only",
+    }
+    enabled_values = {
+        "mimo_v2_multimodal_runtime",
+        "multimodal_runtime",
+        "media_enabled",
+        "vl_audio_video_runtime",
+    }
+    values = {
+        str(caps.get("multimodal_status") or "").lower(),
+        str(runtime.get("multimodal_mode") or "").lower(),
+    }
+    if values & text_runtime_values:
+        return False
+    if values & enabled_values:
+        return True
+    return False
+
+
 def _mimo_v2_runtime_modalities(bundle_path: str | None) -> list[str] | None:
     """Return runtime-wired MiMo modalities from actual adapter + token support."""
     cfg = _read_bundle_json(bundle_path, "config.json")
     if str((cfg or {}).get("model_type") or "").lower() != "mimo_v2":
         return None
 
-    module = _mimo_v2_runtime_module()
     modalities = ["text"]
+    if not _mimo_v2_media_runtime_enabled(cfg):
+        return modalities
+
+    module = _mimo_v2_runtime_module()
     has_vision_runtime = bool(
         module is not None
         and hasattr(module, "VisionModel")
@@ -1979,15 +2015,19 @@ def _artifact_media_modalities(bundle_path: str | None) -> dict[str, list[str]]:
         declared.add("video")
 
     if model_type == "mimo_v2":
+        media_runtime_enabled = _mimo_v2_media_runtime_enabled(cfg)
         if isinstance(cfg.get("vision_config"), dict):
             preserved.add("vision")
-            unwired.add("vision")
+            if not media_runtime_enabled:
+                unwired.add("vision")
         if isinstance(cfg.get("audio_config"), dict):
             preserved.add("audio")
-            unwired.add("audio")
+            if not media_runtime_enabled:
+                unwired.add("audio")
         if "video" in declared:
             preserved.add("video")
-            unwired.add("video")
+            if not media_runtime_enabled:
+                unwired.add("video")
 
     def _ordered(values: set[str]) -> list[str]:
         if "image" in values:

@@ -16,7 +16,7 @@ from typing import Any
 
 
 DEFAULT_AUDIT = Path(
-    "build/current-mimo-v2-jang2l-current-audit-after-audio-expanded-token-l2-restart-20260608.json"
+    "build/current-mimo-v2-jang2l-current-audit-after-media-runtime-stamp-gate-clean-stale-20260608.json"
 )
 DEFAULT_SMOKE = Path(
     "build/current-all-local-model-smoke-mimo-v25-jangtq2-bundled-tools-nomedia-after-do-sample-false-rerun-20260607/summary.json"

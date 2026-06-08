@@ -21,7 +21,7 @@ DEFAULT_OUT = Path(
 )
 
 MIMO_AUDIT = Path(
-    "build/current-mimo-v2-jang2l-current-audit-after-audio-expanded-token-l2-restart-20260608.json"
+    "build/current-mimo-v2-jang2l-current-audit-after-media-runtime-stamp-gate-clean-stale-20260608.json"
 )
 MIMO_NO_SOURCE_EXACTNESS_CLASSIFIER = Path(
     "build/current-mimo-v2-no-source-exactness-classifier-after-audio-expanded-token-l2-restart-20260608.json"
