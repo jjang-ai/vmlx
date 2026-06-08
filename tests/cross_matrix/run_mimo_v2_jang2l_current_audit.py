@@ -1197,7 +1197,8 @@ def _mimo_media_runtime_evidence(
             "class MiMoVisionPatchMerger",
             "def merge_patches(self, hidden_states):",
             "self.merger = MiMoVisionPatchMerger(",
-            "self.linear_2 = nn.Linear(self.hidden_size, dim)",
+            "self.mlp = [",
+            "nn.Linear(self.hidden_size, dim)",
         )
     )
     vision_attention_blocks_present = all(
