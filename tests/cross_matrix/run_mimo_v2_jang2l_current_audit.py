@@ -25,7 +25,7 @@ from typing import Any
 DEFAULT_MODEL_PATH = Path("/Users/example/.mlxstudio/models/JANGQ-AI/MiMo-V2.5-JANGTQ_2")
 DEFAULT_MANIFEST = Path("build/current-mimo-jangtq2-local-manifest-20260607.tsv")
 DEFAULT_OUT = Path(
-    "build/current-mimo-v2-jang2l-current-audit-after-vision-merger-module-20260607.json"
+    "build/current-mimo-v2-jang2l-current-audit-after-vision-attention-blocks-20260607.json"
 )
 
 STRUCTURAL_ARTIFACT = Path("build/current-mimo-jang2l-local-structural-verify-20260606.json")
@@ -940,6 +940,17 @@ def _mimo_media_runtime_evidence(
             "self.linear_2 = nn.Linear(self.hidden_size, dim)",
         )
     )
+    vision_attention_blocks_present = all(
+        marker in adapter_text
+        for marker in (
+            "class MiMoVisionAttention",
+            "class MiMoVisionBlock",
+            "class MiMoVisionSwiGLUMLP",
+            "def run_blocks(self, hidden_states):",
+            "mx.fast.scaled_dot_product_attention",
+            "self.blocks = [",
+        )
+    )
     media_weights_preserved = bool(visual_count > 0 and audio_count > 0)
     metadata_overadvertises = bool(
         config_modalities != ["text"]
@@ -991,6 +1002,7 @@ def _mimo_media_runtime_evidence(
         "mixed_inputs_embeds_splice": bool(mixed_inputs_embeds_present),
         "vision_patch_embed_module": bool(vision_patch_embed_present),
         "vision_merger_module": bool(vision_merger_present),
+        "vision_attention_block_modules": bool(vision_attention_blocks_present),
         "runtime_media_wired": False if runtime_gap else True,
         "missing_runtime_components": (
             [
@@ -1013,11 +1025,15 @@ def _mimo_media_runtime_evidence(
                         vision_patch_embed_present,
                     ),
                     ("vision merger to 4096 hidden size", vision_merger_present),
+                    (
+                        "vision qkv attention and MLP block modules",
+                        vision_attention_blocks_present,
+                    ),
                 )
                 if not present
             ]
             + [
-                "28-block ViT attention forward",
+                "grid-aware rotary/window index reorder and end-to-end ViT forward",
                 "audio tokenizer/feature extraction bridge",
                 "audio local transformer/projection forward",
                 "media-aware prefix/L2 cache proof",

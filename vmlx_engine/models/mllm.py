@@ -1323,6 +1323,41 @@ def _register_mimo_v2_mlx_vlm_runtime() -> None:
                 context_dim=self.hidden_size,
                 spatial_merge_size=self.spatial_merge_size,
             )
+            depth = int(getattr(self.config, "depth", 0) or 0)
+            intermediate_size = int(
+                getattr(self.config, "intermediate_size", self.hidden_size * 4)
+            )
+            num_heads = int(getattr(self.config, "num_heads", 1) or 1)
+            num_kv_heads = int(
+                getattr(self.config, "num_key_value_heads", num_heads) or num_heads
+            )
+            head_dim = int(getattr(self.config, "qk_channels", 0) or 0)
+            if head_dim <= 0:
+                head_dim = max(1, self.hidden_size // max(1, num_heads))
+            rms_norm_eps = float(getattr(self.config, "rms_norm_eps", 1e-6) or 1e-6)
+            hidden_act = str(getattr(self.config, "hidden_act", "silu") or "silu")
+            use_sink = bool(getattr(self.config, "use_sink", False))
+            window_size = int(getattr(self.config, "visual_token_window_size", -1) or -1)
+            self.fullatt_block_indexes = set(
+                int(i) for i in (getattr(self.config, "fullatt_block_indexes", []) or [])
+            )
+            self.vit_window_attn_types = list(
+                getattr(self.config, "vit_window_attn_types", None) or [-1] * depth
+            )
+            self.blocks = [
+                MiMoVisionBlock(
+                    dim=self.hidden_size,
+                    intermediate_dim=intermediate_size,
+                    num_heads=num_heads,
+                    num_kv_heads=num_kv_heads,
+                    head_dim=head_dim,
+                    hidden_act=hidden_act,
+                    rms_norm_eps=rms_norm_eps,
+                    use_sinks=use_sink and (i not in self.fullatt_block_indexes),
+                    window_size=window_size,
+                )
+                for i in range(depth)
+            ]
 
         def embed_patches(self, pixel_values):
             return self.patch_embed(pixel_values)
@@ -1330,11 +1365,18 @@ def _register_mimo_v2_mlx_vlm_runtime() -> None:
         def merge_patches(self, hidden_states):
             return self.merger(hidden_states)
 
+        def run_blocks(self, hidden_states):
+            for i, block in enumerate(self.blocks):
+                full_attn = i in self.fullatt_block_indexes
+                hidden_states = block(hidden_states, full_attn=full_attn)
+            return hidden_states
+
         def __call__(self, pixel_values=None, grid_thw=None, **kwargs):
             raise UnsupportedMediaModalityError(
                 "vision",
-                "MiMo-V2.5 vision patch embedding and merger modules are present, "
-                "but the 28-block ViT attention forward is not wired yet.",
+                "MiMo-V2.5 vision patch embedding, attention blocks, and merger "
+                "modules are present, but grid-aware full media forward and cache "
+                "proof are not wired yet.",
                 family="mimo_v2",
             )
 
@@ -1428,6 +1470,139 @@ def _register_mimo_v2_mlx_vlm_runtime() -> None:
             x = self.linear_1(x)
             x = nn.gelu(x)
             return self.linear_2(x)
+
+    class MiMoVisionSwiGLUMLP(nn.Module):
+        def __init__(self, *, dim: int, intermediate_dim: int, hidden_act: str = "silu"):
+            super().__init__()
+            self.gate_proj = nn.Linear(dim, intermediate_dim)
+            self.up_proj = nn.Linear(dim, intermediate_dim)
+            self.down_proj = nn.Linear(intermediate_dim, dim)
+            self.hidden_act = hidden_act
+
+        def _activate(self, x):
+            if self.hidden_act in {"gelu", "gelu_pytorch_tanh"}:
+                return nn.gelu(x)
+            return x * mx.sigmoid(x)
+
+        def __call__(self, x):
+            return self.down_proj(self._activate(self.gate_proj(x)) * self.up_proj(x))
+
+    class MiMoVisionAttention(nn.Module):
+        def __init__(
+            self,
+            *,
+            dim: int,
+            num_heads: int,
+            num_kv_heads: int,
+            head_dim: int,
+            use_sinks: bool = False,
+            window_size: int = -1,
+        ):
+            super().__init__()
+            self.dim = dim
+            self.num_heads = num_heads
+            self.num_kv_heads = num_kv_heads
+            self.head_dim = head_dim
+            self.num_kv_groups = max(1, num_heads // max(1, num_kv_heads))
+            self.scaling = head_dim**-0.5
+            self.window_size = int(window_size)
+            qkv_dim = (num_heads + 2 * num_kv_heads) * head_dim
+            self.qkv = nn.Linear(dim, qkv_dim)
+            self.proj = nn.Linear(num_heads * head_dim, dim)
+            self.sinks = mx.zeros((num_heads,)) if use_sinks else None
+
+        def _window_mask(self, seq_len: int):
+            if self.window_size <= 0:
+                return None
+            row_idx = mx.arange(seq_len)[:, None]
+            col_idx = mx.arange(seq_len)[None, :]
+            mask = mx.where(
+                mx.abs(row_idx - col_idx) > self.window_size,
+                mx.full((seq_len, seq_len), -mx.inf),
+                mx.zeros((seq_len, seq_len)),
+            )
+            return mask[None, None, :, :]
+
+        def __call__(self, hidden_states, full_attn: bool = False):
+            hidden_states = mx.array(hidden_states)
+            if hidden_states.ndim != 2 or int(hidden_states.shape[-1]) != self.dim:
+                raise ValueError(
+                    "MiMo-V2 vision attention expects rank-2 hidden states with "
+                    f"hidden size {self.dim}; got shape {hidden_states.shape}"
+                )
+            seq_len = int(hidden_states.shape[0])
+            qkv = self.qkv(hidden_states)
+            q_dim = self.num_heads * self.head_dim
+            kv_dim = self.num_kv_heads * self.head_dim
+            q = mx.reshape(qkv[:, :q_dim], (seq_len, self.num_heads, self.head_dim))
+            k = mx.reshape(
+                qkv[:, q_dim : q_dim + kv_dim],
+                (seq_len, self.num_kv_heads, self.head_dim),
+            )
+            v = mx.reshape(qkv[:, q_dim + kv_dim :], (seq_len, self.num_kv_heads, self.head_dim))
+            q = mx.transpose(q[None, :, :, :], (0, 2, 1, 3))
+            k = mx.transpose(k[None, :, :, :], (0, 2, 1, 3))
+            v = mx.transpose(v[None, :, :, :], (0, 2, 1, 3))
+            if self.num_kv_groups > 1:
+                k = mx.repeat(k, self.num_kv_groups, axis=1)
+                v = mx.repeat(v, self.num_kv_groups, axis=1)
+            mask = None if full_attn else self._window_mask(seq_len)
+            if self.sinks is not None:
+                sink_bias = mx.zeros((1, self.num_heads, seq_len, seq_len))
+                sink_bias = sink_bias + self.sinks[None, :, None, None] * (
+                    mx.arange(seq_len)[None, None, None, :] == 0
+                )
+                mask = sink_bias if mask is None else mask + sink_bias
+            attn_output = mx.fast.scaled_dot_product_attention(
+                q,
+                k,
+                v,
+                scale=self.scaling,
+                mask=mask,
+            )
+            attn_output = mx.reshape(
+                mx.transpose(attn_output, (0, 2, 1, 3)),
+                (seq_len, self.num_heads * self.head_dim),
+            )
+            return self.proj(attn_output)
+
+    class MiMoVisionBlock(nn.Module):
+        def __init__(
+            self,
+            *,
+            dim: int,
+            intermediate_dim: int,
+            num_heads: int,
+            num_kv_heads: int,
+            head_dim: int,
+            hidden_act: str = "silu",
+            rms_norm_eps: float = 1e-6,
+            use_sinks: bool = False,
+            window_size: int = -1,
+        ):
+            super().__init__()
+            self.norm1 = nn.RMSNorm(dim, eps=rms_norm_eps)
+            self.norm2 = nn.RMSNorm(dim, eps=rms_norm_eps)
+            self.attn = MiMoVisionAttention(
+                dim=dim,
+                num_heads=num_heads,
+                num_kv_heads=num_kv_heads,
+                head_dim=head_dim,
+                use_sinks=use_sinks,
+                window_size=window_size,
+            )
+            self.mlp = MiMoVisionSwiGLUMLP(
+                dim=dim,
+                intermediate_dim=intermediate_dim,
+                hidden_act=hidden_act,
+            )
+
+        def __call__(self, hidden_states, full_attn: bool = False):
+            hidden_states = hidden_states + self.attn(
+                self.norm1(hidden_states),
+                full_attn=full_attn,
+            )
+            return hidden_states + self.mlp(self.norm2(hidden_states))
 
     def _mimo_v2_flatten_modal_embeds(modal_embeds):
         arr = mx.array(modal_embeds)

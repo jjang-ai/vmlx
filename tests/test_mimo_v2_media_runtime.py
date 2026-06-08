@@ -95,3 +95,35 @@ def test_mimo_v2_vision_merger_rejects_non_merge_unit_patch_count(
     else:
         raise AssertionError("MiMo vision merger accepted an invalid patch count")
     sys.modules.pop("mlx_vlm.models.mimo_v2", None)
+
+
+def test_mimo_v2_vision_attention_blocks_preserve_patch_hidden_shape(
+    tmp_path,
+    monkeypatch,
+):
+    module = _register_fake_mimo_runtime(monkeypatch, tmp_path)
+    cfg = module.VisionConfig.from_dict(
+        {
+            "hidden_size": 8,
+            "out_hidden_size": 16,
+            "patch_size": 2,
+            "temporal_patch_size": 1,
+            "in_channels": 3,
+            "spatial_merge_size": 2,
+            "depth": 2,
+            "intermediate_size": 16,
+            "num_heads": 2,
+            "num_key_value_heads": 1,
+            "qk_channels": 4,
+            "visual_token_window_size": 2,
+            "fullatt_block_indexes": [1],
+        }
+    )
+    vision = module.VisionModel(cfg)
+
+    assert len(vision.blocks) == 2
+    hidden = vision.run_blocks(mx.ones((4, 8)))
+    assert hidden.shape == (4, 8)
+    merged = vision.merge_patches(hidden)
+    assert merged.shape == (1, 16)
+    sys.modules.pop("mlx_vlm.models.mimo_v2", None)

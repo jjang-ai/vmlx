@@ -51,6 +51,12 @@ def test_mimo_current_audit_separates_clean_artifact_from_runtime_blockers(
                 "def merge_patches(self, hidden_states):",
                 "self.merger = MiMoVisionPatchMerger(",
                 "self.linear_2 = nn.Linear(self.hidden_size, dim)",
+                "class MiMoVisionAttention",
+                "class MiMoVisionBlock",
+                "class MiMoVisionSwiGLUMLP",
+                "def run_blocks(self, hidden_states):",
+                "mx.fast.scaled_dot_product_attention",
+                "self.blocks = [",
                 "MiMo-V2.5 JANG_2L vision input is not wired",
                 'key.startswith("model.mtp.")',
             ]
@@ -347,6 +353,10 @@ def test_mimo_current_audit_separates_clean_artifact_from_runtime_blockers(
     assert result["diagnostics"]["mimo_media_runtime"]["vision_patch_embed_module"] is True
     assert result["diagnostics"]["mimo_media_runtime"]["vision_merger_module"] is True
     assert (
+        result["diagnostics"]["mimo_media_runtime"]["vision_attention_block_modules"]
+        is True
+    )
+    assert (
         "VisionConfig parser"
         not in result["diagnostics"]["mimo_media_runtime"]["missing_runtime_components"]
     )
@@ -375,7 +385,11 @@ def test_mimo_current_audit_separates_clean_artifact_from_runtime_blockers(
         not in result["diagnostics"]["mimo_media_runtime"]["missing_runtime_components"]
     )
     assert (
-        "28-block ViT attention forward"
+        "vision qkv attention and MLP block modules"
+        not in result["diagnostics"]["mimo_media_runtime"]["missing_runtime_components"]
+    )
+    assert (
+        "grid-aware rotary/window index reorder and end-to-end ViT forward"
         in result["diagnostics"]["mimo_media_runtime"]["missing_runtime_components"]
     )
     assert result["diagnostics"]["all_local_smoke"]["tool_protocol_pass"] is True
