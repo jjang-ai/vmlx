@@ -51,6 +51,9 @@ DEFAULT_JANG2L_JSON_SENTINEL_ISOLATION = Path(
 DEFAULT_JANGTQ2_LOGPROB_DIAGNOSTIC = Path(
     "build/current-mimo-v25-jangtq2-logprob-literal-diagnostic-20260608.json"
 )
+DEFAULT_JANGTQ2_TEMPLATE_DIAGNOSTIC = Path(
+    "build/current-mimo-v25-jangtq2-tokenizer-template-literal-diagnostic-20260608.json"
+)
 
 EXACTNESS_REASONS = {
     "expected_tool_argument_missing",
@@ -419,6 +422,39 @@ def _logprob_literal_summary(artifact: dict[str, Any] | None) -> dict[str, Any]:
     }
 
 
+def _template_literal_summary(artifact: dict[str, Any] | None) -> dict[str, Any]:
+    rows = artifact.get("rows") if isinstance(artifact, dict) else None
+    if not isinstance(rows, list):
+        return {
+            "exists": False,
+            "literal_preserved_in_raw_prompt": None,
+            "literal_preserved_in_chat_template": None,
+            "failed_literals": [],
+        }
+    failed_literals = []
+    raw_ok = True
+    rendered_ok = True
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        literal = row.get("literal")
+        if row.get("raw_decode_contains_literal") is not True:
+            raw_ok = False
+            failed_literals.append({"literal": literal, "surface": "raw_prompt"})
+        if (
+            row.get("rendered_contains_literal") is not True
+            or row.get("rendered_decode_contains_literal") is not True
+        ):
+            rendered_ok = False
+            failed_literals.append({"literal": literal, "surface": "chat_template"})
+    return {
+        "exists": True,
+        "literal_preserved_in_raw_prompt": raw_ok,
+        "literal_preserved_in_chat_template": rendered_ok,
+        "failed_literals": failed_literals,
+    }
+
+
 def build_classification(
     audit: dict[str, Any],
     smoke: dict[str, Any],
@@ -432,6 +468,7 @@ def build_classification(
     jang2l_literal_variants: dict[str, Any] | None = None,
     jang2l_json_sentinel: dict[str, Any] | None = None,
     jangtq2_logprob_diagnostic: dict[str, Any] | None = None,
+    jangtq2_template_diagnostic: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     component_ok = audit.get("component_ok") if isinstance(audit.get("component_ok"), dict) else {}
     failures = _failures(smoke)
@@ -459,8 +496,13 @@ def build_classification(
     jang2l_literal_variant_summary = _literal_variant_summary(jang2l_literal_variants)
     jang2l_json_sentinel_summary = _json_sentinel_summary(jang2l_json_sentinel)
     jangtq2_logprob_summary = _logprob_literal_summary(jangtq2_logprob_diagnostic)
+    jangtq2_template_summary = _template_literal_summary(jangtq2_template_diagnostic)
 
     excluded_surfaces = {
+        "prompt_template_literal_corruption": (
+            jangtq2_template_summary["literal_preserved_in_raw_prompt"] is True
+            and jangtq2_template_summary["literal_preserved_in_chat_template"] is True
+        ),
         "parser_argument_rewrite": parser_structure_valid,
         "prefix_paged_l2_or_kv_quant_primary_cause": cache_kv_l2_excluded,
         "hidden_stochastic_sampling_primary_cause": deterministic_sampling_seen,
@@ -641,11 +683,13 @@ def build_classification(
         "jang2l_literal_variant_artifact": str(DEFAULT_JANG2L_LITERAL_VARIANTS),
         "jang2l_json_sentinel_artifact": str(DEFAULT_JANG2L_JSON_SENTINEL_ISOLATION),
         "jangtq2_logprob_diagnostic_artifact": str(DEFAULT_JANGTQ2_LOGPROB_DIAGNOSTIC),
+        "jangtq2_template_diagnostic_artifact": str(DEFAULT_JANGTQ2_TEMPLATE_DIAGNOSTIC),
         "no_source_exactness": no_source_exactness,
         "literal_variant_summary": literal_variant_summary,
         "jang2l_literal_variant_summary": jang2l_literal_variant_summary,
         "jang2l_json_sentinel_summary": jang2l_json_sentinel_summary,
         "jangtq2_logprob_summary": jangtq2_logprob_summary,
+        "jangtq2_template_summary": jangtq2_template_summary,
         "no_source_runtime_diagnostics": no_source_runtime_diagnostics,
         "exactness_failures": exactness_failures,
         "excluded_surfaces": excluded_surfaces,
@@ -695,6 +739,11 @@ def main() -> int:
         type=Path,
         default=DEFAULT_JANGTQ2_LOGPROB_DIAGNOSTIC,
     )
+    parser.add_argument(
+        "--jangtq2-template-diagnostic",
+        type=Path,
+        default=DEFAULT_JANGTQ2_TEMPLATE_DIAGNOSTIC,
+    )
     parser.add_argument("--out", type=Path, default=DEFAULT_OUT)
     args = parser.parse_args()
 
@@ -735,6 +784,11 @@ def main() -> int:
         if args.jangtq2_logprob_diagnostic.exists()
         else None
     )
+    jangtq2_template_diagnostic = (
+        _load(args.jangtq2_template_diagnostic)
+        if args.jangtq2_template_diagnostic.exists()
+        else None
+    )
     artifact = build_classification(
         _load(args.audit),
         _load(args.smoke),
@@ -747,6 +801,7 @@ def main() -> int:
         jang2l_literal_variants=jang2l_literal_variants,
         jang2l_json_sentinel=jang2l_json_sentinel,
         jangtq2_logprob_diagnostic=jangtq2_logprob_diagnostic,
+        jangtq2_template_diagnostic=jangtq2_template_diagnostic,
     )
     artifact["audit_artifact"] = str(args.audit)
     artifact["smoke_artifact"] = str(args.smoke)
@@ -762,6 +817,9 @@ def main() -> int:
     artifact["jang2l_json_sentinel_artifact"] = str(args.jang2l_json_sentinel)
     artifact["jangtq2_logprob_diagnostic_artifact"] = str(
         args.jangtq2_logprob_diagnostic
+    )
+    artifact["jangtq2_template_diagnostic_artifact"] = str(
+        args.jangtq2_template_diagnostic
     )
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(json.dumps(artifact, indent=2, sort_keys=True) + "\n", encoding="utf-8")
