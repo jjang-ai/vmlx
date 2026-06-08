@@ -61,9 +61,9 @@ from tests.cross_matrix.release_regression_manifest import (
 )
 
 
-DEFAULT_OUT = Path("build/current-objective-proof-after-mimo-audio-expanded-token-l2-restart-20260608.json")
+DEFAULT_OUT = Path("build/current-objective-proof-after-mimo-media-runtime-stamp-gate-20260608.json")
 CURRENT_RELEASE_REGRESSION_MANIFEST_REL = (
-    "build/current-release-regression-manifest-after-mimo-audio-expanded-token-l2-restart-20260608.json"
+    "build/current-release-regression-manifest-after-mimo-media-runtime-stamp-gate-20260608.json"
 )
 DSV4_QUALITY_CLEARANCE_REL = "build/current-dsv4-long-output-quality-clearance-20260521.json"
 DSV4_CURRENT_IDENTIFIER_CANARY_REL = (
