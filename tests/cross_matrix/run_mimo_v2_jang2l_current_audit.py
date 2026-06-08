@@ -42,6 +42,9 @@ TOOL_FAILURE_ARTIFACT = Path(
 ALL_LOCAL_SMOKE_ARTIFACT = Path(
     "build/current-all-local-model-smoke-mimo-v25-jangtq2-audio-expanded-token-l2-restart-20260608/summary.json"
 )
+JANG2L_ALL_LOCAL_SMOKE_ARTIFACT = Path(
+    "build/current-all-local-model-smoke-mimo-v25-jang2l-media-l2-release-20260608/summary.json"
+)
 KVNONE_NOPREFIX_SMOKE_ARTIFACT = Path(
     "build/current-all-local-model-smoke-mimo-v25-jangtq2-bundled-tools-nomedia-kvnone-noprefix-20260607/summary.json"
 )
@@ -135,6 +138,95 @@ def _artifact(path: Path) -> dict[str, Any]:
         }
     status = data.get("status") if isinstance(data, dict) else None
     return {"artifact": str(path), "exists": True, "status": status, "data": data}
+
+
+def _ensure_smoke_bundle_identity(
+    evidence: dict[str, Any],
+    artifact: Path,
+) -> dict[str, Any]:
+    if not evidence.get("exists") or evidence.get("bundle_kind") != "unknown":
+        return evidence
+    inferred_bundle_kind = _mimo_bundle_kind_from_text(str(artifact))
+    if inferred_bundle_kind == "unknown":
+        return evidence
+    inferred_bundle_name = (
+        "MiMo-V2.5-JANGTQ_2"
+        if inferred_bundle_kind == "jangtq2"
+        else "MiMo-V2.5-JANG_2L"
+    )
+    evidence["bundle_kind"] = inferred_bundle_kind
+    evidence["bundle_name"] = inferred_bundle_name
+    coverage = evidence.get("bundle_media_l2_coverage")
+    if not isinstance(coverage, dict):
+        coverage = {}
+    for bundle_kind in ("jangtq2", "jang2l"):
+        existing = coverage.get(bundle_kind)
+        if not isinstance(existing, dict):
+            existing = {}
+        coverage[bundle_kind] = {
+            "bundle_name": (
+                inferred_bundle_name
+                if bundle_kind == inferred_bundle_kind
+                else existing.get("bundle_name")
+            ),
+            "live_media_e2e_pass": bool(
+                bundle_kind == inferred_bundle_kind
+                and evidence.get("live_media_e2e_pass")
+                and evidence.get("audio_waveform_e2e_pass")
+            ),
+            "block_disk_l2_restart_restore_pass": bool(
+                bundle_kind == inferred_bundle_kind
+                and evidence.get("block_disk_l2_restart_restore_pass")
+            ),
+            "block_disk_l2_restart_cache_hit": bool(
+                bundle_kind == inferred_bundle_kind
+                and evidence.get("block_disk_l2_restart_cache_hit")
+            ),
+        }
+    evidence["bundle_media_l2_coverage"] = coverage
+    return evidence
+
+
+def _merge_bundle_media_l2_coverage(
+    *evidences: dict[str, Any],
+) -> dict[str, dict[str, Any]]:
+    merged: dict[str, dict[str, Any]] = {
+        "jangtq2": {
+            "bundle_name": None,
+            "live_media_e2e_pass": False,
+            "block_disk_l2_restart_cache_hit": False,
+            "block_disk_l2_restart_restore_pass": False,
+        },
+        "jang2l": {
+            "bundle_name": None,
+            "live_media_e2e_pass": False,
+            "block_disk_l2_restart_cache_hit": False,
+            "block_disk_l2_restart_restore_pass": False,
+        },
+    }
+    for evidence in evidences:
+        coverage = evidence.get("bundle_media_l2_coverage")
+        if not isinstance(coverage, dict):
+            continue
+        for bundle_kind in ("jangtq2", "jang2l"):
+            item = coverage.get(bundle_kind)
+            if not isinstance(item, dict):
+                continue
+            target = merged[bundle_kind]
+            if item.get("bundle_name"):
+                target["bundle_name"] = item.get("bundle_name")
+            target["live_media_e2e_pass"] = bool(
+                target["live_media_e2e_pass"] or item.get("live_media_e2e_pass")
+            )
+            target["block_disk_l2_restart_cache_hit"] = bool(
+                target["block_disk_l2_restart_cache_hit"]
+                or item.get("block_disk_l2_restart_cache_hit")
+            )
+            target["block_disk_l2_restart_restore_pass"] = bool(
+                target["block_disk_l2_restart_restore_pass"]
+                or item.get("block_disk_l2_restart_restore_pass")
+            )
+    return merged
 
 
 def _verify_manifest(model_parent: Path, manifest: Path) -> dict[str, Any]:
@@ -407,6 +499,41 @@ def _all_local_smoke_evidence(data: dict[str, Any]) -> dict[str, Any]:
         }
     )
     block_disk_l2_restart_restore_pass = bool(l2_restart_summary.get("pass"))
+    l2_usage = l2_restart.get("usage") if isinstance(l2_restart, dict) else None
+    l2_details = (
+        l2_usage.get("prompt_tokens_details") if isinstance(l2_usage, dict) else None
+    )
+    l2_cache_stats = l2_restart.get("cache_stats") if isinstance(l2_restart, dict) else None
+    l2_scheduler_stats = (
+        l2_cache_stats.get("scheduler_stats")
+        if isinstance(l2_cache_stats, dict)
+        else None
+    )
+    l2_block_disk = (
+        l2_cache_stats.get("block_disk_cache")
+        if isinstance(l2_cache_stats, dict)
+        else None
+    )
+    block_disk_l2_restart_cache_hit = bool(
+        (
+            isinstance(l2_details, dict)
+            and isinstance(l2_details.get("cached_tokens"), int)
+            and l2_details.get("cached_tokens", 0) > 0
+            and "disk" in str(l2_details.get("cache_detail") or "")
+        )
+        or (
+            isinstance(l2_scheduler_stats, dict)
+            and isinstance(l2_scheduler_stats.get("cache_hit_tokens"), int)
+            and l2_scheduler_stats.get("cache_hit_tokens", 0) > 0
+            and "disk" in str(l2_scheduler_stats.get("cache_hit_tokens_by_detail") or "")
+        )
+        or (
+            isinstance(l2_block_disk, dict)
+            and isinstance(l2_block_disk.get("disk_hits"), int)
+            and l2_block_disk.get("disk_hits", 0) > 0
+        )
+        or block_disk_l2_restart_restore_pass
+    )
     bundle_media_l2_coverage = {
         "jangtq2": {
             "bundle_name": bundle_name if bundle_kind == "jangtq2" else None,
@@ -414,6 +541,9 @@ def _all_local_smoke_evidence(data: dict[str, Any]) -> dict[str, Any]:
                 bundle_kind == "jangtq2"
                 and live_media_e2e_pass
                 and audio_waveform_e2e_pass
+            ),
+            "block_disk_l2_restart_cache_hit": bool(
+                bundle_kind == "jangtq2" and block_disk_l2_restart_cache_hit
             ),
             "block_disk_l2_restart_restore_pass": bool(
                 bundle_kind == "jangtq2" and block_disk_l2_restart_restore_pass
@@ -425,6 +555,9 @@ def _all_local_smoke_evidence(data: dict[str, Any]) -> dict[str, Any]:
                 bundle_kind == "jang2l"
                 and live_media_e2e_pass
                 and audio_waveform_e2e_pass
+            ),
+            "block_disk_l2_restart_cache_hit": bool(
+                bundle_kind == "jang2l" and block_disk_l2_restart_cache_hit
             ),
             "block_disk_l2_restart_restore_pass": bool(
                 bundle_kind == "jang2l" and block_disk_l2_restart_restore_pass
@@ -456,6 +589,7 @@ def _all_local_smoke_evidence(data: dict[str, Any]) -> dict[str, Any]:
         "speed_blocked": speed_blocked,
         "generation_tps": generation_tps,
         "block_disk_l2_restart_restore_pass": bool(block_disk_l2_restart_restore_pass),
+        "block_disk_l2_restart_cache_hit": bool(block_disk_l2_restart_cache_hit),
         "block_disk_l2_restart_restore_status": str(
             l2_restart_summary.get("status") or "missing"
         ),
@@ -2065,6 +2199,7 @@ def build_audit(root: Path, model_path: Path, manifest: Path) -> dict[str, Any]:
     length_sweep = _artifact(root / LENGTH_SWEEP_ARTIFACT)
     tool_failure = _artifact(root / TOOL_FAILURE_ARTIFACT)
     all_local_smoke = _artifact(root / ALL_LOCAL_SMOKE_ARTIFACT)
+    jang2l_all_local_smoke = _artifact(root / JANG2L_ALL_LOCAL_SMOKE_ARTIFACT)
     kvnone_noprefix_smoke = _artifact(root / KVNONE_NOPREFIX_SMOKE_ARTIFACT)
     cache_vs_nocache = _artifact(root / CACHE_VS_NOCACHE_ARTIFACT)
     sink_mode_length = _artifact(root / SINK_MODE_LENGTH_DIAGNOSTIC_ARTIFACT)
@@ -2113,40 +2248,16 @@ def build_audit(root: Path, model_path: Path, manifest: Path) -> dict[str, Any]:
         if all_local_smoke.get("exists")
         else {"exists": False}
     )
-    if smoke_evidence.get("exists") and smoke_evidence.get("bundle_kind") == "unknown":
-        inferred_bundle_kind = _mimo_bundle_kind_from_text(str(ALL_LOCAL_SMOKE_ARTIFACT))
-        if inferred_bundle_kind != "unknown":
-            inferred_bundle_name = (
-                "MiMo-V2.5-JANGTQ_2"
-                if inferred_bundle_kind == "jangtq2"
-                else "MiMo-V2.5-JANG_2L"
-            )
-            smoke_evidence["bundle_kind"] = inferred_bundle_kind
-            smoke_evidence["bundle_name"] = inferred_bundle_name
-            coverage = smoke_evidence.get("bundle_media_l2_coverage")
-            if not isinstance(coverage, dict):
-                coverage = {}
-            for bundle_kind in ("jangtq2", "jang2l"):
-                existing = coverage.get(bundle_kind)
-                if not isinstance(existing, dict):
-                    existing = {}
-                coverage[bundle_kind] = {
-                    "bundle_name": (
-                        inferred_bundle_name
-                        if bundle_kind == inferred_bundle_kind
-                        else existing.get("bundle_name")
-                    ),
-                    "live_media_e2e_pass": bool(
-                        bundle_kind == inferred_bundle_kind
-                        and smoke_evidence.get("live_media_e2e_pass")
-                        and smoke_evidence.get("audio_waveform_e2e_pass")
-                    ),
-                    "block_disk_l2_restart_restore_pass": bool(
-                        bundle_kind == inferred_bundle_kind
-                        and smoke_evidence.get("block_disk_l2_restart_restore_pass")
-                    ),
-                }
-            smoke_evidence["bundle_media_l2_coverage"] = coverage
+    smoke_evidence = _ensure_smoke_bundle_identity(smoke_evidence, ALL_LOCAL_SMOKE_ARTIFACT)
+    jang2l_smoke_evidence = (
+        _all_local_smoke_evidence(jang2l_all_local_smoke["data"])
+        if jang2l_all_local_smoke.get("exists")
+        else {"exists": False}
+    )
+    jang2l_smoke_evidence = _ensure_smoke_bundle_identity(
+        jang2l_smoke_evidence,
+        JANG2L_ALL_LOCAL_SMOKE_ARTIFACT,
+    )
     kvnone_noprefix_evidence = (
         _kvnone_noprefix_exactness_evidence(kvnone_noprefix_smoke["data"])
         if kvnone_noprefix_smoke.get("exists")
@@ -2333,9 +2444,10 @@ def build_audit(root: Path, model_path: Path, manifest: Path) -> dict[str, Any]:
     block_disk_l2_restart_restore_proven = bool(
         smoke_evidence.get("block_disk_l2_restart_restore_pass")
     )
-    bundle_media_l2_coverage = smoke_evidence.get("bundle_media_l2_coverage")
-    if not isinstance(bundle_media_l2_coverage, dict):
-        bundle_media_l2_coverage = {}
+    bundle_media_l2_coverage = _merge_bundle_media_l2_coverage(
+        smoke_evidence,
+        jang2l_smoke_evidence,
+    )
     jangtq2_coverage = bundle_media_l2_coverage.get("jangtq2")
     if not isinstance(jangtq2_coverage, dict):
         jangtq2_coverage = {}
@@ -2349,6 +2461,12 @@ def build_audit(root: Path, model_path: Path, manifest: Path) -> dict[str, Any]:
     mimo_jang2l_live_media_l2 = bool(
         jang2l_coverage.get("live_media_e2e_pass")
         and jang2l_coverage.get("block_disk_l2_restart_restore_pass")
+    )
+    mimo_jang2l_l2_restart_cache_hit = bool(
+        jang2l_coverage.get("block_disk_l2_restart_cache_hit")
+    )
+    mimo_jang2l_l2_restart_visible_output = bool(
+        jang2l_coverage.get("block_disk_l2_restart_restore_pass")
     )
     block_disk_l2_restart_restore_blocked = not block_disk_l2_restart_restore_proven
     if image_video_live_e2e_proven and current_runtime_media_supported:
@@ -2494,6 +2612,8 @@ def build_audit(root: Path, model_path: Path, manifest: Path) -> dict[str, Any]:
         blockers.append("mimo_jangtq2_live_media_l2_missing")
     if not mimo_jang2l_live_media_l2:
         blockers.append("mimo_jang2l_live_media_l2_missing")
+    if mimo_jang2l_l2_restart_cache_hit and not mimo_jang2l_l2_restart_visible_output:
+        blockers.append("mimo_jang2l_l2_restart_visible_output_blocked")
     if not media_runtime_wired:
         blockers.append("mimo_media_runtime_implementation_missing")
     if not media_metadata_ok:
@@ -2570,6 +2690,12 @@ def build_audit(root: Path, model_path: Path, manifest: Path) -> dict[str, Any]:
             ),
             "mimo_jangtq2_live_media_l2": bool(mimo_jangtq2_live_media_l2),
             "mimo_jang2l_live_media_l2": bool(mimo_jang2l_live_media_l2),
+            "mimo_jang2l_l2_restart_cache_hit": bool(
+                mimo_jang2l_l2_restart_cache_hit
+            ),
+            "mimo_jang2l_l2_restart_visible_output": bool(
+                mimo_jang2l_l2_restart_visible_output
+            ),
             "manual_sink_does_not_clear_length_generation": bool(sink_mode_fails),
             "disable_sink_does_not_clear_length_generation": bool(disable_sink_fails),
         },
@@ -2582,6 +2708,7 @@ def build_audit(root: Path, model_path: Path, manifest: Path) -> dict[str, Any]:
             "length_sweep": str(LENGTH_SWEEP_ARTIFACT),
             "tool_failure": str(TOOL_FAILURE_ARTIFACT),
             "all_local_smoke": str(ALL_LOCAL_SMOKE_ARTIFACT),
+            "jang2l_all_local_smoke": str(JANG2L_ALL_LOCAL_SMOKE_ARTIFACT),
             "kvnone_noprefix_smoke": str(KVNONE_NOPREFIX_SMOKE_ARTIFACT),
             "cache_vs_nocache": str(CACHE_VS_NOCACHE_ARTIFACT),
             "sink_mode_length_diagnostic": str(SINK_MODE_LENGTH_DIAGNOSTIC_ARTIFACT),
@@ -2603,6 +2730,7 @@ def build_audit(root: Path, model_path: Path, manifest: Path) -> dict[str, Any]:
         "diagnostics": {
             "cache_vs_nocache_next_token_match": bool(cache_match),
             "all_local_smoke": smoke_evidence,
+            "jang2l_all_local_smoke": jang2l_smoke_evidence,
             "kvnone_noprefix_exactness_isolation": kvnone_noprefix_evidence,
             "prompt_shape_first_token": prompt_shape_evidence,
             "synced_long_tool_cache": synced_evidence,

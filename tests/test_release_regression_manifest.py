@@ -11625,10 +11625,13 @@ def test_mimo_v2_root_cause_exposes_decode_speed_and_media_blockers(tmp_path):
     current_audit["component_ok"]["mimo_media_wired"] = False
     current_audit["component_ok"]["mimo_jangtq2_live_media_l2"] = True
     current_audit["component_ok"]["mimo_jang2l_live_media_l2"] = False
+    current_audit["component_ok"]["mimo_jang2l_l2_restart_cache_hit"] = True
+    current_audit["component_ok"]["mimo_jang2l_l2_restart_visible_output"] = False
     current_audit["blockers"] = [
         "mimo_decode_speed_below_release_target",
         "mimo_vl_audio_video_unwired",
         "mimo_jang2l_live_media_l2_missing",
+        "mimo_jang2l_l2_restart_visible_output_blocked",
     ]
     current_audit["latest_decode_speed_evidence"] = {
         "status": "review",
@@ -11656,6 +11659,8 @@ def test_mimo_v2_root_cause_exposes_decode_speed_and_media_blockers(tmp_path):
     assert result["media_unwired"] is True
     assert result["mimo_jangtq2_live_media_l2_passed"] is True
     assert result["mimo_jang2l_live_media_l2_blocked"] is True
+    assert result["mimo_jang2l_l2_restart_cache_hit_passed"] is True
+    assert result["mimo_jang2l_l2_restart_visible_output_blocked"] is True
     assert result["latest_decode_speed_evidence"]["bundle_decode_tps"] == 1.79
     assert result["switchglu_fastpath_active_but_slow"] is True
     assert result["async_decode_wait_dominates"] is True
@@ -11666,6 +11671,7 @@ def test_mimo_v2_root_cause_exposes_decode_speed_and_media_blockers(tmp_path):
     assert "mimo_decode_speed_below_release_target" in result["failures"]
     assert "mimo_media_unwired" in result["failures"]
     assert "mimo_jang2l_live_media_l2_missing" in result["failures"]
+    assert "mimo_jang2l_l2_restart_visible_output_blocked" in result["failures"]
 
 
 def test_mimo_v2_root_cause_accepts_policy_skipped_source_vs_quant_without_clearing_quality(

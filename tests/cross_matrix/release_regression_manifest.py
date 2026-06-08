@@ -3031,6 +3031,8 @@ def _current_release_blocker_ledger(
                         "media_unwired",
                         "mimo_jangtq2_live_media_l2_passed",
                         "mimo_jang2l_live_media_l2_blocked",
+                        "mimo_jang2l_l2_restart_cache_hit_passed",
+                        "mimo_jang2l_l2_restart_visible_output_blocked",
                         "source_vs_quant_requirement_satisfied",
                         "root_cause_candidate",
                         "release_boundary",
@@ -5822,6 +5824,8 @@ def _validate_current_mimo_v2_jang2l_root_cause(root: Path) -> dict[str, Any]:
         "media_unwired": False,
         "mimo_jangtq2_live_media_l2_passed": False,
         "mimo_jang2l_live_media_l2_blocked": False,
+        "mimo_jang2l_l2_restart_cache_hit_passed": False,
+        "mimo_jang2l_l2_restart_visible_output_blocked": False,
         "manifest_integrity_passed": False,
         "stale_local_state_absent": False,
         "current_audit_status": None,
@@ -6072,6 +6076,12 @@ def _validate_current_mimo_v2_jang2l_root_cause(root: Path) -> dict[str, Any]:
     audit_jang2l_live_media_l2_open = (
         current_audit_component_ok.get("mimo_jang2l_live_media_l2") is False
     )
+    audit_jang2l_l2_cache_hit_passed = (
+        current_audit_component_ok.get("mimo_jang2l_l2_restart_cache_hit") is True
+    )
+    audit_jang2l_l2_visible_output_open = (
+        current_audit_component_ok.get("mimo_jang2l_l2_restart_visible_output") is False
+    )
     audit_source_vs_quant_open = (
         current_audit_component_ok.get("source_vs_quant_first_divergence") is False
     )
@@ -6179,6 +6189,12 @@ def _validate_current_mimo_v2_jang2l_root_cause(root: Path) -> dict[str, Any]:
     if audit_jang2l_live_media_l2_open:
         result["mimo_jang2l_live_media_l2_blocked"] = True
         result["failures"].append("mimo_jang2l_live_media_l2_missing")
+    result["mimo_jang2l_l2_restart_cache_hit_passed"] = bool(
+        audit_jang2l_l2_cache_hit_passed
+    )
+    if audit_jang2l_l2_cache_hit_passed and audit_jang2l_l2_visible_output_open:
+        result["mimo_jang2l_l2_restart_visible_output_blocked"] = True
+        result["failures"].append("mimo_jang2l_l2_restart_visible_output_blocked")
     if audit_source_vs_quant_open:
         result["source_vs_quant_first_divergence_passed"] = False
         if (
@@ -6205,6 +6221,7 @@ def _validate_current_mimo_v2_jang2l_root_cause(root: Path) -> dict[str, Any]:
         or result["cb_working_set_pressure_blocked"]
         or result["media_unwired"]
         or result["mimo_jang2l_live_media_l2_blocked"]
+        or result["mimo_jang2l_l2_restart_visible_output_blocked"]
         or not result["source_vs_quant_requirement_satisfied"]
     ):
         result["status"] = "open"
@@ -6243,6 +6260,8 @@ def _validate_current_mimo_v2_jang2l_root_cause(root: Path) -> dict[str, Any]:
             active_boundary_reasons.append("media wiring")
         if result["mimo_jang2l_live_media_l2_blocked"]:
             active_boundary_reasons.append("JANG_2L live media/L2 proof")
+        if result["mimo_jang2l_l2_restart_visible_output_blocked"]:
+            active_boundary_reasons.append("JANG_2L L2 restart visible output")
         if not result["source_vs_quant_requirement_satisfied"]:
             active_boundary_reasons.append(
                 "source-vs-quant/no-source classification boundary"

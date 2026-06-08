@@ -331,6 +331,58 @@ def test_mimo_current_audit_separates_clean_artifact_from_runtime_blockers(
         },
     )
     _write_json(
+        tmp_path
+        / "build/current-all-local-model-smoke-mimo-v25-jang2l-media-l2-release-20260608/summary.json",
+        {
+            "status": "fail",
+            "results": [
+                {
+                    "name": "MiMo-V2.5-JANG_2L",
+                    "relative_path": "/Users/example/.mlxstudio/models/JANGQ-AI/MiMo-V2.5-JANG_2L",
+                    "status": "probe_failed",
+                    "requests": [
+                        {
+                            "label": "text_cache_repeat_1",
+                            "code": 200,
+                            "content": "",
+                            "validation_failures": [
+                                {
+                                    "label": "text_cache_repeat_1",
+                                    "reason": "empty_visible",
+                                }
+                            ],
+                        }
+                    ],
+                    "failures": [
+                        {
+                            "label": "text_cache_repeat_l2_restart",
+                            "reason": "validation_failed",
+                        }
+                    ],
+                    "l2_restart": {
+                        "label": "text_cache_repeat_l2_restart",
+                        "status": "completed",
+                        "code": 200,
+                        "content": "",
+                        "usage": {
+                            "prompt_tokens_details": {
+                                "cached_tokens": 54,
+                                "cache_detail": "paged+disk",
+                            }
+                        },
+                        "cache_stats": {
+                            "scheduler_stats": {
+                                "cache_hit_tokens": 54,
+                                "cache_hit_tokens_by_detail": {"paged+disk": 54},
+                            },
+                            "block_disk_cache": {"disk_hits": 1},
+                        },
+                    },
+                }
+            ],
+        },
+    )
+    _write_json(
         tmp_path / "build/current-mimo-v2-jang2l-sink-mode-length-diagnostic-20260606.json",
         {
             "status": "fail",
@@ -742,8 +794,14 @@ def test_mimo_current_audit_separates_clean_artifact_from_runtime_blockers(
     assert result["diagnostics"]["all_local_smoke"]["bundle_kind"] == "jangtq2"
     assert result["component_ok"]["mimo_jangtq2_live_media_l2"] is False
     assert result["component_ok"]["mimo_jang2l_live_media_l2"] is False
+    assert result["component_ok"]["mimo_jang2l_l2_restart_cache_hit"] is True
+    assert result["component_ok"]["mimo_jang2l_l2_restart_visible_output"] is False
     assert "mimo_jangtq2_live_media_l2_missing" in result["blockers"]
     assert "mimo_jang2l_live_media_l2_missing" in result["blockers"]
+    assert "mimo_jang2l_l2_restart_visible_output_blocked" in result["blockers"]
+    assert (
+        result["diagnostics"]["jang2l_all_local_smoke"]["bundle_kind"] == "jang2l"
+    )
     assert result["diagnostics"]["cb_native_thinking_off"][
         "memory_pressure_blocked"
     ] is True
@@ -767,6 +825,7 @@ def test_mimo_current_audit_separates_clean_artifact_from_runtime_blockers(
         "mimo_audio_waveform_live_e2e_missing",
         "mimo_jangtq2_live_media_l2_missing",
         "mimo_jang2l_live_media_l2_missing",
+        "mimo_jang2l_l2_restart_visible_output_blocked",
         "mimo_model_metadata_overadvertises_unwired_media",
         "mimo_runtime_capabilities_media_status_missing_or_unsafe",
     ]
@@ -1081,13 +1140,68 @@ def test_mimo_all_local_smoke_evidence_tracks_bundle_identity_for_media_l2():
         "jangtq2": {
             "bundle_name": "MiMo-V2.5-JANGTQ_2",
             "live_media_e2e_pass": True,
+            "block_disk_l2_restart_cache_hit": True,
             "block_disk_l2_restart_restore_pass": True,
         },
         "jang2l": {
             "bundle_name": None,
             "live_media_e2e_pass": False,
+            "block_disk_l2_restart_cache_hit": False,
             "block_disk_l2_restart_restore_pass": False,
         },
+    }
+
+
+def test_mimo_jang2l_l2_cache_hit_is_not_visible_restore_pass():
+    from tests.cross_matrix import run_mimo_v2_jang2l_current_audit as audit
+
+    smoke = {
+        "status": "fail",
+        "results": [
+            {
+                "name": "MiMo-V2.5-JANG_2L",
+                "relative_path": "/Users/example/.mlxstudio/models/JANGQ-AI/MiMo-V2.5-JANG_2L",
+                "status": "probe_failed",
+                "requests": [],
+                "failures": [
+                    {
+                        "label": "text_cache_repeat_l2_restart",
+                        "reason": "validation_failed",
+                    }
+                ],
+                "l2_restart": {
+                    "label": "text_cache_repeat_l2_restart",
+                    "status": "completed",
+                    "code": 200,
+                    "content": "",
+                    "usage": {
+                        "prompt_tokens_details": {
+                            "cached_tokens": 54,
+                            "cache_detail": "paged+disk",
+                        }
+                    },
+                    "cache_stats": {
+                        "scheduler_stats": {
+                            "cache_hit_tokens": 54,
+                            "cache_hit_tokens_by_detail": {"paged+disk": 54},
+                        },
+                        "block_disk_cache": {"disk_hits": 1},
+                    },
+                },
+            }
+        ],
+    }
+
+    evidence = audit._all_local_smoke_evidence(smoke)
+
+    assert evidence["bundle_kind"] == "jang2l"
+    assert evidence["block_disk_l2_restart_cache_hit"] is True
+    assert evidence["block_disk_l2_restart_restore_pass"] is False
+    assert evidence["bundle_media_l2_coverage"]["jang2l"] == {
+        "bundle_name": "MiMo-V2.5-JANG_2L",
+        "live_media_e2e_pass": False,
+        "block_disk_l2_restart_cache_hit": True,
+        "block_disk_l2_restart_restore_pass": False,
     }
 
 
