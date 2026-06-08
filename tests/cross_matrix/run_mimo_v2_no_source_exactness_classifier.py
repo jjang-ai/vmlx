@@ -16,13 +16,13 @@ from typing import Any
 
 
 DEFAULT_AUDIT = Path(
-    "build/current-mimo-v2-jang2l-current-audit-after-jangtq2-live-release-smoke-20260608.json"
+    "build/current-mimo-v2-jang2l-current-audit-after-audio-prefill-guard-20260608.json"
 )
 DEFAULT_SMOKE = Path(
-    "build/current-all-local-model-smoke-mimo-v25-jangtq2-media-l2-release-20260608/summary.json"
+    "build/current-all-local-model-smoke-mimo-v25-jangtq2-media-l2-after-cache-cap-20260608/summary.json"
 )
 DEFAULT_OUT = Path(
-    "build/current-mimo-v2-no-source-exactness-classifier-after-compact-hyphen-proof-20260608.json"
+    "build/current-mimo-v2-no-source-exactness-classifier-after-audio-prefill-guard-20260608.json"
 )
 DEFAULT_JANGTQ2_EXACTNESS = Path(
     "build/current-mimo-v25-jangtq2-exactness-isolation-20260608/result.json"
@@ -46,7 +46,7 @@ DEFAULT_JANG2L_LITERAL_VARIANTS = Path(
     "build/current-mimo-v25-jang2l-exactness-tight64-parser-cache-skip-variant-probe-20260608/JANGQ_MiMo-V2.5-JANG_2L/result.json"
 )
 DEFAULT_JANG2L_JSON_SENTINEL_ISOLATION = Path(
-    "build/current-mimo-v25-jang2l-json-sentinel-after-enable-thinking-forward-20260608/summary.json"
+    "build/current-all-local-model-smoke-mimo-v25-jang2l-media-l2-after-audio-prefill-guard-20260608/summary.json"
 )
 DEFAULT_JANGTQ2_LOGPROB_DIAGNOSTIC = Path(
     "build/current-mimo-v25-jangtq2-logprob-literal-diagnostic-20260608.json"
@@ -239,7 +239,63 @@ def _literal_variant_summary(artifact: dict[str, Any] | None) -> dict[str, Any]:
     }
 
 
+def _parse_json_object(text: str) -> dict[str, Any] | None:
+    stripped = text.strip()
+    if stripped.startswith("```"):
+        lines = stripped.splitlines()
+        if lines and lines[0].startswith("```"):
+            lines = lines[1:]
+        if lines and lines[-1].strip().startswith("```"):
+            lines = lines[:-1]
+        stripped = "\n".join(lines).strip()
+    try:
+        parsed = json.loads(stripped)
+    except Exception:
+        return None
+    return parsed if isinstance(parsed, dict) else None
+
+
 def _json_sentinel_summary(artifact: dict[str, Any] | None) -> dict[str, Any]:
+    rows = None
+    if isinstance(artifact, dict) and isinstance(artifact.get("results"), list):
+        for result in artifact["results"]:
+            if isinstance(result, dict) and isinstance(result.get("requests"), list):
+                rows = result["requests"]
+                break
+    if isinstance(rows, list):
+        requests = [
+            row
+            for row in rows
+            if isinstance(row, dict)
+            and str(row.get("label") or "") in {"mimo_structured_json_sentinel"}
+        ]
+        normalized_requests = []
+        for row in requests:
+            normalized = dict(row)
+            failures = row.get("validation_failures")
+            if isinstance(failures, list):
+                for failure in failures:
+                    if not isinstance(failure, dict):
+                        continue
+                    if (
+                        failure.get("reason") == "json_exact_object_mismatch"
+                        and "expected" not in normalized
+                    ):
+                        normalized["expected"] = failure.get("expected")
+                    if (
+                        failure.get("reason") == "json_exact_object_mismatch"
+                        and "parsed" not in normalized
+                    ):
+                        normalized["parsed"] = failure.get("actual")
+                    break
+            if "parsed" not in normalized and isinstance(normalized.get("content"), str):
+                parsed = _parse_json_object(str(normalized.get("content") or ""))
+                if parsed is not None:
+                    normalized["parsed"] = parsed
+            normalized_requests.append(normalized)
+        requests = normalized_requests
+        artifact = {"status": artifact.get("status"), "requests": requests}
+
     if isinstance(artifact, dict) and "parsed_content" in artifact:
         content = artifact.get("content")
         parsed = artifact.get("parsed_content")

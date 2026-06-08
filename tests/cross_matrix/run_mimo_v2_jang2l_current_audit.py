@@ -70,7 +70,7 @@ SOURCE_VS_QUANT_ARTIFACT = Path(
     "build/current-mimo-v2-jangtq2-source-vs-quant-first-divergence-preflight-20260607.json"
 )
 NO_SOURCE_EXACTNESS_CLASSIFIER_ARTIFACT = Path(
-    "build/current-mimo-v2-no-source-exactness-classifier-after-compact-hyphen-proof-20260608.json"
+    "build/current-mimo-v2-no-source-exactness-classifier-after-audio-prefill-guard-20260608.json"
 )
 SYNCED_LONG_TOOL_CACHE_ARTIFACT = Path(
     "build/current-mimo-v25-jang2l-synced-long-tool-cache-proof-20260606.json"

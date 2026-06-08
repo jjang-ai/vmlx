@@ -664,6 +664,67 @@ def test_mimo_no_source_classifier_tracks_current_jang2l_json_semantic_mismatch(
     ]
 
 
+def test_mimo_no_source_classifier_reads_jang2l_all_local_summary_json_sentinel():
+    audit = {
+        "component_ok": {
+            "api_cache_responses_contract": True,
+            "tool_protocol": True,
+            "exactness_cache_kv_quant_excluded": True,
+            "decode_speed_target": True,
+            "source_vs_quant_first_divergence": False,
+            "long_prompt_coherence": True,
+            "cb_system_prompt_working_set_pressure": True,
+            "mimo_media_wired": True,
+        }
+    }
+    smoke = {"results": []}
+    jang2l_all_local_summary = {
+        "status": "fail",
+        "results": [
+            {
+                "requests": [
+                    {
+                        "label": "mimo_structured_json_sentinel",
+                        "content": "```json\n{\"status\":\"ok\",\"value\":\"B7-CAT-09\",\"count\":1}\n```",
+                        "validation_failures": [
+                            {
+                                "reason": "json_exact_object_mismatch",
+                                "actual": {
+                                    "status": "ok",
+                                    "value": "B7-CAT-09",
+                                    "count": 1,
+                                },
+                                "expected": {
+                                    "status": "ok",
+                                    "value": "B7-CAT-09",
+                                    "count": 3,
+                                },
+                            }
+                        ],
+                        "usage": {"completion_tokens": 24},
+                    }
+                ]
+            }
+        ],
+    }
+
+    artifact = build_classification(
+        audit,
+        smoke,
+        jang2l_json_sentinel=jang2l_all_local_summary,
+    )
+
+    assert artifact["secondary_classification"] == (
+        "jang2l_json_sentinel_semantic_mismatch_open"
+    )
+    assert artifact["jang2l_json_sentinel_summary"]["semantic_mismatch_labels"] == [
+        "mimo_structured_json_sentinel"
+    ]
+    assert artifact["jang2l_json_sentinel_artifact"] == (
+        "build/current-all-local-model-smoke-mimo-v25-jang2l-media-l2-after-audio-prefill-guard-20260608/summary.json"
+    )
+
+
 def test_mimo_no_source_classifier_records_current_jangtq2_all_local_boundary():
     audit = {
         "component_ok": {
