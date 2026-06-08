@@ -849,6 +849,23 @@ def _call_processor_direct(
             "does not expose a callable .process method"
         )
 
+    processor_type = type(processor)
+    processor_blob = " ".join(
+        str(item)
+        for item in (
+            getattr(processor_type, "__module__", ""),
+            getattr(processor_type, "__name__", ""),
+            getattr(processor, "model_type", ""),
+            getattr(getattr(processor, "config", None), "model_type", ""),
+        )
+    ).lower()
+    skip_audios_alias = "mimo" in processor_blob and "v2" in processor_blob
+
+    try:
+        params = inspect.signature(processor).parameters
+    except (TypeError, ValueError):
+        params = {}
+
     kwargs: Dict[str, Any] = {
         "text": prompts,
         "padding": True,
@@ -861,11 +878,8 @@ def _call_processor_direct(
         kwargs["videos"] = videos
     if audio:
         kwargs["audio"] = audio
-        kwargs["audios"] = audio
-    try:
-        params = inspect.signature(processor).parameters
-    except (TypeError, ValueError):
-        params = {}
+        if not skip_audios_alias and "audios" in params:
+            kwargs["audios"] = audio
     if params and not any(p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values()):
         kwargs = {k: v for k, v in kwargs.items() if k in params}
     return _as_input_mapping(processor(**kwargs))

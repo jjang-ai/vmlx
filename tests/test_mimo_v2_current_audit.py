@@ -136,7 +136,7 @@ def test_mimo_current_audit_separates_clean_artifact_from_runtime_blockers(
                 "not request.images and not request.videos and not request.audio",
                 "audio=all_audio",
                 'kwargs["audio"] = audio',
-                'kwargs["audios"] = audio',
+                "skip_audios_alias",
             ]
         )
     )
@@ -176,6 +176,7 @@ def test_mimo_current_audit_separates_clean_artifact_from_runtime_blockers(
                 "test_mllm_audio_payload_prefill_uses_model_wrapper_not_text_fast_path",
                 "test_mllm_processor_audio_outputs_are_promoted_to_request_fields",
                 "test_mllm_processor_direct_forwards_raw_audio_to_processor",
+                "test_mllm_processor_direct_omits_invalid_audios_alias_for_mimo_v2_processor",
                 "test_mllm_scheduler_and_batched_engine_route_raw_audio_requests",
             ]
         )
@@ -241,7 +242,7 @@ def test_mimo_current_audit_separates_clean_artifact_from_runtime_blockers(
     )
     _write_json(
         tmp_path
-        / "build/current-all-local-model-smoke-mimo-v25-jangtq2-object-media-e2e-20260608/summary.json",
+        / "build/current-all-local-model-smoke-mimo-v25-jangtq2-audio-waveform-after-audios-signature-filter-20260608/summary.json",
         {
             "status": "fail",
             "results": [

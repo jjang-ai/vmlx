@@ -329,6 +329,33 @@ def test_mllm_processor_direct_forwards_raw_audio_to_processor():
     assert result["audio_codes"] == [[4, 5]]
 
 
+def test_mllm_processor_direct_omits_invalid_audios_alias_for_mimo_v2_processor():
+    """MiMo-V2 processors warn and ignore unknown `audios`; use `audio` only."""
+    from vmlx_engine.mllm_batch_generator import _call_processor_direct
+
+    captured = {}
+
+    class Processor:
+        __module__ = "mlx_vlm.models.mimo_v2.processing_mimo_v2"
+
+        def __call__(self, **kwargs):
+            captured.update(kwargs)
+            return {"input_ids": [[1, 2, 3]], "audio_codes": [[4, 5]]}
+
+    result = _call_processor_direct(
+        Processor(),
+        prompts=["describe audio"],
+        images=None,
+        videos=None,
+        audio=["/tmp/vmlx-audio.wav"],
+        add_special_tokens=False,
+    )
+
+    assert captured["audio"] == ["/tmp/vmlx-audio.wav"]
+    assert "audios" not in captured
+    assert result["audio_codes"] == [[4, 5]]
+
+
 def test_mllm_scheduler_and_batched_engine_route_raw_audio_requests():
     """OpenAI audio parts must reach MLLM scheduler, not stop at API parsing."""
     import inspect

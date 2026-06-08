@@ -25,7 +25,7 @@ from typing import Any
 DEFAULT_MODEL_PATH = Path("/Users/example/.mlxstudio/models/JANGQ-AI/MiMo-V2.5-JANGTQ_2")
 DEFAULT_MANIFEST = Path("build/current-mimo-jangtq2-local-manifest-20260607.tsv")
 DEFAULT_OUT = Path(
-    "build/current-mimo-v2-jang2l-current-audit-after-audio-waveform-smoke-wiring-20260608.json"
+    "build/current-mimo-v2-jang2l-current-audit-after-audios-signature-filter-20260608.json"
 )
 
 STRUCTURAL_ARTIFACT = Path("build/current-mimo-jang2l-local-structural-verify-20260606.json")
@@ -40,7 +40,7 @@ TOOL_FAILURE_ARTIFACT = Path(
     "build/current-mimo-v2-jang2l-tool-dialect-failure-20260606.json"
 )
 ALL_LOCAL_SMOKE_ARTIFACT = Path(
-    "build/current-all-local-model-smoke-mimo-v25-jangtq2-object-media-e2e-20260608/summary.json"
+    "build/current-all-local-model-smoke-mimo-v25-jangtq2-audio-waveform-after-audios-signature-filter-20260608/summary.json"
 )
 KVNONE_NOPREFIX_SMOKE_ARTIFACT = Path(
     "build/current-all-local-model-smoke-mimo-v25-jangtq2-bundled-tools-nomedia-kvnone-noprefix-20260607/summary.json"
@@ -1312,7 +1312,7 @@ def _mimo_media_runtime_evidence(
                 "not request.images and not request.videos and not request.audio",
                 "audio=all_audio",
                 'kwargs["audio"] = audio',
-                'kwargs["audios"] = audio',
+                "skip_audios_alias",
             )
         )
         and all(
@@ -1334,6 +1334,8 @@ def _mimo_media_runtime_evidence(
             )
         )
         and "test_mllm_processor_direct_forwards_raw_audio_to_processor"
+        in scheduler_cache_test_text
+        and "test_mllm_processor_direct_omits_invalid_audios_alias_for_mimo_v2_processor"
         in scheduler_cache_test_text
         and "test_mllm_scheduler_and_batched_engine_route_raw_audio_requests"
         in scheduler_cache_test_text
