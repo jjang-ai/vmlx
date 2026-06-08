@@ -1377,6 +1377,33 @@ def _is_loaded_dsv4_model(model: str = "") -> bool:
         return False
 
 
+def _is_loaded_mimo_v2_model(model: str = "") -> bool:
+    """Return whether the current loaded model resolves to the MiMo V2 family."""
+    try:
+        from .model_config_registry import get_model_config_registry
+
+        registry = get_model_config_registry()
+        for key in (_model_path, _model_name, model):
+            if not key:
+                continue
+            cfg = registry.lookup(key)
+            if getattr(cfg, "family_name", "") == "mimo_v2":
+                return True
+            if getattr(cfg, "model_type", "") == "mimo_v2":
+                return True
+    except Exception:
+        return False
+    return False
+
+
+def _completion_gen_kwargs_to_chat_kwargs(gen_kwargs: dict) -> dict:
+    """Convert legacy completions kwargs to chat kwargs for chat-template-only families."""
+    chat_kwargs = dict(gen_kwargs)
+    chat_kwargs.pop("prompt", None)
+    chat_kwargs["enable_thinking"] = False
+    return chat_kwargs
+
+
 def _is_hy3_model(model_key: str) -> bool:
     """Return True when the current registry contract resolves to Hy3."""
     try:
@@ -10624,6 +10651,15 @@ async def create_completion(request: CompletionRequest):
                     ),
                     timeout=timeout,
                 )
+            elif _is_loaded_mimo_v2_model(request.model):
+                chat_kwargs = _completion_gen_kwargs_to_chat_kwargs(gen_kwargs)
+                output = await asyncio.wait_for(
+                    engine.chat(
+                        messages=[{"role": "user", "content": prompt}],
+                        **chat_kwargs,
+                    ),
+                    timeout=timeout,
+                )
             else:
                 output = await asyncio.wait_for(
                     engine.generate(**gen_kwargs),
@@ -13363,6 +13399,31 @@ async def stream_completions_multi(
             if request.logprobs is not None:
                 gen_kwargs["logprobs"] = True
                 gen_kwargs["top_logprobs"] = request.logprobs
+            if _is_loaded_mimo_v2_model(request.model):
+                chat_kwargs = _completion_gen_kwargs_to_chat_kwargs(gen_kwargs)
+                output = await asyncio.wait_for(
+                    engine.chat(
+                        messages=[{"role": "user", "content": prompt}],
+                        **chat_kwargs,
+                    ),
+                    timeout=_stream_timeout,
+                )
+                data = {
+                    "id": response_id,
+                    "object": "text_completion",
+                    "created": created,
+                    "model": request.model,
+                    "choices": [
+                        {
+                            "index": prompt_index,
+                            "text": output.text,
+                            "finish_reason": output.finish_reason,
+                        }
+                    ],
+                    "usage": get_usage(output).model_dump(exclude_none=True),
+                }
+                yield f"data: {json.dumps(data, ensure_ascii=True)}\n\n"
+                continue
             stream_logprob_offset = 0
             async for output in _stream_with_keepalive(
                 engine.stream_generate(**gen_kwargs), total_timeout=_stream_timeout
