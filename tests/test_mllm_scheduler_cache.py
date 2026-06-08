@@ -1376,6 +1376,58 @@ class TestCleanupFinishedCacheStore:
         scheduler.batch_generator._prefill_for_clean_path_dependent_cache.assert_not_called()
         scheduler.block_aware_cache.store_cache.assert_not_called()
 
+    def test_mixed_swa_tight_memory_store_uses_clean_prefill_when_headroom_is_safe(self):
+        """MiMo JANGTQ should keep release-gate cache reuse with healthy headroom."""
+
+        scheduler = MLLMScheduler.__new__(MLLMScheduler)
+        request = SimpleNamespace(
+            num_output_tokens=3,
+            _bypass_prefix_cache=False,
+            _cached_tokens=0,
+            _extracted_cache=lambda: ["dirty-live-cache"],
+            _extracted_tokens=list(range(667)),
+            _added_stop_tokens=set(),
+        )
+
+        scheduler.running = {"req-mimo-headroom": request}
+        scheduler.block_aware_cache = MagicMock()
+        scheduler.memory_aware_cache = None
+        scheduler.prefix_cache = None
+        scheduler.disk_cache = None
+        scheduler._is_hybrid = False
+        scheduler._kv_cache_bits = 0
+        scheduler._uses_zaya_cache = False
+        scheduler._mixed_attention_cache_model = True
+        scheduler._mllm_request_has_media_cache_context = MagicMock(return_value=False)
+        scheduler._mllm_media_prefix_cache_allowed = MagicMock(return_value=False)
+        scheduler._truncate_hybrid_cache = MagicMock(return_value=["prompt-cache"])
+        scheduler._validate_cache = MagicMock(return_value=True)
+        scheduler._extract_cache_states = MagicMock(return_value=["state"])
+        scheduler.batch_generator = SimpleNamespace(
+            _tight_memory_prefill_drain=True,
+            _prefill_for_clean_path_dependent_cache=MagicMock(
+                return_value=["clean-cache"]
+            ),
+        )
+        scheduler.stop_tokens = set()
+        scheduler.request_id_to_uid = {}
+        scheduler.uid_to_request_id = {}
+        scheduler.paged_cache_manager = MagicMock()
+        scheduler.requests = {"req-mimo-headroom": request}
+        scheduler.finished_req_ids = set()
+        scheduler._cleanup_detokenizer = MagicMock()
+
+        with patch(
+            "vmlx_engine.mllm_scheduler.get_effective_metal_working_set_bytes",
+            return_value=(76 * 1024**3, 107 * 1024**3),
+        ):
+            scheduler._cleanup_finished({"req-mimo-headroom"})
+
+        scheduler.batch_generator._prefill_for_clean_path_dependent_cache.assert_called_once()
+        args = scheduler.batch_generator._prefill_for_clean_path_dependent_cache.call_args.args
+        assert len(args[0]) == 666
+        scheduler.block_aware_cache.store_cache.assert_called_once()
+
     def test_media_request_skips_memory_aware_token_only_store(self):
         """Image/video VLM requests must not be stored under text-only keys."""
 

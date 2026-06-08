@@ -2873,6 +2873,41 @@ class MLLMScheduler:
                                         )
                                     except (TypeError, ValueError):
                                         _tight_clean_store_max_tokens = 512
+                                    try:
+                                        _safe_headroom_max_tokens = int(
+                                            os.environ.get(
+                                                "VMLINUX_MLLM_TIGHT_MEMORY_CLEAN_PREFILL_SAFE_HEADROOM_MAX_TOKENS",
+                                                "768",
+                                            )
+                                        )
+                                    except (TypeError, ValueError):
+                                        _safe_headroom_max_tokens = 768
+                                    try:
+                                        _safe_headroom_min_gb = float(
+                                            os.environ.get(
+                                                "VMLINUX_MLLM_TIGHT_MEMORY_CLEAN_PREFILL_SAFE_HEADROOM_MIN_GB",
+                                                "8",
+                                            )
+                                        )
+                                    except (TypeError, ValueError):
+                                        _safe_headroom_min_gb = 8.0
+                                    try:
+                                        _active_bytes, _max_ws_bytes = (
+                                            get_effective_metal_working_set_bytes(mx)
+                                        )
+                                    except Exception:
+                                        _active_bytes = 0
+                                        _max_ws_bytes = 0
+                                    _free_bytes = max(
+                                        0,
+                                        int(_max_ws_bytes or 0) - int(_active_bytes or 0),
+                                    )
+                                    _safe_headroom_clean_store = (
+                                        _safe_headroom_max_tokens > 0
+                                        and prompt_len <= _safe_headroom_max_tokens
+                                        and _free_bytes
+                                        >= int(max(0.0, _safe_headroom_min_gb) * 1024**3)
+                                    )
                                     _bounded_tight_clean_store = (
                                         _tight_clean_store_max_tokens > 0
                                         and prompt_len <= _tight_clean_store_max_tokens
@@ -2882,6 +2917,7 @@ class MLLMScheduler:
                                         and _tight_memory_drain_active
                                         and not _force_tight_clean_store
                                         and not _bounded_tight_clean_store
+                                        and not _safe_headroom_clean_store
                                     )
                                     if tight_memory_clean_store_disabled:
                                         logger.info(
