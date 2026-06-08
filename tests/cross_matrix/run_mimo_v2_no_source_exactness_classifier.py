@@ -22,7 +22,7 @@ DEFAULT_SMOKE = Path(
     "build/current-all-local-model-smoke-mimo-v25-jangtq2-media-l2-after-cache-cap-20260608/summary.json"
 )
 DEFAULT_OUT = Path(
-    "build/current-mimo-v2-no-source-exactness-classifier-after-audio-prefill-guard-20260608.json"
+    "build/current-mimo-v2-no-source-exactness-classifier-after-live-exactness-pointer-20260608.json"
 )
 DEFAULT_JANGTQ2_EXACTNESS = Path(
     "build/current-mimo-v25-jangtq2-exactness-isolation-20260608/result.json"
@@ -40,10 +40,10 @@ DEFAULT_JANGTQ2_TQ_KERNEL_PARITY = Path(
     "build/current-mimo-v25-jangtq2-tq-kernel-parity-no-source-20260608.json"
 )
 DEFAULT_JANGTQ2_LITERAL_VARIANTS = Path(
-    "build/current-mimo-v25-jangtq2-exactness-variant-probe-20260608/JANGQ_MiMo-V2.5-JANGTQ_2/result.json"
+    "build/current-mimo-v25-jangtq2-exactness-variant-probe-live-20260608/result.json"
 )
 DEFAULT_JANG2L_LITERAL_VARIANTS = Path(
-    "build/current-mimo-v25-jang2l-exactness-tight64-parser-cache-skip-variant-probe-20260608/JANGQ_MiMo-V2.5-JANG_2L/result.json"
+    "build/current-mimo-v25-jang2l-exactness-variant-probe-live-20260608/result.json"
 )
 DEFAULT_JANG2L_JSON_SENTINEL_ISOLATION = Path(
     "build/current-all-local-model-smoke-mimo-v25-jang2l-media-l2-after-audio-prefill-guard-20260608/summary.json"
