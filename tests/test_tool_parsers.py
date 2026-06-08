@@ -846,6 +846,42 @@ class TestMiniMaxToolParser:
         args = json.loads(result.tool_calls[0]["arguments"])
         assert args["expression"] == "2+2"
 
+    def test_unclosed_minimax_block_with_complete_parameter(self, parser):
+        """Live MiniMax can stop before closing the outer tool_call block."""
+        text = '''<minimax:tool_call>
+<invoke name="record_fact">
+<parameter name="value">blue-cat</parameter>'''
+        result = parser.extract_tool_calls(text)
+
+        assert result.tools_called
+        assert result.content is None
+        assert result.tool_calls[0]["name"] == "record_fact"
+        args = json.loads(result.tool_calls[0]["arguments"])
+        assert args == {"value": "blue-cat"}
+
+    def test_minimax_block_missing_invoke_close_with_complete_parameter(self, parser):
+        """A complete outer block may still be missing </invoke>."""
+        text = '''<minimax:tool_call>
+<invoke name="record_fact">
+<parameter name="value">blue-cat</parameter>
+</minimax:tool_call>'''
+        result = parser.extract_tool_calls(text)
+
+        assert result.tools_called
+        assert result.tool_calls[0]["name"] == "record_fact"
+        args = json.loads(result.tool_calls[0]["arguments"])
+        assert args == {"value": "blue-cat"}
+
+    def test_minimax_fragment_without_parameter_value_is_not_fabricated(self, parser):
+        """Do not fake a tool call when only a tag prefix is present."""
+        text = '''<minimax:tool_call>
+<invoke name="record_fact">
+<parameter name="'''
+        result = parser.extract_tool_calls(text)
+
+        assert not result.tools_called
+        assert "<minimax:tool_call>" in result.content
+
     def test_empty_invoke(self, parser):
         """Test invoke with no parameters."""
         text = """<minimax:tool_call>

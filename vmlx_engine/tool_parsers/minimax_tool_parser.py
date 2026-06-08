@@ -95,6 +95,19 @@ class MiniMaxToolParser(ToolParser):
         re.DOTALL,
     )
 
+    # Lenient patterns for live generations that emit the MiniMax-native
+    # dialect but stop before all closing tags. These are intentionally scoped
+    # to a <minimax:tool_call> block plus a valid <invoke name=...> opener so
+    # arbitrary visible XML is not promoted to a tool call.
+    LENIENT_INVOKE_PATTERN = re.compile(
+        r"<invoke name=([^>]+)>(.*?)(?=(?:</invoke>|<invoke name=|$))",
+        re.DOTALL,
+    )
+    LENIENT_PARAM_PATTERN = re.compile(
+        r"<parameter name=([^>]+)>(.*?)(?=(?:</parameter>|<parameter name=|</invoke>|$))",
+        re.DOTALL,
+    )
+
     # Fallback: <func_name>content</func_name> (no invoke wrapper)
     XML_FUNC_PATTERN = re.compile(
         r"<([a-zA-Z_]\w*)>(.*?)</\1>",
@@ -137,61 +150,29 @@ class MiniMaxToolParser(ToolParser):
             invoke_found = False
             for invoke_match in self.INVOKE_PATTERN.finditer(block_content):
                 invoke_found = True
-                func_name = _extract_name(invoke_match.group(1))
-                invoke_content = invoke_match.group(2)
+                tool_call = self._tool_call_from_invoke(
+                    invoke_match.group(1),
+                    invoke_match.group(2),
+                    lenient=False,
+                )
+                if tool_call:
+                    tool_calls.append(tool_call)
 
-                # Extract parameters
-                params = self.PARAM_PATTERN.findall(invoke_content)
-                if params:
-                    arguments = {}
-                    for param_name, param_value in params:
-                        clean_name = _extract_name(param_name)
-                        # Strip leading/trailing newlines from values
-                        clean_value = param_value.strip()
-                        arguments[clean_name] = _convert_param_value(clean_value)
-
-                    tool_calls.append(
-                        {
-                            "id": generate_tool_id(),
-                            "name": func_name,
-                            "arguments": json.dumps(
-                                arguments, ensure_ascii=False
-                            ),
-                        }
+            # Strategy 1b: MiniMax-native but truncated before </invoke>.
+            # This handles required-tool rows where the model starts the
+            # correct native wrapper and parameters but hits max_tokens before
+            # closing the XML. It does not run if the strict invoke parser
+            # already found a complete call in this block.
+            if not invoke_found:
+                for invoke_match in self.LENIENT_INVOKE_PATTERN.finditer(block_content):
+                    invoke_found = True
+                    tool_call = self._tool_call_from_invoke(
+                        invoke_match.group(1),
+                        invoke_match.group(2),
+                        lenient=True,
                     )
-                else:
-                    # No parameter tags — try parsing content as JSON directly
-                    raw_content = invoke_content.strip()
-                    if raw_content:
-                        try:
-                            json.loads(raw_content)
-                            tool_calls.append(
-                                {
-                                    "id": generate_tool_id(),
-                                    "name": func_name,
-                                    "arguments": raw_content,
-                                }
-                            )
-                        except json.JSONDecodeError:
-                            # Raw content without recognized format
-                            tool_calls.append(
-                                {
-                                    "id": generate_tool_id(),
-                                    "name": func_name,
-                                    "arguments": json.dumps(
-                                        {"raw": raw_content}, ensure_ascii=False
-                                    ),
-                                }
-                            )
-                    else:
-                        # Empty invoke — no arguments
-                        tool_calls.append(
-                            {
-                                "id": generate_tool_id(),
-                                "name": func_name,
-                                "arguments": "{}",
-                            }
-                        )
+                    if tool_call:
+                        tool_calls.append(tool_call)
 
             # Strategy 2: No <invoke> found — try fallback formats
             if not invoke_found and block_content:
@@ -199,8 +180,26 @@ class MiniMaxToolParser(ToolParser):
                 if tc:
                     tool_calls.append(tc)
 
+        if not tool_calls:
+            for block_content in self._unterminated_tool_call_blocks(cleaned_text):
+                for invoke_match in self.LENIENT_INVOKE_PATTERN.finditer(block_content):
+                    tool_call = self._tool_call_from_invoke(
+                        invoke_match.group(1),
+                        invoke_match.group(2),
+                        lenient=True,
+                    )
+                    if tool_call:
+                        tool_calls.append(tool_call)
+
         # Remove tool call blocks from text to get remaining content
         content_text = self.TOOL_CALL_PATTERN.sub("", cleaned_text).strip()
+        if tool_calls and "<minimax:tool_call>" in content_text:
+            content_text = re.sub(
+                r"<minimax:tool_call>.*$",
+                "",
+                content_text,
+                flags=re.DOTALL,
+            ).strip()
 
         if tool_calls:
             return ExtractedToolCallInformation(
@@ -212,6 +211,81 @@ class MiniMaxToolParser(ToolParser):
             return ExtractedToolCallInformation(
                 tools_called=False, tool_calls=[], content=cleaned_text
             )
+
+    def _tool_call_from_invoke(
+        self,
+        raw_func_name: str,
+        invoke_content: str,
+        *,
+        lenient: bool,
+    ) -> dict[str, Any] | None:
+        func_name = _extract_name(raw_func_name)
+        params = (
+            self.LENIENT_PARAM_PATTERN.findall(invoke_content)
+            if lenient
+            else self.PARAM_PATTERN.findall(invoke_content)
+        )
+        if params:
+            arguments: dict[str, Any] = {}
+            for param_name, param_value in params:
+                clean_name = _extract_name(param_name)
+                clean_value = param_value.strip()
+                if clean_value.endswith("</parameter>"):
+                    clean_value = clean_value[: -len("</parameter>")].strip()
+                arguments[clean_name] = _convert_param_value(clean_value)
+            return {
+                "id": generate_tool_id(),
+                "name": func_name,
+                "arguments": json.dumps(arguments, ensure_ascii=False),
+            }
+
+        raw_content = invoke_content.strip()
+        if raw_content:
+            if lenient and "<parameter" in raw_content:
+                return None
+            try:
+                json.loads(raw_content)
+                return {
+                    "id": generate_tool_id(),
+                    "name": func_name,
+                    "arguments": raw_content,
+                }
+            except json.JSONDecodeError:
+                return {
+                    "id": generate_tool_id(),
+                    "name": func_name,
+                    "arguments": json.dumps(
+                        {"raw": raw_content},
+                        ensure_ascii=False,
+                    ),
+                }
+
+        if lenient:
+            return None
+
+        return {
+            "id": generate_tool_id(),
+            "name": func_name,
+            "arguments": "{}",
+        }
+
+    @staticmethod
+    def _unterminated_tool_call_blocks(text: str) -> list[str]:
+        blocks: list[str] = []
+        marker = "<minimax:tool_call>"
+        pos = 0
+        while True:
+            start = text.find(marker, pos)
+            if start < 0:
+                break
+            body_start = start + len(marker)
+            end = text.find("</minimax:tool_call>", body_start)
+            if end >= 0:
+                pos = end + len("</minimax:tool_call>")
+                continue
+            blocks.append(text[body_start:].strip())
+            break
+        return blocks
 
     def _parse_block_fallback(
         self, block_content: str

@@ -3689,6 +3689,17 @@ def _parse_tool_calls_with_parser(
         allowed = _allowed_tool_names()
         if not allowed:
             return tool_calls
+        schemas_by_name: dict[str, dict[str, Any]] = {}
+        try:
+            for tool in convert_tools_for_template(
+                _effective_tools_for_tool_parsing(request)
+            ) or []:
+                fn = tool.get("function") if isinstance(tool, dict) else None
+                name = fn.get("name") if isinstance(fn, dict) else None
+                if isinstance(name, str) and name:
+                    schemas_by_name[name] = fn
+        except Exception:
+            schemas_by_name = {}
 
         def _function_payload(tc: Any) -> tuple[str | None, str, str]:
             try:
@@ -3712,6 +3723,24 @@ def _parse_tool_calls_with_parser(
                 except Exception:
                     return {}
             return {}
+
+        def _missing_required_args(name: str | None, raw_args: Any) -> list[str]:
+            if not name:
+                return []
+            schema = schemas_by_name.get(name) or {}
+            params = schema.get("parameters", {}) if isinstance(schema, dict) else {}
+            required = params.get("required", []) if isinstance(params, dict) else []
+            if not isinstance(required, list) or not required:
+                return []
+            args = _coerce_json_args(raw_args)
+            missing: list[str] = []
+            for key in required:
+                if not isinstance(key, str) or not key:
+                    continue
+                value = args.get(key)
+                if value is None or (isinstance(value, str) and value.strip() == ""):
+                    missing.append(key)
+            return missing
 
         def _rewrite_tool_alias(tc: Any) -> Any | None:
             name, raw_args, call_id = _function_payload(tc)
@@ -3747,8 +3776,18 @@ def _parse_tool_calls_with_parser(
 
         filtered = []
         for tc in tool_calls:
-            name, _, _ = _function_payload(tc)
+            name, raw_args, call_id = _function_payload(tc)
             if name in allowed:
+                missing = _missing_required_args(name, raw_args)
+                if missing:
+                    logger.warning(
+                        "Dropping parsed tool call %s for %r because required "
+                        "argument(s) are missing or empty: %s",
+                        call_id or "<no-id>",
+                        name,
+                        ", ".join(missing),
+                    )
+                    continue
                 filtered.append(tc)
             else:
                 rewritten = _rewrite_tool_alias(tc)
@@ -10946,6 +10985,7 @@ async def create_chat_completion(
     _tool_choice = request.tool_choice
     if _tool_choice is not None:
         chat_kwargs["tool_choice"] = _tool_choice
+        _ct_kwargs.setdefault("tool_choice", _tool_choice)
     _suppress_tools = _tool_choice == "none"
 
     # response_format = json_object / json_schema implies the output IS the
@@ -11262,11 +11302,14 @@ async def create_chat_completion(
         )
         raise HTTPException(
             status_code=400,
-            detail=(
-                "tool_choice='required' was set but the model did not produce "
-                "any tool calls. Try rephrasing your prompt or using a model "
-                "with better tool-calling support."
-            ),
+            detail={
+                "message": (
+                    "tool_choice='required' was set but the model did not produce "
+                    "any tool calls. Try rephrasing your prompt or using a model "
+                    "with better tool-calling support."
+                ),
+                "raw_preview": tool_required_preview,
+            },
         )
 
     # Determine finish reason
@@ -12420,6 +12463,7 @@ async def create_response(
     _tool_choice = request.tool_choice
     if _tool_choice is not None:
         chat_kwargs["tool_choice"] = _tool_choice
+        _ct_kwargs.setdefault("tool_choice", _tool_choice)
     _suppress_tools = _tool_choice == "none"
 
     # response_format = json_object / json_schema implies the output IS the
@@ -12869,17 +12913,22 @@ async def create_response(
     # Enforce tool_choice="required": model MUST produce at least one tool call
     _resp_tool_choice = getattr(request, "tool_choice", None)
     if _is_required_tool_choice(_resp_tool_choice) and not tool_calls:
+        tool_required_preview = (parse_text or content_for_parsing or "")
+        tool_required_preview = tool_required_preview.replace("\n", "\\n")[:500]
         logger.warning(
             f"tool_choice='required' but model produced no tool calls. "
-            f"Returning error to client."
+            f"Returning error to client. raw_preview={tool_required_preview!r}"
         )
         raise HTTPException(
             status_code=400,
-            detail=(
-                "tool_choice='required' was set but the model did not produce "
-                "any tool calls. Try rephrasing your prompt or using a model "
-                "with better tool-calling support."
-            ),
+            detail={
+                "message": (
+                    "tool_choice='required' was set but the model did not produce "
+                    "any tool calls. Try rephrasing your prompt or using a model "
+                    "with better tool-calling support."
+                ),
+                "raw_preview": tool_required_preview,
+            },
         )
 
     # Build output array
