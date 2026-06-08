@@ -41,6 +41,9 @@ TOOL_CALL_CONTRACT = Path(
 RELEASE_MANIFEST = Path(
     "build/current-release-regression-manifest-after-mimo-live-refresh-20260608.json"
 )
+OBJECTIVE_DIGEST = Path(
+    "build/current-objective-proof-after-mimo-model-upload-action-20260608.json"
+)
 ISSUE179_AUDIT = Path(
     "build/current-issue179-minimax-k-root-cause-audit-after-parser-settings-parity-20260608.json"
 )
@@ -540,6 +543,48 @@ def _tool_call_contract_checks(data: dict[str, Any]) -> list[dict[str, Any]]:
         for name in required
     )
     return rows
+
+
+def _objective_requirement(
+    data: dict[str, Any], needle: str
+) -> dict[str, Any] | None:
+    requirements = data.get("requirements")
+    if not isinstance(requirements, list):
+        return None
+    for row in requirements:
+        if not isinstance(row, dict):
+            continue
+        requirement = str(row.get("requirement") or row.get("name") or "")
+        if needle in requirement:
+            return row
+    return None
+
+
+def _n2_pro_397b_checks(data: dict[str, Any]) -> list[dict[str, Any]]:
+    row = _objective_requirement(data, "N2 Pro 397B JANG1L/JANGTQ")
+    details = row.get("details") if isinstance(row, dict) else {}
+    details = details if isinstance(details, dict) else {}
+    detail = {
+        "status": row.get("status") if isinstance(row, dict) else "missing",
+        "requirement": row.get("requirement") if isinstance(row, dict) else None,
+        "evidence": row.get("evidence") if isinstance(row, dict) else None,
+        "local_artifact_probe": details.get("local_artifact_probe"),
+        "required_next_evidence": details.get("required_next_evidence"),
+    }
+    return [
+        _check(
+            "n2_pro_397b_objective_row_exists",
+            row is not None,
+            str(OBJECTIVE_DIGEST),
+            data.get("status"),
+        ),
+        _check(
+            "n2_pro_397b_release_clearance",
+            isinstance(row, dict) and row.get("status") == "pass",
+            str(OBJECTIVE_DIGEST),
+            detail,
+        ),
+    ]
 
 
 def _simple_artifact_checks(name: str, data: dict[str, Any]) -> list[dict[str, Any]]:
@@ -1411,6 +1456,7 @@ def _build(root: Path) -> dict[str, Any]:
     api_surface = _load_json(root / API_SURFACE_CONTRACT)
     panel_settings = _load_json(root / PANEL_SETTINGS_CONTRACT)
     tool_call = _load_json(root / TOOL_CALL_CONTRACT)
+    objective_digest = _load_json(root / OBJECTIVE_DIGEST)
     issue179 = _load_json(root / ISSUE179_AUDIT)
     qwen27 = _load_json(root / QWEN27_RESPONSES_CANCEL)
     qwen27_api = _load_json(root / QWEN27_API_PARITY)
@@ -1437,6 +1483,7 @@ def _build(root: Path) -> dict[str, Any]:
         "api_surface_endpoints_contract": _api_surface_contract_checks(api_surface),
         "ui_settings_parser_cache_contract": _panel_settings_contract_checks(panel_settings),
         "tool_json_xml_code_contract": _tool_call_contract_checks(tool_call),
+        "n2_pro_397b": _n2_pro_397b_checks(objective_digest),
         "mimo_v25_jangtq2": _mimo_checks(mimo, mimo_classifier),
         "qwen36_mtp": _qwen27_cancel_checks(qwen27)
         + _qwen27_api_parity_checks(qwen27_api)

@@ -705,6 +705,32 @@ def _write_dsv4_green_artifact(tmp_path: Path) -> None:
     )
 
 
+def _write_green_n2_objective_digest(tmp_path: Path) -> None:
+    _write_json(
+        tmp_path / checklist.OBJECTIVE_DIGEST,
+        {
+            "requirements": [
+                {
+                    "requirement": (
+                        "N2 Pro 397B JANG1L/JANGTQ runtime/cache/API/UI quality "
+                        "is release-cleared"
+                    ),
+                    "status": "pass",
+                    "evidence": [
+                        "build/current-n2-pro-397b-jang1l-jangtq-live-release-proof.json"
+                    ],
+                    "details": {
+                        "local_artifact_probe": {
+                            "artifact_present": True,
+                        },
+                        "required_next_evidence": [],
+                    },
+                }
+            ]
+        },
+    )
+
+
 def test_full_release_objective_checklist_keeps_open_rows_visible(tmp_path):
     _write_json(
         tmp_path / checklist.RELEASE_MANIFEST,
@@ -902,6 +928,66 @@ def test_full_release_objective_checklist_keeps_open_rows_visible(tmp_path):
     assert "dsv4_exact_code_file_long_output_complete" in failed_names
 
 
+def test_full_release_objective_checklist_tracks_open_n2_pro_objective_row(
+    tmp_path,
+):
+    _write_json(
+        tmp_path
+        / "build/current-objective-proof-after-mimo-model-upload-action-20260608.json",
+        {
+            "requirements": [
+                {
+                    "requirement": (
+                        "N2 Pro 397B JANG1L/JANGTQ runtime/cache/API/UI quality "
+                        "is release-cleared"
+                    ),
+                    "status": "open",
+                    "evidence": [
+                        "build/current-release-regression-manifest-after-mimo-live-refresh-20260608.json",
+                        "build/current-objective-proof-after-mimo-model-upload-action-20260608.json",
+                    ],
+                    "details": {
+                        "local_artifact_probe": {
+                            "artifact_present": False,
+                            "searched_roots": [
+                                "/Users/example/.mlxstudio/models",
+                                "/Users/example/models",
+                            ],
+                            "patterns": [
+                                "*N2*",
+                                "*397*",
+                                "*JANG1L*",
+                                "*jang1l*",
+                            ],
+                        },
+                        "required_next_evidence": [
+                            "runtime_cache_api_ui_live_proof",
+                            "typed_cache_prefix_paged_l2_restore",
+                            "mlxstudio_settings_startup_parity",
+                        ],
+                    },
+                }
+            ]
+        },
+    )
+
+    result = _build(tmp_path)
+
+    failed_names = {row["name"] for row in result["failed"]}
+    assert "n2_pro_397b_release_clearance" in failed_names
+    n2_rows = [
+        row
+        for row in result["groups"]["n2_pro_397b"]
+        if row["name"] == "n2_pro_397b_release_clearance"
+    ]
+    assert len(n2_rows) == 1
+    assert n2_rows[0]["detail"]["status"] == "open"
+    assert n2_rows[0]["detail"]["local_artifact_probe"]["artifact_present"] is False
+    assert "runtime_cache_api_ui_live_proof" in n2_rows[0]["detail"][
+        "required_next_evidence"
+    ]
+
+
 def test_full_release_objective_checklist_can_pass_when_all_evidence_is_green(
     tmp_path,
 ):
@@ -1001,6 +1087,7 @@ def test_full_release_objective_checklist_can_pass_when_all_evidence_is_green(
     _write_dsv4_green_artifact(tmp_path)
     _write_green_family_smokes(tmp_path)
     _write_qwen_green_artifacts(tmp_path)
+    _write_green_n2_objective_digest(tmp_path)
 
     result = _build(tmp_path)
 
