@@ -81,6 +81,9 @@ CB_ONESHOT_PREFILL_ARTIFACT = Path(
 CB_NATIVE_THINKING_OFF_ARTIFACT = Path(
     "build/current-mimo-v2-jang2l-cb-cache-after-native-thinking-off-live-20260606.json"
 )
+CB_METAL_BASELINE_ARTIFACT = Path(
+    "build/current-mimo-v2-jang2l-cb-cache-after-metal-baseline-live-20260608.json"
+)
 MLLM_INPUTS_EMBEDS_INTERFACE_ARTIFACT = Path(
     "build/current-mimo-v2-mllm-inputs-embeds-interface-fix-20260606.json"
 )
@@ -1867,6 +1870,47 @@ def _latest_decode_speed_evidence(data: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _cb_metal_baseline_evidence(data: dict[str, Any]) -> dict[str, Any]:
+    summary = data.get("summary")
+    summary = summary if isinstance(summary, dict) else {}
+    rows = data.get("rows")
+    rows = rows if isinstance(rows, list) else []
+    by_name = {
+        str(row.get("name")): row
+        for row in rows
+        if isinstance(row, dict) and row.get("name") is not None
+    }
+    probe = by_name.get("first_token_system_probe") or {}
+    all_http_ok = all(
+        isinstance(row, dict) and row.get("status") == 200
+        for row in rows
+    )
+    memory_pressure_cleared = bool(
+        data.get("status") == "pass"
+        and summary.get("memory_pressure_cleared") is True
+        and all_http_ok
+        and probe.get("status") == 200
+        and "503" not in str(probe.get("error") or "")
+        and "Service Unavailable" not in str(probe.get("error") or "")
+    )
+    return {
+        "exists": True,
+        "status": data.get("status"),
+        "memory_pressure_cleared": memory_pressure_cleared,
+        "first_token_system_probe_http_ok": probe.get("status") == 200,
+        "first_token_system_probe_text": probe.get("text"),
+        "cache_hit_tokens": summary.get("cache_hit_tokens"),
+        "l2_tokens_on_disk": summary.get("l2_tokens_on_disk"),
+        "native_cache": summary.get("native_cache"),
+        "texts": summary.get("texts"),
+        "boundary": (
+            "This live proof clears the post-load Metal working-set 503 path only. "
+            "It does not clear MiMo literal exactness, tool argument exactness, "
+            "or prefix/paged/block-L2 cache reuse by itself."
+        ),
+    }
+
+
 def _decode_speed_log_trace(log_path: Path) -> dict[str, Any]:
     if not log_path.exists():
         return {
@@ -1989,6 +2033,7 @@ def build_audit(root: Path, model_path: Path, manifest: Path) -> dict[str, Any]:
     text_route = _artifact(root / TEXT_ROUTE_ARTIFACT)
     cb_oneshot_prefill = _artifact(root / CB_ONESHOT_PREFILL_ARTIFACT)
     cb_native_thinking_off = _artifact(root / CB_NATIVE_THINKING_OFF_ARTIFACT)
+    cb_metal_baseline = _artifact(root / CB_METAL_BASELINE_ARTIFACT)
     mllm_inputs_embeds_interface = _artifact(root / MLLM_INPUTS_EMBEDS_INTERFACE_ARTIFACT)
     latest_decode_speed = _artifact(root / LATEST_DECODE_SPEED_ARTIFACT)
     api_cache_responses_contract = _artifact(root / NOHEAVY_API_CACHE_CONTRACT_ARTIFACT)
@@ -2107,6 +2152,14 @@ def build_audit(root: Path, model_path: Path, manifest: Path) -> dict[str, Any]:
             prompt_shape_blocked = False
             memory_pressure_blocked = True
         speed_blocked = speed_blocked or bool(cb_native_evidence.get("speed_blocked"))
+    cb_metal_baseline_evidence = (
+        _cb_metal_baseline_evidence(cb_metal_baseline["data"])
+        if cb_metal_baseline.get("exists")
+        and isinstance(cb_metal_baseline.get("data"), dict)
+        else {"exists": False}
+    )
+    if cb_metal_baseline_evidence.get("memory_pressure_cleared"):
+        memory_pressure_blocked = False
     latest_decode_speed_evidence = (
         _latest_decode_speed_evidence(latest_decode_speed["data"])
         if latest_decode_speed.get("exists")
@@ -2438,6 +2491,7 @@ def build_audit(root: Path, model_path: Path, manifest: Path) -> dict[str, Any]:
             "text_route_live_proof": str(TEXT_ROUTE_ARTIFACT),
             "cb_oneshot_prefill_live_proof": str(CB_ONESHOT_PREFILL_ARTIFACT),
             "cb_native_thinking_off_live_proof": str(CB_NATIVE_THINKING_OFF_ARTIFACT),
+            "cb_metal_baseline_live_proof": str(CB_METAL_BASELINE_ARTIFACT),
             "mllm_inputs_embeds_interface": str(MLLM_INPUTS_EMBEDS_INTERFACE_ARTIFACT),
             "latest_decode_speed": str(LATEST_DECODE_SPEED_ARTIFACT),
             "api_cache_responses_contract": str(NOHEAVY_API_CACHE_CONTRACT_ARTIFACT),
@@ -2451,6 +2505,7 @@ def build_audit(root: Path, model_path: Path, manifest: Path) -> dict[str, Any]:
             "text_route": text_route_evidence,
             "cb_oneshot_prefill": cb_evidence,
             "cb_native_thinking_off": cb_native_evidence,
+            "cb_metal_baseline": cb_metal_baseline_evidence,
             "mllm_inputs_embeds_interface": (
                 mllm_inputs_embeds_interface.get("data")
                 if mllm_inputs_embeds_interface.get("exists")
