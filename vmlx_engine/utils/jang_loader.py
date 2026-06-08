@@ -99,7 +99,11 @@ def _jangtq_bits_map_from_metadata(jang_cfg: dict, config: dict | None = None) -
             continue
         routed = candidate.get("routed_expert")
         if isinstance(routed, int):
-            return {"routed_expert": routed}
+            # Full role maps such as
+            # {"attention": 8, "linear_attention": 8, "routed_expert": 2}
+            # carry non-routed quantization contracts used by JANGTQ loaders.
+            # Preserve them instead of collapsing to routed_expert-only.
+            return dict(candidate)
         if isinstance(routed, dict) and routed:
             return {"routed_expert": dict(routed)}
         if any(k in candidate for k in ("gate_proj", "up_proj", "down_proj")):
@@ -2247,8 +2251,8 @@ def _load_jang_v2(
             _dst_lm_head = sum(
                 1 for k in remapped.keys() if k.startswith("language_model.lm_head.")
             )
-            if (_src_lm_count > 0 and _dst_lm_count != _src_lm_count) or (
-                _src_lm_head > 0 and _dst_lm_head != _src_lm_head
+            if (_src_lm_count > 0 and _dst_lm_count < _src_lm_count) or (
+                _src_lm_head > 0 and _dst_lm_head < _src_lm_head
             ):
                 raise RuntimeError(
                     f"jang_loader VLM key remap dropped weights: "

@@ -196,6 +196,31 @@ class TestJangDetection:
             }
         }
 
+    def test_jangtq_vlm_bits_map_preserves_full_role_metadata(self):
+        from vmlx_engine.utils.jang_loader import _jangtq_bits_map_from_metadata
+
+        assert _jangtq_bits_map_from_metadata(
+            {
+                "format": "jangtq",
+                "mxtq_bits": {
+                    "attention": 8,
+                    "linear_attention": 8,
+                    "shared_expert": 8,
+                    "routed_expert": 2,
+                    "embed_tokens": 8,
+                    "lm_head": 8,
+                },
+            },
+            {},
+        ) == {
+            "attention": 8,
+            "linear_attention": 8,
+            "shared_expert": 8,
+            "routed_expert": 2,
+            "embed_tokens": 8,
+            "lm_head": 8,
+        }
+
     def test_detects_jang_affine_weight_format(self, tmp_path):
         from vmlx_engine.utils.jang_loader import is_jang_model
 

@@ -10020,6 +10020,14 @@ class TestJangVLMFallbacks:
         assert tokenizer == "tokenizer"
         assert jang_loader._LAST_LOAD_VLM_FALLBACK is True
 
+    def test_vlm_as_text_key_remap_guard_allows_existing_destination_keys(self):
+        source = Path("vmlx_engine/utils/jang_loader.py").read_text()
+
+        assert "_dst_lm_count < _src_lm_count" in source
+        assert "_dst_lm_head < _src_lm_head" in source
+        assert "_dst_lm_count != _src_lm_count" not in source
+        assert "_dst_lm_head != _src_lm_head" not in source
+
     def test_qwen_vlm_loader_mxtq_stays_native_vlm(self, tmp_path, monkeypatch):
         """JANGTQ/MXTQ Qwen VLM must not be caught by the affine fallback."""
         from vmlx_engine.utils import jang_loader
