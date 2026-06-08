@@ -296,6 +296,7 @@ def _mimo_checks(data: dict[str, Any], classifier: dict[str, Any]) -> list[dict[
         "blockers": blockers,
         "jangtq2_boundary": all_local_smoke.get("artifact_exactness_boundary"),
         "jang2l_boundary": jang2l_smoke.get("artifact_exactness_boundary"),
+        "prompt_shape_first_token": diagnostics.get("prompt_shape_first_token"),
         "classifier": {
             "status": classifier.get("status"),
             "classification": classifier.get("classification"),

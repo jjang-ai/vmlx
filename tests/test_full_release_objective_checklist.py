@@ -794,6 +794,17 @@ def test_full_release_objective_checklist_keeps_open_rows_visible(tmp_path):
                         "failed_labels": ["mimo_structured_json_sentinel"],
                     }
                 },
+                "prompt_shape_first_token": {
+                    "classification": "decode_loop_or_model_artifact_first_token_stop",
+                    "failing_top_token": {
+                        "text": "<|im_end|>",
+                        "is_special": True,
+                    },
+                    "working_folded_top_token": {
+                        "text": "ACK",
+                        "is_special": False,
+                    },
+                },
             },
         },
     )
@@ -846,6 +857,12 @@ def test_full_release_objective_checklist_keeps_open_rows_visible(tmp_path):
     assert mimo_artifact_rows[0]["detail"]["jang2l_boundary"]["classification"] == (
         "empty_visible_output_after_generation_stop"
     )
+    assert mimo_artifact_rows[0]["detail"]["prompt_shape_first_token"][
+        "failing_top_token"
+    ]["text"] == "<|im_end|>"
+    assert mimo_artifact_rows[0]["detail"]["prompt_shape_first_token"][
+        "working_folded_top_token"
+    ]["text"] == "ACK"
     assert mimo_artifact_rows[0]["detail"]["classifier"]["classification"] == (
         "jangtq2_compact_hyphen_decode_quality_open_not_cache_parser_template_tokenizer"
     )
