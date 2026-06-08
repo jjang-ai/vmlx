@@ -26,8 +26,17 @@ def _register_fake_mimo_runtime(monkeypatch, tmp_path):
 
     class FakeTextModel:
         def __init__(self, config):
-            self.model = SimpleNamespace(embed_tokens=lambda input_ids: input_ids)
+            def _embed_tokens(input_ids):
+                ids = mx.array(input_ids)
+                if ids.ndim == 1:
+                    ids = ids[None, :]
+                return mx.zeros(tuple(ids.shape) + (16,))
+
+            self.model = SimpleNamespace(embed_tokens=_embed_tokens)
             self.layers = []
+
+        def __call__(self, input_ids, inputs_embeds=None, cache=None, mask=None):
+            return SimpleNamespace(logits=inputs_embeds)
 
         def make_cache(self):
             return []
@@ -162,4 +171,46 @@ def test_mimo_v2_vision_forward_uses_grid_aware_window_reorder(
     pixel_values = mx.ones((4, 3 * 1 * 2 * 2))
     output = vision(pixel_values=pixel_values, grid_thw=grid_thw)
     assert output.shape == (1, 16)
+    sys.modules.pop("mlx_vlm.models.mimo_v2", None)
+
+
+def test_mimo_v2_model_splices_image_pixels_through_vision_tower(
+    tmp_path,
+    monkeypatch,
+):
+    module = _register_fake_mimo_runtime(monkeypatch, tmp_path)
+    model = module.Model(
+        module.ModelConfig.from_dict(
+            {
+                "model_type": "mimo_v2",
+                "multimodal_status": "media_runtime_enabled",
+                "vision_config": {
+                    "hidden_size": 8,
+                    "out_hidden_size": 16,
+                    "patch_size": 2,
+                    "temporal_patch_size": 1,
+                    "in_channels": 3,
+                    "spatial_merge_size": 2,
+                    "depth": 1,
+                    "intermediate_size": 16,
+                    "num_heads": 2,
+                    "num_key_value_heads": 1,
+                    "qk_channels": 4,
+                    "fullatt_block_indexes": [0],
+                },
+                "processor_config": {"image_token_id": 151655},
+            }
+        )
+    )
+
+    input_ids = mx.array([[11, 151655, 22]])
+    output = model(
+        input_ids,
+        pixel_values=mx.ones((4, 3 * 1 * 2 * 2)),
+        image_grid_thw=mx.array([[1, 2, 2]]),
+    )
+    assert output.logits.shape == (1, 3, 16)
+    assert output.logits.tolist()[0][0] == [0.0] * 16
+    assert output.logits.tolist()[0][2] == [0.0] * 16
+    assert any(abs(v) > 0 for v in output.logits.tolist()[0][1])
     sys.modules.pop("mlx_vlm.models.mimo_v2", None)

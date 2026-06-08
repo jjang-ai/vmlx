@@ -63,6 +63,12 @@ def test_mimo_current_audit_separates_clean_artifact_from_runtime_blockers(
                 "position_embeddings=position_embeddings",
                 "x = self.run_blocks(x, grid_thw=grid_thw)",
                 "return self.merge_patches(x)",
+                "self.visual = (",
+                "if self.visual is None:",
+                "image_embeds = self.visual(",
+                "video_embeds = self.visual(",
+                "image_grid_thw=image_grid_thw",
+                "video_grid_thw=video_grid_thw",
                 "MiMo-V2.5 JANG_2L vision input is not wired",
                 'key.startswith("model.mtp.")',
             ]
@@ -363,6 +369,7 @@ def test_mimo_current_audit_separates_clean_artifact_from_runtime_blockers(
         is True
     )
     assert result["diagnostics"]["mimo_media_runtime"]["vision_grid_forward"] is True
+    assert result["diagnostics"]["mimo_media_runtime"]["model_vision_bridge"] is True
     assert (
         "VisionConfig parser"
         not in result["diagnostics"]["mimo_media_runtime"]["missing_runtime_components"]
@@ -401,6 +408,10 @@ def test_mimo_current_audit_separates_clean_artifact_from_runtime_blockers(
     )
     assert (
         "model-level image/video request bridge to MiMo vision tower"
+        not in result["diagnostics"]["mimo_media_runtime"]["missing_runtime_components"]
+    )
+    assert (
+        "audio tokenizer/feature extraction bridge"
         in result["diagnostics"]["mimo_media_runtime"]["missing_runtime_components"]
     )
     assert result["diagnostics"]["all_local_smoke"]["tool_protocol_pass"] is True

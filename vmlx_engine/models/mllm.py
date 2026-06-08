@@ -1865,6 +1865,11 @@ def _register_mimo_v2_mlx_vlm_runtime() -> None:
                 getattr(config, "multimodal_status", None)
                 != "weights_preserved_text_runtime"
             )
+            self.visual = (
+                VisionModel(config.vision_config)
+                if self._mimo_v2_bind_media_weights
+                else None
+            )
 
         @property
         def layers(self):
@@ -1874,8 +1879,10 @@ def _register_mimo_v2_mlx_vlm_runtime() -> None:
             self,
             input_ids=None,
             pixel_values=None,
+            image_grid_thw=None,
             image_embeds=None,
             video_pixel_values=None,
+            video_grid_thw=None,
             video_embeds=None,
             audio_codes=None,
             audio_embeds=None,
@@ -1884,18 +1891,34 @@ def _register_mimo_v2_mlx_vlm_runtime() -> None:
             from mlx_vlm.models.base import InputEmbeddingsFeatures
 
             if pixel_values is not None:
-                raise UnsupportedMediaModalityError(
-                    "vision",
-                    "MiMo-V2.5 JANG_2L vision weights are preserved, but the "
-                    "current Python runtime only wires the text decode path.",
-                    family="mimo_v2",
+                if self.visual is None:
+                    raise UnsupportedMediaModalityError(
+                        "vision",
+                        "MiMo-V2.5 JANG_2L vision weights are preserved, but this "
+                        "bundle is configured for text-only runtime.",
+                        family="mimo_v2",
+                    )
+                if image_grid_thw is None:
+                    image_grid_thw = kwargs.get("grid_thw")
+                if image_grid_thw is None:
+                    raise ValueError("MiMo-V2 image requests require image_grid_thw")
+                image_embeds = self.visual(
+                    pixel_values=pixel_values,
+                    grid_thw=image_grid_thw,
                 )
             if video_pixel_values is not None:
-                raise UnsupportedMediaModalityError(
-                    "video",
-                    "MiMo-V2.5 JANG_2L video weights are preserved, but the "
-                    "current Python runtime only accepts precomputed video embeddings.",
-                    family="mimo_v2",
+                if self.visual is None:
+                    raise UnsupportedMediaModalityError(
+                        "video",
+                        "MiMo-V2.5 JANG_2L video weights are preserved, but this "
+                        "bundle is configured for text-only runtime.",
+                        family="mimo_v2",
+                    )
+                if video_grid_thw is None:
+                    raise ValueError("MiMo-V2 video requests require video_grid_thw")
+                video_embeds = self.visual(
+                    pixel_values=video_pixel_values,
+                    grid_thw=video_grid_thw,
                 )
             if audio_codes is not None:
                 raise UnsupportedMediaModalityError(
@@ -1939,8 +1962,10 @@ def _register_mimo_v2_mlx_vlm_runtime() -> None:
             self,
             input_ids,
             pixel_values=None,
+            image_grid_thw=None,
             image_embeds=None,
             video_pixel_values=None,
+            video_grid_thw=None,
             video_embeds=None,
             audio_codes=None,
             audio_embeds=None,
@@ -1950,11 +1975,12 @@ def _register_mimo_v2_mlx_vlm_runtime() -> None:
             **kwargs,
         ):
             if pixel_values is not None:
-                raise UnsupportedMediaModalityError(
-                    "vision",
-                    "MiMo-V2.5 JANG_2L vision input is not wired in this Python runtime.",
-                    family="mimo_v2",
-                )
+                inputs_embeds = self.get_input_embeddings(
+                    input_ids=input_ids,
+                    pixel_values=pixel_values,
+                    image_grid_thw=image_grid_thw,
+                ).inputs_embeds
+                input_ids = None
             if any(
                 item is not None
                 for item in (
@@ -1969,6 +1995,7 @@ def _register_mimo_v2_mlx_vlm_runtime() -> None:
                     input_ids=input_ids,
                     image_embeds=image_embeds,
                     video_pixel_values=video_pixel_values,
+                    video_grid_thw=video_grid_thw,
                     video_embeds=video_embeds,
                     audio_codes=audio_codes,
                     audio_embeds=audio_embeds,
