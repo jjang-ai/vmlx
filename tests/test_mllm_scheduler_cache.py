@@ -419,12 +419,13 @@ def test_mllm_mimo_raw_audio_bridge_populates_audio_codes(tmp_path, monkeypatch)
 
     def fake_bridge(**kwargs):
         captured.update(kwargs)
-        return mx.array([[4, 5, 6]], dtype=mx.int32)
+        return mx.ones((10, 20), dtype=mx.int32)
 
     model = SimpleNamespace(
         config=SimpleNamespace(
             model_type="mimo_v2",
             processor_config={"audio_token_id": 151669},
+            audio_config={"group_size": 4},
         ),
         language_model=SimpleNamespace(),
     )
@@ -442,7 +443,9 @@ def test_mllm_mimo_raw_audio_bridge_populates_audio_codes(tmp_path, monkeypatch)
 
     assert captured["audio_paths"] == [str(wav)]
     assert captured["model"] is model
-    assert request.audio_codes.tolist() == [[4, 5, 6]]
+    assert request.audio_codes.shape == (10, 20)
+    assert request.input_ids.tolist() == [[1, 151669, 151669, 151669, 2]]
+    assert request.attention_mask.tolist() == [[1, 1, 1, 1, 1]]
 
 
 def test_mllm_scheduler_and_batched_engine_route_raw_audio_requests():

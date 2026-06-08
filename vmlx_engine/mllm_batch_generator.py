@@ -978,6 +978,23 @@ def _mimo_audio_token_id(model: Any) -> Optional[int]:
     return None
 
 
+def _mimo_audio_group_size(model: Any) -> int:
+    cfg = getattr(model, "config", None)
+    audio_config = _read_config_field(cfg, "audio_config")
+    processor_config = _mimo_audio_processor_config(model)
+    for source, key in (
+        (processor_config, "audio_group_size"),
+        (audio_config, "group_size"),
+    ):
+        value = _read_config_field(source, key)
+        if value is not None:
+            try:
+                return max(1, int(value))
+            except (TypeError, ValueError):
+                pass
+    return 4
+
+
 def _input_ids_contains_token(input_ids: Any, token_id: int) -> bool:
     if input_ids is None:
         return False
@@ -989,6 +1006,67 @@ def _input_ids_contains_token(input_ids: Any, token_id: int) -> bool:
             return int(token_id) in input_ids
         except Exception:
             return False
+
+
+def _expand_mimo_audio_token_placeholders(
+    *,
+    input_ids: Any,
+    attention_mask: Any,
+    token_id: int,
+    target_count: int,
+) -> tuple[mx.array, Any]:
+    """Expand one MiMo audio pad token to the number of audio embeddings."""
+
+    ids = mx.array(input_ids)
+    if ids.ndim == 1:
+        rows = [ids.tolist()]
+        batched = False
+    elif ids.ndim == 2 and int(ids.shape[0]) == 1:
+        rows = ids.tolist()
+        batched = True
+    else:
+        raise ValueError(
+            "MiMo-V2 audio prompt expansion supports one request at a time; "
+            f"got input_ids shape {tuple(ids.shape)}"
+        )
+    row = [int(x) for x in rows[0]]
+    current_count = sum(1 for x in row if x == int(token_id))
+    if current_count == int(target_count):
+        return ids, attention_mask
+    if current_count != 1:
+        raise ValueError(
+            "MiMo-V2 audio token count "
+            f"{current_count} does not match target embeddings {target_count}"
+        )
+
+    expanded: list[int] = []
+    for value in row:
+        if value == int(token_id):
+            expanded.extend([int(token_id)] * int(target_count))
+        else:
+            expanded.append(value)
+    new_ids = mx.array([expanded] if batched else expanded, dtype=ids.dtype)
+
+    if attention_mask is None:
+        return new_ids, attention_mask
+    mask = mx.array(attention_mask)
+    if mask.ndim == 1:
+        mask_row = [int(x) for x in mask.tolist()]
+        mask_batched = False
+    elif mask.ndim == 2 and int(mask.shape[0]) == 1:
+        mask_row = [int(x) for x in mask.tolist()[0]]
+        mask_batched = True
+    else:
+        return new_ids, attention_mask
+    if len(mask_row) != len(row):
+        return new_ids, attention_mask
+    expanded_mask: list[int] = []
+    for value, mask_value in zip(row, mask_row):
+        if value == int(token_id):
+            expanded_mask.extend([mask_value] * int(target_count))
+        else:
+            expanded_mask.append(mask_value)
+    return new_ids, mx.array([expanded_mask] if mask_batched else expanded_mask, dtype=mask.dtype)
 
 
 def _build_mimo_audio_codes_from_paths(
@@ -3919,6 +3997,22 @@ class MLLMBatchGenerator:
                 ),
                 mx.int32,
             )
+            if request.audio_codes is not None:
+                audio_token_id = _mimo_audio_token_id(self.model)
+                if audio_token_id is not None:
+                    audio_groups = (
+                        int(request.audio_codes.shape[0])
+                        + _mimo_audio_group_size(self.model)
+                        - 1
+                    ) // _mimo_audio_group_size(self.model)
+                    request.input_ids, request.attention_mask = (
+                        _expand_mimo_audio_token_placeholders(
+                            input_ids=request.input_ids,
+                            attention_mask=request.attention_mask,
+                            token_id=audio_token_id,
+                            target_count=audio_groups,
+                        )
+                    )
         if all_audio and not any(
             item is not None
             for item in (

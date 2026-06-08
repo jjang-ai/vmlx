@@ -4202,6 +4202,19 @@ def _expand_video_placeholders_to_image_frames(
     return rewritten if changed else chat_messages
 
 
+def _mimo_v2_token_text(processor, token_id, fallback: str) -> str:
+    try:
+        tokenizer = getattr(processor, "tokenizer", processor)
+        convert = getattr(tokenizer, "convert_ids_to_tokens", None)
+        if callable(convert) and token_id is not None:
+            token = convert(int(token_id))
+            if isinstance(token, str) and token:
+                return token
+    except Exception:
+        pass
+    return fallback
+
+
 class MLXMultimodalLM:
     """
     Wrapper around mlx-vlm for multimodal inference.
@@ -4909,6 +4922,74 @@ class MLXMultimodalLM:
 
         return normalized
 
+    def _normalize_mimo_audio_messages_for_template(
+        self,
+        chat_messages: list[dict],
+    ) -> list[dict]:
+        """Render MiMo audio content parts as explicit artifact audio tokens.
+
+        The current local MiMo bundles use a Qwen2.5-VL processor shim. That
+        processor preserves image/video content parts, but ignores raw
+        ``{"type": "audio"}`` parts when rendering the chat template. The
+        audio code bridge can only splice embeddings if the prompt contains
+        the model-owned audio pad token, so normalize MiMo audio placeholders
+        to the special token sequence declared in ``processor_config``.
+        """
+
+        config = getattr(self, "config", None)
+        if isinstance(config, dict):
+            model_type = str(config.get("model_type", "") or "").lower()
+            processor_config = config.get("processor_config") or {}
+        else:
+            model_type = str(getattr(config, "model_type", "") or "").lower()
+            processor_config = getattr(config, "processor_config", None) or {}
+        if model_type != "mimo_v2" or not isinstance(processor_config, dict):
+            return chat_messages
+        audio_token_id = processor_config.get("audio_token_id")
+        if audio_token_id is None:
+            return chat_messages
+        audio_marker = _mimo_v2_token_text(
+            self.processor,
+            processor_config.get("audio_start_token_id"),
+            "<|mimo_audio_start|>",
+        )
+        audio_marker += _mimo_v2_token_text(
+            self.processor,
+            audio_token_id,
+            "<|audio_pad|>",
+        )
+        audio_marker += _mimo_v2_token_text(
+            self.processor,
+            processor_config.get("audio_end_token_id"),
+            "<|mimo_audio_end|>",
+        )
+
+        rewritten: list[dict] = []
+        changed = False
+        for message in chat_messages:
+            content = message.get("content")
+            if not isinstance(content, list):
+                rewritten.append(message)
+                continue
+            new_content: list[dict] = []
+            for part in content:
+                if isinstance(part, dict) and str(part.get("type") or "").lower() in {
+                    "audio",
+                    "input_audio",
+                    "audio_url",
+                }:
+                    new_content.append({"type": "text", "text": audio_marker, "content": audio_marker})
+                    changed = True
+                else:
+                    new_content.append(part)
+            if changed:
+                out = dict(message)
+                out["content"] = new_content
+                rewritten.append(out)
+            else:
+                rewritten.append(message)
+        return rewritten if changed else chat_messages
+
     def _synthesizes_thinking_prompt_when_enabled(self) -> bool:
         """Return True for MLLM families whose template needs an explicit open rail.
 
@@ -5038,6 +5119,8 @@ class MLXMultimodalLM:
             template_kwargs["enable_thinking"] = enable_thinking
         if tools:
             template_kwargs["tools"] = tools
+        if model_type == "mimo_v2":
+            chat_messages = self._normalize_mimo_audio_messages_for_template(chat_messages)
 
         formatted_prompt = None
         try:

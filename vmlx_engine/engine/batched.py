@@ -179,6 +179,62 @@ class BatchedEngine(BaseEngine):
         except Exception:
             return None
 
+    def _use_simple_mllm_media_fallback(
+        self,
+        *,
+        images: list[str],
+        videos: list[str],
+    ) -> bool:
+        if not self._is_mllm or not (images or videos):
+            return False
+        if os.environ.get("VMLINUX_DISABLE_MLLM_MEDIA_SIMPLE_FALLBACK") == "1":
+            return False
+        # Gemma4 media is coherent through MLXMultimodalLM.chat(), while the
+        # current batched MLLM scheduler path can produce corrupted visible
+        # image output after a valid vision prefill. Keep text-only Gemma4 on
+        # the optimized scheduler/cache path; only media turns use the proven
+        # simple VLM forward until batched media prefill parity is fixed.
+        return self._model_family_name() == "gemma4"
+
+    async def _simple_mllm_chat_output(
+        self,
+        messages: list[dict[str, Any]],
+        *,
+        max_tokens: int,
+        temperature: float,
+        top_p: float,
+        tools: list[dict] | None,
+        kwargs: dict[str, Any],
+    ) -> GenerationOutput:
+        if self._mllm_instance is None:
+            raise RuntimeError("MLLM instance is not loaded")
+        call_kwargs = dict(kwargs)
+        call_kwargs.pop("request_id", None)
+        call_kwargs["top_p"] = top_p
+        if tools:
+            call_kwargs["tools"] = convert_tools_for_template(tools)
+        executor = getattr(self._mllm_scheduler, "_step_executor", None)
+        loop = asyncio.get_running_loop()
+        result = await loop.run_in_executor(
+            executor,
+            lambda: self._mllm_instance.chat(
+                messages,
+                max_tokens=max_tokens,
+                temperature=temperature,
+                **call_kwargs,
+            ),
+        )
+        text = clean_output_text(getattr(result, "text", "") or "")
+        return GenerationOutput(
+            text=text,
+            new_text=text,
+            raw_text=getattr(result, "text", "") or text,
+            prompt_tokens=int(getattr(result, "prompt_tokens", 0) or 0),
+            completion_tokens=int(getattr(result, "completion_tokens", 0) or 0),
+            finish_reason=getattr(result, "finish_reason", None) or "stop",
+            finished=True,
+        )
+
     def _messages_are_text_only(self, messages: list[dict[str, Any]]) -> bool:
         for message in messages:
             content = message.get("content")
@@ -1201,7 +1257,15 @@ class BatchedEngine(BaseEngine):
         if (
             self._is_mllm
             and self._processor
-            and (num_images > 0 or num_videos > 0 or mllm_model_type == "zaya1_vl")
+            and (
+                num_images > 0
+                or num_videos > 0
+                or mllm_model_type == "zaya1_vl"
+                or (
+                    mllm_model_type == "mimo_v2"
+                    and bool(self._extract_audio_content(messages))
+                )
+            )
         ):
             # Use mlx_vlm for MLLM when actual images are present (any turn count).
             # Text-only VL conversations still use the standard tokenizer path,
@@ -1243,6 +1307,13 @@ class BatchedEngine(BaseEngine):
                             direct_messages = normalizer._normalize_text_only_messages_for_processor(
                                 direct_messages,
                                 has_media=False,
+                            )
+                        if mllm_model_type == "mimo_v2":
+                            normalizer = MLXMultimodalLM.__new__(MLXMultimodalLM)
+                            normalizer.config = getattr(self._model, "config", None)
+                            normalizer.processor = self._processor
+                            direct_messages = normalizer._normalize_mimo_audio_messages_for_template(
+                                direct_messages,
                             )
                         if direct_messages:
                             return direct_messages
@@ -1751,6 +1822,25 @@ class BatchedEngine(BaseEngine):
         # Convert tools for template
         template_tools = convert_tools_for_template(tools) if tools else None
 
+        if self._use_simple_mllm_media_fallback(
+            images=all_images,
+            videos=all_videos,
+        ):
+            logger.info(
+                "Using simple MLLM media fallback for %s with %d image(s), %d video(s)",
+                self._model_family_name(),
+                len(all_images),
+                len(all_videos),
+            )
+            return await self._simple_mllm_chat_output(
+                messages,
+                max_tokens=max_tokens,
+                temperature=temperature,
+                top_p=top_p,
+                tools=tools,
+                kwargs=kwargs,
+            )
+
         # Apply chat template — pop reasoning_effort and merge into template kwargs
         # so it reaches tokenizer.apply_chat_template() for models that support it
         reasoning_effort = kwargs.pop("reasoning_effort", None)
@@ -1879,6 +1969,26 @@ class BatchedEngine(BaseEngine):
 
         # Convert tools for template
         template_tools = convert_tools_for_template(tools) if tools else None
+
+        if self._use_simple_mllm_media_fallback(
+            images=all_images,
+            videos=all_videos,
+        ):
+            logger.info(
+                "Using simple MLLM media streaming fallback for %s with %d image(s), %d video(s)",
+                self._model_family_name(),
+                len(all_images),
+                len(all_videos),
+            )
+            yield await self._simple_mllm_chat_output(
+                messages,
+                max_tokens=max_tokens,
+                temperature=temperature,
+                top_p=top_p,
+                tools=tools,
+                kwargs={**kwargs, "request_id": request_id},
+            )
+            return
 
         # Apply chat template — pop reasoning_effort and merge into template kwargs
         # so it reaches tokenizer.apply_chat_template() for models that support it
