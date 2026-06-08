@@ -12146,6 +12146,30 @@ class TestTurboQuantKVTelemetry:
             "preserve_rotating_window_metadata"
         )
 
+    def test_native_cache_status_reports_hybrid_ssm_from_registry_without_scheduler(self):
+        from types import SimpleNamespace
+        from vmlx_engine.server import _native_cache_status
+
+        cfg = SimpleNamespace(cache_type="hybrid", cache_subtype=None)
+
+        status = _native_cache_status(None, family="qwen3_5_moe", cfg=cfg)
+
+        assert status["family"] == "qwen3_5_moe"
+        assert status["schema"] == "hybrid_ssm_v1"
+        assert status["cache_type"] == "hybrid_ssm_typed"
+        assert status["components"] == [
+            "attention_kv",
+            "ssm_companion_state",
+            "async_rederive",
+        ]
+        assert status["generic_turboquant_kv"] == {
+            "enabled": False,
+            "reason": "hybrid_ssm_state",
+        }
+        assert status["prefix"] is False
+        assert status["paged"] is False
+        assert status["block_disk_l2"] is False
+
     def test_native_cache_status_reports_plain_attention_kv(self):
         from types import SimpleNamespace
         from vmlx_engine.server import _native_cache_status

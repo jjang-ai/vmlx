@@ -6505,11 +6505,12 @@ def _current_model_config():
 
 def _native_cache_status(scheduler=None, *, family: str | None = None, cfg=None) -> dict:
     """Report architecture-native cache contracts separately from generic TQ-KV."""
-    if scheduler is None:
+    if scheduler is None and family is None and cfg is None:
         return {}
 
     scheduler_family = str(getattr(scheduler, "_model_type_for_runtime", "") or "")
     family_name = family or scheduler_family
+    cache_type = getattr(cfg, "cache_type", None) if cfg is not None else None
     cache_subtype = getattr(cfg, "cache_subtype", None) if cfg is not None else None
     block_aware_cache = getattr(scheduler, "block_aware_cache", None)
     paged_cache_manager = getattr(scheduler, "paged_cache_manager", None)
@@ -6624,7 +6625,7 @@ def _native_cache_status(scheduler=None, *, family: str | None = None, cfg=None)
         }
 
     if (
-        getattr(scheduler, "_is_hybrid", False)
+        (getattr(scheduler, "_is_hybrid", False) or cache_type == "hybrid")
         and not getattr(scheduler, "_uses_dsv4_cache", False)
         and not getattr(scheduler, "_uses_zaya_cache", False)
     ):
