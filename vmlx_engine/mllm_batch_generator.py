@@ -1284,6 +1284,61 @@ def _model_uses_zaya_cache_contract(model: Any) -> bool:
         return False
 
 
+def _runtime_model_type(model: Any) -> str:
+    """Resolve model_type across VLM wrappers and inner language models.
+
+    Some JANG VLM wrappers expose an empty top-level config model type while
+    the real text runtime family lives under ``language_model.config`` or
+    ``args``. MiMo-specific thinking-off and XML tool processors depend on
+    this value, so the batch generator must inspect the inner runtime too.
+    """
+
+    def _cfg_value(cfg: Any, key: str) -> Any:
+        if cfg is None:
+            return None
+        if isinstance(cfg, dict):
+            return cfg.get(key)
+        return getattr(cfg, key, None)
+
+    def _cfg_candidates(obj: Any) -> list[Any]:
+        out: list[Any] = []
+        for attr in ("config", "args", "text_config"):
+            cfg = getattr(obj, attr, None)
+            if cfg is not None:
+                out.append(cfg)
+        for cfg in list(out):
+            raw = _cfg_value(cfg, "_raw_config")
+            if isinstance(raw, dict):
+                out.append(raw)
+            text_cfg = _cfg_value(cfg, "text_config")
+            if text_cfg is not None:
+                out.append(text_cfg)
+        return out
+
+    objects: list[Any] = []
+    for obj in (
+        model,
+        getattr(model, "language_model", None),
+        getattr(model, "model", None),
+    ):
+        if obj is not None and obj not in objects:
+            objects.append(obj)
+    for obj in list(objects):
+        for nested in (
+            getattr(obj, "language_model", None),
+            getattr(obj, "model", None),
+        ):
+            if nested is not None and nested not in objects:
+                objects.append(nested)
+
+    for obj in objects:
+        for cfg in _cfg_candidates(obj):
+            model_type = _cfg_value(cfg, "model_type")
+            if model_type:
+                return str(model_type).lower()
+    return ""
+
+
 def _recompress_to_tq(cache: List[Any], language_model) -> List[Any]:
     """Re-wrap reconstructed KVCache layers into TurboQuantKVCache and compress.
 
@@ -3381,21 +3436,7 @@ class MLLMBatchGenerator:
 
         # Get language model for text generation
         self.language_model = getattr(model, "language_model", model)
-        try:
-            _cfg = getattr(model, "config", None)
-            _text_cfg = getattr(_cfg, "text_config", None)
-            self._model_type = str(
-                getattr(_text_cfg, "model_type", None)
-                or getattr(_cfg, "model_type", None)
-                or (
-                    _cfg.get("model_type")
-                    if isinstance(_cfg, dict)
-                    else ""
-                )
-                or ""
-            ).lower()
-        except Exception:
-            self._model_type = ""
+        self._model_type = _runtime_model_type(model)
 
         # Check if this is actually a VLM with separate language model
         self.is_vlm = hasattr(model, "language_model")

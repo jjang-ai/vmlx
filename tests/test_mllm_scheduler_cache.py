@@ -20,6 +20,7 @@ from types import SimpleNamespace
 
 from vmlx_engine.mllm_scheduler import MLLMSchedulerConfig, MLLMScheduler
 from vmlx_engine.mllm_batch_generator import (
+    MLLMBatchGenerator,
     _prefix_hit_tail_and_cached_tokens as _mllm_prefix_hit_tail_and_cached_tokens,
 )
 
@@ -73,6 +74,48 @@ def test_mllm_tight_memory_text_prefill_chunks_short_tool_prompts():
     assert 'os.environ.get("VMLINUX_TIGHT_MEMORY_PREFILL_STEP_SIZE", "64")' in source
     assert "seq_len > _tight_text_prefill_step_size + 1" in source
     assert "chunk_size = min(_tight_text_prefill_step_size" in source
+
+
+def test_mimo_v2_generator_detects_inner_language_model_type_for_processors():
+    """JANG VLM wrappers can have blank outer model_type; inner runtime wins."""
+    import math
+
+    import mlx.core as mx
+
+    class Tokenizer:
+        eos_token_id = 9
+
+        def encode(self, text, add_special_tokens=False):
+            if text == "<think>":
+                return [1]
+            if text == "</think>":
+                return [2]
+            if text == "<|im_end|>":
+                return [9]
+            return [3]
+
+    model = SimpleNamespace(
+        config=SimpleNamespace(model_type=""),
+        language_model=SimpleNamespace(config=SimpleNamespace(model_type="mimo_v2")),
+    )
+    generator = MLLMBatchGenerator(model=model, processor=SimpleNamespace(tokenizer=Tokenizer()))
+
+    assert generator._model_type == "mimo_v2"
+
+    request = SimpleNamespace(enable_thinking=False, output_tokens=[])
+    processors = generator._mimo_v2_thinking_off_logits_processors(request)
+    logits = mx.zeros((1, 12))
+
+    no_think = processors[0](mx.array([42]), logits)
+    assert math.isinf(float(no_think[0, 1])) and float(no_think[0, 1]) < 0
+    assert math.isinf(float(no_think[0, 2])) and float(no_think[0, 2]) < 0
+
+    first_token = processors[1](mx.array([42]), logits)
+    assert math.isinf(float(first_token[0, 9])) and float(first_token[0, 9]) < 0
+
+    request.output_tokens = [7]
+    later_token = processors[1](mx.array([42, 7]), logits)
+    assert float(later_token[0, 9]) == 0.0
 
 
 def test_mimo_v2_cache_extraction_preserves_swa_kv_heads():
@@ -258,6 +301,8 @@ def test_mllm_audio_payload_prefill_uses_model_wrapper_not_text_fast_path():
         pixel_values=None,
         attention_mask=None,
         image_grid_thw=None,
+        video_pixel_values=None,
+        video_grid_thw=None,
         audio_codes=mx.array([[1, 2], [3, 4]], dtype=mx.int32),
         audio_embeds=None,
         audio_features=None,
