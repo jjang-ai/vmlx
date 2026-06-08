@@ -48,6 +48,9 @@ DEFAULT_JANG2L_LITERAL_VARIANTS = Path(
 DEFAULT_JANG2L_JSON_SENTINEL_ISOLATION = Path(
     "build/current-mimo-v25-jang2l-json-sentinel-after-enable-thinking-forward-20260608/summary.json"
 )
+DEFAULT_JANGTQ2_LOGPROB_DIAGNOSTIC = Path(
+    "build/current-mimo-v25-jangtq2-logprob-literal-diagnostic-20260608.json"
+)
 
 EXACTNESS_REASONS = {
     "expected_tool_argument_missing",
@@ -333,6 +336,89 @@ def _json_sentinel_summary(artifact: dict[str, Any] | None) -> dict[str, Any]:
     }
 
 
+def _case_generated_tokens_and_top1(case: dict[str, Any]) -> tuple[list[str], list[str]]:
+    logprobs = case.get("logprobs") if isinstance(case, dict) else None
+    if not isinstance(logprobs, dict):
+        return [], []
+    if case.get("route") == "completions":
+        tokens = [str(token) for token in (logprobs.get("tokens") or [])]
+        top_entries = logprobs.get("top_logprobs") or []
+        top1: list[str] = []
+        for entry in top_entries:
+            if isinstance(entry, dict) and entry:
+                top1.append(str(next(iter(entry.keys()))))
+            else:
+                top1.append("")
+        return tokens, top1
+
+    content = logprobs.get("content")
+    if not isinstance(content, list):
+        return [], []
+    tokens = []
+    top1 = []
+    for entry in content:
+        if not isinstance(entry, dict):
+            continue
+        tokens.append(str(entry.get("token") or ""))
+        top = entry.get("top_logprobs")
+        first = top[0] if isinstance(top, list) and top else {}
+        top1.append(str(first.get("token") or "") if isinstance(first, dict) else "")
+    return tokens, top1
+
+
+def _logprob_literal_summary(artifact: dict[str, Any] | None) -> dict[str, Any]:
+    cases = artifact.get("cases") if isinstance(artifact, dict) else None
+    if not isinstance(cases, list):
+        return {
+            "exists": False,
+            "failed_literal_cases": [],
+            "generated_tokens_are_top1": None,
+            "wrong_literal_outputs_are_top1": None,
+        }
+
+    failed_cases = []
+    generated_tokens_are_top1 = True
+    wrong_literal_outputs_are_top1 = True
+    for case in cases:
+        if not isinstance(case, dict):
+            continue
+        output = (
+            case.get("text")
+            if case.get("route") == "completions"
+            else case.get("content")
+        )
+        expected = case.get("expected")
+        tokens, top1 = _case_generated_tokens_and_top1(case)
+        token_top1_match = bool(tokens) and len(tokens) == len(top1) and all(
+            token == top for token, top in zip(tokens, top1)
+        )
+        if not token_top1_match:
+            generated_tokens_are_top1 = False
+        if isinstance(expected, str) and str(output or "").strip() != expected.strip():
+            failed_cases.append(
+                {
+                    "label": case.get("label"),
+                    "route": case.get("route"),
+                    "expected": expected,
+                    "output": output,
+                    "tokens": tokens,
+                    "top1": top1,
+                    "generated_tokens_are_top1": token_top1_match,
+                }
+            )
+            if not token_top1_match:
+                wrong_literal_outputs_are_top1 = False
+
+    if not failed_cases:
+        wrong_literal_outputs_are_top1 = None
+    return {
+        "exists": True,
+        "failed_literal_cases": failed_cases,
+        "generated_tokens_are_top1": generated_tokens_are_top1,
+        "wrong_literal_outputs_are_top1": wrong_literal_outputs_are_top1,
+    }
+
+
 def build_classification(
     audit: dict[str, Any],
     smoke: dict[str, Any],
@@ -345,6 +431,7 @@ def build_classification(
     literal_variants: dict[str, Any] | None = None,
     jang2l_literal_variants: dict[str, Any] | None = None,
     jang2l_json_sentinel: dict[str, Any] | None = None,
+    jangtq2_logprob_diagnostic: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     component_ok = audit.get("component_ok") if isinstance(audit.get("component_ok"), dict) else {}
     failures = _failures(smoke)
@@ -367,19 +454,23 @@ def build_classification(
         or "top_p=1.0" in log_text
     )
 
-    excluded_surfaces = {
-        "parser_argument_rewrite": parser_structure_valid,
-        "prefix_paged_l2_or_kv_quant_primary_cause": cache_kv_l2_excluded,
-        "hidden_stochastic_sampling_primary_cause": deterministic_sampling_seen,
-        "tool_protocol_structure": bool(component_ok.get("tool_protocol")),
-        "api_cache_responses_plumbing": bool(component_ok.get("api_cache_responses_contract")),
-        "decode_speed_target": bool(component_ok.get("decode_speed_target")),
-    }
-
     no_source_exactness = _exactness_probe_summary(jangtq2, jang2l)
     literal_variant_summary = _literal_variant_summary(literal_variants)
     jang2l_literal_variant_summary = _literal_variant_summary(jang2l_literal_variants)
     jang2l_json_sentinel_summary = _json_sentinel_summary(jang2l_json_sentinel)
+    jangtq2_logprob_summary = _logprob_literal_summary(jangtq2_logprob_diagnostic)
+
+    excluded_surfaces = {
+        "parser_argument_rewrite": parser_structure_valid,
+        "prefix_paged_l2_or_kv_quant_primary_cause": cache_kv_l2_excluded,
+        "hidden_stochastic_sampling_primary_cause": deterministic_sampling_seen,
+        "api_sampler_non_top1_selection": (
+            jangtq2_logprob_summary["wrong_literal_outputs_are_top1"] is True
+        ),
+        "tool_protocol_structure": bool(component_ok.get("tool_protocol")),
+        "api_cache_responses_plumbing": bool(component_ok.get("api_cache_responses_contract")),
+        "decode_speed_target": bool(component_ok.get("decode_speed_target")),
+    }
     no_switchglu_copy_preserved = _diagnostic_copy_preserved(no_switchglu_fastpath)
     no_router_no_switchglu_copy_preserved = _diagnostic_copy_preserved(
         no_router_no_switchglu_fastpath
@@ -549,10 +640,12 @@ def build_classification(
         "jangtq2_literal_variant_artifact": str(DEFAULT_JANGTQ2_LITERAL_VARIANTS),
         "jang2l_literal_variant_artifact": str(DEFAULT_JANG2L_LITERAL_VARIANTS),
         "jang2l_json_sentinel_artifact": str(DEFAULT_JANG2L_JSON_SENTINEL_ISOLATION),
+        "jangtq2_logprob_diagnostic_artifact": str(DEFAULT_JANGTQ2_LOGPROB_DIAGNOSTIC),
         "no_source_exactness": no_source_exactness,
         "literal_variant_summary": literal_variant_summary,
         "jang2l_literal_variant_summary": jang2l_literal_variant_summary,
         "jang2l_json_sentinel_summary": jang2l_json_sentinel_summary,
+        "jangtq2_logprob_summary": jangtq2_logprob_summary,
         "no_source_runtime_diagnostics": no_source_runtime_diagnostics,
         "exactness_failures": exactness_failures,
         "excluded_surfaces": excluded_surfaces,
@@ -597,6 +690,11 @@ def main() -> int:
         type=Path,
         default=DEFAULT_JANG2L_JSON_SENTINEL_ISOLATION,
     )
+    parser.add_argument(
+        "--jangtq2-logprob-diagnostic",
+        type=Path,
+        default=DEFAULT_JANGTQ2_LOGPROB_DIAGNOSTIC,
+    )
     parser.add_argument("--out", type=Path, default=DEFAULT_OUT)
     args = parser.parse_args()
 
@@ -632,6 +730,11 @@ def main() -> int:
         if args.jang2l_json_sentinel.exists()
         else None
     )
+    jangtq2_logprob_diagnostic = (
+        _load(args.jangtq2_logprob_diagnostic)
+        if args.jangtq2_logprob_diagnostic.exists()
+        else None
+    )
     artifact = build_classification(
         _load(args.audit),
         _load(args.smoke),
@@ -643,6 +746,7 @@ def main() -> int:
         literal_variants=literal_variants,
         jang2l_literal_variants=jang2l_literal_variants,
         jang2l_json_sentinel=jang2l_json_sentinel,
+        jangtq2_logprob_diagnostic=jangtq2_logprob_diagnostic,
     )
     artifact["audit_artifact"] = str(args.audit)
     artifact["smoke_artifact"] = str(args.smoke)
@@ -656,6 +760,9 @@ def main() -> int:
     )
     artifact["jangtq2_tq_kernel_parity_artifact"] = str(args.jangtq2_tq_kernel_parity)
     artifact["jang2l_json_sentinel_artifact"] = str(args.jang2l_json_sentinel)
+    artifact["jangtq2_logprob_diagnostic_artifact"] = str(
+        args.jangtq2_logprob_diagnostic
+    )
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(json.dumps(artifact, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     print(args.out)

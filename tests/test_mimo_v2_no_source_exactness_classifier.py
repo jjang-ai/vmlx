@@ -83,6 +83,88 @@ def test_mimo_no_source_classifier_refuses_parser_claim_without_actual_args():
     assert artifact["excluded_surfaces"]["parser_argument_rewrite"] is False
 
 
+def test_mimo_no_source_classifier_records_greedy_top1_literal_drift():
+    audit = {
+        "component_ok": {
+            "api_cache_responses_contract": True,
+            "tool_protocol": True,
+            "exactness_cache_kv_quant_excluded": True,
+            "decode_speed_target": True,
+            "source_vs_quant_first_divergence": False,
+            "long_prompt_coherence": False,
+            "cb_system_prompt_working_set_pressure": False,
+            "mimo_media_wired": True,
+        }
+    }
+    smoke = {
+        "results": [
+            {
+                "server_log_tail": [
+                    "kwargs={'temperature': 0.0, 'top_p': 1.0, 'max_tokens': 24}"
+                ],
+                "failures": [
+                    {
+                        "label": "structured_json_exact",
+                        "reason": "json_exact_object_mismatch",
+                        "expected": {"status": "ok", "value": "blue-cat", "count": 3},
+                        "actual": {"status": "ok", "value": "blue", "count": 3},
+                    }
+                ],
+            }
+        ]
+    }
+    logprob_diagnostic = {
+        "cases": [
+            {
+                "label": "completion_exact_blue_cat",
+                "route": "completions",
+                "expected": "blue-cat",
+                "text": "blue",
+                "logprobs": {
+                    "tokens": ["blue", "<|im_end|>"],
+                    "top_logprobs": [
+                        {"blue": -0.01, "Blue": -6.0},
+                        {"<|im_end|>": -1.6, " cat": -1.9},
+                    ],
+                },
+            },
+            {
+                "label": "chat_exact_blue_cat",
+                "route": "chat",
+                "expected": "blue-cat",
+                "content": "blue grass",
+                "logprobs": {
+                    "content": [
+                        {
+                            "token": "blue",
+                            "top_logprobs": [{"token": "blue", "logprob": -0.01}],
+                        },
+                        {
+                            "token": " grass",
+                            "top_logprobs": [{"token": " grass", "logprob": -1.4}],
+                        },
+                    ]
+                },
+            },
+        ]
+    }
+
+    artifact = build_classification(
+        audit,
+        smoke,
+        jangtq2_logprob_diagnostic=logprob_diagnostic,
+    )
+
+    assert artifact["status"] == "open"
+    assert artifact["excluded_surfaces"]["hidden_stochastic_sampling_primary_cause"] is True
+    assert artifact["excluded_surfaces"]["api_sampler_non_top1_selection"] is True
+    assert artifact["jangtq2_logprob_summary"]["wrong_literal_outputs_are_top1"] is True
+    assert artifact["jangtq2_logprob_summary"]["failed_literal_cases"][0]["tokens"] == [
+        "blue",
+        "<|im_end|>",
+    ]
+
+
 def test_mimo_no_source_classifier_consumes_jangtq_and_jang2l_isolation_artifacts():
     audit = {
         "component_ok": {

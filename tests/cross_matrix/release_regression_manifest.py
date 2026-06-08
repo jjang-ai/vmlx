@@ -881,7 +881,7 @@ CURRENT_MIMO_V2_JANG2L_SOURCE_VS_QUANT_ARTIFACT = (
     "build/current-mimo-v2-jangtq2-source-vs-quant-first-divergence-preflight-20260607.json"
 )
 CURRENT_MIMO_V2_JANG2L_NO_SOURCE_EXACTNESS_CLASSIFIER_ARTIFACT = (
-    "build/current-mimo-v2-no-source-exactness-classifier-after-media-runtime-stamp-gate-20260608.json"
+    "build/current-mimo-v2-no-source-exactness-classifier-after-jangtq-logprob-diagnostic-20260608.json"
 )
 CURRENT_DIAGNOSTIC_LIVE_SMOKE_ARTIFACTS = {
     # Retired 2026-06-07: old expected-failure diagnostic rows pointed at
@@ -5874,6 +5874,7 @@ def _validate_current_mimo_v2_jang2l_root_cause(root: Path) -> dict[str, Any]:
         and classifier_excluded.get("prefix_paged_l2_or_kv_quant_primary_cause")
         is True
         and classifier_excluded.get("hidden_stochastic_sampling_primary_cause") is True
+        and classifier_excluded.get("api_sampler_non_top1_selection") is True
     )
     if not result["no_source_exactness_excludes_parser_cache_sampling"]:
         result["failures"].append(

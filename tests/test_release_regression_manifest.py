@@ -3545,6 +3545,7 @@ def _write_passing_mimo_v2_root_cause_artifacts(root: Path) -> None:
                     "parser_argument_rewrite": True,
                     "prefix_paged_l2_or_kv_quant_primary_cause": True,
                     "hidden_stochastic_sampling_primary_cause": True,
+                    "api_sampler_non_top1_selection": True,
                 },
                 "unresolved_surfaces": {},
             }
@@ -11653,6 +11654,7 @@ def test_mimo_v2_root_cause_accepts_policy_skipped_source_vs_quant_without_clear
                     "parser_argument_rewrite": True,
                     "prefix_paged_l2_or_kv_quant_primary_cause": True,
                     "hidden_stochastic_sampling_primary_cause": True,
+                    "api_sampler_non_top1_selection": True,
                 },
                 "unresolved_surfaces": {
                     "artifact_quantization_or_decode_logits_quality": True,
