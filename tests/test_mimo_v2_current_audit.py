@@ -243,7 +243,7 @@ def test_mimo_current_audit_separates_clean_artifact_from_runtime_blockers(
     )
     _write_json(
         tmp_path
-        / "build/current-all-local-model-smoke-mimo-v25-jangtq2-media-l2-after-bounded-cleanstore-20260608/summary.json",
+        / "build/current-all-local-model-smoke-mimo-v25-jangtq2-media-l2-after-cache-cap-20260608/summary.json",
         {
             "status": "fail",
             "results": [
@@ -1226,6 +1226,69 @@ def test_mimo_jangtq2_media_l2_transport_is_separate_from_visible_restore_pass()
     }
 
 
+def test_mimo_all_local_smoke_evidence_reads_nested_row_bundle_identity():
+    from tests.cross_matrix import run_mimo_v2_jang2l_current_audit as audit
+
+    smoke = {
+        "status": "fail",
+        "results": [
+            {
+                "row": {
+                    "name": "MiMo-V2.5-JANGTQ_2",
+                    "relative_path": "/Users/example/.mlxstudio/models/JANGQ-AI/MiMo-V2.5-JANGTQ_2",
+                },
+                "status": "probe_failed",
+                "requests": [
+                    {"label": "vl_blue_image", "code": 200, "validation_failures": []},
+                    {"label": "vl_blue_image_repeat", "code": 200, "validation_failures": []},
+                    {"label": "vl_red_image_changed", "code": 200, "validation_failures": []},
+                    {"label": "text_no_media_after_image", "code": 200, "validation_failures": []},
+                    {"label": "vl_blue_video", "code": 200, "validation_failures": []},
+                    {"label": "text_no_media_after_video", "code": 200, "validation_failures": []},
+                    {"label": "audio_blue", "code": 200, "validation_failures": []},
+                    {"label": "text_no_media_after_audio", "code": 200, "validation_failures": []},
+                ],
+                "failures": [],
+                "l2_restart": {
+                    "label": "text_cache_repeat_l2_restart",
+                    "status": "completed",
+                    "code": 200,
+                    "content": "ACK",
+                    "usage": {
+                        "prompt_tokens_details": {
+                            "cached_tokens": 67,
+                            "cache_detail": "paged+disk",
+                        }
+                    },
+                    "cache_stats": {
+                        "scheduler_stats": {
+                            "cache_hit_tokens": 67,
+                            "cache_hit_tokens_by_detail": {"paged+disk": 67},
+                        },
+                        "block_disk_cache": {"disk_hits": 4},
+                    },
+                    "summary": {
+                        "status": "pass",
+                        "pass": True,
+                        "reason": "pass",
+                    },
+                },
+            }
+        ],
+    }
+
+    evidence = audit._all_local_smoke_evidence(smoke)
+
+    assert evidence["bundle_kind"] == "jangtq2"
+    assert evidence["bundle_media_l2_coverage"]["jangtq2"] == {
+        "bundle_name": "MiMo-V2.5-JANGTQ_2",
+        "live_media_e2e_pass": True,
+        "block_disk_l2_restart_cache_hit": True,
+        "block_disk_l2_restart_restore_pass": True,
+        "block_disk_l2_restart_visible_output_pass": True,
+    }
+
+
 def test_mimo_jang2l_l2_cache_hit_is_not_visible_restore_pass():
     from tests.cross_matrix import run_mimo_v2_jang2l_current_audit as audit
 
@@ -1280,11 +1343,11 @@ def test_mimo_jang2l_l2_cache_hit_is_not_visible_restore_pass():
     }
 
 
-def test_mimo_current_audit_points_jangtq2_at_latest_bounded_cleanstore_smoke():
+def test_mimo_current_audit_points_jangtq2_at_latest_cache_cap_smoke():
     from tests.cross_matrix import run_mimo_v2_jang2l_current_audit as audit
 
     assert str(audit.ALL_LOCAL_SMOKE_ARTIFACT) == (
-        "build/current-all-local-model-smoke-mimo-v25-jangtq2-media-l2-after-bounded-cleanstore-20260608/"
+        "build/current-all-local-model-smoke-mimo-v25-jangtq2-media-l2-after-cache-cap-20260608/"
         "summary.json"
     )
 

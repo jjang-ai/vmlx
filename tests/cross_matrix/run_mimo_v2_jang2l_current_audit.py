@@ -40,7 +40,7 @@ TOOL_FAILURE_ARTIFACT = Path(
     "build/current-mimo-v2-jang2l-tool-dialect-failure-20260606.json"
 )
 ALL_LOCAL_SMOKE_ARTIFACT = Path(
-    "build/current-all-local-model-smoke-mimo-v25-jangtq2-media-l2-after-bounded-cleanstore-20260608/summary.json"
+    "build/current-all-local-model-smoke-mimo-v25-jangtq2-media-l2-after-cache-cap-20260608/summary.json"
 )
 JANG2L_ALL_LOCAL_SMOKE_ARTIFACT = Path(
     "build/current-all-local-model-smoke-mimo-v25-jang2l-media-l2-release-20260608/summary.json"
@@ -351,11 +351,17 @@ def _all_local_smoke_evidence(data: dict[str, Any]) -> dict[str, Any]:
             "exact_cache_blocked": True,
             "speed_blocked": True,
         }
+    row = result.get("row")
+    row = row if isinstance(row, dict) else {}
     bundle_name = str(
         result.get("name")
         or result.get("model_name")
         or result.get("relative_path")
         or result.get("model_path")
+        or row.get("name")
+        or row.get("model_name")
+        or row.get("relative_path")
+        or row.get("path")
         or ""
     )
     bundle_kind = _mimo_bundle_kind_from_text(bundle_name)

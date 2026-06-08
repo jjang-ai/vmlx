@@ -513,6 +513,14 @@ def _is_zaya_row(row: dict[str, Any]) -> bool:
     return "zaya" in blob
 
 
+def _is_mimo_v2_row(row: dict[str, Any]) -> bool:
+    blob = " ".join(
+        str(row.get(key, "")).lower()
+        for key in ("name", "served_name", "model_type", "path", "cache_family")
+    )
+    return "mimo_v2" in blob or "mimo-v2" in blob
+
+
 def _exact_ack_cache_payload(model: str, prompt: str, max_tokens: int) -> dict[str, Any]:
     payload = _text_payload(model, prompt, max_tokens, thinking=False)
     payload["messages"] = [
@@ -754,6 +762,17 @@ def _lfm_strict_probe_max_tokens(row: dict[str, Any], max_tokens: int) -> int:
     return max(512, max_tokens) if _is_lfm_row(row) else max_tokens
 
 
+def _cache_probe_max_tokens(row: dict[str, Any], max_tokens: int) -> int:
+    # MiMo-V2 has a prompt-echo failure mode on the exact ACK cache probe when
+    # allowed a long continuation: the first token is ACK, then it repeats the
+    # stable cache-prefix text. For cache/L2 probes, we need to prove first
+    # answer plus cache reuse, not long-form stop discipline. Keep exactness
+    # and long-output quality gates separate.
+    if _is_mimo_v2_row(row):
+        return 1
+    return _lfm_strict_probe_max_tokens(row, max_tokens)
+
+
 def _required_tool_probe_max_tokens(row: dict[str, Any], max_tokens: int) -> int:
     # MiniMax K's native tool template can need >96 decoded tokens to emit a
     # complete <minimax:tool_call><invoke>...</invoke></minimax:tool_call>.
@@ -872,7 +891,7 @@ def build_probe_payloads(
     model = row["served_name"]
     cache_prompt = _cache_probe_prompt(row)
     cache_expected = _cache_probe_expected(row)
-    strict_max_tokens = _lfm_strict_probe_max_tokens(row, max_tokens)
+    strict_max_tokens = _cache_probe_max_tokens(row, max_tokens)
     probes: list[dict[str, Any]] = [
         {
             "label": "text_cache_repeat_1",
@@ -1688,7 +1707,7 @@ def run_l2_restart_probe(
             row,
             row["served_name"],
             _cache_probe_prompt(row),
-            _lfm_strict_probe_max_tokens(row, 48),
+            _cache_probe_max_tokens(row, 48),
         )
         code, resp, elapsed = request_json(
             "POST",

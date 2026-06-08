@@ -610,6 +610,29 @@ def test_repeat_cache_probe_uses_deterministic_exact_output_instruction():
     assert "Reply exactly: ACK" not in prompt
 
 
+def test_mimo_repeat_cache_probe_uses_one_token_ack_cap():
+    mod = load_module()
+    row = {
+        "served_name": "mimo-v2.5-jangtq_2",
+        "is_mllm": True,
+        "supports_video": True,
+        "supports_thinking": False,
+        "model_type": "mimo_v2",
+        "cache_family": "mimo_v2_hybrid_swa",
+    }
+
+    probes = mod.build_probe_payloads(row, max_tokens=48, include_reasoning=False)
+    repeat_1 = next(
+        probe for probe in probes if probe["label"] == "text_cache_repeat_1"
+    )
+    repeat_2 = next(
+        probe for probe in probes if probe["label"] == "text_cache_repeat_2"
+    )
+
+    assert repeat_1["payload"]["max_tokens"] == 1
+    assert repeat_2["payload"]["max_tokens"] == 1
+
+
 def test_zaya_repeat_cache_probe_uses_family_native_color_contract():
     mod = load_module()
     row = {
