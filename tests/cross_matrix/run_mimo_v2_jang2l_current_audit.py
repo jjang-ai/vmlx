@@ -1081,6 +1081,27 @@ def _mimo_media_runtime_evidence(
             else ""
         )
     )
+    audio_tokenizer_config_segmenter_present = all(
+        marker in adapter_text
+        for marker in (
+            "class MiMoAudioTokenizerConfig",
+            "def get_output_length(self, mel_len",
+            "def get_code_length(self, mel_len",
+            "def plan_mimo_audio_mel_segments",
+            "segments_per_mel",
+            "code_lengths",
+        )
+    ) and (
+        "test_mimo_v2_audio_tokenizer_config_and_mel_segment_plan"
+        in (
+            (root / "tests/test_mimo_v2_media_runtime.py").read_text(
+                encoding="utf-8",
+                errors="replace",
+            )
+            if (root / "tests/test_mimo_v2_media_runtime.py").exists()
+            else ""
+        )
+    )
     media_weight_assignment_present = all(
         marker in adapter_text
         for marker in (
@@ -1234,6 +1255,9 @@ def _mimo_media_runtime_evidence(
         "audio_tokenizer_rvq_weight_loader": bool(
             audio_tokenizer_rvq_weight_loader_present
         ),
+        "audio_tokenizer_config_segmenter": bool(
+            audio_tokenizer_config_segmenter_present
+        ),
         "audio_tokenizer_model_execution": bool(
             audio_tokenizer_runtime_execution_present
         ),
@@ -1287,6 +1311,10 @@ def _mimo_media_runtime_evidence(
                     (
                         "audio tokenizer RVQ codebook weight loader",
                         audio_tokenizer_rvq_weight_loader_present,
+                    ),
+                    (
+                        "audio tokenizer config and mel segment planner",
+                        audio_tokenizer_config_segmenter_present,
                     ),
                     (
                         "audio tokenizer model execution bridge (waveform/mel -> 20-channel audio_codes)",

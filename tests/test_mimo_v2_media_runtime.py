@@ -363,6 +363,49 @@ def test_mimo_v2_audio_rvq_loader_reads_bundle_codebooks(
     sys.modules.pop("mlx_vlm.models.mimo_v2", None)
 
 
+def test_mimo_v2_audio_tokenizer_config_and_mel_segment_plan(
+    tmp_path,
+    monkeypatch,
+):
+    module = _register_fake_mimo_runtime(monkeypatch, tmp_path)
+    config = module.MiMoAudioTokenizerConfig.from_dict(
+        {
+            "n_mels": 2,
+            "kernel_size": 3,
+            "stride_size": 2,
+            "avg_pooler": 2,
+            "num_quantizers": 2,
+            "codebook_size": [3, 3],
+        }
+    )
+
+    assert config.get_output_length(mx.array([3, 4, 5])).tolist() == [2, 2, 3]
+    assert config.get_code_length(mx.array([3, 4, 5])).tolist() == [1, 1, 2]
+
+    plan = module.plan_mimo_audio_mel_segments(
+        [
+            mx.array(
+                [
+                    [1.0, 10.0],
+                    [2.0, 20.0],
+                    [3.0, 30.0],
+                    [4.0, 40.0],
+                    [5.0, 50.0],
+                ]
+            ),
+            mx.array([[6.0, 60.0], [7.0, 70.0]]),
+        ],
+        config=config,
+        segment_size=3,
+    )
+
+    assert plan["input_features"].shape == (7, 2)
+    assert plan["input_lens"].tolist() == [3, 2, 2]
+    assert plan["segments_per_mel"] == [[3, 2], [2]]
+    assert plan["code_lengths"] == [2, 1]
+    sys.modules.pop("mlx_vlm.models.mimo_v2", None)
+
+
 def test_mimo_v2_media_enabled_load_binds_speech_embedding_weights(
     tmp_path,
     monkeypatch,

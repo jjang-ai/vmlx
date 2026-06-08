@@ -1604,6 +1604,124 @@ def _register_mimo_v2_mlx_vlm_runtime() -> None:
                 out = decoded if out is None else out + decoded
             return out
 
+    @dataclass
+    class MiMoAudioTokenizerConfig:
+        """MiMo audio-tokenizer config fields needed by the MLX runtime."""
+
+        max_audio_seconds: int = 300
+        stride_size: int = 2
+        avg_pooler: int = 2
+        d_model: int = 1024
+        kernel_size: int = 3
+        encoder_layers: int = 24
+        encoder_attention_heads: int = 16
+        encoder_ffn_dim: int = 4096
+        encoder_causal: bool = True
+        nfft: int = 960
+        n_mels: int = 128
+        sampling_rate: int = 24000
+        hop_length: int = 240
+        window_size: int = 960
+        num_quantizers: int = 20
+        codebook_size: list[int] = field(default_factory=list)
+        hybrid_attention: bool = True
+        hybrid_block_size: int = 8
+        swa_per_block: int = 2
+
+        @classmethod
+        def from_dict(cls, data: dict[str, Any]):
+            params = {}
+            for field_name in cls.__dataclass_fields__:
+                if field_name in data:
+                    params[field_name] = data[field_name]
+            config = cls(**params)
+            if not config.codebook_size:
+                config.codebook_size = [1024] * int(config.num_quantizers)
+            return config
+
+        @classmethod
+        def from_bundle(cls, model_path: str | Path):
+            root = Path(model_path)
+            audio_dir = root if root.name == "audio_tokenizer" else root / "audio_tokenizer"
+            config_path = audio_dir / "config.json"
+            if not config_path.is_file():
+                raise FileNotFoundError(
+                    f"MiMo audio tokenizer config missing: {config_path}"
+                )
+            return cls.from_dict(json.loads(config_path.read_text(encoding="utf-8")))
+
+        def get_output_length(self, mel_len):
+            """Official Conv1d/stride output length before avg-pool downsample."""
+            mel = mx.array(mel_len).astype(mx.int32)
+            tgt_len = mel + 3 - int(self.kernel_size)
+            return ((tgt_len + 2 - int(self.kernel_size)) // int(self.stride_size)) + 1
+
+        def get_code_length(self, mel_len):
+            """Official tokenizer code length after optional avg-pool downsample."""
+            out = self.get_output_length(mel_len)
+            avg = int(self.avg_pooler or 1)
+            if avg == 1:
+                return out
+            return (out // avg) + ((out % avg) != 0).astype(mx.int32)
+
+    def plan_mimo_audio_mel_segments(
+        mels: list[Any],
+        *,
+        config: MiMoAudioTokenizerConfig | None = None,
+        segment_size: int = 6000,
+    ) -> dict[str, Any]:
+        """Build the official MiMo audio-tokenizer mel segmentation plan.
+
+        Mirrors `tokenize_audio_batch`: preserve the concatenated mel tensor,
+        record per-segment input lengths, and precompute per-input code lengths.
+        The encoder forward consumes this plan; this helper does not synthesize
+        codes and does not replace the missing 24-layer encoder.
+        """
+
+        if not mels:
+            return {
+                "input_features": mx.zeros((0, int((config or MiMoAudioTokenizerConfig()).n_mels))),
+                "input_lens": mx.zeros((0,), dtype=mx.int32),
+                "segments_per_mel": [],
+                "code_lengths": [],
+            }
+        config = config or MiMoAudioTokenizerConfig()
+        segment_size = int(segment_size)
+        if segment_size <= 0:
+            raise ValueError("MiMo audio segment_size must be positive")
+        arrays = [mx.array(mel) for mel in mels]
+        for idx, arr in enumerate(arrays):
+            if arr.ndim != 2:
+                raise ValueError(
+                    f"MiMo audio mel {idx} must be 2D [T, n_mels], got {arr.shape}"
+                )
+            if int(arr.shape[-1]) != int(config.n_mels):
+                raise ValueError(
+                    f"MiMo audio mel {idx} has n_mels={arr.shape[-1]}, "
+                    f"expected {config.n_mels}"
+                )
+        segments_per_mel: list[list[int]] = []
+        for arr in arrays:
+            length = int(arr.shape[0])
+            segments = [segment_size] * (length // segment_size)
+            if length % segment_size:
+                segments.append(length % segment_size)
+            if not segments:
+                segments.append(0)
+            segments_per_mel.append(segments)
+        input_lens = [length for segments in segments_per_mel for length in segments]
+        input_features = mx.concatenate(arrays, axis=0)
+        code_lengths = []
+        for segments in segments_per_mel:
+            seg_lengths = mx.array(segments, dtype=mx.int32)
+            code_lengths.append(int(mx.sum(config.get_code_length(seg_lengths)).item()))
+        return {
+            "input_features": input_features,
+            "input_lens": mx.array(input_lens, dtype=mx.int32),
+            "segments_per_mel": segments_per_mel,
+            "code_lengths": code_lengths,
+        }
+
     def load_mimo_audio_rvq_from_bundle(model_path: str | Path):
         """Load MiMo audio-tokenizer RVQ codebooks from a model bundle.
 
@@ -2714,9 +2832,11 @@ def _register_mimo_v2_mlx_vlm_runtime() -> None:
     module.LanguageModel = TextModel
     module.VisionModel = VisionModel
     module.AudioModel = AudioModel
+    module.MiMoAudioTokenizerConfig = MiMoAudioTokenizerConfig
     module.MiMoAudioEuclideanCodebook = MiMoAudioEuclideanCodebook
     module.MiMoAudioResidualVectorQuantizer = MiMoAudioResidualVectorQuantizer
     module.load_mimo_audio_rvq_from_bundle = load_mimo_audio_rvq_from_bundle
+    module.plan_mimo_audio_mel_segments = plan_mimo_audio_mel_segments
     module.__file__ = getattr(text_runtime, "__file__", module_name)
     sys.modules[module_name] = module
 
