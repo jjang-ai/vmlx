@@ -260,6 +260,53 @@ def test_mimo_v2_audio_projection_bridge_splices_audio_token(
     sys.modules.pop("mlx_vlm.models.mimo_v2", None)
 
 
+def test_mimo_v2_stale_text_runtime_metadata_does_not_disable_media_modules(
+    tmp_path,
+    monkeypatch,
+):
+    module = _register_fake_mimo_runtime(monkeypatch, tmp_path)
+    model = module.Model(
+        module.ModelConfig.from_dict(
+            {
+                "model_type": "mimo_v2",
+                "multimodal_status": "weights_preserved_text_runtime",
+                "vision_config": {
+                    "hidden_size": 8,
+                    "out_hidden_size": 16,
+                    "patch_size": 2,
+                    "temporal_patch_size": 1,
+                    "in_channels": 3,
+                    "spatial_merge_size": 2,
+                    "depth": 1,
+                    "intermediate_size": 16,
+                    "num_heads": 2,
+                    "num_key_value_heads": 1,
+                    "qk_channels": 4,
+                    "fullatt_block_indexes": [0],
+                },
+                "audio_config": {
+                    "audio_channels": 2,
+                    "group_size": 2,
+                    "input_full_attention": True,
+                    "input_local_attn_heads": 1,
+                    "input_local_dim": 4,
+                    "input_local_head_dim": 4,
+                    "input_local_intermediate_size": 8,
+                    "input_local_layers": 1,
+                    "out_hidden_size": 16,
+                    "projection_layers": 2,
+                    "speech_vocab_size": 8,
+                },
+            }
+        )
+    )
+
+    assert model.visual is not None
+    assert model.audio_encoder is not None
+    assert model.speech_embeddings is not None
+    sys.modules.pop("mlx_vlm.models.mimo_v2", None)
+
+
 def test_mimo_v2_audio_codes_run_local_transformer_and_splice_audio_token(
     tmp_path,
     monkeypatch,

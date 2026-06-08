@@ -2825,9 +2825,9 @@ def _register_mimo_v2_mlx_vlm_runtime() -> None:
                 "audio_encoder": 0,
                 "speech_embeddings": 0,
             }
-            self._mimo_v2_bind_media_weights = (
-                getattr(config, "multimodal_status", None)
-                != "weights_preserved_text_runtime"
+            self._mimo_v2_bind_media_weights = bool(
+                isinstance(getattr(config, "vision_config", None), VisionConfig)
+                or isinstance(getattr(config, "audio_config", None), AudioConfig)
             )
             self.visual = (
                 VisionModel(config.vision_config)

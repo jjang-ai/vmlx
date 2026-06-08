@@ -456,13 +456,15 @@ def test_mimo_current_audit_separates_clean_artifact_from_runtime_blockers(
     assert result["component_ok"]["media_weights_preserved"] is False
     assert result["component_ok"]["media_runtime_capabilities_safe"] is False
     assert result["component_ok"]["media_model_metadata_text_only_contract"] is False
-    assert result["component_ok"]["media_runtime_implementation"] is False
+    assert result["component_ok"]["media_runtime_implementation"] is True
     assert result["component_ok"]["mimo_media_wired"] is False
     assert result["component_ok"]["manual_sink_does_not_clear_length_generation"] is True
     assert result["component_ok"]["disable_sink_does_not_clear_length_generation"] is True
     assert result["diagnostics"]["mimo_media_runtime"]["classification"] in {
         "runtime_implementation_gap_with_model_metadata_overadvertising",
         "runtime_implementation_gap",
+        "model_metadata_overadvertising",
+        "media_runtime_and_metadata_clear",
     }
     assert result["diagnostics"]["mimo_media_runtime"]["config_parser_components"] == {
         "vision_config": True,
@@ -506,6 +508,14 @@ def test_mimo_current_audit_separates_clean_artifact_from_runtime_blockers(
     assert (
         result["diagnostics"]["mimo_media_runtime"]["audio_tokenizer_model_execution"]
         is True
+    )
+    assert (
+        result["diagnostics"]["mimo_media_runtime"]["local_mimo_v2_multimodal_module"]
+        is True
+    )
+    assert (
+        result["diagnostics"]["mimo_media_runtime"]["missing_mimo_v2_multimodal_module"]
+        is False
     )
     assert result["diagnostics"]["mimo_media_runtime"]["media_weight_assignment"] is True
     assert (
@@ -635,7 +645,6 @@ def test_mimo_current_audit_separates_clean_artifact_from_runtime_blockers(
         "mimo_decode_speed_below_release_target",
         "mimo_cb_system_prompt_working_set_pressure_blocked",
         "mimo_source_vs_quant_first_divergence_missing_or_failed",
-        "mimo_media_runtime_implementation_missing",
         "mimo_model_metadata_overadvertises_unwired_media",
         "mimo_runtime_capabilities_media_status_missing_or_unsafe",
     ]

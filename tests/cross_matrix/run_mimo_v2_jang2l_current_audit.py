@@ -1202,6 +1202,23 @@ def _mimo_media_runtime_evidence(
         in scheduler_cache_test_text
     )
     media_weights_preserved = bool(visual_count > 0 and audio_count > 0)
+    local_mimo_v2_multimodal_module_present = all(
+        (
+            vision_patch_embed_present,
+            vision_merger_present,
+            vision_attention_blocks_present,
+            vision_grid_forward_present,
+            model_vision_bridge_present,
+            audio_projection_bridge_present,
+            audio_code_local_transformer_present,
+            audio_tokenizer_runtime_execution_present,
+            media_weight_assignment_present,
+            mixed_inputs_embeds_present,
+        )
+    )
+    missing_multimodal_module = bool(
+        missing_multimodal_module and not local_mimo_v2_multimodal_module_present
+    )
     metadata_overadvertises = bool(
         config_modalities != ["text"]
         or config_preserved != ["vision", "audio"]
@@ -1246,6 +1263,9 @@ def _mimo_media_runtime_evidence(
         ),
         "runtime_explicitly_unwired": bool(runtime_explicitly_unwired),
         "missing_mimo_v2_multimodal_module": bool(missing_multimodal_module),
+        "local_mimo_v2_multimodal_module": bool(
+            local_mimo_v2_multimodal_module_present
+        ),
         "config_parser_components": {
             "vision_config": bool(vision_config_parser_present),
             "audio_config": bool(audio_config_parser_present),

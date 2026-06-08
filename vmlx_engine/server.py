@@ -1796,16 +1796,58 @@ def _bundle_supports_video_frame_fallback(bundle_path: str | None) -> bool:
     )
 
 
-def _bundle_is_mimo_v2_text_only_runtime(bundle_path: str | None) -> bool:
-    """Return True for MiMo-V2 bundles whose Python runtime is text-only.
+def _mimo_v2_runtime_module() -> Any | None:
+    import sys
 
-    MiMo-V2.5 artifacts preserve visual/audio/video sidecars, but the current
-    Python adapter in ``vmlx_engine.models.mllm`` intentionally raises for
-    ``pixel_values``. Keep runtime capabilities and media rejection honest until
-    the actual multimodal forward path is wired and proven.
-    """
+    module = sys.modules.get("mlx_vlm.models.mimo_v2")
+    if module is not None:
+        return module
+    try:
+        from mlx_vlm.models import mimo_v2 as module
+
+        return module
+    except Exception:
+        return None
+
+
+def _mimo_v2_runtime_modalities(bundle_path: str | None) -> list[str] | None:
+    """Return runtime-wired MiMo modalities from actual adapter + token support."""
     cfg = _read_bundle_json(bundle_path, "config.json")
-    return str((cfg or {}).get("model_type") or "").lower() == "mimo_v2"
+    if str((cfg or {}).get("model_type") or "").lower() != "mimo_v2":
+        return None
+
+    module = _mimo_v2_runtime_module()
+    modalities = ["text"]
+    has_vision_runtime = bool(
+        module is not None
+        and hasattr(module, "VisionModel")
+        and hasattr(module, "MiMoVisionPatchEmbed")
+        and hasattr(module, "MiMoVisionBlock")
+        and isinstance(cfg.get("vision_config"), dict)
+    )
+    if has_vision_runtime and cfg.get("image_token_id") is not None:
+        modalities.append("vision")
+    if has_vision_runtime and cfg.get("video_token_id") is not None:
+        modalities.append("video")
+
+    has_audio_runtime = bool(
+        module is not None
+        and hasattr(module, "AudioModel")
+        and hasattr(module, "MiMoAudioTokenizer")
+        and hasattr(module, "load_mimo_audio_tokenizer_from_bundle")
+        and isinstance(cfg.get("audio_config"), dict)
+        and (Path(bundle_path or "") / "audio_tokenizer" / "model.safetensors").is_file()
+    )
+    # The tokenizer can now produce 20-channel audio codes, but the causal model
+    # still needs an audio token ID to splice those embeddings into the text
+    # stream. Do not advertise API-level audio until the bundle/runtime exposes
+    # that token path.
+    if has_audio_runtime and (
+        cfg.get("audio_token_id") is not None
+        or cfg.get("audio_token_index") is not None
+    ):
+        modalities.append("audio")
+    return modalities
 
 
 def _bundle_declares_native_audio(bundle_path: str | None) -> bool:
@@ -1862,8 +1904,9 @@ def _loaded_mllm_modalities() -> list[str] | None:
     ) if engine is not None else False
     if not engine_is_mllm:
         return None
-    if _bundle_is_mimo_v2_text_only_runtime(_model_path or _model_name):
-        return ["text"]
+    mimo_modalities = _mimo_v2_runtime_modalities(_model_path or _model_name)
+    if mimo_modalities is not None:
+        return mimo_modalities
     modalities = ["text", "vision"]
     if _bundle_declares_native_audio(_model_path or _model_name):
         modalities.append("audio")
@@ -1971,9 +2014,18 @@ def _loaded_media_capability_status(modalities: list[str]) -> dict:
         "runtime_modalities": modalities,
         "declared_modalities": artifact["declared_modalities"],
         "preserved_modalities": artifact["preserved_modalities"],
-        "unwired_modalities": artifact["unwired_modalities"],
+        "unwired_modalities": _ordered_unwired_modalities(unwired - runtime),
         "status_by_modality": status_by_modality,
     }
+
+
+def _ordered_unwired_modalities(values: set[str]) -> list[str]:
+    if "image" in values:
+        values.add("vision")
+    if "vision" in values:
+        values.add("image")
+    order = ["vision", "image", "video", "audio"]
+    return [item for item in order if item in values] + sorted(values - set(order))
 
 
 def _normalize_modality_set(modalities: set[str] | list[str] | tuple[str, ...]) -> set[str]:
