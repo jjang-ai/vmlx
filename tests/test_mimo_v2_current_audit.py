@@ -645,6 +645,7 @@ def test_mimo_current_audit_separates_clean_artifact_from_runtime_blockers(
         "mimo_decode_speed_below_release_target",
         "mimo_cb_system_prompt_working_set_pressure_blocked",
         "mimo_source_vs_quant_first_divergence_missing_or_failed",
+        "mimo_vl_audio_video_live_e2e_missing",
         "mimo_model_metadata_overadvertises_unwired_media",
         "mimo_runtime_capabilities_media_status_missing_or_unsafe",
     ]
@@ -782,3 +783,52 @@ def test_mimo_current_smoke_tool_protocol_beats_legacy_synced_tool_failure():
         "tool_blocked = bool(cb_evidence.get(\"tool_protocol_blocked\"))"
         in source
     )
+
+
+def test_mimo_source_capability_detector_accepts_runtime_media(monkeypatch, tmp_path):
+    import sys
+    import types
+
+    from tests.cross_matrix import run_mimo_v2_jang2l_current_audit as audit
+
+    model_path = tmp_path / "MiMo-V2.5-JANGTQ_2"
+    (model_path / "audio_tokenizer").mkdir(parents=True)
+    (model_path / "audio_tokenizer" / "model.safetensors").write_bytes(b"stub")
+    _write_json(
+        model_path / "config.json",
+        {
+            "model_type": "mimo_v2",
+            "vision_config": {},
+            "audio_config": {},
+            "processor_config": {"audio_token_id": 151669},
+            "image_token_id": 151655,
+            "video_token_id": 151656,
+            "capabilities": {
+                "modalities": ["text"],
+                "preserved_modalities": ["vision", "audio"],
+                "unwired_modalities": ["vision", "audio"],
+                "multimodal_status": "weights_preserved_text_runtime",
+            },
+            "runtime": {"multimodal_mode": "weights_preserved_text_runtime"},
+        },
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "mlx_vlm.models.mimo_v2",
+        types.SimpleNamespace(
+            VisionModel=object,
+            MiMoVisionPatchEmbed=object,
+            MiMoVisionBlock=object,
+            AudioModel=object,
+            MiMoAudioTokenizer=object,
+            load_mimo_audio_tokenizer_from_bundle=lambda *_args, **_kwargs: None,
+        ),
+    )
+
+    evidence = audit._mimo_runtime_capabilities_from_source_detector(model_path)
+
+    assert evidence["exists"] is True
+    assert evidence["runtime_capabilities_safe"] is True
+    assert evidence["runtime_media_supported"] is True
+    assert evidence["status_by_modality"]["image"] == "runtime_supported"
+    assert evidence["status_by_modality"]["audio"] == "runtime_supported"

@@ -1807,6 +1807,13 @@ def _mimo_v2_runtime_module() -> Any | None:
 
         return module
     except Exception:
+        pass
+    try:
+        from vmlx_engine.models import mllm as local_mllm
+
+        local_mllm._register_mimo_v2_mlx_vlm_runtime()
+        return sys.modules.get("mlx_vlm.models.mimo_v2")
+    except Exception:
         return None
 
 
@@ -1842,9 +1849,14 @@ def _mimo_v2_runtime_modalities(bundle_path: str | None) -> list[str] | None:
     # still needs an audio token ID to splice those embeddings into the text
     # stream. Do not advertise API-level audio until the bundle/runtime exposes
     # that token path.
+    processor_config = cfg.get("processor_config")
+    if not isinstance(processor_config, dict):
+        processor_config = {}
     if has_audio_runtime and (
         cfg.get("audio_token_id") is not None
         or cfg.get("audio_token_index") is not None
+        or processor_config.get("audio_token_id") is not None
+        or processor_config.get("audio_token_index") is not None
     ):
         modalities.append("audio")
     return modalities

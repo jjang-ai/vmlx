@@ -12,6 +12,7 @@ def _write_mimo_bundle(path, *, audio_token=False):
                 "model_type": "mimo_v2",
                 "vision_config": {"hidden_size": 1280},
                 "audio_config": {"hidden_size": 1024},
+                "processor_config": {},
                 "image_token_id": 151655,
                 "video_token_id": 151656,
                 **({"audio_token_id": 151657} if audio_token else {}),
@@ -55,6 +56,70 @@ def test_mimo_v2_runtime_modalities_are_component_and_token_gated(
         "video",
         "audio",
     ]
+
+
+def test_mimo_v2_runtime_modalities_register_local_runtime_when_missing(
+    tmp_path,
+    monkeypatch,
+):
+    from vmlx_engine import server
+    from vmlx_engine.models import mllm
+
+    _write_mimo_bundle(tmp_path, audio_token=False)
+    sys.modules.pop("mlx_vlm.models.mimo_v2", None)
+
+    def register_fake_runtime():
+        _install_fake_mimo_runtime(monkeypatch)
+
+    monkeypatch.setattr(
+        mllm,
+        "_register_mimo_v2_mlx_vlm_runtime",
+        register_fake_runtime,
+    )
+
+    assert server._mimo_v2_runtime_modalities(str(tmp_path)) == [
+        "text",
+        "vision",
+        "video",
+    ]
+
+
+def test_mimo_v2_runtime_modalities_use_processor_audio_token_id(
+    tmp_path,
+    monkeypatch,
+):
+    from vmlx_engine import server
+
+    _write_mimo_bundle(tmp_path, audio_token=False)
+    cfg = json.loads((tmp_path / "config.json").read_text(encoding="utf-8"))
+    cfg["processor_config"] = {"audio_token_id": 151669}
+    (tmp_path / "config.json").write_text(json.dumps(cfg), encoding="utf-8")
+    _install_fake_mimo_runtime(monkeypatch)
+
+    assert server._mimo_v2_runtime_modalities(str(tmp_path)) == [
+        "text",
+        "vision",
+        "video",
+        "audio",
+    ]
+
+
+def test_mimo_v2_local_runtime_registration_exports_capability_classes():
+    from vmlx_engine.models.mllm import _register_mimo_v2_mlx_vlm_runtime
+
+    sys.modules.pop("mlx_vlm.models.mimo_v2", None)
+    _register_mimo_v2_mlx_vlm_runtime()
+    module = sys.modules["mlx_vlm.models.mimo_v2"]
+
+    for name in (
+        "VisionModel",
+        "MiMoVisionPatchEmbed",
+        "MiMoVisionBlock",
+        "AudioModel",
+        "MiMoAudioTokenizer",
+        "load_mimo_audio_tokenizer_from_bundle",
+    ):
+        assert hasattr(module, name), name
 
 
 def test_mimo_v2_media_capabilities_filter_runtime_supported_unwired_modalities(

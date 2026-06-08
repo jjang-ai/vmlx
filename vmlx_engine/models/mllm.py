@@ -3201,6 +3201,8 @@ def _register_mimo_v2_mlx_vlm_runtime() -> None:
     module.AudioConfig = AudioConfig
     module.LanguageModel = TextModel
     module.VisionModel = VisionModel
+    module.MiMoVisionPatchEmbed = MiMoVisionPatchEmbed
+    module.MiMoVisionBlock = MiMoVisionBlock
     module.AudioModel = AudioModel
     module.MiMoAudioTokenizerConfig = MiMoAudioTokenizerConfig
     module.MiMoAudioTokenizer = MiMoAudioTokenizer

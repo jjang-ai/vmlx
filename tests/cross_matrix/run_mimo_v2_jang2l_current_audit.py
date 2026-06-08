@@ -777,12 +777,70 @@ def _mimo_runtime_capabilities_from_smoke(data: dict[str, Any]) -> dict[str, Any
     )
     return {
         "exists": True,
+        "source": "live_smoke",
         "runtime_modalities": runtime_modalities,
         "media": media,
         "preserved_modalities": preserved,
         "unwired_modalities": unwired,
         "status_by_modality": status_by_modality,
         "safe_text_only_runtime_capabilities": bool(safe_text_only),
+        "runtime_capabilities_safe": bool(safe_text_only),
+        "runtime_media_supported": False,
+    }
+
+
+def _mimo_runtime_capabilities_from_source_detector(model_path: Path) -> dict[str, Any]:
+    """Return current server media-capability detection without loading weights."""
+    try:
+        from vmlx_engine import server
+    except Exception as exc:
+        return {"exists": False, "source": "server_detector", "error": str(exc)}
+
+    try:
+        modalities = server._mimo_v2_runtime_modalities(str(model_path))
+    except Exception as exc:
+        return {"exists": False, "source": "server_detector", "error": str(exc)}
+    if not isinstance(modalities, list) or not modalities:
+        return {"exists": False, "source": "server_detector", "runtime_modalities": []}
+
+    old_model_path = getattr(server, "_model_path", None)
+    old_model_name = getattr(server, "_model_name", None)
+    try:
+        server._model_path = str(model_path)
+        server._model_name = None
+        media = server._loaded_media_capability_status(modalities)
+    finally:
+        server._model_path = old_model_path
+        server._model_name = old_model_name
+
+    status_by_modality = (
+        media.get("status_by_modality")
+        if isinstance(media.get("status_by_modality"), dict)
+        else {}
+    )
+    runtime_media_supported = all(
+        status_by_modality.get(name) == "runtime_supported"
+        for name in ("vision", "image", "video", "audio")
+    )
+    safe_text_only = (
+        modalities == ["text"]
+        and status_by_modality.get("text") == "runtime_supported"
+        and all(
+            status_by_modality.get(name) == "preserved_unwired"
+            for name in ("vision", "image", "video", "audio")
+        )
+    )
+    return {
+        "exists": True,
+        "source": "server_detector",
+        "runtime_modalities": modalities,
+        "media": media,
+        "preserved_modalities": media.get("preserved_modalities", []),
+        "unwired_modalities": media.get("unwired_modalities", []),
+        "status_by_modality": status_by_modality,
+        "safe_text_only_runtime_capabilities": bool(safe_text_only),
+        "runtime_capabilities_safe": bool(safe_text_only or runtime_media_supported),
+        "runtime_media_supported": bool(runtime_media_supported),
     }
 
 
@@ -852,6 +910,8 @@ def _mimo_media_runtime_evidence(
         if isinstance(all_local_smoke_data, dict)
         else {"exists": False}
     )
+    source_caps = _mimo_runtime_capabilities_from_source_detector(model_path)
+    runtime_caps = source_caps if source_caps.get("exists") else smoke_caps
 
     runtime_adapter = root / "vmlx_engine/models/mllm.py"
     adapter_text = (
@@ -1257,9 +1317,16 @@ def _mimo_media_runtime_evidence(
         "has_audio_tokenizer_config": has_audio_tokenizer_config,
         "has_audio_tokenizer_weights": has_audio_tokenizer_weights,
         "media_weights_preserved": media_weights_preserved,
-        "runtime_capabilities": smoke_caps,
+        "runtime_capabilities": runtime_caps,
+        "smoke_runtime_capabilities": smoke_caps,
         "runtime_capabilities_text_only_safe": bool(
-            smoke_caps.get("safe_text_only_runtime_capabilities")
+            runtime_caps.get("safe_text_only_runtime_capabilities")
+        ),
+        "runtime_capabilities_safe": bool(
+            runtime_caps.get("runtime_capabilities_safe")
+        ),
+        "runtime_capabilities_media_supported": bool(
+            runtime_caps.get("runtime_media_supported")
         ),
         "runtime_explicitly_unwired": bool(runtime_explicitly_unwired),
         "missing_mimo_v2_multimodal_module": bool(missing_multimodal_module),
@@ -1940,8 +2007,29 @@ def build_audit(root: Path, model_path: Path, manifest: Path) -> dict[str, Any]:
         media_runtime_evidence.get("metadata_overadvertises_runtime_media")
     )
     media_runtime_capabilities_safe = bool(
-        media_runtime_evidence.get("runtime_capabilities_text_only_safe")
+        media_runtime_evidence.get("runtime_capabilities_safe")
     )
+    current_runtime_media_supported = bool(
+        media_runtime_evidence.get("runtime_capabilities_media_supported")
+    )
+    text_route_media_unwired_blocked = bool(
+        text_route_evidence.get("media_unwired")
+    ) and not current_runtime_media_supported
+    live_media_e2e_proven = False
+    live_media_e2e_blocked = not live_media_e2e_proven
+    if live_media_e2e_blocked:
+        media_runtime_evidence["live_media_e2e_status"] = "missing"
+        media_runtime_evidence["live_media_e2e_boundary"] = (
+            "Source-level MiMo media capability wiring is not a substitute for "
+            "live image/audio/video server output proof."
+        )
+    else:
+        media_runtime_evidence["live_media_e2e_status"] = "pass"
+        media_runtime_evidence["live_media_e2e_boundary"] = "live media e2e passed"
+    if text_route_evidence.get("media_unwired") and current_runtime_media_supported:
+        media_runtime_evidence["text_route_media_unwired_superseded_by_source"] = True
+    else:
+        media_runtime_evidence["text_route_media_unwired_superseded_by_source"] = False
     if text_route_evidence.get("exists") and text_route_evidence.get("cache_visible_pass"):
         prompt_shape_blocked = False
 
@@ -1963,10 +2051,11 @@ def build_audit(root: Path, model_path: Path, manifest: Path) -> dict[str, Any]:
         and mllm_inputs_embeds_interface_pass
         and api_cache_responses_contract_pass
         and not bool(text_route_evidence.get("cache_l2_not_reproved"))
-        and not bool(text_route_evidence.get("media_unwired"))
+        and not text_route_media_unwired_blocked
         and media_runtime_wired
         and media_metadata_ok
         and media_runtime_capabilities_safe
+        and not live_media_e2e_blocked
         and not stale_present
     )
 
@@ -2006,8 +2095,10 @@ def build_audit(root: Path, model_path: Path, manifest: Path) -> dict[str, Any]:
         blockers.append("mimo_api_cache_responses_contract_missing_or_failed")
     if text_route_evidence.get("cache_l2_not_reproved"):
         blockers.append("mimo_prefix_paged_l2_cache_not_reproved")
-    if text_route_evidence.get("media_unwired"):
+    if text_route_media_unwired_blocked:
         blockers.append("mimo_vl_audio_video_unwired")
+    if live_media_e2e_blocked:
+        blockers.append("mimo_vl_audio_video_live_e2e_missing")
     if not media_runtime_wired:
         blockers.append("mimo_media_runtime_implementation_missing")
     if not media_metadata_ok:
@@ -2063,8 +2154,9 @@ def build_audit(root: Path, model_path: Path, manifest: Path) -> dict[str, Any]:
                 media_runtime_wired
                 and media_metadata_ok
                 and media_runtime_capabilities_safe
-                and not bool(text_route_evidence.get("media_unwired"))
+                and not text_route_media_unwired_blocked
             ),
+            "mimo_live_media_e2e": bool(live_media_e2e_proven),
             "manual_sink_does_not_clear_length_generation": bool(sink_mode_fails),
             "disable_sink_does_not_clear_length_generation": bool(disable_sink_fails),
         },
