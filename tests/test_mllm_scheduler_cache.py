@@ -2052,7 +2052,7 @@ class TestMetalCacheLimit:
         assert "_tight_memory_prefill_drain" in source
         assert "VMLINUX_MLLM_TIGHT_MEMORY_CLEAN_PREFILL_STORE" in source
         assert "VMLINUX_MLLM_TIGHT_MEMORY_CLEAN_PREFILL_STORE_MAX_TOKENS" in source
-        assert '"512"' in source
+        assert '"128"' in source
         assert "tight-memory clean prompt" in source
         assert "prefill disabled to avoid Metal OOM" in source
 

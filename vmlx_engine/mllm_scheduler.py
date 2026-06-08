@@ -2868,7 +2868,7 @@ class MLLMScheduler:
                                         _tight_clean_store_max_tokens = int(
                                             os.environ.get(
                                                 "VMLINUX_MLLM_TIGHT_MEMORY_CLEAN_PREFILL_STORE_MAX_TOKENS",
-                                                "512",
+                                                "128",
                                             )
                                         )
                                     except (TypeError, ValueError):
