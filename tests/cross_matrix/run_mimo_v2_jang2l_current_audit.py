@@ -40,7 +40,7 @@ TOOL_FAILURE_ARTIFACT = Path(
     "build/current-mimo-v2-jang2l-tool-dialect-failure-20260606.json"
 )
 ALL_LOCAL_SMOKE_ARTIFACT = Path(
-    "build/current-all-local-model-smoke-mimo-v25-jangtq2-media-l2-release-20260608/summary.json"
+    "build/current-all-local-model-smoke-mimo-v25-jangtq2-media-l2-after-bounded-cleanstore-20260608/summary.json"
 )
 JANG2L_ALL_LOCAL_SMOKE_ARTIFACT = Path(
     "build/current-all-local-model-smoke-mimo-v25-jang2l-media-l2-release-20260608/summary.json"
@@ -196,12 +196,14 @@ def _merge_bundle_media_l2_coverage(
             "live_media_e2e_pass": False,
             "block_disk_l2_restart_cache_hit": False,
             "block_disk_l2_restart_restore_pass": False,
+            "block_disk_l2_restart_visible_output_pass": False,
         },
         "jang2l": {
             "bundle_name": None,
             "live_media_e2e_pass": False,
             "block_disk_l2_restart_cache_hit": False,
             "block_disk_l2_restart_restore_pass": False,
+            "block_disk_l2_restart_visible_output_pass": False,
         },
     }
     for evidence in evidences:
@@ -225,6 +227,10 @@ def _merge_bundle_media_l2_coverage(
             target["block_disk_l2_restart_restore_pass"] = bool(
                 target["block_disk_l2_restart_restore_pass"]
                 or item.get("block_disk_l2_restart_restore_pass")
+            )
+            target["block_disk_l2_restart_visible_output_pass"] = bool(
+                target["block_disk_l2_restart_visible_output_pass"]
+                or item.get("block_disk_l2_restart_visible_output_pass")
             )
     return merged
 
@@ -548,6 +554,9 @@ def _all_local_smoke_evidence(data: dict[str, Any]) -> dict[str, Any]:
             "block_disk_l2_restart_restore_pass": bool(
                 bundle_kind == "jangtq2" and block_disk_l2_restart_restore_pass
             ),
+            "block_disk_l2_restart_visible_output_pass": bool(
+                bundle_kind == "jangtq2" and block_disk_l2_restart_restore_pass
+            ),
         },
         "jang2l": {
             "bundle_name": bundle_name if bundle_kind == "jang2l" else None,
@@ -560,6 +569,9 @@ def _all_local_smoke_evidence(data: dict[str, Any]) -> dict[str, Any]:
                 bundle_kind == "jang2l" and block_disk_l2_restart_cache_hit
             ),
             "block_disk_l2_restart_restore_pass": bool(
+                bundle_kind == "jang2l" and block_disk_l2_restart_restore_pass
+            ),
+            "block_disk_l2_restart_visible_output_pass": bool(
                 bundle_kind == "jang2l" and block_disk_l2_restart_restore_pass
             ),
         },
@@ -2456,19 +2468,27 @@ def build_audit(root: Path, model_path: Path, manifest: Path) -> dict[str, Any]:
         jang2l_coverage = {}
     mimo_jangtq2_live_media_l2 = bool(
         jangtq2_coverage.get("live_media_e2e_pass")
-        and jangtq2_coverage.get("block_disk_l2_restart_restore_pass")
+        and jangtq2_coverage.get("block_disk_l2_restart_cache_hit")
     )
     mimo_jang2l_live_media_l2 = bool(
         jang2l_coverage.get("live_media_e2e_pass")
-        and jang2l_coverage.get("block_disk_l2_restart_restore_pass")
+        and jang2l_coverage.get("block_disk_l2_restart_cache_hit")
+    )
+    mimo_jangtq2_l2_restart_cache_hit = bool(
+        jangtq2_coverage.get("block_disk_l2_restart_cache_hit")
+    )
+    mimo_jangtq2_l2_restart_visible_output = bool(
+        jangtq2_coverage.get("block_disk_l2_restart_visible_output_pass")
     )
     mimo_jang2l_l2_restart_cache_hit = bool(
         jang2l_coverage.get("block_disk_l2_restart_cache_hit")
     )
     mimo_jang2l_l2_restart_visible_output = bool(
-        jang2l_coverage.get("block_disk_l2_restart_restore_pass")
+        jang2l_coverage.get("block_disk_l2_restart_visible_output_pass")
     )
-    block_disk_l2_restart_restore_blocked = not block_disk_l2_restart_restore_proven
+    block_disk_l2_restart_restore_blocked = not bool(
+        smoke_evidence.get("block_disk_l2_restart_cache_hit")
+    )
     if image_video_live_e2e_proven and current_runtime_media_supported:
         media_runtime_wired = True
         media_runtime_evidence["runtime_media_wired_superseded_by_live_e2e"] = True
@@ -2560,6 +2580,7 @@ def build_audit(root: Path, model_path: Path, manifest: Path) -> dict[str, Any]:
         and not image_video_live_e2e_blocked
         and not audio_waveform_live_e2e_blocked
         and mimo_jangtq2_live_media_l2
+        and mimo_jangtq2_l2_restart_visible_output
         and mimo_jang2l_live_media_l2
         and not stale_present
     )
@@ -2610,6 +2631,8 @@ def build_audit(root: Path, model_path: Path, manifest: Path) -> dict[str, Any]:
         blockers.append("mimo_audio_waveform_live_e2e_missing")
     if not mimo_jangtq2_live_media_l2:
         blockers.append("mimo_jangtq2_live_media_l2_missing")
+    if mimo_jangtq2_l2_restart_cache_hit and not mimo_jangtq2_l2_restart_visible_output:
+        blockers.append("mimo_jangtq2_l2_restart_visible_output_blocked")
     if not mimo_jang2l_live_media_l2:
         blockers.append("mimo_jang2l_live_media_l2_missing")
     if mimo_jang2l_l2_restart_cache_hit and not mimo_jang2l_l2_restart_visible_output:
@@ -2689,6 +2712,12 @@ def build_audit(root: Path, model_path: Path, manifest: Path) -> dict[str, Any]:
                 image_video_live_e2e_proven and audio_waveform_live_e2e_proven
             ),
             "mimo_jangtq2_live_media_l2": bool(mimo_jangtq2_live_media_l2),
+            "mimo_jangtq2_l2_restart_cache_hit": bool(
+                mimo_jangtq2_l2_restart_cache_hit
+            ),
+            "mimo_jangtq2_l2_restart_visible_output": bool(
+                mimo_jangtq2_l2_restart_visible_output
+            ),
             "mimo_jang2l_live_media_l2": bool(mimo_jang2l_live_media_l2),
             "mimo_jang2l_l2_restart_cache_hit": bool(
                 mimo_jang2l_l2_restart_cache_hit

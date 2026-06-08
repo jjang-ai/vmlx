@@ -243,11 +243,13 @@ def test_mimo_current_audit_separates_clean_artifact_from_runtime_blockers(
     )
     _write_json(
         tmp_path
-        / "build/current-all-local-model-smoke-mimo-v25-jangtq2-media-l2-release-20260608/summary.json",
+        / "build/current-all-local-model-smoke-mimo-v25-jangtq2-media-l2-after-bounded-cleanstore-20260608/summary.json",
         {
             "status": "fail",
             "results": [
                 {
+                    "name": "MiMo-V2.5-JANGTQ_2",
+                    "relative_path": "/Users/example/.mlxstudio/models/JANGQ-AI/MiMo-V2.5-JANGTQ_2",
                     "status": "probe_failed",
                     "failures": [
                         {"label": "text_cache_repeat_1", "reason": "empty_visible"},
@@ -1142,13 +1144,85 @@ def test_mimo_all_local_smoke_evidence_tracks_bundle_identity_for_media_l2():
             "live_media_e2e_pass": True,
             "block_disk_l2_restart_cache_hit": True,
             "block_disk_l2_restart_restore_pass": True,
+            "block_disk_l2_restart_visible_output_pass": True,
         },
         "jang2l": {
             "bundle_name": None,
             "live_media_e2e_pass": False,
             "block_disk_l2_restart_cache_hit": False,
             "block_disk_l2_restart_restore_pass": False,
+            "block_disk_l2_restart_visible_output_pass": False,
         },
+    }
+
+
+def test_mimo_jangtq2_media_l2_transport_is_separate_from_visible_restore_pass():
+    from tests.cross_matrix import run_mimo_v2_jang2l_current_audit as audit
+
+    media_requests = [
+        {"label": "vl_blue_image", "code": 200, "validation_failures": []},
+        {"label": "vl_blue_image_repeat", "code": 200, "validation_failures": []},
+        {"label": "vl_red_image_changed", "code": 200, "validation_failures": []},
+        {"label": "text_no_media_after_image", "code": 200, "validation_failures": []},
+        {"label": "vl_blue_video", "code": 200, "validation_failures": []},
+        {"label": "text_no_media_after_video", "code": 200, "validation_failures": []},
+        {"label": "audio_blue", "code": 200, "validation_failures": []},
+        {"label": "text_no_media_after_audio", "code": 200, "validation_failures": []},
+    ]
+    smoke = {
+        "status": "fail",
+        "results": [
+            {
+                "name": "MiMo-V2.5-JANGTQ_2",
+                "relative_path": "/Users/example/.mlxstudio/models/JANGQ-AI/MiMo-V2.5-JANGTQ_2",
+                "status": "probe_failed",
+                "requests": media_requests,
+                "failures": [
+                    {
+                        "label": "text_cache_repeat_l2_restart",
+                        "reason": "validation_failed",
+                    }
+                ],
+                "l2_restart": {
+                    "label": "text_cache_repeat_l2_restart",
+                    "status": "completed",
+                    "code": 200,
+                    "content": "ACK plus prompt echo",
+                    "usage": {
+                        "prompt_tokens_details": {
+                            "cached_tokens": 67,
+                            "cache_detail": "paged+disk",
+                        }
+                    },
+                    "cache_stats": {
+                        "scheduler_stats": {
+                            "cache_hit_tokens": 67,
+                            "cache_hit_tokens_by_detail": {"paged+disk": 67},
+                        },
+                        "block_disk_cache": {"disk_hits": 4},
+                    },
+                    "summary": {
+                        "status": "fail",
+                        "pass": False,
+                        "reason": "validation_failed",
+                    },
+                },
+            }
+        ],
+    }
+
+    evidence = audit._all_local_smoke_evidence(smoke)
+
+    assert evidence["live_media_e2e_pass"] is True
+    assert evidence["audio_waveform_e2e_pass"] is True
+    assert evidence["block_disk_l2_restart_cache_hit"] is True
+    assert evidence["block_disk_l2_restart_restore_pass"] is False
+    assert evidence["bundle_media_l2_coverage"]["jangtq2"] == {
+        "bundle_name": "MiMo-V2.5-JANGTQ_2",
+        "live_media_e2e_pass": True,
+        "block_disk_l2_restart_cache_hit": True,
+        "block_disk_l2_restart_restore_pass": False,
+        "block_disk_l2_restart_visible_output_pass": False,
     }
 
 
@@ -1202,14 +1276,15 @@ def test_mimo_jang2l_l2_cache_hit_is_not_visible_restore_pass():
         "live_media_e2e_pass": False,
         "block_disk_l2_restart_cache_hit": True,
         "block_disk_l2_restart_restore_pass": False,
+        "block_disk_l2_restart_visible_output_pass": False,
     }
 
 
-def test_mimo_current_audit_points_jangtq2_at_latest_live_release_smoke():
+def test_mimo_current_audit_points_jangtq2_at_latest_bounded_cleanstore_smoke():
     from tests.cross_matrix import run_mimo_v2_jang2l_current_audit as audit
 
     assert str(audit.ALL_LOCAL_SMOKE_ARTIFACT) == (
-        "build/current-all-local-model-smoke-mimo-v25-jangtq2-media-l2-release-20260608/"
+        "build/current-all-local-model-smoke-mimo-v25-jangtq2-media-l2-after-bounded-cleanstore-20260608/"
         "summary.json"
     )
 
