@@ -25,7 +25,7 @@ from typing import Any
 DEFAULT_MODEL_PATH = Path("/Users/example/.mlxstudio/models/JANGQ-AI/MiMo-V2.5-JANGTQ_2")
 DEFAULT_MANIFEST = Path("build/current-mimo-jangtq2-local-manifest-20260607.tsv")
 DEFAULT_OUT = Path(
-    "build/current-mimo-v2-jang2l-current-audit-after-media-runtime-stamp-gate-clean-stale-20260608.json"
+    "build/current-mimo-v2-jang2l-current-audit-after-jangtq2-live-release-smoke-20260608.json"
 )
 
 STRUCTURAL_ARTIFACT = Path("build/current-mimo-jang2l-local-structural-verify-20260606.json")
@@ -40,7 +40,7 @@ TOOL_FAILURE_ARTIFACT = Path(
     "build/current-mimo-v2-jang2l-tool-dialect-failure-20260606.json"
 )
 ALL_LOCAL_SMOKE_ARTIFACT = Path(
-    "build/current-all-local-model-smoke-mimo-v25-jangtq2-audio-expanded-token-l2-restart-20260608/summary.json"
+    "build/current-all-local-model-smoke-mimo-v25-jangtq2-media-l2-release-20260608/summary.json"
 )
 JANG2L_ALL_LOCAL_SMOKE_ARTIFACT = Path(
     "build/current-all-local-model-smoke-mimo-v25-jang2l-media-l2-release-20260608/summary.json"
@@ -70,7 +70,7 @@ SOURCE_VS_QUANT_ARTIFACT = Path(
     "build/current-mimo-v2-jangtq2-source-vs-quant-first-divergence-preflight-20260607.json"
 )
 NO_SOURCE_EXACTNESS_CLASSIFIER_ARTIFACT = Path(
-    "build/current-mimo-v2-no-source-exactness-classifier-after-media-runtime-stamp-gate-20260608.json"
+    "build/current-mimo-v2-no-source-exactness-classifier-after-jang2l-live-compare-20260608.json"
 )
 SYNCED_LONG_TOOL_CACHE_ARTIFACT = Path(
     "build/current-mimo-v25-jang2l-synced-long-tool-cache-proof-20260606.json"

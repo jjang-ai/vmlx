@@ -18,7 +18,7 @@ def test_objective_proof_digest_default_out_tracks_current_release_proof_artifac
     from tests.cross_matrix import summarize_objective_proof as objective
 
     assert objective.DEFAULT_OUT == Path(
-        "build/current-objective-proof-after-mimo-media-runtime-stamp-gate-20260608.json"
+        "build/current-objective-proof-after-jangtq2-live-release-smoke-20260608.json"
     )
 
 
@@ -8672,7 +8672,7 @@ def test_objective_digest_includes_current_real_ui_unblocked_non_mimo_matrix(
             "build/current-real-ui-dsv4-memory-preflight-20260530-local-refresh.json"
         ],
         "mimo_v2": [
-            "build/current-all-local-model-smoke-mimo-v25-jangtq2-audio-expanded-token-l2-restart-20260608/summary.json"
+            "build/current-all-local-model-smoke-mimo-v25-jangtq2-media-l2-release-20260608/summary.json"
         ],
     }
     assert row["details"]["real_ui_live_model_matrix"][

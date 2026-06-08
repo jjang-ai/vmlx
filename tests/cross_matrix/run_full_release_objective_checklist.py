@@ -17,14 +17,14 @@ from typing import Any
 
 
 DEFAULT_OUT = Path(
-    "build/current-full-release-objective-checklist-after-mimo-media-runtime-stamp-gate-20260608.json"
+    "build/current-full-release-objective-checklist-after-jangtq2-live-release-smoke-20260608.json"
 )
 
 MIMO_AUDIT = Path(
-    "build/current-mimo-v2-jang2l-current-audit-after-media-runtime-stamp-gate-clean-stale-20260608.json"
+    "build/current-mimo-v2-jang2l-current-audit-after-jangtq2-live-release-smoke-20260608.json"
 )
 MIMO_NO_SOURCE_EXACTNESS_CLASSIFIER = Path(
-    "build/current-mimo-v2-no-source-exactness-classifier-after-media-runtime-stamp-gate-20260608.json"
+    "build/current-mimo-v2-no-source-exactness-classifier-after-jang2l-live-compare-20260608.json"
 )
 NOHEAVY_API_CACHE = Path(
     "build/current-noheavy-api-cache-contract-after-qwen36-bundled-media-pass-20260607.json"

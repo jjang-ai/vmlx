@@ -872,7 +872,7 @@ CURRENT_MIMO_V2_JANG2L_TOOL_DIALECT_ARTIFACT = (
     "build/current-mimo-v2-jang2l-tool-dialect-failure-20260606.json"
 )
 CURRENT_MIMO_V2_JANG2L_CURRENT_AUDIT_ARTIFACT = (
-    "build/current-mimo-v2-jang2l-current-audit-after-media-runtime-stamp-gate-clean-stale-20260608.json"
+    "build/current-mimo-v2-jang2l-current-audit-after-jangtq2-live-release-smoke-20260608.json"
 )
 CURRENT_MIMO_V2_JANG2L_METADATA_TRUTH_ARTIFACT = (
     "build/current-mimo-v25-jang2l-local-metadata-truth-patch-20260606.json"
@@ -1691,7 +1691,7 @@ _ROWS: list[dict[str, Any]] = [
             ".venv/bin/python tests/cross_matrix/run_packaged_integrity_contract.py --jang-tools-source /Users/example/jang/.worktrees/vmlx-release-clean-b5f66a7/jang-tools --out build/current-packaged-integrity-contract-20260522-recheck-bundled-release-gate.json",
         ],
         "artifacts": [
-            "build/current-objective-proof-after-mimo-media-runtime-stamp-gate-20260608.json",
+            "build/current-objective-proof-after-jangtq2-live-release-smoke-20260608.json",
             "build/current-packaged-integrity-contract-after-staged-sequoia-rebuild-current-source-20260607.json",
             "build/current-packaged-integrity-contract-20260601-dsv4-preflight-refresh.json",
             "build/current-packaged-integrity-contract-20260601-qwen3vl-minicpm-mpp-staged-refresh.json",
@@ -1860,12 +1860,12 @@ _ROWS: list[dict[str, Any]] = [
             "The clearance boundary is based on live artifacts, not a hidden sampler/repetition/default override",
         ],
         "commands": [
-            ".venv/bin/python tests/cross_matrix/summarize_objective_proof.py --out build/current-objective-proof-after-mimo-media-runtime-stamp-gate-20260608.json",
+            ".venv/bin/python tests/cross_matrix/summarize_objective_proof.py --out build/current-objective-proof-after-jangtq2-live-release-smoke-20260608.json",
             ".venv/bin/python tests/cross_matrix/run_production_family_audit.py --rows ling_flash_tq --live --py /Applications/vMLX.app/Contents/Resources/bundled-python/python/bin/python3.12 --out build/current-production-family-live-ling-bundled-current-20260606.json",
         ],
         "artifacts": [
             "build/current-production-family-live-ling-bundled-current-20260606.json",
-            "build/current-objective-proof-after-mimo-media-runtime-stamp-gate-20260608.json",
+            "build/current-objective-proof-after-jangtq2-live-release-smoke-20260608.json",
             "build/current-ling-jangtq-strict-russian-nocache-bundled-4850c9c2-20260524.json",
             "build/current-ling-mxfp4-crack-strict-russian-nocache-bundled-4850c9c2-20260524.json",
             "build/current-ling-jangtq-russian-prompt-variant-probe-20260524.json",
