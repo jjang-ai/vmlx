@@ -209,6 +209,40 @@ class BatchedEngine(BaseEngine):
         return True
 
     @staticmethod
+    def _extract_audio_content(messages: list[dict[str, Any]]) -> list[Any]:
+        """Extract OpenAI-style audio parts without changing message shape."""
+        audios: list[Any] = []
+        for message in messages:
+            content = message.get("content")
+            if not isinstance(content, list):
+                continue
+            for part in content:
+                item = part
+                if hasattr(item, "model_dump"):
+                    item = item.model_dump(exclude_none=True)
+                elif hasattr(item, "dict"):
+                    item = {k: v for k, v in item.dict().items() if v is not None}
+                if not isinstance(item, dict):
+                    continue
+                part_type = str(item.get("type", "") or "").lower()
+                if part_type not in {"input_audio", "audio", "audio_url"} and not any(
+                    key in item for key in ("input_audio", "audio", "audio_url")
+                ):
+                    continue
+                source = (
+                    item.get("input_audio")
+                    or item.get("audio")
+                    or item.get("audio_url")
+                    or item.get("url")
+                    or item.get("path")
+                    or item.get("data")
+                )
+                if source is None:
+                    continue
+                audios.append(source)
+        return audios
+
+    @staticmethod
     def _collapse_text_only_content_lists(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
         normalized: list[dict[str, Any]] = []
         for message in messages:
@@ -1413,6 +1447,7 @@ class BatchedEngine(BaseEngine):
         stop: list[str] | None = None,
         images: list[str] | None = None,
         videos: list[str] | None = None,
+        audio: list[Any] | None = None,
         **kwargs,
     ) -> GenerationOutput:
         """
@@ -1426,6 +1461,7 @@ class BatchedEngine(BaseEngine):
             stop: Stop sequences
             images: Optional image URLs/paths (for MLLM)
             videos: Optional video URLs/paths (for MLLM)
+            audio: Optional audio inputs (for MLLM)
             **kwargs: Additional model-specific parameters
 
         Returns:
@@ -1450,6 +1486,7 @@ class BatchedEngine(BaseEngine):
                 prompt=prompt,
                 images=images,
                 videos=videos,
+                audio=audio,
                 max_tokens=max_tokens,
                 temperature=temperature,
                 top_p=top_p,
@@ -1542,6 +1579,7 @@ class BatchedEngine(BaseEngine):
         stop: list[str] | None = None,
         images: list[str] | None = None,
         videos: list[str] | None = None,
+        audio: list[Any] | None = None,
         request_id: str | None = None,
         **kwargs,
     ) -> AsyncIterator[GenerationOutput]:
@@ -1556,6 +1594,7 @@ class BatchedEngine(BaseEngine):
             stop: Stop sequences
             images: Optional image URLs/paths (for MLLM)
             videos: Optional video URLs/paths (for MLLM)
+            audio: Optional audio inputs (for MLLM)
             request_id: Optional custom request ID for cancellation support
             **kwargs: Additional model-specific parameters
 
@@ -1578,6 +1617,7 @@ class BatchedEngine(BaseEngine):
                 prompt=prompt,
                 images=images,
                 videos=videos,
+                audio=audio,
                 max_tokens=max_tokens,
                 temperature=temperature,
                 top_p=top_p,
@@ -1667,6 +1707,7 @@ class BatchedEngine(BaseEngine):
         tools: list[dict] | None = None,
         images: list[str] | None = None,
         videos: list[str] | None = None,
+        audio: list[Any] | None = None,
         **kwargs,
     ) -> GenerationOutput:
         """
@@ -1684,6 +1725,7 @@ class BatchedEngine(BaseEngine):
             tools: Optional tool definitions
             images: Optional image URLs/paths
             videos: Optional video URLs/paths
+            audio: Optional audio inputs
             **kwargs: Additional model-specific parameters
 
         Returns:
@@ -1701,8 +1743,10 @@ class BatchedEngine(BaseEngine):
         # Extract images/videos from messages (OpenAI multimodal format)
         # Note: We only use extracted media here, messages are already processed by server
         _, extracted_images, extracted_videos = extract_multimodal_content(messages)
+        extracted_audio = self._extract_audio_content(messages)
         all_images = (images or []) + extracted_images
         all_videos = (videos or []) + extracted_videos
+        all_audio = (audio or []) + extracted_audio
 
         # Convert tools for template
         template_tools = convert_tools_for_template(tools) if tools else None
@@ -1774,6 +1818,7 @@ class BatchedEngine(BaseEngine):
             top_p=top_p,
             images=all_images if all_images else None,
             videos=all_videos if all_videos else None,
+            audio=all_audio if all_audio else None,
             gen_prompt_len=gen_prompt_len,
             encode_add_special_tokens=False,
             enable_thinking=thinking_enabled,
@@ -1789,6 +1834,7 @@ class BatchedEngine(BaseEngine):
         tools: list[dict] | None = None,
         images: list[str] | None = None,
         videos: list[str] | None = None,
+        audio: list[Any] | None = None,
         request_id: str | None = None,
         **kwargs,
     ) -> AsyncIterator[GenerationOutput]:
@@ -1807,6 +1853,7 @@ class BatchedEngine(BaseEngine):
             tools: Optional tool definitions
             images: Optional image URLs/paths
             videos: Optional video URLs/paths
+            audio: Optional audio inputs
             request_id: Optional custom request ID for cancellation support
             **kwargs: Additional model-specific parameters
 
@@ -1825,8 +1872,10 @@ class BatchedEngine(BaseEngine):
         # Extract images/videos from messages (OpenAI multimodal format)
         # Note: We only use extracted media here, messages are already processed by server
         _, extracted_images, extracted_videos = extract_multimodal_content(messages)
+        extracted_audio = self._extract_audio_content(messages)
         all_images = (images or []) + extracted_images
         all_videos = (videos or []) + extracted_videos
+        all_audio = (audio or []) + extracted_audio
 
         # Convert tools for template
         template_tools = convert_tools_for_template(tools) if tools else None
@@ -1893,6 +1942,7 @@ class BatchedEngine(BaseEngine):
             top_p=top_p,
             images=all_images if all_images else None,
             videos=all_videos if all_videos else None,
+            audio=all_audio if all_audio else None,
             request_id=request_id,
             gen_prompt_len=gen_prompt_len,
             encode_add_special_tokens=False,

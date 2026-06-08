@@ -288,6 +288,7 @@ class MLLMRequest:
     prompt: str
     images: Optional[List[str]] = None
     videos: Optional[List[str]] = None
+    audio: Optional[List[Any]] = None
     sampling_params: SamplingParams = field(default_factory=SamplingParams)
     arrival_time: float = field(default_factory=time.time)
 
@@ -1978,6 +1979,7 @@ class MLLMScheduler:
         prompt: str,
         images: Optional[List[str]] = None,
         videos: Optional[List[str]] = None,
+        audio: Optional[List[Any]] = None,
         max_tokens: int = 256,
         temperature: float = 0.7,
         top_p: float = 0.9,
@@ -2029,6 +2031,7 @@ class MLLMScheduler:
             prompt=prompt,
             images=images,
             videos=videos,
+            audio=audio,
             sampling_params=sampling_params,
             video_fps=kwargs.get("video_fps"),
             video_max_frames=kwargs.get("video_max_frames"),
@@ -2043,7 +2046,7 @@ class MLLMScheduler:
         _max_prompt_tokens = int(kwargs.get("max_prompt_tokens", 0) or 0)
         if _max_prompt_tokens > 0:
             request._max_prompt_tokens = _max_prompt_tokens
-            if not images and not videos:
+            if not images and not videos and not audio:
                 tokenizer = getattr(self.processor, "tokenizer", self.processor)
                 try:
                     token_ids = tokenizer.encode(prompt, add_special_tokens=False)
@@ -2215,6 +2218,7 @@ class MLLMScheduler:
                 prompt=request.prompt,
                 images=request.images,
                 videos=request.videos,
+                audio=request.audio,
                 max_tokens=request.sampling_params.max_tokens,
                 temperature=request.sampling_params.temperature,
                 top_p=request.sampling_params.top_p,
@@ -3645,6 +3649,7 @@ class MLLMScheduler:
         prompt: str,
         images: Optional[List[str]] = None,
         videos: Optional[List[str]] = None,
+        audio: Optional[List[Any]] = None,
         max_tokens: int = 256,
         temperature: float = 0.7,
         top_p: float = 0.9,
@@ -3657,6 +3662,7 @@ class MLLMScheduler:
             prompt: Text prompt
             images: List of image inputs
             videos: List of video inputs
+            audio: List of audio inputs
             max_tokens: Maximum tokens to generate
             temperature: Sampling temperature
             top_p: Top-p sampling
@@ -3669,6 +3675,7 @@ class MLLMScheduler:
             prompt=prompt,
             images=images,
             videos=videos,
+            audio=audio,
             max_tokens=max_tokens,
             temperature=temperature,
             top_p=top_p,
@@ -3717,6 +3724,7 @@ class MLLMScheduler:
         prompt: str,
         images: Optional[List[str]] = None,
         videos: Optional[List[str]] = None,
+        audio: Optional[List[Any]] = None,
         **kwargs,
     ) -> RequestOutput:
         """
@@ -3726,6 +3734,7 @@ class MLLMScheduler:
             prompt: Text prompt
             images: Image inputs
             videos: Video inputs
+            audio: Audio inputs
             **kwargs: Generation parameters
 
         Returns:
@@ -3735,6 +3744,7 @@ class MLLMScheduler:
             prompt=prompt,
             images=images,
             videos=videos,
+            audio=audio,
             **kwargs,
         )
 

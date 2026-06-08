@@ -286,6 +286,88 @@ def test_mllm_processor_audio_outputs_are_promoted_to_request_fields():
     assert "request.audio_features = _ensure_mx_array(" in source
 
 
+def test_mllm_processor_direct_forwards_raw_audio_to_processor():
+    """Raw audio request inputs must reach processors that expose audio kwargs."""
+    from vmlx_engine.mllm_batch_generator import _call_processor_direct
+
+    captured = {}
+
+    class Processor:
+        def __call__(
+            self,
+            *,
+            text,
+            padding,
+            return_tensors,
+            add_special_tokens,
+            audio=None,
+            audios=None,
+        ):
+            captured.update(
+                {
+                    "text": text,
+                    "padding": padding,
+                    "return_tensors": return_tensors,
+                    "add_special_tokens": add_special_tokens,
+                    "audio": audio,
+                    "audios": audios,
+                }
+            )
+            return {"input_ids": [[1, 2, 3]], "audio_codes": [[4, 5]]}
+
+    result = _call_processor_direct(
+        Processor(),
+        prompts=["describe audio"],
+        images=None,
+        videos=None,
+        audio=["/tmp/vmlx-audio.wav"],
+        add_special_tokens=False,
+    )
+
+    assert captured["audio"] == ["/tmp/vmlx-audio.wav"]
+    assert captured["audios"] == ["/tmp/vmlx-audio.wav"]
+    assert result["audio_codes"] == [[4, 5]]
+
+
+def test_mllm_scheduler_and_batched_engine_route_raw_audio_requests():
+    """OpenAI audio parts must reach MLLM scheduler, not stop at API parsing."""
+    import inspect
+    from dataclasses import fields
+
+    from vmlx_engine.engine.batched import BatchedEngine
+    from vmlx_engine.mllm_scheduler import MLLMRequest, MLLMScheduler
+
+    assert "audio" in {field.name for field in fields(MLLMRequest)}
+    add_source = inspect.getsource(MLLMScheduler.add_request)
+    assert "audio: Optional[List[Any]] = None" in add_source
+    assert "audio=audio" in add_source
+    assert "not images and not videos and not audio" in add_source
+    schedule_source = inspect.getsource(MLLMScheduler._schedule_waiting)
+    assert "audio=request.audio" in schedule_source
+
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "transcribe"},
+                {
+                    "type": "input_audio",
+                    "input_audio": {
+                        "data": "UklGRg==",
+                        "format": "wav",
+                    },
+                },
+            ],
+        }
+    ]
+    extracted = BatchedEngine._extract_audio_content(messages)
+    assert extracted == [{"data": "UklGRg==", "format": "wav"}]
+
+    engine_source = inspect.getsource(BatchedEngine)
+    assert "extracted_audio = self._extract_audio_content(messages)" in engine_source
+    assert "audio=all_audio if all_audio else None" in engine_source
+
+
 def test_mllm_exact_prefix_hit_with_generation_suffix_refeeds_last_prompt_token():
     """VLM memory/legacy hits store N-1 KV, so suffix-only prefill is wrong."""
 

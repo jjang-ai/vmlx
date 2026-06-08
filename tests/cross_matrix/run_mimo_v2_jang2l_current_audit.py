@@ -25,7 +25,7 @@ from typing import Any
 DEFAULT_MODEL_PATH = Path("/Users/example/.mlxstudio/models/JANGQ-AI/MiMo-V2.5-JANGTQ_2")
 DEFAULT_MANIFEST = Path("build/current-mimo-jangtq2-local-manifest-20260607.tsv")
 DEFAULT_OUT = Path(
-    "build/current-mimo-v2-jang2l-current-audit-after-audio-processor-fields-20260607.json"
+    "build/current-mimo-v2-jang2l-current-audit-after-raw-audio-request-ingestion-20260607.json"
 )
 
 STRUCTURAL_ARTIFACT = Path("build/current-mimo-jang2l-local-structural-verify-20260606.json")
@@ -861,6 +861,24 @@ def _mimo_media_runtime_evidence(
         if batch_generator.exists()
         else ""
     )
+    scheduler_path = root / "vmlx_engine/mllm_scheduler.py"
+    scheduler_text = (
+        scheduler_path.read_text(encoding="utf-8", errors="replace")
+        if scheduler_path.exists()
+        else ""
+    )
+    batched_engine_path = root / "vmlx_engine/engine/batched.py"
+    batched_engine_text = (
+        batched_engine_path.read_text(encoding="utf-8", errors="replace")
+        if batched_engine_path.exists()
+        else ""
+    )
+    scheduler_cache_tests = root / "tests/test_mllm_scheduler_cache.py"
+    scheduler_cache_test_text = (
+        scheduler_cache_tests.read_text(encoding="utf-8", errors="replace")
+        if scheduler_cache_tests.exists()
+        else ""
+    )
     zaya_runtime_tests = root / "tests/test_zaya_runtime.py"
     zaya_runtime_test_text = (
         zaya_runtime_tests.read_text(encoding="utf-8", errors="replace")
@@ -1042,12 +1060,7 @@ def _mimo_media_runtime_evidence(
         )
     ) and (
         "test_mllm_audio_payload_prefill_uses_model_wrapper_not_text_fast_path"
-        in (root / "tests/test_mllm_scheduler_cache.py").read_text(
-            encoding="utf-8",
-            errors="replace",
-        )
-        if (root / "tests/test_mllm_scheduler_cache.py").exists()
-        else False
+        in scheduler_cache_test_text
     )
     audio_processor_output_bridge_present = all(
         marker in batch_generator_text
@@ -1061,12 +1074,42 @@ def _mimo_media_runtime_evidence(
         )
     ) and (
         "test_mllm_processor_audio_outputs_are_promoted_to_request_fields"
-        in (root / "tests/test_mllm_scheduler_cache.py").read_text(
-            encoding="utf-8",
-            errors="replace",
+        in scheduler_cache_test_text
+    )
+    raw_audio_request_ingestion_present = (
+        all(
+            marker in batch_generator_text
+            for marker in (
+                "audio: Optional[List",
+                "process_audio_input",
+                "not request.images and not request.videos and not request.audio",
+                "audio=all_audio",
+                'kwargs["audio"] = audio',
+                'kwargs["audios"] = audio',
+            )
         )
-        if (root / "tests/test_mllm_scheduler_cache.py").exists()
-        else False
+        and all(
+            marker in scheduler_text
+            for marker in (
+                "audio: Optional[List[Any]] = None",
+                "audio=request.audio",
+                "audio=audio",
+                "not images and not videos and not audio",
+            )
+        )
+        and all(
+            marker in batched_engine_text
+            for marker in (
+                "def _extract_audio_content",
+                "extracted_audio = self._extract_audio_content(messages)",
+                "all_audio = (audio or []) + extracted_audio",
+                "audio=all_audio if all_audio else None",
+            )
+        )
+        and "test_mllm_processor_direct_forwards_raw_audio_to_processor"
+        in scheduler_cache_test_text
+        and "test_mllm_scheduler_and_batched_engine_route_raw_audio_requests"
+        in scheduler_cache_test_text
     )
     media_weights_preserved = bool(visual_count > 0 and audio_count > 0)
     metadata_overadvertises = bool(
@@ -1128,6 +1171,7 @@ def _mimo_media_runtime_evidence(
         "media_aware_prefix_l2_cache": bool(media_aware_prefix_l2_cache_present),
         "audio_payload_forwarding": bool(audio_payload_forwarding_present),
         "audio_processor_output_bridge": bool(audio_processor_output_bridge_present),
+        "raw_audio_request_ingestion": bool(raw_audio_request_ingestion_present),
         "runtime_media_wired": False if runtime_gap else True,
         "missing_runtime_components": (
             [
@@ -1185,6 +1229,10 @@ def _mimo_media_runtime_evidence(
                     (
                         "processor-produced audio tensor field bridge",
                         audio_processor_output_bridge_present,
+                    ),
+                    (
+                        "raw audio request bridge from API/UI to processor",
+                        raw_audio_request_ingestion_present,
                     ),
                 )
                 if not present

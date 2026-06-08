@@ -108,6 +108,33 @@ def test_mimo_current_audit_separates_clean_artifact_from_runtime_blockers(
                 "request.audio_codes = _ensure_mx_array(",
                 "request.audio_embeds = _ensure_mx_array(",
                 "request.audio_features = _ensure_mx_array(",
+                "audio: Optional[List",
+                "process_audio_input",
+                "not request.images and not request.videos and not request.audio",
+                "audio=all_audio",
+                'kwargs["audio"] = audio',
+                'kwargs["audios"] = audio',
+            ]
+        )
+    )
+    (tmp_path / "vmlx_engine/mllm_scheduler.py").write_text(
+        "\n".join(
+            [
+                "audio: Optional[List[Any]] = None",
+                "audio=request.audio",
+                "audio=audio",
+                "not images and not videos and not audio",
+            ]
+        )
+    )
+    (tmp_path / "vmlx_engine/engine").mkdir(parents=True)
+    (tmp_path / "vmlx_engine/engine/batched.py").write_text(
+        "\n".join(
+            [
+                "def _extract_audio_content",
+                "extracted_audio = self._extract_audio_content(messages)",
+                "all_audio = (audio or []) + extracted_audio",
+                "audio=all_audio if all_audio else None",
             ]
         )
     )
@@ -125,6 +152,8 @@ def test_mimo_current_audit_separates_clean_artifact_from_runtime_blockers(
             [
                 "test_mllm_audio_payload_prefill_uses_model_wrapper_not_text_fast_path",
                 "test_mllm_processor_audio_outputs_are_promoted_to_request_fields",
+                "test_mllm_processor_direct_forwards_raw_audio_to_processor",
+                "test_mllm_scheduler_and_batched_engine_route_raw_audio_requests",
             ]
         )
     )
@@ -443,6 +472,10 @@ def test_mimo_current_audit_separates_clean_artifact_from_runtime_blockers(
         is True
     )
     assert (
+        result["diagnostics"]["mimo_media_runtime"]["raw_audio_request_ingestion"]
+        is True
+    )
+    assert (
         "VisionConfig parser"
         not in result["diagnostics"]["mimo_media_runtime"]["missing_runtime_components"]
     )
@@ -508,6 +541,10 @@ def test_mimo_current_audit_separates_clean_artifact_from_runtime_blockers(
     )
     assert (
         "processor-produced audio tensor field bridge"
+        not in result["diagnostics"]["mimo_media_runtime"]["missing_runtime_components"]
+    )
+    assert (
+        "raw audio request bridge from API/UI to processor"
         not in result["diagnostics"]["mimo_media_runtime"]["missing_runtime_components"]
     )
     assert result["diagnostics"]["all_local_smoke"]["tool_protocol_pass"] is True

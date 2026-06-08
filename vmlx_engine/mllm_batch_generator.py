@@ -817,6 +817,7 @@ def _call_processor_direct(
     prompts: Any,
     images: Optional[List[str]],
     videos: Optional[List[Any]] = None,
+    audio: Optional[List[Any]] = None,
     add_special_tokens: bool,
 ) -> Dict[str, Any]:
     """Call a VLM processor without mlx_vlm.process_inputs' bad `.process` trap.
@@ -830,7 +831,7 @@ def _call_processor_direct(
     filtering.
     """
     process_method = getattr(processor, "process", None)
-    if callable(process_method) and not videos:
+    if callable(process_method) and not videos and not audio:
         from mlx_vlm.utils import process_inputs
 
         return _as_input_mapping(
@@ -858,6 +859,9 @@ def _call_processor_direct(
         kwargs["images"] = _shape_images_for_processor_call(processor, images)
     if videos:
         kwargs["videos"] = videos
+    if audio:
+        kwargs["audio"] = audio
+        kwargs["audios"] = audio
     try:
         params = inspect.signature(processor).parameters
     except (TypeError, ValueError):
@@ -2357,6 +2361,7 @@ class MLLMBatchRequest:
     prompt: str  # Text prompt
     images: Optional[List[str]] = None  # Image paths/URLs/base64
     videos: Optional[List[str]] = None  # Video inputs
+    audio: Optional[List[Any]] = None  # Audio inputs
     max_tokens: int = 256
     temperature: float = 0.7
     top_p: float = 0.9
@@ -3466,7 +3471,7 @@ class MLLMBatchGenerator:
         # For API-driven workloads (e.g. MMLU benchmarks with 14k short requests),
         # per-request VLM processor overhead dominates. The tokenizer alone is
         # sufficient when no images or videos are present.
-        is_text_only = not request.images and not request.videos
+        is_text_only = not request.images and not request.videos and not request.audio
         if is_text_only:
             tokenizer = getattr(self.processor, "tokenizer", self.processor)
             # Use add_special_tokens=False because the prompt has already been
@@ -3510,6 +3515,7 @@ class MLLMBatchGenerator:
         all_images = []
         video_inputs = []
         video_cache_sources = []
+        all_audio = []
 
         if request.images:
             from .models.mllm import process_image_input
@@ -3545,12 +3551,23 @@ class MLLMBatchGenerator:
             if request.videos and not video_inputs:
                 raise ValueError("All video inputs failed to process")
 
-        if all_images or video_inputs:
+        if request.audio:
+            from .models.mllm import process_audio_input
+
+            for audio in request.audio:
+                try:
+                    all_audio.append(process_audio_input(audio))
+                except Exception as e:
+                    logger.warning(f"Failed to process audio: {e}")
+            if request.audio and not all_audio:
+                raise ValueError("All audio inputs failed to process")
+
+        if all_images or video_inputs or all_audio:
             _apply_vlm_image_request_cache_limit()
             mx.clear_cache()
 
         # Check pixel cache first
-        media_cache_sources = all_images + video_cache_sources
+        media_cache_sources = all_images + video_cache_sources + all_audio
         _mllm_bypass = bool(getattr(request, "_bypass_prefix_cache", False))
         cached_pixels = None
         if not _mllm_bypass:
@@ -3592,12 +3609,13 @@ class MLLMBatchGenerator:
             self.processor,
             has_image_literal="<image>" in request.prompt,
             has_images=bool(all_images),
-        ) or bool(video_inputs):
+        ) or bool(video_inputs) or bool(all_audio):
             inputs = _call_processor_direct(
                 self.processor,
                 prompts=request.prompt,
                 images=all_images,
                 videos=video_inputs,
+                audio=all_audio,
                 add_special_tokens=False,
             )
         else:
