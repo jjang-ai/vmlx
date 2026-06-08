@@ -1535,6 +1535,75 @@ def _register_mimo_v2_mlx_vlm_runtime() -> None:
         def __call__(self, x):
             return self.linear_2(nn.gelu(self.linear_1(x)))
 
+    class MiMoAudioEuclideanCodebook(nn.Module):
+        """MiMo audio tokenizer nearest-codebook encoder.
+
+        Mirrors the official PyTorch `EuclideanCodebook.encode` path used by
+        `MiMoAudioTokenizer`: maximize `-(||x||^2 - 2*x@embed.T + ||embed||^2)`.
+        """
+
+        def __init__(self, embed):
+            super().__init__()
+            self.embed = mx.array(embed)
+
+        def encode(self, x):
+            x = mx.array(x)
+            original_shape = tuple(x.shape[:-1])
+            flat = mx.reshape(x, (-1, x.shape[-1])).astype(mx.float32)
+            embed = self.embed.astype(mx.float32)
+            dist = -(
+                mx.sum(flat * flat, axis=1, keepdims=True)
+                - 2 * (flat @ mx.transpose(embed))
+                + mx.sum(embed * embed, axis=1, keepdims=True).T
+            )
+            indices = mx.argmax(dist, axis=-1).astype(mx.int32)
+            return mx.reshape(indices, original_shape)
+
+        def decode(self, indices):
+            return self.embed[mx.array(indices).astype(mx.int32)]
+
+    class MiMoAudioResidualVectorQuantizer(nn.Module):
+        """Residual VQ used by the MiMo audio tokenizer encoder output."""
+
+        def __init__(self, codebook_embeds):
+            super().__init__()
+            self.codebooks = [MiMoAudioEuclideanCodebook(embed) for embed in codebook_embeds]
+
+        def encode(self, hidden_states, n_q: int | None = None, st: int = 0):
+            residual = mx.array(hidden_states)
+            n_q = len(self.codebooks) if n_q is None else int(n_q)
+            st = int(st or 0)
+            if st < 0 or n_q < st or n_q > len(self.codebooks):
+                raise ValueError(
+                    f"Invalid MiMo audio RVQ range: st={st}, n_q={n_q}, "
+                    f"codebooks={len(self.codebooks)}"
+                )
+            all_indices = []
+            for codebook in self.codebooks[st:n_q]:
+                indices = codebook.encode(residual)
+                quantized = codebook.decode(indices).astype(residual.dtype)
+                residual = residual - quantized
+                all_indices.append(indices)
+            if not all_indices:
+                return mx.zeros((0,) + tuple(residual.shape[:-1]), dtype=mx.int32)
+            return mx.stack(all_indices, axis=0)
+
+        def decode(self, codes, st: int = 0):
+            codes = mx.array(codes).astype(mx.int32)
+            if codes.ndim < 1:
+                raise ValueError("MiMo audio RVQ codes must include a quantizer axis")
+            st = int(st or 0)
+            if st < 0 or st + int(codes.shape[0]) > len(self.codebooks):
+                raise ValueError(
+                    f"Invalid MiMo audio RVQ decode range: st={st}, "
+                    f"codes={codes.shape[0]}, codebooks={len(self.codebooks)}"
+                )
+            out = None
+            for offset in range(int(codes.shape[0])):
+                decoded = self.codebooks[st + offset].decode(codes[offset])
+                out = decoded if out is None else out + decoded
+            return out
+
     def _parse_mimo_v2_int_list(value, length: int):
         if isinstance(value, str) and "-" in value:
             return [int(v) for v in value.split("-")]
@@ -2572,6 +2641,8 @@ def _register_mimo_v2_mlx_vlm_runtime() -> None:
     module.LanguageModel = TextModel
     module.VisionModel = VisionModel
     module.AudioModel = AudioModel
+    module.MiMoAudioEuclideanCodebook = MiMoAudioEuclideanCodebook
+    module.MiMoAudioResidualVectorQuantizer = MiMoAudioResidualVectorQuantizer
     module.__file__ = getattr(text_runtime, "__file__", module_name)
     sys.modules[module_name] = module
 

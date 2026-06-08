@@ -80,6 +80,11 @@ def test_mimo_current_audit_separates_clean_artifact_from_runtime_blockers(
                 "def process_audio_codes(self, audio_codes, speech_embeddings):",
                 "speech_embeddings=self.speech_embeddings",
                 "_pad_and_group_mimo_v2_audio_codes",
+                "class MiMoAudioEuclideanCodebook",
+                "class MiMoAudioResidualVectorQuantizer",
+                "def encode(self, hidden_states",
+                "def decode(self, codes",
+                "mx.argmax(dist, axis=-1)",
                 "def _apply_mimo_v2_media_weights(self):",
                 "_mimo_v2_assign_weight(self, key, value)",
                 "MiMo-V2 load assigned %d preserved media tensors",
@@ -156,6 +161,9 @@ def test_mimo_current_audit_separates_clean_artifact_from_runtime_blockers(
                 "test_mllm_scheduler_and_batched_engine_route_raw_audio_requests",
             ]
         )
+    )
+    (tmp_path / "tests/test_mimo_v2_media_runtime.py").write_text(
+        "test_mimo_v2_audio_residual_vector_quantizer_matches_nearest_codebook\n"
     )
     manifest = tmp_path / "build" / "current-mimo-http-tb5-manifest-20260606.tsv"
     manifest.parent.mkdir(parents=True)
@@ -456,6 +464,10 @@ def test_mimo_current_audit_separates_clean_artifact_from_runtime_blockers(
     assert result["diagnostics"]["mimo_media_runtime"]["audio_projection_bridge"] is True
     assert (
         result["diagnostics"]["mimo_media_runtime"]["audio_code_local_transformer"]
+        is True
+    )
+    assert (
+        result["diagnostics"]["mimo_media_runtime"]["audio_tokenizer_rvq_codebook"]
         is True
     )
     assert (

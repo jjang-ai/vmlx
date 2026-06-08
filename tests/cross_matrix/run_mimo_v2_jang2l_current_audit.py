@@ -1040,6 +1040,28 @@ def _mimo_media_runtime_evidence(
             "return_codes_only",
         )
     )
+    audio_tokenizer_rvq_present = all(
+        marker in adapter_text
+        for marker in (
+            "class MiMoAudioEuclideanCodebook",
+            "class MiMoAudioResidualVectorQuantizer",
+            "def encode(self, hidden_states",
+            "def decode(self, codes",
+            "mx.argmax(dist, axis=-1)",
+        )
+    ) and (
+        "test_mimo_v2_audio_residual_vector_quantizer_matches_nearest_codebook"
+        in scheduler_cache_test_text
+        or "test_mimo_v2_audio_residual_vector_quantizer_matches_nearest_codebook"
+        in (
+            (root / "tests/test_mimo_v2_media_runtime.py").read_text(
+                encoding="utf-8",
+                errors="replace",
+            )
+            if (root / "tests/test_mimo_v2_media_runtime.py").exists()
+            else ""
+        )
+    )
     media_weight_assignment_present = all(
         marker in adapter_text
         for marker in (
@@ -1189,6 +1211,7 @@ def _mimo_media_runtime_evidence(
         "model_vision_bridge": bool(model_vision_bridge_present),
         "audio_projection_bridge": bool(audio_projection_bridge_present),
         "audio_code_local_transformer": bool(audio_code_local_transformer_present),
+        "audio_tokenizer_rvq_codebook": bool(audio_tokenizer_rvq_present),
         "audio_tokenizer_model_execution": bool(
             audio_tokenizer_runtime_execution_present
         ),

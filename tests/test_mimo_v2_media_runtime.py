@@ -297,6 +297,28 @@ def test_mimo_v2_audio_codes_run_local_transformer_and_splice_audio_token(
     sys.modules.pop("mlx_vlm.models.mimo_v2", None)
 
 
+def test_mimo_v2_audio_residual_vector_quantizer_matches_nearest_codebook(
+    tmp_path,
+    monkeypatch,
+):
+    module = _register_fake_mimo_runtime(monkeypatch, tmp_path)
+    quantizer = module.MiMoAudioResidualVectorQuantizer(
+        [
+            mx.array([[0.0, 0.0], [2.0, 0.0], [0.0, 2.0]]),
+            mx.array([[0.0, 0.0], [0.5, 0.0], [0.0, 0.5]]),
+        ]
+    )
+
+    hidden = mx.array([[2.4, 0.1], [0.2, 2.3]])
+    codes = quantizer.encode(hidden)
+
+    assert codes.shape == (2, 2)
+    assert codes.tolist() == [[1, 2], [1, 2]]
+    decoded = quantizer.decode(codes)
+    assert decoded.tolist() == [[2.5, 0.0], [0.0, 2.5]]
+    sys.modules.pop("mlx_vlm.models.mimo_v2", None)
+
+
 def test_mimo_v2_media_enabled_load_binds_speech_embedding_weights(
     tmp_path,
     monkeypatch,
