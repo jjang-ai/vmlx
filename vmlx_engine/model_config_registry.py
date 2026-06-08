@@ -552,13 +552,16 @@ class ModelConfigRegistry:
                 # canonical here so source, packaged app, and CLI agree.
                 updates["reasoning_parser"] = "minimax_m2"
             elif is_mimo_v2_family:
-                # MiMo-V2.5 uses generic XML function calls and <think> blocks.
+                # MiMo-V2.5 uses generic XML function calls. Current live proof
+                # shows advertised thinking can produce hidden-only output with
+                # no visible final answer, so keep thinking disabled even when
+                # stale sidecars claim a reasoning parser.
                 # Do not let stale sidecars promote it to unrelated Qwen/JSON
                 # tool formats or qwen3-specific reasoning extraction.
-                updates["reasoning_parser"] = "think_xml"
+                updates["reasoning_parser"] = None
                 updates["tool_parser"] = "xml_function"
                 updates["supports_native_tools"] = True
-                updates["supports_thinking"] = True
+                updates["supports_thinking"] = False
                 updates["think_in_template"] = False
             elif base_supports_thinking is False:
                 updates["supports_thinking"] = False
