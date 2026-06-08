@@ -17,6 +17,22 @@ class TestJangDetection:
         (tmp_path / "jjqf_config.json").write_text("{}")
         assert is_jang_model(str(tmp_path)) is True
 
+    def test_detects_jangtq_sidecar_without_weight_format(self, tmp_path):
+        from vmlx_engine.utils.jang_loader import is_jang_model
+
+        (tmp_path / "jang_config.json").write_text(
+            json.dumps(
+                {
+                    "format": "jangtq",
+                    "family": "mimo_v2",
+                    "profile": "JANGTQ_2",
+                    "tq_layout": "prestacked_switch_mlp",
+                }
+            )
+        )
+
+        assert is_jang_model(str(tmp_path)) is True
+
     def test_no_config_returns_false(self, tmp_path):
         from vmlx_engine.utils.jang_loader import is_jang_model
         assert is_jang_model(str(tmp_path)) is False
@@ -29,6 +45,24 @@ class TestJangDetection:
         from vmlx_engine.utils.jang_loader import is_jang_model
         assert is_jang_model("/this/does/not/exist") is False
 
+    def test_v2_bundle_has_tq_packed_uses_index_not_first_shard_only(self, tmp_path):
+        from vmlx_engine.utils.jang_loader import _v2_bundle_has_tq_packed
+
+        (tmp_path / "model.safetensors.index.json").write_text(
+            json.dumps(
+                {
+                    "weight_map": {
+                        "model.embed_tokens.weight": "model-00001.safetensors",
+                        "model.layers.1.mlp.switch_mlp.up_proj.tq_packed": "model-00002.safetensors",
+                    }
+                }
+            )
+        )
+        (tmp_path / "model-00001.safetensors").write_bytes(b"first shard lacks tq")
+        (tmp_path / "model-00002.safetensors").write_bytes(b"second shard has tq")
+
+        assert _v2_bundle_has_tq_packed(tmp_path, [tmp_path / "model-00001.safetensors"]) is True
+
     def test_load_jang_model_accepts_affine_weight_format(
         self, tmp_path, monkeypatch
     ):
@@ -37,6 +71,38 @@ class TestJangDetection:
         (tmp_path / "config.json").write_text('{"model_type":"deepseek_v4"}')
         (tmp_path / "jang_config.json").write_text(
             '{"version":2,"weight_format":"affine","quantization":{}}'
+        )
+        expected = (object(), object())
+
+        monkeypatch.setattr(jang_loader, "_is_v2_model", lambda path: True)
+        monkeypatch.setattr(
+            jang_loader,
+            "_load_jang_v2",
+            lambda path, jang_cfg, **kwargs: expected,
+        )
+        monkeypatch.setattr(
+            jang_loader,
+            "_ensure_jang_family_runtime_supported",
+            lambda path, config: None,
+        )
+
+        assert jang_loader.load_jang_model(tmp_path, skip_eval=True) is expected
+
+    def test_load_jang_model_accepts_jangtq_format_sidecar(
+        self, tmp_path, monkeypatch
+    ):
+        from vmlx_engine.utils import jang_loader
+
+        (tmp_path / "config.json").write_text('{"model_type":"mimo_v2"}')
+        (tmp_path / "jang_config.json").write_text(
+            json.dumps(
+                {
+                    "format": "jangtq",
+                    "family": "mimo_v2",
+                    "profile": "JANGTQ_2",
+                    "tq_layout": "prestacked_switch_mlp",
+                }
+            )
         )
         expected = (object(), object())
 

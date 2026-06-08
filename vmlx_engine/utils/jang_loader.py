@@ -1271,6 +1271,12 @@ def is_jang_model(model_path: str | Path) -> bool:
     JANG_CODEC_FORMATS = set(JANG_FORMAT_VALUES) | JANG_WEIGHT_FORMAT_VALUES
     if fmt in JANG_CODEC_FORMATS or weight_format in JANG_CODEC_FORMATS:
         return True
+    if (
+        str(fmt or "").lower() == "jangtq"
+        or str(cfg.get("profile") or "").upper().startswith("JANGTQ")
+        or str(cfg.get("tq_layout") or "").lower()
+    ):
+        return True
     # Legacy JANG/JJQF bundles can carry an otherwise-empty config file. Treat
     # presence of the stamp as JANG unless it explicitly declares a stock MLX
     # weight format, which is the capability-only case above documents.
@@ -1671,7 +1677,7 @@ def _load_jang_v2(
     config["quantization"].setdefault("mode", _jang_quant_mode(jang_cfg, config))
 
     # MXTQ / JANGTQ fast path ─────────────────────────────────────────────
-    # Detect tq_packed keys in the first shard. If present, delegate loading
+    # Detect tq_packed keys. If present, delegate loading
     # to jang_tools.load_jangtq.load_jangtq_model() which installs native
     # TurboQuantLinear / TurboQuantSwitchLinear modules and applies all
     # P3/P15/P17/P18 Metal-kernel optimizations (multiblock Hadamard, router
@@ -1679,14 +1685,7 @@ def _load_jang_v2(
     # dequant-and-requant fallback below stays in place for environments
     # where jang_tools is unavailable.
     _tq_weight_files = _get_v2_weight_files(path)
-    _is_mxtq_v2 = False
-    if _tq_weight_files:
-        try:
-            _tq_first_keys = list(mx.load(str(_tq_weight_files[0])).keys())
-            _is_mxtq_v2 = any(k.endswith(".tq_packed") for k in _tq_first_keys)
-            del _tq_first_keys
-        except Exception:
-            _is_mxtq_v2 = False
+    _is_mxtq_v2 = _v2_bundle_has_tq_packed(path, _tq_weight_files)
 
     if _is_mxtq_v2:
         # DeepSeek V4 (model_type="deepseek_v4") — register our MLX model
@@ -3437,6 +3436,36 @@ def _get_v2_weight_files(path: Path) -> list[Path]:
     return files
 
 
+def _v2_bundle_has_tq_packed(path: Path, weight_files: list[Path] | None = None) -> bool:
+    """Return True when any v2 shard/index key contains JANGTQ ``.tq_packed``.
+
+    Some large bundles place routed expert TQ tensors after shard 0. Checking
+    only the first shard makes the LLM text loader miss the native JANGTQ fast
+    path and fall into regular affine loading, where ``*.tq_packed`` /
+    ``*.tq_norms`` / ``*.tq_bits`` are rejected as unknown parameters.
+    """
+    index_path = path / "model.safetensors.index.json"
+    try:
+        if index_path.exists():
+            index = json.loads(index_path.read_text())
+            weight_map = index.get("weight_map") if isinstance(index, dict) else {}
+            if isinstance(weight_map, dict):
+                return any(str(key).endswith(".tq_packed") for key in weight_map)
+    except Exception:
+        pass
+
+    try:
+        from safetensors import safe_open
+
+        for weight_file in weight_files or _get_v2_weight_files(path):
+            with safe_open(str(weight_file), framework="numpy") as tensors:
+                if any(str(key).endswith(".tq_packed") for key in tensors.keys()):
+                    return True
+    except Exception:
+        pass
+    return False
+
+
 def _bind_mimo_v2_preserved_media_weights_from_index(model: Any, path: Path) -> dict[str, int]:
     """Bind preserved MiMo media tensors after the JANGTQ VLM fast loader.
 
@@ -3661,16 +3690,25 @@ def load_jang_model(
     weight_format = jang_cfg.get("weight_format")
     if not fmt and weight_format in JANG_WEIGHT_FORMAT_VALUES:
         fmt = weight_format
+    if not fmt and (
+        str(jang_cfg.get("profile") or "").upper().startswith("JANGTQ")
+        or str(jang_cfg.get("tq_layout") or "").lower()
+    ):
+        fmt = "jangtq"
     if not fmt:
         raise ValueError(
             f"JANG config {config_path.name} is missing 'format' / 'weight_format'. "
             f"Expected one of: {', '.join(JANG_FORMAT_VALUES)} or "
             f"weight_format={','.join(sorted(JANG_WEIGHT_FORMAT_VALUES))}"
         )
-    if fmt not in JANG_FORMAT_VALUES and fmt not in JANG_WEIGHT_FORMAT_VALUES:
+    if (
+        fmt not in JANG_FORMAT_VALUES
+        and fmt not in JANG_WEIGHT_FORMAT_VALUES
+        and str(fmt).lower() != "jangtq"
+    ):
         raise ValueError(
             f"Not a JANG model: format='{fmt}' (expected {', '.join(JANG_FORMAT_VALUES)} "
-            f"or weight_format={','.join(sorted(JANG_WEIGHT_FORMAT_VALUES))})"
+            f"or weight_format={','.join(sorted(JANG_WEIGHT_FORMAT_VALUES))}, jangtq)"
         )
 
     # Legacy: format_version string ("1.0"/"2.0"). JANGTQ: int version 2.
