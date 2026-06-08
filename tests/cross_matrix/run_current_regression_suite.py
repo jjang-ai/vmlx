@@ -23,7 +23,7 @@ from typing import Any
 
 
 DEFAULT_OUT = Path(
-    "build/current-regression-suite-after-mllm-tight-memory-guard-20260607.json"
+    "build/current-regression-suite-after-packaged-integrity-pass-20260607.json"
 )
 DEFAULT_STEP_TIMEOUT_SEC = 900.0
 STEP_TIMEOUT_RETURNCODE = 124
@@ -41,7 +41,7 @@ DEFERRED_RELEASE_OPEN_REQUIREMENTS = {
 }
 
 CURRENT_OBJECTIVE_DIGEST_ARTIFACT = (
-    "build/current-objective-proof-after-mllm-tight-memory-guard-20260607.json"
+    "build/current-objective-proof-after-mimo-manifest-classifier-sync-20260607.json"
 )
 
 CURRENT_SUITE_SOURCE_HASH_FILES = (
@@ -90,6 +90,7 @@ CURRENT_SUITE_SOURCE_HASH_FILES = (
     "tests/cross_matrix/run_generation_defaults_contract.py",
     "tests/cross_matrix/run_gemma4_12b_speed_gate.py",
     "tests/cross_matrix/run_decode_speed_gate.py",
+    "tests/cross_matrix/run_mimo_v2_local_bundle_metadata_contract.py",
     "tests/cross_matrix/run_installed_app_runtime_parity_audit.py",
     "tests/cross_matrix/run_issue175_177_installed_runtime_audit.py",
     "tests/cross_matrix/run_issue175_177_live_runtime_audit.py",
@@ -108,7 +109,9 @@ CURRENT_SUITE_SOURCE_HASH_FILES = (
     "tests/cross_matrix/run_mcp_policy_contract.py",
     "tests/cross_matrix/run_model_artifact_format_contract.py",
     "tests/cross_matrix/run_model_family_detection_contract.py",
+    "tests/cross_matrix/run_mimo_v2_no_source_exactness_classifier.py",
     "tests/cross_matrix/run_native_mtp_contract.py",
+    "tests/cross_matrix/run_full_release_objective_checklist.py",
     "tests/cross_matrix/run_noheavy_api_cache_contract.py",
     "tests/cross_matrix/run_noheavy_panel_settings_contract.py",
     "tests/cross_matrix/run_packaged_integrity_contract.py",
@@ -139,6 +142,10 @@ CURRENT_SUITE_SOURCE_HASH_FILES = (
     "tests/test_dsv4_batch_generator_speed.py",
     "tests/test_dsv4_route_mode_code_exactness.py",
     "tests/test_gemma4_12b_speed_gate.py",
+    "tests/test_agents_release_control_plane.py",
+    "tests/test_mimo_v2_no_source_exactness_classifier.py",
+    "tests/test_mimo_v2_local_bundle_metadata_contract.py",
+    "tests/test_full_release_objective_checklist.py",
     "tests/test_engine_audit.py",
     "tests/test_generation_defaults_contract.py",
     "tests/test_image_api.py",
@@ -423,7 +430,16 @@ def _step_is_ok(name: str, step: dict[str, Any], root: Path) -> bool:
     if name == "tool_call_contracts":
         if step["returncode"] == 0:
             return True
-        path = root / "build/current-tool-call-contract-after-jangtq2-objective-refresh-20260607.json"
+        path = root / "build/current-tool-call-contract-after-current-mimo-proof-20260607.json"
+        try:
+            artifact = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            return False
+        return artifact.get("status") in {"open", "pass"}
+    if name == "full_release_objective_checklist":
+        if step["returncode"] == 0:
+            return True
+        path = root / "build/current-full-release-objective-checklist-after-mimo-manifest-classifier-sync-20260607.json"
         try:
             artifact = json.loads(path.read_text(encoding="utf-8"))
         except Exception:
@@ -486,13 +502,13 @@ CURRENT_SUITE_COMMANDS: dict[str, list[str]] = {
         sys.executable,
         "tests/cross_matrix/run_noheavy_api_cache_contract.py",
         "--out",
-        "build/current-noheavy-api-cache-contract-after-jangtq2-objective-refresh-20260607.json",
+        "build/current-noheavy-api-cache-contract-after-qwen36-bundled-media-pass-20260607.json",
     ],
     "cache_architecture_contracts": [
         sys.executable,
         "tests/cross_matrix/run_cache_architecture_contract.py",
         "--out",
-        "build/current-cache-architecture-contract-after-mllm-tight-memory-guard-20260607.json",
+        "build/current-cache-architecture-contract-after-mimo-capability-snapshot-fix-20260607.json",
     ],
     "noheavy_panel_settings_contract": [
         sys.executable,
@@ -504,19 +520,19 @@ CURRENT_SUITE_COMMANDS: dict[str, list[str]] = {
         sys.executable,
         "tests/cross_matrix/run_max_output_context_contract.py",
         "--out",
-        "build/current-max-output-context-contract-after-jangtq2-objective-refresh-20260607.json",
+        "build/current-max-output-context-contract-after-current-mimo-proof-20260607.json",
     ],
     "parser_registry_contracts": [
         sys.executable,
         "tests/cross_matrix/run_parser_registry_contract.py",
         "--out",
-        "build/current-parser-registry-contract-after-jangtq2-objective-refresh-20260607.json",
+        "build/current-parser-registry-contract-after-mimo-capability-snapshot-fix-20260607.json",
     ],
     "generation_defaults_contracts": [
         sys.executable,
         "tests/cross_matrix/run_generation_defaults_contract.py",
         "--out",
-        "build/current-generation-defaults-contract-after-jangtq2-objective-refresh-20260607.json",
+        "build/current-generation-defaults-contract-after-do-sample-false-mimo-20260607.json",
     ],
     "reasoning_template_contracts": [
         sys.executable,
@@ -540,7 +556,7 @@ CURRENT_SUITE_COMMANDS: dict[str, list[str]] = {
         sys.executable,
         "tests/cross_matrix/run_tool_call_contract.py",
         "--out",
-        "build/current-tool-call-contract-after-jangtq2-objective-refresh-20260607.json",
+        "build/current-tool-call-contract-after-current-mimo-proof-20260607.json",
     ],
     "mcp_policy_contracts": [
         sys.executable,
@@ -584,25 +600,31 @@ CURRENT_SUITE_COMMANDS: dict[str, list[str]] = {
         sys.executable,
         "tests/cross_matrix/run_model_artifact_format_contract.py",
         "--out",
-        "build/current-model-artifact-format-contract-after-mllm-tight-memory-guard-20260607.json",
+        "build/current-model-artifact-format-contract-after-mimo-capability-snapshot-fix-20260607.json",
     ],
     "model_family_detection_contracts": [
         sys.executable,
         "tests/cross_matrix/run_model_family_detection_contract.py",
         "--out",
-        "build/current-model-family-detection-contract-after-jangtq2-objective-refresh-20260607.json",
+        "build/current-model-family-detection-contract-after-mimo-capability-snapshot-fix-20260607.json",
     ],
     "native_mtp_contracts": [
         sys.executable,
         "tests/cross_matrix/run_native_mtp_contract.py",
         "--out",
-        "build/current-native-mtp-contract-after-mllm-tight-memory-guard-20260607.json",
+        "build/current-native-mtp-contract-after-mimo-capability-snapshot-fix-20260607.json",
     ],
     "vl_media_cache_contracts": [
         sys.executable,
         "tests/cross_matrix/run_vl_media_cache_contract.py",
         "--out",
-        "build/current-vl-media-cache-contract-after-mllm-tight-memory-guard-20260607.json",
+        "build/current-vl-media-cache-contract-after-mimo-capability-snapshot-fix-20260607.json",
+    ],
+    "mimo_v2_local_bundle_metadata_contract": [
+        sys.executable,
+        "tests/cross_matrix/run_mimo_v2_local_bundle_metadata_contract.py",
+        "--out",
+        "build/current-mimo-v2-local-bundle-metadata-contract-20260607.json",
     ],
     "step37_crash_falsification_contract": [
         sys.executable,
@@ -614,7 +636,7 @@ CURRENT_SUITE_COMMANDS: dict[str, list[str]] = {
         sys.executable,
         "tests/cross_matrix/run_packaged_integrity_contract.py",
         "--out",
-        "build/current-packaged-integrity-contract-after-bundle-refresh-20260606.json",
+        "build/current-packaged-integrity-contract-after-staged-sequoia-rebuild-current-source-20260607.json",
     ],
     "installed_app_runtime_parity_audit": [
         sys.executable,
@@ -636,7 +658,7 @@ CURRENT_SUITE_COMMANDS: dict[str, list[str]] = {
         sys.executable,
         "tests/cross_matrix/run_issue179_minimax_k_root_cause_audit.py",
         "--out",
-        "build/current-issue179-minimax-k-root-cause-audit-after-current-source-cancel-refresh-20260607.json",
+        "build/current-issue179-minimax-k-root-cause-audit-after-local-repro-memory-preflight-20260607.json",
     ],
     "issue179_cancel_probe_memory_preflight": [
         sys.executable,
@@ -649,7 +671,7 @@ CURRENT_SUITE_COMMANDS: dict[str, list[str]] = {
         sys.executable,
         "tests/cross_matrix/run_issue175_179_release_boundary_audit.py",
         "--out",
-        "build/current-issue175-179-release-boundary-audit-after-public-v1556-scan-20260606.json",
+        "build/current-issue175-179-release-boundary-audit-after-issue179-memory-preflight-20260607.json",
     ],
     "issue181_183_runtime_audit": [
         sys.executable,
@@ -661,7 +683,7 @@ CURRENT_SUITE_COMMANDS: dict[str, list[str]] = {
         sys.executable,
         "tests/cross_matrix/run_public_app_issue_audit.py",
         "--out",
-        "build/current-public-app-issue-audit-after-public-v1556-scan-20260606.json",
+        "build/current-public-app-issue-audit-after-issue179-memory-preflight-20260607.json",
     ],
     "focused_regression_pytest": [
         sys.executable,
@@ -669,6 +691,9 @@ CURRENT_SUITE_COMMANDS: dict[str, list[str]] = {
         "pytest",
         "-q",
         "tests/test_objective_proof_digest.py",
+        "tests/test_agents_release_control_plane.py",
+        "tests/test_mimo_v2_no_source_exactness_classifier.py",
+        "tests/test_full_release_objective_checklist.py",
         "tests/test_dsv4_default_cache_tool_loop_gate.py",
         "tests/test_release_gate_python_app.py",
         "tests/test_current_regression_suite.py",
@@ -693,7 +718,7 @@ CURRENT_SUITE_COMMANDS: dict[str, list[str]] = {
         "tests/test_gemma4_12b_speed_gate.py",
         "tests/test_step37_crash_falsification_contract.py",
         "-k",
-        "objective_proof_digest or default_cache_tool_loop or current_regression_suite or release_regression_manifest or remote_max2_dsv4 or issue179_reporter_parity_metadata or reporter_server_hash_parity or issue179_memory_preflight or issue181_183_runtime_audit or public_app_issue_audit or model_family_detection or mcp_policy_contract or decode_speed_gate or gemma4_speed_gate or vl_media_cache_contract or step37_crash_falsification or dsv4_cache_hit_repetition_processor or generated_only_logits_processor or dsv4_repetition_penalty_uses_generated_only_prompt_context or dsv4_warmup or dsv4_code_exactness_probe",
+        "objective_proof_digest or full_release_objective_checklist or default_cache_tool_loop or current_regression_suite or release_regression_manifest or remote_max2_dsv4 or issue179_reporter_parity_metadata or reporter_server_hash_parity or issue179_memory_preflight or issue181_183_runtime_audit or public_app_issue_audit or model_family_detection or mcp_policy_contract or decode_speed_gate or gemma4_speed_gate or vl_media_cache_contract or step37_crash_falsification or dsv4_cache_hit_repetition_processor or generated_only_logits_processor or dsv4_repetition_penalty_uses_generated_only_prompt_context or dsv4_warmup or dsv4_code_exactness_probe",
     ],
     "objective_digest": [
         sys.executable,
@@ -707,7 +732,13 @@ CURRENT_SUITE_COMMANDS: dict[str, list[str]] = {
         "--require-current-proof-sweep",
         "--require-release-ready",
         "--out",
-        "build/current-release-regression-manifest-after-mllm-tight-memory-guard-20260607.json",
+        "build/current-release-regression-manifest-after-mimo-no-source-classifier-20260607.json",
+    ],
+    "full_release_objective_checklist": [
+        sys.executable,
+        "tests/cross_matrix/run_full_release_objective_checklist.py",
+        "--out",
+        "build/current-full-release-objective-checklist-after-mimo-manifest-classifier-sync-20260607.json",
     ],
 }
 
