@@ -85,7 +85,7 @@ CB_NATIVE_THINKING_OFF_ARTIFACT = Path(
     "build/current-mimo-v2-jang2l-cb-cache-after-native-thinking-off-live-20260606.json"
 )
 CB_METAL_BASELINE_ARTIFACT = Path(
-    "build/current-mimo-v2-jang2l-cb-cache-after-metal-baseline-live-20260608.json"
+    "build/current-mimo-v2-jangtq2-cb-cache-after-bookend-audit-20260608.json"
 )
 MLLM_INPUTS_EMBEDS_INTERFACE_ARTIFACT = Path(
     "build/current-mimo-v2-mllm-inputs-embeds-interface-fix-20260606.json"
