@@ -4119,6 +4119,135 @@ class TestMediaDiagnostics:
         assert summary["data_url"] == 1
         assert "SECRET_RESPONSE_IMAGE" not in json.dumps(summary)
 
+    def test_responses_multimodal_history_drops_none_optional_part_fields(self):
+        from vmlx_engine.api.models import ContentPart, Message
+        from vmlx_engine.server import _responses_input_to_messages
+
+        response_input = [
+            {
+                "type": "function_call",
+                "call_id": "call_tool",
+                "name": "run_command",
+                "arguments": '{"command":"printf ok"}',
+            },
+            {
+                "type": "function_call_output",
+                "call_id": "call_tool",
+                "output": "ok",
+            },
+            Message(
+                role="user",
+                content=[
+                    ContentPart(type="text", text="what color?"),
+                    ContentPart(
+                        type="image_url",
+                        image_url={
+                            "url": "data:image/png;base64,SECRET_RESPONSE_IMAGE",
+                            "detail": None,
+                        },
+                    ),
+                ],
+            ),
+        ]
+
+        messages = _responses_input_to_messages(
+            response_input,
+            preserve_multimodal=True,
+        )
+
+        user_content = messages[-1]["content"]
+        assert user_content == [
+            {"type": "text", "text": "what color?"},
+            {
+                "type": "image_url",
+                "image_url": {
+                    "url": "data:image/png;base64,SECRET_RESPONSE_IMAGE",
+                },
+            },
+        ]
+        assert "None" not in json.dumps(user_content)
+        assert "image_url" not in user_content[0]
+
+    def test_responses_multimodal_history_coerces_orphan_tool_results(self):
+        from vmlx_engine.server import _coerce_orphan_tool_messages_for_template
+
+        messages = [
+            {"role": "assistant", "content": "prior answer without native tool_calls"},
+            {
+                "role": "tool",
+                "tool_call_id": "call_missing",
+                "content": "REAL_TOOL_OUTPUT",
+            },
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "what color?"},
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": "data:image/png;base64,SECRET_RESPONSE_IMAGE",
+                        },
+                    },
+                ],
+            },
+        ]
+
+        coerced = _coerce_orphan_tool_messages_for_template(messages)
+
+        assert coerced[1] == {
+            "role": "user",
+            "content": "Tool result (call_missing):\nREAL_TOOL_OUTPUT",
+        }
+        assert coerced[2]["content"][1]["type"] == "image_url"
+
+    def test_responses_multimodal_history_keeps_matched_native_tool_results(self):
+        from vmlx_engine.server import _coerce_orphan_tool_messages_for_template
+
+        messages = [
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": "call_ok",
+                        "type": "function",
+                        "function": {"name": "run_command", "arguments": {}},
+                    }
+                ],
+            },
+            {"role": "tool", "tool_call_id": "call_ok", "content": "ok"},
+        ]
+
+        assert _coerce_orphan_tool_messages_for_template(messages) == messages
+
+    def test_responses_multimodal_history_coerces_non_adjacent_tool_results(self):
+        from vmlx_engine.server import _coerce_orphan_tool_messages_for_template
+
+        messages = [
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": "call_earlier",
+                        "type": "function",
+                        "function": {"name": "run_command", "arguments": {}},
+                    }
+                ],
+            },
+            {"role": "tool", "tool_call_id": "call_earlier", "content": "ok"},
+            {"role": "assistant", "content": "done"},
+            {"role": "tool", "tool_call_id": "call_earlier", "content": "late"},
+        ]
+
+        coerced = _coerce_orphan_tool_messages_for_template(messages)
+
+        assert coerced[1]["role"] == "tool"
+        assert coerced[3] == {
+            "role": "user",
+            "content": "Tool result (call_earlier):\nlate",
+        }
+
     def test_chat_multimodal_summary_handles_input_image_shape(self):
         from vmlx_engine.server import _messages_multimodal_summary
 
@@ -5332,6 +5461,14 @@ class TestV4bToolChoiceRequired:
         assert "tool_calls_required" in source or "HTTPException" in source, (
             "Chat Completions must raise error when required tool calls missing"
         )
+        assert "raw_preview" in source, (
+            "Chat Completions required-tool 400 must preserve raw_preview so "
+            "parser/model failures are classifiable from smoke artifacts"
+        )
+        assert '_ct_kwargs.setdefault("tool_choice", _tool_choice)' in source, (
+            "Chat Completions must forward tool_choice to chat-template kwargs "
+            "so fallback prompt injection sees the same contract the API enforces"
+        )
 
     def test_responses_nonstreaming(self):
         import inspect
@@ -5339,6 +5476,14 @@ class TestV4bToolChoiceRequired:
         source = inspect.getsource(create_response)
         assert "required" in source, (
             "Responses API must check tool_choice='required'"
+        )
+        assert '_ct_kwargs.setdefault("tool_choice", _tool_choice)' in source, (
+            "Responses API must forward tool_choice to chat-template kwargs "
+            "so fallback prompt injection sees the same contract the API enforces"
+        )
+        assert "raw_preview" in source, (
+            "Responses required-tool 400 must preserve raw_preview so "
+            "parser/model failures are classifiable from smoke artifacts"
         )
 
     def test_chat_completions_streaming(self):
@@ -7802,8 +7947,8 @@ class TestStartupCompatibilityGuards:
         assert "pct = (active / max_ws) * 100.0" in block
         assert "if pct < threshold_pct:\n                    return" in block
 
-    def test_xml_function_tool_fallback_requires_concrete_function_examples(self):
-        """MiMo/xml_function prompts need concrete <function=name> examples."""
+    def test_xml_function_tool_fallback_accepts_native_mimo_schema(self):
+        """MiMo/xml_function prompts should not duplicate a native tool schema."""
         source = Path("./vmlx_engine/api/tool_calling.py").read_text()
         server_source = Path("./vmlx_engine/server.py").read_text()
         start = source.index("_xml_function_has_native_tool_schema = (")
@@ -7811,11 +7956,16 @@ class TestStartupCompatibilityGuards:
         block = source[start:end]
 
         assert 'all(f"<name>{name}</name>" in instruction_prompt for name in tool_names)' in block
-        assert 'all(f"<function={name}>" in instruction_prompt for name in tool_names)' in block
+        assert 'all(f"<function={name}>" in instruction_prompt for name in tool_names)' not in block
         assert '"<function=example_function_name>" not in source'
-        assert 'if is_xml_function_native_tool_prompt:\n        for msg in messages_copy:' in source
+        assert "def _splice_tool_prompt_into_rendered_chatml(" in source
+        assert (
+            "if is_xml_function_native_tool_prompt:\n"
+            "            return _splice_tool_prompt_into_rendered_chatml(prompt, tool_prompt)"
+            in source
+        )
         assert ") and not is_xml_function_native_tool_prompt:" in source
-        assert "raw_preview={tool_required_preview!r}" in server_source
+        assert server_source.count("raw_preview={tool_required_preview!r}") >= 2
         assert "def _drop_tool_visible_channel_marker(" in server_source
         assert 'text.strip().lower() in {"thought", "analysis"}' in server_source
 
@@ -11314,6 +11464,8 @@ class TestTurboQuantKVTelemetry:
             "_tool_grounding",
             "tool_grounded",
             "tool_evidence_markers",
+            "http_status",
+            "http_error",
         ):
             assert marker in gate_source
 
@@ -11466,6 +11618,7 @@ class TestTurboQuantKVTelemetry:
         assert out["type"] == "function_call_output"
         assert out["call_id"] == "call_bad_path"
         assert "not a readable file" in out["output"]
+        assert re.search(r"(?m)^[^:\n]+\.(py|ts|tsx|md):1:", out["output"])
 
     def test_responses_long_context_tool_cache_gate_inspect_symbol_searches_directories(self):
         import runpy

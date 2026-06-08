@@ -67,6 +67,14 @@ def check_and_inject_fallback_tools(
     """
     if not template_tools or prompt is None:
         return prompt
+    tool_choice = template_kwargs.get("tool_choice") if isinstance(template_kwargs, dict) else None
+    tool_choice_required = tool_choice == "required" or (
+        isinstance(tool_choice, dict)
+        and (
+            tool_choice.get("type") in {"required", "function"}
+            or bool(tool_choice.get("function") or tool_choice.get("name"))
+        )
+    )
 
     def _tool_func(tool: dict) -> dict:
         if not isinstance(tool, dict):
@@ -138,6 +146,8 @@ def check_and_inject_fallback_tools(
             )
         )
 
+    explicit_tool_requested = any(_request_mentions_tool_name(name) for name in tool_names)
+
     # Some templates need more than tool-name visibility. DSV4 may mention
     # schemas without a parser-matching DSML exemplar. Qwen3.5/3.6 MoE's
     # shipped template includes only an `example_function_name` exemplar; live
@@ -169,6 +179,7 @@ def check_and_inject_fallback_tools(
     ):
         return prompt
     is_lfm2_native_tool_prompt = parser_id in {"lfm2", "liquid"}
+    is_minimax_native_tool_prompt = parser_id in {"minimax", "minimax_m2"}
     is_xml_function_native_tool_prompt = parser_id in {
         "xml_function",
         "mimo_xml_function",
@@ -209,13 +220,17 @@ def check_and_inject_fallback_tools(
         and "<|tool_call_end|>" in instruction_prompt
         and all(f"{name}(" in instruction_prompt for name in tool_names)
     )
+    _minimax_has_concrete_tool_examples = (
+        is_minimax_native_tool_prompt
+        and "<minimax:tool_call>" in instruction_prompt
+        and all(f'<invoke name="{name}">' in instruction_prompt for name in tool_names)
+    )
     _xml_function_has_native_tool_schema = (
         is_xml_function_native_tool_prompt
         and "<tool_call>" in instruction_prompt
         and "<function=example_function_name>" in instruction_prompt
         and "<tools>" in instruction_prompt
         and all(f"<name>{name}</name>" in instruction_prompt for name in tool_names)
-        and all(f"<function={name}>" in instruction_prompt for name in tool_names)
     )
     _step3p5_has_concrete_tool_examples = (
         is_step3p5_native_tool_prompt
@@ -226,6 +241,7 @@ def check_and_inject_fallback_tools(
         and (not is_qwen_native_tool_prompt or _qwen_has_concrete_tool_examples)
         and (not is_zaya_native_tool_prompt or _zaya_has_concrete_tool_examples)
         and (not is_lfm2_native_tool_prompt or _lfm2_has_concrete_tool_examples)
+        and (not is_minimax_native_tool_prompt or _minimax_has_concrete_tool_examples)
         and (not is_xml_function_native_tool_prompt or _xml_function_has_native_tool_schema)
         and (not is_step3p5_native_tool_prompt or _step3p5_has_concrete_tool_examples)
     ):
@@ -413,6 +429,8 @@ def check_and_inject_fallback_tools(
             name = re.escape(param)
             patterns = (
                 rf"\b{name}\s+parameter(?:\s+content)?\s+must\s+be\s+[`'\"]?([A-Za-z0-9][A-Za-z0-9_.:-]{{0,79}})",
+                rf"\b{name}\s+argument\s+must\s+be\s+(?:the\s+)?literal\s+string\s+[`'\"]?([A-Za-z0-9][A-Za-z0-9_.:-]{{0,79}})",
+                rf"\b{name}\s+argument\s*(?:=|:|to|is)\s*[`'\"]?([A-Za-z0-9][A-Za-z0-9_.:-]{{0,79}})",
                 rf"\b{name}\s+[`'\"]?([A-Za-z0-9][A-Za-z0-9_.:-]{{0,119}})",
                 rf"\b{name}\s*(?:=|:|to|is)\s*[`'\"]?([A-Za-z0-9][A-Za-z0-9_.:-]{{0,79}})",
                 rf"\bwith\s+{name}\s+[`'\"]?([A-Za-z0-9][A-Za-z0-9_.:-]{{0,79}})",
@@ -518,6 +536,32 @@ def check_and_inject_fallback_tools(
             ]
         )
         return "\n".join(lines)
+
+    def _render_minimax_examples(tools: list[dict]) -> str:
+        xml_examples = _render_xml_examples(
+            tools,
+            "<tool_call>",
+            "</tool_call>",
+        )
+        blocks: list[str] = []
+        for block in re.findall(
+            r"<tool_call>\s*<function=([^>]+)>(.*?)</function>\s*</tool_call>",
+            xml_examples,
+            flags=re.DOTALL,
+        ):
+            name, params_block = block
+            lines = ["<minimax:tool_call>", f'<invoke name="{name.strip()}">']
+            for param, value in re.findall(
+                r"<parameter=([^>]+)>\s*(.*?)\s*</parameter>",
+                params_block,
+                flags=re.DOTALL,
+            ):
+                lines.append(
+                    f'<parameter name="{param.strip()}">{value.strip()}</parameter>'
+                )
+            lines.extend(["</invoke>", "</minimax:tool_call>"])
+            blocks.append("\n".join(lines))
+        return "\n\n".join(blocks)
 
     def _render_lfm2_examples(tools: list[dict]) -> str:
         def _derive_run_command_value() -> str:
@@ -691,6 +735,26 @@ def check_and_inject_fallback_tools(
             "you must call it instead of fabricating a result.",
             "",
         ]
+        if explicit_tool_requested and not tool_choice_required:
+            qwen_lines.extend(
+                [
+                    "The current user explicitly named an available tool.",
+                    "Your next assistant output must be exactly one native tool call before any prose.",
+                    "Do not answer as if the tool already ran. Do not emit an empty function call.",
+                    "Every required parameter listed below must be present and non-empty.",
+                    "",
+                ]
+            )
+        if tool_choice_required:
+            qwen_lines.extend(
+                [
+                    "The current API request set tool_choice=required. You must emit exactly one native tool call before any prose.",
+                    "Do not answer from prior context, do not summarize first, and do not invent a tool result.",
+                    "Historical tool results in the conversation do not satisfy this current-turn requirement.",
+                    "Only after this new tool call is executed in a later continuation may you produce the visible answer.",
+                    "",
+                ]
+            )
         for idx, tool in enumerate(template_tools):
             func = _tool_func(tool)
             name = func.get("name", "") or "unknown_tool"
@@ -717,11 +781,36 @@ def check_and_inject_fallback_tools(
                     )
                     suffix = f": {p_desc}" if p_desc else ""
                     qwen_lines.append(f"    - {p_name} ({p_type}, {req}){suffix}")
+                if name.strip().lower() == "run_command" and "command" in props:
+                    command_block = _render_xml_examples(
+                        [tool],
+                        "<tool_call>",
+                        "</tool_call>",
+                    )
+                    match = re.search(
+                        r"<parameter=command>\s*([\s\S]*?)\s*</parameter>",
+                        command_block,
+                    )
+                    if match:
+                        exact_command = match.group(1).strip()
+                        qwen_lines.append(
+                            f"For this request, run_command.command must be exactly: {exact_command}"
+                        )
+                        for token in re.findall(r"\b[A-Z][A-Z0-9_]{6,}\b", request_text):
+                            qwen_lines.append(
+                                f"Do not use {token} itself as a shell command; "
+                                "it is file content or answer text."
+                            )
             qwen_lines.append("")
         tool_prompt = (
             "\n".join(qwen_lines).rstrip()
             + "\n\nWhen a tool call is needed, emit ONLY this native XML shape. "
             "Do not emit JSON result data, markdown, prose, or a fake directory listing.\n"
+            + (
+                "Because tool_choice=required, the first assistant output for this turn must be one of the native tool calls below and nothing else.\n"
+                if tool_choice_required
+                else ""
+            )
             + _render_xml_examples(template_tools, "<tool_call>", "</tool_call>")
             + (
                 "\n\nFor a request to list the current directory, set path to \".\" exactly."
@@ -830,6 +919,39 @@ def check_and_inject_fallback_tools(
             "not a tool call.\n"
             + _render_lfm2_examples(lfm2_prompt_tools)
         )
+    elif is_minimax_native_tool_prompt:
+        minimax_prompt_tools = _requested_tools(template_tools)
+        minimax_lines = [
+            "You have access to MiniMax native tools. When the user asks for one, "
+            "call it instead of explaining what you would do.",
+            "",
+        ]
+        if tool_choice_required:
+            minimax_lines.extend(
+                [
+                    "The current API request set tool_choice=required.",
+                    "Your next assistant output must be exactly one MiniMax tool call and no visible text.",
+                    "Do not emit only a partial tag; include every required parameter and close the invoke/tool_call tags.",
+                    "",
+                ]
+            )
+        for tool in minimax_prompt_tools:
+            func = _tool_func(tool)
+            name = func.get("name", "") or "unknown_tool"
+            params = func.get("parameters", {}) or {}
+            props = params.get("properties", {}) if isinstance(params, dict) else {}
+            if props:
+                minimax_lines.append(f"{name} fields: {', '.join(str(p) for p in props)}")
+            else:
+                minimax_lines.append(f"{name} fields: none")
+        tool_prompt = (
+            "\n".join(minimax_lines).rstrip()
+            + "\n\nWhen a tool call is needed, emit ONLY this exact native MiniMax XML shape. "
+            "Do not emit JSON, markdown, prose, generic <tool_call> tags, or a fake result.\n"
+            "Fill fields from the user's request exactly. "
+            "If the user says the value argument must be the literal string blue-cat, put only blue-cat in value.\n"
+            + _render_minimax_examples(minimax_prompt_tools)
+        )
     else:
         tool_prompt = (
             "You are an expert assistant with access to tools.\n\n"
@@ -862,6 +984,14 @@ def check_and_inject_fallback_tools(
                     if name
                 )
             )
+        if is_minimax_native_tool_prompt:
+            return (
+                "<minimax:tool_call>" in rendered
+                and all(
+                    f'<invoke name="{name}">' in rendered
+                    for name in tool_names
+                )
+            )
         if not all(name in rendered for name in tool_names):
             return False
         if is_dsv4_prompt:
@@ -872,7 +1002,10 @@ def check_and_inject_fallback_tools(
             return (
                 "<tool_call>" in rendered
                 and all(name in rendered for name in tool_names)
-                and all(f"<function={name}>" in rendered for name in tool_names)
+                and (
+                    all(f"<name>{name}</name>" in rendered for name in tool_names)
+                    or all(f"<function={name}>" in rendered for name in tool_names)
+                )
             )
         if is_step3p5_native_tool_prompt:
             return all(f"<function={name}>" in rendered for name in tool_names)
@@ -949,6 +1082,19 @@ def check_and_inject_fallback_tools(
 
     if not injected:
         messages_copy.insert(0, {"role": "system", "content": tool_prompt})
+
+    if is_qwen_native_tool_prompt and tool_choice_required:
+        qwen_required_reminder = (
+            "Current turn API contract: tool_choice=required. "
+            "Your next assistant output must be exactly one native <tool_call> "
+            f"for one of: {', '.join(tool_names)}. "
+            "Historical tool results do not satisfy this current-turn requirement. "
+            "Do not answer in prose before the tool call."
+        )
+        for msg in reversed(messages_copy):
+            if msg.get("role") == "user":
+                _append_tool_prompt_to_message(msg, qwen_required_reminder)
+                break
 
     # Re-apply template with modified messages
     # Remove tools from kwargs so generic templates don't try to format them again.
