@@ -958,6 +958,21 @@ def build_audit(
             and "num_ctx" in panel_main
             and "thinking_budget" in panel_main
         ),
+        "installed_panel_parser_reasoning_settings_wired": (
+            panel_result["returncode"] == 0
+            and renderer_result["returncode"] == 0
+            and "Tool Call Parser" in panel_renderer
+            and "Reasoning Parser" in panel_renderer
+            and "--tool-call-parser" in panel_renderer
+            and "--reasoning-parser" in panel_renderer
+            and "xml_function" in panel_renderer
+            and "think_xml" in panel_renderer
+            and "MiMo V2.5" in panel_renderer
+            and "--tool-call-parser" in panel_main
+            and "--reasoning-parser" in panel_main
+            and "enable-auto-tool-choice" in panel_main
+            and "unsupported reasoning parser" in panel_main
+        ),
         "installed_panel_ollama_streaming_json_writes_guarded": (
             panel_result["returncode"] == 0
             and installed_ollama_json_writes > 0
@@ -1065,6 +1080,12 @@ def build_audit(
             "has_ollama_num_predict": "num_predict" in panel_main,
             "has_ollama_num_ctx": "num_ctx" in panel_main,
             "has_thinking_budget": "thinking_budget" in panel_main,
+            "has_tool_call_parser_cli": "--tool-call-parser" in panel_main,
+            "has_reasoning_parser_cli": "--reasoning-parser" in panel_main,
+            "has_auto_tool_choice_cli": "enable-auto-tool-choice" in panel_main,
+            "has_unsupported_reasoning_parser_guard": (
+                "unsupported reasoning parser" in panel_main
+            ),
             "has_responses_stream_cache_detail_metrics": (
                 "cachedTokens" in panel_main
                 and "cacheDetail" in panel_main
@@ -1102,6 +1123,12 @@ def build_audit(
             "has_chat_output_override_note": "max_tokens/max_output_tokens"
             in panel_renderer,
             "has_chat_thinking_budget_note": "max_thinking_tokens" in panel_renderer,
+            "has_tool_call_parser_label": "Tool Call Parser" in panel_renderer,
+            "has_reasoning_parser_label": "Reasoning Parser" in panel_renderer,
+            "has_tool_call_parser_cli": "--tool-call-parser" in panel_renderer,
+            "has_reasoning_parser_cli": "--reasoning-parser" in panel_renderer,
+            "has_mimo_tool_parser_option": "xml_function" in panel_renderer,
+            "has_mimo_reasoning_parser_option": "think_xml" in panel_renderer,
         },
         "vmlx_user_data_disconnect_errors": user_data_disconnect_errors,
         "vmlx_diagnostic_disconnect_errors": diagnostic_disconnect_errors,
@@ -1117,7 +1144,8 @@ def build_audit(
             "coverage for #178 LoRA flags, MiMo xml_function launch, or "
             "Electron gateway EPIPE/AggregateError disconnect handling, or ALGateway "
             "single-model cache endpoint/routing behavior, or model-owned "
-            "generation/max-token settings behavior."
+            "generation/max-token settings behavior, or parser/reasoning settings "
+            "and launch-preview parity."
         ),
     }
 

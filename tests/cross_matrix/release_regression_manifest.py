@@ -5633,6 +5633,7 @@ def _validate_app_runtime_parity_audit(
         "installed_panel_max_output_context_settings_wired",
         "installed_panel_model_owned_generation_defaults_wired",
         "installed_panel_request_builders_keep_output_context_separate",
+        "installed_panel_parser_reasoning_settings_wired",
         "installed_panel_ollama_streaming_json_writes_guarded",
         "installed_panel_ollama_proxy_response_errors_guarded",
         "installed_vmlx_user_data_no_raw_disconnect_errors",

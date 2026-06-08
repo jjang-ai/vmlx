@@ -2761,6 +2761,7 @@ def _write_expected_installed_app_runtime_parity_audit(root: Path) -> None:
                     "installed_panel_max_output_context_settings_wired": True,
                     "installed_panel_model_owned_generation_defaults_wired": True,
                     "installed_panel_request_builders_keep_output_context_separate": True,
+                    "installed_panel_parser_reasoning_settings_wired": True,
                     "installed_panel_ollama_streaming_json_writes_guarded": True,
                     "installed_panel_ollama_proxy_response_errors_guarded": True,
                     "installed_vmlx_user_data_no_raw_disconnect_errors": True,
@@ -2818,6 +2819,7 @@ def _write_expected_staged_app_runtime_parity_audit(root: Path) -> None:
                     "installed_panel_max_output_context_settings_wired": True,
                     "installed_panel_model_owned_generation_defaults_wired": True,
                     "installed_panel_request_builders_keep_output_context_separate": True,
+                    "installed_panel_parser_reasoning_settings_wired": True,
                     "installed_panel_ollama_streaming_json_writes_guarded": True,
                     "installed_panel_ollama_proxy_response_errors_guarded": True,
                     "installed_vmlx_user_data_no_raw_disconnect_errors": True,
@@ -2874,6 +2876,25 @@ def test_current_proof_sweep_rejects_installed_app_missing_generation_settings_p
 
     assert (
         "missing_check:installed_panel_model_owned_generation_defaults_wired"
+        in result["failures"]
+    )
+
+
+def test_current_proof_sweep_rejects_installed_app_missing_parser_settings_parity(
+    tmp_path,
+):
+    _write_expected_installed_app_runtime_parity_audit(tmp_path)
+    path = tmp_path / CURRENT_INSTALLED_APP_RUNTIME_PARITY_AUDIT_ARTIFACT
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["checks"].pop("installed_panel_parser_reasoning_settings_wired")
+    path.write_text(json.dumps(payload) + "\n", encoding="utf-8")
+
+    result = validate_current_proof_sweep_artifacts(tmp_path)[
+        "installed_app_runtime_parity_audit"
+    ]
+
+    assert (
+        "missing_check:installed_panel_parser_reasoning_settings_wired"
         in result["failures"]
     )
 
