@@ -1256,6 +1256,30 @@ def _word_set(text: str) -> set[str]:
     return set(re.findall(r"[a-z0-9]+", text.lower()))
 
 
+def _loads_json_or_single_markdown_fence(text: str) -> tuple[Any | None, str | None]:
+    """Parse JSON, accepting one ordinary markdown fence wrapper.
+
+    This is syntax cleanup only. It does not repair semantic values, field
+    names, field types, counts, or malformed JSON beyond stripping a single
+    ```/``` wrapper around an otherwise valid object.
+    """
+    stripped = str(text or "").strip()
+    candidates = [stripped]
+    if stripped.startswith("```"):
+        lines = stripped.splitlines()
+        if len(lines) >= 3 and lines[-1].strip() == "```":
+            first = lines[0].strip().lower()
+            if first in {"```", "```json", "```javascript", "```js"}:
+                candidates.append("\n".join(lines[1:-1]).strip())
+    last_error: str | None = None
+    for candidate in candidates:
+        try:
+            return json.loads(candidate), None
+        except Exception as exc:
+            last_error = f"{type(exc).__name__}: {exc}"
+    return None, last_error
+
+
 def validate_probe_response(
     label: str,
     code: int,
@@ -1386,15 +1410,13 @@ def validate_probe_response(
             "value": "B7-CAT-09" if label == "mimo_structured_json_sentinel" else "blue-cat",
             "count": 3,
         }
-        try:
-            parsed_json = json.loads(stripped)
-        except Exception as exc:
-            parsed_json = None
+        parsed_json, parse_error = _loads_json_or_single_markdown_fence(stripped)
+        if parse_error is not None:
             failures.append(
                 {
                     "label": label,
                     "reason": "json_parse_failed",
-                    "error": f"{type(exc).__name__}: {exc}",
+                    "error": parse_error,
                     "content_head": stripped[:160],
                 }
             )

@@ -1560,6 +1560,99 @@ def test_mimo_audio_waveform_missing_payload_is_classified_as_bridge_gap():
     )
 
 
+def test_mimo_audit_accepts_fenced_json_without_semantic_repair():
+    from tests.cross_matrix import run_mimo_v2_jang2l_current_audit as audit
+
+    smoke = {
+        "status": "fail",
+        "results": [
+            {
+                "status": "probe_failed",
+                "requests": [
+                    {
+                        "label": "mimo_structured_json_sentinel",
+                        "code": 200,
+                        "content": (
+                            '```json\n'
+                            '{"status":"ok","value":"B7-CAT-09","count":3}\n'
+                            '```'
+                        ),
+                        "validation_failures": [
+                            {
+                                "label": "mimo_structured_json_sentinel",
+                                "reason": "json_parse_failed",
+                            }
+                        ],
+                    },
+                    {
+                        "label": "structured_json_exact",
+                        "code": 200,
+                        "content": (
+                            '```json\n'
+                            '{"status":"ok","value":"bluecat","count":3}\n'
+                            '```'
+                        ),
+                        "validation_failures": [
+                            {
+                                "label": "structured_json_exact",
+                                "reason": "json_exact_object_mismatch",
+                                "expected": {
+                                    "status": "ok",
+                                    "value": "blue-cat",
+                                    "count": 3,
+                                },
+                                "actual": {
+                                    "status": "ok",
+                                    "value": "bluecat",
+                                    "count": 3,
+                                },
+                            }
+                        ],
+                    },
+                ],
+                "failures": [
+                    {
+                        "label": "mimo_structured_json_sentinel",
+                        "reason": "json_parse_failed",
+                    },
+                    {
+                        "label": "structured_json_exact",
+                        "reason": "json_exact_object_mismatch",
+                        "expected": {
+                            "status": "ok",
+                            "value": "blue-cat",
+                            "count": 3,
+                        },
+                        "actual": {
+                            "status": "ok",
+                            "value": "bluecat",
+                            "count": 3,
+                        },
+                    },
+                ],
+            }
+        ],
+    }
+
+    evidence = audit._all_local_smoke_evidence(smoke)
+    boundary = evidence["artifact_exactness_boundary"]
+
+    assert boundary["classification"] == (
+        "model_generated_literal_mutation_after_valid_parser_structure"
+    )
+    assert boundary["parser_structure_valid_for_failed_rows"] is True
+    assert boundary["examples"][0]["actual"] == {
+        "status": "ok",
+        "value": "B7-CAT-09",
+        "count": 3,
+    }
+    assert boundary["examples"][1]["actual"] == {
+        "status": "ok",
+        "value": "bluecat",
+        "count": 3,
+    }
+
+
 def test_mimo_current_smoke_tool_protocol_beats_legacy_synced_tool_failure():
     source = Path("tests/cross_matrix/run_mimo_v2_jang2l_current_audit.py").read_text()
     assert source.count('if not smoke_evidence.get("exists"):') >= 2

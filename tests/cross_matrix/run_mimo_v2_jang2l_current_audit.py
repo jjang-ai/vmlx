@@ -345,6 +345,25 @@ def _tool_protocol_blocked(data: dict[str, Any]) -> bool:
     )
 
 
+def _loads_json_or_single_markdown_fence(text: str) -> tuple[Any | None, str | None]:
+    """Parse JSON, accepting one ordinary markdown fence wrapper only."""
+    stripped = str(text or "").strip()
+    candidates = [stripped]
+    if stripped.startswith("```"):
+        lines = stripped.splitlines()
+        if len(lines) >= 3 and lines[-1].strip() == "```":
+            first = lines[0].strip().lower()
+            if first in {"```", "```json", "```javascript", "```js"}:
+                candidates.append("\n".join(lines[1:-1]).strip())
+    last_error: str | None = None
+    for candidate in candidates:
+        try:
+            return json.loads(candidate), None
+        except Exception as exc:
+            last_error = f"{type(exc).__name__}: {exc}"
+    return None, last_error
+
+
 def _all_local_smoke_evidence(data: dict[str, Any]) -> dict[str, Any]:
     results = data.get("results")
     result = results[0] if isinstance(results, list) and results else data
@@ -851,9 +870,10 @@ def _artifact_exactness_boundary(
         elif label in {"structured_json_exact", "mimo_structured_json_sentinel"}:
             structure_kind = "visible_json_object"
             if not row_empty_visible:
-                try:
-                    parsed = json.loads(content) if isinstance(content, str) else {}
-                except Exception:
+                parsed, _ = _loads_json_or_single_markdown_fence(
+                    content if isinstance(content, str) else ""
+                )
+                if not isinstance(parsed, dict):
                     parsed = {}
                 if isinstance(parsed, dict):
                     structure_valid = True

@@ -1598,6 +1598,37 @@ def test_main_writes_top_level_pass_status_when_all_model_probes_pass(
     assert summary["row_count"] == 1
 
 
+def test_structured_json_validation_accepts_single_markdown_fence():
+    mod = load_module()
+
+    failures = mod.validate_probe_response(
+        "mimo_structured_json_sentinel",
+        200,
+        '```json\n{"status":"ok","value":"B7-CAT-09","count":3}\n```',
+    )
+
+    assert failures == []
+
+
+def test_structured_json_validation_does_not_repair_semantic_values():
+    mod = load_module()
+
+    failures = mod.validate_probe_response(
+        "structured_json_exact",
+        200,
+        '```json\n{"status":"ok","value":"bluecat","count":3}\n```',
+    )
+
+    assert failures == [
+        {
+            "label": "structured_json_exact",
+            "reason": "json_exact_object_mismatch",
+            "expected": {"status": "ok", "value": "blue-cat", "count": 3},
+            "actual": {"status": "ok", "value": "bluecat", "count": 3},
+        }
+    ]
+
+
 def test_probe_options_obey_live_text_only_capabilities():
     mod = load_module()
     row = {"is_mllm": True, "supports_video": True}
