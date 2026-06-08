@@ -6031,9 +6031,15 @@ def _validate_current_mimo_v2_jang2l_root_cause(root: Path) -> dict[str, Any]:
     if audit_artifact_exactness_open:
         result["artifact_exactness_blocked"] = True
         result["failures"].append("mimo_jangtq2_artifact_exactness_blocked")
+        accepted_exactness_classifications = {
+            "model_generated_literal_mutation_after_valid_parser_structure",
+            "jangtq2_plain_literal_copy_regression_jang2l_plain_copy_passes",
+            "jangtq2_plain_literal_copy_fails_before_parser_or_json_repair",
+            "jangtq2_literal_corruption_persists_without_cache_fastpath_router_and_tq_kernel_parity_passes",
+        }
         if (
             result["no_source_exactness_classification"]
-            != "model_generated_literal_mutation_after_valid_parser_structure"
+            not in accepted_exactness_classifications
             or classifier_unresolved.get("artifact_quantization_or_decode_logits_quality")
             is not True
         ):

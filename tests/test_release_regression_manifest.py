@@ -11645,7 +11645,8 @@ def test_mimo_v2_root_cause_accepts_policy_skipped_source_vs_quant_without_clear
         json.dumps(
             {
                 "status": "open",
-                "classification": "model_generated_literal_mutation_after_valid_parser_structure",
+                "classification": "jangtq2_plain_literal_copy_regression_jang2l_plain_copy_passes",
+                "secondary_classification": "jang2l_json_sentinel_semantic_mismatch_open",
                 "source_vs_quant_load_performed": False,
                 "source_vs_quant_load_skipped_reason": "user_disallowed_source_vs_quant_due_ram",
                 "excluded_surfaces": {
@@ -11691,6 +11692,10 @@ def test_mimo_v2_root_cause_accepts_policy_skipped_source_vs_quant_without_clear
         not in result["current_audit_blockers"]
     )
     assert "mimo_jangtq2_artifact_exactness_blocked" in result["failures"]
+    assert (
+        "mimo_no_source_exactness_classifier_missing_literal_mutation_boundary"
+        not in result["failures"]
+    )
 
 
 def test_mimo_v2_current_audit_extracts_fastpath_async_bottleneck(tmp_path):
