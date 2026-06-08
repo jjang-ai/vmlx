@@ -463,18 +463,25 @@ def _zaya_cache_payload(model: str, prompt: str, max_tokens: int) -> dict[str, A
     )
 
 
-def _required_tool_payload(model: str, max_tokens: int, *, prompt_style: str = "natural") -> dict[str, Any]:
+def _required_tool_payload(
+    model: str,
+    max_tokens: int,
+    *,
+    prompt_style: str = "natural",
+    expected_value: str = "blue-cat",
+) -> dict[str, Any]:
     if prompt_style == "json_call":
         tool_prompt = (
             "Call function record_fact with exactly these JSON arguments and "
-            'no other value: {"value":"blue-cat"}. The string blue-cat is a '
-            "literal value; include the hyphen and the letters cat. Return no prose."
+            f'no other value: {{"value":"{expected_value}"}}. The string '
+            f"{expected_value} is a literal value; preserve every character, "
+            "including hyphens, digits, and letter case. Return no prose."
         )
     else:
         tool_prompt = (
             "Use the record_fact tool exactly once. Its value argument must be "
-            'the literal string "blue-cat"; include the hyphen and the letters '
-            "cat. Do not answer in visible text."
+            f'the literal string "{expected_value}"; preserve every character, '
+            "including hyphens, digits, and letter case. Do not answer in visible text."
         )
     return {
         "model": model,
@@ -580,7 +587,16 @@ def _tool_result_continuation_payload(model: str, max_tokens: int) -> dict[str, 
     }
 
 
-def _strict_json_payload(model: str, max_tokens: int) -> dict[str, Any]:
+def _strict_json_payload(
+    model: str,
+    max_tokens: int,
+    *,
+    expected_value: str = "blue-cat",
+) -> dict[str, Any]:
+    expected_json = json.dumps(
+        {"status": "ok", "value": expected_value, "count": 3},
+        separators=(",", ":"),
+    )
     return {
         "model": model,
         "messages": [
@@ -588,9 +604,8 @@ def _strict_json_payload(model: str, max_tokens: int) -> dict[str, Any]:
                 "role": "user",
                 "content": (
                     "Return exactly this JSON object and nothing else, preserving "
-                    "the literal string blue-cat including the hyphen and the "
-                    "letters cat: "
-                    "{\"status\":\"ok\",\"value\":\"blue-cat\",\"count\":3}"
+                    f"the literal string {expected_value}, including every "
+                    f"hyphen, digit, and letter case: {expected_json}"
                 ),
             }
         ],
@@ -841,6 +856,17 @@ def build_probe_payloads(
             ),
         }
     )
+    if row.get("model_type") == "mimo_v2":
+        probes.append(
+            {
+                "label": "mimo_structured_json_sentinel",
+                "payload": _strict_json_payload(
+                    model,
+                    max(_lfm_strict_probe_max_tokens(row, max_tokens), 96),
+                    expected_value="B7-CAT-09",
+                ),
+            }
+        )
     probes.append(
         {
             "label": "exact_code_whitespace",
@@ -1056,7 +1082,8 @@ def validate_probe_response(
     failures: list[dict[str, Any]] = []
     if code != 200:
         failures.append({"label": label, "reason": "http_status", "code": code})
-    if not stripped and label != "tool_required":
+    tool_only_labels = {"tool_required", "mimo_tool_required_sentinel"}
+    if not stripped and label not in tool_only_labels:
         failures.append(
             {
                 "label": label,
@@ -1165,8 +1192,12 @@ def validate_probe_response(
                     "content_head": stripped[:160],
                 }
             )
-    elif label == "structured_json_exact":
-        expected_json = {"status": "ok", "value": "blue-cat", "count": 3}
+    elif label in {"structured_json_exact", "mimo_structured_json_sentinel"}:
+        expected_json = {
+            "status": "ok",
+            "value": "B7-CAT-09" if label == "mimo_structured_json_sentinel" else "blue-cat",
+            "count": 3,
+        }
         try:
             parsed_json = json.loads(stripped)
         except Exception as exc:

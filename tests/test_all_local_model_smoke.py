@@ -1120,6 +1120,88 @@ def test_validate_probe_response_accepts_expected_tool_call():
     assert failures == []
 
 
+def test_validate_probe_response_accepts_mimo_sentinel_tool_call():
+    mod = load_module()
+
+    failures = mod.validate_probe_response(
+        "mimo_tool_required_sentinel",
+        200,
+        "",
+        "",
+        tool_calls=[
+            {
+                "function": {
+                    "name": "record_fact",
+                    "arguments": '{"value":"B7-CAT-09"}',
+                }
+            }
+        ],
+    )
+
+    assert failures == []
+
+
+def test_validate_probe_response_rejects_mimo_sentinel_dehyphenation():
+    mod = load_module()
+
+    failures = mod.validate_probe_response(
+        "mimo_tool_required_sentinel",
+        200,
+        "",
+        "",
+        tool_calls=[
+            {
+                "function": {
+                    "name": "record_fact",
+                    "arguments": '{"value":"B7 CAT 09"}',
+                }
+            }
+        ],
+    )
+
+    assert failures == [
+        {
+            "label": "mimo_tool_required_sentinel",
+            "reason": "expected_tool_argument_missing",
+            "expected": {"value": "B7-CAT-09"},
+            "actual": {"value": "B7 CAT 09"},
+        }
+    ]
+
+
+def test_validate_probe_response_accepts_mimo_sentinel_json_exactness():
+    mod = load_module()
+
+    failures = mod.validate_probe_response(
+        "mimo_structured_json_sentinel",
+        200,
+        '{"status":"ok","value":"B7-CAT-09","count":3}',
+        "",
+    )
+
+    assert failures == []
+
+
+def test_validate_probe_response_rejects_mimo_sentinel_json_dehyphenation():
+    mod = load_module()
+
+    failures = mod.validate_probe_response(
+        "mimo_structured_json_sentinel",
+        200,
+        '{"status":"ok","value":"B7 CAT 09","count":3}',
+        "",
+    )
+
+    assert failures == [
+        {
+            "label": "mimo_structured_json_sentinel",
+            "reason": "json_exact_object_mismatch",
+            "expected": {"status": "ok", "value": "B7-CAT-09", "count": 3},
+            "actual": {"status": "ok", "value": "B7 CAT 09", "count": 3},
+        }
+    ]
+
+
 def test_validate_probe_response_rejects_tool_visible_text_leak():
     mod = load_module()
 
