@@ -2042,7 +2042,7 @@ class TestMetalCacheLimit:
         assert "_prefill_for_clean_path_dependent_cache" in source
 
     def test_mllm_tight_memory_mixed_swa_skips_clean_prefill_store(self):
-        """Tight-memory MiMo must not launch a second clean prefill after output."""
+        """Tight-memory MiMo keeps a bounded clean-store safety policy."""
         import inspect
         from vmlx_engine.mllm_scheduler import MLLMScheduler
 
@@ -2051,5 +2051,109 @@ class TestMetalCacheLimit:
         assert "tight_memory_clean_store_disabled" in source
         assert "_tight_memory_prefill_drain" in source
         assert "VMLINUX_MLLM_TIGHT_MEMORY_CLEAN_PREFILL_STORE" in source
+        assert "VMLINUX_MLLM_TIGHT_MEMORY_CLEAN_PREFILL_STORE_MAX_TOKENS" in source
+        assert '"512"' in source
         assert "tight-memory clean prompt" in source
         assert "prefill disabled to avoid Metal OOM" in source
+
+
+class RotatingKVCache:
+    pass
+
+
+class TestMLLMMixedSWACleanStorePolicy:
+    class FakeBlockAwareCache:
+        def __init__(self):
+            self.stores = []
+            self._request_tables = {}
+
+        def store_cache(self, request_id, token_ids, cache_states, cache_extra_keys=None):
+            self.stores.append(
+                (request_id, list(token_ids), list(cache_states), cache_extra_keys)
+            )
+
+    def _scheduler(self, tokens, monkeypatch):
+        scheduler = MLLMScheduler.__new__(MLLMScheduler)
+        scheduler.block_aware_cache = self.FakeBlockAwareCache()
+        scheduler.paged_cache_manager = MagicMock()
+        scheduler.memory_aware_cache = None
+        scheduler.prefix_cache = None
+        scheduler.disk_cache = None
+        scheduler.batch_generator = SimpleNamespace(
+            stop_tokens=set(),
+            _tight_memory_prefill_drain=True,
+            _prefill_for_clean_path_dependent_cache=MagicMock(
+                return_value=[RotatingKVCache()]
+            ),
+        )
+        scheduler.stop_tokens = set()
+        request = SimpleNamespace(
+            request_id="mimo-clean",
+            _extracted_tokens=list(tokens),
+            _extracted_cache=[RotatingKVCache()],
+            _added_stop_tokens=set(),
+            num_output_tokens=1,
+            _cached_tokens=0,
+        )
+        scheduler.running = {"mimo-clean": request}
+        scheduler.request_id_to_uid = {"mimo-clean": 3}
+        scheduler.uid_to_request_id = {3: "mimo-clean"}
+        scheduler.requests = dict(scheduler.running)
+        scheduler.finished_req_ids = set()
+        scheduler._is_hybrid = True
+        scheduler._uses_zaya_cache = False
+        scheduler._mixed_attention_cache_model = False
+        scheduler._kv_cache_bits = 0
+        scheduler._cleanup_detokenizer = MagicMock()
+        scheduler._mllm_request_has_media_cache_context = MagicMock(return_value=False)
+        scheduler._mllm_media_prefix_cache_allowed = MagicMock(return_value=False)
+        scheduler._validate_cache = MagicMock(return_value=True)
+        scheduler._extract_cache_states = MagicMock(
+            return_value=[{"class_name": "RotatingKVCache"}]
+        )
+        monkeypatch.delenv("VMLINUX_MLLM_TIGHT_MEMORY_CLEAN_PREFILL_STORE", raising=False)
+        monkeypatch.delenv(
+            "VMLINUX_MLLM_TIGHT_MEMORY_CLEAN_PREFILL_STORE_MAX_TOKENS",
+            raising=False,
+        )
+        return scheduler
+
+    def test_tight_memory_mixed_swa_stores_short_clean_prompt_by_default(self, monkeypatch):
+        scheduler = self._scheduler([10, 11, 12, 13], monkeypatch)
+
+        scheduler._cleanup_finished({"mimo-clean"})
+
+        scheduler.batch_generator._prefill_for_clean_path_dependent_cache.assert_called_once_with(
+            [10, 11, 12]
+        )
+        assert scheduler.block_aware_cache.stores == [
+            ("mimo-clean", [10, 11, 12], [{"class_name": "RotatingKVCache"}], None)
+        ]
+
+    def test_tight_memory_mixed_swa_skips_clean_prompt_above_configured_cap(
+        self, monkeypatch
+    ):
+        scheduler = self._scheduler([10, 11, 12, 13], monkeypatch)
+        monkeypatch.setenv(
+            "VMLINUX_MLLM_TIGHT_MEMORY_CLEAN_PREFILL_STORE_MAX_TOKENS",
+            "2",
+        )
+
+        scheduler._cleanup_finished({"mimo-clean"})
+
+        scheduler.batch_generator._prefill_for_clean_path_dependent_cache.assert_not_called()
+        assert scheduler.block_aware_cache.stores == []
+
+    def test_tight_memory_mixed_swa_force_env_overrides_cap(self, monkeypatch):
+        scheduler = self._scheduler([10, 11, 12, 13], monkeypatch)
+        monkeypatch.setenv(
+            "VMLINUX_MLLM_TIGHT_MEMORY_CLEAN_PREFILL_STORE_MAX_TOKENS",
+            "2",
+        )
+        monkeypatch.setenv("VMLINUX_MLLM_TIGHT_MEMORY_CLEAN_PREFILL_STORE", "1")
+
+        scheduler._cleanup_finished({"mimo-clean"})
+
+        scheduler.batch_generator._prefill_for_clean_path_dependent_cache.assert_called_once_with(
+            [10, 11, 12]
+        )

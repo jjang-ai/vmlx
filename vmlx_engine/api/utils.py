@@ -454,6 +454,22 @@ def is_mllm_model(model_name: str, force_mllm: bool = False) -> bool:
     # file-based checks (jang_config.json, config.json) actually find the files.
     local_path = resolve_to_local_path(model_name)
 
+    def _mimo_v2_media_runtime_auto_wired_path(path: str, cfg: dict) -> bool:
+        """True when current source and bundle sidecars prove MiMo media wiring."""
+        try:
+            from .. import server as _server_module
+
+            module = _server_module._mimo_v2_runtime_module()
+            return bool(
+                _server_module._mimo_v2_media_runtime_auto_enabled(
+                    path,
+                    cfg,
+                    module,
+                )
+            )
+        except Exception:
+            return False
+
     def _is_mimo_v2_preserved_text_runtime_path(path: str) -> bool:
         config_path = os.path.join(path, "config.json")
         if not os.path.isfile(config_path):
@@ -484,8 +500,12 @@ def is_mllm_model(model_name: str, force_mllm: bool = False) -> bool:
             multimodal_mode == "weights_preserved_text_runtime"
             or multimodal_status == "weights_preserved_text_runtime"
         ):
+            if _mimo_v2_media_runtime_auto_wired_path(path, model_config):
+                return False
             return True
         if modalities == {"text"} and ({"vision", "audio"} & unwired):
+            if _mimo_v2_media_runtime_auto_wired_path(path, model_config):
+                return False
             return True
         return False
 

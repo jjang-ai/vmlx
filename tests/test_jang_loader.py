@@ -120,6 +120,38 @@ class TestJangDetection:
 
         assert jang_loader.load_jang_model(tmp_path, skip_eval=True) is expected
 
+    def test_load_jang_vlm_model_accepts_jangtq_format_sidecar(
+        self, tmp_path, monkeypatch
+    ):
+        from vmlx_engine.utils import jang_loader
+
+        (tmp_path / "config.json").write_text('{"model_type":"mimo_v2"}')
+        (tmp_path / "jang_config.json").write_text(
+            json.dumps(
+                {
+                    "format": "jangtq",
+                    "family": "mimo_v2",
+                    "profile": "JANGTQ_2",
+                    "tq_layout": "prestacked_switch_mlp",
+                }
+            )
+        )
+        expected = (object(), object())
+
+        monkeypatch.setattr(jang_loader, "_is_v2_model", lambda path: True)
+        monkeypatch.setattr(
+            jang_loader,
+            "_load_jang_v2_vlm",
+            lambda path, jang_cfg, **kwargs: expected,
+        )
+        monkeypatch.setattr(
+            jang_loader,
+            "_ensure_jang_family_runtime_supported",
+            lambda path, config: None,
+        )
+
+        assert jang_loader.load_jang_vlm_model(tmp_path, skip_eval=True) is expected
+
     def test_detects_jang_affine_weight_format(self, tmp_path):
         from vmlx_engine.utils.jang_loader import is_jang_model
 

@@ -3634,11 +3634,23 @@ def load_jang_vlm_model(
     weight_format = jang_cfg.get("weight_format")
     if not fmt and weight_format in JANG_WEIGHT_FORMAT_VALUES:
         fmt = weight_format
-    if not fmt or (fmt not in JANG_FORMAT_VALUES and fmt not in JANG_WEIGHT_FORMAT_VALUES):
+    if not fmt and (
+        str(jang_cfg.get("profile") or "").upper().startswith("JANGTQ")
+        or str(jang_cfg.get("tq_layout") or "").lower()
+    ):
+        fmt = "jangtq"
+    if (
+        not fmt
+        or (
+            fmt not in JANG_FORMAT_VALUES
+            and fmt not in JANG_WEIGHT_FORMAT_VALUES
+            and str(fmt).lower() != "jangtq"
+        )
+    ):
         raise ValueError(
             f"Not a JANG VLM: format='{fmt}' weight_format='{weight_format}' "
             f"(expected one of {', '.join(JANG_FORMAT_VALUES)} or "
-            f"weight_format={','.join(sorted(JANG_WEIGHT_FORMAT_VALUES))})"
+            f"weight_format={','.join(sorted(JANG_WEIGHT_FORMAT_VALUES))}, jangtq)"
         )
 
     # v2: instant load

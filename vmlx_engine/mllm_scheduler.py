@@ -2853,20 +2853,35 @@ class MLLMScheduler:
                                             "_prefill_for_clean_ssm",
                                             None,
                                         )
-                                    tight_memory_clean_store_disabled = (
-                                        _uses_mixed_attention_cache
-                                        and bool(
-                                            getattr(
-                                                self.batch_generator,
-                                                "_tight_memory_prefill_drain",
-                                                False,
+                                    _tight_memory_drain_active = bool(
+                                        getattr(
+                                            self.batch_generator,
+                                            "_tight_memory_prefill_drain",
+                                            False,
+                                        )
+                                    )
+                                    _force_tight_clean_store = os.environ.get(
+                                        "VMLINUX_MLLM_TIGHT_MEMORY_CLEAN_PREFILL_STORE",
+                                        "0",
+                                    ).lower() in {"1", "true", "yes", "on"}
+                                    try:
+                                        _tight_clean_store_max_tokens = int(
+                                            os.environ.get(
+                                                "VMLINUX_MLLM_TIGHT_MEMORY_CLEAN_PREFILL_STORE_MAX_TOKENS",
+                                                "512",
                                             )
                                         )
-                                        and os.environ.get(
-                                            "VMLINUX_MLLM_TIGHT_MEMORY_CLEAN_PREFILL_STORE",
-                                            "0",
-                                        ).lower()
-                                        not in {"1", "true", "yes", "on"}
+                                    except (TypeError, ValueError):
+                                        _tight_clean_store_max_tokens = 512
+                                    _bounded_tight_clean_store = (
+                                        _tight_clean_store_max_tokens > 0
+                                        and prompt_len <= _tight_clean_store_max_tokens
+                                    )
+                                    tight_memory_clean_store_disabled = (
+                                        _uses_mixed_attention_cache
+                                        and _tight_memory_drain_active
+                                        and not _force_tight_clean_store
+                                        and not _bounded_tight_clean_store
                                     )
                                     if tight_memory_clean_store_disabled:
                                         logger.info(

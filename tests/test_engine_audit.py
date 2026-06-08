@@ -9598,6 +9598,67 @@ class TestJangVLMFallbacks:
         assert utils.is_mllm_model(str(model_dir)) is False
         assert utils.is_mllm_model(str(model_dir), force_mllm=True) is False
 
+    def test_mimo_v2_stale_text_runtime_routes_mllm_when_media_sidecars_are_wired(
+        self,
+        tmp_path,
+        monkeypatch,
+    ):
+        from vmlx_engine.api import utils
+        import vmlx_engine.server as server
+
+        model_dir = tmp_path
+        (model_dir / "config.json").write_text(
+            json.dumps(
+                {
+                    "model_type": "mimo_v2",
+                    "vision_config": {"model_type": "mimo_v2_vision"},
+                    "audio_config": {"model_type": "mimo_v2_audio"},
+                    "image_token_id": 151655,
+                    "video_token_id": 151656,
+                    "processor_config": {"audio_token_id": 151669},
+                    "capabilities": {
+                        "family": "mimo_v2",
+                        "modalities": ["text"],
+                        "preserved_modalities": ["vision", "audio"],
+                        "unwired_modalities": ["vision", "audio"],
+                        "multimodal_status": "weights_preserved_text_runtime",
+                    },
+                    "runtime": {
+                        "multimodal_mode": "weights_preserved_text_runtime",
+                    },
+                }
+            )
+        )
+        (model_dir / "preprocessor_config.json").write_text("{}")
+        (model_dir / "audio_tokenizer").mkdir()
+        (model_dir / "audio_tokenizer" / "model.safetensors").write_bytes(b"stub")
+        (model_dir / "model.safetensors.index.json").write_text(
+            json.dumps(
+                {
+                    "weight_map": {
+                        "visual.blocks.0.attn.qkv.weight": "a.safetensors",
+                        "audio_encoder.input_local_transformer.layers.0.mlp.gate_proj.weight": "b.safetensors",
+                        "speech_embeddings.0.weight": "c.safetensors",
+                    }
+                }
+            )
+        )
+
+        module = SimpleNamespace(
+            VisionModel=object,
+            MiMoVisionPatchEmbed=object,
+            MiMoVisionPatchMerger=object,
+            MiMoVisionBlock=object,
+            AudioModel=object,
+            MiMoAudioTokenizer=object,
+            load_mimo_audio_tokenizer_from_bundle=lambda *_args, **_kwargs: None,
+        )
+        monkeypatch.setattr(server, "_mimo_v2_runtime_module", lambda: module)
+        utils._IS_MLLM_CACHE.clear()
+
+        assert utils.is_mllm_model(str(model_dir)) is True
+        assert utils.is_mllm_model(str(model_dir), force_mllm=True) is True
+
     def test_gemma4_unified_routes_multimodal_when_source_runtime_available(
         self,
         tmp_path,
