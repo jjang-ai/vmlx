@@ -334,7 +334,7 @@ def test_mimo_current_audit_separates_clean_artifact_from_runtime_blockers(
     )
     _write_json(
         tmp_path
-        / "build/current-all-local-model-smoke-mimo-v25-jang2l-media-l2-release-20260608/summary.json",
+        / "build/current-all-local-model-smoke-mimo-v25-jang2l-media-l2-notools-after-auto-mllm-20260608/summary.json",
         {
             "status": "fail",
             "results": [
@@ -1348,6 +1348,15 @@ def test_mimo_current_audit_points_jangtq2_at_latest_cache_cap_smoke():
 
     assert str(audit.ALL_LOCAL_SMOKE_ARTIFACT) == (
         "build/current-all-local-model-smoke-mimo-v25-jangtq2-media-l2-after-cache-cap-20260608/"
+        "summary.json"
+    )
+
+
+def test_mimo_current_audit_points_jang2l_at_latest_mllm_media_smoke():
+    from tests.cross_matrix import run_mimo_v2_jang2l_current_audit as audit
+
+    assert str(audit.JANG2L_ALL_LOCAL_SMOKE_ARTIFACT) == (
+        "build/current-all-local-model-smoke-mimo-v25-jang2l-media-l2-notools-after-auto-mllm-20260608/"
         "summary.json"
     )
 
