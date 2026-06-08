@@ -1108,19 +1108,75 @@ class TestIssueGuards:
 
         assert _resolve_vlm_image_prefill_single_buffer_limit(96 * 1024**3) == 8 * 1024**3
 
+    def test_mimo_tight_memory_text_prefill_guard_rejects_long_prompt_before_metal(self):
+        from vmlx_engine.mllm_batch_generator import _mimo_tight_memory_text_prefill_budget
+
+        gib = 1024**3
+        decision = _mimo_tight_memory_text_prefill_budget(
+            model_type="mimo_v2",
+            has_media_payload=False,
+            tight_memory_prefill_drain=True,
+            seq_len=307,
+            active_memory_bytes=int(106.0 * gib),
+            max_working_set_bytes=int(107.5 * gib),
+            reject_tokens=256,
+            min_free_bytes=2 * gib,
+            guard_enabled=True,
+        )
+
+        assert decision.should_reject is True
+        assert decision.max_prompt_tokens == 256
+        assert "MiMo-V2 tight-memory text prefill rejected" in decision.detail
+        assert "Metal headroom" in decision.detail
+
+    def test_mimo_tight_memory_text_prefill_guard_allows_short_or_non_mimo_paths(self):
+        from vmlx_engine.mllm_batch_generator import _mimo_tight_memory_text_prefill_budget
+
+        gib = 1024**3
+        common = dict(
+            tight_memory_prefill_drain=True,
+            active_memory_bytes=int(106.0 * gib),
+            max_working_set_bytes=int(107.5 * gib),
+            reject_tokens=256,
+            min_free_bytes=2 * gib,
+            guard_enabled=True,
+        )
+
+        assert _mimo_tight_memory_text_prefill_budget(
+            model_type="mimo_v2",
+            has_media_payload=False,
+            seq_len=80,
+            **common,
+        ).should_reject is False
+        assert _mimo_tight_memory_text_prefill_budget(
+            model_type="gemma4",
+            has_media_payload=False,
+            seq_len=307,
+            **common,
+        ).should_reject is False
+        assert _mimo_tight_memory_text_prefill_budget(
+            model_type="mimo_v2",
+            has_media_payload=True,
+            seq_len=307,
+            **common,
+        ).should_reject is False
+
     def test_vlm_image_prefill_budget_error_logs_without_internal_traceback(self):
         import inspect
 
         import vmlx_engine.mllm_batch_generator as _m
 
         src = inspect.getsource(_m.MLLMBatchGenerator._process_prompts)
-        start = src.index("_err_code = (")
-        end = src.index("self._prefill_errors.append", start)
+        start = src.index("if isinstance(prefill_err, VLMImagePrefillBudgetError):")
+        end = src.index("# Use only the successfully prefilled requests", start)
         branch = src[start:end]
 
-        assert "if _err_code == VLMImagePrefillBudgetError.code:" in branch
+        assert "_err_code = VLMImagePrefillBudgetError.code" in branch
+        assert 'elif isinstance(prefill_err, PromptTooLongError):' in branch
+        assert '_err_code = "prompt_too_long"' in branch
+        assert 'error_source=(' in branch
         budget_branch = branch.split(
-            "if _err_code == VLMImagePrefillBudgetError.code:", 1
+            "if _err_code in {", 1
         )[1].split("else:", 1)[0]
         assert "logger.warning(" in budget_branch
         assert "_tb.format_exc()" not in budget_branch

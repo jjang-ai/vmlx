@@ -254,6 +254,128 @@ class VLMImagePrefillBudgetDecision:
     detail: str
 
 
+@dataclass(frozen=True)
+class MiMoTightMemoryTextPrefillDecision:
+    should_reject: bool
+    prompt_tokens: int
+    max_prompt_tokens: int
+    active_memory_bytes: int
+    max_working_set_bytes: int
+    free_memory_bytes: int
+    detail: str
+
+
+def _mimo_tight_memory_text_prefill_budget(
+    *,
+    model_type: str,
+    has_media_payload: bool,
+    tight_memory_prefill_drain: bool,
+    seq_len: int,
+    active_memory_bytes: int,
+    max_working_set_bytes: int,
+    reject_tokens: int,
+    min_free_bytes: int,
+    guard_enabled: bool,
+) -> MiMoTightMemoryTextPrefillDecision:
+    """Reject MiMo text-only shapes that hard-abort Metal under no headroom.
+
+    This guard is not a fake success path: the request still fails. Its purpose
+    is to keep the server process alive for users and for the release harness
+    when a giant MiMo JANG_2L load leaves too little Metal working-set headroom
+    for longer text-prefill/tool prompts.
+    """
+    tokens = max(0, int(seq_len or 0))
+    max_tokens = max(1, int(reject_tokens or 1))
+    active = max(0, int(active_memory_bytes or 0))
+    max_ws = max(0, int(max_working_set_bytes or 0))
+    min_free = max(0, int(min_free_bytes or 0))
+    free = max(0, max_ws - active) if max_ws > 0 else 0
+
+    def gb(value: int) -> float:
+        return value / (1024**3)
+
+    base = dict(
+        prompt_tokens=tokens,
+        max_prompt_tokens=max_tokens,
+        active_memory_bytes=active,
+        max_working_set_bytes=max_ws,
+        free_memory_bytes=free,
+    )
+    if (
+        not guard_enabled
+        or model_type != "mimo_v2"
+        or has_media_payload
+        or not tight_memory_prefill_drain
+        or max_ws <= 0
+        or free >= min_free
+        or tokens <= max_tokens
+    ):
+        return MiMoTightMemoryTextPrefillDecision(
+            should_reject=False,
+            detail="MiMo-V2 tight-memory text prefill budget ok or not applicable",
+            **base,
+        )
+
+    return MiMoTightMemoryTextPrefillDecision(
+        should_reject=True,
+        detail=(
+            "MiMo-V2 tight-memory text prefill rejected before Metal forward: "
+            f"prompt has {tokens} tokens while Metal headroom is {gb(free):.1f}GB, "
+            f"below guard {gb(min_free):.1f}GB. This request shape can hard-abort "
+            "Metal before Python can recover; reduce prompt length, close other "
+            "sessions, use a smaller MiMo quant, or set "
+            "VMLINUX_MIMO_TEXT_PREFILL_GUARD=0 at OOM risk."
+        ),
+        **base,
+    )
+
+
+def _raise_if_mimo_tight_memory_text_prefill_exceeds_budget(
+    *,
+    model_type: str,
+    has_media_payload: bool,
+    tight_memory_prefill_drain: bool,
+    seq_len: int,
+    request_id: str,
+) -> None:
+    if os.environ.get("VMLINUX_MIMO_TEXT_PREFILL_GUARD", "1") == "0":
+        guard_enabled = False
+    else:
+        guard_enabled = True
+    try:
+        reject_tokens = int(os.environ.get("VMLINUX_MIMO_TEXT_PREFILL_REJECT_TOKENS", "256"))
+    except (TypeError, ValueError):
+        reject_tokens = 256
+    reject_tokens = max(16, reject_tokens)
+    min_free_gb = _parse_positive_float_env("VMLINUX_MIMO_TEXT_PREFILL_MIN_FREE_GB")
+    if min_free_gb is None:
+        min_free_gb = 2.0
+    try:
+        active, max_ws = get_effective_metal_working_set_bytes(mx)
+    except Exception:
+        active = 0
+        max_ws = 0
+    decision = _mimo_tight_memory_text_prefill_budget(
+        model_type=model_type,
+        has_media_payload=has_media_payload,
+        tight_memory_prefill_drain=tight_memory_prefill_drain,
+        seq_len=seq_len,
+        active_memory_bytes=active,
+        max_working_set_bytes=max_ws,
+        reject_tokens=reject_tokens,
+        min_free_bytes=int(min_free_gb * 1024**3),
+        guard_enabled=guard_enabled,
+    )
+    if decision.should_reject:
+        logger.warning(decision.detail)
+        raise PromptTooLongError(
+            decision.prompt_tokens,
+            decision.max_prompt_tokens,
+            source="mimo_v2_tight_memory_text_prefill",
+            request_id=request_id,
+        )
+
+
 def _vlm_image_request_cache_limit_bytes(
     *,
     active_memory_bytes: int,
@@ -4730,6 +4852,15 @@ class MLLMBatchGenerator:
             and _tight_text_prefill_step_size < self.prefill_step_size
             and seq_len > _tight_text_prefill_step_size + 1
         )
+        _raise_if_mimo_tight_memory_text_prefill_exceeds_budget(
+            model_type=self._model_type,
+            has_media_payload=has_media_payload,
+            tight_memory_prefill_drain=bool(
+                getattr(self, "_tight_memory_prefill_drain", False)
+            ),
+            seq_len=seq_len,
+            request_id=request.request_id,
+        )
         if (
             not has_media_payload
             and self._model_type == "mimo_v2"
@@ -6472,6 +6603,8 @@ class MLLMBatchGenerator:
                     _err_code = VLMImagePrefillBudgetError.code
                 elif isinstance(prefill_err, UnsupportedMediaModalityError):
                     _err_code = UnsupportedMediaModalityError.code
+                elif isinstance(prefill_err, PromptTooLongError):
+                    _err_code = "prompt_too_long"
                 else:
                     _err_code = None
                 _err_detail = (
@@ -6482,6 +6615,7 @@ class MLLMBatchGenerator:
                 if _err_code in {
                     VLMImagePrefillBudgetError.code,
                     UnsupportedMediaModalityError.code,
+                    "prompt_too_long",
                 }:
                     logger.warning(
                         f"Prefill rejected for {req.request_id}: {_err_detail} "
@@ -6503,6 +6637,21 @@ class MLLMBatchGenerator:
                     finish_reason="error",
                     error=_err_detail,
                     error_code=_err_code,
+                    error_prompt_tokens=(
+                        prefill_err.prompt_tokens
+                        if isinstance(prefill_err, PromptTooLongError)
+                        else None
+                    ),
+                    error_max_prompt_tokens=(
+                        prefill_err.max_prompt_tokens
+                        if isinstance(prefill_err, PromptTooLongError)
+                        else None
+                    ),
+                    error_source=(
+                        prefill_err.source
+                        if isinstance(prefill_err, PromptTooLongError)
+                        else None
+                    ),
                 ))
 
         # Use only the successfully prefilled requests for the batch
