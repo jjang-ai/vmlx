@@ -2104,6 +2104,91 @@ def _mimo_v2_runtime_modalities(bundle_path: str | None) -> list[str] | None:
     return modalities
 
 
+def _current_metal_working_set_bytes() -> tuple[int, int]:
+    try:
+        import mlx.core as mx
+        from vmlx_engine.utils.memory_limits import (
+            get_effective_metal_working_set_bytes,
+        )
+
+        active, max_ws = get_effective_metal_working_set_bytes(mx)
+        return int(active or 0), int(max_ws or 0)
+    except Exception:
+        return 0, 0
+
+
+def _mimo_v2_loaded_media_memory_gate(
+    bundle_path: str | None,
+    runtime_modalities: list[str] | None = None,
+) -> dict[str, Any]:
+    """Return current loaded-model MiMo media headroom status.
+
+    MiMo JANG_2L can have all media runtime components wired and still be too
+    large to run media prefill safely on a 128GB machine. Do not advertise
+    image/video/audio as usable when the loaded model is already inside the
+    working-set band that the media prefill guard will reject.
+    """
+    cfg = _read_bundle_json(bundle_path, "config.json")
+    if str((cfg or {}).get("model_type") or "").lower() != "mimo_v2":
+        return {"applicable": False, "safe": True, "reason": "not_mimo_v2"}
+    if _engine is None:
+        return {"applicable": False, "safe": True, "reason": "model_not_loaded"}
+    model_key = str(_model_path or _model_name or "")
+    if bundle_path and model_key and str(bundle_path) != model_key:
+        return {
+            "applicable": False,
+            "safe": True,
+            "reason": "not_loaded_bundle",
+        }
+    modalities = runtime_modalities or _mimo_v2_runtime_modalities(bundle_path) or []
+    media_modalities = sorted(_normalize_modality_set(modalities) - {"text"})
+    if not media_modalities:
+        return {
+            "applicable": True,
+            "safe": True,
+            "reason": "no_runtime_media_modalities",
+            "media_modalities": [],
+        }
+    active, max_ws = _current_metal_working_set_bytes()
+    if max_ws <= 0:
+        return {
+            "applicable": True,
+            "safe": True,
+            "reason": "working_set_unavailable",
+            "media_modalities": media_modalities,
+        }
+    try:
+        reject_pct = float(os.environ.get("VMLINUX_MIMO_MEDIA_CAPABILITY_REJECT_PCT", "98"))
+    except (TypeError, ValueError):
+        reject_pct = 98.0
+    try:
+        min_free_gb = float(os.environ.get("VMLINUX_MIMO_MEDIA_CAPABILITY_MIN_FREE_GB", "2"))
+    except (TypeError, ValueError):
+        min_free_gb = 2.0
+    free = max(0, max_ws - active)
+    pct = (active / max_ws) * 100.0
+    min_free = int(max(0.0, min_free_gb) * 1024**3)
+    safe = bool(pct < reject_pct and free >= min_free)
+    return {
+        "applicable": True,
+        "safe": safe,
+        "reason": "safe" if safe else "insufficient_metal_working_set_headroom",
+        "active_bytes": active,
+        "max_working_set_bytes": max_ws,
+        "free_bytes": free,
+        "active_pct": round(pct, 2),
+        "reject_pct": reject_pct,
+        "min_free_gb": min_free_gb,
+        "media_modalities": media_modalities,
+        "release_boundary": (
+            "MiMo media runtime components are present, but media is hidden from "
+            "runtime capabilities when current Metal working-set headroom is below "
+            "the media prefill safety floor. This is not a VL success claim; use a "
+            "smaller MiMo quant or reduce model/media memory pressure."
+        ),
+    }
+
+
 def _bundle_declares_native_audio(bundle_path: str | None) -> bool:
     cfg = _read_bundle_json(bundle_path, "config.json")
     if not cfg:
@@ -2160,6 +2245,9 @@ def _loaded_mllm_modalities() -> list[str] | None:
         return None
     mimo_modalities = _mimo_v2_runtime_modalities(_model_path or _model_name)
     if mimo_modalities is not None:
+        gate = _mimo_v2_loaded_media_memory_gate(_model_path or _model_name, mimo_modalities)
+        if gate.get("applicable") and not gate.get("safe"):
+            return ["text"]
         return mimo_modalities
     modalities = ["text", "vision"]
     if _bundle_declares_native_audio(_model_path or _model_name):
@@ -2258,14 +2346,33 @@ def _loaded_media_capability_status(modalities: list[str]) -> dict:
     bundle_path = _model_path or _model_name
     artifact = _artifact_media_modalities(bundle_path)
     runtime = set(_normalize_modality_set(modalities))
+    static_runtime = set(
+        _normalize_modality_set(_mimo_v2_runtime_modalities(bundle_path) or [])
+    )
+    memory_gate = _mimo_v2_loaded_media_memory_gate(
+        bundle_path,
+        list(static_runtime) if static_runtime else modalities,
+    )
+    memory_gated = set()
+    if memory_gate.get("applicable") and not memory_gate.get("safe"):
+        memory_gated = static_runtime - {"text"}
     declared = set(_normalize_modality_set(artifact["declared_modalities"]))
     preserved = set(_normalize_modality_set(artifact["preserved_modalities"]))
     unwired = set(_normalize_modality_set(artifact["unwired_modalities"]))
-    known = {"text", "vision", "image", "video", "audio"} | runtime | declared | preserved | unwired
+    known = (
+        {"text", "vision", "image", "video", "audio"}
+        | runtime
+        | declared
+        | preserved
+        | unwired
+        | memory_gated
+    )
     status_by_modality: dict[str, str] = {}
     for modality in sorted(known):
         if modality in runtime:
             status_by_modality[modality] = "runtime_supported"
+        elif modality in memory_gated:
+            status_by_modality[modality] = "memory_gated"
         elif modality in unwired:
             status_by_modality[modality] = "preserved_unwired"
         elif modality in declared:
@@ -2277,6 +2384,7 @@ def _loaded_media_capability_status(modalities: list[str]) -> dict:
         "declared_modalities": artifact["declared_modalities"],
         "preserved_modalities": artifact["preserved_modalities"],
         "unwired_modalities": _ordered_unwired_modalities(unwired - runtime),
+        "memory_gate": memory_gate,
         "status_by_modality": status_by_modality,
     }
 

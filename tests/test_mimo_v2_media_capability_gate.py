@@ -222,3 +222,32 @@ def test_mimo_v2_media_capabilities_filter_runtime_supported_unwired_modalities(
     assert status["status_by_modality"]["vision"] == "runtime_supported"
     assert status["status_by_modality"]["video"] == "runtime_supported"
     assert status["status_by_modality"]["audio"] == "preserved_unwired"
+
+
+def test_mimo_v2_loaded_media_capabilities_are_memory_gated(
+    tmp_path,
+    monkeypatch,
+):
+    from vmlx_engine import server
+
+    gib = 1024**3
+    _write_mimo_bundle(tmp_path, audio_token=True, media_runtime=True)
+    _install_fake_mimo_runtime(monkeypatch)
+    monkeypatch.setattr(server, "_model_path", str(tmp_path))
+    monkeypatch.setattr(server, "_model_name", None)
+    monkeypatch.setattr(server, "_engine", types.SimpleNamespace(is_mllm=True))
+    monkeypatch.setattr(
+        server,
+        "_current_metal_working_set_bytes",
+        lambda: (int(106.0 * gib), int(107.5 * gib)),
+    )
+
+    assert server._loaded_runtime_modalities() == ["text"]
+    status = server._loaded_media_capability_status(["text"])
+
+    assert status["memory_gate"]["safe"] is False
+    assert status["memory_gate"]["reason"] == "insufficient_metal_working_set_headroom"
+    assert status["status_by_modality"]["vision"] == "memory_gated"
+    assert status["status_by_modality"]["image"] == "memory_gated"
+    assert status["status_by_modality"]["video"] == "memory_gated"
+    assert status["status_by_modality"]["audio"] == "memory_gated"

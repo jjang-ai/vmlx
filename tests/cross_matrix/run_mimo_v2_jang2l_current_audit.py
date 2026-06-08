@@ -25,7 +25,7 @@ from typing import Any
 DEFAULT_MODEL_PATH = Path("/Users/example/.mlxstudio/models/JANGQ-AI/MiMo-V2.5-JANGTQ_2")
 DEFAULT_MANIFEST = Path("build/current-mimo-jangtq2-local-manifest-20260607.tsv")
 DEFAULT_OUT = Path(
-    "build/current-mimo-v2-jang2l-current-audit-after-live-exactness-pointer-20260608.json"
+    "build/current-mimo-v2-jang2l-current-audit-after-jang2l-media-memory-gated-capabilities-20260608.json"
 )
 
 STRUCTURAL_ARTIFACT = Path("build/current-mimo-jang2l-local-structural-verify-20260606.json")
@@ -43,7 +43,7 @@ ALL_LOCAL_SMOKE_ARTIFACT = Path(
     "build/current-all-local-model-smoke-mimo-v25-jangtq2-media-l2-after-cache-cap-20260608/summary.json"
 )
 JANG2L_ALL_LOCAL_SMOKE_ARTIFACT = Path(
-    "build/current-all-local-model-smoke-mimo-v25-jang2l-media-l2-patched-defaults-20260608/summary.json"
+    "build/current-all-local-model-smoke-mimo-v25-jang2l-media-memory-gated-capabilities-20260608/summary.json"
 )
 KVNONE_NOPREFIX_SMOKE_ARTIFACT = Path(
     "build/current-all-local-model-smoke-mimo-v25-jangtq2-bundled-tools-nomedia-kvnone-noprefix-20260607/summary.json"
@@ -481,6 +481,20 @@ def _all_local_smoke_evidence(data: dict[str, Any]) -> dict[str, Any]:
         for request in requests
         if isinstance(request, dict) and request.get("label") is not None
     }
+    capabilities = row.get("capabilities") if isinstance(row, dict) else None
+    capabilities = capabilities if isinstance(capabilities, dict) else {}
+    modalities = capabilities.get("modalities")
+    if not isinstance(modalities, list):
+        modalities = []
+    preserved_modalities = capabilities.get("preserved_modalities")
+    if not isinstance(preserved_modalities, list):
+        preserved_modalities = []
+    media_capability_downscoped_to_text = bool(
+        bundle_kind == "jang2l"
+        and "text" in {str(item) for item in modalities}
+        and not ({"image", "video", "audio"} & {str(item) for item in modalities})
+        and ({"vision", "audio"} & {str(item) for item in preserved_modalities})
+    )
     live_media_e2e_labels = []
     live_media_failures = []
     for label in media_labels:
@@ -749,6 +763,11 @@ def _all_local_smoke_evidence(data: dict[str, Any]) -> dict[str, Any]:
         "audio_waveform_e2e_classification": audio_waveform_classification,
         "audio_waveform_e2e_labels": audio_waveform_e2e_labels,
         "audio_waveform_e2e_failures": audio_waveform_failures,
+        "media_capability_downscoped_to_text": media_capability_downscoped_to_text,
+        "media_capability_modalities": [str(item) for item in modalities],
+        "media_capability_preserved_modalities": [
+            str(item) for item in preserved_modalities
+        ],
         "typed_media_prefill_budget_rejection": bool(media_prefill_budget_labels),
         "typed_media_prefill_budget_rejection_labels": media_prefill_budget_labels,
         "post_media_working_set_pressure_rejection": bool(
@@ -2755,6 +2774,9 @@ def build_audit(root: Path, model_path: Path, manifest: Path) -> dict[str, Any]:
     mimo_jang2l_post_media_working_set_pressure_blocked = bool(
         jang2l_smoke_evidence.get("post_media_working_set_pressure_rejection")
     )
+    mimo_jang2l_media_capability_downscoped_to_text = bool(
+        jang2l_smoke_evidence.get("media_capability_downscoped_to_text")
+    )
     block_disk_l2_restart_restore_blocked = not bool(
         smoke_evidence.get("block_disk_l2_restart_cache_hit")
     )
@@ -2908,6 +2930,8 @@ def build_audit(root: Path, model_path: Path, manifest: Path) -> dict[str, Any]:
         blockers.append("mimo_jangtq2_l2_restart_visible_output_blocked")
     if not mimo_jang2l_live_media_l2:
         blockers.append("mimo_jang2l_live_media_l2_missing")
+    if mimo_jang2l_media_capability_downscoped_to_text:
+        blockers.append("mimo_jang2l_media_capability_downscoped_to_text")
     if mimo_jang2l_l2_restart_cache_hit and not mimo_jang2l_l2_restart_visible_output:
         blockers.append("mimo_jang2l_l2_restart_visible_output_blocked")
     if mimo_jang2l_tool_long_prompt_metal_oom_blocked:
@@ -3006,6 +3030,9 @@ def build_audit(root: Path, model_path: Path, manifest: Path) -> dict[str, Any]:
             ),
             "mimo_jang2l_l2_restart_visible_output": bool(
                 mimo_jang2l_l2_restart_visible_output
+            ),
+            "mimo_jang2l_media_capability_downscoped_to_text": bool(
+                mimo_jang2l_media_capability_downscoped_to_text
             ),
             "mimo_jang2l_tool_long_prompt_metal_oom": not bool(
                 mimo_jang2l_tool_long_prompt_metal_oom_blocked
