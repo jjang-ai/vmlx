@@ -1008,6 +1008,72 @@ class TestNativeMtpAutodetect:
         assert "vision_tower.patch_embed.proj.weight" in sanitized_moe
         assert "language_model.lm_head.weight" not in sanitized_moe
 
+    def test_qwen36_vlm_mtp_gdn_sink_does_not_leak_to_upstream_originals(self):
+        from vmlx_engine.patches.mlx_vlm_mtp import qwen35_vl
+
+        class DenseDecoder:
+            def __call__(self, x, mask=None, cache=None, position_ids=None):
+                return x + 10
+
+        class MoeDecoder:
+            def __call__(self, x, mask=None, cache=None, position_ids=None):
+                return x + 20
+
+        class QwenModel:
+            def __call__(
+                self,
+                inputs,
+                inputs_embeds=None,
+                mask=None,
+                cache=None,
+                position_ids=None,
+            ):
+                return inputs + 30
+
+        dense_lang = SimpleNamespace(Qwen3_5DecoderLayer=DenseDecoder)
+        moe_lang = SimpleNamespace(Qwen3_5MoeDecoderLayer=MoeDecoder)
+
+        def create_mask(_hidden, _cache):
+            return "mask"
+
+        model_lang = SimpleNamespace(
+            Qwen3_5Model=QwenModel,
+            create_attention_mask=create_mask,
+            create_ssm_mask=create_mask,
+        )
+
+        qwen35_vl._patch_decoder_layer(dense_lang)
+        qwen35_vl._patch_moe_decoder_layer(moe_lang)
+        qwen35_vl._patch_qwen_model(model_lang)
+
+        for layer_cls, original_value in ((DenseDecoder, 11), (MoeDecoder, 21)):
+            layer = layer_cls()
+            layer.is_linear = True
+            layer.input_layernorm = lambda x: x
+            layer.linear_attn = (
+                lambda x, mask=None, cache=None, gdn_sink=None, n_confirmed=0: x + 1
+            )
+            layer.post_attention_layernorm = lambda x: x
+            layer.mlp = lambda x: x + 2
+
+            assert layer(1, gdn_sink=None, n_confirmed=0) == original_value
+            assert layer(1, gdn_sink=[], n_confirmed=0) == 8
+
+        model = QwenModel()
+        model.embed_tokens = lambda inputs: inputs
+        class ModelLayer:
+            is_linear = True
+
+            def __call__(self, h, *args, **kwargs):
+                return h + 1
+
+        model.layers = [ModelLayer()]
+        model.fa_idx = 0
+        model.ssm_idx = 0
+
+        assert model(1, gdn_sink=None, n_confirmed=0) == 31
+        assert model(1, cache=[None], gdn_sink=[], n_confirmed=0) == 2
+
     def test_qwen36_vlm_text_rope_fresh_prefill_uses_scalar_cache_offset(
         self, tmp_path
     ):

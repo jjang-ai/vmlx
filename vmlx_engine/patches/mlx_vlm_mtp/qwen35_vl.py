@@ -523,8 +523,8 @@ def _patch_decoder_layer(qlang: Any) -> None:
         gdn_sink: Optional[list] = None,
         n_confirmed: int = 0,
     ):
-        if n_confirmed == 0:
-            return original_call(self, x, mask, cache, position_ids, gdn_sink=gdn_sink)
+        if n_confirmed == 0 and gdn_sink is None:
+            return original_call(self, x, mask, cache, position_ids)
 
         if self.is_linear:
             r = self.linear_attn(
@@ -559,8 +559,8 @@ def _patch_moe_decoder_layer(qmoe_lang: Any) -> None:
         gdn_sink: Optional[list] = None,
         n_confirmed: int = 0,
     ):
-        if n_confirmed == 0:
-            return original_call(self, x, mask, cache, position_ids, gdn_sink=gdn_sink)
+        if n_confirmed == 0 and gdn_sink is None:
+            return original_call(self, x, mask, cache, position_ids)
 
         if self.is_linear:
             r = self.linear_attn(
@@ -597,7 +597,7 @@ def _patch_qwen_model(qlang: Any) -> None:
         n_confirmed: int = 0,
         return_unnormed: bool = False,
     ):
-        if n_confirmed == 0 and not return_unnormed:
+        if n_confirmed == 0 and gdn_sink is None and not return_unnormed:
             return original_call(
                 self,
                 inputs,
@@ -605,7 +605,6 @@ def _patch_qwen_model(qlang: Any) -> None:
                 mask=mask,
                 cache=cache,
                 position_ids=position_ids,
-                gdn_sink=gdn_sink,
             )
 
         h = self.embed_tokens(inputs) if inputs_embeds is None else inputs_embeds
