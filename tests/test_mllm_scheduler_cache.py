@@ -123,11 +123,16 @@ def test_mimo_v2_token_trace_is_opt_in_and_reports_decoded_stop(caplog, monkeypa
     """MiMo token tracing must be diagnostic-only and include stop evidence."""
     import logging
 
+    import mlx.core as mx
+
     class Tokenizer:
         def decode(self, ids, skip_special_tokens=False):
-            assert ids == [9]
             assert skip_special_tokens is False
-            return "<|im_end|>"
+            return {
+                9: "<|im_end|>",
+                3: "3",
+                1: "1",
+            }.get(ids[0], str(ids[0]))
 
     generator = SimpleNamespace(
         _model_type="mimo_v2",
@@ -155,12 +160,14 @@ def test_mimo_v2_token_trace_is_opt_in_and_reports_decoded_stop(caplog, monkeypa
     assert "MiMo-V2 token trace" not in caplog.text
 
     monkeypatch.setenv("VMLINUX_MIMO_V2_TOKEN_TRACE", "1")
+    monkeypatch.setenv("VMLINUX_MIMO_V2_TOKEN_TRACE_TOPK", "2")
     _trace_mimo_v2_generated_token(
         generator,
         request,
         9,
         phase="prefill_sample",
         finish_reason="stop",
+        logprobs=mx.array([0.0, 0.9, 0.1, 0.8, 0.2, 0.3, 0.4, 0.5, 0.6, 1.0]),
     )
 
     assert "MiMo-V2 token trace" in caplog.text
@@ -168,6 +175,8 @@ def test_mimo_v2_token_trace_is_opt_in_and_reports_decoded_stop(caplog, monkeypa
     assert "decoded='<|im_end|>'" in caplog.text
     assert "is_stop=True" in caplog.text
     assert "eos_ids=[9]" in caplog.text
+    assert "top_tokens=[{'id': 9, 'decoded': '<|im_end|>'" in caplog.text
+    assert "{'id': 1, 'decoded': '1'" in caplog.text
 
 
 def test_batched_mllm_generate_forwards_enable_thinking_to_scheduler():

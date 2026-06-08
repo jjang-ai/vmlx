@@ -1355,6 +1355,7 @@ def _trace_mimo_v2_generated_token(
     *,
     phase: str,
     finish_reason: str | None = None,
+    logprobs: Any = None,
 ) -> None:
     """Log MiMo generated token IDs for root-cause diagnostics only.
 
@@ -1383,12 +1384,47 @@ def _trace_mimo_v2_generated_token(
                 decoded = None
         except Exception:
             decoded = None
+    top_tokens: list[dict[str, Any]] = []
+    try:
+        top_k = int(os.environ.get("VMLINUX_MIMO_V2_TOKEN_TRACE_TOPK", "0") or "0")
+    except Exception:
+        top_k = 0
+    if top_k > 0 and logprobs is not None and tokenizer is not None:
+        try:
+            arr = logprobs
+            if hasattr(arr, "ndim") and int(arr.ndim) > 1:
+                arr = arr.reshape((-1,))
+            values = arr.tolist() if hasattr(arr, "tolist") else list(arr)
+            ranked = sorted(
+                enumerate(values),
+                key=lambda item: float(item[1]),
+                reverse=True,
+            )[:top_k]
+            for cand_id, cand_score in ranked:
+                try:
+                    cand_decoded = tokenizer.decode(
+                        [int(cand_id)],
+                        skip_special_tokens=False,
+                    )
+                except TypeError:
+                    cand_decoded = tokenizer.decode([int(cand_id)])
+                except Exception:
+                    cand_decoded = None
+                top_tokens.append(
+                    {
+                        "id": int(cand_id),
+                        "decoded": cand_decoded,
+                        "score": float(cand_score),
+                    }
+                )
+        except Exception as exc:
+            top_tokens.append({"error": f"{type(exc).__name__}: {exc}"})
     stop_tokens = set(getattr(generator, "stop_tokens", set()) or set())
     token_ids = getattr(generator, "_mimo_v2_thinking_off_token_ids", {}) or {}
     logger.info(
         "MiMo-V2 token trace: request=%s phase=%s token_id=%r decoded=%r "
         "enable_thinking=%r output_len=%d is_stop=%s finish_reason=%r "
-        "think_ids=%s eos_ids=%s stop_tokens=%s",
+        "think_ids=%s eos_ids=%s stop_tokens=%s top_tokens=%s",
         getattr(request, "request_id", None),
         phase,
         token_int,
@@ -1400,6 +1436,7 @@ def _trace_mimo_v2_generated_token(
         sorted(token_ids.get("think_ids", set()) or []),
         sorted(token_ids.get("eos_ids", set()) or []),
         sorted(stop_tokens),
+        top_tokens,
     )
 
 
@@ -6053,6 +6090,7 @@ class MLLMBatchGenerator:
                         req,
                         _sampled_value,
                         phase="prefill_sample",
+                        logprobs=logprobs,
                     )
                     if trace is not None:
                         trace.stop("token_item")
@@ -6349,6 +6387,7 @@ class MLLMBatchGenerator:
                                 req,
                                 _sampled_value,
                                 phase="prefill_sample",
+                                logprobs=logprobs,
                             )
                         first_tokens.append(_sampled_value)
                         all_logprobs.append(logprobs.squeeze(0) if logprobs is not None else None)
@@ -6403,6 +6442,7 @@ class MLLMBatchGenerator:
                                         req,
                                         _sampled_value,
                                         phase="prefill_sample",
+                                        logprobs=logprobs,
                                     )
                                 first_tokens.append(_sampled_value)
                                 all_logprobs.append(logprobs.squeeze(0) if logprobs is not None else None)
@@ -7534,6 +7574,7 @@ class MLLMBatchGenerator:
                 token,
                 phase="response_step",
                 finish_reason=finish_reason,
+                logprobs=logprobs[i],
             )
 
             if finish_reason is not None:
