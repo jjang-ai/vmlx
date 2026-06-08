@@ -540,6 +540,24 @@ def test_probe_payloads_cover_repeat_text_reasoning_and_media():
     assert reasoning["payload"]["max_tokens"] >= 256
 
 
+def test_media_probe_asks_for_colored_object_not_solid_frame_dominant_color():
+    mod = load_module()
+    row = {
+        "served_name": "mimo-v2",
+        "is_mllm": True,
+        "supports_video": False,
+        "supports_thinking": False,
+        "model_type": "mimo_v2",
+    }
+
+    probes = mod.build_probe_payloads(row, max_tokens=32, include_reasoning=False)
+    blue = next(probe for probe in probes if probe["label"] == "vl_blue_image")
+    text = blue["payload"]["messages"][0]["content"][0]["text"].lower()
+
+    assert "square object" in text
+    assert "dominant color" not in text
+
+
 def test_probe_payloads_include_tool_probe_for_mimo_xml_tools():
     mod = load_module()
     row = {

@@ -353,8 +353,42 @@ def solid_png_base64(width: int, height: int, rgb: tuple[int, int, int]) -> str:
     return base64.b64encode(data).decode("ascii")
 
 
-BLUE_PNG = solid_png_base64(16, 16, (0, 0, 255))
-RED_PNG = solid_png_base64(16, 16, (255, 0, 0))
+def square_object_png_base64(
+    width: int,
+    height: int,
+    rgb: tuple[int, int, int],
+    *,
+    background: tuple[int, int, int] = (255, 255, 255),
+) -> str:
+    x0 = width // 4
+    x1 = width - x0
+    y0 = height // 4
+    y1 = height - y0
+    rows = []
+    for y in range(height):
+        row = bytearray(b"\x00")
+        for x in range(width):
+            row.extend(rgb if x0 <= x < x1 and y0 <= y < y1 else background)
+        rows.append(bytes(row))
+    raw = b"".join(rows)
+
+    def chunk(kind: bytes, payload: bytes) -> bytes:
+        return (
+            struct.pack(">I", len(payload))
+            + kind
+            + payload
+            + struct.pack(">I", zlib.crc32(kind + payload) & 0xFFFFFFFF)
+        )
+
+    data = b"\x89PNG\r\n\x1a\n"
+    data += chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0))
+    data += chunk(b"IDAT", zlib.compress(raw))
+    data += chunk(b"IEND", b"")
+    return base64.b64encode(data).decode("ascii")
+
+
+BLUE_OBJECT_PNG = square_object_png_base64(224, 224, (0, 0, 255))
+RED_OBJECT_PNG = square_object_png_base64(224, 224, (255, 0, 0))
 
 
 def blue_video_data_url() -> str | None:
@@ -371,13 +405,13 @@ def blue_video_data_url() -> str | None:
             tmp.name,
             cv2.VideoWriter_fourcc(*"mp4v"),
             2.0,
-            (32, 32),
+            (224, 224),
         )
         if not writer.isOpened():
             return None
         for _ in range(8):
-            frame = np.zeros((32, 32, 3), dtype=np.uint8)
-            frame[:] = (255, 0, 0)
+            frame = np.full((224, 224, 3), 255, dtype=np.uint8)
+            frame[56:168, 56:168] = (255, 0, 0)
             writer.write(frame)
         writer.release()
         data = Path(tmp.name).read_bytes()
@@ -818,12 +852,12 @@ def build_probe_payloads(
     )
     if include_media and row.get("is_mllm"):
         image_content = [
-            {"type": "text", "text": "What is the dominant color in this image? Reply one word."},
-            {"type": "image_url", "image_url": {"url": "data:image/png;base64," + BLUE_PNG}},
+            {"type": "text", "text": "What color is the square object in this image? Reply one word."},
+            {"type": "image_url", "image_url": {"url": "data:image/png;base64," + BLUE_OBJECT_PNG}},
         ]
         red_image_content = [
-            {"type": "text", "text": "What is the dominant color in this image? Reply one word."},
-            {"type": "image_url", "image_url": {"url": "data:image/png;base64," + RED_PNG}},
+            {"type": "text", "text": "What color is the square object in this image? Reply one word."},
+            {"type": "image_url", "image_url": {"url": "data:image/png;base64," + RED_OBJECT_PNG}},
         ]
         probes.extend(
             [
@@ -870,7 +904,7 @@ def build_probe_payloads(
             video_url = blue_video_data_url()
             if video_url:
                 video_content = [
-                    {"type": "text", "text": "What is the dominant color in this video? Reply one word."},
+                    {"type": "text", "text": "What color is the square object in this video? Reply one word."},
                     {"type": "video_url", "video_url": {"url": video_url}},
                 ]
                 probes.extend(
