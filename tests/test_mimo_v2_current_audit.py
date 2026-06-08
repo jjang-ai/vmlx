@@ -391,7 +391,7 @@ def test_mimo_current_audit_separates_clean_artifact_from_runtime_blockers(
     )
     _write_json(
         tmp_path
-        / "build/current-all-local-model-smoke-mimo-v25-jang2l-media-memory-gated-capabilities-20260608/summary.json",
+        / "build/current-all-local-model-smoke-mimo-v25-jang2l-media-l2-runtime-modalities-20260608/summary.json",
         {
             "status": "fail",
             "results": [
@@ -406,6 +406,45 @@ def test_mimo_current_audit_separates_clean_artifact_from_runtime_blockers(
                         }
                     },
                     "status": "probe_failed",
+                    "capabilities": {
+                        "body": {
+                            "modalities": ["text"],
+                            "media": {
+                                "runtime_modalities": ["text"],
+                                "declared_modalities": [
+                                    "text",
+                                    "vision",
+                                    "image",
+                                    "video",
+                                    "audio",
+                                ],
+                                "preserved_modalities": [
+                                    "vision",
+                                    "image",
+                                    "video",
+                                    "audio",
+                                ],
+                                "unwired_modalities": [
+                                    "vision",
+                                    "image",
+                                    "video",
+                                    "audio",
+                                ],
+                                "status_by_modality": {
+                                    "text": "runtime_supported",
+                                    "vision": "memory_gated",
+                                    "image": "memory_gated",
+                                    "video": "memory_gated",
+                                    "audio": "memory_gated",
+                                },
+                                "memory_gate": {
+                                    "applicable": True,
+                                    "safe": False,
+                                    "reason": "insufficient_metal_working_set_headroom",
+                                },
+                            },
+                        }
+                    },
                     "requests": [
                         {
                             "label": "text_cache_repeat_1",
@@ -900,8 +939,9 @@ def test_mimo_current_audit_separates_clean_artifact_from_runtime_blockers(
     assert result["component_ok"]["mimo_jang2l_l2_restart_visible_output"] is True
     assert (
         result["component_ok"]["mimo_jang2l_media_capability_downscoped_to_text"]
-        is True
+        is False
     )
+    assert result["component_ok"]["mimo_jang2l_media_capability_memory_gated"] is False
     assert result["component_ok"]["mimo_jang2l_tool_long_prompt_metal_oom"] is True
     assert result["component_ok"]["mimo_jang2l_tight_memory_prompt_budget"] is True
     assert result["component_ok"]["mimo_jang2l_media_prefill_budget"] is True
@@ -910,7 +950,8 @@ def test_mimo_current_audit_separates_clean_artifact_from_runtime_blockers(
     )
     assert "mimo_jangtq2_live_media_l2_missing" in result["blockers"]
     assert "mimo_jang2l_live_media_l2_missing" in result["blockers"]
-    assert "mimo_jang2l_media_capability_downscoped_to_text" in result["blockers"]
+    assert "mimo_jang2l_media_capability_downscoped_to_text" not in result["blockers"]
+    assert "mimo_jang2l_media_capability_memory_gated" in result["blockers"]
     assert "mimo_jang2l_l2_restart_visible_output_blocked" not in result["blockers"]
     assert "mimo_jang2l_tool_long_prompt_metal_oom_blocked" not in result["blockers"]
     assert "mimo_jang2l_tight_memory_prompt_budget_blocked" not in result["blockers"]
@@ -964,7 +1005,8 @@ def test_mimo_current_audit_separates_clean_artifact_from_runtime_blockers(
     assert result["diagnostics"]["disable_sink_clears_length_generation"] is False
     assert "sink-kernel-only" in result["diagnostics"]["sink_boundary"]
     assert "mimo_jang2l_live_media_l2_missing" in result["blockers"]
-    assert "mimo_jang2l_media_capability_downscoped_to_text" in result["blockers"]
+    assert "mimo_jang2l_media_capability_downscoped_to_text" not in result["blockers"]
+    assert "mimo_jang2l_media_capability_memory_gated" in result["blockers"]
     assert "mimo_jang2l_media_prefill_budget_blocked" not in result["blockers"]
     assert (
         "mimo_jang2l_post_media_working_set_pressure_blocked"
@@ -1546,7 +1588,7 @@ def test_mimo_current_audit_points_jang2l_at_latest_media_l2_release_smoke():
     from tests.cross_matrix import run_mimo_v2_jang2l_current_audit as audit
 
     assert str(audit.JANG2L_ALL_LOCAL_SMOKE_ARTIFACT) == (
-        "build/current-all-local-model-smoke-mimo-v25-jang2l-media-memory-gated-capabilities-20260608/"
+        "build/current-all-local-model-smoke-mimo-v25-jang2l-media-l2-runtime-modalities-20260608/"
         "summary.json"
     )
 

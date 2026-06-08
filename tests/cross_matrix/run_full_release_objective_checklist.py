@@ -17,11 +17,11 @@ from typing import Any
 
 
 DEFAULT_OUT = Path(
-    "build/current-full-release-objective-checklist-after-noheavy-contract-refresh-20260608.json"
+    "build/current-full-release-objective-checklist-after-jang2l-runtime-modalities-proof-20260608.json"
 )
 
 MIMO_AUDIT = Path(
-    "build/current-mimo-v2-jang2l-current-audit-after-noheavy-contract-refresh-20260608.json"
+    "build/current-mimo-v2-jang2l-current-audit-after-jang2l-runtime-modalities-proof-20260608.json"
 )
 MIMO_NO_SOURCE_EXACTNESS_CLASSIFIER = Path(
     "build/current-mimo-v2-no-source-exactness-classifier-after-conservative-no-cb-prefix-proof-20260608.json"
@@ -39,7 +39,7 @@ TOOL_CALL_CONTRACT = Path(
     "build/current-tool-call-contract-after-current-mimo-proof-20260607.json"
 )
 RELEASE_MANIFEST = Path(
-    "build/current-release-regression-manifest-after-noheavy-contract-refresh-20260608.json"
+    "build/current-release-regression-manifest-after-jang2l-runtime-modalities-proof-20260608.json"
 )
 ISSUE179_AUDIT = Path(
     "build/current-issue179-minimax-k-root-cause-audit-after-parser-settings-parity-20260608.json"

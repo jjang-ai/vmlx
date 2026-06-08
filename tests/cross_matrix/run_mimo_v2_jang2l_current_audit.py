@@ -25,7 +25,7 @@ from typing import Any
 DEFAULT_MODEL_PATH = Path("/Users/example/.mlxstudio/models/JANGQ-AI/MiMo-V2.5-JANGTQ_2")
 DEFAULT_MANIFEST = Path("build/current-mimo-jangtq2-local-manifest-20260607.tsv")
 DEFAULT_OUT = Path(
-    "build/current-mimo-v2-jang2l-current-audit-after-noheavy-contract-refresh-20260608.json"
+    "build/current-mimo-v2-jang2l-current-audit-after-jang2l-runtime-modalities-proof-20260608.json"
 )
 
 STRUCTURAL_ARTIFACT = Path("build/current-mimo-jang2l-local-structural-verify-20260606.json")
@@ -43,7 +43,7 @@ ALL_LOCAL_SMOKE_ARTIFACT = Path(
     "build/current-all-local-model-smoke-mimo-v25-jangtq2-media-l2-after-cache-cap-20260608/summary.json"
 )
 JANG2L_ALL_LOCAL_SMOKE_ARTIFACT = Path(
-    "build/current-all-local-model-smoke-mimo-v25-jang2l-media-memory-gated-capabilities-20260608/summary.json"
+    "build/current-all-local-model-smoke-mimo-v25-jang2l-media-l2-runtime-modalities-20260608/summary.json"
 )
 KVNONE_NOPREFIX_SMOKE_ARTIFACT = Path(
     "build/current-all-local-model-smoke-mimo-v25-jangtq2-bundled-tools-nomedia-kvnone-noprefix-20260607/summary.json"
@@ -481,16 +481,49 @@ def _all_local_smoke_evidence(data: dict[str, Any]) -> dict[str, Any]:
         for request in requests
         if isinstance(request, dict) and request.get("label") is not None
     }
-    capabilities = row.get("capabilities") if isinstance(row, dict) else None
+    live_capabilities = (
+        result.get("capabilities", {}).get("body", {})
+        if isinstance(result.get("capabilities"), dict)
+        else {}
+    )
+    capabilities = live_capabilities if isinstance(live_capabilities, dict) else {}
+    if not capabilities:
+        capabilities = row.get("capabilities") if isinstance(row, dict) else None
     capabilities = capabilities if isinstance(capabilities, dict) else {}
+    media_capabilities = (
+        capabilities.get("media") if isinstance(capabilities.get("media"), dict) else {}
+    )
+    media_status_by_modality = (
+        media_capabilities.get("status_by_modality")
+        if isinstance(media_capabilities.get("status_by_modality"), dict)
+        else {}
+    )
+    media_memory_gate = (
+        media_capabilities.get("memory_gate")
+        if isinstance(media_capabilities.get("memory_gate"), dict)
+        else {}
+    )
     modalities = capabilities.get("modalities")
     if not isinstance(modalities, list):
         modalities = []
-    preserved_modalities = capabilities.get("preserved_modalities")
+    preserved_modalities = media_capabilities.get("preserved_modalities")
+    if not isinstance(preserved_modalities, list):
+        preserved_modalities = capabilities.get("preserved_modalities")
     if not isinstance(preserved_modalities, list):
         preserved_modalities = []
+    media_capability_memory_gated = bool(
+        bundle_kind == "jang2l"
+        and (
+            media_memory_gate.get("safe") is False
+            or any(
+                str(value) == "memory_gated"
+                for value in media_status_by_modality.values()
+            )
+        )
+    )
     media_capability_downscoped_to_text = bool(
         bundle_kind == "jang2l"
+        and not media_capability_memory_gated
         and "text" in {str(item) for item in modalities}
         and not ({"image", "video", "audio"} & {str(item) for item in modalities})
         and ({"vision", "audio"} & {str(item) for item in preserved_modalities})
@@ -764,6 +797,9 @@ def _all_local_smoke_evidence(data: dict[str, Any]) -> dict[str, Any]:
         "audio_waveform_e2e_labels": audio_waveform_e2e_labels,
         "audio_waveform_e2e_failures": audio_waveform_failures,
         "media_capability_downscoped_to_text": media_capability_downscoped_to_text,
+        "media_capability_memory_gated": media_capability_memory_gated,
+        "media_capability_status_by_modality": media_status_by_modality,
+        "media_capability_memory_gate": media_memory_gate,
         "media_capability_modalities": [str(item) for item in modalities],
         "media_capability_preserved_modalities": [
             str(item) for item in preserved_modalities
@@ -2777,6 +2813,9 @@ def build_audit(root: Path, model_path: Path, manifest: Path) -> dict[str, Any]:
     mimo_jang2l_media_capability_downscoped_to_text = bool(
         jang2l_smoke_evidence.get("media_capability_downscoped_to_text")
     )
+    mimo_jang2l_media_capability_memory_gated = bool(
+        jang2l_smoke_evidence.get("media_capability_memory_gated")
+    )
     block_disk_l2_restart_restore_blocked = not bool(
         smoke_evidence.get("block_disk_l2_restart_cache_hit")
     )
@@ -2932,6 +2971,8 @@ def build_audit(root: Path, model_path: Path, manifest: Path) -> dict[str, Any]:
         blockers.append("mimo_jang2l_live_media_l2_missing")
     if mimo_jang2l_media_capability_downscoped_to_text:
         blockers.append("mimo_jang2l_media_capability_downscoped_to_text")
+    if mimo_jang2l_media_capability_memory_gated:
+        blockers.append("mimo_jang2l_media_capability_memory_gated")
     if mimo_jang2l_l2_restart_cache_hit and not mimo_jang2l_l2_restart_visible_output:
         blockers.append("mimo_jang2l_l2_restart_visible_output_blocked")
     if mimo_jang2l_tool_long_prompt_metal_oom_blocked:
@@ -3033,6 +3074,9 @@ def build_audit(root: Path, model_path: Path, manifest: Path) -> dict[str, Any]:
             ),
             "mimo_jang2l_media_capability_downscoped_to_text": bool(
                 mimo_jang2l_media_capability_downscoped_to_text
+            ),
+            "mimo_jang2l_media_capability_memory_gated": not bool(
+                mimo_jang2l_media_capability_memory_gated
             ),
             "mimo_jang2l_tool_long_prompt_metal_oom": not bool(
                 mimo_jang2l_tool_long_prompt_metal_oom_blocked
