@@ -56,6 +56,7 @@ REQUIRED_NATIVE_MTP_TEST_MARKERS = (
     "test_native_mtp_depth_uses_validated_model_tuning_sidecar_by_default",
     "test_mllm_generator_runs_depth3_native_mtp_verify_cycle",
     "test_mllm_native_mtp_only_enables_for_proven_deterministic_sampling",
+    "test_qwen36_vlm_mtp_gdn_sink_does_not_leak_to_upstream_originals",
     "test_native_mtp_adaptive_depth_lowers_d3_after_poor_third_position",
     # Telemetry and metadata edge cases.
     "test_native_mtp_stats_snapshot_exposes_acceptance_depth_and_timings",
