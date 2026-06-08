@@ -77,6 +77,7 @@ export interface SessionConfig {
   defaultMinP?: number
   defaultRepetitionPenalty: number
   defaultMaxNewTokens?: number
+  defaultDoSample?: boolean
   defaultSamplingDefaultsDeclared?: boolean
   defaultEnableThinking?: boolean
   dsv4PrefixCache?: boolean
@@ -167,6 +168,7 @@ export const DEFAULT_CONFIG: SessionConfig = {
   defaultMinP: 0,
   defaultRepetitionPenalty: 0,
   defaultMaxNewTokens: 0,
+  defaultDoSample: undefined,
   defaultSamplingDefaultsDeclared: false,
   defaultEnableThinking: undefined,
   dsv4PrefixCache: true,
@@ -378,6 +380,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
     : (detectedNativeMtp?.depth || config.nativeMtpDepth || 3)
   const hasDeclaredSamplingDefaults =
     config.defaultSamplingDefaultsDeclared === true ||
+    config.defaultDoSample === false ||
     config.defaultTemperature > 0 ||
     config.defaultTopP > 0 ||
     (config.defaultTopK ?? 0) > 0 ||
@@ -385,6 +388,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
     config.defaultRepetitionPenalty > 0
   const generationDefaultsSummary = [
     (config.defaultMaxNewTokens ?? 0) > 0 ? `max output tokens ${Math.floor(config.defaultMaxNewTokens ?? 0)}` : null,
+    config.defaultDoSample === false ? 'sampling off' : null,
     hasDeclaredSamplingDefaults ? `temperature ${(config.defaultTemperature / 100).toFixed(2)}` : null,
     config.defaultTopP > 0 ? `top-p ${(config.defaultTopP / 100).toFixed(2)}` : null,
     hasDeclaredSamplingDefaults ? ((config.defaultTopK ?? 0) > 0 ? `top-k ${Math.floor(config.defaultTopK ?? 0)}` : 'top-k off') : null,

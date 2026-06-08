@@ -82,9 +82,31 @@ describe('readGenerationDefaults generation_config defaults', () => {
     })
   })
 
+  it('treats generation_config do_sample=false as effective greedy sampling', async () => {
+    const dir = makeModelDir({
+      'generation_config.json': {
+        do_sample: false,
+        temperature: 1.0,
+        top_p: 0.95,
+        top_k: 40,
+        max_new_tokens: 2048,
+      },
+    }, 'vmlx-generation-defaults-do-sample-false-')
+
+    await expect(readGenerationDefaults(dir)).resolves.toMatchObject({
+      doSample: false,
+      temperature: 0,
+      topP: 1,
+      topK: 0,
+      maxNewTokens: 2048,
+      source: 'generation_config',
+    })
+  })
+
   it('lets JANG chat sampling metadata override generation_config.json', async () => {
     const dir = makeModelDir({
       'generation_config.json': {
+        do_sample: false,
         temperature: 0.7,
         top_p: 0.95,
         top_k: 20,
@@ -109,6 +131,8 @@ describe('readGenerationDefaults generation_config defaults', () => {
       repeatPenalty: 1.0,
       source: 'jang_config',
     })
+    const defaults = await readGenerationDefaults(dir)
+    expect(defaults?.doSample).toBeUndefined()
   })
 
   it('surfaces Step Flash JANG greedy chat metadata instead of treating zero temperature as missing', async () => {

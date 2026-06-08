@@ -68,6 +68,7 @@ export interface ServerConfig {
   streamInterval: number
   maxTokens?: number
   defaultMaxNewTokens?: number
+  defaultDoSample?: boolean
   defaultTopK?: number
   defaultMinP?: number
   defaultSamplingDefaultsDeclared?: boolean

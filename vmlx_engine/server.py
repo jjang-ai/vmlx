@@ -957,6 +957,38 @@ def _generation_config_default(model_name: str, key: str) -> float | None:
     return None
 
 
+def _generation_config_do_sample(model_name: str) -> bool | None:
+    """Read ``generation_config.json::do_sample`` when explicitly declared."""
+    if not model_name:
+        return None
+    cache = _generation_defaults_cache
+    if model_name not in cache:
+        try:
+            from pathlib import Path as _P
+            import json as _json
+            _p = _P(model_name) / "generation_config.json"
+            if _p.is_file():
+                _doc = _json.loads(_p.read_text())
+                cache[model_name] = _doc if isinstance(_doc, dict) else {}
+            else:
+                cache[model_name] = {}
+        except Exception:
+            cache[model_name] = {}
+    val = cache[model_name].get("do_sample")
+    return bool(val) if isinstance(val, bool) else None
+
+
+def _generation_config_declares_greedy_sampling(model_name: str) -> bool:
+    """Whether generation_config explicitly declares sampling disabled.
+
+    This is only used after request, CLI, and JANG chat defaults have had a
+    chance to resolve. JANG chat metadata is a runtime contract and can
+    intentionally override generic generation_config fields.
+    """
+    bundle_path = _model_path or model_name
+    return _generation_config_do_sample(bundle_path) is False
+
+
 def _jang_chat_default_mode(bundle_path: str) -> str | None:
     """Return ``jang_config.chat.reasoning.default_mode`` or None."""
     if not bundle_path:
@@ -1079,9 +1111,17 @@ def _resolve_temperature(request_value: float | None, model_name: str = "") -> f
         return request_value
     if _default_temperature is not None:
         return _default_temperature
+    bundle_path = _model_path or model_name
     v = _bundle_sampling_default(model_name, "temperature")
     if v is not None:
+        if (
+            _jang_chat_sampling_default(bundle_path, "temperature") is None
+            and _generation_config_declares_greedy_sampling(model_name)
+        ):
+            return 0.0
         return v
+    if _generation_config_declares_greedy_sampling(model_name):
+        return 0.0
     fam_temp, _, _ = _family_fallback_for(model_name)
     if fam_temp is not None:
         return fam_temp
@@ -1094,9 +1134,17 @@ def _resolve_top_p(request_value: float | None, model_name: str = "") -> float:
         return request_value
     if _default_top_p is not None:
         return _default_top_p
+    bundle_path = _model_path or model_name
     v = _bundle_sampling_default(model_name, "top_p")
     if v is not None:
+        if (
+            _jang_chat_sampling_default(bundle_path, "top_p") is None
+            and _generation_config_declares_greedy_sampling(model_name)
+        ):
+            return 1.0
         return v
+    if _generation_config_declares_greedy_sampling(model_name):
+        return 1.0
     _, fam_top_p, _ = _family_fallback_for(model_name)
     if fam_top_p is not None:
         return fam_top_p
@@ -1109,9 +1157,17 @@ def _resolve_top_k(request_value: int | None, model_name: str = "") -> int:
         return max(0, int(request_value))
     if _default_top_k is not None:
         return max(0, int(_default_top_k))
+    bundle_path = _model_path or model_name
     v = _bundle_sampling_default(model_name, "top_k")
     if v is not None:
+        if (
+            _jang_chat_sampling_default(bundle_path, "top_k") is None
+            and _generation_config_declares_greedy_sampling(model_name)
+        ):
+            return 0
         return max(0, int(v))
+    if _generation_config_declares_greedy_sampling(model_name):
+        return 0
     family = _model_family_for_defaults(model_name)
     if family in _FAMILY_TOP_K_DEFAULTS:
         return max(0, int(_FAMILY_TOP_K_DEFAULTS[family]))

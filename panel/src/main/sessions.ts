@@ -55,6 +55,7 @@ function shouldPassHfTokenToEngine(modelPath?: string): boolean {
 }
 
 interface BundleStartupDefaults {
+  doSample?: boolean
   defaultTemperature?: number
   defaultTopP?: number
   defaultTopK?: number
@@ -439,9 +440,11 @@ function readBundleStartupDefaults(modelPath?: string): BundleStartupDefaults {
   const out: BundleStartupDefaults = {}
   try {
     const gen = JSON.parse(readFileSync(join(modelPath, 'generation_config.json'), 'utf8'))
-    if (typeof gen.temperature === 'number') out.defaultTemperature = Math.round(gen.temperature * 100)
-    if (typeof gen.top_p === 'number') out.defaultTopP = Math.round(gen.top_p * 100)
-    if (typeof gen.top_k === 'number') out.defaultTopK = Math.max(0, Math.round(gen.top_k))
+    const generationConfigDisablesSampling = gen.do_sample === false
+    if (typeof gen.do_sample === 'boolean') out.doSample = gen.do_sample
+    if (typeof gen.temperature === 'number') out.defaultTemperature = generationConfigDisablesSampling ? 0 : Math.round(gen.temperature * 100)
+    if (typeof gen.top_p === 'number') out.defaultTopP = generationConfigDisablesSampling ? 100 : Math.round(gen.top_p * 100)
+    if (typeof gen.top_k === 'number') out.defaultTopK = generationConfigDisablesSampling ? 0 : Math.max(0, Math.round(gen.top_k))
     if (typeof gen.min_p === 'number') out.defaultMinP = Math.max(0, Math.round(gen.min_p * 100))
     if (typeof gen.repetition_penalty === 'number') out.defaultRepetitionPenalty = Math.round(gen.repetition_penalty * 100)
     if (hasSamplingDefaultsRecord(gen, ['temperature', 'top_p', 'top_k', 'min_p', 'repetition_penalty'])) {
@@ -455,6 +458,7 @@ function readBundleStartupDefaults(modelPath?: string): BundleStartupDefaults {
     const jang = JSON.parse(readFileSync(join(modelPath, 'jang_config.json'), 'utf8'))
     const sampling = jang?.chat?.sampling_defaults
     if (sampling && typeof sampling === 'object') {
+      delete out.doSample
       if (typeof sampling.temperature === 'number') out.defaultTemperature = Math.round(sampling.temperature * 100)
       if (typeof sampling.top_p === 'number') out.defaultTopP = Math.round(sampling.top_p * 100)
       if (typeof sampling.top_k === 'number') out.defaultTopK = Math.max(0, Math.round(sampling.top_k))
@@ -512,6 +516,7 @@ function applyBundleStartupDefaults(config: Partial<ServerConfig>, modelPath?: s
   changed = setConfigValue(mutable, 'defaultRepetitionPenalty', defs.defaultRepetitionPenalty ?? 0) || changed
   changed = setConfigValue(mutable, 'defaultMaxNewTokens', defs.maxTokens ?? 0) || changed
   changed = setConfigValue(mutable, 'defaultSamplingDefaultsDeclared', defs.samplingDefaultsDeclared === true) || changed
+  changed = setConfigValue(mutable, 'defaultDoSample', defs.doSample) || changed
   const migrationKey = 'generationStartupDefaultsVersion'
   if (mutable[migrationKey] !== GENERATION_STARTUP_DEFAULTS_VERSION) {
     const oldHiddenMaxTokens =

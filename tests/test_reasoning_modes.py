@@ -649,6 +649,75 @@ def test_missing_bundle_sampling_defaults_do_not_force_sampler(tmp_path, monkeyp
     assert server._resolve_top_k(40) == 40
 
 
+def test_generation_config_do_sample_false_resolves_greedy_when_request_omits_sampling(
+    tmp_path, monkeypatch
+):
+    """`do_sample=false` is the bundle contract, not a display-only field."""
+    import json
+    from vmlx_engine import server
+
+    (tmp_path / "config.json").write_text(json.dumps({"model_type": "mimo_v2"}))
+    (tmp_path / "generation_config.json").write_text(json.dumps({
+        "do_sample": False,
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 40,
+        "max_new_tokens": 2048,
+    }))
+
+    monkeypatch.setattr(server, "_model_path", str(tmp_path))
+    monkeypatch.setattr(server, "_model_name", "mimo-v25")
+    monkeypatch.setattr(server, "_default_temperature", None)
+    monkeypatch.setattr(server, "_default_top_p", None)
+    monkeypatch.setattr(server, "_default_top_k", None)
+    monkeypatch.setattr(server, "_default_max_tokens_explicit", False, raising=False)
+    server._jang_sampling_defaults_cache.clear()
+    server._generation_defaults_cache.clear()
+
+    assert server._resolve_temperature(None) == 0.0
+    assert server._resolve_top_p(None) == 1.0
+    assert server._resolve_top_k(None) == 0
+    assert server._resolve_max_tokens(None) == 2048
+    assert server._resolve_temperature(0.6) == 0.6
+    assert server._resolve_top_p(0.9) == 0.9
+    assert server._resolve_top_k(40) == 40
+
+
+def test_jang_chat_sampling_overrides_generation_config_do_sample_false(
+    tmp_path, monkeypatch
+):
+    """JANG chat metadata remains higher priority than generic generation config."""
+    import json
+    from vmlx_engine import server
+
+    (tmp_path / "generation_config.json").write_text(json.dumps({
+        "do_sample": False,
+        "temperature": 1.0,
+        "top_p": 0.95,
+    }))
+    (tmp_path / "jang_config.json").write_text(json.dumps({
+        "chat": {
+            "sampling_defaults": {
+                "temperature": 0.55,
+                "top_p": 0.92,
+                "top_k": 64,
+            }
+        }
+    }))
+
+    monkeypatch.setattr(server, "_model_path", str(tmp_path))
+    monkeypatch.setattr(server, "_model_name", "jang-chat")
+    monkeypatch.setattr(server, "_default_temperature", None)
+    monkeypatch.setattr(server, "_default_top_p", None)
+    monkeypatch.setattr(server, "_default_top_k", None)
+    server._jang_sampling_defaults_cache.clear()
+    server._generation_defaults_cache.clear()
+
+    assert server._resolve_temperature(None) == 0.55
+    assert server._resolve_top_p(None) == 0.92
+    assert server._resolve_top_k(None) == 64
+
+
 @pytest.mark.parametrize("model_type", ["bailing_hybrid", "bailing_moe_v2_5"])
 def test_ling_suppresses_reasoning_parser_and_stale_think_in_template(
     tmp_path, monkeypatch, model_type
