@@ -751,6 +751,7 @@ def build_classification(
     jangtq2_hyphen_distribution: dict[str, Any] | None = None,
     jangtq2_current_all_local: dict[str, Any] | None = None,
     jangtq2_conservative_no_cb_no_prefix: dict[str, Any] | None = None,
+    artifact_paths: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     component_ok = audit.get("component_ok") if isinstance(audit.get("component_ok"), dict) else {}
     failures = _failures(smoke)
@@ -1006,15 +1007,7 @@ def build_classification(
             "JANG_2L served artifact/runtime still fails JSON sentinel exactness; provide corrected artifact or runtime decode proof that preserves value and count"
         )
 
-    return {
-        "status": status,
-        "release_ready": release_ready,
-        "classification": classification,
-        "secondary_classification": secondary_classification,
-        "model_upload_action_required": bool(model_upload_action_reasons),
-        "model_upload_action_reasons": model_upload_action_reasons,
-        "source_vs_quant_load_performed": False,
-        "source_vs_quant_load_skipped_reason": "user_disallowed_source_vs_quant_due_ram",
+    paths = {
         "audit_artifact": str(DEFAULT_AUDIT),
         "smoke_artifact": str(DEFAULT_SMOKE),
         "jangtq2_exactness_artifact": str(DEFAULT_JANGTQ2_EXACTNESS),
@@ -1035,6 +1028,20 @@ def build_classification(
         "jangtq2_conservative_no_cb_no_prefix_artifact": str(
             DEFAULT_JANGTQ2_CONSERVATIVE_NO_CB_NO_PREFIX
         ),
+    }
+    if artifact_paths:
+        paths.update(artifact_paths)
+
+    return {
+        "status": status,
+        "release_ready": release_ready,
+        "classification": classification,
+        "secondary_classification": secondary_classification,
+        "model_upload_action_required": bool(model_upload_action_reasons),
+        "model_upload_action_reasons": model_upload_action_reasons,
+        "source_vs_quant_load_performed": False,
+        "source_vs_quant_load_skipped_reason": "user_disallowed_source_vs_quant_due_ram",
+        **paths,
         "no_source_exactness": no_source_exactness,
         "literal_variant_summary": literal_variant_summary,
         "jang2l_literal_variant_summary": jang2l_literal_variant_summary,
@@ -1193,33 +1200,35 @@ def main() -> int:
         jangtq2_conservative_no_cb_no_prefix=(
             jangtq2_conservative_no_cb_no_prefix
         ),
-    )
-    artifact["audit_artifact"] = str(args.audit)
-    artifact["smoke_artifact"] = str(args.smoke)
-    artifact["jangtq2_exactness_artifact"] = str(args.jangtq2_exactness)
-    artifact["jang2l_exactness_artifact"] = str(args.jang2l_exactness)
-    artifact["jangtq2_no_switchglu_fastpath_artifact"] = str(
-        args.jangtq2_no_switchglu_fastpath
-    )
-    artifact["jangtq2_no_router_no_switchglu_fastpath_artifact"] = str(
-        args.jangtq2_no_router_no_switchglu_fastpath
-    )
-    artifact["jangtq2_tq_kernel_parity_artifact"] = str(args.jangtq2_tq_kernel_parity)
-    artifact["jang2l_json_sentinel_artifact"] = str(args.jang2l_json_sentinel)
-    artifact["jangtq2_logprob_diagnostic_artifact"] = str(
-        args.jangtq2_logprob_diagnostic
-    )
-    artifact["jangtq2_template_diagnostic_artifact"] = str(
-        args.jangtq2_template_diagnostic
+        artifact_paths={
+            "audit_artifact": str(args.audit),
+            "smoke_artifact": str(args.smoke),
+            "jangtq2_exactness_artifact": str(args.jangtq2_exactness),
+            "jang2l_exactness_artifact": str(args.jang2l_exactness),
+            "jangtq2_no_switchglu_fastpath_artifact": str(
+                args.jangtq2_no_switchglu_fastpath
+            ),
+            "jangtq2_no_router_no_switchglu_fastpath_artifact": str(
+                args.jangtq2_no_router_no_switchglu_fastpath
+            ),
+            "jangtq2_tq_kernel_parity_artifact": str(args.jangtq2_tq_kernel_parity),
+            "jangtq2_literal_variant_artifact": str(args.jangtq2_literal_variants),
+            "jang2l_literal_variant_artifact": str(args.jang2l_literal_variants),
+            "jang2l_json_sentinel_artifact": str(args.jang2l_json_sentinel),
+            "jangtq2_logprob_diagnostic_artifact": str(
+                args.jangtq2_logprob_diagnostic
+            ),
+            "jangtq2_template_diagnostic_artifact": str(
+                args.jangtq2_template_diagnostic
+            ),
+            "jangtq2_current_all_local_artifact": str(args.jangtq2_current_all_local),
+            "jangtq2_conservative_no_cb_no_prefix_artifact": str(
+                args.jangtq2_conservative_no_cb_no_prefix
+            ),
+        },
     )
     artifact["jangtq2_hyphen_distribution_artifact"] = str(
         args.jangtq2_hyphen_distribution
-    )
-    artifact["jangtq2_current_all_local_artifact"] = str(
-        args.jangtq2_current_all_local
-    )
-    artifact["jangtq2_conservative_no_cb_no_prefix_artifact"] = str(
-        args.jangtq2_conservative_no_cb_no_prefix
     )
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(json.dumps(artifact, indent=2, sort_keys=True) + "\n", encoding="utf-8")

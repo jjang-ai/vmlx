@@ -197,6 +197,26 @@ def test_mimo_no_source_classifier_records_greedy_top1_literal_drift():
     )
 
 
+def test_mimo_no_source_classifier_preserves_overridden_literal_variant_pointer():
+    audit = {"component_ok": {"tool_protocol": True}}
+    smoke = {"results": []}
+
+    artifact = build_classification(
+        audit,
+        smoke,
+        literal_variants={"status": "open", "requests": []},
+        artifact_paths={
+            "jangtq2_literal_variant_artifact": (
+                "build/current-mimo-v25-jangtq2-exactness-rerun-20260608/result.json"
+            )
+        },
+    )
+
+    assert artifact["jangtq2_literal_variant_artifact"] == (
+        "build/current-mimo-v25-jangtq2-exactness-rerun-20260608/result.json"
+    )
+
+
 def test_mimo_no_source_classifier_consumes_jangtq_and_jang2l_isolation_artifacts():
     audit = {
         "component_ok": {
