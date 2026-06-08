@@ -247,13 +247,43 @@ def test_mimo_no_source_classifier_promotes_plain_literal_copy_failure():
             },
         ],
     }
+    jang2l_literal_variants = {
+        "status": "open",
+        "requests": [
+            {
+                "label": "plain_exact_blue_cat",
+                "pass": True,
+                "content": "blue-cat",
+                "expected": "blue-cat",
+            },
+            {
+                "label": "plain_exact_sentinel",
+                "pass": True,
+                "content": "B7-CAT-09",
+                "expected": "B7-CAT-09",
+            },
+            {
+                "label": "tool_blue_cat",
+                "pass": False,
+                "code": 0,
+                "expected": {"value": "blue-cat"},
+            },
+        ],
+    }
 
-    artifact = build_classification(audit, smoke, literal_variants=literal_variants)
+    artifact = build_classification(
+        audit,
+        smoke,
+        literal_variants=literal_variants,
+        jang2l_literal_variants=jang2l_literal_variants,
+    )
 
     assert artifact["classification"] == (
-        "jangtq2_plain_literal_copy_fails_before_parser_or_json_repair"
+        "jangtq2_plain_literal_copy_regression_jang2l_plain_copy_passes"
     )
     assert artifact["literal_variant_summary"]["plain_literal_copy_pass"] is False
+    assert artifact["jang2l_literal_variant_summary"]["plain_literal_copy_pass"] is True
     assert artifact["literal_variant_summary"]["structured_literal_pass"] is False
     assert artifact["literal_variant_summary"]["tool_literal_pass"] is False
     assert artifact["unresolved_surfaces"]["jangtq2_plain_literal_copy"] is True
+    assert artifact["unresolved_surfaces"]["jang2l_tool_memory_or_protocol"] is True

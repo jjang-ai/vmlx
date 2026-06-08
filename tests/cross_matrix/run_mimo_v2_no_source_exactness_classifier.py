@@ -42,6 +42,9 @@ DEFAULT_JANGTQ2_TQ_KERNEL_PARITY = Path(
 DEFAULT_JANGTQ2_LITERAL_VARIANTS = Path(
     "build/current-mimo-v25-jangtq2-exactness-variant-probe-20260608/JANGQ_MiMo-V2.5-JANGTQ_2/result.json"
 )
+DEFAULT_JANG2L_LITERAL_VARIANTS = Path(
+    "build/current-mimo-v25-jang2l-exactness-variant-probe-20260608/JANGQ_MiMo-V2.5-JANG_2L/result.json"
+)
 
 EXACTNESS_REASONS = {
     "expected_tool_argument_missing",
@@ -218,6 +221,7 @@ def build_classification(
     no_router_no_switchglu_fastpath: dict[str, Any] | None = None,
     tq_kernel_parity: dict[str, Any] | None = None,
     literal_variants: dict[str, Any] | None = None,
+    jang2l_literal_variants: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     component_ok = audit.get("component_ok") if isinstance(audit.get("component_ok"), dict) else {}
     failures = _failures(smoke)
@@ -251,6 +255,7 @@ def build_classification(
 
     no_source_exactness = _exactness_probe_summary(jangtq2, jang2l)
     literal_variant_summary = _literal_variant_summary(literal_variants)
+    jang2l_literal_variant_summary = _literal_variant_summary(jang2l_literal_variants)
     no_switchglu_copy_preserved = _diagnostic_copy_preserved(no_switchglu_fastpath)
     no_router_no_switchglu_copy_preserved = _diagnostic_copy_preserved(
         no_router_no_switchglu_fastpath
@@ -313,12 +318,23 @@ def build_classification(
         "jangtq2_plain_literal_copy": (
             literal_variant_summary["plain_literal_copy_pass"] is False
         ),
+        "jang2l_tool_memory_or_protocol": (
+            jang2l_literal_variant_summary["exists"] is True
+            and jang2l_literal_variant_summary["tool_literal_pass"] is not True
+        ),
     }
 
     release_ready = False
     status = "open" if exactness_failures or any(unresolved_surfaces.values()) else "pass"
 
     if (
+        literal_variant_summary["plain_literal_copy_pass"] is False
+        and jang2l_literal_variant_summary["plain_literal_copy_pass"] is True
+    ):
+        classification = (
+            "jangtq2_plain_literal_copy_regression_jang2l_plain_copy_passes"
+        )
+    elif (
         literal_variant_summary["plain_literal_copy_pass"] is False
         and literal_variant_summary["structured_literal_pass"] is False
         and literal_variant_summary["tool_literal_pass"] is False
@@ -386,8 +402,10 @@ def build_classification(
         ),
         "jangtq2_tq_kernel_parity_artifact": str(DEFAULT_JANGTQ2_TQ_KERNEL_PARITY),
         "jangtq2_literal_variant_artifact": str(DEFAULT_JANGTQ2_LITERAL_VARIANTS),
+        "jang2l_literal_variant_artifact": str(DEFAULT_JANG2L_LITERAL_VARIANTS),
         "no_source_exactness": no_source_exactness,
         "literal_variant_summary": literal_variant_summary,
+        "jang2l_literal_variant_summary": jang2l_literal_variant_summary,
         "no_source_runtime_diagnostics": no_source_runtime_diagnostics,
         "exactness_failures": exactness_failures,
         "excluded_surfaces": excluded_surfaces,
@@ -422,6 +440,11 @@ def main() -> int:
         type=Path,
         default=DEFAULT_JANGTQ2_LITERAL_VARIANTS,
     )
+    parser.add_argument(
+        "--jang2l-literal-variants",
+        type=Path,
+        default=DEFAULT_JANG2L_LITERAL_VARIANTS,
+    )
     parser.add_argument("--out", type=Path, default=DEFAULT_OUT)
     args = parser.parse_args()
 
@@ -447,6 +470,11 @@ def main() -> int:
         if args.jangtq2_literal_variants.exists()
         else None
     )
+    jang2l_literal_variants = (
+        _load(args.jang2l_literal_variants)
+        if args.jang2l_literal_variants.exists()
+        else None
+    )
     artifact = build_classification(
         _load(args.audit),
         _load(args.smoke),
@@ -456,6 +484,7 @@ def main() -> int:
         no_router_no_switchglu_fastpath=no_router_no_switchglu_fastpath,
         tq_kernel_parity=tq_kernel_parity,
         literal_variants=literal_variants,
+        jang2l_literal_variants=jang2l_literal_variants,
     )
     artifact["audit_artifact"] = str(args.audit)
     artifact["smoke_artifact"] = str(args.smoke)
