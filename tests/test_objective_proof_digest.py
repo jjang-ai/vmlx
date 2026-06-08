@@ -1453,7 +1453,7 @@ def test_objective_proof_digest_tracks_ling_multilingual_cjk_leakage(tmp_path):
     )
     _write_json(
         tmp_path,
-        "build/current-dsv4-route-mode-code-exactness-preflight-after-release-manifest-refresh-20260607.json",
+        "build/current-dsv4-route-mode-code-exactness-preflight-after-mimo-model-upload-action-20260608.json",
         {
             "status": "pass",
             "reason": "sufficient_free_memory",
@@ -2650,7 +2650,7 @@ def test_objective_proof_digest_surfaces_dsv4_chatmax_prompt_trigger_probe(tmp_p
     )
     _write_json(
         tmp_path,
-        "build/current-dsv4-route-mode-code-exactness-preflight-after-release-manifest-refresh-20260607.json",
+        "build/current-dsv4-route-mode-code-exactness-preflight-after-mimo-model-upload-action-20260608.json",
         {
             "status": "pass",
             "reason": "sufficient_free_memory",
@@ -3707,10 +3707,10 @@ def test_objective_proof_digest_summarizes_dsv4_exact_code_root_boundary(
     )
     _write_json(
         tmp_path,
-        "build/current-dsv4-route-mode-code-exactness-preflight-after-release-manifest-refresh-20260607.json",
+        "build/current-dsv4-route-mode-code-exactness-preflight-after-mimo-model-upload-action-20260608.json",
         {
             "status": "skipped",
-            "reason": "insufficient_free_memory",
+            "reason": "insufficient_vm_stat_memory",
             "required_available_gb": 120.0,
             "required_free_gb": 120.0,
             "min_free_gb": 120.0,
@@ -3718,7 +3718,8 @@ def test_objective_proof_digest_summarizes_dsv4_exact_code_root_boundary(
             "model_size_gb": 79.98,
             "safety_margin_gb": 40.02,
             "floor_valid": True,
-            "available_for_gate_gb": 105.89,
+            "available_for_gate_gb": 105.93,
+            "memory_gap_gb": 14.07,
             "launch_blockers": ["insufficient_memory"],
             "launch_allowed": False,
             "active_heavy_process_count": 0,
@@ -3752,7 +3753,7 @@ def test_objective_proof_digest_summarizes_dsv4_exact_code_root_boundary(
                 {
                     "name": "preflight",
                     "system_memory": {
-                        "available_gb": 105.89,
+                        "available_gb": 113.28,
                         "total_gb": 128.0,
                     },
                 }
@@ -3835,12 +3836,12 @@ def test_objective_proof_digest_summarizes_dsv4_exact_code_root_boundary(
     assert summary["current_primary_failure"] == "direct_off_exact_code_generation"
     assert summary["source_full_output_preflight"]["artifact_present"] is True
     assert summary["source_full_output_preflight"]["artifact"] == (
-        "build/current-dsv4-route-mode-code-exactness-preflight-after-release-manifest-refresh-20260607.json"
+        "build/current-dsv4-route-mode-code-exactness-preflight-after-mimo-model-upload-action-20260608.json"
     )
     assert summary["source_full_output_preflight"]["status"] == "skipped"
-    assert summary["source_full_output_preflight"]["reason"] == "insufficient_free_memory"
-    assert summary["source_full_output_preflight"]["available_gb"] == 105.89
-    assert summary["source_full_output_preflight"]["memory_gap_gb"] == 14.11
+    assert summary["source_full_output_preflight"]["reason"] == "insufficient_vm_stat_memory"
+    assert summary["source_full_output_preflight"]["available_gb"] == 113.28
+    assert summary["source_full_output_preflight"]["memory_gap_gb"] == 14.07
     assert (
         summary["source_full_output_preflight"]["memory_pressure_free_percent"] == 94
     )
@@ -3849,7 +3850,7 @@ def test_objective_proof_digest_summarizes_dsv4_exact_code_root_boundary(
     assert summary["source_full_output_preflight"]["required_available_gb"] == 120.0
     assert summary["source_full_output_preflight"]["required_free_gb"] == 120.0
     assert summary["source_full_output_preflight"]["min_free_gb"] == 120.0
-    assert summary["source_full_output_preflight"]["available_for_gate_gb"] == 105.89
+    assert summary["source_full_output_preflight"]["available_for_gate_gb"] == 105.93
     assert summary["source_full_output_preflight"]["launch_allowed"] is False
     assert summary["source_full_output_preflight"]["required_model_margin_gb"] == 40.0
     assert summary["source_full_output_preflight"]["model_size_gb"] == 79.98
@@ -3869,7 +3870,7 @@ def test_objective_proof_digest_summarizes_dsv4_exact_code_root_boundary(
     assert summary["source_full_output_clearance_missing"] is True
     joined_evidence = "\n".join(quality["evidence"])
     assert (
-        "current-dsv4-route-mode-code-exactness-preflight-after-release-manifest-refresh-20260607.json"
+        "current-dsv4-route-mode-code-exactness-preflight-after-mimo-model-upload-action-20260608.json"
         in joined_evidence
     )
     assert (
@@ -9913,13 +9914,13 @@ def test_objective_proof_digest_accepts_dsv4_quality_clearance_artifact(tmp_path
             },
             "artifacts": {
                 "identifier_gate": "build/current-dsv4-identifier-count-ablation-20260521/result.json",
-                "full_output_gate": "build/current-dsv4-route-mode-code-exactness-preflight-after-release-manifest-refresh-20260607.json",
+                "full_output_gate": "build/current-dsv4-route-mode-code-exactness-preflight-after-mimo-model-upload-action-20260608.json",
             },
         },
     )
     _write_json(
         tmp_path,
-        "build/current-dsv4-route-mode-code-exactness-preflight-after-release-manifest-refresh-20260607.json",
+        "build/current-dsv4-route-mode-code-exactness-preflight-after-mimo-model-upload-action-20260608.json",
         {
             "status": "pass",
             "reason": "sufficient_free_memory",
@@ -10425,7 +10426,7 @@ def test_objective_proof_digest_reports_missing_current_dsv4_clearance_artifacts
             },
             "artifacts": {
                 "identifier_gate": "build/current-dsv4-identifier-count-ablation-20260521/result.json",
-                "full_output_gate": "build/current-dsv4-route-mode-code-exactness-preflight-after-release-manifest-refresh-20260607.json",
+                "full_output_gate": "build/current-dsv4-route-mode-code-exactness-preflight-after-mimo-model-upload-action-20260608.json",
             },
         },
     )
@@ -10438,7 +10439,7 @@ def test_objective_proof_digest_reports_missing_current_dsv4_clearance_artifacts
     assert quality["details"]["legacy_clearance_artifacts"] == {}
     assert quality["details"]["missing_clearance_artifacts"] == [
         "build/current-dsv4-identifier-count-ablation-20260521/result.json",
-        "build/current-dsv4-route-mode-code-exactness-preflight-after-release-manifest-refresh-20260607.json",
+        "build/current-dsv4-route-mode-code-exactness-preflight-after-mimo-model-upload-action-20260608.json",
     ]
 
 

@@ -1685,7 +1685,18 @@ def _load_jang_v2(
     # dequant-and-requant fallback below stays in place for environments
     # where jang_tools is unavailable.
     _tq_weight_files = _get_v2_weight_files(path)
-    _is_mxtq_v2 = _v2_bundle_has_tq_packed(path, _tq_weight_files)
+    _is_mxtq_v2 = False
+    try:
+        from safetensors import safe_open
+
+        for _wf in _tq_weight_files:
+            with safe_open(str(_wf), framework="numpy") as _sf:
+                if any(k.endswith(".tq_packed") for k in _sf.keys()):
+                    _is_mxtq_v2 = True
+                    break
+    except Exception as _tq_scan_err:
+        logger.debug("JANGTQ packed header scan skipped: %s", _tq_scan_err)
+        _is_mxtq_v2 = _v2_bundle_has_tq_packed(path, _tq_weight_files)
 
     if _is_mxtq_v2:
         # DeepSeek V4 (model_type="deepseek_v4") — register our MLX model
