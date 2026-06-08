@@ -228,12 +228,21 @@ def test_mimo_no_source_classifier_promotes_plain_literal_copy_failure():
         "requests": [
             {
                 "label": "plain_exact_blue_cat",
+                "route": "completions",
+                "pass": False,
+                "content": "blue cat",
+                "expected": "blue-cat",
+            },
+            {
+                "label": "plain_exact_chat_blue_cat",
+                "route": "chat",
                 "pass": False,
                 "content": "blue cat",
                 "expected": "blue-cat",
             },
             {
                 "label": "json_blue_cat",
+                "route": "chat",
                 "pass": False,
                 "content": '{"status":"ok","value":"bluecat","count":3}',
                 "parsed": {"status": "ok", "value": "bluecat", "count": 3},
@@ -241,6 +250,7 @@ def test_mimo_no_source_classifier_promotes_plain_literal_copy_failure():
             },
             {
                 "label": "tool_blue_cat",
+                "route": "chat",
                 "pass": False,
                 "parsed": {"value": "blue-123"},
                 "expected": {"value": "blue-cat"},
@@ -252,18 +262,28 @@ def test_mimo_no_source_classifier_promotes_plain_literal_copy_failure():
         "requests": [
             {
                 "label": "plain_exact_blue_cat",
+                "route": "completions",
                 "pass": True,
                 "content": "blue-cat",
                 "expected": "blue-cat",
             },
             {
                 "label": "plain_exact_sentinel",
+                "route": "completions",
+                "pass": True,
+                "content": "B7-CAT-09",
+                "expected": "B7-CAT-09",
+            },
+            {
+                "label": "plain_exact_chat_sentinel",
+                "route": "chat",
                 "pass": True,
                 "content": "B7-CAT-09",
                 "expected": "B7-CAT-09",
             },
             {
                 "label": "tool_blue_cat",
+                "route": "chat",
                 "pass": False,
                 "code": 0,
                 "expected": {"value": "blue-cat"},
@@ -282,7 +302,17 @@ def test_mimo_no_source_classifier_promotes_plain_literal_copy_failure():
         "jangtq2_plain_literal_copy_regression_jang2l_plain_copy_passes"
     )
     assert artifact["literal_variant_summary"]["plain_literal_copy_pass"] is False
+    assert (
+        artifact["literal_variant_summary"]["plain_completion_literal_copy_pass"]
+        is False
+    )
+    assert artifact["literal_variant_summary"]["plain_chat_literal_copy_pass"] is False
     assert artifact["jang2l_literal_variant_summary"]["plain_literal_copy_pass"] is True
+    assert (
+        artifact["jang2l_literal_variant_summary"]["plain_completion_literal_copy_pass"]
+        is True
+    )
+    assert artifact["jang2l_literal_variant_summary"]["plain_chat_literal_copy_pass"] is True
     assert artifact["literal_variant_summary"]["structured_literal_pass"] is False
     assert artifact["literal_variant_summary"]["tool_literal_pass"] is False
     assert artifact["unresolved_surfaces"]["jangtq2_plain_literal_copy"] is True

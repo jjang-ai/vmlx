@@ -173,6 +173,8 @@ def _literal_variant_summary(artifact: dict[str, Any] | None) -> dict[str, Any]:
         return {
             "exists": False,
             "plain_literal_copy_pass": None,
+            "plain_completion_literal_copy_pass": None,
+            "plain_chat_literal_copy_pass": None,
             "structured_literal_pass": None,
             "tool_literal_pass": None,
             "failed_labels": [],
@@ -198,6 +200,13 @@ def _literal_variant_summary(artifact: dict[str, Any] | None) -> dict[str, Any]:
             and str(request.get("label", "")).startswith(prefix)
         ]
 
+    def _route_labels(prefix: str, route: str) -> list[dict[str, Any]]:
+        return [
+            request
+            for request in _labels(prefix)
+            if str(request.get("route") or "") == route
+        ]
+
     def _all_pass(rows: list[dict[str, Any]]) -> bool | None:
         if not rows:
             return None
@@ -207,6 +216,10 @@ def _literal_variant_summary(artifact: dict[str, Any] | None) -> dict[str, Any]:
         "exists": True,
         "status": artifact.get("status"),
         "plain_literal_copy_pass": _all_pass(_labels("plain_exact")),
+        "plain_completion_literal_copy_pass": _all_pass(
+            _route_labels("plain_exact", "completions")
+        ),
+        "plain_chat_literal_copy_pass": _all_pass(_route_labels("plain_exact", "chat")),
         "structured_literal_pass": _all_pass(_labels("json_")),
         "tool_literal_pass": _all_pass(_labels("tool_")),
         "failed_labels": [failure["label"] for failure in failures],

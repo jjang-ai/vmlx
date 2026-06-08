@@ -172,6 +172,47 @@ def build_cases(
             },
         },
         {
+            "label": "plain_exact_chat_blue_cat",
+            "route": "chat",
+            "expected": expected_blue,
+            "payload": {
+                "model": model,
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": (
+                            f"Output exactly this string and nothing else:\n{expected_blue}"
+                        ),
+                    }
+                ],
+                "temperature": 0,
+                "top_p": 1,
+                "max_tokens": 20,
+                "enable_thinking": False,
+            },
+        },
+        {
+            "label": "plain_exact_chat_sentinel",
+            "route": "chat",
+            "expected": expected_sentinel,
+            "payload": {
+                "model": model,
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": (
+                            "Output exactly this string and nothing else:\n"
+                            f"{expected_sentinel}"
+                        ),
+                    }
+                ],
+                "temperature": 0,
+                "top_p": 1,
+                "max_tokens": 24,
+                "enable_thinking": False,
+            },
+        },
+        {
             "label": "json_blue_cat",
             "route": "chat",
             "expected": {"status": "ok", "value": expected_blue, "count": 3},
@@ -279,8 +320,11 @@ def classify_case(case: dict[str, Any], response: dict[str, Any]) -> dict[str, A
     content = ""
     parsed: Any = None
 
-    if label.startswith("plain_exact"):
+    if label in {"plain_exact_blue_cat", "plain_exact_sentinel"}:
         content = _completion_text(body)
+        passed = response.get("code") == 200 and content.strip() == expected
+    elif label in {"plain_exact_chat_blue_cat", "plain_exact_chat_sentinel"}:
+        content = _message_content(body)
         passed = response.get("code") == 200 and content.strip() == expected
     elif label.startswith("json_"):
         content = _message_content(body)

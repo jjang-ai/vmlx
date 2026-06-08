@@ -13,6 +13,8 @@ def test_mimo_exactness_probe_builds_literal_json_and_tool_cases():
     assert labels == [
         "plain_exact_blue_cat",
         "plain_exact_sentinel",
+        "plain_exact_chat_blue_cat",
+        "plain_exact_chat_sentinel",
         "json_blue_cat",
         "json_sentinel",
         "tool_blue_cat",
@@ -20,6 +22,7 @@ def test_mimo_exactness_probe_builds_literal_json_and_tool_cases():
     ]
     by_label = {case["label"]: case for case in cases}
     assert by_label["plain_exact_sentinel"]["payload"]["model"] == "mimo-test"
+    assert by_label["plain_exact_chat_sentinel"]["route"] == "chat"
     assert "B7-CAT-09" in by_label["json_sentinel"]["payload"]["messages"][0]["content"]
     assert by_label["tool_sentinel_json_call"]["payload"]["tool_choice"] == "required"
 
@@ -48,6 +51,20 @@ def test_mimo_exactness_probe_accepts_exact_outputs():
             },
         },
     )
+    chat_plain = classify_case(
+        cases["plain_exact_chat_sentinel"],
+        {
+            "code": 200,
+            "body": {
+                "choices": [
+                    {
+                        "message": {"content": "B7-CAT-09"},
+                        "finish_reason": "stop",
+                    }
+                ]
+            },
+        },
+    )
     tool = classify_case(
         cases["tool_sentinel_json_call"],
         {
@@ -73,6 +90,7 @@ def test_mimo_exactness_probe_accepts_exact_outputs():
     )
 
     assert plain["pass"] is True
+    assert chat_plain["pass"] is True
     assert json_row["pass"] is True
     assert tool["pass"] is True
 
@@ -94,6 +112,20 @@ def test_mimo_exactness_probe_rejects_literal_mutation_without_repair():
                         "message": {
                             "content": '{"status":"ok","value":"B7CAT-09","count":3}'
                         }
+                    }
+                ]
+            },
+        },
+    )
+    chat_plain = classify_case(
+        cases["plain_exact_chat_sentinel"],
+        {
+            "code": 200,
+            "body": {
+                "choices": [
+                    {
+                        "message": {"content": "B7CAT-09"},
+                        "finish_reason": "stop",
                     }
                 ]
             },
@@ -126,5 +158,7 @@ def test_mimo_exactness_probe_rejects_literal_mutation_without_repair():
     assert plain["content"] == "B7CAT-09"
     assert json_row["pass"] is False
     assert json_row["parsed"] == {"status": "ok", "value": "B7CAT-09", "count": 3}
+    assert chat_plain["pass"] is False
+    assert chat_plain["content"] == "B7CAT-09"
     assert tool["pass"] is False
     assert tool["parsed"] == {"value": "B7CAT-09"}
