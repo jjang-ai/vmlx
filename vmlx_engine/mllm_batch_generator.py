@@ -3670,6 +3670,15 @@ class MLLMBatchGenerator:
             request.extra_kwargs["video_grid_thw"] = _ensure_mx_array(
                 request.extra_kwargs["video_grid_thw"], mx.int32
             )
+        request.audio_codes = _ensure_mx_array(
+            request.extra_kwargs.pop("audio_codes", None), mx.int32
+        )
+        request.audio_embeds = _ensure_mx_array(
+            request.extra_kwargs.pop("audio_embeds", None)
+        )
+        request.audio_features = _ensure_mx_array(
+            request.extra_kwargs.pop("audio_features", None)
+        )
 
         self._raise_if_prompt_over_limit(
             request,

@@ -25,7 +25,7 @@ from typing import Any
 DEFAULT_MODEL_PATH = Path("/Users/example/.mlxstudio/models/JANGQ-AI/MiMo-V2.5-JANGTQ_2")
 DEFAULT_MANIFEST = Path("build/current-mimo-jangtq2-local-manifest-20260607.tsv")
 DEFAULT_OUT = Path(
-    "build/current-mimo-v2-jang2l-current-audit-after-audio-payload-forwarding-20260607.json"
+    "build/current-mimo-v2-jang2l-current-audit-after-audio-processor-fields-20260607.json"
 )
 
 STRUCTURAL_ARTIFACT = Path("build/current-mimo-jang2l-local-structural-verify-20260606.json")
@@ -1049,6 +1049,25 @@ def _mimo_media_runtime_evidence(
         if (root / "tests/test_mllm_scheduler_cache.py").exists()
         else False
     )
+    audio_processor_output_bridge_present = all(
+        marker in batch_generator_text
+        for marker in (
+            'request.extra_kwargs.pop("audio_codes", None)',
+            'request.extra_kwargs.pop("audio_embeds", None)',
+            'request.extra_kwargs.pop("audio_features", None)',
+            "request.audio_codes = _ensure_mx_array(",
+            "request.audio_embeds = _ensure_mx_array(",
+            "request.audio_features = _ensure_mx_array(",
+        )
+    ) and (
+        "test_mllm_processor_audio_outputs_are_promoted_to_request_fields"
+        in (root / "tests/test_mllm_scheduler_cache.py").read_text(
+            encoding="utf-8",
+            errors="replace",
+        )
+        if (root / "tests/test_mllm_scheduler_cache.py").exists()
+        else False
+    )
     media_weights_preserved = bool(visual_count > 0 and audio_count > 0)
     metadata_overadvertises = bool(
         config_modalities != ["text"]
@@ -1108,6 +1127,7 @@ def _mimo_media_runtime_evidence(
         "media_weight_assignment": bool(media_weight_assignment_present),
         "media_aware_prefix_l2_cache": bool(media_aware_prefix_l2_cache_present),
         "audio_payload_forwarding": bool(audio_payload_forwarding_present),
+        "audio_processor_output_bridge": bool(audio_processor_output_bridge_present),
         "runtime_media_wired": False if runtime_gap else True,
         "missing_runtime_components": (
             [
@@ -1161,6 +1181,10 @@ def _mimo_media_runtime_evidence(
                     (
                         "audio payload forwarding through MLLM wrapper",
                         audio_payload_forwarding_present,
+                    ),
+                    (
+                        "processor-produced audio tensor field bridge",
+                        audio_processor_output_bridge_present,
                     ),
                 )
                 if not present

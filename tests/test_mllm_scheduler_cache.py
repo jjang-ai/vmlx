@@ -271,6 +271,21 @@ def test_mllm_audio_payload_prefill_uses_model_wrapper_not_text_fast_path():
     assert request.vision_encoded is True
 
 
+def test_mllm_processor_audio_outputs_are_promoted_to_request_fields():
+    """Processor-returned audio tensors must not stay buried in extra_kwargs."""
+    import inspect
+    from vmlx_engine.mllm_batch_generator import MLLMBatchGenerator
+
+    source = inspect.getsource(MLLMBatchGenerator._preprocess_request)
+
+    assert 'request.extra_kwargs.pop("audio_codes", None)' in source
+    assert 'request.extra_kwargs.pop("audio_embeds", None)' in source
+    assert 'request.extra_kwargs.pop("audio_features", None)' in source
+    assert "request.audio_codes = _ensure_mx_array(" in source
+    assert "request.audio_embeds = _ensure_mx_array(" in source
+    assert "request.audio_features = _ensure_mx_array(" in source
+
+
 def test_mllm_exact_prefix_hit_with_generation_suffix_refeeds_last_prompt_token():
     """VLM memory/legacy hits store N-1 KV, so suffix-only prefill is wrong."""
 

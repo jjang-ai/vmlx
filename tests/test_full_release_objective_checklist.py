@@ -760,7 +760,7 @@ def test_full_release_objective_checklist_keeps_open_rows_visible(tmp_path):
     _write_green_panel_settings_artifact(tmp_path)
     _write_json(
         tmp_path
-        / "build/current-mimo-v2-jang2l-current-audit-after-audio-payload-forwarding-20260607.json",
+        / "build/current-mimo-v2-jang2l-current-audit-after-audio-processor-fields-20260607.json",
         {
             "status": "open",
             "local_release_clearance": False,
@@ -882,7 +882,7 @@ def test_full_release_objective_checklist_can_pass_when_all_evidence_is_green(
     _write_green_panel_settings_artifact(tmp_path)
     _write_json(
         tmp_path
-        / "build/current-mimo-v2-jang2l-current-audit-after-audio-payload-forwarding-20260607.json",
+        / "build/current-mimo-v2-jang2l-current-audit-after-audio-processor-fields-20260607.json",
         {
             "status": "pass",
             "local_release_clearance": True,

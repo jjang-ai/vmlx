@@ -102,6 +102,12 @@ def test_mimo_current_audit_separates_clean_artifact_from_runtime_blockers(
                 'kwargs["audio_embeds"] = request.audio_features',
                 "has_media_payload = has_images or has_audio_payload",
                 "not has_media_payload",
+                'request.extra_kwargs.pop("audio_codes", None)',
+                'request.extra_kwargs.pop("audio_embeds", None)',
+                'request.extra_kwargs.pop("audio_features", None)',
+                "request.audio_codes = _ensure_mx_array(",
+                "request.audio_embeds = _ensure_mx_array(",
+                "request.audio_features = _ensure_mx_array(",
             ]
         )
     )
@@ -115,7 +121,12 @@ def test_mimo_current_audit_separates_clean_artifact_from_runtime_blockers(
         )
     )
     (tmp_path / "tests/test_mllm_scheduler_cache.py").write_text(
-        "test_mllm_audio_payload_prefill_uses_model_wrapper_not_text_fast_path"
+        "\n".join(
+            [
+                "test_mllm_audio_payload_prefill_uses_model_wrapper_not_text_fast_path",
+                "test_mllm_processor_audio_outputs_are_promoted_to_request_fields",
+            ]
+        )
     )
     manifest = tmp_path / "build" / "current-mimo-http-tb5-manifest-20260606.tsv"
     manifest.parent.mkdir(parents=True)
@@ -428,6 +439,10 @@ def test_mimo_current_audit_separates_clean_artifact_from_runtime_blockers(
         is True
     )
     assert (
+        result["diagnostics"]["mimo_media_runtime"]["audio_processor_output_bridge"]
+        is True
+    )
+    assert (
         "VisionConfig parser"
         not in result["diagnostics"]["mimo_media_runtime"]["missing_runtime_components"]
     )
@@ -489,6 +504,10 @@ def test_mimo_current_audit_separates_clean_artifact_from_runtime_blockers(
     )
     assert (
         "audio payload forwarding through MLLM wrapper"
+        not in result["diagnostics"]["mimo_media_runtime"]["missing_runtime_components"]
+    )
+    assert (
+        "processor-produced audio tensor field bridge"
         not in result["diagnostics"]["mimo_media_runtime"]["missing_runtime_components"]
     )
     assert result["diagnostics"]["all_local_smoke"]["tool_protocol_pass"] is True
