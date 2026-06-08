@@ -251,7 +251,6 @@ class TestToolChoiceSuppression:
         assert len(result) == 1
         assert result[0].function["name"] == "search"
 
-
     def test_specific_tool_choice_dict_counts_as_required_for_enforcement(self):
         from vmlx_engine.server import _is_required_tool_choice
 
@@ -581,18 +580,39 @@ class TestResponsesInputConversion:
         coerced = _coerce_zaya_vl_tool_history_for_template(messages)
 
         assert all(m["role"] != "tool" for m in coerced)
+        assert len(coerced) == 1
         assert coerced[0]["role"] == "user"
-        assert "tool-call history" in coerced[0]["content"][0]["text"]
-        assert coerced[1]["role"] == "assistant"
-        assert isinstance(coerced[1]["content"], list)
-        assert "<zyphra_tool_call>" in coerced[1]["content"][0]["text"]
-        assert "<function=run_command>" in coerced[1]["content"][0]["text"]
-        assert coerced[2]["role"] == "user"
-        assert isinstance(coerced[2]["content"], list)
-        assert "<zyphra_tool_response>" in coerced[2]["content"][0]["text"]
-        assert '{"stdout":"ok"}' in coerced[2]["content"][0]["text"]
-        assert coerced[3]["content"][0]["type"] == "text"
-        assert coerced[3]["content"][0]["text"] == "Continue."
+        assert isinstance(coerced[0]["content"], list)
+        assert "tool_calls" not in coerced[0]
+        merged_text = coerced[0]["content"][0]["text"]
+        assert "tool-call history" in merged_text
+        assert "Previous assistant tool call:" in merged_text
+        assert "<zyphra_tool_call>" in merged_text
+        assert "<function=run_command>" in merged_text
+        assert "Tool response: " in merged_text
+        assert "<zyphra_tool_response>" not in merged_text
+        assert '{"stdout":"ok"}' in merged_text
+        assert "Continue." in merged_text
+
+    def test_zaya_vl_tool_history_summarizes_stored_json_result(self):
+        from vmlx_engine.server import _coerce_zaya_vl_tool_history_for_template
+
+        coerced = _coerce_zaya_vl_tool_history_for_template(
+            [
+                {
+                    "role": "tool",
+                    "tool_call_id": "call_smoke_record_fact",
+                    "name": "record_fact",
+                    "content": '{"ok":true,"stored":"blue-cat"}',
+                },
+            ]
+        )
+
+        text = coerced[0]["content"][0]["text"]
+        assert text.startswith("Tool response: ")
+        assert "<zyphra_tool_response>" not in text
+        assert "STORED blue-cat" in text
+        assert '{"ok":true,"stored":"blue-cat"}' not in text
 
     def test_server_wires_zaya_vl_tool_history_coercion_into_chat_and_responses_paths(self):
         source = Path("vmlx_engine/server.py").read_text()
@@ -812,6 +832,61 @@ class TestFallbackToolPromptFormat:
         assert "VALUE HERE" not in rendered
         assert "<tool_call>" not in rendered
 
+    def test_minimax_fallback_injects_concrete_native_required_tool_call(self):
+        from vmlx_engine.api.tool_calling import check_and_inject_fallback_tools
+
+        class FakeTokenizer:
+            def apply_chat_template(self, messages, **kwargs):
+                return "\n".join(str(m.get("content", "")) for m in messages)
+
+        prompt = (
+            "]~b]system\nTools available: record_fact\n"
+            "]~b]user\nUse record_fact.\n]~b]ai\n<think>\n"
+        )
+        messages = [
+            {
+                "role": "user",
+                "content": (
+                    "Use the record_fact tool exactly once. Its value argument "
+                    "must be the literal string \"blue-cat\"."
+                ),
+            }
+        ]
+        tools = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "record_fact",
+                    "description": "Record one exact fact.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"value": {"type": "string"}},
+                        "required": ["value"],
+                    },
+                },
+            }
+        ]
+
+        rendered = check_and_inject_fallback_tools(
+            prompt,
+            messages,
+            tools,
+            FakeTokenizer(),
+            {
+                "tokenize": False,
+                "add_generation_prompt": True,
+                "tool_choice": "required",
+            },
+            tool_parser_id="minimax",
+        )
+
+        assert "<minimax:tool_call>" in rendered
+        assert '<invoke name="record_fact">' in rendered
+        assert '<parameter name="value">blue-cat</parameter>' in rendered
+        assert "</invoke>" in rendered
+        assert "</minimax:tool_call>" in rendered
+        assert "<function=record_fact>" not in rendered
+
     def test_dsv4_fallback_ignores_historical_dsml_when_checking_examples(self):
         from vmlx_engine.api.tool_calling import check_and_inject_fallback_tools
 
@@ -909,6 +984,67 @@ class TestFallbackToolPromptFormat:
         assert "<function=list_directory>" in rendered
         assert "<parameter=path>" in rendered
         assert "fake directory listing" in rendered
+        assert "tools" not in tokenizer.last_kwargs
+
+    def test_qwen_required_tool_choice_fallback_injects_hard_first_call_contract(self):
+        from vmlx_engine.api.tool_calling import check_and_inject_fallback_tools
+
+        class FakeTokenizer:
+            last_kwargs = None
+
+            def apply_chat_template(self, messages, **kwargs):
+                self.last_kwargs = kwargs
+                return "\n".join(m.get("content", "") for m in messages)
+
+        prompt = (
+            "<|im_start|>system\n# Tools\n<tools>\n"
+            '{"type":"function","function":{"name":"grep_repo"}}\n'
+            "</tools>\n"
+            "<tool_call>\n"
+            "<function=example_function_name>\n"
+            "<parameter=example_parameter_1>\nvalue_1\n</parameter>\n"
+            "</function>\n</tool_call>\n"
+            "<|im_end|>\n<|im_start|>user\nUse grep_repo<|im_end|>\n"
+            "<|im_start|>assistant\n"
+        )
+        messages = [{"role": "user", "content": "Use grep_repo for pattern cache."}]
+        tools = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "grep_repo",
+                    "description": "Search source",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"pattern": {"type": "string"}},
+                        "required": ["pattern"],
+                    },
+                },
+            }
+        ]
+
+        tokenizer = FakeTokenizer()
+        rendered = check_and_inject_fallback_tools(
+            prompt,
+            messages,
+            tools,
+            tokenizer,
+            {
+                "tokenize": False,
+                "add_generation_prompt": True,
+                "tools": tools,
+                "tool_choice": "required",
+            },
+        )
+
+        assert "tool_choice=required" in rendered
+        assert "emit exactly one native tool call before any prose" in rendered
+        assert "first assistant output for this turn must be one of the native tool calls" in rendered
+        assert "Current turn API contract: tool_choice=required" in rendered
+        assert "Historical tool results do not satisfy this current-turn requirement" in rendered
+        assert "Do not answer in prose before the tool call" in rendered
+        assert "<function=grep_repo>" in rendered
+        assert "<parameter=pattern>" in rendered
         assert "tools" not in tokenizer.last_kwargs
 
     def test_step3p5_fallback_not_triggered_when_native_examples_present(self):
@@ -1129,6 +1265,43 @@ class TestFallbackToolPromptFormat:
         assert "<parameter=value>\nblue-cat\n</parameter>" in rendered
         assert "<parameter=value>\nexample\n</parameter>" not in rendered
         assert "<parameter=value>\nREQUEST_VALUE\n</parameter>" not in rendered
+
+    def test_zaya_fallback_extracts_value_argument_literal_string(self):
+        from vmlx_engine.api.tool_calling import check_and_inject_fallback_tools
+
+        class FakeTokenizer:
+            def apply_chat_template(self, messages, **kwargs):
+                return "\n".join(m.get("content", "") for m in messages)
+
+        tools = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "record_fact",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"value": {"type": "string"}},
+                        "required": ["value"],
+                    },
+                },
+            }
+        ]
+        request = (
+            'Use the record_fact tool exactly once. Its value argument must be '
+            'the literal string "blue-cat"; preserve every character.'
+        )
+
+        rendered = check_and_inject_fallback_tools(
+            "user: " + request + "\nassistant:",
+            [{"role": "user", "content": request}],
+            tools,
+            FakeTokenizer(),
+            {"tokenize": False, "add_generation_prompt": True, "tools": tools},
+            tool_parser_id="zaya_xml",
+        )
+
+        assert "<parameter=value>\nblue-cat\n</parameter>" in rendered
+        assert "<parameter=value>\nargument\n</parameter>" not in rendered
 
     def test_zaya_fallback_does_not_teach_unavailable_list_directory_tool(self):
         from vmlx_engine.api.tool_calling import check_and_inject_fallback_tools
@@ -3158,6 +3331,28 @@ class TestXMLFunctionToolParser:
         assert result.content == "ok"
         assert result.tool_calls[0]["name"] == "search"
         assert result.tool_calls[0]["arguments"] == '{"query": "MiMo V2 cache", "limit": 3}'
+
+    def test_extracts_mimo_nested_invoke_xml_tool_call(self):
+        """MiMo JANG_2L can emit tool_name/arguments XML instead of function=."""
+        from vmlx_engine.tool_parsers import ToolParserManager
+
+        parser = ToolParserManager.get_tool_parser("xml_function")()
+        result = parser.extract_tool_calls(
+            "<tool_call>\n"
+            "<function_call>\n"
+            "<invoke>\n"
+            "<tool_name>record_fact</tool_name>\n"
+            "<arguments>\n"
+            "<value>blue-cat</value>\n"
+            "</arguments>\n"
+            "</invoke>\n"
+            "</tool_call>"
+        )
+
+        assert result.tools_called is True
+        assert result.content is None
+        assert result.tool_calls[0]["name"] == "record_fact"
+        assert result.tool_calls[0]["arguments"] == '{"value": "blue-cat"}'
 
     def test_streaming_emits_tool_call_only_after_close(self):
         from vmlx_engine.tool_parsers import ToolParserManager
