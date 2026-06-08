@@ -63,7 +63,7 @@ from tests.cross_matrix.release_regression_manifest import (
 
 DEFAULT_OUT = Path("build/current-objective-proof-after-mimo-recall-cap-guard-20260608.json")
 CURRENT_RELEASE_REGRESSION_MANIFEST_REL = (
-    "build/current-release-regression-manifest-after-mimo-recall-cap-guard-20260608.json"
+    "build/current-release-regression-manifest-after-mimo-live-refresh-20260608.json"
 )
 DSV4_QUALITY_CLEARANCE_REL = "build/current-dsv4-long-output-quality-clearance-20260521.json"
 DSV4_CURRENT_IDENTIFIER_CANARY_REL = (
@@ -360,7 +360,7 @@ ALL_LOCAL_MODEL_SMOKE_LIVE_SLICE_CURRENT_REL = (
     "build/current-all-local-model-smoke-live-slice-tools-media-continuation-20260606/summary.json"
 )
 ALL_LOCAL_MODEL_SMOKE_MIMO_V2_JANG2L_REL = (
-    "build/current-all-local-model-smoke-mimo-v25-jang2l-after-recall-cap-and-text-oom-guard-20260608/summary.json"
+    "build/current-all-local-model-smoke-mimo-v25-jang2l-live-refresh-20260608/summary.json"
 )
 MIMO_V2_JANG2L_STRUCTURAL_VERIFY_REL = (
     "build/current-mimo-jang2l-local-structural-verify-20260606.json"
@@ -378,7 +378,7 @@ MIMO_V2_JANG2L_TOOL_DIALECT_REL = (
     "build/current-mimo-v2-jang2l-tool-dialect-failure-20260606.json"
 )
 MIMO_V2_JANG2L_CURRENT_AUDIT_REL = (
-    "build/current-mimo-v2-jang2l-current-audit-after-recall-cap-and-text-oom-guard-20260608.json"
+    "build/current-mimo-v2-jang2l-current-audit-after-live-refresh-20260608.json"
 )
 MIMO_V2_JANG2L_METADATA_TRUTH_REL = (
     "build/current-mimo-v25-jang2l-local-metadata-truth-patch-20260606.json"
@@ -387,10 +387,10 @@ MIMO_V2_JANG2L_CONSERVATIVE_DIAGNOSTIC_REL = (
     "build/current-mimo-conservative-diagnostic-20260606/summary.json"
 )
 MIMO_V2_JANG2L_NOMEDIA_TOOL_CACHE_REL = (
-    "build/current-all-local-model-smoke-mimo-v25-jangtq2-media-l2-after-cache-cap-20260608/summary.json"
+    "build/current-all-local-model-smoke-mimo-v25-jangtq2-live-refresh-20260608/summary.json"
 )
 MIMO_V2_NO_SOURCE_EXACTNESS_CLASSIFIER_REL = (
-    "build/current-mimo-v2-no-source-exactness-classifier-after-jang2l-recall-cap-and-text-oom-guard-20260608.json"
+    "build/current-mimo-v2-no-source-exactness-classifier-after-jangtq2-live-refresh-20260608.json"
 )
 ALL_LOCAL_MODEL_SMOKE_DSV4_JANGTQ_K_REL = (
     "build/current-all-local-model-smoke-dsv4-jangtq-k-tools-cache-20260606/summary.json"

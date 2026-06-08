@@ -8673,7 +8673,7 @@ def test_objective_digest_includes_current_real_ui_unblocked_non_mimo_matrix(
             "build/current-real-ui-dsv4-memory-preflight-20260530-local-refresh.json"
         ],
         "mimo_v2": [
-            "build/current-all-local-model-smoke-mimo-v25-jang2l-after-recall-cap-and-text-oom-guard-20260608/summary.json"
+            "build/current-all-local-model-smoke-mimo-v25-jang2l-live-refresh-20260608/summary.json"
         ],
     }
     assert row["details"]["real_ui_live_model_matrix"][
@@ -10630,3 +10630,11 @@ def test_objective_proof_digest_surfaces_current_mimo_model_upload_boundary(
         "mimo_jang2l_media_capability_downscoped_to_text",
     ]
     assert details["mimo_jang2l_media_capability_downscoped_to_text"] is True
+
+
+def test_objective_proof_digest_uses_current_mimo_no_source_classifier_artifact():
+    from tests.cross_matrix import summarize_objective_proof as objective
+
+    assert objective.MIMO_V2_NO_SOURCE_EXACTNESS_CLASSIFIER_REL == (
+        "build/current-mimo-v2-no-source-exactness-classifier-after-jangtq2-live-refresh-20260608.json"
+    )

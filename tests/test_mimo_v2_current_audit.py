@@ -1579,7 +1579,7 @@ def test_mimo_current_audit_points_jangtq2_at_latest_cache_cap_smoke():
     from tests.cross_matrix import run_mimo_v2_jang2l_current_audit as audit
 
     assert str(audit.ALL_LOCAL_SMOKE_ARTIFACT) == (
-        "build/current-all-local-model-smoke-mimo-v25-jangtq2-media-l2-after-cache-cap-20260608/"
+        "build/current-all-local-model-smoke-mimo-v25-jangtq2-live-refresh-20260608/"
         "summary.json"
     )
 
@@ -1588,7 +1588,7 @@ def test_mimo_current_audit_points_jang2l_at_latest_media_l2_release_smoke():
     from tests.cross_matrix import run_mimo_v2_jang2l_current_audit as audit
 
     assert str(audit.JANG2L_ALL_LOCAL_SMOKE_ARTIFACT) == (
-        "build/current-all-local-model-smoke-mimo-v25-jang2l-media-l2-runtime-modalities-20260608/"
+        "build/current-all-local-model-smoke-mimo-v25-jang2l-live-refresh-20260608/"
         "summary.json"
     )
 

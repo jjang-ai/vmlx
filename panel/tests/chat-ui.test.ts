@@ -18,7 +18,7 @@
  *   - String truncation
  */
 import { readFileSync } from 'node:fs'
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 
 // ─── Re-implement pure functions from chat-utils.ts for testing ──────────────
 
@@ -222,9 +222,16 @@ function getMessageLayout(role: MessageRole) {
 
 describe('Timestamp Formatting', () => {
   it('formats "Just now" for timestamps within 1 minute', () => {
-    expect(formatTimestamp(Date.now())).toBe('Just now')
-    expect(formatTimestamp(Date.now() - 30_000)).toBe('Just now')
-    expect(formatTimestamp(Date.now() - 59_999)).toBe('Just now')
+    const now = new Date('2026-06-08T12:00:00Z')
+    vi.useFakeTimers()
+    vi.setSystemTime(now)
+    try {
+      expect(formatTimestamp(now.getTime())).toBe('Just now')
+      expect(formatTimestamp(now.getTime() - 30_000)).toBe('Just now')
+      expect(formatTimestamp(now.getTime() - 59_999)).toBe('Just now')
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('formats time only for today (after 1 minute)', () => {

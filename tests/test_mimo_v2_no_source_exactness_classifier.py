@@ -1,6 +1,28 @@
+from tests.cross_matrix import run_mimo_v2_no_source_exactness_classifier as classifier
 from tests.cross_matrix.run_mimo_v2_no_source_exactness_classifier import (
     build_classification,
 )
+
+
+def test_mimo_no_source_classifier_defaults_point_at_live_refresh_artifacts():
+    assert str(classifier.DEFAULT_AUDIT) == (
+        "build/current-mimo-v2-jang2l-current-audit-after-live-refresh-20260608.json"
+    )
+    assert str(classifier.DEFAULT_SMOKE) == (
+        "build/current-all-local-model-smoke-mimo-v25-jangtq2-live-refresh-20260608/"
+        "summary.json"
+    )
+    assert str(classifier.DEFAULT_OUT) == (
+        "build/current-mimo-v2-no-source-exactness-classifier-after-jangtq2-live-refresh-20260608.json"
+    )
+    assert str(classifier.DEFAULT_JANG2L_JSON_SENTINEL_ISOLATION) == (
+        "build/current-all-local-model-smoke-mimo-v25-jang2l-live-refresh-20260608/"
+        "summary.json"
+    )
+    assert str(classifier.DEFAULT_JANGTQ2_CURRENT_ALL_LOCAL) == (
+        "build/current-all-local-model-smoke-mimo-v25-jangtq2-live-refresh-20260608/"
+        "JANGQ_MiMo-V2.5-JANGTQ_2/result.json"
+    )
 
 
 def test_mimo_no_source_classifier_keeps_exactness_open_without_fake_fix():
@@ -795,7 +817,7 @@ def test_mimo_no_source_classifier_reads_jang2l_all_local_summary_json_sentinel(
         "mimo_structured_json_sentinel"
     ]
     assert artifact["jang2l_json_sentinel_artifact"] == (
-        "build/current-all-local-model-smoke-mimo-v25-jang2l-after-recall-cap-and-text-oom-guard-20260608/summary.json"
+        "build/current-all-local-model-smoke-mimo-v25-jang2l-live-refresh-20260608/summary.json"
     )
 
 
