@@ -7017,6 +7017,105 @@ class TestStartupCompatibilityGuards:
         assert exc.value.code == "unsupported_media_modality"
         sys.modules.pop("mlx_vlm.models.mimo_v2", None)
 
+    def test_mllm_mimo_v2_config_preserves_media_processor_contract(
+        self, tmp_path, monkeypatch
+    ):
+        from vmlx_engine.models import mllm
+
+        model_dir = tmp_path / "MiMo-V2.5-JANGTQ_2"
+        model_dir.mkdir()
+        (model_dir / "config.json").write_text(
+            '{"model_type":"mimo_v2","vision_config":{},"audio_config":{}}',
+            encoding="utf-8",
+        )
+
+        class FakeTextConfig:
+            model_type = "mimo_v2"
+
+            @classmethod
+            def from_dict(cls, params):
+                return cls()
+
+        class FakeTextModel:
+            def __init__(self, config):
+                self.model = SimpleNamespace(embed_tokens=lambda input_ids: input_ids)
+                self.layers = []
+
+        def fake_import_module(name):
+            if name == "jang_tools.mimo_v2.mlx_model":
+                return SimpleNamespace(Model=FakeTextModel, ModelArgs=FakeTextConfig)
+            raise ImportError(name)
+
+        monkeypatch.setattr(mllm.importlib, "import_module", fake_import_module)
+
+        sys.modules.pop("mlx_vlm.models.mimo_v2", None)
+        mllm._register_local_mlx_vlm_runtime_if_needed(model_dir)
+        module = sys.modules["mlx_vlm.models.mimo_v2"]
+        cfg = module.ModelConfig.from_dict(
+            {
+                "model_type": "mimo_v2",
+                "vision_config": {
+                    "depth": 28,
+                    "hidden_size": 1280,
+                    "out_hidden_size": 4096,
+                    "patch_size": 16,
+                    "temporal_patch_size": 2,
+                    "tokens_per_second": 2,
+                    "vit_window_attn_types": [-1, 0, 1],
+                },
+                "audio_config": {
+                    "audio_channels": 20,
+                    "audio_segment_size": 6000,
+                    "out_hidden_size": 4096,
+                    "speech_vocab_size": "1280",
+                    "speech_zeroemb_idx": "1024",
+                },
+                "processor_config": {
+                    "image_token_id": 151655,
+                    "video_token_id": 151656,
+                    "audio_token_id": 151669,
+                    "vision_start_token_id": 151652,
+                    "vision_end_token_id": 151653,
+                    "video_start_token_id": 151670,
+                    "video_end_token_id": 151671,
+                    "audio_start_token_id": 151673,
+                    "audio_end_token_id": 151674,
+                    "image_max_pixels": 8388608,
+                    "video_total_max_pixels": 268435456,
+                    "max_frames": 3600,
+                    "fps": 1.0,
+                },
+                "capabilities": {
+                    "preserved_modalities": ["vision", "audio"],
+                    "unwired_modalities": ["vision", "audio"],
+                    "multimodal_status": "weights_preserved_text_runtime",
+                },
+            }
+        )
+
+        assert cfg.vision_config.depth == 28
+        assert cfg.vision_config.out_hidden_size == 4096
+        assert cfg.vision_config.vit_window_attn_types == [-1, 0, 1]
+        assert cfg.audio_config.audio_segment_size == 6000
+        assert cfg.audio_config.speech_vocab_size == "1280"
+        assert cfg.processor_config["video_total_max_pixels"] == 268435456
+        assert cfg.processor_config["max_frames"] == 3600
+        assert cfg.media_token_ids == {
+            "image": 151655,
+            "video": 151656,
+            "audio": 151669,
+            "vision_start": 151652,
+            "vision_end": 151653,
+            "video_start": 151670,
+            "video_end": 151671,
+            "audio_start": 151673,
+            "audio_end": 151674,
+        }
+        assert cfg.media_runtime_status == "weights_preserved_text_runtime"
+        assert cfg.preserved_modalities == ["vision", "audio"]
+        assert cfg.unwired_modalities == ["vision", "audio"]
+        sys.modules.pop("mlx_vlm.models.mimo_v2", None)
+
     def test_mimo_v2_thinking_off_suppresses_scheduler_stop_tokens_first_only(self):
         import mlx.core as mx
 

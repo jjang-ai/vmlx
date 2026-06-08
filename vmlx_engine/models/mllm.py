@@ -877,15 +877,40 @@ def _register_mimo_v2_mlx_vlm_runtime() -> None:
                 return _MiMoV2CausalLMOutput(logits)
             return self.inner(input_ids, cache=cache, mask=mask, **kwargs)
 
-    class VisionConfig:
-        @classmethod
-        def from_dict(cls, params):
-            return cls()
+    class _MiMoV2MediaConfig:
+        """Preserve MiMo media metadata until the real media forward is wired.
 
-    class AudioConfig:
+        The earlier placeholder configs threw away `vision_config`,
+        `audio_config`, and `processor_config` even though the local JANG
+        bundles carry the exact ViT/audio/tokenizer contract. Keeping these
+        fields on the runtime config is a required intermediate step for real
+        VL/audio/video wiring: load/forward code can now consume the model-owned
+        shapes, token ids, pixel/frame limits, and timing parameters instead of
+        guessing or hard-coding them.
+        """
+
+        default_model_type = "mimo_v2_media"
+
+        def __init__(self, **params):
+            self.raw_config = dict(params)
+            self.model_type = str(
+                params.get("model_type") or self.default_model_type
+            )
+            for key, value in params.items():
+                setattr(self, key, value)
+
         @classmethod
         def from_dict(cls, params):
-            return cls()
+            return cls(**dict(params or {}))
+
+        def to_dict(self):
+            return dict(self.raw_config)
+
+    class VisionConfig(_MiMoV2MediaConfig):
+        default_model_type = "mimo_v2_vision"
+
+    class AudioConfig(_MiMoV2MediaConfig):
+        default_model_type = "mimo_v2_audio"
 
     class ModelConfig:
         def __init__(
@@ -893,6 +918,7 @@ def _register_mimo_v2_mlx_vlm_runtime() -> None:
             text_config=None,
             vision_config=None,
             audio_config=None,
+            processor_config=None,
             model_type: str = "mimo_v2",
             eos_token_id=None,
             **kwargs,
@@ -901,7 +927,42 @@ def _register_mimo_v2_mlx_vlm_runtime() -> None:
             self.text_config = text_config
             self.vision_config = vision_config or VisionConfig()
             self.audio_config = audio_config or AudioConfig()
+            self.processor_config = dict(processor_config or {})
             self.eos_token_id = eos_token_id
+            self.image_token_id = kwargs.get("image_token_id")
+            self.video_token_id = kwargs.get("video_token_id")
+            self.audio_token_id = kwargs.get("audio_token_id")
+            self.vision_start_token_id = kwargs.get("vision_start_token_id")
+            self.vision_end_token_id = kwargs.get("vision_end_token_id")
+            self.video_start_token_id = kwargs.get("video_start_token_id")
+            self.video_end_token_id = kwargs.get("video_end_token_id")
+            self.audio_start_token_id = kwargs.get("audio_start_token_id")
+            self.audio_end_token_id = kwargs.get("audio_end_token_id")
+            self.media_token_ids = {
+                key: value
+                for key, value in {
+                    "image": self.image_token_id,
+                    "video": self.video_token_id,
+                    "audio": self.audio_token_id,
+                    "vision_start": self.vision_start_token_id,
+                    "vision_end": self.vision_end_token_id,
+                    "video_start": self.video_start_token_id,
+                    "video_end": self.video_end_token_id,
+                    "audio_start": self.audio_start_token_id,
+                    "audio_end": self.audio_end_token_id,
+                }.items()
+                if value is not None
+            }
+            self.media_runtime_status = kwargs.get(
+                "multimodal_status",
+                "weights_preserved_text_runtime",
+            )
+            self.preserved_modalities = list(
+                kwargs.get("preserved_modalities") or ["vision", "image", "video", "audio"]
+            )
+            self.unwired_modalities = list(
+                kwargs.get("unwired_modalities") or ["vision", "image", "video", "audio"]
+            )
 
         @classmethod
         def from_dict(cls, params):
@@ -922,8 +983,35 @@ def _register_mimo_v2_mlx_vlm_runtime() -> None:
                 text_config=TextConfig.from_dict(merged_text),
                 vision_config=VisionConfig.from_dict(params.get("vision_config") or {}),
                 audio_config=AudioConfig.from_dict(params.get("audio_config") or {}),
+                processor_config=params.get("processor_config") or {},
                 model_type=str(params.get("model_type") or "mimo_v2"),
                 eos_token_id=params.get("eos_token_id"),
+                image_token_id=params.get("image_token_id")
+                or (params.get("processor_config") or {}).get("image_token_id"),
+                video_token_id=params.get("video_token_id")
+                or (params.get("processor_config") or {}).get("video_token_id"),
+                audio_token_id=params.get("audio_token_id")
+                or (params.get("processor_config") or {}).get("audio_token_id"),
+                vision_start_token_id=params.get("vision_start_token_id")
+                or (params.get("processor_config") or {}).get("vision_start_token_id"),
+                vision_end_token_id=params.get("vision_end_token_id")
+                or (params.get("processor_config") or {}).get("vision_end_token_id"),
+                video_start_token_id=(params.get("processor_config") or {}).get("video_start_token_id"),
+                video_end_token_id=(params.get("processor_config") or {}).get("video_end_token_id"),
+                audio_start_token_id=(params.get("processor_config") or {}).get("audio_start_token_id"),
+                audio_end_token_id=(params.get("processor_config") or {}).get("audio_end_token_id"),
+                preserved_modalities=(
+                    (params.get("capabilities") or {}).get("preserved_modalities")
+                    or params.get("preserved_modalities")
+                ),
+                unwired_modalities=(
+                    (params.get("capabilities") or {}).get("unwired_modalities")
+                    or params.get("unwired_modalities")
+                ),
+                multimodal_status=(
+                    (params.get("capabilities") or {}).get("multimodal_status")
+                    or params.get("multimodal_status")
+                ),
             )
 
     class VisionModel(nn.Module):
