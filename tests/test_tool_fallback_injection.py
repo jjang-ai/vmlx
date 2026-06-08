@@ -375,9 +375,9 @@ def test_mimo_xml_function_direct_fallback_stays_inside_chatml_system():
     )
 
     assert result.startswith("<|im_start|>system\nYou are MiMo.")
-    assert "You have access to MiMo XML function tools" in result
-    assert result.index("You have access to MiMo XML function tools") < result.index("<|im_end|>")
-    assert not result.startswith("You have access to MiMo XML function tools")
+    assert "MiMo XML function tools" in result
+    assert result.index("MiMo XML function tools") < result.index("<|im_end|>")
+    assert not result.startswith("MiMo XML function tools")
 
 
 def test_mimo_xml_function_fallback_prefers_chatml_system_turn():
@@ -430,8 +430,74 @@ def test_mimo_xml_function_fallback_prefers_chatml_system_turn():
 
     system_end = result.index("<|im_end|>")
     user_start = result.index("<|im_start|>user")
-    assert "You have access to MiMo XML function tools" in result[:system_end]
+    assert "MiMo XML function tools" in result[:system_end]
     assert "<function=record_fact>" in result[:system_end]
     assert "<parameter=value>" in result[:system_end]
     assert "blue-cat" in result[:system_end]
-    assert "You have access to MiMo XML function tools" not in result[user_start:]
+    assert "MiMo XML function tools" not in result[user_start:]
+
+
+def test_mimo_xml_function_fallback_keeps_tool_schema_compact_for_tight_memory():
+    """MiMo JANG_2L must not spend hundreds of tokens on one-tool scaffolding."""
+    mock_tokenizer = MagicMock()
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "record_fact",
+                "description": "Record one exact fact for a smoke test.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "value": {
+                            "type": "string",
+                            "description": "The exact value to record.",
+                        }
+                    },
+                    "required": ["value"],
+                },
+            },
+        },
+    ]
+    messages = [
+        {
+            "role": "user",
+            "content": (
+                "Call function record_fact with exactly these JSON arguments "
+                'and no other value: {"value":"B7-CAT-09"}. The string '
+                "B7-CAT-09 is a literal value; preserve every character."
+            ),
+        },
+    ]
+
+    def mock_apply(modified_messages, **kwargs):
+        return (
+            "<|im_start|>system\n"
+            f"{modified_messages[0]['content']}<|im_end|>"
+            "<|im_start|>user\n"
+            f"{modified_messages[1]['content']}<|im_end|>"
+            "<|im_start|>assistant\n"
+        )
+
+    mock_tokenizer.apply_chat_template.side_effect = mock_apply
+
+    result = check_and_inject_fallback_tools(
+        prompt="<|im_start|>user\nUse record_fact.<|im_end|><|im_start|>assistant\n",
+        messages=messages,
+        template_tools=tools,
+        tokenizer=mock_tokenizer,
+        template_kwargs={
+            "add_generation_prompt": True,
+            "enable_thinking": False,
+            "tool_choice": "required",
+        },
+        tool_parser_id="xml_function",
+    )
+
+    system_text = result.split("<|im_start|>system\n", 1)[1].split("<|im_end|>", 1)[0]
+    assert len(system_text) <= 420
+    assert "MiMo XML function tools" in system_text
+    assert "<tool_call>" in system_text
+    assert "<function=record_fact>" in system_text
+    assert "<parameter=value>" in system_text
+    assert '"name": "FUNCTION_NAME"' not in system_text

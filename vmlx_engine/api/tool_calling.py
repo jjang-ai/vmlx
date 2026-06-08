@@ -821,9 +821,7 @@ def check_and_inject_fallback_tools(
     elif is_xml_function_native_tool_prompt:
         xml_function_prompt_tools = _requested_tools(template_tools)
         xml_function_lines = [
-            "You have access to MiMo XML function tools. When the user asks for one, "
-            "call it instead of explaining what you would do.",
-            "",
+            "MiMo XML function tools:",
         ]
         for tool in xml_function_prompt_tools:
             func = _tool_func(tool)
@@ -836,11 +834,9 @@ def check_and_inject_fallback_tools(
                 xml_function_lines.append(f"{name} fields: none")
         tool_prompt = (
             "\n".join(xml_function_lines).rstrip()
-            + "\n\nWhen a tool call is needed, emit ONLY this native XML function shape. "
-            "Do not emit JSON, markdown, prose, fake results, or a different XML dialect.\n"
-            "If the user explicitly asks to use a tool, emit the tool call first; do not answer as if the tool result already exists.\n"
-            "Fill fields from the user's request exactly. "
-            "If the user says `with value blue-cat`, put only `blue-cat` in `value`.\n"
+            + "\nUse native XML function shape only when a tool is requested/required. "
+            "No prose, JSON, markdown, fake results, or other XML. "
+            "Copy user field values exactly.\n"
             + _render_xml_examples(
                 xml_function_prompt_tools,
                 "<tool_call>",
