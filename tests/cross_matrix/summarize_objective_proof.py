@@ -61,9 +61,9 @@ from tests.cross_matrix.release_regression_manifest import (
 )
 
 
-DEFAULT_OUT = Path("build/current-objective-proof-after-mimo-tq-kv-boundary-20260607.json")
+DEFAULT_OUT = Path("build/current-objective-proof-after-mimo-tq-kernel-boundary-20260608.json")
 CURRENT_RELEASE_REGRESSION_MANIFEST_REL = (
-    "build/current-release-regression-manifest-after-mimo-tq-kv-boundary-20260607.json"
+    "build/current-release-regression-manifest-after-mimo-tq-kernel-boundary-20260608.json"
 )
 DSV4_QUALITY_CLEARANCE_REL = "build/current-dsv4-long-output-quality-clearance-20260521.json"
 DSV4_CURRENT_IDENTIFIER_CANARY_REL = (

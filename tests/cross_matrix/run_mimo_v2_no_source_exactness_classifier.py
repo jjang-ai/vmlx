@@ -22,13 +22,22 @@ DEFAULT_SMOKE = Path(
     "build/current-all-local-model-smoke-mimo-v25-jangtq2-bundled-tools-nomedia-after-do-sample-false-rerun-20260607/summary.json"
 )
 DEFAULT_OUT = Path(
-    "build/current-mimo-v2-no-source-exactness-classifier-after-do-sample-false-20260607.json"
+    "build/current-mimo-v2-no-source-exactness-classifier-after-tq-kernel-boundary-20260608.json"
 )
 DEFAULT_JANGTQ2_EXACTNESS = Path(
     "build/current-mimo-v25-jangtq2-exactness-isolation-20260608/result.json"
 )
 DEFAULT_JANG2L_EXACTNESS = Path(
     "build/current-mimo-v25-jang2l-exactness-isolation-20260608/result.json"
+)
+DEFAULT_JANGTQ2_NO_SWITCHGLU_FASTPATH = Path(
+    "build/current-mimo-v25-jangtq2-exactness-no-switchglu-fastpath-diagnostic-20260608/result.json"
+)
+DEFAULT_JANGTQ2_NO_ROUTER_NO_SWITCHGLU_FASTPATH = Path(
+    "build/current-mimo-v25-jangtq2-exactness-no-router-no-switchglu-fastpath-diagnostic-20260608/result.json"
+)
+DEFAULT_JANGTQ2_TQ_KERNEL_PARITY = Path(
+    "build/current-mimo-v25-jangtq2-tq-kernel-parity-no-source-20260608.json"
 )
 
 EXACTNESS_REASONS = {
@@ -123,12 +132,41 @@ def _exactness_probe_summary(
     }
 
 
+def _diagnostic_copy_preserved(artifact: dict[str, Any] | None) -> bool | None:
+    if not isinstance(artifact, dict):
+        return None
+    cases = artifact.get("cases")
+    if not isinstance(cases, dict):
+        return None
+    text = _choice_text(cases.get("completion_copy_b7", {}), completion=True)
+    if not text:
+        return None
+    return text.strip() == "B7-CAT-09"
+
+
+def _tq_kernel_parity_passed(artifact: dict[str, Any] | None) -> bool | None:
+    if not isinstance(artifact, dict):
+        return None
+    if artifact.get("status") != "pass":
+        return False
+    reports = artifact.get("reports")
+    if not isinstance(reports, list) or not reports:
+        return False
+    return all(
+        isinstance(report, dict) and float(report.get("max_abs_diff", 1.0)) < 2e-2
+        for report in reports
+    )
+
+
 def build_classification(
     audit: dict[str, Any],
     smoke: dict[str, Any],
     *,
     jangtq2: dict[str, Any] | None = None,
     jang2l: dict[str, Any] | None = None,
+    no_switchglu_fastpath: dict[str, Any] | None = None,
+    no_router_no_switchglu_fastpath: dict[str, Any] | None = None,
+    tq_kernel_parity: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     component_ok = audit.get("component_ok") if isinstance(audit.get("component_ok"), dict) else {}
     failures = _failures(smoke)
@@ -161,6 +199,27 @@ def build_classification(
     }
 
     no_source_exactness = _exactness_probe_summary(jangtq2, jang2l)
+    no_switchglu_copy_preserved = _diagnostic_copy_preserved(no_switchglu_fastpath)
+    no_router_no_switchglu_copy_preserved = _diagnostic_copy_preserved(
+        no_router_no_switchglu_fastpath
+    )
+    tq_kernel_parity_passed = _tq_kernel_parity_passed(tq_kernel_parity)
+    no_source_runtime_diagnostics = {
+        "jangtq2_no_switchglu_fastpath_literal_preserved": no_switchglu_copy_preserved,
+        "jangtq2_no_router_no_switchglu_fastpath_literal_preserved": (
+            no_router_no_switchglu_copy_preserved
+        ),
+        "jangtq2_tq_kernel_parity_passed": tq_kernel_parity_passed,
+        "jangtq2_switchglu_fastpath_primary_cause_excluded": (
+            no_switchglu_copy_preserved is False
+        ),
+        "jangtq2_compiled_router_primary_cause_excluded": (
+            no_router_no_switchglu_copy_preserved is False
+        ),
+        "jangtq2_tq_gather_kernel_primary_cause_excluded": (
+            tq_kernel_parity_passed is True
+        ),
+    }
 
     unresolved_surfaces = {
         "artifact_quantization_or_decode_logits_quality": bool(exactness_failures),
@@ -181,12 +240,47 @@ def build_classification(
             component_ok.get("cb_system_prompt_working_set_pressure")
         ),
         "mimo_media_runtime": not bool(component_ok.get("mimo_media_wired")),
+        "jangtq2_switchglu_fastpath": (
+            no_source_runtime_diagnostics[
+                "jangtq2_switchglu_fastpath_primary_cause_excluded"
+            ]
+            is not True
+        ),
+        "jangtq2_compiled_router": (
+            no_source_runtime_diagnostics[
+                "jangtq2_compiled_router_primary_cause_excluded"
+            ]
+            is not True
+        ),
+        "jangtq2_tq_gather_kernel": (
+            no_source_runtime_diagnostics[
+                "jangtq2_tq_gather_kernel_primary_cause_excluded"
+            ]
+            is not True
+        ),
     }
 
     release_ready = False
     status = "open" if exactness_failures or any(unresolved_surfaces.values()) else "pass"
 
     if (
+        unresolved_surfaces["jangtq2_raw_decode_or_artifact_quality"]
+        and unresolved_surfaces["jang2l_chat_tool_quality"]
+        and no_source_runtime_diagnostics[
+            "jangtq2_switchglu_fastpath_primary_cause_excluded"
+        ]
+        and no_source_runtime_diagnostics[
+            "jangtq2_compiled_router_primary_cause_excluded"
+        ]
+        and no_source_runtime_diagnostics[
+            "jangtq2_tq_gather_kernel_primary_cause_excluded"
+        ]
+    ):
+        classification = (
+            "jangtq2_literal_corruption_persists_without_cache_fastpath_router_"
+            "and_tq_kernel_parity_passes"
+        )
+    elif (
         unresolved_surfaces["jangtq2_raw_decode_or_artifact_quality"]
         and unresolved_surfaces["jang2l_chat_tool_quality"]
     ):
@@ -221,7 +315,15 @@ def build_classification(
         "smoke_artifact": str(DEFAULT_SMOKE),
         "jangtq2_exactness_artifact": str(DEFAULT_JANGTQ2_EXACTNESS),
         "jang2l_exactness_artifact": str(DEFAULT_JANG2L_EXACTNESS),
+        "jangtq2_no_switchglu_fastpath_artifact": str(
+            DEFAULT_JANGTQ2_NO_SWITCHGLU_FASTPATH
+        ),
+        "jangtq2_no_router_no_switchglu_fastpath_artifact": str(
+            DEFAULT_JANGTQ2_NO_ROUTER_NO_SWITCHGLU_FASTPATH
+        ),
+        "jangtq2_tq_kernel_parity_artifact": str(DEFAULT_JANGTQ2_TQ_KERNEL_PARITY),
         "no_source_exactness": no_source_exactness,
+        "no_source_runtime_diagnostics": no_source_runtime_diagnostics,
         "exactness_failures": exactness_failures,
         "excluded_surfaces": excluded_surfaces,
         "unresolved_surfaces": unresolved_surfaces,
@@ -235,21 +337,61 @@ def main() -> int:
     parser.add_argument("--smoke", type=Path, default=DEFAULT_SMOKE)
     parser.add_argument("--jangtq2-exactness", type=Path, default=DEFAULT_JANGTQ2_EXACTNESS)
     parser.add_argument("--jang2l-exactness", type=Path, default=DEFAULT_JANG2L_EXACTNESS)
+    parser.add_argument(
+        "--jangtq2-no-switchglu-fastpath",
+        type=Path,
+        default=DEFAULT_JANGTQ2_NO_SWITCHGLU_FASTPATH,
+    )
+    parser.add_argument(
+        "--jangtq2-no-router-no-switchglu-fastpath",
+        type=Path,
+        default=DEFAULT_JANGTQ2_NO_ROUTER_NO_SWITCHGLU_FASTPATH,
+    )
+    parser.add_argument(
+        "--jangtq2-tq-kernel-parity",
+        type=Path,
+        default=DEFAULT_JANGTQ2_TQ_KERNEL_PARITY,
+    )
     parser.add_argument("--out", type=Path, default=DEFAULT_OUT)
     args = parser.parse_args()
 
     jangtq2 = _load(args.jangtq2_exactness) if args.jangtq2_exactness.exists() else None
     jang2l = _load(args.jang2l_exactness) if args.jang2l_exactness.exists() else None
+    no_switchglu_fastpath = (
+        _load(args.jangtq2_no_switchglu_fastpath)
+        if args.jangtq2_no_switchglu_fastpath.exists()
+        else None
+    )
+    no_router_no_switchglu_fastpath = (
+        _load(args.jangtq2_no_router_no_switchglu_fastpath)
+        if args.jangtq2_no_router_no_switchglu_fastpath.exists()
+        else None
+    )
+    tq_kernel_parity = (
+        _load(args.jangtq2_tq_kernel_parity)
+        if args.jangtq2_tq_kernel_parity.exists()
+        else None
+    )
     artifact = build_classification(
         _load(args.audit),
         _load(args.smoke),
         jangtq2=jangtq2,
         jang2l=jang2l,
+        no_switchglu_fastpath=no_switchglu_fastpath,
+        no_router_no_switchglu_fastpath=no_router_no_switchglu_fastpath,
+        tq_kernel_parity=tq_kernel_parity,
     )
     artifact["audit_artifact"] = str(args.audit)
     artifact["smoke_artifact"] = str(args.smoke)
     artifact["jangtq2_exactness_artifact"] = str(args.jangtq2_exactness)
     artifact["jang2l_exactness_artifact"] = str(args.jang2l_exactness)
+    artifact["jangtq2_no_switchglu_fastpath_artifact"] = str(
+        args.jangtq2_no_switchglu_fastpath
+    )
+    artifact["jangtq2_no_router_no_switchglu_fastpath_artifact"] = str(
+        args.jangtq2_no_router_no_switchglu_fastpath
+    )
+    artifact["jangtq2_tq_kernel_parity_artifact"] = str(args.jangtq2_tq_kernel_parity)
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(json.dumps(artifact, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     print(args.out)

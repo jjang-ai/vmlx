@@ -24,7 +24,7 @@ MIMO_AUDIT = Path(
     "build/current-mimo-v2-jang2l-current-audit-after-raw-audio-request-ingestion-20260607.json"
 )
 MIMO_NO_SOURCE_EXACTNESS_CLASSIFIER = Path(
-    "build/current-mimo-v2-no-source-exactness-classifier-after-jangtq2-jang2l-isolation-20260608.json"
+    "build/current-mimo-v2-no-source-exactness-classifier-after-tq-kernel-boundary-20260608.json"
 )
 NOHEAVY_API_CACHE = Path(
     "build/current-noheavy-api-cache-contract-after-qwen36-bundled-media-pass-20260607.json"

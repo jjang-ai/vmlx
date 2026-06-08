@@ -132,11 +132,62 @@ def test_mimo_no_source_classifier_consumes_jangtq_and_jang2l_isolation_artifact
         }
     }
 
-    artifact = build_classification(audit, smoke, jangtq2=jangtq2, jang2l=jang2l)
+    no_switchglu_fastpath = {
+        "cases": {
+            "completion_copy_b7": {
+                "body": {"choices": [{"text": "B7C9099"}]},
+            }
+        }
+    }
+    no_router_no_switchglu_fastpath = {
+        "cases": {
+            "completion_copy_b7": {
+                "body": {"choices": [{"text": "B7C9099"}]},
+            }
+        }
+    }
+    tq_kernel_parity = {
+        "status": "pass",
+        "reports": [{"max_abs_diff": 2.4e-5}],
+    }
+
+    artifact = build_classification(
+        audit,
+        smoke,
+        jangtq2=jangtq2,
+        jang2l=jang2l,
+        no_switchglu_fastpath=no_switchglu_fastpath,
+        no_router_no_switchglu_fastpath=no_router_no_switchglu_fastpath,
+        tq_kernel_parity=tq_kernel_parity,
+    )
 
     assert artifact["status"] == "open"
-    assert artifact["classification"] == "jangtq2_raw_decode_literal_corruption_jang2l_chat_tool_quality_open"
+    assert artifact["classification"] == (
+        "jangtq2_literal_corruption_persists_without_cache_fastpath_router_"
+        "and_tq_kernel_parity_passes"
+    )
     assert artifact["no_source_exactness"]["jangtq2_raw_completion_literal_preserved"] is False
     assert artifact["no_source_exactness"]["jang2l_raw_completion_literal_preserved"] is True
+    assert (
+        artifact["no_source_runtime_diagnostics"][
+            "jangtq2_switchglu_fastpath_primary_cause_excluded"
+        ]
+        is True
+    )
+    assert (
+        artifact["no_source_runtime_diagnostics"][
+            "jangtq2_compiled_router_primary_cause_excluded"
+        ]
+        is True
+    )
+    assert (
+        artifact["no_source_runtime_diagnostics"][
+            "jangtq2_tq_gather_kernel_primary_cause_excluded"
+        ]
+        is True
+    )
     assert artifact["unresolved_surfaces"]["jangtq2_raw_decode_or_artifact_quality"] is True
     assert artifact["unresolved_surfaces"]["jang2l_chat_tool_quality"] is True
+    assert artifact["unresolved_surfaces"]["jangtq2_switchglu_fastpath"] is False
+    assert artifact["unresolved_surfaces"]["jangtq2_compiled_router"] is False
+    assert artifact["unresolved_surfaces"]["jangtq2_tq_gather_kernel"] is False

@@ -881,7 +881,7 @@ CURRENT_MIMO_V2_JANG2L_SOURCE_VS_QUANT_ARTIFACT = (
     "build/current-mimo-v2-jangtq2-source-vs-quant-first-divergence-preflight-20260607.json"
 )
 CURRENT_MIMO_V2_JANG2L_NO_SOURCE_EXACTNESS_CLASSIFIER_ARTIFACT = (
-    "build/current-mimo-v2-no-source-exactness-classifier-after-jangtq2-jang2l-isolation-20260608.json"
+    "build/current-mimo-v2-no-source-exactness-classifier-after-tq-kernel-boundary-20260608.json"
 )
 CURRENT_DIAGNOSTIC_LIVE_SMOKE_ARTIFACTS = {
     # Retired 2026-06-07: old expected-failure diagnostic rows pointed at
