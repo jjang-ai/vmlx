@@ -498,6 +498,32 @@ if __name__ == "__main__":
     pytest.main([__file__, "-v"])
 
 
+def test_mimo_video_processor_outputs_stay_on_video_kwargs():
+    """MiMo video must not be collapsed into image pixel_values.
+
+    The MiMo wrapper has distinct image and video token splices. Passing
+    processor ``pixel_values_videos`` as generic ``pixel_values`` routes video
+    frames through the image path and fails with missing ``image_grid_thw``.
+    """
+    from pathlib import Path
+
+    import vmlx_engine.mllm_batch_generator as _m
+
+    module_src = Path(_m.__file__).read_text(encoding="utf-8")
+
+    assert 'video_pixel_values = inputs.get("pixel_values_videos")' in module_src
+    assert (
+        "request.video_pixel_values = _ensure_mx_array(video_pixel_values)"
+        in module_src
+    )
+    assert (
+        'if pixel_values is None:\n            pixel_values = inputs.get("pixel_values_videos")'
+        not in module_src
+    )
+    assert 'kwargs["video_pixel_values"] = request.video_pixel_values' in module_src
+    assert 'kwargs["video_grid_thw"] = request.video_grid_thw' in module_src
+
+
 # =============================================================================
 # Extended regression coverage — user requested "reasoning on/off, sliding
 # window, hybrid, buttons, etc."

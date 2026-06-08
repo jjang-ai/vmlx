@@ -2380,6 +2380,8 @@ class MLLMBatchRequest:
     pixel_values: Optional[mx.array] = None
     attention_mask: Optional[mx.array] = None
     image_grid_thw: Optional[mx.array] = None
+    video_pixel_values: Optional[mx.array] = None
+    video_grid_thw: Optional[mx.array] = None
     audio_codes: Optional[mx.array] = None
     audio_embeds: Optional[mx.array] = None
     audio_features: Optional[mx.array] = None
@@ -3495,6 +3497,8 @@ class MLLMBatchGenerator:
                 request.pixel_values = None
                 request.attention_mask = None
                 request.image_grid_thw = None
+                request.video_pixel_values = None
+                request.video_grid_thw = None
                 request.extra_kwargs = dict(preserved_private_kwargs)
                 self._raise_if_prompt_over_limit(
                     request,
@@ -3580,6 +3584,8 @@ class MLLMBatchGenerator:
             request.pixel_values = cached_pixels.pixel_values
             request.attention_mask = cached_pixels.attention_mask
             request.image_grid_thw = cached_pixels.image_grid_thw
+            request.video_pixel_values = None
+            request.video_grid_thw = None
             request.extra_kwargs = dict(cached_pixels.extra_kwargs)
             self._raise_if_prompt_over_limit(
                 request,
@@ -3669,9 +3675,9 @@ class MLLMBatchGenerator:
         # special-case each processor's output format.
         request.input_ids = _ensure_mx_array(inputs.get("input_ids"), mx.int32)
         pixel_values = inputs.get("pixel_values")
-        if pixel_values is None:
-            pixel_values = inputs.get("pixel_values_videos")
+        video_pixel_values = inputs.get("pixel_values_videos")
         request.pixel_values = _ensure_mx_array(pixel_values)
+        request.video_pixel_values = _ensure_mx_array(video_pixel_values)
         request.attention_mask = _ensure_mx_array(inputs.get("attention_mask"))
 
         # Extract extra kwargs
@@ -3685,9 +3691,11 @@ class MLLMBatchGenerator:
             request.extra_kwargs.pop("image_grid_thw", None), mx.int32
         )
         if "video_grid_thw" in request.extra_kwargs:
-            request.extra_kwargs["video_grid_thw"] = _ensure_mx_array(
-                request.extra_kwargs["video_grid_thw"], mx.int32
+            request.video_grid_thw = _ensure_mx_array(
+                request.extra_kwargs.pop("video_grid_thw"), mx.int32
             )
+        else:
+            request.video_grid_thw = None
         request.audio_codes = _ensure_mx_array(
             request.extra_kwargs.pop("audio_codes", None), mx.int32
         )
@@ -4091,10 +4099,14 @@ class MLLMBatchGenerator:
         # no-op that the vision encoder skips, so omitting it is safe.
         if request.pixel_values is not None:
             kwargs["pixel_values"] = request.pixel_values
+        if request.video_pixel_values is not None:
+            kwargs["video_pixel_values"] = request.video_pixel_values
         if request.attention_mask is not None:
             kwargs["mask"] = request.attention_mask
         if request.image_grid_thw is not None:
             kwargs["image_grid_thw"] = request.image_grid_thw
+        if request.video_grid_thw is not None:
+            kwargs["video_grid_thw"] = request.video_grid_thw
         if request.audio_codes is not None:
             kwargs["audio_codes"] = request.audio_codes
         if request.audio_embeds is not None:
@@ -4112,7 +4124,10 @@ class MLLMBatchGenerator:
         if input_ids.ndim == 1:
             input_ids = input_ids[None, :]
 
-        has_images = request.pixel_values is not None
+        has_images = (
+            request.pixel_values is not None
+            or request.video_pixel_values is not None
+        )
         has_audio_payload = (
             request.audio_codes is not None
             or request.audio_embeds is not None
