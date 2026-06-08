@@ -6167,7 +6167,11 @@ def _validate_current_mimo_v2_jang2l_root_cause(root: Path) -> dict[str, Any]:
             result["failures"].append(
                 "mimo_no_source_exactness_classifier_missing_literal_mutation_boundary"
             )
-        if primary_exactness_classification.startswith("jangtq2_plain_literal_copy"):
+        if primary_exactness_classification.startswith(
+            "jangtq2_plain_literal_copy"
+        ) or primary_exactness_classification == (
+            "jangtq2_compact_hyphen_decode_quality_open_not_cache_parser_template_tokenizer"
+        ):
             result["artifact_exactness_release_action"] = (
                 "replace_all_routed_2bit_jangtq2_or_lift_gate_down_precision"
             )

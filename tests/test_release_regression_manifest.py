@@ -11784,6 +11784,86 @@ def test_mimo_v2_root_cause_accepts_policy_skipped_source_vs_quant_without_clear
     ]
 
 
+def test_mimo_v2_root_cause_maps_compact_hyphen_exactness_to_rebuild_action(
+    tmp_path,
+):
+    from tests.cross_matrix.release_regression_manifest import (
+        CURRENT_MIMO_V2_JANG2L_CURRENT_AUDIT_ARTIFACT,
+        CURRENT_MIMO_V2_JANG2L_NO_SOURCE_EXACTNESS_CLASSIFIER_ARTIFACT,
+        CURRENT_MIMO_V2_JANG2L_SOURCE_VS_QUANT_ARTIFACT,
+        _validate_current_mimo_v2_jang2l_root_cause,
+    )
+
+    _write_passing_mimo_v2_root_cause_artifacts(tmp_path)
+    source_vs_quant_path = tmp_path / CURRENT_MIMO_V2_JANG2L_SOURCE_VS_QUANT_ARTIFACT
+    source_vs_quant_path.write_text(
+        json.dumps(
+            {
+                "status": "missing_prerequisites",
+                "remote_evidence_only": False,
+                "source_model_path": "/Volumes/ModelDrive/jangq-ai/sources/MiMo-V2.5",
+                "quant_model_path": "/Users/example/.mlxstudio/models/JANGQ-AI/MiMo-V2.5-JANGTQ_2",
+                "rows": [],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    classifier_path = (
+        tmp_path / CURRENT_MIMO_V2_JANG2L_NO_SOURCE_EXACTNESS_CLASSIFIER_ARTIFACT
+    )
+    classifier_path.write_text(
+        json.dumps(
+            {
+                "status": "open",
+                "classification": "jangtq2_compact_hyphen_decode_quality_open_not_cache_parser_template_tokenizer",
+                "secondary_classification": "jang2l_json_sentinel_semantic_mismatch_open",
+                "source_vs_quant_load_performed": False,
+                "source_vs_quant_load_skipped_reason": "user_disallowed_source_vs_quant_due_ram",
+                "excluded_surfaces": {
+                    "chat_template_only_primary_cause": True,
+                    "parser_argument_rewrite": True,
+                    "prefix_paged_l2_or_kv_quant_primary_cause": True,
+                    "tokenizer_roundtrip_primary_cause": True,
+                },
+                "unresolved_surfaces": {
+                    "artifact_quantization_or_decode_logits_quality": True,
+                    "jangtq2_compact_hyphen_decode_quality": True,
+                    "source_vs_quant_first_divergence": True,
+                },
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    current_audit_path = tmp_path / CURRENT_MIMO_V2_JANG2L_CURRENT_AUDIT_ARTIFACT
+    current_audit = json.loads(current_audit_path.read_text(encoding="utf-8"))
+    current_audit["status"] = "open"
+    current_audit["local_release_clearance"] = False
+    current_audit["component_ok"]["source_vs_quant_first_divergence"] = False
+    current_audit["component_ok"]["artifact_exactness"] = False
+    current_audit["blockers"] = [
+        "mimo_jangtq2_artifact_exactness_blocked",
+        "mimo_source_vs_quant_first_divergence_missing_or_failed",
+    ]
+    current_audit_path.write_text(json.dumps(current_audit) + "\n", encoding="utf-8")
+
+    result = _validate_current_mimo_v2_jang2l_root_cause(tmp_path)
+
+    assert result["artifact_exactness_bundle_status"]["jangtq2"] == {
+        "blocked": True,
+        "classification": "jangtq2_compact_hyphen_decode_quality_open_not_cache_parser_template_tokenizer",
+        "evidence": CURRENT_MIMO_V2_JANG2L_NO_SOURCE_EXACTNESS_CLASSIFIER_ARTIFACT,
+    }
+    assert result["artifact_exactness_release_action"] == (
+        "replace_all_routed_2bit_jangtq2_or_lift_gate_down_precision"
+    )
+    assert result["recommended_next_artifact_profiles"] == [
+        "JANGTQ gate=3/up=2/down=3",
+        "JANGTQ gate=3/up=3/down=3",
+    ]
+
+
 def test_mimo_v2_current_audit_extracts_fastpath_async_bottleneck(tmp_path):
     from tests.cross_matrix.run_mimo_v2_jang2l_current_audit import (
         _latest_decode_speed_evidence,

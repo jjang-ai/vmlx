@@ -213,13 +213,39 @@ def _mimo_classifier_checks(
     excluded = excluded if isinstance(excluded, dict) else {}
     unresolved = classifier.get("unresolved_surfaces")
     unresolved = unresolved if isinstance(unresolved, dict) else {}
+    classification = classifier.get("classification")
     exactness_green = component_ok.get("artifact_exactness") is True
     exactness_open = component_ok.get("artifact_exactness") is not True
+    accepted_open_classifications = {
+        "model_generated_literal_mutation_after_valid_parser_structure",
+        "jangtq2_plain_literal_copy_regression_jang2l_plain_copy_passes",
+        "jangtq2_plain_literal_copy_fails_before_parser_or_json_repair",
+        "jangtq2_literal_corruption_persists_without_cache_fastpath_router_and_tq_kernel_parity_passes",
+        "jangtq2_compact_hyphen_decode_quality_open_not_cache_parser_template_tokenizer",
+    }
     expected_open_classification = (
-        classifier.get("classification")
-        == "model_generated_literal_mutation_after_valid_parser_structure"
+        classification in accepted_open_classifications
         and unresolved.get("artifact_quantization_or_decode_logits_quality") is True
     )
+    exactness_boundary_details = {
+        "artifact_exactness": component_ok.get("artifact_exactness"),
+        "classifier_status": classifier.get("status"),
+        "classification": classification,
+        "unresolved_surfaces": unresolved,
+    }
+    if (
+        isinstance(classification, str)
+        and classification.startswith("jangtq2_plain_literal_copy")
+    ) or classification == (
+        "jangtq2_compact_hyphen_decode_quality_open_not_cache_parser_template_tokenizer"
+    ):
+        exactness_boundary_details["artifact_exactness_release_action"] = (
+            "replace_all_routed_2bit_jangtq2_or_lift_gate_down_precision"
+        )
+        exactness_boundary_details["recommended_next_artifact_profiles"] = [
+            "JANGTQ gate=3/up=2/down=3",
+            "JANGTQ gate=3/up=3/down=3",
+        ]
     return [
         _check(
             "mimo_no_source_exactness_classifier_exists",
@@ -246,12 +272,7 @@ def _mimo_classifier_checks(
             (exactness_open and expected_open_classification)
             or (exactness_green and classifier.get("status") == "pass"),
             str(MIMO_NO_SOURCE_EXACTNESS_CLASSIFIER),
-            {
-                "artifact_exactness": component_ok.get("artifact_exactness"),
-                "classifier_status": classifier.get("status"),
-                "classification": classifier.get("classification"),
-                "unresolved_surfaces": unresolved,
-            },
+            exactness_boundary_details,
         ),
     ]
 

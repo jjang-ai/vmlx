@@ -786,16 +786,19 @@ def test_full_release_objective_checklist_keeps_open_rows_visible(tmp_path):
         tmp_path / checklist.MIMO_NO_SOURCE_EXACTNESS_CLASSIFIER,
         {
             "status": "open",
-            "classification": "model_generated_literal_mutation_after_valid_parser_structure",
+            "classification": "jangtq2_compact_hyphen_decode_quality_open_not_cache_parser_template_tokenizer",
             "source_vs_quant_load_performed": False,
             "source_vs_quant_load_skipped_reason": "user_disallowed_source_vs_quant_due_ram",
             "excluded_surfaces": {
+                "chat_template_only_primary_cause": True,
                 "parser_argument_rewrite": True,
                 "prefix_paged_l2_or_kv_quant_primary_cause": True,
                 "hidden_stochastic_sampling_primary_cause": True,
+                "tokenizer_roundtrip_primary_cause": True,
             },
             "unresolved_surfaces": {
                 "artifact_quantization_or_decode_logits_quality": True,
+                "jangtq2_compact_hyphen_decode_quality": True,
                 "source_vs_quant_first_divergence": True,
             },
         },
@@ -814,6 +817,19 @@ def test_full_release_objective_checklist_keeps_open_rows_visible(tmp_path):
     assert "mimo_media_runtime_implementation" in failed_names
     assert "mimo_mimo_media_wired" in failed_names
     assert "mimo_no_source_classifier_tracks_exactness_boundary" not in failed_names
+    mimo_exactness_rows = [
+        row
+        for row in result["groups"]["mimo_v25_jangtq2"]
+        if row["name"] == "mimo_no_source_classifier_tracks_exactness_boundary"
+    ]
+    assert len(mimo_exactness_rows) == 1
+    assert mimo_exactness_rows[0]["detail"]["artifact_exactness_release_action"] == (
+        "replace_all_routed_2bit_jangtq2_or_lift_gate_down_precision"
+    )
+    assert mimo_exactness_rows[0]["detail"]["recommended_next_artifact_profiles"] == [
+        "JANGTQ gate=3/up=2/down=3",
+        "JANGTQ gate=3/up=3/down=3",
+    ]
     assert "gemma4_12b_media_rows_complete" in failed_names
     assert "step37_real_vlm_runtime_complete" in failed_names
     assert "nemotron_omni_media_rows_complete" in failed_names
