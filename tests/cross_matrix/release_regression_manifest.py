@@ -404,7 +404,7 @@ CURRENT_ISSUE175_177_LIVE_RUNTIME_AUDIT_ARTIFACT = (
     "build/current-issue175-177-live-runtime-audit-20260601-local-refresh.json"
 )
 CURRENT_ISSUE179_MINIMAX_K_ROOT_CAUSE_AUDIT_ARTIFACT = (
-    "build/current-issue179-minimax-k-root-cause-audit-after-local-repro-memory-preflight-20260607.json"
+    "build/current-issue179-minimax-k-root-cause-audit-after-parser-settings-parity-20260608.json"
 )
 CURRENT_ISSUE179_MINIMAX_K_LIVE_PROBE_MEMORY_PREFLIGHT_ARTIFACT = (
     "build/current-issue179-minimax-k-responses-cancel-probe-memory-preflight-20260602-local-ready-check.json"
@@ -2090,7 +2090,7 @@ _ROWS: list[dict[str, Any]] = [
             ".venv/bin/python tests/cross_matrix/run_installed_app_runtime_parity_audit.py --app panel/release/sequoia-app/mac-arm64/vMLX.app --out build/current-staged-app-runtime-parity-audit-gemma4-release-boundary-after-ui-e2e-fixes-dmg-build-20260604.json",
             ".venv/bin/python tests/cross_matrix/run_issue175_177_installed_runtime_audit.py --out build/current-issue175-177-installed-runtime-audit-20260602-v1554-installed-tahoe.json",
             ".venv/bin/python tests/cross_matrix/run_issue175_177_live_runtime_audit.py --out build/current-issue175-177-live-runtime-audit-20260601-local-refresh.json",
-            ".venv/bin/python tests/cross_matrix/run_issue179_minimax_k_root_cause_audit.py --out build/current-issue179-minimax-k-root-cause-audit-after-local-repro-memory-preflight-20260607.json",
+            ".venv/bin/python tests/cross_matrix/run_issue179_minimax_k_root_cause_audit.py --out build/current-issue179-minimax-k-root-cause-audit-after-parser-settings-parity-20260608.json",
             ".venv/bin/python tests/cross_matrix/run_issue179_reporter_parity_metadata.py --out build/current-issue179-reporter-parity-metadata-template-20260528.json",
             "VMLINUX_REAL_UI_MODEL_PATH=/Users/example/models/dealign.ai/Nemotron-Omni-Nano-JANGTQ-CRACK VMLINUX_REAL_UI_PROOF_BASENAME=current-real-ui-live-model-nemotron-omni-nano-jangtq-20260527 VMLINUX_REAL_UI_MAX_TOKENS=96 node panel/scripts/live-real-ui-model-proof.mjs",
             "VMLINUX_REAL_UI_APP_PATH=/Applications/vMLX.app VMLINUX_REAL_UI_PYTHON=/Applications/vMLX.app/Contents/Resources/bundled-python/python/bin/python3 VMLINUX_REAL_UI_MODEL_PATH=/Users/example/models/dealign.ai/Nemotron-Omni-Nano-JANGTQ-CRACK VMLINUX_REAL_UI_SERVED_MODEL=Nemotron-Omni-Nano-JANGTQ-CRACK VMLINUX_REAL_UI_PROOF_BASENAME=current-real-ui-installed-app-nemotron-omni-nano-responses-tools-reasoning-cachecontrols-localonly-20260601 VMLINUX_REAL_UI_WIRE_API=responses VMLINUX_REAL_UI_BUILTIN_TOOLS=1 VMLINUX_REAL_UI_ENABLE_THINKING=1 VMLINUX_REAL_UI_MAX_TOKENS=512 VMLINUX_REAL_UI_MAX_TOOL_ITERATIONS=8 VMLINUX_REAL_UI_CHECK_SERVER_CACHE_CONTROLS=1 node panel/scripts/live-real-ui-model-proof.mjs",
@@ -2143,7 +2143,7 @@ _ROWS: list[dict[str, Any]] = [
             "build/current-installed-app-runtime-parity-audit-20260528-userdata-epipe-scan.json",
             "build/current-issue175-177-installed-runtime-audit-20260602-v1554-installed-tahoe.json",
             "build/current-issue175-177-live-runtime-audit-20260601-local-refresh.json",
-            "build/current-issue179-minimax-k-root-cause-audit-after-local-repro-memory-preflight-20260607.json",
+            "build/current-issue179-minimax-k-root-cause-audit-after-parser-settings-parity-20260608.json",
             "build/current-issue179-reporter-parity-metadata-template-20260528.json",
             "docs/internal/agent-notes/current-real-ui-live-model-nemotron-omni-nano-jangtq-20260527-proof.json",
             "docs/internal/agent-notes/current-real-ui-live-model-nemotron-omni-nano-jangtq-20260527-chat.png",

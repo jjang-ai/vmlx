@@ -15,7 +15,7 @@ from typing import Any
 
 
 DEFAULT_OUT = Path(
-    "build/current-issue175-179-release-boundary-audit-after-public-v1556-scan-20260606.json"
+    "build/current-issue175-179-release-boundary-audit-after-issue179-memory-preflight-20260607.json"
 )
 INSTALLED_APP_RUNTIME_PARITY_AUDIT_ARTIFACT = Path(
     "build/current-installed-app-runtime-parity-audit-after-installed-app-rebuild-20260606.json"
@@ -27,7 +27,7 @@ ISSUE175_177_LIVE_RUNTIME_AUDIT_ARTIFACT = Path(
     "build/current-issue175-177-live-runtime-audit-20260601-local-refresh.json"
 )
 ISSUE179_MINIMAX_K_ROOT_CAUSE_AUDIT_ARTIFACT = Path(
-    "build/current-issue179-minimax-k-root-cause-audit-after-current-source-cancel-refresh-20260607.json"
+    "build/current-issue179-minimax-k-root-cause-audit-after-parser-settings-parity-20260608.json"
 )
 
 OPEN_RELEASE_ROWS = [

@@ -42,7 +42,7 @@ RELEASE_MANIFEST = Path(
     "build/current-release-regression-manifest-after-mimo-model-upload-action-20260608.json"
 )
 ISSUE179_AUDIT = Path(
-    "build/current-issue179-minimax-k-root-cause-audit-after-local-repro-memory-preflight-20260607.json"
+    "build/current-issue179-minimax-k-root-cause-audit-after-parser-settings-parity-20260608.json"
 )
 QWEN27_RESPONSES_CANCEL = Path(
     "build/current-qwen27-mxfp4-mtp-responses-cancel-mtp-deterministic-20260607.json"

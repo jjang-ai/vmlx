@@ -47,7 +47,19 @@ def test_issue179_audit_keeps_reporter_cancel_404_boundary_open():
     assert audit["reporter_server_hash_parity"]["status"] == "open"
     assert (
         audit["reporter_server_hash_parity"]["provenance"]["failure"]
-        == "missing_required_public_release_dmg_contracts"
+        == "reporter_server_hash_provenance_unknown"
+    )
+    assert (
+        audit["reporter_server_hash_parity"]["provenance"][
+            "missing_required_public_release_contracts"
+        ]
+        == []
+    )
+    assert (
+        audit["reporter_server_hash_parity"]["provenance"][
+            "public_release_checked_count"
+        ]
+        == 6
     )
     assert (
         audit["reporter_server_hash_parity"]["reporter_installed_server_sha256"]
@@ -60,10 +72,53 @@ def test_issue179_audit_keeps_reporter_cancel_404_boundary_open():
         "reporter installed app bundle hash matches public/local server.py route proof",
         "reporter response id was still active when the cancel request was sent",
         "reporter chat/session/settings database state matches local diagnostic state",
-        "a concrete prompt reproduces screenshot-shaped wrong-language or numeric garbage",
         "the 404 cancel response caused the screenshot rather than followed the stream abort",
     ]
+    assert audit["local_reporter_prompt_reproduction"]["clean"] is True
+    assert audit["local_reporter_prompt_reproduction"]["observed_stream_text"] is True
     assert "#179 remains open" in audit["release_boundary"]
+
+
+def test_issue179_local_reporter_repro_accepts_reasoning_only_clean_cancel(tmp_path):
+    path = tmp_path / gate.LOCAL_REPORTER_PROMPT_REPRODUCTION_PROOF
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(
+            {
+                "status": "pass",
+                "request": {
+                    "input": "Hi",
+                    "model": "models/MiniMax-M2.7-JANGTQ_K",
+                    "stream": True,
+                    "temperature": 1.0,
+                    "top_p": 0.95,
+                    "top_k": 40,
+                    "max_output_tokens": 4096,
+                },
+                "raw": {
+                    "stream_started": True,
+                    "response_id": "resp_clean_reasoning_only",
+                    "cancel_status": 200,
+                    "cancel_trigger": "delay_elapsed",
+                    "raw_content_text": "",
+                    "raw_reasoning_text": "We",
+                },
+                "probe": {
+                    "bad_text_captured": False,
+                    "cancel_route_present": True,
+                },
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    repro = gate.analyze_local_reporter_prompt_reproduction(tmp_path)
+
+    assert repro["request_matches_reporter"] is True
+    assert repro["observed_stream_text"] is True
+    assert repro["clean"] is True
+
 
 def test_issue179_audit_writes_json_artifact(tmp_path):
     out = tmp_path / "issue179-audit.json"

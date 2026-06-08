@@ -20,7 +20,7 @@ from typing import Any
 
 
 DEFAULT_OUT = Path(
-    "build/current-issue179-minimax-k-root-cause-audit-after-current-source-cancel-refresh-20260607.json"
+    "build/current-issue179-minimax-k-root-cause-audit-after-parser-settings-parity-20260608.json"
 )
 REPORTER_LOG = Path("build/issue-179/vmlx-logs-490f58c0-2026-05-27.log")
 REPORTER_SCREENSHOT = Path("build/issue-179/minimax-garbage-screenshot.png")
@@ -70,13 +70,13 @@ LOCAL_REAL_UI_PROOFS = (
     ),
 )
 LOCAL_RESPONSES_CANCEL_PROOF = Path(
-    "build/current-issue179-minimax-k-responses-cancel-probe-after-mimo-dsv4-ledger-20260607.json"
+    "build/current-issue179-minimax-k-responses-cancel-probe-current-source-parser-settings-parity-20260608.json"
 )
 LOCAL_LIVE_PROBE_MEMORY_PREFLIGHT = Path(
     "build/current-issue179-minimax-k-responses-cancel-probe-memory-preflight-20260602-local-ready-check.json"
 )
 LOCAL_REPORTER_PROMPT_REPRODUCTION_PROOF = Path(
-    "build/current-issue179-minimax-k-responses-cancel-probe-installed-badtext-20260528.json"
+    "build/current-issue179-minimax-k-responses-cancel-probe-current-source-parser-settings-parity-20260608.json"
 )
 LOCAL_MODEL_MANIFEST = Path(
     "build/current-issue179-minimax-k-local-model-manifest-20260527.json"
@@ -926,6 +926,7 @@ def analyze_local_reporter_prompt_reproduction(root: Path) -> dict[str, Any]:
     content = str(raw.get("raw_content_text") or "")
     reasoning = str(raw.get("raw_reasoning_text") or "")
     text_counts = _bad_text_counts("\n".join((content, reasoning)))
+    observed_stream_text = bool(content.strip()) or bool(reasoning.strip())
     request_matches_reporter = (
         request.get("input") == "Hi"
         and request.get("model") == "models/MiniMax-M2.7-JANGTQ_K"
@@ -939,10 +940,10 @@ def analyze_local_reporter_prompt_reproduction(root: Path) -> dict[str, Any]:
         path.exists()
         and raw.get("stream_started") is True
         and isinstance(raw.get("response_id"), str)
+        and raw.get("cancel_status") == 200
         and request_matches_reporter
         and probe.get("bad_text_captured") is False
-        and bool(content.strip())
-        and bool(reasoning.strip())
+        and observed_stream_text
         and text_counts == {
             "raw_parser_tag": False,
             "cjk": 0,
@@ -964,6 +965,7 @@ def analyze_local_reporter_prompt_reproduction(root: Path) -> dict[str, Any]:
         "content_text": content,
         "reasoning_text": reasoning,
         "bad_text_counts": text_counts,
+        "observed_stream_text": observed_stream_text,
         "clean": clean,
     }
 
