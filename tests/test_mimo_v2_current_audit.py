@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import sys
+import types
 from pathlib import Path
 
 from tests.cross_matrix import run_mimo_v2_jang2l_current_audit as audit
@@ -9,6 +11,61 @@ from tests.cross_matrix import run_mimo_v2_jang2l_current_audit as audit
 def _write_json(path: Path, data: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(data) + "\n")
+
+
+def test_mimo_bookend_quantization_audit_accepts_q8_sidecars(
+    tmp_path, monkeypatch
+):
+    model_path = tmp_path / "MiMo-V2.5-JANGTQ_2"
+    model_path.mkdir()
+    _write_json(
+        model_path / "model.safetensors.index.json",
+        {
+            "weight_map": {
+                "lm_head.weight": "bookends.safetensors",
+                "lm_head.scales": "bookends.safetensors",
+                "lm_head.biases": "bookends.safetensors",
+                "model.embed_tokens.weight": "bookends.safetensors",
+                "model.embed_tokens.scales": "bookends.safetensors",
+                "model.embed_tokens.biases": "bookends.safetensors",
+            }
+        },
+    )
+    (model_path / "bookends.safetensors").write_bytes(b"stub")
+
+    class FakeTensor:
+        def __init__(self, shape, dtype):
+            self.shape = shape
+            self.dtype = dtype
+
+    class FakeSafeOpen:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def get_tensor(self, key):
+            if key.endswith(".weight"):
+                return FakeTensor((152576, 1024), "uint32")
+            return FakeTensor((152576, 64), "float16")
+
+    monkeypatch.setitem(
+        sys.modules,
+        "safetensors",
+        types.SimpleNamespace(safe_open=FakeSafeOpen),
+    )
+
+    result = audit._bookend_quantization_audit(model_path)
+
+    assert result["status"] == "pass"
+    assert result["missing_keys"] == []
+    assert result["q8_shape_compatible"] is True
+    assert result["keys"]["lm_head.weight"]["dtype"] == "uint32"
+    assert "does not clear MiMo exactness" in result["boundary"]
 
 
 def test_mimo_current_audit_separates_clean_artifact_from_runtime_blockers(

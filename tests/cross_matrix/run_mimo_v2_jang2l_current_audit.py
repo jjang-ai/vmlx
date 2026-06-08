@@ -285,6 +285,78 @@ def _verify_manifest(model_parent: Path, manifest: Path) -> dict[str, Any]:
     return result
 
 
+def _bookend_quantization_audit(model_path: Path) -> dict[str, Any]:
+    """Inspect MiMo q8 bookend sidecars without loading the model."""
+    required = [
+        "lm_head.weight",
+        "lm_head.scales",
+        "lm_head.biases",
+        "model.embed_tokens.weight",
+        "model.embed_tokens.scales",
+        "model.embed_tokens.biases",
+    ]
+    result: dict[str, Any] = {
+        "status": "missing_index",
+        "required_keys": required,
+        "missing_keys": [],
+        "keys": {},
+        "boundary": (
+            "This no-load check only proves lm_head/embed_tokens affine sidecars "
+            "exist with q8-compatible shapes. It does not clear MiMo exactness; "
+            "literal mutation can still be artifact/logit or runtime decode quality."
+        ),
+    }
+    index_path = model_path / "model.safetensors.index.json"
+    if not index_path.exists():
+        return result
+    try:
+        index = json.loads(index_path.read_text(encoding="utf-8"))
+        weight_map = index.get("weight_map")
+        if not isinstance(weight_map, dict):
+            result["status"] = "invalid_index"
+            return result
+        missing = [key for key in required if key not in weight_map]
+        result["missing_keys"] = missing
+        if missing:
+            result["status"] = "missing_bookend_sidecars"
+            return result
+        from safetensors import safe_open
+
+        grouped: dict[str, list[str]] = {}
+        for key in required:
+            grouped.setdefault(str(weight_map[key]), []).append(key)
+        for shard, keys in grouped.items():
+            with safe_open(str(model_path / shard), framework="numpy") as sf:
+                for key in keys:
+                    tensor = sf.get_tensor(key)
+                    result["keys"][key] = {
+                        "file": shard,
+                        "shape": list(tensor.shape),
+                        "dtype": str(tensor.dtype),
+                    }
+        lm_weight = result["keys"].get("lm_head.weight", {})
+        lm_scales = result["keys"].get("lm_head.scales", {})
+        embed_weight = result["keys"].get("model.embed_tokens.weight", {})
+        embed_scales = result["keys"].get("model.embed_tokens.scales", {})
+        q8_shapes = (
+            lm_weight.get("dtype") == "uint32"
+            and embed_weight.get("dtype") == "uint32"
+            and lm_scales.get("dtype") == "float16"
+            and embed_scales.get("dtype") == "float16"
+            and isinstance(lm_weight.get("shape"), list)
+            and isinstance(embed_weight.get("shape"), list)
+            and lm_weight.get("shape")[-1] == 1024
+            and embed_weight.get("shape")[-1] == 1024
+        )
+        result["q8_shape_compatible"] = bool(q8_shapes)
+        result["status"] = "pass" if q8_shapes else "unexpected_bookend_shapes"
+        return result
+    except Exception as exc:  # pragma: no cover - diagnostic robustness
+        result["status"] = "error"
+        result["error"] = f"{type(exc).__name__}: {exc}"
+        return result
+
+
 def _text_cache_narrow_pass(data: dict[str, Any]) -> bool:
     requests = data.get("requests")
     if not isinstance(requests, list):
@@ -2380,6 +2452,7 @@ def _decode_speed_log_trace(log_path: Path) -> dict[str, Any]:
 def build_audit(root: Path, model_path: Path, manifest: Path) -> dict[str, Any]:
     model_parent = model_path.parent
     manifest_check = _verify_manifest(model_parent, manifest)
+    bookend_quantization = _bookend_quantization_audit(model_path)
     stale_state = [
         {
             "path": str(path),
@@ -2864,6 +2937,7 @@ def build_audit(root: Path, model_path: Path, manifest: Path) -> dict[str, Any]:
         },
         "component_ok": {
             "manifest_integrity": manifest_check["status"] == "pass",
+            "bookend_quantization_sidecars": bookend_quantization.get("status") == "pass",
             "stale_local_state_absent": not stale_present,
             "structural_verify": bool(structural_pass),
             "text_cache_narrow": bool(text_cache_pass),
@@ -2998,6 +3072,7 @@ def build_audit(root: Path, model_path: Path, manifest: Path) -> dict[str, Any]:
             ),
             "api_cache_responses_contract": api_cache_responses_evidence,
             "mimo_media_runtime": media_runtime_evidence,
+            "bookend_quantization": bookend_quantization,
             "source_vs_quant_first_divergence": (
                 source_vs_quant.get("data")
                 if source_vs_quant.get("exists")
@@ -3020,7 +3095,13 @@ def build_audit(root: Path, model_path: Path, manifest: Path) -> dict[str, Any]:
                 "mutations with runtime KV quantization, native cache storage "
                 "quantization, prefix cache, paged cache, block-disk L2, and cache "
                 "hits disabled. Do not chase prefix-cache reuse, L2 disk cache, or "
-                "runtime KV quantization as the primary current MiMo exactness cause."
+            "runtime KV quantization as the primary current MiMo exactness cause."
+            ),
+            "exactness_bookend_boundary": (
+                "Current MiMo JANGTQ_2 exactness is not the old missing "
+                "lm_head/embed_tokens sidecar failure class when "
+                "bookend_quantization.status=pass; focus corrected routed "
+                "TQ/quantization or runtime decode/logit proof."
             ),
         },
         "release_boundary": (
