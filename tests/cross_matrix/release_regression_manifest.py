@@ -881,7 +881,7 @@ CURRENT_MIMO_V2_JANG2L_SOURCE_VS_QUANT_ARTIFACT = (
     "build/current-mimo-v2-jangtq2-source-vs-quant-first-divergence-preflight-20260607.json"
 )
 CURRENT_MIMO_V2_JANG2L_NO_SOURCE_EXACTNESS_CLASSIFIER_ARTIFACT = (
-    "build/current-mimo-v2-no-source-exactness-classifier-after-jang2l-live-compare-20260608.json"
+    "build/current-mimo-v2-no-source-exactness-classifier-after-compact-hyphen-proof-20260608.json"
 )
 CURRENT_DIAGNOSTIC_LIVE_SMOKE_ARTIFACTS = {
     # Retired 2026-06-07: old expected-failure diagnostic rows pointed at
@@ -6156,6 +6156,7 @@ def _validate_current_mimo_v2_jang2l_root_cause(root: Path) -> dict[str, Any]:
             "jangtq2_plain_literal_copy_regression_jang2l_plain_copy_passes",
             "jangtq2_plain_literal_copy_fails_before_parser_or_json_repair",
             "jangtq2_literal_corruption_persists_without_cache_fastpath_router_and_tq_kernel_parity_passes",
+            "jangtq2_compact_hyphen_decode_quality_open_not_cache_parser_template_tokenizer",
         }
         if (
             result["no_source_exactness_classification"]

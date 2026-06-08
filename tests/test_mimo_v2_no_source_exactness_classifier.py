@@ -401,6 +401,71 @@ def test_mimo_no_source_classifier_promotes_plain_literal_copy_failure():
     assert artifact["unresolved_surfaces"]["jang2l_tool_memory_or_protocol"] is True
 
 
+def test_mimo_no_source_classifier_consumes_compact_hyphen_distribution_probe():
+    audit = {
+        "component_ok": {
+            "api_cache_responses_contract": True,
+            "tool_protocol": True,
+            "exactness_cache_kv_quant_excluded": True,
+            "decode_speed_target": True,
+            "source_vs_quant_first_divergence": False,
+            "long_prompt_coherence": True,
+            "cb_system_prompt_working_set_pressure": True,
+            "mimo_media_wired": True,
+        }
+    }
+    smoke = {"results": []}
+    hyphen_distribution = {
+        "classification": "compact_hyphen_exactness_fails_in_served_artifact",
+        "not_caused_by": [
+            "prefix_cache",
+            "l2_disk_cache",
+            "tool_parser",
+            "chat_template_only",
+            "tokenizer_roundtrip",
+        ],
+        "requests": {
+            "chat_exact_blue_cat": {"code": 200, "text": "blue cat"},
+            "completion_repeat_blue_cat": {"code": 200, "text": "blue"},
+            "chat_hyphen_spaces": {"code": 200, "text": "blue - cat"},
+        },
+    }
+
+    artifact = build_classification(
+        audit,
+        smoke,
+        jangtq2_hyphen_distribution=hyphen_distribution,
+    )
+
+    assert artifact["classification"] == (
+        "jangtq2_compact_hyphen_decode_quality_open_not_cache_parser_template_tokenizer"
+    )
+    assert artifact["jangtq2_hyphen_distribution_summary"] == {
+        "exists": True,
+        "classification": "compact_hyphen_exactness_fails_in_served_artifact",
+        "chat_compact_hyphen_fails": True,
+        "completion_compact_hyphen_fails": True,
+        "spaced_hyphen_preserved": True,
+        "not_caused_by": [
+            "prefix_cache",
+            "l2_disk_cache",
+            "tool_parser",
+            "chat_template_only",
+            "tokenizer_roundtrip",
+        ],
+    }
+    assert (
+        artifact["excluded_surfaces"]["chat_template_only_primary_cause"] is True
+    )
+    assert (
+        artifact["excluded_surfaces"]["tokenizer_roundtrip_primary_cause"] is True
+    )
+    assert (
+        artifact["unresolved_surfaces"]["jangtq2_compact_hyphen_decode_quality"]
+        is True
+    )
+
+
 def test_mimo_no_source_classifier_tracks_jang2l_json_sentinel_separately():
     audit = {
         "component_ok": {

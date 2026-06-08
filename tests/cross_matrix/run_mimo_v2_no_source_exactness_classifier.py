@@ -22,7 +22,7 @@ DEFAULT_SMOKE = Path(
     "build/current-all-local-model-smoke-mimo-v25-jangtq2-media-l2-release-20260608/summary.json"
 )
 DEFAULT_OUT = Path(
-    "build/current-mimo-v2-no-source-exactness-classifier-after-jang2l-live-compare-20260608.json"
+    "build/current-mimo-v2-no-source-exactness-classifier-after-compact-hyphen-proof-20260608.json"
 )
 DEFAULT_JANGTQ2_EXACTNESS = Path(
     "build/current-mimo-v25-jangtq2-exactness-isolation-20260608/result.json"
@@ -53,6 +53,9 @@ DEFAULT_JANGTQ2_LOGPROB_DIAGNOSTIC = Path(
 )
 DEFAULT_JANGTQ2_TEMPLATE_DIAGNOSTIC = Path(
     "build/current-mimo-v25-jangtq2-tokenizer-template-literal-diagnostic-20260608.json"
+)
+DEFAULT_JANGTQ2_HYPHEN_DISTRIBUTION = Path(
+    "build/current-mimo-v25-jangtq2-exactness-classification-20260608.json"
 )
 
 EXACTNESS_REASONS = {
@@ -455,6 +458,51 @@ def _template_literal_summary(artifact: dict[str, Any] | None) -> dict[str, Any]
     }
 
 
+def _hyphen_distribution_summary(artifact: dict[str, Any] | None) -> dict[str, Any]:
+    if not isinstance(artifact, dict):
+        return {
+            "exists": False,
+            "classification": None,
+            "chat_compact_hyphen_fails": None,
+            "completion_compact_hyphen_fails": None,
+            "spaced_hyphen_preserved": None,
+            "not_caused_by": [],
+        }
+    requests = artifact.get("requests")
+    if not isinstance(requests, dict):
+        return {
+            "exists": False,
+            "classification": artifact.get("classification"),
+            "chat_compact_hyphen_fails": None,
+            "completion_compact_hyphen_fails": None,
+            "spaced_hyphen_preserved": None,
+            "not_caused_by": [
+                str(item) for item in artifact.get("not_caused_by", [])
+            ]
+            if isinstance(artifact.get("not_caused_by"), list)
+            else [],
+        }
+
+    def _text(label: str) -> str:
+        row = requests.get(label)
+        return str(row.get("text") or "") if isinstance(row, dict) else ""
+
+    not_caused_by = artifact.get("not_caused_by")
+    if not isinstance(not_caused_by, list):
+        not_caused_by = []
+    return {
+        "exists": True,
+        "classification": artifact.get("classification"),
+        "chat_compact_hyphen_fails": _text("chat_exact_blue_cat").strip()
+        not in {"", "blue-cat"},
+        "completion_compact_hyphen_fails": _text("completion_repeat_blue_cat").strip()
+        not in {"", "blue-cat"},
+        "spaced_hyphen_preserved": _text("chat_hyphen_spaces").strip()
+        == "blue - cat",
+        "not_caused_by": [str(item) for item in not_caused_by],
+    }
+
+
 def build_classification(
     audit: dict[str, Any],
     smoke: dict[str, Any],
@@ -469,6 +517,7 @@ def build_classification(
     jang2l_json_sentinel: dict[str, Any] | None = None,
     jangtq2_logprob_diagnostic: dict[str, Any] | None = None,
     jangtq2_template_diagnostic: dict[str, Any] | None = None,
+    jangtq2_hyphen_distribution: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     component_ok = audit.get("component_ok") if isinstance(audit.get("component_ok"), dict) else {}
     failures = _failures(smoke)
@@ -497,11 +546,18 @@ def build_classification(
     jang2l_json_sentinel_summary = _json_sentinel_summary(jang2l_json_sentinel)
     jangtq2_logprob_summary = _logprob_literal_summary(jangtq2_logprob_diagnostic)
     jangtq2_template_summary = _template_literal_summary(jangtq2_template_diagnostic)
+    jangtq2_hyphen_summary = _hyphen_distribution_summary(jangtq2_hyphen_distribution)
 
     excluded_surfaces = {
         "prompt_template_literal_corruption": (
             jangtq2_template_summary["literal_preserved_in_raw_prompt"] is True
             and jangtq2_template_summary["literal_preserved_in_chat_template"] is True
+        ),
+        "chat_template_only_primary_cause": (
+            "chat_template_only" in jangtq2_hyphen_summary["not_caused_by"]
+        ),
+        "tokenizer_roundtrip_primary_cause": (
+            "tokenizer_roundtrip" in jangtq2_hyphen_summary["not_caused_by"]
         ),
         "parser_argument_rewrite": parser_structure_valid,
         "prefix_paged_l2_or_kv_quant_primary_cause": cache_kv_l2_excluded,
@@ -584,12 +640,23 @@ def build_classification(
             jang2l_json_sentinel_summary["exists"] is True
             and jang2l_json_sentinel_summary["exact_json_pass"] is not True
         ),
+        "jangtq2_compact_hyphen_decode_quality": (
+            jangtq2_hyphen_summary["classification"]
+            == "compact_hyphen_exactness_fails_in_served_artifact"
+            and jangtq2_hyphen_summary["chat_compact_hyphen_fails"] is True
+            and jangtq2_hyphen_summary["completion_compact_hyphen_fails"] is True
+            and jangtq2_hyphen_summary["spaced_hyphen_preserved"] is True
+        ),
     }
 
     release_ready = False
     status = "open" if exactness_failures or any(unresolved_surfaces.values()) else "pass"
 
-    if (
+    if unresolved_surfaces["jangtq2_compact_hyphen_decode_quality"]:
+        classification = (
+            "jangtq2_compact_hyphen_decode_quality_open_not_cache_parser_template_tokenizer"
+        )
+    elif (
         literal_variant_summary["plain_literal_copy_pass"] is False
         and jang2l_literal_variant_summary["plain_literal_copy_pass"] is True
     ):
@@ -690,6 +757,7 @@ def build_classification(
         "jang2l_json_sentinel_summary": jang2l_json_sentinel_summary,
         "jangtq2_logprob_summary": jangtq2_logprob_summary,
         "jangtq2_template_summary": jangtq2_template_summary,
+        "jangtq2_hyphen_distribution_summary": jangtq2_hyphen_summary,
         "no_source_runtime_diagnostics": no_source_runtime_diagnostics,
         "exactness_failures": exactness_failures,
         "excluded_surfaces": excluded_surfaces,
@@ -744,6 +812,11 @@ def main() -> int:
         type=Path,
         default=DEFAULT_JANGTQ2_TEMPLATE_DIAGNOSTIC,
     )
+    parser.add_argument(
+        "--jangtq2-hyphen-distribution",
+        type=Path,
+        default=DEFAULT_JANGTQ2_HYPHEN_DISTRIBUTION,
+    )
     parser.add_argument("--out", type=Path, default=DEFAULT_OUT)
     args = parser.parse_args()
 
@@ -789,6 +862,11 @@ def main() -> int:
         if args.jangtq2_template_diagnostic.exists()
         else None
     )
+    jangtq2_hyphen_distribution = (
+        _load(args.jangtq2_hyphen_distribution)
+        if args.jangtq2_hyphen_distribution.exists()
+        else None
+    )
     artifact = build_classification(
         _load(args.audit),
         _load(args.smoke),
@@ -802,6 +880,7 @@ def main() -> int:
         jang2l_json_sentinel=jang2l_json_sentinel,
         jangtq2_logprob_diagnostic=jangtq2_logprob_diagnostic,
         jangtq2_template_diagnostic=jangtq2_template_diagnostic,
+        jangtq2_hyphen_distribution=jangtq2_hyphen_distribution,
     )
     artifact["audit_artifact"] = str(args.audit)
     artifact["smoke_artifact"] = str(args.smoke)
@@ -820,6 +899,9 @@ def main() -> int:
     )
     artifact["jangtq2_template_diagnostic_artifact"] = str(
         args.jangtq2_template_diagnostic
+    )
+    artifact["jangtq2_hyphen_distribution_artifact"] = str(
+        args.jangtq2_hyphen_distribution
     )
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(json.dumps(artifact, indent=2, sort_keys=True) + "\n", encoding="utf-8")
