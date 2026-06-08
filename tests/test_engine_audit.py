@@ -7942,8 +7942,13 @@ class TestStartupCompatibilityGuards:
         assert 'getattr(mx, "get_cache_memory", None)' in block
         assert "non_cache_active = max(0, active - cache_bytes)" in block
         assert "non_cache_pct = (non_cache_active / max_ws) * 100.0" in block
+        assert "_metal_ws_model_baseline_bytes" in block
+        assert "transient_bytes = max(0, active - int(baseline))" in block
+        assert "allowed_transient_pct = max(0.5, 100.0 - threshold_pct)" in block
         assert "get_metal_ws_guard_threshold(99.0)" in block
         assert "default 99" in server_source
+        assert "_record_metal_ws_model_baseline(\"lifespan_engine_start\")" in server_source
+        assert "_record_metal_ws_model_baseline(\"simple_engine_start\")" in server_source
         assert "pct = (active / max_ws) * 100.0" in block
         assert "if pct < threshold_pct:\n                    return" in block
 

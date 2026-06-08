@@ -4651,6 +4651,106 @@ class TestMlxstudio78MetalWorkingSetGuard:
             # Must NOT raise
             asyncio.run(check_metal_working_set_pressure(MagicMock()))
 
+    def test_loaded_model_baseline_allows_low_transient_pressure(self):
+        import asyncio
+        from types import SimpleNamespace
+        from unittest.mock import MagicMock, patch
+        import mlx.core as mx
+        import vmlx_engine.server as s
+
+        max_ws = 100 * 1024 ** 3
+        active = int(max_ws * 0.995)
+        baseline = int(max_ws * 0.992)
+
+        async def run():
+            with patch.dict(os.environ, {
+                "VMLINUX_METAL_WS_GUARD": "1",
+                "VMLINUX_METAL_WS_REJECT_PCT": "99",
+            }):
+                with patch.object(mx, "device_info", lambda: {
+                    "max_recommended_working_set_size": max_ws
+                }, create=True), patch.object(
+                    mx, "get_active_memory", lambda: active, create=True
+                ), patch.object(
+                    mx, "get_cache_memory", lambda: 0, create=True
+                ), patch.object(
+                    mx, "clear_cache", lambda: None, create=True
+                ):
+                    return await s.check_metal_working_set_pressure(MagicMock())
+
+        old_engine = s._engine
+        old_model_path = s._model_path
+        old_model_name = s._model_name
+        old_baseline = s._metal_ws_model_baseline_bytes
+        old_baseline_max = s._metal_ws_model_baseline_max_ws_bytes
+        old_baseline_key = s._metal_ws_model_baseline_model_key
+        try:
+            s._engine = SimpleNamespace()
+            s._model_path = "/models/MiMo-V2.5-JANGTQ_2"
+            s._model_name = "MiMo-V2.5-JANGTQ_2"
+            s._metal_ws_model_baseline_bytes = baseline
+            s._metal_ws_model_baseline_max_ws_bytes = max_ws
+            s._metal_ws_model_baseline_model_key = s._model_path
+            asyncio.run(run())
+        finally:
+            s._engine = old_engine
+            s._model_path = old_model_path
+            s._model_name = old_model_name
+            s._metal_ws_model_baseline_bytes = old_baseline
+            s._metal_ws_model_baseline_max_ws_bytes = old_baseline_max
+            s._metal_ws_model_baseline_model_key = old_baseline_key
+
+    def test_loaded_model_baseline_still_rejects_high_transient_pressure(self):
+        import asyncio
+        from types import SimpleNamespace
+        from unittest.mock import MagicMock, patch
+        import mlx.core as mx
+        from fastapi import HTTPException
+        import vmlx_engine.server as s
+
+        max_ws = 100 * 1024 ** 3
+        active = int(max_ws * 0.995)
+        baseline = int(max_ws * 0.94)
+
+        async def run():
+            with patch.dict(os.environ, {
+                "VMLINUX_METAL_WS_GUARD": "1",
+                "VMLINUX_METAL_WS_REJECT_PCT": "99",
+            }):
+                with patch.object(mx, "device_info", lambda: {
+                    "max_recommended_working_set_size": max_ws
+                }, create=True), patch.object(
+                    mx, "get_active_memory", lambda: active, create=True
+                ), patch.object(
+                    mx, "get_cache_memory", lambda: 0, create=True
+                ), patch.object(
+                    mx, "clear_cache", lambda: None, create=True
+                ):
+                    return await s.check_metal_working_set_pressure(MagicMock())
+
+        old_engine = s._engine
+        old_model_path = s._model_path
+        old_model_name = s._model_name
+        old_baseline = s._metal_ws_model_baseline_bytes
+        old_baseline_max = s._metal_ws_model_baseline_max_ws_bytes
+        old_baseline_key = s._metal_ws_model_baseline_model_key
+        try:
+            s._engine = SimpleNamespace()
+            s._model_path = "/models/MiMo-V2.5-JANGTQ_2"
+            s._model_name = "MiMo-V2.5-JANGTQ_2"
+            s._metal_ws_model_baseline_bytes = baseline
+            s._metal_ws_model_baseline_max_ws_bytes = max_ws
+            s._metal_ws_model_baseline_model_key = s._model_path
+            with pytest.raises(HTTPException):
+                asyncio.run(run())
+        finally:
+            s._engine = old_engine
+            s._model_path = old_model_path
+            s._model_name = old_model_name
+            s._metal_ws_model_baseline_bytes = old_baseline
+            s._metal_ws_model_baseline_max_ws_bytes = old_baseline_max
+            s._metal_ws_model_baseline_model_key = old_baseline_key
+
     def test_guard_can_be_disabled(self):
         import asyncio, os
         from unittest.mock import MagicMock, patch

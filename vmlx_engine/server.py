@@ -181,6 +181,57 @@ _model_name_mismatch_warned: bool = (
 # didn't match the loaded model — lowered log level hid the bug.
 _model_name_mismatch_seen: set[tuple[str, str]] = set()
 _metal_na_status_cache: dict[str, dict] = {}
+_metal_ws_model_baseline_bytes: int | None = None
+_metal_ws_model_baseline_max_ws_bytes: int | None = None
+_metal_ws_model_baseline_model_key: str | None = None
+
+
+def _reset_metal_ws_model_baseline() -> None:
+    """Forget the loaded-model Metal working-set baseline on model switch."""
+    global \
+        _metal_ws_model_baseline_bytes, \
+        _metal_ws_model_baseline_max_ws_bytes, \
+        _metal_ws_model_baseline_model_key
+    _metal_ws_model_baseline_bytes = None
+    _metal_ws_model_baseline_max_ws_bytes = None
+    _metal_ws_model_baseline_model_key = None
+
+
+def _record_metal_ws_model_baseline(reason: str = "model_loaded") -> None:
+    """Record post-load Metal residency so request guard checks transient pressure.
+
+    MLX active memory includes persistent model weights. Huge but valid local
+    bundles such as MiMo can sit near the recommended Metal working set after a
+    successful load. The request-time OOM guard should still protect first-load
+    and high-transient cases, but it should not reject follow-up requests solely
+    because model weights are resident.
+    """
+    global \
+        _metal_ws_model_baseline_bytes, \
+        _metal_ws_model_baseline_max_ws_bytes, \
+        _metal_ws_model_baseline_model_key
+    if _engine is None:
+        return
+    try:
+        import mlx.core as mx
+        from vmlx_engine.utils.memory_limits import get_effective_metal_working_set_bytes
+
+        if hasattr(mx, "clear_cache"):
+            mx.clear_cache()
+        active, max_ws = get_effective_metal_working_set_bytes(mx)
+    except Exception:
+        return
+    if active <= 0 or max_ws <= 0:
+        return
+    _metal_ws_model_baseline_bytes = int(active)
+    _metal_ws_model_baseline_max_ws_bytes = int(max_ws)
+    _metal_ws_model_baseline_model_key = _model_path or _model_name
+    logger.info(
+        "Recorded Metal working-set model baseline: active=%.1fGB max=%.1fGB reason=%s",
+        active / (1024**3),
+        max_ws / (1024**3),
+        reason,
+    )
 
 
 def _argv_has_option(argv: list[str], option: str) -> bool:
@@ -2902,6 +2953,7 @@ async def lifespan(app: FastAPI):
     # Startup: Start engine if loaded (needed for BatchedEngine in uvicorn's event loop)
     if _engine is not None and hasattr(_engine, "_loaded") and not _engine._loaded:
         await _engine.start()
+        _record_metal_ws_model_baseline("lifespan_engine_start")
 
         # Apply chat template override for BatchedEngine (SimpleEngine does it in load_model)
         try:
@@ -3664,6 +3716,40 @@ async def check_metal_working_set_pressure(request: Request):
         non_cache_pct = (non_cache_active / max_ws) * 100.0
         if non_cache_pct < threshold_pct:
             return
+
+    # If a huge model is already loaded, raw active/max includes persistent
+    # model weights. Use the post-load baseline to decide whether the current
+    # request is adding dangerous transient pressure, while keeping the normal
+    # high-pressure reject path when no matching baseline has been recorded.
+    try:
+        model_key = _model_path or _model_name
+        baseline = _metal_ws_model_baseline_bytes
+        baseline_max_ws = _metal_ws_model_baseline_max_ws_bytes
+        baseline_key = _metal_ws_model_baseline_model_key
+        if (
+            _engine is not None
+            and baseline is not None
+            and baseline_max_ws == max_ws
+            and baseline_key == model_key
+        ):
+            if active < baseline:
+                _record_metal_ws_model_baseline("working_set_lowered")
+                baseline = _metal_ws_model_baseline_bytes or active
+            transient_bytes = max(0, active - int(baseline))
+            transient_pct = (transient_bytes / max_ws) * 100.0
+            allowed_transient_pct = max(0.5, 100.0 - threshold_pct)
+            if transient_pct <= allowed_transient_pct:
+                logger.info(
+                    "Metal working-set guard allowed loaded-model baseline pressure: "
+                    "active=%.1fGB baseline=%.1fGB transient=%.2f%% threshold=%.1f%%",
+                    active / (1024**3),
+                    int(baseline) / (1024**3),
+                    transient_pct,
+                    threshold_pct,
+                )
+                return
+    except Exception:
+        pass
 
     # Log throttle (shared state with mlxstudio#63 is overkill — use own).
     global _last_metal_ws_log
@@ -4666,6 +4752,7 @@ def load_model(
 
     _model_load_error = None  # Clear any previous error
     _jang_metadata = None  # Clear any previous JANG metadata
+    _reset_metal_ws_model_baseline()
 
     _default_max_tokens = max_tokens
     _default_max_tokens_explicit = bool(max_tokens_explicit)
@@ -4885,6 +4972,7 @@ def load_model(
         except RuntimeError:
             # No running loop (CLI startup) — safe to use asyncio.run
             asyncio.run(_engine.start())
+            _record_metal_ws_model_baseline("simple_engine_start")
         model_type = "MLLM" if _engine.is_mllm else "LLM"
         logger.info(f"{model_type} model loaded (simple mode): {model_name}")
 
