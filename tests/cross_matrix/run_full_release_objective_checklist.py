@@ -291,7 +291,7 @@ def _mimo_checks(data: dict[str, Any], classifier: dict[str, Any]) -> list[dict[
         "tool_protocol",
         "artifact_exactness",
         "cb_system_prompt_working_set_pressure",
-        "source_vs_quant_first_divergence",
+        "source_vs_quant_requirement_satisfied",
         "media_weights_preserved",
         "media_runtime_capabilities_safe",
         "media_model_metadata_text_only_contract",

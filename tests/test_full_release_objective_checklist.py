@@ -774,6 +774,7 @@ def test_full_release_objective_checklist_keeps_open_rows_visible(tmp_path):
                 "artifact_exactness": False,
                 "cb_system_prompt_working_set_pressure": False,
                 "source_vs_quant_first_divergence": False,
+                "source_vs_quant_requirement_satisfied": True,
                 "media_weights_preserved": True,
                 "media_runtime_capabilities_safe": True,
                 "media_model_metadata_text_only_contract": False,
@@ -816,6 +817,8 @@ def test_full_release_objective_checklist_keeps_open_rows_visible(tmp_path):
     assert "mimo_media_model_metadata_text_only_contract" in failed_names
     assert "mimo_media_runtime_implementation" in failed_names
     assert "mimo_mimo_media_wired" in failed_names
+    assert "mimo_source_vs_quant_first_divergence" not in failed_names
+    assert "mimo_source_vs_quant_requirement_satisfied" not in failed_names
     assert "mimo_no_source_classifier_tracks_exactness_boundary" not in failed_names
     mimo_exactness_rows = [
         row
@@ -910,6 +913,7 @@ def test_full_release_objective_checklist_can_pass_when_all_evidence_is_green(
                 "artifact_exactness": True,
                 "cb_system_prompt_working_set_pressure": True,
                 "source_vs_quant_first_divergence": True,
+                "source_vs_quant_requirement_satisfied": True,
                 "media_weights_preserved": True,
                 "media_runtime_capabilities_safe": True,
                 "media_model_metadata_text_only_contract": True,
