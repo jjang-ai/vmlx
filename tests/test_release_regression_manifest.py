@@ -4092,7 +4092,7 @@ def test_release_regression_manifest_current_sweep_uses_latest_live_smoke_artifa
     assert "current-regression-suite-20260528-installed-aggregate-stale.json" not in joined
     assert "current-regression-suite-20260528-epipe-aggregate-guard.json" not in joined
     assert "current-regression-suite-20260528-dsv4-continue-refresh.json" not in joined
-    assert "current-regression-suite-after-mimo-model-upload-action-20260608.json" in joined
+    assert "current-regression-suite-after-noheavy-contract-refresh-20260608.json" in joined
     assert "current-regression-suite-gemma4-release-boundary-after-ui-e2e-fixes-dmg-build-20260604.json" not in joined
     assert "current-regression-suite-20260602-v1553-installed-tahoe-refresh.json" not in joined
     assert "current-regression-suite-20260602-vm-stat-gate-validation.json" not in joined
@@ -12255,7 +12255,7 @@ def test_release_regression_manifest_runner_default_out_tracks_current_release_p
     from tests.cross_matrix import run_release_regression_manifest as runner
 
     assert runner.DEFAULT_OUT == Path(
-        "build/current-release-regression-manifest-after-mimo-model-upload-action-20260608.json"
+        "build/current-release-regression-manifest-after-noheavy-contract-refresh-20260608.json"
     )
 
 
@@ -15727,7 +15727,7 @@ def test_release_regression_manifest_tracks_cache_architecture_with_runner_artif
     joined = " ".join(row["commands"] + row["artifacts"] + row["proves"])
 
     assert "run_cache_architecture_contract.py" in joined
-    assert "current-cache-architecture-contract-after-mimo-tq-kv-boundary-20260607.json" in joined
+    assert "current-cache-architecture-contract-after-noheavy-contract-refresh-20260608.json" in joined
     assert "current-cache-architecture-contract-20260602-step-jangtq-boundary.json" not in joined
     assert "current-cache-architecture-contract-20260601-zaya-dsv4-terminal-disk-guard.json" not in joined
     assert "current-cache-architecture-contract-20260601-step37-mixed-swa-ui-storage-quant.json" not in joined
@@ -15768,7 +15768,7 @@ def test_release_regression_manifest_tracks_native_mtp_with_runner_artifact():
     joined = " ".join(row["commands"] + row["artifacts"] + row["proves"])
 
     assert "run_native_mtp_contract.py" in joined
-    assert "current-native-mtp-contract-after-qwen-gdn-sink-refresh-20260608.json" in joined
+    assert "current-native-mtp-contract-after-noheavy-contract-refresh-20260608.json" in joined
     assert "current-qwen36-mtp-gdn-sink-source-proof-20260606.json" in joined
     assert "current-qwen35-dense-mtp-gdn-sink-fix-20260606.json" in joined
     assert "gdn_sink" in joined

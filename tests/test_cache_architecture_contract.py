@@ -5,7 +5,7 @@ def test_cache_architecture_contract_default_out_tracks_current_release_proof_ar
     from tests.cross_matrix import run_cache_architecture_contract as gate
 
     assert gate.DEFAULT_OUT == Path(
-        "build/current-cache-architecture-contract-after-mimo-tq-kv-boundary-20260607.json"
+        "build/current-cache-architecture-contract-after-noheavy-contract-refresh-20260608.json"
     )
 
 

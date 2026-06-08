@@ -5,7 +5,7 @@ def test_native_mtp_contract_default_out_tracks_current_release_proof_artifact()
     from tests.cross_matrix import run_native_mtp_contract as gate
 
     assert gate.DEFAULT_OUT == Path(
-        "build/current-native-mtp-contract-after-mimo-capability-snapshot-fix-20260607.json"
+        "build/current-native-mtp-contract-after-noheavy-contract-refresh-20260608.json"
     )
 
 

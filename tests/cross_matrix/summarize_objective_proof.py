@@ -63,7 +63,7 @@ from tests.cross_matrix.release_regression_manifest import (
 
 DEFAULT_OUT = Path("build/current-objective-proof-after-jangtq2-live-release-smoke-20260608.json")
 CURRENT_RELEASE_REGRESSION_MANIFEST_REL = (
-    "build/current-release-regression-manifest-after-mimo-model-upload-action-20260608.json"
+    "build/current-release-regression-manifest-after-noheavy-contract-refresh-20260608.json"
 )
 DSV4_QUALITY_CLEARANCE_REL = "build/current-dsv4-long-output-quality-clearance-20260521.json"
 DSV4_CURRENT_IDENTIFIER_CANARY_REL = (
@@ -192,7 +192,7 @@ DSV4_BATCH_GENERATOR_WARMUP_ABLATION_REL = (
     "build/current-dsv4-jang-batch-generator-warmup-ablation-20260524.json"
 )
 API_CACHE_CONTRACT_REL = "build/current-noheavy-api-cache-contract-after-dsv4-preflight-refresh-20260608.json"
-CACHE_ARCHITECTURE_CONTRACT_REL = "build/current-cache-architecture-contract-after-mimo-tq-kv-boundary-20260607.json"
+CACHE_ARCHITECTURE_CONTRACT_REL = "build/current-cache-architecture-contract-after-noheavy-contract-refresh-20260608.json"
 TOOL_CALL_CONTRACT_REL = "build/current-tool-call-contract-after-current-mimo-proof-20260607.json"
 PANEL_SETTINGS_CONTRACT_REL = "build/current-panel-settings-contract-proof-20260601-cache-ui-storage-quant.json"
 MAX_OUTPUT_CONTEXT_CONTRACT_REL = "build/current-max-output-context-contract-after-current-mimo-proof-20260607.json"
@@ -201,7 +201,7 @@ MODEL_FAMILY_CONTRACT_REL = "build/current-model-family-detection-contract-after
 PARSER_REGISTRY_CONTRACT_REL = "build/current-parser-registry-contract-after-mimo-capability-snapshot-fix-20260607.json"
 MODEL_ARTIFACT_FORMAT_CONTRACT_REL = "build/current-model-artifact-format-contract-after-mimo-capability-snapshot-fix-20260607.json"
 GENERATION_DEFAULTS_CONTRACT_REL = "build/current-generation-defaults-contract-after-dsv4-preflight-refresh-20260608.json"
-NATIVE_MTP_CONTRACT_REL = "build/current-native-mtp-contract-after-qwen-gdn-sink-refresh-20260608.json"
+NATIVE_MTP_CONTRACT_REL = "build/current-native-mtp-contract-after-noheavy-contract-refresh-20260608.json"
 VL_MEDIA_CONTRACT_REL = "build/current-vl-media-cache-contract-after-dsv4-preflight-refresh-20260608.json"
 QWEN_JANG_SOURCE_SPEED_REL = "build/current-decode-speed-live-qwen27-jang4m-source-20260606.json"
 QWEN_JANG_PACKAGED_SPEED_REL = "build/current-decode-speed-live-qwen27-jang4m-installed-app-deterministic-pp-20260606.json"

@@ -24,7 +24,7 @@ from tests.cross_matrix.run_current_regression_suite import (
 )
 
 CURRENT_RELEASE_REGRESSION_MANIFEST_ARTIFACT = (
-    "build/current-release-regression-manifest-after-mimo-model-upload-action-20260608.json"
+    "build/current-release-regression-manifest-after-noheavy-contract-refresh-20260608.json"
 )
 
 EXPECTED_CURRENT_MODEL_ARTIFACT_CHECKS = (
@@ -374,11 +374,11 @@ CURRENT_POST_BUDGET_EDGE_ARTIFACTS = {
     "tool-call-loop-parser-cleanup": "build/current-tool-call-contract-after-current-mimo-proof-20260607.json",
     "panel-tool-security-loop-boundary": "build/current-panel-tool-security-contract-20260528-tool-loop-security-matrix.json",
     "api-chat-responses-anthropic-ollama-parity": "build/current-api-surface-contract-20260602-v1554-stream-cache-reuse-refresh.json",
-    "cache-architecture-family-classification": "build/current-cache-architecture-contract-after-mimo-tq-kv-boundary-20260607.json",
+    "cache-architecture-family-classification": "build/current-cache-architecture-contract-after-noheavy-contract-refresh-20260608.json",
     "jang-model-compat-runtime-boundary": "build/current-jang-model-compat-contract-20260528-pr155-runtime-boundary.json",
     "model-artifact-format-detection": "build/current-model-artifact-format-contract-after-mimo-capability-snapshot-fix-20260607.json",
     "model-family-detection-noheavy": "build/current-model-family-detection-contract-after-mimo-capability-snapshot-fix-20260607.json",
-    "native-mtp-d3-effect-policy": "build/current-native-mtp-contract-after-qwen-gdn-sink-refresh-20260608.json",
+    "native-mtp-d3-effect-policy": "build/current-native-mtp-contract-after-noheavy-contract-refresh-20260608.json",
     "mcp-policy-ui-gateway": "build/current-mcp-policy-contract-20260531-post-step-lfm-refresh.json",
     "vl-media-cache-tool-followup": "build/current-vl-media-cache-contract-after-dsv4-preflight-refresh-20260608.json",
     "packaged-release-integrity": "build/current-packaged-integrity-contract-after-staged-sequoia-rebuild-current-source-20260607.json",
@@ -386,7 +386,7 @@ CURRENT_POST_BUDGET_EDGE_ARTIFACTS = {
 }
 
 CURRENT_REGRESSION_SUITE_ARTIFACT = (
-    "build/current-regression-suite-after-mimo-model-upload-action-20260608.json"
+    "build/current-regression-suite-after-noheavy-contract-refresh-20260608.json"
 )
 CURRENT_ISSUE175_179_RELEASE_BOUNDARY_AUDIT_ARTIFACT = (
     "build/current-issue175-179-release-boundary-audit-after-issue179-memory-preflight-20260607.json"
@@ -1472,10 +1472,10 @@ _ROWS: list[dict[str, Any]] = [
             "Panel session launch builder preserves DSV4 default-on native prefix-cache policy, DSV4-only native cache controls, Qwen3.6 hybrid and Mamba paged-cache forcing, and regular KV stale saved false semantics",
         ],
         "commands": [
-            ".venv/bin/python tests/cross_matrix/run_cache_architecture_contract.py --out build/current-cache-architecture-contract-after-mimo-tq-kv-boundary-20260607.json",
+            ".venv/bin/python tests/cross_matrix/run_cache_architecture_contract.py --out build/current-cache-architecture-contract-after-noheavy-contract-refresh-20260608.json",
         ],
         "artifacts": [
-            "build/current-cache-architecture-contract-after-mimo-tq-kv-boundary-20260607.json",
+            "build/current-cache-architecture-contract-after-noheavy-contract-refresh-20260608.json",
             "build/current-cache-architecture-contract-20260530-lfm2-tool-parser-local.json",
             "build/current-cache-architecture-contract-20260528-gemma4-mixed-swa-row.json",
             "build/current-cache-architecture-contract-20260527-cache-family-matrix.json",
@@ -1607,11 +1607,11 @@ _ROWS: list[dict[str, Any]] = [
             "Qwen3.6/Qwen3.5 VLM native-MTP GatedDeltaNet wrappers accept and consume gdn_sink instead of leaking it to upstream originals",
         ],
         "commands": [
-            ".venv/bin/python tests/cross_matrix/run_native_mtp_contract.py --out build/current-native-mtp-contract-after-qwen-gdn-sink-refresh-20260608.json",
+            ".venv/bin/python tests/cross_matrix/run_native_mtp_contract.py --out build/current-native-mtp-contract-after-noheavy-contract-refresh-20260608.json",
             "VMLINUX_BENCH_PYTHON=/Applications/vMLX.app/Contents/Resources/bundled-python/python/bin/python3.12 .venv/bin/python bench/native_mtp_speed_ab.py /Users/example/models/JANGQ/Qwen3.6-27B-JANG_4M-MTP --served-name qwen27-jang4m-mtp-ab --port 8814 --cache off --max-num-seqs 1 --max-tokens 320 --repeats 1 --warmup 0 --load-timeout-s 600 --out build/current-native-mtp-speed-ab-qwen27-jang4m-mtp-installed-app-20260606 --disable-prompt-reuse",
         ],
         "artifacts": [
-            "build/current-native-mtp-contract-after-qwen-gdn-sink-refresh-20260608.json",
+            "build/current-native-mtp-contract-after-noheavy-contract-refresh-20260608.json",
             "build/current-qwen36-mtp-gdn-sink-source-proof-20260606.json",
             "build/current-qwen35-dense-mtp-gdn-sink-fix-20260606.json",
             "build/current-native-mtp-contract-20260527-after-think-xml-registry-fix.json",
