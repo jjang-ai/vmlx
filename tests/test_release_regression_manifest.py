@@ -3700,7 +3700,7 @@ def _passing_open_requirement_details() -> dict[str, object]:
                     "created_at": "2026-06-01T17:56:03-0700",
                     "status": "skipped",
                     "reason": "insufficient_free_memory",
-                    "model": "/Users/example/models/JANGQ/DeepSeek-V4-Flash-JANGTQ-K",
+                    "model": "/Users/example/models/JANGQ/DeepSeek-V4-Flash-JANGTQ-K-HeadBF16-Probe-20260520",
                     "commands": {
                         "memory": "vm_stat",
                         "memory_pressure": "memory_pressure",
@@ -3900,19 +3900,18 @@ def test_release_regression_manifest_tracks_multifamily_live_workflow_gate():
     assert "revalidates visible text for unexpected CJK" in joined
     assert "--include-tools" in joined
     assert "tool_choice=required" in joined
-    assert "current-all-local-model-smoke-zaya-text-bundled-20260524/summary.json" in joined
-    assert "current-all-local-model-smoke-zaya-text-bundled-toolprobe-20260525/summary.json" in joined
+    assert "current-filtered-live-smoke-zaya-text-mxfp4-20260607/summary.json" in joined
     assert "current-all-local-model-smoke-zaya-vl-bundled-20260524/summary.json" in joined
     assert (
         "current-all-local-model-smoke-zaya-vl-jangtq4-bundled-20260524/summary.json"
         in joined
     )
     assert (
-        "current-all-local-model-smoke-zaya-vl-jangtq4-bundled-toolprobe-20260525/summary.json"
+        "current-all-local-model-smoke-zaya-vl-mxfp4-bundled-after-source-tool-pass-20260607/summary.json"
         in joined
     )
     assert (
-        "current-all-local-model-smoke-zaya-vl-mxfp4-after-thinking-capability-truth-20260606/summary.json"
+        "current-all-local-model-smoke-zaya-vl-mxfp4-bundled-after-source-tool-pass-20260607/summary.json"
         in joined
     )
     assert "ZAYA text MXFP4 tool probe remains diagnostic" in joined
@@ -3941,14 +3940,7 @@ def test_release_regression_manifest_tracks_multifamily_live_workflow_gate():
         "current-all-local-model-smoke-nemotron-omni-jangtq-explicit-nomedia-bundled-20260524/summary.json"
         in joined
     )
-    assert (
-        "current-all-local-model-smoke-nemotron-omni-jangtq-video-bundled-20260526-rerun/summary.json"
-        in joined
-    )
-    assert (
-        "current-all-local-model-smoke-nemotron-omni-jangtq-bundled-toolprobe-20260525/summary.json"
-        in joined
-    )
+    assert "current-filtered-live-smoke-nemotron-omni-jangtq-20260607/summary.json" in joined
     assert "Nemotron Omni Nano bundled tool probe passes tool_required" in joined
     assert "current-nemotron-omni-no-media-prompt-variants-20260524/result.json" in joined
     assert "current-nemotron-omni-no-media-system-prompt-diagnostic-20260524/result.json" in joined
@@ -3957,11 +3949,7 @@ def test_release_regression_manifest_tracks_multifamily_live_workflow_gate():
         in joined
     )
     assert (
-        "current-all-local-model-smoke-ling-bailing-jangtq-bundled-20260525-rerun/summary.json"
-        in joined
-    )
-    assert (
-        "current-all-local-model-smoke-ling-bailing-jangtq-bundled-toolprobe-20260525/summary.json"
+        "current-filtered-live-smoke-ling-flash-jangtq-20260607/summary.json"
         in joined
     )
     assert "Ling/Bailing bundled tool probe passes tool_required" in joined
@@ -3970,11 +3958,7 @@ def test_release_regression_manifest_tracks_multifamily_live_workflow_gate():
         in joined
     )
     assert (
-        "current-all-local-model-smoke-gemma26-jang4m-tools-media-continuation-20260606/summary.json"
-        in joined
-    )
-    assert (
-        "current-all-local-model-smoke-gemma4-26b-jang4m-crack-bundled-toolprobe-currentmodality-20260526/summary.json"
+        "current-all-local-model-smoke-gemma26-jang4m-bundled-tools-media-20260607/summary.json"
         in joined
     )
     assert (
@@ -3987,11 +3971,7 @@ def test_release_regression_manifest_tracks_multifamily_live_workflow_gate():
         in joined
     )
     assert (
-        "current-all-local-model-smoke-qwen36-mxfp4-crack-bundled-20260525-rerun/summary.json"
-        in joined
-    )
-    assert (
-        "current-all-local-model-smoke-qwen36-mxfp4-crack-bundled-toolprobe-20260525/summary.json"
+        "current-all-local-model-smoke-qwen36-27b-jang4m-mtp-bundled-tools-media-20260607/summary.json"
         in joined
     )
     assert "Qwen3.6 MXFP4 bundled tool probe passes tool_required" in joined
@@ -4000,7 +3980,7 @@ def test_release_regression_manifest_tracks_multifamily_live_workflow_gate():
         in joined
     )
     assert (
-        "current-all-local-model-smoke-hy3-jangtq2-bundled-toolprobe-20260525/summary.json"
+        "current-all-local-model-smoke-ling-hy3-nemotron-tools-media-20260606/summary.json"
         in joined
     )
     assert "Hy3 bundled tool probe passes tool_required" in joined
@@ -4013,26 +3993,22 @@ def test_release_regression_manifest_tracks_multifamily_live_workflow_gate():
         in joined
     )
     assert (
-        "current-all-local-model-smoke-minimax-small-jangtq-bundled-toolprobe-20260525/summary.json"
+        "current-all-local-model-smoke-minimaxk-bundled-after-required-tool-256-20260607/summary.json"
         in joined
     )
     assert "MiniMax bundled tool probe passes required record_fact" in joined
     assert (
-        "current-all-local-model-smoke-zaya-text-bundled-toolprobe-20260525/summary.json"
+        "current-filtered-live-smoke-zaya-text-mxfp4-20260607/summary.json"
         in joined
     )
     assert (
-        "current-all-local-model-smoke-zaya-vl-jangtq4-bundled-toolprobe-20260525/summary.json"
-        in joined
-    )
-    assert (
-        "current-all-local-model-smoke-zaya-vl-mxfp4-after-thinking-capability-truth-20260606/summary.json"
+        "current-all-local-model-smoke-zaya-vl-mxfp4-bundled-after-source-tool-pass-20260607/summary.json"
         in joined
     )
     assert "ZAYA text MXFP4 bundled tool probe remains a diagnostic failure" in joined
     assert "--only DeepSeek-V4-Flash-JANGTQ-K" in joined
     assert (
-        "current-all-local-model-smoke-dsv4-jangtq-k-tools-cache-20260606/summary.json"
+        "current-filtered-live-smoke-dsv4-jangtq-k-20260607/summary.json"
         in joined
     )
     assert "--only ZAYA1-VL-8B-MXFP4" in joined
@@ -4487,8 +4463,8 @@ def test_release_regression_manifest_uses_installed_app_lfm25_responses_delta_ca
     row = CURRENT_REAL_UI_LIVE_MODEL_PROOF_ROWS["lfm25_moe_a1b_responses_delta"]
 
     expected = (
-        "current-real-ui-live-model-lfm25-jang2l-continuation-responses-tools-"
-        "cache-settings-default-max512-20260604"
+        "current-real-ui-live-model-lfm25-mxfp4-responses-tools-"
+        "cachecontrols-20260607"
     )
     assert expected in row["proof"]
     assert expected in row["chat_screenshot"]
@@ -4880,7 +4856,7 @@ def test_release_regression_manifest_real_ui_live_model_rows_include_ling_bailin
     assert rows["qwen36_mxfp4_crack_video"]["family"] == "qwen36"
     assert (
         rows["qwen36_mxfp4_crack_video"]["proof"]
-        == "docs/internal/agent-notes/current-real-ui-live-model-qwen36-27b-jang4m-mtp-responses-tools-cachecontrols-deterministic-mtp-20260607-proof.json"
+        == "docs/internal/agent-notes/current-real-ui-live-model-qwen36-27b-jang4m-mtp-responses-tools-video-reasoning-cachecontrols-max256-20260607-proof.json"
     )
     assert rows["qwen36_mxfp4_crack_responses_tools_reasoning_image_cachecontrols"]["model_path"] == (
         "/Users/example/models/JANGQ/Qwen3.6-27B-JANG_4M-MTP"
@@ -4892,7 +4868,7 @@ def test_release_regression_manifest_real_ui_live_model_rows_include_ling_bailin
     assert rows["qwen36_mxfp4_crack_responses_tools_reasoning_image_cachecontrols"]["family"] == "qwen36"
     assert (
         rows["qwen36_mxfp4_crack_responses_tools_reasoning_image_cachecontrols"]["proof"]
-        == "docs/internal/agent-notes/current-real-ui-live-model-qwen36-27b-jang4m-mtp-responses-tools-cachecontrols-deterministic-mtp-20260607-proof.json"
+        == "docs/internal/agent-notes/current-real-ui-live-model-qwen36-27b-jang4m-mtp-responses-tools-image-reasoning-cachecontrols-max256-20260607-proof.json"
     )
     assert rows["qwen36_mxfp4_crack_responses_stricttools_cachecontrols"]["model_path"] == (
         "/Users/example/models/JANGQ/Qwen3.6-27B-JANG_4M-MTP"
@@ -9509,7 +9485,7 @@ def test_release_blocker_ledger_prefers_current_dsv4_exactness_preflight_artifac
             {
                 "status": "skipped",
                 "reason": "insufficient_vm_stat_memory",
-                "model": "/Users/example/models/JANGQ/DeepSeek-V4-Flash-JANGTQ-K",
+                "model": "/Users/example/models/JANGQ/DeepSeek-V4-Flash-JANGTQ-K-HeadBF16-Probe-20260520",
                 "commands": {
                     "memory": "vm_stat",
                     "memory_pressure": "memory_pressure",
@@ -10833,7 +10809,7 @@ def test_release_regression_manifest_rejects_missing_or_wrong_tool_smoke_artifac
             "failed": 0,
             "failing_results": [
                 {
-                    "model": "Gemma-4-26B-A4B-it-JANG_4M-CRACK",
+                    "model": "Qwen3.6-27B-JANG_4M-MTP",
                     "status": "pass",
                     "failures": [],
                     "missing_request_labels": [],
@@ -11200,7 +11176,7 @@ def test_release_regression_manifest_uses_effective_runtime_video_capability(
                             "name": "Nemotron-Omni-Nano-JANGTQ-CRACK",
                             "model_type": "nemotron_h",
                             "is_mllm": True,
-                            "supports_video": True,
+                            "supports_video": False,
                             "supports_thinking": True,
                             "cache_family": "hybrid_ssm",
                         },
