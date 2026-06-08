@@ -47,7 +47,21 @@ function envBool(name, fallback = false) {
   return /^(1|true|yes|on)$/i.test(value)
 }
 
+function envNumber(name) {
+  const value = process.env[name] ?? process.env[name.replace('VMLINUX_', 'VMLX_')]
+  if (value == null || value === '') return undefined
+  const parsed = Number(value)
+  return Number.isFinite(parsed) ? parsed : undefined
+}
+
 const builtinToolsEnabled = envBool('VMLINUX_REAL_UI_BUILTIN_TOOLS', false)
+const samplingOverrides = {
+  temperature: envNumber('VMLINUX_REAL_UI_TEMPERATURE'),
+  topP: envNumber('VMLINUX_REAL_UI_TOP_P'),
+  topK: envNumber('VMLINUX_REAL_UI_TOP_K'),
+  minP: envNumber('VMLINUX_REAL_UI_MIN_P'),
+  repeatPenalty: envNumber('VMLINUX_REAL_UI_REPEAT_PENALTY'),
+}
 const defaultPromptOne = builtinToolsEnabled
   ? [
       'Use the run_command tool exactly once to create a file named real_ui_tool_probe_1.txt in the configured working directory.',
@@ -921,8 +935,13 @@ function generationDefaultsAppliedSeen(result) {
   const chatOverrides = result?.chatOverrides && typeof result.chatOverrides === 'object'
     ? result.chatOverrides
     : {}
+  const expectedSampling = result?.requestContract?.samplingOverrides || {}
   for (const field of ['temperature', 'topP', 'topK', 'minP', 'repeatPenalty']) {
-    if (chatOverrides[field] != null) return false
+    if (expectedSampling[field] != null) {
+      if (chatOverrides[field] !== expectedSampling[field]) return false
+    } else if (chatOverrides[field] != null) {
+      return false
+    }
   }
   const requestMaxTokens = result?.requestContract?.requestMaxTokens
   const overrideMaxTokens = chatOverrides.maxTokens
@@ -1162,6 +1181,7 @@ async function main() {
         const videoDataUrl = ${JSON.stringify(videoDataUrl)};
         const videoExpectRegex = ${JSON.stringify(videoExpectRegex)};
         const workingDirectory = ${JSON.stringify(workingDirectory)};
+        const samplingOverrides = ${JSON.stringify(samplingOverrides)};
         const endpoint = { host: '127.0.0.1', port: ${JSON.stringify(serverPort)} };
         const l2DiskStorageSeen = ${l2DiskStorageSeen.toString()};
         const waitForCacheEndpointStorage = async (initial, sessionId) => {
@@ -1224,6 +1244,9 @@ async function main() {
             toolResultMaxChars: ${JSON.stringify(toolResultMaxChars)},
             maxTokens: ${JSON.stringify(requestMaxTokens)},
           };
+          for (const [key, value] of Object.entries(samplingOverrides || {})) {
+            if (value !== undefined && value !== null) overrides[key] = value;
+          }
           if (enableThinking !== undefined) overrides.enableThinking = enableThinking;
           await window.api.chat.setOverrides(chat.id, overrides);
           const chatOverrides = await window.api.chat.getOverrides(chat.id).catch((error) => ({ error: String(error?.message || error) }));
@@ -1668,6 +1691,9 @@ async function main() {
         wireApi,
         builtinToolsEnabled,
         enableThinking: enableThinkingOverride ?? null,
+        samplingOverrides: Object.fromEntries(
+          Object.entries(samplingOverrides).filter(([, value]) => value !== undefined),
+        ),
         checkServerCacheControls,
         checkMedia,
         checkVideo,
@@ -1720,19 +1746,27 @@ async function main() {
     result.visibleAssistantTurnsComplete = visibleAssistantAfterEachUser(result.chat?.turns || [])
     result.liveSpeedSamples = extractLiveSpeedSamples(result)
     result.provenSurfaces = deriveProvenSurfaces(result)
+    let assertionError = null
+    try {
+      assertResult(result)
+    } catch (error) {
+      assertionError = error
+      result.status = 'fail'
+      result.failureStage = result.failureStage || 'release_assertions'
+      result.assertionFailures = error.failures || [error.message]
+    }
     writeFileSync(
       path.join(proofDir, `${proofBasename}-proof.json`),
       JSON.stringify(result, null, 2),
     )
     if (process.env.VMLINUX_REAL_UI_ALLOW_FAIL === '1' || process.env.VMLX_REAL_UI_ALLOW_FAIL === '1') {
-      try {
-        assertResult(result)
-        console.log(JSON.stringify({ ok: true, result }, null, 2))
-      } catch (error) {
-        console.log(JSON.stringify({ ok: false, failures: error.failures || [error.message], result }, null, 2))
-      }
+      console.log(JSON.stringify({
+        ok: assertionError === null,
+        failures: assertionError ? result.assertionFailures : undefined,
+        result,
+      }, null, 2))
     } else {
-      assertResult(result)
+      if (assertionError) throw assertionError
       console.log(JSON.stringify({ ok: true, result }, null, 2))
     }
   } finally {

@@ -41,6 +41,7 @@ declare global {
           modelPaths: string[],
         ) => Promise<Record<string, "text" | "image" | "unknown">>;
         getGenerationDefaults: (modelPath: string) => Promise<{
+          doSample?: boolean;
           temperature?: number;
           topP?: number;
           topK?: number;

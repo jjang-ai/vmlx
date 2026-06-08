@@ -169,6 +169,7 @@ async function fetchHfPath(
 
 /** Generation defaults read from a model's generation_config.json */
 export interface GenerationDefaults {
+  doSample?: boolean;
   temperature?: number;
   topP?: number;
   topK?: number;
@@ -254,11 +255,19 @@ export async function readGenerationDefaults(
       const raw = await readFile(configPath, "utf-8");
       const config = JSON.parse(raw);
 
+      const generationConfigDisablesSampling = config.do_sample === false;
+      if (typeof config.do_sample === "boolean")
+        defaults.doSample = config.do_sample;
       if (typeof config.temperature === "number")
-        defaults.temperature = config.temperature;
-      if (typeof config.top_p === "number") defaults.topP = config.top_p;
+        defaults.temperature = generationConfigDisablesSampling
+          ? 0
+          : config.temperature;
+      if (typeof config.top_p === "number")
+        defaults.topP = generationConfigDisablesSampling ? 1 : config.top_p;
       if (typeof config.top_k === "number")
-        defaults.topK = Math.max(0, Math.round(config.top_k));
+        defaults.topK = generationConfigDisablesSampling
+          ? 0
+          : Math.max(0, Math.round(config.top_k));
       if (typeof config.min_p === "number") defaults.minP = config.min_p;
       if (typeof config.repetition_penalty === "number")
         defaults.repeatPenalty = config.repetition_penalty;
@@ -282,6 +291,7 @@ export async function readGenerationDefaults(
       const jang = JSON.parse(raw);
       const sampling = jang?.chat?.sampling_defaults;
       if (sampling && typeof sampling === "object") {
+        delete defaults.doSample;
         if (typeof sampling.temperature === "number")
           defaults.temperature = sampling.temperature;
         if (typeof sampling.top_p === "number") defaults.topP = sampling.top_p;

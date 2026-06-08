@@ -27,6 +27,7 @@ export interface ChatSettingsResetOverrides {
 }
 
 export interface ChatSettingsGenerationDefaults {
+  doSample?: boolean
   temperature?: number
   topP?: number
   topK?: number

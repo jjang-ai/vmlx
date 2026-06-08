@@ -333,6 +333,7 @@ function filterAdditionalArgs(raw: string | undefined, blockedFlags: Set<string>
 
 function hasDeclaredSamplingDefaults(gen: any): boolean {
   return !!gen && (
+    gen.doSample === false ||
     gen.temperature != null ||
     gen.topP != null ||
     gen.topK != null ||
@@ -351,6 +352,7 @@ async function applyBundleGenerationDefaults(config: SessionConfig, modelPath: s
     next.defaultMinP = gen?.minP != null ? Math.round(gen.minP * 100) : 0
     next.defaultRepetitionPenalty = gen?.repeatPenalty != null ? Math.round(gen.repeatPenalty * 100) : 0
     next.defaultMaxNewTokens = gen?.maxNewTokens != null ? Math.round(gen.maxNewTokens) : 0
+    next.defaultDoSample = typeof gen?.doSample === 'boolean' ? gen.doSample : undefined
     next.defaultSamplingDefaultsDeclared = hasDeclaredSamplingDefaults(gen)
   } catch (_) {
     next.defaultTemperature = 0
@@ -359,6 +361,7 @@ async function applyBundleGenerationDefaults(config: SessionConfig, modelPath: s
     next.defaultMinP = 0
     next.defaultRepetitionPenalty = 0
     next.defaultMaxNewTokens = 0
+    next.defaultDoSample = undefined
     next.defaultSamplingDefaultsDeclared = false
   }
   return next
