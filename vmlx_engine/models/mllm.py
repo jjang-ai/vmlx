@@ -1604,6 +1604,79 @@ def _register_mimo_v2_mlx_vlm_runtime() -> None:
                 out = decoded if out is None else out + decoded
             return out
 
+    def load_mimo_audio_rvq_from_bundle(model_path: str | Path):
+        """Load MiMo audio-tokenizer RVQ codebooks from a model bundle.
+
+        This is the narrow, model-owned bridge from the preserved
+        ``audio_tokenizer/model.safetensors`` sidecar into the MLX residual VQ
+        runtime above. It intentionally stops at codebook loading: waveform/mel
+        frontend and the 24-layer audio-tokenizer encoder are separate runtime
+        components and must not be reported as implemented by this helper.
+        """
+
+        root = Path(model_path)
+        audio_dir = root if root.name == "audio_tokenizer" else root / "audio_tokenizer"
+        config_path = audio_dir / "config.json"
+        weights_path = audio_dir / "model.safetensors"
+        if not config_path.is_file():
+            raise FileNotFoundError(f"MiMo audio tokenizer config missing: {config_path}")
+        if not weights_path.is_file():
+            raise FileNotFoundError(f"MiMo audio tokenizer weights missing: {weights_path}")
+
+        cfg = json.loads(config_path.read_text(encoding="utf-8"))
+        try:
+            num_quantizers = int(cfg["num_quantizers"])
+        except Exception as exc:
+            raise ValueError("MiMo audio tokenizer config missing num_quantizers") from exc
+        codebook_size = cfg.get("codebook_size")
+        if not isinstance(codebook_size, list) or len(codebook_size) < num_quantizers:
+            raise ValueError(
+                "MiMo audio tokenizer config codebook_size must list every quantizer"
+            )
+
+        try:
+            from safetensors.torch import load_file as _torch_load_file
+
+            raw_tensors = _torch_load_file(str(weights_path), device="cpu")
+
+            def _load_tensor(key: str):
+                if key not in raw_tensors:
+                    raise KeyError(key)
+                return mx.array(raw_tensors[key].float().cpu().numpy())
+
+        except ImportError:
+            from safetensors.numpy import load_file as _np_load_file
+
+            raw_tensors = _np_load_file(str(weights_path))
+
+            def _load_tensor(key: str):
+                if key not in raw_tensors:
+                    raise KeyError(key)
+                return mx.array(raw_tensors[key])
+
+        codebooks = []
+        missing = []
+        for idx in range(num_quantizers):
+            key = f"encoder.quantizer.vq.layers.{idx}._codebook.embed"
+            try:
+                embed = _load_tensor(key)
+            except KeyError:
+                missing.append(key)
+                continue
+            expected_rows = int(codebook_size[idx])
+            if int(embed.shape[0]) != expected_rows:
+                raise ValueError(
+                    f"MiMo audio tokenizer codebook {idx} shape mismatch: "
+                    f"expected {expected_rows} rows, got {embed.shape[0]}"
+                )
+            codebooks.append(embed)
+        if missing:
+            preview = ", ".join(missing[:3])
+            if len(missing) > 3:
+                preview += f", ... ({len(missing)} missing)"
+            raise KeyError(f"MiMo audio tokenizer codebook weights missing: {preview}")
+        return MiMoAudioResidualVectorQuantizer(codebooks)
+
     def _parse_mimo_v2_int_list(value, length: int):
         if isinstance(value, str) and "-" in value:
             return [int(v) for v in value.split("-")]
@@ -2643,6 +2716,7 @@ def _register_mimo_v2_mlx_vlm_runtime() -> None:
     module.AudioModel = AudioModel
     module.MiMoAudioEuclideanCodebook = MiMoAudioEuclideanCodebook
     module.MiMoAudioResidualVectorQuantizer = MiMoAudioResidualVectorQuantizer
+    module.load_mimo_audio_rvq_from_bundle = load_mimo_audio_rvq_from_bundle
     module.__file__ = getattr(text_runtime, "__file__", module_name)
     sys.modules[module_name] = module
 

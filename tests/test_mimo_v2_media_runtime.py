@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import importlib
+import json
 import sys
 from types import SimpleNamespace
 
 import mlx.core as mx
+import numpy as np
 
 
 def _register_fake_mimo_runtime(monkeypatch, tmp_path):
@@ -316,6 +318,48 @@ def test_mimo_v2_audio_residual_vector_quantizer_matches_nearest_codebook(
     assert codes.tolist() == [[1, 2], [1, 2]]
     decoded = quantizer.decode(codes)
     assert decoded.tolist() == [[2.5, 0.0], [0.0, 2.5]]
+    sys.modules.pop("mlx_vlm.models.mimo_v2", None)
+
+
+def test_mimo_v2_audio_rvq_loader_reads_bundle_codebooks(
+    tmp_path,
+    monkeypatch,
+):
+    from safetensors.numpy import save_file
+
+    module = _register_fake_mimo_runtime(monkeypatch, tmp_path)
+    bundle = tmp_path / "bundle"
+    audio_dir = bundle / "audio_tokenizer"
+    audio_dir.mkdir(parents=True)
+    (audio_dir / "config.json").write_text(
+        json.dumps(
+            {
+                "num_quantizers": 2,
+                "codebook_size": [3, 3],
+                "n_mels": 128,
+            }
+        ),
+        encoding="utf-8",
+    )
+    save_file(
+        {
+            "encoder.quantizer.vq.layers.0._codebook.embed": np.array(
+                [[0.0, 0.0], [2.0, 0.0], [0.0, 2.0]],
+                dtype=np.float32,
+            ),
+            "encoder.quantizer.vq.layers.1._codebook.embed": np.array(
+                [[0.0, 0.0], [0.5, 0.0], [0.0, 0.5]],
+                dtype=np.float32,
+            ),
+        },
+        str(audio_dir / "model.safetensors"),
+    )
+
+    quantizer = module.load_mimo_audio_rvq_from_bundle(bundle)
+    codes = quantizer.encode(mx.array([[2.4, 0.1], [0.2, 2.3]]))
+
+    assert codes.tolist() == [[1, 2], [1, 2]]
+    assert quantizer.decode(codes).tolist() == [[2.5, 0.0], [0.0, 2.5]]
     sys.modules.pop("mlx_vlm.models.mimo_v2", None)
 
 

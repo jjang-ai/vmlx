@@ -85,6 +85,10 @@ def test_mimo_current_audit_separates_clean_artifact_from_runtime_blockers(
                 "def encode(self, hidden_states",
                 "def decode(self, codes",
                 "mx.argmax(dist, axis=-1)",
+                "def load_mimo_audio_rvq_from_bundle",
+                "audio_tokenizer/model.safetensors",
+                "encoder.quantizer.vq.layers",
+                "MiMoAudioResidualVectorQuantizer(codebooks",
                 "def _apply_mimo_v2_media_weights(self):",
                 "_mimo_v2_assign_weight(self, key, value)",
                 "MiMo-V2 load assigned %d preserved media tensors",
@@ -164,6 +168,7 @@ def test_mimo_current_audit_separates_clean_artifact_from_runtime_blockers(
     )
     (tmp_path / "tests/test_mimo_v2_media_runtime.py").write_text(
         "test_mimo_v2_audio_residual_vector_quantizer_matches_nearest_codebook\n"
+        "test_mimo_v2_audio_rvq_loader_reads_bundle_codebooks\n"
     )
     manifest = tmp_path / "build" / "current-mimo-http-tb5-manifest-20260606.tsv"
     manifest.parent.mkdir(parents=True)
@@ -471,6 +476,12 @@ def test_mimo_current_audit_separates_clean_artifact_from_runtime_blockers(
         is True
     )
     assert (
+        result["diagnostics"]["mimo_media_runtime"][
+            "audio_tokenizer_rvq_weight_loader"
+        ]
+        is True
+    )
+    assert (
         result["diagnostics"]["mimo_media_runtime"]["audio_tokenizer_model_execution"]
         is False
     )
@@ -541,6 +552,10 @@ def test_mimo_current_audit_separates_clean_artifact_from_runtime_blockers(
     )
     assert (
         "audio code local transformer forward"
+        not in result["diagnostics"]["mimo_media_runtime"]["missing_runtime_components"]
+    )
+    assert (
+        "audio tokenizer RVQ codebook weight loader"
         not in result["diagnostics"]["mimo_media_runtime"]["missing_runtime_components"]
     )
     assert (
