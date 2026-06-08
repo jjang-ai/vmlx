@@ -1515,8 +1515,82 @@ def _register_mimo_v2_mlx_vlm_runtime() -> None:
                 )
             }
 
-    class AudioModel(VisionModel):
-        pass
+    class AudioProjection(nn.Module):
+        def __init__(self, *, input_size: int, hidden_size: int, output_size: int):
+            super().__init__()
+            self.linear_1 = nn.Linear(input_size, hidden_size, bias=False)
+            self.linear_2 = nn.Linear(hidden_size, output_size, bias=False)
+
+        def __call__(self, x):
+            return self.linear_2(nn.gelu(self.linear_1(x)))
+
+    class AudioModel(nn.Module):
+        def __init__(self, config=None):
+            super().__init__()
+            self.config = config or AudioConfig()
+            self.audio_channels = int(getattr(self.config, "audio_channels", 20) or 20)
+            self.group_size = int(getattr(self.config, "group_size", 6) or 6)
+            self.input_local_dim = int(
+                getattr(self.config, "input_local_dim", None)
+                or getattr(self.config, "hidden_size", 0)
+                or 1280
+            )
+            self.out_hidden_size = int(
+                getattr(self.config, "out_hidden_size", None) or 4096
+            )
+            proj_in = self.input_local_dim * self.group_size
+            projection_layers = int(getattr(self.config, "projection_layers", 2) or 2)
+            if projection_layers == 1:
+                self.projection = nn.Linear(proj_in, self.out_hidden_size, bias=False)
+            else:
+                self.projection = AudioProjection(
+                    input_size=proj_in,
+                    hidden_size=proj_in * 4,
+                    output_size=self.out_hidden_size,
+                )
+
+        def project_local_audio(self, audio_hidden):
+            audio_hidden = mx.array(audio_hidden)
+            if audio_hidden.ndim == 3:
+                if int(audio_hidden.shape[1]) != self.group_size:
+                    raise ValueError(
+                        "MiMo-V2 audio local hidden group size mismatch: "
+                        f"{audio_hidden.shape[1]} != {self.group_size}"
+                    )
+                audio_hidden = mx.reshape(audio_hidden, (audio_hidden.shape[0], -1))
+            if audio_hidden.ndim != 2:
+                raise ValueError(
+                    "MiMo-V2 audio projection expects rank-2 or rank-3 audio hidden "
+                    f"states; got shape {audio_hidden.shape}"
+                )
+            expected = self.input_local_dim * self.group_size
+            if int(audio_hidden.shape[-1]) != expected:
+                raise ValueError(
+                    f"MiMo-V2 audio projection expected hidden size {expected}; "
+                    f"got {audio_hidden.shape[-1]}"
+                )
+            return self.projection(audio_hidden)
+
+        def __call__(self, audio_codes=None, audio_embeds=None, audio_hidden=None):
+            if audio_embeds is not None:
+                audio_embeds = mx.array(audio_embeds)
+                if audio_embeds.ndim != 2:
+                    raise ValueError(
+                        "MiMo-V2 audio_embeds must be rank-2 [N, H]; "
+                        f"got shape {audio_embeds.shape}"
+                    )
+                if int(audio_embeds.shape[-1]) == self.out_hidden_size:
+                    return audio_embeds
+                return self.project_local_audio(audio_embeds)
+            if audio_hidden is not None:
+                return self.project_local_audio(audio_hidden)
+            if audio_codes is not None:
+                raise UnsupportedMediaModalityError(
+                    "audio",
+                    "MiMo-V2.5 audio code tokenization/local transformer is not wired yet.",
+                    family="mimo_v2",
+                )
+            raise ValueError("MiMo-V2 audio encoder requires audio_embeds or audio_hidden")
 
     class MiMoVisionPatchEmbed(nn.Module):
         def __init__(
@@ -1870,6 +1944,11 @@ def _register_mimo_v2_mlx_vlm_runtime() -> None:
                 if self._mimo_v2_bind_media_weights
                 else None
             )
+            self.audio_encoder = (
+                AudioModel(config.audio_config)
+                if self._mimo_v2_bind_media_weights
+                else None
+            )
 
         @property
         def layers(self):
@@ -1924,9 +2003,20 @@ def _register_mimo_v2_mlx_vlm_runtime() -> None:
                 raise UnsupportedMediaModalityError(
                     "audio",
                     "MiMo-V2.5 JANG_2L audio weights are preserved, but the "
-                    "current Python runtime only accepts precomputed audio embeddings.",
+                    "current Python runtime does not wire audio code tokenization yet.",
                     family="mimo_v2",
                 )
+            if audio_embeds is not None:
+                audio_arr = mx.array(audio_embeds)
+                if (
+                    self.audio_encoder is not None
+                    and audio_arr.ndim == 2
+                    and int(audio_arr.shape[-1])
+                    != int(getattr(self.config.text_config, "hidden_size", 4096))
+                ):
+                    audio_embeds = self.audio_encoder(audio_embeds=audio_arr)
+                else:
+                    audio_embeds = audio_arr
             if input_ids is None:
                 raise ValueError("MiMo-V2 get_input_embeddings requires input_ids")
             inputs_embeds = self.language_model.model.embed_tokens(input_ids)

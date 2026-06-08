@@ -69,6 +69,11 @@ def test_mimo_current_audit_separates_clean_artifact_from_runtime_blockers(
                 "video_embeds = self.visual(",
                 "image_grid_thw=image_grid_thw",
                 "video_grid_thw=video_grid_thw",
+                "class AudioProjection",
+                "class AudioModel(nn.Module):",
+                "self.audio_encoder = (",
+                "def project_local_audio(self, audio_hidden):",
+                "audio_embeds = self.audio_encoder(audio_embeds=audio_arr)",
                 "MiMo-V2.5 JANG_2L vision input is not wired",
                 'key.startswith("model.mtp.")',
             ]
@@ -370,6 +375,7 @@ def test_mimo_current_audit_separates_clean_artifact_from_runtime_blockers(
     )
     assert result["diagnostics"]["mimo_media_runtime"]["vision_grid_forward"] is True
     assert result["diagnostics"]["mimo_media_runtime"]["model_vision_bridge"] is True
+    assert result["diagnostics"]["mimo_media_runtime"]["audio_projection_bridge"] is True
     assert (
         "VisionConfig parser"
         not in result["diagnostics"]["mimo_media_runtime"]["missing_runtime_components"]
@@ -412,6 +418,14 @@ def test_mimo_current_audit_separates_clean_artifact_from_runtime_blockers(
     )
     assert (
         "audio tokenizer/feature extraction bridge"
+        in result["diagnostics"]["mimo_media_runtime"]["missing_runtime_components"]
+    )
+    assert (
+        "audio projection bridge to text hidden size"
+        not in result["diagnostics"]["mimo_media_runtime"]["missing_runtime_components"]
+    )
+    assert (
+        "audio code local transformer forward"
         in result["diagnostics"]["mimo_media_runtime"]["missing_runtime_components"]
     )
     assert result["diagnostics"]["all_local_smoke"]["tool_protocol_pass"] is True

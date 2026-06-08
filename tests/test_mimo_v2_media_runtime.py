@@ -214,3 +214,38 @@ def test_mimo_v2_model_splices_image_pixels_through_vision_tower(
     assert output.logits.tolist()[0][2] == [0.0] * 16
     assert any(abs(v) > 0 for v in output.logits.tolist()[0][1])
     sys.modules.pop("mlx_vlm.models.mimo_v2", None)
+
+
+def test_mimo_v2_audio_projection_bridge_splices_audio_token(
+    tmp_path,
+    monkeypatch,
+):
+    module = _register_fake_mimo_runtime(monkeypatch, tmp_path)
+    model = module.Model(
+        module.ModelConfig.from_dict(
+            {
+                "model_type": "mimo_v2",
+                "multimodal_status": "media_runtime_enabled",
+                "audio_config": {
+                    "group_size": 2,
+                    "input_local_dim": 4,
+                    "out_hidden_size": 16,
+                    "projection_layers": 2,
+                },
+                "processor_config": {"audio_token_id": 151669},
+            }
+        )
+    )
+
+    projected = model.audio_encoder(audio_embeds=mx.ones((1, 8)))
+    assert projected.shape == (1, 16)
+
+    output = model(
+        mx.array([[11, 151669, 22]]),
+        audio_embeds=mx.ones((1, 8)),
+    )
+    assert output.logits.shape == (1, 3, 16)
+    assert output.logits.tolist()[0][0] == [0.0] * 16
+    assert output.logits.tolist()[0][2] == [0.0] * 16
+    assert any(abs(v) > 0 for v in output.logits.tolist()[0][1])
+    sys.modules.pop("mlx_vlm.models.mimo_v2", None)

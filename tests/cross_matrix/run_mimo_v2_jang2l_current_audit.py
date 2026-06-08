@@ -25,7 +25,7 @@ from typing import Any
 DEFAULT_MODEL_PATH = Path("/Users/example/.mlxstudio/models/JANGQ-AI/MiMo-V2.5-JANGTQ_2")
 DEFAULT_MANIFEST = Path("build/current-mimo-jangtq2-local-manifest-20260607.tsv")
 DEFAULT_OUT = Path(
-    "build/current-mimo-v2-jang2l-current-audit-after-model-vision-bridge-20260607.json"
+    "build/current-mimo-v2-jang2l-current-audit-after-audio-projection-bridge-20260607.json"
 )
 
 STRUCTURAL_ARTIFACT = Path("build/current-mimo-jang2l-local-structural-verify-20260606.json")
@@ -973,6 +973,16 @@ def _mimo_media_runtime_evidence(
             "video_grid_thw=video_grid_thw",
         )
     )
+    audio_projection_bridge_present = all(
+        marker in adapter_text
+        for marker in (
+            "class AudioProjection",
+            "class AudioModel(nn.Module):",
+            "self.audio_encoder = (",
+            "def project_local_audio(self, audio_hidden):",
+            "audio_embeds = self.audio_encoder(audio_embeds=audio_arr)",
+        )
+    )
     media_weights_preserved = bool(visual_count > 0 and audio_count > 0)
     metadata_overadvertises = bool(
         config_modalities != ["text"]
@@ -1027,6 +1037,7 @@ def _mimo_media_runtime_evidence(
         "vision_attention_block_modules": bool(vision_attention_blocks_present),
         "vision_grid_forward": bool(vision_grid_forward_present),
         "model_vision_bridge": bool(model_vision_bridge_present),
+        "audio_projection_bridge": bool(audio_projection_bridge_present),
         "runtime_media_wired": False if runtime_gap else True,
         "missing_runtime_components": (
             [
@@ -1061,12 +1072,16 @@ def _mimo_media_runtime_evidence(
                         "model-level image/video request bridge to MiMo vision tower",
                         model_vision_bridge_present,
                     ),
+                    (
+                        "audio projection bridge to text hidden size",
+                        audio_projection_bridge_present,
+                    ),
                 )
                 if not present
             ]
             + [
                 "audio tokenizer/feature extraction bridge",
-                "audio local transformer/projection forward",
+                "audio code local transformer forward",
                 "media-aware prefix/L2 cache proof",
             ]
             if runtime_gap
