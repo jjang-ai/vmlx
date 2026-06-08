@@ -25,7 +25,7 @@ from typing import Any
 DEFAULT_MODEL_PATH = Path("/Users/example/.mlxstudio/models/JANGQ-AI/MiMo-V2.5-JANGTQ_2")
 DEFAULT_MANIFEST = Path("build/current-mimo-jangtq2-local-manifest-20260607.tsv")
 DEFAULT_OUT = Path(
-    "build/current-mimo-v2-jang2l-current-audit-after-jang2l-safe-cache-l2-proof-20260608.json"
+    "build/current-mimo-v2-jang2l-current-audit-after-total-budget-prefill-guard-20260608.json"
 )
 
 STRUCTURAL_ARTIFACT = Path("build/current-mimo-jang2l-local-structural-verify-20260606.json")
@@ -43,7 +43,7 @@ ALL_LOCAL_SMOKE_ARTIFACT = Path(
     "build/current-all-local-model-smoke-mimo-v25-jangtq2-media-l2-after-cache-cap-20260608/summary.json"
 )
 JANG2L_ALL_LOCAL_SMOKE_ARTIFACT = Path(
-    "build/current-all-local-model-smoke-mimo-v25-jang2l-nomedia-after-mimo-safe-cache-prompt-20260608-bundled/summary.json"
+    "build/current-all-local-model-smoke-mimo-v25-jang2l-nomedia-after-total-budget-prefill-guard-20260608/summary.json"
 )
 KVNONE_NOPREFIX_SMOKE_ARTIFACT = Path(
     "build/current-all-local-model-smoke-mimo-v25-jangtq2-bundled-tools-nomedia-kvnone-noprefix-20260607/summary.json"
@@ -607,6 +607,14 @@ def _all_local_smoke_evidence(data: dict[str, Any]) -> dict[str, Any]:
         )
         for request in requests
     )
+    typed_tight_memory_prompt_rejections = [
+        request
+        for request in requests
+        if isinstance(request, dict)
+        and request.get("code") == 413
+        and "mimo_v2_tight_memory_text_prefill"
+        in str(request.get("error") or "")
+    ]
     return {
         "exists": True,
         "bundle_name": bundle_name or None,
@@ -644,6 +652,13 @@ def _all_local_smoke_evidence(data: dict[str, Any]) -> dict[str, Any]:
         "block_disk_l2_restart_restore_summary": l2_restart_summary,
         "server_died_mid_probe": bool(server_died_mid_probe),
         "metal_oom_crash": bool(metal_oom_crash),
+        "typed_tight_memory_prompt_rejection": bool(
+            typed_tight_memory_prompt_rejections
+        ),
+        "typed_tight_memory_prompt_rejection_labels": [
+            str(request.get("label"))
+            for request in typed_tight_memory_prompt_rejections
+        ],
         "runtime_crash_error_excerpt": (
             " ".join((request_errors + " " + server_log_tail).split())[:500]
             if (server_died_mid_probe or metal_oom_crash)
@@ -774,6 +789,7 @@ def _artifact_exactness_boundary(
     literal_mutation = False
     empty_visible_output = False
     server_died_mid_probe = False
+    typed_tight_memory_prompt_rejection = False
     for failure in failures:
         label = str(failure.get("label"))
         request = request_by_label.get(label) or {}
@@ -785,6 +801,11 @@ def _artifact_exactness_boundary(
         if request.get("code") == 0 or reason == "http_status":
             if "RemoteDisconnected" in request_error or "Connection refused" in request_error:
                 server_died_mid_probe = True
+            if (
+                request.get("code") == 413
+                and "mimo_v2_tight_memory_text_prefill" in request_error
+            ):
+                typed_tight_memory_prompt_rejection = True
         row_empty_visible = reason == "empty_visible"
         empty_visible_output = empty_visible_output or row_empty_visible
         validation_failures = request.get("validation_failures")
@@ -871,6 +892,8 @@ def _artifact_exactness_boundary(
         classification = "server_died_mid_probe_metal_oom"
     elif server_died_mid_probe:
         classification = "server_died_mid_probe_before_exactness_rows_completed"
+    elif typed_tight_memory_prompt_rejection:
+        classification = "typed_tight_memory_prompt_budget_rejection"
     elif parser_structure_valid and literal_mutation:
         classification = "model_generated_literal_mutation_after_valid_parser_structure"
     elif empty_visible_output:
@@ -893,6 +916,14 @@ def _artifact_exactness_boundary(
             "Do not clear MiMo JANG_2L exactness by parser repair or prompt "
             "rewrites. The server disconnected before exactness rows completed; "
             "classify and fix the runtime crash first."
+        )
+    elif typed_tight_memory_prompt_rejection:
+        release_boundary = (
+            "Do not clear MiMo JANG_2L tool/long-prompt rows by hiding typed "
+            "413 responses or lowering harness budgets. The current runtime "
+            "keeps the server alive under extreme Metal pressure, but the "
+            "JANG_2L bundle still cannot execute these rows with the requested "
+            "prompt plus generation budget on this 107.5GB working-set host."
         )
     elif empty_visible_output:
         release_boundary = (
@@ -924,6 +955,7 @@ def _artifact_exactness_boundary(
         "empty_visible_output": empty_visible_output,
         "server_died_mid_probe": server_died_mid_probe,
         "metal_oom_crash": metal_oom_crash,
+        "typed_tight_memory_prompt_rejection": typed_tight_memory_prompt_rejection,
         "failed_labels": [str(failure.get("label")) for failure in failures],
         "examples": examples,
         "release_boundary": release_boundary,
@@ -2590,6 +2622,9 @@ def build_audit(root: Path, model_path: Path, manifest: Path) -> dict[str, Any]:
         jang2l_smoke_evidence.get("metal_oom_crash")
         or jang2l_smoke_evidence.get("server_died_mid_probe")
     )
+    mimo_jang2l_tight_memory_prompt_budget_blocked = bool(
+        jang2l_smoke_evidence.get("typed_tight_memory_prompt_rejection")
+    )
     block_disk_l2_restart_restore_blocked = not bool(
         smoke_evidence.get("block_disk_l2_restart_cache_hit")
     )
@@ -2687,6 +2722,7 @@ def build_audit(root: Path, model_path: Path, manifest: Path) -> dict[str, Any]:
         and mimo_jangtq2_l2_restart_visible_output
         and mimo_jang2l_live_media_l2
         and not mimo_jang2l_tool_long_prompt_metal_oom_blocked
+        and not mimo_jang2l_tight_memory_prompt_budget_blocked
         and not stale_present
     )
 
@@ -2744,6 +2780,8 @@ def build_audit(root: Path, model_path: Path, manifest: Path) -> dict[str, Any]:
         blockers.append("mimo_jang2l_l2_restart_visible_output_blocked")
     if mimo_jang2l_tool_long_prompt_metal_oom_blocked:
         blockers.append("mimo_jang2l_tool_long_prompt_metal_oom_blocked")
+    if mimo_jang2l_tight_memory_prompt_budget_blocked:
+        blockers.append("mimo_jang2l_tight_memory_prompt_budget_blocked")
     if not media_runtime_wired:
         blockers.append("mimo_media_runtime_implementation_missing")
     if not media_metadata_ok:
@@ -2834,6 +2872,9 @@ def build_audit(root: Path, model_path: Path, manifest: Path) -> dict[str, Any]:
             ),
             "mimo_jang2l_tool_long_prompt_metal_oom": bool(
                 mimo_jang2l_tool_long_prompt_metal_oom_blocked
+            ),
+            "mimo_jang2l_tight_memory_prompt_budget": bool(
+                mimo_jang2l_tight_memory_prompt_budget_blocked
             ),
             "manual_sink_does_not_clear_length_generation": bool(sink_mode_fails),
             "disable_sink_does_not_clear_length_generation": bool(disable_sink_fails),

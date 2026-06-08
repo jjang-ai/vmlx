@@ -334,7 +334,7 @@ def test_mimo_current_audit_separates_clean_artifact_from_runtime_blockers(
     )
     _write_json(
         tmp_path
-        / "build/current-all-local-model-smoke-mimo-v25-jang2l-nomedia-after-mimo-safe-cache-prompt-20260608-bundled/summary.json",
+        / "build/current-all-local-model-smoke-mimo-v25-jang2l-nomedia-after-total-budget-prefill-guard-20260608/summary.json",
         {
             "status": "fail",
             "results": [
@@ -363,14 +363,21 @@ def test_mimo_current_audit_separates_clean_artifact_from_runtime_blockers(
                         },
                         {
                             "label": "tool_required",
-                            "code": 0,
+                            "code": 413,
                             "content": "",
-                            "error": "RemoteDisconnected: Remote end closed connection without response",
+                            "error": {
+                                "message": (
+                                    "Prompt too long "
+                                    "(mimo_v2_tight_memory_text_prefill: ~403 tokens)."
+                                ),
+                                "type": "invalid_request_error",
+                                "code": "prompt_too_long",
+                            },
                             "validation_failures": [
                                 {
                                     "label": "tool_required",
                                     "reason": "http_status",
-                                    "code": 0,
+                                    "code": 413,
                                 }
                             ],
                         }
@@ -379,7 +386,7 @@ def test_mimo_current_audit_separates_clean_artifact_from_runtime_blockers(
                         {
                             "label": "tool_required",
                             "reason": "http_status",
-                            "code": 0,
+                            "code": 413,
                         }
                     ],
                     "l2_restart": {
@@ -408,12 +415,7 @@ def test_mimo_current_audit_separates_clean_artifact_from_runtime_blockers(
                             "cache_hit_tokens": 60,
                         },
                     },
-                    "server_log_tail": (
-                        "libc++abi: terminating due to uncaught exception of "
-                        "type std::runtime_error: [METAL] Command buffer "
-                        "execution failed: Insufficient Memory "
-                        "(00000008:kIOGPUCommandBufferCallbackErrorOutOfMemory)"
-                    ),
+                    "server_log_tail": "Application shutdown complete.",
                 }
             ],
         },
@@ -832,11 +834,13 @@ def test_mimo_current_audit_separates_clean_artifact_from_runtime_blockers(
     assert result["component_ok"]["mimo_jang2l_live_media_l2"] is False
     assert result["component_ok"]["mimo_jang2l_l2_restart_cache_hit"] is True
     assert result["component_ok"]["mimo_jang2l_l2_restart_visible_output"] is True
-    assert result["component_ok"]["mimo_jang2l_tool_long_prompt_metal_oom"] is True
+    assert result["component_ok"]["mimo_jang2l_tool_long_prompt_metal_oom"] is False
+    assert result["component_ok"]["mimo_jang2l_tight_memory_prompt_budget"] is True
     assert "mimo_jangtq2_live_media_l2_missing" in result["blockers"]
     assert "mimo_jang2l_live_media_l2_missing" in result["blockers"]
     assert "mimo_jang2l_l2_restart_visible_output_blocked" not in result["blockers"]
-    assert "mimo_jang2l_tool_long_prompt_metal_oom_blocked" in result["blockers"]
+    assert "mimo_jang2l_tool_long_prompt_metal_oom_blocked" not in result["blockers"]
+    assert "mimo_jang2l_tight_memory_prompt_budget_blocked" in result["blockers"]
     assert (
         result["diagnostics"]["jang2l_all_local_smoke"]["bundle_kind"] == "jang2l"
     )
@@ -844,9 +848,15 @@ def test_mimo_current_audit_separates_clean_artifact_from_runtime_blockers(
         result["diagnostics"]["jang2l_all_local_smoke"]["artifact_exactness_boundary"][
             "classification"
         ]
-        == "server_died_mid_probe_metal_oom"
+        == "typed_tight_memory_prompt_budget_rejection"
     )
-    assert result["diagnostics"]["jang2l_all_local_smoke"]["metal_oom_crash"] is True
+    assert result["diagnostics"]["jang2l_all_local_smoke"]["metal_oom_crash"] is False
+    assert (
+        result["diagnostics"]["jang2l_all_local_smoke"][
+            "typed_tight_memory_prompt_rejection"
+        ]
+        is True
+    )
     assert result["diagnostics"]["cb_native_thinking_off"][
         "memory_pressure_blocked"
     ] is True
@@ -870,7 +880,7 @@ def test_mimo_current_audit_separates_clean_artifact_from_runtime_blockers(
         "mimo_audio_waveform_live_e2e_missing",
         "mimo_jangtq2_live_media_l2_missing",
         "mimo_jang2l_live_media_l2_missing",
-        "mimo_jang2l_tool_long_prompt_metal_oom_blocked",
+        "mimo_jang2l_tight_memory_prompt_budget_blocked",
         "mimo_model_metadata_overadvertises_unwired_media",
         "mimo_runtime_capabilities_media_status_missing_or_unsafe",
     ]
@@ -1450,7 +1460,7 @@ def test_mimo_current_audit_points_jang2l_at_latest_media_l2_release_smoke():
     from tests.cross_matrix import run_mimo_v2_jang2l_current_audit as audit
 
     assert str(audit.JANG2L_ALL_LOCAL_SMOKE_ARTIFACT) == (
-        "build/current-all-local-model-smoke-mimo-v25-jang2l-nomedia-after-mimo-safe-cache-prompt-20260608-bundled/"
+        "build/current-all-local-model-smoke-mimo-v25-jang2l-nomedia-after-total-budget-prefill-guard-20260608/"
         "summary.json"
     )
 

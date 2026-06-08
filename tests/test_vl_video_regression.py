@@ -1117,15 +1117,17 @@ class TestIssueGuards:
             has_media_payload=False,
             tight_memory_prefill_drain=True,
             seq_len=307,
+            generation_tokens=96,
             active_memory_bytes=int(106.0 * gib),
             max_working_set_bytes=int(107.5 * gib),
             reject_tokens=256,
+            max_total_tokens=192,
             min_free_bytes=2 * gib,
             guard_enabled=True,
         )
 
         assert decision.should_reject is True
-        assert decision.max_prompt_tokens == 256
+        assert decision.max_prompt_tokens == 192
         assert "MiMo-V2 tight-memory text prefill rejected" in decision.detail
         assert "Metal headroom" in decision.detail
 
@@ -1138,6 +1140,7 @@ class TestIssueGuards:
             active_memory_bytes=int(106.0 * gib),
             max_working_set_bytes=int(107.5 * gib),
             reject_tokens=256,
+            max_total_tokens=192,
             min_free_bytes=2 * gib,
             guard_enabled=True,
         )
@@ -1146,20 +1149,45 @@ class TestIssueGuards:
             model_type="mimo_v2",
             has_media_payload=False,
             seq_len=80,
+            generation_tokens=1,
             **common,
         ).should_reject is False
         assert _mimo_tight_memory_text_prefill_budget(
             model_type="gemma4",
             has_media_payload=False,
             seq_len=307,
+            generation_tokens=96,
             **common,
         ).should_reject is False
         assert _mimo_tight_memory_text_prefill_budget(
             model_type="mimo_v2",
             has_media_payload=True,
             seq_len=307,
+            generation_tokens=96,
             **common,
         ).should_reject is False
+
+    def test_mimo_tight_memory_text_prefill_guard_rejects_generation_budget(self):
+        from vmlx_engine.mllm_batch_generator import _mimo_tight_memory_text_prefill_budget
+
+        gib = 1024**3
+        decision = _mimo_tight_memory_text_prefill_budget(
+            model_type="mimo_v2",
+            has_media_payload=False,
+            tight_memory_prefill_drain=True,
+            seq_len=140,
+            generation_tokens=96,
+            active_memory_bytes=int(106.0 * gib),
+            max_working_set_bytes=int(107.5 * gib),
+            reject_tokens=256,
+            max_total_tokens=192,
+            min_free_bytes=2 * gib,
+            guard_enabled=True,
+        )
+
+        assert decision.should_reject is True
+        assert decision.max_prompt_tokens == 192
+        assert "generation budget is 96" in decision.detail
 
     def test_vlm_image_prefill_budget_error_logs_without_internal_traceback(self):
         import inspect

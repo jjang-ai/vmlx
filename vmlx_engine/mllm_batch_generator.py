@@ -258,7 +258,9 @@ class VLMImagePrefillBudgetDecision:
 class MiMoTightMemoryTextPrefillDecision:
     should_reject: bool
     prompt_tokens: int
+    generation_tokens: int
     max_prompt_tokens: int
+    max_total_tokens: int
     active_memory_bytes: int
     max_working_set_bytes: int
     free_memory_bytes: int
@@ -271,9 +273,11 @@ def _mimo_tight_memory_text_prefill_budget(
     has_media_payload: bool,
     tight_memory_prefill_drain: bool,
     seq_len: int,
+    generation_tokens: int,
     active_memory_bytes: int,
     max_working_set_bytes: int,
     reject_tokens: int,
+    max_total_tokens: int,
     min_free_bytes: int,
     guard_enabled: bool,
 ) -> MiMoTightMemoryTextPrefillDecision:
@@ -285,7 +289,10 @@ def _mimo_tight_memory_text_prefill_budget(
     for longer text-prefill/tool prompts.
     """
     tokens = max(0, int(seq_len or 0))
+    gen_tokens = max(0, int(generation_tokens or 0))
+    total_tokens = tokens + gen_tokens
     max_tokens = max(1, int(reject_tokens or 1))
+    max_total = max(1, int(max_total_tokens or max_tokens))
     active = max(0, int(active_memory_bytes or 0))
     max_ws = max(0, int(max_working_set_bytes or 0))
     min_free = max(0, int(min_free_bytes or 0))
@@ -296,7 +303,9 @@ def _mimo_tight_memory_text_prefill_budget(
 
     base = dict(
         prompt_tokens=tokens,
+        generation_tokens=gen_tokens,
         max_prompt_tokens=max_tokens,
+        max_total_tokens=max_total,
         active_memory_bytes=active,
         max_working_set_bytes=max_ws,
         free_memory_bytes=free,
@@ -308,7 +317,7 @@ def _mimo_tight_memory_text_prefill_budget(
         or not tight_memory_prefill_drain
         or max_ws <= 0
         or free >= min_free
-        or tokens <= max_tokens
+        or (tokens <= max_tokens and total_tokens <= max_total)
     ):
         return MiMoTightMemoryTextPrefillDecision(
             should_reject=False,
@@ -316,17 +325,25 @@ def _mimo_tight_memory_text_prefill_budget(
             **base,
         )
 
+    limiting_tokens = max_total if total_tokens > max_total else max_tokens
     return MiMoTightMemoryTextPrefillDecision(
         should_reject=True,
         detail=(
             "MiMo-V2 tight-memory text prefill rejected before Metal forward: "
-            f"prompt has {tokens} tokens while Metal headroom is {gb(free):.1f}GB, "
-            f"below guard {gb(min_free):.1f}GB. This request shape can hard-abort "
+            f"prompt has {tokens} tokens and generation budget is {gen_tokens} "
+            f"tokens while Metal headroom is {gb(free):.1f}GB, below guard "
+            f"{gb(min_free):.1f}GB. This request shape can hard-abort "
             "Metal before Python can recover; reduce prompt length, close other "
             "sessions, use a smaller MiMo quant, or set "
             "VMLINUX_MIMO_TEXT_PREFILL_GUARD=0 at OOM risk."
         ),
-        **base,
+        max_prompt_tokens=limiting_tokens,
+        prompt_tokens=total_tokens if total_tokens > max_total else tokens,
+        generation_tokens=gen_tokens,
+        max_total_tokens=max_total,
+        active_memory_bytes=active,
+        max_working_set_bytes=max_ws,
+        free_memory_bytes=free,
     )
 
 
@@ -336,6 +353,7 @@ def _raise_if_mimo_tight_memory_text_prefill_exceeds_budget(
     has_media_payload: bool,
     tight_memory_prefill_drain: bool,
     seq_len: int,
+    generation_tokens: int,
     request_id: str,
 ) -> None:
     if os.environ.get("VMLINUX_MIMO_TEXT_PREFILL_GUARD", "1") == "0":
@@ -347,6 +365,13 @@ def _raise_if_mimo_tight_memory_text_prefill_exceeds_budget(
     except (TypeError, ValueError):
         reject_tokens = 256
     reject_tokens = max(16, reject_tokens)
+    try:
+        max_total_tokens = int(
+            os.environ.get("VMLINUX_MIMO_TEXT_PREFILL_TOTAL_TOKENS", "192")
+        )
+    except (TypeError, ValueError):
+        max_total_tokens = 192
+    max_total_tokens = max(16, max_total_tokens)
     min_free_gb = _parse_positive_float_env("VMLINUX_MIMO_TEXT_PREFILL_MIN_FREE_GB")
     if min_free_gb is None:
         min_free_gb = 2.0
@@ -360,9 +385,11 @@ def _raise_if_mimo_tight_memory_text_prefill_exceeds_budget(
         has_media_payload=has_media_payload,
         tight_memory_prefill_drain=tight_memory_prefill_drain,
         seq_len=seq_len,
+        generation_tokens=generation_tokens,
         active_memory_bytes=active,
         max_working_set_bytes=max_ws,
         reject_tokens=reject_tokens,
+        max_total_tokens=max_total_tokens,
         min_free_bytes=int(min_free_gb * 1024**3),
         guard_enabled=guard_enabled,
     )
@@ -4859,6 +4886,7 @@ class MLLMBatchGenerator:
                 getattr(self, "_tight_memory_prefill_drain", False)
             ),
             seq_len=seq_len,
+            generation_tokens=int(getattr(request, "max_tokens", 0) or 0),
             request_id=request.request_id,
         )
         if (
