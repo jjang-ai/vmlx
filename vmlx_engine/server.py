@@ -1906,6 +1906,73 @@ def _mimo_v2_media_runtime_enabled(cfg: dict[str, Any]) -> bool:
     return False
 
 
+def _mimo_v2_bundle_has_index_prefix(bundle_path: str | None, prefixes: tuple[str, ...]) -> bool:
+    try:
+        index = _read_bundle_json(bundle_path, "model.safetensors.index.json")
+    except Exception:
+        index = {}
+    weight_map = index.get("weight_map") if isinstance(index, dict) else {}
+    if not isinstance(weight_map, dict):
+        return False
+    return any(
+        isinstance(name, str) and name.startswith(prefix)
+        for name in weight_map
+        for prefix in prefixes
+    )
+
+
+def _mimo_v2_media_runtime_auto_enabled(
+    bundle_path: str | None,
+    cfg: dict[str, Any],
+    module: Any | None,
+) -> bool:
+    """Enable MiMo media only when source runtime and bundle sidecars agree.
+
+    Older MiMo bundles were honestly stamped as ``weights_preserved_text_runtime``
+    because the Python media path was not wired yet. Current source can run the
+    media bridge, but stale metadata can remain on local promoted bundles. Do
+    not let an importable class alone advertise media: require token/config
+    metadata plus actual media sidecars and source runtime components.
+    """
+    if module is None or not isinstance(cfg, dict):
+        return False
+    bundle = Path(bundle_path or "")
+    has_vision_runtime = all(
+        hasattr(module, name)
+        for name in (
+            "VisionModel",
+            "MiMoVisionPatchEmbed",
+            "MiMoVisionPatchMerger",
+            "MiMoVisionBlock",
+        )
+    )
+    has_audio_runtime = all(
+        hasattr(module, name)
+        for name in (
+            "AudioModel",
+            "MiMoAudioTokenizer",
+            "load_mimo_audio_tokenizer_from_bundle",
+        )
+    )
+    has_vision_bundle = (
+        has_vision_runtime
+        and isinstance(cfg.get("vision_config"), dict)
+        and (cfg.get("image_token_id") is not None or cfg.get("video_token_id") is not None)
+        and (bundle / "preprocessor_config.json").is_file()
+        and _mimo_v2_bundle_has_index_prefix(bundle_path, ("visual.",))
+    )
+    has_audio_bundle = (
+        has_audio_runtime
+        and isinstance(cfg.get("audio_config"), dict)
+        and (bundle / "audio_tokenizer" / "model.safetensors").is_file()
+        and _mimo_v2_bundle_has_index_prefix(
+            bundle_path,
+            ("audio_encoder.", "speech_embeddings."),
+        )
+    )
+    return bool(has_vision_bundle or has_audio_bundle)
+
+
 def _mimo_v2_runtime_modalities(bundle_path: str | None) -> list[str] | None:
     """Return runtime-wired MiMo modalities from actual adapter + token support."""
     cfg = _read_bundle_json(bundle_path, "config.json")
@@ -1913,14 +1980,19 @@ def _mimo_v2_runtime_modalities(bundle_path: str | None) -> list[str] | None:
         return None
 
     modalities = ["text"]
-    if not _mimo_v2_media_runtime_enabled(cfg):
+    module = _mimo_v2_runtime_module()
+    if not _mimo_v2_media_runtime_enabled(cfg) and not _mimo_v2_media_runtime_auto_enabled(
+        bundle_path,
+        cfg,
+        module,
+    ):
         return modalities
 
-    module = _mimo_v2_runtime_module()
     has_vision_runtime = bool(
         module is not None
         and hasattr(module, "VisionModel")
         and hasattr(module, "MiMoVisionPatchEmbed")
+        and hasattr(module, "MiMoVisionPatchMerger")
         and hasattr(module, "MiMoVisionBlock")
         and isinstance(cfg.get("vision_config"), dict)
     )
