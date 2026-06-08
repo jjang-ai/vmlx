@@ -242,7 +242,7 @@ def test_mimo_current_audit_separates_clean_artifact_from_runtime_blockers(
     )
     _write_json(
         tmp_path
-        / "build/current-all-local-model-smoke-mimo-v25-jangtq2-audio-waveform-after-audios-signature-filter-20260608/summary.json",
+        / "build/current-all-local-model-smoke-mimo-v25-jangtq2-l2-restart-20260608/summary.json",
         {
             "status": "fail",
             "results": [
@@ -304,6 +304,20 @@ def test_mimo_current_audit_separates_clean_artifact_from_runtime_blockers(
                             "validation_failures": [],
                         },
                     ],
+                    "l2_restart": {
+                        "summary": {
+                            "status": "pass",
+                            "pass": True,
+                            "reason": "pass",
+                            "cache_hit_tokens": 67,
+                            "disk_hits": 2,
+                            "cache_summary": {
+                                "cache_hit_tokens": 67,
+                                "disk_hits": 2,
+                                "has_cache_hit": True,
+                            },
+                        }
+                    },
                     "cache_after": {
                         "body": {
                             "scheduler_stats": {
@@ -672,7 +686,7 @@ def test_mimo_current_audit_separates_clean_artifact_from_runtime_blockers(
         result["diagnostics"]["all_local_smoke"][
             "block_disk_l2_restart_restore_status"
         ]
-        == "missing"
+        == "pass"
     )
     assert result["diagnostics"]["cb_native_thinking_off"][
         "memory_pressure_blocked"
@@ -690,7 +704,6 @@ def test_mimo_current_audit_separates_clean_artifact_from_runtime_blockers(
         "mimo_decode_speed_below_release_target",
         "mimo_cb_system_prompt_working_set_pressure_blocked",
         "mimo_source_vs_quant_first_divergence_missing_or_failed",
-        "mimo_block_disk_l2_restart_restore_missing",
         "mimo_audio_waveform_live_e2e_missing",
         "mimo_model_metadata_overadvertises_unwired_media",
         "mimo_runtime_capabilities_media_status_missing_or_unsafe",
