@@ -1013,6 +1013,20 @@ def _register_mimo_v2_mlx_vlm_runtime() -> None:
             setattr(cur, last, new_module)
 
     def _mimo_v2_assign_weight(root, dotted, value):
+        if dotted == "visual.patch_embed.proj.weight" and len(value.shape) > 2:
+            value = mx.reshape(value, (value.shape[0], -1))
+        if (
+            dotted.startswith("visual.blocks.")
+            and dotted.endswith(".attn.qkv.weight")
+            and len(value.shape) == 2
+        ):
+            attn_path = dotted[: -len(".qkv.weight")]
+            attn = _mimo_v2_get_module(root, attn_path)
+            denom = int(attn.num_heads) + 2 * int(attn.num_kv_heads)
+            if denom > 0 and int(value.shape[0]) % denom == 0:
+                inferred_head_dim = int(value.shape[0]) // denom
+                attn.head_dim = inferred_head_dim
+                attn.scaling = inferred_head_dim**-0.5
         parts = dotted.split(".")
         cur = root
         for part in parts[:-1]:
@@ -1529,11 +1543,16 @@ def _register_mimo_v2_mlx_vlm_runtime() -> None:
     class AudioProjection(nn.Module):
         def __init__(self, *, input_size: int, hidden_size: int, output_size: int):
             super().__init__()
-            self.linear_1 = nn.Linear(input_size, hidden_size, bias=False)
-            self.linear_2 = nn.Linear(hidden_size, output_size, bias=False)
+            self.mlp = [
+                nn.Linear(input_size, hidden_size, bias=False),
+                MiMoVisionGELU(),
+                nn.Linear(hidden_size, output_size, bias=False),
+            ]
 
         def __call__(self, x):
-            return self.linear_2(nn.gelu(self.linear_1(x)))
+            for layer in self.mlp:
+                x = layer(x)
+            return x
 
     class MiMoAudioEuclideanCodebook(nn.Module):
         """MiMo audio tokenizer nearest-codebook encoder.
@@ -2537,8 +2556,11 @@ def _register_mimo_v2_mlx_vlm_runtime() -> None:
             self.spatial_merge_size = spatial_merge_size
             self.hidden_size = context_dim * (spatial_merge_size**2)
             self.ln_q = nn.LayerNorm(context_dim, eps=1e-6)
-            self.linear_1 = nn.Linear(self.hidden_size, self.hidden_size)
-            self.linear_2 = nn.Linear(self.hidden_size, dim)
+            self.mlp = [
+                nn.Linear(self.hidden_size, self.hidden_size),
+                MiMoVisionGELU(),
+                nn.Linear(self.hidden_size, dim),
+            ]
 
         def __call__(self, x):
             x = mx.array(x)
@@ -2554,9 +2576,13 @@ def _register_mimo_v2_mlx_vlm_runtime() -> None:
                 )
             x = self.ln_q(x)
             x = mx.reshape(x, (-1, self.hidden_size))
-            x = self.linear_1(x)
-            x = nn.gelu(x)
-            return self.linear_2(x)
+            for layer in self.mlp:
+                x = layer(x)
+            return x
+
+    class MiMoVisionGELU(nn.Module):
+        def __call__(self, x):
+            return nn.gelu(x)
 
     class MiMoVisionSwiGLUMLP(nn.Module):
         def __init__(self, *, dim: int, intermediate_dim: int, hidden_act: str = "silu"):
@@ -3191,7 +3217,19 @@ def _register_mimo_v2_mlx_vlm_runtime() -> None:
             return result
 
         def sanitize(self, weights):
-            return self.language_model.sanitize(weights)
+            media_weights = {
+                key: value
+                for key, value in weights.items()
+                if key.startswith(("visual.", "audio_encoder.", "speech_embeddings."))
+            }
+            text_weights = {
+                key: value
+                for key, value in weights.items()
+                if key not in media_weights
+            }
+            sanitized = self.language_model.sanitize(text_weights)
+            sanitized.update(media_weights)
+            return sanitized
 
     module = types.ModuleType(module_name)
     module.Model = Model
@@ -4285,6 +4323,20 @@ class MLXMultimodalLM:
             with warnings.catch_warnings():
                 warnings.filterwarnings("ignore", message=".*torchvision.*", category=UserWarning)
                 self.model, self.processor = load(self.model_name)
+            if _is_mimo_v2_runtime_object_or_name(self.model, resolved_name):
+                try:
+                    from ..utils.jang_loader import (
+                        _bind_mimo_v2_preserved_media_weights_from_index,
+                    )
+
+                    _bind_mimo_v2_preserved_media_weights_from_index(
+                        self.model, Path(resolved_name)
+                    )
+                except Exception as _mimo_media_err:
+                    raise RuntimeError(
+                        "MiMo-V2 media-enabled load could not bind preserved "
+                        f"visual/audio tensors: {_mimo_media_err}"
+                    ) from _mimo_media_err
             self.config = load_config(self.model_name)
             if str((self.config or {}).get("model_type", "")).lower() == "zaya1_vl":
                 from ..utils.jang_loader import _build_vlm_processor

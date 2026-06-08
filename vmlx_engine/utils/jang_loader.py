@@ -14,6 +14,7 @@ import importlib
 import json
 import logging
 import shutil
+import struct
 import sys
 import tempfile
 import time
@@ -2706,6 +2707,7 @@ def _load_jang_v2_vlm(
         # the KV cache knows about the TQ layers.
         if not hasattr(_vlm_model, "config"):
             _vlm_model.config = config
+        _bind_mimo_v2_preserved_media_weights_from_index(_vlm_model, path)
         try:
             _lang = getattr(_vlm_model, "language_model", None)
             if _lang is not None:
@@ -3326,6 +3328,140 @@ def _get_v2_weight_files(path: Path) -> list[Path]:
     if not files:
         files = sorted(path.glob("*.safetensors"))
     return files
+
+
+def _bind_mimo_v2_preserved_media_weights_from_index(model: Any, path: Path) -> dict[str, int]:
+    """Bind preserved MiMo media tensors after the JANGTQ VLM fast loader.
+
+    ``jang_tools.load_jangtq_vlm_model`` owns the TurboQuant text load path and
+    returns before this module's generic VLM shard loop runs. For MiMo-V2, that
+    means ``visual.*``, ``audio_encoder.*``, and ``speech_embeddings.*`` tensors
+    can stay unassigned even though the runtime object exposes media modules.
+    Stream just those indexed tensors and let the local MiMo runtime bind them.
+    """
+
+    if not (
+        hasattr(model, "_bind_mimo_v2_media_weight")
+        and hasattr(model, "_apply_mimo_v2_media_weights")
+    ):
+        return {}
+    if not bool(getattr(model, "_mimo_v2_bind_media_weights", False)):
+        return {}
+    existing_counts = getattr(model, "_mimo_v2_media_weight_counts", None)
+    if isinstance(existing_counts, dict) and any(existing_counts.values()):
+        return {}
+
+    index_path = path / "model.safetensors.index.json"
+    if not index_path.exists():
+        return {}
+    try:
+        weight_map = json.loads(index_path.read_text()).get("weight_map", {})
+    except Exception as exc:
+        raise RuntimeError(
+            f"MiMo-V2 media tensor binding could not read {index_path}: {exc}"
+        ) from exc
+
+    prefixes = ("visual.", "audio_encoder.", "speech_embeddings.")
+    shard_to_keys: dict[str, list[str]] = {}
+    for key, shard in weight_map.items():
+        if key.startswith(prefixes):
+            shard_to_keys.setdefault(str(shard), []).append(key)
+    if not shard_to_keys:
+        return {}
+
+    counts = {"visual": 0, "audio_encoder": 0, "speech_embeddings": 0}
+    failures = []
+    for shard, keys in sorted(shard_to_keys.items()):
+        shard_path = path / shard
+        try:
+            for key in sorted(keys):
+                value = _load_safetensors_tensor_for_mlx(shard_path, key)
+                if not model._bind_mimo_v2_media_weight(key, value):
+                    failures.append(f"{key}: unrecognized media key")
+                    continue
+                if key.startswith("visual."):
+                    counts["visual"] += 1
+                elif key.startswith("audio_encoder."):
+                    counts["audio_encoder"] += 1
+                elif key.startswith("speech_embeddings."):
+                    counts["speech_embeddings"] += 1
+        except Exception as exc:
+            raise RuntimeError(
+                f"MiMo-V2 media tensor binding failed while reading {shard_path}: "
+                f"{type(exc).__name__}: {exc}"
+            ) from exc
+
+    if failures:
+        raise RuntimeError(
+            "MiMo-V2 media tensor binding rejected preserved media keys: "
+            + "; ".join(failures[:8])
+        )
+
+    if any(counts.values()):
+        logger.info(
+            "MiMo-V2 JANGTQ fast path bound preserved media weights: "
+            "visual=%d audio_encoder=%d speech_embeddings=%d",
+            counts["visual"],
+            counts["audio_encoder"],
+            counts["speech_embeddings"],
+        )
+        assigned = model._apply_mimo_v2_media_weights()
+        logger.info(
+            "MiMo-V2 JANGTQ fast path assigned %d preserved media tensors to runtime modules",
+            assigned,
+        )
+    return counts
+
+
+def _load_safetensors_tensor_for_mlx(path: Path, key: str) -> Any:
+    """Load one safetensors tensor as MLX without materializing the whole shard."""
+
+    try:
+        from safetensors import safe_open
+
+        with safe_open(str(path), framework="mlx") as handle:
+            return handle.get_tensor(key)
+    except TypeError as exc:
+        if "bfloat16" not in str(exc).lower():
+            raise
+    except ImportError:
+        pass
+
+    with path.open("rb") as handle:
+        header_len = struct.unpack("<Q", handle.read(8))[0]
+        header = json.loads(handle.read(header_len))
+        if key not in header:
+            raise KeyError(key)
+        entry = header[key]
+        dtype = str(entry["dtype"]).upper()
+        shape = tuple(int(dim) for dim in entry["shape"])
+        start, end = (int(offset) for offset in entry["data_offsets"])
+        handle.seek(8 + header_len + start)
+        raw = handle.read(end - start)
+
+    if dtype == "BF16":
+        bits = np.frombuffer(raw, dtype="<u2").copy().reshape(shape)
+        fp32 = (bits.astype(np.uint32) << 16).view(np.float32)
+        return mx.array(fp32).astype(mx.bfloat16)
+
+    dtype_map = {
+        "F64": "<f8",
+        "F32": "<f4",
+        "F16": "<f2",
+        "I64": "<i8",
+        "I32": "<i4",
+        "I16": "<i2",
+        "I8": "i1",
+        "U64": "<u8",
+        "U32": "<u4",
+        "U16": "<u2",
+        "U8": "u1",
+        "BOOL": "?",
+    }
+    if dtype not in dtype_map:
+        raise TypeError(f"unsupported safetensors dtype for MLX load: {dtype}")
+    array = np.frombuffer(raw, dtype=np.dtype(dtype_map[dtype])).copy().reshape(shape)
+    return mx.array(array)
 
 
 # ─── Public API ──────────────────────────────────────────────────────

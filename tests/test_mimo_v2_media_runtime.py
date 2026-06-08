@@ -532,3 +532,149 @@ def test_mimo_v2_media_enabled_load_binds_speech_embedding_weights(
     model.load_weights([("speech_embeddings.0.weight", replacement)])
     assert model.speech_embeddings[0].weight.tolist() == replacement.tolist()
     sys.modules.pop("mlx_vlm.models.mimo_v2", None)
+
+
+def test_mimo_v2_sanitize_preserves_media_weights_for_binding(tmp_path, monkeypatch):
+    module = _register_fake_mimo_runtime(monkeypatch, tmp_path)
+    model = module.Model(
+        module.ModelConfig.from_dict(
+            {
+                "model_type": "mimo_v2",
+                "vision_config": {"hidden_size": 4},
+                "audio_config": {
+                    "audio_channels": 1,
+                    "group_size": 1,
+                    "input_local_attn_heads": 1,
+                    "input_local_dim": 4,
+                    "input_local_head_dim": 4,
+                    "input_local_intermediate_size": 8,
+                    "input_local_layers": 1,
+                    "out_hidden_size": 16,
+                    "speech_vocab_size": 8,
+                },
+            }
+        )
+    )
+    original_sanitize = model.language_model.sanitize
+
+    def text_only_sanitize(weights):
+        return {
+            key: value
+            for key, value in original_sanitize(weights).items()
+            if key.startswith("model.") or key.startswith("lm_head")
+        }
+
+    model.language_model.sanitize = text_only_sanitize
+
+    sanitized = model.sanitize(
+        {
+            "visual.patch_embed.proj.weight": mx.ones((4, 4)),
+            "audio_encoder.projection.layers.0.weight": mx.ones((4, 4)),
+            "speech_embeddings.0.weight": mx.ones((8, 4)),
+            "model.layers.0.input_layernorm.weight": mx.ones((4,)),
+        }
+    )
+
+    assert "visual.patch_embed.proj.weight" in sanitized
+    assert "audio_encoder.projection.layers.0.weight" in sanitized
+    assert "speech_embeddings.0.weight" in sanitized
+    sys.modules.pop("mlx_vlm.models.mimo_v2", None)
+
+
+def test_mimo_v2_jangtq_fast_path_binds_indexed_media_weights(tmp_path, monkeypatch):
+    from safetensors.numpy import save_file
+
+    from vmlx_engine.utils.jang_loader import (
+        _bind_mimo_v2_preserved_media_weights_from_index,
+    )
+
+    module = _register_fake_mimo_runtime(monkeypatch, tmp_path)
+    model = module.Model(
+        module.ModelConfig.from_dict(
+            {
+                "model_type": "mimo_v2",
+                "vision_config": {
+                    "hidden_size": 4,
+                    "out_hidden_size": 16,
+                    "patch_size": 2,
+                    "temporal_patch_size": 1,
+                    "in_channels": 1,
+                    "spatial_merge_size": 1,
+                    "depth": 1,
+                    "num_heads": 2,
+                    "num_key_value_heads": 1,
+                    "intermediate_size": 8,
+                    "fullatt_block_indexes": [0],
+                },
+                "audio_config": {
+                    "audio_channels": 1,
+                    "group_size": 1,
+                    "input_local_attn_heads": 1,
+                    "input_local_dim": 4,
+                    "input_local_head_dim": 4,
+                    "input_local_intermediate_size": 8,
+                    "input_local_layers": 1,
+                    "out_hidden_size": 16,
+                    "speech_vocab_size": 8,
+                },
+            }
+        )
+    )
+    bundle = tmp_path / "indexed-media-bundle"
+    bundle.mkdir()
+    shard = "model-00001-of-00001.safetensors"
+    weights = {
+        "visual.patch_embed.proj.weight": np.full(
+            (4, 1, 1, 2, 2), 1.0, dtype=np.float32
+        ),
+        "visual.merger.mlp.0.weight": np.full((4, 4), 2.0, dtype=np.float32),
+        "visual.merger.mlp.2.weight": np.full((16, 4), 3.0, dtype=np.float32),
+        "visual.blocks.0.attn.qkv.weight": np.full(
+            (24, 4), 4.0, dtype=np.float32
+        ),
+        "audio_encoder.projection.mlp.0.weight": np.full(
+            (16, 4), 5.0, dtype=np.float32
+        ),
+        "audio_encoder.projection.mlp.2.weight": np.full(
+            (16, 16), 6.0, dtype=np.float32
+        ),
+        "speech_embeddings.0.weight": np.full((8, 4), 7.0, dtype=np.float32),
+        "model.layers.0.input_layernorm.weight": np.full((4,), 8.0, dtype=np.float32),
+    }
+    save_file(weights, str(bundle / shard))
+    (bundle / "model.safetensors.index.json").write_text(
+        json.dumps(
+            {
+                "metadata": {"total_size": 0},
+                "weight_map": {key: shard for key in weights},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    counts = _bind_mimo_v2_preserved_media_weights_from_index(model, bundle)
+
+    assert counts == {"visual": 4, "audio_encoder": 2, "speech_embeddings": 1}
+    assert model.visual.patch_embed.proj.weight.tolist() == weights[
+        "visual.patch_embed.proj.weight"
+    ].reshape((4, 4)).tolist()
+    assert model.visual.merger.mlp[0].weight.tolist() == weights[
+        "visual.merger.mlp.0.weight"
+    ].tolist()
+    assert model.visual.merger.mlp[2].weight.tolist() == weights[
+        "visual.merger.mlp.2.weight"
+    ].tolist()
+    assert model.visual.blocks[0].attn.head_dim == 6
+    assert model.visual.blocks[0].attn.qkv.weight.tolist() == weights[
+        "visual.blocks.0.attn.qkv.weight"
+    ].tolist()
+    assert model.audio_encoder.projection.mlp[0].weight.tolist() == weights[
+        "audio_encoder.projection.mlp.0.weight"
+    ].tolist()
+    assert model.audio_encoder.projection.mlp[2].weight.tolist() == weights[
+        "audio_encoder.projection.mlp.2.weight"
+    ].tolist()
+    assert model.speech_embeddings[0].weight.tolist() == weights[
+        "speech_embeddings.0.weight"
+    ].tolist()
+    sys.modules.pop("mlx_vlm.models.mimo_v2", None)
