@@ -4101,7 +4101,17 @@ class MLLMBatchGenerator:
             kwargs["pixel_values"] = request.pixel_values
         if request.video_pixel_values is not None:
             kwargs["video_pixel_values"] = request.video_pixel_values
-        if request.attention_mask is not None:
+        has_mimo_media_payload = (
+            self._model_type == "mimo_v2"
+            and (
+                request.pixel_values is not None
+                or request.video_pixel_values is not None
+                or request.audio_codes is not None
+                or request.audio_embeds is not None
+                or request.audio_features is not None
+            )
+        )
+        if request.attention_mask is not None and not has_mimo_media_payload:
             kwargs["mask"] = request.attention_mask
         if request.image_grid_thw is not None:
             kwargs["image_grid_thw"] = request.image_grid_thw

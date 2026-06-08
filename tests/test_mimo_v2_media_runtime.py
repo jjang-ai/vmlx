@@ -679,3 +679,47 @@ def test_mimo_v2_jangtq_fast_path_binds_indexed_media_weights(tmp_path, monkeypa
         "speech_embeddings.0.weight"
     ].tolist()
     sys.modules.pop("mlx_vlm.models.mimo_v2", None)
+
+
+def test_mimo_v2_media_prefill_does_not_forward_processor_attention_mask(
+    monkeypatch,
+):
+    from vmlx_engine.mllm_batch_generator import MLLMBatchGenerator, MLLMBatchRequest
+
+    class FakeModel:
+        def __init__(self):
+            self.kwargs = None
+
+        def __call__(self, input_ids, **kwargs):
+            self.kwargs = kwargs
+            return SimpleNamespace(logits=mx.zeros((1, 3, 5)))
+
+    fake_model = FakeModel()
+    fake_self = SimpleNamespace(
+        _is_hybrid=False,
+        _model_type="mimo_v2",
+        _tight_memory_prefill_drain=False,
+        prefill_step_size=1024,
+        language_model=None,
+        model=fake_model,
+    )
+    request = MLLMBatchRequest(uid=1, request_id="mimo-media", prompt="p")
+    request.input_ids = mx.array([[1, 151655, 2]], dtype=mx.int32)
+    request.pixel_values = mx.zeros((4, 8))
+    request.image_grid_thw = mx.array([[1, 2, 2]], dtype=mx.int32)
+    request.attention_mask = mx.ones((1, 3), dtype=mx.int32)
+    request.extra_kwargs = {}
+
+    monkeypatch.setattr(
+        "vmlx_engine.mllm_batch_generator._raise_if_image_prefill_exceeds_budget",
+        lambda **kwargs: None,
+    )
+
+    logits = MLLMBatchGenerator._run_vision_encoding_inner(
+        fake_self, request, cache=None
+    )
+
+    assert logits.shape == (1, 3, 5)
+    assert "mask" not in fake_model.kwargs
+    assert "pixel_values" in fake_model.kwargs
+    assert "image_grid_thw" in fake_model.kwargs
