@@ -1334,6 +1334,7 @@ def _register_mimo_v2_mlx_vlm_runtime() -> None:
             head_dim = int(getattr(self.config, "qk_channels", 0) or 0)
             if head_dim <= 0:
                 head_dim = max(1, self.hidden_size // max(1, num_heads))
+            self.vision_head_dim = head_dim
             rms_norm_eps = float(getattr(self.config, "rms_norm_eps", 1e-6) or 1e-6)
             hidden_act = str(getattr(self.config, "hidden_act", "silu") or "silu")
             use_sink = bool(getattr(self.config, "use_sink", False))
@@ -1365,20 +1366,142 @@ def _register_mimo_v2_mlx_vlm_runtime() -> None:
         def merge_patches(self, hidden_states):
             return self.merger(hidden_states)
 
-        def run_blocks(self, hidden_states):
+        def _grid_rows(self, grid_thw):
+            grid = mx.array(grid_thw)
+            if grid.ndim == 1:
+                grid = grid[None, :]
+            return [[int(v) for v in row] for row in grid.tolist()]
+
+        def apply_index(self, tensor, index):
+            tensor = mx.array(tensor)
+            index = mx.array(index)
+            unit = self.spatial_merge_size * self.spatial_merge_size
+            tail_shape = tuple(tensor.shape[1:])
+            grouped = mx.reshape(tensor, (-1, unit) + tail_shape)
+            selected = grouped[index]
+            return mx.reshape(selected, (-1,) + tail_shape)
+
+        def get_window_index_1d(self, grid_thw, col: bool = True):
+            window_index = []
+            window_index_id = 0
+            for grid_t, grid_h, grid_w in self._grid_rows(grid_thw):
+                llm_grid_h = grid_h // self.spatial_merge_size
+                llm_grid_w = grid_w // self.spatial_merge_size
+                index = mx.reshape(
+                    mx.arange(grid_t * llm_grid_h * llm_grid_w),
+                    (grid_t, llm_grid_h, llm_grid_w),
+                )
+                if col:
+                    index = mx.reshape(mx.transpose(index, (0, 2, 1)), (-1,))
+                else:
+                    index = mx.reshape(index, (-1,))
+                window_index.extend((index + window_index_id).tolist())
+                window_index_id += grid_t * llm_grid_h * llm_grid_w
+            return mx.array(window_index, dtype=mx.int32)
+
+        def rot_pos_emb(self, grid_thw):
+            pos_ids = []
+            max_grid_size = 1
+            for grid_t, grid_h, grid_w in self._grid_rows(grid_thw):
+                max_grid_size = max(max_grid_size, grid_h, grid_w)
+                hpos = mx.broadcast_to(mx.arange(grid_h)[:, None], (grid_h, grid_w))
+                hpos = mx.reshape(
+                    hpos,
+                    (
+                        grid_h // self.spatial_merge_size,
+                        self.spatial_merge_size,
+                        grid_w // self.spatial_merge_size,
+                        self.spatial_merge_size,
+                    ),
+                )
+                hpos = mx.reshape(mx.transpose(hpos, (0, 2, 1, 3)), (-1,))
+                wpos = mx.broadcast_to(mx.arange(grid_w)[None, :], (grid_h, grid_w))
+                wpos = mx.reshape(
+                    wpos,
+                    (
+                        grid_h // self.spatial_merge_size,
+                        self.spatial_merge_size,
+                        grid_w // self.spatial_merge_size,
+                        self.spatial_merge_size,
+                    ),
+                )
+                wpos = mx.reshape(mx.transpose(wpos, (0, 2, 1, 3)), (-1,))
+                pos = mx.stack([hpos, wpos], axis=-1)
+                if grid_t > 1:
+                    pos = mx.tile(pos, (grid_t, 1))
+                pos_ids.append(pos)
+            pos_ids = mx.concatenate(pos_ids, axis=0)
+
+            rotary_dim = max(2, self.vision_head_dim // 2)
+            if rotary_dim % 2:
+                rotary_dim += 1
+            inv_freq = 1.0 / (
+                10000.0 ** (mx.arange(0, rotary_dim, 2).astype(mx.float32) / rotary_dim)
+            )
+            seq = mx.arange(max_grid_size).astype(mx.float32)
+            rotary = seq[:, None] * inv_freq[None, :]
+            return mx.reshape(rotary[pos_ids], (pos_ids.shape[0], -1))
+
+        def run_blocks(self, hidden_states, grid_thw=None):
+            if grid_thw is None:
+                row_based_embeddings = None
+                col_based_embeddings = None
+                window_index_1d_col = None
+                reverse_window_index_1d_col = None
+            else:
+                emb = self.rot_pos_emb(grid_thw)
+                emb = mx.concatenate([emb, emb], axis=-1)
+                row_based_embeddings = (mx.cos(emb), mx.sin(emb))
+                window_index_1d_col = self.get_window_index_1d(grid_thw, col=True)
+                reverse_window_index_1d_col = mx.argsort(window_index_1d_col)
+                col_emb = self.apply_index(emb, window_index_1d_col)
+                col_based_embeddings = (mx.cos(col_emb), mx.sin(col_emb))
+
             for i, block in enumerate(self.blocks):
+                window_attn_type = (
+                    self.vit_window_attn_types[i]
+                    if i < len(self.vit_window_attn_types)
+                    else -1
+                )
+                if (
+                    grid_thw is not None
+                    and window_attn_type == 1
+                    and (i == 0 or self.vit_window_attn_types[i - 1] != 1)
+                ):
+                    hidden_states = self.apply_index(hidden_states, window_index_1d_col)
+                if (
+                    grid_thw is not None
+                    and i > 0
+                    and window_attn_type != 1
+                    and self.vit_window_attn_types[i - 1] == 1
+                ):
+                    hidden_states = self.apply_index(
+                        hidden_states,
+                        reverse_window_index_1d_col,
+                    )
                 full_attn = i in self.fullatt_block_indexes
-                hidden_states = block(hidden_states, full_attn=full_attn)
+                position_embeddings = (
+                    col_based_embeddings
+                    if grid_thw is not None and window_attn_type == 1
+                    else row_based_embeddings
+                )
+                hidden_states = block(
+                    hidden_states,
+                    full_attn=full_attn,
+                    position_embeddings=position_embeddings,
+                )
             return hidden_states
 
         def __call__(self, pixel_values=None, grid_thw=None, **kwargs):
-            raise UnsupportedMediaModalityError(
-                "vision",
-                "MiMo-V2.5 vision patch embedding, attention blocks, and merger "
-                "modules are present, but grid-aware full media forward and cache "
-                "proof are not wired yet.",
-                family="mimo_v2",
-            )
+            if pixel_values is None or grid_thw is None:
+                raise UnsupportedMediaModalityError(
+                    "vision",
+                    "MiMo-V2.5 vision forward requires pixel_values and grid_thw.",
+                    family="mimo_v2",
+                )
+            x = self.embed_patches(pixel_values)
+            x = self.run_blocks(x, grid_thw=grid_thw)
+            return self.merge_patches(x)
 
         def sanitize(self, weights):
             return {
@@ -1523,7 +1646,39 @@ def _register_mimo_v2_mlx_vlm_runtime() -> None:
             )
             return mask[None, None, :, :]
 
-        def __call__(self, hidden_states, full_attn: bool = False):
+        def _rotate_half(self, x):
+            half = int(x.shape[-1]) // 2
+            first = x[..., :half]
+            second = x[..., half : half * 2]
+            rest = x[..., half * 2 :]
+            rotated = mx.concatenate([-second, first], axis=-1)
+            return mx.concatenate([rotated, rest], axis=-1) if rest.shape[-1] else rotated
+
+        def _apply_rotary(self, q, k, position_embeddings):
+            if position_embeddings is None:
+                return q, k
+            cos, sin = position_embeddings
+            rope_dim = min(int(cos.shape[-1]), int(q.shape[-1]))
+            cos = cos[:, :rope_dim][None, None, :, :]
+            sin = sin[:, :rope_dim][None, None, :, :]
+            q_rope = q[..., :rope_dim]
+            k_rope = k[..., :rope_dim]
+            q = mx.concatenate(
+                [q_rope * cos + self._rotate_half(q_rope) * sin, q[..., rope_dim:]],
+                axis=-1,
+            )
+            k = mx.concatenate(
+                [k_rope * cos + self._rotate_half(k_rope) * sin, k[..., rope_dim:]],
+                axis=-1,
+            )
+            return q, k
+
+        def __call__(
+            self,
+            hidden_states,
+            full_attn: bool = False,
+            position_embeddings=None,
+        ):
             hidden_states = mx.array(hidden_states)
             if hidden_states.ndim != 2 or int(hidden_states.shape[-1]) != self.dim:
                 raise ValueError(
@@ -1543,6 +1698,7 @@ def _register_mimo_v2_mlx_vlm_runtime() -> None:
             q = mx.transpose(q[None, :, :, :], (0, 2, 1, 3))
             k = mx.transpose(k[None, :, :, :], (0, 2, 1, 3))
             v = mx.transpose(v[None, :, :, :], (0, 2, 1, 3))
+            q, k = self._apply_rotary(q, k, position_embeddings)
             if self.num_kv_groups > 1:
                 k = mx.repeat(k, self.num_kv_groups, axis=1)
                 v = mx.repeat(v, self.num_kv_groups, axis=1)
@@ -1597,10 +1753,16 @@ def _register_mimo_v2_mlx_vlm_runtime() -> None:
                 hidden_act=hidden_act,
             )
 
-        def __call__(self, hidden_states, full_attn: bool = False):
+        def __call__(
+            self,
+            hidden_states,
+            full_attn: bool = False,
+            position_embeddings=None,
+        ):
             hidden_states = hidden_states + self.attn(
                 self.norm1(hidden_states),
                 full_attn=full_attn,
+                position_embeddings=position_embeddings,
             )
             return hidden_states + self.mlp(self.norm2(hidden_states))
 

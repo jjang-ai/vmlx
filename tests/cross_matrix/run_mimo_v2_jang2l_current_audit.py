@@ -25,7 +25,7 @@ from typing import Any
 DEFAULT_MODEL_PATH = Path("/Users/example/.mlxstudio/models/JANGQ-AI/MiMo-V2.5-JANGTQ_2")
 DEFAULT_MANIFEST = Path("build/current-mimo-jangtq2-local-manifest-20260607.tsv")
 DEFAULT_OUT = Path(
-    "build/current-mimo-v2-jang2l-current-audit-after-vision-attention-blocks-20260607.json"
+    "build/current-mimo-v2-jang2l-current-audit-after-vision-grid-forward-20260607.json"
 )
 
 STRUCTURAL_ARTIFACT = Path("build/current-mimo-jang2l-local-structural-verify-20260606.json")
@@ -946,9 +946,20 @@ def _mimo_media_runtime_evidence(
             "class MiMoVisionAttention",
             "class MiMoVisionBlock",
             "class MiMoVisionSwiGLUMLP",
-            "def run_blocks(self, hidden_states):",
+            "def run_blocks(self, hidden_states, grid_thw=None):",
             "mx.fast.scaled_dot_product_attention",
             "self.blocks = [",
+        )
+    )
+    vision_grid_forward_present = all(
+        marker in adapter_text
+        for marker in (
+            "def rot_pos_emb(self, grid_thw):",
+            "def get_window_index_1d(self, grid_thw, col: bool = True):",
+            "reverse_window_index_1d_col = mx.argsort(window_index_1d_col)",
+            "position_embeddings=position_embeddings",
+            "x = self.run_blocks(x, grid_thw=grid_thw)",
+            "return self.merge_patches(x)",
         )
     )
     media_weights_preserved = bool(visual_count > 0 and audio_count > 0)
@@ -1003,6 +1014,7 @@ def _mimo_media_runtime_evidence(
         "vision_patch_embed_module": bool(vision_patch_embed_present),
         "vision_merger_module": bool(vision_merger_present),
         "vision_attention_block_modules": bool(vision_attention_blocks_present),
+        "vision_grid_forward": bool(vision_grid_forward_present),
         "runtime_media_wired": False if runtime_gap else True,
         "missing_runtime_components": (
             [
@@ -1029,11 +1041,15 @@ def _mimo_media_runtime_evidence(
                         "vision qkv attention and MLP block modules",
                         vision_attention_blocks_present,
                     ),
+                    (
+                        "grid-aware rotary/window index reorder and end-to-end ViT forward",
+                        vision_grid_forward_present,
+                    ),
                 )
                 if not present
             ]
             + [
-                "grid-aware rotary/window index reorder and end-to-end ViT forward",
+                "model-level image/video request bridge to MiMo vision tower",
                 "audio tokenizer/feature extraction bridge",
                 "audio local transformer/projection forward",
                 "media-aware prefix/L2 cache proof",

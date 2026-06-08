@@ -54,9 +54,15 @@ def test_mimo_current_audit_separates_clean_artifact_from_runtime_blockers(
                 "class MiMoVisionAttention",
                 "class MiMoVisionBlock",
                 "class MiMoVisionSwiGLUMLP",
-                "def run_blocks(self, hidden_states):",
+                "def run_blocks(self, hidden_states, grid_thw=None):",
                 "mx.fast.scaled_dot_product_attention",
                 "self.blocks = [",
+                "def rot_pos_emb(self, grid_thw):",
+                "def get_window_index_1d(self, grid_thw, col: bool = True):",
+                "reverse_window_index_1d_col = mx.argsort(window_index_1d_col)",
+                "position_embeddings=position_embeddings",
+                "x = self.run_blocks(x, grid_thw=grid_thw)",
+                "return self.merge_patches(x)",
                 "MiMo-V2.5 JANG_2L vision input is not wired",
                 'key.startswith("model.mtp.")',
             ]
@@ -356,6 +362,7 @@ def test_mimo_current_audit_separates_clean_artifact_from_runtime_blockers(
         result["diagnostics"]["mimo_media_runtime"]["vision_attention_block_modules"]
         is True
     )
+    assert result["diagnostics"]["mimo_media_runtime"]["vision_grid_forward"] is True
     assert (
         "VisionConfig parser"
         not in result["diagnostics"]["mimo_media_runtime"]["missing_runtime_components"]
@@ -390,6 +397,10 @@ def test_mimo_current_audit_separates_clean_artifact_from_runtime_blockers(
     )
     assert (
         "grid-aware rotary/window index reorder and end-to-end ViT forward"
+        not in result["diagnostics"]["mimo_media_runtime"]["missing_runtime_components"]
+    )
+    assert (
+        "model-level image/video request bridge to MiMo vision tower"
         in result["diagnostics"]["mimo_media_runtime"]["missing_runtime_components"]
     )
     assert result["diagnostics"]["all_local_smoke"]["tool_protocol_pass"] is True

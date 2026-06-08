@@ -127,3 +127,39 @@ def test_mimo_v2_vision_attention_blocks_preserve_patch_hidden_shape(
     merged = vision.merge_patches(hidden)
     assert merged.shape == (1, 16)
     sys.modules.pop("mlx_vlm.models.mimo_v2", None)
+
+
+def test_mimo_v2_vision_forward_uses_grid_aware_window_reorder(
+    tmp_path,
+    monkeypatch,
+):
+    module = _register_fake_mimo_runtime(monkeypatch, tmp_path)
+    cfg = module.VisionConfig.from_dict(
+        {
+            "hidden_size": 8,
+            "out_hidden_size": 16,
+            "patch_size": 2,
+            "temporal_patch_size": 1,
+            "in_channels": 3,
+            "spatial_merge_size": 2,
+            "depth": 3,
+            "intermediate_size": 16,
+            "num_heads": 2,
+            "num_key_value_heads": 1,
+            "qk_channels": 4,
+            "visual_token_window_size": 2,
+            "vit_window_attn_types": [-1, 1, -1],
+            "fullatt_block_indexes": [0],
+        }
+    )
+    vision = module.VisionModel(cfg)
+
+    grid_thw = mx.array([[1, 2, 2]])
+    index = vision.get_window_index_1d(grid_thw, col=True)
+    assert index.tolist() == [0]
+    assert vision.rot_pos_emb(grid_thw).shape == (4, 2)
+
+    pixel_values = mx.ones((4, 3 * 1 * 2 * 2))
+    output = vision(pixel_values=pixel_values, grid_thw=grid_thw)
+    assert output.shape == (1, 16)
+    sys.modules.pop("mlx_vlm.models.mimo_v2", None)
