@@ -252,6 +252,21 @@ class TestToolChoiceSuppression:
         assert result[0].function["name"] == "search"
 
 
+    def test_specific_tool_choice_dict_counts_as_required_for_enforcement(self):
+        from vmlx_engine.server import _is_required_tool_choice
+
+        assert _is_required_tool_choice("required") is True
+        assert (
+            _is_required_tool_choice(
+                {"type": "function", "function": {"name": "record_fact"}}
+            )
+            is True
+        )
+        assert _is_required_tool_choice({"name": "record_fact"}) is True
+        assert _is_required_tool_choice("auto") is False
+        assert _is_required_tool_choice(None) is False
+
+
 # ─── Responses API tool_choice ───────────────────────────────────────────────
 
 

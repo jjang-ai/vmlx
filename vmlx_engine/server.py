@@ -2251,6 +2251,18 @@ def _filter_tools_for_specific_choice(
     return filtered
 
 
+def _is_required_tool_choice(tool_choice: Any) -> bool:
+    """Return True when the request requires at least one tool call."""
+    if tool_choice == "required":
+        return True
+    if not isinstance(tool_choice, dict):
+        return False
+    function = tool_choice.get("function")
+    target_name = function.get("name") if isinstance(function, dict) else None
+    target_name = target_name or tool_choice.get("name")
+    return bool(tool_choice.get("type") in {"required", "function"} or target_name)
+
+
 def _drop_colliding_mcp_tools(
     mcp_tools: list[dict[str, Any]],
     request_tools: Any,
@@ -11145,7 +11157,7 @@ async def create_chat_completion(
             logger.warning(f"JSON validation failed: {error}")
 
     # Enforce tool_choice="required": model MUST produce at least one tool call
-    if _tool_choice == "required" and not tool_calls:
+    if _is_required_tool_choice(_tool_choice) and not tool_calls:
         tool_required_preview = (_cc_parse_text or content_for_parsing or "")
         tool_required_preview = tool_required_preview.replace("\n", "\\n")[:500]
         logger.warning(
@@ -12760,7 +12772,7 @@ async def create_response(
 
     # Enforce tool_choice="required": model MUST produce at least one tool call
     _resp_tool_choice = getattr(request, "tool_choice", None)
-    if _resp_tool_choice == "required" and not tool_calls:
+    if _is_required_tool_choice(_resp_tool_choice) and not tool_calls:
         logger.warning(
             f"tool_choice='required' but model produced no tool calls. "
             f"Returning error to client."
@@ -13981,7 +13993,7 @@ async def stream_chat_completion(
         yield f"data: {_dump_sse_json(empty_chunk)}\n\n"
 
     # Enforce tool_choice="required" in streaming: emit error SSE if no tool calls
-    if getattr(request, "tool_choice", None) == "required" and not tool_calls_emitted:
+    if _is_required_tool_choice(getattr(request, "tool_choice", None)) and not tool_calls_emitted:
         # tool_calls_emitted is set True only when tool calls were actually parsed and yielded.
         # tool_call_buffering can be True even on false-positive marker detection with no actual calls.
         logger.warning(
@@ -15137,7 +15149,7 @@ async def stream_responses_api(
 
     # Enforce tool_choice="required" in Responses API streaming
     _resp_stream_tc = getattr(request, "tool_choice", None)
-    if _resp_stream_tc == "required" and not tool_calls:
+    if _is_required_tool_choice(_resp_stream_tc) and not tool_calls:
         logger.warning(
             f"Stream {response_id}: tool_choice='required' but no tool calls produced"
         )
