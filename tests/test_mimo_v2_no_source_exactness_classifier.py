@@ -476,6 +476,70 @@ def test_mimo_no_source_classifier_consumes_compact_hyphen_distribution_probe():
     )
 
 
+def test_mimo_no_source_classifier_consumes_conservative_no_cb_no_prefix_probe():
+    audit = {
+        "component_ok": {
+            "api_cache_responses_contract": True,
+            "tool_protocol": True,
+            "exactness_cache_kv_quant_excluded": True,
+            "decode_speed_target": True,
+            "source_vs_quant_first_divergence": False,
+            "long_prompt_coherence": True,
+            "cb_system_prompt_working_set_pressure": True,
+            "mimo_media_wired": True,
+        }
+    }
+    smoke = {
+        "results": [
+            {
+                "failures": [
+                    {
+                        "label": "tool_required",
+                        "reason": "expected_tool_argument_missing",
+                        "actual": {"value": "blue cat"},
+                    }
+                ],
+                "server_log_tail": [
+                    "Resolved sampling kwargs {'temperature': 0.0, 'top_p': 1.0}"
+                ],
+            }
+        ]
+    }
+    conservative = {
+        "status": "fail",
+        "launch": "no-continuous-batching + disable-prefix-cache + is-mllm",
+        "failures": [
+            {"label": "json_blue_cat", "content": '{"value":"blue"}'},
+            {"label": "tool_b7_cat_09", "tool_calls": []},
+        ],
+    }
+
+    artifact = build_classification(
+        audit,
+        smoke,
+        jangtq2_conservative_no_cb_no_prefix=conservative,
+    )
+
+    assert artifact["status"] == "open"
+    assert artifact["jangtq2_conservative_no_cb_no_prefix_summary"] == {
+        "exists": True,
+        "status": "fail",
+        "literal_exactness_failed": True,
+        "failed_labels": ["json_blue_cat", "tool_b7_cat_09"],
+        "continuous_batching_disabled": True,
+        "prefix_cache_disabled": True,
+        "launch": "no-continuous-batching + disable-prefix-cache + is-mllm",
+    }
+    assert artifact["excluded_surfaces"]["continuous_batching_primary_cause"] is True
+    assert artifact["excluded_surfaces"]["prefix_cache_primary_cause"] is True
+    assert (
+        artifact["unresolved_surfaces"][
+            "jangtq2_conservative_no_cb_no_prefix_literal_mutation"
+        ]
+        is True
+    )
+
+
 def test_mimo_no_source_classifier_tracks_jang2l_json_sentinel_separately():
     audit = {
         "component_ok": {

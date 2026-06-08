@@ -22,7 +22,7 @@ DEFAULT_SMOKE = Path(
     "build/current-all-local-model-smoke-mimo-v25-jangtq2-media-l2-after-cache-cap-20260608/summary.json"
 )
 DEFAULT_OUT = Path(
-    "build/current-mimo-v2-no-source-exactness-classifier-after-live-exactness-pointer-20260608.json"
+    "build/current-mimo-v2-no-source-exactness-classifier-after-conservative-no-cb-prefix-proof-20260608.json"
 )
 DEFAULT_JANGTQ2_EXACTNESS = Path(
     "build/current-mimo-v25-jangtq2-exactness-isolation-20260608/result.json"
@@ -59,6 +59,9 @@ DEFAULT_JANGTQ2_HYPHEN_DISTRIBUTION = Path(
 )
 DEFAULT_JANGTQ2_CURRENT_ALL_LOCAL = Path(
     "build/current-all-local-model-smoke-mimo-v25-jangtq2-media-l2-after-cache-cap-20260608/JANGQ_MiMo-V2.5-JANGTQ_2/result.json"
+)
+DEFAULT_JANGTQ2_CONSERVATIVE_NO_CB_NO_PREFIX = Path(
+    "build/current-mimo-v25-jangtq2-conservative-no-cb-no-prefix-exactness-20260608/summary.json"
 )
 
 EXACTNESS_REASONS = {
@@ -697,6 +700,40 @@ def _current_all_local_summary(artifact: dict[str, Any] | None) -> dict[str, Any
     }
 
 
+def _conservative_no_cb_no_prefix_summary(
+    artifact: dict[str, Any] | None,
+) -> dict[str, Any]:
+    if not isinstance(artifact, dict):
+        return {
+            "exists": False,
+            "status": None,
+            "literal_exactness_failed": None,
+            "failed_labels": [],
+            "continuous_batching_disabled": None,
+            "prefix_cache_disabled": None,
+            "launch": None,
+        }
+
+    failures = artifact.get("failures")
+    failures = failures if isinstance(failures, list) else []
+    failed_labels = [
+        str(failure.get("label"))
+        for failure in failures
+        if isinstance(failure, dict) and failure.get("label")
+    ]
+    launch = str(artifact.get("launch") or "")
+    return {
+        "exists": True,
+        "status": artifact.get("status"),
+        "literal_exactness_failed": artifact.get("status") == "fail"
+        and bool(failed_labels),
+        "failed_labels": failed_labels,
+        "continuous_batching_disabled": "no-continuous-batching" in launch,
+        "prefix_cache_disabled": "disable-prefix-cache" in launch,
+        "launch": launch,
+    }
+
+
 def build_classification(
     audit: dict[str, Any],
     smoke: dict[str, Any],
@@ -713,6 +750,7 @@ def build_classification(
     jangtq2_template_diagnostic: dict[str, Any] | None = None,
     jangtq2_hyphen_distribution: dict[str, Any] | None = None,
     jangtq2_current_all_local: dict[str, Any] | None = None,
+    jangtq2_conservative_no_cb_no_prefix: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     component_ok = audit.get("component_ok") if isinstance(audit.get("component_ok"), dict) else {}
     failures = _failures(smoke)
@@ -745,6 +783,9 @@ def build_classification(
     jangtq2_current_all_local_summary = _current_all_local_summary(
         jangtq2_current_all_local
     )
+    conservative_no_cb_no_prefix_summary = _conservative_no_cb_no_prefix_summary(
+        jangtq2_conservative_no_cb_no_prefix
+    )
 
     excluded_surfaces = {
         "prompt_template_literal_corruption": (
@@ -760,6 +801,14 @@ def build_classification(
         "parser_argument_rewrite": parser_structure_valid,
         "prefix_paged_l2_or_kv_quant_primary_cause": cache_kv_l2_excluded,
         "hidden_stochastic_sampling_primary_cause": deterministic_sampling_seen,
+        "continuous_batching_primary_cause": (
+            conservative_no_cb_no_prefix_summary["continuous_batching_disabled"] is True
+            and conservative_no_cb_no_prefix_summary["literal_exactness_failed"] is True
+        ),
+        "prefix_cache_primary_cause": (
+            conservative_no_cb_no_prefix_summary["prefix_cache_disabled"] is True
+            and conservative_no_cb_no_prefix_summary["literal_exactness_failed"] is True
+        ),
         "api_sampler_non_top1_selection": (
             jangtq2_logprob_summary["wrong_literal_outputs_are_top1"] is True
         ),
@@ -849,6 +898,10 @@ def build_classification(
             jangtq2_current_all_local_summary["exists"] is True
             and bool(jangtq2_current_all_local_summary["literal_mutation_labels"])
         ),
+        "jangtq2_conservative_no_cb_no_prefix_literal_mutation": (
+            conservative_no_cb_no_prefix_summary["exists"] is True
+            and conservative_no_cb_no_prefix_summary["literal_exactness_failed"] is True
+        ),
     }
 
     release_ready = False
@@ -926,6 +979,7 @@ def build_classification(
             "either rerun source-vs-quant when RAM is authorized or provide a stronger artifact-only logits/quantization diagnosis"
         )
     required_next_evidence.extend([
+        "conservative live JANGTQ_2 proof with continuous batching off and prefix cache disabled still fails literal exactness; do not keep chasing cache/CB as the primary exactness cause without contrary logits evidence",
         "if artifact/quantization is confirmed, rebuild or reupload MiMo with a corrected quantization contract",
         "if runtime decode is confirmed, fix the decode/kernel path and rerun the exact tool/JSON sentinel rows",
     ])
@@ -978,6 +1032,9 @@ def build_classification(
         "jangtq2_logprob_diagnostic_artifact": str(DEFAULT_JANGTQ2_LOGPROB_DIAGNOSTIC),
         "jangtq2_template_diagnostic_artifact": str(DEFAULT_JANGTQ2_TEMPLATE_DIAGNOSTIC),
         "jangtq2_current_all_local_artifact": str(DEFAULT_JANGTQ2_CURRENT_ALL_LOCAL),
+        "jangtq2_conservative_no_cb_no_prefix_artifact": str(
+            DEFAULT_JANGTQ2_CONSERVATIVE_NO_CB_NO_PREFIX
+        ),
         "no_source_exactness": no_source_exactness,
         "literal_variant_summary": literal_variant_summary,
         "jang2l_literal_variant_summary": jang2l_literal_variant_summary,
@@ -986,6 +1043,9 @@ def build_classification(
         "jangtq2_template_summary": jangtq2_template_summary,
         "jangtq2_hyphen_distribution_summary": jangtq2_hyphen_summary,
         "jangtq2_current_all_local_summary": jangtq2_current_all_local_summary,
+        "jangtq2_conservative_no_cb_no_prefix_summary": (
+            conservative_no_cb_no_prefix_summary
+        ),
         "no_source_runtime_diagnostics": no_source_runtime_diagnostics,
         "exactness_failures": exactness_failures,
         "excluded_surfaces": excluded_surfaces,
@@ -1050,6 +1110,11 @@ def main() -> int:
         type=Path,
         default=DEFAULT_JANGTQ2_CURRENT_ALL_LOCAL,
     )
+    parser.add_argument(
+        "--jangtq2-conservative-no-cb-no-prefix",
+        type=Path,
+        default=DEFAULT_JANGTQ2_CONSERVATIVE_NO_CB_NO_PREFIX,
+    )
     parser.add_argument("--out", type=Path, default=DEFAULT_OUT)
     args = parser.parse_args()
 
@@ -1105,6 +1170,11 @@ def main() -> int:
         if args.jangtq2_current_all_local.exists()
         else None
     )
+    jangtq2_conservative_no_cb_no_prefix = (
+        _load(args.jangtq2_conservative_no_cb_no_prefix)
+        if args.jangtq2_conservative_no_cb_no_prefix.exists()
+        else None
+    )
     artifact = build_classification(
         _load(args.audit),
         _load(args.smoke),
@@ -1120,6 +1190,9 @@ def main() -> int:
         jangtq2_template_diagnostic=jangtq2_template_diagnostic,
         jangtq2_hyphen_distribution=jangtq2_hyphen_distribution,
         jangtq2_current_all_local=jangtq2_current_all_local,
+        jangtq2_conservative_no_cb_no_prefix=(
+            jangtq2_conservative_no_cb_no_prefix
+        ),
     )
     artifact["audit_artifact"] = str(args.audit)
     artifact["smoke_artifact"] = str(args.smoke)
@@ -1144,6 +1217,9 @@ def main() -> int:
     )
     artifact["jangtq2_current_all_local_artifact"] = str(
         args.jangtq2_current_all_local
+    )
+    artifact["jangtq2_conservative_no_cb_no_prefix_artifact"] = str(
+        args.jangtq2_conservative_no_cb_no_prefix
     )
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(json.dumps(artifact, indent=2, sort_keys=True) + "\n", encoding="utf-8")

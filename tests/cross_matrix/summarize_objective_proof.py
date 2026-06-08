@@ -390,7 +390,7 @@ MIMO_V2_JANG2L_NOMEDIA_TOOL_CACHE_REL = (
     "build/current-all-local-model-smoke-mimo-v25-jangtq2-media-l2-after-cache-cap-20260608/summary.json"
 )
 MIMO_V2_NO_SOURCE_EXACTNESS_CLASSIFIER_REL = (
-    "build/current-mimo-v2-no-source-exactness-classifier-after-live-exactness-pointer-20260608.json"
+    "build/current-mimo-v2-no-source-exactness-classifier-after-conservative-no-cb-prefix-proof-20260608.json"
 )
 ALL_LOCAL_MODEL_SMOKE_DSV4_JANGTQ_K_REL = (
     "build/current-all-local-model-smoke-dsv4-jangtq-k-tools-cache-20260606/summary.json"
