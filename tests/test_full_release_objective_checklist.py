@@ -813,6 +813,10 @@ def test_full_release_objective_checklist_keeps_open_rows_visible(tmp_path):
         {
             "status": "open",
             "classification": "jangtq2_compact_hyphen_decode_quality_open_not_cache_parser_template_tokenizer",
+            "model_upload_action_required": True,
+            "model_upload_action_reasons": [
+                "JANGTQ_2 served artifact emits wrong compact-hyphen/sentinel literals as greedy top-1; rebuild/reupload with corrected quantization unless a runtime decode bug is proven"
+            ],
             "source_vs_quant_load_performed": False,
             "source_vs_quant_load_skipped_reason": "user_disallowed_source_vs_quant_due_ram",
             "excluded_surfaces": {
@@ -865,6 +869,17 @@ def test_full_release_objective_checklist_keeps_open_rows_visible(tmp_path):
     ]["text"] == "ACK"
     assert mimo_artifact_rows[0]["detail"]["classifier"]["classification"] == (
         "jangtq2_compact_hyphen_decode_quality_open_not_cache_parser_template_tokenizer"
+    )
+    assert (
+        mimo_artifact_rows[0]["detail"]["classifier"]["model_upload_action_required"]
+        is True
+    )
+    assert any(
+        "JANGTQ_2 served artifact emits wrong compact-hyphen/sentinel literals"
+        in reason
+        for reason in mimo_artifact_rows[0]["detail"]["classifier"][
+            "model_upload_action_reasons"
+        ]
     )
     mimo_exactness_rows = [
         row

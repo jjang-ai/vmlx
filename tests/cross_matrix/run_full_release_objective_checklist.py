@@ -301,6 +301,12 @@ def _mimo_checks(data: dict[str, Any], classifier: dict[str, Any]) -> list[dict[
             "status": classifier.get("status"),
             "classification": classifier.get("classification"),
             "secondary_classification": classifier.get("secondary_classification"),
+            "model_upload_action_required": classifier.get(
+                "model_upload_action_required"
+            ),
+            "model_upload_action_reasons": classifier.get(
+                "model_upload_action_reasons"
+            ),
             "unresolved_surfaces": classifier_unresolved,
             "required_next_evidence": classifier.get("required_next_evidence"),
         },

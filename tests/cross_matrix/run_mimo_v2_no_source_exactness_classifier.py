@@ -942,11 +942,23 @@ def build_classification(
             "JANG_2L remains blocked on JSON sentinel exactness: exact semantic values must match after runtime thinking-off forwarding; do not repair semantic values or prompt-fold a fake pass"
         )
 
+    model_upload_action_reasons: list[str] = []
+    if artifact_only_logit_diagnosis_present:
+        model_upload_action_reasons.append(
+            "JANGTQ_2 served artifact emits wrong compact-hyphen/sentinel literals as greedy top-1; rebuild/reupload with corrected quantization unless a runtime decode bug is proven"
+        )
+    if unresolved_surfaces["jang2l_json_sentinel_exactness"]:
+        model_upload_action_reasons.append(
+            "JANG_2L served artifact/runtime still fails JSON sentinel exactness; provide corrected artifact or runtime decode proof that preserves value and count"
+        )
+
     return {
         "status": status,
         "release_ready": release_ready,
         "classification": classification,
         "secondary_classification": secondary_classification,
+        "model_upload_action_required": bool(model_upload_action_reasons),
+        "model_upload_action_reasons": model_upload_action_reasons,
         "source_vs_quant_load_performed": False,
         "source_vs_quant_load_skipped_reason": "user_disallowed_source_vs_quant_due_ram",
         "audit_artifact": str(DEFAULT_AUDIT),

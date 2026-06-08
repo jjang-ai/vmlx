@@ -159,6 +159,12 @@ def test_mimo_no_source_classifier_records_greedy_top1_literal_drift():
     assert artifact["excluded_surfaces"]["hidden_stochastic_sampling_primary_cause"] is True
     assert artifact["excluded_surfaces"]["api_sampler_non_top1_selection"] is True
     assert artifact["jangtq2_logprob_summary"]["wrong_literal_outputs_are_top1"] is True
+    assert artifact["model_upload_action_required"] is True
+    assert any(
+        "JANGTQ_2 served artifact emits wrong compact-hyphen/sentinel literals"
+        in item
+        for item in artifact["model_upload_action_reasons"]
+    )
     assert artifact["jangtq2_logprob_summary"]["failed_literal_cases"][0]["tokens"] == [
         "blue",
         "<|im_end|>",
