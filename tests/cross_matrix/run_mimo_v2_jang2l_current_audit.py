@@ -25,7 +25,7 @@ from typing import Any
 DEFAULT_MODEL_PATH = Path("/Users/example/.mlxstudio/models/JANGQ-AI/MiMo-V2.5-JANGTQ_2")
 DEFAULT_MANIFEST = Path("build/current-mimo-jangtq2-local-manifest-20260607.tsv")
 DEFAULT_OUT = Path(
-    "build/current-mimo-v2-jang2l-current-audit-after-audio-code-local-transformer-20260607.json"
+    "build/current-mimo-v2-jang2l-current-audit-after-audio-media-cache-20260607.json"
 )
 
 STRUCTURAL_ARTIFACT = Path("build/current-mimo-jang2l-local-structural-verify-20260606.json")
@@ -855,6 +855,18 @@ def _mimo_media_runtime_evidence(
         if runtime_adapter.exists()
         else ""
     )
+    batch_generator = root / "vmlx_engine/mllm_batch_generator.py"
+    batch_generator_text = (
+        batch_generator.read_text(encoding="utf-8", errors="replace")
+        if batch_generator.exists()
+        else ""
+    )
+    zaya_runtime_tests = root / "tests/test_zaya_runtime.py"
+    zaya_runtime_test_text = (
+        zaya_runtime_tests.read_text(encoding="utf-8", errors="replace")
+        if zaya_runtime_tests.exists()
+        else ""
+    )
     runtime_explicitly_unwired = all(
         marker in adapter_text
         for marker in (
@@ -1002,6 +1014,23 @@ def _mimo_media_runtime_evidence(
             "MiMo-V2 load assigned %d preserved media tensors",
         )
     )
+    media_aware_prefix_l2_cache_present = all(
+        marker in batch_generator_text
+        for marker in (
+            "def _mllm_media_cache_extra_keys(request: Any)",
+            "audio_codes",
+            "audio_embeds",
+            "audio_features",
+            "cache_extra_keys=_cache_extra_keys",
+            "cache_extra_keys=_ssm_extra_keys",
+        )
+    ) and all(
+        marker in zaya_runtime_test_text
+        for marker in (
+            "test_mllm_media_cache_key_includes_audio_codes",
+            "test_mllm_audio_payloads_are_media_cache_context",
+        )
+    )
     media_weights_preserved = bool(visual_count > 0 and audio_count > 0)
     metadata_overadvertises = bool(
         config_modalities != ["text"]
@@ -1059,6 +1088,7 @@ def _mimo_media_runtime_evidence(
         "audio_projection_bridge": bool(audio_projection_bridge_present),
         "audio_code_local_transformer": bool(audio_code_local_transformer_present),
         "media_weight_assignment": bool(media_weight_assignment_present),
+        "media_aware_prefix_l2_cache": bool(media_aware_prefix_l2_cache_present),
         "runtime_media_wired": False if runtime_gap else True,
         "missing_runtime_components": (
             [
@@ -1105,12 +1135,15 @@ def _mimo_media_runtime_evidence(
                         "media weight assignment to runtime modules",
                         media_weight_assignment_present,
                     ),
+                    (
+                        "media-aware prefix/L2 cache proof",
+                        media_aware_prefix_l2_cache_present,
+                    ),
                 )
                 if not present
             ]
             + [
                 "audio tokenizer/feature extraction bridge",
-                "media-aware prefix/L2 cache proof",
             ]
             if runtime_gap
             else []

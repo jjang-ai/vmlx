@@ -88,6 +88,27 @@ def test_mimo_current_audit_separates_clean_artifact_from_runtime_blockers(
             ]
         )
     )
+    (tmp_path / "vmlx_engine/mllm_batch_generator.py").write_text(
+        "\n".join(
+            [
+                "def _mllm_media_cache_extra_keys(request: Any)",
+                "audio_codes",
+                "audio_embeds",
+                "audio_features",
+                "cache_extra_keys=_cache_extra_keys",
+                "cache_extra_keys=_ssm_extra_keys",
+            ]
+        )
+    )
+    (tmp_path / "tests").mkdir(parents=True)
+    (tmp_path / "tests/test_zaya_runtime.py").write_text(
+        "\n".join(
+            [
+                "test_mllm_media_cache_key_includes_audio_codes",
+                "test_mllm_audio_payloads_are_media_cache_context",
+            ]
+        )
+    )
     manifest = tmp_path / "build" / "current-mimo-http-tb5-manifest-20260606.tsv"
     manifest.parent.mkdir(parents=True)
     manifest.write_text(
@@ -391,6 +412,10 @@ def test_mimo_current_audit_separates_clean_artifact_from_runtime_blockers(
     )
     assert result["diagnostics"]["mimo_media_runtime"]["media_weight_assignment"] is True
     assert (
+        result["diagnostics"]["mimo_media_runtime"]["media_aware_prefix_l2_cache"]
+        is True
+    )
+    assert (
         "VisionConfig parser"
         not in result["diagnostics"]["mimo_media_runtime"]["missing_runtime_components"]
     )
@@ -444,6 +469,10 @@ def test_mimo_current_audit_separates_clean_artifact_from_runtime_blockers(
     )
     assert (
         "media weight assignment to runtime modules"
+        not in result["diagnostics"]["mimo_media_runtime"]["missing_runtime_components"]
+    )
+    assert (
+        "media-aware prefix/L2 cache proof"
         not in result["diagnostics"]["mimo_media_runtime"]["missing_runtime_components"]
     )
     assert result["diagnostics"]["all_local_smoke"]["tool_protocol_pass"] is True

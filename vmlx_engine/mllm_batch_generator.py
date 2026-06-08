@@ -185,6 +185,11 @@ def _mllm_media_cache_extra_keys(request: Any) -> Optional[Dict[str, str]]:
     has_media = bool(
         getattr(request, "images", None)
         or getattr(request, "videos", None)
+        or getattr(request, "audio_codes", None) is not None
+        or getattr(request, "audio_embeds", None) is not None
+        or getattr(request, "audio_features", None) is not None
+        or getattr(request, "audio", None)
+        or getattr(request, "audios", None)
         or getattr(request, "pixel_values", None) is not None
         or getattr(request, "image_grid_thw", None) is not None
     )
@@ -221,7 +226,14 @@ def _mllm_media_cache_extra_keys(request: Any) -> Optional[Dict[str, str]]:
     if getattr(request, "videos", None):
         _hash_text("video_fps", getattr(request, "video_fps", None))
         _hash_text("video_max_frames", getattr(request, "video_max_frames", None))
+    for source in getattr(request, "audios", None) or []:
+        _hash_text("audio", source)
+    if getattr(request, "audio", None):
+        _hash_text("audio", getattr(request, "audio", None))
     _hash_array("image_grid_thw", getattr(request, "image_grid_thw", None))
+    _hash_array("audio_codes", getattr(request, "audio_codes", None))
+    _hash_array("audio_embeds", getattr(request, "audio_embeds", None))
+    _hash_array("audio_features", getattr(request, "audio_features", None))
     if not media_sources:
         # Fallback for callers that hand us preprocessed pixel tensors without
         # source URLs/paths. Do not hash attention_mask: it changes with text
@@ -2363,6 +2375,9 @@ class MLLMBatchRequest:
     pixel_values: Optional[mx.array] = None
     attention_mask: Optional[mx.array] = None
     image_grid_thw: Optional[mx.array] = None
+    audio_codes: Optional[mx.array] = None
+    audio_embeds: Optional[mx.array] = None
+    audio_features: Optional[mx.array] = None
     extra_kwargs: Dict[str, Any] = field(default_factory=dict)
 
     # Generation state
@@ -3978,6 +3993,14 @@ class MLLMBatchGenerator:
         if getattr(request, "images", None) or getattr(request, "videos", None):
             return True
         if getattr(request, "pixel_values", None) is not None:
+            return True
+        if getattr(request, "audio_codes", None) is not None:
+            return True
+        if getattr(request, "audio_embeds", None) is not None:
+            return True
+        if getattr(request, "audio_features", None) is not None:
+            return True
+        if getattr(request, "audio", None) or getattr(request, "audios", None):
             return True
         if token_ids is None and getattr(request, "input_ids", None) is not None:
             try:

@@ -2091,6 +2091,53 @@ def test_mllm_media_cache_key_includes_video_frame_settings():
     )
 
 
+def test_mllm_media_cache_key_includes_audio_codes():
+    from vmlx_engine.mllm_batch_generator import _mllm_media_cache_extra_keys
+
+    audio_a = SimpleNamespace(
+        images=None,
+        videos=None,
+        image_grid_thw=None,
+        pixel_values=None,
+        audio_codes=mx.array([[1, 2], [3, 4]], dtype=mx.int32),
+    )
+    audio_b = SimpleNamespace(
+        images=None,
+        videos=None,
+        image_grid_thw=None,
+        pixel_values=None,
+        audio_codes=mx.array([[1, 2], [3, 5]], dtype=mx.int32),
+    )
+    no_audio = SimpleNamespace(
+        images=None,
+        videos=None,
+        image_grid_thw=None,
+        pixel_values=None,
+    )
+
+    assert _mllm_media_cache_extra_keys(audio_a) is not None
+    assert _mllm_media_cache_extra_keys(audio_a) != _mllm_media_cache_extra_keys(audio_b)
+    assert _mllm_media_cache_extra_keys(no_audio) is None
+
+
+def test_mllm_audio_payloads_are_media_cache_context():
+    from vmlx_engine.mllm_batch_generator import MLLMBatchGenerator
+
+    generator = MLLMBatchGenerator.__new__(MLLMBatchGenerator)
+    generator.model = SimpleNamespace(config=SimpleNamespace(audio_token_id=151669))
+    generator.language_model = SimpleNamespace(config=None)
+
+    assert generator._request_has_media_cache_context(
+        SimpleNamespace(audio_codes=mx.array([[1, 2]], dtype=mx.int32))
+    )
+    assert generator._request_has_media_cache_context(
+        SimpleNamespace(audio_embeds=mx.zeros((1, 16)))
+    )
+    assert generator._request_has_media_cache_context(
+        SimpleNamespace(input_ids=mx.array([[1, 151669, 2]]))
+    )
+
+
 def test_mllm_paged_fetch_uses_request_cache_extra_keys_without_stale_name():
     """Regression for live ZAYA-VL text rows warning on undefined side-key name."""
 
