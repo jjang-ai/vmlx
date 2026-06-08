@@ -680,6 +680,36 @@ class TestBatchedEngineVideoTemplate:
 class TestServerSamplingResolution:
     """Tests for server-side sampling parameter resolution."""
 
+    def test_family_fallback_prefers_loaded_model_path_over_served_alias(
+        self, monkeypatch, tmp_path
+    ):
+        import vmlx_engine.server as server
+
+        (tmp_path / "config.json").write_text(
+            json.dumps({"model_type": "qwen3_5_moe"})
+        )
+
+        lookup_calls = []
+
+        class _Registry:
+            def lookup(self, key):
+                lookup_calls.append(key)
+                if key == str(tmp_path):
+                    return SimpleNamespace(family_name="qwen3_5_moe")
+                return SimpleNamespace(family_name="unknown")
+
+        monkeypatch.setattr(server, "_model_path", str(tmp_path))
+        monkeypatch.setattr(server, "_FAMILY_FALLBACK_DEFAULTS", {"unused": (0.1, 0.2, 1.1)})
+        monkeypatch.setattr(
+            "vmlx_engine.model_config_registry.get_model_config_registry",
+            lambda: _Registry(),
+        )
+
+        assert server._family_fallback_for("served-alias") == (None, None, None)
+        assert lookup_calls
+        assert lookup_calls[0] == str(tmp_path)
+        assert "served-alias" not in lookup_calls
+
     def test_gemma4_video_capability_requires_video_processor(self, monkeypatch):
         import vmlx_engine.server as server
 

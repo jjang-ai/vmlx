@@ -627,10 +627,10 @@ def _family_fallback_for(model_name: str = "") -> tuple[float | None, float | No
             return configured
 
     candidates: list[str] = []
-    if model_name:
-        candidates.append(model_name)
     if _model_path:
         candidates.append(_model_path)
+    if model_name and model_name != _model_path:
+        candidates.append(model_name)
     if not candidates:
         return (None, None, None)
     try:
