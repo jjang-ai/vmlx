@@ -1209,6 +1209,32 @@ def test_build_probe_payloads_adds_mimo_literal_sentinel_probes():
     assert "blue-cat" in by_label["tool_required"]["payload"]["messages"][0]["content"]
 
 
+def test_build_probe_payloads_does_not_clip_mimo_multiturn_recall_to_cache_cap():
+    mod = load_module()
+    row = {
+        "served_name": "mimo-v2.5-jang_2l",
+        "cache_family": "mimo_v2_hybrid_swa",
+        "model_type": "mimo_v2",
+        "supports_thinking": False,
+        "supports_tools": True,
+        "is_mllm": True,
+    }
+
+    probes = mod.build_probe_payloads(
+        row,
+        max_tokens=512,
+        include_reasoning=False,
+        include_media=False,
+        include_video=False,
+        include_tools=False,
+    )
+    by_label = {probe["label"]: probe for probe in probes}
+
+    assert by_label["text_cache_repeat_1"]["payload"]["max_tokens"] == 1
+    assert by_label["text_cache_repeat_2"]["payload"]["max_tokens"] == 1
+    assert by_label["text_multiturn_recall"]["payload"]["max_tokens"] >= 16
+
+
 def test_validate_probe_response_requires_expected_tool_call():
     mod = load_module()
 

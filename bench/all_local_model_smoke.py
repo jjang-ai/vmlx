@@ -782,6 +782,16 @@ def _cache_probe_max_tokens(row: dict[str, Any], max_tokens: int) -> int:
     return _lfm_strict_probe_max_tokens(row, max_tokens)
 
 
+def _recall_probe_max_tokens(row: dict[str, Any], max_tokens: int) -> int:
+    # Do not reuse the MiMo exact-ACK cache cap here. The recall row expects
+    # two remembered terms ("blue" and "cat"), so a 1-token cap creates a false
+    # model/runtime failure. Keep MiMo bounded to avoid turning this into a
+    # long-output discipline probe; that remains a separate gate.
+    if _is_mimo_v2_row(row):
+        return max(16, min(max_tokens, 64))
+    return _lfm_strict_probe_max_tokens(row, max_tokens)
+
+
 def _required_tool_probe_max_tokens(row: dict[str, Any], max_tokens: int) -> int:
     # MiniMax K's native tool template can need >96 decoded tokens to emit a
     # complete <minimax:tool_call><invoke>...</invoke></minimax:tool_call>.
@@ -903,6 +913,7 @@ def build_probe_payloads(
     cache_prompt = _cache_probe_prompt(row)
     cache_expected = _cache_probe_expected(row)
     strict_max_tokens = _cache_probe_max_tokens(row, max_tokens)
+    recall_max_tokens = _recall_probe_max_tokens(row, max_tokens)
     probes: list[dict[str, Any]] = [
         {
             "label": "text_cache_repeat_1",
@@ -931,7 +942,7 @@ def build_probe_payloads(
                     },
                 ],
                 "temperature": 0,
-                "max_tokens": strict_max_tokens,
+                "max_tokens": recall_max_tokens,
                 "stream": False,
                 "enable_thinking": False,
             },

@@ -795,7 +795,7 @@ def test_mimo_no_source_classifier_reads_jang2l_all_local_summary_json_sentinel(
         "mimo_structured_json_sentinel"
     ]
     assert artifact["jang2l_json_sentinel_artifact"] == (
-        "build/current-all-local-model-smoke-mimo-v25-jang2l-media-l2-runtime-modalities-20260608/summary.json"
+        "build/current-all-local-model-smoke-mimo-v25-jang2l-after-recall-cap-and-text-oom-guard-20260608/summary.json"
     )
 
 

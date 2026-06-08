@@ -1189,7 +1189,7 @@ class TestIssueGuards:
         assert decision.max_prompt_tokens == 192
         assert "generation budget is 96" in decision.detail
 
-    def test_mimo_tight_memory_text_prefill_guard_allows_tool_schema_budget(self):
+    def test_mimo_tight_memory_text_prefill_guard_rejects_tool_schema_crash_shape(self):
         from vmlx_engine.mllm_batch_generator import _mimo_tight_memory_text_prefill_budget
 
         gib = 1024**3
@@ -1199,15 +1199,18 @@ class TestIssueGuards:
             tight_memory_prefill_drain=True,
             seq_len=324,
             generation_tokens=96,
-            active_memory_bytes=int(106.0 * gib),
+            active_memory_bytes=int(106.3 * gib),
             max_working_set_bytes=int(107.5 * gib),
-            reject_tokens=512,
-            max_total_tokens=768,
+            reject_tokens=256,
+            max_total_tokens=384,
             min_free_bytes=2 * gib,
             guard_enabled=True,
         )
 
-        assert decision.should_reject is False
+        assert decision.should_reject is True
+        assert decision.prompt_tokens == 420
+        assert decision.max_prompt_tokens == 384
+        assert "hard-abort Metal" in decision.detail
 
     def test_vlm_image_prefill_budget_error_logs_without_internal_traceback(self):
         import inspect

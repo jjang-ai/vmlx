@@ -16,13 +16,13 @@ from typing import Any
 
 
 DEFAULT_AUDIT = Path(
-    "build/current-mimo-v2-jang2l-current-audit-after-jang2l-runtime-modalities-proof-20260608.json"
+    "build/current-mimo-v2-jang2l-current-audit-after-recall-cap-and-text-oom-guard-20260608.json"
 )
 DEFAULT_SMOKE = Path(
     "build/current-all-local-model-smoke-mimo-v25-jangtq2-media-l2-after-cache-cap-20260608/summary.json"
 )
 DEFAULT_OUT = Path(
-    "build/current-mimo-v2-no-source-exactness-classifier-after-jang2l-runtime-modalities-proof-20260608.json"
+    "build/current-mimo-v2-no-source-exactness-classifier-after-jang2l-recall-cap-and-text-oom-guard-20260608.json"
 )
 DEFAULT_JANGTQ2_EXACTNESS = Path(
     "build/current-mimo-v25-jangtq2-exactness-isolation-20260608/result.json"
@@ -46,7 +46,7 @@ DEFAULT_JANG2L_LITERAL_VARIANTS = Path(
     "build/current-mimo-v25-jang2l-exactness-variant-probe-live-20260608/result.json"
 )
 DEFAULT_JANG2L_JSON_SENTINEL_ISOLATION = Path(
-    "build/current-all-local-model-smoke-mimo-v25-jang2l-media-l2-runtime-modalities-20260608/summary.json"
+    "build/current-all-local-model-smoke-mimo-v25-jang2l-after-recall-cap-and-text-oom-guard-20260608/summary.json"
 )
 DEFAULT_JANGTQ2_LOGPROB_DIAGNOSTIC = Path(
     "build/current-mimo-v25-jangtq2-logprob-literal-diagnostic-20260608.json"

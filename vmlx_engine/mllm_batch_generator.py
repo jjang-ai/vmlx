@@ -361,13 +361,13 @@ def _raise_if_mimo_tight_memory_text_prefill_exceeds_budget(
     else:
         guard_enabled = True
     try:
-        reject_tokens = int(os.environ.get("VMLINUX_MIMO_TEXT_PREFILL_REJECT_TOKENS", "512"))
+        reject_tokens = int(os.environ.get("VMLINUX_MIMO_TEXT_PREFILL_REJECT_TOKENS", "256"))
     except (TypeError, ValueError):
         reject_tokens = 256
     reject_tokens = max(16, reject_tokens)
     try:
         max_total_tokens = int(
-                os.environ.get("VMLINUX_MIMO_TEXT_PREFILL_TOTAL_TOKENS", "768")
+                os.environ.get("VMLINUX_MIMO_TEXT_PREFILL_TOTAL_TOKENS", "384")
         )
     except (TypeError, ValueError):
         max_total_tokens = 192
