@@ -391,7 +391,7 @@ def test_mimo_current_audit_separates_clean_artifact_from_runtime_blockers(
     )
     _write_json(
         tmp_path
-        / "build/current-all-local-model-smoke-mimo-v25-jang2l-nomedia-l2-patched-defaults-20260608/summary.json",
+        / "build/current-all-local-model-smoke-mimo-v25-jang2l-media-l2-patched-defaults-20260608/summary.json",
         {
             "status": "fail",
             "results": [
@@ -436,6 +436,42 @@ def test_mimo_current_audit_separates_clean_artifact_from_runtime_blockers(
                                         "value": "B7-CAT-09",
                                         "count": 1,
                                     },
+                                }
+                            ],
+                        }
+                    ]
+                    + [
+                        {
+                            "label": label,
+                            "code": 413,
+                            "content": "",
+                            "error": {
+                                "message": "VLM image prefill rejected before Metal forward: projected Metal working set 99% exceeds threshold 98%.",
+                                "type": "invalid_request_error",
+                                "code": "vlm_image_prefill_too_large",
+                            },
+                            "validation_failures": [
+                                {"label": label, "reason": "http_status", "code": 413}
+                            ],
+                        }
+                        for label in [
+                            "vl_blue_image",
+                            "vl_blue_image_repeat",
+                            "vl_red_image_changed",
+                            "vl_blue_video",
+                            "audio_blue",
+                        ]
+                    ]
+                    + [
+                        {
+                            "label": "text_no_media_after_audio",
+                            "code": 503,
+                            "content": "",
+                            "validation_failures": [
+                                {
+                                    "label": "text_no_media_after_audio",
+                                    "reason": "http_status",
+                                    "code": 503,
                                 }
                             ],
                         }
@@ -893,17 +929,17 @@ def test_mimo_current_audit_separates_clean_artifact_from_runtime_blockers(
     assert result["component_ok"]["mimo_jang2l_l2_restart_visible_output"] is True
     assert result["component_ok"]["mimo_jang2l_tool_long_prompt_metal_oom"] is True
     assert result["component_ok"]["mimo_jang2l_tight_memory_prompt_budget"] is True
-    assert result["component_ok"]["mimo_jang2l_media_prefill_budget"] is True
+    assert result["component_ok"]["mimo_jang2l_media_prefill_budget"] is False
     assert (
-        result["component_ok"]["mimo_jang2l_post_media_working_set_pressure"] is True
+        result["component_ok"]["mimo_jang2l_post_media_working_set_pressure"] is False
     )
     assert "mimo_jangtq2_live_media_l2_missing" in result["blockers"]
     assert "mimo_jang2l_live_media_l2_missing" in result["blockers"]
     assert "mimo_jang2l_l2_restart_visible_output_blocked" not in result["blockers"]
     assert "mimo_jang2l_tool_long_prompt_metal_oom_blocked" not in result["blockers"]
     assert "mimo_jang2l_tight_memory_prompt_budget_blocked" not in result["blockers"]
-    assert "mimo_jang2l_media_prefill_budget_blocked" not in result["blockers"]
-    assert "mimo_jang2l_post_media_working_set_pressure_blocked" not in result["blockers"]
+    assert "mimo_jang2l_media_prefill_budget_blocked" in result["blockers"]
+    assert "mimo_jang2l_post_media_working_set_pressure_blocked" in result["blockers"]
     assert (
         result["diagnostics"]["jang2l_all_local_smoke"]["bundle_kind"] == "jang2l"
     )
@@ -924,13 +960,19 @@ def test_mimo_current_audit_separates_clean_artifact_from_runtime_blockers(
         result["diagnostics"]["jang2l_all_local_smoke"][
             "typed_media_prefill_budget_rejection_labels"
         ]
-        == []
+        == [
+            "vl_blue_image",
+            "vl_blue_image_repeat",
+            "vl_red_image_changed",
+            "vl_blue_video",
+            "audio_blue",
+        ]
     )
     assert (
         result["diagnostics"]["jang2l_all_local_smoke"][
             "post_media_working_set_pressure_rejection_labels"
         ]
-        == []
+        == ["text_no_media_after_audio"]
     )
     assert result["diagnostics"]["cb_native_thinking_off"][
         "memory_pressure_blocked"
@@ -949,8 +991,8 @@ def test_mimo_current_audit_separates_clean_artifact_from_runtime_blockers(
     assert result["diagnostics"]["disable_sink_clears_length_generation"] is False
     assert "sink-kernel-only" in result["diagnostics"]["sink_boundary"]
     assert "mimo_jang2l_live_media_l2_missing" in result["blockers"]
-    assert "mimo_jang2l_media_prefill_budget_blocked" not in result["blockers"]
-    assert "mimo_jang2l_post_media_working_set_pressure_blocked" not in result["blockers"]
+    assert "mimo_jang2l_media_prefill_budget_blocked" in result["blockers"]
+    assert "mimo_jang2l_post_media_working_set_pressure_blocked" in result["blockers"]
 
 
 def test_mimo_tool_protocol_is_separate_from_literal_argument_exactness(tmp_path):
@@ -1523,11 +1565,11 @@ def test_mimo_current_audit_points_jangtq2_at_latest_cache_cap_smoke():
     )
 
 
-def test_mimo_current_audit_points_jang2l_at_latest_nomedia_l2_release_smoke():
+def test_mimo_current_audit_points_jang2l_at_latest_media_l2_release_smoke():
     from tests.cross_matrix import run_mimo_v2_jang2l_current_audit as audit
 
     assert str(audit.JANG2L_ALL_LOCAL_SMOKE_ARTIFACT) == (
-        "build/current-all-local-model-smoke-mimo-v25-jang2l-nomedia-l2-patched-defaults-20260608/"
+        "build/current-all-local-model-smoke-mimo-v25-jang2l-media-l2-patched-defaults-20260608/"
         "summary.json"
     )
 
