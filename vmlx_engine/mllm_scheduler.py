@@ -2864,12 +2864,15 @@ class MLLMScheduler:
                                         "VMLINUX_MLLM_TIGHT_MEMORY_CLEAN_PREFILL_STORE",
                                         "0",
                                     ).lower() in {"1", "true", "yes", "on"}
+                                    _tight_clean_store_max_tokens_raw = os.environ.get(
+                                        "VMLINUX_MLLM_TIGHT_MEMORY_CLEAN_PREFILL_STORE_MAX_TOKENS"
+                                    )
+                                    _tight_clean_store_cap_explicit = (
+                                        _tight_clean_store_max_tokens_raw is not None
+                                    )
                                     try:
                                         _tight_clean_store_max_tokens = int(
-                                            os.environ.get(
-                                                "VMLINUX_MLLM_TIGHT_MEMORY_CLEAN_PREFILL_STORE_MAX_TOKENS",
-                                                "128",
-                                            )
+                                            _tight_clean_store_max_tokens_raw or "128"
                                         )
                                     except (TypeError, ValueError):
                                         _tight_clean_store_max_tokens = 512
@@ -2902,15 +2905,19 @@ class MLLMScheduler:
                                         0,
                                         int(_max_ws_bytes or 0) - int(_active_bytes or 0),
                                     )
-                                    _safe_headroom_clean_store = (
-                                        _safe_headroom_max_tokens > 0
-                                        and prompt_len <= _safe_headroom_max_tokens
-                                        and _free_bytes
-                                        >= int(max(0.0, _safe_headroom_min_gb) * 1024**3)
-                                    )
                                     _bounded_tight_clean_store = (
                                         _tight_clean_store_max_tokens > 0
                                         and prompt_len <= _tight_clean_store_max_tokens
+                                    )
+                                    _safe_headroom_clean_store = (
+                                        _safe_headroom_max_tokens > 0
+                                        and prompt_len <= _safe_headroom_max_tokens
+                                        and (
+                                            not _tight_clean_store_cap_explicit
+                                            or _bounded_tight_clean_store
+                                        )
+                                        and _free_bytes
+                                        >= int(max(0.0, _safe_headroom_min_gb) * 1024**3)
                                     )
                                     tight_memory_clean_store_disabled = (
                                         _uses_mixed_attention_cache
