@@ -94,6 +94,18 @@ def test_mimo_v2_runtime_modalities_fail_closed_for_preserved_text_runtime(
     assert server._mimo_v2_runtime_modalities(str(tmp_path)) == ["text"]
 
 
+def test_mimo_v2_preserved_text_runtime_routes_text_only_despite_vision_config(
+    tmp_path,
+):
+    from vmlx_engine.api import utils
+
+    _write_mimo_bundle(tmp_path, audio_token=True, media_runtime=False)
+    utils._IS_MLLM_CACHE.clear()
+
+    assert utils.is_mllm_model(str(tmp_path)) is False
+    assert utils.is_mllm_model(str(tmp_path), force_mllm=True) is False
+
+
 def test_mimo_v2_runtime_modalities_auto_enable_when_runtime_and_sidecars_are_complete(
     tmp_path,
     monkeypatch,

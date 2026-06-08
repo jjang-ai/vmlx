@@ -2193,6 +2193,8 @@ def _artifact_media_modalities(bundle_path: str | None) -> dict[str, list[str]]:
     cfg = _read_bundle_json(bundle_path, "config.json")
     jang = _read_bundle_json(bundle_path, "jang_config.json")
     caps = jang.get("capabilities") if isinstance(jang.get("capabilities"), dict) else {}
+    if not caps and isinstance((cfg or {}).get("capabilities"), dict):
+        caps = cfg.get("capabilities") or {}
     declared: set[str] = {"text"}
     preserved: set[str] = set()
     unwired: set[str] = set()
@@ -2221,18 +2223,20 @@ def _artifact_media_modalities(bundle_path: str | None) -> dict[str, list[str]]:
         declared.add("video")
 
     if model_type == "mimo_v2":
-        media_runtime_enabled = _mimo_v2_media_runtime_enabled(cfg)
+        runtime_modalities = set(
+            _normalize_modality_set(_mimo_v2_runtime_modalities(bundle_path) or [])
+        )
         if isinstance(cfg.get("vision_config"), dict):
             preserved.add("vision")
-            if not media_runtime_enabled:
+            if "vision" not in runtime_modalities:
                 unwired.add("vision")
         if isinstance(cfg.get("audio_config"), dict):
             preserved.add("audio")
-            if not media_runtime_enabled:
+            if "audio" not in runtime_modalities:
                 unwired.add("audio")
         if "video" in declared:
             preserved.add("video")
-            if not media_runtime_enabled:
+            if "video" not in runtime_modalities:
                 unwired.add("video")
 
     def _ordered(values: set[str]) -> list[str]:

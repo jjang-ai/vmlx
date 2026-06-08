@@ -454,6 +454,56 @@ def is_mllm_model(model_name: str, force_mllm: bool = False) -> bool:
     # file-based checks (jang_config.json, config.json) actually find the files.
     local_path = resolve_to_local_path(model_name)
 
+    def _is_mimo_v2_preserved_text_runtime_path(path: str) -> bool:
+        config_path = os.path.join(path, "config.json")
+        if not os.path.isfile(config_path):
+            return False
+        try:
+            model_config = json.loads(open(config_path).read())
+        except Exception:
+            return False
+        capabilities = model_config.get("capabilities") or {}
+        runtime = model_config.get("runtime") or {}
+        model_type = str(model_config.get("model_type") or "").lower()
+        family = str(capabilities.get("family") or "").lower()
+        if model_type != "mimo_v2" and family != "mimo_v2":
+            return False
+        multimodal_mode = str(runtime.get("multimodal_mode") or "").lower()
+        multimodal_status = str(capabilities.get("multimodal_status") or "").lower()
+        modalities = {
+            str(item).lower()
+            for item in capabilities.get("modalities") or []
+            if item is not None
+        }
+        unwired = {
+            str(item).lower()
+            for item in capabilities.get("unwired_modalities") or []
+            if item is not None
+        }
+        if (
+            multimodal_mode == "weights_preserved_text_runtime"
+            or multimodal_status == "weights_preserved_text_runtime"
+        ):
+            return True
+        if modalities == {"text"} and ({"vision", "audio"} & unwired):
+            return True
+        return False
+
+    if _is_mimo_v2_preserved_text_runtime_path(local_path):
+        if force_mllm:
+            _logger.warning(
+                "is_mllm_model(%s): MiMo V2 preserved media weights override "
+                "force_mllm — bundle metadata marks vision/audio as unwired "
+                "weights_preserved_text_runtime; routing text-only",
+                model_name,
+            )
+        else:
+            _logger.info(
+                "is_mllm_model(%s): tier=mimo_v2_preserved_text_runtime result=False",
+                model_name,
+            )
+        return False
+
     if _has_native_mtp_vl_artifact(local_path):
         _logger.info(
             "is_mllm_model(%s): tier=native_mtp_vl_artifact result=True",

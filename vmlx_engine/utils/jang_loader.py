@@ -929,6 +929,16 @@ def _ensure_jang_family_runtime_supported(path: Path, config: dict | None) -> No
                 "the bundled jang_tools package"
             ),
         )
+        try:
+            from vmlx_engine.models.mllm import _register_mimo_v2_mlx_vlm_runtime
+
+            _register_mimo_v2_mlx_vlm_runtime()
+        except Exception as exc:
+            logger.warning(
+                "MiMo-V2.5 vMLX runtime patch registration failed for %s: %s",
+                path,
+                exc,
+            )
 
     if "bailing_hybrid" in model_types:
         try:
@@ -2017,6 +2027,23 @@ def _load_jang_v2(
     _is_dsv4_model = str(config.get("model_type") or "") == "deepseek_v4"
     _dsv4_expert_pending = {}
     _dsv4_n_experts = int(config.get("n_routed_experts") or 0)
+    try:
+        _mimo_v2_bundle_config = json.loads((path / "config.json").read_text())
+    except Exception:
+        _mimo_v2_bundle_config = {}
+    _is_mimo_v2_model = (
+        str(config.get("model_type") or _text_cfg.get("model_type") or "").lower() == "mimo_v2"
+        or str((_mimo_v2_bundle_config or {}).get("model_type") or "").lower() == "mimo_v2"
+    )
+    _mimo_v2_pending_affine = {}
+    _mimo_v2_quantization = (
+        config.get("quantization")
+        if isinstance(config.get("quantization"), dict)
+        else (_mimo_v2_bundle_config or {}).get("quantization")
+        if isinstance((_mimo_v2_bundle_config or {}).get("quantization"), dict)
+        else None
+    )
+    _mimo_v2_runtime_quantized_count = 0
 
     for sf in weight_files:
         weights = mx.load(str(sf))
@@ -2232,6 +2259,21 @@ def _load_jang_v2(
             weights = _sanitize_deepseek_v4_regular_layout(weights)
         else:
             weights = _sanitize_qwen3_next_conv1d_layout(weights)
+        if _is_mimo_v2_model:
+            for key, value in weights.items():
+                if not (
+                    ".self_attn.qkv_proj." in key
+                    or ".mlp.gate_proj." in key
+                    or ".mlp.up_proj." in key
+                    or ".mlp.down_proj." in key
+                ):
+                    continue
+                for suffix in ("weight", "scales", "biases"):
+                    marker = f".{suffix}"
+                    if key.endswith(marker):
+                        base = key[: -len(marker)]
+                        _mimo_v2_pending_affine.setdefault(base, {})[suffix] = value
+                        break
         # MoE gate dequant + optional Nemotron fc rename
         if _needs_gate_dequant:
             weights = _prepare_gate_dequant_weights(
@@ -2310,6 +2352,21 @@ def _load_jang_v2(
         # Distributed: only load weights for assigned layer range
         if layer_range is not None:
             weights = _filter_by_layer_range(weights, layer_range[0], layer_range[1])
+        if _is_mimo_v2_model and weights and isinstance(_mimo_v2_quantization, dict):
+            try:
+                from vmlx_engine.models import mllm as _mimo_mllm
+
+                _mimo_v2_runtime_quantized_count += (
+                    _mimo_mllm._quantize_mimo_v2_runtime_modules(
+                        model,
+                        weights,
+                        _mimo_v2_quantization,
+                    )
+                )
+            except Exception:
+                logger.exception(
+                    "  MiMo-V2 text load runtime module quantization failed"
+                )
         # Pre-fix per-layer bits before load to prevent shape mismatch
         # ValueError on JANG mixed-precision models (fixes #62, #63).
         if weights:
@@ -2336,6 +2393,56 @@ def _load_jang_v2(
             "DSV4 routed expert shard staging ended with incomplete expert "
             f"groups: {_describe_dsv4_pending_experts(_dsv4_expert_pending)}"
         )
+
+    if _is_mimo_v2_model and isinstance(_mimo_v2_quantization, dict):
+        if _mimo_v2_runtime_quantized_count:
+            logger.info(
+                "  MiMo-V2 text load quantized %d runtime modules",
+                _mimo_v2_runtime_quantized_count,
+            )
+        try:
+            from vmlx_engine.models import mllm as _mimo_mllm
+
+            pending_qkv_count = _mimo_mllm._install_mimo_v2_pending_qkv_affine_modules(
+                model,
+                _mimo_v2_pending_affine,
+                _mimo_v2_quantization,
+            )
+            if pending_qkv_count:
+                logger.info(
+                    "  MiMo-V2 text load installed %d split-shard affine qkv modules",
+                    pending_qkv_count,
+                )
+            pending_mlp_count = _mimo_mllm._install_mimo_v2_pending_dense_mlp_affine_modules(
+                model,
+                _mimo_v2_pending_affine,
+                _mimo_v2_quantization,
+            )
+            if pending_mlp_count:
+                logger.info(
+                    "  MiMo-V2 text load installed %d split-shard affine dense MLP modules",
+                    pending_mlp_count,
+                )
+            qkv_upgrade_count = _mimo_mllm._upgrade_mimo_v2_loaded_qkv_affine_modules(
+                model,
+                _mimo_v2_quantization,
+            )
+            if qkv_upgrade_count:
+                logger.info(
+                    "  MiMo-V2 text load upgraded %d packed affine qkv modules after load",
+                    qkv_upgrade_count,
+                )
+            hotspot_count = _mimo_mllm._quantize_mimo_v2_passthrough_decode_hotspots(
+                model,
+                _mimo_v2_quantization,
+            )
+            if hotspot_count:
+                logger.info(
+                    "  MiMo-V2 text load runtime-quantized %d passthrough decode hotspot modules",
+                    hotspot_count,
+                )
+        except Exception:
+            logger.exception("  MiMo-V2 text load affine post-load repair failed")
 
     # Mistral-Small-4-119B + any future model_type-promoted text load: the
     # internal nn.quantize predicate in mlx_lm.utils.load_model could not see
@@ -4678,7 +4785,7 @@ def _post_load_quantization_overrides(
 ) -> dict | None:
     """Return trusted post-load per-module quantization overrides.
 
-    DSV4 affine/prestacked switch tensors are shape-ambiguous enough that the
+    DSV4 and MiMo V2 affine/prestacked switch tensors are shape-ambiguous enough that the
     post-load shape heuristic can reinterpret a valid 2b_g128 tensor as a
     shorter 4b_g64 tensor. For that family, config/JANG metadata is the source
     of truth after the loader has proved the artifact layout.
@@ -4697,7 +4804,7 @@ def _post_load_quantization_overrides(
         return None
     text_config = config.get("text_config") if isinstance(config.get("text_config"), dict) else {}
     model_type = str(config.get("model_type") or text_config.get("model_type") or "")
-    if model_type == "deepseek_v4":
+    if model_type in {"deepseek_v4", "mimo_v2"}:
         return quantization
     return None
 
