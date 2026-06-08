@@ -11737,6 +11737,13 @@ def test_mimo_v2_root_cause_accepts_policy_skipped_source_vs_quant_without_clear
     assert "tool protocol" not in result["release_boundary"]
     assert "long-prompt coherence" not in result["release_boundary"]
     assert "current JANGTQ2 artifact exactness" in result["release_boundary"]
+    assert result["artifact_exactness_release_action"] == (
+        "replace_all_routed_2bit_jangtq2_or_lift_gate_down_precision"
+    )
+    assert result["recommended_next_artifact_profiles"] == [
+        "JANGTQ gate=3/up=2/down=3",
+        "JANGTQ gate=3/up=3/down=3",
+    ]
 
 
 def test_mimo_v2_current_audit_extracts_fastpath_async_bottleneck(tmp_path):

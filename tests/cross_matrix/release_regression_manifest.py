@@ -3004,6 +3004,8 @@ def _current_release_blocker_ledger(
                         "prompt_length_coherence_blocked",
                         "tool_protocol_blocked",
                         "artifact_exactness_blocked",
+                        "artifact_exactness_release_action",
+                        "recommended_next_artifact_profiles",
                         "decode_speed_target_blocked",
                         "media_unwired",
                         "source_vs_quant_requirement_satisfied",
@@ -5778,6 +5780,8 @@ def _validate_current_mimo_v2_jang2l_root_cause(root: Path) -> dict[str, Any]:
         "prompt_length_coherence_blocked": False,
         "tool_protocol_blocked": False,
         "artifact_exactness_blocked": False,
+        "artifact_exactness_release_action": None,
+        "recommended_next_artifact_profiles": [],
         "decode_speed_target_blocked": False,
         "cb_working_set_pressure_blocked": False,
         "media_unwired": False,
@@ -6067,6 +6071,16 @@ def _validate_current_mimo_v2_jang2l_root_cause(root: Path) -> dict[str, Any]:
             result["failures"].append(
                 "mimo_no_source_exactness_classifier_missing_literal_mutation_boundary"
             )
+        if str(result["no_source_exactness_classification"] or "").startswith(
+            "jangtq2_plain_literal_copy"
+        ):
+            result["artifact_exactness_release_action"] = (
+                "replace_all_routed_2bit_jangtq2_or_lift_gate_down_precision"
+            )
+            result["recommended_next_artifact_profiles"] = [
+                "JANGTQ gate=3/up=2/down=3",
+                "JANGTQ gate=3/up=3/down=3",
+            ]
     if audit_decode_speed_open:
         result["decode_speed_target_blocked"] = True
         result["failures"].append("mimo_decode_speed_below_release_target")
