@@ -633,6 +633,28 @@ def test_mimo_repeat_cache_probe_uses_one_token_ack_cap():
     assert repeat_2["payload"]["max_tokens"] == 1
 
 
+def test_mimo_repeat_cache_probe_avoids_custom_system_prompt_stop_trap():
+    mod = load_module()
+    row = {
+        "served_name": "mimo-v2.5-jang_2l",
+        "name": "MiMo-V2.5-JANG_2L",
+        "is_mllm": True,
+        "supports_video": True,
+        "supports_thinking": False,
+        "model_type": "mimo_v2",
+        "cache_family": "mimo_v2_hybrid_swa",
+    }
+
+    probes = mod.build_probe_payloads(row, max_tokens=48, include_reasoning=False)
+    repeat = next(probe for probe in probes if probe["label"] == "text_cache_repeat_1")
+    messages = repeat["payload"]["messages"]
+
+    assert len(messages) == 1
+    assert messages[0]["role"] == "user"
+    assert "Output exactly ACK and nothing else" in messages[0]["content"]
+    assert "stable words" in messages[0]["content"]
+
+
 def test_zaya_repeat_cache_probe_uses_family_native_color_contract():
     mod = load_module()
     row = {

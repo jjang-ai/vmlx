@@ -542,6 +542,15 @@ def _zaya_cache_payload(model: str, prompt: str, max_tokens: int) -> dict[str, A
     )
 
 
+def _mimo_cache_payload(model: str, prompt: str, max_tokens: int) -> dict[str, Any]:
+    return _text_payload(
+        model,
+        f"Output exactly ACK and nothing else. {prompt}",
+        max_tokens,
+        thinking=False,
+    )
+
+
 def _required_tool_payload(
     model: str,
     max_tokens: int,
@@ -832,6 +841,8 @@ def _cache_probe_expected(row: dict[str, Any]) -> str:
 def _cache_probe_payload(row: dict[str, Any], model: str, prompt: str, max_tokens: int) -> dict[str, Any]:
     if _is_zaya_row(row):
         return _zaya_cache_payload(model, prompt, max_tokens)
+    if _is_mimo_v2_row(row):
+        return _mimo_cache_payload(model, prompt, max_tokens)
     return _exact_ack_cache_payload(model, prompt, max_tokens)
 
 
