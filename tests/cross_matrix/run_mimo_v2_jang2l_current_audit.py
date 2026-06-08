@@ -25,7 +25,7 @@ from typing import Any
 DEFAULT_MODEL_PATH = Path("/Users/example/.mlxstudio/models/JANGQ-AI/MiMo-V2.5-JANGTQ_2")
 DEFAULT_MANIFEST = Path("build/current-mimo-jangtq2-local-manifest-20260607.tsv")
 DEFAULT_OUT = Path(
-    "build/current-mimo-v2-jang2l-current-audit-after-jangtq2-live-release-smoke-20260608.json"
+    "build/current-mimo-v2-jang2l-current-audit-after-jang2l-safe-cache-l2-proof-20260608.json"
 )
 
 STRUCTURAL_ARTIFACT = Path("build/current-mimo-jang2l-local-structural-verify-20260606.json")
@@ -43,7 +43,7 @@ ALL_LOCAL_SMOKE_ARTIFACT = Path(
     "build/current-all-local-model-smoke-mimo-v25-jangtq2-media-l2-after-cache-cap-20260608/summary.json"
 )
 JANG2L_ALL_LOCAL_SMOKE_ARTIFACT = Path(
-    "build/current-all-local-model-smoke-mimo-v25-jang2l-media-l2-release-20260608/summary.json"
+    "build/current-all-local-model-smoke-mimo-v25-jang2l-nomedia-after-mimo-safe-cache-prompt-20260608-bundled/summary.json"
 )
 KVNONE_NOPREFIX_SMOKE_ARTIFACT = Path(
     "build/current-all-local-model-smoke-mimo-v25-jangtq2-bundled-tools-nomedia-kvnone-noprefix-20260607/summary.json"
@@ -181,6 +181,10 @@ def _ensure_smoke_bundle_identity(
             "block_disk_l2_restart_cache_hit": bool(
                 bundle_kind == inferred_bundle_kind
                 and evidence.get("block_disk_l2_restart_cache_hit")
+            ),
+            "block_disk_l2_restart_visible_output_pass": bool(
+                bundle_kind == inferred_bundle_kind
+                and evidence.get("block_disk_l2_restart_visible_output_pass")
             ),
         }
     evidence["bundle_media_l2_coverage"] = coverage
@@ -583,6 +587,26 @@ def _all_local_smoke_evidence(data: dict[str, Any]) -> dict[str, Any]:
         },
     }
     exactness_boundary = _artifact_exactness_boundary(result, exactness_failures)
+    server_log_tail = str(result.get("server_log_tail") or "")
+    request_errors = " ".join(
+        str(request.get("error") or "")
+        for request in requests
+        if isinstance(request, dict)
+    )
+    metal_oom_crash = (
+        "OutOfMemory" in server_log_tail
+        or "kIOGPUCommandBufferCallbackErrorOutOfMemory" in server_log_tail
+        or "Insufficient Memory" in server_log_tail
+    )
+    server_died_mid_probe = any(
+        isinstance(request, dict)
+        and request.get("code") == 0
+        and (
+            "RemoteDisconnected" in str(request.get("error") or "")
+            or "Connection refused" in str(request.get("error") or "")
+        )
+        for request in requests
+    )
     return {
         "exists": True,
         "bundle_name": bundle_name or None,
@@ -608,6 +632,9 @@ def _all_local_smoke_evidence(data: dict[str, Any]) -> dict[str, Any]:
         "generation_tps": generation_tps,
         "block_disk_l2_restart_restore_pass": bool(block_disk_l2_restart_restore_pass),
         "block_disk_l2_restart_cache_hit": bool(block_disk_l2_restart_cache_hit),
+        "block_disk_l2_restart_visible_output_pass": bool(
+            block_disk_l2_restart_restore_pass
+        ),
         "block_disk_l2_restart_restore_status": str(
             l2_restart_summary.get("status") or "missing"
         ),
@@ -615,6 +642,13 @@ def _all_local_smoke_evidence(data: dict[str, Any]) -> dict[str, Any]:
             l2_restart_summary.get("reason") or "unknown"
         ),
         "block_disk_l2_restart_restore_summary": l2_restart_summary,
+        "server_died_mid_probe": bool(server_died_mid_probe),
+        "metal_oom_crash": bool(metal_oom_crash),
+        "runtime_crash_error_excerpt": (
+            " ".join((request_errors + " " + server_log_tail).split())[:500]
+            if (server_died_mid_probe or metal_oom_crash)
+            else None
+        ),
         "failures": failures,
     }
 
@@ -739,6 +773,7 @@ def _artifact_exactness_boundary(
     parser_structure_valid = True
     literal_mutation = False
     empty_visible_output = False
+    server_died_mid_probe = False
     for failure in failures:
         label = str(failure.get("label"))
         request = request_by_label.get(label) or {}
@@ -746,6 +781,10 @@ def _artifact_exactness_boundary(
         actual = failure.get("actual")
         reason = str(failure.get("reason") or "")
         content = request.get("content")
+        request_error = str(request.get("error") or failure.get("error") or "")
+        if request.get("code") == 0 or reason == "http_status":
+            if "RemoteDisconnected" in request_error or "Connection refused" in request_error:
+                server_died_mid_probe = True
         row_empty_visible = reason == "empty_visible"
         empty_visible_output = empty_visible_output or row_empty_visible
         validation_failures = request.get("validation_failures")
@@ -821,7 +860,18 @@ def _artifact_exactness_boundary(
             }
         )
 
-    if parser_structure_valid and literal_mutation:
+    server_log_tail = str(result.get("server_log_tail") or "")
+    metal_oom_crash = (
+        "OutOfMemory" in server_log_tail
+        or "kIOGPUCommandBufferCallbackErrorOutOfMemory" in server_log_tail
+        or "Insufficient Memory" in server_log_tail
+    )
+
+    if server_died_mid_probe and metal_oom_crash:
+        classification = "server_died_mid_probe_metal_oom"
+    elif server_died_mid_probe:
+        classification = "server_died_mid_probe_before_exactness_rows_completed"
+    elif parser_structure_valid and literal_mutation:
         classification = "model_generated_literal_mutation_after_valid_parser_structure"
     elif empty_visible_output:
         classification = "empty_visible_output_after_generation_stop"
@@ -830,7 +880,21 @@ def _artifact_exactness_boundary(
     else:
         classification = "parser_or_output_structure_failure"
 
-    if empty_visible_output:
+    if server_died_mid_probe and metal_oom_crash:
+        release_boundary = (
+            "Do not clear MiMo JANG_2L exactness by parser repair, JSON repair, "
+            "or hiding failed rows. The current bundled-runtime proof shows "
+            "the server dies mid-probe from Metal OOM before tool/JSON/code "
+            "rows can complete; fix memory/runtime scheduling or use a smaller "
+            "release artifact before claiming these rows."
+        )
+    elif server_died_mid_probe:
+        release_boundary = (
+            "Do not clear MiMo JANG_2L exactness by parser repair or prompt "
+            "rewrites. The server disconnected before exactness rows completed; "
+            "classify and fix the runtime crash first."
+        )
+    elif empty_visible_output:
         release_boundary = (
             "Do not clear MiMo exactness by JSON repair, parser rewrites, "
             "cache-hit accounting, or hiding failed rows. empty visible output "
@@ -858,6 +922,8 @@ def _artifact_exactness_boundary(
         "parser_structure_valid_for_failed_rows": parser_structure_valid,
         "model_generated_literal_mutation": literal_mutation,
         "empty_visible_output": empty_visible_output,
+        "server_died_mid_probe": server_died_mid_probe,
+        "metal_oom_crash": metal_oom_crash,
         "failed_labels": [str(failure.get("label")) for failure in failures],
         "examples": examples,
         "release_boundary": release_boundary,
@@ -2520,6 +2586,10 @@ def build_audit(root: Path, model_path: Path, manifest: Path) -> dict[str, Any]:
     mimo_jang2l_l2_restart_visible_output = bool(
         jang2l_coverage.get("block_disk_l2_restart_visible_output_pass")
     )
+    mimo_jang2l_tool_long_prompt_metal_oom_blocked = bool(
+        jang2l_smoke_evidence.get("metal_oom_crash")
+        or jang2l_smoke_evidence.get("server_died_mid_probe")
+    )
     block_disk_l2_restart_restore_blocked = not bool(
         smoke_evidence.get("block_disk_l2_restart_cache_hit")
     )
@@ -2616,6 +2686,7 @@ def build_audit(root: Path, model_path: Path, manifest: Path) -> dict[str, Any]:
         and mimo_jangtq2_live_media_l2
         and mimo_jangtq2_l2_restart_visible_output
         and mimo_jang2l_live_media_l2
+        and not mimo_jang2l_tool_long_prompt_metal_oom_blocked
         and not stale_present
     )
 
@@ -2671,6 +2742,8 @@ def build_audit(root: Path, model_path: Path, manifest: Path) -> dict[str, Any]:
         blockers.append("mimo_jang2l_live_media_l2_missing")
     if mimo_jang2l_l2_restart_cache_hit and not mimo_jang2l_l2_restart_visible_output:
         blockers.append("mimo_jang2l_l2_restart_visible_output_blocked")
+    if mimo_jang2l_tool_long_prompt_metal_oom_blocked:
+        blockers.append("mimo_jang2l_tool_long_prompt_metal_oom_blocked")
     if not media_runtime_wired:
         blockers.append("mimo_media_runtime_implementation_missing")
     if not media_metadata_ok:
@@ -2758,6 +2831,9 @@ def build_audit(root: Path, model_path: Path, manifest: Path) -> dict[str, Any]:
             ),
             "mimo_jang2l_l2_restart_visible_output": bool(
                 mimo_jang2l_l2_restart_visible_output
+            ),
+            "mimo_jang2l_tool_long_prompt_metal_oom": bool(
+                mimo_jang2l_tool_long_prompt_metal_oom_blocked
             ),
             "manual_sink_does_not_clear_length_generation": bool(sink_mode_fails),
             "disable_sink_does_not_clear_length_generation": bool(disable_sink_fails),
