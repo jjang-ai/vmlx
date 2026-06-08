@@ -3029,6 +3029,8 @@ def _current_release_blocker_ledger(
                         "recommended_next_artifact_profiles",
                         "decode_speed_target_blocked",
                         "media_unwired",
+                        "mimo_jangtq2_live_media_l2_passed",
+                        "mimo_jang2l_live_media_l2_blocked",
                         "source_vs_quant_requirement_satisfied",
                         "root_cause_candidate",
                         "release_boundary",
@@ -5818,6 +5820,8 @@ def _validate_current_mimo_v2_jang2l_root_cause(root: Path) -> dict[str, Any]:
         "decode_speed_target_blocked": False,
         "cb_working_set_pressure_blocked": False,
         "media_unwired": False,
+        "mimo_jangtq2_live_media_l2_passed": False,
+        "mimo_jang2l_live_media_l2_blocked": False,
         "manifest_integrity_passed": False,
         "stale_local_state_absent": False,
         "current_audit_status": None,
@@ -6062,6 +6066,12 @@ def _validate_current_mimo_v2_jang2l_root_cause(root: Path) -> dict[str, Any]:
         current_audit_component_ok.get("cb_system_prompt_working_set_pressure") is False
     )
     audit_media_unwired = current_audit_component_ok.get("mimo_media_wired") is False
+    audit_jangtq2_live_media_l2_passed = (
+        current_audit_component_ok.get("mimo_jangtq2_live_media_l2") is True
+    )
+    audit_jang2l_live_media_l2_open = (
+        current_audit_component_ok.get("mimo_jang2l_live_media_l2") is False
+    )
     audit_source_vs_quant_open = (
         current_audit_component_ok.get("source_vs_quant_first_divergence") is False
     )
@@ -6163,6 +6173,12 @@ def _validate_current_mimo_v2_jang2l_root_cause(root: Path) -> dict[str, Any]:
     if audit_media_unwired:
         result["media_unwired"] = True
         result["failures"].append("mimo_media_unwired")
+    result["mimo_jangtq2_live_media_l2_passed"] = bool(
+        audit_jangtq2_live_media_l2_passed
+    )
+    if audit_jang2l_live_media_l2_open:
+        result["mimo_jang2l_live_media_l2_blocked"] = True
+        result["failures"].append("mimo_jang2l_live_media_l2_missing")
     if audit_source_vs_quant_open:
         result["source_vs_quant_first_divergence_passed"] = False
         if (
@@ -6188,6 +6204,7 @@ def _validate_current_mimo_v2_jang2l_root_cause(root: Path) -> dict[str, Any]:
         or result["decode_speed_target_blocked"]
         or result["cb_working_set_pressure_blocked"]
         or result["media_unwired"]
+        or result["mimo_jang2l_live_media_l2_blocked"]
         or not result["source_vs_quant_requirement_satisfied"]
     ):
         result["status"] = "open"
@@ -6224,6 +6241,8 @@ def _validate_current_mimo_v2_jang2l_root_cause(root: Path) -> dict[str, Any]:
             active_boundary_reasons.append("working-set pressure")
         if result["media_unwired"]:
             active_boundary_reasons.append("media wiring")
+        if result["mimo_jang2l_live_media_l2_blocked"]:
+            active_boundary_reasons.append("JANG_2L live media/L2 proof")
         if not result["source_vs_quant_requirement_satisfied"]:
             active_boundary_reasons.append(
                 "source-vs-quant/no-source classification boundary"

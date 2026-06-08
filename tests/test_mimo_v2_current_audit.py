@@ -739,6 +739,11 @@ def test_mimo_current_audit_separates_clean_artifact_from_runtime_blockers(
         ]
         == "pass"
     )
+    assert result["diagnostics"]["all_local_smoke"]["bundle_kind"] == "jangtq2"
+    assert result["component_ok"]["mimo_jangtq2_live_media_l2"] is False
+    assert result["component_ok"]["mimo_jang2l_live_media_l2"] is False
+    assert "mimo_jangtq2_live_media_l2_missing" in result["blockers"]
+    assert "mimo_jang2l_live_media_l2_missing" in result["blockers"]
     assert result["diagnostics"]["cb_native_thinking_off"][
         "memory_pressure_blocked"
     ] is True
@@ -760,6 +765,8 @@ def test_mimo_current_audit_separates_clean_artifact_from_runtime_blockers(
         "mimo_cb_system_prompt_working_set_pressure_blocked",
         "mimo_vl_audio_video_unwired",
         "mimo_audio_waveform_live_e2e_missing",
+        "mimo_jangtq2_live_media_l2_missing",
+        "mimo_jang2l_live_media_l2_missing",
         "mimo_model_metadata_overadvertises_unwired_media",
         "mimo_runtime_capabilities_media_status_missing_or_unsafe",
     ]
@@ -993,6 +1000,95 @@ def test_mimo_all_local_smoke_evidence_accepts_disk_l2_restart_restore():
     assert evidence["block_disk_l2_restart_restore_pass"] is True
     assert evidence["block_disk_l2_restart_restore_status"] == "pass"
     assert evidence["block_disk_l2_restart_restore_reason"] == "pass"
+
+
+def test_mimo_all_local_smoke_evidence_tracks_bundle_identity_for_media_l2():
+    from tests.cross_matrix import run_mimo_v2_jang2l_current_audit as audit
+
+    smoke = {
+        "status": "pass",
+        "results": [
+            {
+                "name": "MiMo-V2.5-JANGTQ_2",
+                "relative_path": "/Users/example/.mlxstudio/models/JANGQ-AI/MiMo-V2.5-JANGTQ_2",
+                "status": "pass",
+                "requests": [
+                    {
+                        "label": "vl_blue_image",
+                        "code": 200,
+                        "validation_failures": [],
+                    },
+                    {
+                        "label": "vl_blue_image_repeat",
+                        "code": 200,
+                        "validation_failures": [],
+                    },
+                    {
+                        "label": "vl_red_image_changed",
+                        "code": 200,
+                        "validation_failures": [],
+                    },
+                    {
+                        "label": "text_no_media_after_image",
+                        "code": 200,
+                        "validation_failures": [],
+                    },
+                    {
+                        "label": "vl_blue_video",
+                        "code": 200,
+                        "validation_failures": [],
+                    },
+                    {
+                        "label": "text_no_media_after_video",
+                        "code": 200,
+                        "validation_failures": [],
+                    },
+                    {
+                        "label": "audio_blue",
+                        "code": 200,
+                        "validation_failures": [],
+                    },
+                    {
+                        "label": "text_no_media_after_audio",
+                        "code": 200,
+                        "validation_failures": [],
+                    },
+                ],
+                "failures": [],
+                "l2_restart": {
+                    "summary": {
+                        "status": "pass",
+                        "pass": True,
+                        "reason": "pass",
+                    }
+                },
+                "cache_after": {
+                    "body": {
+                        "scheduler_stats": {
+                            "batch_generator": {"generation_tps": 45.0}
+                        }
+                    }
+                },
+            }
+        ],
+    }
+
+    evidence = audit._all_local_smoke_evidence(smoke)
+
+    assert evidence["bundle_name"] == "MiMo-V2.5-JANGTQ_2"
+    assert evidence["bundle_kind"] == "jangtq2"
+    assert evidence["bundle_media_l2_coverage"] == {
+        "jangtq2": {
+            "bundle_name": "MiMo-V2.5-JANGTQ_2",
+            "live_media_e2e_pass": True,
+            "block_disk_l2_restart_restore_pass": True,
+        },
+        "jang2l": {
+            "bundle_name": None,
+            "live_media_e2e_pass": False,
+            "block_disk_l2_restart_restore_pass": False,
+        },
+    }
 
 
 def test_mimo_audio_waveform_rows_clear_audio_gate_separately_from_image_video():

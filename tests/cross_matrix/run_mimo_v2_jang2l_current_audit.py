@@ -112,6 +112,15 @@ def _load_json(path: Path) -> Any:
     return json.loads(path.read_text())
 
 
+def _mimo_bundle_kind_from_text(text: str) -> str:
+    lowered = text.lower()
+    if "jangtq_2" in lowered or "jangtq2" in lowered:
+        return "jangtq2"
+    if "jang_2l" in lowered or "jang2l" in lowered:
+        return "jang2l"
+    return "unknown"
+
+
 def _artifact(path: Path) -> dict[str, Any]:
     if not path.exists():
         return {"artifact": str(path), "exists": False, "status": "missing"}
@@ -244,6 +253,14 @@ def _all_local_smoke_evidence(data: dict[str, Any]) -> dict[str, Any]:
             "exact_cache_blocked": True,
             "speed_blocked": True,
         }
+    bundle_name = str(
+        result.get("name")
+        or result.get("model_name")
+        or result.get("relative_path")
+        or result.get("model_path")
+        or ""
+    )
+    bundle_kind = _mimo_bundle_kind_from_text(bundle_name)
 
     requests = result.get("requests")
     failures = result.get("failures")
@@ -389,9 +406,37 @@ def _all_local_smoke_evidence(data: dict[str, Any]) -> dict[str, Any]:
             "reason": "l2_restart_probe_not_run",
         }
     )
+    block_disk_l2_restart_restore_pass = bool(l2_restart_summary.get("pass"))
+    bundle_media_l2_coverage = {
+        "jangtq2": {
+            "bundle_name": bundle_name if bundle_kind == "jangtq2" else None,
+            "live_media_e2e_pass": bool(
+                bundle_kind == "jangtq2"
+                and live_media_e2e_pass
+                and audio_waveform_e2e_pass
+            ),
+            "block_disk_l2_restart_restore_pass": bool(
+                bundle_kind == "jangtq2" and block_disk_l2_restart_restore_pass
+            ),
+        },
+        "jang2l": {
+            "bundle_name": bundle_name if bundle_kind == "jang2l" else None,
+            "live_media_e2e_pass": bool(
+                bundle_kind == "jang2l"
+                and live_media_e2e_pass
+                and audio_waveform_e2e_pass
+            ),
+            "block_disk_l2_restart_restore_pass": bool(
+                bundle_kind == "jang2l" and block_disk_l2_restart_restore_pass
+            ),
+        },
+    }
     exactness_boundary = _artifact_exactness_boundary(result, exactness_failures)
     return {
         "exists": True,
+        "bundle_name": bundle_name or None,
+        "bundle_kind": bundle_kind,
+        "bundle_media_l2_coverage": bundle_media_l2_coverage,
         "tool_protocol_pass": tool_protocol_pass,
         "artifact_exactness_pass": not bool(exactness_failures),
         "artifact_exactness_failures": exactness_failures,
@@ -410,7 +455,7 @@ def _all_local_smoke_evidence(data: dict[str, Any]) -> dict[str, Any]:
         "exact_cache_blocked": exact_cache_blocked,
         "speed_blocked": speed_blocked,
         "generation_tps": generation_tps,
-        "block_disk_l2_restart_restore_pass": bool(l2_restart_summary.get("pass")),
+        "block_disk_l2_restart_restore_pass": bool(block_disk_l2_restart_restore_pass),
         "block_disk_l2_restart_restore_status": str(
             l2_restart_summary.get("status") or "missing"
         ),
@@ -2068,6 +2113,40 @@ def build_audit(root: Path, model_path: Path, manifest: Path) -> dict[str, Any]:
         if all_local_smoke.get("exists")
         else {"exists": False}
     )
+    if smoke_evidence.get("exists") and smoke_evidence.get("bundle_kind") == "unknown":
+        inferred_bundle_kind = _mimo_bundle_kind_from_text(str(ALL_LOCAL_SMOKE_ARTIFACT))
+        if inferred_bundle_kind != "unknown":
+            inferred_bundle_name = (
+                "MiMo-V2.5-JANGTQ_2"
+                if inferred_bundle_kind == "jangtq2"
+                else "MiMo-V2.5-JANG_2L"
+            )
+            smoke_evidence["bundle_kind"] = inferred_bundle_kind
+            smoke_evidence["bundle_name"] = inferred_bundle_name
+            coverage = smoke_evidence.get("bundle_media_l2_coverage")
+            if not isinstance(coverage, dict):
+                coverage = {}
+            for bundle_kind in ("jangtq2", "jang2l"):
+                existing = coverage.get(bundle_kind)
+                if not isinstance(existing, dict):
+                    existing = {}
+                coverage[bundle_kind] = {
+                    "bundle_name": (
+                        inferred_bundle_name
+                        if bundle_kind == inferred_bundle_kind
+                        else existing.get("bundle_name")
+                    ),
+                    "live_media_e2e_pass": bool(
+                        bundle_kind == inferred_bundle_kind
+                        and smoke_evidence.get("live_media_e2e_pass")
+                        and smoke_evidence.get("audio_waveform_e2e_pass")
+                    ),
+                    "block_disk_l2_restart_restore_pass": bool(
+                        bundle_kind == inferred_bundle_kind
+                        and smoke_evidence.get("block_disk_l2_restart_restore_pass")
+                    ),
+                }
+            smoke_evidence["bundle_media_l2_coverage"] = coverage
     kvnone_noprefix_evidence = (
         _kvnone_noprefix_exactness_evidence(kvnone_noprefix_smoke["data"])
         if kvnone_noprefix_smoke.get("exists")
@@ -2254,6 +2333,23 @@ def build_audit(root: Path, model_path: Path, manifest: Path) -> dict[str, Any]:
     block_disk_l2_restart_restore_proven = bool(
         smoke_evidence.get("block_disk_l2_restart_restore_pass")
     )
+    bundle_media_l2_coverage = smoke_evidence.get("bundle_media_l2_coverage")
+    if not isinstance(bundle_media_l2_coverage, dict):
+        bundle_media_l2_coverage = {}
+    jangtq2_coverage = bundle_media_l2_coverage.get("jangtq2")
+    if not isinstance(jangtq2_coverage, dict):
+        jangtq2_coverage = {}
+    jang2l_coverage = bundle_media_l2_coverage.get("jang2l")
+    if not isinstance(jang2l_coverage, dict):
+        jang2l_coverage = {}
+    mimo_jangtq2_live_media_l2 = bool(
+        jangtq2_coverage.get("live_media_e2e_pass")
+        and jangtq2_coverage.get("block_disk_l2_restart_restore_pass")
+    )
+    mimo_jang2l_live_media_l2 = bool(
+        jang2l_coverage.get("live_media_e2e_pass")
+        and jang2l_coverage.get("block_disk_l2_restart_restore_pass")
+    )
     block_disk_l2_restart_restore_blocked = not block_disk_l2_restart_restore_proven
     if image_video_live_e2e_proven and current_runtime_media_supported:
         media_runtime_wired = True
@@ -2345,6 +2441,8 @@ def build_audit(root: Path, model_path: Path, manifest: Path) -> dict[str, Any]:
         and media_runtime_capabilities_safe
         and not image_video_live_e2e_blocked
         and not audio_waveform_live_e2e_blocked
+        and mimo_jangtq2_live_media_l2
+        and mimo_jang2l_live_media_l2
         and not stale_present
     )
 
@@ -2392,6 +2490,10 @@ def build_audit(root: Path, model_path: Path, manifest: Path) -> dict[str, Any]:
         blockers.append("mimo_image_video_live_e2e_missing")
     if audio_waveform_live_e2e_blocked:
         blockers.append("mimo_audio_waveform_live_e2e_missing")
+    if not mimo_jangtq2_live_media_l2:
+        blockers.append("mimo_jangtq2_live_media_l2_missing")
+    if not mimo_jang2l_live_media_l2:
+        blockers.append("mimo_jang2l_live_media_l2_missing")
     if not media_runtime_wired:
         blockers.append("mimo_media_runtime_implementation_missing")
     if not media_metadata_ok:
@@ -2466,6 +2568,8 @@ def build_audit(root: Path, model_path: Path, manifest: Path) -> dict[str, Any]:
             "mimo_live_media_e2e": bool(
                 image_video_live_e2e_proven and audio_waveform_live_e2e_proven
             ),
+            "mimo_jangtq2_live_media_l2": bool(mimo_jangtq2_live_media_l2),
+            "mimo_jang2l_live_media_l2": bool(mimo_jang2l_live_media_l2),
             "manual_sink_does_not_clear_length_generation": bool(sink_mode_fails),
             "disable_sink_does_not_clear_length_generation": bool(disable_sink_fails),
         },
