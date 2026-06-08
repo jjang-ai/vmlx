@@ -1172,6 +1172,7 @@ def _live_smoke_cache_validation_failures(request: dict[str, Any]) -> list[str]:
 EXPECTED_CURRENT_OPEN_REQUIREMENTS = [
     "Cross-family live multi-turn smoke matrix is release-cleared",
     "MiMo V2.5 JANG_2L runtime/tool/long-prompt quality is release-cleared",
+    "N2 Pro 397B JANG1L/JANGTQ runtime/cache/API/UI quality is release-cleared",
     "MiniMax-M2.7-JANGTQ_K reporter parity/root cause is release-cleared",
     "Real Electron UI cross-family live model matrix is release-cleared",
     "DSV4 long-output/code/file-generation quality is release-cleared",

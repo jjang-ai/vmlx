@@ -139,6 +139,13 @@ def _passing_generation_defaults_payload():
     }
 
 
+def test_release_regression_manifest_tracks_n2_pro_397b_known_open_requirement():
+    assert (
+        "N2 Pro 397B JANG1L/JANGTQ runtime/cache/API/UI quality is release-cleared"
+        in EXPECTED_CURRENT_OPEN_REQUIREMENTS
+    )
+
+
 def _write_current_objective_digest(
     root: Path,
     *,

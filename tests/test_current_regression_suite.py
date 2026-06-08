@@ -80,6 +80,15 @@ def test_current_regression_suite_does_not_keep_proven_dsv4_default_cache_tool_l
     )
 
 
+def test_current_regression_suite_tracks_n2_pro_397b_as_known_open_requirement():
+    from tests.cross_matrix import run_current_regression_suite as suite
+
+    assert (
+        "N2 Pro 397B JANG1L/JANGTQ runtime/cache/API/UI quality is release-cleared"
+        in suite.EXPECTED_OPEN_REQUIREMENTS
+    )
+
+
 def test_current_regression_suite_does_not_keep_proven_dsv4_native_cache_or_multi_tool_open():
     from tests.cross_matrix import run_current_regression_suite as suite
 

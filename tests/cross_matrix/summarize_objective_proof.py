@@ -7069,6 +7069,54 @@ def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
         ),
         details=mimo_quality_details,
     )
+    _add(
+        requirements,
+        "N2 Pro 397B JANG1L/JANGTQ runtime/cache/API/UI quality is release-cleared",
+        "open",
+        [
+            CURRENT_RELEASE_REGRESSION_MANIFEST_REL,
+            str(DEFAULT_OUT),
+        ],
+        caveat=(
+            "N2 Pro 397B JANG1L/JANGTQ is now tracked as an explicit release "
+            "blocker. No current local artifact or live proof is registered in "
+            "the active worktree, so do not sign, notarize, tag, or publish a "
+            "release claiming N2 support until both quant profiles pass the "
+            "same runtime/cache/API/UI gates as the other release-critical "
+            "families."
+        ),
+        details={
+            "local_artifact_probe": {
+                "artifact_present": False,
+                "searched_roots": [
+                    "/Users/example/.mlxstudio/models",
+                    "/Users/example/models",
+                ],
+                "patterns": ["*N2*", "*397*", "*JANG1L*", "*jang1l*"],
+                "boundary": (
+                    "No matching local N2 Pro 397B JANG1L/JANGTQ artifact was "
+                    "found during the 2026-06-08 focused no-heavy probe."
+                ),
+            },
+            "required_next_evidence": [
+                "runtime_cache_api_ui_live_proof",
+                "JANG1L local artifact metadata and structural verification",
+                "JANGTQ local artifact metadata and structural verification",
+                "loader/model-family/generation-default/parser detection",
+                "visible text multi-turn output",
+                "required tool, auto tool, no-tool, and tool-result continuation",
+                "JSON/XML/code/whitespace exactness and raw-markup leak checks",
+                "typed native cache schema, prefix/paged hit telemetry, and L2 restart restore",
+                "Responses and Chat Completions streaming/non-streaming parity",
+                "MLXStudio settings/startup parity for parser, reasoning, cache, max output, and max context",
+                "media/VL/audio/video proof if the artifacts advertise those modalities",
+            ],
+            "release_boundary": (
+                "This row is intentionally open and evidence-gated. It is not "
+                "a runtime pass, compatibility fallback, or model-upload claim."
+            ),
+        },
+    )
     release_blockers = release_manifest.get("release_blockers")
     if not isinstance(release_blockers, list):
         release_blockers = []

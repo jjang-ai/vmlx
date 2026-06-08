@@ -22,6 +22,22 @@ def test_objective_proof_digest_default_out_tracks_current_release_proof_artifac
     )
 
 
+def test_objective_proof_digest_tracks_n2_pro_397b_release_blocker():
+    from tests.cross_matrix import summarize_objective_proof as objective
+
+    digest = objective.build_digest(Path("."))
+    rows = {item["requirement"]: item for item in digest["requirements"]}
+    row = rows[
+        "N2 Pro 397B JANG1L/JANGTQ runtime/cache/API/UI quality is release-cleared"
+    ]
+
+    assert row["status"] == "open"
+    assert "JANG1L" in row["caveat"]
+    assert "JANGTQ" in row["caveat"]
+    assert row["details"]["local_artifact_probe"]["artifact_present"] is False
+    assert "runtime_cache_api_ui_live_proof" in row["details"]["required_next_evidence"]
+
+
 def test_objective_proof_digest_live_smoke_pointers_match_release_manifest_current_map():
     from tests.cross_matrix import release_regression_manifest as manifest
     from tests.cross_matrix import summarize_objective_proof as objective
@@ -1221,6 +1237,7 @@ def test_objective_proof_digest_keeps_dsv4_long_quality_open(tmp_path):
         "Gemma4 26B CRACK mixed-SWA app-engine speed floor is release-cleared",
         "Cross-family live multi-turn smoke matrix is release-cleared",
         "MiMo V2.5 JANG_2L runtime/tool/long-prompt quality is release-cleared",
+        "N2 Pro 397B JANG1L/JANGTQ runtime/cache/API/UI quality is release-cleared",
         "MiniMax-M2.7-JANGTQ_K reporter parity/root cause is release-cleared",
         "Real Electron UI cross-family live model matrix is release-cleared",
         "DSV4 long-output/code/file-generation quality is release-cleared",
@@ -10259,6 +10276,7 @@ def test_objective_proof_digest_accepts_dsv4_quality_clearance_artifact(tmp_path
         "Gemma4 26B CRACK mixed-SWA app-engine speed floor is release-cleared",
         "Cross-family live multi-turn smoke matrix is release-cleared",
         "MiMo V2.5 JANG_2L runtime/tool/long-prompt quality is release-cleared",
+        "N2 Pro 397B JANG1L/JANGTQ runtime/cache/API/UI quality is release-cleared",
         "MiniMax-M2.7-JANGTQ_K reporter parity/root cause is release-cleared",
         "Real Electron UI cross-family live model matrix is release-cleared",
         "DSV4 long-output/code/file-generation quality is release-cleared",
