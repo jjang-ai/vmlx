@@ -10502,3 +10502,131 @@ def test_objective_proof_digest_classifies_legacy_dsv4_clearance_artifacts_as_st
         "build/dsv4-chat-prompt-ablation-20260520101331/result.json"
         not in quality["details"]["missing_clearance_artifacts"]
     )
+
+
+def test_objective_proof_digest_surfaces_current_mimo_model_upload_boundary(
+    tmp_path,
+):
+    from tests.cross_matrix import summarize_objective_proof as objective
+
+    _write_json(tmp_path, objective.MIMO_V2_JANG2L_STRUCTURAL_VERIFY_REL, {"status": "pass"})
+    _write_json(
+        tmp_path,
+        objective.MIMO_V2_JANG2L_METADATA_TRUTH_REL,
+        {
+            "status": "pass",
+            "runtime_modalities": ["text"],
+            "preserved_modalities": ["vision", "audio"],
+            "unwired_modalities": ["vision", "audio"],
+            "multimodal_status": "weights_preserved_text_runtime",
+        },
+    )
+    _write_json(
+        tmp_path,
+        objective.MIMO_V2_JANG2L_TEXT_CACHE_REL,
+        {
+            "requests": [
+                {"content": "cache ok", "usage": {"prompt_tokens_details": {"cached_tokens": 0}}},
+                {"content": "cache ok", "usage": {"prompt_tokens_details": {"cached_tokens": 32}}},
+            ]
+        },
+    )
+    _write_json(
+        tmp_path,
+        objective.MIMO_V2_JANG2L_SWITCHGLU_PARITY_REL,
+        {"max_abs_diff": 0.0001, "mean_abs_diff": 0.00001},
+    )
+    _write_json(tmp_path, objective.MIMO_V2_JANG2L_LENGTH_SWEEP_REL, {"status": "pass", "cases": []})
+    _write_json(
+        tmp_path,
+        objective.MIMO_V2_JANG2L_TOOL_DIALECT_REL,
+        {"status": "pass", "runtime_observations": []},
+    )
+    _write_json(
+        tmp_path,
+        objective.MIMO_V2_JANG2L_CONSERVATIVE_DIAGNOSTIC_REL,
+        {"rows": []},
+    )
+    _write_json(
+        tmp_path,
+        objective.MIMO_V2_JANG2L_NOMEDIA_TOOL_CACHE_REL,
+        {
+            "status": "fail",
+            "results": [
+                {
+                    "requests": [
+                        {"label": "text_cache_repeat_1", "validation_failures": []},
+                        {"label": "text_cache_repeat_2", "validation_failures": []},
+                        {"label": "text_multiturn_recall", "validation_failures": []},
+                        {
+                            "label": "tool_required",
+                            "code": 200,
+                            "tool_calls": [{"function": {"name": "record_fact"}}],
+                            "validation_failures": [],
+                        },
+                    ],
+                    "failures": [
+                        {
+                            "label": "mimo_structured_json_sentinel",
+                            "reason": "json_exact_object_mismatch",
+                        }
+                    ],
+                }
+            ],
+        },
+    )
+    _write_json(
+        tmp_path,
+        objective.MIMO_V2_JANG2L_CURRENT_AUDIT_REL,
+        {
+            "status": "open",
+            "local_release_clearance": False,
+            "blockers": [
+                "mimo_jangtq2_artifact_exactness_blocked",
+                "mimo_jang2l_live_media_l2_missing",
+                "mimo_jang2l_media_capability_downscoped_to_text",
+            ],
+            "component_ok": {
+                "manifest_integrity": True,
+                "stale_local_state_absent": True,
+                "long_prompt_coherence": True,
+                "tool_protocol": True,
+                "decode_speed_target": True,
+                "exact_cache_prompt_following": True,
+                "prefix_paged_l2_cache_reproved": True,
+                "cb_system_prompt_working_set_pressure": True,
+                "source_vs_quant_requirement_satisfied": True,
+                "artifact_exactness": False,
+                "mimo_media_wired": True,
+                "mimo_jang2l_media_capability_downscoped_to_text": True,
+            },
+        },
+    )
+    _write_json(
+        tmp_path,
+        objective.MIMO_V2_NO_SOURCE_EXACTNESS_CLASSIFIER_REL,
+        {
+            "status": "open",
+            "classification": "jangtq2_compact_hyphen_decode_quality_open_not_cache_parser_template_tokenizer",
+            "secondary_classification": "jang2l_json_sentinel_semantic_mismatch_open",
+            "model_upload_action_required": True,
+            "model_upload_action_reasons": [
+                "JANGTQ_2 served artifact emits wrong compact-hyphen/sentinel literals",
+                "JANG_2L served artifact/runtime still fails JSON sentinel exactness",
+            ],
+        },
+    )
+
+    ok, details = objective._mimo_v2_jang2l_quality_detail(tmp_path)
+
+    assert ok is False
+    assert details["tool_protocol_blocked"] is False
+    assert details["source_vs_quant_first_divergence_passed"] is True
+    assert details["artifact_exactness_passed"] is False
+    assert details["model_upload_action_required"] is True
+    assert details["current_audit_blockers"] == [
+        "mimo_jangtq2_artifact_exactness_blocked",
+        "mimo_jang2l_live_media_l2_missing",
+        "mimo_jang2l_media_capability_downscoped_to_text",
+    ]
+    assert details["mimo_jang2l_media_capability_downscoped_to_text"] is True

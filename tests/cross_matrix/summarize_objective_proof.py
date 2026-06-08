@@ -389,6 +389,9 @@ MIMO_V2_JANG2L_CONSERVATIVE_DIAGNOSTIC_REL = (
 MIMO_V2_JANG2L_NOMEDIA_TOOL_CACHE_REL = (
     "build/current-all-local-model-smoke-mimo-v25-jangtq2-media-l2-after-cache-cap-20260608/summary.json"
 )
+MIMO_V2_NO_SOURCE_EXACTNESS_CLASSIFIER_REL = (
+    "build/current-mimo-v2-no-source-exactness-classifier-after-live-exactness-pointer-20260608.json"
+)
 ALL_LOCAL_MODEL_SMOKE_DSV4_JANGTQ_K_REL = (
     "build/current-all-local-model-smoke-dsv4-jangtq-k-tools-cache-20260606/summary.json"
 )
@@ -4864,6 +4867,7 @@ def _mimo_v2_jang2l_quality_detail(root: Path) -> tuple[bool, dict[str, Any]]:
         "metadata_truth": MIMO_V2_JANG2L_METADATA_TRUTH_REL,
         "conservative_diagnostic": MIMO_V2_JANG2L_CONSERVATIVE_DIAGNOSTIC_REL,
         "nomedia_tool_cache": MIMO_V2_JANG2L_NOMEDIA_TOOL_CACHE_REL,
+        "no_source_exactness_classifier": MIMO_V2_NO_SOURCE_EXACTNESS_CLASSIFIER_REL,
     }
     payloads = {key: _load(root, rel) for key, rel in artifacts.items()}
     missing = [
@@ -4992,15 +4996,34 @@ def _mimo_v2_jang2l_quality_detail(root: Path) -> tuple[bool, dict[str, Any]]:
         current_audit_component_ok.get("cb_system_prompt_working_set_pressure") is False
     )
     audit_source_vs_quant_pass = (
-        current_audit_component_ok.get("source_vs_quant_first_divergence") is True
+        current_audit_component_ok.get("source_vs_quant_requirement_satisfied") is True
+    )
+    audit_artifact_exactness_pass = (
+        current_audit_component_ok.get("artifact_exactness") is True
+    )
+    audit_local_release_clearance = current_audit.get("local_release_clearance") is True
+    audit_jang2l_media_downscoped = (
+        current_audit_component_ok.get("mimo_jang2l_media_capability_downscoped_to_text")
+        is True
     )
     audit_media_wired = current_audit_component_ok.get("mimo_media_wired") is True
+    current_audit_blockers = [
+        str(item)
+        for item in current_audit.get("blockers", [])
+        if str(item)
+    ]
     if audit_long_prompt_open:
         prompt_length_coherence_blocked = True
     if audit_tool_protocol_open:
         tool_protocol_blocked = True
 
     nomedia_tool_cache = payloads["nomedia_tool_cache"]
+    classifier = payloads["no_source_exactness_classifier"]
+    classifier_reasons = [
+        str(item)
+        for item in classifier.get("model_upload_action_reasons", [])
+        if str(item)
+    ]
     nomedia_results = nomedia_tool_cache.get("results")
     if not isinstance(nomedia_results, list):
         nomedia_results = []
@@ -5065,6 +5088,10 @@ def _mimo_v2_jang2l_quality_detail(root: Path) -> tuple[bool, dict[str, Any]]:
         tool_protocol_blocked = True
     if nomedia_tool_cache.get("status") == "fail" and not nomedia_exact_cache_pass:
         prompt_length_coherence_blocked = True
+    if current_audit_component_ok.get("long_prompt_coherence") is True:
+        prompt_length_coherence_blocked = False
+    if current_audit_component_ok.get("tool_protocol") is True:
+        tool_protocol_blocked = False
 
     ok = (
         not missing
@@ -5081,6 +5108,9 @@ def _mimo_v2_jang2l_quality_detail(root: Path) -> tuple[bool, dict[str, Any]]:
         and not audit_decode_speed_open
         and not audit_working_set_open
         and audit_source_vs_quant_pass
+        and audit_artifact_exactness_pass
+        and audit_local_release_clearance
+        and not audit_jang2l_media_downscoped
         and audit_media_wired
     )
     return ok, {
@@ -5103,6 +5133,15 @@ def _mimo_v2_jang2l_quality_detail(root: Path) -> tuple[bool, dict[str, Any]]:
         "decode_speed_blocked": audit_decode_speed_open,
         "cb_system_prompt_working_set_pressure_blocked": audit_working_set_open,
         "source_vs_quant_first_divergence_passed": audit_source_vs_quant_pass,
+        "artifact_exactness_passed": audit_artifact_exactness_pass,
+        "local_release_clearance_passed": audit_local_release_clearance,
+        "current_audit_blockers": current_audit_blockers,
+        "mimo_jang2l_media_capability_downscoped_to_text": audit_jang2l_media_downscoped,
+        "model_upload_action_required": classifier.get("model_upload_action_required") is True,
+        "model_upload_action_reasons": classifier_reasons,
+        "classifier_status": classifier.get("status"),
+        "classifier_classification": classifier.get("classification"),
+        "classifier_secondary_classification": classifier.get("secondary_classification"),
         "mimo_media_wired": audit_media_wired,
         "conservative_tool_failures": conservative_tool_failures,
         "nomedia_tool_cache_status": nomedia_tool_cache.get("status"),
@@ -6983,6 +7022,12 @@ def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
     )
     mimo_quality_ok, mimo_quality_details = _mimo_v2_jang2l_quality_detail(root)
     mimo_quality_open = []
+    if mimo_quality_details.get("model_upload_action_required"):
+        mimo_quality_open.append("corrected MiMo artifact/upload or runtime decode proof")
+    if not mimo_quality_details.get("artifact_exactness_passed"):
+        mimo_quality_open.append("tool/JSON literal exactness")
+    if mimo_quality_details.get("mimo_jang2l_media_capability_downscoped_to_text"):
+        mimo_quality_open.append("JANG_2L live media/L2 capability")
     if mimo_quality_details.get("prompt_length_coherence_blocked"):
         mimo_quality_open.append("long-prompt/tool-context quality")
     if mimo_quality_details.get("tool_protocol_blocked"):
