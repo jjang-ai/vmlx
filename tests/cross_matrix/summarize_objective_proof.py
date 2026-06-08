@@ -61,7 +61,7 @@ from tests.cross_matrix.release_regression_manifest import (
 )
 
 
-DEFAULT_OUT = Path("build/current-objective-proof-after-mimo-recall-cap-guard-20260608.json")
+DEFAULT_OUT = Path("build/current-objective-proof-after-mimo-model-upload-action-20260608.json")
 CURRENT_RELEASE_REGRESSION_MANIFEST_REL = (
     "build/current-release-regression-manifest-after-mimo-live-refresh-20260608.json"
 )

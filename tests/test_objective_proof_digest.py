@@ -18,7 +18,7 @@ def test_objective_proof_digest_default_out_tracks_current_release_proof_artifac
     from tests.cross_matrix import summarize_objective_proof as objective
 
     assert objective.DEFAULT_OUT == Path(
-        "build/current-objective-proof-after-mimo-recall-cap-guard-20260608.json"
+        "build/current-objective-proof-after-mimo-model-upload-action-20260608.json"
     )
 
 
