@@ -25,7 +25,7 @@ from typing import Any
 DEFAULT_MODEL_PATH = Path("/Users/example/.mlxstudio/models/JANGQ-AI/MiMo-V2.5-JANGTQ_2")
 DEFAULT_MANIFEST = Path("build/current-mimo-jangtq2-local-manifest-20260607.tsv")
 DEFAULT_OUT = Path(
-    "build/current-mimo-v2-jang2l-current-audit-after-jangtq2-local-manifest-speed-refresh-20260607.json"
+    "build/current-mimo-v2-jang2l-current-audit-after-live-smokes-20260607.json"
 )
 
 STRUCTURAL_ARTIFACT = Path("build/current-mimo-jang2l-local-structural-verify-20260606.json")
@@ -40,7 +40,10 @@ TOOL_FAILURE_ARTIFACT = Path(
     "build/current-mimo-v2-jang2l-tool-dialect-failure-20260606.json"
 )
 ALL_LOCAL_SMOKE_ARTIFACT = Path(
-    "build/current-all-local-model-smoke-mimo-v25-jangtq2-tools-nomedia-after-literal-prompts-20260607/summary.json"
+    "build/current-all-local-model-smoke-mimo-v25-jangtq2-after-runtime-repairs-20260607/summary.json"
+)
+KVNONE_NOPREFIX_SMOKE_ARTIFACT = Path(
+    "build/current-all-local-model-smoke-mimo-v25-jangtq2-bundled-tools-nomedia-kvnone-noprefix-20260607/summary.json"
 )
 CACHE_VS_NOCACHE_ARTIFACT = Path(
     "build/current-mimo-v2-jang2l-cache-vs-nocache-next-token-20260606.json"
@@ -80,6 +83,9 @@ MLLM_INPUTS_EMBEDS_INTERFACE_ARTIFACT = Path(
 )
 LATEST_DECODE_SPEED_ARTIFACT = Path(
     "build/current-decode-speed-live-mimo-v25-jang2l-source-after-jangtq2-local-refresh-20260607.json"
+)
+NOHEAVY_API_CACHE_CONTRACT_ARTIFACT = Path(
+    "build/current-noheavy-api-cache-contract-after-qwen36-bundled-media-pass-20260607.json"
 )
 CLEANUP_LOG = Path("build/current-mimo-stale-local-cleanup-20260606.txt")
 
@@ -245,11 +251,17 @@ def _all_local_smoke_evidence(data: dict[str, Any]) -> dict[str, Any]:
         if not isinstance(request, dict) or request.get("label") != "tool_required":
             continue
         tool_calls = request.get("tool_calls")
-        validation_failures = request.get("validation_failures")
-        if not isinstance(validation_failures, list):
-            validation_failures = []
-        if isinstance(tool_calls, list) and tool_calls and not validation_failures:
-            tool_protocol_pass = True
+        if not isinstance(tool_calls, list) or not tool_calls:
+            continue
+        for call in tool_calls:
+            if not isinstance(call, dict):
+                continue
+            function = call.get("function")
+            if isinstance(function, dict) and function.get("name") == "record_fact":
+                tool_protocol_pass = True
+                break
+        if tool_protocol_pass:
+            break
 
     exact_cache_blocked = any(
         isinstance(failure, dict)
@@ -263,7 +275,9 @@ def _all_local_smoke_evidence(data: dict[str, Any]) -> dict[str, Any]:
         and failure.get("label")
         in {
             "tool_required",
+            "mimo_tool_required_sentinel",
             "structured_json_exact",
+            "mimo_structured_json_sentinel",
             "exact_code_whitespace",
             "tool_result_continuation",
         }
@@ -278,15 +292,234 @@ def _all_local_smoke_evidence(data: dict[str, Any]) -> dict[str, Any]:
     speed_blocked = not (
         isinstance(generation_tps, (int, float)) and generation_tps >= 40.0
     )
+    exactness_boundary = _artifact_exactness_boundary(result, exactness_failures)
     return {
         "exists": True,
         "tool_protocol_pass": tool_protocol_pass,
         "artifact_exactness_pass": not bool(exactness_failures),
         "artifact_exactness_failures": exactness_failures,
+        "artifact_exactness_boundary": exactness_boundary,
         "exact_cache_blocked": exact_cache_blocked,
         "speed_blocked": speed_blocked,
         "generation_tps": generation_tps,
         "failures": failures,
+    }
+
+
+def _kvnone_noprefix_exactness_evidence(data: dict[str, Any]) -> dict[str, Any]:
+    evidence = _all_local_smoke_evidence(data)
+    results = data.get("results")
+    result = results[0] if isinstance(results, list) and results else data
+    if not isinstance(result, dict):
+        evidence.update(
+            {
+                "classification": "invalid_kvnone_noprefix_smoke_shape",
+                "exactness_not_caused_by_prefix_or_kv_quant": False,
+            }
+        )
+        return evidence
+
+    health_before = result.get("health_before")
+    health_body = health_before if isinstance(health_before, dict) else {}
+    if isinstance(health_body.get("body"), dict):
+        health_body = health_body["body"]
+    kv_cache_quantization = health_body.get("kv_cache_quantization")
+    kv_quant_disabled = (
+        isinstance(kv_cache_quantization, dict)
+        and kv_cache_quantization.get("enabled") is False
+    )
+    native_cache = health_body.get("native_cache")
+    native_cache = native_cache if isinstance(native_cache, dict) else {}
+    storage_quantization = native_cache.get("storage_quantization")
+    storage_quant_disabled = (
+        isinstance(storage_quantization, dict)
+        and storage_quantization.get("enabled") is False
+    )
+    prefix_disabled = native_cache.get("prefix") is False
+    paged_disabled = native_cache.get("paged") is False
+    block_l2_disabled = native_cache.get("block_disk_l2") is False
+    cache_hits_zero = bool(
+        result.get("cache_after", {})
+        .get("body", {})
+        .get("scheduler_stats", {})
+        .get("cache", {})
+        .get("cache_hits", 0)
+        == 0
+    )
+    failed_labels = [
+        failure.get("label")
+        for failure in evidence.get("artifact_exactness_failures", [])
+        if isinstance(failure, dict)
+    ]
+    required_exactness_failures = {
+        "tool_required",
+        "mimo_tool_required_sentinel",
+        "structured_json_exact",
+        "mimo_structured_json_sentinel",
+    }
+    exactness_reproduced = required_exactness_failures.issubset(set(failed_labels))
+    exactness_not_cache = (
+        kv_quant_disabled
+        and storage_quant_disabled
+        and prefix_disabled
+        and paged_disabled
+        and block_l2_disabled
+        and cache_hits_zero
+        and exactness_reproduced
+    )
+    evidence.update(
+        {
+            "kv_cache_quantization_disabled": kv_quant_disabled,
+            "native_storage_quantization_disabled": storage_quant_disabled,
+            "prefix_cache_disabled": prefix_disabled,
+            "paged_cache_disabled": paged_disabled,
+            "block_disk_l2_disabled": block_l2_disabled,
+            "cache_hits_zero": cache_hits_zero,
+            "failed_labels": failed_labels,
+            "exactness_reproduced_without_prefix_or_kv_quant": exactness_reproduced,
+            "exactness_not_caused_by_prefix_or_kv_quant": exactness_not_cache,
+            "classification": (
+                "mimo_literal_exactness_reproduces_with_prefix_paged_l2_and_kv_quant_disabled"
+                if exactness_not_cache
+                else "mimo_kvnone_noprefix_isolation_inconclusive"
+            ),
+        }
+    )
+    return evidence
+
+
+def _artifact_exactness_boundary(
+    result: dict[str, Any],
+    exactness_failures: list[Any],
+) -> dict[str, Any]:
+    exact_labels = {
+        "tool_required",
+        "mimo_tool_required_sentinel",
+        "structured_json_exact",
+        "mimo_structured_json_sentinel",
+        "exact_code_whitespace",
+        "tool_result_continuation",
+    }
+    failures = [
+        failure
+        for failure in exactness_failures
+        if isinstance(failure, dict) and failure.get("label") in exact_labels
+    ]
+    if not failures:
+        return {
+            "classification": "artifact_exactness_clear",
+            "parser_structure_valid_for_failed_rows": True,
+            "model_generated_literal_mutation": False,
+            "failed_labels": [],
+            "examples": [],
+        }
+
+    requests = result.get("requests")
+    requests = requests if isinstance(requests, list) else []
+    request_by_label = {
+        str(request.get("label")): request
+        for request in requests
+        if isinstance(request, dict) and request.get("label") is not None
+    }
+
+    examples: list[dict[str, Any]] = []
+    parser_structure_valid = True
+    literal_mutation = False
+    for failure in failures:
+        label = str(failure.get("label"))
+        request = request_by_label.get(label) or {}
+        expected = failure.get("expected")
+        actual = failure.get("actual")
+        validation_failures = request.get("validation_failures")
+        if isinstance(validation_failures, list):
+            for request_failure in validation_failures:
+                if not isinstance(request_failure, dict):
+                    continue
+                if request_failure.get("label") != label:
+                    continue
+                if expected is None:
+                    expected = request_failure.get("expected")
+                if actual is None:
+                    actual = request_failure.get("actual")
+                break
+        structure_valid = False
+        structure_kind = "unknown"
+
+        if label in {"tool_required", "mimo_tool_required_sentinel"}:
+            structure_kind = "openai_tool_call_json_arguments"
+            tool_calls = request.get("tool_calls")
+            tool_calls = tool_calls if isinstance(tool_calls, list) else []
+            for call in tool_calls:
+                if not isinstance(call, dict):
+                    continue
+                function = call.get("function")
+                if not isinstance(function, dict):
+                    continue
+                if function.get("name") != "record_fact":
+                    continue
+                arguments = function.get("arguments")
+                try:
+                    parsed = json.loads(arguments) if isinstance(arguments, str) else {}
+                except Exception:
+                    parsed = {}
+                if isinstance(parsed, dict):
+                    structure_valid = True
+                    if actual is None:
+                        actual = parsed
+                    break
+        elif label in {"structured_json_exact", "mimo_structured_json_sentinel"}:
+            structure_kind = "visible_json_object"
+            content = request.get("content")
+            try:
+                parsed = json.loads(content) if isinstance(content, str) else {}
+            except Exception:
+                parsed = {}
+            if isinstance(parsed, dict):
+                structure_valid = True
+                if actual is None:
+                    actual = parsed
+        elif label == "tool_result_continuation":
+            structure_kind = "visible_tool_result_continuation_text"
+            structure_valid = isinstance(request.get("content"), str)
+        elif label == "exact_code_whitespace":
+            structure_kind = "visible_exact_text"
+            structure_valid = isinstance(request.get("content"), str)
+
+        parser_structure_valid = parser_structure_valid and structure_valid
+        if structure_valid and expected is not None and actual is not None and actual != expected:
+            literal_mutation = True
+        examples.append(
+            {
+                "label": label,
+                "reason": failure.get("reason"),
+                "structure_kind": structure_kind,
+                "parser_structure_valid": structure_valid,
+                "expected": expected,
+                "actual": actual,
+                "content_head": failure.get("content_head"),
+            }
+        )
+
+    if parser_structure_valid and literal_mutation:
+        classification = "model_generated_literal_mutation_after_valid_parser_structure"
+    elif parser_structure_valid:
+        classification = "exactness_failure_after_valid_parser_structure"
+    else:
+        classification = "parser_or_output_structure_failure"
+
+    return {
+        "classification": classification,
+        "parser_structure_valid_for_failed_rows": parser_structure_valid,
+        "model_generated_literal_mutation": literal_mutation,
+        "failed_labels": [str(failure.get("label")) for failure in failures],
+        "examples": examples,
+        "release_boundary": (
+            "Do not clear MiMo exactness by rewriting parsed tool arguments, "
+            "repairing generated JSON values, disabling cache, or hiding the "
+            "failed rows. Valid parser structure plus wrong literal values "
+            "means the remaining blocker is model/runtime decode quality or "
+            "artifact quantization, not XML/JSON parser mutation."
+        ),
     }
 
 
@@ -465,6 +698,242 @@ def _source_vs_quant_first_divergence_pass(data: dict[str, Any]) -> bool:
         if "source_output" not in row or "quant_output" not in row:
             return False
     return True
+
+
+def _api_cache_responses_contract_evidence(data: dict[str, Any]) -> dict[str, Any]:
+    checks = data.get("checks")
+    checks = checks if isinstance(checks, dict) else {}
+    required = {
+        "responses_sampling_kwargs": checks.get("responses_sampling_kwargs") is True,
+        "streaming_cache_detail_usage": checks.get("streaming_cache_detail_usage")
+        is True,
+        "responses_previous_response_history": checks.get(
+            "responses_previous_response_history"
+        )
+        is True,
+        "cache_stats_reuse_skip_telemetry": checks.get(
+            "cache_stats_reuse_skip_telemetry"
+        )
+        is True,
+        "cache_reuse_endpoints": checks.get("cache_reuse_endpoints") is True,
+        "request_output_caps_override_server_default": checks.get(
+            "request_output_caps_override_server_default"
+        )
+        is True,
+        "prompt_context_caps_stay_separate_from_output_caps": checks.get(
+            "prompt_context_caps_stay_separate_from_output_caps"
+        )
+        is True,
+        "ollama_adapter_surface": checks.get("ollama_adapter_surface") is True,
+        "anthropic_bundle_defaults": checks.get("anthropic_bundle_defaults") is True,
+    }
+    missing = [name for name, ok in required.items() if not ok]
+    return {
+        "exists": True,
+        "status": data.get("status"),
+        "pass": data.get("status") == "pass" and not missing,
+        "required_checks": required,
+        "missing_required_checks": missing,
+        "missing_markers": data.get("missing_markers")
+        if isinstance(data.get("missing_markers"), list)
+        else [],
+        "boundary": (
+            "No-heavy source contract only. This proves API/cache/Responses "
+            "route behavior, telemetry, and endpoint wiring; it does not replace "
+            "live MiMo model output, tool, cache-hit, L2/restart, media, or UI proof."
+        ),
+    }
+
+
+def _mimo_runtime_capabilities_from_smoke(data: dict[str, Any]) -> dict[str, Any]:
+    results = data.get("results")
+    result = results[0] if isinstance(results, list) and results else data
+    if not isinstance(result, dict):
+        return {"exists": False}
+    capabilities = (
+        result.get("capabilities", {}).get("body", {})
+        if isinstance(result.get("capabilities"), dict)
+        else {}
+    )
+    media = capabilities.get("media") if isinstance(capabilities.get("media"), dict) else {}
+    status_by_modality = (
+        media.get("status_by_modality")
+        if isinstance(media.get("status_by_modality"), dict)
+        else {}
+    )
+    unwired = media.get("unwired_modalities")
+    unwired = unwired if isinstance(unwired, list) else []
+    preserved = media.get("preserved_modalities")
+    preserved = preserved if isinstance(preserved, list) else []
+    runtime_modalities = capabilities.get("modalities")
+    runtime_modalities = runtime_modalities if isinstance(runtime_modalities, list) else []
+    safe_text_only = (
+        runtime_modalities == ["text"]
+        and status_by_modality.get("text") == "runtime_supported"
+        and all(
+            status_by_modality.get(name) == "preserved_unwired"
+            for name in ("vision", "image", "video", "audio")
+        )
+    )
+    return {
+        "exists": True,
+        "runtime_modalities": runtime_modalities,
+        "media": media,
+        "preserved_modalities": preserved,
+        "unwired_modalities": unwired,
+        "status_by_modality": status_by_modality,
+        "safe_text_only_runtime_capabilities": bool(safe_text_only),
+    }
+
+
+def _count_index_names(model_path: Path, prefixes: tuple[str, ...]) -> int:
+    index_path = model_path / "model.safetensors.index.json"
+    if not index_path.exists():
+        return 0
+    try:
+        data = json.loads(index_path.read_text(encoding="utf-8"))
+    except Exception:
+        return 0
+    weight_map = data.get("weight_map")
+    if not isinstance(weight_map, dict):
+        return 0
+    return sum(
+        1
+        for name in weight_map
+        if any(str(name).startswith(prefix) for prefix in prefixes)
+    )
+
+
+def _mimo_media_runtime_evidence(
+    root: Path,
+    model_path: Path,
+    all_local_smoke_data: dict[str, Any] | None,
+) -> dict[str, Any]:
+    config_path = model_path / "config.json"
+    try:
+        config = json.loads(config_path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        config = {}
+        config_error = str(exc)
+    else:
+        config_error = None
+
+    capabilities = (
+        config.get("capabilities") if isinstance(config.get("capabilities"), dict) else {}
+    )
+    config_modalities = capabilities.get("modalities")
+    config_preserved = capabilities.get("preserved_modalities")
+    config_unwired = capabilities.get("unwired_modalities")
+    config_multimodal_status = capabilities.get("multimodal_status")
+    runtime = config.get("runtime") if isinstance(config.get("runtime"), dict) else {}
+    runtime_multimodal_mode = runtime.get("multimodal_mode")
+
+    config_text_only_contract = (
+        config_modalities == ["text"]
+        and config_preserved == ["vision", "audio"]
+        and config_unwired == ["vision", "audio"]
+        and config_multimodal_status == "weights_preserved_text_runtime"
+        and runtime_multimodal_mode == "weights_preserved_text_runtime"
+    )
+
+    visual_count = _count_index_names(model_path, ("visual.",))
+    audio_count = _count_index_names(
+        model_path,
+        ("audio_encoder.", "speech_embeddings."),
+    )
+    has_processor = (model_path / "preprocessor_config.json").exists()
+    has_audio_tokenizer = (model_path / "audio_tokenizer").exists()
+    smoke_caps = (
+        _mimo_runtime_capabilities_from_smoke(all_local_smoke_data)
+        if isinstance(all_local_smoke_data, dict)
+        else {"exists": False}
+    )
+
+    runtime_adapter = root / "vmlx_engine/models/mllm.py"
+    adapter_text = (
+        runtime_adapter.read_text(encoding="utf-8", errors="replace")
+        if runtime_adapter.exists()
+        else ""
+    )
+    runtime_explicitly_unwired = all(
+        marker in adapter_text
+        for marker in (
+            "MiMo-V2.5 JANG_2L vision input is not wired",
+            "key.startswith((\"visual.\", \"audio_encoder.\", \"speech_embeddings.\", \"model.mtp.\"))",
+            "class VisionModel",
+            "class AudioModel",
+        )
+    )
+    missing_multimodal_module = not any(
+        path.exists()
+        for path in (
+            root
+            / ".venv/lib/python3.13/site-packages/jang_tools/mimo_v2/mimo_v2_multimodal.py",
+            Path("/Users/example/jang/jang-tools/jang_tools/mimo_v2/mimo_v2_multimodal.py"),
+        )
+    )
+    media_weights_preserved = bool(visual_count > 0 and audio_count > 0)
+    metadata_overadvertises = bool(
+        config_modalities != ["text"]
+        or config_preserved != ["vision", "audio"]
+        or config_unwired != ["vision", "audio"]
+        or config_multimodal_status != "weights_preserved_text_runtime"
+        or runtime_multimodal_mode != "weights_preserved_text_runtime"
+    )
+    runtime_gap = bool(runtime_explicitly_unwired or missing_multimodal_module)
+    return {
+        "status": "open" if runtime_gap or metadata_overadvertises else "pass",
+        "classification": (
+            "runtime_implementation_gap_with_model_metadata_overadvertising"
+            if runtime_gap and metadata_overadvertises
+            else "runtime_implementation_gap"
+            if runtime_gap
+            else "model_metadata_overadvertising"
+            if metadata_overadvertises
+            else "media_runtime_and_metadata_clear"
+        ),
+        "config_error": config_error,
+        "config_modalities": config_modalities,
+        "config_preserved_modalities": config_preserved,
+        "config_unwired_modalities": config_unwired,
+        "config_multimodal_status": config_multimodal_status,
+        "runtime_multimodal_mode": runtime_multimodal_mode,
+        "config_text_only_contract": bool(config_text_only_contract),
+        "metadata_overadvertises_runtime_media": metadata_overadvertises,
+        "visual_tensor_count": visual_count,
+        "audio_tensor_count": audio_count,
+        "has_preprocessor_config": has_processor,
+        "has_audio_tokenizer_dir": has_audio_tokenizer,
+        "media_weights_preserved": media_weights_preserved,
+        "runtime_capabilities": smoke_caps,
+        "runtime_capabilities_text_only_safe": bool(
+            smoke_caps.get("safe_text_only_runtime_capabilities")
+        ),
+        "runtime_explicitly_unwired": bool(runtime_explicitly_unwired),
+        "missing_mimo_v2_multimodal_module": bool(missing_multimodal_module),
+        "runtime_media_wired": False if runtime_gap else True,
+        "missing_runtime_components": [
+            "VisionConfig parser",
+            "AudioConfig parser",
+            "visual.* load_weights binding",
+            "audio_encoder.* and speech_embeddings.* load_weights binding",
+            "visual patch embedding and 28-block ViT forward",
+            "vision merger to 4096 hidden size",
+            "audio tokenizer/feature extraction bridge",
+            "audio local transformer/projection forward",
+            "mixed media/text inputs_embeds construction",
+            "media-aware prefix/L2 cache proof",
+        ]
+        if runtime_gap
+        else [],
+        "required_model_metadata_if_runtime_unwired": {
+            "capabilities.modalities": ["text"],
+            "capabilities.preserved_modalities": ["vision", "audio"],
+            "capabilities.unwired_modalities": ["vision", "audio"],
+            "capabilities.multimodal_status": "weights_preserved_text_runtime",
+            "runtime.multimodal_mode": "weights_preserved_text_runtime",
+        },
+    }
 
 
 def _text_route_evidence(data: dict[str, Any]) -> dict[str, Any]:
@@ -819,6 +1288,7 @@ def build_audit(root: Path, model_path: Path, manifest: Path) -> dict[str, Any]:
     length_sweep = _artifact(root / LENGTH_SWEEP_ARTIFACT)
     tool_failure = _artifact(root / TOOL_FAILURE_ARTIFACT)
     all_local_smoke = _artifact(root / ALL_LOCAL_SMOKE_ARTIFACT)
+    kvnone_noprefix_smoke = _artifact(root / KVNONE_NOPREFIX_SMOKE_ARTIFACT)
     cache_vs_nocache = _artifact(root / CACHE_VS_NOCACHE_ARTIFACT)
     sink_mode_length = _artifact(root / SINK_MODE_LENGTH_DIAGNOSTIC_ARTIFACT)
     disable_sink_length = _artifact(root / DISABLE_SINK_LENGTH_DIAGNOSTIC_ARTIFACT)
@@ -832,6 +1302,7 @@ def build_audit(root: Path, model_path: Path, manifest: Path) -> dict[str, Any]:
     cb_native_thinking_off = _artifact(root / CB_NATIVE_THINKING_OFF_ARTIFACT)
     mllm_inputs_embeds_interface = _artifact(root / MLLM_INPUTS_EMBEDS_INTERFACE_ARTIFACT)
     latest_decode_speed = _artifact(root / LATEST_DECODE_SPEED_ARTIFACT)
+    api_cache_responses_contract = _artifact(root / NOHEAVY_API_CACHE_CONTRACT_ARTIFACT)
 
     structural_pass = structural.get("status") == "pass"
     text_cache_pass = text_cache.get("exists") and _text_cache_narrow_pass(text_cache["data"])
@@ -863,6 +1334,12 @@ def build_audit(root: Path, model_path: Path, manifest: Path) -> dict[str, Any]:
         if all_local_smoke.get("exists")
         else {"exists": False}
     )
+    kvnone_noprefix_evidence = (
+        _kvnone_noprefix_exactness_evidence(kvnone_noprefix_smoke["data"])
+        if kvnone_noprefix_smoke.get("exists")
+        and isinstance(kvnone_noprefix_smoke.get("data"), dict)
+        else {"exists": False}
+    )
     synced_evidence = (
         _synced_long_tool_cache_evidence(synced_long_tool_cache["data"])
         if synced_long_tool_cache.get("exists")
@@ -884,7 +1361,10 @@ def build_audit(root: Path, model_path: Path, manifest: Path) -> dict[str, Any]:
         exact_cache_blocked = False
         speed_blocked = True
     if synced_evidence.get("exists"):
-        tool_blocked = tool_blocked or bool(synced_evidence.get("tool_protocol_blocked"))
+        if not smoke_evidence.get("exists"):
+            tool_blocked = tool_blocked or bool(
+                synced_evidence.get("tool_protocol_blocked")
+            )
         length_blocked = length_blocked or bool(synced_evidence.get("long_prompt_blocked"))
         exact_cache_blocked = exact_cache_blocked and not bool(
             synced_evidence.get("short_cache_exact_pass")
@@ -918,7 +1398,8 @@ def build_audit(root: Path, model_path: Path, manifest: Path) -> dict[str, Any]:
             prompt_shape_blocked = False
         if cb_evidence.get("prefix_paged_l2_cache_reproved"):
             text_route_evidence["cache_l2_not_reproved"] = False
-        tool_blocked = bool(cb_evidence.get("tool_protocol_blocked"))
+        if not smoke_evidence.get("exists"):
+            tool_blocked = bool(cb_evidence.get("tool_protocol_blocked"))
         length_blocked = length_blocked or bool(cb_evidence.get("long_prompt_crashed"))
         speed_blocked = speed_blocked or bool(cb_evidence.get("speed_blocked"))
     cb_native_evidence = (
@@ -982,6 +1463,33 @@ def build_audit(root: Path, model_path: Path, manifest: Path) -> dict[str, Any]:
         and isinstance(mllm_inputs_embeds_interface.get("data"), dict)
         and mllm_inputs_embeds_interface["data"].get("status") == "pass"
     )
+    api_cache_responses_evidence = (
+        _api_cache_responses_contract_evidence(api_cache_responses_contract["data"])
+        if api_cache_responses_contract.get("exists")
+        and isinstance(api_cache_responses_contract.get("data"), dict)
+        else {
+            "exists": False,
+            "pass": False,
+            "missing_required_checks": ["missing_noheavy_api_cache_contract_artifact"],
+            "classification": "missing_api_cache_responses_contract_artifact",
+        }
+    )
+    api_cache_responses_contract_pass = bool(api_cache_responses_evidence.get("pass"))
+    media_runtime_evidence = _mimo_media_runtime_evidence(
+        root,
+        model_path,
+        all_local_smoke.get("data")
+        if all_local_smoke.get("exists")
+        and isinstance(all_local_smoke.get("data"), dict)
+        else None,
+    )
+    media_runtime_wired = bool(media_runtime_evidence.get("runtime_media_wired"))
+    media_metadata_ok = not bool(
+        media_runtime_evidence.get("metadata_overadvertises_runtime_media")
+    )
+    media_runtime_capabilities_safe = bool(
+        media_runtime_evidence.get("runtime_capabilities_text_only_safe")
+    )
     if text_route_evidence.get("exists") and text_route_evidence.get("cache_visible_pass"):
         prompt_shape_blocked = False
 
@@ -1001,8 +1509,12 @@ def build_audit(root: Path, model_path: Path, manifest: Path) -> dict[str, Any]:
         and not memory_pressure_blocked
         and source_vs_quant_pass
         and mllm_inputs_embeds_interface_pass
+        and api_cache_responses_contract_pass
         and not bool(text_route_evidence.get("cache_l2_not_reproved"))
         and not bool(text_route_evidence.get("media_unwired"))
+        and media_runtime_wired
+        and media_metadata_ok
+        and media_runtime_capabilities_safe
         and not stale_present
     )
 
@@ -1038,10 +1550,18 @@ def build_audit(root: Path, model_path: Path, manifest: Path) -> dict[str, Any]:
         blockers.append("mimo_source_vs_quant_first_divergence_missing_or_failed")
     if not mllm_inputs_embeds_interface_pass:
         blockers.append("mimo_mllm_inputs_embeds_interface_missing_or_failed")
+    if not api_cache_responses_contract_pass:
+        blockers.append("mimo_api_cache_responses_contract_missing_or_failed")
     if text_route_evidence.get("cache_l2_not_reproved"):
         blockers.append("mimo_prefix_paged_l2_cache_not_reproved")
     if text_route_evidence.get("media_unwired"):
         blockers.append("mimo_vl_audio_video_unwired")
+    if not media_runtime_wired:
+        blockers.append("mimo_media_runtime_implementation_missing")
+    if not media_metadata_ok:
+        blockers.append("mimo_model_metadata_overadvertises_unwired_media")
+    if not media_runtime_capabilities_safe:
+        blockers.append("mimo_runtime_capabilities_media_status_missing_or_unsafe")
 
     return {
         "status": status,
@@ -1063,12 +1583,22 @@ def build_audit(root: Path, model_path: Path, manifest: Path) -> dict[str, Any]:
             "long_prompt_coherence": not bool(length_blocked),
             "tool_protocol": not bool(tool_blocked),
             "artifact_exactness": not bool(artifact_exactness_blocked),
+            "exactness_cache_kv_quant_excluded": bool(
+                kvnone_noprefix_evidence.get("exactness_not_caused_by_prefix_or_kv_quant")
+            ),
             "exact_cache_prompt_following": not bool(exact_cache_blocked),
             "decode_speed_target": not bool(speed_blocked),
             "system_prompt_first_token_stop": not bool(prompt_shape_blocked),
             "cb_system_prompt_working_set_pressure": not bool(memory_pressure_blocked),
             "source_vs_quant_first_divergence": bool(source_vs_quant_pass),
             "mllm_inputs_embeds_interface": bool(mllm_inputs_embeds_interface_pass),
+            "api_cache_responses_contract": bool(api_cache_responses_contract_pass),
+            "media_weights_preserved": bool(
+                media_runtime_evidence.get("media_weights_preserved")
+            ),
+            "media_runtime_capabilities_safe": bool(media_runtime_capabilities_safe),
+            "media_model_metadata_text_only_contract": bool(media_metadata_ok),
+            "media_runtime_implementation": bool(media_runtime_wired),
             "text_route_long_prompt": bool(
                 text_route_evidence.get("long_prompt_recall_pass")
                 and text_route_evidence.get("long_prompt_oom_cleared")
@@ -1077,7 +1607,12 @@ def build_audit(root: Path, model_path: Path, manifest: Path) -> dict[str, Any]:
             "prefix_paged_l2_cache_reproved": not bool(
                 text_route_evidence.get("cache_l2_not_reproved")
             ),
-            "mimo_media_wired": not bool(text_route_evidence.get("media_unwired")),
+            "mimo_media_wired": bool(
+                media_runtime_wired
+                and media_metadata_ok
+                and media_runtime_capabilities_safe
+                and not bool(text_route_evidence.get("media_unwired"))
+            ),
             "manual_sink_does_not_clear_length_generation": bool(sink_mode_fails),
             "disable_sink_does_not_clear_length_generation": bool(disable_sink_fails),
         },
@@ -1090,6 +1625,7 @@ def build_audit(root: Path, model_path: Path, manifest: Path) -> dict[str, Any]:
             "length_sweep": str(LENGTH_SWEEP_ARTIFACT),
             "tool_failure": str(TOOL_FAILURE_ARTIFACT),
             "all_local_smoke": str(ALL_LOCAL_SMOKE_ARTIFACT),
+            "kvnone_noprefix_smoke": str(KVNONE_NOPREFIX_SMOKE_ARTIFACT),
             "cache_vs_nocache": str(CACHE_VS_NOCACHE_ARTIFACT),
             "sink_mode_length_diagnostic": str(SINK_MODE_LENGTH_DIAGNOSTIC_ARTIFACT),
             "disable_sink_length_diagnostic": str(DISABLE_SINK_LENGTH_DIAGNOSTIC_ARTIFACT),
@@ -1103,10 +1639,12 @@ def build_audit(root: Path, model_path: Path, manifest: Path) -> dict[str, Any]:
             "cb_native_thinking_off_live_proof": str(CB_NATIVE_THINKING_OFF_ARTIFACT),
             "mllm_inputs_embeds_interface": str(MLLM_INPUTS_EMBEDS_INTERFACE_ARTIFACT),
             "latest_decode_speed": str(LATEST_DECODE_SPEED_ARTIFACT),
+            "api_cache_responses_contract": str(NOHEAVY_API_CACHE_CONTRACT_ARTIFACT),
         },
         "diagnostics": {
             "cache_vs_nocache_next_token_match": bool(cache_match),
             "all_local_smoke": smoke_evidence,
+            "kvnone_noprefix_exactness_isolation": kvnone_noprefix_evidence,
             "prompt_shape_first_token": prompt_shape_evidence,
             "synced_long_tool_cache": synced_evidence,
             "text_route": text_route_evidence,
@@ -1121,6 +1659,8 @@ def build_audit(root: Path, model_path: Path, manifest: Path) -> dict[str, Any]:
                     "classification": "missing_mimo_mllm_inputs_embeds_interface_proof",
                 }
             ),
+            "api_cache_responses_contract": api_cache_responses_evidence,
+            "mimo_media_runtime": media_runtime_evidence,
             "source_vs_quant_first_divergence": (
                 source_vs_quant.get("data")
                 if source_vs_quant.get("exists")
@@ -1137,15 +1677,22 @@ def build_audit(root: Path, model_path: Path, manifest: Path) -> dict[str, Any]:
                 "MiMo length-generation failures; do not classify the blocker as "
                 "an MLX sink-kernel-only issue."
             ),
+            "exactness_cache_boundary": (
+                "The no-prefix/KV-none smoke reproduced the same MiMo literal "
+                "mutations with runtime KV quantization, native cache storage "
+                "quantization, prefix cache, paged cache, block-disk L2, and cache "
+                "hits disabled. Do not chase prefix-cache reuse, L2 disk cache, or "
+                "runtime KV quantization as the primary current MiMo exactness cause."
+            ),
         },
         "release_boundary": (
             "MiMo local artifact integrity is clean, but release remains blocked "
             "until long-prompt coherence, tool protocol/artifact exactness, "
-            "decode speed, CB system prompt working-set pressure, local "
-            "source-vs-quant first-divergence or an equivalent current-artifact "
-            "classification, and media wiring proof pass without fake parser "
-            "injection, hidden thinking-mode rewrites, forced fallback, or cache "
-            "disabling."
+            "decode speed, CB system prompt working-set pressure, API/cache/"
+            "Responses contracts, local source-vs-quant first-divergence or an "
+            "equivalent current-artifact classification, and media wiring proof "
+            "pass without fake parser injection, hidden thinking-mode rewrites, "
+            "forced fallback, or cache disabling."
         ),
     }
 
