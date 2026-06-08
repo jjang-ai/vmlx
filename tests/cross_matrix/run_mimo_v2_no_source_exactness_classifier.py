@@ -40,7 +40,7 @@ DEFAULT_JANGTQ2_TQ_KERNEL_PARITY = Path(
     "build/current-mimo-v25-jangtq2-tq-kernel-parity-no-source-20260608.json"
 )
 DEFAULT_JANGTQ2_LITERAL_VARIANTS = Path(
-    "build/current-mimo-v25-jangtq2-exactness-variant-probe-live-20260608/result.json"
+    "build/current-mimo-v25-jangtq2-exactness-variant-probe-live-after-loader-order-20260608/result.json"
 )
 DEFAULT_JANG2L_LITERAL_VARIANTS = Path(
     "build/current-mimo-v25-jang2l-exactness-variant-probe-live-20260608/result.json"
