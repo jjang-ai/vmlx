@@ -24,7 +24,7 @@ from tests.cross_matrix.run_current_regression_suite import (
 )
 
 CURRENT_RELEASE_REGRESSION_MANIFEST_ARTIFACT = (
-    "build/current-release-regression-manifest-after-dsv4-mimo-classifier-preflight-20260608.json"
+    "build/current-release-regression-manifest-after-bundled-python-sync-20260608.json"
 )
 
 EXPECTED_CURRENT_MODEL_ARTIFACT_CHECKS = (
@@ -381,12 +381,12 @@ CURRENT_POST_BUDGET_EDGE_ARTIFACTS = {
     "native-mtp-d3-effect-policy": "build/current-native-mtp-contract-after-noheavy-contract-refresh-20260608.json",
     "mcp-policy-ui-gateway": "build/current-mcp-policy-contract-20260531-post-step-lfm-refresh.json",
     "vl-media-cache-tool-followup": "build/current-vl-media-cache-contract-after-dsv4-preflight-refresh-20260608.json",
-    "packaged-release-integrity": "build/current-packaged-integrity-contract-after-staged-sequoia-rebuild-current-source-20260607.json",
+    "packaged-release-integrity": "build/current-packaged-integrity-contract-after-bundled-python-sync-20260608.json",
     "public-release-surface-preflight": "build/current-release-surface-contract-20260602-v154-live-public-after-site-fix.json",
 }
 
 CURRENT_REGRESSION_SUITE_ARTIFACT = (
-    "build/current-regression-suite-after-dsv4-mimo-classifier-preflight-20260608.json"
+    "build/current-regression-suite-after-bundled-python-sync-20260608.json"
 )
 CURRENT_ISSUE175_179_RELEASE_BOUNDARY_AUDIT_ARTIFACT = (
     "build/current-issue175-179-release-boundary-audit-after-issue179-memory-preflight-20260607.json"
@@ -1689,13 +1689,13 @@ _ROWS: list[dict[str, Any]] = [
             "packaged Python has no __pycache__/*.pyc files that would invalidate the signed app seal",
         ],
         "commands": [
-            ".venv/bin/python tests/cross_matrix/run_packaged_integrity_contract.py --out build/current-packaged-integrity-contract-after-staged-sequoia-rebuild-current-source-20260607.json",
+            ".venv/bin/python tests/cross_matrix/run_packaged_integrity_contract.py --out build/current-packaged-integrity-contract-after-bundled-python-sync-20260608.json",
             ".venv/bin/python tests/cross_matrix/run_packaged_integrity_contract.py --jang-tools-source /Users/example/jang/jang-tools --out build/current-packaged-integrity-contract-20260524-pycache-seal-check.json",
             ".venv/bin/python tests/cross_matrix/run_packaged_integrity_contract.py --jang-tools-source /Users/example/jang/.worktrees/vmlx-release-clean-b5f66a7/jang-tools --out build/current-packaged-integrity-contract-20260522-recheck-bundled-release-gate.json",
         ],
         "artifacts": [
-            "build/current-objective-proof-after-dsv4-mimo-classifier-preflight-20260608.json",
-            "build/current-packaged-integrity-contract-after-staged-sequoia-rebuild-current-source-20260607.json",
+            "build/current-objective-proof-after-bundled-python-sync-20260608.json",
+            "build/current-packaged-integrity-contract-after-bundled-python-sync-20260608.json",
             "build/current-packaged-integrity-contract-20260601-dsv4-preflight-refresh.json",
             "build/current-packaged-integrity-contract-20260601-qwen3vl-minicpm-mpp-staged-refresh.json",
             "build/current-packaged-integrity-contract-20260531-after-adhoc-reseal.json",
@@ -1863,12 +1863,12 @@ _ROWS: list[dict[str, Any]] = [
             "The clearance boundary is based on live artifacts, not a hidden sampler/repetition/default override",
         ],
         "commands": [
-            ".venv/bin/python tests/cross_matrix/summarize_objective_proof.py --out build/current-objective-proof-after-dsv4-mimo-classifier-preflight-20260608.json",
+            ".venv/bin/python tests/cross_matrix/summarize_objective_proof.py --out build/current-objective-proof-after-bundled-python-sync-20260608.json",
             ".venv/bin/python tests/cross_matrix/run_production_family_audit.py --rows ling_flash_tq --live --py /Applications/vMLX.app/Contents/Resources/bundled-python/python/bin/python3.12 --out build/current-production-family-live-ling-bundled-current-20260606.json",
         ],
         "artifacts": [
             "build/current-production-family-live-ling-bundled-current-20260606.json",
-            "build/current-objective-proof-after-dsv4-mimo-classifier-preflight-20260608.json",
+            "build/current-objective-proof-after-bundled-python-sync-20260608.json",
             "build/current-ling-jangtq-strict-russian-nocache-bundled-4850c9c2-20260524.json",
             "build/current-ling-mxfp4-crack-strict-russian-nocache-bundled-4850c9c2-20260524.json",
             "build/current-ling-jangtq-russian-prompt-variant-probe-20260524.json",

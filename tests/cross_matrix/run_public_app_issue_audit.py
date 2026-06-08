@@ -38,7 +38,7 @@ REASONING_TEMPLATE_CONTRACT = Path(
     "build/current-reasoning-template-contract-20260526-settings-audit.json"
 )
 PACKAGED_INTEGRITY_CONTRACT = Path(
-    "build/current-packaged-integrity-contract-after-staged-sequoia-rebuild-current-source-20260607.json"
+    "build/current-packaged-integrity-contract-after-bundled-python-sync-20260608.json"
 )
 GEMMA4_INSTALLED_SPEED_ARTIFACTS = (
     Path(
