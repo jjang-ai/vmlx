@@ -328,7 +328,10 @@ def register_all(registry=None):
     # full attention layers use 4 KV heads, SWA layers use 8 KV heads, V states
     # are scaled by 0.707. The current target bundle removes MTP tensors and
     # keeps base decode autoregressive. MiMo's template emits generic XML
-    # function calls, not Qwen tools; think_xml extracts <think> blocks.
+    # function calls, not Qwen tools. Current MiMo JANGTQ_2 live proof shows
+    # requested thinking can stop with all output hidden in reasoning_content and
+    # no visible final answer, so do not advertise reasoning until a visible-final
+    # thinking proof exists.
     _register(
         ModelConfig(
             family_name="mimo_v2",
@@ -337,9 +340,9 @@ def register_all(registry=None):
             cache_subtype="mimo_v2_asymmetric_swa",
             eos_tokens=["<|im_end|>"],
             tool_parser="xml_function",
-            reasoning_parser="think_xml",
+            reasoning_parser=None,
             think_in_template=False,
-            supports_thinking=True,
+            supports_thinking=False,
             supports_native_tools=True,
             is_mllm=True,
             architecture_hints={

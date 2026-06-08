@@ -1685,9 +1685,9 @@ class TestModelConfigs:
         assert config.family_name == "mimo_v2"
         assert config.cache_type == "kv"
         assert config.cache_subtype == "mimo_v2_asymmetric_swa"
-        assert config.reasoning_parser == "think_xml"
+        assert config.reasoning_parser is None
         assert config.tool_parser == "xml_function"
-        assert config.supports_thinking is True
+        assert config.supports_thinking is False
         assert config.supports_native_tools is True
         assert config.is_mllm is True
         assert config.architecture_hints["runtime_mtp_mode"] == "absent"
@@ -2030,9 +2030,9 @@ class TestModelConfigComprehensiveChecks:
     def test_mimo_v2_registered_with_jang2l_contract(self, registry):
         """MiMo-V2.5 JANG_2L is a new multimodal KV family.
 
-        The 2026-05-27 JANG source contract says think_xml reasoning extraction
-        is valid, the current target bundle has no MTP tensors, and tools use
-        the generic XML function format rather than Qwen-like JSON.
+        The current target bundle has no MTP tensors, and tools use the generic
+        XML function format rather than Qwen-like JSON. Thinking is not
+        advertised until a live proof shows visible final answers.
         """
         registry.clear_cache()
         with patch("vmlx_engine.model_config_registry.load_config", _mock_load_config("mimo_v2")):
@@ -2040,8 +2040,8 @@ class TestModelConfigComprehensiveChecks:
 
         assert config.family_name == "mimo_v2"
         assert config.cache_type == "kv"
-        assert config.reasoning_parser == "think_xml"
-        assert config.supports_thinking is True
+        assert config.reasoning_parser is None
+        assert config.supports_thinking is False
         assert config.think_in_template is False
         assert config.tool_parser == "xml_function"
         assert config.supports_native_tools is True
@@ -2088,10 +2088,10 @@ class TestModelConfigComprehensiveChecks:
 
         assert config.family_name == "mimo_v2"
         assert config.cache_type == "kv"
-        assert config.reasoning_parser == "think_xml"
+        assert config.reasoning_parser is None
         assert config.tool_parser == "xml_function"
         assert config.supports_native_tools is True
-        assert config.supports_thinking is True
+        assert config.supports_thinking is False
         assert config.think_in_template is False
         assert config.is_mllm is True
         assert config.think_in_template is False, (
@@ -2132,9 +2132,10 @@ class TestModelConfigComprehensiveChecks:
         config = registry.lookup(str(tmp_path))
 
         assert config.family_name == "mimo_v2"
-        assert config.reasoning_parser == "think_xml"
+        assert config.reasoning_parser is None
         assert config.tool_parser == "xml_function"
         assert config.supports_native_tools is True
+        assert config.supports_thinking is False
 
     def test_zaya_stale_stamp_cannot_disable_reasoning_or_reenable_think_seed(
         self, registry, tmp_path
