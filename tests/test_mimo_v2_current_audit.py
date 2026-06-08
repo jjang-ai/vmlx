@@ -441,6 +441,35 @@ def test_mimo_current_audit_separates_clean_artifact_from_runtime_blockers(
         },
     )
     _write_json(
+        tmp_path / audit.TEXT_ROUTE_ARTIFACT,
+        {
+            "status": "open",
+            "fix_status": "partial",
+            "live_rows": {
+                "long_prompt_first_request": {
+                    "sentinel_recall_pass": True,
+                    "oom_cleared": True,
+                },
+                "cache_repeat_1": {
+                    "empty_visible_cleared": True,
+                    "exact_expected_ack_cache_742": False,
+                },
+                "cache_repeat_2": {
+                    "empty_visible_cleared": True,
+                    "exact_expected_ack_cache_742": False,
+                },
+                "tool_required": {"tool_call_pass": True},
+            },
+            "remaining_blockers": [
+                "decode_speed_below_release_target",
+                "exact_cache_prompt_following_still_returns_ACK_not_ACK_CACHE_742",
+                "prefix_paged_l2_cache_hit_not_reproved_on_continuous_batching_route",
+                "source_vs_quant_first_divergence_missing",
+                "mimo_vl_audio_video_unwired",
+            ],
+        },
+    )
+    _write_json(
         tmp_path
         / "build/current-mimo-v2-jang2l-cb-cache-after-native-thinking-off-live-20260606.json",
         {
@@ -517,7 +546,7 @@ def test_mimo_current_audit_separates_clean_artifact_from_runtime_blockers(
     assert result["component_ok"]["manifest_integrity"] is True
     assert result["component_ok"]["text_cache_narrow"] is True
     assert result["component_ok"]["cache_vs_nocache_next_token"] is True
-    assert result["component_ok"]["long_prompt_coherence"] is False
+    assert result["component_ok"]["long_prompt_coherence"] is True
     assert result["component_ok"]["tool_protocol"] is True
     assert result["component_ok"]["exact_cache_prompt_following"] is True
     assert result["component_ok"]["decode_speed_target"] is False
@@ -526,6 +555,7 @@ def test_mimo_current_audit_separates_clean_artifact_from_runtime_blockers(
     assert result["component_ok"]["source_vs_quant_first_divergence"] is False
     assert result["component_ok"]["source_vs_quant_policy_skipped"] is True
     assert result["component_ok"]["source_vs_quant_requirement_satisfied"] is True
+    assert result["component_ok"]["text_route_long_prompt_supersedes_length_sweep"] is True
     assert result["component_ok"]["api_cache_responses_contract"] is True
     assert result["component_ok"]["media_weights_preserved"] is False
     assert result["component_ok"]["media_runtime_capabilities_safe"] is False
@@ -726,9 +756,9 @@ def test_mimo_current_audit_separates_clean_artifact_from_runtime_blockers(
     assert result["diagnostics"]["disable_sink_clears_length_generation"] is False
     assert "sink-kernel-only" in result["diagnostics"]["sink_boundary"]
     assert result["blockers"] == [
-        "mimo_long_prompt_coherence_blocked",
         "mimo_decode_speed_below_release_target",
         "mimo_cb_system_prompt_working_set_pressure_blocked",
+        "mimo_vl_audio_video_unwired",
         "mimo_audio_waveform_live_e2e_missing",
         "mimo_model_metadata_overadvertises_unwired_media",
         "mimo_runtime_capabilities_media_status_missing_or_unsafe",
@@ -1107,6 +1137,7 @@ def test_mimo_source_capability_detector_accepts_runtime_media(monkeypatch, tmp_
         types.SimpleNamespace(
             VisionModel=object,
             MiMoVisionPatchEmbed=object,
+            MiMoVisionPatchMerger=object,
             MiMoVisionBlock=object,
             AudioModel=object,
             MiMoAudioTokenizer=object,

@@ -2257,6 +2257,13 @@ def build_audit(root: Path, model_path: Path, manifest: Path) -> dict[str, Any]:
         media_runtime_evidence["text_route_media_unwired_superseded_by_source"] = True
     else:
         media_runtime_evidence["text_route_media_unwired_superseded_by_source"] = False
+    text_route_long_prompt_supersedes_length_sweep = bool(
+        text_route_evidence.get("exists")
+        and text_route_evidence.get("long_prompt_recall_pass")
+        and text_route_evidence.get("long_prompt_oom_cleared")
+    )
+    if text_route_long_prompt_supersedes_length_sweep:
+        length_blocked = False
     if text_route_evidence.get("exists") and text_route_evidence.get("cache_visible_pass"):
         prompt_shape_blocked = False
 
@@ -2386,6 +2393,9 @@ def build_audit(root: Path, model_path: Path, manifest: Path) -> dict[str, Any]:
                 and text_route_evidence.get("long_prompt_oom_cleared")
             ),
             "text_route_tool_call": bool(text_route_evidence.get("tool_call_pass")),
+            "text_route_long_prompt_supersedes_length_sweep": bool(
+                text_route_long_prompt_supersedes_length_sweep
+            ),
             "prefix_paged_l2_cache_reproved": not bool(
                 text_route_evidence.get("cache_l2_not_reproved")
             ),
