@@ -24,7 +24,7 @@ MIMO_AUDIT = Path(
     "build/current-mimo-v2-jang2l-current-audit-after-jang2l-runtime-modalities-proof-20260608.json"
 )
 MIMO_NO_SOURCE_EXACTNESS_CLASSIFIER = Path(
-    "build/current-mimo-v2-no-source-exactness-classifier-after-conservative-no-cb-prefix-proof-20260608.json"
+    "build/current-mimo-v2-no-source-exactness-classifier-after-jang2l-runtime-modalities-proof-20260608.json"
 )
 NOHEAVY_API_CACHE = Path(
     "build/current-noheavy-api-cache-contract-after-dsv4-preflight-refresh-20260608.json"
