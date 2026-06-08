@@ -1296,6 +1296,47 @@ def _register_mimo_v2_mlx_vlm_runtime() -> None:
     class VisionModel(nn.Module):
         def __init__(self, config=None):
             super().__init__()
+            self.config = config or VisionConfig()
+            self.hidden_size = int(getattr(self.config, "hidden_size", 1280))
+            self.out_hidden_size = int(
+                getattr(self.config, "out_hidden_size", 4096)
+            )
+            self.patch_size = int(getattr(self.config, "patch_size", 16))
+            self.temporal_patch_size = int(
+                getattr(self.config, "temporal_patch_size", 2)
+            )
+            self.in_channels = int(
+                getattr(self.config, "in_channels", None)
+                or getattr(self.config, "in_chans", 3)
+            )
+            self.spatial_merge_size = int(
+                getattr(self.config, "spatial_merge_size", 2)
+            )
+            self.patch_embed = MiMoVisionPatchEmbed(
+                patch_size=self.patch_size,
+                temporal_patch_size=self.temporal_patch_size,
+                in_channels=self.in_channels,
+                embed_dim=self.hidden_size,
+            )
+            self.merger = MiMoVisionPatchMerger(
+                dim=self.out_hidden_size,
+                context_dim=self.hidden_size,
+                spatial_merge_size=self.spatial_merge_size,
+            )
+
+        def embed_patches(self, pixel_values):
+            return self.patch_embed(pixel_values)
+
+        def merge_patches(self, hidden_states):
+            return self.merger(hidden_states)
+
+        def __call__(self, pixel_values=None, grid_thw=None, **kwargs):
+            raise UnsupportedMediaModalityError(
+                "vision",
+                "MiMo-V2.5 vision patch embedding and merger modules are present, "
+                "but the 28-block ViT attention forward is not wired yet.",
+                family="mimo_v2",
+            )
 
         def sanitize(self, weights):
             return {
@@ -1311,6 +1352,82 @@ def _register_mimo_v2_mlx_vlm_runtime() -> None:
 
     class AudioModel(VisionModel):
         pass
+
+    class MiMoVisionPatchEmbed(nn.Module):
+        def __init__(
+            self,
+            *,
+            patch_size: int = 16,
+            temporal_patch_size: int = 2,
+            in_channels: int = 3,
+            embed_dim: int = 1280,
+        ):
+            super().__init__()
+            self.patch_size = patch_size
+            self.temporal_patch_size = temporal_patch_size
+            self.in_channels = in_channels
+            self.embed_dim = embed_dim
+            self.proj = nn.Linear(
+                in_channels * temporal_patch_size * patch_size * patch_size,
+                embed_dim,
+                bias=False,
+            )
+
+        def __call__(self, hidden_states):
+            hidden_states = mx.array(hidden_states)
+            flat_patch_width = (
+                self.in_channels
+                * self.temporal_patch_size
+                * self.patch_size
+                * self.patch_size
+            )
+            if hidden_states.shape[-1] == flat_patch_width:
+                return self.proj(hidden_states)
+            expected = (
+                -1,
+                self.in_channels,
+                self.temporal_patch_size,
+                self.patch_size,
+                self.patch_size,
+            )
+            try:
+                patches = mx.reshape(hidden_states, expected)
+            except Exception as exc:
+                raise ValueError(
+                    "MiMo-V2 vision patch embedding expected flattened patches "
+                    f"of width {flat_patch_width} or reshapeable raw patches; "
+                    f"got shape {hidden_states.shape}"
+                ) from exc
+            return self.proj(mx.reshape(patches, (patches.shape[0], flat_patch_width)))
+
+    class MiMoVisionPatchMerger(nn.Module):
+        def __init__(self, *, dim: int, context_dim: int, spatial_merge_size: int = 2):
+            super().__init__()
+            self.dim = dim
+            self.context_dim = context_dim
+            self.spatial_merge_size = spatial_merge_size
+            self.hidden_size = context_dim * (spatial_merge_size**2)
+            self.ln_q = nn.LayerNorm(context_dim, eps=1e-6)
+            self.linear_1 = nn.Linear(self.hidden_size, self.hidden_size)
+            self.linear_2 = nn.Linear(self.hidden_size, dim)
+
+        def __call__(self, x):
+            x = mx.array(x)
+            if x.ndim != 2 or int(x.shape[-1]) != self.context_dim:
+                raise ValueError(
+                    "MiMo-V2 vision merger expects rank-2 patch states with "
+                    f"hidden size {self.context_dim}; got shape {x.shape}"
+                )
+            if int(x.shape[0]) % int(self.spatial_merge_size**2) != 0:
+                raise ValueError(
+                    "MiMo-V2 vision merger patch count must be divisible by "
+                    f"{self.spatial_merge_size**2}; got {x.shape[0]}"
+                )
+            x = self.ln_q(x)
+            x = mx.reshape(x, (-1, self.hidden_size))
+            x = self.linear_1(x)
+            x = nn.gelu(x)
+            return self.linear_2(x)
 
     def _mimo_v2_flatten_modal_embeds(modal_embeds):
         arr = mx.array(modal_embeds)

@@ -25,7 +25,7 @@ from typing import Any
 DEFAULT_MODEL_PATH = Path("/Users/example/.mlxstudio/models/JANGQ-AI/MiMo-V2.5-JANGTQ_2")
 DEFAULT_MANIFEST = Path("build/current-mimo-jangtq2-local-manifest-20260607.tsv")
 DEFAULT_OUT = Path(
-    "build/current-mimo-v2-jang2l-current-audit-after-media-embedding-splice-20260607.json"
+    "build/current-mimo-v2-jang2l-current-audit-after-vision-merger-module-20260607.json"
 )
 
 STRUCTURAL_ARTIFACT = Path("build/current-mimo-jang2l-local-structural-verify-20260606.json")
@@ -922,6 +922,24 @@ def _mimo_media_runtime_evidence(
             "token count",
         )
     )
+    vision_patch_embed_present = all(
+        marker in adapter_text
+        for marker in (
+            "class MiMoVisionPatchEmbed",
+            "def embed_patches(self, pixel_values):",
+            "self.patch_embed = MiMoVisionPatchEmbed(",
+            "flat_patch_width",
+        )
+    )
+    vision_merger_present = all(
+        marker in adapter_text
+        for marker in (
+            "class MiMoVisionPatchMerger",
+            "def merge_patches(self, hidden_states):",
+            "self.merger = MiMoVisionPatchMerger(",
+            "self.linear_2 = nn.Linear(self.hidden_size, dim)",
+        )
+    )
     media_weights_preserved = bool(visual_count > 0 and audio_count > 0)
     metadata_overadvertises = bool(
         config_modalities != ["text"]
@@ -971,6 +989,8 @@ def _mimo_media_runtime_evidence(
             "audio": bool(audio_load_weights_binding_present),
         },
         "mixed_inputs_embeds_splice": bool(mixed_inputs_embeds_present),
+        "vision_patch_embed_module": bool(vision_patch_embed_present),
+        "vision_merger_module": bool(vision_merger_present),
         "runtime_media_wired": False if runtime_gap else True,
         "missing_runtime_components": (
             [
@@ -988,12 +1008,16 @@ def _mimo_media_runtime_evidence(
                         "mixed media/text inputs_embeds construction",
                         mixed_inputs_embeds_present,
                     ),
+                    (
+                        "visual patch embedding module",
+                        vision_patch_embed_present,
+                    ),
+                    ("vision merger to 4096 hidden size", vision_merger_present),
                 )
                 if not present
             ]
             + [
-                "visual patch embedding and 28-block ViT forward",
-                "vision merger to 4096 hidden size",
+                "28-block ViT attention forward",
                 "audio tokenizer/feature extraction bridge",
                 "audio local transformer/projection forward",
                 "media-aware prefix/L2 cache proof",

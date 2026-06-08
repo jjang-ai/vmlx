@@ -43,6 +43,14 @@ def test_mimo_current_audit_separates_clean_artifact_from_runtime_blockers(
                 "video_embeds is not None",
                 "audio_embeds is not None",
                 "token count",
+                "class MiMoVisionPatchEmbed",
+                "def embed_patches(self, pixel_values):",
+                "self.patch_embed = MiMoVisionPatchEmbed(",
+                "flat_patch_width",
+                "class MiMoVisionPatchMerger",
+                "def merge_patches(self, hidden_states):",
+                "self.merger = MiMoVisionPatchMerger(",
+                "self.linear_2 = nn.Linear(self.hidden_size, dim)",
                 "MiMo-V2.5 JANG_2L vision input is not wired",
                 'key.startswith("model.mtp.")',
             ]
@@ -336,6 +344,8 @@ def test_mimo_current_audit_separates_clean_artifact_from_runtime_blockers(
         "audio": True,
     }
     assert result["diagnostics"]["mimo_media_runtime"]["mixed_inputs_embeds_splice"] is True
+    assert result["diagnostics"]["mimo_media_runtime"]["vision_patch_embed_module"] is True
+    assert result["diagnostics"]["mimo_media_runtime"]["vision_merger_module"] is True
     assert (
         "VisionConfig parser"
         not in result["diagnostics"]["mimo_media_runtime"]["missing_runtime_components"]
@@ -355,6 +365,18 @@ def test_mimo_current_audit_separates_clean_artifact_from_runtime_blockers(
     assert (
         "mixed media/text inputs_embeds construction"
         not in result["diagnostics"]["mimo_media_runtime"]["missing_runtime_components"]
+    )
+    assert (
+        "visual patch embedding module"
+        not in result["diagnostics"]["mimo_media_runtime"]["missing_runtime_components"]
+    )
+    assert (
+        "vision merger to 4096 hidden size"
+        not in result["diagnostics"]["mimo_media_runtime"]["missing_runtime_components"]
+    )
+    assert (
+        "28-block ViT attention forward"
+        in result["diagnostics"]["mimo_media_runtime"]["missing_runtime_components"]
     )
     assert result["diagnostics"]["all_local_smoke"]["tool_protocol_pass"] is True
     assert result["diagnostics"]["prompt_shape_first_token"]["blocked"] is True
