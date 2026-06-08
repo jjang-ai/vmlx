@@ -843,6 +843,10 @@ def _mimo_media_runtime_evidence(
     )
     has_processor = (model_path / "preprocessor_config.json").exists()
     has_audio_tokenizer = (model_path / "audio_tokenizer").exists()
+    has_audio_tokenizer_config = (model_path / "audio_tokenizer" / "config.json").exists()
+    has_audio_tokenizer_weights = (
+        model_path / "audio_tokenizer" / "model.safetensors"
+    ).exists()
     smoke_caps = (
         _mimo_runtime_capabilities_from_smoke(all_local_smoke_data)
         if isinstance(all_local_smoke_data, dict)
@@ -1024,6 +1028,18 @@ def _mimo_media_runtime_evidence(
             "_pad_and_group_mimo_v2_audio_codes",
         )
     )
+    audio_tokenizer_runtime_execution_present = all(
+        marker in adapter_text
+        for marker in (
+            "class MiMoAudioTokenizer",
+            "def encode_audio_to_codes",
+            "audio_tokenizer/model.safetensors",
+            "num_quantizers",
+            "codebook_size",
+            "n_mels",
+            "return_codes_only",
+        )
+    )
     media_weight_assignment_present = all(
         marker in adapter_text
         for marker in (
@@ -1119,7 +1135,11 @@ def _mimo_media_runtime_evidence(
         or config_multimodal_status != "weights_preserved_text_runtime"
         or runtime_multimodal_mode != "weights_preserved_text_runtime"
     )
-    runtime_gap = bool(runtime_explicitly_unwired or missing_multimodal_module)
+    runtime_gap = bool(
+        runtime_explicitly_unwired
+        or missing_multimodal_module
+        or not audio_tokenizer_runtime_execution_present
+    )
     return {
         "status": "open" if runtime_gap or metadata_overadvertises else "pass",
         "classification": (
@@ -1143,6 +1163,8 @@ def _mimo_media_runtime_evidence(
         "audio_tensor_count": audio_count,
         "has_preprocessor_config": has_processor,
         "has_audio_tokenizer_dir": has_audio_tokenizer,
+        "has_audio_tokenizer_config": has_audio_tokenizer_config,
+        "has_audio_tokenizer_weights": has_audio_tokenizer_weights,
         "media_weights_preserved": media_weights_preserved,
         "runtime_capabilities": smoke_caps,
         "runtime_capabilities_text_only_safe": bool(
@@ -1167,6 +1189,9 @@ def _mimo_media_runtime_evidence(
         "model_vision_bridge": bool(model_vision_bridge_present),
         "audio_projection_bridge": bool(audio_projection_bridge_present),
         "audio_code_local_transformer": bool(audio_code_local_transformer_present),
+        "audio_tokenizer_model_execution": bool(
+            audio_tokenizer_runtime_execution_present
+        ),
         "media_weight_assignment": bool(media_weight_assignment_present),
         "media_aware_prefix_l2_cache": bool(media_aware_prefix_l2_cache_present),
         "audio_payload_forwarding": bool(audio_payload_forwarding_present),
@@ -1215,6 +1240,10 @@ def _mimo_media_runtime_evidence(
                         audio_code_local_transformer_present,
                     ),
                     (
+                        "audio tokenizer model execution bridge (waveform/mel -> 20-channel audio_codes)",
+                        audio_tokenizer_runtime_execution_present,
+                    ),
+                    (
                         "media weight assignment to runtime modules",
                         media_weight_assignment_present,
                     ),
@@ -1236,9 +1265,6 @@ def _mimo_media_runtime_evidence(
                     ),
                 )
                 if not present
-            ]
-            + [
-                "audio tokenizer/feature extraction bridge",
             ]
             if runtime_gap
             else []

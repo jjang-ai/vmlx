@@ -458,6 +458,10 @@ def test_mimo_current_audit_separates_clean_artifact_from_runtime_blockers(
         result["diagnostics"]["mimo_media_runtime"]["audio_code_local_transformer"]
         is True
     )
+    assert (
+        result["diagnostics"]["mimo_media_runtime"]["audio_tokenizer_model_execution"]
+        is False
+    )
     assert result["diagnostics"]["mimo_media_runtime"]["media_weight_assignment"] is True
     assert (
         result["diagnostics"]["mimo_media_runtime"]["media_aware_prefix_l2_cache"]
@@ -516,7 +520,7 @@ def test_mimo_current_audit_separates_clean_artifact_from_runtime_blockers(
         not in result["diagnostics"]["mimo_media_runtime"]["missing_runtime_components"]
     )
     assert (
-        "audio tokenizer/feature extraction bridge"
+        "audio tokenizer model execution bridge (waveform/mel -> 20-channel audio_codes)"
         in result["diagnostics"]["mimo_media_runtime"]["missing_runtime_components"]
     )
     assert (
