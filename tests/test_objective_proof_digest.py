@@ -8673,7 +8673,7 @@ def test_objective_digest_includes_current_real_ui_unblocked_non_mimo_matrix(
             "build/current-real-ui-dsv4-memory-preflight-20260530-local-refresh.json"
         ],
         "mimo_v2": [
-            "build/current-all-local-model-smoke-mimo-v25-jangtq2-media-l2-release-20260608/summary.json"
+            "build/current-all-local-model-smoke-mimo-v25-jangtq2-media-l2-after-cache-cap-20260608/summary.json"
         ],
     }
     assert row["details"]["real_ui_live_model_matrix"][
