@@ -18,7 +18,7 @@ def test_objective_proof_digest_default_out_tracks_current_release_proof_artifac
     from tests.cross_matrix import summarize_objective_proof as objective
 
     assert objective.DEFAULT_OUT == Path(
-        "build/current-objective-proof-after-mimo-audio-bridge-missing-l2-restart-20260608.json"
+        "build/current-objective-proof-after-mimo-audio-expanded-token-l2-restart-20260608.json"
     )
 
 
@@ -8497,11 +8497,7 @@ def test_objective_proof_digest_keeps_cross_family_live_smoke_open_when_only_mim
         "non_mimo_live_smoke_clear_mimo_v2_deferred"
     )
     assert row["details"]["mimo_v2_deferred"] is True
-    assert row["details"]["not_pass_required_family_artifacts"] == {
-        "mimo_v2": [
-            "build/current-all-local-model-smoke-mimo-v25-jangtq2-bundled-tools-nomedia-after-do-sample-false-rerun-20260607/summary.json"
-        ],
-    }
+    assert row["details"]["not_pass_required_family_artifacts"] == {}
     assert row["details"]["missing_required_family_keys"] == ["mimo_v2"]
     assert row["details"]["non_mimo_missing_required_family_keys"] == []
     assert row["details"]["non_mimo_not_pass_artifacts"] == []
@@ -8676,7 +8672,7 @@ def test_objective_digest_includes_current_real_ui_unblocked_non_mimo_matrix(
             "build/current-real-ui-dsv4-memory-preflight-20260530-local-refresh.json"
         ],
         "mimo_v2": [
-            "build/current-all-local-model-smoke-mimo-v25-jangtq2-bundled-tools-nomedia-after-do-sample-false-rerun-20260607/summary.json"
+            "build/current-all-local-model-smoke-mimo-v25-jangtq2-audio-expanded-token-l2-restart-20260608/summary.json"
         ],
     }
     assert row["details"]["real_ui_live_model_matrix"][

@@ -25,7 +25,7 @@ from typing import Any
 DEFAULT_MODEL_PATH = Path("/Users/example/.mlxstudio/models/JANGQ-AI/MiMo-V2.5-JANGTQ_2")
 DEFAULT_MANIFEST = Path("build/current-mimo-jangtq2-local-manifest-20260607.tsv")
 DEFAULT_OUT = Path(
-    "build/current-mimo-v2-jang2l-current-audit-after-audio-bridge-missing-l2-restart-20260608.json"
+    "build/current-mimo-v2-jang2l-current-audit-after-audio-expanded-token-l2-restart-20260608.json"
 )
 
 STRUCTURAL_ARTIFACT = Path("build/current-mimo-jang2l-local-structural-verify-20260606.json")
@@ -40,7 +40,7 @@ TOOL_FAILURE_ARTIFACT = Path(
     "build/current-mimo-v2-jang2l-tool-dialect-failure-20260606.json"
 )
 ALL_LOCAL_SMOKE_ARTIFACT = Path(
-    "build/current-all-local-model-smoke-mimo-v25-jangtq2-audio-bridge-missing-l2-restart-20260608/summary.json"
+    "build/current-all-local-model-smoke-mimo-v25-jangtq2-audio-expanded-token-l2-restart-20260608/summary.json"
 )
 KVNONE_NOPREFIX_SMOKE_ARTIFACT = Path(
     "build/current-all-local-model-smoke-mimo-v25-jangtq2-bundled-tools-nomedia-kvnone-noprefix-20260607/summary.json"
@@ -2160,8 +2160,8 @@ def build_audit(root: Path, model_path: Path, manifest: Path) -> dict[str, Any]:
     else:
         media_runtime_evidence["live_media_e2e_status"] = "pass"
         media_runtime_evidence["live_media_e2e_boundary"] = (
-            "Live MiMo object image/video and post-media text recovery rows passed; "
-            "audio waveform depth remains a separate release gate."
+            "Live MiMo object image/video, audio waveform, and post-media text "
+            "recovery rows passed for the current proof."
         )
         media_runtime_evidence["live_media_e2e_labels"] = smoke_evidence.get(
             "live_media_e2e_labels"

@@ -242,7 +242,7 @@ def test_mimo_current_audit_separates_clean_artifact_from_runtime_blockers(
     )
     _write_json(
         tmp_path
-        / "build/current-all-local-model-smoke-mimo-v25-jangtq2-audio-bridge-missing-l2-restart-20260608/summary.json",
+        / "build/current-all-local-model-smoke-mimo-v25-jangtq2-audio-expanded-token-l2-restart-20260608/summary.json",
         {
             "status": "fail",
             "results": [
