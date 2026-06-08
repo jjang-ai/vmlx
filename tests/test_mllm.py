@@ -98,6 +98,178 @@ def test_video_path(tmp_path):
 class TestMLLMHelperFunctions:
     """Test helper functions that don't require model loading."""
 
+    def test_mlx_vlm_prompt_cache_trim_patch_handles_rank3_kv(self):
+        """mlx-vlm PromptCacheState restore must trim rank-3 VLM KV caches."""
+        pytest.importorskip("mlx_vlm")
+        import importlib
+        from types import SimpleNamespace
+
+        import mlx.core as mx
+        from vmlx_engine.utils import mlx_vlm_compat
+
+        gen = importlib.import_module("mlx_vlm.generate")
+        cache = [
+            SimpleNamespace(
+                keys=mx.zeros((1, 6, 8)),
+                values=mx.zeros((1, 6, 8)),
+                offset=6,
+            )
+        ]
+
+        mlx_vlm_compat.apply()
+        assert getattr(gen.stream_generate, "_vmlx_rank3_cache_trim_patched", False)
+        gen._vmlx_trim_prompt_cache(cache, 4)
+
+        assert cache[0].keys.shape == (1, 4, 8)
+        assert cache[0].values.shape == (1, 4, 8)
+        assert cache[0].offset == 4
+
+    def test_mlx_vlm_stream_generate_primes_qwen_mrope_before_full_image_prefill(self):
+        """Qwen/N2 VLM full image prefill must prime mRoPE before cached forward."""
+        pytest.importorskip("mlx_vlm")
+        import importlib
+        from types import SimpleNamespace
+
+        import mlx.core as mx
+        from vmlx_engine.utils import mlx_vlm_compat
+
+        gen = importlib.import_module("mlx_vlm.generate")
+        calls = []
+
+        def get_rope_index(input_ids, image_grid_thw, video_grid_thw, mask):
+            calls.append((input_ids, image_grid_thw, video_grid_thw, mask))
+            return (
+                mx.zeros((3, input_ids.shape[0], input_ids.shape[1]), dtype=mx.int64),
+                mx.array([[7]], dtype=mx.int64),
+            )
+
+        language_model = SimpleNamespace(
+            _position_ids=None,
+            _rope_deltas=None,
+            get_rope_index=get_rope_index,
+        )
+        model = SimpleNamespace(language_model=language_model)
+        input_ids = mx.array([[1, 2, 3]], dtype=mx.int64)
+        mask = mx.ones((1, 3), dtype=mx.int64)
+        image_grid_thw = mx.array([[1, 2, 2]], dtype=mx.int64)
+        kwargs = {"image_grid_thw": image_grid_thw}
+
+        mlx_vlm_compat.apply()
+        assert getattr(gen.stream_generate, "_vmlx_mrope_full_prefill_patched", False)
+
+        assert gen._vmlx_prime_qwen_mrope_for_full_prompt(
+            model, input_ids, mask, kwargs
+        )
+
+        assert len(calls) == 1
+        assert calls[0][0] is input_ids
+        assert calls[0][1] is image_grid_thw
+        assert calls[0][2] is None
+        assert calls[0][3] is mask
+        assert language_model._position_ids.shape == (3, 1, 3)
+        assert language_model._rope_deltas.tolist() == [[7]]
+        assert kwargs["rope_deltas"].tolist() == [[7]]
+
+    def test_qwen35_language_mrope_delta_patch_installed(self):
+        """Qwen/N2 language forward must not add cache offsets to None deltas."""
+        pytest.importorskip("mlx_vlm")
+
+        from mlx_vlm.models.qwen3_5 import language as qwen35_language
+        from vmlx_engine.utils import mlx_vlm_compat
+
+        mlx_vlm_compat.apply()
+
+        assert getattr(
+            qwen35_language.LanguageModel.__call__,
+            "_vmlx_mrope_none_delta_patched",
+            False,
+        )
+
+    def test_qwen35_language_mrope_treats_none_cache_offset_as_zero(self):
+        """Fresh Qwen/N2 VLM caches can report None offset before first prefill."""
+        pytest.importorskip("mlx_vlm")
+        from types import SimpleNamespace
+
+        import mlx.core as mx
+        from mlx_vlm.models.qwen3_5 import language as qwen35_language
+        from vmlx_engine.utils import mlx_vlm_compat
+
+        mlx_vlm_compat.apply()
+
+        captured = {}
+
+        class _Model:
+            fa_idx = 0
+
+            def __call__(self, *args, **kwargs):
+                captured["position_ids"] = kwargs.get("position_ids")
+                raise RuntimeError("position ids captured")
+
+        fake_self = SimpleNamespace(
+            model=_Model(),
+            _rope_deltas=mx.array([[7]], dtype=mx.int64),
+            _position_ids=mx.zeros((3, 1, 4), dtype=mx.int64),
+            args=SimpleNamespace(tie_word_embeddings=False),
+            lm_head=lambda x: x,
+        )
+        cache = [SimpleNamespace(offset=None)]
+        inputs = mx.array([[1, 2, 3, 4]], dtype=mx.int64)
+
+        with pytest.raises(RuntimeError, match="position ids captured"):
+            qwen35_language.LanguageModel.__call__(fake_self, inputs, cache=cache)
+
+        assert captured["position_ids"].shape == (3, 1, 4)
+
+    def test_media_expanded_token_ids_for_cache_uses_mlx_vlm_prepare_inputs(self, monkeypatch):
+        """VLM prefix-cache keys must use media-expanded IDs, not text token IDs."""
+        pytest.importorskip("mlx_vlm")
+        import importlib
+        from types import SimpleNamespace
+
+        import mlx.core as mx
+        from vmlx_engine.models.mllm import _media_expanded_token_ids_for_cache
+
+        gen = importlib.import_module("mlx_vlm.generate")
+        calls = []
+
+        def fake_prepare_inputs(*args, **kwargs):
+            calls.append(kwargs)
+            return {"input_ids": mx.array([[10, 11, 999, 999, 12]])}
+
+        monkeypatch.setattr(gen, "prepare_inputs", fake_prepare_inputs)
+        monkeypatch.setattr(gen, "normalize_resize_shape", lambda value: ("norm", value))
+
+        token_ids = _media_expanded_token_ids_for_cache(
+            SimpleNamespace(config=SimpleNamespace(model_type="qwen3_5_moe", image_token_index=999)),
+            SimpleNamespace(chat_template=None),
+            "formatted prompt",
+            images=["image.png"],
+            resize_shape=(64, 64),
+        )
+
+        assert token_ids == [10, 11, 999, 999, 12]
+        assert calls[0]["images"] == ["image.png"]
+        assert calls[0]["prompts"] == "formatted prompt"
+        assert calls[0]["image_token_index"] == 999
+        assert calls[0]["resize_shape"] == ("norm", (64, 64))
+
+    def test_simple_media_prompt_cache_rejects_path_dependent_layers(self):
+        """Simple VLM PromptCacheState restore is unsafe for hybrid SSM layers."""
+        from types import SimpleNamespace
+        from vmlx_engine.models.mllm import _supports_simple_media_prompt_cache
+
+        hybrid = SimpleNamespace(
+            language_model=SimpleNamespace(
+                model=SimpleNamespace(layers=[SimpleNamespace(linear_attn=object())])
+            )
+        )
+        plain = SimpleNamespace(
+            language_model=SimpleNamespace(model=SimpleNamespace(layers=[SimpleNamespace()]))
+        )
+
+        assert not _supports_simple_media_prompt_cache(hybrid)
+        assert _supports_simple_media_prompt_cache(plain)
+
     def test_qwen35_vlm_compat_transposes_patch_embed_to_mlx_conv3d_layout(self):
         """Issue #182: Qwen VL HF patch embed weights must load in MLX layout."""
         pytest.importorskip("mlx_vlm")

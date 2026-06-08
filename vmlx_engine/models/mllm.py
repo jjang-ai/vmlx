@@ -3380,15 +3380,89 @@ def _prompt_cache_state_from_entry(cache_entry: Any) -> Any | None:
     # stale cache into a fake prefix hit.
     if all(token_id == 0 for token_id in token_ids):
         return None
+    if len(token_ids) <= 1:
+        return None
+    restore_token_ids = list(token_ids[:-1])
+    restore_len = len(restore_token_ids)
+    try:
+        kv_cache = _copy_prompt_cache_to_prompt_boundary(kv_cache, restore_len)
+    except Exception:
+        return None
+    if not kv_cache:
+        return None
     try:
         from mlx_vlm.generate import PromptCacheState
     except Exception:
         return None
 
     state = PromptCacheState()
+    try:
+        from ..utils.mlx_vlm_compat import _vmlx_wrap_rank3_prompt_cache_for_mlx_vlm
+
+        kv_cache = _vmlx_wrap_rank3_prompt_cache_for_mlx_vlm(kv_cache)
+    except Exception:
+        pass
     state.cache = kv_cache
-    state.token_ids = list(token_ids)
+    state.token_ids = restore_token_ids
     return state
+
+
+def _media_expanded_token_ids_for_cache(
+    model: Any,
+    processor: Any,
+    prompt: str,
+    *,
+    images: list[Any] | None = None,
+    audio: list[Any] | None = None,
+    video: list[Any] | None = None,
+    resize_shape: Any = None,
+) -> list[int] | None:
+    """Return mlx-vlm's media-expanded input IDs for VLM prefix-cache keys."""
+    if not images and not audio and not video:
+        return None
+    try:
+        from mlx_vlm.generate import normalize_resize_shape, prepare_inputs
+    except Exception:
+        return None
+    try:
+        config = getattr(model, "config", None)
+        model_type = str(getattr(config, "model_type", "") or "")
+        image_token_index = getattr(config, "image_token_index", None)
+        add_special_tokens = (
+            getattr(processor, "chat_template", None) is None
+            if model_type in {"gemma3", "gemma3n", "gemma4"}
+            else True
+        )
+        inputs = prepare_inputs(
+            processor,
+            images=images if images else None,
+            audio=audio if audio else None,
+            videos=video if video else None,
+            prompts=prompt,
+            image_token_index=image_token_index,
+            resize_shape=normalize_resize_shape(resize_shape),
+            add_special_tokens=add_special_tokens,
+        )
+        input_ids = inputs.get("input_ids", None)
+        if input_ids is None:
+            return None
+        return [int(x) for x in input_ids.flatten().tolist()]
+    except Exception as exc:
+        logger.debug("Media-expanded VLM cache tokenization failed: %s", exc)
+        return None
+
+
+def _supports_simple_media_prompt_cache(model: Any) -> bool:
+    """Whether simple mlx-vlm media PromptCacheState restore is safe."""
+    language_model = getattr(model, "language_model", None)
+    inner_model = getattr(language_model, "model", None)
+    layers = getattr(inner_model, "layers", None)
+    if not layers:
+        return True
+    for layer in layers:
+        if hasattr(layer, "linear_attn") or hasattr(layer, "mamba") or hasattr(layer, "ssm"):
+            return False
+    return True
 
 
 def _copy_prompt_cache_to_prompt_boundary(
@@ -3403,24 +3477,56 @@ def _copy_prompt_cache_to_prompt_boundary(
     prompt_tokens_count = max(int(prompt_tokens_count or 0), 0)
     for layer_cache in prompt_cache:
         new_cache = copy.copy(layer_cache)
+        copied = False
         if hasattr(layer_cache, "state"):
             state = layer_cache.state
             if state is not None and len(state) >= 2 and state[0] is not None:
                 keys = mx.array(state[0])
                 values = mx.array(state[1])
-                cache_len = keys.shape[2] if len(keys.shape) >= 3 else None
+                cache_axis = 2 if len(keys.shape) >= 4 else 1 if len(keys.shape) == 3 else None
+                cache_len = keys.shape[cache_axis] if cache_axis is not None else None
                 target_len = prompt_tokens_count
                 if cache_len is not None:
                     target_len = min(prompt_tokens_count, cache_len)
                     if cache_len > target_len:
-                        keys = keys[:, :, :target_len, :]
-                        values = values[:, :, :target_len, :]
+                        if cache_axis == 2:
+                            keys = keys[:, :, :target_len, :]
+                            values = values[:, :, :target_len, :]
+                        else:
+                            keys = keys[:, :target_len, :]
+                            values = values[:, :target_len, :]
                 new_cache.keys = keys
                 new_cache.values = values
                 if len(state) >= 3:
-                    new_cache.offset = min(state[2], target_len)
+                    offset = state[2]
+                    new_cache.offset = target_len if offset is None else min(offset, target_len)
                 elif hasattr(layer_cache, "offset"):
-                    new_cache.offset = min(layer_cache.offset, target_len)
+                    offset = layer_cache.offset
+                    new_cache.offset = target_len if offset is None else min(offset, target_len)
+                copied = True
+        if not copied:
+            keys = getattr(layer_cache, "keys", None)
+            values = getattr(layer_cache, "values", None)
+            if keys is not None and values is not None:
+                keys = mx.array(keys)
+                values = mx.array(values)
+                cache_axis = 2 if len(keys.shape) >= 4 else 1 if len(keys.shape) == 3 else None
+                cache_len = keys.shape[cache_axis] if cache_axis is not None else None
+                target_len = prompt_tokens_count
+                if cache_len is not None:
+                    target_len = min(prompt_tokens_count, cache_len)
+                    if cache_len > target_len:
+                        if cache_axis == 2:
+                            keys = keys[:, :, :target_len, :]
+                            values = values[:, :, :target_len, :]
+                        else:
+                            keys = keys[:, :target_len, :]
+                            values = values[:, :target_len, :]
+                new_cache.keys = keys
+                new_cache.values = values
+                if hasattr(layer_cache, "offset"):
+                    offset = layer_cache.offset
+                    new_cache.offset = target_len if offset is None else min(offset, target_len)
         cache_to_store.append(new_cache)
     return cache_to_store
 
@@ -4322,6 +4428,10 @@ class MLXMultimodalLM:
                 self.model, self.processor = smelt_load(resolved_name, expert_percent=_smelt_pct)
             else:
                 self.model, self.processor = load_jang_vlm_model(resolved_name)
+            try:
+                _apply_mlx_vlm_compat()
+            except Exception as _e:
+                logger.debug(f"mlx_vlm compat patch after JANG load skipped: {_e}")
             self.config = load_config(resolved_name)
             _set_vlm_inference_mode(self.model)
             self._loaded = True
@@ -5331,15 +5441,22 @@ class MLXMultimodalLM:
         prompt_cache_state = None
         cache_hit = False
         _cache_token_ids: list[int] | None = None  # reused by store path below
+        media_cache_safe = _supports_simple_media_prompt_cache(self.model)
 
-        if use_cache and self._cache_manager is not None and all_sources:
+        if use_cache and media_cache_safe and self._cache_manager is not None and all_sources:
             try:
                 tokenizer = (
                     self.processor.tokenizer
                     if hasattr(self.processor, "tokenizer")
                     else self.processor
                 )
-                token_ids = tokenizer.encode(formatted_prompt)
+                token_ids = _media_expanded_token_ids_for_cache(
+                    self.model,
+                    self.processor,
+                    formatted_prompt,
+                    images=all_images,
+                    resize_shape=kwargs.get("resize_shape"),
+                ) or tokenizer.encode(formatted_prompt)
                 _cache_token_ids = token_ids
                 cache_entry, prefix_match_len = self._cache_manager.fetch(
                     all_sources, formatted_prompt, token_ids
@@ -5404,7 +5521,7 @@ class MLXMultimodalLM:
         # False when the cache is empty (via len fallback). That made
         # store skip the very first attempt, so the cache could never
         # populate and no request ever hit. (2026-04-18 Ralph iter 11)
-        if use_cache and self._cache_manager is not None and all_sources and not cache_hit:
+        if use_cache and media_cache_safe and self._cache_manager is not None and all_sources and not cache_hit:
             if prompt_cache is not None:
                 try:
                     num_tokens = getattr(result, "prompt_tokens", 0)
@@ -5545,15 +5662,22 @@ class MLXMultimodalLM:
         cache_hit = False
         token_ids: list[int] = []
         use_cache = kwargs.pop("use_cache", True)
+        media_cache_safe = _supports_simple_media_prompt_cache(self.model)
 
-        if use_cache and self._cache_manager is not None and all_sources:
+        if use_cache and media_cache_safe and self._cache_manager is not None and all_sources:
             try:
                 tokenizer = (
                     self.processor.tokenizer
                     if hasattr(self.processor, "tokenizer")
                     else self.processor
                 )
-                token_ids = tokenizer.encode(formatted_prompt)
+                token_ids = _media_expanded_token_ids_for_cache(
+                    self.model,
+                    self.processor,
+                    formatted_prompt,
+                    images=all_images,
+                    resize_shape=kwargs.get("resize_shape"),
+                ) or tokenizer.encode(formatted_prompt)
                 cache_entry, prefix_match_len = self._cache_manager.fetch(
                     all_sources, formatted_prompt, token_ids
                 )
@@ -5610,6 +5734,7 @@ class MLXMultimodalLM:
 
         if (
             use_cache
+            and media_cache_safe
             and self._cache_manager is not None
             and all_sources
             and not cache_hit
@@ -5771,10 +5896,18 @@ class MLXMultimodalLM:
             if hasattr(self.processor, "tokenizer")
             else self.processor
         )
-        token_ids = tokenizer.encode(formatted_prompt)
+        token_ids = _media_expanded_token_ids_for_cache(
+            self.model,
+            self.processor,
+            formatted_prompt,
+            images=all_images,
+            audio=all_audio,
+            resize_shape=kwargs.get("resize_shape"),
+        ) or tokenizer.encode(formatted_prompt)
+        media_cache_safe = _supports_simple_media_prompt_cache(self.model)
 
         # Check prefix cache
-        if use_cache and self._cache_manager is not None and all_images:
+        if use_cache and media_cache_safe and self._cache_manager is not None and all_images:
             try:
                 cache_entry, prefix_match_len = self._cache_manager.fetch(
                     all_images, formatted_prompt, token_ids
@@ -5799,7 +5932,7 @@ class MLXMultimodalLM:
         prompt_cache_state = None
         skip_prompt_processing = False
 
-        if cache_hit and cache_entry and cache_entry.kv_cache:
+        if media_cache_safe and cache_hit and cache_entry and cache_entry.kv_cache:
             if all_images:
                 # mlx-vlm trims multimodal prefixes via PromptCacheState. Passing
                 # raw prompt_cache with the full prompt would double-process the
@@ -5896,6 +6029,7 @@ class MLXMultimodalLM:
         # IMPORTANT: We need to store only the prompt portion, not generated tokens
         if (
             use_cache
+            and media_cache_safe
             and self._cache_manager is not None
             and all_images
             and not cache_hit
@@ -6083,15 +6217,23 @@ class MLXMultimodalLM:
         cache_hit = False
         use_cache = kwargs.pop("use_cache", True)
         token_ids: list[int] = []
+        media_cache_safe = _supports_simple_media_prompt_cache(self.model)
 
-        if use_cache and self._cache_manager is not None and all_images:
+        if use_cache and media_cache_safe and self._cache_manager is not None and all_images:
             try:
                 tokenizer = (
                     self.processor.tokenizer
                     if hasattr(self.processor, "tokenizer")
                     else self.processor
                 )
-                token_ids = tokenizer.encode(formatted_prompt)
+                token_ids = _media_expanded_token_ids_for_cache(
+                    self.model,
+                    self.processor,
+                    formatted_prompt,
+                    images=all_images,
+                    audio=all_audio,
+                    resize_shape=kwargs.get("resize_shape"),
+                ) or tokenizer.encode(formatted_prompt)
                 cache_entry, prefix_match_len = self._cache_manager.fetch(
                     all_images, formatted_prompt, token_ids
                 )
@@ -6200,6 +6342,7 @@ class MLXMultimodalLM:
 
         if (
             use_cache
+            and media_cache_safe
             and self._cache_manager is not None
             and all_images
             and not cache_hit

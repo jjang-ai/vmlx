@@ -659,7 +659,7 @@ class TestMLXMultimodalLMCache:
         state = captured.get("prompt_cache_state")
         assert state is not None
         assert state.cache == ["cached-kv"]
-        assert state.token_ids == [10, 11, 12]
+        assert state.token_ids == [10, 11]
         assert captured.get("prompt_cache") is None
 
     def test_generate_image_prefix_hit_passes_prompt_cache_state_to_mlx_vlm(
@@ -724,7 +724,7 @@ class TestMLXMultimodalLMCache:
         state = captured.get("prompt_cache_state")
         assert state is not None
         assert state.cache == ["cached-kv"]
-        assert state.token_ids == [10, 11, 12]
+        assert state.token_ids == [10, 11]
         assert captured.get("prompt_cache") is None
 
     def test_generate_image_cache_miss_stores_prompt_boundary_only(
@@ -797,6 +797,30 @@ class TestMLXMultimodalLMCache:
         assert layer_cache.offset == 6
         assert layer_cache.keys.shape[2] == 6
 
+    def test_prompt_cache_copy_trims_rank3_kv_state(self):
+        """VLM cache copy must handle rank-3 KV tensors from mlx-vlm backends."""
+        from types import SimpleNamespace
+
+        import mlx.core as mx
+        from vmlx_engine.models.mllm import _copy_prompt_cache_to_prompt_boundary
+
+        layer_cache = SimpleNamespace(
+            state=(
+                mx.zeros((1, 6, 8)),
+                mx.zeros((1, 6, 8)),
+                6,
+            ),
+            offset=6,
+        )
+
+        copied = _copy_prompt_cache_to_prompt_boundary([layer_cache], 4)
+
+        assert len(copied) == 1
+        assert copied[0].keys.shape == (1, 4, 8)
+        assert copied[0].values.shape == (1, 4, 8)
+        assert copied[0].offset == 4
+        assert layer_cache.state[0].shape == (1, 6, 8)
+
     def test_prompt_cache_state_rejects_legacy_dummy_token_ids(self):
         """Legacy store_cache dummy tokens must not drive mlx-vlm prefix trim."""
         from vmlx_engine.models.mllm import _prompt_cache_state_from_entry
@@ -810,6 +834,124 @@ class TestMLXMultimodalLMCache:
         )
 
         assert _prompt_cache_state_from_entry(entry) is None
+
+    def test_prompt_cache_state_wraps_rank3_kv_for_upstream_trim(self):
+        """PromptCacheState handoff must survive mlx-vlm's rank-4 trim syntax."""
+        from types import SimpleNamespace
+
+        import mlx.core as mx
+        from vmlx_engine.models.mllm import _prompt_cache_state_from_entry
+
+        entry = MLLMPrefixCacheEntry(
+            image_hash="img",
+            prompt_hash="prompt",
+            kv_cache=[
+                SimpleNamespace(
+                    keys=mx.zeros((1, 6, 8)),
+                    values=mx.zeros((1, 6, 8)),
+                    offset=6,
+                )
+            ],
+            token_ids=[1, 2, 3, 4, 5, 6],
+            prompt_tokens=6,
+        )
+
+        state = _prompt_cache_state_from_entry(entry)
+        layer_cache = state.cache[0]
+
+        cached_len = layer_cache.keys.shape[2]
+        assert cached_len > 4
+        layer_cache.keys = layer_cache.keys[:, :, :4, :]
+        layer_cache.values = layer_cache.values[:, :, :4, :]
+        layer_cache.offset = 4
+
+        assert layer_cache.keys.shape == (1, 4, 8)
+        assert layer_cache.values.shape == (1, 4, 8)
+
+    def test_prompt_cache_state_uses_n_minus_one_media_restore_boundary(self):
+        """Exact VLM media prompt hits must leave one token for safe re-prefill."""
+        from types import SimpleNamespace
+
+        import mlx.core as mx
+        from vmlx_engine.models.mllm import _prompt_cache_state_from_entry
+
+        entry = MLLMPrefixCacheEntry(
+            image_hash="img",
+            prompt_hash="prompt",
+            kv_cache=[
+                SimpleNamespace(
+                    keys=mx.zeros((1, 2, 6, 8)),
+                    values=mx.zeros((1, 2, 6, 8)),
+                    offset=6,
+                )
+            ],
+            token_ids=[1, 2, 3, 4, 5, 6],
+            prompt_tokens=6,
+        )
+
+        state = _prompt_cache_state_from_entry(entry)
+
+        assert state.token_ids == [1, 2, 3, 4, 5]
+        assert state.cache[0].keys.shape == (1, 2, 5, 8)
+        assert state.cache[0].values.shape == (1, 2, 5, 8)
+        assert state.cache[0].offset == 5
+
+    def test_prompt_cache_state_wraps_property_backed_rank3_kv_state(self):
+        """Real mlx-vlm cache classes can expose keys through the state tuple."""
+        import mlx.core as mx
+        from vmlx_engine.models.mllm import _prompt_cache_state_from_entry
+
+        class _StateBackedCache:
+            def __init__(self):
+                self.state = (
+                    mx.zeros((1, 6, 8)),
+                    mx.zeros((1, 6, 8)),
+                    6,
+                )
+
+            @property
+            def keys(self):
+                return self.state[0]
+
+            @keys.setter
+            def keys(self, value):
+                self.state = (value, self.state[1], self.state[2])
+
+            @property
+            def values(self):
+                return self.state[1]
+
+            @values.setter
+            def values(self, value):
+                self.state = (self.state[0], value, self.state[2])
+
+            @property
+            def offset(self):
+                return self.state[2]
+
+            @offset.setter
+            def offset(self, value):
+                self.state = (self.state[0], self.state[1], value)
+
+        entry = MLLMPrefixCacheEntry(
+            image_hash="img",
+            prompt_hash="prompt",
+            kv_cache=[_StateBackedCache()],
+            token_ids=[1, 2, 3, 4, 5, 6],
+            prompt_tokens=6,
+        )
+
+        state = _prompt_cache_state_from_entry(entry)
+        layer_cache = state.cache[0]
+
+        cached_len = layer_cache.keys.shape[2]
+        assert cached_len > 4
+        layer_cache.keys = layer_cache.keys[:, :, :4, :]
+        layer_cache.values = layer_cache.values[:, :, :4, :]
+        layer_cache.offset = 4
+
+        assert layer_cache.keys.shape == (1, 4, 8)
+        assert layer_cache.values.shape == (1, 4, 8)
 
     def test_stream_chat_image_prefix_hit_passes_prompt_cache_state_to_mlx_vlm(
         self, monkeypatch
@@ -878,7 +1020,7 @@ class TestMLXMultimodalLMCache:
         state = captured.get("prompt_cache_state")
         assert state is not None
         assert state.cache == ["cached-kv"]
-        assert state.token_ids == [10, 11, 12]
+        assert state.token_ids == [10, 11]
         assert captured.get("prompt_cache") is None
 
     def test_stream_chat_cache_miss_stores_prompt_boundary_only(
@@ -1019,7 +1161,7 @@ class TestMLXMultimodalLMCache:
         state = captured.get("prompt_cache_state")
         assert state is not None
         assert state.cache == ["cached-kv"]
-        assert state.token_ids == [10, 11, 12]
+        assert state.token_ids == [10, 11]
         assert captured.get("prompt_cache") is None
 
     def test_stream_generate_cache_miss_stores_prompt_boundary_only(
