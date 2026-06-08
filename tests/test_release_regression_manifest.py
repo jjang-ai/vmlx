@@ -4559,6 +4559,17 @@ def test_release_regression_manifest_chat_ipc_stream_metrics_include_cache_reuse
     assert "respUsage.input_tokens_details.cache_detail" in source
 
 
+def test_release_regression_manifest_chat_ipc_rolls_back_failed_media_turns():
+    source = Path("panel/src/main/ipc/chat.ts").read_text(encoding="utf-8")
+
+    assert "rolled_back_failed_media_user_message" in source
+    assert "rolled_back_empty_warning_media_user_message" in source
+    assert "VLM image prefill guard" in source
+    assert "db.deleteMessage(userMessage.id)" in source
+    assert "hasMediaAttachments && !hadVisibleActivity && !wasAborted" in source
+    assert "mediaWarningWithoutVisibleActivity" in source
+
+
 def test_release_regression_manifest_real_ui_script_records_request_contract():
     script = Path("panel/scripts/live-real-ui-model-proof.mjs")
     source = script.read_text(encoding="utf-8")
