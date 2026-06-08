@@ -478,6 +478,55 @@ class TestBatchedEngineVideoTemplate:
         assert "conv_in" in patched_gdn
         assert "gdn_sink=gdn_sink" in inspect.getsource(DecoderLayer.__call__)
 
+    def test_qwen35_dense_mtp_decoder_call_forwards_gdn_sink_runtime(self):
+        import types
+
+        from vmlx_engine.patches.mlx_lm_mtp.qwen35_model import _patch_decoder_layer
+
+        class DecoderLayer:
+            pass
+
+        q35 = types.SimpleNamespace(DecoderLayer=DecoderLayer)
+        _patch_decoder_layer(q35)
+
+        observed = {}
+
+        class LinearAttention:
+            def __call__(
+                self,
+                x,
+                mask,
+                cache,
+                *,
+                gdn_sink=None,
+                n_confirmed=0,
+            ):
+                observed["x"] = x
+                observed["mask"] = mask
+                observed["cache"] = cache
+                observed["gdn_sink"] = gdn_sink
+                observed["n_confirmed"] = n_confirmed
+                return 3
+
+        layer = DecoderLayer()
+        layer.is_linear = True
+        layer.input_layernorm = lambda x: x + 1
+        layer.linear_attn = LinearAttention()
+        layer.post_attention_layernorm = lambda x: x + 5
+        layer.mlp = lambda x: x + 7
+
+        sink = []
+        result = layer(10, mask="mask", cache="cache", gdn_sink=sink, n_confirmed=2)
+
+        assert result == 38
+        assert observed == {
+            "x": 11,
+            "mask": "mask",
+            "cache": "cache",
+            "gdn_sink": sink,
+            "n_confirmed": 2,
+        }
+
     def test_qwen35_dense_mtp_patch_propagates_gdn_sink_past_decoder(self):
         import inspect
 
