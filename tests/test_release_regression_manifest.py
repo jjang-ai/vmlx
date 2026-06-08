@@ -145,7 +145,7 @@ def _write_current_objective_digest(
     open_requirements: list[str] | None = None,
     missing_evidence: list[str] | None = None,
 ) -> None:
-    artifact = root / "build/current-objective-proof-after-issue179-local-repro-refresh-20260608.json"
+    artifact = root / "build/current-objective-proof-after-dsv4-preflight-refresh-20260608.json"
     artifact.parent.mkdir(parents=True, exist_ok=True)
     open_rows = (
         EXPECTED_CURRENT_OPEN_REQUIREMENTS
@@ -10311,7 +10311,7 @@ def test_release_regression_manifest_rejects_stale_issue179_objective_digest_row
     tmp_path,
 ):
     _write_current_objective_digest(tmp_path)
-    path = tmp_path / "build/current-objective-proof-after-issue179-local-repro-refresh-20260608.json"
+    path = tmp_path / "build/current-objective-proof-after-dsv4-preflight-refresh-20260608.json"
     payload = json.loads(path.read_text(encoding="utf-8"))
     unexpected_requirement = "Unexpected MiniMax stale reporter row is release-cleared"
     payload["requirements"].append(
@@ -15098,7 +15098,7 @@ def test_release_regression_manifest_tracks_packaged_integrity_with_runner_artif
     assert "Version triples" in joined
     assert "bundled Python hash parity" in joined
     assert "objective proof digest" in joined
-    assert "current-objective-proof-after-issue179-local-repro-refresh-20260608.json" in joined
+    assert "current-objective-proof-after-dsv4-preflight-refresh-20260608.json" in joined
     assert "objective-gate-enforced" in joined
     assert "verify-bundled" in joined
 
@@ -15166,7 +15166,7 @@ def test_release_regression_manifest_tracks_current_updater_and_i18n_rechecks():
 
     ling = rows["ling-bailing-multilingual-quality-live"]
     ling_joined = " ".join(ling["commands"] + ling["artifacts"] + ling["proves"])
-    assert "current-objective-proof-after-issue179-local-repro-refresh-20260608.json" in ling_joined
+    assert "current-objective-proof-after-dsv4-preflight-refresh-20260608.json" in ling_joined
 
 
 def test_release_regression_manifest_tracks_live_only_boundaries():
@@ -15211,7 +15211,7 @@ def test_release_regression_manifest_tracks_fresh_dsv4_live_failure_artifact():
     assert "current-dsv4-jang-batch-generator-isolated-identifier-logits-after-full-prefill-fix-20260524.json" in joined
     assert "current-dsv4-jang-thinking-off-logit-probe-20260524.json" in joined
     assert "current-dsv4-jang-live-api-copy-framing-canary-20260524.json" in joined
-    assert "current-dsv4-route-mode-code-exactness-preflight-after-mimo-model-upload-action-20260608.json" in joined
+    assert "current-dsv4-route-mode-code-exactness-preflight-after-issue179-local-repro-refresh-20260608.json" in joined
     assert "current-dsv4-route-mode-code-exactness-memory-preflight-20260603-second-local-check.json" not in joined
     assert "current-dsv4-route-mode-code-exactness-memory-preflight-20260602-developer-id-local-recheck.json" not in joined
     assert "current-dsv4-route-mode-code-exactness-memory-preflight-20260601-post-epipe-fix.json" not in joined

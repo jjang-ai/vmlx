@@ -96,7 +96,7 @@ NEMOTRON_OMNI_MEDIA_GATE = Path(
     "build/current-nemotron-omni-mxfp4-media-gate-20260607/SUMMARY.json"
 )
 DSV4_EXACTNESS_PREFLIGHT = Path(
-    "build/current-dsv4-route-mode-code-exactness-preflight-after-mimo-model-upload-action-20260608.json"
+    "build/current-dsv4-route-mode-code-exactness-preflight-after-issue179-local-repro-refresh-20260608.json"
 )
 
 

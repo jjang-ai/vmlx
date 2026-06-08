@@ -7523,7 +7523,7 @@ def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
             DSV4_CURRENT_SOURCE_TOKEN_TAIL_AB_EXACTNESS_REL,
             DSV4_CURRENT_SOURCE_MEMORY_PREFLIGHT_REL,
             DSV4_CURRENT_REAL_UI_MEMORY_PREFLIGHT_REL,
-            "build/current-dsv4-route-mode-code-exactness-preflight-after-mimo-model-upload-action-20260608.json",
+            "build/current-dsv4-route-mode-code-exactness-preflight-after-issue179-local-repro-refresh-20260608.json",
             "build/current-dsv4-responses-cache-gate-20260606.json",
             "build/current-dsv4-responses-restart-l2-gate-20260606.json",
             "build/current-dsv4-responses-one-tool-stop-20260606.json",

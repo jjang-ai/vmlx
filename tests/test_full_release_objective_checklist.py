@@ -685,7 +685,7 @@ def _write_dsv4_green_artifact(tmp_path: Path) -> None:
     ]
     _write_json(
         tmp_path
-        / "build/current-dsv4-route-mode-code-exactness-preflight-after-mimo-model-upload-action-20260608.json",
+        / "build/current-dsv4-route-mode-code-exactness-preflight-after-issue179-local-repro-refresh-20260608.json",
         {
             "status": "pass",
             "reason": None,

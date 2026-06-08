@@ -41,7 +41,7 @@ DEFERRED_RELEASE_OPEN_REQUIREMENTS = {
 }
 
 CURRENT_OBJECTIVE_DIGEST_ARTIFACT = (
-    "build/current-objective-proof-after-issue179-local-repro-refresh-20260608.json"
+    "build/current-objective-proof-after-dsv4-preflight-refresh-20260608.json"
 )
 
 CURRENT_SUITE_SOURCE_HASH_FILES = (
