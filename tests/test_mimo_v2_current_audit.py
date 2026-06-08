@@ -877,11 +877,11 @@ def test_mimo_current_audit_separates_clean_artifact_from_runtime_blockers(
     assert result["component_ok"]["mimo_jang2l_live_media_l2"] is False
     assert result["component_ok"]["mimo_jang2l_l2_restart_cache_hit"] is True
     assert result["component_ok"]["mimo_jang2l_l2_restart_visible_output"] is True
-    assert result["component_ok"]["mimo_jang2l_tool_long_prompt_metal_oom"] is False
-    assert result["component_ok"]["mimo_jang2l_tight_memory_prompt_budget"] is False
-    assert result["component_ok"]["mimo_jang2l_media_prefill_budget"] is True
+    assert result["component_ok"]["mimo_jang2l_tool_long_prompt_metal_oom"] is True
+    assert result["component_ok"]["mimo_jang2l_tight_memory_prompt_budget"] is True
+    assert result["component_ok"]["mimo_jang2l_media_prefill_budget"] is False
     assert (
-        result["component_ok"]["mimo_jang2l_post_media_working_set_pressure"] is True
+        result["component_ok"]["mimo_jang2l_post_media_working_set_pressure"] is False
     )
     assert "mimo_jangtq2_live_media_l2_missing" in result["blockers"]
     assert "mimo_jang2l_live_media_l2_missing" in result["blockers"]

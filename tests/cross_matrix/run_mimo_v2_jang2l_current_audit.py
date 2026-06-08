@@ -2933,16 +2933,16 @@ def build_audit(root: Path, model_path: Path, manifest: Path) -> dict[str, Any]:
             "mimo_jang2l_l2_restart_visible_output": bool(
                 mimo_jang2l_l2_restart_visible_output
             ),
-            "mimo_jang2l_tool_long_prompt_metal_oom": bool(
+            "mimo_jang2l_tool_long_prompt_metal_oom": not bool(
                 mimo_jang2l_tool_long_prompt_metal_oom_blocked
             ),
-            "mimo_jang2l_tight_memory_prompt_budget": bool(
+            "mimo_jang2l_tight_memory_prompt_budget": not bool(
                 mimo_jang2l_tight_memory_prompt_budget_blocked
             ),
-            "mimo_jang2l_media_prefill_budget": bool(
+            "mimo_jang2l_media_prefill_budget": not bool(
                 mimo_jang2l_media_prefill_budget_blocked
             ),
-            "mimo_jang2l_post_media_working_set_pressure": bool(
+            "mimo_jang2l_post_media_working_set_pressure": not bool(
                 mimo_jang2l_post_media_working_set_pressure_blocked
             ),
             "manual_sink_does_not_clear_length_generation": bool(sink_mode_fails),
