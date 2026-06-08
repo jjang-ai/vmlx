@@ -2383,7 +2383,9 @@ def _loaded_media_capability_status(modalities: list[str]) -> dict:
         "runtime_modalities": modalities,
         "declared_modalities": artifact["declared_modalities"],
         "preserved_modalities": artifact["preserved_modalities"],
-        "unwired_modalities": _ordered_unwired_modalities(unwired - runtime),
+        "unwired_modalities": _ordered_unwired_modalities(
+            (unwired | memory_gated) - runtime
+        ),
         "memory_gate": memory_gate,
         "status_by_modality": status_by_modality,
     }

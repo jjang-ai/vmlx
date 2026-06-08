@@ -247,6 +247,8 @@ def test_mimo_v2_loaded_media_capabilities_are_memory_gated(
 
     assert status["memory_gate"]["safe"] is False
     assert status["memory_gate"]["reason"] == "insufficient_metal_working_set_headroom"
+    assert status["runtime_modalities"] == ["text"]
+    assert status["unwired_modalities"] == ["vision", "image", "video", "audio"]
     assert status["status_by_modality"]["vision"] == "memory_gated"
     assert status["status_by_modality"]["image"] == "memory_gated"
     assert status["status_by_modality"]["video"] == "memory_gated"
