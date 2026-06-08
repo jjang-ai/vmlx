@@ -242,7 +242,7 @@ def test_mimo_current_audit_separates_clean_artifact_from_runtime_blockers(
     )
     _write_json(
         tmp_path
-        / "build/current-all-local-model-smoke-mimo-v25-jangtq2-l2-restart-20260608/summary.json",
+        / "build/current-all-local-model-smoke-mimo-v25-jangtq2-audio-bridge-missing-l2-restart-20260608/summary.json",
         {
             "status": "fail",
             "results": [
@@ -976,12 +976,63 @@ def test_mimo_audio_waveform_rows_clear_audio_gate_separately_from_image_video()
 
     assert evidence["audio_waveform_e2e_pass"] is True
     assert evidence["audio_waveform_e2e_status"] == "pass"
+    assert evidence["audio_waveform_e2e_classification"] == "audio_waveform_e2e_clear"
     assert evidence["audio_waveform_e2e_labels"] == [
         "audio_blue",
         "text_no_media_after_audio",
     ]
     assert evidence["live_media_e2e_pass"] is False
     assert evidence["artifact_exactness_pass"] is False
+
+
+def test_mimo_audio_waveform_missing_payload_is_classified_as_bridge_gap():
+    from tests.cross_matrix import run_mimo_v2_jang2l_current_audit as audit
+
+    smoke = {
+        "status": "fail",
+        "results": [
+            {
+                "status": "probe_failed",
+                "requests": [
+                    {
+                        "label": "audio_blue",
+                        "code": 200,
+                        "content": (
+                            "Generation failed: unsupported media modality audio "
+                            "for mimo_v2: raw audio reached the VLM processor, "
+                            "but the processor returned no audio_codes."
+                        ),
+                        "validation_failures": [
+                            {
+                                "label": "audio_blue",
+                                "reason": "audio_processor_payload_missing",
+                            }
+                        ],
+                    },
+                    {
+                        "label": "text_no_media_after_audio",
+                        "code": 200,
+                        "content": "NONE",
+                        "validation_failures": [],
+                    },
+                ],
+                "failures": [
+                    {
+                        "label": "audio_blue",
+                        "reason": "audio_processor_payload_missing",
+                    }
+                ],
+            }
+        ],
+    }
+
+    evidence = audit._all_local_smoke_evidence(smoke)
+
+    assert evidence["audio_waveform_e2e_pass"] is False
+    assert (
+        evidence["audio_waveform_e2e_classification"]
+        == "mimo_waveform_to_audio_codes_bridge_missing"
+    )
 
 
 def test_mimo_current_smoke_tool_protocol_beats_legacy_synced_tool_failure():

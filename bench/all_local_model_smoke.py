@@ -1430,6 +1430,19 @@ def validate_probe_response(
         if "blue" not in words:
             failures.append({"label": label, "reason": "expected_color_missing", "expected": "blue"})
     elif label == "audio_blue":
+        if (
+            "unsupported media modality audio" in lower
+            or "returned no audio_codes" in lower
+            or "waveform-to-mimo-audio-codes" in lower
+        ):
+            failures.append(
+                {
+                    "label": label,
+                    "reason": "audio_processor_payload_missing",
+                    "expected": "waveform_to_mimo_audio_codes",
+                }
+            )
+            return failures
         if "blue" not in words:
             failures.append(
                 {

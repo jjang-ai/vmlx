@@ -61,7 +61,7 @@ def test_release_tracker_points_at_current_control_plane_checklist():
     ).read_text(encoding="utf-8")
 
     assert (
-        "build/current-full-release-objective-checklist-after-mimo-l2-restart-20260608.json"
+        "build/current-full-release-objective-checklist-after-mimo-audio-bridge-missing-l2-restart-20260608.json"
         in tracker
     )
     assert "Agent control-plane update - 2026-06-07" in tracker

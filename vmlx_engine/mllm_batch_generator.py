@@ -3719,6 +3719,25 @@ class MLLMBatchGenerator:
         request.audio_features = _ensure_mx_array(
             request.extra_kwargs.pop("audio_features", None)
         )
+        if all_audio and not any(
+            item is not None
+            for item in (
+                request.audio_codes,
+                request.audio_embeds,
+                request.audio_features,
+            )
+        ):
+            raise UnsupportedMediaModalityError(
+                "audio",
+                (
+                    "raw audio reached the VLM processor, but the processor "
+                    "returned no audio_codes, audio_embeds, or audio_features. "
+                    "A real waveform-to-MiMo-audio-codes bridge is required; "
+                    "continuing as text-only would hide an unsupported audio path."
+                ),
+                family=str(self._model_type or "mllm"),
+                request_id=request.request_id,
+            )
 
         self._raise_if_prompt_over_limit(
             request,

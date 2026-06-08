@@ -356,6 +356,42 @@ def test_mllm_processor_direct_omits_invalid_audios_alias_for_mimo_v2_processor(
     assert result["audio_codes"] == [[4, 5]]
 
 
+def test_mllm_raw_audio_without_processor_payload_fails_loudly(tmp_path):
+    """Audio requests must not silently continue as text-only if ignored."""
+    from types import SimpleNamespace
+
+    import pytest
+
+    from vmlx_engine.errors import UnsupportedMediaModalityError
+    from vmlx_engine.mllm_batch_generator import MLLMBatchGenerator, MLLMBatchRequest
+
+    wav = tmp_path / "blue.wav"
+    wav.write_bytes(b"RIFF----WAVEfmt ")
+
+    class Processor:
+        def __call__(self, **kwargs):
+            return {"input_ids": [[1, 2, 3]], "attention_mask": [[1, 1, 1]]}
+
+    model = SimpleNamespace(
+        config=SimpleNamespace(model_type="mimo_v2"),
+        language_model=SimpleNamespace(),
+    )
+    generator = MLLMBatchGenerator(model=model, processor=Processor())
+    request = MLLMBatchRequest(
+        uid=1,
+        request_id="audio-no-payload",
+        prompt="transcribe audio",
+        audio=[str(wav)],
+    )
+
+    with pytest.raises(UnsupportedMediaModalityError) as exc:
+        generator._preprocess_request(request)
+
+    assert exc.value.modality == "audio"
+    assert exc.value.family == "mimo_v2"
+    assert "returned no audio_codes" in exc.value.detail
+
+
 def test_mllm_scheduler_and_batched_engine_route_raw_audio_requests():
     """OpenAI audio parts must reach MLLM scheduler, not stop at API parsing."""
     import inspect

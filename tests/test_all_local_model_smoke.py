@@ -1376,6 +1376,23 @@ def test_validate_probe_response_checks_media_color_and_no_media_carryover():
             "expected": "blue",
         }
     ]
+    failures = mod.validate_probe_response(
+        "audio_blue",
+        200,
+        (
+            "Generation failed: unsupported media modality audio for mimo_v2: "
+            "raw audio reached the VLM processor, but the processor returned "
+            "no audio_codes, audio_embeds, or audio_features."
+        ),
+        "",
+    )
+    assert failures == [
+        {
+            "label": "audio_blue",
+            "reason": "audio_processor_payload_missing",
+            "expected": "waveform_to_mimo_audio_codes",
+        }
+    ]
     failures = mod.validate_probe_response("text_no_media_after_audio", 200, "audio", "")
     assert {
         "label": "text_no_media_after_audio",

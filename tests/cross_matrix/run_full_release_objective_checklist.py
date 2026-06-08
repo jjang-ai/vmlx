@@ -17,14 +17,14 @@ from typing import Any
 
 
 DEFAULT_OUT = Path(
-    "build/current-full-release-objective-checklist-after-mimo-l2-restart-20260608.json"
+    "build/current-full-release-objective-checklist-after-mimo-audio-bridge-missing-l2-restart-20260608.json"
 )
 
 MIMO_AUDIT = Path(
-    "build/current-mimo-v2-jang2l-current-audit-after-l2-restart-20260608.json"
+    "build/current-mimo-v2-jang2l-current-audit-after-audio-bridge-missing-l2-restart-20260608.json"
 )
 MIMO_NO_SOURCE_EXACTNESS_CLASSIFIER = Path(
-    "build/current-mimo-v2-no-source-exactness-classifier-after-l2-restart-20260608.json"
+    "build/current-mimo-v2-no-source-exactness-classifier-after-audio-bridge-missing-l2-restart-20260608.json"
 )
 NOHEAVY_API_CACHE = Path(
     "build/current-noheavy-api-cache-contract-after-qwen36-bundled-media-pass-20260607.json"
@@ -39,7 +39,7 @@ TOOL_CALL_CONTRACT = Path(
     "build/current-tool-call-contract-after-current-mimo-proof-20260607.json"
 )
 RELEASE_MANIFEST = Path(
-    "build/current-release-regression-manifest-after-mimo-l2-restart-20260608.json"
+    "build/current-release-regression-manifest-after-mimo-audio-bridge-missing-l2-restart-20260608.json"
 )
 ISSUE179_AUDIT = Path(
     "build/current-issue179-minimax-k-root-cause-audit-after-qwen-installed-video-wiring-20260607.json"

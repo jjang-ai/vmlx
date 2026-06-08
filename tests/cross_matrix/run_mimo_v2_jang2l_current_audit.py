@@ -25,7 +25,7 @@ from typing import Any
 DEFAULT_MODEL_PATH = Path("/Users/example/.mlxstudio/models/JANGQ-AI/MiMo-V2.5-JANGTQ_2")
 DEFAULT_MANIFEST = Path("build/current-mimo-jangtq2-local-manifest-20260607.tsv")
 DEFAULT_OUT = Path(
-    "build/current-mimo-v2-jang2l-current-audit-after-l2-restart-20260608.json"
+    "build/current-mimo-v2-jang2l-current-audit-after-audio-bridge-missing-l2-restart-20260608.json"
 )
 
 STRUCTURAL_ARTIFACT = Path("build/current-mimo-jang2l-local-structural-verify-20260606.json")
@@ -40,7 +40,7 @@ TOOL_FAILURE_ARTIFACT = Path(
     "build/current-mimo-v2-jang2l-tool-dialect-failure-20260606.json"
 )
 ALL_LOCAL_SMOKE_ARTIFACT = Path(
-    "build/current-all-local-model-smoke-mimo-v25-jangtq2-l2-restart-20260608/summary.json"
+    "build/current-all-local-model-smoke-mimo-v25-jangtq2-audio-bridge-missing-l2-restart-20260608/summary.json"
 )
 KVNONE_NOPREFIX_SMOKE_ARTIFACT = Path(
     "build/current-all-local-model-smoke-mimo-v25-jangtq2-bundled-tools-nomedia-kvnone-noprefix-20260607/summary.json"
@@ -312,6 +312,19 @@ def _all_local_smoke_evidence(data: dict[str, Any]) -> dict[str, Any]:
             continue
         audio_waveform_e2e_labels.append(label)
     audio_waveform_e2e_pass = len(audio_waveform_e2e_labels) == len(audio_labels)
+    audio_failure_reasons = {
+        str(failure.get("reason"))
+        for failure in audio_waveform_failures
+        if isinstance(failure, dict)
+    }
+    if audio_waveform_e2e_pass:
+        audio_waveform_classification = "audio_waveform_e2e_clear"
+    elif "audio_processor_payload_missing" in audio_failure_reasons:
+        audio_waveform_classification = "mimo_waveform_to_audio_codes_bridge_missing"
+    elif "expected_audio_transcript_missing" in audio_failure_reasons:
+        audio_waveform_classification = "audio_reached_runtime_but_transcript_wrong"
+    else:
+        audio_waveform_classification = "audio_waveform_e2e_missing_or_failed"
 
     tool_protocol_pass = False
     for request in requests:
@@ -385,6 +398,7 @@ def _all_local_smoke_evidence(data: dict[str, Any]) -> dict[str, Any]:
         "audio_waveform_e2e_status": (
             "pass" if audio_waveform_e2e_pass else "missing_or_failed"
         ),
+        "audio_waveform_e2e_classification": audio_waveform_classification,
         "audio_waveform_e2e_labels": audio_waveform_e2e_labels,
         "audio_waveform_e2e_failures": audio_waveform_failures,
         "exact_cache_blocked": exact_cache_blocked,

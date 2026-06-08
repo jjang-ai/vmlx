@@ -26,7 +26,7 @@ from tests.cross_matrix.release_regression_manifest import (
 
 
 DEFAULT_OUT = Path(
-    "build/current-release-regression-manifest-after-mimo-l2-restart-20260608.json"
+    "build/current-release-regression-manifest-after-mimo-audio-bridge-missing-l2-restart-20260608.json"
 )
 PREPACKAGE_ALLOWED_BLOCKERS = {
     "packaged_app_developer_id_signing_blocked",
