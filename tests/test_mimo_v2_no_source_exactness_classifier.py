@@ -287,3 +287,130 @@ def test_mimo_no_source_classifier_promotes_plain_literal_copy_failure():
     assert artifact["literal_variant_summary"]["tool_literal_pass"] is False
     assert artifact["unresolved_surfaces"]["jangtq2_plain_literal_copy"] is True
     assert artifact["unresolved_surfaces"]["jang2l_tool_memory_or_protocol"] is True
+
+
+def test_mimo_no_source_classifier_tracks_jang2l_json_sentinel_separately():
+    audit = {
+        "component_ok": {
+            "api_cache_responses_contract": True,
+            "tool_protocol": True,
+            "exactness_cache_kv_quant_excluded": True,
+            "decode_speed_target": True,
+            "source_vs_quant_first_divergence": False,
+            "long_prompt_coherence": True,
+            "cb_system_prompt_working_set_pressure": True,
+            "mimo_media_wired": True,
+        }
+    }
+    smoke = {"results": []}
+    literal_variants = {
+        "status": "open",
+        "requests": [
+            {
+                "label": "plain_exact_blue_cat",
+                "pass": False,
+                "content": "blue cat",
+                "expected": "blue-cat",
+            },
+            {
+                "label": "json_blue_cat",
+                "pass": False,
+                "content": '{"status":"ok","value":"bluecat","count":3}',
+                "parsed": {"status": "ok", "value": "bluecat", "count": 3},
+                "expected": {"status": "ok", "value": "blue-cat", "count": 3},
+            },
+            {
+                "label": "tool_blue_cat",
+                "pass": False,
+                "parsed": {"value": "blue-123"},
+                "expected": {"value": "blue-cat"},
+            },
+        ],
+    }
+    jang2l_literal_variants = {
+        "status": "open",
+        "requests": [
+            {
+                "label": "plain_exact_blue_cat",
+                "pass": True,
+                "content": "blue-cat",
+                "expected": "blue-cat",
+            },
+            {
+                "label": "plain_exact_sentinel",
+                "pass": True,
+                "content": "B7-CAT-09",
+                "expected": "B7-CAT-09",
+            },
+            {
+                "label": "tool_blue_cat",
+                "pass": True,
+                "parsed": {"value": "blue-cat"},
+                "expected": {"value": "blue-cat"},
+            },
+            {
+                "label": "tool_sentinel_json_call",
+                "pass": True,
+                "parsed": {"value": "B7-CAT-09"},
+                "expected": {"value": "B7-CAT-09"},
+            },
+            {
+                "label": "json_sentinel",
+                "pass": False,
+                "content": "",
+                "parsed": None,
+                "expected": {"status": "ok", "value": "B7-CAT-09", "count": 3},
+            },
+        ],
+    }
+    jang2l_json_sentinel = {
+        "status": "open",
+        "requests": [
+            {
+                "label": "original",
+                "pass": False,
+                "content": "",
+                "parsed": None,
+                "expected": {"status": "ok", "value": "B7-CAT-09", "count": 3},
+                "usage": {"completion_tokens": 1},
+            },
+            {
+                "label": "lower_value_control",
+                "pass": False,
+                "content": '{"status":"ok","value":"b7-cat-09","readcount":3}',
+                "parsed": {"status": "ok", "value": "b7-cat-09", "readcount": 3},
+                "expected": {"status": "ok", "value": "b7-cat-09", "count": 3},
+                "usage": {"completion_tokens": 20},
+            },
+        ],
+    }
+    stale_jang2l_isolation = {
+        "cases": {
+            "completion_copy_b7": {
+                "body": {"choices": [{"text": "B7-CAT-09"}]},
+            },
+            "chat_tool_b7": {
+                "body": {"choices": [{"message": {"content": "prose, no tool"}}]},
+            },
+        }
+    }
+
+    artifact = build_classification(
+        audit,
+        smoke,
+        jang2l=stale_jang2l_isolation,
+        literal_variants=literal_variants,
+        jang2l_literal_variants=jang2l_literal_variants,
+        jang2l_json_sentinel=jang2l_json_sentinel,
+    )
+
+    assert artifact["classification"] == (
+        "jangtq2_plain_literal_copy_regression_jang2l_plain_copy_passes"
+    )
+    assert artifact["secondary_classification"] == "jang2l_json_sentinel_empty_output_open"
+    assert artifact["unresolved_surfaces"]["jang2l_tool_memory_or_protocol"] is False
+    assert artifact["unresolved_surfaces"]["jang2l_json_sentinel_exactness"] is True
+    assert artifact["jang2l_json_sentinel_summary"]["empty_output_labels"] == ["original"]
+    assert artifact["jang2l_json_sentinel_summary"]["schema_mutation_labels"] == [
+        "lower_value_control"
+    ]

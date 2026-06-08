@@ -45,6 +45,9 @@ DEFAULT_JANGTQ2_LITERAL_VARIANTS = Path(
 DEFAULT_JANG2L_LITERAL_VARIANTS = Path(
     "build/current-mimo-v25-jang2l-exactness-tight64-parser-cache-skip-variant-probe-20260608/JANGQ_MiMo-V2.5-JANG_2L/result.json"
 )
+DEFAULT_JANG2L_JSON_SENTINEL_ISOLATION = Path(
+    "build/current-mimo-v25-jang2l-json-sentinel-isolation-20260608/JANGQ_MiMo-V2.5-JANG_2L/result.json"
+)
 
 EXACTNESS_REASONS = {
     "expected_tool_argument_missing",
@@ -211,6 +214,59 @@ def _literal_variant_summary(artifact: dict[str, Any] | None) -> dict[str, Any]:
     }
 
 
+def _json_sentinel_summary(artifact: dict[str, Any] | None) -> dict[str, Any]:
+    requests = artifact.get("requests") if isinstance(artifact, dict) else None
+    if not isinstance(requests, list):
+        return {
+            "exists": False,
+            "exact_json_pass": None,
+            "empty_output_labels": [],
+            "schema_mutation_labels": [],
+            "failed_labels": [],
+            "failures": [],
+        }
+
+    failures = [
+        {
+            "label": str(request.get("label")),
+            "content": request.get("content"),
+            "parsed": request.get("parsed"),
+            "expected": request.get("expected"),
+            "completion_tokens": (
+                request.get("usage", {}).get("completion_tokens")
+                if isinstance(request.get("usage"), dict)
+                else None
+            ),
+        }
+        for request in requests
+        if isinstance(request, dict) and request.get("pass") is not True
+    ]
+    empty_output_labels = [
+        failure["label"]
+        for failure in failures
+        if str(failure.get("content") or "").strip() == ""
+    ]
+    schema_mutation_labels = [
+        failure["label"]
+        for failure in failures
+        if isinstance(failure.get("parsed"), dict)
+        and isinstance(failure.get("expected"), dict)
+        and set(failure["parsed"].keys()) != set(failure["expected"].keys())
+    ]
+    return {
+        "exists": True,
+        "status": artifact.get("status"),
+        "exact_json_pass": all(
+            isinstance(request, dict) and request.get("pass") is True
+            for request in requests
+        ),
+        "empty_output_labels": empty_output_labels,
+        "schema_mutation_labels": schema_mutation_labels,
+        "failed_labels": [failure["label"] for failure in failures],
+        "failures": failures,
+    }
+
+
 def build_classification(
     audit: dict[str, Any],
     smoke: dict[str, Any],
@@ -222,6 +278,7 @@ def build_classification(
     tq_kernel_parity: dict[str, Any] | None = None,
     literal_variants: dict[str, Any] | None = None,
     jang2l_literal_variants: dict[str, Any] | None = None,
+    jang2l_json_sentinel: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     component_ok = audit.get("component_ok") if isinstance(audit.get("component_ok"), dict) else {}
     failures = _failures(smoke)
@@ -256,6 +313,7 @@ def build_classification(
     no_source_exactness = _exactness_probe_summary(jangtq2, jang2l)
     literal_variant_summary = _literal_variant_summary(literal_variants)
     jang2l_literal_variant_summary = _literal_variant_summary(jang2l_literal_variants)
+    jang2l_json_sentinel_summary = _json_sentinel_summary(jang2l_json_sentinel)
     no_switchglu_copy_preserved = _diagnostic_copy_preserved(no_switchglu_fastpath)
     no_router_no_switchglu_copy_preserved = _diagnostic_copy_preserved(
         no_router_no_switchglu_fastpath
@@ -288,6 +346,7 @@ def build_classification(
             no_source_exactness["jang2l_raw_completion_text"] != ""
             and no_source_exactness["jang2l_raw_completion_literal_preserved"]
             and not no_source_exactness["jang2l_tool_call_parsed"]
+            and jang2l_literal_variant_summary["tool_literal_pass"] is not True
         ),
         "source_vs_quant_first_divergence": not bool(
             component_ok.get("source_vs_quant_first_divergence")
@@ -321,6 +380,10 @@ def build_classification(
         "jang2l_tool_memory_or_protocol": (
             jang2l_literal_variant_summary["exists"] is True
             and jang2l_literal_variant_summary["tool_literal_pass"] is not True
+        ),
+        "jang2l_json_sentinel_exactness": (
+            jang2l_json_sentinel_summary["exists"] is True
+            and jang2l_json_sentinel_summary["exact_json_pass"] is not True
         ),
     }
 
@@ -369,6 +432,15 @@ def build_classification(
     else:
         classification = "insufficient_evidence"
 
+    secondary_classification = None
+    if unresolved_surfaces["jang2l_json_sentinel_exactness"]:
+        if jang2l_json_sentinel_summary["empty_output_labels"]:
+            secondary_classification = "jang2l_json_sentinel_empty_output_open"
+        elif jang2l_json_sentinel_summary["schema_mutation_labels"]:
+            secondary_classification = "jang2l_json_sentinel_schema_mutation_open"
+        else:
+            secondary_classification = "jang2l_json_sentinel_exactness_open"
+
     required_next_evidence = [
         "do not repair semantic values in parser or JSON repair layer",
         "either rerun source-vs-quant when RAM is authorized or provide a stronger artifact-only logits/quantization diagnosis",
@@ -383,11 +455,16 @@ def build_classification(
         required_next_evidence.append(
             "MiMo media runtime wiring is no longer the exactness blocker; keep live media E2E, audio depth, and cache/UI proof as separate release gates"
         )
+    if unresolved_surfaces["jang2l_json_sentinel_exactness"]:
+        required_next_evidence.append(
+            "JANG_2L remains blocked on JSON sentinel exactness: empty one-token outputs and schema-key mutation must be explained without JSON repair or prompt-only folding"
+        )
 
     return {
         "status": status,
         "release_ready": release_ready,
         "classification": classification,
+        "secondary_classification": secondary_classification,
         "source_vs_quant_load_performed": False,
         "source_vs_quant_load_skipped_reason": "user_disallowed_source_vs_quant_due_ram",
         "audit_artifact": str(DEFAULT_AUDIT),
@@ -403,9 +480,11 @@ def build_classification(
         "jangtq2_tq_kernel_parity_artifact": str(DEFAULT_JANGTQ2_TQ_KERNEL_PARITY),
         "jangtq2_literal_variant_artifact": str(DEFAULT_JANGTQ2_LITERAL_VARIANTS),
         "jang2l_literal_variant_artifact": str(DEFAULT_JANG2L_LITERAL_VARIANTS),
+        "jang2l_json_sentinel_artifact": str(DEFAULT_JANG2L_JSON_SENTINEL_ISOLATION),
         "no_source_exactness": no_source_exactness,
         "literal_variant_summary": literal_variant_summary,
         "jang2l_literal_variant_summary": jang2l_literal_variant_summary,
+        "jang2l_json_sentinel_summary": jang2l_json_sentinel_summary,
         "no_source_runtime_diagnostics": no_source_runtime_diagnostics,
         "exactness_failures": exactness_failures,
         "excluded_surfaces": excluded_surfaces,
@@ -445,6 +524,11 @@ def main() -> int:
         type=Path,
         default=DEFAULT_JANG2L_LITERAL_VARIANTS,
     )
+    parser.add_argument(
+        "--jang2l-json-sentinel",
+        type=Path,
+        default=DEFAULT_JANG2L_JSON_SENTINEL_ISOLATION,
+    )
     parser.add_argument("--out", type=Path, default=DEFAULT_OUT)
     args = parser.parse_args()
 
@@ -475,6 +559,11 @@ def main() -> int:
         if args.jang2l_literal_variants.exists()
         else None
     )
+    jang2l_json_sentinel = (
+        _load(args.jang2l_json_sentinel)
+        if args.jang2l_json_sentinel.exists()
+        else None
+    )
     artifact = build_classification(
         _load(args.audit),
         _load(args.smoke),
@@ -485,6 +574,7 @@ def main() -> int:
         tq_kernel_parity=tq_kernel_parity,
         literal_variants=literal_variants,
         jang2l_literal_variants=jang2l_literal_variants,
+        jang2l_json_sentinel=jang2l_json_sentinel,
     )
     artifact["audit_artifact"] = str(args.audit)
     artifact["smoke_artifact"] = str(args.smoke)
@@ -497,6 +587,7 @@ def main() -> int:
         args.jangtq2_no_router_no_switchglu_fastpath
     )
     artifact["jangtq2_tq_kernel_parity_artifact"] = str(args.jangtq2_tq_kernel_parity)
+    artifact["jang2l_json_sentinel_artifact"] = str(args.jang2l_json_sentinel)
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(json.dumps(artifact, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     print(args.out)
