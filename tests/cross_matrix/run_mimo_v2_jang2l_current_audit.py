@@ -1032,12 +1032,24 @@ def _mimo_media_runtime_evidence(
         marker in adapter_text
         for marker in (
             "class MiMoAudioTokenizer",
+            "class MiMoAudioTokenizerEncoder",
             "def encode_audio_to_codes",
+            "def load_mimo_audio_tokenizer_from_bundle",
             "audio_tokenizer/model.safetensors",
             "num_quantizers",
             "codebook_size",
             "n_mels",
             "return_codes_only",
+        )
+    ) and (
+        "test_mimo_v2_audio_tokenizer_executes_mel_to_audio_codes"
+        in (
+            (root / "tests/test_mimo_v2_media_runtime.py").read_text(
+                encoding="utf-8",
+                errors="replace",
+            )
+            if (root / "tests/test_mimo_v2_media_runtime.py").exists()
+            else ""
         )
     )
     audio_tokenizer_rvq_present = all(

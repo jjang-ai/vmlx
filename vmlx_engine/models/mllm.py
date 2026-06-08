@@ -1612,11 +1612,15 @@ def _register_mimo_v2_mlx_vlm_runtime() -> None:
         stride_size: int = 2
         avg_pooler: int = 2
         d_model: int = 1024
+        scale_embedding: bool = False
         kernel_size: int = 3
+        activation_function: str = "gelu"
         encoder_layers: int = 24
+        encoder_skip_layer_id: int | None = 3
         encoder_attention_heads: int = 16
         encoder_ffn_dim: int = 4096
         encoder_causal: bool = True
+        encoder_attn_window_size: list[int] = field(default_factory=lambda: [128, 0])
         nfft: int = 960
         n_mels: int = 128
         sampling_rate: int = 24000
@@ -1624,6 +1628,11 @@ def _register_mimo_v2_mlx_vlm_runtime() -> None:
         window_size: int = 960
         num_quantizers: int = 20
         codebook_size: list[int] = field(default_factory=list)
+        threshold_ema_dead_code: int = 2
+        position_embedding_type: str = "rope"
+        rope_theta: int = 10000
+        rope_type: str = "default"
+        ln_type: str = "LayerNorm"
         hybrid_attention: bool = True
         hybrid_block_size: int = 8
         swa_per_block: int = 2
@@ -1722,6 +1731,322 @@ def _register_mimo_v2_mlx_vlm_runtime() -> None:
             "code_lengths": code_lengths,
         }
 
+    def _mimo_audio_lengths_list(lengths) -> list[int]:
+        arr = mx.array(lengths).astype(mx.int32)
+        if arr.ndim == 0:
+            return [int(arr.item())]
+        return [int(x) for x in arr.tolist()]
+
+    def _mimo_audio_unpack_segments(features, lengths):
+        features = mx.array(features)
+        lens = _mimo_audio_lengths_list(lengths)
+        if not lens:
+            return mx.zeros((0, 0, int(features.shape[-1]) if features.ndim else 0))
+        max_len = max(lens)
+        rows = []
+        offset = 0
+        for length in lens:
+            row = features[offset : offset + length]
+            offset += length
+            if length < max_len:
+                pad = mx.zeros((max_len - length, features.shape[-1]), dtype=features.dtype)
+                row = mx.concatenate([row, pad], axis=0)
+            rows.append(row[None, :, :])
+        return mx.concatenate(rows, axis=0)
+
+    def _mimo_audio_pack_segments(hidden, lengths):
+        lens = _mimo_audio_lengths_list(lengths)
+        rows = []
+        for idx, length in enumerate(lens):
+            if length > 0:
+                rows.append(hidden[idx, :length, :])
+        if not rows:
+            return mx.zeros((0, hidden.shape[-1]), dtype=hidden.dtype)
+        return mx.concatenate(rows, axis=0)
+
+    def _mimo_audio_position_ids(lengths):
+        lens = _mimo_audio_lengths_list(lengths)
+        parts = [mx.arange(length, dtype=mx.float32) for length in lens if length > 0]
+        if not parts:
+            return mx.zeros((0,), dtype=mx.float32)
+        return mx.concatenate(parts, axis=0)
+
+    def _mimo_audio_rotate_half(x):
+        half = int(x.shape[-1]) // 2
+        first = x[..., :half]
+        second = x[..., half : half * 2]
+        rest = x[..., half * 2 :]
+        rotated = mx.concatenate([-second, first], axis=-1)
+        return mx.concatenate([rotated, rest], axis=-1) if rest.shape[-1] else rotated
+
+    def _mimo_audio_activation(name: str, x):
+        lowered = str(name or "gelu").lower()
+        if lowered == "silu":
+            return nn.silu(x)
+        return nn.gelu(x)
+
+    class MiMoAudioTokenizerAttention(nn.Module):
+        def __init__(self, config: MiMoAudioTokenizerConfig, window_size=None):
+            super().__init__()
+            self.embed_dim = int(config.d_model)
+            self.num_heads = int(config.encoder_attention_heads)
+            self.head_dim = self.embed_dim // max(1, self.num_heads)
+            self.scaling = self.head_dim**-0.5
+            self.window_size = tuple(window_size or [-1, -1])
+            self.causal = bool(config.encoder_causal)
+            self.rope_theta = float(config.rope_theta)
+            self.k_proj = nn.Linear(self.embed_dim, self.embed_dim, bias=False)
+            self.v_proj = nn.Linear(self.embed_dim, self.embed_dim, bias=True)
+            self.q_proj = nn.Linear(self.embed_dim, self.embed_dim, bias=True)
+            self.out_proj = nn.Linear(self.embed_dim, self.embed_dim, bias=True)
+
+        def _apply_rope(self, q, k, lengths):
+            positions = _mimo_audio_position_ids(lengths)
+            if int(positions.shape[0]) == 0:
+                return q, k
+            inv_freq = 1.0 / (
+                self.rope_theta
+                ** (
+                    mx.arange(0, self.head_dim, 2).astype(mx.float32)
+                    / self.head_dim
+                )
+            )
+            freqs = positions[:, None] * inv_freq[None, :]
+            emb = mx.concatenate([freqs, freqs], axis=-1)
+            cos = emb[:, None, :].astype(q.dtype)
+            sin = emb[:, None, :].astype(q.dtype)
+            return (
+                q * cos + _mimo_audio_rotate_half(q) * sin,
+                k * cos + _mimo_audio_rotate_half(k) * sin,
+            )
+
+        def _mask(self, seq_len: int, dtype):
+            has_window = self.window_size and int(self.window_size[0]) > 0
+            if not self.causal and not has_window:
+                return None
+            row = mx.arange(seq_len)[:, None]
+            col = mx.arange(seq_len)[None, :]
+            mask = mx.zeros((seq_len, seq_len), dtype=dtype)
+            if self.causal:
+                mask = mx.where(col > row, mx.full((seq_len, seq_len), -mx.inf), mask)
+            if has_window:
+                mask = mx.where(
+                    mx.abs(row - col) > int(self.window_size[0]),
+                    mx.full((seq_len, seq_len), -mx.inf),
+                    mask,
+                )
+            return mask[None, None, :, :]
+
+        def __call__(self, hidden_states, lengths):
+            hidden_states = mx.array(hidden_states)
+            total_len = int(hidden_states.shape[0])
+            q = mx.reshape(self.q_proj(hidden_states), (total_len, self.num_heads, self.head_dim))
+            k = mx.reshape(self.k_proj(hidden_states), (total_len, self.num_heads, self.head_dim))
+            v = mx.reshape(self.v_proj(hidden_states), (total_len, self.num_heads, self.head_dim))
+            q, k = self._apply_rope(q, k, lengths)
+            outputs = []
+            offset = 0
+            for seq_len in _mimo_audio_lengths_list(lengths):
+                if seq_len <= 0:
+                    continue
+                q_seq = mx.transpose(q[offset : offset + seq_len], (1, 0, 2))[None, :, :, :]
+                k_seq = mx.transpose(k[offset : offset + seq_len], (1, 0, 2))[None, :, :, :]
+                v_seq = mx.transpose(v[offset : offset + seq_len], (1, 0, 2))[None, :, :, :]
+                attn = mx.fast.scaled_dot_product_attention(
+                    q_seq,
+                    k_seq,
+                    v_seq,
+                    scale=self.scaling,
+                    mask=self._mask(seq_len, q_seq.dtype),
+                )
+                outputs.append(mx.reshape(mx.transpose(attn[0], (1, 0, 2)), (seq_len, self.embed_dim)))
+                offset += seq_len
+            if not outputs:
+                return mx.zeros_like(hidden_states)
+            return self.out_proj(mx.concatenate(outputs, axis=0))
+
+    class MiMoAudioTokenizerLayer(nn.Module):
+        def __init__(self, config: MiMoAudioTokenizerConfig, window_size=None):
+            super().__init__()
+            self.self_attn = MiMoAudioTokenizerAttention(config, window_size=window_size)
+            self.self_attn_layer_norm = nn.LayerNorm(int(config.d_model))
+            self.fc1 = nn.Linear(int(config.d_model), int(config.encoder_ffn_dim), bias=True)
+            self.fc2 = nn.Linear(int(config.encoder_ffn_dim), int(config.d_model), bias=True)
+            self.final_layer_norm = nn.LayerNorm(int(config.d_model))
+            self.activation_function = str(config.activation_function or "gelu")
+
+        def __call__(self, hidden_states, lengths):
+            residual = hidden_states
+            hidden_states = self.self_attn_layer_norm(hidden_states)
+            hidden_states = self.self_attn(hidden_states, lengths)
+            hidden_states = residual + hidden_states
+            residual = hidden_states
+            hidden_states = self.final_layer_norm(hidden_states)
+            hidden_states = _mimo_audio_activation(
+                self.activation_function,
+                self.fc1(hidden_states),
+            )
+            hidden_states = self.fc2(hidden_states)
+            return residual + hidden_states
+
+    class MiMoAudioTokenizerEncoder(nn.Module):
+        def __init__(self, config: MiMoAudioTokenizerConfig):
+            super().__init__()
+            self.config = config
+            self.conv1 = nn.Conv1d(
+                int(config.n_mels),
+                int(config.d_model),
+                int(config.kernel_size),
+                padding=1,
+                bias=True,
+            )
+            self.conv2 = nn.Conv1d(
+                int(config.d_model),
+                int(config.d_model),
+                int(config.kernel_size),
+                stride=int(config.stride_size),
+                padding=1,
+                bias=True,
+            )
+            attn_windows = []
+            if bool(config.hybrid_attention):
+                for idx in range(int(config.encoder_layers)):
+                    if idx % int(config.swa_per_block) < int(config.swa_per_block) - 1:
+                        attn_windows.append(tuple(config.encoder_attn_window_size))
+                    else:
+                        attn_windows.append((-1, -1))
+            else:
+                attn_windows = [tuple(config.encoder_attn_window_size)] * int(config.encoder_layers)
+            self.layers = [
+                MiMoAudioTokenizerLayer(config, window_size=attn_windows[idx])
+                for idx in range(int(config.encoder_layers))
+            ]
+            self.layer_norm = nn.LayerNorm(int(config.d_model))
+            self.down_sample_layer = (
+                nn.Conv1d(
+                    int(config.d_model),
+                    int(config.d_model),
+                    int(config.avg_pooler),
+                    stride=int(config.avg_pooler),
+                    bias=False,
+                )
+                if int(config.avg_pooler or 1) != 1
+                else None
+            )
+            self.down_sample_norm = (
+                nn.LayerNorm(int(config.d_model))
+                if self.down_sample_layer is not None
+                else None
+            )
+            self.quantizer = MiMoAudioResidualVectorQuantizer(
+                [
+                    mx.zeros((int(size), int(config.d_model)), dtype=mx.float32)
+                    for size in list(config.codebook_size)[: int(config.num_quantizers)]
+                ]
+            )
+
+        def get_output_length(self, mel_len):
+            return self.config.get_output_length(mel_len)
+
+        def get_features(self, input_features, input_lens):
+            input_lens = mx.array(input_lens).astype(mx.int32)
+            output_length = self.get_output_length(input_lens)
+            hidden = _mimo_audio_unpack_segments(input_features, input_lens)
+            hidden = _mimo_audio_activation(self.config.activation_function, self.conv1(hidden))
+            hidden = _mimo_audio_activation(self.config.activation_function, self.conv2(hidden))
+            packed = _mimo_audio_pack_segments(hidden, output_length)
+            skip_hidden = None
+            for idx, layer in enumerate(self.layers):
+                packed = layer(packed, output_length)
+                if self.config.encoder_skip_layer_id is not None and idx == int(self.config.encoder_skip_layer_id) - 1:
+                    skip_hidden = packed
+            if skip_hidden is not None:
+                packed = packed + skip_hidden
+            packed = self.layer_norm(packed)
+            if self.down_sample_layer is not None:
+                dense = _mimo_audio_unpack_segments(packed, output_length)
+                avg = int(self.config.avg_pooler)
+                tgt_len = int(dense.shape[1])
+                if tgt_len % avg:
+                    pad_len = avg - (tgt_len % avg)
+                    dense = mx.concatenate(
+                        [
+                            dense,
+                            mx.zeros((dense.shape[0], pad_len, dense.shape[2]), dtype=dense.dtype),
+                        ],
+                        axis=1,
+                    )
+                dense = _mimo_audio_activation(
+                    self.config.activation_function,
+                    self.down_sample_layer(dense),
+                )
+                output_length = self.config.get_code_length(input_lens)
+                packed = _mimo_audio_pack_segments(dense, output_length)
+                packed = self.down_sample_norm(packed)
+            return packed, output_length
+
+        def encode(
+            self,
+            input_features,
+            input_lens=None,
+            output_length=None,
+            return_codes_only=False,
+            n_q=None,
+            use_quantizer=True,
+        ):
+            if input_lens is None:
+                raise ValueError("MiMo audio tokenizer encode requires input_lens")
+            hidden_states, output_length = self.get_features(input_features, input_lens)
+            codes = None
+            if use_quantizer and self.quantizer is not None:
+                codes = self.quantizer.encode(hidden_states.astype(mx.float32), n_q=n_q)
+                if return_codes_only:
+                    return codes, output_length
+                hidden_states = self.quantizer.decode(codes).astype(hidden_states.dtype)
+            return hidden_states, hidden_states, output_length, codes
+
+    class MiMoAudioTokenizer(nn.Module):
+        def __init__(self, config: MiMoAudioTokenizerConfig):
+            super().__init__()
+            self.config = config
+            self.sampling_rate = int(config.sampling_rate)
+            self.encoder = MiMoAudioTokenizerEncoder(config)
+            self.downsample_rate = int(config.hop_length * 2 * config.avg_pooler)
+
+        def get_output_length(self, mel_len):
+            return self.encoder.get_output_length(mel_len)
+
+        def encode(self, mels, input_lens, use_quantizer=True, return_codes_only=False, n_q=None):
+            return self.encoder.encode(
+                mels,
+                input_lens=input_lens,
+                use_quantizer=use_quantizer,
+                return_codes_only=return_codes_only,
+                n_q=n_q,
+            )
+
+        def encode_audio_to_codes(self, mels, *, segment_size: int = 6000, n_q=None):
+            plan = plan_mimo_audio_mel_segments(
+                mels,
+                config=self.config,
+                segment_size=segment_size,
+            )
+            if not plan["code_lengths"]:
+                return []
+            codes, _ = self.encode(
+                plan["input_features"],
+                input_lens=plan["input_lens"],
+                return_codes_only=True,
+                n_q=n_q,
+            )
+            codes = mx.transpose(codes, (1, 0)).astype(mx.int32)
+            result = []
+            offset = 0
+            for length in plan["code_lengths"]:
+                result.append(codes[offset : offset + int(length)])
+                offset += int(length)
+            return result
+
     def load_mimo_audio_rvq_from_bundle(model_path: str | Path):
         """Load MiMo audio-tokenizer RVQ codebooks from a model bundle.
 
@@ -1794,6 +2119,51 @@ def _register_mimo_v2_mlx_vlm_runtime() -> None:
                 preview += f", ... ({len(missing)} missing)"
             raise KeyError(f"MiMo audio tokenizer codebook weights missing: {preview}")
         return MiMoAudioResidualVectorQuantizer(codebooks)
+
+    def load_mimo_audio_tokenizer_from_bundle(model_path: str | Path):
+        """Load executable MiMo audio tokenizer from ``audio_tokenizer/model.safetensors``."""
+
+        root = Path(model_path)
+        audio_dir = root if root.name == "audio_tokenizer" else root / "audio_tokenizer"
+        config = MiMoAudioTokenizerConfig.from_bundle(audio_dir)
+        tokenizer = MiMoAudioTokenizer(config)
+        weights_path = audio_dir / "model.safetensors"
+        if not weights_path.is_file():
+            raise FileNotFoundError(f"MiMo audio tokenizer weights missing: {weights_path}")
+
+        try:
+            from safetensors.torch import load_file as _torch_load_file
+
+            raw_tensors = _torch_load_file(str(weights_path), device="cpu")
+            items = [
+                (key, mx.array(value.float().cpu().numpy()))
+                for key, value in raw_tensors.items()
+                if "encoder.quantizer.vq.layers." not in key
+            ]
+        except ImportError:
+            from safetensors.numpy import load_file as _np_load_file
+
+            raw_tensors = _np_load_file(str(weights_path))
+            items = [
+                (key, mx.array(value))
+                for key, value in raw_tensors.items()
+                if "encoder.quantizer.vq.layers." not in key
+            ]
+
+        converted = []
+        for key, value in items:
+            if key in {
+                "encoder.conv1.weight",
+                "encoder.conv2.weight",
+                "encoder.down_sample_layer.0.weight",
+            } and value.ndim == 3:
+                value = mx.transpose(value, (0, 2, 1))
+            if key.startswith("encoder.down_sample_layer.0."):
+                key = key.replace("encoder.down_sample_layer.0.", "encoder.down_sample_layer.", 1)
+            converted.append((key, value))
+        tokenizer.load_weights(converted, strict=False)
+        tokenizer.encoder.quantizer = load_mimo_audio_rvq_from_bundle(audio_dir)
+        return tokenizer
 
     def _parse_mimo_v2_int_list(value, length: int):
         if isinstance(value, str) and "-" in value:
@@ -2833,9 +3203,12 @@ def _register_mimo_v2_mlx_vlm_runtime() -> None:
     module.VisionModel = VisionModel
     module.AudioModel = AudioModel
     module.MiMoAudioTokenizerConfig = MiMoAudioTokenizerConfig
+    module.MiMoAudioTokenizer = MiMoAudioTokenizer
+    module.MiMoAudioTokenizerEncoder = MiMoAudioTokenizerEncoder
     module.MiMoAudioEuclideanCodebook = MiMoAudioEuclideanCodebook
     module.MiMoAudioResidualVectorQuantizer = MiMoAudioResidualVectorQuantizer
     module.load_mimo_audio_rvq_from_bundle = load_mimo_audio_rvq_from_bundle
+    module.load_mimo_audio_tokenizer_from_bundle = load_mimo_audio_tokenizer_from_bundle
     module.plan_mimo_audio_mel_segments = plan_mimo_audio_mel_segments
     module.__file__ = getattr(text_runtime, "__file__", module_name)
     sys.modules[module_name] = module

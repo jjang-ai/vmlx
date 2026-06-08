@@ -406,6 +406,56 @@ def test_mimo_v2_audio_tokenizer_config_and_mel_segment_plan(
     sys.modules.pop("mlx_vlm.models.mimo_v2", None)
 
 
+def test_mimo_v2_audio_tokenizer_executes_mel_to_audio_codes(
+    tmp_path,
+    monkeypatch,
+):
+    module = _register_fake_mimo_runtime(monkeypatch, tmp_path)
+    config = module.MiMoAudioTokenizerConfig.from_dict(
+        {
+            "n_mels": 2,
+            "d_model": 4,
+            "encoder_layers": 1,
+            "encoder_attention_heads": 2,
+            "encoder_ffn_dim": 8,
+            "encoder_causal": True,
+            "encoder_attn_window_size": [4, 0],
+            "avg_pooler": 1,
+            "num_quantizers": 2,
+            "codebook_size": [4, 4],
+            "encoder_skip_layer_id": None,
+        }
+    )
+    tokenizer = module.MiMoAudioTokenizer(config)
+    tokenizer.encoder.quantizer = module.MiMoAudioResidualVectorQuantizer(
+        [
+            mx.zeros((4, 4), dtype=mx.float32),
+            mx.ones((4, 4), dtype=mx.float32),
+        ]
+    )
+
+    codes = tokenizer.encode_audio_to_codes(
+        [
+            mx.array(
+                [
+                    [0.1, 1.0],
+                    [0.2, 1.1],
+                    [0.3, 1.2],
+                    [0.4, 1.3],
+                ],
+                dtype=mx.float32,
+            )
+        ],
+        segment_size=4,
+    )
+
+    assert len(codes) == 1
+    assert codes[0].shape == (config.get_code_length(mx.array([4])).item(), 2)
+    assert codes[0].dtype == mx.int32
+    assert codes[0].tolist() == [[0, 0], [0, 0]]
+    sys.modules.pop("mlx_vlm.models.mimo_v2", None)
+
+
 def test_mimo_v2_media_enabled_load_binds_speech_embedding_weights(
     tmp_path,
     monkeypatch,

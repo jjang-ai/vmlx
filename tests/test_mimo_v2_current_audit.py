@@ -95,6 +95,14 @@ def test_mimo_current_audit_separates_clean_artifact_from_runtime_blockers(
                 "def plan_mimo_audio_mel_segments",
                 "segments_per_mel",
                 "code_lengths",
+                "class MiMoAudioTokenizer",
+                "class MiMoAudioTokenizerEncoder",
+                "def encode_audio_to_codes",
+                "def load_mimo_audio_tokenizer_from_bundle",
+                "num_quantizers",
+                "codebook_size",
+                "n_mels",
+                "return_codes_only",
                 "def _apply_mimo_v2_media_weights(self):",
                 "_mimo_v2_assign_weight(self, key, value)",
                 "MiMo-V2 load assigned %d preserved media tensors",
@@ -176,6 +184,7 @@ def test_mimo_current_audit_separates_clean_artifact_from_runtime_blockers(
         "test_mimo_v2_audio_residual_vector_quantizer_matches_nearest_codebook\n"
         "test_mimo_v2_audio_rvq_loader_reads_bundle_codebooks\n"
         "test_mimo_v2_audio_tokenizer_config_and_mel_segment_plan\n"
+        "test_mimo_v2_audio_tokenizer_executes_mel_to_audio_codes\n"
     )
     manifest = tmp_path / "build" / "current-mimo-http-tb5-manifest-20260606.tsv"
     manifest.parent.mkdir(parents=True)
@@ -496,7 +505,7 @@ def test_mimo_current_audit_separates_clean_artifact_from_runtime_blockers(
     )
     assert (
         result["diagnostics"]["mimo_media_runtime"]["audio_tokenizer_model_execution"]
-        is False
+        is True
     )
     assert result["diagnostics"]["mimo_media_runtime"]["media_weight_assignment"] is True
     assert (
@@ -557,7 +566,7 @@ def test_mimo_current_audit_separates_clean_artifact_from_runtime_blockers(
     )
     assert (
         "audio tokenizer model execution bridge (waveform/mel -> 20-channel audio_codes)"
-        in result["diagnostics"]["mimo_media_runtime"]["missing_runtime_components"]
+        not in result["diagnostics"]["mimo_media_runtime"]["missing_runtime_components"]
     )
     assert (
         "audio projection bridge to text hidden size"
