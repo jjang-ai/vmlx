@@ -41,6 +41,13 @@ def _register_fake_mimo_runtime(monkeypatch, tmp_path):
         def make_cache(self):
             return []
 
+        def sanitize(self, weights):
+            return weights
+
+        def load_weights(self, weights, strict=True):
+            self.loaded_weights = dict(weights)
+            return None
+
     real_import_module = importlib.import_module
 
     def fake_import_module(name, package=None):
@@ -248,4 +255,74 @@ def test_mimo_v2_audio_projection_bridge_splices_audio_token(
     assert output.logits.tolist()[0][0] == [0.0] * 16
     assert output.logits.tolist()[0][2] == [0.0] * 16
     assert any(abs(v) > 0 for v in output.logits.tolist()[0][1])
+    sys.modules.pop("mlx_vlm.models.mimo_v2", None)
+
+
+def test_mimo_v2_audio_codes_run_local_transformer_and_splice_audio_token(
+    tmp_path,
+    monkeypatch,
+):
+    module = _register_fake_mimo_runtime(monkeypatch, tmp_path)
+    model = module.Model(
+        module.ModelConfig.from_dict(
+            {
+                "model_type": "mimo_v2",
+                "multimodal_status": "media_runtime_enabled",
+                "audio_config": {
+                    "audio_channels": 2,
+                    "group_size": 2,
+                    "input_full_attention": True,
+                    "input_local_attn_heads": 1,
+                    "input_local_dim": 4,
+                    "input_local_head_dim": 4,
+                    "input_local_intermediate_size": 8,
+                    "input_local_layers": 1,
+                    "out_hidden_size": 16,
+                    "projection_layers": 2,
+                    "speech_vocab_size": 8,
+                },
+                "processor_config": {"audio_token_id": 151669},
+            }
+        )
+    )
+
+    output = model(
+        mx.array([[11, 151669, 22]]),
+        audio_codes=mx.array([[1, 2], [3, 4]], dtype=mx.int32),
+    )
+    assert output.logits.shape == (1, 3, 16)
+    assert output.logits.tolist()[0][0] == [0.0] * 16
+    assert output.logits.tolist()[0][2] == [0.0] * 16
+    assert any(abs(v) > 0 for v in output.logits.tolist()[0][1])
+    sys.modules.pop("mlx_vlm.models.mimo_v2", None)
+
+
+def test_mimo_v2_media_enabled_load_binds_speech_embedding_weights(
+    tmp_path,
+    monkeypatch,
+):
+    module = _register_fake_mimo_runtime(monkeypatch, tmp_path)
+    model = module.Model(
+        module.ModelConfig.from_dict(
+            {
+                "model_type": "mimo_v2",
+                "multimodal_status": "media_runtime_enabled",
+                "audio_config": {
+                    "audio_channels": 2,
+                    "group_size": 2,
+                    "input_local_attn_heads": 1,
+                    "input_local_dim": 4,
+                    "input_local_head_dim": 4,
+                    "input_local_intermediate_size": 8,
+                    "input_local_layers": 1,
+                    "out_hidden_size": 16,
+                    "speech_vocab_size": 8,
+                },
+            }
+        )
+    )
+
+    replacement = mx.ones((8, 4))
+    model.load_weights([("speech_embeddings.0.weight", replacement)])
+    assert model.speech_embeddings[0].weight.tolist() == replacement.tolist()
     sys.modules.pop("mlx_vlm.models.mimo_v2", None)

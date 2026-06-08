@@ -25,7 +25,7 @@ from typing import Any
 DEFAULT_MODEL_PATH = Path("/Users/example/.mlxstudio/models/JANGQ-AI/MiMo-V2.5-JANGTQ_2")
 DEFAULT_MANIFEST = Path("build/current-mimo-jangtq2-local-manifest-20260607.tsv")
 DEFAULT_OUT = Path(
-    "build/current-mimo-v2-jang2l-current-audit-after-audio-projection-bridge-20260607.json"
+    "build/current-mimo-v2-jang2l-current-audit-after-audio-code-local-transformer-20260607.json"
 )
 
 STRUCTURAL_ARTIFACT = Path("build/current-mimo-jang2l-local-structural-verify-20260606.json")
@@ -983,6 +983,25 @@ def _mimo_media_runtime_evidence(
             "audio_embeds = self.audio_encoder(audio_embeds=audio_arr)",
         )
     )
+    audio_code_local_transformer_present = all(
+        marker in adapter_text
+        for marker in (
+            "class MiMoAudioLocalTransformer",
+            "class MiMoAudioLocalAttention",
+            "self.input_local_transformer = MiMoAudioLocalTransformer",
+            "def process_audio_codes(self, audio_codes, speech_embeddings):",
+            "speech_embeddings=self.speech_embeddings",
+            "_pad_and_group_mimo_v2_audio_codes",
+        )
+    )
+    media_weight_assignment_present = all(
+        marker in adapter_text
+        for marker in (
+            "def _apply_mimo_v2_media_weights(self):",
+            "_mimo_v2_assign_weight(self, key, value)",
+            "MiMo-V2 load assigned %d preserved media tensors",
+        )
+    )
     media_weights_preserved = bool(visual_count > 0 and audio_count > 0)
     metadata_overadvertises = bool(
         config_modalities != ["text"]
@@ -1038,6 +1057,8 @@ def _mimo_media_runtime_evidence(
         "vision_grid_forward": bool(vision_grid_forward_present),
         "model_vision_bridge": bool(model_vision_bridge_present),
         "audio_projection_bridge": bool(audio_projection_bridge_present),
+        "audio_code_local_transformer": bool(audio_code_local_transformer_present),
+        "media_weight_assignment": bool(media_weight_assignment_present),
         "runtime_media_wired": False if runtime_gap else True,
         "missing_runtime_components": (
             [
@@ -1076,12 +1097,19 @@ def _mimo_media_runtime_evidence(
                         "audio projection bridge to text hidden size",
                         audio_projection_bridge_present,
                     ),
+                    (
+                        "audio code local transformer forward",
+                        audio_code_local_transformer_present,
+                    ),
+                    (
+                        "media weight assignment to runtime modules",
+                        media_weight_assignment_present,
+                    ),
                 )
                 if not present
             ]
             + [
                 "audio tokenizer/feature extraction bridge",
-                "audio code local transformer forward",
                 "media-aware prefix/L2 cache proof",
             ]
             if runtime_gap

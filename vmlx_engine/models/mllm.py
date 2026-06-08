@@ -1012,6 +1012,17 @@ def _register_mimo_v2_mlx_vlm_runtime() -> None:
         else:
             setattr(cur, last, new_module)
 
+    def _mimo_v2_assign_weight(root, dotted, value):
+        parts = dotted.split(".")
+        cur = root
+        for part in parts[:-1]:
+            cur = cur[int(part)] if part.isdigit() else getattr(cur, part)
+        last = parts[-1]
+        if last.isdigit():
+            cur[int(last)] = value
+        else:
+            setattr(cur, last, value)
+
     def _install_mimo_v2_prestacked_jangtq_modules(model, weights, *, seed=42):
         """Bind prestacked MiMo JANGTQ tensors to TurboQuant switch modules.
 
@@ -1524,6 +1535,212 @@ def _register_mimo_v2_mlx_vlm_runtime() -> None:
         def __call__(self, x):
             return self.linear_2(nn.gelu(self.linear_1(x)))
 
+    def _parse_mimo_v2_int_list(value, length: int):
+        if isinstance(value, str) and "-" in value:
+            return [int(v) for v in value.split("-")]
+        if isinstance(value, (list, tuple)):
+            values = [int(v) for v in value]
+            return values if len(values) == length else (values * length)[:length]
+        return [int(value)] * length
+
+    def _pad_and_group_mimo_v2_audio_codes(audio_codes, audio_channels: int, group_size: int):
+        audio_codes = mx.array(audio_codes).astype(mx.int32)
+        if audio_codes.ndim == 3:
+            if int(audio_codes.shape[1]) != group_size:
+                raise ValueError(
+                    "MiMo-V2 grouped audio_codes group size mismatch: "
+                    f"{audio_codes.shape[1]} != {group_size}"
+                )
+            return audio_codes[:, :, :audio_channels]
+        if audio_codes.ndim != 2:
+            raise ValueError(
+                "MiMo-V2 audio_codes must be rank-2 [T, C] or rank-3 [G, group, C]; "
+                f"got shape {audio_codes.shape}"
+            )
+        if int(audio_codes.shape[0]) <= 0:
+            raise ValueError("MiMo-V2 audio_codes must contain at least one timestep")
+        audio_codes = audio_codes[:, :audio_channels]
+        t = int(audio_codes.shape[0])
+        padded_t = ((t + group_size - 1) // group_size) * group_size
+        if padded_t > t:
+            pad = mx.broadcast_to(audio_codes[-1:, :], (padded_t - t, audio_codes.shape[1]))
+            audio_codes = mx.concatenate([audio_codes, pad], axis=0)
+        return mx.reshape(audio_codes, (padded_t // group_size, group_size, audio_codes.shape[1]))
+
+    class MiMoAudioLocalMLP(nn.Module):
+        def __init__(self, *, hidden_size: int, intermediate_size: int):
+            super().__init__()
+            self.gate_proj = nn.Linear(hidden_size, intermediate_size, bias=False)
+            self.up_proj = nn.Linear(hidden_size, intermediate_size, bias=False)
+            self.down_proj = nn.Linear(intermediate_size, hidden_size, bias=False)
+
+        def __call__(self, x):
+            return self.down_proj(nn.silu(self.gate_proj(x)) * self.up_proj(x))
+
+    class MiMoAudioLocalAttention(nn.Module):
+        def __init__(
+            self,
+            *,
+            hidden_size: int,
+            num_heads: int,
+            head_dim: int,
+            rope_theta: float,
+            partial_rotary_factor: float,
+        ):
+            super().__init__()
+            self.hidden_size = hidden_size
+            self.num_heads = num_heads
+            self.head_dim = head_dim
+            self.scaling = head_dim**-0.5
+            self.rope_theta = float(rope_theta)
+            self.rotary_dim = int(head_dim * float(partial_rotary_factor))
+            self.rotary_dim = max(0, min(head_dim, self.rotary_dim))
+            if self.rotary_dim % 2:
+                self.rotary_dim -= 1
+            self.q_proj = nn.Linear(hidden_size, num_heads * head_dim, bias=True)
+            self.k_proj = nn.Linear(hidden_size, num_heads * head_dim, bias=True)
+            self.v_proj = nn.Linear(hidden_size, num_heads * head_dim, bias=True)
+            self.o_proj = nn.Linear(num_heads * head_dim, hidden_size, bias=False)
+
+        def _rotate_half(self, x):
+            half = int(x.shape[-1]) // 2
+            first = x[..., :half]
+            second = x[..., half : half * 2]
+            rest = x[..., half * 2 :]
+            rotated = mx.concatenate([-second, first], axis=-1)
+            return mx.concatenate([rotated, rest], axis=-1) if rest.shape[-1] else rotated
+
+        def _apply_rope(self, q, k):
+            if self.rotary_dim <= 0:
+                return q, k
+            seq_len = int(q.shape[-2])
+            inv_freq = 1.0 / (
+                self.rope_theta
+                ** (
+                    mx.arange(0, self.rotary_dim, 2).astype(mx.float32)
+                    / self.rotary_dim
+                )
+            )
+            pos = mx.arange(seq_len).astype(mx.float32)
+            freqs = pos[:, None] * inv_freq[None, :]
+            emb = mx.concatenate([freqs, freqs], axis=-1)
+            cos = mx.cos(emb)[None, None, :, :].astype(q.dtype)
+            sin = mx.sin(emb)[None, None, :, :].astype(q.dtype)
+            q_rope = q[..., : self.rotary_dim]
+            k_rope = k[..., : self.rotary_dim]
+            q = mx.concatenate(
+                [
+                    q_rope * cos + self._rotate_half(q_rope) * sin,
+                    q[..., self.rotary_dim :],
+                ],
+                axis=-1,
+            )
+            k = mx.concatenate(
+                [
+                    k_rope * cos + self._rotate_half(k_rope) * sin,
+                    k[..., self.rotary_dim :],
+                ],
+                axis=-1,
+            )
+            return q, k
+
+        def __call__(self, hidden_states, *, is_causal: bool = False):
+            hidden_states = mx.array(hidden_states)
+            batch, seq_len, _ = hidden_states.shape
+            q = mx.reshape(
+                self.q_proj(hidden_states),
+                (batch, seq_len, self.num_heads, self.head_dim),
+            )
+            k = mx.reshape(
+                self.k_proj(hidden_states),
+                (batch, seq_len, self.num_heads, self.head_dim),
+            )
+            v = mx.reshape(
+                self.v_proj(hidden_states),
+                (batch, seq_len, self.num_heads, self.head_dim),
+            )
+            q = mx.transpose(q, (0, 2, 1, 3))
+            k = mx.transpose(k, (0, 2, 1, 3))
+            v = mx.transpose(v, (0, 2, 1, 3))
+            q, k = self._apply_rope(q, k)
+            mask = None
+            if is_causal:
+                row = mx.arange(seq_len)[:, None]
+                col = mx.arange(seq_len)[None, :]
+                mask = mx.where(
+                    col > row,
+                    mx.full((seq_len, seq_len), -mx.inf),
+                    mx.zeros((seq_len, seq_len)),
+                )[None, None, :, :]
+            attn = mx.fast.scaled_dot_product_attention(
+                q,
+                k,
+                v,
+                scale=self.scaling,
+                mask=mask,
+            )
+            attn = mx.reshape(
+                mx.transpose(attn, (0, 2, 1, 3)),
+                (batch, seq_len, self.num_heads * self.head_dim),
+            )
+            return self.o_proj(attn)
+
+    class MiMoAudioLocalBlock(nn.Module):
+        def __init__(self, config):
+            super().__init__()
+            hidden_size = int(getattr(config, "input_local_dim", 1024) or 1024)
+            num_heads = int(getattr(config, "input_local_attn_heads", 16) or 16)
+            head_dim = int(getattr(config, "input_local_head_dim", 0) or 0)
+            if head_dim <= 0:
+                head_dim = max(1, hidden_size // max(1, num_heads))
+            intermediate_size = int(
+                getattr(config, "input_local_intermediate_size", hidden_size * 4)
+                or hidden_size * 4
+            )
+            self.self_attn = MiMoAudioLocalAttention(
+                hidden_size=hidden_size,
+                num_heads=num_heads,
+                head_dim=head_dim,
+                rope_theta=float(getattr(config, "rope_theta", 640000.0) or 640000.0),
+                partial_rotary_factor=float(
+                    getattr(config, "partial_rotary_factor", 1.0) or 1.0
+                ),
+            )
+            self.mlp = MiMoAudioLocalMLP(
+                hidden_size=hidden_size,
+                intermediate_size=intermediate_size,
+            )
+            self.input_layernorm = nn.RMSNorm(hidden_size, eps=1e-6)
+            self.post_attention_layernorm = nn.RMSNorm(hidden_size, eps=1e-6)
+
+        def __call__(self, hidden_states, *, is_causal: bool = False):
+            hidden_states = hidden_states + self.self_attn(
+                self.input_layernorm(hidden_states),
+                is_causal=is_causal,
+            )
+            hidden_states = hidden_states + self.mlp(
+                self.post_attention_layernorm(hidden_states)
+            )
+            return hidden_states
+
+    class MiMoAudioLocalTransformer(nn.Module):
+        def __init__(self, config):
+            super().__init__()
+            hidden_size = int(getattr(config, "input_local_dim", 1024) or 1024)
+            layers = int(getattr(config, "input_local_layers", 6) or 6)
+            self.layers = [MiMoAudioLocalBlock(config) for _ in range(layers)]
+            self.norm = nn.RMSNorm(hidden_size, eps=1e-6)
+            self.input_full_attention = bool(
+                getattr(config, "input_full_attention", True)
+            )
+
+        def __call__(self, inputs_embeds):
+            hidden_states = mx.array(inputs_embeds)
+            is_causal = not self.input_full_attention
+            for layer in self.layers:
+                hidden_states = layer(hidden_states, is_causal=is_causal)
+            return self.norm(hidden_states)
+
     class AudioModel(nn.Module):
         def __init__(self, config=None):
             super().__init__()
@@ -1538,6 +1755,10 @@ def _register_mimo_v2_mlx_vlm_runtime() -> None:
             self.out_hidden_size = int(
                 getattr(self.config, "out_hidden_size", None) or 4096
             )
+            self.input_full_attention = bool(
+                getattr(self.config, "input_full_attention", True)
+            )
+            self.input_local_transformer = MiMoAudioLocalTransformer(self.config)
             proj_in = self.input_local_dim * self.group_size
             projection_layers = int(getattr(self.config, "projection_layers", 2) or 2)
             if projection_layers == 1:
@@ -1571,7 +1792,48 @@ def _register_mimo_v2_mlx_vlm_runtime() -> None:
                 )
             return self.projection(audio_hidden)
 
-        def __call__(self, audio_codes=None, audio_embeds=None, audio_hidden=None):
+        def _apply_speech_embeddings(self, audio_codes, speech_embeddings):
+            if speech_embeddings is None:
+                raise UnsupportedMediaModalityError(
+                    "audio",
+                    "MiMo-V2.5 audio_codes require speech_embeddings weights.",
+                    family="mimo_v2",
+                )
+            grouped = _pad_and_group_mimo_v2_audio_codes(
+                audio_codes,
+                self.audio_channels,
+                self.group_size,
+            )
+            if int(grouped.shape[-1]) < self.audio_channels:
+                raise ValueError(
+                    "MiMo-V2 audio_codes channel count mismatch: "
+                    f"{grouped.shape[-1]} < {self.audio_channels}"
+                )
+            out = mx.zeros(
+                (grouped.shape[0], self.group_size, self.input_local_dim),
+                dtype=speech_embeddings[0].weight.dtype,
+            )
+            if len(speech_embeddings) < self.audio_channels:
+                raise ValueError(
+                    "MiMo-V2 speech embedding count mismatch: "
+                    f"{len(speech_embeddings)} < {self.audio_channels}"
+                )
+            for idx in range(self.audio_channels):
+                out = out + speech_embeddings[idx](grouped[:, :, idx])
+            return out
+
+        def process_audio_codes(self, audio_codes, speech_embeddings):
+            audio_embs = self._apply_speech_embeddings(audio_codes, speech_embeddings)
+            audio_hidden = self.input_local_transformer(audio_embs)
+            return self.project_local_audio(audio_hidden)
+
+        def __call__(
+            self,
+            speech_embeddings=None,
+            audio_codes=None,
+            audio_embeds=None,
+            audio_hidden=None,
+        ):
             if audio_embeds is not None:
                 audio_embeds = mx.array(audio_embeds)
                 if audio_embeds.ndim != 2:
@@ -1585,12 +1847,10 @@ def _register_mimo_v2_mlx_vlm_runtime() -> None:
             if audio_hidden is not None:
                 return self.project_local_audio(audio_hidden)
             if audio_codes is not None:
-                raise UnsupportedMediaModalityError(
-                    "audio",
-                    "MiMo-V2.5 audio code tokenization/local transformer is not wired yet.",
-                    family="mimo_v2",
-                )
-            raise ValueError("MiMo-V2 audio encoder requires audio_embeds or audio_hidden")
+                return self.process_audio_codes(audio_codes, speech_embeddings)
+            raise ValueError(
+                "MiMo-V2 audio encoder requires audio_codes, audio_embeds, or audio_hidden"
+            )
 
     class MiMoVisionPatchEmbed(nn.Module):
         def __init__(
@@ -1949,6 +2209,17 @@ def _register_mimo_v2_mlx_vlm_runtime() -> None:
                 if self._mimo_v2_bind_media_weights
                 else None
             )
+            self.speech_embeddings = (
+                [
+                    nn.Embedding(vocab_size, self.audio_encoder.input_local_dim)
+                    for vocab_size in _parse_mimo_v2_int_list(
+                        getattr(config.audio_config, "speech_vocab_size", 1280),
+                        self.audio_encoder.audio_channels,
+                    )
+                ]
+                if self._mimo_v2_bind_media_weights and self.audio_encoder is not None
+                else None
+            )
 
         @property
         def layers(self):
@@ -2000,11 +2271,15 @@ def _register_mimo_v2_mlx_vlm_runtime() -> None:
                     grid_thw=video_grid_thw,
                 )
             if audio_codes is not None:
-                raise UnsupportedMediaModalityError(
-                    "audio",
-                    "MiMo-V2.5 JANG_2L audio weights are preserved, but the "
-                    "current Python runtime does not wire audio code tokenization yet.",
-                    family="mimo_v2",
+                if self.audio_encoder is None or self.speech_embeddings is None:
+                    raise UnsupportedMediaModalityError(
+                        "audio",
+                        "MiMo-V2.5 JANG_2L audio code runtime requires media-enabled metadata.",
+                        family="mimo_v2",
+                    )
+                audio_embeds = self.audio_encoder(
+                    speech_embeddings=self.speech_embeddings,
+                    audio_codes=audio_codes,
                 )
             if audio_embeds is not None:
                 audio_arr = mx.array(audio_embeds)
@@ -2126,6 +2401,25 @@ def _register_mimo_v2_mlx_vlm_runtime() -> None:
             self._mimo_v2_media_weight_counts[group] += 1
             return True
 
+        def _apply_mimo_v2_media_weights(self):
+            if not self._mimo_v2_bind_media_weights or not self._mimo_v2_media_weights:
+                return 0
+            assigned = 0
+            failures = []
+            for key, value in self._mimo_v2_media_weights.items():
+                try:
+                    _mimo_v2_assign_weight(self, key, value)
+                    assigned += 1
+                except Exception as exc:
+                    failures.append(f"{key}: {type(exc).__name__}: {exc}")
+            if failures:
+                preview = "; ".join(failures[:8])
+                raise RuntimeError(
+                    "MiMo-V2 media-enabled load could not bind preserved media "
+                    f"weights ({len(failures)} failures): {preview}"
+                )
+            return assigned
+
         def load_weights(self, weights, strict=True):
             filtered = {}
             for key, value in weights:
@@ -2143,6 +2437,11 @@ def _register_mimo_v2_mlx_vlm_runtime() -> None:
                     self._mimo_v2_media_weight_counts["visual"],
                     self._mimo_v2_media_weight_counts["audio_encoder"],
                     self._mimo_v2_media_weight_counts["speech_embeddings"],
+                )
+                assigned_media = self._apply_mimo_v2_media_weights()
+                logger.info(
+                    "MiMo-V2 load assigned %d preserved media tensors to runtime modules",
+                    assigned_media,
                 )
 
             if hasattr(self.language_model, "sanitize"):

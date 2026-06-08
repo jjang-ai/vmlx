@@ -74,6 +74,15 @@ def test_mimo_current_audit_separates_clean_artifact_from_runtime_blockers(
                 "self.audio_encoder = (",
                 "def project_local_audio(self, audio_hidden):",
                 "audio_embeds = self.audio_encoder(audio_embeds=audio_arr)",
+                "class MiMoAudioLocalTransformer",
+                "class MiMoAudioLocalAttention",
+                "self.input_local_transformer = MiMoAudioLocalTransformer",
+                "def process_audio_codes(self, audio_codes, speech_embeddings):",
+                "speech_embeddings=self.speech_embeddings",
+                "_pad_and_group_mimo_v2_audio_codes",
+                "def _apply_mimo_v2_media_weights(self):",
+                "_mimo_v2_assign_weight(self, key, value)",
+                "MiMo-V2 load assigned %d preserved media tensors",
                 "MiMo-V2.5 JANG_2L vision input is not wired",
                 'key.startswith("model.mtp.")',
             ]
@@ -377,6 +386,11 @@ def test_mimo_current_audit_separates_clean_artifact_from_runtime_blockers(
     assert result["diagnostics"]["mimo_media_runtime"]["model_vision_bridge"] is True
     assert result["diagnostics"]["mimo_media_runtime"]["audio_projection_bridge"] is True
     assert (
+        result["diagnostics"]["mimo_media_runtime"]["audio_code_local_transformer"]
+        is True
+    )
+    assert result["diagnostics"]["mimo_media_runtime"]["media_weight_assignment"] is True
+    assert (
         "VisionConfig parser"
         not in result["diagnostics"]["mimo_media_runtime"]["missing_runtime_components"]
     )
@@ -426,7 +440,11 @@ def test_mimo_current_audit_separates_clean_artifact_from_runtime_blockers(
     )
     assert (
         "audio code local transformer forward"
-        in result["diagnostics"]["mimo_media_runtime"]["missing_runtime_components"]
+        not in result["diagnostics"]["mimo_media_runtime"]["missing_runtime_components"]
+    )
+    assert (
+        "media weight assignment to runtime modules"
+        not in result["diagnostics"]["mimo_media_runtime"]["missing_runtime_components"]
     )
     assert result["diagnostics"]["all_local_smoke"]["tool_protocol_pass"] is True
     assert result["diagnostics"]["prompt_shape_first_token"]["blocked"] is True
