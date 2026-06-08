@@ -1592,6 +1592,134 @@ def summarize_cache(cache_stats: Any) -> dict[str, Any]:
     }
 
 
+def l2_restart_restore_summary(record: dict[str, Any] | None) -> dict[str, Any]:
+    """Summarize whether a fresh-process block-disk L2 restore was proven."""
+    if not isinstance(record, dict):
+        return {
+            "status": "missing",
+            "pass": False,
+            "reason": "l2_restart_probe_not_run",
+        }
+    cache_summary = record.get("cache_summary")
+    cache_summary = cache_summary if isinstance(cache_summary, dict) else {}
+    cache_text = json.dumps(record.get("cache_stats"), sort_keys=True).lower()
+    disk_hits = cache_summary.get("disk_hits")
+    cache_hit_tokens = cache_summary.get("cache_hit_tokens")
+    validation_failures = record.get("validation_failures")
+    validation_failures = validation_failures if isinstance(validation_failures, list) else []
+    code = record.get("code")
+    disk_restore = (
+        isinstance(disk_hits, (int, float))
+        and disk_hits > 0
+        and isinstance(cache_hit_tokens, (int, float))
+        and cache_hit_tokens > 0
+    ) or (
+        isinstance(cache_hit_tokens, (int, float))
+        and cache_hit_tokens > 0
+        and "disk" in cache_text
+    )
+    passed = bool(code == 200 and not validation_failures and disk_restore)
+    reason = "pass"
+    if code != 200:
+        reason = "http_status"
+    elif validation_failures:
+        reason = "validation_failed"
+    elif not disk_restore:
+        reason = "disk_l2_restore_not_observed"
+    return {
+        "status": "pass" if passed else "fail",
+        "pass": passed,
+        "reason": reason,
+        "disk_hits": disk_hits,
+        "cache_hit_tokens": cache_hit_tokens,
+        "cache_summary": cache_summary,
+    }
+
+
+def run_l2_restart_probe(
+    row: dict[str, Any],
+    *,
+    cmd: list[str],
+    row_dir: Path,
+    port: int,
+    load_timeout_s: float,
+    request_timeout_s: float,
+) -> dict[str, Any]:
+    """Restart the same server command and prove block-disk L2 restores."""
+    log_path = row_dir / "server-l2-restart.log"
+    env = build_server_env()
+    server_cwd = server_process_cwd(row_dir)
+    with log_path.open("w") as log:
+        proc = subprocess.Popen(
+            cmd,
+            cwd=server_cwd,
+            env=env,
+            stdout=log,
+            stderr=subprocess.STDOUT,
+            text=True,
+        )
+    base_url = f"http://127.0.0.1:{port}"
+    label = "text_cache_repeat_l2_restart"
+    try:
+        try:
+            health = wait_ready(base_url, load_timeout_s, proc)
+        except Exception as exc:
+            return {
+                "label": label,
+                "status": "load_failed",
+                "pass": False,
+                "error": repr(exc),
+                "server_log_tail": log_path.read_text(errors="replace")[-6000:],
+            }
+        payload = _cache_probe_payload(
+            row,
+            row["served_name"],
+            _cache_probe_prompt(row),
+            _lfm_strict_probe_max_tokens(row, 48),
+        )
+        code, resp, elapsed = request_json(
+            "POST",
+            f"{base_url}/v1/chat/completions",
+            payload,
+            timeout=request_timeout_s,
+        )
+        content, reasoning, usage = extract_text(resp)
+        code_stats, cache_stats, _ = request_json(
+            "GET",
+            f"{base_url}/v1/cache/stats",
+            timeout=30.0,
+        )
+        record = {
+            "label": label,
+            "status": "completed",
+            "code": code,
+            "elapsed_sec": elapsed,
+            "content": content,
+            "content_head": content[:280],
+            "reasoning_head": reasoning[:280],
+            "reasoning_chars": len(reasoning),
+            "usage": usage,
+            "cache_stats_code": code_stats,
+            "cache_stats": cache_stats,
+            "cache_summary": summarize_cache(cache_stats),
+            "validation_failures": validate_probe_response(
+                label,
+                code,
+                content,
+                reasoning,
+                expected_content=_cache_probe_expected(row),
+            ),
+            "health_before": health,
+            "server_log_tail": log_path.read_text(errors="replace")[-6000:],
+        }
+        record["summary"] = l2_restart_restore_summary(record)
+        record["pass"] = bool(record["summary"]["pass"])
+        write_json(row_dir / "l2_restart_probe.json", record)
+        return record
+    finally:
+        terminate_process(proc)
+
+
 def run_model_row(
     row: dict[str, Any],
     *,
@@ -1604,6 +1732,7 @@ def run_model_row(
     include_video: bool,
     include_audio: bool,
     include_tools: bool,
+    include_l2_restart: bool = False,
 ) -> dict[str, Any]:
     row_dir = out_root / sanitize_name(row["namespace"] + "_" + row["name"])
     row_dir.mkdir(parents=True, exist_ok=True)
@@ -1737,6 +1866,26 @@ def run_model_row(
         result["health_after"] = {"code": code, "body": health_after}
         result["cache_after"] = {"code": code_cache, "body": cache_after, "summary": summarize_cache(cache_after)}
         failures = collect_probe_failures(result["requests"])
+        if include_l2_restart:
+            terminate_process(proc)
+            result["l2_restart"] = run_l2_restart_probe(
+                row,
+                cmd=cmd,
+                row_dir=row_dir,
+                port=port,
+                load_timeout_s=load_timeout_s,
+                request_timeout_s=request_timeout_s,
+            )
+            l2_summary = l2_restart_restore_summary(result["l2_restart"])
+            result["l2_restart"]["summary"] = l2_summary
+            if not l2_summary["pass"]:
+                failures.append(
+                    {
+                        "label": "text_cache_repeat_l2_restart",
+                        "reason": l2_summary["reason"],
+                        "cache_summary": l2_summary.get("cache_summary"),
+                    }
+                )
         result["status"] = "pass" if not failures else "probe_failed"
         result["failures"] = failures
         result["server_log_tail"] = log_path.read_text(errors="replace")[-6000:]
@@ -1810,6 +1959,14 @@ def main() -> int:
     parser.add_argument("--no-video", action="store_true")
     parser.add_argument("--no-audio", action="store_true")
     parser.add_argument(
+        "--include-l2-restart",
+        action="store_true",
+        help=(
+            "After normal probes, restart the same server against the same "
+            "block-disk cache directory and require a disk-backed cache hit."
+        ),
+    )
+    parser.add_argument(
         "--include-tools",
         action="store_true",
         help="Add explicit Chat Completions tool_choice=required and tool-result continuation probes.",
@@ -1855,6 +2012,7 @@ def main() -> int:
             include_video=not args.no_video,
             include_audio=not args.no_audio,
             include_tools=args.include_tools,
+            include_l2_restart=args.include_l2_restart,
         )
         results.append(result)
         if result.get("status") != "pass":

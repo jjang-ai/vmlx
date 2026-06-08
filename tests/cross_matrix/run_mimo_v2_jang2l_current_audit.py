@@ -359,6 +359,17 @@ def _all_local_smoke_evidence(data: dict[str, Any]) -> dict[str, Any]:
     speed_blocked = not (
         isinstance(generation_tps, (int, float)) and generation_tps >= 40.0
     )
+    l2_restart = result.get("l2_restart")
+    l2_restart = l2_restart if isinstance(l2_restart, dict) else {}
+    l2_restart_summary = (
+        l2_restart.get("summary")
+        if isinstance(l2_restart.get("summary"), dict)
+        else {
+            "status": "missing",
+            "pass": False,
+            "reason": "l2_restart_probe_not_run",
+        }
+    )
     exactness_boundary = _artifact_exactness_boundary(result, exactness_failures)
     return {
         "exists": True,
@@ -379,6 +390,14 @@ def _all_local_smoke_evidence(data: dict[str, Any]) -> dict[str, Any]:
         "exact_cache_blocked": exact_cache_blocked,
         "speed_blocked": speed_blocked,
         "generation_tps": generation_tps,
+        "block_disk_l2_restart_restore_pass": bool(l2_restart_summary.get("pass")),
+        "block_disk_l2_restart_restore_status": str(
+            l2_restart_summary.get("status") or "missing"
+        ),
+        "block_disk_l2_restart_restore_reason": str(
+            l2_restart_summary.get("reason") or "unknown"
+        ),
+        "block_disk_l2_restart_restore_summary": l2_restart_summary,
         "failures": failures,
     }
 
@@ -2098,6 +2117,10 @@ def build_audit(root: Path, model_path: Path, manifest: Path) -> dict[str, Any]:
     image_video_live_e2e_blocked = not image_video_live_e2e_proven
     audio_waveform_live_e2e_proven = bool(smoke_evidence.get("audio_waveform_e2e_pass"))
     audio_waveform_live_e2e_blocked = not audio_waveform_live_e2e_proven
+    block_disk_l2_restart_restore_proven = bool(
+        smoke_evidence.get("block_disk_l2_restart_restore_pass")
+    )
+    block_disk_l2_restart_restore_blocked = not block_disk_l2_restart_restore_proven
     if image_video_live_e2e_proven and current_runtime_media_supported:
         media_runtime_wired = True
         media_runtime_evidence["runtime_media_wired_superseded_by_live_e2e"] = True
@@ -2174,6 +2197,7 @@ def build_audit(root: Path, model_path: Path, manifest: Path) -> dict[str, Any]:
         and mllm_inputs_embeds_interface_pass
         and api_cache_responses_contract_pass
         and not bool(text_route_evidence.get("cache_l2_not_reproved"))
+        and not block_disk_l2_restart_restore_blocked
         and not text_route_media_unwired_blocked
         and media_runtime_wired
         and media_metadata_ok
@@ -2219,6 +2243,8 @@ def build_audit(root: Path, model_path: Path, manifest: Path) -> dict[str, Any]:
         blockers.append("mimo_api_cache_responses_contract_missing_or_failed")
     if text_route_evidence.get("cache_l2_not_reproved"):
         blockers.append("mimo_prefix_paged_l2_cache_not_reproved")
+    if block_disk_l2_restart_restore_blocked:
+        blockers.append("mimo_block_disk_l2_restart_restore_missing")
     if text_route_media_unwired_blocked:
         blockers.append("mimo_vl_audio_video_unwired")
     if image_video_live_e2e_blocked:
@@ -2275,6 +2301,9 @@ def build_audit(root: Path, model_path: Path, manifest: Path) -> dict[str, Any]:
             "text_route_tool_call": bool(text_route_evidence.get("tool_call_pass")),
             "prefix_paged_l2_cache_reproved": not bool(
                 text_route_evidence.get("cache_l2_not_reproved")
+            ),
+            "block_disk_l2_restart_restore": bool(
+                block_disk_l2_restart_restore_proven
             ),
             "mimo_media_wired": bool(
                 media_runtime_wired

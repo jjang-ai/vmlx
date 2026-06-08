@@ -976,6 +976,46 @@ def test_summarize_cache_reports_real_hits_and_hybrid_miss_fallbacks():
     assert summary["hybrid_kv_without_ssm_tokens"] == 12
 
 
+def test_l2_restart_restore_summary_requires_fresh_process_disk_hit():
+    mod = load_module()
+
+    summary = mod.l2_restart_restore_summary(
+        {
+            "code": 200,
+            "validation_failures": [],
+            "cache_stats": {
+                "scheduler": {"cache_hit_tokens": 64},
+                "cache": {"scheduler_cache": {"disk_hits": 1}},
+            },
+            "cache_summary": {"cache_hit_tokens": 64, "disk_hits": 1},
+        }
+    )
+
+    assert summary["pass"] is True
+    assert summary["status"] == "pass"
+    assert summary["reason"] == "pass"
+
+
+def test_l2_restart_restore_summary_rejects_memory_only_cache_hit():
+    mod = load_module()
+
+    summary = mod.l2_restart_restore_summary(
+        {
+            "code": 200,
+            "validation_failures": [],
+            "cache_stats": {
+                "scheduler": {"cache_hit_tokens": 64},
+                "cache": {"scheduler_cache": {"cache_hits": 1}},
+            },
+            "cache_summary": {"cache_hit_tokens": 64, "cache_hits": 1, "disk_hits": 0},
+        }
+    )
+
+    assert summary["pass"] is False
+    assert summary["status"] == "fail"
+    assert summary["reason"] == "disk_l2_restore_not_observed"
+
+
 def test_validate_probe_response_rejects_dsv4_control_fragment_garbage():
     mod = load_module()
 

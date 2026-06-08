@@ -668,6 +668,12 @@ def test_mimo_current_audit_separates_clean_artifact_from_runtime_blockers(
     assert result["diagnostics"]["cb_native_thinking_off"][
         "prefix_paged_l2_cache_reproved"
     ] is True
+    assert (
+        result["diagnostics"]["all_local_smoke"][
+            "block_disk_l2_restart_restore_status"
+        ]
+        == "missing"
+    )
     assert result["diagnostics"]["cb_native_thinking_off"][
         "memory_pressure_blocked"
     ] is True
@@ -684,6 +690,7 @@ def test_mimo_current_audit_separates_clean_artifact_from_runtime_blockers(
         "mimo_decode_speed_below_release_target",
         "mimo_cb_system_prompt_working_set_pressure_blocked",
         "mimo_source_vs_quant_first_divergence_missing_or_failed",
+        "mimo_block_disk_l2_restart_restore_missing",
         "mimo_audio_waveform_live_e2e_missing",
         "mimo_model_metadata_overadvertises_unwired_media",
         "mimo_runtime_capabilities_media_status_missing_or_unsafe",
@@ -794,6 +801,8 @@ def test_mimo_tool_protocol_is_separate_from_literal_argument_exactness(tmp_path
     assert evidence["tool_protocol_pass"] is True
     assert evidence["artifact_exactness_pass"] is False
     assert evidence["artifact_exactness_failures"] == smoke["results"][0]["failures"]
+    assert evidence["block_disk_l2_restart_restore_pass"] is False
+    assert evidence["block_disk_l2_restart_restore_reason"] == "l2_restart_probe_not_run"
     assert evidence["artifact_exactness_boundary"]["classification"] == (
         "model_generated_literal_mutation_after_valid_parser_structure"
     )
@@ -879,6 +888,43 @@ def test_mimo_object_media_rows_clear_live_media_e2e_separately_from_exactness()
         "text_no_media_after_video",
     ]
     assert evidence["artifact_exactness_pass"] is False
+
+
+def test_mimo_all_local_smoke_evidence_accepts_disk_l2_restart_restore():
+    from tests.cross_matrix import run_mimo_v2_jang2l_current_audit as audit
+
+    smoke = {
+        "status": "pass",
+        "results": [
+            {
+                "status": "pass",
+                "requests": [],
+                "failures": [],
+                "cache_after": {
+                    "body": {
+                        "scheduler_stats": {
+                            "batch_generator": {"generation_tps": 42.0}
+                        }
+                    }
+                },
+                "l2_restart": {
+                    "summary": {
+                        "status": "pass",
+                        "pass": True,
+                        "reason": "pass",
+                        "disk_hits": 1,
+                        "cache_hit_tokens": 64,
+                    }
+                },
+            }
+        ],
+    }
+
+    evidence = audit._all_local_smoke_evidence(smoke)
+
+    assert evidence["block_disk_l2_restart_restore_pass"] is True
+    assert evidence["block_disk_l2_restart_restore_status"] == "pass"
+    assert evidence["block_disk_l2_restart_restore_reason"] == "pass"
 
 
 def test_mimo_audio_waveform_rows_clear_audio_gate_separately_from_image_video():
