@@ -357,7 +357,7 @@ def test_mllm_processor_direct_omits_invalid_audios_alias_for_mimo_v2_processor(
 
 
 def test_mllm_raw_audio_without_processor_payload_fails_loudly(tmp_path):
-    """Audio requests must not silently continue as text-only if ignored."""
+    """Audio requests must not silently continue if no audio token is present."""
     from types import SimpleNamespace
 
     import pytest
@@ -373,7 +373,10 @@ def test_mllm_raw_audio_without_processor_payload_fails_loudly(tmp_path):
             return {"input_ids": [[1, 2, 3]], "attention_mask": [[1, 1, 1]]}
 
     model = SimpleNamespace(
-        config=SimpleNamespace(model_type="mimo_v2"),
+        config=SimpleNamespace(
+            model_type="mimo_v2",
+            processor_config={"audio_token_id": 151669},
+        ),
         language_model=SimpleNamespace(),
     )
     generator = MLLMBatchGenerator(model=model, processor=Processor())
@@ -389,7 +392,57 @@ def test_mllm_raw_audio_without_processor_payload_fails_loudly(tmp_path):
 
     assert exc.value.modality == "audio"
     assert exc.value.family == "mimo_v2"
-    assert "returned no audio_codes" in exc.value.detail
+    assert "contains no audio token" in exc.value.detail
+
+
+def test_mllm_mimo_raw_audio_bridge_populates_audio_codes(tmp_path, monkeypatch):
+    """MiMo raw audio should build audio_codes before the generic fail-loud guard."""
+    from types import SimpleNamespace
+
+    import mlx.core as mx
+
+    import vmlx_engine.mllm_batch_generator as module
+    from vmlx_engine.mllm_batch_generator import MLLMBatchGenerator, MLLMBatchRequest
+
+    wav = tmp_path / "blue.wav"
+    wav.write_bytes(b"RIFF----WAVEfmt ")
+    captured = {}
+
+    class Processor:
+        name_or_path = str(tmp_path)
+
+        def __call__(self, **kwargs):
+            return {
+                "input_ids": [[1, 151669, 2]],
+                "attention_mask": [[1, 1, 1]],
+            }
+
+    def fake_bridge(**kwargs):
+        captured.update(kwargs)
+        return mx.array([[4, 5, 6]], dtype=mx.int32)
+
+    model = SimpleNamespace(
+        config=SimpleNamespace(
+            model_type="mimo_v2",
+            processor_config={"audio_token_id": 151669},
+        ),
+        language_model=SimpleNamespace(),
+    )
+    monkeypatch.setattr(module, "_build_mimo_audio_codes_from_paths", fake_bridge)
+
+    generator = MLLMBatchGenerator(model=model, processor=Processor())
+    request = MLLMBatchRequest(
+        uid=1,
+        request_id="audio-bridge",
+        prompt="transcribe audio <|audio_pad|>",
+        audio=[str(wav)],
+    )
+
+    generator._preprocess_request(request)
+
+    assert captured["audio_paths"] == [str(wav)]
+    assert captured["model"] is model
+    assert request.audio_codes.tolist() == [[4, 5, 6]]
 
 
 def test_mllm_scheduler_and_batched_engine_route_raw_audio_requests():

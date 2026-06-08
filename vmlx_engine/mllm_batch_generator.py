@@ -107,6 +107,7 @@ import os
 import time
 from collections import OrderedDict, deque
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Callable, Deque, Dict, List, Optional, Tuple
 
 import mlx.core as mx
@@ -125,6 +126,7 @@ from .utils.memory_limits import (
 from .mlx_memory import clear_mlx_memory_cache
 
 logger = logging.getLogger(__name__)
+_MIMO_AUDIO_TOKENIZER_CACHE: Dict[str, Any] = {}
 
 
 def _read_config_field(obj: Any, field: str) -> Any:
@@ -883,6 +885,183 @@ def _call_processor_direct(
     if params and not any(p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values()):
         kwargs = {k: v for k, v in kwargs.items() if k in params}
     return _as_input_mapping(processor(**kwargs))
+
+
+def _resolve_mimo_audio_bundle_path(model: Any, processor: Any) -> Optional[Path]:
+    """Resolve the loaded MiMo bundle path without hardcoding local model names."""
+
+    candidates: List[Any] = []
+    for obj in (
+        processor,
+        getattr(processor, "tokenizer", None),
+        getattr(processor, "image_processor", None),
+        getattr(model, "config", None),
+        getattr(getattr(model, "config", None), "_name_or_path", None),
+    ):
+        if obj is None:
+            continue
+        if isinstance(obj, (str, os.PathLike)):
+            candidates.append(obj)
+            continue
+        for attr in (
+            "name_or_path",
+            "_name_or_path",
+            "pretrained_model_name_or_path",
+            "model_path",
+        ):
+            value = getattr(obj, attr, None)
+            if value:
+                candidates.append(value)
+    for candidate in candidates:
+        try:
+            path = Path(candidate).expanduser()
+        except TypeError:
+            continue
+        if path.is_dir() and (path / "config.json").is_file():
+            return path
+    return None
+
+
+def _mimo_audio_processor_config(model: Any) -> Dict[str, Any]:
+    cfg = getattr(model, "config", None)
+    if isinstance(cfg, dict):
+        raw = cfg.get("processor_config") or {}
+    else:
+        raw = getattr(cfg, "processor_config", None) or {}
+    return raw if isinstance(raw, dict) else {}
+
+
+def _mimo_audio_log_mel(path: str, processor_config: Dict[str, Any]):
+    """Decode one audio file and produce MiMo tokenizer mel frames [T, n_mels]."""
+
+    import numpy as np
+    import librosa
+
+    target_sr = int(processor_config.get("audio_sampling_rate") or 24000)
+    n_fft = int(processor_config.get("audio_nfft") or 960)
+    hop_length = int(processor_config.get("audio_hop_length") or 240)
+    win_length = int(processor_config.get("audio_window_size") or n_fft)
+    n_mels = int(processor_config.get("audio_n_mels") or 128)
+    fmin = float(processor_config.get("audio_fmin") or 0.0)
+    fmax_raw = processor_config.get("audio_fmax")
+    fmax = None if fmax_raw is None else float(fmax_raw)
+
+    waveform, _ = librosa.load(path, sr=target_sr, mono=True)
+    waveform = np.asarray(waveform, dtype=np.float32)
+    if waveform.size == 0:
+        raise ValueError(f"MiMo audio input is empty: {path}")
+    mel = librosa.feature.melspectrogram(
+        y=waveform,
+        sr=target_sr,
+        n_fft=n_fft,
+        hop_length=hop_length,
+        win_length=win_length,
+        n_mels=n_mels,
+        fmin=fmin,
+        fmax=fmax,
+        power=2.0,
+    )
+    return mx.array(np.log(np.maximum(mel, 1e-10)).T.astype(np.float32))
+
+
+def _mimo_audio_token_id(model: Any) -> Optional[int]:
+    cfg = getattr(model, "config", None)
+    processor_config = _mimo_audio_processor_config(model)
+    for source in (processor_config, cfg):
+        for key in ("audio_token_id", "audio_token_index"):
+            value = _read_config_field(source, key)
+            if value is not None:
+                try:
+                    return int(value)
+                except (TypeError, ValueError):
+                    pass
+    return None
+
+
+def _input_ids_contains_token(input_ids: Any, token_id: int) -> bool:
+    if input_ids is None:
+        return False
+    try:
+        arr = mx.array(input_ids)
+        return bool(mx.any(arr == int(token_id)).item())
+    except Exception:
+        try:
+            return int(token_id) in input_ids
+        except Exception:
+            return False
+
+
+def _build_mimo_audio_codes_from_paths(
+    *,
+    model: Any,
+    processor: Any,
+    audio_paths: List[str],
+    input_ids: Any,
+) -> Optional[mx.array]:
+    """Convert raw MiMo audio paths to 20-channel audio_codes when possible."""
+
+    if not audio_paths:
+        return None
+    token_id = _mimo_audio_token_id(model)
+    if token_id is None:
+        raise UnsupportedMediaModalityError(
+            "audio",
+            "MiMo-V2 audio request has raw audio but no audio_token_id in model processor_config.",
+            family="mimo_v2",
+        )
+    if not _input_ids_contains_token(input_ids, token_id):
+        raise UnsupportedMediaModalityError(
+            "audio",
+            "MiMo-V2 audio request has raw audio but the tokenized prompt contains no audio token.",
+            family="mimo_v2",
+        )
+    bundle = _resolve_mimo_audio_bundle_path(model, processor)
+    if bundle is None:
+        raise UnsupportedMediaModalityError(
+            "audio",
+            "MiMo-V2 audio request cannot resolve the loaded bundle path for audio_tokenizer weights.",
+            family="mimo_v2",
+        )
+    audio_dir = bundle / "audio_tokenizer"
+    if not (audio_dir / "config.json").is_file() or not (audio_dir / "model.safetensors").is_file():
+        raise UnsupportedMediaModalityError(
+            "audio",
+            f"MiMo-V2 audio tokenizer sidecar is incomplete under {audio_dir}.",
+            family="mimo_v2",
+        )
+    cache_key = str(bundle.resolve())
+    tokenizer = _MIMO_AUDIO_TOKENIZER_CACHE.get(cache_key)
+    if tokenizer is None:
+        from .models import mllm as local_mllm
+
+        local_mllm._register_mimo_v2_mlx_vlm_runtime()
+        import sys
+
+        module = sys.modules.get("mlx_vlm.models.mimo_v2")
+        if module is None or not hasattr(module, "load_mimo_audio_tokenizer_from_bundle"):
+            raise UnsupportedMediaModalityError(
+                "audio",
+                "MiMo-V2 audio tokenizer runtime is not registered.",
+                family="mimo_v2",
+            )
+        tokenizer = module.load_mimo_audio_tokenizer_from_bundle(bundle)
+        _MIMO_AUDIO_TOKENIZER_CACHE[cache_key] = tokenizer
+    processor_config = _mimo_audio_processor_config(model)
+    segment_size = int(processor_config.get("audio_segment_size") or 6000)
+    channels = int(processor_config.get("audio_channels") or 20)
+    mels = [
+        _mimo_audio_log_mel(str(path), processor_config)
+        for path in audio_paths
+    ]
+    codes_per_audio = tokenizer.encode_audio_to_codes(
+        mels,
+        segment_size=segment_size,
+        n_q=channels,
+    )
+    if not codes_per_audio:
+        return None
+    codes = mx.concatenate([mx.array(c).astype(mx.int32) for c in codes_per_audio], axis=0)
+    return codes[:, :channels]
 
 def _should_use_safe_processor_path(
     processor: Any,
@@ -3719,6 +3898,27 @@ class MLLMBatchGenerator:
         request.audio_features = _ensure_mx_array(
             request.extra_kwargs.pop("audio_features", None)
         )
+        if (
+            all_audio
+            and self._model_type == "mimo_v2"
+            and not any(
+                item is not None
+                for item in (
+                    request.audio_codes,
+                    request.audio_embeds,
+                    request.audio_features,
+                )
+            )
+        ):
+            request.audio_codes = _ensure_mx_array(
+                _build_mimo_audio_codes_from_paths(
+                    model=self.model,
+                    processor=self.processor,
+                    audio_paths=all_audio,
+                    input_ids=request.input_ids,
+                ),
+                mx.int32,
+            )
         if all_audio and not any(
             item is not None
             for item in (
