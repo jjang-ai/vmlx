@@ -1228,7 +1228,10 @@ class TestIssueGuards:
         src = inspect.getsource(_m.MLLMBatchGenerator._run_vision_encoding_inner)
         wrapper_forward = src[src.index("output = self.model(input_ids, **kwargs)") - 900 :]
 
+        assert "if has_images or has_audio_payload:" in wrapper_forward
         assert "has_audio_payload=has_audio_payload" in wrapper_forward
+        assert "_apply_vlm_image_request_cache_limit" in wrapper_forward
+        assert "mx.clear_cache()" in wrapper_forward
         assert "_raise_if_image_prefill_exceeds_budget" in wrapper_forward
         assert "output = self.model(input_ids, **kwargs)" in wrapper_forward
 

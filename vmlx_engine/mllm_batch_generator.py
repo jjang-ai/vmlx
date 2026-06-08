@@ -5212,8 +5212,8 @@ class MLLMBatchGenerator:
                     return output.logits
                 return output
 
-        if has_images:
-            # Image-expanded prompts must use the one-shot VLM wrapper path.
+        if has_images or has_audio_payload:
+            # Media-expanded prompts must use the one-shot VLM wrapper path.
             # Drop allocator free-list memory and reject impossible requests
             # before Metal executes a command buffer that can kill the server.
             _apply_vlm_image_request_cache_limit()
