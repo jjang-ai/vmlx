@@ -15,7 +15,10 @@ from typing import Any
 DEFAULT_MODEL_PATH = Path(
     "/Users/example/.mlxstudio/models/JANGQ-AI/Step-3.7-Flash-JANG_2L"
 )
-DEFAULT_OUT = Path("build/current-step37-vlm-runtime-audit-after-gemma4-vl-refresh-20260606.json")
+DEFAULT_OUT = Path("build/current-step37-vlm-runtime-audit-after-source-live-media-proof-20260607.json")
+DEFAULT_LIVE_MEDIA_PROOF = Path(
+    "build/current-all-local-model-smoke-step37-jang2l-source-tools-media-after-vlm-routing-20260607/summary.json"
+)
 JANG_RUNTIME_NOTE = Path(
     "/Users/example/jang/docs/runtime/2026-05-29-step37-lfm25-source-and-quant-status.md"
 )
@@ -94,6 +97,67 @@ def _inspect_mlx_vlm_step3p7_runtime() -> dict[str, Any]:
         )
     )
     return runtime
+
+
+def _inspect_live_media_proof(path: Path) -> dict[str, Any]:
+    payload = _read_json(path)
+    proof: dict[str, Any] = {
+        "artifact": str(path),
+        "exists": path.exists(),
+        "status": payload.get("status"),
+        "completed": payload.get("completed"),
+        "failed": payload.get("failed"),
+        "row_count": payload.get("row_count"),
+        "required_labels": [
+            "text_cache_repeat_1",
+            "text_cache_repeat_2",
+            "text_multiturn_recall",
+            "tool_required",
+            "tool_result_continuation",
+            "structured_json_exact",
+            "exact_code_whitespace",
+            "vl_blue_image",
+            "text_no_media_after_image",
+            "vl_blue_image_repeat",
+            "vl_red_image_changed",
+            "vl_blue_video",
+            "text_no_media_after_video",
+        ],
+        "present_labels": [],
+        "missing_labels": [],
+        "validation_failures": [],
+        "pass": False,
+    }
+    results = payload.get("results") if isinstance(payload.get("results"), list) else []
+    requests: list[dict[str, Any]] = []
+    for result in results:
+        if not isinstance(result, dict):
+            continue
+        for request in result.get("requests") or []:
+            if isinstance(request, dict):
+                requests.append(request)
+        for failure in result.get("failures") or []:
+            proof["validation_failures"].append(failure)
+    labels = [
+        str(request.get("label"))
+        for request in requests
+        if request.get("label") is not None
+    ]
+    proof["present_labels"] = sorted(set(labels))
+    proof["missing_labels"] = [
+        label for label in proof["required_labels"] if label not in proof["present_labels"]
+    ]
+    for request in requests:
+        for failure in request.get("validation_failures") or []:
+            proof["validation_failures"].append(failure)
+    proof["pass"] = (
+        proof["exists"] is True
+        and payload.get("status") == "pass"
+        and payload.get("failed") in {0, None}
+        and not proof["missing_labels"]
+        and not proof["validation_failures"]
+    )
+    return proof
 
 
 def _bridge_kind(text: str) -> str:
@@ -501,6 +565,7 @@ def _inspect_source_owned_runtime_progress() -> dict[str, Any]:
 def build_audit(
     *,
     model_path: Path,
+    live_media_proof_path: Path = DEFAULT_LIVE_MEDIA_PROOF,
     mlx_vlm_step3p7_importable: bool | None = None,
     mlx_vlm_step3p7_runtime: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
@@ -516,6 +581,7 @@ def build_audit(
         reference=local_reference_vlm_runtime,
     )
     source_owned_runtime_progress = _inspect_source_owned_runtime_progress()
+    live_media_proof = _inspect_live_media_proof(live_media_proof_path)
     try:
         from vmlx_engine.models import mllm
 
@@ -610,15 +676,16 @@ def build_audit(
         "step_jangtq_status": step_jangtq_status,
         "mlx_vlm_implementation_contract": mlx_vlm_implementation_contract,
         "source_owned_runtime_progress": source_owned_runtime_progress,
+        "live_media_proof": live_media_proof,
         "runtime_note": str(JANG_RUNTIME_NOTE),
         "runtime_note_confirms_open_vlm": runtime_note_confirms_open_vlm,
         "root_cause": root_cause,
         "failure_summary": failure_summary,
         "release_clearance": release_clearance,
         "next_proof": (
-            "Implement and prove a real Step3p7 VLM runtime path in vMLX/MLX-VLM "
-            "covering image patch handling, full+sliding KV cache, q/k norms, "
-            "K/V scale sidecars, parser stripping, and real Electron UI image proof."
+            "Source live Step3p7 media proof is present when live_media_proof.pass "
+            "is true. Remaining release proof, if any, belongs to packaged/bundled "
+            "Electron UI parity rather than the source VLM runtime surface."
         ),
         "commands": {
             "audit": (
@@ -639,9 +706,18 @@ def write_audit(*, model_path: Path, out_path: Path) -> dict[str, Any]:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--model-path", type=Path, default=DEFAULT_MODEL_PATH)
+    parser.add_argument("--live-media-proof", type=Path, default=DEFAULT_LIVE_MEDIA_PROOF)
     parser.add_argument("--out", type=Path, default=DEFAULT_OUT)
     args = parser.parse_args()
-    payload = write_audit(model_path=args.model_path, out_path=args.out)
+    payload = build_audit(
+        model_path=args.model_path,
+        live_media_proof_path=args.live_media_proof,
+    )
+    args.out.parent.mkdir(parents=True, exist_ok=True)
+    args.out.write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
     print(
         json.dumps(
             {

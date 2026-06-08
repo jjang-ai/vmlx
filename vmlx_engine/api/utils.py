@@ -341,6 +341,27 @@ def _is_step3p7_advertised_vlm_path(local_path: str) -> bool:
         return False
 
 
+def _source_step3p7_vlm_runtime_available() -> bool:
+    """Return True when vMLX ships the source-owned Step3.7 VLM runtime."""
+    try:
+        from ..models import step3p7_mlx_vlm as runtime
+    except Exception:
+        return False
+    return all(
+        hasattr(runtime, name)
+        for name in (
+            "Model",
+            "ModelConfig",
+            "TextConfig",
+            "VisionConfig",
+            "LanguageModel",
+            "VisionModel",
+            "Step3VLProcessor",
+            "Step3VisionProcessor",
+        )
+    )
+
+
 def _has_native_mtp_vl_artifact(local_path: str) -> bool:
     """Return True for real artifact-backed Qwen native-MTP VL bundles.
 
@@ -515,10 +536,18 @@ def is_mllm_model(model_name: str, force_mllm: bool = False) -> bool:
         return False
 
     if _is_step3p7_advertised_vlm_path(local_path):
+        if _source_step3p7_vlm_runtime_available():
+            _logger.info(
+                "is_mllm_model(%s): tier=step3p7_source_vlm_runtime "
+                "force_mllm=%s result=True",
+                model_name,
+                force_mllm,
+            )
+            return True
         if force_mllm:
             _logger.warning(
                 "is_mllm_model(%s): Step3p7 advertised VLM metadata "
-                "overrides force_mllm — Step3p7 VLM is not production-cleared "
+                "overrides force_mllm — Step3p7 VLM runtime is unavailable "
                 "in this runtime; routing text-only to avoid MLLM crashes",
                 model_name,
             )
@@ -526,7 +555,7 @@ def is_mllm_model(model_name: str, force_mllm: bool = False) -> bool:
             _logger.warning(
                 "is_mllm_model(%s): tier=step3p7_advertised_vlm_text_only "
                 "result=False — Step3p7 VLM metadata is present but the VLM "
-                "runtime is not production-cleared",
+                "runtime is unavailable",
                 model_name,
             )
         return False

@@ -446,8 +446,10 @@ class TestHelperFunctions:
         }))
         assert not is_mllm_model(str(llm_dir))
 
-    def test_step37_advertised_vlm_runtime_launches_text_only_by_default(self, tmp_path):
-        """Step3.7 advertised vision must not route into the unsafe MLLM path."""
+    def test_step37_advertised_vlm_runtime_launches_text_only_when_runtime_missing(
+        self, monkeypatch, tmp_path
+    ):
+        """Step3.7 advertised vision must not route into MLLM without runtime."""
         import json
 
         from vmlx_engine.api import utils as api_utils
@@ -481,6 +483,11 @@ class TestHelperFunctions:
 
         api_utils.resolve_to_local_path.cache_clear()
         api_utils._IS_MLLM_CACHE.clear()
+        monkeypatch.setattr(
+            api_utils,
+            "_source_step3p7_vlm_runtime_available",
+            lambda: False,
+        )
 
         assert api_utils.is_mllm_model(str(step_dir), force_mllm=False) is False
         assert api_utils.is_mllm_model(str(step_dir), force_mllm=True) is False

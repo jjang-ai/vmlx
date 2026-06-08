@@ -31,22 +31,36 @@ def _write_step3p7_model(tmp_path, *, jang_has_vision):
     return model_dir
 
 
-def test_step3p7_jang_advertised_vision_routes_text_only_by_default(tmp_path):
+def test_step3p7_jang_advertised_vision_routes_vlm_when_source_runtime_exists(tmp_path):
     from vmlx_engine.api import utils
 
     model_dir = _write_step3p7_model(tmp_path, jang_has_vision=True)
     utils._IS_MLLM_CACHE.clear()
+
+    assert utils.is_mllm_model(str(model_dir)) is True
+
+
+def test_step3p7_jang_advertised_vision_blocks_vlm_when_runtime_missing(
+    tmp_path,
+    monkeypatch,
+):
+    from vmlx_engine.api import utils
+
+    model_dir = _write_step3p7_model(tmp_path, jang_has_vision=True)
+    utils._IS_MLLM_CACHE.clear()
+    monkeypatch.setattr(utils, "_source_step3p7_vlm_runtime_available", lambda: False)
 
     assert utils.is_mllm_model(str(model_dir)) is False
+    assert utils.is_mllm_model(str(model_dir), force_mllm=True) is False
 
 
-def test_step3p7_jang_advertised_vision_overrides_force_mllm_by_default(tmp_path):
+def test_step3p7_jang_advertised_vision_force_mllm_uses_source_runtime(tmp_path):
     from vmlx_engine.api import utils
 
     model_dir = _write_step3p7_model(tmp_path, jang_has_vision=True)
     utils._IS_MLLM_CACHE.clear()
 
-    assert utils.is_mllm_model(str(model_dir), force_mllm=True) is False
+    assert utils.is_mllm_model(str(model_dir), force_mllm=True) is True
 
 
 def test_step3p7_jang_text_only_view_stays_text_only(tmp_path):
