@@ -12196,6 +12196,34 @@ class TestTurboQuantKVTelemetry:
         }
         assert extracted[1]["class_name"] == "_KVCache"
 
+    def test_scheduler_cache_extraction_preserves_mimo_mixed_full_kv_heads(self):
+        """MiMo full-attention KV must not be sliced to the smaller SWA head count."""
+        import mlx.core as mx
+        from mlx_lm.models.cache import KVCache
+        from types import SimpleNamespace
+        from vmlx_engine.scheduler import Scheduler
+
+        cfg = SimpleNamespace(
+            model_type="mimo_v2",
+            num_key_value_heads=4,
+            num_global_key_value_heads=8,
+            swa_num_key_value_heads=4,
+            kv_lora_rank=0,
+        )
+        scheduler = Scheduler.__new__(Scheduler)
+        scheduler.model = SimpleNamespace(args=cfg)
+
+        full_cache = KVCache()
+        full_cache.keys = mx.ones((1, 8, 6, 192), dtype=mx.float16)
+        full_cache.values = mx.ones((1, 8, 6, 192), dtype=mx.float16)
+        full_cache.offset = 6
+
+        extracted = scheduler._extract_cache_states([full_cache])
+
+        keys, values = extracted[0]["state"]
+        assert keys.shape[1] == 8
+        assert values.shape[1] == 8
+
     def test_quantization_status_detects_jangtq_sidecar_and_bits(self, tmp_path):
         from vmlx_engine.server import _model_quantization_status
 

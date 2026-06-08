@@ -1427,6 +1427,106 @@ class Scheduler:
         self._n_kv_heads_cached = n_kv
         return n_kv
 
+    def _detect_allowed_n_kv_heads(self) -> set[int]:
+        """Return all KV head counts that are valid for this model."""
+        if hasattr(self, "_allowed_n_kv_heads_cached"):
+            return self._allowed_n_kv_heads_cached
+        allowed: set[int] = set()
+        primary = self._detect_n_kv_heads()
+        if primary > 0:
+            allowed.add(primary)
+        try:
+            candidates = [self.model]
+            lm = getattr(self.model, "language_model", None)
+            if lm is not None:
+                candidates.append(lm)
+            mm = getattr(self.model, "model", None)
+            if mm is not None and mm is not self.model:
+                candidates.append(mm)
+            for model_obj in candidates:
+                for attr in ("args", "config", "text_config"):
+                    cfg = getattr(model_obj, attr, None)
+                    if cfg is None:
+                        continue
+                    for field in (
+                        "num_global_key_value_heads",
+                        "global_num_key_value_heads",
+                        "swa_num_key_value_heads",
+                        "num_swa_key_value_heads",
+                        "sliding_num_key_value_heads",
+                        "local_num_key_value_heads",
+                    ):
+                        val = getattr(cfg, field, None)
+                        if val is None:
+                            tc = getattr(cfg, "text_config", None)
+                            if tc is not None:
+                                val = getattr(tc, field, None)
+                        if isinstance(val, int) and val > 0:
+                            allowed.add(val)
+        except Exception:
+            pass
+        self._allowed_n_kv_heads_cached = allowed
+        return allowed
+
+    def _detect_config_int_field(self, fields: tuple[str, ...]) -> int:
+        try:
+            candidates = [self.model]
+            lm = getattr(self.model, "language_model", None)
+            if lm is not None:
+                candidates.append(lm)
+            mm = getattr(self.model, "model", None)
+            if mm is not None and mm is not self.model:
+                candidates.append(mm)
+            for model_obj in candidates:
+                for attr in ("args", "config", "text_config"):
+                    cfg = getattr(model_obj, attr, None)
+                    if cfg is None:
+                        continue
+                    for field in fields:
+                        val = getattr(cfg, field, None)
+                        if val is None:
+                            tc = getattr(cfg, "text_config", None)
+                            if tc is not None:
+                                val = getattr(tc, field, None)
+                        if isinstance(val, int) and val > 0:
+                            return val
+        except Exception:
+            pass
+        return 0
+
+    def _cache_head_slice_target(self, class_name: str, actual_heads: int) -> int:
+        """Return target H for safe GQA-inflation slicing, or 0 to keep as-is.
+
+        Mixed full/SWA families such as Gemma 4 and MiMo V2 can legitimately
+        use different KV head counts by cache class. Extraction must not slice
+        an 8-head full-attention KVCache down to the smaller 4-head SWA count.
+        """
+        allowed = self._detect_allowed_n_kv_heads()
+        if allowed and actual_heads in allowed:
+            return 0
+        primary = self._detect_n_kv_heads()
+        if primary <= 0 or actual_heads <= primary:
+            return 0
+        if len(allowed) > 1:
+            if "Rotating" in str(class_name):
+                target = self._detect_config_int_field(
+                    (
+                        "swa_num_key_value_heads",
+                        "num_swa_key_value_heads",
+                        "sliding_num_key_value_heads",
+                        "local_num_key_value_heads",
+                    )
+                )
+            else:
+                target = self._detect_config_int_field(
+                    (
+                        "num_global_key_value_heads",
+                        "global_num_key_value_heads",
+                    )
+                )
+            return target if target > 0 and actual_heads > target else 0
+        return primary
+
     def _wrap_make_cache_quantized(self, bits: int, group_size: int) -> None:
         """
         Configure KV cache quantization for prefix cache storage.
@@ -3907,7 +4007,6 @@ class Scheduler:
                 ):
                     sub_states = []
                     all_ok = True
-                    n_kv = self._detect_n_kv_heads()
                     for j, sub_cache in enumerate(layer_cache.caches):
                         if hasattr(sub_cache, "state") and hasattr(
                             sub_cache, "meta_state"
@@ -3918,26 +4017,36 @@ class Scheduler:
                             if (
                                 isinstance(sub_state, tuple)
                                 and len(sub_state) == 2
-                                and n_kv > 0
                             ):
                                 sk, sv = sub_state
                                 if (
                                     hasattr(sk, "shape")
                                     and len(sk.shape) == 4
-                                    and sk.shape[1] > n_kv
                                 ):
-                                    sub_state = (sk[:, :n_kv, :, :], sv[:, :n_kv, :, :])
+                                    target_h = self._cache_head_slice_target(
+                                        type(sub_cache).__name__,
+                                        int(sk.shape[1]),
+                                    )
+                                    if target_h > 0:
+                                        sub_state = (
+                                            sk[:, :target_h, :, :],
+                                            sv[:, :target_h, :, :],
+                                        )
                                 elif (
                                     isinstance(sk, (tuple, list))
                                     and len(sk) >= 1
                                     and hasattr(sk[0], "shape")
                                     and len(sk[0].shape) == 4
-                                    and sk[0].shape[1] > n_kv
                                 ):
-                                    sub_state = (
-                                        tuple(t[:, :n_kv, :, :] for t in sk),
-                                        tuple(t[:, :n_kv, :, :] for t in sv),
+                                    target_h = self._cache_head_slice_target(
+                                        type(sub_cache).__name__,
+                                        int(sk[0].shape[1]),
                                     )
+                                    if target_h > 0:
+                                        sub_state = (
+                                            tuple(t[:, :target_h, :, :] for t in sk),
+                                            tuple(t[:, :target_h, :, :] for t in sv),
+                                        )
                             sub_states.append(
                                 {
                                     "state": sub_state,
@@ -4037,37 +4146,40 @@ class Scheduler:
                     # QuantizedKVCache (tuple-of-tuples: (data, scales, zeros)).
                     if isinstance(state, tuple) and len(state) == 2:
                         keys, values = state
-                        n_kv = self._detect_n_kv_heads()
-                        if n_kv > 0:
-                            if hasattr(keys, "shape") and len(keys.shape) == 4:
-                                # Standard KVCache: keys/values are 4D tensors
-                                if keys.shape[1] > n_kv:
-                                    orig_h = keys.shape[1]
-                                    keys = keys[:, :n_kv, :, :]
-                                    values = values[:, :n_kv, :, :]
-                                    state = (keys, values)
-                                    if i == 0:
-                                        logger.debug(
-                                            f"GQA head normalization: sliced H "
-                                            f"{orig_h} → {n_kv}"
-                                        )
-                            elif isinstance(keys, (tuple, list)) and len(keys) >= 1:
-                                # QuantizedKVCache: keys/values are tuples of
-                                # (data, scales, zeros) — check first component
-                                first_k = keys[0]
-                                if (
-                                    hasattr(first_k, "shape")
-                                    and len(first_k.shape) == 4
-                                    and first_k.shape[1] > n_kv
-                                ):
+                        if hasattr(keys, "shape") and len(keys.shape) == 4:
+                            # Standard KVCache: keys/values are 4D tensors.
+                            target_h = self._cache_head_slice_target(
+                                cls_name,
+                                int(keys.shape[1]),
+                            )
+                            if target_h > 0:
+                                orig_h = keys.shape[1]
+                                keys = keys[:, :target_h, :, :]
+                                values = values[:, :target_h, :, :]
+                                state = (keys, values)
+                                if i == 0:
+                                    logger.debug(
+                                        f"GQA head normalization: sliced H "
+                                        f"{orig_h} → {target_h}"
+                                    )
+                        elif isinstance(keys, (tuple, list)) and len(keys) >= 1:
+                            # QuantizedKVCache: keys/values are tuples of
+                            # (data, scales, zeros) — check first component.
+                            first_k = keys[0]
+                            if hasattr(first_k, "shape") and len(first_k.shape) == 4:
+                                target_h = self._cache_head_slice_target(
+                                    cls_name,
+                                    int(first_k.shape[1]),
+                                )
+                                if target_h > 0:
                                     orig_h = first_k.shape[1]
-                                    keys = tuple(t[:, :n_kv, :, :] for t in keys)
-                                    values = tuple(t[:, :n_kv, :, :] for t in values)
+                                    keys = tuple(t[:, :target_h, :, :] for t in keys)
+                                    values = tuple(t[:, :target_h, :, :] for t in values)
                                     state = (keys, values)
                                     if i == 0:
                                         logger.debug(
                                             f"GQA head normalization (quantized): "
-                                            f"sliced H {orig_h} → {n_kv}"
+                                            f"sliced H {orig_h} → {target_h}"
                                         )
 
                     # Ensure QuantizedKVCache meta includes group_size and bits.
