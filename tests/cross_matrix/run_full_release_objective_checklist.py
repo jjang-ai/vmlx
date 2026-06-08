@@ -21,13 +21,13 @@ DEFAULT_OUT = Path(
 )
 
 MIMO_AUDIT = Path(
-    "build/current-mimo-v2-jang2l-current-audit-after-jang2l-media-memory-gated-capabilities-20260608.json"
+    "build/current-mimo-v2-jang2l-current-audit-after-noheavy-contract-refresh-20260608.json"
 )
 MIMO_NO_SOURCE_EXACTNESS_CLASSIFIER = Path(
     "build/current-mimo-v2-no-source-exactness-classifier-after-conservative-no-cb-prefix-proof-20260608.json"
 )
 NOHEAVY_API_CACHE = Path(
-    "build/current-noheavy-api-cache-contract-after-qwen36-bundled-media-pass-20260607.json"
+    "build/current-noheavy-api-cache-contract-after-dsv4-preflight-refresh-20260608.json"
 )
 API_SURFACE_CONTRACT = Path(
     "build/current-api-surface-contract-20260602-v1554-stream-cache-reuse-refresh.json"

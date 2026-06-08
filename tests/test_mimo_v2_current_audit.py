@@ -577,7 +577,7 @@ def test_mimo_current_audit_separates_clean_artifact_from_runtime_blockers(
     )
     _write_json(
         tmp_path
-        / "build/current-noheavy-api-cache-contract-after-qwen36-bundled-media-pass-20260607.json",
+        / "build/current-noheavy-api-cache-contract-after-dsv4-preflight-refresh-20260608.json",
         {
             "status": "pass",
             "checks": {

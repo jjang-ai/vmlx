@@ -21,7 +21,7 @@ from pathlib import Path
 from typing import Any
 
 
-DEFAULT_OUT = Path("build/current-generation-defaults-contract-after-do-sample-false-mimo-20260607.json")
+DEFAULT_OUT = Path("build/current-generation-defaults-contract-after-dsv4-preflight-refresh-20260608.json")
 
 SOURCE_HASH_FILES = (
     "vmlx_engine/server.py",

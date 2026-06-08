@@ -41,7 +41,7 @@ DEFERRED_RELEASE_OPEN_REQUIREMENTS = {
 }
 
 CURRENT_OBJECTIVE_DIGEST_ARTIFACT = (
-    "build/current-objective-proof-after-dsv4-preflight-refresh-20260608.json"
+    "build/current-objective-proof-after-noheavy-contract-refresh-20260608.json"
 )
 
 CURRENT_SUITE_SOURCE_HASH_FILES = (
@@ -502,7 +502,7 @@ CURRENT_SUITE_COMMANDS: dict[str, list[str]] = {
         sys.executable,
         "tests/cross_matrix/run_noheavy_api_cache_contract.py",
         "--out",
-        "build/current-noheavy-api-cache-contract-after-qwen36-bundled-media-pass-20260607.json",
+        "build/current-noheavy-api-cache-contract-after-dsv4-preflight-refresh-20260608.json",
     ],
     "cache_architecture_contracts": [
         sys.executable,
@@ -532,7 +532,7 @@ CURRENT_SUITE_COMMANDS: dict[str, list[str]] = {
         sys.executable,
         "tests/cross_matrix/run_generation_defaults_contract.py",
         "--out",
-        "build/current-generation-defaults-contract-after-do-sample-false-mimo-20260607.json",
+        "build/current-generation-defaults-contract-after-dsv4-preflight-refresh-20260608.json",
     ],
     "reasoning_template_contracts": [
         sys.executable,
@@ -618,7 +618,7 @@ CURRENT_SUITE_COMMANDS: dict[str, list[str]] = {
         sys.executable,
         "tests/cross_matrix/run_vl_media_cache_contract.py",
         "--out",
-        "build/current-vl-media-cache-contract-after-mimo-capability-snapshot-fix-20260607.json",
+        "build/current-vl-media-cache-contract-after-dsv4-preflight-refresh-20260608.json",
     ],
     "mimo_v2_local_bundle_metadata_contract": [
         sys.executable,

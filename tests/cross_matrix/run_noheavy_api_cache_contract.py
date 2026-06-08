@@ -26,7 +26,7 @@ from pathlib import Path
 from typing import Any
 
 
-DEFAULT_OUT = Path("build/current-noheavy-api-cache-contract-after-jangtq2-objective-refresh-20260607.json")
+DEFAULT_OUT = Path("build/current-noheavy-api-cache-contract-after-dsv4-preflight-refresh-20260608.json")
 SOURCE_HASH_FILES = (
     "vmlx_engine/server.py",
     "vmlx_engine/tool_parsers/dsml_tool_parser.py",
@@ -58,6 +58,11 @@ REQUIRED_NOHEAVY_API_CACHE_TEST_MARKERS = (
     "test_chat_completions_streaming",
     "test_responses_streaming",
     "test_responses_nonstreaming_forwards_tc_id",
+    "test_chat_completion_streaming_validates_json",
+    "test_responses_api_streaming_validates_json",
+    "test_streaming_emits_error_on_strict_failure",
+    "test_text_format_has_json_schema_field",
+    "test_text_format_preserves_schema_data",
     "test_chat_stream_tracks_cache_detail_alongside_cached_tokens",
     "test_chat_stream_finish_chunks_emit_cache_detail",
     "test_responses_stream_tracks_cache_detail_alongside_cached",
@@ -114,6 +119,11 @@ COMMANDS: dict[str, list[str]] = {
             "or responses_request_has_sampling_fields "
             "or media_diag_hooks_cover_anthropic_and_ollama_streaming_ingress "
             "or responses_nonstreaming_forwards_tc_id "
+            "or chat_completion_streaming_validates_json "
+            "or responses_api_streaming_validates_json "
+            "or streaming_emits_error_on_strict_failure "
+            "or text_format_has_json_schema_field "
+            "or text_format_preserves_schema_data "
             "or chat_completions_nonstreaming "
             "or responses_nonstreaming "
             "or chat_completions_streaming "
@@ -309,6 +319,17 @@ def build_artifact(root: Path) -> dict[str, Any]:
             and "test_usage_builders_preserve_cache_detail_without_cached_tokens" not in missing_markers
             and "test_chat_stream_usage_preserves_cache_detail_without_cached_tokens" not in missing_markers
             and "test_responses_stream_usage_preserves_cache_detail_without_cached_tokens" not in missing_markers
+        ),
+        "json_response_format_stream_validation": (
+            api_ok
+            and "test_chat_completion_streaming_validates_json" not in missing_markers
+            and "test_responses_api_streaming_validates_json" not in missing_markers
+            and "test_streaming_emits_error_on_strict_failure" not in missing_markers
+        ),
+        "responses_text_format_json_schema_preserved": (
+            api_ok
+            and "test_text_format_has_json_schema_field" not in missing_markers
+            and "test_text_format_preserves_schema_data" not in missing_markers
         ),
         "responses_previous_response_history": (
             responses_history_ok

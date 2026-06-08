@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Any
 
 
-DEFAULT_OUT = Path("build/current-vl-media-cache-contract-after-mllm-tight-memory-guard-20260607.json")
+DEFAULT_OUT = Path("build/current-vl-media-cache-contract-after-dsv4-preflight-refresh-20260608.json")
 
 PYTEST_PATTERN = (
     "video_url or video_fallback or media_salt or mediaSalt or tool_replay "

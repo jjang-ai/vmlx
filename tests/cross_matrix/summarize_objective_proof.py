@@ -191,7 +191,7 @@ DSV4_BATCH_GENERATOR_LOGIT_TRACE_REL = (
 DSV4_BATCH_GENERATOR_WARMUP_ABLATION_REL = (
     "build/current-dsv4-jang-batch-generator-warmup-ablation-20260524.json"
 )
-API_CACHE_CONTRACT_REL = "build/current-noheavy-api-cache-contract-after-qwen36-bundled-media-pass-20260607.json"
+API_CACHE_CONTRACT_REL = "build/current-noheavy-api-cache-contract-after-dsv4-preflight-refresh-20260608.json"
 CACHE_ARCHITECTURE_CONTRACT_REL = "build/current-cache-architecture-contract-after-mimo-tq-kv-boundary-20260607.json"
 TOOL_CALL_CONTRACT_REL = "build/current-tool-call-contract-after-current-mimo-proof-20260607.json"
 PANEL_SETTINGS_CONTRACT_REL = "build/current-panel-settings-contract-proof-20260601-cache-ui-storage-quant.json"
@@ -200,9 +200,9 @@ MAX_OUTPUT_CONTEXT_CONTRACT_FALLBACK_REL = "build/current-max-output-context-con
 MODEL_FAMILY_CONTRACT_REL = "build/current-model-family-detection-contract-after-mimo-capability-snapshot-fix-20260607.json"
 PARSER_REGISTRY_CONTRACT_REL = "build/current-parser-registry-contract-after-mimo-capability-snapshot-fix-20260607.json"
 MODEL_ARTIFACT_FORMAT_CONTRACT_REL = "build/current-model-artifact-format-contract-after-mimo-capability-snapshot-fix-20260607.json"
-GENERATION_DEFAULTS_CONTRACT_REL = "build/current-generation-defaults-contract-after-do-sample-false-mimo-20260607.json"
+GENERATION_DEFAULTS_CONTRACT_REL = "build/current-generation-defaults-contract-after-dsv4-preflight-refresh-20260608.json"
 NATIVE_MTP_CONTRACT_REL = "build/current-native-mtp-contract-after-qwen-gdn-sink-refresh-20260608.json"
-VL_MEDIA_CONTRACT_REL = "build/current-vl-media-cache-contract-after-mimo-capability-snapshot-fix-20260607.json"
+VL_MEDIA_CONTRACT_REL = "build/current-vl-media-cache-contract-after-dsv4-preflight-refresh-20260608.json"
 QWEN_JANG_SOURCE_SPEED_REL = "build/current-decode-speed-live-qwen27-jang4m-source-20260606.json"
 QWEN_JANG_PACKAGED_SPEED_REL = "build/current-decode-speed-live-qwen27-jang4m-installed-app-deterministic-pp-20260606.json"
 QWEN_NATIVE_MTP_SPEED_REL = "build/current-decode-speed-live-qwen27-jang4m-mtp-20260523.json"
@@ -378,7 +378,7 @@ MIMO_V2_JANG2L_TOOL_DIALECT_REL = (
     "build/current-mimo-v2-jang2l-tool-dialect-failure-20260606.json"
 )
 MIMO_V2_JANG2L_CURRENT_AUDIT_REL = (
-    "build/current-mimo-v2-jang2l-current-audit-after-jang2l-media-memory-gated-capabilities-20260608.json"
+    "build/current-mimo-v2-jang2l-current-audit-after-noheavy-contract-refresh-20260608.json"
 )
 MIMO_V2_JANG2L_METADATA_TRUTH_REL = (
     "build/current-mimo-v25-jang2l-local-metadata-truth-patch-20260606.json"
