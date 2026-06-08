@@ -73,6 +73,41 @@ def _jang_default_bits(jang_cfg: dict, fallback: list[int] | None = None) -> int
     return int(min(bit_widths))
 
 
+def _jangtq_bits_map_from_metadata(jang_cfg: dict, config: dict | None = None) -> dict:
+    """Return JANGTQ per-projection bits from all model-owned metadata.
+
+    `jang_tools.load_jangtq_vlm_model` historically reads only
+    `jang_config.json["mxtq_bits"]`. Newer artifacts also stamp the same
+    contract into `config.json["mxtq_bits"]` and `config.json["runtime"]
+    ["routed_expert_bits"]`. vMLX must honor those fields automatically so a
+    corrected MiMo/N2 JANGTQ bundle does not need runtime hardcoding.
+    """
+    cfg = config or {}
+    runtime = cfg.get("runtime") if isinstance(cfg, dict) else None
+    runtime = runtime if isinstance(runtime, dict) else {}
+    candidates = (
+        (jang_cfg or {}).get("mxtq_bits"),
+        cfg.get("mxtq_bits") if isinstance(cfg, dict) else None,
+        (jang_cfg or {}).get("routed_expert_bits"),
+        cfg.get("routed_expert_bits") if isinstance(cfg, dict) else None,
+        runtime.get("routed_expert_bits"),
+    )
+    for candidate in candidates:
+        if isinstance(candidate, int):
+            return {"routed_expert": candidate}
+        if not isinstance(candidate, dict) or not candidate:
+            continue
+        routed = candidate.get("routed_expert")
+        if isinstance(routed, int):
+            return {"routed_expert": routed}
+        if isinstance(routed, dict) and routed:
+            return {"routed_expert": dict(routed)}
+        if any(k in candidate for k in ("gate_proj", "up_proj", "down_proj")):
+            return {"routed_expert": dict(candidate)}
+        return dict(candidate)
+    return {}
+
+
 def _jang_quant_mode(jang_cfg: dict, config: dict | None = None) -> str:
     """Return the MLX quantization mode declared by JANG metadata."""
     cfg_quant = (config or {}).get("quantization") or {}
@@ -2800,7 +2835,11 @@ def _load_jang_v2_vlm(
         # output quality. Replaces the earlier lossy dequant-and-requant
         # fallback that produced gibberish on Qwen3.6-35B-A3B-JANGTQ_2L.
         try:
-            from jang_tools.load_jangtq_vlm import load_jangtq_vlm_model as _load_vlm
+            from jang_tools.load_jangtq_vlm import (
+                _mlx_vlm_skeleton as _jangtq_vlm_skeleton,
+                load_jangtq_vlm_model as _load_vlm,
+            )
+            from jang_tools.load_jangtq import _hydrate_jangtq_model
         except ImportError as _ie:
             raise RuntimeError(
                 f"JANGTQ VLM requires jang_tools.load_jangtq_vlm but import failed: {_ie}\n"
@@ -2816,7 +2855,28 @@ def _load_jang_v2_vlm(
                 "  filter_expert_keys=True ignored on JANGTQ VLM fast path "
                 "(smelt partial-expert loading is not TQ-aware yet)"
             )
-        _vlm_model, _vlm_processor = _load_vlm(path)
+        _vlm_bits_map = _jangtq_bits_map_from_metadata(jang_cfg, config)
+        if _vlm_bits_map != _vlm_mxtq_bits_map:
+            logger.info(
+                "  JANGTQ VLM bits map resolved from merged metadata: %s",
+                _vlm_bits_map,
+            )
+        if _vlm_bits_map:
+            print(f"Loading JANGTQ VLM: {path.name}", flush=True)
+            print(
+                f"  seed={_vlm_mxtq_seed}, bits_map={_vlm_bits_map}",
+                flush=True,
+            )
+            _vlm_model, _vlm_processor, _, _vlm_model_config = _jangtq_vlm_skeleton(path)
+            _hydrate_jangtq_model(
+                model=_vlm_model,
+                model_path=path,
+                mxtq_seed=_vlm_mxtq_seed,
+                mxtq_bits_map=_vlm_bits_map,
+                model_config=_vlm_model_config,
+            )
+        else:
+            _vlm_model, _vlm_processor = _load_vlm(path)
 
         # Match the rest of the VLM-path post-processing that would normally
         # fire at the bottom of this function: attach config if missing and

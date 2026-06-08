@@ -152,6 +152,50 @@ class TestJangDetection:
 
         assert jang_loader.load_jang_vlm_model(tmp_path, skip_eval=True) is expected
 
+    def test_jangtq_vlm_bits_map_falls_back_to_config_metadata(self):
+        from vmlx_engine.utils.jang_loader import _jangtq_bits_map_from_metadata
+
+        assert _jangtq_bits_map_from_metadata(
+            {"format": "jangtq"},
+            {
+                "mxtq_bits": {
+                    "routed_expert": {
+                        "gate_proj": 3,
+                        "up_proj": 2,
+                        "down_proj": 3,
+                    }
+                }
+            },
+        ) == {
+            "routed_expert": {
+                "gate_proj": 3,
+                "up_proj": 2,
+                "down_proj": 3,
+            }
+        }
+
+    def test_jangtq_vlm_bits_map_falls_back_to_runtime_routed_bits(self):
+        from vmlx_engine.utils.jang_loader import _jangtq_bits_map_from_metadata
+
+        assert _jangtq_bits_map_from_metadata(
+            {"format": "jangtq"},
+            {
+                "runtime": {
+                    "routed_expert_bits": {
+                        "gate_proj": 3,
+                        "up_proj": 3,
+                        "down_proj": 3,
+                    }
+                }
+            },
+        ) == {
+            "routed_expert": {
+                "gate_proj": 3,
+                "up_proj": 3,
+                "down_proj": 3,
+            }
+        }
+
     def test_detects_jang_affine_weight_format(self, tmp_path):
         from vmlx_engine.utils.jang_loader import is_jang_model
 
