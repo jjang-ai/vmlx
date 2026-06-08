@@ -11715,6 +11715,28 @@ def _responses_input_to_messages(
             extract images from message content internally.
     """
 
+    def _drop_none_fields(value):
+        """Recursively drop absent optional fields before MLLM templating.
+
+        Multimodal chat templates commonly test key presence (for example
+        ``'image_url' in item``) before reading nested values. Pydantic content
+        parts can carry optional keys with ``None`` values, which makes text
+        parts look like image/audio/video parts. Preserve the user-provided
+        media/text structure, but remove absent optional fields at every level
+        before the tokenizer sees Responses history.
+        """
+        if hasattr(value, "model_dump"):
+            return value.model_dump(exclude_none=True)
+        if isinstance(value, dict):
+            return {
+                key: _drop_none_fields(item)
+                for key, item in value.items()
+                if item is not None
+            }
+        if isinstance(value, list):
+            return [_drop_none_fields(item) for item in value]
+        return value
+
     def _resolve_content(raw_content):
         """Resolve content: preserve arrays for MLLM, extract text for LLM."""
         if preserve_multimodal and isinstance(raw_content, list):
@@ -11723,12 +11745,7 @@ def _responses_input_to_messages(
             # for text items that have image_url=None as a model field.
             clean_parts = []
             for p in raw_content:
-                if hasattr(p, "model_dump"):
-                    clean_parts.append(p.model_dump(exclude_none=True))
-                elif isinstance(p, dict):
-                    clean_parts.append({k: v for k, v in p.items() if v is not None})
-                else:
-                    clean_parts.append(p)
+                clean_parts.append(_drop_none_fields(p))
             # OpenAI Responses API uses `input_image` / `input_video` /
             # `input_audio` as the canonical content-part types (with
             # `image_url` / `audio` etc. as sub-fields), distinct from
@@ -11764,7 +11781,7 @@ def _responses_input_to_messages(
                             url = url.get("url")
                         if url:
                             normalized.append({"type": "image_url",
-                                               "image_url": {"url": url}})
+                                               "image_url": _drop_none_fields({"url": url})})
                         else:
                             normalized.append(p)
                     elif t == "input_video":
@@ -11773,7 +11790,7 @@ def _responses_input_to_messages(
                             url = url.get("url")
                         if url:
                             normalized.append({"type": "video_url",
-                                               "video_url": {"url": url}})
+                                               "video_url": _drop_none_fields({"url": url})})
                         else:
                             normalized.append(p)
                     elif t == "input_text":
@@ -11949,6 +11966,46 @@ def _responses_input_to_messages(
     return messages
 
 
+def _coerce_orphan_tool_messages_for_template(messages: list[dict]) -> list[dict]:
+    """Preserve orphan tool outputs as text instead of native tool messages.
+
+    Strict native templates such as Gemma4 render a ``role=tool`` message by
+    looking backward for a matching assistant ``tool_calls[].id``. Responses
+    history from UI/tool auto-continue can contain a tool result without that
+    native anchor. Passing it through as ``role=tool`` makes the template's
+    tool name ``None`` and crashes during rendering. Do not fabricate a missing
+    tool call; keep the output in context as visible history text.
+    """
+    active_tool_call_ids: set[str] = set()
+    coerced: list[dict] = []
+    for msg in messages:
+        role = msg.get("role") if isinstance(msg, dict) else None
+        if role == "assistant":
+            active_tool_call_ids = set()
+            for tc in msg.get("tool_calls") or []:
+                if not isinstance(tc, dict):
+                    continue
+                tc_id = tc.get("id")
+                if isinstance(tc_id, str) and tc_id:
+                    active_tool_call_ids.add(tc_id)
+        if role == "tool":
+            tool_call_id = msg.get("tool_call_id")
+            if not isinstance(tool_call_id, str) or tool_call_id not in active_tool_call_ids:
+                content = _extract_text_from_content(msg.get("content", ""))
+                label = tool_call_id if isinstance(tool_call_id, str) and tool_call_id else "unknown"
+                coerced.append(
+                    {
+                        "role": "user",
+                        "content": f"Tool result ({label}):\n{content}",
+                    }
+                )
+                continue
+        elif role != "assistant":
+            active_tool_call_ids = set()
+        coerced.append(msg)
+    return coerced
+
+
 def _zaya_vl_text_part(text: str) -> list[dict[str, str]]:
     return [{"type": "text", "text": text}]
 
@@ -11983,6 +12040,61 @@ def _render_zaya_tool_call_history(tool_calls: list) -> str:
     return "\n\n".join(blocks)
 
 
+def _render_zaya_tool_response_text(msg: dict) -> str:
+    content = _extract_text_from_content(msg.get("content", ""))
+    tool_name = str(msg.get("name") or "tool").strip() or "tool"
+    try:
+        parsed = json.loads(content)
+    except Exception:
+        parsed = None
+    if isinstance(parsed, dict):
+        stored = parsed.get("stored")
+        if isinstance(stored, str) and stored:
+            if tool_name == "record_fact":
+                return f"STORED {stored}"
+            return f"{tool_name} result: {stored}"
+    return content
+
+
+def _zaya_vl_text_from_part_list(content: Any) -> str | None:
+    if isinstance(content, list):
+        parts: list[str] = []
+        for item in content:
+            if not isinstance(item, dict) or item.get("type") != "text":
+                return None
+            text = item.get("text")
+            if isinstance(text, str):
+                parts.append(text)
+        return "\n".join(parts)
+    if isinstance(content, str):
+        return content
+    return None
+
+
+def _merge_zaya_vl_adjacent_user_text(messages: list[dict]) -> list[dict]:
+    merged: list[dict] = []
+    for msg in messages:
+        if (
+            merged
+            and isinstance(msg, dict)
+            and isinstance(merged[-1], dict)
+            and msg.get("role") == "user"
+            and merged[-1].get("role") == "user"
+        ):
+            previous_text = _zaya_vl_text_from_part_list(merged[-1].get("content"))
+            current_text = _zaya_vl_text_from_part_list(msg.get("content"))
+            if previous_text is not None and current_text is not None:
+                merged[-1] = {
+                    **merged[-1],
+                    "content": _zaya_vl_text_part(
+                        previous_text.rstrip() + "\n\n" + current_text.lstrip()
+                    ),
+                }
+                continue
+        merged.append(msg)
+    return merged
+
+
 def _coerce_zaya_vl_tool_history_for_template(messages: list[dict]) -> list[dict]:
     """Render ZAYA-VL tool history as text parts instead of role=tool turns.
 
@@ -12001,20 +12113,23 @@ def _coerce_zaya_vl_tool_history_for_template(messages: list[dict]) -> list[dict
         if role == "assistant" and msg.get("tool_calls"):
             rendered = _render_zaya_tool_call_history(msg.get("tool_calls") or [])
             if rendered:
-                coerced.append({**msg, "content": _zaya_vl_text_part(rendered)})
+                coerced.append(
+                    {
+                        "role": "user",
+                        "content": _zaya_vl_text_part(
+                            "Previous assistant tool call:\n" + rendered
+                        ),
+                    }
+                )
             else:
                 coerced.append(msg)
             continue
         if role == "tool":
-            content = _extract_text_from_content(msg.get("content", ""))
+            content = _render_zaya_tool_response_text(msg)
             coerced.append(
                 {
                     "role": "user",
-                    "content": _zaya_vl_text_part(
-                        "<zyphra_tool_response>"
-                        + content
-                        + "</zyphra_tool_response>"
-                    ),
+                    "content": _zaya_vl_text_part("Tool response: " + content),
                 }
             )
             continue
@@ -12022,7 +12137,7 @@ def _coerce_zaya_vl_tool_history_for_template(messages: list[dict]) -> list[dict
             coerced.append({**msg, "content": _zaya_vl_text_part(msg.get("content", ""))})
             continue
         coerced.append(msg)
-    return coerced
+    return _merge_zaya_vl_adjacent_user_text(coerced)
 
 
 def _should_coerce_zaya_vl_tool_history(model_hint: str | None = None) -> bool:
@@ -12232,6 +12347,8 @@ async def create_response(
                 "continuing with request input only",
                 request.previous_response_id,
             )
+    if _preserve_mm:
+        messages = _coerce_orphan_tool_messages_for_template(messages)
     if engine.is_mllm and _should_coerce_zaya_vl_tool_history(request.model):
         messages = _coerce_zaya_vl_tool_history_for_template(messages)
 
