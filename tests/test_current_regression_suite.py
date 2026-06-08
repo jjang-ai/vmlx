@@ -1076,7 +1076,7 @@ def test_current_regression_suite_refreshes_release_regression_manifest(monkeypa
         and "tests/cross_matrix/run_dsv4_route_mode_code_exactness.py" in " ".join(cmd)
         and "--memory-preflight-only" in cmd
         and "--cases" not in cmd
-        and "build/current-dsv4-route-mode-code-exactness-memory-preflight-after-lfm-step-manifest-fix-20260604.json"
+        and "build/current-dsv4-route-mode-code-exactness-preflight-after-mimo-classifier-refresh-20260608.json"
         in cmd
         for name, cmd in seen_steps
     )
@@ -1089,7 +1089,7 @@ def test_current_regression_suite_refreshes_release_regression_manifest(monkeypa
     )
     assert any(
         name == "release_regression_manifest"
-        and "build/current-release-regression-manifest-after-jang2l-runtime-modalities-proof-20260608.json"
+        and "build/current-release-regression-manifest-after-dsv4-mimo-classifier-preflight-20260608.json"
         in cmd
         for name, cmd in seen_steps
     )
@@ -1520,7 +1520,7 @@ def test_current_regression_suite_refreshes_current_objective_digest_artifact(
 
     assert artifact["status"] == "pass"
     assert suite.CURRENT_OBJECTIVE_DIGEST_ARTIFACT == (
-        "build/current-objective-proof-after-jang2l-runtime-modalities-proof-20260608.json"
+        "build/current-objective-proof-after-dsv4-mimo-classifier-preflight-20260608.json"
     )
     assert any(
         name == "objective_digest"
@@ -1943,7 +1943,7 @@ def test_current_regression_suite_runs_full_release_objective_checklist(
     assert any(name == "full_release_objective_checklist" for name, _cmd in seen_steps)
     assert any(
         "run_full_release_objective_checklist.py" in " ".join(cmd)
-        and "current-full-release-objective-checklist-after-jang2l-runtime-modalities-proof-20260608.json"
+        and "current-full-release-objective-checklist-after-dsv4-mimo-classifier-preflight-20260608.json"
         in " ".join(cmd)
         for _name, cmd in seen_steps
     )
@@ -1954,7 +1954,7 @@ def test_current_regression_suite_allows_open_full_release_objective_checklist(
 ):
     from tests.cross_matrix import run_current_regression_suite as suite
 
-    path = tmp_path / "build/current-full-release-objective-checklist-after-jang2l-runtime-modalities-proof-20260608.json"
+    path = tmp_path / "build/current-full-release-objective-checklist-after-dsv4-mimo-classifier-preflight-20260608.json"
     path.parent.mkdir(parents=True)
     path.write_text(json.dumps({"status": "open"}) + "\n")
 

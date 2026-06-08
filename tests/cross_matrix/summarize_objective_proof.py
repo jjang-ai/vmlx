@@ -63,7 +63,7 @@ from tests.cross_matrix.release_regression_manifest import (
 
 DEFAULT_OUT = Path("build/current-objective-proof-after-jangtq2-live-release-smoke-20260608.json")
 CURRENT_RELEASE_REGRESSION_MANIFEST_REL = (
-    "build/current-release-regression-manifest-after-jang2l-runtime-modalities-proof-20260608.json"
+    "build/current-release-regression-manifest-after-dsv4-mimo-classifier-preflight-20260608.json"
 )
 DSV4_QUALITY_CLEARANCE_REL = "build/current-dsv4-long-output-quality-clearance-20260521.json"
 DSV4_CURRENT_IDENTIFIER_CANARY_REL = (
@@ -7523,7 +7523,7 @@ def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
             DSV4_CURRENT_SOURCE_TOKEN_TAIL_AB_EXACTNESS_REL,
             DSV4_CURRENT_SOURCE_MEMORY_PREFLIGHT_REL,
             DSV4_CURRENT_REAL_UI_MEMORY_PREFLIGHT_REL,
-            "build/current-dsv4-route-mode-code-exactness-preflight-after-issue179-local-repro-refresh-20260608.json",
+            "build/current-dsv4-route-mode-code-exactness-preflight-after-mimo-classifier-refresh-20260608.json",
             "build/current-dsv4-responses-cache-gate-20260606.json",
             "build/current-dsv4-responses-restart-l2-gate-20260606.json",
             "build/current-dsv4-responses-one-tool-stop-20260606.json",
