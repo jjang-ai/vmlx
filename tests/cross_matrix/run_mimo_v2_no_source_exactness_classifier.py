@@ -39,6 +39,9 @@ DEFAULT_JANGTQ2_NO_ROUTER_NO_SWITCHGLU_FASTPATH = Path(
 DEFAULT_JANGTQ2_TQ_KERNEL_PARITY = Path(
     "build/current-mimo-v25-jangtq2-tq-kernel-parity-no-source-20260608.json"
 )
+DEFAULT_JANGTQ2_LITERAL_VARIANTS = Path(
+    "build/current-mimo-v25-jangtq2-exactness-variant-probe-20260608/JANGQ_MiMo-V2.5-JANGTQ_2/result.json"
+)
 
 EXACTNESS_REASONS = {
     "expected_tool_argument_missing",
@@ -158,6 +161,53 @@ def _tq_kernel_parity_passed(artifact: dict[str, Any] | None) -> bool | None:
     )
 
 
+def _literal_variant_summary(artifact: dict[str, Any] | None) -> dict[str, Any]:
+    requests = artifact.get("requests") if isinstance(artifact, dict) else None
+    if not isinstance(requests, list):
+        return {
+            "exists": False,
+            "plain_literal_copy_pass": None,
+            "structured_literal_pass": None,
+            "tool_literal_pass": None,
+            "failed_labels": [],
+            "failures": [],
+        }
+
+    failures = [
+        {
+            "label": str(request.get("label")),
+            "content": request.get("content"),
+            "parsed": request.get("parsed"),
+            "expected": request.get("expected"),
+        }
+        for request in requests
+        if isinstance(request, dict) and request.get("pass") is not True
+    ]
+
+    def _labels(prefix: str) -> list[dict[str, Any]]:
+        return [
+            request
+            for request in requests
+            if isinstance(request, dict)
+            and str(request.get("label", "")).startswith(prefix)
+        ]
+
+    def _all_pass(rows: list[dict[str, Any]]) -> bool | None:
+        if not rows:
+            return None
+        return all(row.get("pass") is True for row in rows)
+
+    return {
+        "exists": True,
+        "status": artifact.get("status"),
+        "plain_literal_copy_pass": _all_pass(_labels("plain_exact")),
+        "structured_literal_pass": _all_pass(_labels("json_")),
+        "tool_literal_pass": _all_pass(_labels("tool_")),
+        "failed_labels": [failure["label"] for failure in failures],
+        "failures": failures,
+    }
+
+
 def build_classification(
     audit: dict[str, Any],
     smoke: dict[str, Any],
@@ -167,6 +217,7 @@ def build_classification(
     no_switchglu_fastpath: dict[str, Any] | None = None,
     no_router_no_switchglu_fastpath: dict[str, Any] | None = None,
     tq_kernel_parity: dict[str, Any] | None = None,
+    literal_variants: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     component_ok = audit.get("component_ok") if isinstance(audit.get("component_ok"), dict) else {}
     failures = _failures(smoke)
@@ -199,6 +250,7 @@ def build_classification(
     }
 
     no_source_exactness = _exactness_probe_summary(jangtq2, jang2l)
+    literal_variant_summary = _literal_variant_summary(literal_variants)
     no_switchglu_copy_preserved = _diagnostic_copy_preserved(no_switchglu_fastpath)
     no_router_no_switchglu_copy_preserved = _diagnostic_copy_preserved(
         no_router_no_switchglu_fastpath
@@ -258,12 +310,23 @@ def build_classification(
             ]
             is not True
         ),
+        "jangtq2_plain_literal_copy": (
+            literal_variant_summary["plain_literal_copy_pass"] is False
+        ),
     }
 
     release_ready = False
     status = "open" if exactness_failures or any(unresolved_surfaces.values()) else "pass"
 
     if (
+        literal_variant_summary["plain_literal_copy_pass"] is False
+        and literal_variant_summary["structured_literal_pass"] is False
+        and literal_variant_summary["tool_literal_pass"] is False
+    ):
+        classification = (
+            "jangtq2_plain_literal_copy_fails_before_parser_or_json_repair"
+        )
+    elif (
         unresolved_surfaces["jangtq2_raw_decode_or_artifact_quality"]
         and unresolved_surfaces["jang2l_chat_tool_quality"]
         and no_source_runtime_diagnostics[
@@ -322,7 +385,9 @@ def build_classification(
             DEFAULT_JANGTQ2_NO_ROUTER_NO_SWITCHGLU_FASTPATH
         ),
         "jangtq2_tq_kernel_parity_artifact": str(DEFAULT_JANGTQ2_TQ_KERNEL_PARITY),
+        "jangtq2_literal_variant_artifact": str(DEFAULT_JANGTQ2_LITERAL_VARIANTS),
         "no_source_exactness": no_source_exactness,
+        "literal_variant_summary": literal_variant_summary,
         "no_source_runtime_diagnostics": no_source_runtime_diagnostics,
         "exactness_failures": exactness_failures,
         "excluded_surfaces": excluded_surfaces,
@@ -352,6 +417,11 @@ def main() -> int:
         type=Path,
         default=DEFAULT_JANGTQ2_TQ_KERNEL_PARITY,
     )
+    parser.add_argument(
+        "--jangtq2-literal-variants",
+        type=Path,
+        default=DEFAULT_JANGTQ2_LITERAL_VARIANTS,
+    )
     parser.add_argument("--out", type=Path, default=DEFAULT_OUT)
     args = parser.parse_args()
 
@@ -372,6 +442,11 @@ def main() -> int:
         if args.jangtq2_tq_kernel_parity.exists()
         else None
     )
+    literal_variants = (
+        _load(args.jangtq2_literal_variants)
+        if args.jangtq2_literal_variants.exists()
+        else None
+    )
     artifact = build_classification(
         _load(args.audit),
         _load(args.smoke),
@@ -380,6 +455,7 @@ def main() -> int:
         no_switchglu_fastpath=no_switchglu_fastpath,
         no_router_no_switchglu_fastpath=no_router_no_switchglu_fastpath,
         tq_kernel_parity=tq_kernel_parity,
+        literal_variants=literal_variants,
     )
     artifact["audit_artifact"] = str(args.audit)
     artifact["smoke_artifact"] = str(args.smoke)

@@ -191,3 +191,69 @@ def test_mimo_no_source_classifier_consumes_jangtq_and_jang2l_isolation_artifact
     assert artifact["unresolved_surfaces"]["jangtq2_switchglu_fastpath"] is False
     assert artifact["unresolved_surfaces"]["jangtq2_compiled_router"] is False
     assert artifact["unresolved_surfaces"]["jangtq2_tq_gather_kernel"] is False
+
+
+def test_mimo_no_source_classifier_promotes_plain_literal_copy_failure():
+    audit = {
+        "component_ok": {
+            "api_cache_responses_contract": True,
+            "tool_protocol": True,
+            "exactness_cache_kv_quant_excluded": True,
+            "decode_speed_target": True,
+            "source_vs_quant_first_divergence": False,
+            "long_prompt_coherence": True,
+            "cb_system_prompt_working_set_pressure": True,
+            "mimo_media_wired": True,
+        }
+    }
+    smoke = {
+        "results": [
+            {
+                "server_log_tail": [
+                    "kwargs={'temperature': 0.0, 'top_p': 1.0, 'max_tokens': 64}"
+                ],
+                "failures": [
+                    {
+                        "label": "structured_json_exact",
+                        "reason": "json_exact_object_mismatch",
+                        "expected": {"status": "ok", "value": "blue-cat", "count": 3},
+                        "actual": {"status": "ok", "value": "bluecat", "count": 3},
+                    },
+                ],
+            }
+        ]
+    }
+    literal_variants = {
+        "status": "open",
+        "requests": [
+            {
+                "label": "plain_exact_blue_cat",
+                "pass": False,
+                "content": "blue cat",
+                "expected": "blue-cat",
+            },
+            {
+                "label": "json_blue_cat",
+                "pass": False,
+                "content": '{"status":"ok","value":"bluecat","count":3}',
+                "parsed": {"status": "ok", "value": "bluecat", "count": 3},
+                "expected": {"status": "ok", "value": "blue-cat", "count": 3},
+            },
+            {
+                "label": "tool_blue_cat",
+                "pass": False,
+                "parsed": {"value": "blue-123"},
+                "expected": {"value": "blue-cat"},
+            },
+        ],
+    }
+
+    artifact = build_classification(audit, smoke, literal_variants=literal_variants)
+
+    assert artifact["classification"] == (
+        "jangtq2_plain_literal_copy_fails_before_parser_or_json_repair"
+    )
+    assert artifact["literal_variant_summary"]["plain_literal_copy_pass"] is False
+    assert artifact["literal_variant_summary"]["structured_literal_pass"] is False
+    assert artifact["literal_variant_summary"]["tool_literal_pass"] is False
+    assert artifact["unresolved_surfaces"]["jangtq2_plain_literal_copy"] is True
