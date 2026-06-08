@@ -11837,6 +11837,31 @@ def _responses_get_history(response_id: str | None) -> list[dict]:
         return _clone_response_messages(history)
 
 
+def _responses_scrub_multimodal_history_for_text_followup(messages: list[dict]) -> list[dict]:
+    """Drop replayed media payloads when a chained Responses turn is text-only.
+
+    `previous_response_id` history is prepended to the new turn. If an earlier
+    user turn contained image/video/audio parts, a later text-only follow-up
+    would otherwise replay those media parts and can re-trigger VLM prefill
+    budget rejection even though the user did not attach media to the new turn.
+    Preserve textual context and tool/assistant turns; do not use this for
+    media-bearing follow-ups.
+    """
+    scrubbed: list[dict] = []
+    for message in messages or []:
+        if not isinstance(message, dict):
+            scrubbed.append(message)
+            continue
+        content = message.get("content")
+        if isinstance(content, list) and _content_has_multimodal(content):
+            replacement = dict(message)
+            replacement["content"] = _extract_text_from_content(content)
+            scrubbed.append(replacement)
+        else:
+            scrubbed.append(message)
+    return scrubbed
+
+
 def _extract_text_from_content(content) -> str:
     """Extract plain text from a content field that may be a string or list of parts."""
     if isinstance(content, str):
@@ -12534,6 +12559,10 @@ async def create_response(
     )
     if request.previous_response_id:
         previous_messages = _responses_get_history(request.previous_response_id)
+        if previous_messages and not _responses_has_media:
+            previous_messages = _responses_scrub_multimodal_history_for_text_followup(
+                previous_messages
+            )
         if previous_messages:
             messages = previous_messages + messages
             logger.debug(

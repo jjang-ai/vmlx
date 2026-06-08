@@ -4217,6 +4217,37 @@ class TestMediaDiagnostics:
         assert "None" not in json.dumps(user_content)
         assert "image_url" not in user_content[0]
 
+    def test_responses_text_followup_scrubs_media_from_previous_history(self):
+        from vmlx_engine.server import (
+            _responses_scrub_multimodal_history_for_text_followup,
+        )
+
+        previous_messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "what color is this?"},
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": "data:image/png;base64,SECRET_RESPONSE_IMAGE",
+                        },
+                    },
+                ],
+            },
+            {"role": "assistant", "content": "blue"},
+            {"role": "user", "content": "remember this text"},
+        ]
+
+        scrubbed = _responses_scrub_multimodal_history_for_text_followup(
+            previous_messages
+        )
+
+        assert scrubbed[0]["content"] == "what color is this?"
+        assert scrubbed[1:] == previous_messages[1:]
+        assert "SECRET_RESPONSE_IMAGE" not in json.dumps(scrubbed)
+        assert isinstance(previous_messages[0]["content"], list)
+
     def test_responses_multimodal_history_coerces_orphan_tool_results(self):
         from vmlx_engine.server import _coerce_orphan_tool_messages_for_template
 
