@@ -9282,9 +9282,22 @@ def test_release_blocker_ledger_reports_mimo_exactness_next_proof_without_stale_
             "decode_speed_target_blocked": False,
             "media_unwired": False,
             "source_vs_quant_requirement_satisfied": True,
+            "artifact_exactness_bundle_status": {
+                "jangtq2": {
+                    "blocked": True,
+                    "classification": "jangtq2_plain_literal_copy_fails_before_parser_or_json_repair",
+                    "evidence": CURRENT_MIMO_V2_JANG2L_NO_SOURCE_EXACTNESS_CLASSIFIER_ARTIFACT,
+                },
+                "jang2l": {
+                    "blocked": True,
+                    "classification": "jang2l_json_sentinel_semantic_mismatch_open",
+                    "evidence": CURRENT_MIMO_V2_JANG2L_NO_SOURCE_EXACTNESS_CLASSIFIER_ARTIFACT,
+                },
+            },
             "release_boundary": (
                 "local artifact/runtime has narrow text-cache proof but still "
-                "fails current JANGTQ2 artifact exactness; do not release-clear MiMo"
+                "fails current JANGTQ2 artifact exactness, current JANG_2L "
+                "artifact exactness; do not release-clear MiMo"
             ),
         },
         issue175_179_release_boundary_audit={"status": "pass", "issues": {}},
@@ -9296,6 +9309,7 @@ def test_release_blocker_ledger_reports_mimo_exactness_next_proof_without_stale_
     blockers = {blocker["id"]: blocker for blocker in ledger["blockers"]}
     next_proof = blockers["mimo_v2_jang2l_runtime_quality_open"]["next_proof"]
     assert "JANGTQ2 artifact exactness" in next_proof
+    assert "JANG_2L artifact exactness" in next_proof
     assert "long-prompt" not in next_proof
     assert "tool protocol" not in next_proof
     assert "cache" not in next_proof
@@ -11727,7 +11741,18 @@ def test_mimo_v2_root_cause_accepts_policy_skipped_source_vs_quant_without_clear
         "mimo_source_vs_quant_first_divergence_missing_or_failed"
         not in result["current_audit_blockers"]
     )
+    assert result["artifact_exactness_bundle_status"]["jangtq2"] == {
+        "blocked": True,
+        "classification": "jangtq2_plain_literal_copy_regression_jang2l_plain_copy_passes",
+        "evidence": CURRENT_MIMO_V2_JANG2L_NO_SOURCE_EXACTNESS_CLASSIFIER_ARTIFACT,
+    }
+    assert result["artifact_exactness_bundle_status"]["jang2l"] == {
+        "blocked": True,
+        "classification": "jang2l_json_sentinel_semantic_mismatch_open",
+        "evidence": CURRENT_MIMO_V2_JANG2L_NO_SOURCE_EXACTNESS_CLASSIFIER_ARTIFACT,
+    }
     assert "mimo_jangtq2_artifact_exactness_blocked" in result["failures"]
+    assert "mimo_jang2l_artifact_exactness_blocked" in result["failures"]
     assert (
         "mimo_no_source_exactness_classifier_missing_literal_mutation_boundary"
         not in result["failures"]
@@ -11737,6 +11762,7 @@ def test_mimo_v2_root_cause_accepts_policy_skipped_source_vs_quant_without_clear
     assert "tool protocol" not in result["release_boundary"]
     assert "long-prompt coherence" not in result["release_boundary"]
     assert "current JANGTQ2 artifact exactness" in result["release_boundary"]
+    assert "current JANG_2L artifact exactness" in result["release_boundary"]
     assert result["artifact_exactness_release_action"] == (
         "replace_all_routed_2bit_jangtq2_or_lift_gate_down_precision"
     )
@@ -14947,7 +14973,7 @@ def test_release_regression_manifest_tracks_packaged_integrity_with_runner_artif
     assert "Version triples" in joined
     assert "bundled Python hash parity" in joined
     assert "objective proof digest" in joined
-    assert "current-objective-proof-after-mimo-audio-expanded-token-l2-restart-20260608.json" in joined
+    assert "current-objective-proof-after-mimo-media-runtime-stamp-gate-20260608.json" in joined
     assert "objective-gate-enforced" in joined
     assert "verify-bundled" in joined
 
@@ -15015,7 +15041,7 @@ def test_release_regression_manifest_tracks_current_updater_and_i18n_rechecks():
 
     ling = rows["ling-bailing-multilingual-quality-live"]
     ling_joined = " ".join(ling["commands"] + ling["artifacts"] + ling["proves"])
-    assert "current-objective-proof-after-mimo-audio-expanded-token-l2-restart-20260608.json" in ling_joined
+    assert "current-objective-proof-after-mimo-media-runtime-stamp-gate-20260608.json" in ling_joined
 
 
 def test_release_regression_manifest_tracks_live_only_boundaries():

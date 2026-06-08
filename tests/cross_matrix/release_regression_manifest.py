@@ -2972,8 +2972,28 @@ def _current_release_blocker_ledger(
             "including MiMo in a production release."
         )
         if mimo_v2_jang2l_root_cause.get("artifact_exactness_blocked") is True:
+            artifact_exactness_labels = ["JANGTQ2 artifact exactness"]
+            bundle_status = mimo_v2_jang2l_root_cause.get(
+                "artifact_exactness_bundle_status"
+            )
+            if isinstance(bundle_status, dict):
+                artifact_exactness_labels = []
+                if (
+                    isinstance(bundle_status.get("jangtq2"), dict)
+                    and bundle_status["jangtq2"].get("blocked") is True
+                ):
+                    artifact_exactness_labels.append("JANGTQ2 artifact exactness")
+                if (
+                    isinstance(bundle_status.get("jang2l"), dict)
+                    and bundle_status["jang2l"].get("blocked") is True
+                ):
+                    artifact_exactness_labels.append("JANG_2L artifact exactness")
+                if not artifact_exactness_labels:
+                    artifact_exactness_labels.append("MiMo artifact exactness")
             mimo_next_proof = (
-                "Pass current local MiMo JANGTQ2 artifact exactness/value-drift "
+                "Pass current local MiMo "
+                + " and ".join(artifact_exactness_labels)
+                + "/value-drift "
                 "proof, or replace it with corrected artifact/runtime evidence, "
                 "before including MiMo in a production release."
             )
@@ -3004,6 +3024,7 @@ def _current_release_blocker_ledger(
                         "prompt_length_coherence_blocked",
                         "tool_protocol_blocked",
                         "artifact_exactness_blocked",
+                        "artifact_exactness_bundle_status",
                         "artifact_exactness_release_action",
                         "recommended_next_artifact_profiles",
                         "decode_speed_target_blocked",
@@ -5780,6 +5801,18 @@ def _validate_current_mimo_v2_jang2l_root_cause(root: Path) -> dict[str, Any]:
         "prompt_length_coherence_blocked": False,
         "tool_protocol_blocked": False,
         "artifact_exactness_blocked": False,
+        "artifact_exactness_bundle_status": {
+            "jangtq2": {
+                "blocked": False,
+                "classification": None,
+                "evidence": no_source_classifier_artifact,
+            },
+            "jang2l": {
+                "blocked": False,
+                "classification": None,
+                "evidence": no_source_classifier_artifact,
+            },
+        },
         "artifact_exactness_release_action": None,
         "recommended_next_artifact_profiles": [],
         "decode_speed_target_blocked": False,
@@ -5886,6 +5919,9 @@ def _validate_current_mimo_v2_jang2l_root_cause(root: Path) -> dict[str, Any]:
     )
     result["no_source_exactness_classification"] = no_source_classifier_payload.get(
         "classification"
+    )
+    result["no_source_exactness_secondary_classification"] = (
+        no_source_classifier_payload.get("secondary_classification")
     )
     result["no_source_exactness_unresolved_surfaces"] = classifier_unresolved
     result["no_source_exactness_excludes_parser_cache_sampling"] = (
@@ -6055,7 +6091,46 @@ def _validate_current_mimo_v2_jang2l_root_cause(root: Path) -> dict[str, Any]:
         result["tool_protocol_blocked"] = True
     if audit_artifact_exactness_open:
         result["artifact_exactness_blocked"] = True
-        result["failures"].append("mimo_jangtq2_artifact_exactness_blocked")
+        primary_exactness_classification = str(
+            result["no_source_exactness_classification"] or ""
+        )
+        secondary_exactness_classification = str(
+            result["no_source_exactness_secondary_classification"] or ""
+        )
+        bundle_status = result["artifact_exactness_bundle_status"]
+        if primary_exactness_classification.startswith("jangtq2"):
+            bundle_status["jangtq2"] = {
+                "blocked": True,
+                "classification": primary_exactness_classification,
+                "evidence": no_source_classifier_artifact,
+            }
+        elif secondary_exactness_classification.startswith("jangtq2"):
+            bundle_status["jangtq2"] = {
+                "blocked": True,
+                "classification": secondary_exactness_classification,
+                "evidence": no_source_classifier_artifact,
+            }
+        if secondary_exactness_classification.startswith("jang2l"):
+            bundle_status["jang2l"] = {
+                "blocked": True,
+                "classification": secondary_exactness_classification,
+                "evidence": no_source_classifier_artifact,
+            }
+        elif primary_exactness_classification.startswith("jang2l"):
+            bundle_status["jang2l"] = {
+                "blocked": True,
+                "classification": primary_exactness_classification,
+                "evidence": no_source_classifier_artifact,
+            }
+        if bundle_status["jangtq2"]["blocked"] is True:
+            result["failures"].append("mimo_jangtq2_artifact_exactness_blocked")
+        if bundle_status["jang2l"]["blocked"] is True:
+            result["failures"].append("mimo_jang2l_artifact_exactness_blocked")
+        if (
+            bundle_status["jangtq2"]["blocked"] is not True
+            and bundle_status["jang2l"]["blocked"] is not True
+        ):
+            result["failures"].append("mimo_artifact_exactness_blocked")
         accepted_exactness_classifications = {
             "model_generated_literal_mutation_after_valid_parser_structure",
             "jangtq2_plain_literal_copy_regression_jang2l_plain_copy_passes",
@@ -6071,9 +6146,7 @@ def _validate_current_mimo_v2_jang2l_root_cause(root: Path) -> dict[str, Any]:
             result["failures"].append(
                 "mimo_no_source_exactness_classifier_missing_literal_mutation_boundary"
             )
-        if str(result["no_source_exactness_classification"] or "").startswith(
-            "jangtq2_plain_literal_copy"
-        ):
+        if primary_exactness_classification.startswith("jangtq2_plain_literal_copy"):
             result["artifact_exactness_release_action"] = (
                 "replace_all_routed_2bit_jangtq2_or_lift_gate_down_precision"
             )
@@ -6127,7 +6200,24 @@ def _validate_current_mimo_v2_jang2l_root_cause(root: Path) -> dict[str, Any]:
         if result["tool_protocol_blocked"]:
             active_boundary_reasons.append("tool protocol")
         if result["artifact_exactness_blocked"]:
-            active_boundary_reasons.append("current JANGTQ2 artifact exactness")
+            bundle_status = result.get("artifact_exactness_bundle_status")
+            if not isinstance(bundle_status, dict):
+                bundle_status = {}
+            if (
+                isinstance(bundle_status.get("jangtq2"), dict)
+                and bundle_status["jangtq2"].get("blocked") is True
+            ):
+                active_boundary_reasons.append("current JANGTQ2 artifact exactness")
+            if (
+                isinstance(bundle_status.get("jang2l"), dict)
+                and bundle_status["jang2l"].get("blocked") is True
+            ):
+                active_boundary_reasons.append("current JANG_2L artifact exactness")
+            if not any(
+                reason.endswith("artifact exactness")
+                for reason in active_boundary_reasons
+            ):
+                active_boundary_reasons.append("current MiMo artifact exactness")
         if result["decode_speed_target_blocked"]:
             active_boundary_reasons.append("decode speed")
         if result["cb_working_set_pressure_blocked"]:
