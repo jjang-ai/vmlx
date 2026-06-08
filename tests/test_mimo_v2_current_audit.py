@@ -490,6 +490,24 @@ def test_mimo_current_audit_separates_clean_artifact_from_runtime_blockers(
             "log_tail": "Metal working-set pressure reject: 98.5% of 107.5GB",
         },
     )
+    _write_json(
+        tmp_path / audit.NO_SOURCE_EXACTNESS_CLASSIFIER_ARTIFACT,
+        {
+            "status": "open",
+            "classification": "model_generated_literal_mutation_after_valid_parser_structure",
+            "source_vs_quant_load_performed": False,
+            "source_vs_quant_load_skipped_reason": "user_disallowed_source_vs_quant_due_ram",
+            "excluded_surfaces": {
+                "parser_argument_rewrite": True,
+                "prefix_paged_l2_or_kv_quant_primary_cause": True,
+                "hidden_stochastic_sampling_primary_cause": True,
+            },
+            "unresolved_surfaces": {
+                "artifact_quantization_or_decode_logits_quality": True,
+                "source_vs_quant_first_divergence": True,
+            },
+        },
+    )
 
     result = audit.build_audit(tmp_path, model_path, manifest)
 
@@ -505,6 +523,8 @@ def test_mimo_current_audit_separates_clean_artifact_from_runtime_blockers(
     assert result["component_ok"]["system_prompt_first_token_stop"] is True
     assert result["component_ok"]["cb_system_prompt_working_set_pressure"] is False
     assert result["component_ok"]["source_vs_quant_first_divergence"] is False
+    assert result["component_ok"]["source_vs_quant_policy_skipped"] is True
+    assert result["component_ok"]["source_vs_quant_requirement_satisfied"] is True
     assert result["component_ok"]["api_cache_responses_contract"] is True
     assert result["component_ok"]["media_weights_preserved"] is False
     assert result["component_ok"]["media_runtime_capabilities_safe"] is False
@@ -692,6 +712,11 @@ def test_mimo_current_audit_separates_clean_artifact_from_runtime_blockers(
         "memory_pressure_blocked"
     ] is True
     assert result["diagnostics"]["api_cache_responses_contract"]["pass"] is True
+    assert result["diagnostics"]["source_vs_quant_policy_skip"]["policy_skipped"] is True
+    assert (
+        result["diagnostics"]["source_vs_quant_policy_skip"]["reason"]
+        == "user_disallowed_source_vs_quant_due_ram"
+    )
     assert (
         "No-heavy source contract only"
         in result["diagnostics"]["api_cache_responses_contract"]["boundary"]
@@ -703,7 +728,6 @@ def test_mimo_current_audit_separates_clean_artifact_from_runtime_blockers(
         "mimo_long_prompt_coherence_blocked",
         "mimo_decode_speed_below_release_target",
         "mimo_cb_system_prompt_working_set_pressure_blocked",
-        "mimo_source_vs_quant_first_divergence_missing_or_failed",
         "mimo_audio_waveform_live_e2e_missing",
         "mimo_model_metadata_overadvertises_unwired_media",
         "mimo_runtime_capabilities_media_status_missing_or_unsafe",

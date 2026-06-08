@@ -66,6 +66,9 @@ FIRST_TOKEN_ARTIFACT = Path(
 SOURCE_VS_QUANT_ARTIFACT = Path(
     "build/current-mimo-v2-jangtq2-source-vs-quant-first-divergence-preflight-20260607.json"
 )
+NO_SOURCE_EXACTNESS_CLASSIFIER_ARTIFACT = Path(
+    "build/current-mimo-v2-no-source-exactness-classifier-after-media-runtime-stamp-gate-20260608.json"
+)
 SYNCED_LONG_TOOL_CACHE_ARTIFACT = Path(
     "build/current-mimo-v25-jang2l-synced-long-tool-cache-proof-20260606.json"
 )
@@ -808,6 +811,59 @@ def _source_vs_quant_first_divergence_pass(data: dict[str, Any]) -> bool:
         if "source_output" not in row or "quant_output" not in row:
             return False
     return True
+
+
+def _source_vs_quant_policy_skip(data: dict[str, Any] | None) -> dict[str, Any]:
+    if not isinstance(data, dict):
+        return {
+            "policy_skipped": False,
+            "reason": None,
+            "classifier_status": None,
+            "boundary": "no no-source classifier artifact was available",
+        }
+    excluded = data.get("excluded_surfaces")
+    if not isinstance(excluded, dict):
+        excluded = {}
+    reason = data.get("source_vs_quant_load_skipped_reason")
+    classifier_status = data.get("status")
+    required_exclusions = {
+        "parser_argument_rewrite": excluded.get("parser_argument_rewrite") is True,
+        "prefix_paged_l2_or_kv_quant_primary_cause": (
+            excluded.get("prefix_paged_l2_or_kv_quant_primary_cause") is True
+        ),
+        "hidden_stochastic_sampling_primary_cause": (
+            excluded.get("hidden_stochastic_sampling_primary_cause") is True
+        ),
+    }
+    policy_skipped = (
+        data.get("source_vs_quant_load_performed") is False
+        and reason
+        in {
+            "user_disallowed_source_vs_quant_due_ram",
+            "user_disallowed_source_vs_quant",
+            "source_vs_quant_skipped_by_policy",
+        }
+        and classifier_status in {"open", "pass"}
+        and all(required_exclusions.values())
+    )
+    return {
+        "policy_skipped": bool(policy_skipped),
+        "reason": reason,
+        "classifier_status": classifier_status,
+        "required_exclusions": required_exclusions,
+        "classification": data.get("classification"),
+        "secondary_classification": data.get("secondary_classification"),
+        "unresolved_surfaces": data.get("unresolved_surfaces")
+        if isinstance(data.get("unresolved_surfaces"), dict)
+        else {},
+        "boundary": (
+            "source-vs-quant was not run because policy/RAM disallows it; "
+            "this removes only the source-comparison blocker and does not "
+            "release-clear unresolved MiMo exactness, long-prompt, CB, or media rows"
+            if policy_skipped
+            else "source-vs-quant remains required unless a valid policy-skip classifier is present"
+        ),
+    }
 
 
 def _api_cache_responses_contract_evidence(data: dict[str, Any]) -> dict[str, Any]:
@@ -1927,6 +1983,7 @@ def build_audit(root: Path, model_path: Path, manifest: Path) -> dict[str, Any]:
     rendered_prompt = _artifact(root / RENDERED_PROMPT_ARTIFACT)
     first_token = _artifact(root / FIRST_TOKEN_ARTIFACT)
     source_vs_quant = _artifact(root / SOURCE_VS_QUANT_ARTIFACT)
+    no_source_classifier = _artifact(root / NO_SOURCE_EXACTNESS_CLASSIFIER_ARTIFACT)
     synced_long_tool_cache = _artifact(root / SYNCED_LONG_TOOL_CACHE_ARTIFACT)
     text_route = _artifact(root / TEXT_ROUTE_ARTIFACT)
     cb_oneshot_prefill = _artifact(root / CB_ONESHOT_PREFILL_ARTIFACT)
@@ -2089,6 +2146,15 @@ def build_audit(root: Path, model_path: Path, manifest: Path) -> dict[str, Any]:
     source_vs_quant_pass = source_vs_quant.get("exists") and _source_vs_quant_first_divergence_pass(
         source_vs_quant["data"]
     )
+    source_vs_quant_policy_skip = _source_vs_quant_policy_skip(
+        no_source_classifier.get("data")
+        if no_source_classifier.get("exists")
+        and isinstance(no_source_classifier.get("data"), dict)
+        else None
+    )
+    source_vs_quant_requirement_satisfied = bool(
+        source_vs_quant_pass or source_vs_quant_policy_skip.get("policy_skipped")
+    )
     mllm_inputs_embeds_interface_pass = (
         mllm_inputs_embeds_interface.get("exists")
         and isinstance(mllm_inputs_embeds_interface.get("data"), dict)
@@ -2207,7 +2273,7 @@ def build_audit(root: Path, model_path: Path, manifest: Path) -> dict[str, Any]:
         and not speed_blocked
         and not prompt_shape_blocked
         and not memory_pressure_blocked
-        and source_vs_quant_pass
+        and source_vs_quant_requirement_satisfied
         and mllm_inputs_embeds_interface_pass
         and api_cache_responses_contract_pass
         and not bool(text_route_evidence.get("cache_l2_not_reproved"))
@@ -2249,7 +2315,7 @@ def build_audit(root: Path, model_path: Path, manifest: Path) -> dict[str, Any]:
         blockers.append("mimo_system_prompt_first_token_stop_blocked")
     if memory_pressure_blocked:
         blockers.append("mimo_cb_system_prompt_working_set_pressure_blocked")
-    if not source_vs_quant_pass:
+    if not source_vs_quant_requirement_satisfied:
         blockers.append("mimo_source_vs_quant_first_divergence_missing_or_failed")
     if not mllm_inputs_embeds_interface_pass:
         blockers.append("mimo_mllm_inputs_embeds_interface_missing_or_failed")
@@ -2300,6 +2366,12 @@ def build_audit(root: Path, model_path: Path, manifest: Path) -> dict[str, Any]:
             "system_prompt_first_token_stop": not bool(prompt_shape_blocked),
             "cb_system_prompt_working_set_pressure": not bool(memory_pressure_blocked),
             "source_vs_quant_first_divergence": bool(source_vs_quant_pass),
+            "source_vs_quant_policy_skipped": bool(
+                source_vs_quant_policy_skip.get("policy_skipped")
+            ),
+            "source_vs_quant_requirement_satisfied": bool(
+                source_vs_quant_requirement_satisfied
+            ),
             "mllm_inputs_embeds_interface": bool(mllm_inputs_embeds_interface_pass),
             "api_cache_responses_contract": bool(api_cache_responses_contract_pass),
             "media_weights_preserved": bool(
@@ -2350,6 +2422,7 @@ def build_audit(root: Path, model_path: Path, manifest: Path) -> dict[str, Any]:
             "rendered_prompt_compare": str(RENDERED_PROMPT_ARTIFACT),
             "first_token_probe": str(FIRST_TOKEN_ARTIFACT),
             "source_vs_quant_first_divergence": str(SOURCE_VS_QUANT_ARTIFACT),
+            "no_source_exactness_classifier": str(NO_SOURCE_EXACTNESS_CLASSIFIER_ARTIFACT),
             "synced_long_tool_cache": str(SYNCED_LONG_TOOL_CACHE_ARTIFACT),
             "text_route_live_proof": str(TEXT_ROUTE_ARTIFACT),
             "cb_oneshot_prefill_live_proof": str(CB_ONESHOT_PREFILL_ARTIFACT),
@@ -2387,6 +2460,7 @@ def build_audit(root: Path, model_path: Path, manifest: Path) -> dict[str, Any]:
                     "classification": "missing_local_source_vs_quant_first_divergence",
                 }
             ),
+            "source_vs_quant_policy_skip": source_vs_quant_policy_skip,
             "manual_sink_sdpa_clears_length_generation": False if sink_mode_fails else None,
             "disable_sink_clears_length_generation": False if disable_sink_fails else None,
             "sink_boundary": (
