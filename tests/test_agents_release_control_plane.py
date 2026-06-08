@@ -61,9 +61,9 @@ def test_release_tracker_points_at_current_control_plane_checklist():
     ).read_text(encoding="utf-8")
 
     assert (
-        "build/current-full-release-objective-checklist-after-mimo-tq-kv-boundary-20260607.json"
+        "build/current-full-release-objective-checklist-after-mimo-object-media-e2e-20260608.json"
         in tracker
     )
     assert "Agent control-plane update - 2026-06-07" in tracker
     assert "status=open" in tracker
-    assert "failed_count=17" in tracker
+    assert "failed_count=16" in tracker

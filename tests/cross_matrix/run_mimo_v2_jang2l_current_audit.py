@@ -25,7 +25,7 @@ from typing import Any
 DEFAULT_MODEL_PATH = Path("/Users/example/.mlxstudio/models/JANGQ-AI/MiMo-V2.5-JANGTQ_2")
 DEFAULT_MANIFEST = Path("build/current-mimo-jangtq2-local-manifest-20260607.tsv")
 DEFAULT_OUT = Path(
-    "build/current-mimo-v2-jang2l-current-audit-after-raw-audio-request-ingestion-20260607.json"
+    "build/current-mimo-v2-jang2l-current-audit-after-object-media-e2e-20260608.json"
 )
 
 STRUCTURAL_ARTIFACT = Path("build/current-mimo-jang2l-local-structural-verify-20260606.json")
@@ -40,7 +40,7 @@ TOOL_FAILURE_ARTIFACT = Path(
     "build/current-mimo-v2-jang2l-tool-dialect-failure-20260606.json"
 )
 ALL_LOCAL_SMOKE_ARTIFACT = Path(
-    "build/current-all-local-model-smoke-mimo-v25-jangtq2-after-runtime-repairs-20260607/summary.json"
+    "build/current-all-local-model-smoke-mimo-v25-jangtq2-object-media-e2e-20260608/summary.json"
 )
 KVNONE_NOPREFIX_SMOKE_ARTIFACT = Path(
     "build/current-all-local-model-smoke-mimo-v25-jangtq2-bundled-tools-nomedia-kvnone-noprefix-20260607/summary.json"
@@ -246,6 +246,44 @@ def _all_local_smoke_evidence(data: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(failures, list):
         failures = []
 
+    media_labels = [
+        "vl_blue_image",
+        "vl_blue_image_repeat",
+        "vl_red_image_changed",
+        "text_no_media_after_image",
+        "vl_blue_video",
+        "text_no_media_after_video",
+    ]
+    requests_by_label = {
+        str(request.get("label")): request
+        for request in requests
+        if isinstance(request, dict) and request.get("label") is not None
+    }
+    live_media_e2e_labels = []
+    live_media_failures = []
+    for label in media_labels:
+        request = requests_by_label.get(label)
+        if not isinstance(request, dict):
+            live_media_failures.append({"label": label, "reason": "missing_request"})
+            continue
+        validation_failures = request.get("validation_failures")
+        if not isinstance(validation_failures, list):
+            validation_failures = []
+        if request.get("code") != 200:
+            live_media_failures.append(
+                {"label": label, "reason": "http_status", "code": request.get("code")}
+            )
+            continue
+        if validation_failures:
+            live_media_failures.extend(
+                failure
+                for failure in validation_failures
+                if isinstance(failure, dict)
+            )
+            continue
+        live_media_e2e_labels.append(label)
+    live_media_e2e_pass = len(live_media_e2e_labels) == len(media_labels)
+
     tool_protocol_pass = False
     for request in requests:
         if not isinstance(request, dict) or request.get("label") != "tool_required":
@@ -299,6 +337,10 @@ def _all_local_smoke_evidence(data: dict[str, Any]) -> dict[str, Any]:
         "artifact_exactness_pass": not bool(exactness_failures),
         "artifact_exactness_failures": exactness_failures,
         "artifact_exactness_boundary": exactness_boundary,
+        "live_media_e2e_pass": live_media_e2e_pass,
+        "live_media_e2e_status": "pass" if live_media_e2e_pass else "missing_or_failed",
+        "live_media_e2e_labels": live_media_e2e_labels,
+        "live_media_e2e_failures": live_media_failures,
         "exact_cache_blocked": exact_cache_blocked,
         "speed_blocked": speed_blocked,
         "generation_tps": generation_tps,
@@ -2015,17 +2057,48 @@ def build_audit(root: Path, model_path: Path, manifest: Path) -> dict[str, Any]:
     text_route_media_unwired_blocked = bool(
         text_route_evidence.get("media_unwired")
     ) and not current_runtime_media_supported
-    live_media_e2e_proven = False
-    live_media_e2e_blocked = not live_media_e2e_proven
-    if live_media_e2e_blocked:
-        media_runtime_evidence["live_media_e2e_status"] = "missing"
+    image_video_live_e2e_proven = bool(smoke_evidence.get("live_media_e2e_pass"))
+    image_video_live_e2e_blocked = not image_video_live_e2e_proven
+    audio_waveform_live_e2e_proven = False
+    audio_waveform_live_e2e_blocked = not audio_waveform_live_e2e_proven
+    if image_video_live_e2e_proven and current_runtime_media_supported:
+        media_runtime_wired = True
+        media_runtime_evidence["runtime_media_wired_superseded_by_live_e2e"] = True
+        media_runtime_evidence["status"] = (
+            "open" if media_runtime_evidence.get("metadata_overadvertises_runtime_media") else "pass"
+        )
+        media_runtime_evidence["classification"] = (
+            "live_image_video_runtime_wired_audio_waveform_e2e_still_open"
+        )
+    else:
+        media_runtime_evidence["runtime_media_wired_superseded_by_live_e2e"] = False
+    if image_video_live_e2e_blocked:
+        media_runtime_evidence["live_media_e2e_status"] = str(
+            smoke_evidence.get("live_media_e2e_status") or "missing"
+        )
         media_runtime_evidence["live_media_e2e_boundary"] = (
             "Source-level MiMo media capability wiring is not a substitute for "
             "live image/audio/video server output proof."
         )
+        media_runtime_evidence["live_media_e2e_failures"] = smoke_evidence.get(
+            "live_media_e2e_failures"
+        )
     else:
         media_runtime_evidence["live_media_e2e_status"] = "pass"
-        media_runtime_evidence["live_media_e2e_boundary"] = "live media e2e passed"
+        media_runtime_evidence["live_media_e2e_boundary"] = (
+            "Live MiMo object image/video and post-media text recovery rows passed; "
+            "audio waveform depth remains a separate release gate."
+        )
+        media_runtime_evidence["live_media_e2e_labels"] = smoke_evidence.get(
+            "live_media_e2e_labels"
+        )
+    media_runtime_evidence["audio_waveform_live_e2e_status"] = (
+        "pass" if audio_waveform_live_e2e_proven else "missing"
+    )
+    media_runtime_evidence["audio_waveform_live_e2e_boundary"] = (
+        "Object image/video live E2E does not clear audio waveform ingestion, "
+        "tokenizer, audio-code splice, cache salt, and post-audio recovery proof."
+    )
     if text_route_evidence.get("media_unwired") and current_runtime_media_supported:
         media_runtime_evidence["text_route_media_unwired_superseded_by_source"] = True
     else:
@@ -2055,7 +2128,8 @@ def build_audit(root: Path, model_path: Path, manifest: Path) -> dict[str, Any]:
         and media_runtime_wired
         and media_metadata_ok
         and media_runtime_capabilities_safe
-        and not live_media_e2e_blocked
+        and not image_video_live_e2e_blocked
+        and not audio_waveform_live_e2e_blocked
         and not stale_present
     )
 
@@ -2097,8 +2171,10 @@ def build_audit(root: Path, model_path: Path, manifest: Path) -> dict[str, Any]:
         blockers.append("mimo_prefix_paged_l2_cache_not_reproved")
     if text_route_media_unwired_blocked:
         blockers.append("mimo_vl_audio_video_unwired")
-    if live_media_e2e_blocked:
-        blockers.append("mimo_vl_audio_video_live_e2e_missing")
+    if image_video_live_e2e_blocked:
+        blockers.append("mimo_image_video_live_e2e_missing")
+    if audio_waveform_live_e2e_blocked:
+        blockers.append("mimo_audio_waveform_live_e2e_missing")
     if not media_runtime_wired:
         blockers.append("mimo_media_runtime_implementation_missing")
     if not media_metadata_ok:
@@ -2156,7 +2232,11 @@ def build_audit(root: Path, model_path: Path, manifest: Path) -> dict[str, Any]:
                 and media_runtime_capabilities_safe
                 and not text_route_media_unwired_blocked
             ),
-            "mimo_live_media_e2e": bool(live_media_e2e_proven),
+            "mimo_image_video_live_e2e": bool(image_video_live_e2e_proven),
+            "mimo_audio_waveform_live_e2e": bool(audio_waveform_live_e2e_proven),
+            "mimo_live_media_e2e": bool(
+                image_video_live_e2e_proven and audio_waveform_live_e2e_proven
+            ),
             "manual_sink_does_not_clear_length_generation": bool(sink_mode_fails),
             "disable_sink_does_not_clear_length_generation": bool(disable_sink_fails),
         },

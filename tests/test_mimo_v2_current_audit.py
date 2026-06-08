@@ -241,7 +241,7 @@ def test_mimo_current_audit_separates_clean_artifact_from_runtime_blockers(
     )
     _write_json(
         tmp_path
-        / "build/current-all-local-model-smoke-mimo-v25-jangtq2-after-runtime-repairs-20260607/summary.json",
+        / "build/current-all-local-model-smoke-mimo-v25-jangtq2-object-media-e2e-20260608/summary.json",
         {
             "status": "fail",
             "results": [
@@ -264,6 +264,44 @@ def test_mimo_current_audit_separates_clean_artifact_from_runtime_blockers(
                             ],
                             "validation_failures": [],
                         }
+                    ]
+                    + [
+                        {
+                            "label": "vl_blue_image",
+                            "code": 200,
+                            "content": "Blue",
+                            "validation_failures": [],
+                        },
+                        {
+                            "label": "vl_blue_image_repeat",
+                            "code": 200,
+                            "content": "Blue",
+                            "validation_failures": [],
+                        },
+                        {
+                            "label": "vl_red_image_changed",
+                            "code": 200,
+                            "content": "Red",
+                            "validation_failures": [],
+                        },
+                        {
+                            "label": "text_no_media_after_image",
+                            "code": 200,
+                            "content": "NONE",
+                            "validation_failures": [],
+                        },
+                        {
+                            "label": "vl_blue_video",
+                            "code": 200,
+                            "content": "Blue",
+                            "validation_failures": [],
+                        },
+                        {
+                            "label": "text_no_media_after_video",
+                            "code": 200,
+                            "content": "NONE",
+                            "validation_failures": [],
+                        },
                     ],
                     "cache_after": {
                         "body": {
@@ -645,7 +683,7 @@ def test_mimo_current_audit_separates_clean_artifact_from_runtime_blockers(
         "mimo_decode_speed_below_release_target",
         "mimo_cb_system_prompt_working_set_pressure_blocked",
         "mimo_source_vs_quant_first_divergence_missing_or_failed",
-        "mimo_vl_audio_video_live_e2e_missing",
+        "mimo_audio_waveform_live_e2e_missing",
         "mimo_model_metadata_overadvertises_unwired_media",
         "mimo_runtime_capabilities_media_status_missing_or_unsafe",
     ]
@@ -769,6 +807,77 @@ def test_mimo_tool_protocol_is_separate_from_literal_argument_exactness(tmp_path
         is True
     )
     assert "tool_required" in evidence["artifact_exactness_boundary"]["failed_labels"]
+
+
+def test_mimo_object_media_rows_clear_live_media_e2e_separately_from_exactness():
+    from tests.cross_matrix import run_mimo_v2_jang2l_current_audit as audit
+
+    smoke = {
+        "status": "fail",
+        "results": [
+            {
+                "status": "probe_failed",
+                "requests": [
+                    {
+                        "label": "vl_blue_image",
+                        "code": 200,
+                        "content": "Blue",
+                        "validation_failures": [],
+                    },
+                    {
+                        "label": "vl_blue_image_repeat",
+                        "code": 200,
+                        "content": "Blue",
+                        "validation_failures": [],
+                    },
+                    {
+                        "label": "vl_red_image_changed",
+                        "code": 200,
+                        "content": "Red",
+                        "validation_failures": [],
+                    },
+                    {
+                        "label": "text_no_media_after_image",
+                        "code": 200,
+                        "content": "NONE",
+                        "validation_failures": [],
+                    },
+                    {
+                        "label": "vl_blue_video",
+                        "code": 200,
+                        "content": "Blue",
+                        "validation_failures": [],
+                    },
+                    {
+                        "label": "text_no_media_after_video",
+                        "code": 200,
+                        "content": "NONE",
+                        "validation_failures": [],
+                    },
+                ],
+                "failures": [
+                    {
+                        "label": "mimo_tool_required_sentinel",
+                        "reason": "expected_tool_argument_missing",
+                    }
+                ],
+            }
+        ],
+    }
+
+    evidence = audit._all_local_smoke_evidence(smoke)
+
+    assert evidence["live_media_e2e_pass"] is True
+    assert evidence["live_media_e2e_status"] == "pass"
+    assert evidence["live_media_e2e_labels"] == [
+        "vl_blue_image",
+        "vl_blue_image_repeat",
+        "vl_red_image_changed",
+        "text_no_media_after_image",
+        "vl_blue_video",
+        "text_no_media_after_video",
+    ]
+    assert evidence["artifact_exactness_pass"] is False
 
 
 def test_mimo_current_smoke_tool_protocol_beats_legacy_synced_tool_failure():

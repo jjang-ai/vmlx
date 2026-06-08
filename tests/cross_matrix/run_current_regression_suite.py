@@ -41,7 +41,7 @@ DEFERRED_RELEASE_OPEN_REQUIREMENTS = {
 }
 
 CURRENT_OBJECTIVE_DIGEST_ARTIFACT = (
-    "build/current-objective-proof-after-mimo-tq-kv-boundary-20260607.json"
+    "build/current-objective-proof-after-mimo-object-media-e2e-20260608.json"
 )
 
 CURRENT_SUITE_SOURCE_HASH_FILES = (
@@ -439,7 +439,7 @@ def _step_is_ok(name: str, step: dict[str, Any], root: Path) -> bool:
     if name == "full_release_objective_checklist":
         if step["returncode"] == 0:
             return True
-        path = root / "build/current-full-release-objective-checklist-after-mimo-tq-kv-boundary-20260607.json"
+        path = root / "build/current-full-release-objective-checklist-after-mimo-object-media-e2e-20260608.json"
         try:
             artifact = json.loads(path.read_text(encoding="utf-8"))
         except Exception:
@@ -732,13 +732,13 @@ CURRENT_SUITE_COMMANDS: dict[str, list[str]] = {
         "--require-current-proof-sweep",
         "--require-release-ready",
         "--out",
-        "build/current-release-regression-manifest-after-mimo-tq-kv-boundary-20260607.json",
+        "build/current-release-regression-manifest-after-mimo-object-media-e2e-20260608.json",
     ],
     "full_release_objective_checklist": [
         sys.executable,
         "tests/cross_matrix/run_full_release_objective_checklist.py",
         "--out",
-        "build/current-full-release-objective-checklist-after-mimo-tq-kv-boundary-20260607.json",
+        "build/current-full-release-objective-checklist-after-mimo-object-media-e2e-20260608.json",
     ],
 }
 
