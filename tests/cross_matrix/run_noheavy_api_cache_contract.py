@@ -15,6 +15,7 @@ This helper intentionally does not load models. It runs focused tests that pin:
 - Structured JSON/schema repair and post-generation repair diagnostics.
 - Structured XML repair/validation diagnostics for benchmark/catalog callers.
 - Guided JSON/schema token masking on compatible llguidance text paths.
+- Live-smoke benchmark request adoption for JSON schema response_format.
 - One-shot strict JSON-only retry after unrecoverable repair/schema failure.
 - API docs boundary for repair/validation vs hard constrained decoding.
 """
@@ -41,6 +42,8 @@ SOURCE_HASH_FILES = (
     "vmlx_engine/api/ollama_adapter.py",
     "docs/guides/server.md",
     "docs/reference/configuration.md",
+    "bench/all_local_model_smoke.py",
+    "tests/test_all_local_model_smoke.py",
     "tests/test_structured_output.py",
     "tests/test_structured_output_repair_report.py",
     "tests/test_llm.py",
@@ -87,6 +90,8 @@ REQUIRED_NOHEAVY_API_CACHE_TEST_MARKERS = (
     "test_chat_response_format_forwards_guided_json_hint",
     "test_responses_text_format_forwards_guided_json_hint",
     "test_generate_installs_guided_json_logits_processor",
+    "test_structured_json_probes_request_json_schema_response_format",
+    "test_mimo_structured_json_sentinel_requests_literal_schema_response_format",
     "test_chat_response_format_strict_retries_failed_json_only",
     "test_responses_text_format_strict_retries_failed_json_only",
     "test_chat_stream_tracks_cache_detail_alongside_cached_tokens",
@@ -295,6 +300,19 @@ COMMANDS: dict[str, list[str]] = {
             "or generate_installs_guided_json_logits_processor"
         ),
     ],
+    "structured_smoke_response_format_contracts": [
+        sys.executable,
+        "-m",
+        "pytest",
+        "-q",
+        "-vv",
+        "tests/test_all_local_model_smoke.py",
+        "-k",
+        (
+            "structured_json_probes_request_json_schema_response_format "
+            "or mimo_structured_json_sentinel_requests_literal_schema_response_format"
+        ),
+    ],
     "panel_gateway_contracts": [
         "npm",
         "--prefix",
@@ -376,6 +394,7 @@ def build_artifact(root: Path) -> dict[str, Any]:
     structured_output_ok = commands["structured_output_repair_contracts"]["returncode"] == 0
     structured_retry_ok = commands["structured_output_retry_contracts"]["returncode"] == 0
     structured_guided_ok = commands["structured_guided_decoding_contracts"]["returncode"] == 0
+    structured_smoke_ok = commands["structured_smoke_response_format_contracts"]["returncode"] == 0
     panel_gateway_ok = commands["panel_gateway_contracts"]["returncode"] == 0
     checks = {
         "openai_chat_sampling_kwargs": (
@@ -466,6 +485,13 @@ def build_artifact(root: Path) -> dict[str, Any]:
             and "test_responses_text_format_forwards_guided_json_hint"
             not in missing_markers
             and "test_generate_installs_guided_json_logits_processor"
+            not in missing_markers
+        ),
+        "structured_live_smoke_response_format_adoption": (
+            structured_smoke_ok
+            and "test_structured_json_probes_request_json_schema_response_format"
+            not in missing_markers
+            and "test_mimo_structured_json_sentinel_requests_literal_schema_response_format"
             not in missing_markers
         ),
         "responses_previous_response_history": (

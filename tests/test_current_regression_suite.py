@@ -1001,6 +1001,27 @@ def test_noheavy_api_cache_contract_includes_guided_json_schema_decoding():
     assert "generate_installs_guided_json_logits_processor" in command
 
 
+def test_noheavy_api_cache_contract_includes_structured_smoke_response_format_adoption():
+    from tests.cross_matrix import run_noheavy_api_cache_contract as gate
+    from tests.cross_matrix import release_regression_manifest as manifest
+
+    markers = gate.REQUIRED_NOHEAVY_API_CACHE_TEST_MARKERS
+
+    assert "test_structured_json_probes_request_json_schema_response_format" in markers
+    assert (
+        "test_mimo_structured_json_sentinel_requests_literal_schema_response_format"
+        in markers
+    )
+    assert "structured_live_smoke_response_format_adoption" in (
+        manifest.EXPECTED_CURRENT_NOHEAVY_API_CACHE_CHECKS
+    )
+    assert "bench/all_local_model_smoke.py" in gate.SOURCE_HASH_FILES
+    assert "tests/test_all_local_model_smoke.py" in gate.SOURCE_HASH_FILES
+    command = " ".join(gate.COMMANDS["structured_smoke_response_format_contracts"])
+    assert "tests/test_all_local_model_smoke.py" in command
+    assert "structured_json_probes_request_json_schema_response_format" in command
+
+
 def test_noheavy_api_cache_contract_includes_structured_xml_repair():
     from tests.cross_matrix import run_noheavy_api_cache_contract as gate
     from tests.cross_matrix import release_regression_manifest as manifest

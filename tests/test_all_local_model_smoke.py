@@ -1218,6 +1218,76 @@ def test_build_probe_payloads_adds_mimo_literal_sentinel_probes():
     assert "blue-cat" in by_label["tool_required"]["payload"]["messages"][0]["content"]
 
 
+def test_structured_json_probes_request_json_schema_response_format():
+    mod = load_module()
+    row = {
+        "served_name": "qwen3.6-27b-jang_4m-mtp",
+        "cache_family": "hybrid_ssm",
+        "model_type": "qwen3_5_moe",
+        "supports_thinking": True,
+        "supports_tools": True,
+        "is_mllm": False,
+    }
+
+    probes = mod.build_probe_payloads(
+        row,
+        max_tokens=48,
+        include_reasoning=False,
+        include_media=False,
+        include_video=False,
+        include_tools=False,
+    )
+    structured_payload = {
+        probe["label"]: probe["payload"]
+        for probe in probes
+        if probe["label"] == "structured_json_exact"
+    }["structured_json_exact"]
+
+    response_format = structured_payload["response_format"]
+
+    assert response_format["type"] == "json_schema"
+    assert response_format["json_schema"]["name"] == "all_local_model_smoke_structured_json_exact"
+    schema = response_format["json_schema"]["schema"]
+    assert schema["type"] == "object"
+    assert schema["additionalProperties"] is False
+    assert schema["required"] == ["status", "value", "count"]
+    assert schema["properties"]["status"]["const"] == "ok"
+    assert schema["properties"]["value"]["const"] == "blue-cat"
+    assert schema["properties"]["count"]["const"] == 3
+
+
+def test_mimo_structured_json_sentinel_requests_literal_schema_response_format():
+    mod = load_module()
+    row = {
+        "served_name": "mimo-v2.5-jangtq_2",
+        "cache_family": "mimo_v2_hybrid_swa",
+        "model_type": "mimo_v2",
+        "supports_thinking": False,
+        "supports_tools": True,
+        "is_mllm": True,
+    }
+
+    probes = mod.build_probe_payloads(
+        row,
+        max_tokens=48,
+        include_reasoning=False,
+        include_media=False,
+        include_video=False,
+        include_tools=False,
+    )
+    payload = {
+        probe["label"]: probe["payload"]
+        for probe in probes
+        if probe["label"] == "mimo_structured_json_sentinel"
+    }["mimo_structured_json_sentinel"]
+
+    schema = payload["response_format"]["json_schema"]["schema"]
+
+    assert payload["response_format"]["type"] == "json_schema"
+    assert payload["response_format"]["json_schema"]["name"] == "all_local_model_smoke_mimo_structured_json_sentinel"
+    assert schema["properties"]["value"]["const"] == "B7-CAT-09"
+
+
 def test_build_probe_payloads_does_not_clip_mimo_multiturn_recall_to_cache_cap():
     mod = load_module()
     row = {

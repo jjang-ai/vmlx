@@ -680,6 +680,7 @@ def _strict_json_payload(
     max_tokens: int,
     *,
     expected_value: str = "blue-cat",
+    schema_name: str = "all_local_model_smoke_structured_json_exact",
 ) -> dict[str, Any]:
     expected_json = json.dumps(
         {"status": "ok", "value": expected_value, "count": 3},
@@ -701,6 +702,22 @@ def _strict_json_payload(
         "max_tokens": max_tokens,
         "stream": False,
         "enable_thinking": False,
+        "response_format": {
+            "type": "json_schema",
+            "json_schema": {
+                "name": schema_name,
+                "schema": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "properties": {
+                        "status": {"type": "string", "const": "ok"},
+                        "value": {"type": "string", "const": expected_value},
+                        "count": {"type": "integer", "const": 3},
+                    },
+                    "required": ["status", "value", "count"],
+                },
+            },
+        },
     }
 
 
@@ -998,6 +1015,7 @@ def build_probe_payloads(
             "payload": _strict_json_payload(
                 model,
                 max(_lfm_strict_probe_max_tokens(row, max_tokens), 96),
+                schema_name="all_local_model_smoke_structured_json_exact",
             ),
         }
     )
@@ -1009,6 +1027,7 @@ def build_probe_payloads(
                     model,
                     max(_lfm_strict_probe_max_tokens(row, max_tokens), 96),
                     expected_value="B7-CAT-09",
+                    schema_name="all_local_model_smoke_mimo_structured_json_sentinel",
                 ),
             }
         )
