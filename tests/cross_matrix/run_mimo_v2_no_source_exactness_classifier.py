@@ -245,6 +245,7 @@ def _literal_variant_summary(artifact: dict[str, Any] | None) -> dict[str, Any]:
             "plain_chat_literal_copy_pass": None,
             "structured_literal_pass": None,
             "tool_literal_pass": None,
+            "plain_literal_no_cache_reuse_failed": None,
             "failed_labels": [],
             "failures": [],
         }
@@ -282,16 +283,30 @@ def _literal_variant_summary(artifact: dict[str, Any] | None) -> dict[str, Any]:
             return None
         return all(row.get("pass") is True for row in rows)
 
+    def _cached_tokens(row: dict[str, Any]) -> int:
+        usage = row.get("usage") if isinstance(row.get("usage"), dict) else {}
+        details = (
+            usage.get("prompt_tokens_details")
+            if isinstance(usage.get("prompt_tokens_details"), dict)
+            else {}
+        )
+        cached = details.get("cached_tokens")
+        return cached if isinstance(cached, int) else 0
+
+    plain_rows = _labels("plain_exact")
+    plain_failures = [row for row in plain_rows if row.get("pass") is not True]
     return {
         "exists": True,
         "status": artifact.get("status"),
-        "plain_literal_copy_pass": _all_pass(_labels("plain_exact")),
+        "plain_literal_copy_pass": _all_pass(plain_rows),
         "plain_completion_literal_copy_pass": _all_pass(
             _route_labels("plain_exact", "completions")
         ),
         "plain_chat_literal_copy_pass": _all_pass(_route_labels("plain_exact", "chat")),
         "structured_literal_pass": _all_pass(_labels("json_")),
         "tool_literal_pass": _all_pass(_labels("tool_")),
+        "plain_literal_no_cache_reuse_failed": bool(plain_failures)
+        and all(_cached_tokens(row) == 0 for row in plain_failures),
         "failed_labels": [failure["label"] for failure in failures],
         "failures": failures,
     }
@@ -675,6 +690,8 @@ def _current_all_local_summary(artifact: dict[str, Any] | None) -> dict[str, Any
             "literal_mutation_labels": [],
             "context_recall_failure_labels": [],
             "literal_mutation_failures": [],
+            "runtime_kv_quantization_disabled": None,
+            "native_storage_quantization_disabled": None,
         }
 
     request_rows = artifact.get("requests")
@@ -689,6 +706,27 @@ def _current_all_local_summary(artifact: dict[str, Any] | None) -> dict[str, Any
         l2_restart = by_label.get("text_cache_repeat_l2_restart", {})
     if not isinstance(l2_restart, dict):
         l2_restart = {}
+    cache_after = artifact.get("cache_after")
+    cache_body = (
+        cache_after.get("body")
+        if isinstance(cache_after, dict) and isinstance(cache_after.get("body"), dict)
+        else {}
+    )
+    kv_quantization = (
+        cache_body.get("kv_cache_quantization")
+        if isinstance(cache_body.get("kv_cache_quantization"), dict)
+        else {}
+    )
+    native_cache = (
+        cache_body.get("native_cache")
+        if isinstance(cache_body.get("native_cache"), dict)
+        else {}
+    )
+    storage_quantization = (
+        native_cache.get("storage_quantization")
+        if isinstance(native_cache.get("storage_quantization"), dict)
+        else {}
+    )
 
     first_cache = by_label.get("text_cache_repeat_1", {})
     second_cache = by_label.get("text_cache_repeat_2", {})
@@ -752,6 +790,10 @@ def _current_all_local_summary(artifact: dict[str, Any] | None) -> dict[str, Any
         ],
         "context_recall_failure_labels": context_recall_failure_labels,
         "literal_mutation_failures": literal_mutation_failures,
+        "runtime_kv_quantization_disabled": kv_quantization.get("enabled") is False,
+        "native_storage_quantization_disabled": (
+            storage_quantization.get("enabled") is False
+        ),
     }
 
 
@@ -843,6 +885,11 @@ def build_classification(
         jangtq2_conservative_no_cb_no_prefix
     )
 
+    literal_no_cache_and_quant_disabled = bool(
+        literal_variant_summary["plain_literal_no_cache_reuse_failed"] is True
+        and jangtq2_current_all_local_summary["runtime_kv_quantization_disabled"] is True
+        and jangtq2_current_all_local_summary["native_storage_quantization_disabled"] is True
+    )
     excluded_surfaces = {
         "prompt_template_literal_corruption": (
             jangtq2_template_summary["literal_preserved_in_raw_prompt"] is True
@@ -855,7 +902,9 @@ def build_classification(
             "tokenizer_roundtrip" in jangtq2_hyphen_summary["not_caused_by"]
         ),
         "parser_argument_rewrite": parser_structure_valid,
-        "prefix_paged_l2_or_kv_quant_primary_cause": cache_kv_l2_excluded,
+        "prefix_paged_l2_or_kv_quant_primary_cause": (
+            cache_kv_l2_excluded or literal_no_cache_and_quant_disabled
+        ),
         "hidden_stochastic_sampling_primary_cause": deterministic_sampling_seen,
         "continuous_batching_primary_cause": (
             conservative_no_cb_no_prefix_summary["continuous_batching_disabled"] is True

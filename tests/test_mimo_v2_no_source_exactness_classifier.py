@@ -589,6 +589,95 @@ def test_mimo_no_source_classifier_consumes_conservative_no_cb_no_prefix_probe()
     )
 
 
+def test_mimo_no_source_classifier_excludes_cache_kv_from_no_cache_plain_literals():
+    audit = {
+        "component_ok": {
+            "api_cache_responses_contract": True,
+            "tool_protocol": True,
+            "exactness_cache_kv_quant_excluded": False,
+            "decode_speed_target": False,
+            "source_vs_quant_first_divergence": False,
+            "long_prompt_coherence": True,
+            "cb_system_prompt_working_set_pressure": True,
+            "mimo_media_wired": False,
+        }
+    }
+    smoke = {
+        "results": [
+            {
+                "failures": [
+                    {
+                        "label": "tool_required",
+                        "reason": "expected_tool_argument_missing",
+                    }
+                ],
+                "server_log_tail": [
+                    "Resolved sampling kwargs {'temperature': 0.0, 'top_p': 1.0}"
+                ],
+            }
+        ]
+    }
+    literal_variants = {
+        "requests": [
+            {
+                "label": "plain_exact_blue_cat",
+                "route": "completions",
+                "pass": False,
+                "content": "blue cat",
+                "expected": "blue-cat",
+                "usage": {"prompt_tokens_details": None},
+            },
+            {
+                "label": "plain_exact_sentinel",
+                "route": "completions",
+                "pass": False,
+                "content": "B7 CAT-09",
+                "expected": "B7-CAT-09",
+                "usage": {"prompt_tokens_details": None},
+            },
+        ]
+    }
+    current_all_local = {
+        "cache_after": {
+            "body": {
+                "kv_cache_quantization": {"enabled": False},
+                "native_cache": {
+                    "storage_quantization": {"enabled": False},
+                },
+            }
+        },
+        "requests": [],
+    }
+
+    artifact = build_classification(
+        audit,
+        smoke,
+        literal_variants=literal_variants,
+        jangtq2_current_all_local=current_all_local,
+    )
+
+    assert (
+        artifact["literal_variant_summary"]["plain_literal_no_cache_reuse_failed"]
+        is True
+    )
+    assert (
+        artifact["jangtq2_current_all_local_summary"][
+            "runtime_kv_quantization_disabled"
+        ]
+        is True
+    )
+    assert (
+        artifact["jangtq2_current_all_local_summary"][
+            "native_storage_quantization_disabled"
+        ]
+        is True
+    )
+    assert (
+        artifact["excluded_surfaces"]["prefix_paged_l2_or_kv_quant_primary_cause"]
+        is True
+    )
+
+
 def test_mimo_no_source_classifier_tracks_jang2l_json_sentinel_separately():
     audit = {
         "component_ok": {

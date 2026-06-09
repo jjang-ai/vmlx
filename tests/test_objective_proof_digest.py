@@ -18,7 +18,7 @@ def test_objective_proof_digest_default_out_tracks_current_release_proof_artifac
     from tests.cross_matrix import summarize_objective_proof as objective
 
     assert objective.DEFAULT_OUT == Path(
-        "build/current-objective-proof-after-switchglu-parity-proof-20260609.json"
+        "build/current-objective-proof-after-artifact-diagnosis-20260609.json"
     )
 
 
@@ -10656,5 +10656,5 @@ def test_objective_proof_digest_uses_current_mimo_no_source_classifier_artifact(
     from tests.cross_matrix import summarize_objective_proof as objective
 
     assert objective.MIMO_V2_NO_SOURCE_EXACTNESS_CLASSIFIER_REL == (
-        "build/current-mimo-v2-no-source-exactness-classifier-after-lossless-token-trace-20260609.json"
+        "build/current-mimo-v2-no-source-exactness-classifier-after-artifact-diagnosis-20260609.json"
     )

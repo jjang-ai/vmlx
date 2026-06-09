@@ -17,14 +17,14 @@ from typing import Any
 
 
 DEFAULT_OUT = Path(
-    "build/current-full-release-objective-checklist-after-switchglu-parity-proof-20260609.json"
+    "build/current-full-release-objective-checklist-after-artifact-diagnosis-20260609.json"
 )
 
 MIMO_AUDIT = Path(
-    "build/current-mimo-v2-jang2l-current-audit-after-switchglu-parity-proof-20260609.json"
+    "build/current-mimo-v2-jang2l-current-audit-after-artifact-diagnosis-20260609.json"
 )
 MIMO_NO_SOURCE_EXACTNESS_CLASSIFIER = Path(
-    "build/current-mimo-v2-no-source-exactness-classifier-after-lossless-token-trace-20260609.json"
+    "build/current-mimo-v2-no-source-exactness-classifier-after-artifact-diagnosis-20260609.json"
 )
 NOHEAVY_API_CACHE = Path(
     "build/current-noheavy-api-cache-contract-after-gateway-stale-port-20260609.json"
@@ -42,7 +42,7 @@ RELEASE_MANIFEST = Path(
     "build/current-release-regression-manifest-after-mimo-live-refresh-20260608.json"
 )
 OBJECTIVE_DIGEST = Path(
-    "build/current-objective-proof-after-switchglu-parity-proof-20260609.json"
+    "build/current-objective-proof-after-artifact-diagnosis-20260609.json"
 )
 ISSUE179_AUDIT = Path(
     "build/current-issue179-minimax-k-root-cause-audit-after-parser-settings-parity-20260608.json"

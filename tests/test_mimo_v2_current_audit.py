@@ -1665,6 +1665,14 @@ def test_mimo_current_audit_points_switchglu_at_current_parity_proof():
     )
 
 
+def test_mimo_current_audit_points_classifier_at_artifact_diagnosis():
+    from tests.cross_matrix import run_mimo_v2_jang2l_current_audit as audit
+
+    assert str(audit.NO_SOURCE_EXACTNESS_CLASSIFIER_ARTIFACT) == (
+        "build/current-mimo-v2-no-source-exactness-classifier-after-artifact-diagnosis-20260609.json"
+    )
+
+
 def test_mimo_current_audit_points_jang2l_at_latest_media_l2_release_smoke():
     from tests.cross_matrix import run_mimo_v2_jang2l_current_audit as audit
 
