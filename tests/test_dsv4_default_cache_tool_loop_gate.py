@@ -1,5 +1,6 @@
 from argparse import Namespace
 from pathlib import Path
+from types import SimpleNamespace
 
 
 def test_dsv4_default_cache_tool_loop_gate_dry_run_pins_default_cache_flags():
@@ -237,6 +238,31 @@ def test_dsv4_default_cache_tool_loop_gate_dry_run_can_request_thinking_mode():
         "enable_thinking": True,
         "chat_template_kwargs": {"enable_thinking": True},
     }
+
+
+def test_dsv4_default_cache_tool_loop_memory_snapshot_labels_binary_units(
+    monkeypatch,
+):
+    import tests.cross_matrix.run_dsv4_default_cache_tool_loop_gate as gate
+
+    class FakePsutil:
+        @staticmethod
+        def virtual_memory():
+            return SimpleNamespace(
+                total=128 * 1024**3,
+                available=113.59 * 1024**3,
+                percent=11.3,
+            )
+
+    monkeypatch.setitem(__import__("sys").modules, "psutil", FakePsutil)
+
+    snapshot = gate.resource_snapshot("preflight")
+
+    assert snapshot["system_memory"]["unit"] == "GiB"
+    assert snapshot["system_memory"]["available_gib"] == 113.59
+    assert snapshot["system_memory"]["total_gib"] == 128.0
+    assert snapshot["system_memory"]["available_gb"] == 113.59
+    assert snapshot["system_memory"]["total_gb"] == 128.0
 
 
 def test_dsv4_default_cache_tool_loop_gate_memory_preflight_skips_before_spawn(
