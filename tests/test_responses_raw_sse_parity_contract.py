@@ -6,8 +6,15 @@ from tests.cross_matrix.run_responses_raw_sse_parity_contract import (
 )
 
 
-def _sse(arguments: str = '{"query":"alpha"}', final_arguments: str = "") -> str:
-    return f"""event: response.reasoning_summary_text.delta
+def _sse(
+    arguments: str = '{"query":"alpha"}',
+    final_arguments: str = "",
+    model: str = "same-model",
+) -> str:
+    return f"""event: response.created
+data: {{"type":"response.created","response":{{"id":"resp_1","status":"in_progress","model":{json.dumps(model)},"output":[]}}}}
+
+event: response.reasoning_summary_text.delta
 data: {{"type":"response.reasoning_summary_text.delta","delta":"checking"}}
 
 event: response.output_item.added
@@ -28,6 +35,31 @@ data: {{"type":"response.completed","response":{{"status":"completed"}}}}
 """
 
 
+def _sse_with_message_and_duplicate_function_index() -> str:
+    return """event: response.output_item.added
+data: {"type":"response.output_item.added","output_index":0,"item":{"id":"msg_1","type":"message","status":"in_progress","role":"assistant","content":[]}}
+
+event: response.reasoning_summary_text.delta
+data: {"type":"response.reasoning_summary_text.delta","item_id":"msg_1","output_index":0,"delta":"checking"}
+
+event: response.output_item.done
+data: {"type":"response.output_item.done","output_index":0,"item":{"id":"msg_1","type":"message","status":"completed","role":"assistant","content":[]}}
+
+event: response.output_item.added
+data: {"type":"response.output_item.added","output_index":0,"item":{"id":"fc_1","type":"function_call","status":"in_progress","call_id":"call_1","name":"lookup","arguments":""}}
+
+event: response.function_call_arguments.delta
+data: {"type":"response.function_call_arguments.delta","item_id":"fc_1","output_index":0,"delta":"{\\"query\\":\\"alpha\\"}"}
+
+event: response.function_call_arguments.done
+data: {"type":"response.function_call_arguments.done","item_id":"fc_1","output_index":0,"arguments":"{\\"query\\":\\"alpha\\"}"}
+
+event: response.output_item.done
+data: {"type":"response.output_item.done","output_index":0,"item":{"id":"fc_1","type":"function_call","status":"completed","call_id":"call_1","name":"lookup","arguments":"{\\"query\\":\\"alpha\\"}"}}
+
+"""
+
+
 def test_classifier_uses_done_arguments_when_final_item_arguments_are_empty():
     row = classify_sse_capture(_sse())
 
@@ -36,6 +68,18 @@ def test_classifier_uses_done_arguments_when_final_item_arguments_are_empty():
     assert row["final_item_arguments"] == ""
     assert row["authoritative_arguments"] == '{"query":"alpha"}'
     assert row["empty_final_item_with_done_args"] is True
+    assert row["output_item_indices_valid"] is True
+    assert row["model"] == "same-model"
+
+
+def test_classifier_flags_function_call_reusing_message_output_index():
+    row = classify_sse_capture(_sse_with_message_and_duplicate_function_index())
+
+    assert row["authoritative_arguments"] == '{"query":"alpha"}'
+    assert row["output_indices_by_type"]["message"] == [0]
+    assert row["output_indices_by_type"]["function_call"] == [0]
+    assert row["conflicting_output_indices"] == [0]
+    assert row["output_item_indices_valid"] is False
 
 
 def test_raw_sse_parity_stays_open_when_tunnel_capture_is_missing(tmp_path):
@@ -130,6 +174,63 @@ data: {"type":"response.reasoning_summary_text.delta","delta":"checking"}
     assert artifact["captures"]["direct"]["has_required_reasoning_events"] is False
 
 
+def test_raw_sse_parity_fails_when_surface_reuses_message_output_index_for_tool(
+    tmp_path,
+):
+    direct = tmp_path / "direct.sse"
+    gateway = tmp_path / "gateway.sse"
+    tunnel = tmp_path / "tunnel.sse"
+    direct.write_text(_sse())
+    gateway.write_text(_sse())
+    tunnel.write_text(_sse_with_message_and_duplicate_function_index())
+
+    artifact = build_artifact(
+        direct_sse=direct,
+        gateway_sse=gateway,
+        tunnel_sse=tunnel,
+        expected_function_name="lookup",
+        expected_arguments='{"query":"alpha"}',
+        require_reasoning_events=True,
+    )
+
+    assert artifact["status"] == "fail"
+    assert (
+        artifact["checks"]["all_present_surfaces_have_valid_output_item_indices"]
+        is False
+    )
+    assert artifact["captures"]["tunnel"]["conflicting_output_indices"] == [0]
+
+
+def test_raw_sse_parity_fails_when_same_model_is_required_and_surfaces_differ(
+    tmp_path,
+):
+    direct = tmp_path / "direct.sse"
+    gateway = tmp_path / "gateway.sse"
+    tunnel = tmp_path / "tunnel.sse"
+    direct.write_text(_sse(model="gemma4-e2b-sse"))
+    gateway.write_text(_sse(model="gemma4-e2b-sse"))
+    tunnel.write_text(_sse(model="models/Qwen3.6-35B-A3B-MXFP8-CRACK-MTP"))
+
+    artifact = build_artifact(
+        direct_sse=direct,
+        gateway_sse=gateway,
+        tunnel_sse=tunnel,
+        expected_function_name="lookup",
+        expected_arguments='{"query":"alpha"}',
+        require_reasoning_events=True,
+        require_same_model=True,
+    )
+
+    assert artifact["status"] == "fail"
+    assert artifact["checks"]["all_present_surfaces_report_model"] is True
+    assert artifact["checks"]["all_present_surfaces_same_model"] is False
+    assert artifact["captures"]["direct"]["model"] == "gemma4-e2b-sse"
+    assert (
+        artifact["captures"]["tunnel"]["model"]
+        == "models/Qwen3.6-35B-A3B-MXFP8-CRACK-MTP"
+    )
+
+
 def test_raw_sse_parity_passes_when_all_surfaces_match(tmp_path):
     direct = tmp_path / "direct.sse"
     gateway = tmp_path / "gateway.sse"
@@ -144,9 +245,11 @@ def test_raw_sse_parity_passes_when_all_surfaces_match(tmp_path):
         expected_function_name="lookup",
         expected_arguments='{"query":"alpha"}',
         require_reasoning_events=True,
+        require_same_model=True,
     )
 
     assert artifact["status"] == "pass"
     assert artifact["checks"]["all_required_surfaces_present"] is True
+    assert artifact["checks"]["all_present_surfaces_same_model"] is True
     assert artifact["checks"]["all_present_surfaces_match_expected_arguments"] is True
     assert artifact["checks"]["all_present_surfaces_have_required_reasoning"] is True
