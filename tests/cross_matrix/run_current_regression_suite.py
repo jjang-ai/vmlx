@@ -724,6 +724,8 @@ CURRENT_SUITE_COMMANDS: dict[str, list[str]] = {
         "build/responses-sse-captures-20260609/direct-gemma4-e2b-after-gemma4-parser.sse",
         "--gateway-sse",
         "build/responses-sse-captures-20260609/gateway-gemma4-e2b-after-parser.sse",
+        "--tunnel-sse",
+        "build/responses-sse-captures-20260609/tunnel-gemma4-e2b-after-parser.sse",
         "--direct-log",
         "build/responses-sse-captures-20260609/direct-gemma4-e2b-after-gemma4-parser.server.log",
         "--gateway-log",
@@ -737,7 +739,7 @@ CURRENT_SUITE_COMMANDS: dict[str, list[str]] = {
         "--require-reasoning-events",
         "--require-same-model",
         "--out",
-        "build/current-responses-raw-sse-parity-direct-gateway-gemma4-e2b-after-parser-20260609.json",
+        "build/current-responses-raw-sse-parity-direct-gateway-tunnel-gemma4-e2b-after-parser-20260609.json",
     ],
     "focused_regression_pytest": [
         sys.executable,

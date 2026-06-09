@@ -1239,6 +1239,10 @@ def test_current_regression_suite_tracks_responses_raw_sse_parity_contract():
         "gateway-gemma4-e2b-after-parser.sse"
     ) in parity_command
     assert (
+        "--tunnel-sse build/responses-sse-captures-20260609/"
+        "tunnel-gemma4-e2b-after-parser.sse"
+    ) in parity_command
+    assert (
         "--direct-log build/responses-sse-captures-20260609/"
         "direct-gemma4-e2b-after-gemma4-parser.server.log"
     ) in parity_command
@@ -1251,6 +1255,10 @@ def test_current_regression_suite_tracks_responses_raw_sse_parity_contract():
     assert "--expected-model gemma4-e2b-sse" in parity_command
     assert "--require-reasoning-events" in parity_command
     assert "--require-same-model" in parity_command
+    assert (
+        "--out build/current-responses-raw-sse-parity-direct-gateway-tunnel-"
+        "gemma4-e2b-after-parser-20260609.json"
+    ) in parity_command
 
 
 def test_noheavy_api_cache_contract_default_out_tracks_current_suite_artifact():
