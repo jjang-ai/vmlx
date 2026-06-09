@@ -965,6 +965,21 @@ def test_noheavy_api_cache_contract_includes_structured_schema_decode_repair():
     )
 
 
+def test_noheavy_api_cache_contract_includes_structured_json_retry():
+    from tests.cross_matrix import run_noheavy_api_cache_contract as gate
+
+    markers = gate.REQUIRED_NOHEAVY_API_CACHE_TEST_MARKERS
+
+    assert "test_chat_response_format_strict_retries_failed_json_only" in markers
+    assert "test_responses_text_format_strict_retries_failed_json_only" in markers
+    assert "tests/test_server.py" in gate.SOURCE_HASH_FILES
+    assert any(
+        "tests/test_server.py" in " ".join(cmd)
+        and "strict_retries_failed_json_only" in " ".join(cmd)
+        for cmd in gate.COMMANDS.values()
+    )
+
+
 def test_noheavy_api_cache_contract_default_out_tracks_current_suite_artifact():
     from tests.cross_matrix import run_noheavy_api_cache_contract as gate
 

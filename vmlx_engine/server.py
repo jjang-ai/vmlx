@@ -11607,6 +11607,25 @@ async def create_chat_completion(
         _structured_report = repair_json_output(
             cleaned_text or content_for_parsing, response_format
         )
+        if not _structured_report.get("is_valid"):
+            _retry_output, _retry_report = await _retry_structured_output_json_once(
+                engine=engine,
+                messages=messages,
+                chat_kwargs=chat_kwargs,
+                response_format=response_format,
+                invalid_text=cleaned_text or content_for_parsing or "",
+                error=_structured_report.get("error"),
+                timeout=timeout,
+                fastapi_request=fastapi_request,
+                request_id=f"{response_id}-json-retry",
+                endpoint="Chat Completions",
+            )
+            if _retry_output is not None and _retry_report.get("is_valid"):
+                output = _retry_output
+                reasoning_text = None
+                content_for_parsing = _retry_output.text
+                cleaned_text = _retry_output.text
+                _structured_report = _retry_report
         parsed_json = _structured_report.get("parsed")
         is_valid = bool(_structured_report.get("is_valid"))
         error = _structured_report.get("error")
@@ -11947,6 +11966,119 @@ def _merge_responses_warnings(*warning_lists: list[str] | None) -> list[str] | N
             seen.add(text)
             merged.append(text)
     return merged or None
+
+
+def _plain_response_format_dict(response_format: Any) -> dict[str, Any] | None:
+    if response_format is None:
+        return None
+    if isinstance(response_format, dict):
+        return response_format
+    if hasattr(response_format, "model_dump"):
+        return response_format.model_dump(exclude_none=True)
+    return None
+
+
+def _structured_output_json_retry_instruction(
+    response_format: Any,
+    error: str | None,
+) -> str | None:
+    rf_dict = _plain_response_format_dict(response_format)
+    if not isinstance(rf_dict, dict):
+        return None
+    rf_type = rf_dict.get("type")
+    if rf_type not in {"json_object", "json_schema"}:
+        return None
+
+    lines = [
+        "Please fix this JSON only.",
+        "Your previous response failed structured JSON validation.",
+        "Return exactly one valid JSON object or array.",
+        "Do not include markdown fences, comments, explanations, or any prose.",
+    ]
+    if error:
+        lines.append(f"Validation error: {error}")
+    if rf_type == "json_schema":
+        json_schema = rf_dict.get("json_schema")
+        schema = (
+            json_schema.get("schema")
+            if isinstance(json_schema, dict)
+            else None
+        )
+        if schema:
+            lines.append("JSON Schema:")
+            lines.append(json.dumps(schema, ensure_ascii=False, sort_keys=True))
+    return "\n".join(lines)
+
+
+def _structured_retry_report(report: dict[str, Any]) -> dict[str, Any]:
+    updated = dict(report)
+    actions = [
+        str(action)
+        for action in updated.get("repair_actions", [])
+        if str(action).strip()
+    ]
+    updated["repair_needed"] = True
+    updated["repair_actions"] = list(
+        dict.fromkeys(["model_retry_json_only"] + actions)
+    )
+    return updated
+
+
+async def _retry_structured_output_json_once(
+    *,
+    engine: Any,
+    messages: list[dict[str, Any]],
+    chat_kwargs: dict[str, Any],
+    response_format: Any,
+    invalid_text: str,
+    error: str | None,
+    timeout: float,
+    fastapi_request: Request | None,
+    request_id: str,
+    endpoint: str,
+) -> tuple[GenerationOutput | None, dict[str, Any]]:
+    instruction = _structured_output_json_retry_instruction(response_format, error)
+    if not instruction:
+        return None, {}
+
+    retry_messages = list(messages or [])
+    if invalid_text:
+        retry_messages.append({"role": "assistant", "content": invalid_text})
+    retry_messages.append({"role": "user", "content": instruction})
+
+    retry_kwargs = dict(chat_kwargs)
+    # The retry is a JSON-only correction pass. Keeping tool schemas in this
+    # turn can make a model produce a tool call instead of the corrected object.
+    retry_kwargs.pop("tools", None)
+    retry_kwargs.pop("_vmlx_tools_present", None)
+    retry_kwargs.pop("tool_choice", None)
+
+    logger.info(
+        "%s: retrying failed structured JSON output with JSON-only correction prompt",
+        endpoint,
+    )
+    try:
+        retry_output = await _await_chat_with_disconnect_abort(
+            engine,
+            messages=retry_messages,
+            chat_kwargs=retry_kwargs,
+            timeout=timeout,
+            fastapi_request=fastapi_request,
+            request_id=request_id,
+            endpoint=f"{endpoint} structured JSON retry",
+        )
+    except Exception:
+        logger.warning(
+            "%s: structured JSON retry failed before producing output",
+            endpoint,
+            exc_info=True,
+        )
+        return None, {}
+
+    retry_report = repair_json_output(retry_output.text, response_format)
+    if retry_report.get("is_valid"):
+        retry_report = _structured_retry_report(retry_report)
+    return retry_output, retry_report
 
 
 def _structured_output_repair_warning(report: dict | None) -> list[str] | None:
@@ -13379,6 +13511,25 @@ async def create_response(
             _structured_report = repair_json_output(
                 _out_text, response_format
             )
+            if not _structured_report.get("is_valid"):
+                _retry_output, _retry_report = await _retry_structured_output_json_once(
+                    engine=engine,
+                    messages=messages,
+                    chat_kwargs=chat_kwargs,
+                    response_format=response_format,
+                    invalid_text=_out_text or "",
+                    error=_structured_report.get("error"),
+                    timeout=timeout,
+                    fastapi_request=fastapi_request,
+                    request_id=f"{response_id}-json-retry",
+                    endpoint="Responses API",
+                )
+                if _retry_output is not None and _retry_report.get("is_valid"):
+                    output = _retry_output
+                    reasoning_text = None
+                    content_for_parsing = _retry_output.text
+                    cleaned_text = _retry_output.text
+                    _structured_report = _retry_report
             parsed_json = _structured_report.get("parsed")
             is_valid = bool(_structured_report.get("is_valid"))
             error = _structured_report.get("error")

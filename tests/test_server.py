@@ -1469,6 +1469,132 @@ class TestOpenAILogprobsFormatting:
 
         assert engine.kwargs["max_prompt_tokens"] == 32
 
+    @pytest.mark.asyncio
+    async def test_chat_response_format_strict_retries_failed_json_only(self, monkeypatch):
+        import vmlx_engine.server as server
+        from vmlx_engine.api.models import ChatCompletionRequest, Message
+        from vmlx_engine.engine.base import GenerationOutput
+
+        schema = {
+            "type": "object",
+            "properties": {"status": {"type": "string"}},
+            "required": ["status"],
+        }
+
+        class _Engine:
+            is_mllm = False
+            preserve_native_tool_format = False
+
+            def __init__(self):
+                self.calls = []
+
+            async def chat(self, *, messages, **kwargs):
+                self.calls.append({"messages": messages, "kwargs": kwargs})
+                text = "not json" if len(self.calls) == 1 else '{"status":"ok"}'
+                return GenerationOutput(
+                    text=text,
+                    prompt_tokens=5,
+                    completion_tokens=2,
+                    finish_reason="stop",
+                )
+
+        engine = _Engine()
+        monkeypatch.setattr(server, "_engine", engine)
+        monkeypatch.setattr(server, "_served_model_name", "loaded-model")
+        monkeypatch.setattr(server, "_model_name", "loaded-model")
+        monkeypatch.setattr(server, "_model_path", None)
+        monkeypatch.setattr(server, "_model_type", "llm")
+        monkeypatch.setattr(server, "_reasoning_parser", None)
+        monkeypatch.setattr(server, "_mcp_manager", None)
+
+        response = await server.create_chat_completion(
+            ChatCompletionRequest(
+                model="loaded-model",
+                messages=[Message(role="user", content="return status")],
+                max_tokens=16,
+                response_format={
+                    "type": "json_schema",
+                    "json_schema": {
+                        "name": "status",
+                        "schema": schema,
+                        "strict": True,
+                    },
+                },
+            ),
+            fastapi_request=None,
+        )
+
+        assert response.choices[0].message.content == '{"status": "ok"}'
+        assert len(engine.calls) == 2
+        assert engine.calls[1]["messages"][-2] == {
+            "role": "assistant",
+            "content": "not json",
+        }
+        assert "fix this JSON only" in engine.calls[1]["messages"][-1]["content"]
+
+    @pytest.mark.asyncio
+    async def test_responses_text_format_strict_retries_failed_json_only(self, monkeypatch):
+        import vmlx_engine.server as server
+        from vmlx_engine.api.models import ResponsesRequest
+        from vmlx_engine.engine.base import GenerationOutput
+
+        schema = {
+            "type": "object",
+            "properties": {"status": {"type": "string"}},
+            "required": ["status"],
+        }
+
+        class _Engine:
+            is_mllm = False
+            preserve_native_tool_format = False
+
+            def __init__(self):
+                self.calls = []
+
+            async def chat(self, *, messages, **kwargs):
+                self.calls.append({"messages": messages, "kwargs": kwargs})
+                text = "still not json" if len(self.calls) == 1 else '{"status":"ok"}'
+                return GenerationOutput(
+                    text=text,
+                    prompt_tokens=5,
+                    completion_tokens=2,
+                    finish_reason="stop",
+                )
+
+        engine = _Engine()
+        monkeypatch.setattr(server, "_engine", engine)
+        monkeypatch.setattr(server, "_served_model_name", "loaded-model")
+        monkeypatch.setattr(server, "_model_name", "loaded-model")
+        monkeypatch.setattr(server, "_model_path", None)
+        monkeypatch.setattr(server, "_model_type", "llm")
+        monkeypatch.setattr(server, "_reasoning_parser", None)
+        monkeypatch.setattr(server, "_mcp_manager", None)
+
+        response = await server.create_response(
+            ResponsesRequest(
+                model="loaded-model",
+                input="return status",
+                max_output_tokens=16,
+                text={
+                    "type": "json_schema",
+                    "json_schema": {
+                        "name": "status",
+                        "schema": schema,
+                        "strict": True,
+                    },
+                },
+            ),
+            fastapi_request=None,
+        )
+
+        assert response.output_text == '{"status": "ok"}'
+        assert len(engine.calls) == 2
+        assert engine.calls[1]["messages"][-2] == {
+            "role": "assistant",
+            "content": "still not json",
+        }
+        assert "fix this JSON only" in engine.calls[1]["messages"][-1]["content"]
+
     @pytest.mark.parametrize(
         "endpoint, stream, is_mllm, expected",
         [

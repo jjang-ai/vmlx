@@ -13,6 +13,7 @@ This helper intentionally does not load models. It runs focused tests that pin:
 - TurboQuant KV runtime and disk-cache serialization contracts.
 - MLXStudio gateway stale-port and standby-wake routing contracts.
 - Structured JSON/schema repair and post-generation repair diagnostics.
+- One-shot strict JSON-only retry after unrecoverable repair/schema failure.
 """
 
 from __future__ import annotations
@@ -37,6 +38,7 @@ SOURCE_HASH_FILES = (
     "vmlx_engine/api/ollama_adapter.py",
     "tests/test_structured_output.py",
     "tests/test_structured_output_repair_report.py",
+    "tests/test_server.py",
     "tests/test_engine_audit.py",
     "tests/test_batching.py",
     "tests/test_mllm_scheduler_cache.py",
@@ -72,6 +74,8 @@ REQUIRED_NOHEAVY_API_CACHE_TEST_MARKERS = (
     "test_text_format_preserves_schema_data",
     "test_json_schema_decodes_nested_object_string",
     "test_reports_nested_object_json_string_schema_decode",
+    "test_chat_response_format_strict_retries_failed_json_only",
+    "test_responses_text_format_strict_retries_failed_json_only",
     "test_chat_stream_tracks_cache_detail_alongside_cached_tokens",
     "test_chat_stream_finish_chunks_emit_cache_detail",
     "test_responses_stream_tracks_cache_detail_alongside_cached",
@@ -245,6 +249,19 @@ COMMANDS: dict[str, list[str]] = {
             "or repair_records_preserves_raw_vs_repaired_counts"
         ),
     ],
+    "structured_output_retry_contracts": [
+        sys.executable,
+        "-m",
+        "pytest",
+        "-q",
+        "-vv",
+        "tests/test_server.py",
+        "-k",
+        (
+            "chat_response_format_strict_retries_failed_json_only "
+            "or responses_text_format_strict_retries_failed_json_only"
+        ),
+    ],
     "panel_gateway_contracts": [
         "npm",
         "--prefix",
@@ -324,6 +341,7 @@ def build_artifact(root: Path) -> dict[str, Any]:
     dsml_ok = commands["dsv4_dsml_tool_contracts"]["returncode"] == 0
     responses_history_ok = commands["responses_history_contracts"]["returncode"] == 0
     structured_output_ok = commands["structured_output_repair_contracts"]["returncode"] == 0
+    structured_retry_ok = commands["structured_output_retry_contracts"]["returncode"] == 0
     panel_gateway_ok = commands["panel_gateway_contracts"]["returncode"] == 0
     checks = {
         "openai_chat_sampling_kwargs": (
@@ -384,6 +402,13 @@ def build_artifact(root: Path) -> dict[str, Any]:
             and "test_json_schema_decodes_nested_object_string"
             not in missing_markers
             and "test_reports_nested_object_json_string_schema_decode"
+            not in missing_markers
+        ),
+        "structured_json_retry_after_repair_failure": (
+            structured_retry_ok
+            and "test_chat_response_format_strict_retries_failed_json_only"
+            not in missing_markers
+            and "test_responses_text_format_strict_retries_failed_json_only"
             not in missing_markers
         ),
         "responses_previous_response_history": (
