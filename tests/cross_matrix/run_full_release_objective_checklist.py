@@ -80,6 +80,9 @@ QWEN35_INSTALLED_VIDEO = Path(
 GEMMA4_12B_JANG4M_SMOKE = Path(
     "build/current-all-local-model-smoke-gemma4-12b-jang4m-tools-nomedia-after-cache-family-fix-20260606/JANGQ_gemma-4-12B-it-JANG_4M/result.json"
 )
+GEMMA4_12B_ISSUE191_STARTUP_VISIBLE = Path(
+    "build/current-gemma4-12b-issue191-source-startup-visible-proof-20260609.json"
+)
 GEMMA4_12B_JANG4M_MEDIA_SMOKE = Path(
     "build/current-gemma4-12b-jang4m-media-smoke-after-vlm-prefill-guard-20260607.json"
 )
@@ -755,6 +758,34 @@ def _gemma4_12b_media_checks(data: dict[str, Any]) -> list[dict[str, Any]]:
                 "failures": row.get("failures"),
                 "content": _get(row, "chat", "content"),
                 "checks": checks,
+            },
+        )
+    ]
+
+
+def _gemma4_12b_issue191_startup_checks(data: dict[str, Any]) -> list[dict[str, Any]]:
+    checks = data.get("checks") if isinstance(data.get("checks"), dict) else {}
+    content = _get(data, "chat_response", "choices", default=[])
+    first_choice = content[0] if isinstance(content, list) and content else {}
+    message = first_choice.get("message") if isinstance(first_choice, dict) else {}
+    visible = message.get("content") if isinstance(message, dict) else None
+    return _simple_artifact_checks("gemma4_12b_issue191_startup", data) + [
+        _check(
+            "gemma4_12b_issue191_startup_visible_generation",
+            data.get("status") == "pass"
+            and checks.get("import_alias_ok") is True
+            and checks.get("startup_health_ok") is True
+            and checks.get("visible_generation_ok") is True
+            and checks.get("post_chat_health_ok") is True
+            and visible == "GEMMA4-OK"
+            and first_choice.get("finish_reason") == "stop",
+            str(GEMMA4_12B_ISSUE191_STARTUP_VISIBLE),
+            {
+                "status": data.get("status"),
+                "model": data.get("model"),
+                "checks": checks,
+                "content": visible,
+                "finish_reason": first_choice.get("finish_reason"),
             },
         )
     ]
@@ -1661,6 +1692,7 @@ def _build(root: Path) -> dict[str, Any]:
     qwen35_restart = _load_json(root / QWEN35_RESTART_L2_RESTORE)
     qwen35_installed_video = _load_json(root / QWEN35_INSTALLED_VIDEO)
     gemma4 = _load_json(root / GEMMA4_12B_JANG4M_SMOKE)
+    gemma4_issue191_startup = _load_json(root / GEMMA4_12B_ISSUE191_STARTUP_VISIBLE)
     gemma4_media = _load_json(root / GEMMA4_12B_JANG4M_MEDIA_SMOKE)
     gemma_qat = _load_json(root / GEMMA_QAT_NATIVE_MXFP4_INVENTORY)
     step37 = _load_json(root / STEP37_TEXTONLY_SMOKE)
@@ -1713,6 +1745,7 @@ def _build(root: Path) -> dict[str, Any]:
             expected_mllm=True,
             cache_detail="paged+mixed_swa",
         )
+        + _gemma4_12b_issue191_startup_checks(gemma4_issue191_startup)
         + _gemma4_12b_media_checks(gemma4_media),
         "gemma_qat_native_mxfp4": _gemma_qat_native_mxfp4_checks(gemma_qat),
         "step37_flash": _smoke_mixed_swa_checks(

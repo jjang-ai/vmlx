@@ -20,6 +20,12 @@ def test_full_release_objective_checklist_uses_current_responses_raw_sse_parity_
     )
 
 
+def test_full_release_objective_checklist_uses_current_gemma4_12b_issue191_startup_proof():
+    assert checklist.GEMMA4_12B_ISSUE191_STARTUP_VISIBLE == Path(
+        "build/current-gemma4-12b-issue191-source-startup-visible-proof-20260609.json"
+    )
+
+
 def _write_json(path: Path, data: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(data) + "\n")
@@ -212,6 +218,28 @@ def _smoke_artifact(
 
 
 def _write_green_family_smokes(tmp_path: Path) -> None:
+    _write_json(
+        tmp_path / checklist.GEMMA4_12B_ISSUE191_STARTUP_VISIBLE,
+        {
+            "status": "pass",
+            "model": "/Users/example/models/JANGQ-AI/gemma-4-12B-it-JANG_4M",
+            "checks": {
+                "import_alias_ok": True,
+                "startup_health_ok": True,
+                "visible_generation_ok": True,
+                "post_chat_health_ok": True,
+            },
+            "chat_response": {
+                "choices": [
+                    {
+                        "finish_reason": "stop",
+                        "message": {"content": "GEMMA4-OK", "role": "assistant"},
+                    }
+                ],
+                "usage": {"completion_tokens": 10},
+            },
+        },
+    )
     _write_json(
         tmp_path
         / "build/current-all-local-model-smoke-gemma4-12b-jang4m-tools-nomedia-after-cache-family-fix-20260606/JANGQ_gemma-4-12B-it-JANG_4M/result.json",
@@ -897,6 +925,27 @@ def test_full_release_objective_checklist_keeps_open_rows_visible(tmp_path):
             },
         },
     )
+    _write_json(
+        tmp_path / checklist.GEMMA4_12B_ISSUE191_STARTUP_VISIBLE,
+        {
+            "status": "pass",
+            "model": "/Users/example/models/JANGQ-AI/gemma-4-12B-it-JANG_4M",
+            "checks": {
+                "import_alias_ok": True,
+                "startup_health_ok": True,
+                "visible_generation_ok": True,
+                "post_chat_health_ok": True,
+            },
+            "chat_response": {
+                "choices": [
+                    {
+                        "finish_reason": "stop",
+                        "message": {"content": "GEMMA4-OK", "role": "assistant"},
+                    }
+                ]
+            },
+        },
+    )
     _write_qwen_green_artifacts(tmp_path)
 
     result = _build(tmp_path)
@@ -958,6 +1007,17 @@ def test_full_release_objective_checklist_keeps_open_rows_visible(tmp_path):
         "JANGTQ gate=3/up=2/down=3",
         "JANGTQ gate=3/up=3/down=3",
     ]
+    gemma_startup_rows = [
+        row
+        for row in result["groups"]["gemma4_12b"]
+        if row["name"] == "gemma4_12b_issue191_startup_visible_generation"
+    ]
+    assert len(gemma_startup_rows) == 1
+    assert gemma_startup_rows[0]["ok"] is True
+    assert (
+        gemma_startup_rows[0]["evidence"]
+        == "build/current-gemma4-12b-issue191-source-startup-visible-proof-20260609.json"
+    )
     assert "gemma4_12b_media_rows_complete" in failed_names
     assert "step37_real_vlm_runtime_complete" in failed_names
     assert "nemotron_omni_media_rows_complete" in failed_names
