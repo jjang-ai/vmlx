@@ -30,6 +30,10 @@ _TOOL_CALL_PATTERN = re.compile(
     r'<\|tool_call>call:(\w+)\{(.*?)\}<tool_call\|>',
     re.DOTALL,
 )
+_TOOL_CALL_AT_END_PATTERN = re.compile(
+    r'<\|tool_call>call:(\w+)\{(.*?)\}\s*$',
+    re.DOTALL,
+)
 
 # Gemma 4 escape token for string quoting
 _ESCAPE_OPEN = '<|"|>'
@@ -143,7 +147,11 @@ class Gemma4ToolParser(ToolParser):
         cleaned_text = self.strip_think_tags(cleaned_text)
 
         # Parse Gemma 4 native format: <|tool_call>call:name{args}<tool_call|>
-        matches = _TOOL_CALL_PATTERN.findall(cleaned_text)
+        pattern = _TOOL_CALL_PATTERN
+        matches = pattern.findall(cleaned_text)
+        if not matches:
+            pattern = _TOOL_CALL_AT_END_PATTERN
+            matches = pattern.findall(cleaned_text)
         for name, args_str in matches:
             arguments = _parse_gemma4_args(args_str)
             if name:
@@ -154,7 +162,7 @@ class Gemma4ToolParser(ToolParser):
                 })
 
         if matches:
-            cleaned_text = _TOOL_CALL_PATTERN.sub("", cleaned_text).strip()
+            cleaned_text = pattern.sub("", cleaned_text).strip()
 
         # Fallback: try Hermes format
         if not tool_calls:
