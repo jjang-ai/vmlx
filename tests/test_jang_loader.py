@@ -530,6 +530,81 @@ class TestJangDetection:
             "language_model.model.layers.0.mlp.gate.gate.weight",
         ) is False
 
+    def test_gemma4_qat_mxfp4_ple_dequant_uses_mxfp_mode(self):
+        import mlx.core as mx
+
+        from vmlx_engine.utils.jang_loader import _dequantize_gemma4_ple_tensor
+
+        packed = mx.zeros((2, 192), dtype=mx.uint32)
+        scales = mx.ones((2, 48), dtype=mx.uint8)
+
+        dequantized, bits, group_size, mode = _dequantize_gemma4_ple_tensor(
+            packed,
+            scales,
+            None,
+            "language_model.model.per_layer_model_projection.weight",
+        )
+        mx.eval(dequantized)
+
+        assert dequantized.shape == (2, 1536)
+        assert dequantized.dtype == mx.float16
+        assert bits == 4
+        assert group_size == 32
+        assert mode == "mxfp4"
+
+    def test_gemma4_qat_mxfp4_quantized_ple_stays_packed(self):
+        import mlx.core as mx
+        import mlx.nn as nn
+
+        from vmlx_engine.utils.jang_loader import (
+            _configure_gemma4_quantized_ple_module,
+        )
+
+        class _Inner(nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.per_layer_model_projection = nn.QuantizedLinear(
+                    input_dims=1536,
+                    output_dims=2,
+                    bias=False,
+                    group_size=64,
+                    bits=8,
+                )
+                self.per_layer_model_projection.biases = mx.zeros(
+                    (2, 48), dtype=mx.float16
+                )
+
+        class _LanguageModel(nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.model = _Inner()
+
+        class _VLM(nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.language_model = _LanguageModel()
+
+        packed = mx.zeros((2, 192), dtype=mx.uint32)
+        scales = mx.ones((2, 48), dtype=mx.uint8)
+        model = _VLM()
+
+        configured, bits, group_size, mode = _configure_gemma4_quantized_ple_module(
+            model,
+            "language_model.model.per_layer_model_projection.weight",
+            packed,
+            scales,
+        )
+
+        module = model.language_model.model.per_layer_model_projection
+        assert configured is True
+        assert bits == 4
+        assert group_size == 32
+        assert mode == "mxfp4"
+        assert module.bits == 4
+        assert module.group_size == 32
+        assert module.mode == "mxfp4"
+        assert not hasattr(module, "biases") or module.biases is None
+
     def test_step37_text_loader_preserves_quantized_gate_sidecars(self):
         import mlx.core as mx
         import mlx.nn as nn

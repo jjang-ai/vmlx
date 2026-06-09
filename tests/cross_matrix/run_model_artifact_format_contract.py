@@ -67,6 +67,11 @@ REQUIRED_ARTIFACT_TEST_MARKERS = (
     "test_jang_quant_mode_supports_mxfp8_metadata",
     "test_qwen36_plain_mlx_4bit_keeps_hybrid_cache_without_jang_or_mxfp",
     "test_native_mtp_detection_uses_weights_not_path_name",
+    # Gemma4 QAT/native MXFP4 PLE tensors must either stay packed for
+    # QuantizedLinear/QuantizedEmbedding modules or dequantize via native MXFP
+    # mode for older plain modules. Affine fallback corrupts the runtime path.
+    "test_gemma4_qat_mxfp4_ple_dequant_uses_mxfp_mode",
+    "test_gemma4_qat_mxfp4_quantized_ple_stays_packed",
 )
 
 COMMANDS: dict[str, list[str]] = {

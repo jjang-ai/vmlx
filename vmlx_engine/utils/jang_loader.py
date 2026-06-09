@@ -73,6 +73,127 @@ def _jang_default_bits(jang_cfg: dict, fallback: list[int] | None = None) -> int
     return int(min(bit_widths))
 
 
+def _dequantize_gemma4_ple_tensor(
+    weight: mx.array,
+    scales: mx.array,
+    biases: mx.array | None,
+    weight_key: str,
+) -> tuple[mx.array, int, int, str]:
+    """Dequantize Gemma4 per-layer input projection tensors.
+
+    Gemma4 E2B/E4B QAT/native MXFP4 bundles store the PLE Linear as packed
+    uint32 weights plus UE8M0 uint8 scales. This is not affine quantization:
+    passing those scales through the affine mx.dequantize path either fails or,
+    on older runtimes, leaves garbage-producing uint32 weights in a plain
+    nn.Linear. Detect the MXFP shape contract explicitly and use MLX's native
+    MXFP dequant mode.
+    """
+
+    if scales.dtype == mx.uint8:
+        w_cols = int(weight.shape[-1])
+        s_cols = int(scales.shape[-1])
+        if s_cols * 32 == w_cols * 8:
+            dequantized = mx.dequantize(
+                weight,
+                scales,
+                None,
+                group_size=32,
+                bits=4,
+                mode="mxfp4",
+                dtype=mx.float16,
+            )
+            return dequantized, 4, 32, "mxfp4"
+        if s_cols * 32 == w_cols * 4:
+            dequantized = mx.dequantize(
+                weight,
+                scales,
+                None,
+                group_size=32,
+                bits=8,
+                mode="mxfp8",
+                dtype=mx.float16,
+            )
+            return dequantized, 8, 32, "mxfp8"
+        raise RuntimeError(
+            f"jang_loader Gemma4 PLE dequant: unsupported MXFP shape for "
+            f"{weight_key} (shape={weight.shape}, scales={scales.shape}, "
+            f"scale_dtype={scales.dtype})"
+        )
+
+    affine_biases = biases if biases is not None else mx.zeros_like(scales)
+    for try_bits in (8, 6, 4, 3, 2):
+        elem = 32 // try_bits
+        real_cols = int(weight.shape[-1]) * elem
+        if int(scales.shape[-1]) == 0:
+            continue
+        group_size = real_cols // int(scales.shape[-1])
+        if group_size >= 2 and group_size * int(scales.shape[-1]) == real_cols:
+            try:
+                dequantized = mx.dequantize(
+                    weight,
+                    scales,
+                    affine_biases,
+                    group_size=group_size,
+                    bits=try_bits,
+                    dtype=mx.float16,
+                )
+                return dequantized, try_bits, group_size, "affine"
+            except Exception:
+                continue
+
+    raise RuntimeError(
+        f"jang_loader Gemma4 PLE dequant: failed to find a valid bit-width for "
+        f"{weight_key} (shape={weight.shape}, scales={scales.shape}). Tried "
+        f"bits=[8,6,4,3,2]. Without dequant, forward pass produces garbage "
+        f"output (#52). Please verify the JANG file integrity and quant format."
+    )
+
+
+def _resolve_module_for_weight_key(model: Any, weight_key: str) -> Any | None:
+    if not weight_key.endswith(".weight"):
+        return None
+    module_path = weight_key[: -len(".weight")]
+    try:
+        return dict(model.named_modules()).get(module_path)
+    except Exception:
+        return None
+
+
+def _configure_gemma4_quantized_ple_module(
+    model: Any,
+    weight_key: str,
+    weight: mx.array,
+    scales: mx.array,
+) -> tuple[bool, int | None, int | None, str | None]:
+    """Keep native MXFP Gemma4 PLE tensors packed for quantized modules."""
+    module = _resolve_module_for_weight_key(model, weight_key)
+    if module is None:
+        return False, None, None, None
+    if not (hasattr(module, "bits") and hasattr(module, "group_size")):
+        return False, None, None, None
+    if weight.dtype != mx.uint32 or scales.dtype != mx.uint8:
+        return False, None, None, None
+
+    w_cols = int(weight.shape[-1])
+    s_cols = int(scales.shape[-1])
+    if s_cols * 32 == w_cols * 8:
+        mode, bits, group_size = "mxfp4", 4, 32
+    elif s_cols * 32 == w_cols * 4:
+        mode, bits, group_size = "mxfp8", 8, 32
+    else:
+        return False, None, None, None
+
+    module.mode = mode
+    module.bits = bits
+    module.group_size = group_size
+    if hasattr(module, "biases"):
+        try:
+            del module.biases
+        except Exception:
+            module.biases = None
+    return True, bits, group_size, mode
+
+
 def _jangtq_bits_map_from_metadata(jang_cfg: dict, config: dict | None = None) -> dict:
     """Return JANGTQ per-projection bits from all model-owned metadata.
 
@@ -393,19 +514,29 @@ def _vlm_quant_module_path_candidates(module_path: str, model_type: str = "") ->
     return candidates
 
 
-def _should_dequantize_vlm_gate_weight(model: Any, weight_key: str) -> bool:
-    """Return false when a gate weight targets an already-quantized module."""
+def _weight_targets_quantized_module(model: Any, weight_key: str) -> bool:
+    """Return true when a weight key targets an already-quantized module."""
     if not weight_key.endswith(".weight"):
-        return True
+        return False
     module_path = weight_key[: -len(".weight")]
     try:
         modules = dict(model.named_modules())
     except Exception:
-        return True
+        return False
     module = modules.get(module_path)
     if module is None:
-        return True
-    return not (hasattr(module, "bits") and hasattr(module, "group_size"))
+        return False
+    return hasattr(module, "bits") and hasattr(module, "group_size")
+
+
+def _should_dequantize_vlm_gate_weight(model: Any, weight_key: str) -> bool:
+    """Return false when a gate weight targets an already-quantized module."""
+    return not _weight_targets_quantized_module(model, weight_key)
+
+
+def _should_dequantize_gemma_ple_weight(model: Any, weight_key: str) -> bool:
+    """Return false when a Gemma PLE weight targets a quantized module."""
+    return not _weight_targets_quantized_module(model, weight_key)
 
 
 def _prepare_gate_dequant_weights(
@@ -3419,47 +3550,62 @@ def _load_jang_v2_vlm(
                         continue
                     _s_key = f"{_pfx}.scales"
                     _b_key = f"{_pfx}.biases"
+                    if not _should_dequantize_gemma_ple_weight(model, _w_key):
+                        if _s_key in shard_weights:
+                            _configured, _bits, _gs, _mode = (
+                                _configure_gemma4_quantized_ple_module(
+                                    model,
+                                    _w_key,
+                                    _w,
+                                    shard_weights[_s_key],
+                                )
+                            )
+                            if _configured:
+                                logger.info(
+                                    f"  Preserved quantized Gemma4 PLE: {_w_key} "
+                                    f"(mode={_mode}, bits={_bits}, gs={_gs})"
+                                )
+                                continue
+                        logger.info(
+                            f"  Preserved quantized Gemma4 PLE: {_w_key} "
+                            f"(target module is already quantized)"
+                        )
+                        continue
                     if _s_key not in shard_weights:
                         continue
                     _s = shard_weights[_s_key]
-                    _b = shard_weights.get(_b_key, mx.zeros_like(_s))
-                    _ple_dequantized = False
-                    for _try_bits in (8, 6, 4, 3, 2):
-                        _elem = 32 // _try_bits
-                        _real_cols = _w.shape[-1] * _elem
-                        if _s.shape[-1] == 0:
-                            continue
-                        _gs = _real_cols // _s.shape[-1]
-                        if _gs >= 2 and _gs * _s.shape[-1] == _real_cols:
-                            try:
-                                _dq = mx.dequantize(
-                                    _w, _s, _b, group_size=_gs, bits=_try_bits
-                                )
-                                mx.eval(_dq)
-                                shard_weights[_w_key] = _dq.astype(mx.float16)
-                                del shard_weights[_s_key]
-                                if _b_key in shard_weights:
-                                    del shard_weights[_b_key]
-                                logger.info(
-                                    f"  Dequantized Gemma4 PLE: {_w_key} "
-                                    f"(bits={_try_bits}, gs={_gs})"
-                                )
-                                _ple_dequantized = True
-                                break
-                            except Exception:
-                                continue
-                    # Audit-2026-04-07 risk §6.4 hardening: bit-width search exhaustion
-                    # used to silently leave the uint32 weight in place — forward pass
-                    # would then matmul/take on uint32 and produce garbage / all-pad
-                    # output (#52). Fail loud instead so the user gets a clear error.
-                    if not _ple_dequantized:
-                        raise RuntimeError(
-                            f"jang_loader Gemma4 PLE dequant: failed to find a valid "
-                            f"bit-width for {_w_key} (shape={_w.shape}, scales="
-                            f"{_s.shape}). Tried bits=[8,6,4,3,2]. Without dequant, "
-                            f"forward pass produces garbage output (#52). Please "
-                            f"verify the JANG file integrity and quant format."
+                    _b = shard_weights.get(_b_key)
+                    _configured, _bits, _gs, _mode = (
+                        _configure_gemma4_quantized_ple_module(
+                            model,
+                            _w_key,
+                            _w,
+                            _s,
                         )
+                    )
+                    if _configured:
+                        if _b_key in shard_weights:
+                            del shard_weights[_b_key]
+                        logger.info(
+                            f"  Configured Gemma4 quantized PLE: {_w_key} "
+                            f"(mode={_mode}, bits={_bits}, gs={_gs})"
+                        )
+                        continue
+                    _dq, _bits, _gs, _mode = _dequantize_gemma4_ple_tensor(
+                        _w,
+                        _s,
+                        _b,
+                        _w_key,
+                    )
+                    mx.eval(_dq)
+                    shard_weights[_w_key] = _dq.astype(mx.float16)
+                    del shard_weights[_s_key]
+                    if _b_key in shard_weights:
+                        del shard_weights[_b_key]
+                    logger.info(
+                        f"  Dequantized Gemma4 PLE: {_w_key} "
+                        f"(mode={_mode}, bits={_bits}, gs={_gs})"
+                    )
 
         # Mistral4 MLA text models in mlx-lm expect split
         # embed_q/unembed_out weights, but mlx-vlm's Mistral4 VLM wrapper still
