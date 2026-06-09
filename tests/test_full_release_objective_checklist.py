@@ -99,6 +99,7 @@ def _write_green_responses_raw_sse_artifact(tmp_path: Path) -> None:
                 "local_empty_xml_arguments_fail_closed": True,
                 "local_output_index_ordering_guard": True,
                 "gateway_argument_stream_passthrough_guard": True,
+                "all_present_surfaces_have_valid_output_item_indices": True,
                 "all_present_surfaces_have_required_reasoning": True,
                 "no_reasoning_disable_workaround": True,
             },
@@ -697,6 +698,25 @@ def _write_qwen_green_artifacts(tmp_path: Path) -> None:
             },
         },
     )
+    _write_json(
+        tmp_path / checklist.QWEN35_RAW_SSE_PARITY,
+        {
+            "status": "pass",
+            "missing_captures": [],
+            "checks": {
+                "all_present_surfaces_same_model": True,
+                "all_present_surfaces_match_expected_model": True,
+                "all_present_surfaces_have_authoritative_args": True,
+                "all_present_surfaces_match_expected_arguments": True,
+                "all_present_surfaces_have_required_reasoning": True,
+                "no_reasoning_disable_workaround": True,
+                "all_present_surfaces_have_valid_output_item_indices": True,
+                "local_responses_streaming_guards_pass": True,
+                "local_output_index_ordering_guard": True,
+                "local_empty_xml_arguments_fail_closed": True,
+            },
+        },
+    )
 
 
 def _write_issue179_green_artifact(tmp_path: Path) -> None:
@@ -1278,6 +1298,7 @@ def test_full_release_objective_checklist_blocks_missing_responses_tunnel_captur
             "local_empty_xml_arguments_fail_closed": True,
             "local_output_index_ordering_guard": True,
             "gateway_argument_stream_passthrough_guard": True,
+            "all_present_surfaces_have_valid_output_item_indices": True,
             "all_present_surfaces_have_required_reasoning": True,
             "no_reasoning_disable_workaround": True,
         },
@@ -1315,6 +1336,7 @@ def test_full_release_objective_checklist_blocks_reasoning_disable_workaround():
             "local_empty_xml_arguments_fail_closed": True,
             "local_output_index_ordering_guard": True,
             "gateway_argument_stream_passthrough_guard": True,
+            "all_present_surfaces_have_valid_output_item_indices": True,
             "all_present_surfaces_have_required_reasoning": False,
             "no_reasoning_disable_workaround": False,
         },
@@ -1349,6 +1371,7 @@ def test_full_release_objective_checklist_separates_missing_reasoning_events_fro
             "local_empty_xml_arguments_fail_closed": True,
             "local_output_index_ordering_guard": True,
             "gateway_argument_stream_passthrough_guard": True,
+            "all_present_surfaces_have_valid_output_item_indices": True,
             "all_present_surfaces_have_required_reasoning": False,
             "no_reasoning_disable_workaround": True,
         },
@@ -1383,6 +1406,7 @@ def test_full_release_objective_checklist_surfaces_tunnel_model_availability():
             "local_empty_xml_arguments_fail_closed": True,
             "local_output_index_ordering_guard": True,
             "gateway_argument_stream_passthrough_guard": True,
+            "all_present_surfaces_have_valid_output_item_indices": True,
             "all_present_surfaces_have_required_reasoning": False,
             "no_reasoning_disable_workaround": True,
         },
@@ -1393,6 +1417,81 @@ def test_full_release_objective_checklist_surfaces_tunnel_model_availability():
 
     assert "responses_raw_sse_parity_tunnel_expected_model_advertised" in failed
     assert "responses_raw_sse_parity_no_reasoning_disable_workaround" not in failed
+
+
+def test_full_release_objective_checklist_blocks_raw_sse_duplicate_output_index():
+    data = {
+        "artifact": str(checklist.RESPONSES_RAW_SSE_PARITY),
+        "exists": True,
+        "status": "fail",
+        "missing_captures": [],
+        "checks": {
+            "direct_capture_present": True,
+            "gateway_capture_present": True,
+            "tunnel_capture_present": True,
+            "all_required_surfaces_present": True,
+            "all_present_surfaces_parse_cleanly": True,
+            "all_present_surfaces_match_expected_function_name": True,
+            "all_present_surfaces_match_expected_arguments": True,
+            "all_present_surfaces_have_authoritative_args": True,
+            "authoritative_arguments_match_across_present_surfaces": True,
+            "tunnel_expected_model_advertised": True,
+            "local_responses_streaming_guards_pass": True,
+            "local_empty_xml_arguments_fail_closed": True,
+            "local_output_index_ordering_guard": True,
+            "gateway_argument_stream_passthrough_guard": True,
+            "all_present_surfaces_have_valid_output_item_indices": False,
+            "all_present_surfaces_have_required_reasoning": True,
+            "no_reasoning_disable_workaround": True,
+        },
+    }
+
+    rows = checklist._responses_raw_sse_parity_checks(data)
+    failed = {row["name"]: row for row in rows if not row["ok"]}
+
+    assert "responses_raw_sse_parity_status_pass" in failed
+    assert (
+        "responses_raw_sse_parity_all_present_surfaces_have_valid_output_item_indices"
+        in failed
+    )
+    assert "responses_raw_sse_parity_no_reasoning_disable_workaround" not in failed
+
+
+def test_full_release_objective_checklist_blocks_qwen35_raw_sse_duplicate_output_index():
+    data = {
+        "exists": True,
+        "status": "fail",
+        "missing_captures": [],
+        "checks": {
+            "all_present_surfaces_same_model": True,
+            "all_present_surfaces_match_expected_model": True,
+            "all_present_surfaces_have_authoritative_args": True,
+            "all_present_surfaces_match_expected_arguments": True,
+            "all_present_surfaces_have_required_reasoning": True,
+            "no_reasoning_disable_workaround": True,
+            "all_present_surfaces_have_valid_output_item_indices": False,
+            "local_responses_streaming_guards_pass": True,
+            "local_output_index_ordering_guard": True,
+            "local_empty_xml_arguments_fail_closed": True,
+        },
+        "captures": {
+            "tunnel": {
+                "conflicting_output_indices": [0],
+                "output_indices_by_type": {"message": [0], "function_call": [0]},
+            }
+        },
+    }
+
+    rows = checklist._qwen35_raw_sse_parity_checks(data)
+    failed = {row["name"]: row for row in rows if not row["ok"]}
+
+    assert "qwen35_raw_sse_status_pass" in failed
+    assert "qwen35_raw_sse_valid_output_item_indices" in failed
+    assert "qwen35_raw_sse_reasoning_events" not in failed
+    assert failed["qwen35_raw_sse_valid_output_item_indices"]["detail"] == {
+        "missing_captures": [],
+        "conflicting_output_indices": {"tunnel": [0]},
+    }
 
 
 def test_full_release_objective_checklist_can_pass_when_all_evidence_is_green(
@@ -1498,10 +1597,20 @@ def test_full_release_objective_checklist_can_pass_when_all_evidence_is_green(
         tmp_path / checklist.GEMMA_QAT_NATIVE_MXFP4_INVENTORY,
         {
             "status": "pass",
-            "count": 5,
+            "count": 16,
             "missing_required_rows": [],
             "open_required_rows": [],
             "source_live_smoke_open_rows": [],
+            "required_rows": {
+                key: {"status": "pass", "live_proof_status": "pass"}
+                for key in [
+                    "gemma4_e2b_qat_jang4m",
+                    "gemma4_e4b_qat_jang4m",
+                    "gemma4_12b_qat_jang4m",
+                    "gemma4_26b_qat_jang4m",
+                    "gemma4_31b_qat_jang4m",
+                ]
+            },
             "checks": {
                 "gemma4_e2b_qat_native_mxfp4_present": True,
                 "gemma4_e4b_qat_native_mxfp4_present": True,
@@ -1509,6 +1618,11 @@ def test_full_release_objective_checklist_can_pass_when_all_evidence_is_green(
                 "gemma4_12b_audio_honestly_gated": True,
                 "gemma4_26b_present": True,
                 "gemma4_31v_or_31b_present": True,
+                "gemma4_e2b_qat_jang4m_present": True,
+                "gemma4_e4b_qat_jang4m_present": True,
+                "gemma4_12b_qat_jang4m_present": True,
+                "gemma4_26b_qat_jang4m_present": True,
+                "gemma4_31b_qat_jang4m_present": True,
                 "all_required_source_live_smokes_present": True,
                 "all_required_live_proofs_present": True,
             },

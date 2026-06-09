@@ -74,6 +74,9 @@ QWEN35_LONG_TOOL_CACHE = Path(
 QWEN35_RESTART_L2_RESTORE = Path(
     "build/current-qwen35-mxfp8-mtp-restart-l2-restore-20260607/summary.json"
 )
+QWEN35_RAW_SSE_PARITY = Path(
+    "build/current-responses-raw-sse-parity-qwen35-tunnel-output-index-20260609.json"
+)
 QWEN35_INSTALLED_VIDEO = Path(
     "docs/internal/agent-notes/current-real-ui-installed-app-qwen36-35b-mxfp8-mtp-responses-tools-video-reasoning-cachecontrols-max512-20260607-proof.json"
 )
@@ -544,6 +547,7 @@ def _responses_raw_sse_parity_checks(data: dict[str, Any]) -> list[dict[str, Any
         "local_empty_xml_arguments_fail_closed",
         "local_output_index_ordering_guard",
         "gateway_argument_stream_passthrough_guard",
+        "all_present_surfaces_have_valid_output_item_indices",
         "all_present_surfaces_have_required_reasoning",
         "no_reasoning_disable_workaround",
     ]
@@ -1434,6 +1438,28 @@ def _qwen35_restart_l2_checks(data: dict[str, Any]) -> list[dict[str, Any]]:
     ]
 
 
+def _qwen35_raw_sse_parity_checks(data: dict[str, Any]) -> list[dict[str, Any]]:
+    checks = data.get("checks") if isinstance(data.get("checks"), dict) else {}
+    captures = data.get("captures") if isinstance(data.get("captures"), dict) else {}
+    detail = {
+        "missing_captures": data.get("missing_captures"),
+        "conflicting_output_indices": {
+            name: row.get("conflicting_output_indices")
+            for name, row in captures.items()
+            if isinstance(row, dict) and row.get("conflicting_output_indices")
+        },
+    }
+    return [
+        _check("qwen35_raw_sse_artifact_exists", data.get("exists") is True, str(QWEN35_RAW_SSE_PARITY), data.get("status")),
+        _check("qwen35_raw_sse_status_pass", data.get("status") == "pass", str(QWEN35_RAW_SSE_PARITY), data.get("status")),
+        _check("qwen35_raw_sse_same_model_surfaces", checks.get("all_present_surfaces_same_model") is True and checks.get("all_present_surfaces_match_expected_model") is True, str(QWEN35_RAW_SSE_PARITY), checks.get("all_present_surfaces_same_model")),
+        _check("qwen35_raw_sse_authoritative_args", checks.get("all_present_surfaces_have_authoritative_args") is True and checks.get("all_present_surfaces_match_expected_arguments") is True, str(QWEN35_RAW_SSE_PARITY)),
+        _check("qwen35_raw_sse_reasoning_events", checks.get("all_present_surfaces_have_required_reasoning") is True and checks.get("no_reasoning_disable_workaround") is True, str(QWEN35_RAW_SSE_PARITY)),
+        _check("qwen35_raw_sse_valid_output_item_indices", checks.get("all_present_surfaces_have_valid_output_item_indices") is True, str(QWEN35_RAW_SSE_PARITY), detail),
+        _check("qwen35_raw_sse_local_source_guards", checks.get("local_responses_streaming_guards_pass") is True and checks.get("local_output_index_ordering_guard") is True and checks.get("local_empty_xml_arguments_fail_closed") is True, str(QWEN35_RAW_SSE_PARITY)),
+    ]
+
+
 def _qwen_installed_video_checks(
     name: str,
     data: dict[str, Any],
@@ -1745,6 +1771,7 @@ def _build(root: Path) -> dict[str, Any]:
     qwen35_startup = _load_json(root / QWEN35_STARTUP_MTP)
     qwen35_long_tool_cache = _load_json(root / QWEN35_LONG_TOOL_CACHE)
     qwen35_restart = _load_json(root / QWEN35_RESTART_L2_RESTORE)
+    qwen35_raw_sse = _load_json(root / QWEN35_RAW_SSE_PARITY)
     qwen35_installed_video = _load_json(root / QWEN35_INSTALLED_VIDEO)
     gemma4 = _load_json(root / GEMMA4_12B_JANG4M_SMOKE)
     gemma4_issue191_startup = _load_json(root / GEMMA4_12B_ISSUE191_STARTUP_VISIBLE)
@@ -1783,6 +1810,7 @@ def _build(root: Path) -> dict[str, Any]:
         + _qwen35_startup_checks(qwen35_startup)
         + _qwen35_long_tool_cache_checks(qwen35_long_tool_cache)
         + _qwen35_restart_l2_checks(qwen35_restart)
+        + _qwen35_raw_sse_parity_checks(qwen35_raw_sse)
         + _qwen_installed_video_checks(
             "qwen35",
             qwen35_installed_video,
