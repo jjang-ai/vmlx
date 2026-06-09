@@ -8,6 +8,12 @@ from tests.cross_matrix import run_full_release_objective_checklist as checklist
 _build = checklist._build
 
 
+def test_full_release_objective_checklist_uses_current_noheavy_api_cache_contract():
+    assert checklist.NOHEAVY_API_CACHE == Path(
+        "build/current-noheavy-api-cache-contract-after-xml-docs-boundary-20260609.json"
+    )
+
+
 def _write_json(path: Path, data: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(data) + "\n")

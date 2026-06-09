@@ -22,6 +22,14 @@ def test_objective_proof_digest_default_out_tracks_current_release_proof_artifac
     )
 
 
+def test_objective_proof_digest_uses_current_noheavy_api_cache_contract():
+    from tests.cross_matrix import summarize_objective_proof as objective
+
+    assert objective.API_CACHE_CONTRACT_REL == (
+        "build/current-noheavy-api-cache-contract-after-xml-docs-boundary-20260609.json"
+    )
+
+
 def test_objective_proof_digest_tracks_n2_pro_397b_release_blocker():
     from tests.cross_matrix import summarize_objective_proof as objective
 

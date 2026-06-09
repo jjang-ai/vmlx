@@ -18,6 +18,8 @@ This helper intentionally does not load models. It runs focused tests that pin:
 - Guided JSON/schema token masking on compatible llguidance text paths.
 - Live-smoke benchmark request adoption for JSON schema response_format.
 - One-shot strict JSON-only retry after unrecoverable repair/schema failure.
+- One-shot strict XML-only retry after unrecoverable XML repair failure.
+- Strict stream-end XML validation for Chat and Responses SSE.
 - API docs boundary for repair/validation vs hard constrained decoding.
 """
 
@@ -34,7 +36,7 @@ from pathlib import Path
 from typing import Any
 
 
-DEFAULT_OUT = Path("build/current-noheavy-api-cache-contract-after-structured-schema-decode-20260609.json")
+DEFAULT_OUT = Path("build/current-noheavy-api-cache-contract-after-xml-docs-boundary-20260609.json")
 SOURCE_HASH_FILES = (
     "vmlx_engine/server.py",
     "vmlx_engine/api/models.py",

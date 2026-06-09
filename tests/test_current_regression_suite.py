@@ -1137,7 +1137,22 @@ def test_noheavy_api_cache_contract_default_out_tracks_current_suite_artifact():
     from tests.cross_matrix import run_noheavy_api_cache_contract as gate
 
     assert gate.DEFAULT_OUT == Path(
+        "build/current-noheavy-api-cache-contract-after-xml-docs-boundary-20260609.json"
+    )
+
+
+def test_current_regression_suite_runs_noheavy_api_cache_to_current_artifact():
+    from tests.cross_matrix import run_current_regression_suite as suite
+
+    command = " ".join(suite.CURRENT_SUITE_COMMANDS["noheavy_api_cache_contract"])
+
+    assert (
+        "build/current-noheavy-api-cache-contract-after-xml-docs-boundary-20260609.json"
+        in command
+    )
+    assert (
         "build/current-noheavy-api-cache-contract-after-structured-schema-decode-20260609.json"
+        not in command
     )
 
 
