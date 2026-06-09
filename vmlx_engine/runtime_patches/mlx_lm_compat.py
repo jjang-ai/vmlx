@@ -16,10 +16,55 @@ def install() -> None:
     global _APPLIED
     if _APPLIED:
         return
+    _patch_tokenizer_wrapper_find_bounds()
     _patch_batch_rotating_kv_meta_state()
     _patch_lfm2_moe_sigmoid_routing()
     _patch_gemma4_channel_thinking_detection()
     _APPLIED = True
+
+
+def _patch_tokenizer_wrapper_find_bounds() -> None:
+    """Backport mlx-lm#1326: clamp TokenizerWrapper._find bounds.
+
+    mlx_lm.server probes the tail of thinking prompts with ``start=len(prompt)-11``.
+    For very short prompts the pinned wheel can pass a negative start into
+    ``TokenizerWrapper._find``. Python negative indexing then wraps around and
+    can raise ``IndexError`` instead of returning "not found".
+    """
+    try:
+        from mlx_lm.tokenizer_utils import TokenizerWrapper
+    except Exception as exc:
+        logger.debug("mlx_lm_compat: TokenizerWrapper unavailable: %s", exc)
+        return
+
+    current = getattr(TokenizerWrapper, "_find", None)
+    if current is None or getattr(current, "_vmlx_find_bounds_patch", False):
+        return
+
+    def _vmlx_find(self, tokens, sequence, start=None, end=None, reverse=False):
+        token_count = len(tokens)
+        seq_count = len(sequence)
+        if seq_count == 0:
+            return -1
+
+        safe_start = max(0, int(start or 0))
+        safe_end = token_count if end is None else min(token_count, max(0, int(end)))
+        if safe_end - safe_start < seq_count:
+            return -1
+
+        outer_loop = (
+            range(safe_end - seq_count, safe_start - 1, -1)
+            if reverse
+            else range(safe_start, safe_end - seq_count + 1)
+        )
+        for i in outer_loop:
+            if tokens[i] == sequence[0]:
+                if all(tokens[i + j] == sequence[j] for j in range(1, seq_count)):
+                    return i
+        return -1
+
+    _vmlx_find._vmlx_find_bounds_patch = True  # type: ignore[attr-defined]
+    TokenizerWrapper._find = _vmlx_find
 
 
 def _patch_batch_rotating_kv_meta_state() -> None:

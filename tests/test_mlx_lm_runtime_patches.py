@@ -6,6 +6,18 @@ from types import SimpleNamespace
 import mlx.core as mx
 
 
+def test_tokenizer_wrapper_find_clamps_negative_reverse_start():
+    import vmlx_engine.runtime_patches.mlx_lm_compat as compat
+    from mlx_lm.tokenizer_utils import TokenizerWrapper
+
+    compat.install()
+
+    wrapper = TokenizerWrapper.__new__(TokenizerWrapper)
+
+    assert wrapper._find([1, 2], [3, 4, 5], start=-9, reverse=True) == -1
+    assert wrapper._find([1, 2, 3], [1, 2], start=-9, reverse=True) == 0
+
+
 def test_batch_rotating_kv_cache_false_meta_state_roundtrips():
     import vmlx_engine.runtime_patches.mlx_lm_compat as compat
     from mlx_lm.models.cache import BatchRotatingKVCache
