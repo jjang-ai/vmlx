@@ -4280,7 +4280,7 @@ def test_release_regression_manifest_current_sweep_uses_latest_live_smoke_artifa
     assert "current-generation-defaults-contract-20260602-step-greedy-display.json" not in joined
     assert "current-generation-defaults-contract-20260531-post-step-lfm-refresh.json" not in joined
     assert "current-generation-defaults-contract-20260526-settings-audit.json" not in joined
-    assert "current-max-output-context-contract-after-current-mimo-proof-20260607.json" in joined
+    assert "current-max-output-context-contract-after-jangtq2-objective-refresh-20260607.json" in joined
     assert "current-max-output-context-contract-20260526-settings-audit.json" not in joined
     assert "current-reasoning-template-contract-20260526-settings-audit.json" in joined
     assert "current-generation-defaults-contract-20260525-additional-args-guard.json" not in joined
@@ -15043,7 +15043,7 @@ def test_release_regression_manifest_tracks_tool_calls_with_runner_artifact():
     joined = " ".join(row["commands"] + row["artifacts"] + row["proves"])
 
     assert "run_tool_call_contract.py" in joined
-    assert "current-tool-call-contract-after-current-mimo-proof-20260607.json" in joined
+    assert "current-tool-call-contract-after-jangtq2-objective-refresh-20260607.json" in joined
     assert "Tool parser residue" in joined
     assert "DSV4" in joined
     assert "maxToolIterations" in joined
@@ -15676,7 +15676,7 @@ def test_release_regression_manifest_tracks_named_model_family_detection_with_ru
 
     assert row["domain"] == "model_family_detection"
     assert "run_model_family_detection_contract.py" in joined
-    assert "current-model-family-detection-contract-after-mimo-capability-snapshot-fix-20260607.json" in joined
+    assert "current-model-family-detection-contract-after-jangtq2-objective-refresh-20260607.json" in joined
     assert "current-model-family-detection-contract-20260602-step-jangtq-boundary.json" not in joined
     assert "current-model-family-detection-contract-20260531-post-step-lfm-refresh.json" not in joined
     assert "current-model-family-detection-contract-20260522-plain-kv-cache-health.json" in joined

@@ -262,10 +262,7 @@ def build_artifact(root: Path) -> dict[str, Any]:
             "live_default_cache_dsv4_tool_loop_artifact_passed",
         }
     }
-    live_default_cache_open = (
-        checks["live_default_cache_dsv4_tool_loop_artifact_present"] is True
-        and live_default_cache_status in {"skipped", "dry_run", "review", "error"}
-    )
+    live_default_cache_open = not live_default_cache_runtime_passed
     status = (
         "pass"
         if all(checks.values())

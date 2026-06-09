@@ -432,7 +432,7 @@ def _step_is_ok(name: str, step: dict[str, Any], root: Path) -> bool:
     if name == "tool_call_contracts":
         if step["returncode"] == 0:
             return True
-        path = root / "build/current-tool-call-contract-after-current-mimo-proof-20260607.json"
+        path = root / "build/current-tool-call-contract-after-jangtq2-objective-refresh-20260607.json"
         try:
             artifact = json.loads(path.read_text(encoding="utf-8"))
         except Exception:
@@ -522,13 +522,13 @@ CURRENT_SUITE_COMMANDS: dict[str, list[str]] = {
         sys.executable,
         "tests/cross_matrix/run_max_output_context_contract.py",
         "--out",
-        "build/current-max-output-context-contract-after-current-mimo-proof-20260607.json",
+        "build/current-max-output-context-contract-after-jangtq2-objective-refresh-20260607.json",
     ],
     "parser_registry_contracts": [
         sys.executable,
         "tests/cross_matrix/run_parser_registry_contract.py",
         "--out",
-        "build/current-parser-registry-contract-after-mimo-capability-snapshot-fix-20260607.json",
+        "build/current-parser-registry-contract-after-jangtq2-objective-refresh-20260607.json",
     ],
     "generation_defaults_contracts": [
         sys.executable,
@@ -558,7 +558,7 @@ CURRENT_SUITE_COMMANDS: dict[str, list[str]] = {
         sys.executable,
         "tests/cross_matrix/run_tool_call_contract.py",
         "--out",
-        "build/current-tool-call-contract-after-current-mimo-proof-20260607.json",
+        "build/current-tool-call-contract-after-jangtq2-objective-refresh-20260607.json",
     ],
     "mcp_policy_contracts": [
         sys.executable,
@@ -602,13 +602,13 @@ CURRENT_SUITE_COMMANDS: dict[str, list[str]] = {
         sys.executable,
         "tests/cross_matrix/run_model_artifact_format_contract.py",
         "--out",
-        "build/current-model-artifact-format-contract-after-mimo-capability-snapshot-fix-20260607.json",
+        "build/current-model-artifact-format-contract-after-mllm-tight-memory-guard-20260607.json",
     ],
     "model_family_detection_contracts": [
         sys.executable,
         "tests/cross_matrix/run_model_family_detection_contract.py",
         "--out",
-        "build/current-model-family-detection-contract-after-mimo-capability-snapshot-fix-20260607.json",
+        "build/current-model-family-detection-contract-after-jangtq2-objective-refresh-20260607.json",
     ],
     "native_mtp_contracts": [
         sys.executable,

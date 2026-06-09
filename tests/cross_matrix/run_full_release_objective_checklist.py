@@ -36,7 +36,7 @@ PANEL_SETTINGS_CONTRACT = Path(
     "build/current-panel-settings-contract-proof-20260601-cache-ui-storage-quant.json"
 )
 TOOL_CALL_CONTRACT = Path(
-    "build/current-tool-call-contract-after-current-mimo-proof-20260607.json"
+    "build/current-tool-call-contract-after-jangtq2-objective-refresh-20260607.json"
 )
 RELEASE_MANIFEST = Path(
     "build/current-release-regression-manifest-after-mimo-live-refresh-20260608.json"

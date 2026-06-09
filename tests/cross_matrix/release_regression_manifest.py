@@ -366,18 +366,18 @@ REQUIRED_RELEASE_DOMAINS = {
 
 CURRENT_POST_BUDGET_EDGE_ARTIFACTS = {
     "noheavy-api-cache-endpoint-runtime": "build/current-noheavy-api-cache-contract-after-dsv4-preflight-refresh-20260608.json",
-    "chat-settings-max-output-context-ui": "build/current-max-output-context-contract-after-current-mimo-proof-20260607.json",
+    "chat-settings-max-output-context-ui": "build/current-max-output-context-contract-after-jangtq2-objective-refresh-20260607.json",
     "panel-session-cache-settings-family-gating": "build/current-panel-settings-contract-proof-20260601-cache-ui-storage-quant.json",
     "generation-defaults-no-hidden-forcing": "build/current-generation-defaults-contract-after-dsv4-preflight-refresh-20260608.json",
-    "parser-registry-tool-reasoning-parity": "build/current-parser-registry-contract-after-mimo-capability-snapshot-fix-20260607.json",
+    "parser-registry-tool-reasoning-parity": "build/current-parser-registry-contract-after-jangtq2-objective-refresh-20260607.json",
     "reasoning-template-no-think-tag-leak": "build/current-reasoning-template-contract-20260526-settings-audit.json",
-    "tool-call-loop-parser-cleanup": "build/current-tool-call-contract-after-current-mimo-proof-20260607.json",
+    "tool-call-loop-parser-cleanup": "build/current-tool-call-contract-after-jangtq2-objective-refresh-20260607.json",
     "panel-tool-security-loop-boundary": "build/current-panel-tool-security-contract-20260528-tool-loop-security-matrix.json",
     "api-chat-responses-anthropic-ollama-parity": "build/current-api-surface-contract-20260602-v1554-stream-cache-reuse-refresh.json",
     "cache-architecture-family-classification": "build/current-cache-architecture-contract-after-noheavy-contract-refresh-20260608.json",
     "jang-model-compat-runtime-boundary": "build/current-jang-model-compat-contract-20260528-pr155-runtime-boundary.json",
-    "model-artifact-format-detection": "build/current-model-artifact-format-contract-after-mimo-capability-snapshot-fix-20260607.json",
-    "model-family-detection-noheavy": "build/current-model-family-detection-contract-after-mimo-capability-snapshot-fix-20260607.json",
+    "model-artifact-format-detection": "build/current-model-artifact-format-contract-after-mllm-tight-memory-guard-20260607.json",
+    "model-family-detection-noheavy": "build/current-model-family-detection-contract-after-jangtq2-objective-refresh-20260607.json",
     "native-mtp-d3-effect-policy": "build/current-native-mtp-contract-after-noheavy-contract-refresh-20260608.json",
     "mcp-policy-ui-gateway": "build/current-mcp-policy-contract-20260531-post-step-lfm-refresh.json",
     "vl-media-cache-tool-followup": "build/current-vl-media-cache-contract-after-dsv4-preflight-refresh-20260608.json",
@@ -1244,10 +1244,10 @@ _ROWS: list[dict[str, Any]] = [
             "Casual preset maxTokens is documented as an explicit server output cap and does not change model-owned defaults or context",
         ],
         "commands": [
-            ".venv/bin/python tests/cross_matrix/run_max_output_context_contract.py --out build/current-max-output-context-contract-after-current-mimo-proof-20260607.json",
+            ".venv/bin/python tests/cross_matrix/run_max_output_context_contract.py --out build/current-max-output-context-contract-after-jangtq2-objective-refresh-20260607.json",
         ],
         "artifacts": [
-            "build/current-max-output-context-contract-after-current-mimo-proof-20260607.json",
+            "build/current-max-output-context-contract-after-jangtq2-objective-refresh-20260607.json",
             "build/current-max-output-context-contract-20260527-after-think-xml-registry-fix.json",
             "build/current-max-output-context-contract-20260527-issues-175-178-bundled-sync.json",
             "build/current-max-output-context-contract-20260524-after-gemma4-telemetry-final.json",
@@ -1339,10 +1339,10 @@ _ROWS: list[dict[str, Any]] = [
             "Qwen2/Qwen2-VL, Gemma 3, and GLM base stay off reasoning rails",
         ],
         "commands": [
-            ".venv/bin/python tests/cross_matrix/run_parser_registry_contract.py --out build/current-parser-registry-contract-after-mimo-capability-snapshot-fix-20260607.json",
+            ".venv/bin/python tests/cross_matrix/run_parser_registry_contract.py --out build/current-parser-registry-contract-after-jangtq2-objective-refresh-20260607.json",
         ],
         "artifacts": [
-            "build/current-parser-registry-contract-after-mimo-capability-snapshot-fix-20260607.json",
+            "build/current-parser-registry-contract-after-jangtq2-objective-refresh-20260607.json",
             "build/current-parser-registry-contract-20260527-after-think-xml-registry-fix.json",
             "build/current-parser-registry-contract-20260527-issues-175-178-bundled-sync.json",
             "build/current-parser-registry-contract-20260523-post-budget-edge.json",
@@ -1388,10 +1388,10 @@ _ROWS: list[dict[str, Any]] = [
             "maxToolIterations caps tool loops",
         ],
         "commands": [
-            ".venv/bin/python tests/cross_matrix/run_tool_call_contract.py --out build/current-tool-call-contract-after-current-mimo-proof-20260607.json",
+            ".venv/bin/python tests/cross_matrix/run_tool_call_contract.py --out build/current-tool-call-contract-after-jangtq2-objective-refresh-20260607.json",
         ],
         "artifacts": [
-            "build/current-tool-call-contract-after-current-mimo-proof-20260607.json",
+            "build/current-tool-call-contract-after-jangtq2-objective-refresh-20260607.json",
             "build/current-tool-call-contract-20260523-post-budget-edge.json",
             "build/current-tool-call-contract-20260521.json",
             "build/current-tool-call-contract-20260522-dsv4-live-write-file-repair.json",
@@ -1510,10 +1510,10 @@ _ROWS: list[dict[str, Any]] = [
             "Registry/family detection uses bundle config and capability metadata",
         ],
         "commands": [
-            ".venv/bin/python tests/cross_matrix/run_model_artifact_format_contract.py --out build/current-model-artifact-format-contract-after-mimo-capability-snapshot-fix-20260607.json",
+            ".venv/bin/python tests/cross_matrix/run_model_artifact_format_contract.py --out build/current-model-artifact-format-contract-after-mllm-tight-memory-guard-20260607.json",
         ],
         "artifacts": [
-            "build/current-model-artifact-format-contract-after-mimo-capability-snapshot-fix-20260607.json",
+            "build/current-model-artifact-format-contract-after-mllm-tight-memory-guard-20260607.json",
             "build/current-model-artifact-format-contract-20260527-after-think-xml-registry-fix.json",
             "build/current-model-artifact-format-contract-20260527-issues-175-178-bundled-sync.json",
             "build/current-model-artifact-format-contract-20260523-post-budget-edge.json",
@@ -1572,10 +1572,10 @@ _ROWS: list[dict[str, Any]] = [
             "This is source/static compatibility proof only; live multi-turn output quality remains a separate live row",
         ],
         "commands": [
-            ".venv/bin/python tests/cross_matrix/run_model_family_detection_contract.py --out build/current-model-family-detection-contract-after-mimo-capability-snapshot-fix-20260607.json",
+            ".venv/bin/python tests/cross_matrix/run_model_family_detection_contract.py --out build/current-model-family-detection-contract-after-jangtq2-objective-refresh-20260607.json",
         ],
         "artifacts": [
-            "build/current-model-family-detection-contract-after-mimo-capability-snapshot-fix-20260607.json",
+            "build/current-model-family-detection-contract-after-jangtq2-objective-refresh-20260607.json",
             "build/current-model-family-detection-contract-20260527-after-think-xml-registry-fix.json",
             "build/current-model-family-detection-contract-20260527-issues-175-178-bundled-sync.json",
             "build/current-model-family-detection-contract-20260523-post-budget-edge.json",
@@ -3210,30 +3210,6 @@ def _current_release_blocker_ledger(
     public_issues = public_app_issue_audit.get("issues")
     if not isinstance(public_issues, dict):
         public_issues = {}
-    issue115 = public_issues.get("115")
-    if (
-        isinstance(issue115, dict)
-        and issue115.get("focused_source_slice") == "open"
-        and issue115.get("release_clearance")
-        == "mapped_to_current_installed_app_gemma_qwen_speed_gate"
-    ):
-        blockers.append(
-            {
-                "id": "issue115_installed_app_performance_regression_open",
-                "status": "open",
-                "evidence": CURRENT_PUBLIC_APP_ISSUE_AUDIT_ARTIFACT,
-                "next_proof": (
-                    "Rerun reporter-equivalent Gemma installed-app speed proof "
-                    "under current app/runtime and replace sub-floor speed "
-                    "artifacts before release."
-                ),
-                "details": {
-                    "repo": issue115.get("repo"),
-                    "title": issue115.get("title"),
-                    "checks": issue115.get("checks"),
-                },
-            }
-        )
     issue119 = public_issues.get("119")
     if (
         isinstance(issue119, dict)

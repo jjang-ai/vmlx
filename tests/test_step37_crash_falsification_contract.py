@@ -80,6 +80,13 @@ def test_step37_crash_falsification_contract_accepts_current_bundled_proof(tmp_p
     }
 
 
+def test_step37_crash_falsification_contract_keeps_missing_current_proof_open(tmp_path):
+    payload = contract.build_contract(tmp_path)
+
+    assert payload["status"] == "open"
+    assert all(item.startswith("missing:") for item in payload["failures"])
+
+
 def test_step37_crash_falsification_contract_rejects_silent_mid_request_exit(tmp_path):
     endpoint = _passing_endpoint()
     endpoint["rows"][1]["server_alive_after"] = False
