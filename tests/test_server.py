@@ -2599,6 +2599,195 @@ class TestOpenAILogprobsFormatting:
         assert json.loads(function_items[-1]["arguments"]) == expected_args
 
     @pytest.mark.asyncio
+    async def test_streaming_responses_tool_call_uses_next_output_index_without_text(
+        self, monkeypatch
+    ):
+        """Function calls must not reuse the placeholder message output index."""
+        import json
+        from types import SimpleNamespace
+
+        import vmlx_engine.server as server
+        from vmlx_engine.api.models import ResponsesRequest
+        from vmlx_engine.engine.base import GenerationOutput
+
+        class _Engine:
+            tokenizer = SimpleNamespace(has_thinking=False)
+
+            async def stream_chat(self, *, messages, **kwargs):
+                text = '<tool_call>{"name":"lookup","arguments":{"query":"alpha"}}</tool_call>'
+                yield GenerationOutput(
+                    text=text,
+                    new_text=text,
+                    tokens=[],
+                    prompt_tokens=5,
+                    completion_tokens=1,
+                    finished=True,
+                    finish_reason="stop",
+                )
+
+        monkeypatch.setattr(server, "_default_timeout", 5.0)
+        monkeypatch.setattr(server, "_model_name", "unit-tool-model")
+        monkeypatch.setattr(server, "_model_path", None)
+        monkeypatch.setattr(server, "_reasoning_parser", None)
+        monkeypatch.setattr(server, "_tool_call_parser", "auto")
+
+        request = ResponsesRequest(
+            model="unit-tool-model",
+            input="use lookup",
+            stream=True,
+            tools=[
+                {
+                    "type": "function",
+                    "name": "lookup",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"query": {"type": "string"}},
+                        "required": ["query"],
+                    },
+                }
+            ],
+        )
+
+        payloads: list[tuple[str, dict]] = []
+        async for event in server.stream_responses_api(
+            _Engine(),
+            [{"role": "user", "content": "use lookup"}],
+            request,
+            fastapi_request=None,
+        ):
+            if not event.startswith("event: "):
+                continue
+            event_type = event.splitlines()[0].removeprefix("event: ")
+            data_line = next(
+                line for line in event.splitlines() if line.startswith("data: ")
+            )
+            payloads.append((event_type, json.loads(data_line.removeprefix("data: "))))
+
+        message_done_indexes = [
+            payload["output_index"]
+            for event_type, payload in payloads
+            if event_type == "response.output_item.done"
+            and payload.get("item", {}).get("type") == "message"
+        ]
+        function_added_indexes = [
+            payload["output_index"]
+            for event_type, payload in payloads
+            if event_type == "response.output_item.added"
+            and payload.get("item", {}).get("type") == "function_call"
+        ]
+        function_done_indexes = [
+            payload["output_index"]
+            for event_type, payload in payloads
+            if event_type == "response.output_item.done"
+            and payload.get("item", {}).get("type") == "function_call"
+        ]
+        function_arg_indexes = [
+            payload["output_index"]
+            for event_type, payload in payloads
+            if event_type
+            in (
+                "response.function_call_arguments.delta",
+                "response.function_call_arguments.done",
+            )
+        ]
+
+        assert message_done_indexes == [0]
+        assert function_added_indexes == [1]
+        assert function_done_indexes == [1]
+        assert function_arg_indexes and set(function_arg_indexes) == {1}
+
+    @pytest.mark.asyncio
+    async def test_streaming_responses_required_empty_xml_tool_call_is_rejected(
+        self, monkeypatch
+    ):
+        """Malformed XML tool calls must not become executable empty JSON args."""
+        import json
+        from types import SimpleNamespace
+
+        import vmlx_engine.server as server
+        from vmlx_engine.api.models import ResponsesRequest
+        from vmlx_engine.engine.base import GenerationOutput
+
+        class _Engine:
+            tokenizer = SimpleNamespace(has_thinking=False)
+
+            async def stream_chat(self, *, messages, **kwargs):
+                chunks = (
+                    ("**Quick preamble:** Checking `/tmp`...\n", False, None),
+                    (
+                        "<tool_call>\n<function=exec_command>\n</function>\n</tool_call>",
+                        True,
+                        "stop",
+                    ),
+                )
+                text = ""
+                for idx, (delta, finished, reason) in enumerate(chunks, start=1):
+                    text += delta
+                    yield GenerationOutput(
+                        text=text,
+                        new_text=delta,
+                        tokens=[],
+                        prompt_tokens=5,
+                        completion_tokens=idx,
+                        finished=finished,
+                        finish_reason=reason,
+                    )
+
+        monkeypatch.setattr(server, "_default_timeout", 5.0)
+        monkeypatch.setattr(server, "_model_name", "unit-tool-model")
+        monkeypatch.setattr(server, "_model_path", None)
+        monkeypatch.setattr(server, "_reasoning_parser", None)
+        monkeypatch.setattr(server, "_tool_call_parser", "auto")
+
+        request = ResponsesRequest(
+            model="unit-tool-model",
+            input="list /tmp",
+            stream=True,
+            tool_choice="required",
+            tools=[
+                {
+                    "type": "function",
+                    "name": "exec_command",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"cmd": {"type": "string"}},
+                        "required": ["cmd"],
+                    },
+                }
+            ],
+        )
+
+        payloads: list[tuple[str, dict]] = []
+        async for event in server.stream_responses_api(
+            _Engine(),
+            [{"role": "user", "content": "list /tmp"}],
+            request,
+            fastapi_request=None,
+        ):
+            if not event.startswith("event: "):
+                continue
+            event_type = event.splitlines()[0].removeprefix("event: ")
+            data_line = next(
+                line for line in event.splitlines() if line.startswith("data: ")
+            )
+            payloads.append((event_type, json.loads(data_line.removeprefix("data: "))))
+
+        function_items = [
+            payload["item"]
+            for event_type, payload in payloads
+            if event_type == "response.output_item.done"
+            and payload.get("item", {}).get("type") == "function_call"
+        ]
+        error_codes = [
+            payload.get("error", {}).get("code") or payload.get("code")
+            for event_type, payload in payloads
+            if event_type == "error"
+        ]
+
+        assert function_items == []
+        assert "tool_calls_required" in error_codes
+
+    @pytest.mark.asyncio
     async def test_streaming_responses_reasoning_tool_call_keeps_arguments(
         self, monkeypatch
     ):

@@ -15966,35 +15966,25 @@ async def stream_responses_api(
                 "part": {"type": "output_text", "text": final_text, "annotations": []},
             },
         )
+        message_item = {
+            "id": msg_id,
+            "type": "message",
+            "status": "completed",
+            "role": "assistant",
+            "content": [
+                {"type": "output_text", "text": final_text, "annotations": []}
+            ],
+        }
         yield _sse(
             "response.output_item.done",
             {
                 "type": "response.output_item.done",
                 "output_index": output_index,
-                "item": {
-                    "id": msg_id,
-                    "type": "message",
-                    "status": "completed",
-                    "role": "assistant",
-                    "content": [
-                        {"type": "output_text", "text": final_text, "annotations": []}
-                    ],
-                },
+                "item": message_item,
             },
         )
-        if final_text:
-            all_output_items.append(
-                {
-                    "id": msg_id,
-                    "type": "message",
-                    "status": "completed",
-                    "role": "assistant",
-                    "content": [
-                        {"type": "output_text", "text": final_text, "annotations": []}
-                    ],
-                }
-            )
-            output_index += 1
+        all_output_items.append(message_item)
+        output_index += 1
 
         # Emit each tool call as a function_call output item
         for tc in tool_calls:
