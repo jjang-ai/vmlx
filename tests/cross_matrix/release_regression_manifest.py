@@ -392,7 +392,7 @@ CURRENT_POST_BUDGET_EDGE_ARTIFACTS = {
 }
 
 CURRENT_REGRESSION_SUITE_ARTIFACT = (
-    "build/current-regression-suite-after-structured-schema-decode-20260609.json"
+    "build/current-regression-suite-after-pr-intake-matrix-refresh-20260609.json"
 )
 CURRENT_ISSUE175_179_RELEASE_BOUNDARY_AUDIT_ARTIFACT = (
     "build/current-issue175-179-release-boundary-audit-after-issue179-memory-preflight-20260607.json"

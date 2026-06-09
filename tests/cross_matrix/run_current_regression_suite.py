@@ -23,7 +23,7 @@ from typing import Any
 
 
 DEFAULT_OUT = Path(
-    "build/current-regression-suite-after-structured-schema-decode-20260609.json"
+    "build/current-regression-suite-after-pr-intake-matrix-refresh-20260609.json"
 )
 DEFAULT_STEP_TIMEOUT_SEC = 900.0
 STEP_TIMEOUT_RETURNCODE = 124

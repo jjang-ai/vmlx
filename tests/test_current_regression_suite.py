@@ -1067,6 +1067,14 @@ def test_noheavy_api_cache_contract_default_out_tracks_current_suite_artifact():
     )
 
 
+def test_current_regression_suite_default_out_tracks_pr_intake_artifact():
+    from tests.cross_matrix import run_current_regression_suite as suite
+
+    assert suite.DEFAULT_OUT == Path(
+        "build/current-regression-suite-after-pr-intake-matrix-refresh-20260609.json"
+    )
+
+
 def test_noheavy_panel_settings_contract_parses_vitest_test_count():
     from tests.cross_matrix.run_noheavy_panel_settings_contract import _parse_counts
 
