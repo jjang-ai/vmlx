@@ -91,7 +91,7 @@ MLLM_INPUTS_EMBEDS_INTERFACE_ARTIFACT = Path(
     "build/current-mimo-v2-mllm-inputs-embeds-interface-fix-20260606.json"
 )
 LATEST_DECODE_SPEED_ARTIFACT = Path(
-    "build/current-decode-speed-live-mimo-v25-jang2l-source-after-jangtq2-local-refresh-20260607.json"
+    "build/current-mimo-v25-jangtq2-exactness-boundary-after-runtime-isolation-20260609.json"
 )
 NOHEAVY_API_CACHE_CONTRACT_ARTIFACT = Path(
     "build/current-noheavy-api-cache-contract-after-gateway-stale-port-20260609.json"
@@ -2309,6 +2309,33 @@ def _cb_native_thinking_off_evidence(data: dict[str, Any]) -> dict[str, Any]:
 
 
 def _latest_decode_speed_evidence(data: dict[str, Any]) -> dict[str, Any]:
+    speed_boundary = data.get("speed_boundary")
+    if isinstance(speed_boundary, dict):
+        server_tps = speed_boundary.get("current_source_server_tps")
+        wall_tps = speed_boundary.get("current_source_wall_tps")
+        current_artifact = speed_boundary.get("current_source_long_decode_artifact")
+        speed_pass = (
+            isinstance(server_tps, (int, float)) and server_tps >= 40.0
+        ) or (
+            isinstance(wall_tps, (int, float)) and wall_tps >= 40.0
+        )
+        return {
+            "exists": True,
+            "status": data.get("status"),
+            "speed_blocked": not speed_pass,
+            "classification": "current_text_runtime_release_path_speed_boundary",
+            "bundle_decode_tps": server_tps,
+            "wall_decode_tps": wall_tps,
+            "current_source_long_decode_artifact": current_artifact,
+            "stale_forced_mllm_speed_artifact": speed_boundary.get(
+                "accepted_prior_speed_artifact"
+            ),
+            "stale_forced_mllm_generation_tps": speed_boundary.get(
+                "accepted_prior_generation_tps"
+            ),
+            "notes": speed_boundary.get("status"),
+        }
+
     results = data.get("results")
     result = results[0] if isinstance(results, list) and results else data
     if not isinstance(result, dict):

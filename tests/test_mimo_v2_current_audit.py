@@ -13,6 +13,35 @@ def _write_json(path: Path, data: dict) -> None:
     path.write_text(json.dumps(data) + "\n")
 
 
+def test_mimo_latest_speed_uses_current_text_runtime_boundary() -> None:
+    evidence = audit._latest_decode_speed_evidence(
+        {
+            "status": "open",
+            "speed_boundary": {
+                "accepted_prior_speed_artifact": (
+                    "build/current-all-local-model-smoke-mimo-v25-jangtq2-live-runtime-proof-20260609/"
+                    "JANGQ_MiMo-V2.5-JANGTQ_2/result.json"
+                ),
+                "accepted_prior_generation_tps": 51.445792193622715,
+                "current_source_long_decode_artifact": (
+                    "build/current-mimo-v25-jangtq2-current-source-long-decode-speed-after-capability-fix-20260609/"
+                    "result.json"
+                ),
+                "current_source_wall_tps": 36.6158,
+                "current_source_server_tps": 36.9,
+                "status": (
+                    "open_because_current_source_long_decode_is_below_40_even_though_prior_live_smoke_crossed_50"
+                ),
+            },
+        }
+    )
+
+    assert evidence["classification"] == "current_text_runtime_release_path_speed_boundary"
+    assert evidence["speed_blocked"] is True
+    assert evidence["bundle_decode_tps"] == 36.9
+    assert evidence["stale_forced_mllm_generation_tps"] == 51.445792193622715
+
+
 def test_mimo_bookend_quantization_audit_accepts_q8_sidecars(
     tmp_path, monkeypatch
 ):

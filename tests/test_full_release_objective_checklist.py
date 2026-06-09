@@ -933,7 +933,7 @@ def test_full_release_objective_checklist_tracks_open_n2_pro_objective_row(
 ):
     _write_json(
         tmp_path
-        / "build/current-objective-proof-after-live-mimo-jangtq2-runtime-proof-20260609.json",
+        / "build/current-objective-proof-after-current-mimo-text-speed-boundary-20260609.json",
         {
             "requirements": [
                 {
@@ -944,7 +944,7 @@ def test_full_release_objective_checklist_tracks_open_n2_pro_objective_row(
                     "status": "open",
                     "evidence": [
                         "build/current-release-regression-manifest-after-mimo-live-refresh-20260608.json",
-                        "build/current-objective-proof-after-live-mimo-jangtq2-runtime-proof-20260609.json",
+                        "build/current-objective-proof-after-current-mimo-text-speed-boundary-20260609.json",
                     ],
                     "details": {
                         "local_artifact_probe": {
