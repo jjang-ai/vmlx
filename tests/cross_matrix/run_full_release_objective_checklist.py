@@ -78,7 +78,7 @@ QWEN35_INSTALLED_VIDEO = Path(
     "docs/internal/agent-notes/current-real-ui-installed-app-qwen36-35b-mxfp8-mtp-responses-tools-video-reasoning-cachecontrols-max512-20260607-proof.json"
 )
 GEMMA4_12B_JANG4M_SMOKE = Path(
-    "build/current-all-local-model-smoke-gemma4-12b-jang4m-tools-nomedia-after-cache-family-fix-20260606/JANGQ_gemma-4-12B-it-JANG_4M/result.json"
+    "build/current-all-local-model-smoke-gemma4-12b-jang4m-tools-nomedia-current-20260609/JANGQ_gemma-4-12B-it-JANG_4M/result.json"
 )
 GEMMA4_12B_ISSUE191_STARTUP_VISIBLE = Path(
     "build/current-gemma4-12b-issue191-source-startup-visible-proof-20260609.json"

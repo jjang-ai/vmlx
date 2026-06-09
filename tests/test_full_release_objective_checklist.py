@@ -26,6 +26,12 @@ def test_full_release_objective_checklist_uses_current_gemma4_12b_issue191_start
     )
 
 
+def test_full_release_objective_checklist_uses_current_gemma4_12b_jang4m_nomedia_proof():
+    assert checklist.GEMMA4_12B_JANG4M_SMOKE == Path(
+        "build/current-all-local-model-smoke-gemma4-12b-jang4m-tools-nomedia-current-20260609/JANGQ_gemma-4-12B-it-JANG_4M/result.json"
+    )
+
+
 def _write_json(path: Path, data: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(data) + "\n")
@@ -247,7 +253,7 @@ def _write_green_family_smokes(tmp_path: Path) -> None:
     )
     _write_json(
         tmp_path
-        / "build/current-all-local-model-smoke-gemma4-12b-jang4m-tools-nomedia-after-cache-family-fix-20260606/JANGQ_gemma-4-12B-it-JANG_4M/result.json",
+        / "build/current-all-local-model-smoke-gemma4-12b-jang4m-tools-nomedia-current-20260609/JANGQ_gemma-4-12B-it-JANG_4M/result.json",
         _smoke_artifact(
             mllm=True,
             tool_parser="gemma4",
