@@ -37,6 +37,7 @@ from typing import Any
 DEFAULT_OUT = Path("build/current-noheavy-api-cache-contract-after-structured-schema-decode-20260609.json")
 SOURCE_HASH_FILES = (
     "vmlx_engine/server.py",
+    "vmlx_engine/api/models.py",
     "vmlx_engine/api/tool_calling.py",
     "vmlx_engine/tool_parsers/dsml_tool_parser.py",
     "vmlx_engine/api/anthropic_adapter.py",
@@ -100,6 +101,8 @@ REQUIRED_NOHEAVY_API_CACHE_TEST_MARKERS = (
     "test_mimo_structured_json_sentinel_requests_literal_schema_response_format",
     "test_chat_response_format_strict_retries_failed_json_only",
     "test_responses_text_format_strict_retries_failed_json_only",
+    "test_chat_response_format_strict_retries_failed_xml_only",
+    "test_responses_text_format_strict_retries_failed_xml_only",
     "test_chat_stream_tracks_cache_detail_alongside_cached_tokens",
     "test_chat_stream_finish_chunks_emit_cache_detail",
     "test_responses_stream_tracks_cache_detail_alongside_cached",
@@ -290,7 +293,9 @@ COMMANDS: dict[str, list[str]] = {
         "-k",
         (
             "chat_response_format_strict_retries_failed_json_only "
-            "or responses_text_format_strict_retries_failed_json_only"
+            "or responses_text_format_strict_retries_failed_json_only "
+            "or chat_response_format_strict_retries_failed_xml_only "
+            "or responses_text_format_strict_retries_failed_xml_only"
         ),
     ],
     "structured_guided_decoding_contracts": [
@@ -506,6 +511,13 @@ def build_artifact(root: Path) -> dict[str, Any]:
             and "test_chat_response_format_strict_retries_failed_json_only"
             not in missing_markers
             and "test_responses_text_format_strict_retries_failed_json_only"
+            not in missing_markers
+        ),
+        "structured_xml_retry_after_repair_failure": (
+            structured_retry_ok
+            and "test_chat_response_format_strict_retries_failed_xml_only"
+            not in missing_markers
+            and "test_responses_text_format_strict_retries_failed_xml_only"
             not in missing_markers
         ),
         "structured_guided_json_schema_token_masking": (

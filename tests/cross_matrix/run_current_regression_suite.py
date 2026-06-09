@@ -188,6 +188,7 @@ CURRENT_SUITE_SOURCE_HASH_FILES = (
     "tests/test_tool_format.py",
     "tests/test_tool_parsers.py",
     "tests/test_vl_media_cache_contract.py",
+    "vmlx_engine/api/models.py",
     "vmlx_engine/api/tool_calling.py",
     "vmlx_engine/block_disk_store.py",
     "vmlx_engine/cli.py",

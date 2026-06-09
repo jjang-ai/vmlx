@@ -117,6 +117,7 @@ from .api.tool_calling import (
     convert_tools_for_template,
     parse_json_output,
     repair_json_output,
+    repair_xml_output,
     parse_tool_calls,
 )
 from .api.utils import (
@@ -11670,7 +11671,47 @@ async def create_chat_completion(
     structured_output_warnings: list[str] | None = None
 
     # Process response_format if specified
-    if response_format and not tool_calls:
+    _xml_response_config = _xml_response_format_config(response_format)
+    if _xml_response_config and not tool_calls:
+        _structured_report = repair_xml_output(
+            cleaned_text or content_for_parsing,
+            root_tag=_xml_response_config.get("root_tag"),
+            required_fields=_xml_response_config.get("required_fields") or (),
+        )
+        if not _structured_report.get("is_valid"):
+            _retry_output, _retry_report = await _retry_structured_output_xml_once(
+                engine=engine,
+                messages=messages,
+                chat_kwargs=chat_kwargs,
+                response_format=response_format,
+                invalid_text=cleaned_text or content_for_parsing or "",
+                error=_structured_report.get("error"),
+                timeout=timeout,
+                fastapi_request=fastapi_request,
+                request_id=f"{response_id}-xml-retry",
+                endpoint="Chat Completions",
+            )
+            if _retry_output is not None and _retry_report.get("is_valid"):
+                output = _retry_output
+                reasoning_text = None
+                content_for_parsing = _retry_output.text
+                cleaned_text = _retry_output.text
+                _structured_report = _retry_report
+        repaired_xml = _structured_report.get("xml")
+        is_valid = bool(_structured_report.get("is_valid"))
+        error = _structured_report.get("error")
+        structured_output_warnings = _structured_output_repair_warning(
+            _structured_report
+        )
+        if repaired_xml is not None:
+            cleaned_text = str(repaired_xml)
+        if not is_valid:
+            if _xml_response_config.get("strict"):
+                raise HTTPException(
+                    status_code=400, detail=f"response_format strict mode: {error}"
+                )
+            logger.warning(f"XML validation failed: {error}")
+    elif response_format and not tool_calls:
         _structured_report = repair_json_output(
             cleaned_text or content_for_parsing, response_format
         )
@@ -12077,6 +12118,49 @@ def _structured_output_json_retry_instruction(
     return "\n".join(lines)
 
 
+def _xml_response_format_config(response_format: Any) -> dict[str, Any] | None:
+    rf_dict = _plain_response_format_dict(response_format)
+    if not isinstance(rf_dict, dict) or rf_dict.get("type") != "xml":
+        return None
+    required_fields = rf_dict.get("required_xml_fields", rf_dict.get("required_fields", ()))
+    if isinstance(required_fields, str):
+        required_fields = [required_fields]
+    elif not isinstance(required_fields, (list, tuple)):
+        required_fields = []
+    return {
+        "root_tag": rf_dict.get("xml_root_tag") or rf_dict.get("root_tag"),
+        "required_fields": tuple(
+            str(field).strip() for field in required_fields if str(field).strip()
+        ),
+        "strict": bool(rf_dict.get("strict", False)),
+    }
+
+
+def _structured_output_xml_retry_instruction(
+    response_format: Any,
+    error: str | None,
+) -> str | None:
+    config = _xml_response_format_config(response_format)
+    if config is None:
+        return None
+
+    lines = [
+        "Please fix this XML only.",
+        "Your previous response failed structured XML validation.",
+        "Return exactly one valid XML document.",
+        "Do not include markdown fences, comments, explanations, or any prose.",
+    ]
+    root_tag = config.get("root_tag")
+    if root_tag:
+        lines.append(f"Root tag: {root_tag}")
+    required_fields = config.get("required_fields") or ()
+    if required_fields:
+        lines.append(f"Required XML fields: {', '.join(required_fields)}")
+    if error:
+        lines.append(f"Validation error: {error}")
+    return "\n".join(lines)
+
+
 def _structured_retry_report(report: dict[str, Any]) -> dict[str, Any]:
     updated = dict(report)
     actions = [
@@ -12087,6 +12171,20 @@ def _structured_retry_report(report: dict[str, Any]) -> dict[str, Any]:
     updated["repair_needed"] = True
     updated["repair_actions"] = list(
         dict.fromkeys(["model_retry_json_only"] + actions)
+    )
+    return updated
+
+
+def _structured_xml_retry_report(report: dict[str, Any]) -> dict[str, Any]:
+    updated = dict(report)
+    actions = [
+        str(action)
+        for action in updated.get("repair_actions", [])
+        if str(action).strip()
+    ]
+    updated["repair_needed"] = True
+    updated["repair_actions"] = list(
+        dict.fromkeys(["model_retry_xml_only"] + actions)
     )
     return updated
 
@@ -12148,6 +12246,66 @@ async def _retry_structured_output_json_once(
     return retry_output, retry_report
 
 
+async def _retry_structured_output_xml_once(
+    *,
+    engine: Any,
+    messages: list[dict[str, Any]],
+    chat_kwargs: dict[str, Any],
+    response_format: Any,
+    invalid_text: str,
+    error: str | None,
+    timeout: float,
+    fastapi_request: Request | None,
+    request_id: str,
+    endpoint: str,
+) -> tuple[GenerationOutput | None, dict[str, Any]]:
+    instruction = _structured_output_xml_retry_instruction(response_format, error)
+    config = _xml_response_format_config(response_format)
+    if not instruction or config is None:
+        return None, {}
+
+    retry_messages = list(messages or [])
+    if invalid_text:
+        retry_messages.append({"role": "assistant", "content": invalid_text})
+    retry_messages.append({"role": "user", "content": instruction})
+
+    retry_kwargs = dict(chat_kwargs)
+    retry_kwargs.pop("tools", None)
+    retry_kwargs.pop("_vmlx_tools_present", None)
+    retry_kwargs.pop("tool_choice", None)
+
+    logger.info(
+        "%s: retrying failed structured XML output with XML-only correction prompt",
+        endpoint,
+    )
+    try:
+        retry_output = await _await_chat_with_disconnect_abort(
+            engine,
+            messages=retry_messages,
+            chat_kwargs=retry_kwargs,
+            timeout=timeout,
+            fastapi_request=fastapi_request,
+            request_id=request_id,
+            endpoint=f"{endpoint} structured XML retry",
+        )
+    except Exception:
+        logger.warning(
+            "%s: structured XML retry failed before producing output",
+            endpoint,
+            exc_info=True,
+        )
+        return None, {}
+
+    retry_report = repair_xml_output(
+        retry_output.text,
+        root_tag=config.get("root_tag"),
+        required_fields=config.get("required_fields") or (),
+    )
+    if retry_report.get("is_valid"):
+        retry_report = _structured_xml_retry_report(retry_report)
+    return retry_output, retry_report
+
+
 def _structured_output_repair_warning(report: dict | None) -> list[str] | None:
     if not isinstance(report, dict) or report.get("repair_needed") is not True:
         return None
@@ -12157,8 +12315,9 @@ def _structured_output_repair_warning(report: dict | None) -> list[str] | None:
         if str(action).strip()
     ]
     action_text = ", ".join(actions) if actions else "unknown"
+    format_name = "XML" if "xml" in report else "JSON"
     return [
-        "structured output JSON was repaired after generation "
+        f"structured output {format_name} was repaired after generation "
         f"before returning it to the client; repair_actions={action_text}. "
         "This is post-generation repair, not guided or constrained decoding."
     ]
@@ -13575,6 +13734,53 @@ async def create_response(
     if _text_format and hasattr(_text_format, "model_dump"):
         _text_format = _text_format.model_dump(exclude_none=True)
     if (
+        _text_format
+        and isinstance(_text_format, dict)
+        and _text_format.get("type") == "xml"
+        and not tool_calls
+    ):
+        _xml_response_config = _xml_response_format_config(_text_format)
+        if _xml_response_config:
+            _out_text = cleaned_text or content_for_parsing
+            _structured_report = repair_xml_output(
+                _out_text,
+                root_tag=_xml_response_config.get("root_tag"),
+                required_fields=_xml_response_config.get("required_fields") or (),
+            )
+            if not _structured_report.get("is_valid"):
+                _retry_output, _retry_report = await _retry_structured_output_xml_once(
+                    engine=engine,
+                    messages=messages,
+                    chat_kwargs=chat_kwargs,
+                    response_format=_text_format,
+                    invalid_text=_out_text or "",
+                    error=_structured_report.get("error"),
+                    timeout=timeout,
+                    fastapi_request=fastapi_request,
+                    request_id=f"{response_id}-xml-retry",
+                    endpoint="Responses API",
+                )
+                if _retry_output is not None and _retry_report.get("is_valid"):
+                    output = _retry_output
+                    reasoning_text = None
+                    content_for_parsing = _retry_output.text
+                    cleaned_text = _retry_output.text
+                    _structured_report = _retry_report
+            repaired_xml = _structured_report.get("xml")
+            is_valid = bool(_structured_report.get("is_valid"))
+            error = _structured_report.get("error")
+            structured_output_warnings = _structured_output_repair_warning(
+                _structured_report
+            )
+            if repaired_xml is not None:
+                cleaned_text = str(repaired_xml)
+            if not is_valid:
+                if _xml_response_config.get("strict"):
+                    raise HTTPException(
+                        status_code=400, detail=f"response_format strict mode: {error}"
+                    )
+                logger.warning(f"[responses] XML validation failed: {error}")
+    elif (
         _text_format
         and isinstance(_text_format, dict)
         and _text_format.get("type") not in (None, "text")

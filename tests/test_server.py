@@ -1533,6 +1533,69 @@ class TestOpenAILogprobsFormatting:
         assert "fix this JSON only" in engine.calls[1]["messages"][-1]["content"]
 
     @pytest.mark.asyncio
+    async def test_chat_response_format_strict_retries_failed_xml_only(self, monkeypatch):
+        import vmlx_engine.server as server
+        from vmlx_engine.api.models import ChatCompletionRequest, Message
+        from vmlx_engine.engine.base import GenerationOutput
+
+        class _Engine:
+            is_mllm = False
+            preserve_native_tool_format = False
+
+            def __init__(self):
+                self.calls = []
+
+            async def chat(self, *, messages, **kwargs):
+                self.calls.append({"messages": messages, "kwargs": kwargs})
+                text = (
+                    "<catalog><label>CLIPFARM</label></catalog>"
+                    if len(self.calls) == 1
+                    else "<catalog><visible_text>CLIPFARM</visible_text></catalog>"
+                )
+                return GenerationOutput(
+                    text=text,
+                    prompt_tokens=5,
+                    completion_tokens=2,
+                    finish_reason="stop",
+                )
+
+        engine = _Engine()
+        monkeypatch.setattr(server, "_engine", engine)
+        monkeypatch.setattr(server, "_served_model_name", "loaded-model")
+        monkeypatch.setattr(server, "_model_name", "loaded-model")
+        monkeypatch.setattr(server, "_model_path", None)
+        monkeypatch.setattr(server, "_model_type", "llm")
+        monkeypatch.setattr(server, "_reasoning_parser", None)
+        monkeypatch.setattr(server, "_mcp_manager", None)
+
+        response = await server.create_chat_completion(
+            ChatCompletionRequest(
+                model="loaded-model",
+                messages=[Message(role="user", content="return catalog xml")],
+                max_tokens=16,
+                response_format={
+                    "type": "xml",
+                    "xml_root_tag": "catalog",
+                    "required_xml_fields": ["visible_text"],
+                    "strict": True,
+                },
+            ),
+            fastapi_request=None,
+        )
+
+        assert (
+            response.choices[0].message.content
+            == "<catalog><visible_text>CLIPFARM</visible_text></catalog>"
+        )
+        assert len(engine.calls) == 2
+        assert engine.calls[1]["messages"][-2] == {
+            "role": "assistant",
+            "content": "<catalog><label>CLIPFARM</label></catalog>",
+        }
+        assert "fix this XML only" in engine.calls[1]["messages"][-1]["content"]
+        assert "Required XML fields: visible_text" in engine.calls[1]["messages"][-1]["content"]
+
+    @pytest.mark.asyncio
     async def test_chat_response_format_forwards_guided_json_hint(self, monkeypatch):
         import vmlx_engine.server as server
         from vmlx_engine.api.models import ChatCompletionRequest, Message
@@ -1657,6 +1720,69 @@ class TestOpenAILogprobsFormatting:
             "content": "still not json",
         }
         assert "fix this JSON only" in engine.calls[1]["messages"][-1]["content"]
+
+    @pytest.mark.asyncio
+    async def test_responses_text_format_strict_retries_failed_xml_only(self, monkeypatch):
+        import vmlx_engine.server as server
+        from vmlx_engine.api.models import ResponsesRequest
+        from vmlx_engine.engine.base import GenerationOutput
+
+        class _Engine:
+            is_mllm = False
+            preserve_native_tool_format = False
+
+            def __init__(self):
+                self.calls = []
+
+            async def chat(self, *, messages, **kwargs):
+                self.calls.append({"messages": messages, "kwargs": kwargs})
+                text = (
+                    "still not xml"
+                    if len(self.calls) == 1
+                    else "<catalog><visible_text>CLIPFARM</visible_text></catalog>"
+                )
+                return GenerationOutput(
+                    text=text,
+                    prompt_tokens=5,
+                    completion_tokens=2,
+                    finish_reason="stop",
+                )
+
+        engine = _Engine()
+        monkeypatch.setattr(server, "_engine", engine)
+        monkeypatch.setattr(server, "_served_model_name", "loaded-model")
+        monkeypatch.setattr(server, "_model_name", "loaded-model")
+        monkeypatch.setattr(server, "_model_path", None)
+        monkeypatch.setattr(server, "_model_type", "llm")
+        monkeypatch.setattr(server, "_reasoning_parser", None)
+        monkeypatch.setattr(server, "_mcp_manager", None)
+
+        response = await server.create_response(
+            ResponsesRequest(
+                model="loaded-model",
+                input="return catalog xml",
+                max_output_tokens=16,
+                text={
+                    "type": "xml",
+                    "xml_root_tag": "catalog",
+                    "required_xml_fields": ["visible_text"],
+                    "strict": True,
+                },
+            ),
+            fastapi_request=None,
+        )
+
+        assert (
+            response.output_text
+            == "<catalog><visible_text>CLIPFARM</visible_text></catalog>"
+        )
+        assert len(engine.calls) == 2
+        assert engine.calls[1]["messages"][-2] == {
+            "role": "assistant",
+            "content": "still not xml",
+        }
+        assert "fix this XML only" in engine.calls[1]["messages"][-1]["content"]
+        assert "Required XML fields: visible_text" in engine.calls[1]["messages"][-1]["content"]
 
     @pytest.mark.asyncio
     async def test_responses_text_format_forwards_guided_json_hint(self, monkeypatch):

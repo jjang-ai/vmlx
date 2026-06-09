@@ -169,6 +169,8 @@ class ResponseFormat(BaseModel):
     - "json_schema": Forces JSON matching a specific schema
     """
 
+    model_config = {"extra": "allow"}
+
     type: str = "text"  # "text", "json_object", "json_schema"
     json_schema: ResponseFormatJsonSchema | None = None
 
