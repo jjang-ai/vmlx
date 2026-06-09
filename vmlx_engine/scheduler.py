@@ -1036,15 +1036,31 @@ class Scheduler:
 
     @staticmethod
     def _model_has_mixed_attention(model: Any) -> bool:
-        """Return True for models that interleave sliding-window and full
-        attention layers (Gemma 4 pattern). Detection is conservative: only
-        returns True when the config clearly lists at least two distinct
-        attention modes including at least one sliding variant.
+        """Return True for cache layouts with sliding/rotating attention.
+
+        Config metadata catches Gemma/Step-style mixed-attention models. Some
+        bundles (notably MiMo V2.5) do not expose that metadata reliably, but
+        their runtime cache is authoritative: if ``model.make_cache()`` returns
+        RotatingKVCache layers, post-generation truncation is not a safe prompt
+        boundary store. Use the clean N-1 prompt-prefill cache contract instead.
         """
         def _cfg_value(cfg: Any, key: str) -> Any:
             if isinstance(cfg, dict):
                 return cfg.get(key)
             return getattr(cfg, key, None)
+
+        def _cache_has_rotating(cache_obj: Any) -> bool:
+            if cache_obj is None:
+                return False
+            if isinstance(cache_obj, (list, tuple)):
+                return any(_cache_has_rotating(c) for c in cache_obj)
+            sub = getattr(cache_obj, "caches", None)
+            if isinstance(sub, (list, tuple)):
+                return any(_cache_has_rotating(c) for c in sub)
+            return type(cache_obj).__name__ in {
+                "RotatingKVCache",
+                "BatchRotatingKVCache",
+            }
 
         candidates = []
         for attr in ('args', 'config'):
@@ -1081,7 +1097,10 @@ class Scheduler:
                 kinds = {str(k).lower() for k in layer_types}
                 if len(kinds) >= 2 and any('sliding' in k for k in kinds):
                     return True
-        return False
+        try:
+            return _cache_has_rotating(model.make_cache())
+        except Exception:
+            return False
 
     @staticmethod
     def _model_uses_dsv4_cache(model: Any) -> bool:
@@ -2884,7 +2903,10 @@ class Scheduler:
             return []
         cached_tokens = max(0, int(cached_tokens or 0))
         gen_prompt_len = int(getattr(request, "_gen_prompt_len", 0) or 0)
-        if 0 < gen_prompt_len < len(prompt_tokens):
+        if (
+            0 < gen_prompt_len < len(prompt_tokens)
+            and not getattr(self, "_mixed_attention_cache_model", False)
+        ):
             fetch_tokens = prompt_tokens[:-gen_prompt_len]
             suffix = prompt_tokens[-gen_prompt_len:]
             cached_tokens = min(cached_tokens, len(fetch_tokens))
@@ -2922,7 +2944,7 @@ class Scheduler:
         if self._is_hybrid:
             return "hybrid_ssm"
         try:
-            if self._model_has_mixed_attention(self.model):
+            if getattr(self, "_mixed_attention_cache_model", False):
                 return "mixed_swa_kv"
         except Exception:
             pass
@@ -4361,6 +4383,12 @@ class Scheduler:
         # template trailer (e.g. `<|im_start|>assistant\n<think>\n`) during prefill.
         _full_tokens_list = list(request.prompt_token_ids)
         _gpl_fetch = getattr(request, "_gen_prompt_len", 0) or 0
+        if getattr(self, "_mixed_attention_cache_model", False):
+            # Mixed full/SWA models must use the full effective prompt as the
+            # cache key for strict logprob equivalence. Stripping the generation
+            # prompt replays several suffix tokens from an earlier RotatingKV
+            # boundary; MiMo V2.5 shows small but real distribution drift there.
+            _gpl_fetch = 0
         if 0 < _gpl_fetch < len(_full_tokens_list):
             _fetch_tokens = _full_tokens_list[:-_gpl_fetch]
             _gpl_suffix_tokens = _full_tokens_list[-_gpl_fetch:]
@@ -6061,7 +6089,9 @@ class Scheduler:
                                                 request._extracted_cache_from_prompt_snapshot = True
                                         else:
                                             cache_for_extract = None
-                                    elif self._model_has_mixed_attention(self.model):
+                                    elif getattr(
+                                        self, "_mixed_attention_cache_model", False
+                                    ):
                                         # Mixed full/sliding-window attention
                                         # models (Step3p7, Gemma4, MiMo, etc.)
                                         # use RotatingKVCache for SWA layers.
@@ -6080,7 +6110,14 @@ class Scheduler:
                                             getattr(request, "_gen_prompt_len", 0)
                                             or 0
                                         )
-                                        if 0 < _gpl_mixed < len(mixed_prompt_tokens):
+                                        if (
+                                            0 < _gpl_mixed < len(mixed_prompt_tokens)
+                                            and not getattr(
+                                                self,
+                                                "_mixed_attention_cache_model",
+                                                False,
+                                            )
+                                        ):
                                             mixed_prompt_tokens = mixed_prompt_tokens[
                                                 :-_gpl_mixed
                                             ]
@@ -6221,8 +6258,65 @@ class Scheduler:
                                             f"{request_id}, skipping paged cache store"
                                         )
                             else:
-                                # Standard cache stores object references
-                                request._extracted_cache = raw_cache
+                                if getattr(
+                                    self, "_mixed_attention_cache_model", False
+                                ):
+                                    mixed_prompt_tokens = list(
+                                        request.prompt_token_ids
+                                    )
+                                    _gpl_mixed = (
+                                        getattr(request, "_gen_prompt_len", 0)
+                                        or 0
+                                    )
+                                    if (
+                                        0 < _gpl_mixed < len(mixed_prompt_tokens)
+                                        and not getattr(
+                                            self,
+                                            "_mixed_attention_cache_model",
+                                            False,
+                                        )
+                                    ):
+                                        mixed_prompt_tokens = mixed_prompt_tokens[
+                                            :-_gpl_mixed
+                                        ]
+                                    mixed_key_tokens = (
+                                        mixed_prompt_tokens[:-1]
+                                        if len(mixed_prompt_tokens) > 1
+                                        else []
+                                    )
+                                    if mixed_key_tokens:
+                                        logger.info(
+                                            "Mixed-SWA prefix cache store using "
+                                            "clean prompt-boundary re-prefill "
+                                            "(%d cache-key tokens from %d prompt "
+                                            "tokens, object cache).",
+                                            len(mixed_key_tokens),
+                                            len(mixed_prompt_tokens),
+                                        )
+                                        clean_cache = (
+                                            self._prefill_for_prompt_only_cache(
+                                                mixed_key_tokens
+                                            )
+                                        )
+                                        if clean_cache is not None:
+                                            request._extracted_cache = clean_cache
+                                            request._extracted_cache_key_tokens = list(
+                                                mixed_key_tokens
+                                            )
+                                            request._extracted_cache_from_prompt_snapshot = True
+                                        else:
+                                            logger.warning(
+                                                "Cannot produce mixed-SWA prompt-only "
+                                                "object cache for %s, skipping "
+                                                "prefix cache store",
+                                                request_id,
+                                            )
+                                            request._extracted_cache = None
+                                    else:
+                                        request._extracted_cache = None
+                                else:
+                                    # Standard cache stores object references
+                                    request._extracted_cache = raw_cache
                         else:
                             logger.info(
                                 f"No cache returned from BatchGenerator for {request_id}"
@@ -6798,20 +6892,28 @@ class Scheduler:
                             if 0 < _gpl_store < len(prompt_tokens):
                                 prompt_tokens = prompt_tokens[:-_gpl_store]
                             prompt_len = len(prompt_tokens)
-                            cache_to_store = self._truncate_cache_to_prompt_length(
-                                request._extracted_cache, prompt_len
+                            cache_key_override = getattr(
+                                request, "_extracted_cache_key_tokens", None
                             )
+                            if cache_key_override is not None:
+                                cache_to_store = request._extracted_cache
+                                cache_key_tokens = list(cache_key_override)
+                            else:
+                                cache_to_store = self._truncate_cache_to_prompt_length(
+                                    request._extracted_cache, prompt_len
+                                )
                             if cache_to_store is None:
                                 logger.debug(
                                     f"Request {request_id}: cannot truncate cache "
                                     f"to prompt length (hybrid model), skipping store"
                                 )
                             else:
-                                cache_key_tokens = (
-                                    prompt_tokens[:-1]
-                                    if prompt_len > 1
-                                    else list(prompt_tokens)
-                                )
+                                if cache_key_override is None:
+                                    cache_key_tokens = (
+                                        prompt_tokens[:-1]
+                                        if prompt_len > 1
+                                        else list(prompt_tokens)
+                                    )
                                 # Quantize for storage efficiency
                                 if getattr(self, "_kv_cache_bits", 0):
                                     cache_to_store = self._quantize_cache_for_storage(
@@ -6862,15 +6964,23 @@ class Scheduler:
                             if 0 < _gpl_store < len(prompt_tokens):
                                 prompt_tokens = prompt_tokens[:-_gpl_store]
                             prompt_len = len(prompt_tokens)
-                            cache_to_store = self._truncate_cache_to_prompt_length(
-                                request._extracted_cache, prompt_len
+                            cache_key_override = getattr(
+                                request, "_extracted_cache_key_tokens", None
                             )
-                            if cache_to_store is not None:
-                                cache_key_tokens = (
-                                    prompt_tokens[:-1]
-                                    if prompt_len > 1
-                                    else list(prompt_tokens)
+                            if cache_key_override is not None:
+                                cache_to_store = request._extracted_cache
+                                cache_key_tokens = list(cache_key_override)
+                            else:
+                                cache_to_store = self._truncate_cache_to_prompt_length(
+                                    request._extracted_cache, prompt_len
                                 )
+                            if cache_to_store is not None:
+                                if cache_key_override is None:
+                                    cache_key_tokens = (
+                                        prompt_tokens[:-1]
+                                        if prompt_len > 1
+                                        else list(prompt_tokens)
+                                    )
                                 # Quantize for storage efficiency
                                 if getattr(self, "_kv_cache_bits", 0):
                                     cache_to_store = self._quantize_cache_for_storage(

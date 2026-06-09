@@ -10722,6 +10722,8 @@ async def create_completion(request: CompletionRequest):
     choices = []
     total_completion_tokens = 0
     total_prompt_tokens = 0
+    total_cached_tokens = 0
+    cache_detail: str | None = None
 
     for i, prompt in enumerate(prompts):
         try:
@@ -10836,6 +10838,10 @@ async def create_completion(request: CompletionRequest):
         total_prompt_tokens += (
             output.prompt_tokens if hasattr(output, "prompt_tokens") else 0
         )
+        total_cached_tokens += int(getattr(output, "cached_tokens", 0) or 0)
+        _detail = getattr(output, "cache_detail", "") or None
+        if _detail:
+            cache_detail = _detail
 
     elapsed = time.perf_counter() - start_time
     tokens_per_sec = total_completion_tokens / elapsed if elapsed > 0 else 0
@@ -10850,6 +10856,12 @@ async def create_completion(request: CompletionRequest):
             prompt_tokens=total_prompt_tokens,
             completion_tokens=total_completion_tokens,
             total_tokens=total_prompt_tokens + total_completion_tokens,
+            prompt_tokens_details=PromptTokensDetails(
+                cached_tokens=total_cached_tokens,
+                cache_detail=cache_detail,
+            )
+            if total_cached_tokens > 0 or cache_detail
+            else None,
         ),
     )
 
