@@ -942,7 +942,7 @@ def test_full_release_objective_checklist_tracks_open_n2_pro_objective_row(
                     ),
                     "status": "open",
                     "evidence": [
-                        "build/current-release-regression-manifest-after-structured-schema-decode-20260609.json",
+                        "build/current-release-regression-manifest-after-pr-intake-matrix-refresh-20260609.json",
                         str(checklist.OBJECTIVE_DIGEST),
                     ],
                     "details": {

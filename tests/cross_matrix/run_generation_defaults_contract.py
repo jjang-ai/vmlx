@@ -21,7 +21,9 @@ from pathlib import Path
 from typing import Any
 
 
-DEFAULT_OUT = Path("build/current-generation-defaults-contract-after-dsv4-preflight-refresh-20260608.json")
+DEFAULT_OUT = Path(
+    "build/current-generation-defaults-contract-after-pr-intake-matrix-refresh-20260609.json"
+)
 
 SOURCE_HASH_FILES = (
     "vmlx_engine/server.py",
@@ -83,6 +85,9 @@ REQUIRED_GENERATION_DEFAULT_TEST_MARKERS = (
     "test_panel_cli_flag_contract_covers_dsv4_cache_and_output_boundaries",
     "test_command_preview_uses_runtime_numeric_sanitizers_for_core_flags",
     "test_text_stale_value_flags_strip_their_values_in_preview_and_runtime",
+    "test_local_generation_metadata_audit_defaults_include_step3p7_repro_paths",
+    "test_local_generation_metadata_audit_reports_step3p7_source_runtime_route",
+    "test_local_generation_metadata_audit_reports_step3p7_guard_when_runtime_missing",
     "test_local_generation_metadata_audit_reports_high_risk_rows",
     "test_local_generation_metadata_audit_flags_thinking_template_without_budget",
     "test_local_generation_metadata_audit_accepts_template_budget_support",
@@ -158,6 +163,14 @@ REQUIRED_GENERATION_DEFAULT_FAMILY_MATRIX: dict[str, dict[str, tuple[str, ...]]]
             "test_local_generation_metadata_audit_accepts_template_budget_support",
             "surfaces maxThinkingTokens only when the template consumes thinking_budget",
             "chat settings hides max-thinking tokens when template metadata says budget is unsupported",
+        ),
+    },
+    "step3p7_metadata_route_matrix": {
+        "checks": ("local_high_risk_model_metadata_audit",),
+        "markers": (
+            "test_local_generation_metadata_audit_defaults_include_step3p7_repro_paths",
+            "test_local_generation_metadata_audit_reports_step3p7_source_runtime_route",
+            "test_local_generation_metadata_audit_reports_step3p7_guard_when_runtime_missing",
         ),
     },
     "additional_args_no_override": {
@@ -401,6 +414,9 @@ def build_artifact(root: Path) -> dict[str, Any]:
         ),
         "local_high_risk_model_metadata_audit": (
             not failed
+            and "test_local_generation_metadata_audit_defaults_include_step3p7_repro_paths" not in missing_markers
+            and "test_local_generation_metadata_audit_reports_step3p7_source_runtime_route" not in missing_markers
+            and "test_local_generation_metadata_audit_reports_step3p7_guard_when_runtime_missing" not in missing_markers
             and "test_local_generation_metadata_audit_reports_high_risk_rows" not in missing_markers
             and "test_local_generation_metadata_audit_flags_thinking_template_without_budget" not in missing_markers
             and "test_local_generation_metadata_audit_accepts_template_budget_support" not in missing_markers

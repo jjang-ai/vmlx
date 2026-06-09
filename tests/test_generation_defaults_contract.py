@@ -5,7 +5,7 @@ def test_generation_defaults_contract_default_out_tracks_current_release_proof_a
     from tests.cross_matrix import run_generation_defaults_contract as gate
 
     assert gate.DEFAULT_OUT == Path(
-        "build/current-generation-defaults-contract-after-dsv4-preflight-refresh-20260608.json"
+        "build/current-generation-defaults-contract-after-pr-intake-matrix-refresh-20260609.json"
     )
 
 
@@ -41,6 +41,9 @@ def test_generation_defaults_contract_pins_named_default_edges():
     assert "test_panel_cli_flag_contract_covers_dsv4_cache_and_output_boundaries" in required
     assert "test_command_preview_uses_runtime_numeric_sanitizers_for_core_flags" in required
     assert "test_text_stale_value_flags_strip_their_values_in_preview_and_runtime" in required
+    assert "test_local_generation_metadata_audit_defaults_include_step3p7_repro_paths" in required
+    assert "test_local_generation_metadata_audit_reports_step3p7_source_runtime_route" in required
+    assert "test_local_generation_metadata_audit_reports_step3p7_guard_when_runtime_missing" in required
     assert "test_local_generation_metadata_audit_flags_thinking_template_without_budget" in required
     assert "test_local_generation_metadata_audit_accepts_template_budget_support" in required
     assert "marks thinking-budget unsupported when the template has thinking but no budget variable" in required
@@ -65,6 +68,7 @@ def test_generation_defaults_contract_publishes_structured_family_matrix():
         "dsv4_direct_chat_repetition_policy",
         "max_output_context_separation",
         "thinking_budget_template_support",
+        "step3p7_metadata_route_matrix",
         "additional_args_no_override",
         "cli_mlxstudio_startup_parity",
         "registered_family_max_token_contract",
@@ -92,6 +96,14 @@ def test_generation_defaults_contract_publishes_structured_family_matrix():
     ]
     assert "panel_max_output_context_labels_are_separated" in output_context["checks"]
     assert "surfaces Max Output Tokens separately from Max Context Tokens" in output_context["markers"]
+
+    step3p7 = gate.REQUIRED_GENERATION_DEFAULT_FAMILY_MATRIX[
+        "step3p7_metadata_route_matrix"
+    ]
+    assert "local_high_risk_model_metadata_audit" in step3p7["checks"]
+    assert "test_local_generation_metadata_audit_defaults_include_step3p7_repro_paths" in step3p7["markers"]
+    assert "test_local_generation_metadata_audit_reports_step3p7_source_runtime_route" in step3p7["markers"]
+    assert "test_local_generation_metadata_audit_reports_step3p7_guard_when_runtime_missing" in step3p7["markers"]
 
     startup = gate.REQUIRED_GENERATION_DEFAULT_FAMILY_MATRIX[
         "cli_mlxstudio_startup_parity"

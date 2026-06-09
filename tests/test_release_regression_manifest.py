@@ -4276,7 +4276,7 @@ def test_release_regression_manifest_current_sweep_uses_latest_live_smoke_artifa
     assert "current-packaged-integrity-contract-20260526-bundled-release-proof.json" not in joined
     assert "current-packaged-integrity-contract-20260525-additional-args-guard.json" not in joined
     assert "current-regression-suite-20260524-crossfamily-cleared-dsv4-open.json" not in joined
-    assert "current-generation-defaults-contract-after-dsv4-preflight-refresh-20260608.json" in joined
+    assert "current-generation-defaults-contract-after-pr-intake-matrix-refresh-20260609.json" in joined
     assert "current-generation-defaults-contract-20260602-step-greedy-display.json" not in joined
     assert "current-generation-defaults-contract-20260531-post-step-lfm-refresh.json" not in joined
     assert "current-generation-defaults-contract-20260526-settings-audit.json" not in joined
@@ -12319,7 +12319,7 @@ def test_release_regression_manifest_runner_default_out_tracks_current_release_p
     from tests.cross_matrix import run_release_regression_manifest as runner
 
     assert runner.DEFAULT_OUT == Path(
-        "build/current-release-regression-manifest-after-structured-schema-decode-20260609.json"
+        "build/current-release-regression-manifest-after-pr-intake-matrix-refresh-20260609.json"
     )
 
 
@@ -14942,7 +14942,7 @@ def test_release_regression_manifest_tracks_generation_defaults_with_runner_arti
     joined = " ".join(row["commands"] + row["artifacts"] + row["proves"])
 
     assert "run_generation_defaults_contract.py" in joined
-    assert "current-generation-defaults-contract-after-dsv4-preflight-refresh-20260608.json" in joined
+    assert "current-generation-defaults-contract-after-pr-intake-matrix-refresh-20260609.json" in joined
     assert "current-generation-defaults-contract-20260602-step-greedy-display.json" not in joined
     assert "current-generation-defaults-contract-20260531-post-step-lfm-refresh.json" not in joined
     assert "current-generation-defaults-contract-20260526-settings-audit.json" not in joined
@@ -14951,6 +14951,7 @@ def test_release_regression_manifest_tracks_generation_defaults_with_runner_arti
     assert "jang_config.json" in joined
     assert "hidden sampler forcing" in joined
     assert "Additional Args cannot override app-owned reasoning, parser, cache, MTP" in joined
+    assert "Step3p7 metadata-route" in joined
 
 
 def test_release_regression_manifest_tracks_reasoning_template_with_runner_artifact():
@@ -15013,7 +15014,7 @@ def test_release_regression_manifest_tracks_current_defaults_reasoning_api_reche
 
     generation = rows["generation-defaults-no-hidden-forcing"]
     generation_joined = " ".join(generation["commands"] + generation["artifacts"] + generation["proves"])
-    assert "current-generation-defaults-contract-after-dsv4-preflight-refresh-20260608.json" in generation_joined
+    assert "current-generation-defaults-contract-after-pr-intake-matrix-refresh-20260609.json" in generation_joined
     assert "current-generation-defaults-contract-20260602-step-greedy-display.json" not in generation_joined
     assert "current-generation-defaults-contract-20260531-post-step-lfm-refresh.json" not in generation_joined
     assert "current-generation-defaults-contract-20260526-settings-audit.json" not in generation_joined
@@ -15021,6 +15022,7 @@ def test_release_regression_manifest_tracks_current_defaults_reasoning_api_reche
     assert "bundle max_new_tokens" in generation_joined
     assert "without hidden sampler or repetition floors" in generation_joined
     assert "server default output cap is not a request ceiling" in generation_joined
+    assert "Step3p7 metadata-route" in generation_joined
 
     reasoning = rows["reasoning-template-no-think-tag-leak"]
     reasoning_joined = " ".join(reasoning["commands"] + reasoning["artifacts"] + reasoning["proves"])
@@ -15162,7 +15164,7 @@ def test_release_regression_manifest_tracks_packaged_integrity_with_runner_artif
     assert "Version triples" in joined
     assert "bundled Python hash parity" in joined
     assert "objective proof digest" in joined
-    assert "current-objective-proof-after-structured-schema-decode-20260609.json" in joined
+    assert "current-objective-proof-after-pr-intake-matrix-refresh-20260609.json" in joined
     assert "objective-gate-enforced" in joined
     assert "verify-bundled" in joined
 
@@ -15230,7 +15232,7 @@ def test_release_regression_manifest_tracks_current_updater_and_i18n_rechecks():
 
     ling = rows["ling-bailing-multilingual-quality-live"]
     ling_joined = " ".join(ling["commands"] + ling["artifacts"] + ling["proves"])
-    assert "current-objective-proof-after-structured-schema-decode-20260609.json" in ling_joined
+    assert "current-objective-proof-after-pr-intake-matrix-refresh-20260609.json" in ling_joined
 
 
 def test_release_regression_manifest_tracks_live_only_boundaries():

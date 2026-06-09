@@ -158,7 +158,7 @@ def test_release_gate_objective_digest_default_tracks_current_release_matrix():
         "--out",
         str(
             Path.cwd()
-            / "build/current-objective-proof-after-structured-schema-decode-20260609.json"
+            / "build/current-objective-proof-after-pr-intake-matrix-refresh-20260609.json"
         ),
     ]
 

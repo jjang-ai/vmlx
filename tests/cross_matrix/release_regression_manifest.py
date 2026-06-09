@@ -24,7 +24,7 @@ from tests.cross_matrix.run_current_regression_suite import (
 )
 
 CURRENT_RELEASE_REGRESSION_MANIFEST_ARTIFACT = (
-    "build/current-release-regression-manifest-after-structured-schema-decode-20260609.json"
+    "build/current-release-regression-manifest-after-pr-intake-matrix-refresh-20260609.json"
 )
 
 EXPECTED_CURRENT_MODEL_ARTIFACT_CHECKS = (
@@ -374,7 +374,7 @@ CURRENT_POST_BUDGET_EDGE_ARTIFACTS = {
     "noheavy-api-cache-endpoint-runtime": "build/current-noheavy-api-cache-contract-after-structured-schema-decode-20260609.json",
     "chat-settings-max-output-context-ui": "build/current-max-output-context-contract-after-jangtq2-objective-refresh-20260607.json",
     "panel-session-cache-settings-family-gating": "build/current-panel-settings-contract-proof-20260601-cache-ui-storage-quant.json",
-    "generation-defaults-no-hidden-forcing": "build/current-generation-defaults-contract-after-dsv4-preflight-refresh-20260608.json",
+    "generation-defaults-no-hidden-forcing": "build/current-generation-defaults-contract-after-pr-intake-matrix-refresh-20260609.json",
     "parser-registry-tool-reasoning-parity": "build/current-parser-registry-contract-after-jangtq2-objective-refresh-20260607.json",
     "reasoning-template-no-think-tag-leak": "build/current-reasoning-template-contract-20260526-settings-audit.json",
     "tool-call-loop-parser-cleanup": "build/current-tool-call-contract-after-cross-model-loop-metrics-20260609.json",
@@ -1314,13 +1314,13 @@ _ROWS: list[dict[str, Any]] = [
             "bundle max_new_tokens is preserved for omitted request budgets without hidden sampler or repetition floors",
             "server default output cap is not a request ceiling for explicit Chat Completions or Responses requests",
             "Additional Args cannot override app-owned reasoning, parser, cache, MTP, server, template, model-name, or MCP launch flags",
-            "structured family matrix covers standard MLX, JANG, DSV4, max-token/context, thinking-budget, and app-owned CLI boundaries",
+            "structured family matrix covers standard MLX, JANG, DSV4, max-token/context, thinking-budget, Step3p7 metadata-route, and app-owned CLI boundaries",
         ],
         "commands": [
-            ".venv/bin/python tests/cross_matrix/run_generation_defaults_contract.py --out build/current-generation-defaults-contract-after-dsv4-preflight-refresh-20260608.json",
+            ".venv/bin/python tests/cross_matrix/run_generation_defaults_contract.py --out build/current-generation-defaults-contract-after-pr-intake-matrix-refresh-20260609.json",
         ],
         "artifacts": [
-            "build/current-generation-defaults-contract-after-dsv4-preflight-refresh-20260608.json",
+            "build/current-generation-defaults-contract-after-pr-intake-matrix-refresh-20260609.json",
             "build/current-generation-defaults-contract-20260528-family-matrix.json",
             "build/current-generation-defaults-contract-20260527-after-think-xml-registry-fix.json",
             "build/current-generation-defaults-contract-20260527-issues-175-178-bundled-sync.json",
@@ -1702,7 +1702,7 @@ _ROWS: list[dict[str, Any]] = [
             ".venv/bin/python tests/cross_matrix/run_packaged_integrity_contract.py --jang-tools-source /Users/example/jang/.worktrees/vmlx-release-clean-b5f66a7/jang-tools --out build/current-packaged-integrity-contract-20260522-recheck-bundled-release-gate.json",
         ],
         "artifacts": [
-            "build/current-objective-proof-after-structured-schema-decode-20260609.json",
+            "build/current-objective-proof-after-pr-intake-matrix-refresh-20260609.json",
             "build/current-packaged-integrity-contract-after-bundled-python-sync-20260608.json",
             "build/current-packaged-integrity-contract-20260601-dsv4-preflight-refresh.json",
             "build/current-packaged-integrity-contract-20260601-qwen3vl-minicpm-mpp-staged-refresh.json",
@@ -1871,12 +1871,12 @@ _ROWS: list[dict[str, Any]] = [
             "The clearance boundary is based on live artifacts, not a hidden sampler/repetition/default override",
         ],
         "commands": [
-            ".venv/bin/python tests/cross_matrix/summarize_objective_proof.py --out build/current-objective-proof-after-structured-schema-decode-20260609.json",
+            ".venv/bin/python tests/cross_matrix/summarize_objective_proof.py --out build/current-objective-proof-after-pr-intake-matrix-refresh-20260609.json",
             ".venv/bin/python tests/cross_matrix/run_production_family_audit.py --rows ling_flash_tq --live --py /Applications/vMLX.app/Contents/Resources/bundled-python/python/bin/python3.12 --out build/current-production-family-live-ling-bundled-current-20260606.json",
         ],
         "artifacts": [
             "build/current-production-family-live-ling-bundled-current-20260606.json",
-            "build/current-objective-proof-after-structured-schema-decode-20260609.json",
+            "build/current-objective-proof-after-pr-intake-matrix-refresh-20260609.json",
             "build/current-ling-jangtq-strict-russian-nocache-bundled-4850c9c2-20260524.json",
             "build/current-ling-mxfp4-crack-strict-russian-nocache-bundled-4850c9c2-20260524.json",
             "build/current-ling-jangtq-russian-prompt-variant-probe-20260524.json",

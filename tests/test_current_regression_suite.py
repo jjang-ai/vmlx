@@ -1207,7 +1207,7 @@ def test_current_regression_suite_refreshes_release_regression_manifest(monkeypa
     )
     assert any(
         name == "release_regression_manifest"
-        and "build/current-release-regression-manifest-after-structured-schema-decode-20260609.json"
+        and "build/current-release-regression-manifest-after-pr-intake-matrix-refresh-20260609.json"
         in cmd
         for name, cmd in seen_steps
     )
@@ -1639,7 +1639,7 @@ def test_current_regression_suite_refreshes_current_objective_digest_artifact(
 
     assert artifact["status"] == "pass"
     assert suite.CURRENT_OBJECTIVE_DIGEST_ARTIFACT == (
-        "build/current-objective-proof-after-structured-schema-decode-20260609.json"
+        "build/current-objective-proof-after-pr-intake-matrix-refresh-20260609.json"
     )
     assert any(
         name == "objective_digest"
@@ -1949,7 +1949,7 @@ def test_current_regression_suite_runs_generation_defaults_contracts(monkeypatch
         for _name, cmd in seen_steps
     )
     assert any(
-        "build/current-generation-defaults-contract-after-dsv4-preflight-refresh-20260608.json"
+        "build/current-generation-defaults-contract-after-pr-intake-matrix-refresh-20260609.json"
         in " ".join(cmd)
         for _name, cmd in seen_steps
     )
@@ -2062,7 +2062,7 @@ def test_current_regression_suite_runs_full_release_objective_checklist(
     assert any(name == "full_release_objective_checklist" for name, _cmd in seen_steps)
     assert any(
         "run_full_release_objective_checklist.py" in " ".join(cmd)
-        and "current-full-release-objective-checklist-after-structured-schema-decode-20260609.json"
+        and "current-full-release-objective-checklist-after-pr-intake-matrix-refresh-20260609.json"
         in " ".join(cmd)
         for _name, cmd in seen_steps
     )
@@ -2073,7 +2073,7 @@ def test_current_regression_suite_allows_open_full_release_objective_checklist(
 ):
     from tests.cross_matrix import run_current_regression_suite as suite
 
-    path = tmp_path / "build/current-full-release-objective-checklist-after-structured-schema-decode-20260609.json"
+    path = tmp_path / "build/current-full-release-objective-checklist-after-pr-intake-matrix-refresh-20260609.json"
     path.parent.mkdir(parents=True)
     path.write_text(json.dumps({"status": "open"}) + "\n")
 
