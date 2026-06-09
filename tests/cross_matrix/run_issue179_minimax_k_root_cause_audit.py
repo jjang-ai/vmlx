@@ -85,6 +85,20 @@ LOCAL_REPORTER_PROMPT_REPRODUCTION_FALLBACKS = (
 LOCAL_MODEL_MANIFEST = Path(
     "build/current-issue179-minimax-k-local-model-manifest-20260527.json"
 )
+LOCAL_MODEL_PATH_CANDIDATES = (
+    Path("/Users/example/models/dealign.ai/MiniMax-M2.7-JANGTQ_K-CRACK"),
+    Path("/Users/example/models/dealign.ai/MiniMax-M2.7-JANGTQ-CRACK"),
+    Path("/Users/example/.mlxstudio/models/JANGQ-AI/MiniMax-M2.7-JANGTQ_K"),
+    Path("/Users/example/.omlx/models/MiniMax-M2.7-JANGTQ_K"),
+)
+LOCAL_MODEL_METADATA_FILES = (
+    "config.json",
+    "generation_config.json",
+    "jang_config.json",
+    "model.safetensors.index.json",
+    "tokenizer_config.json",
+    "tokenizer.json",
+)
 PUBLIC_RELEASE_DMG_CONTRACT = Path(
     "build/issue-179/public-v1.5.49-tahoe-dmg-contract.json"
 )
@@ -987,6 +1001,8 @@ def analyze_local_reporter_prompt_reproduction(root: Path) -> dict[str, Any]:
 def analyze_local_model_manifest(root: Path) -> dict[str, Any]:
     path = root / LOCAL_MODEL_MANIFEST
     data = read_json(path)
+    if not path.exists():
+        return analyze_local_model_metadata_fallback()
     checks = data.get("checks") if isinstance(data.get("checks"), dict) else {}
     summary = data.get("summary") if isinstance(data.get("summary"), dict) else {}
     return {
@@ -1019,6 +1035,67 @@ def analyze_local_model_manifest(root: Path) -> dict[str, Any]:
             and checks.get("has_jangtq_runtime") is True
             and checks.get("model_shard_count_is_67") is True
         ),
+    }
+
+
+def analyze_local_model_metadata_fallback() -> dict[str, Any]:
+    model_path = next((path for path in LOCAL_MODEL_PATH_CANDIDATES if path.exists()), None)
+    if model_path is None:
+        return {
+            "path": str(LOCAL_MODEL_MANIFEST),
+            "exists": False,
+            "status": "missing",
+            "checks": {},
+            "model_file_hashes": [],
+            "local_full_k_artifact_shape_recorded": False,
+            "metadata_fallback": {
+                "status": "missing",
+                "checked_paths": [str(path) for path in LOCAL_MODEL_PATH_CANDIDATES],
+            },
+        }
+
+    metadata_hashes = [
+        {"path": name, "sha256": sha256_file(model_path / name)}
+        for name in LOCAL_MODEL_METADATA_FILES
+        if (model_path / name).exists()
+    ]
+    shard_paths = sorted(model_path.glob("model-*-of-*.safetensors"))
+    checks = {
+        "has_config": (model_path / "config.json").exists(),
+        "has_generation_config": (model_path / "generation_config.json").exists(),
+        "has_jang_config": (model_path / "jang_config.json").exists(),
+        "has_model_index": (model_path / "model.safetensors.index.json").exists(),
+        "has_tokenizer": (model_path / "tokenizer.json").exists()
+        or (model_path / "tokenizer_config.json").exists(),
+        "has_jangtq_runtime": (model_path / "modeling_minimax_m2.py").exists()
+        and (model_path / "configuration_minimax_m2.py").exists(),
+        "model_shard_count_is_67": len(shard_paths) == 67,
+    }
+    return {
+        "path": str(LOCAL_MODEL_MANIFEST),
+        "exists": False,
+        "sha256": "",
+        "status": "metadata_fallback",
+        "model_file_hashes": metadata_hashes,
+        "model_path": str(model_path),
+        "total_bytes": sum(path.stat().st_size for path in model_path.iterdir() if path.is_file()),
+        "total_file_count": sum(1 for path in model_path.iterdir() if path.is_file()),
+        "model_shard_count": len(shard_paths),
+        "hash_shards": False,
+        "hashed_file_count": len(metadata_hashes),
+        "unhashed_safetensors_count": len(shard_paths),
+        "checks": checks,
+        "local_full_k_artifact_shape_recorded": all(checks.values()),
+        "metadata_fallback": {
+            "status": "used",
+            "reason": "manifest_artifact_missing_hashing_metadata_only_no_shards",
+            "metadata_files_hashed": [row["path"] for row in metadata_hashes],
+            "shard_hash_boundary": (
+                "Shard hashes are intentionally not computed by this fallback; "
+                "reporter model-file parity remains open until a full manifest "
+                "or reporter-machine model hashes are captured."
+            ),
+        },
     }
 
 

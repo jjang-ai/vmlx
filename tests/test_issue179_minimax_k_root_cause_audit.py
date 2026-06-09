@@ -113,6 +113,39 @@ def test_issue179_audit_tracks_language_planning_leak_isolation_axes():
     assert "single_axis_runtime_ab_required" in isolation["release_boundary"]
 
 
+def test_issue179_local_model_manifest_falls_back_to_direct_metadata(
+    tmp_path, monkeypatch
+):
+    model = tmp_path / "MiniMax-M2.7-JANGTQ_K-CRACK"
+    model.mkdir()
+    for name in (
+        "config.json",
+        "generation_config.json",
+        "jang_config.json",
+        "model.safetensors.index.json",
+        "tokenizer_config.json",
+        "tokenizer.json",
+    ):
+        (model / name).write_text(json.dumps({"name": name}) + "\n", encoding="utf-8")
+    (model / "modeling_minimax_m2.py").write_text("# model\n", encoding="utf-8")
+    (model / "configuration_minimax_m2.py").write_text("# config\n", encoding="utf-8")
+    for index in range(1, 68):
+        (model / f"model-{index:05d}-of-00067.safetensors").write_bytes(b"")
+
+    monkeypatch.setattr(gate, "LOCAL_MODEL_PATH_CANDIDATES", (model,))
+
+    manifest = gate.analyze_local_model_manifest(tmp_path)
+
+    assert manifest["status"] == "metadata_fallback"
+    assert manifest["exists"] is False
+    assert manifest["checks"]["has_generation_config"] is True
+    assert manifest["checks"]["model_shard_count_is_67"] is True
+    assert manifest["local_full_k_artifact_shape_recorded"] is True
+    assert manifest["hash_shards"] is False
+    assert manifest["unhashed_safetensors_count"] == 67
+    assert "generation_config.json" in manifest["metadata_fallback"]["metadata_files_hashed"]
+
+
 def test_issue179_local_reporter_repro_accepts_reasoning_only_clean_cancel(tmp_path):
     path = tmp_path / gate.LOCAL_REPORTER_PROMPT_REPRODUCTION_PROOF
     path.parent.mkdir(parents=True, exist_ok=True)
