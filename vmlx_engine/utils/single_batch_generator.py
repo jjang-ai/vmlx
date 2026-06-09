@@ -28,6 +28,80 @@ from .mamba_cache import _should_capture_generation_logprobs
 
 logger = logging.getLogger(__name__)
 
+_PRESERVE_MAKE_CACHE_MAX_KV_MODEL_TYPES = {
+    "gemma4",
+    "gemma4_text",
+    "gemma4_unified",
+    "gemma4_unified_text",
+    "mimo_v2",
+    "qwen3_5",
+    "qwen3_5_text",
+    "qwen3_5_moe",
+    "qwen3_5_moe_text",
+}
+
+
+def _config_get(config: Any, key: str, default: Any = None) -> Any:
+    if isinstance(config, dict):
+        return config.get(key, default)
+    return getattr(config, key, default)
+
+
+def _model_type_values(model: Any) -> set[str]:
+    values: set[str] = set()
+    queue = [getattr(model, "config", None)]
+    seen: set[int] = set()
+    while queue:
+        config = queue.pop(0)
+        if config is None or id(config) in seen:
+            continue
+        seen.add(id(config))
+        model_type = _config_get(config, "model_type")
+        if isinstance(model_type, str) and model_type:
+            values.add(model_type)
+        for key in ("text_config", "language_config", "vision_config"):
+            child = _config_get(config, key)
+            if child is not None:
+                queue.append(child)
+    return values
+
+
+def _layer_types(config: Any) -> list[str]:
+    value = _config_get(config, "layer_types")
+    if isinstance(value, (list, tuple)):
+        return [str(item).lower() for item in value]
+    return []
+
+
+def _preserve_model_make_cache_max_kv_size(model: Any) -> bool:
+    """Keep architecture-owned mixed/hybrid caches out of generic KV rotation.
+
+    Upstream mlx-lm PR #1343 applies ``max_kv_size`` to plain KVCache entries
+    returned by ``model.make_cache()``. That can be a reasonable explicit memory
+    cap for ordinary KV models, but it changes full/global attention semantics
+    in mixed-cache families such as Gemma4, MiMo V2, and Qwen3.6/N2.
+    """
+    model_types = _model_type_values(model)
+    if model_types & _PRESERVE_MAKE_CACHE_MAX_KV_MODEL_TYPES:
+        return True
+    for config_name in ("config", "args"):
+        config = getattr(model, config_name, None)
+        if not config:
+            continue
+        cache_type = str(_config_get(config, "cache_type", "") or "").lower()
+        cache_subtype = str(_config_get(config, "cache_subtype", "") or "").lower()
+        if cache_type == "hybrid" or any(
+            marker in cache_subtype
+            for marker in ("hybrid", "mixed", "swa", "ssm", "mamba")
+        ):
+            return True
+        layer_types = _layer_types(config)
+        if layer_types and any("sliding" in item for item in layer_types) and any(
+            "full" in item or "global" in item for item in layer_types
+        ):
+            return True
+    return False
+
 
 @dataclass
 class _Request:
@@ -191,7 +265,18 @@ class SingleBatchGenerator:
                 mx.synchronize()
 
     def _make_new_cache(self):
-        return mlx_cache.make_prompt_cache(self.model, max_kv_size=self.max_kv_size)
+        max_kv_size = self.max_kv_size
+        if max_kv_size is not None and _preserve_model_make_cache_max_kv_size(
+            self.model
+        ):
+            logger.warning(
+                "Ignoring generic max_kv_size=%s for architecture-owned "
+                "mixed/hybrid make_cache() model; use a family-proven cache "
+                "policy instead.",
+                max_kv_size,
+            )
+            max_kv_size = None
+        return mlx_cache.make_prompt_cache(self.model, max_kv_size=max_kv_size)
 
     @staticmethod
     def _clone_array(value):

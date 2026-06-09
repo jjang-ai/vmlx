@@ -1,5 +1,6 @@
 import numpy as np
 import mlx.core as mx
+from types import SimpleNamespace
 
 from vmlx_engine.request import Request, RequestStatus, SamplingParams
 from vmlx_engine.scheduler import Scheduler, SchedulerConfig
@@ -105,6 +106,75 @@ class TestSingleActiveBatchGenerator:
         generator._refresh_thread_stream()
         assert generator._stream is fake_streams[1]
         assert new_stream_calls == [fake_device, fake_device]
+
+    def test_single_active_generator_keeps_max_kv_size_for_plain_kv_model(
+        self, monkeypatch
+    ):
+        from vmlx_engine.utils import single_batch_generator as single
+
+        captured = {}
+
+        def fake_make_prompt_cache(model, max_kv_size=None):
+            captured["max_kv_size"] = max_kv_size
+            return ["cache"]
+
+        monkeypatch.setattr(single.mlx_cache, "make_prompt_cache", fake_make_prompt_cache)
+
+        model = _TinyModel()
+        model.config = SimpleNamespace(model_type="llama")
+        generator = single.SingleBatchGenerator(model=model, max_kv_size=128)
+
+        assert generator._make_new_cache() == ["cache"]
+        assert captured["max_kv_size"] == 128
+
+    def test_single_active_generator_suppresses_generic_max_kv_for_mixed_cache_families(
+        self, monkeypatch
+    ):
+        from vmlx_engine.utils import single_batch_generator as single
+
+        captured = []
+
+        def fake_make_prompt_cache(model, max_kv_size=None):
+            captured.append((model.config.model_type, max_kv_size))
+            return ["cache"]
+
+        monkeypatch.setattr(single.mlx_cache, "make_prompt_cache", fake_make_prompt_cache)
+
+        for model_type in ("gemma4", "mimo_v2", "qwen3_5_moe"):
+            model = _TinyModel()
+            model.config = SimpleNamespace(model_type=model_type)
+            generator = single.SingleBatchGenerator(model=model, max_kv_size=128)
+
+            assert generator._make_new_cache() == ["cache"]
+
+        assert captured == [
+            ("gemma4", None),
+            ("mimo_v2", None),
+            ("qwen3_5_moe", None),
+        ]
+
+    def test_single_active_generator_suppresses_generic_max_kv_for_mixed_layer_types(
+        self, monkeypatch
+    ):
+        from vmlx_engine.utils import single_batch_generator as single
+
+        captured = {}
+
+        def fake_make_prompt_cache(model, max_kv_size=None):
+            captured["max_kv_size"] = max_kv_size
+            return ["cache"]
+
+        monkeypatch.setattr(single.mlx_cache, "make_prompt_cache", fake_make_prompt_cache)
+
+        model = _TinyModel()
+        model.config = SimpleNamespace(
+            model_type="future_family",
+            layer_types=["sliding_attention", "full_attention"],
+        )
+        generator = single.SingleBatchGenerator(model=model, max_kv_size=128)
+
+        assert generator._make_new_cache() == ["cache"]
+        assert captured["max_kv_size"] is None
 
     def test_single_active_generator_materializes_sample_without_async_eval(
         self, monkeypatch

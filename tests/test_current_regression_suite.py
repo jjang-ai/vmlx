@@ -337,10 +337,22 @@ def test_current_regression_suite_hashes_mlx_lm_runtime_patch_sources():
         "vmlx_engine/runtime_patches/mlx_lm_compat.py",
         "vmlx_engine/runtime_patches/mlx_vlm_compat.py",
         "tests/test_mlx_lm_runtime_patches.py",
+        "tests/test_single_active_batch_generator.py",
+        "vmlx_engine/utils/single_batch_generator.py",
     }
 
     assert required.issubset(set(suite.CURRENT_SUITE_SOURCE_HASH_FILES))
     assert all(Path(path).exists() for path in required)
+
+
+def test_current_regression_suite_runs_single_active_cache_policy_guard():
+    from tests.cross_matrix import run_current_regression_suite as suite
+
+    command = suite.CURRENT_SUITE_COMMANDS["focused_regression_pytest"]
+    joined = " ".join(command)
+
+    assert "tests/test_single_active_batch_generator.py" in command
+    assert "single_active_generator" in joined
 
 
 def test_current_regression_suite_runs_gemma_qat_inventory_gate():
