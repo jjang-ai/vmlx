@@ -331,6 +331,46 @@ def test_raw_sse_parity_reports_tunnel_expected_model_not_advertised(tmp_path):
     assert artifact["checks"]["tunnel_expected_model_advertised"] is False
 
 
+def test_raw_sse_parity_consumes_local_responses_streaming_contract(tmp_path):
+    direct = tmp_path / "direct.sse"
+    gateway = tmp_path / "gateway.sse"
+    tunnel = tmp_path / "tunnel.sse"
+    noheavy = tmp_path / "noheavy.json"
+    for path in (direct, gateway, tunnel):
+        path.write_text(_sse())
+    noheavy.write_text(
+        json.dumps(
+            {
+                "status": "pass",
+                "missing_markers": [],
+                "checks": {
+                    "responses_streaming_tool_call_arguments_and_indexes": True,
+                    "gateway_responses_function_call_arguments_streaming": True,
+                    "gateway_responses_reasoning_empty_final_arguments_streaming": True,
+                    "gateway_stale_responses_port_rejection": True,
+                },
+            }
+        )
+    )
+
+    artifact = build_artifact(
+        direct_sse=direct,
+        gateway_sse=gateway,
+        tunnel_sse=tunnel,
+        expected_function_name="lookup",
+        expected_arguments='{"query":"alpha"}',
+        noheavy_contract=noheavy,
+        require_reasoning_events=True,
+    )
+
+    assert artifact["local_source_contract"]["path"] == str(noheavy)
+    assert artifact["local_source_contract"]["local_responses_streaming_guards_pass"] is True
+    assert artifact["checks"]["local_responses_streaming_guards_pass"] is True
+    assert artifact["checks"]["local_empty_xml_arguments_fail_closed"] is True
+    assert artifact["checks"]["local_output_index_ordering_guard"] is True
+    assert artifact["checks"]["gateway_argument_stream_passthrough_guard"] is True
+
+
 def test_raw_sse_parity_fails_when_same_model_is_required_and_surfaces_differ(
     tmp_path,
 ):

@@ -15,6 +15,9 @@ from typing import Any
 
 
 DEFAULT_OUT = Path("build/current-responses-raw-sse-parity-20260609.json")
+DEFAULT_NOHEAVY_CONTRACT = Path(
+    "build/current-noheavy-api-cache-contract-after-responses-reasoning-empty-final-args-gateway-20260609.json"
+)
 
 
 def _extract_available_models(error_message: str) -> list[str]:
@@ -189,6 +192,70 @@ def classify_server_log(log_text: str) -> dict[str, Any]:
     }
 
 
+def classify_noheavy_contract(path: Path | None) -> dict[str, Any]:
+    if path is None:
+        return {"present": False}
+    row: dict[str, Any] = {"present": path.exists(), "path": str(path)}
+    if not path.exists():
+        return row
+    try:
+        data = json.loads(path.read_text())
+    except json.JSONDecodeError as exc:
+        row.update({"parse_error": str(exc)})
+        return row
+    checks = data.get("checks") if isinstance(data.get("checks"), dict) else {}
+    missing_markers = data.get("missing_markers")
+    if not isinstance(missing_markers, list):
+        missing_markers = []
+    rows = {
+        "responses_streaming_tool_call_arguments_and_indexes": checks.get(
+            "responses_streaming_tool_call_arguments_and_indexes"
+        )
+        is True,
+        "gateway_responses_function_call_arguments_streaming": checks.get(
+            "gateway_responses_function_call_arguments_streaming"
+        )
+        is True,
+        "gateway_responses_reasoning_empty_final_arguments_streaming": checks.get(
+            "gateway_responses_reasoning_empty_final_arguments_streaming"
+        )
+        is True,
+        "gateway_stale_responses_port_rejection": checks.get(
+            "gateway_stale_responses_port_rejection"
+        )
+        is True,
+    }
+    row.update(
+        {
+            "status": data.get("status"),
+            "missing_markers": missing_markers,
+            "checks": rows,
+            "local_empty_xml_arguments_fail_closed": rows[
+                "responses_streaming_tool_call_arguments_and_indexes"
+            ],
+            "local_output_index_ordering_guard": rows[
+                "responses_streaming_tool_call_arguments_and_indexes"
+            ],
+            "gateway_argument_stream_passthrough_guard": rows[
+                "gateway_responses_function_call_arguments_streaming"
+            ]
+            and rows["gateway_responses_reasoning_empty_final_arguments_streaming"],
+            "gateway_stale_responses_port_rejection_guard": rows[
+                "gateway_stale_responses_port_rejection"
+            ],
+        }
+    )
+    row["local_responses_streaming_guards_pass"] = (
+        row["status"] == "pass"
+        and not missing_markers
+        and row["local_empty_xml_arguments_fail_closed"]
+        and row["local_output_index_ordering_guard"]
+        and row["gateway_argument_stream_passthrough_guard"]
+        and row["gateway_stale_responses_port_rejection_guard"]
+    )
+    return row
+
+
 def build_artifact(
     *,
     direct_sse: Path | None,
@@ -200,6 +267,7 @@ def build_artifact(
     expected_function_name: str | None = None,
     expected_arguments: str | None = None,
     expected_model: str | None = None,
+    noheavy_contract: Path | None = DEFAULT_NOHEAVY_CONTRACT,
     require_reasoning_events: bool = False,
     require_same_model: bool = False,
 ) -> dict[str, Any]:
@@ -346,6 +414,7 @@ def build_artifact(
         if expected_model is None
         else captures["tunnel"].get("expected_model_advertised") is True
     )
+    local_contract = classify_noheavy_contract(noheavy_contract)
 
     if (
         mismatch
@@ -391,7 +460,24 @@ def build_artifact(
             "all_present_surfaces_same_model": all_present_surfaces_same_model,
             "tunnel_expected_model_advertised": tunnel_expected_model_advertised,
             "all_required_surfaces_present": all_required_present,
+            "local_responses_streaming_guards_pass": local_contract.get(
+                "local_responses_streaming_guards_pass"
+            )
+            is True,
+            "local_empty_xml_arguments_fail_closed": local_contract.get(
+                "local_empty_xml_arguments_fail_closed"
+            )
+            is True,
+            "local_output_index_ordering_guard": local_contract.get(
+                "local_output_index_ordering_guard"
+            )
+            is True,
+            "gateway_argument_stream_passthrough_guard": local_contract.get(
+                "gateway_argument_stream_passthrough_guard"
+            )
+            is True,
         },
+        "local_source_contract": local_contract,
         "expected": {
             "model": expected_model,
             "function_name": expected_function_name,
@@ -420,6 +506,7 @@ def main() -> None:
     parser.add_argument("--expected-function-name")
     parser.add_argument("--expected-arguments")
     parser.add_argument("--expected-model")
+    parser.add_argument("--noheavy-contract", type=Path, default=DEFAULT_NOHEAVY_CONTRACT)
     parser.add_argument("--require-reasoning-events", action="store_true")
     parser.add_argument("--require-same-model", action="store_true")
     parser.add_argument("--out", type=Path, default=DEFAULT_OUT)
@@ -435,6 +522,7 @@ def main() -> None:
         expected_function_name=args.expected_function_name,
         expected_arguments=args.expected_arguments,
         expected_model=args.expected_model,
+        noheavy_contract=args.noheavy_contract,
         require_reasoning_events=args.require_reasoning_events,
         require_same_model=args.require_same_model,
     )
