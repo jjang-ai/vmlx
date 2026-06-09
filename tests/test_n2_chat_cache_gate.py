@@ -85,6 +85,60 @@ def test_n2_chat_cache_gate_records_requested_probes_for_skipped_runs():
     }
 
 
+def test_n2_chat_cache_gate_writes_failure_artifact_when_server_exits_before_health(
+    tmp_path, monkeypatch
+):
+    model = tmp_path / "Nex-N2-Pro-JANG_1L"
+    model.mkdir()
+    out = tmp_path / "n2.json"
+
+    class FakeProc:
+        pid = 12345
+        returncode = -6
+
+        def poll(self):
+            return -6
+
+        def wait(self, timeout=None):
+            return -6
+
+    monkeypatch.setattr(runner, "memory_preflight", lambda _min_available_gb: None)
+    monkeypatch.setattr(runner, "build_command", lambda _args: ["fake-server"])
+    monkeypatch.setattr(runner, "build_env", lambda: {})
+    monkeypatch.setattr(runner.subprocess, "Popen", lambda *a, **k: FakeProc())
+    monkeypatch.setattr(
+        runner,
+        "wait_health",
+        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("server exited early with code -6")),
+    )
+    monkeypatch.setattr(
+        runner,
+        "resource_snapshot",
+        lambda name, proc=None: {"name": name, "system_memory": {"unit": "GiB"}},
+    )
+    args = SimpleNamespace(
+        model=model,
+        served_model_name="n2-pro-jang1l-chat-proof",
+        out=out,
+        cache_dir=tmp_path / "cache",
+        min_available_gb=0.0,
+        port=8899,
+        load_timeout_s=1,
+        include_tool_probe=False,
+        include_responses_probe=False,
+        include_responses_stream_probe=False,
+        include_l2_restart_probe=False,
+    )
+
+    result = runner.run(args)
+
+    assert result["status"] == "fail"
+    assert result["phase"] == "server_startup"
+    assert result["server_exit"] == -6
+    assert "server exited early with code -6" in result["error"]
+    assert result["server_log"].endswith("n2.server.log")
+
+
 def test_n2_chat_cache_gate_extracts_tool_call_arguments():
     response = {
         "code": 200,

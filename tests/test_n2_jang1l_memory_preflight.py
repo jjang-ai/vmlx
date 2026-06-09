@@ -95,4 +95,42 @@ def test_n2_jang1l_memory_preflight_marks_scheduled_when_headroom_available(tmp_
     assert result["decision"] == "schedule_live_proof"
     assert result["launch_safe"] is True
     assert result["memory_gap_gib"] == 0.0
-    assert result["reason"] == "payload plus required runtime headroom fits current available memory"
+    assert result["reason"] == (
+        "payload plus required Metal/runtime headroom fits current available memory"
+    )
+
+
+def test_n2_jang1l_memory_preflight_default_headroom_blocks_observed_oom_margin(
+    tmp_path, monkeypatch
+):
+    model = tmp_path / "Nex-N2-Pro-JANG_1L"
+    _write_json(
+        model / "model.safetensors.index.json",
+        {
+            "metadata": {"total_size": 118726363464},
+            "weight_map": {},
+        },
+    )
+    _write_json(model / "config.json", {"model_type": "qwen3_5_moe"})
+    monkeypatch.setattr(
+        runner,
+        "memory_snapshot",
+        lambda: {"unit": "GiB", "total_gib": 128.0, "available_gib": 115.7},
+    )
+
+    result = runner.build_preflight(
+        SimpleNamespace(
+            model=model,
+            out=tmp_path / "out.json",
+            required_extra_headroom_gib=runner.DEFAULT_REQUIRED_EXTRA_HEADROOM_GIB,
+        )
+    )
+
+    assert runner.DEFAULT_REQUIRED_EXTRA_HEADROOM_GIB == 8.0
+    assert result["indexed_payload_gib"] == 110.57
+    assert result["required_available_gib"] == 118.57
+    assert result["decision"] == "do_not_launch"
+    assert result["launch_safe"] is False
+    assert result["reason"] == (
+        "payload plus required Metal/runtime headroom exceeds current available memory"
+    )

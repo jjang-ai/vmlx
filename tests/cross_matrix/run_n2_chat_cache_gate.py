@@ -815,6 +815,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     health: dict[str, Any] | None = None
     final_health: dict[str, Any] | None = None
     server_exit: int | None = None
+    run_error: Exception | None = None
     try:
         with log_path.open("w", encoding="utf-8") as log_file:
             proc = subprocess.Popen(
@@ -918,6 +919,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 )
             final_health = get_json(f"http://127.0.0.1:{args.port}/health", timeout=5)
             telemetry.append(resource_snapshot("after_requests", proc))
+    except Exception as exc:  # noqa: BLE001 - live diagnostic artifact
+        run_error = exc
     finally:
         if proc is not None and proc.poll() is None:
             try:
@@ -933,6 +936,26 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                     proc.kill()
                 proc.wait(timeout=10)
             server_exit = proc.returncode
+        elif proc is not None:
+            server_exit = proc.returncode
+
+    if run_error is not None:
+        return {
+            "schema": "vmlx-n2-chat-cache-gate-v1",
+            "status": "fail",
+            "phase": "server_startup" if health is None else "request_probe",
+            "model": str(args.model),
+            "served_model_name": args.served_model_name,
+            "cmd": cmd,
+            "health": health,
+            "final_health": final_health,
+            "rows": rows,
+            "error": f"{type(run_error).__name__}: {run_error}",
+            "telemetry": telemetry,
+            "server_log": str(log_path),
+            "server_exit": server_exit,
+            "requested_probes": requested_probes(args),
+        }
 
     cache_hit_row = next((row for row in rows if row.get("mode") == "cache_hit"), {})
     cache_hit_usage = cache_hit_row.get("usage") if isinstance(cache_hit_row, dict) else {}

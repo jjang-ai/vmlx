@@ -55,7 +55,7 @@ def test_objective_proof_digest_tracks_n2_pro_397b_release_blocker():
     )
     assert row["details"]["local_artifact_probe"]["no_load"] is True
     assert row["details"]["local_artifact_probe"]["indexed_payload_gib"] == 110.57
-    assert row["details"]["local_artifact_probe"]["required_available_gib"] == 114.57
+    assert row["details"]["local_artifact_probe"]["required_available_gib"] == 118.57
     assert row["details"]["noheavy_contracts"]["n2_family_policy"] is True
     assert "runtime_cache_api_ui_live_proof" in row["details"]["required_next_evidence"]
 

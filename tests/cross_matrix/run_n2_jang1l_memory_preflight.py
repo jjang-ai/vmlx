@@ -18,6 +18,7 @@ from typing import Any
 REPO = Path(__file__).resolve().parents[2]
 DEFAULT_MODEL = Path("/Users/example/.mlxstudio/models/JANGQ-AI/Nex-N2-Pro-JANG_1L")
 DEFAULT_OUT = REPO / "build/current-n2-pro-jang1l-local-memory-preflight-20260609.json"
+DEFAULT_REQUIRED_EXTRA_HEADROOM_GIB = 8.0
 
 
 def _load_json(path: Path) -> dict[str, Any]:
@@ -113,9 +114,9 @@ def build_preflight(args: argparse.Namespace) -> dict[str, Any]:
     architecture = architectures[0] if architectures else None
     decision = "schedule_live_proof" if launch_safe else "do_not_launch"
     reason = (
-        "payload plus required runtime headroom fits current available memory"
+        "payload plus required Metal/runtime headroom fits current available memory"
         if launch_safe
-        else "payload plus required runtime headroom exceeds current available memory"
+        else "payload plus required Metal/runtime headroom exceeds current available memory"
     )
     if not model.exists():
         decision = "missing_model"
@@ -166,7 +167,11 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--model", type=Path, default=DEFAULT_MODEL)
     parser.add_argument("--out", type=Path, default=DEFAULT_OUT)
-    parser.add_argument("--required-extra-headroom-gib", type=float, default=4.0)
+    parser.add_argument(
+        "--required-extra-headroom-gib",
+        type=float,
+        default=DEFAULT_REQUIRED_EXTRA_HEADROOM_GIB,
+    )
     args = parser.parse_args(argv)
 
     result = build_preflight(args)
