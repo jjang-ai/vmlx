@@ -685,6 +685,7 @@ def test_current_regression_suite_hashes_panel_api_settings_sources():
         "panel/tests/interleaved-reasoning-render.test.ts",
         "panel/tests/model-config-registry.test.ts",
         "panel/tests/settings-flow.test.ts",
+        "panel/tests/tool-status-responsiveness.test.ts",
         "tests/cross_matrix/run_api_surface_contract.py",
         "tests/cross_matrix/run_max_output_context_contract.py",
         "tests/cross_matrix/run_noheavy_panel_settings_contract.py",
@@ -1059,6 +1060,26 @@ def test_noheavy_api_cache_contract_includes_structured_repair_rates():
     command = " ".join(gate.COMMANDS["structured_output_repair_contracts"])
     assert "tests/test_structured_output_repair_report.py" in command
     assert "repair_records_reports_raw_and_repaired_rates" in command
+
+
+def test_noheavy_api_cache_contract_includes_responses_gateway_tool_and_stale_port_rows():
+    from tests.cross_matrix import run_noheavy_api_cache_contract as gate
+    from tests.cross_matrix import release_regression_manifest as manifest
+
+    markers = gate.REQUIRED_NOHEAVY_API_CACHE_TEST_MARKERS
+
+    assert "passes Responses function-call argument SSE through unchanged" in markers
+    assert "returns backend-unavailable for stale Responses session ports" in markers
+    assert "gateway_responses_function_call_arguments_streaming" in (
+        manifest.EXPECTED_CURRENT_NOHEAVY_API_CACHE_CHECKS
+    )
+    assert "gateway_stale_responses_port_rejection" in (
+        manifest.EXPECTED_CURRENT_NOHEAVY_API_CACHE_CHECKS
+    )
+    assert "panel/tests/api-gateway-single-model.behavior.test.ts" in gate.SOURCE_HASH_FILES
+    command = " ".join(gate.COMMANDS["panel_gateway_contracts"])
+    assert "passes Responses function-call argument SSE through unchanged" in command
+    assert "returns backend-unavailable for stale Responses session ports" in command
 
 
 def test_noheavy_api_cache_contract_includes_response_format_docs_boundary():

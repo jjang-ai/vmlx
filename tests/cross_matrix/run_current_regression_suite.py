@@ -80,6 +80,7 @@ CURRENT_SUITE_SOURCE_HASH_FILES = (
     "panel/tests/model-config-registry.test.ts",
     "panel/tests/generation-defaults.test.ts",
     "panel/tests/settings-flow.test.ts",
+    "panel/tests/tool-status-responsiveness.test.ts",
     "tests/cross_matrix/release_regression_manifest.py",
     "tests/cross_matrix/run_api_surface_contract.py",
     "tests/cross_matrix/run_cache_architecture_contract.py",

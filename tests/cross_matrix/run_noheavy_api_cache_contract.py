@@ -131,6 +131,8 @@ REQUIRED_NOHEAVY_API_CACHE_TEST_MARKERS = (
     "test_hybrid_ssm_capture_stores_block_aligned_checkpoints",
     "allows gateway startup on ports used only by stopped or remote saved sessions",
     "auto-switches to a standby model by waking it before direct OpenAI streaming",
+    "passes Responses function-call argument SSE through unchanged",
+    "returns backend-unavailable for stale Responses session ports",
 )
 
 COMMANDS: dict[str, list[str]] = {
@@ -331,7 +333,9 @@ COMMANDS: dict[str, list[str]] = {
         "--testNamePattern",
         (
             "allows gateway startup on ports used only by stopped or remote saved sessions|"
-            "auto-switches to a standby model by waking it before direct OpenAI streaming"
+            "auto-switches to a standby model by waking it before direct OpenAI streaming|"
+            "passes Responses function-call argument SSE through unchanged|"
+            "returns backend-unavailable for stale Responses session ports"
         ),
     ],
 }
@@ -532,6 +536,16 @@ def build_artifact(root: Path) -> dict[str, Any]:
         "gateway_standby_wake_routing": (
             panel_gateway_ok
             and "auto-switches to a standby model by waking it before direct OpenAI streaming"
+            not in missing_markers
+        ),
+        "gateway_responses_function_call_arguments_streaming": (
+            panel_gateway_ok
+            and "passes Responses function-call argument SSE through unchanged"
+            not in missing_markers
+        ),
+        "gateway_stale_responses_port_rejection": (
+            panel_gateway_ok
+            and "returns backend-unavailable for stale Responses session ports"
             not in missing_markers
         ),
         "dsv4_native_cache_status": (
