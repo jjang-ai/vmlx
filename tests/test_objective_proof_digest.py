@@ -61,6 +61,16 @@ def test_objective_proof_digest_tracks_n2_pro_397b_release_blocker():
         "build/current-n2-jangtq2-chat-cache-responses-proof-after-responses-parser-20260609.json"
         in row["evidence"]
     )
+    assert "build/current-n2-jang1l-chat-cache-proof-20260609.json" in row["evidence"]
+    assert row["details"]["jang1l_live_gate"]["artifact"] == (
+        "build/current-n2-jang1l-chat-cache-proof-20260609.json"
+    )
+    assert row["details"]["jang1l_live_gate"]["status"] == "skipped"
+    assert row["details"]["jang1l_live_gate"]["reason"] == (
+        "n2_jang1l_insufficient_available_memory"
+    )
+    assert row["details"]["jang1l_live_gate"]["indexed_payload_gib"] == 110.57
+    assert row["details"]["jang1l_live_gate"]["required_available_gib"] == 118.57
     assert (
         "build/current-n2-jangtq2-chat-cache-responses-l2-proof-20260609.json"
         in row["evidence"]

@@ -989,6 +989,14 @@ def test_full_release_objective_checklist_tracks_open_n2_pro_objective_row(
                             "memory_preflight_decision": "do_not_launch",
                             "launch_safe": False,
                         },
+                        "jang1l_live_gate": {
+                            "artifact": "build/current-n2-jang1l-chat-cache-proof-20260609.json",
+                            "status": "skipped",
+                            "reason": "n2_jang1l_insufficient_available_memory",
+                            "available_gib": 111.61,
+                            "required_available_gib": 118.57,
+                            "memory_gap_gib": 6.96,
+                        },
                         "noheavy_contracts": {
                             "api_cache": "pass",
                             "cache_architecture": "pass",
@@ -1019,6 +1027,10 @@ def test_full_release_objective_checklist_tracks_open_n2_pro_objective_row(
     assert n2_rows[0]["detail"]["status"] == "open"
     assert n2_rows[0]["detail"]["local_artifact_probe"]["artifact_present"] is True
     assert n2_rows[0]["detail"]["local_artifact_probe"]["memory_preflight_decision"] == "do_not_launch"
+    assert n2_rows[0]["detail"]["jang1l_live_gate"]["status"] == "skipped"
+    assert n2_rows[0]["detail"]["jang1l_live_gate"]["reason"] == (
+        "n2_jang1l_insufficient_available_memory"
+    )
     assert "runtime_cache_api_ui_live_proof" in n2_rows[0]["detail"][
         "required_next_evidence"
     ]

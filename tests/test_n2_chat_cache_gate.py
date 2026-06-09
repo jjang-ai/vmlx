@@ -85,6 +85,57 @@ def test_n2_chat_cache_gate_records_requested_probes_for_skipped_runs():
     }
 
 
+def test_n2_chat_cache_gate_skips_jang1l_when_payload_exceeds_available_headroom(
+    tmp_path, monkeypatch
+):
+    model = tmp_path / "Nex-N2-Pro-JANG_1L"
+    model.mkdir()
+    (model / "model.safetensors.index.json").write_text(
+        '{"metadata":{"total_size":"118111600640"},"weight_map":{"a":"a.safetensors"}}'
+    )
+    out = tmp_path / "n2.json"
+    popen_called = False
+
+    def fake_popen(*_args, **_kwargs):
+        nonlocal popen_called
+        popen_called = True
+        raise AssertionError("server should not launch")
+
+    monkeypatch.setattr(
+        runner,
+        "resource_snapshot",
+        lambda name, proc=None: {
+            "name": name,
+            "system_memory": {"unit": "GiB", "available_gib": 111.0},
+        },
+    )
+    monkeypatch.setattr(runner.subprocess, "Popen", fake_popen)
+    args = SimpleNamespace(
+        model=model,
+        served_model_name="n2-pro-jang1l-chat-proof",
+        out=out,
+        cache_dir=tmp_path / "cache",
+        min_available_gb=24.0,
+        port=8899,
+        load_timeout_s=1,
+        include_tool_probe=False,
+        include_responses_probe=False,
+        include_responses_stream_probe=False,
+        include_l2_restart_probe=False,
+    )
+
+    result = runner.run(args)
+
+    assert popen_called is False
+    assert result["status"] == "skipped"
+    assert result["reason"] == "n2_jang1l_insufficient_available_memory"
+    assert result["indexed_payload_gib"] == 110.0
+    assert result["required_available_gib"] == 118.0
+    assert result["available_gib"] == 111.0
+    assert result["memory_gap_gib"] == 7.0
+    assert result["release_boundary"].startswith("N2 JANG_1L live proof was not launched")
+
+
 def test_n2_chat_cache_gate_writes_failure_artifact_when_server_exits_before_health(
     tmp_path, monkeypatch
 ):

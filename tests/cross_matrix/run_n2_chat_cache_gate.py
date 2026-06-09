@@ -31,6 +31,7 @@ REPO = Path(__file__).resolve().parents[2]
 DEFAULT_MODEL = Path("/Users/example/.mlxstudio/models/JANGQ-AI/Nex-N2-Pro-JANGTQ2")
 DEFAULT_OUT = REPO / "build/current-n2-jangtq2-chat-cache-proof-20260609.json"
 DEFAULT_CACHE_DIR = REPO / "build/current-n2-jangtq2-chat-cache-proof-block-cache-20260609"
+DEFAULT_JANG1L_REQUIRED_EXTRA_HEADROOM_GIB = 8.0
 
 
 def resource_snapshot(name: str, proc: subprocess.Popen | None = None) -> dict[str, Any]:
@@ -85,6 +86,84 @@ def memory_preflight(min_available_gb: float) -> dict[str, Any] | None:
             "available_gb": available,
             "memory_gap_gb": gap_gib,
             "telemetry": [snap],
+        }
+    return None
+
+
+def _as_int(value: Any) -> int:
+    if isinstance(value, bool):
+        return 0
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value)
+    if isinstance(value, str):
+        try:
+            return int(value)
+        except ValueError:
+            return 0
+    return 0
+
+
+def _is_n2_jang1l_model(args: argparse.Namespace) -> bool:
+    model_text = str(getattr(args, "model", ""))
+    served = str(getattr(args, "served_model_name", ""))
+    return "JANG_1L" in model_text or "jang1l" in served.lower()
+
+
+def n2_jang1l_payload_preflight(args: argparse.Namespace) -> dict[str, Any] | None:
+    if not _is_n2_jang1l_model(args):
+        return None
+    model = Path(args.model)
+    index_path = model / "model.safetensors.index.json"
+    if not index_path.exists():
+        return None
+    try:
+        index = json.loads(index_path.read_text(encoding="utf-8"))
+    except Exception as exc:  # noqa: BLE001 - diagnostic artifact
+        return {
+            "status": "skipped",
+            "reason": "n2_jang1l_index_unreadable",
+            "error": f"{type(exc).__name__}: {exc}",
+        }
+    metadata = index.get("metadata") if isinstance(index, dict) else {}
+    metadata = metadata if isinstance(metadata, dict) else {}
+    payload_bytes = _as_int(metadata.get("total_size"))
+    if payload_bytes <= 0:
+        payload_bytes = sum(path.stat().st_size for path in model.glob("*.safetensors"))
+    if payload_bytes <= 0:
+        return None
+
+    snap = resource_snapshot("n2_jang1l_preflight")
+    memory = snap.get("system_memory") if isinstance(snap.get("system_memory"), dict) else {}
+    available = memory.get("available_gib", memory.get("available_gb"))
+    payload_gib = round(payload_bytes / (1024**3), 2)
+    headroom = float(
+        getattr(
+            args,
+            "jang1l_required_extra_headroom_gib",
+            DEFAULT_JANG1L_REQUIRED_EXTRA_HEADROOM_GIB,
+        )
+    )
+    required_available = round(payload_gib + headroom, 2)
+    if isinstance(available, (int, float)) and available < required_available:
+        gap = round(required_available - float(available), 2)
+        return {
+            "status": "skipped",
+            "reason": "n2_jang1l_insufficient_available_memory",
+            "unit": "GiB",
+            "available_gib": available,
+            "required_available_gib": required_available,
+            "memory_gap_gib": gap,
+            "indexed_payload_gib": payload_gib,
+            "required_extra_headroom_gib": headroom,
+            "telemetry": [snap],
+            "release_boundary": (
+                "N2 JANG_1L live proof was not launched because the indexed payload "
+                "plus Metal/runtime headroom exceeds current available memory. "
+                "128 GiB total RAM is not sufficient evidence without current "
+                "available headroom."
+            ),
         }
     return None
 
@@ -807,6 +886,17 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         )
         return preflight
 
+    jang1l_preflight = n2_jang1l_payload_preflight(args)
+    if jang1l_preflight is not None:
+        jang1l_preflight.update(
+            {
+                "model": str(args.model),
+                "artifact": str(args.out),
+                "requested_probes": requested_probes(args),
+            }
+        )
+        return jang1l_preflight
+
     log_path = args.out.with_suffix(".server.log")
     cmd = build_command(args)
     telemetry = [resource_snapshot("before_launch")]
@@ -1115,6 +1205,11 @@ def main() -> int:
     parser.add_argument("--load-timeout-s", type=int, default=900)
     parser.add_argument("--request-timeout-s", type=int, default=240)
     parser.add_argument("--min-available-gb", type=float, default=24.0)
+    parser.add_argument(
+        "--jang1l-required-extra-headroom-gib",
+        type=float,
+        default=DEFAULT_JANG1L_REQUIRED_EXTRA_HEADROOM_GIB,
+    )
     parser.add_argument("--prefill-batch-size", type=int, default=512)
     parser.add_argument("--prefill-step-size", type=int, default=1024)
     parser.add_argument("--completion-batch-size", type=int, default=256)

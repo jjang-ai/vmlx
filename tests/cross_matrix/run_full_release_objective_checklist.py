@@ -607,6 +607,7 @@ def _n2_pro_397b_checks(data: dict[str, Any]) -> list[dict[str, Any]]:
         "requirement": row.get("requirement") if isinstance(row, dict) else None,
         "evidence": row.get("evidence") if isinstance(row, dict) else None,
         "local_artifact_probe": details.get("local_artifact_probe"),
+        "jang1l_live_gate": details.get("jang1l_live_gate"),
         "required_next_evidence": details.get("required_next_evidence"),
     }
     return [

@@ -198,6 +198,9 @@ CACHE_ARCHITECTURE_CONTRACT_REL = "build/current-cache-architecture-contract-aft
 N2_PRO_JANG1L_LOCAL_MEMORY_PREFLIGHT_REL = (
     "build/current-n2-pro-jang1l-local-memory-preflight-20260609.json"
 )
+N2_PRO_JANG1L_CHAT_CACHE_PROOF_REL = (
+    "build/current-n2-jang1l-chat-cache-proof-20260609.json"
+)
 N2_API_CACHE_CONTRACT_REL = (
     "build/current-noheavy-api-cache-contract-after-mimo-n2-runtime-refresh-20260609.json"
 )
@@ -5550,6 +5553,7 @@ def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
     n2_jangtq2_l2_proof = _load(
         root, N2_JANGTQ2_CHAT_CACHE_RESPONSES_L2_PROOF_REL
     )
+    n2_jang1l_chat_cache_proof = _load(root, N2_PRO_JANG1L_CHAT_CACHE_PROOF_REL)
     gemma_qat_inventory = _load(root, GEMMA_QAT_NATIVE_MXFP4_INVENTORY_REL)
     panel_settings_contract = _load(root, PANEL_SETTINGS_CONTRACT_REL)
     max_output_context_contract_rel, max_output_context_contract = _load_first_present(
@@ -7212,6 +7216,7 @@ def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
             CURRENT_RELEASE_REGRESSION_MANIFEST_REL,
             str(DEFAULT_OUT),
             N2_PRO_JANG1L_LOCAL_MEMORY_PREFLIGHT_REL,
+            N2_PRO_JANG1L_CHAT_CACHE_PROOF_REL,
             N2_JANGTQ2_CHAT_CACHE_RESPONSES_PROOF_REL,
             N2_JANGTQ2_CHAT_CACHE_RESPONSES_L2_PROOF_REL,
             N2_API_CACHE_CONTRACT_REL,
@@ -7262,6 +7267,29 @@ def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
                     "current memory preflight is only a launch-safety warning. "
                     "JANG_1L should be treated as careful-RAM live-proof work, "
                     "not permanent infeasibility; this is not live runtime proof."
+                ),
+            },
+            "jang1l_live_gate": {
+                "artifact": N2_PRO_JANG1L_CHAT_CACHE_PROOF_REL,
+                "status": n2_jang1l_chat_cache_proof.get("status"),
+                "reason": n2_jang1l_chat_cache_proof.get("reason"),
+                "model": n2_jang1l_chat_cache_proof.get("model"),
+                "available_gib": n2_jang1l_chat_cache_proof.get("available_gib"),
+                "required_available_gib": n2_jang1l_chat_cache_proof.get(
+                    "required_available_gib"
+                ),
+                "memory_gap_gib": n2_jang1l_chat_cache_proof.get("memory_gap_gib"),
+                "indexed_payload_gib": n2_jang1l_chat_cache_proof.get(
+                    "indexed_payload_gib"
+                ),
+                "required_extra_headroom_gib": n2_jang1l_chat_cache_proof.get(
+                    "required_extra_headroom_gib"
+                ),
+                "requested_probes": n2_jang1l_chat_cache_proof.get(
+                    "requested_probes"
+                ),
+                "release_boundary": n2_jang1l_chat_cache_proof.get(
+                    "release_boundary"
                 ),
             },
             "noheavy_contracts": {
