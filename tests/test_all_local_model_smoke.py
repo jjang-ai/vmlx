@@ -259,8 +259,11 @@ def test_classify_model_marks_mimo_v2_jang2l_as_multimodal_xml_tools_no_mtp(tmp_
     assert row["model_type"] == "mimo_v2"
     assert row["is_mllm"] is True
     assert row["supports_video"] is False
-    assert row["supports_thinking"] is True
+    assert row["supports_thinking"] is False
     assert row["supports_tools"] is True
+    assert row["capabilities"]["reasoning"]["supported"] is False
+    assert row["capabilities"]["reasoning"]["parser"] is None
+    assert row["capabilities"]["tools"]["parser"] == "xml_function"
     assert row["has_mtp"] is False
     assert row["cache_family"] == "mimo_v2_hybrid_swa"
 
@@ -307,14 +310,17 @@ def test_classify_model_reads_mimo_v2_embedded_config_capabilities(tmp_path):
     assert row["capabilities"]["modalities"] == ["text"]
     assert row["capabilities"]["preserved_modalities"] == ["vision", "audio"]
     assert row["capabilities"]["unwired_modalities"] == ["vision", "audio"]
-    assert row["supports_thinking"] is True
+    assert row["supports_thinking"] is False
     assert row["supports_tools"] is True
+    assert row["capabilities"]["reasoning"]["supported"] is False
+    assert row["capabilities"]["reasoning"]["parser"] is None
+    assert row["capabilities"]["tools"]["parser"] == "xml_function"
     assert mod.probe_options_from_capabilities(
         row,
         row["capabilities"],
         include_media=True,
         include_video=True,
-    ) == {"include_media": False, "include_video": False}
+    ) == {"include_media": False, "include_video": False, "include_audio": False}
 
 
 def test_classify_model_marks_mimo_v2_without_jang_config_as_xml_tool_family(tmp_path):
@@ -335,8 +341,11 @@ def test_classify_model_marks_mimo_v2_without_jang_config_as_xml_tool_family(tmp
     row = mod.classify_model_dir(model_dir)
 
     assert row["model_type"] == "mimo_v2"
-    assert row["supports_thinking"] is True
+    assert row["supports_thinking"] is False
     assert row["supports_tools"] is True
+    assert row["capabilities"]["reasoning"]["supported"] is False
+    assert row["capabilities"]["reasoning"]["parser"] is None
+    assert row["capabilities"]["tools"]["parser"] == "xml_function"
     assert row["has_mtp"] is False
     assert row["cache_family"] == "mimo_v2_hybrid_swa"
     assert row["has_jang_config"] is False

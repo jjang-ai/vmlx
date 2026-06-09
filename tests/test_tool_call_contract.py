@@ -6,7 +6,7 @@ def test_tool_call_contract_default_out_tracks_current_release_proof_artifact():
     from tests.cross_matrix import run_tool_call_contract as gate
 
     assert gate.DEFAULT_OUT == Path(
-        "build/current-tool-call-contract-20260528-tool-parser-loop-matrix.json"
+        "build/current-tool-call-contract-after-jangtq2-objective-refresh-20260607.json"
     )
 
 

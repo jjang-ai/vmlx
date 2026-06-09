@@ -5,7 +5,7 @@ def test_model_artifact_format_contract_default_out_tracks_current_release_proof
     from tests.cross_matrix import run_model_artifact_format_contract as gate
 
     assert gate.DEFAULT_OUT == Path(
-        "build/current-model-artifact-format-contract-20260531-post-step-lfm-refresh.json"
+        "build/current-model-artifact-format-contract-after-mllm-tight-memory-guard-20260607.json"
     )
 
 
