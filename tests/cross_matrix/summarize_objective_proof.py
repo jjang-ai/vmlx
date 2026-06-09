@@ -204,6 +204,9 @@ N2_API_CACHE_CONTRACT_REL = (
 N2_CACHE_ARCHITECTURE_CONTRACT_REL = (
     "build/current-cache-architecture-contract-after-mimo-n2-runtime-refresh-20260609.json"
 )
+GEMMA_QAT_NATIVE_MXFP4_INVENTORY_REL = (
+    "build/current-gemma-qat-native-mxfp4-local-inventory-after-source-smoke-map-20260609.json"
+)
 TOOL_CALL_CONTRACT_REL = "build/current-tool-call-contract-after-cross-model-loop-metrics-20260609.json"
 PANEL_SETTINGS_CONTRACT_REL = "build/current-panel-settings-contract-proof-20260601-cache-ui-storage-quant.json"
 MAX_OUTPUT_CONTEXT_CONTRACT_REL = "build/current-max-output-context-contract-after-jangtq2-objective-refresh-20260607.json"
@@ -5518,6 +5521,7 @@ def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
     n2_api_cache_contract = _load(root, N2_API_CACHE_CONTRACT_REL)
     n2_cache_architecture_contract = _load(root, N2_CACHE_ARCHITECTURE_CONTRACT_REL)
     n2_local_memory_preflight = _load(root, N2_PRO_JANG1L_LOCAL_MEMORY_PREFLIGHT_REL)
+    gemma_qat_inventory = _load(root, GEMMA_QAT_NATIVE_MXFP4_INVENTORY_REL)
     panel_settings_contract = _load(root, PANEL_SETTINGS_CONTRACT_REL)
     max_output_context_contract_rel, max_output_context_contract = _load_first_present(
         root,
@@ -7034,6 +7038,62 @@ def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
         ),
         details=all_local_smoke_details,
     )
+    gemma_qat_checks = (
+        gemma_qat_inventory.get("checks")
+        if isinstance(gemma_qat_inventory.get("checks"), dict)
+        else {}
+    )
+    gemma_qat_missing = gemma_qat_inventory.get("missing_required_rows")
+    gemma_qat_open = gemma_qat_inventory.get("open_required_rows")
+    gemma_qat_source_open = gemma_qat_inventory.get("source_live_smoke_open_rows")
+    gemma_qat_release_ok = (
+        gemma_qat_inventory.get("status") == "pass"
+        and gemma_qat_checks.get("all_required_live_proofs_present") is True
+        and gemma_qat_missing == []
+        and gemma_qat_open == []
+    )
+    _add(
+        requirements,
+        "Gemma QAT/native MXFP4 E2B/E4B/12B/26B/31B runtime/media/cache/API/UI quality is release-cleared",
+        _status(gemma_qat_release_ok),
+        [
+            GEMMA_QAT_NATIVE_MXFP4_INVENTORY_REL,
+            str(DEFAULT_OUT),
+            CURRENT_RELEASE_REGRESSION_MANIFEST_REL,
+        ],
+        caveat=(
+            None
+            if gemma_qat_release_ok
+            else (
+                "Gemma QAT/native MXFP4 source-smoke coverage is tracked "
+                "separately from release clearance. Do not release-claim E2B, "
+                "E4B, 12B, 26B, or 31B/31V QAT/native MXFP4 rows until full "
+                "live media/tool/Responses/cache/UI/installed-app proof exists "
+                "for the advertised modalities and model-owned defaults."
+            )
+        ),
+        details={
+            "inventory_status": gemma_qat_inventory.get("status"),
+            "missing_required_rows": gemma_qat_missing,
+            "open_required_rows": gemma_qat_open,
+            "source_live_smoke_open_rows": gemma_qat_source_open,
+            "checks": {
+                "all_required_source_live_smokes_present": gemma_qat_checks.get(
+                    "all_required_source_live_smokes_present"
+                ),
+                "all_required_live_proofs_present": gemma_qat_checks.get(
+                    "all_required_live_proofs_present"
+                ),
+            },
+            "required_next_evidence": [
+                "same-model raw SSE direct/gateway/tunnel Responses tool-argument streaming",
+                "installed-app startup and UI settings parity",
+                "visual/audio/video live proof for each advertised bundle modality",
+                "mixed-SWA cache telemetry, TurboQuant KV boundaries, and L2 restart restore",
+                "model-owned generation defaults plus parser/reasoning/tool behavior",
+            ],
+        },
+    )
     mimo_quality_ok, mimo_quality_details = _mimo_v2_jang2l_quality_detail(root)
     mimo_quality_open = []
     if mimo_quality_details.get("model_upload_action_required"):
@@ -7113,8 +7173,21 @@ def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
                 "indexed_payload_gb_decimal": n2_local_memory_preflight.get(
                     "indexed_payload_gb_decimal"
                 ),
+                "indexed_payload_gib": n2_local_memory_preflight.get(
+                    "indexed_payload_gib"
+                ),
+                "required_available_gib": n2_local_memory_preflight.get(
+                    "required_available_gib"
+                ),
+                "available_gib": n2_local_memory_preflight.get("available_gib"),
+                "memory_gap_gib": n2_local_memory_preflight.get("memory_gap_gib"),
                 "memory_preflight_decision": n2_local_memory_preflight.get("decision"),
                 "launch_safe": n2_local_memory_preflight.get("launch_safe"),
+                "classification": n2_local_memory_preflight.get("classification"),
+                "no_load": n2_local_memory_preflight.get("no_load"),
+                "artifact_profile": n2_local_memory_preflight.get("artifact_profile"),
+                "model_type": n2_local_memory_preflight.get("model_type"),
+                "weights": n2_local_memory_preflight.get("weights"),
                 "vm_free_plus_speculative_gib": n2_local_memory_preflight.get(
                     "vm_free_plus_speculative_gib"
                 ),

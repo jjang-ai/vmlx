@@ -746,6 +746,8 @@ def test_current_regression_suite_hashes_focused_pytest_gate_sources():
         "tests/test_agents_release_control_plane.py",
         "tests/cross_matrix/run_mimo_v2_cache_vs_nocache_next_token.py",
         "tests/test_mimo_v2_cache_vs_nocache_next_token.py",
+        "tests/cross_matrix/run_n2_jang1l_memory_preflight.py",
+        "tests/test_n2_jang1l_memory_preflight.py",
         "tests/cross_matrix/run_n2_chat_cache_gate.py",
         "tests/test_n2_chat_cache_gate.py",
         "tests/test_mimo_v2_no_source_exactness_classifier.py",
