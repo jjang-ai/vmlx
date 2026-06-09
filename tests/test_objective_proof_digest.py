@@ -18,7 +18,7 @@ def test_objective_proof_digest_default_out_tracks_current_release_proof_artifac
     from tests.cross_matrix import summarize_objective_proof as objective
 
     assert objective.DEFAULT_OUT == Path(
-        "build/current-objective-proof-after-pr-intake-matrix-refresh-20260609.json"
+        "build/current-objective-proof-after-n2-jangtq2-live-proof-20260609.json"
     )
 
 
@@ -57,7 +57,22 @@ def test_objective_proof_digest_tracks_n2_pro_397b_release_blocker():
     assert row["details"]["local_artifact_probe"]["indexed_payload_gib"] == 110.57
     assert row["details"]["local_artifact_probe"]["required_available_gib"] == 118.57
     assert row["details"]["noheavy_contracts"]["n2_family_policy"] is True
-    assert "runtime_cache_api_ui_live_proof" in row["details"]["required_next_evidence"]
+    assert (
+        "build/current-n2-jangtq2-chat-cache-responses-proof-after-responses-parser-20260609.json"
+        in row["evidence"]
+    )
+    assert row["details"]["jangtq2_live_proof"]["status"] == "pass"
+    assert row["details"]["jangtq2_live_proof"]["stable_text"] is True
+    assert row["details"]["jangtq2_live_proof"]["tool_probe_pass"] is True
+    assert row["details"]["jangtq2_live_proof"]["responses_probe_pass"] is True
+    assert row["details"]["jangtq2_live_proof"]["responses_stream_probe_pass"] is True
+    assert row["details"]["jangtq2_live_proof"]["cache_hit_cache_detail"] == "paged+ssm"
+    assert row["details"]["jangtq2_live_proof"]["cache_hit_cached_tokens"] > 0
+    assert row["details"]["jangtq2_live_proof"]["block_disk_writes"] > 0
+    assert row["details"]["jangtq2_live_proof"]["ssm_disk_stores"] > 0
+    assert "JANG_1L runtime/cache/API/UI live proof" in row["details"][
+        "required_next_evidence"
+    ]
 
 
 def test_objective_proof_digest_tracks_gemma_qat_native_mxfp4_release_blocker():

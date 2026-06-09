@@ -741,6 +741,9 @@ def _write_dsv4_green_artifact(tmp_path: Path) -> None:
 
 
 def _write_green_n2_objective_digest(tmp_path: Path) -> None:
+    assert checklist.OBJECTIVE_DIGEST == Path(
+        "build/current-objective-proof-after-n2-jangtq2-live-proof-20260609.json"
+    )
     _write_json(
         tmp_path / checklist.OBJECTIVE_DIGEST,
         {

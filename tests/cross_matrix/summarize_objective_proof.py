@@ -62,7 +62,7 @@ from tests.cross_matrix.release_regression_manifest import (
 
 
 DEFAULT_OUT = Path(
-    "build/current-objective-proof-after-pr-intake-matrix-refresh-20260609.json"
+    "build/current-objective-proof-after-n2-jangtq2-live-proof-20260609.json"
 )
 CURRENT_RELEASE_REGRESSION_MANIFEST_REL = (
     "build/current-release-regression-manifest-after-pr-intake-matrix-refresh-20260609.json"
@@ -203,6 +203,9 @@ N2_API_CACHE_CONTRACT_REL = (
 )
 N2_CACHE_ARCHITECTURE_CONTRACT_REL = (
     "build/current-cache-architecture-contract-after-mimo-n2-runtime-refresh-20260609.json"
+)
+N2_JANGTQ2_CHAT_CACHE_RESPONSES_PROOF_REL = (
+    "build/current-n2-jangtq2-chat-cache-responses-proof-after-responses-parser-20260609.json"
 )
 GEMMA_QAT_NATIVE_MXFP4_INVENTORY_REL = (
     "build/current-gemma-qat-native-mxfp4-local-inventory-after-source-smoke-map-20260609.json"
@@ -5521,6 +5524,7 @@ def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
     n2_api_cache_contract = _load(root, N2_API_CACHE_CONTRACT_REL)
     n2_cache_architecture_contract = _load(root, N2_CACHE_ARCHITECTURE_CONTRACT_REL)
     n2_local_memory_preflight = _load(root, N2_PRO_JANG1L_LOCAL_MEMORY_PREFLIGHT_REL)
+    n2_jangtq2_live_proof = _load(root, N2_JANGTQ2_CHAT_CACHE_RESPONSES_PROOF_REL)
     gemma_qat_inventory = _load(root, GEMMA_QAT_NATIVE_MXFP4_INVENTORY_REL)
     panel_settings_contract = _load(root, PANEL_SETTINGS_CONTRACT_REL)
     max_output_context_contract_rel, max_output_context_contract = _load_first_present(
@@ -7151,6 +7155,7 @@ def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
             CURRENT_RELEASE_REGRESSION_MANIFEST_REL,
             str(DEFAULT_OUT),
             N2_PRO_JANG1L_LOCAL_MEMORY_PREFLIGHT_REL,
+            N2_JANGTQ2_CHAT_CACHE_RESPONSES_PROOF_REL,
             N2_API_CACHE_CONTRACT_REL,
             N2_CACHE_ARCHITECTURE_CONTRACT_REL,
             MODEL_FAMILY_CONTRACT_REL,
@@ -7230,11 +7235,73 @@ def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
                     is True
                 ),
             },
+            "jangtq2_live_proof": {
+                "artifact": N2_JANGTQ2_CHAT_CACHE_RESPONSES_PROOF_REL,
+                "status": n2_jangtq2_live_proof.get("status"),
+                "model": n2_jangtq2_live_proof.get("model"),
+                "served_model_name": n2_jangtq2_live_proof.get("served_model_name"),
+                "stable_text": n2_jangtq2_live_proof.get("stable_text"),
+                "tool_probe_pass": n2_jangtq2_live_proof.get("tool_probe_pass"),
+                "responses_probe_pass": n2_jangtq2_live_proof.get(
+                    "responses_probe_pass"
+                ),
+                "responses_stream_probe_pass": n2_jangtq2_live_proof.get(
+                    "responses_stream_probe_pass"
+                ),
+                "cache_hit_cached_tokens": n2_jangtq2_live_proof.get(
+                    "cache_hit_cached_tokens"
+                ),
+                "cache_hit_cache_detail": n2_jangtq2_live_proof.get(
+                    "cache_hit_cache_detail"
+                ),
+                "block_disk_writes": (
+                    (
+                        (
+                            n2_jangtq2_live_proof.get("final_health")
+                            if isinstance(n2_jangtq2_live_proof.get("final_health"), dict)
+                            else {}
+                        ).get("cache")
+                        or {}
+                    ).get("block_disk_cache")
+                    or {}
+                ).get("disk_writes"),
+                "block_disk_hits": (
+                    (
+                        (
+                            n2_jangtq2_live_proof.get("final_health")
+                            if isinstance(n2_jangtq2_live_proof.get("final_health"), dict)
+                            else {}
+                        ).get("cache")
+                        or {}
+                    ).get("block_disk_cache")
+                    or {}
+                ).get("disk_hits"),
+                "ssm_disk_stores": (
+                    (
+                        (
+                            (
+                                n2_jangtq2_live_proof.get("final_health")
+                                if isinstance(
+                                    n2_jangtq2_live_proof.get("final_health"), dict
+                                )
+                                else {}
+                            ).get("cache")
+                            or {}
+                        ).get("ssm_companion")
+                        or {}
+                    ).get("disk")
+                    or {}
+                ).get("stores"),
+                "boundary": (
+                    "Current-source N2 JANGTQ2 chat/cache/Responses proof only. "
+                    "This does not clear N2 JANG_1L, installed-app/UI parity, "
+                    "media rows, or full release support."
+                ),
+            },
             "required_next_evidence": [
                 "memory_safe_live_launch_or_smaller_runtime_strategy",
-                "runtime_cache_api_ui_live_proof",
+                "JANG_1L runtime/cache/API/UI live proof",
                 "JANG1L local artifact metadata and structural verification",
-                "JANGTQ local artifact metadata and structural verification",
                 "loader/model-family/generation-default/parser detection",
                 "visible text multi-turn output",
                 "required tool, auto tool, no-tool, and tool-result continuation",
