@@ -25,7 +25,7 @@ from typing import Any
 DEFAULT_MODEL_PATH = Path("/Users/example/.mlxstudio/models/JANGQ-AI/MiMo-V2.5-JANGTQ_2")
 DEFAULT_MANIFEST = Path("build/current-mimo-jangtq2-local-manifest-20260607.tsv")
 DEFAULT_OUT = Path(
-    "build/current-mimo-v2-jang2l-current-audit-after-mllm-inputs-embeds-proof-20260609.json"
+    "build/current-mimo-v2-jang2l-current-audit-after-current-text-cache-proof-20260609.json"
 )
 
 STRUCTURAL_ARTIFACT = Path("build/current-mimo-jang2l-local-structural-verify-20260606.json")
@@ -640,6 +640,46 @@ def _all_local_smoke_evidence(data: dict[str, Any]) -> dict[str, Any]:
         and failure.get("label") in {"text_cache_repeat_1", "text_cache_repeat_2"}
         for failure in failures
     )
+    cache_repeat_1 = requests_by_label.get("text_cache_repeat_1")
+    cache_repeat_2 = requests_by_label.get("text_cache_repeat_2")
+
+    def _request_text(request):
+        if not isinstance(request, dict):
+            return None
+        return (
+            request.get("content")
+            or request.get("text")
+            or request.get("output_text")
+        )
+
+    def _request_cached_tokens(request) -> int:
+        if not isinstance(request, dict):
+            return 0
+        usage = request.get("usage") if isinstance(request.get("usage"), dict) else {}
+        details = (
+            usage.get("prompt_tokens_details")
+            if isinstance(usage.get("prompt_tokens_details"), dict)
+            else {}
+        )
+        cache_summary = (
+            request.get("cache_summary")
+            if isinstance(request.get("cache_summary"), dict)
+            else {}
+        )
+        cached_tokens = details.get("cached_tokens")
+        if isinstance(cached_tokens, int):
+            return cached_tokens
+        cached_tokens = cache_summary.get("cache_hit_tokens")
+        return cached_tokens if isinstance(cached_tokens, int) else 0
+
+    text_cache_narrow_pass = bool(
+        isinstance(cache_repeat_1, dict)
+        and isinstance(cache_repeat_2, dict)
+        and _request_text(cache_repeat_1) == "ACK"
+        and _request_text(cache_repeat_2) == "ACK"
+        and not exact_cache_blocked
+        and _request_cached_tokens(cache_repeat_2) > 0
+    )
     exactness_failures = [
         failure
         for failure in failures
@@ -782,6 +822,7 @@ def _all_local_smoke_evidence(data: dict[str, Any]) -> dict[str, Any]:
         "bundle_kind": bundle_kind,
         "bundle_media_l2_coverage": bundle_media_l2_coverage,
         "tool_protocol_pass": tool_protocol_pass,
+        "text_cache_narrow_pass": text_cache_narrow_pass,
         "artifact_exactness_pass": not bool(exactness_failures),
         "artifact_exactness_failures": exactness_failures,
         "artifact_exactness_boundary": exactness_boundary,
@@ -2615,6 +2656,8 @@ def build_audit(root: Path, model_path: Path, manifest: Path) -> dict[str, Any]:
         else {"exists": False}
     )
     smoke_evidence = _ensure_smoke_bundle_identity(smoke_evidence, ALL_LOCAL_SMOKE_ARTIFACT)
+    if smoke_evidence.get("exists"):
+        text_cache_pass = bool(text_cache_pass or smoke_evidence.get("text_cache_narrow_pass"))
     jang2l_smoke_evidence = (
         _all_local_smoke_evidence(jang2l_all_local_smoke["data"])
         if jang2l_all_local_smoke.get("exists")

@@ -1323,6 +1323,51 @@ def test_mimo_all_local_smoke_evidence_accepts_disk_l2_restart_restore():
     assert evidence["block_disk_l2_restart_restore_reason"] == "pass"
 
 
+def test_mimo_all_local_smoke_evidence_accepts_narrow_text_cache_repeat():
+    from tests.cross_matrix import run_mimo_v2_jang2l_current_audit as audit
+
+    smoke = {
+        "status": "probe_failed",
+        "results": [
+            {
+                "status": "probe_failed",
+                "failures": [
+                    {
+                        "label": "tool_required",
+                        "reason": "expected_tool_argument_missing",
+                    }
+                ],
+                "requests": [
+                    {
+                        "label": "text_cache_repeat_1",
+                        "content": "ACK",
+                        "cache_summary": {"cache_hit_tokens": 0},
+                    },
+                    {
+                        "label": "text_cache_repeat_2",
+                        "content": "ACK",
+                        "usage": {
+                            "prompt_tokens_details": {
+                                "cached_tokens": 60,
+                                "cache_detail": "paged",
+                            }
+                        },
+                        "cache_summary": {
+                            "cache_hit_tokens": 60,
+                            "has_cache_hit": True,
+                        },
+                    },
+                ],
+            }
+        ],
+    }
+
+    evidence = audit._all_local_smoke_evidence(smoke)
+
+    assert evidence["text_cache_narrow_pass"] is True
+    assert evidence["artifact_exactness_pass"] is False
+
+
 def test_mimo_all_local_smoke_evidence_tracks_bundle_identity_for_media_l2():
     from tests.cross_matrix import run_mimo_v2_jang2l_current_audit as audit
 
