@@ -49,7 +49,7 @@ KVNONE_NOPREFIX_SMOKE_ARTIFACT = Path(
     "build/current-all-local-model-smoke-mimo-v25-jangtq2-bundled-tools-nomedia-kvnone-noprefix-20260607/summary.json"
 )
 CACHE_VS_NOCACHE_ARTIFACT = Path(
-    "build/current-mimo-v2-jangtq2-cache-vs-nocache-next-token-logprobs-20260609.json"
+    "build/current-mimo-v2-jangtq2-cache-vs-nocache-next-token-logprobs-after-unit-label-20260609.json"
 )
 SINK_MODE_LENGTH_DIAGNOSTIC_ARTIFACT = Path(
     "build/current-mimo-v2-jang2l-sink-mode-length-diagnostic-20260606.json"

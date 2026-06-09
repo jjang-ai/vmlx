@@ -24,7 +24,7 @@ from typing import Any
 
 REPO = Path(__file__).resolve().parents[2]
 DEFAULT_MODEL = Path("/Users/example/.mlxstudio/models/JANGQ-AI/MiMo-V2.5-JANGTQ_2")
-DEFAULT_OUT = REPO / "build/current-mimo-v2-jangtq2-cache-vs-nocache-next-token-logprobs-20260609.json"
+DEFAULT_OUT = REPO / "build/current-mimo-v2-jangtq2-cache-vs-nocache-next-token-logprobs-after-unit-label-20260609.json"
 DEFAULT_CACHE_DIR = REPO / "build/current-mimo-v2-jangtq2-cache-vs-nocache-next-token-block-cache-20260609"
 DEFAULT_MIN_AVAILABLE_GB = 90.0
 
