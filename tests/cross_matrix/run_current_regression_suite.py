@@ -43,7 +43,7 @@ DEFERRED_RELEASE_OPEN_REQUIREMENTS = {
 }
 
 CURRENT_OBJECTIVE_DIGEST_ARTIFACT = (
-    "build/current-objective-proof-after-n2-jangtq2-live-proof-20260609.json"
+    "build/current-objective-proof-after-n2-jangtq2-l2-live-proof-20260609.json"
 )
 
 CURRENT_SUITE_SOURCE_HASH_FILES = (

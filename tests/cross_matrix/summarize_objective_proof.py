@@ -62,7 +62,7 @@ from tests.cross_matrix.release_regression_manifest import (
 
 
 DEFAULT_OUT = Path(
-    "build/current-objective-proof-after-n2-jangtq2-live-proof-20260609.json"
+    "build/current-objective-proof-after-n2-jangtq2-l2-live-proof-20260609.json"
 )
 CURRENT_RELEASE_REGRESSION_MANIFEST_REL = (
     "build/current-release-regression-manifest-after-pr-intake-matrix-refresh-20260609.json"
@@ -206,6 +206,9 @@ N2_CACHE_ARCHITECTURE_CONTRACT_REL = (
 )
 N2_JANGTQ2_CHAT_CACHE_RESPONSES_PROOF_REL = (
     "build/current-n2-jangtq2-chat-cache-responses-proof-after-responses-parser-20260609.json"
+)
+N2_JANGTQ2_CHAT_CACHE_RESPONSES_L2_PROOF_REL = (
+    "build/current-n2-jangtq2-chat-cache-responses-l2-proof-20260609.json"
 )
 GEMMA_QAT_NATIVE_MXFP4_INVENTORY_REL = (
     "build/current-gemma-qat-native-mxfp4-local-inventory-after-source-smoke-map-20260609.json"
@@ -5525,6 +5528,9 @@ def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
     n2_cache_architecture_contract = _load(root, N2_CACHE_ARCHITECTURE_CONTRACT_REL)
     n2_local_memory_preflight = _load(root, N2_PRO_JANG1L_LOCAL_MEMORY_PREFLIGHT_REL)
     n2_jangtq2_live_proof = _load(root, N2_JANGTQ2_CHAT_CACHE_RESPONSES_PROOF_REL)
+    n2_jangtq2_l2_proof = _load(
+        root, N2_JANGTQ2_CHAT_CACHE_RESPONSES_L2_PROOF_REL
+    )
     gemma_qat_inventory = _load(root, GEMMA_QAT_NATIVE_MXFP4_INVENTORY_REL)
     panel_settings_contract = _load(root, PANEL_SETTINGS_CONTRACT_REL)
     max_output_context_contract_rel, max_output_context_contract = _load_first_present(
@@ -7156,6 +7162,7 @@ def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
             str(DEFAULT_OUT),
             N2_PRO_JANG1L_LOCAL_MEMORY_PREFLIGHT_REL,
             N2_JANGTQ2_CHAT_CACHE_RESPONSES_PROOF_REL,
+            N2_JANGTQ2_CHAT_CACHE_RESPONSES_L2_PROOF_REL,
             N2_API_CACHE_CONTRACT_REL,
             N2_CACHE_ARCHITECTURE_CONTRACT_REL,
             MODEL_FAMILY_CONTRACT_REL,
@@ -7296,6 +7303,76 @@ def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
                     "Current-source N2 JANGTQ2 chat/cache/Responses proof only. "
                     "This does not clear N2 JANG_1L, installed-app/UI parity, "
                     "media rows, or full release support."
+                ),
+            },
+            "jangtq2_l2_restart_proof": {
+                "artifact": N2_JANGTQ2_CHAT_CACHE_RESPONSES_L2_PROOF_REL,
+                "status": n2_jangtq2_l2_proof.get("status"),
+                "l2_restart_probe_pass": n2_jangtq2_l2_proof.get(
+                    "l2_restart_probe_pass"
+                ),
+                "restart_cached_tokens": (
+                    (
+                        (
+                            (
+                                n2_jangtq2_l2_proof.get("l2_restart_probe")
+                                if isinstance(
+                                    n2_jangtq2_l2_proof.get("l2_restart_probe"), dict
+                                )
+                                else {}
+                            ).get("row")
+                            or {}
+                        ).get("usage")
+                        or {}
+                    ).get("prompt_tokens_details")
+                    or {}
+                ).get("cached_tokens"),
+                "restart_cache_detail": (
+                    (
+                        (
+                            (
+                                n2_jangtq2_l2_proof.get("l2_restart_probe")
+                                if isinstance(
+                                    n2_jangtq2_l2_proof.get("l2_restart_probe"), dict
+                                )
+                                else {}
+                            ).get("row")
+                            or {}
+                        ).get("usage")
+                        or {}
+                    ).get("prompt_tokens_details")
+                    or {}
+                ).get("cache_detail"),
+                "block_disk_hits": (
+                    (
+                        (
+                            n2_jangtq2_l2_proof.get("l2_restart_probe")
+                            if isinstance(
+                                n2_jangtq2_l2_proof.get("l2_restart_probe"), dict
+                            )
+                            else {}
+                        ).get("after_health_cache")
+                        or {}
+                    ).get("block_disk_cache")
+                    or {}
+                ).get("disk_hits"),
+                "ssm_disk_hits": (
+                    (
+                        (
+                            n2_jangtq2_l2_proof.get("l2_restart_probe")
+                            if isinstance(
+                                n2_jangtq2_l2_proof.get("l2_restart_probe"), dict
+                            )
+                            else {}
+                        ).get("after_health_cache")
+                        or {}
+                    ).get("ssm_companion_disk")
+                    or {}
+                ).get("hits"),
+                "boundary": (
+                    "Current-source N2 JANGTQ2 fresh-process L2 restart proof only. "
+                    "This does not clear N2 JANG_1L, installed-app/UI parity, "
+                    "media rows, same-model tunnel parity, or full release support."
                 ),
             },
             "required_next_evidence": [
