@@ -76,6 +76,7 @@ def test_installed_app_runtime_parity_hashes_packaged_engine_surface():
     assert "api/utils.py" in gate.CRITICAL_ENGINE_HASH_FILES
     assert "tool_parsers/dsml_tool_parser.py" in gate.CRITICAL_ENGINE_HASH_FILES
     assert "patches/mlx_vlm_mtp/qwen35_vl.py" in gate.CRITICAL_ENGINE_HASH_FILES
+    assert "utils/hybrid_tq_cache.py" in gate.CRITICAL_ENGINE_HASH_FILES
     assert "utils/ssm_companion_cache.py" in gate.CRITICAL_ENGINE_HASH_FILES
     assert "models/gemma4_unified_register.py" in gate.CRITICAL_ENGINE_HASH_FILES
     assert "models/gemma4_unified/__init__.py" in gate.CRITICAL_ENGINE_HASH_FILES

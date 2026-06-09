@@ -490,6 +490,7 @@ def test_staged_app_engine_hash_parity_rejects_stale_packaged_runtime(tmp_path):
         in runner.STAGED_APP_ENGINE_HASH_FILES
     )
     assert "patches/mlx_vlm_mtp/qwen35_vl.py" in runner.STAGED_APP_ENGINE_HASH_FILES
+    assert "utils/hybrid_tq_cache.py" in runner.STAGED_APP_ENGINE_HASH_FILES
     assert "utils/mlx_vlm_compat.py" in runner.STAGED_APP_ENGINE_HASH_FILES
 
     source = tmp_path / "vmlx_engine/server.py"

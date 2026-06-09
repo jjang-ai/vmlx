@@ -132,6 +132,7 @@ HASH_GATED_ENGINE_FILES=(
   "patches/mlx_vlm_mtp/qwen35_vl.py"
   "utils/single_batch_generator.py"
   "utils/head_dim_detection.py"
+  "utils/hybrid_tq_cache.py"
   "utils/mlx_vlm_compat.py"
   "utils/ssm_companion_cache.py"
   "utils/ssm_companion_disk_store.py"
