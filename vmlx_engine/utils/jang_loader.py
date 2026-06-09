@@ -4909,6 +4909,7 @@ def _pre_fix_bits_from_shard(model, shard_weights, block_size):
                 if gs not in gs_candidates:
                     gs_candidates.append(gs)
 
+            valid = []
             for try_bs in gs_candidates:
                 in_dim = s_cols * try_bs
                 if in_dim <= 0 or (w_cols * 32) % in_dim != 0:
@@ -4916,6 +4917,17 @@ def _pre_fix_bits_from_shard(model, shard_weights, block_size):
                 actual_bits = (w_cols * 32) // in_dim
                 if actual_bits not in (2, 3, 4, 5, 6, 8):
                     continue
+                valid.append((in_dim, actual_bits, try_bs))
+
+            if ".switch_mlp." in mod_path and valid:
+                # Stacked routed-expert tensors can be shape-ambiguous:
+                # (E, 2048, 256) with 32 scale groups can mean bogus
+                # 4-bit/g64 over 2048 columns or real 2-bit/g128 over 4096
+                # columns. MiMo V2 JANG_2L uses the full-width layout, so
+                # choose the widest valid input interpretation for switch_mlp.
+                valid.sort(reverse=True)
+
+            for _in_dim, actual_bits, try_bs in valid:
                 changed = False
                 if actual_bits != module.bits:
                     module.bits = actual_bits
@@ -5017,6 +5029,7 @@ def _pre_fix_bits_from_metadata(model, shape_map, block_size):
                 if gs not in gs_candidates:
                     gs_candidates.append(gs)
 
+            valid = []
             for try_bs in gs_candidates:
                 in_dim = s_cols * try_bs
                 if in_dim <= 0 or (w_cols * 32) % in_dim != 0:
@@ -5024,6 +5037,15 @@ def _pre_fix_bits_from_metadata(model, shape_map, block_size):
                 actual_bits = (w_cols * 32) // in_dim
                 if actual_bits not in (2, 3, 4, 5, 6, 8):
                     continue
+                valid.append((in_dim, actual_bits, try_bs))
+
+            if ".switch_mlp." in mod_path and valid:
+                # See `_pre_fix_bits_from_shard`: stacked MiMo/JANG routed
+                # experts need the widest valid interpretation, not the first
+                # block-size candidate.
+                valid.sort(reverse=True)
+
+            for _in_dim, actual_bits, try_bs in valid:
                 changed = False
                 if actual_bits != module.bits:
                     module.bits = actual_bits
@@ -5192,6 +5214,7 @@ def _fix_quantized_bits(model, quantization_overrides: dict | None = None):
                     if gs not in gs_candidates:
                         gs_candidates.append(gs)
 
+            valid = []
             for try_gs in gs_candidates:
                 in_dim = s_cols * try_gs
                 if in_dim <= 0 or (w_cols * 32) % in_dim != 0:
@@ -5200,12 +5223,21 @@ def _fix_quantized_bits(model, quantization_overrides: dict | None = None):
                 if try_bits in (2, 3, 4, 5, 6, 8):
                     if logical_input_dims and in_dim != logical_input_dims:
                         continue
-                    if try_bits != module.bits:
-                        module.bits = try_bits
-                    if try_gs != module.group_size:
-                        module.group_size = try_gs
-                    fixed = True
-                    break
+                    valid.append((in_dim, try_bits, try_gs))
+
+            if ".switch_mlp." in name_lower and valid:
+                # Stacked MiMo routed experts are ambiguous under first-valid
+                # probing. Prefer the full input width so gather_qmm sees the
+                # same K dimension as the activation tensor.
+                valid.sort(reverse=True)
+
+            for _in_dim, try_bits, try_gs in valid:
+                if try_bits != module.bits:
+                    module.bits = try_bits
+                if try_gs != module.group_size:
+                    module.group_size = try_gs
+                fixed = True
+                break
 
             if not fixed:
                 # Last resort: try current gs with whatever bits result
