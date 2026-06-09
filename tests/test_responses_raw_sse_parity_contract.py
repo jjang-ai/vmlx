@@ -101,7 +101,34 @@ def test_classifier_records_raw_json_model_not_found_capture():
     assert row["event_count"] == 0
     assert row["raw_json_error"] is True
     assert row["error_code"] == "model_not_found"
+    assert row["available_models"] == []
     assert row["has_authoritative_arguments"] is False
+
+
+def test_classifier_extracts_available_models_from_model_not_found_capture():
+    row = classify_sse_capture(
+        json.dumps(
+            {
+                "error": {
+                    "message": (
+                        "Model 'gemma4-e2b-sse' not found. Available: "
+                        "[models/Qwen3.6-27B-MXFP8-CRACK-MTP, "
+                        "Gemma-4-12B-it-MXFP8-CRACK, "
+                        "models/Gemma-4-12B-it-MXFP8-CRACK]"
+                    ),
+                    "type": "invalid_request_error",
+                    "code": "model_not_found",
+                }
+            }
+        )
+    )
+
+    assert row["error_code"] == "model_not_found"
+    assert row["available_models"] == [
+        "models/Qwen3.6-27B-MXFP8-CRACK-MTP",
+        "Gemma-4-12B-it-MXFP8-CRACK",
+        "models/Gemma-4-12B-it-MXFP8-CRACK",
+    ]
 
 
 def test_raw_sse_parity_stays_open_when_tunnel_capture_is_missing(tmp_path):
@@ -264,6 +291,44 @@ def test_raw_sse_parity_fails_when_surface_reuses_message_output_index_for_tool(
         is False
     )
     assert artifact["captures"]["tunnel"]["conflicting_output_indices"] == [0]
+
+
+def test_raw_sse_parity_reports_tunnel_expected_model_not_advertised(tmp_path):
+    direct = tmp_path / "direct.sse"
+    gateway = tmp_path / "gateway.sse"
+    tunnel = tmp_path / "tunnel.sse"
+    direct.write_text(_sse(model="gemma4-e2b-sse"))
+    gateway.write_text(_sse(model="gemma4-e2b-sse"))
+    tunnel.write_text(
+        json.dumps(
+            {
+                "error": {
+                    "message": (
+                        "Model 'gemma4-e2b-sse' not found. Available: "
+                        "[Gemma-4-12B-it-MXFP8-CRACK, models/Qwen3.6-35B]"
+                    ),
+                    "type": "invalid_request_error",
+                    "code": "model_not_found",
+                }
+            }
+        )
+    )
+
+    artifact = build_artifact(
+        direct_sse=direct,
+        gateway_sse=gateway,
+        tunnel_sse=tunnel,
+        expected_model="gemma4-e2b-sse",
+        require_same_model=True,
+    )
+
+    assert artifact["status"] == "fail"
+    assert artifact["captures"]["tunnel"]["available_models"] == [
+        "Gemma-4-12B-it-MXFP8-CRACK",
+        "models/Qwen3.6-35B",
+    ]
+    assert artifact["captures"]["tunnel"]["expected_model_advertised"] is False
+    assert artifact["checks"]["tunnel_expected_model_advertised"] is False
 
 
 def test_raw_sse_parity_fails_when_same_model_is_required_and_surfaces_differ(

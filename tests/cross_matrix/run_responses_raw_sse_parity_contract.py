@@ -17,6 +17,16 @@ from typing import Any
 DEFAULT_OUT = Path("build/current-responses-raw-sse-parity-20260609.json")
 
 
+def _extract_available_models(error_message: str) -> list[str]:
+    marker = "Available:"
+    if marker not in error_message:
+        return []
+    raw = error_message.split(marker, 1)[1].strip()
+    if raw.startswith("[") and "]" in raw:
+        raw = raw[1 : raw.index("]")]
+    return [item.strip().strip("'\"") for item in raw.split(",") if item.strip()]
+
+
 def _event_payloads(sse_text: str) -> list[tuple[str, dict[str, Any]]]:
     events: list[tuple[str, dict[str, Any]]] = []
     for block in sse_text.replace("\r\n", "\n").split("\n\n"):
@@ -58,6 +68,9 @@ def classify_sse_capture(sse_text: str) -> dict[str, Any]:
                 "error_type": error.get("type"),
                 "error_code": error.get("code"),
                 "error_message": error.get("message"),
+                "available_models": _extract_available_models(
+                    str(error.get("message") or "")
+                ),
             }
     arg_deltas: list[str] = []
     arg_done: list[str] = []
@@ -217,6 +230,12 @@ def build_artifact(
             if expected_model is None
             else classified.get("model") == expected_model
         )
+        available_models = classified.get("available_models")
+        classified["expected_model_advertised"] = (
+            True
+            if expected_model is None or not isinstance(available_models, list)
+            else expected_model in available_models
+        )
         classified["has_required_reasoning_events"] = (
             True
             if not require_reasoning_events
@@ -322,6 +341,11 @@ def build_artifact(
         if not require_same_model
         else all_present_surfaces_report_model and len(known_models) == 1
     )
+    tunnel_expected_model_advertised = (
+        True
+        if expected_model is None
+        else captures["tunnel"].get("expected_model_advertised") is True
+    )
 
     if (
         mismatch
@@ -365,6 +389,7 @@ def build_artifact(
             "reasoning_not_disabled_by_surface": no_reasoning_disable_by_surface,
             "all_present_surfaces_report_model": all_present_surfaces_report_model,
             "all_present_surfaces_same_model": all_present_surfaces_same_model,
+            "tunnel_expected_model_advertised": tunnel_expected_model_advertised,
             "all_required_surfaces_present": all_required_present,
         },
         "expected": {

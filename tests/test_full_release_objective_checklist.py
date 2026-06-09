@@ -88,6 +88,7 @@ def _write_green_responses_raw_sse_artifact(tmp_path: Path) -> None:
                 "all_present_surfaces_match_expected_arguments": True,
                 "all_present_surfaces_have_authoritative_args": True,
                 "authoritative_arguments_match_across_present_surfaces": True,
+                "tunnel_expected_model_advertised": True,
                 "all_present_surfaces_have_required_reasoning": True,
                 "no_reasoning_disable_workaround": True,
             },
@@ -1170,6 +1171,7 @@ def test_full_release_objective_checklist_blocks_missing_responses_tunnel_captur
             "all_present_surfaces_match_expected_arguments": True,
             "all_present_surfaces_have_authoritative_args": True,
             "authoritative_arguments_match_across_present_surfaces": True,
+            "tunnel_expected_model_advertised": True,
             "all_present_surfaces_have_required_reasoning": True,
             "no_reasoning_disable_workaround": True,
         },
@@ -1202,6 +1204,7 @@ def test_full_release_objective_checklist_blocks_reasoning_disable_workaround():
             "all_present_surfaces_match_expected_arguments": True,
             "all_present_surfaces_have_authoritative_args": True,
             "authoritative_arguments_match_across_present_surfaces": True,
+            "tunnel_expected_model_advertised": True,
             "all_present_surfaces_have_required_reasoning": False,
             "no_reasoning_disable_workaround": False,
         },
@@ -1231,6 +1234,7 @@ def test_full_release_objective_checklist_separates_missing_reasoning_events_fro
             "all_present_surfaces_match_expected_arguments": True,
             "all_present_surfaces_have_authoritative_args": True,
             "authoritative_arguments_match_across_present_surfaces": True,
+            "tunnel_expected_model_advertised": True,
             "all_present_surfaces_have_required_reasoning": False,
             "no_reasoning_disable_workaround": True,
         },
@@ -1241,6 +1245,35 @@ def test_full_release_objective_checklist_separates_missing_reasoning_events_fro
 
     assert "responses_raw_sse_parity_status_pass" in failed
     assert "responses_raw_sse_parity_all_present_surfaces_have_required_reasoning" in failed
+    assert "responses_raw_sse_parity_no_reasoning_disable_workaround" not in failed
+
+
+def test_full_release_objective_checklist_surfaces_tunnel_model_availability():
+    data = {
+        "artifact": str(checklist.RESPONSES_RAW_SSE_PARITY),
+        "exists": True,
+        "status": "fail",
+        "missing_captures": [],
+        "checks": {
+            "direct_capture_present": True,
+            "gateway_capture_present": True,
+            "tunnel_capture_present": True,
+            "all_required_surfaces_present": True,
+            "all_present_surfaces_parse_cleanly": True,
+            "all_present_surfaces_match_expected_function_name": False,
+            "all_present_surfaces_match_expected_arguments": False,
+            "all_present_surfaces_have_authoritative_args": False,
+            "authoritative_arguments_match_across_present_surfaces": False,
+            "tunnel_expected_model_advertised": False,
+            "all_present_surfaces_have_required_reasoning": False,
+            "no_reasoning_disable_workaround": True,
+        },
+    }
+
+    rows = checklist._responses_raw_sse_parity_checks(data)
+    failed = {row["name"]: row for row in rows if not row["ok"]}
+
+    assert "responses_raw_sse_parity_tunnel_expected_model_advertised" in failed
     assert "responses_raw_sse_parity_no_reasoning_disable_workaround" not in failed
 
 

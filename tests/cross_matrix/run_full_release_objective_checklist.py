@@ -539,6 +539,7 @@ def _responses_raw_sse_parity_checks(data: dict[str, Any]) -> list[dict[str, Any
         "all_present_surfaces_match_expected_arguments",
         "all_present_surfaces_have_authoritative_args",
         "authoritative_arguments_match_across_present_surfaces",
+        "tunnel_expected_model_advertised",
         "all_present_surfaces_have_required_reasoning",
         "no_reasoning_disable_workaround",
     ]
