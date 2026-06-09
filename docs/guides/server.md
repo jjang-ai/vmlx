@@ -336,11 +336,15 @@ See [Reasoning Models Guide](reasoning.md) for full details.
 
 ## Structured Output (JSON Mode)
 
-Force the model to return valid JSON using `response_format`:
+Request JSON-shaped output using `response_format`. vMLX adds JSON
+instructions to the prompt, then applies post-generation repair/validation to
+the model text before returning it. This is repair/validation support, not hard
+grammar-constrained decoding. Non-streaming Chat Completions and Responses also
+perform one JSON-only correction retry when deterministic repair still fails.
 
 ### JSON Object Mode
 
-Returns any valid JSON:
+Returns any valid JSON after validation/repair:
 
 ```python
 response = client.chat.completions.create(
@@ -353,7 +357,7 @@ response = client.chat.completions.create(
 
 ### JSON Schema Mode
 
-Returns JSON matching a specific schema:
+Returns JSON matching a specific schema after validation/repair:
 
 ```python
 response = client.chat.completions.create(
@@ -376,10 +380,23 @@ response = client.chat.completions.create(
         }
     }
 )
-# Output validated against schema
+# Output validated against schema after post-generation repair if needed.
 data = json.loads(response.choices[0].message.content)
 assert "colors" in data
 ```
+
+Notes:
+
+- `response_format` does not currently enable hard grammar-constrained decoding
+  in the runtime.
+- Markdown fences, prose around JSON, trailing commas, Python booleans/nulls,
+  safe schema coercions, and selected deterministic shape repairs can be fixed
+  after generation.
+- If repair/validation still fails on a non-streaming request, vMLX performs
+  one JSON-only correction retry. Strict schema mode returns an error if that
+  retry still fails.
+- Streaming requests are validated at the end of the stream; strict failures
+  are surfaced as stream errors rather than retried mid-stream.
 
 ### Curl Example
 

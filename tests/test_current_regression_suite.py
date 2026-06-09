@@ -980,6 +980,22 @@ def test_noheavy_api_cache_contract_includes_structured_json_retry():
     )
 
 
+def test_noheavy_api_cache_contract_includes_response_format_docs_boundary():
+    from tests.cross_matrix import run_noheavy_api_cache_contract as gate
+
+    markers = gate.REQUIRED_NOHEAVY_API_CACHE_TEST_MARKERS
+
+    assert "test_server_docs_state_response_format_is_not_constrained_decoding" in markers
+    assert "docs/guides/server.md" in gate.SOURCE_HASH_FILES
+    assert "docs/reference/configuration.md" in gate.SOURCE_HASH_FILES
+    assert any(
+        "tests/test_engine_audit.py" in " ".join(cmd)
+        and "server_docs_state_response_format_is_not_constrained_decoding"
+        in " ".join(cmd)
+        for cmd in gate.COMMANDS.values()
+    )
+
+
 def test_noheavy_api_cache_contract_default_out_tracks_current_suite_artifact():
     from tests.cross_matrix import run_noheavy_api_cache_contract as gate
 

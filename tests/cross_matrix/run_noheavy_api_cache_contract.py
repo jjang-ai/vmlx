@@ -14,6 +14,7 @@ This helper intentionally does not load models. It runs focused tests that pin:
 - MLXStudio gateway stale-port and standby-wake routing contracts.
 - Structured JSON/schema repair and post-generation repair diagnostics.
 - One-shot strict JSON-only retry after unrecoverable repair/schema failure.
+- API docs boundary for repair/validation vs hard constrained decoding.
 """
 
 from __future__ import annotations
@@ -36,6 +37,8 @@ SOURCE_HASH_FILES = (
     "vmlx_engine/tool_parsers/dsml_tool_parser.py",
     "vmlx_engine/api/anthropic_adapter.py",
     "vmlx_engine/api/ollama_adapter.py",
+    "docs/guides/server.md",
+    "docs/reference/configuration.md",
     "tests/test_structured_output.py",
     "tests/test_structured_output_repair_report.py",
     "tests/test_server.py",
@@ -72,6 +75,7 @@ REQUIRED_NOHEAVY_API_CACHE_TEST_MARKERS = (
     "test_streaming_emits_error_on_strict_failure",
     "test_text_format_has_json_schema_field",
     "test_text_format_preserves_schema_data",
+    "test_server_docs_state_response_format_is_not_constrained_decoding",
     "test_json_schema_decodes_nested_object_string",
     "test_reports_nested_object_json_string_schema_decode",
     "test_chat_response_format_strict_retries_failed_json_only",
@@ -137,6 +141,7 @@ COMMANDS: dict[str, list[str]] = {
             "or chat_completion_streaming_validates_json "
             "or responses_api_streaming_validates_json "
             "or streaming_emits_error_on_strict_failure "
+            "or server_docs_state_response_format_is_not_constrained_decoding "
             "or text_format_has_json_schema_field "
             "or text_format_preserves_schema_data "
             "or chat_completions_nonstreaming "
@@ -396,6 +401,11 @@ def build_artifact(root: Path) -> dict[str, Any]:
             api_ok
             and "test_text_format_has_json_schema_field" not in missing_markers
             and "test_text_format_preserves_schema_data" not in missing_markers
+        ),
+        "response_format_docs_repair_validation_boundary": (
+            api_ok
+            and "test_server_docs_state_response_format_is_not_constrained_decoding"
+            not in missing_markers
         ),
         "structured_schema_decode_repair": (
             structured_output_ok

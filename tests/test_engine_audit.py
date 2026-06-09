@@ -4960,6 +4960,18 @@ class TestH4JsonSchemaStreaming:
             "Streaming must emit error event on strict JSON schema failure"
         )
 
+    def test_server_docs_state_response_format_is_not_constrained_decoding(self):
+        server_doc = Path("docs/guides/server.md").read_text(encoding="utf-8")
+        config_doc = Path("docs/reference/configuration.md").read_text(encoding="utf-8")
+
+        combined = f"{server_doc}\n{config_doc}".lower()
+
+        assert "post-generation repair" in combined
+        assert "not hard grammar-constrained decoding" in combined
+        assert "repair/validation" in combined
+        assert "one json-only correction retry" in combined
+        assert "force the model to return valid json" not in combined
+
 
 class TestH6ConfigRestartWarning:
     """H6: updateSessionConfig must return restart-required info."""

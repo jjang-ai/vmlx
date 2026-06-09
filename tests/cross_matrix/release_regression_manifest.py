@@ -207,6 +207,7 @@ EXPECTED_CURRENT_NOHEAVY_API_CACHE_CHECKS = (
     "streaming_cache_detail_usage",
     "structured_schema_decode_repair",
     "structured_json_retry_after_repair_failure",
+    "response_format_docs_repair_validation_boundary",
     "responses_previous_response_history",
     "cache_reuse_endpoints",
     "cache_stats_reuse_skip_telemetry",

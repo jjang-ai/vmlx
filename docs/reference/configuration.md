@@ -125,7 +125,7 @@ Create `mcp.json`:
 | `stream` | Enable streaming | `true` |
 | `stop` | Stop sequences | None |
 | `tools` | Tool definitions | None |
-| `response_format` | Output format (`json_object`, `json_schema`) | None |
+| `response_format` | Request `json_object` or `json_schema`; vMLX uses prompt instructions plus post-generation repair/validation, not hard grammar-constrained decoding. Non-streaming JSON/schema failures get one JSON-only correction retry before strict-mode rejection. | None |
 
 ### Multimodal Options
 
