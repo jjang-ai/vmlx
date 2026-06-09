@@ -4231,6 +4231,64 @@ def _parse_tool_calls_with_parser(
             )
         ]
 
+    def _repair_required_single_tool_bare_json_args(text: str) -> tuple[str, list | None]:
+        """Repair schema-valid bare argument JSON for a required single tool.
+
+        LFM-family live smoke can emit only ``{"value":"blue-cat"}`` when the
+        API request exposed exactly one required tool. Keep this schema-gated:
+        do not infer a tool name unless the request forced tool use, exposed one
+        tool, and the JSON object maps to that tool's declared parameters.
+        """
+        if not request or not _is_required_tool_choice(getattr(request, "tool_choice", None)):
+            return text, None
+        allowed = _allowed_tool_names()
+        if len(allowed) != 1:
+            return text, None
+        stripped = (text or "").strip()
+        if not stripped.startswith("{"):
+            return text, None
+        try:
+            args = json.loads(stripped)
+        except Exception:
+            return text, None
+        if not isinstance(args, dict) or not args:
+            return text, None
+        name = next(iter(allowed))
+        schema = None
+        try:
+            effective_tools = _effective_tools_for_tool_parsing(request)
+            for tool in convert_tools_for_template(effective_tools) or []:
+                fn = tool.get("function") if isinstance(tool, dict) else None
+                if isinstance(fn, dict) and fn.get("name") == name:
+                    schema = fn
+                    break
+        except Exception:
+            schema = None
+        params = schema.get("parameters", {}) if isinstance(schema, dict) else {}
+        props = params.get("properties", {}) if isinstance(params, dict) else {}
+        required = params.get("required", []) if isinstance(params, dict) else []
+        if not isinstance(props, dict) or not props:
+            return text, None
+        if any(key not in props for key in args):
+            return text, None
+        if isinstance(required, list):
+            for key in required:
+                if not isinstance(key, str) or key not in args:
+                    return text, None
+                value = args.get(key)
+                if value is None or (isinstance(value, str) and value.strip() == ""):
+                    return text, None
+        return "", [
+            ToolCall(
+                id=f"call_{uuid.uuid4().hex[:8]}",
+                type="function",
+                function=FunctionCall(
+                    name=name,
+                    arguments=json.dumps(args, ensure_ascii=False),
+                ),
+            )
+        ]
+
     def _generic_parse_filtered(text: str) -> tuple[str, list | None]:
         cleaned, calls = parse_tool_calls(text)
         if calls:
@@ -4241,6 +4299,9 @@ def _parse_tool_calls_with_parser(
         repaired_cleaned, repaired_calls = _repair_instruction_echo_tool_call(text)
         if repaired_calls:
             return repaired_cleaned, repaired_calls
+        bare_cleaned, bare_calls = _repair_required_single_tool_bare_json_args(text)
+        if bare_calls:
+            return bare_cleaned, bare_calls
         return text, None
 
     # Determine which parser to use.

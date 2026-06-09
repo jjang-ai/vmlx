@@ -3118,6 +3118,50 @@ class TestFallbackToolPromptFormat:
         assert calls[0].function.name == "list_directory"
         assert '"path": "."' in calls[0].function.arguments
 
+    def test_server_repairs_required_single_tool_bare_json_arguments(
+        self, monkeypatch
+    ):
+        import vmlx_engine.server as server
+        from vmlx_engine.server import ChatCompletionRequest, Message
+
+        monkeypatch.setattr(server, "_tool_call_parser", None)
+        req = ChatCompletionRequest(
+            model="lfm2.5-8b-a1b-mxfp8",
+            messages=[
+                Message(
+                    role="user",
+                    content=(
+                        "Call function record_fact with exactly these JSON "
+                        'arguments and no other value: {"value":"blue-cat"}.'
+                    ),
+                )
+            ],
+            tool_choice="required",
+            tools=[
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "record_fact",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {"value": {"type": "string"}},
+                            "required": ["value"],
+                        },
+                    },
+                }
+            ],
+        )
+
+        cleaned, calls = server._parse_tool_calls_with_parser(
+            '{"value":"blue-cat"}',
+            req,
+        )
+
+        assert cleaned == ""
+        assert calls
+        assert calls[0].function.name == "record_fact"
+        assert calls[0].function.arguments == '{"value": "blue-cat"}'
+
     def test_server_repairs_dsv4_partial_tool_intent_from_request_args(self, monkeypatch):
         import vmlx_engine.server as server
         from vmlx_engine.api.models import ResponsesRequest

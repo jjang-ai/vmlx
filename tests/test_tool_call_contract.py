@@ -179,4 +179,8 @@ def test_tool_call_contract_emits_cross_model_raw_dialect_and_loop_metrics(
     assert final_case["stopped_after_sufficient_observation"] is True
     assert artifact["checks"]["raw_tool_dialect_leak_metrics_present"] is True
     assert artifact["checks"]["tool_loop_control_metrics_present"] is True
+    assert (
+        artifact["checks"]["required_single_tool_bare_json_arguments_repaired"]
+        is True
+    )
     assert "tests/cross_matrix/run_tool_call_contract.py" in artifact["source_hashes"]

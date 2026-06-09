@@ -36,6 +36,7 @@ DSML_PATTERN = (
     "or dsml_parser_repairs_partial_invoke_with_malformed_value_attr "
     "or dsml_parser_repairs_htmlish_invoke_degradation "
     "or server_repairs_dsv4_partial_tool_intent_from_request_args "
+    "or server_repairs_required_single_tool_bare_json_arguments "
     "or dsv4_encoder_keeps_function_arguments_as_dsml_params "
     "or dsv4_encoder_preserves_code_identifiers_on_direct_chat_rail "
     "or dsml_issue_165_server_tool_call_arguments_are_not_empty_or_raw "
@@ -55,6 +56,7 @@ REQUIRED_TOOL_CALL_TEST_MARKERS = (
     "dsml_parser_rejects_canonical_attr_residue_and_repairs_live_write_file",
     "dsml_parser_repairs_partial_invoke_with_malformed_value_attr",
     "server_repairs_dsv4_partial_tool_intent_from_request_args",
+    "server_repairs_required_single_tool_bare_json_arguments",
     "dsv4_encoder_keeps_function_arguments_as_dsml_params",
     "dsv4_encoder_preserves_code_identifiers_on_direct_chat_rail",
     "responses_extracts_suppressed_reasoning_tool_calls_before_finalize",
@@ -413,6 +415,11 @@ def build_artifact(root: Path) -> dict[str, Any]:
         "dsv4_default_cache_degraded_dsml_shapes_repaired_when_schema_valid": not failed and engine_passed >= 21,
         "dsv4_tool_preamble_suppressed_and_not_stored_without_call": not failed and engine_passed >= 21,
         "tool_choice_none_does_not_fallback_to_raw_dsml": not failed and engine_passed >= 21,
+        "required_single_tool_bare_json_arguments_repaired": (
+            not failed
+            and "server_repairs_required_single_tool_bare_json_arguments"
+            not in missing_markers
+        ),
         "panel_tool_executor_blocks_unsafe_paths_and_commands": not failed and panel_passed >= 10,
         "panel_max_tool_iterations_caps_tool_loops": not failed and panel_passed >= 10,
         "family_tool_parser_matrix_covers_no_leak_and_alias_edges": (
