@@ -19,7 +19,9 @@ DEFAULT_ROOTS = (
     Path("/Users/example/models"),
     Path("/Users/example/.mlxstudio/models"),
 )
-DEFAULT_OUT = Path("build/current-gemma-qat-native-mxfp4-local-inventory-20260609.json")
+DEFAULT_OUT = Path(
+    "build/current-gemma-qat-native-mxfp4-local-inventory-after-source-smoke-map-20260609.json"
+)
 
 REQUIRED_QAT_ROWS = {
     "gemma4_e2b_qat_native_mxfp4": {
