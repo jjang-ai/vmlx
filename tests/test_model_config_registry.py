@@ -926,6 +926,18 @@ class TestModelConfigs:
         assert config.family_name == "gemma3_text"
         assert config.is_mllm is False
 
+    def test_gemma3n_e2b_e4b_qat_configs(self, registry):
+        for repo in (
+            "google/gemma-3n-E2B-it-qat-q4_0",
+            "google/gemma-3n-E4B-it-qat-q4_0",
+        ):
+            config = self._lookup(registry, repo, "gemma3n")
+            assert config.family_name == "gemma3n"
+            assert config.is_mllm is True
+            assert config.tool_parser == "gemma3"
+            assert config.reasoning_parser is None
+            assert config.eos_tokens == ["<end_of_turn>", "<eos>"]
+
     # Nemotron
     def test_nemotron_config(self, registry):
         config = self._lookup(registry, "nvidia/Nemotron-4-340B-Instruct", "nemotron")
