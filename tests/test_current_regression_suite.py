@@ -1231,6 +1231,7 @@ def test_current_regression_suite_tracks_responses_raw_sse_parity_contract():
     assert "--expected-function-name lookup" in parity_command
     assert "--expected-arguments {\"query\":\"alpha\"}" in parity_command
     assert "--require-reasoning-events" in parity_command
+    assert "--require-same-model" in parity_command
 
 
 def test_noheavy_api_cache_contract_default_out_tracks_current_suite_artifact():

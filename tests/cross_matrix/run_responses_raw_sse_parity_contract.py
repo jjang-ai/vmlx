@@ -314,7 +314,9 @@ def build_artifact(
         },
         "boundary": (
             "pass requires direct local server, panel gateway, and tunnel raw SSE "
-            "captures with matching expected authoritative function_call arguments"
+            "captures for the same model with valid output item indices, required "
+            "reasoning events when requested, and matching expected authoritative "
+            "function_call arguments"
         ),
     }
 

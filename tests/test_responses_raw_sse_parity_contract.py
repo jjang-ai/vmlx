@@ -36,7 +36,10 @@ data: {{"type":"response.completed","response":{{"status":"completed"}}}}
 
 
 def _sse_with_message_and_duplicate_function_index() -> str:
-    return """event: response.output_item.added
+    return """event: response.created
+data: {"type":"response.created","response":{"id":"resp_1","status":"in_progress","model":"same-model","output":[]}}
+
+event: response.output_item.added
 data: {"type":"response.output_item.added","output_index":0,"item":{"id":"msg_1","type":"message","status":"in_progress","role":"assistant","content":[]}}
 
 event: response.reasoning_summary_text.delta

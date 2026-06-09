@@ -716,6 +716,7 @@ CURRENT_SUITE_COMMANDS: dict[str, list[str]] = {
         "--expected-arguments",
         '{"query":"alpha"}',
         "--require-reasoning-events",
+        "--require-same-model",
         "--out",
         "build/current-responses-raw-sse-parity-20260609.json",
     ],
