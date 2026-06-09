@@ -49,6 +49,8 @@ class _Request:
     match_sequence: Any = None
     next_token: Optional[mx.array] = None
     next_logprobs: Any = None
+    next_token_materialized: bool = False
+    next_logprobs_materialized: bool = False
 
 
 @dataclass
@@ -395,6 +397,8 @@ class SingleBatchGenerator:
                 req,
                 input_tokens,
             )
+            req.next_token_materialized = True
+            req.next_logprobs_materialized = req.next_logprobs is not None
             if trace:
                 self._sync()
                 sample_s = time.perf_counter() - sample_t0
@@ -450,6 +454,8 @@ class SingleBatchGenerator:
     ) -> Response:
         current_token = req.next_token
         current_logprobs = req.next_logprobs
+        current_token_materialized = req.next_token_materialized
+        current_logprobs_materialized = req.next_logprobs_materialized
         if current_token is None:
             raise RuntimeError("SingleBatchGenerator decode requested before prefill")
 
@@ -464,10 +470,13 @@ class SingleBatchGenerator:
         else:
             req.next_token = None
             req.next_logprobs = None
+            req.next_token_materialized = False
+            req.next_logprobs_materialized = False
 
         try:
-            current_token = self._eval_on_stream(current_token)[0]
-            if current_logprobs is not None:
+            if not current_token_materialized:
+                current_token = self._eval_on_stream(current_token)[0]
+            if current_logprobs is not None and not current_logprobs_materialized:
                 current_logprobs = self._eval_on_stream(current_logprobs)[0]
         except Exception:
             self._sync()

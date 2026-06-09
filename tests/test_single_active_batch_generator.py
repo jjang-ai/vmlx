@@ -142,7 +142,7 @@ class TestSingleActiveBatchGenerator:
         assert generation_responses == []
         assert prompt_responses[0].token == 3
         assert prompt_responses[0].finish_reason == "length"
-        assert eval_calls
+        assert eval_calls == [1]
 
     def test_eval_on_stream_rehomes_values_inside_owned_stream(self, monkeypatch):
         """Rebinding has to happen inside the generator stream too.
