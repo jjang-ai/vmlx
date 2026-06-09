@@ -85,6 +85,25 @@ def test_classifier_flags_function_call_reusing_message_output_index():
     assert row["output_item_indices_valid"] is False
 
 
+def test_classifier_records_raw_json_model_not_found_capture():
+    row = classify_sse_capture(
+        json.dumps(
+            {
+                "error": {
+                    "message": "Model 'gemma4-e2b-sse' not found.",
+                    "type": "invalid_request_error",
+                    "code": "model_not_found",
+                }
+            }
+        )
+    )
+
+    assert row["event_count"] == 0
+    assert row["raw_json_error"] is True
+    assert row["error_code"] == "model_not_found"
+    assert row["has_authoritative_arguments"] is False
+
+
 def test_raw_sse_parity_stays_open_when_tunnel_capture_is_missing(tmp_path):
     direct = tmp_path / "direct.sse"
     gateway = tmp_path / "gateway.sse"

@@ -45,6 +45,20 @@ def _event_payloads(sse_text: str) -> list[tuple[str, dict[str, Any]]]:
 
 def classify_sse_capture(sse_text: str) -> dict[str, Any]:
     events = _event_payloads(sse_text)
+    raw_json_error: dict[str, Any] = {}
+    if not events:
+        try:
+            raw_payload = json.loads(sse_text)
+        except json.JSONDecodeError:
+            raw_payload = None
+        if isinstance(raw_payload, dict) and isinstance(raw_payload.get("error"), dict):
+            error = raw_payload["error"]
+            raw_json_error = {
+                "raw_json_error": True,
+                "error_type": error.get("type"),
+                "error_code": error.get("code"),
+                "error_message": error.get("message"),
+            }
     arg_deltas: list[str] = []
     arg_done: list[str] = []
     function_items: list[dict[str, Any]] = []
@@ -134,6 +148,7 @@ def classify_sse_capture(sse_text: str) -> dict[str, Any]:
         "output_item_indices_valid": not conflicting_output_indices,
         "models": models,
         "model": models[-1] if models else "",
+        **raw_json_error,
     }
 
 
