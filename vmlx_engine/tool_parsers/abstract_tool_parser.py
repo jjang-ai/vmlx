@@ -6,6 +6,7 @@ Inspired by vLLM's tool parser architecture but simplified for MLX backend.
 """
 
 import importlib
+import json
 import re
 import uuid
 from abc import ABC, abstractmethod
@@ -180,6 +181,45 @@ class ToolParser(ABC):
         """Reset parser state for a new request."""
         self.current_tool_id = -1
         self.prev_tool_call_arr = []
+
+    @staticmethod
+    def _function_schema_for_tool(
+        request: dict[str, Any] | None, tool_name: str
+    ) -> dict[str, Any] | None:
+        if not request:
+            return None
+        for tool in request.get("tools") or []:
+            function = tool.get("function") if isinstance(tool, dict) else None
+            if isinstance(function, dict) and function.get("name") == tool_name:
+                parameters = function.get("parameters")
+                return parameters if isinstance(parameters, dict) else None
+        return None
+
+    @classmethod
+    def _serialize_tool_arguments(
+        cls,
+        tool_name: str,
+        arguments: Any,
+        request: dict[str, Any] | None = None,
+    ) -> str:
+        if isinstance(arguments, dict):
+            return json.dumps(arguments, ensure_ascii=False)
+        if not isinstance(arguments, str):
+            return str(arguments)
+
+        schema = cls._function_schema_for_tool(request, tool_name)
+        properties = schema.get("properties") if isinstance(schema, dict) else None
+        if not isinstance(properties, dict):
+            return arguments
+
+        xml_arg = arguments.strip()
+        match = re.fullmatch(r"<([A-Za-z_][\w.-]*)>\s*(.*?)\s*</\1>", xml_arg, re.DOTALL)
+        if not match:
+            return arguments
+        param_name, param_value = match.groups()
+        if param_name not in properties:
+            return arguments
+        return json.dumps({param_name: param_value.strip()}, ensure_ascii=False)
 
 
 class ToolParserManager:

@@ -352,6 +352,15 @@ try:
     if not hasattr(_assistant, "Model") or not hasattr(_assistant, "ModelConfig"):
         print("  FAIL Gemma 4 assistant alias missing Model/ModelConfig")
         sys.exit(1)
+    _unified_assistant = importlib.import_module(
+        "mlx_vlm.speculative.drafters.gemma4_unified_assistant"
+    )
+    if (
+        not hasattr(_unified_assistant, "Model")
+        or not hasattr(_unified_assistant, "ModelConfig")
+    ):
+        print("  FAIL Gemma 4 Unified assistant alias missing Model/ModelConfig")
+        sys.exit(1)
     print("  ok   Gemma 4 assistant mlx_vlm.models alias")
 except Exception as e:
     print(f"  FAIL Gemma 4 assistant alias check: {type(e).__name__}: {e}")

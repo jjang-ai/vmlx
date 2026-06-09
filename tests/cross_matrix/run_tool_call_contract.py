@@ -38,6 +38,7 @@ DSML_PATTERN = (
     "or dsv4_encoder_keeps_function_arguments_as_dsml_params "
     "or dsv4_encoder_preserves_code_identifiers_on_direct_chat_rail "
     "or dsml_issue_165_server_tool_call_arguments_are_not_empty_or_raw "
+    "or qwen_issue_192_xml_string_arguments_use_request_schema "
     "or dsv4_fallback_tool_prompt_uses_canonical_tool_calls_wrapper "
     "or dsv4_native_schema_prompt_with_only_generic_examples_gets_concrete_fallback "
     "or tool_markup_residue_strips_all_registered_marker_families "
@@ -56,6 +57,7 @@ REQUIRED_TOOL_CALL_TEST_MARKERS = (
     "dsv4_encoder_keeps_function_arguments_as_dsml_params",
     "dsv4_encoder_preserves_code_identifiers_on_direct_chat_rail",
     "responses_extracts_suppressed_reasoning_tool_calls_before_finalize",
+    "qwen_issue_192_xml_string_arguments_use_request_schema",
     "tool_markup_residue_strips_all_registered_marker_families",
     "increments the auto-continue counter once per follow-up attempt",
     "resets text-chat tool streaming state before chained follow-up requests",
@@ -75,6 +77,9 @@ REQUIRED_TOOL_CALL_TEST_MARKERS = (
 
 SOURCE_HASH_FILES = (
     "vmlx_engine/server.py",
+    "vmlx_engine/tool_parsers/abstract_tool_parser.py",
+    "vmlx_engine/tool_parsers/qwen_tool_parser.py",
+    "vmlx_engine/tool_parsers/auto_tool_parser.py",
     "vmlx_engine/tool_parsers/dsml_tool_parser.py",
     "tests/test_dsml_tool_parser.py",
     "tests/test_tool_format.py",

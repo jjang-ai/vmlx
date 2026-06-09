@@ -83,10 +83,8 @@ class QwenToolParser(ToolParser):
                         {
                             "id": generate_tool_id(),
                             "name": name,
-                            "arguments": (
-                                json.dumps(arguments, ensure_ascii=False)
-                                if isinstance(arguments, dict)
-                                else str(arguments)
+                            "arguments": self._serialize_tool_arguments(
+                                name, arguments, request
                             ),
                         }
                     )

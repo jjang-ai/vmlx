@@ -186,7 +186,13 @@ def _installed_gemma4_assistant_alias_imports() -> bool:
                     "assert m.__name__ == "
                     "'mlx_vlm.speculative.drafters.gemma4_assistant'; "
                     "assert hasattr(m, 'Model'); "
-                    "assert hasattr(m, 'ModelConfig')"
+                    "assert hasattr(m, 'ModelConfig'); "
+                    "u=importlib.import_module("
+                    "'mlx_vlm.speculative.drafters.gemma4_unified_assistant'); "
+                    "assert u.__name__ == "
+                    "'mlx_vlm.speculative.drafters.gemma4_assistant'; "
+                    "assert hasattr(u, 'Model'); "
+                    "assert hasattr(u, 'ModelConfig')"
                 ),
             ],
             cwd="/",
@@ -213,14 +219,20 @@ def _issue166_checks(root: Path) -> dict[str, bool]:
     return {
         "source_gemma4_assistant_alias": (
             "mlx_vlm.speculative.drafters.gemma4_assistant" in engine_init
+            and "mlx_vlm.speculative.drafters.gemma4_unified_assistant"
+            in engine_init
             and "mlx_vlm.models.gemma4_assistant" in engine_init
+            and "mlx_vlm.models.gemma4_unified_assistant" in engine_init
             and "gemma4_assistant" in engine_init
+            and "gemma4_unified_assistant" in engine_init
             and "test_mlx_vlm_registry_patch_aliases_gemma4_assistant_model_path"
             in engine_tests
         ),
         "bundled_verify_gemma4_assistant_alias": (
             "Gemma 4 assistant mlx_vlm.models alias" in verify_script
             and "mlx_vlm.models.gemma4_assistant" in verify_script
+            and "mlx_vlm.speculative.drafters.gemma4_unified_assistant"
+            in verify_script
             and '"__init__.py"' in verify_script
         ),
         "installed_app_gemma4_assistant_alias": (
@@ -928,10 +940,11 @@ def build_audit(root: Path) -> dict[str, Any]:
                 "open" if all(required_open_checks.values()) else "fail"
             )
             issue["release_clearance"] = "open_minimax_k_issue179_reporter_parity_required"
-        elif number in {"111", "165"}:
+        elif number in {"111", "165", "166"}:
             installed_hash_checks = {
                 "111": "installed_app_mllm_hash_guarded",
                 "165": "installed_app_dsml_parser_hash_guarded",
+                "166": "installed_app_gemma4_assistant_alias",
             }
             installed_key = installed_hash_checks[number]
             open_keys = {installed_key}

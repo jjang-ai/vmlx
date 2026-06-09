@@ -213,6 +213,35 @@ class TestQwenToolParser:
         assert len(result.tool_calls) == 1
         assert result.tool_calls[0]["name"] == "calculate"
 
+    def test_xml_string_arguments_use_matching_single_param_schema(self, parser):
+        """Qwen3-Coder may emit <command> XML as the argument payload."""
+        text = (
+            '<tool_call>{"name": "bash", "arguments": '
+            '"<command>\\necho \\"Tools are working correctly!\\"\\n</command>"}'
+            "</tool_call>"
+        )
+        request = {
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "bash",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {"command": {"type": "string"}},
+                            "required": ["command"],
+                        },
+                    },
+                }
+            ]
+        }
+
+        result = parser.extract_tool_calls(text, request=request)
+
+        assert result.tools_called
+        args = json.loads(result.tool_calls[0]["arguments"])
+        assert args == {"command": 'echo "Tools are working correctly!"'}
+
     def test_bracket_format(self, parser):
         """Test parsing Qwen bracket format (Qwen3 style)."""
         text = '[Calling tool: add({"a": 5, "b": 3})]'
@@ -688,6 +717,36 @@ class TestAutoToolParser:
 
         assert result.tools_called
         assert result.tool_calls[0]["name"] == "calculate"
+
+    def test_detects_qwen_xml_string_arguments_with_schema(self, parser):
+        """Auto parser should not leak Qwen <command> XML as raw arguments."""
+        text = (
+            '<tool_call>{"name": "bash", "arguments": '
+            '"<command>\\necho \\"Tools are working correctly!\\"\\n</command>"}'
+            "</tool_call>"
+        )
+        request = {
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "bash",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {"command": {"type": "string"}},
+                            "required": ["command"],
+                        },
+                    },
+                }
+            ]
+        }
+
+        result = parser.extract_tool_calls(text, request=request)
+
+        assert result.tools_called
+        assert json.loads(result.tool_calls[0]["arguments"]) == {
+            "command": 'echo "Tools are working correctly!"'
+        }
 
     def test_detects_qwen_bracket(self, parser):
         """Test auto detection of Qwen bracket format."""

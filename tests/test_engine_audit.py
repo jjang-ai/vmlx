@@ -3332,6 +3332,57 @@ class TestToolParserConcurrency:
         }
         assert DSML_PREFIX not in tool_calls[0].function.arguments
 
+    def test_qwen_issue_192_xml_string_arguments_use_request_schema(self):
+        """Qwen XML string args should become schema JSON in server tool_calls."""
+        import json
+
+        import vmlx_engine.server as srv
+
+        request = srv.ChatCompletionRequest(
+            model="qwen3-coder-next",
+            messages=[
+                srv.Message(
+                    role="user",
+                    content="test your tools with a bash echo command",
+                )
+            ],
+            tools=[
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "bash",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {"command": {"type": "string"}},
+                            "required": ["command"],
+                        },
+                    },
+                }
+            ],
+        )
+        output = (
+            '<tool_call>{"name": "bash", "arguments": '
+            '"<command>\\necho \\"Tools are working correctly!\\"\\n</command>"}'
+            "</tool_call>"
+        )
+
+        old_auto = srv._enable_auto_tool_choice
+        old_parser = srv._tool_call_parser
+        try:
+            srv._enable_auto_tool_choice = True
+            srv._tool_call_parser = "qwen"
+            cleaned, tool_calls = srv._parse_tool_calls_with_parser(output, request)
+        finally:
+            srv._enable_auto_tool_choice = old_auto
+            srv._tool_call_parser = old_parser
+
+        assert cleaned == ""
+        assert tool_calls and len(tool_calls) == 1
+        assert tool_calls[0].function.name == "bash"
+        assert json.loads(tool_calls[0].function.arguments) == {
+            "command": 'echo "Tools are working correctly!"'
+        }
+
     def test_dsv4_fallback_tool_prompt_uses_canonical_tool_calls_wrapper(self):
         """Fallback injection must not teach a non-canonical bare DSML invoke."""
         from vmlx_engine.api.tool_calling import check_and_inject_fallback_tools
@@ -6552,6 +6603,8 @@ class TestStartupCompatibilityGuards:
         import vmlx_engine
 
         sys.modules.pop("mlx_vlm.models.gemma4_assistant", None)
+        sys.modules.pop("mlx_vlm.models.gemma4_unified_assistant", None)
+        sys.modules.pop("mlx_vlm.speculative.drafters.gemma4_unified_assistant", None)
 
         vmlx_engine._install_mlx_vlm_registry_patches()
 
@@ -6559,6 +6612,13 @@ class TestStartupCompatibilityGuards:
         assert module.__name__ == "mlx_vlm.speculative.drafters.gemma4_assistant"
         assert hasattr(module, "Model")
         assert hasattr(module, "ModelConfig")
+
+        unified_module = importlib.import_module(
+            "mlx_vlm.speculative.drafters.gemma4_unified_assistant"
+        )
+        assert unified_module.__name__ == "mlx_vlm.speculative.drafters.gemma4_assistant"
+        assert hasattr(unified_module, "Model")
+        assert hasattr(unified_module, "ModelConfig")
 
     def test_bundled_python_import_gate_covers_step37_source_runtime(self):
         verify_script = Path("./panel/scripts/verify-bundled-python.sh").read_text()
