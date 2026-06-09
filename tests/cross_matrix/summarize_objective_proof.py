@@ -61,7 +61,7 @@ from tests.cross_matrix.release_regression_manifest import (
 )
 
 
-DEFAULT_OUT = Path("build/current-objective-proof-after-mimo-n2-runtime-refresh-20260609.json")
+DEFAULT_OUT = Path("build/current-objective-proof-after-live-mimo-jangtq2-runtime-proof-20260609.json")
 CURRENT_RELEASE_REGRESSION_MANIFEST_REL = (
     "build/current-release-regression-manifest-after-mimo-live-refresh-20260608.json"
 )
@@ -387,7 +387,7 @@ MIMO_V2_JANG2L_TOOL_DIALECT_REL = (
     "build/current-mimo-v2-jang2l-tool-dialect-failure-20260606.json"
 )
 MIMO_V2_JANG2L_CURRENT_AUDIT_REL = (
-    "build/current-mimo-v2-jang2l-current-audit-after-mimo-n2-runtime-refresh-20260609.json"
+    "build/current-mimo-v2-jang2l-current-audit-after-live-mimo-jangtq2-runtime-proof-20260609.json"
 )
 MIMO_V2_JANG2L_METADATA_TRUTH_REL = (
     "build/current-mimo-v25-jang2l-local-metadata-truth-patch-20260606.json"

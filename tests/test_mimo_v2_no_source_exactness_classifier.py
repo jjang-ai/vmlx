@@ -6,7 +6,7 @@ from tests.cross_matrix.run_mimo_v2_no_source_exactness_classifier import (
 
 def test_mimo_no_source_classifier_defaults_point_at_live_refresh_artifacts():
     assert str(classifier.DEFAULT_AUDIT) == (
-        "build/current-mimo-v2-jang2l-current-audit-after-mimo-n2-runtime-refresh-20260609.json"
+        "build/current-mimo-v2-jang2l-current-audit-after-live-mimo-jangtq2-runtime-proof-20260609.json"
     )
     assert str(classifier.DEFAULT_SMOKE) == (
         "build/current-all-local-model-smoke-mimo-v25-jangtq2-live-refresh-20260608/"
