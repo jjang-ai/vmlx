@@ -72,6 +72,7 @@ REQUIRED_ARTIFACT_TEST_MARKERS = (
     # mode for older plain modules. Affine fallback corrupts the runtime path.
     "test_gemma4_qat_mxfp4_ple_dequant_uses_mxfp_mode",
     "test_gemma4_qat_mxfp4_quantized_ple_stays_packed",
+    "test_native_mxfp_uint8_scales_select_mxfp_kernel",
 )
 
 COMMANDS: dict[str, list[str]] = {

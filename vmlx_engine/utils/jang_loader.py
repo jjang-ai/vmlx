@@ -5258,6 +5258,7 @@ def _fix_quantized_bits(model, quantization_overrides: dict | None = None):
     post-load heuristic must not reinterpret a proven override into the shorter
     matrix, or the first routed expert gather_qmm crashes at decode time.
     """
+    import mlx.core as mx
     import mlx.nn as nn
 
     try:
@@ -5300,6 +5301,28 @@ def _fix_quantized_bits(model, quantization_overrides: dict | None = None):
             w_cols = module.weight.shape[-1]
             s_cols = module.scales.shape[-1]
             fixed = False
+
+            if module.scales.dtype == mx.uint8:
+                # Native MXFP4/MXFP8 bundles store UE8M0 scales as uint8.
+                # Treat those scales as authoritative and route the module
+                # through MLX's MXFP kernel instead of affine quantized_matmul.
+                if s_cols * 32 == w_cols * 8:
+                    module.mode = "mxfp4"
+                    module.bits = 4
+                    module.group_size = 32
+                    fixed = True
+                elif s_cols * 32 == w_cols * 4:
+                    module.mode = "mxfp8"
+                    module.bits = 8
+                    module.group_size = 32
+                    fixed = True
+                if fixed:
+                    if hasattr(module, "biases"):
+                        try:
+                            del module.biases
+                        except Exception:
+                            module.biases = None
+                    continue
 
             override = _override_for_name(name)
             if override is not None:

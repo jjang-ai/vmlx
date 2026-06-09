@@ -605,6 +605,35 @@ class TestJangDetection:
         assert module.mode == "mxfp4"
         assert not hasattr(module, "biases") or module.biases is None
 
+    def test_native_mxfp_uint8_scales_select_mxfp_kernel(self):
+        import mlx.core as mx
+        import mlx.nn as nn
+
+        from vmlx_engine.utils.jang_loader import _fix_quantized_bits
+
+        class _Model(nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.proj = nn.QuantizedLinear(
+                    input_dims=1536,
+                    output_dims=2,
+                    bias=False,
+                    group_size=64,
+                    bits=8,
+                )
+                self.proj.weight = mx.zeros((2, 192), dtype=mx.uint32)
+                self.proj.scales = mx.ones((2, 48), dtype=mx.uint8)
+                self.proj.biases = mx.zeros((2, 48), dtype=mx.float16)
+
+        model = _Model()
+
+        _fix_quantized_bits(model)
+
+        assert model.proj.bits == 4
+        assert model.proj.group_size == 32
+        assert model.proj.mode == "mxfp4"
+        assert not hasattr(model.proj, "biases") or model.proj.biases is None
+
     def test_step37_text_loader_preserves_quantized_gate_sidecars(self):
         import mlx.core as mx
         import mlx.nn as nn
