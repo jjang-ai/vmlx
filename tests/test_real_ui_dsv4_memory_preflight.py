@@ -2,14 +2,38 @@
 """Contracts for the DSV4 real-UI no-heavy memory preflight."""
 
 from pathlib import Path
+from types import SimpleNamespace
+import sys
 
 from tests.cross_matrix import run_real_ui_dsv4_memory_preflight as gate
 
 
 def test_dsv4_memory_preflight_default_out_tracks_current_release_artifact():
     assert gate.DEFAULT_OUT == Path(
-        "build/current-real-ui-dsv4-memory-preflight-20260602-developer-id-local-recheck.json"
+        "build/current-real-ui-dsv4-memory-preflight-after-lfm-step-manifest-fix-20260604.json"
     )
+
+
+def test_dsv4_memory_preflight_psutil_snapshot_labels_binary_units(monkeypatch):
+    monkeypatch.setitem(
+        sys.modules,
+        "psutil",
+        SimpleNamespace(
+            virtual_memory=lambda: SimpleNamespace(
+                available=113.59 * 1024**3,
+                total=128 * 1024**3,
+                percent=11.3,
+            )
+        ),
+    )
+
+    snapshot = gate.psutil_memory_snapshot()
+
+    assert snapshot["unit"] == "GiB"
+    assert snapshot["available_gib"] == 113.59
+    assert snapshot["total_gib"] == 128.0
+    assert snapshot["available_gb"] == 113.59
+    assert snapshot["total_gb"] == 128.0
 
 
 def test_dsv4_memory_preflight_records_insufficient_memory(tmp_path):
@@ -34,10 +58,18 @@ Pages purgeable:                           25000.
     assert payload["did_not_launch"] is True
     assert payload["model_path"].endswith("DeepSeek-V4-Flash-JANGTQ-K")
     assert payload["free_plus_speculative_purgeable_gb"] < 120.0
+    assert payload["unit"] == "GiB"
+    assert payload["free_plus_speculative_purgeable_gib"] == payload[
+        "free_plus_speculative_purgeable_gb"
+    ]
     assert payload["available_for_gate_gb"] == payload["free_plus_speculative_purgeable_gb"]
+    assert payload["available_for_gate_gib"] == payload["available_for_gate_gb"]
     assert payload["required_free_gb"] == 120.0
+    assert payload["required_free_gib"] == 120.0
     assert payload["min_free_gb"] == 120.0
+    assert payload["min_free_gib"] == 120.0
     assert payload["memory_gap_gb"] > 0
+    assert payload["memory_gap_gib"] == payload["memory_gap_gb"]
     assert payload["launch_decision"] == "do_not_launch"
     assert payload["launch_allowed"] is False
     assert payload["memory_breakdown"] == payload["memory_breakdown_gb"]
@@ -74,8 +106,10 @@ Pages purgeable:                           25000.
     assert payload["status"] == "skipped_insufficient_memory"
     assert payload["preflight_memory_source"] == "vm_stat_free_plus_speculative_purgeable"
     assert payload["psutil_available_gb"] == 108.91
+    assert payload["psutil_available_gib"] == 108.91
     assert payload["psutil_memory_percent"] == 15.0
     assert payload["psutil_memory_gap_gb"] == 11.09
+    assert payload["psutil_memory_gap_gib"] == 11.09
     assert payload["memory_gap_gb"] > payload["psutil_memory_gap_gb"]
     assert payload["inactive_file_cache_gb"] > 0
 

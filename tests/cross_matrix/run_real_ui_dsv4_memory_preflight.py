@@ -66,9 +66,14 @@ def psutil_memory_snapshot() -> dict[str, Any]:
         vm = psutil.virtual_memory()
     except Exception as exc:  # noqa: BLE001 - diagnostic helper
         return {"error": f"{type(exc).__name__}: {exc}"}
+    available_gib = round(vm.available / (1024**3), 2)
+    total_gib = round(vm.total / (1024**3), 2)
     return {
-        "available_gb": round(vm.available / (1024**3), 2),
-        "total_gb": round(vm.total / (1024**3), 2),
+        "unit": "GiB",
+        "available_gib": available_gib,
+        "total_gib": total_gib,
+        "available_gb": available_gib,
+        "total_gb": total_gib,
         "percent": vm.percent,
     }
 
@@ -156,6 +161,8 @@ def build_preflight(
             memory_pressure_text = ""
     memory_pressure_snapshot = parse_memory_pressure(memory_pressure_text)
     psutil_available_gb = psutil_snapshot.get("available_gb")
+    psutil_available_gib = psutil_snapshot.get("available_gib", psutil_available_gb)
+    psutil_total_gib = psutil_snapshot.get("total_gib", psutil_snapshot.get("total_gb"))
     psutil_memory_gap_gb = (
         round(max(0.0, required_available_gb - float(psutil_available_gb)), 2)
         if isinstance(psutil_available_gb, (int, float))
@@ -201,6 +208,7 @@ def build_preflight(
             top_processes_text = ""
     payload = {
         "status": status,
+        "unit": "GiB",
         "reason": (
             "local memory meets DSV4 real-UI preflight floor; run the live row instead of leaving dsv4 missing"
             if status == "ready_to_launch"
@@ -217,20 +225,29 @@ def build_preflight(
         "model_path": str(model_path),
         "model_size_gb": size_gb,
         "required_available_gb": required_available_gb,
+        "required_available_gib": required_available_gb,
         "required_free_gb": required_available_gb,
+        "required_free_gib": required_available_gb,
         "min_free_gb": required_available_gb,
+        "min_free_gib": required_available_gb,
         "required_model_margin_gb": DEFAULT_REQUIRED_MODEL_MARGIN_GB,
         "safety_margin_gb": safety_margin_gb,
         "floor_valid": floor_valid,
         "preflight_memory_source": "vm_stat_free_plus_speculative_purgeable",
         "free_plus_speculative_purgeable_gb": free_plus_speculative_purgeable,
+        "free_plus_speculative_purgeable_gib": free_plus_speculative_purgeable,
         "available_for_gate_gb": free_plus_speculative_purgeable,
+        "available_for_gate_gib": free_plus_speculative_purgeable,
         "memory_gap_gb": memory_gap_gb,
+        "memory_gap_gib": memory_gap_gb,
         "inactive_file_cache_gb": inactive_gb,
         "psutil_available_gb": psutil_available_gb,
+        "psutil_available_gib": psutil_available_gib,
         "psutil_total_gb": psutil_snapshot.get("total_gb"),
+        "psutil_total_gib": psutil_total_gib,
         "psutil_memory_percent": psutil_snapshot.get("percent"),
         "psutil_memory_gap_gb": psutil_memory_gap_gb,
+        "psutil_memory_gap_gib": psutil_memory_gap_gb,
         "memory_pressure_free_percent": memory_pressure_snapshot.get("free_percent"),
         "memory_pressure_raw_tail": memory_pressure_snapshot.get("raw_tail"),
         "top_memory_processes": parse_top_memory_processes(top_processes_text),
