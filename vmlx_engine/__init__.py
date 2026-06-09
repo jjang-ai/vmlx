@@ -178,9 +178,15 @@ def _install_mlx_vlm_registry_import_hook() -> None:
     """
     import importlib.abc
     import importlib.machinery
+    import importlib.util
     import sys
+    from pathlib import Path
 
     targets = {"mlx_vlm.utils", "mlx_vlm.prompt_utils"}
+    gemma4_unified_pkg = "mlx_vlm.models.gemma4_unified"
+    gemma4_unified_dir = (
+        Path(__file__).resolve().parent / "models" / "gemma4_unified"
+    )
 
     class _VLMRegistryPatchLoader(importlib.abc.Loader):
         def __init__(self, wrapped):
@@ -200,6 +206,28 @@ def _install_mlx_vlm_registry_import_hook() -> None:
         _vmlx_vlm_registry_patch_finder = True
 
         def find_spec(self, fullname, path, target=None):
+            if fullname == gemma4_unified_pkg:
+                init_path = gemma4_unified_dir / "__init__.py"
+                if init_path.is_file():
+                    return importlib.util.spec_from_file_location(
+                        fullname,
+                        init_path,
+                        submodule_search_locations=[str(gemma4_unified_dir)],
+                    )
+                return None
+            if fullname.startswith(f"{gemma4_unified_pkg}."):
+                rel_parts = fullname.removeprefix(f"{gemma4_unified_pkg}.").split(".")
+                module_path = gemma4_unified_dir.joinpath(*rel_parts).with_suffix(".py")
+                package_init = gemma4_unified_dir.joinpath(*rel_parts, "__init__.py")
+                if package_init.is_file():
+                    return importlib.util.spec_from_file_location(
+                        fullname,
+                        package_init,
+                        submodule_search_locations=[str(package_init.parent)],
+                    )
+                if module_path.is_file():
+                    return importlib.util.spec_from_file_location(fullname, module_path)
+                return None
             if fullname not in targets:
                 return None
             spec = importlib.machinery.PathFinder.find_spec(fullname, path)

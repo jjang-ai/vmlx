@@ -6649,6 +6649,24 @@ class TestStartupCompatibilityGuards:
         assert "Gemma 4 Unified source VLM/audio runtime missing" in verify_script
         assert "Gemma 4 Unified mlx-vlm registration missing" in verify_script
 
+    def test_gemma4_unified_runtime_import_hook_resolves_direct_mlx_vlm_path(self):
+        import importlib
+        import sys
+
+        import vmlx_engine  # noqa: F401
+
+        sys.modules.pop("mlx_vlm.models.gemma4_unified.processing_gemma4_unified", None)
+        sys.modules.pop("mlx_vlm.models.gemma4_unified", None)
+
+        module = importlib.import_module("mlx_vlm.models.gemma4_unified")
+        processing = importlib.import_module(
+            "mlx_vlm.models.gemma4_unified.processing_gemma4_unified"
+        )
+
+        assert hasattr(module, "Model")
+        assert hasattr(module, "Gemma4UnifiedProcessor")
+        assert hasattr(processing, "Gemma4UnifiedProcessor")
+
     def test_mlx_vlm_registry_patch_remaps_minicpm_v46_to_minicpmo(self):
         import vmlx_engine
         from mlx_vlm.prompt_utils import MODEL_CONFIG
