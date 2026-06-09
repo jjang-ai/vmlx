@@ -980,6 +980,27 @@ def test_noheavy_api_cache_contract_includes_structured_json_retry():
     )
 
 
+def test_noheavy_api_cache_contract_includes_structured_xml_repair():
+    from tests.cross_matrix import run_noheavy_api_cache_contract as gate
+    from tests.cross_matrix import release_regression_manifest as manifest
+
+    markers = gate.REQUIRED_NOHEAVY_API_CACHE_TEST_MARKERS
+
+    assert "test_reports_markdown_extraction_as_repair_with_required_fields" in markers
+    assert "test_repair_records_supports_xml_root_and_required_fields" in markers
+    assert "structured_xml_repair_validation_boundary" in (
+        manifest.EXPECTED_CURRENT_NOHEAVY_API_CACHE_CHECKS
+    )
+    assert "tests/test_structured_output.py" in gate.SOURCE_HASH_FILES
+    assert "tests/test_structured_output_repair_report.py" in gate.SOURCE_HASH_FILES
+    assert any(
+        "tests/test_structured_output.py" in " ".join(cmd)
+        and "reports_markdown_extraction_as_repair_with_required_fields"
+        in " ".join(cmd)
+        for cmd in gate.COMMANDS.values()
+    )
+
+
 def test_noheavy_api_cache_contract_includes_response_format_docs_boundary():
     from tests.cross_matrix import run_noheavy_api_cache_contract as gate
 

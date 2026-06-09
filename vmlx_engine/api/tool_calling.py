@@ -2035,6 +2035,161 @@ def extract_xml_from_text(text: str, root_tag: Optional[str] = None) -> Optional
     return None
 
 
+def _xml_candidates_from_text(text: str, root_tag: Optional[str] = None) -> List[str]:
+    candidates = [text.strip()]
+    candidates.extend(
+        match.strip()
+        for match in re.findall(r"```(?:xml|XML)?\s*([\s\S]*?)\s*```", text)
+    )
+
+    tags = [root_tag] if root_tag else re.findall(r"<([A-Za-z_][\w:.-]*)\b[^>]*>", text)
+    seen_tags: set[str] = set()
+    for tag in tags:
+        if not tag or tag.startswith("/") or tag in seen_tags:
+            continue
+        seen_tags.add(tag)
+        for match in re.finditer(
+            rf"(<{re.escape(tag)}\b[\s\S]*?</{re.escape(tag)}>)",
+            text,
+        ):
+            candidates.append(match.group(1).strip())
+
+    unique: List[str] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        if candidate and candidate not in seen:
+            unique.append(candidate)
+            seen.add(candidate)
+    return unique
+
+
+def _xml_missing_required_fields(
+    root: ET.Element,
+    required_fields: Tuple[str, ...],
+) -> List[str]:
+    missing: List[str] = []
+    for field in required_fields:
+        if not field:
+            continue
+        found = root.find(field)
+        if found is None or (found.text or "").strip() == "":
+            missing.append(field)
+    return missing
+
+
+def _xml_validation_error(
+    root: ET.Element,
+    root_tag: Optional[str],
+    required_fields: Tuple[str, ...],
+) -> Tuple[bool, Optional[str], Optional[bool]]:
+    if root_tag and root.tag != root_tag:
+        return False, f"XML root tag mismatch: expected {root_tag}, got {root.tag}", None
+
+    missing = _xml_missing_required_fields(root, required_fields)
+    if missing:
+        return False, f"missing required XML fields: {', '.join(missing)}", False
+    return True, None, True if required_fields else None
+
+
+def repair_xml_output(
+    text: str,
+    *,
+    root_tag: Optional[str] = None,
+    required_fields: Tuple[str, ...] = (),
+) -> Dict[str, Any]:
+    """Parse/repair XML output and return raw-vs-repaired diagnostics.
+
+    This is post-generation extraction and validation for benchmark/catalog
+    callers. It strips wrappers such as markdown/prose around one valid XML
+    block, validates the expected root and required child fields, and fails
+    closed when multiple candidate XML blocks could satisfy an unspecified root.
+    It does not invent missing tags or perform guided decoding.
+    """
+    stripped = text.strip()
+    report: Dict[str, Any] = {
+        "cleaned_text": text,
+        "xml": None,
+        "is_valid": False,
+        "error": "Failed to extract valid XML from output",
+        "raw_xml_ok": False,
+        "raw_fields_ok": None,
+        "repair_needed": False,
+        "repair_actions": [],
+        "repaired_text": None,
+        "root_tag": root_tag,
+        "required_fields": list(required_fields),
+    }
+
+    raw_valid = False
+    try:
+        raw_root = ET.fromstring(stripped)
+        report["raw_xml_ok"] = True
+        raw_valid, raw_error, raw_fields_ok = _xml_validation_error(
+            raw_root,
+            root_tag,
+            required_fields,
+        )
+        report["raw_fields_ok"] = raw_fields_ok
+        if raw_valid:
+            xml = ET.tostring(raw_root, encoding="unicode")
+            report.update(
+                {
+                    "xml": xml,
+                    "is_valid": True,
+                    "error": None,
+                    "repaired_text": xml,
+                }
+            )
+            return report
+        report["error"] = raw_error
+    except ET.ParseError:
+        pass
+
+    valid_candidates: List[Tuple[str, ET.Element, str]] = []
+    invalid_candidate_error = report.get("error")
+    for candidate in _xml_candidates_from_text(text, root_tag):
+        try:
+            root = ET.fromstring(candidate)
+        except ET.ParseError as exc:
+            invalid_candidate_error = f"XML parse failed: {exc}"
+            continue
+
+        ok, error, _fields_ok = _xml_validation_error(root, root_tag, required_fields)
+        if not ok:
+            invalid_candidate_error = error
+            continue
+        valid_candidates.append((candidate, root, ET.tostring(root, encoding="unicode")))
+
+    unique_valid = list(
+        {
+            xml: (candidate, root, xml)
+            for candidate, root, xml in valid_candidates
+        }.values()
+    )
+    if not root_tag and len(unique_valid) > 1:
+        report["error"] = "ambiguous XML candidates; specify root_tag"
+        return report
+    if not unique_valid:
+        report["error"] = invalid_candidate_error or report["error"]
+        return report
+
+    candidate, _root, xml = unique_valid[0]
+    actions: List[str] = []
+    if candidate.strip() != stripped or not report["raw_xml_ok"] or not raw_valid:
+        actions.append("extract_xml_block")
+    report.update(
+        {
+            "xml": xml,
+            "is_valid": True,
+            "error": None,
+            "repair_needed": bool(actions),
+            "repair_actions": actions,
+            "repaired_text": xml,
+        }
+    )
+    return report
+
+
 def parse_json_output(
     text: str, response_format: Optional[Union[ResponseFormat, Dict[str, Any]]] = None
 ) -> Tuple[str, Optional[Dict[str, Any]], bool, Optional[str]]:

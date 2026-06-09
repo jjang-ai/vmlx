@@ -54,6 +54,40 @@ def test_repair_records_preserves_raw_vs_repaired_counts():
     assert repaired[2]["structured_output"]["is_valid"] is False
 
 
+def test_repair_records_supports_xml_root_and_required_fields():
+    records = [
+        {
+            "id": "native_xml",
+            "text": "<catalog><visible_text>OK</visible_text></catalog>",
+        },
+        {
+            "id": "fenced_xml",
+            "text": "Result:\n```xml\n<catalog><visible_text>FIXED</visible_text></catalog>\n```",
+        },
+        {"id": "bad_xml", "text": "<catalog><label>missing</label></catalog>"},
+    ]
+
+    repaired, summary = repair_records(
+        records,
+        response_format={"type": "xml"},
+        xml_root_tag="catalog",
+        required_xml_fields=("visible_text",),
+    )
+
+    assert summary["records"] == 3
+    assert summary["valid"] == 2
+    assert summary["invalid"] == 1
+    assert summary["raw_xml_ok"] == 2
+    assert summary["raw_fields_ok"] == 1
+    assert summary["repair_needed"] == 1
+    assert summary["repair_actions"]["extract_xml_block"] == 1
+    assert repaired[1]["structured_output"]["xml"] == (
+        "<catalog><visible_text>FIXED</visible_text></catalog>"
+    )
+    assert repaired[1]["structured_output"]["raw_xml_ok"] is False
+    assert repaired[2]["structured_output"]["is_valid"] is False
+
+
 def test_cli_writes_repaired_jsonl_and_summary(tmp_path):
     input_path = tmp_path / "clips.jsonl"
     output_path = tmp_path / "repaired.jsonl"
@@ -88,3 +122,41 @@ def test_cli_writes_repaired_jsonl_and_summary(tmp_path):
     assert summary["repair_needed"] == 1
     rows = [json.loads(line) for line in output_path.read_text().splitlines()]
     assert rows[1]["structured_output"]["parsed"] == {"visible_text": ["ONE", "TWO"]}
+
+
+def test_cli_writes_xml_repair_jsonl_and_summary(tmp_path):
+    input_path = tmp_path / "clips.xml.jsonl"
+    output_path = tmp_path / "repaired.xml.jsonl"
+    summary_path = tmp_path / "summary.xml.json"
+    input_path.write_text(
+        '{"id":"native","text":"<catalog><visible_text>OK</visible_text></catalog>"}\n'
+        '{"id":"fixed","text":"Result:\\n```xml\\n<catalog><visible_text>ONE</visible_text></catalog>\\n```"}\n'
+    )
+
+    rc = main(
+        [
+            "--input-jsonl",
+            str(input_path),
+            "--out-jsonl",
+            str(output_path),
+            "--summary-json",
+            str(summary_path),
+            "--format",
+            "xml",
+            "--xml-root-tag",
+            "catalog",
+            "--required-xml-field",
+            "visible_text",
+        ]
+    )
+
+    assert rc == 0
+    summary = json.loads(summary_path.read_text())
+    assert summary["records"] == 2
+    assert summary["valid"] == 2
+    assert summary["raw_xml_ok"] == 1
+    assert summary["repair_needed"] == 1
+    rows = [json.loads(line) for line in output_path.read_text().splitlines()]
+    assert rows[1]["structured_output"]["xml"] == (
+        "<catalog><visible_text>ONE</visible_text></catalog>"
+    )

@@ -13,6 +13,7 @@ This helper intentionally does not load models. It runs focused tests that pin:
 - TurboQuant KV runtime and disk-cache serialization contracts.
 - MLXStudio gateway stale-port and standby-wake routing contracts.
 - Structured JSON/schema repair and post-generation repair diagnostics.
+- Structured XML repair/validation diagnostics for benchmark/catalog callers.
 - One-shot strict JSON-only retry after unrecoverable repair/schema failure.
 - API docs boundary for repair/validation vs hard constrained decoding.
 """
@@ -78,6 +79,8 @@ REQUIRED_NOHEAVY_API_CACHE_TEST_MARKERS = (
     "test_server_docs_state_response_format_is_not_constrained_decoding",
     "test_json_schema_decodes_nested_object_string",
     "test_reports_nested_object_json_string_schema_decode",
+    "test_reports_markdown_extraction_as_repair_with_required_fields",
+    "test_repair_records_supports_xml_root_and_required_fields",
     "test_chat_response_format_strict_retries_failed_json_only",
     "test_responses_text_format_strict_retries_failed_json_only",
     "test_chat_stream_tracks_cache_detail_alongside_cached_tokens",
@@ -251,7 +254,9 @@ COMMANDS: dict[str, list[str]] = {
             "or json_schema_repairs_qwen_adjacent_string_array "
             "or json_schema_coerces_string_to_array "
             "or chat_completion_repairs_and_canonicalizes_schema_json "
-            "or repair_records_preserves_raw_vs_repaired_counts"
+            "or repair_records_preserves_raw_vs_repaired_counts "
+            "or reports_markdown_extraction_as_repair_with_required_fields "
+            "or repair_records_supports_xml_root_and_required_fields"
         ),
     ],
     "structured_output_retry_contracts": [
@@ -412,6 +417,13 @@ def build_artifact(root: Path) -> dict[str, Any]:
             and "test_json_schema_decodes_nested_object_string"
             not in missing_markers
             and "test_reports_nested_object_json_string_schema_decode"
+            not in missing_markers
+        ),
+        "structured_xml_repair_validation_boundary": (
+            structured_output_ok
+            and "test_reports_markdown_extraction_as_repair_with_required_fields"
+            not in missing_markers
+            and "test_repair_records_supports_xml_root_and_required_fields"
             not in missing_markers
         ),
         "structured_json_retry_after_repair_failure": (

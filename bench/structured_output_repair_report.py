@@ -13,7 +13,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from vmlx_engine.api.tool_calling import repair_json_output
+from vmlx_engine.api.tool_calling import repair_json_output, repair_xml_output
 
 
 TEXT_FIELDS = ("text", "raw_response", "response", "output", "content")
@@ -30,6 +30,8 @@ def _load_json_arg(value: str | None) -> dict[str, Any] | None:
 
 
 def _response_format_from_args(args: argparse.Namespace) -> dict[str, Any]:
+    if args.format == "xml":
+        return {"type": "xml"}
     if args.response_format_json:
         loaded = _load_json_arg(args.response_format_json)
         if not isinstance(loaded, dict):
@@ -65,6 +67,8 @@ def repair_records(
     *,
     response_format: dict[str, Any],
     text_field: str | None = None,
+    xml_root_tag: str | None = None,
+    required_xml_fields: tuple[str, ...] = (),
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     repaired_records: list[dict[str, Any]] = []
     summary = {
@@ -73,32 +77,57 @@ def repair_records(
         "invalid": 0,
         "raw_json_ok": 0,
         "raw_schema_ok": 0,
+        "raw_xml_ok": 0,
+        "raw_fields_ok": 0,
         "repair_needed": 0,
         "repair_actions": {},
     }
 
     for index, record in enumerate(records):
         text = _record_text(record, text_field)
-        report = repair_json_output(text, response_format)
+        if response_format.get("type") == "xml":
+            report = repair_xml_output(
+                text,
+                root_tag=xml_root_tag,
+                required_fields=required_xml_fields,
+            )
+        else:
+            report = repair_json_output(text, response_format)
         out = dict(record)
-        out["structured_output"] = {
-            "index": index,
-            "is_valid": report["is_valid"],
-            "error": report["error"],
-            "raw_json_ok": report["raw_json_ok"],
-            "raw_schema_ok": report["raw_schema_ok"],
-            "repair_needed": report["repair_needed"],
-            "repair_actions": report["repair_actions"],
-            "parsed": report["parsed"],
-        }
+        if response_format.get("type") == "xml":
+            out["structured_output"] = {
+                "index": index,
+                "is_valid": report["is_valid"],
+                "error": report["error"],
+                "raw_xml_ok": report["raw_xml_ok"],
+                "raw_fields_ok": report["raw_fields_ok"],
+                "repair_needed": report["repair_needed"],
+                "repair_actions": report["repair_actions"],
+                "xml": report["xml"],
+            }
+        else:
+            out["structured_output"] = {
+                "index": index,
+                "is_valid": report["is_valid"],
+                "error": report["error"],
+                "raw_json_ok": report["raw_json_ok"],
+                "raw_schema_ok": report["raw_schema_ok"],
+                "repair_needed": report["repair_needed"],
+                "repair_actions": report["repair_actions"],
+                "parsed": report["parsed"],
+            }
         repaired_records.append(out)
 
         summary["records"] += 1
         summary["valid" if report["is_valid"] else "invalid"] += 1
-        if report["raw_json_ok"]:
+        if report.get("raw_json_ok"):
             summary["raw_json_ok"] += 1
-        if report["raw_schema_ok"]:
+        if report.get("raw_schema_ok"):
             summary["raw_schema_ok"] += 1
+        if report.get("raw_xml_ok"):
+            summary["raw_xml_ok"] += 1
+        if report.get("raw_fields_ok"):
+            summary["raw_fields_ok"] += 1
         if report["repair_needed"]:
             summary["repair_needed"] += 1
         for action in report["repair_actions"]:
@@ -134,9 +163,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--out-jsonl", required=True)
     parser.add_argument("--summary-json", required=True)
     parser.add_argument("--text-field")
+    parser.add_argument("--format", choices=("json", "xml"), default="json")
     parser.add_argument("--response-format-json")
     parser.add_argument("--schema-json")
     parser.add_argument("--schema-name", default="benchmark_output")
+    parser.add_argument("--xml-root-tag")
+    parser.add_argument("--required-xml-field", action="append", default=[])
     args = parser.parse_args(argv)
 
     response_format = _response_format_from_args(args)
@@ -145,6 +177,8 @@ def main(argv: list[str] | None = None) -> int:
         records,
         response_format=response_format,
         text_field=args.text_field,
+        xml_root_tag=args.xml_root_tag,
+        required_xml_fields=tuple(args.required_xml_field),
     )
     summary["response_format"] = response_format
     _write_jsonl(Path(args.out_jsonl), repaired_records)

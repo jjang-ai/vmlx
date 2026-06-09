@@ -206,6 +206,7 @@ EXPECTED_CURRENT_NOHEAVY_API_CACHE_CHECKS = (
     "ollama_adapter_surface",
     "streaming_cache_detail_usage",
     "structured_schema_decode_repair",
+    "structured_xml_repair_validation_boundary",
     "structured_json_retry_after_repair_failure",
     "response_format_docs_repair_validation_boundary",
     "responses_previous_response_history",

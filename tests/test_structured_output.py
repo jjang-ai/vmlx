@@ -15,6 +15,7 @@ from vmlx_engine.api.tool_calling import (
     extract_xml_from_text,
     parse_json_output,
     repair_json_output,
+    repair_xml_output,
     build_json_system_prompt,
 )
 from vmlx_engine.api.models import ResponseFormat, ResponseFormatJsonSchema
@@ -206,6 +207,49 @@ class TestExtractXmlFromText:
 
     def test_xml_fails_closed_when_invalid(self):
         assert extract_xml_from_text("before <tool><name>x</tool> after") is None
+
+
+class TestRepairXmlOutput:
+    """Tests for raw-vs-repaired XML structured output diagnostics."""
+
+    def test_reports_markdown_extraction_as_repair_with_required_fields(self):
+        report = repair_xml_output(
+            """Result:
+```xml
+<catalog><visible_text>CLIPFARM</visible_text></catalog>
+```""",
+            root_tag="catalog",
+            required_fields=("visible_text",),
+        )
+        assert report["xml"] == "<catalog><visible_text>CLIPFARM</visible_text></catalog>"
+        assert report["is_valid"] is True
+        assert report["raw_xml_ok"] is False
+        assert report["raw_fields_ok"] is None
+        assert report["repair_needed"] is True
+        assert "extract_xml_block" in report["repair_actions"]
+
+    def test_reports_missing_required_xml_field(self):
+        report = repair_xml_output(
+            "<catalog><label>CLIPFARM</label></catalog>",
+            root_tag="catalog",
+            required_fields=("visible_text",),
+        )
+        assert report["is_valid"] is False
+        assert report["raw_xml_ok"] is True
+        assert report["raw_fields_ok"] is False
+        assert report["repair_needed"] is False
+        assert "missing required XML fields: visible_text" in report["error"]
+
+    def test_fails_closed_on_ambiguous_xml_candidates_without_root_tag(self):
+        report = repair_xml_output(
+            "<catalog><visible_text>A</visible_text></catalog>"
+            "<catalog><visible_text>B</visible_text></catalog>",
+            required_fields=("visible_text",),
+        )
+        assert report["is_valid"] is False
+        assert report["xml"] is None
+        assert report["repair_needed"] is False
+        assert "ambiguous XML candidates" in report["error"]
 
 
 class TestParseJsonOutput:
