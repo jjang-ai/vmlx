@@ -62,6 +62,23 @@ def _record_text(record: dict[str, Any], explicit_field: str | None) -> str:
     raise KeyError(f"record has no text field in {', '.join(fields)}")
 
 
+def _add_summary_rates(summary: dict[str, Any]) -> None:
+    records = int(summary["records"])
+
+    def rate(key: str) -> float:
+        if records == 0:
+            return 0.0
+        return float(summary[key]) / float(records)
+
+    summary["raw_json_ok_rate"] = rate("raw_json_ok")
+    summary["raw_schema_ok_rate"] = rate("raw_schema_ok")
+    summary["raw_xml_ok_rate"] = rate("raw_xml_ok")
+    summary["raw_fields_ok_rate"] = rate("raw_fields_ok")
+    summary["validated_rate"] = rate("valid")
+    summary["invalid_rate"] = rate("invalid")
+    summary["repair_needed_rate"] = rate("repair_needed")
+
+
 def repair_records(
     records: list[dict[str, Any]],
     *,
@@ -135,6 +152,7 @@ def repair_records(
             actions = summary["repair_actions"]
             actions[action] = actions.get(action, 0) + 1
 
+    _add_summary_rates(summary)
     return repaired_records, summary
 
 

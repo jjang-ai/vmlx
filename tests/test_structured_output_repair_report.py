@@ -54,6 +54,25 @@ def test_repair_records_preserves_raw_vs_repaired_counts():
     assert repaired[2]["structured_output"]["is_valid"] is False
 
 
+def test_repair_records_reports_raw_and_repaired_rates():
+    records = [
+        {"id": "native", "text": '{"visible_text": ["OK"]}'},
+        {
+            "id": "repaired",
+            "text": '{"visible_text": "CLIPFARM STRESS STREAM", "0-15 M00 ALERT START"}',
+        },
+        {"id": "invalid", "text": "not json"},
+    ]
+
+    _, summary = repair_records(records, response_format=_response_format())
+
+    assert summary["raw_json_ok_rate"] == 1 / 3
+    assert summary["raw_schema_ok_rate"] == 1 / 3
+    assert summary["validated_rate"] == 2 / 3
+    assert summary["invalid_rate"] == 1 / 3
+    assert summary["repair_needed_rate"] == 1 / 3
+
+
 def test_repair_records_does_not_store_schema_invalid_json_as_parsed_payload():
     records = [
         {
