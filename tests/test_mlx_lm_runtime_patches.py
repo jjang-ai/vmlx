@@ -4,6 +4,7 @@
 from types import SimpleNamespace
 
 import mlx.core as mx
+from mlx.utils import tree_flatten
 
 
 def test_tokenizer_wrapper_find_clamps_negative_reverse_start():
@@ -247,6 +248,68 @@ def test_mlx_vlm_gemma4_shared_kv_layers_drop_unused_kv_modules_and_weights():
     assert "language_model.model.layers.2.self_attn.q_proj.weight" in weights
     assert "language_model.model.layers.2.self_attn.k_proj.weight" not in weights
     assert "language_model.model.layers.3.self_attn.v_proj.weight" not in weights
+
+
+def test_mlx_vlm_gemma4_shared_kv_load_weights_drops_mlx_format_materialized_kv():
+    import vmlx_engine.runtime_patches.mlx_vlm_compat as compat
+    from mlx_vlm.models import gemma4
+
+    compat.install()
+
+    text_config = gemma4.TextConfig(
+        hidden_size=16,
+        num_hidden_layers=4,
+        intermediate_size=32,
+        num_attention_heads=2,
+        num_key_value_heads=1,
+        head_dim=8,
+        global_head_dim=8,
+        vocab_size=32,
+        vocab_size_per_layer_input=32,
+        hidden_size_per_layer_input=0,
+        num_kv_shared_layers=2,
+        sliding_window=32,
+        sliding_window_pattern=2,
+        layer_types=[
+            "sliding_attention",
+            "full_attention",
+            "sliding_attention",
+            "full_attention",
+        ],
+        rope_parameters={},
+    )
+    model = gemma4.Model(
+        gemma4.ModelConfig(
+            text_config=text_config,
+            vision_config=gemma4.VisionConfig(
+                hidden_size=16,
+                intermediate_size=32,
+                num_hidden_layers=1,
+                num_attention_heads=2,
+                num_key_value_heads=2,
+                head_dim=8,
+                global_head_dim=8,
+                patch_size=16,
+                position_embedding_size=32,
+                layer_types=["full_attention"],
+                rope_parameters={"rope_theta": 10000.0},
+            ),
+            model_type="gemma4",
+            vocab_size=32,
+            image_token_id=30,
+            audio_config=None,
+        )
+    )
+
+    weights = list(tree_flatten(model.parameters(), destination={}).items())
+    weights.append(
+        (
+            "language_model.model.layers.2.self_attn.k_proj.weight",
+            mx.zeros((8, 16)),
+        )
+    )
+
+    assert model.load_weights(weights, strict=True) is model
 
 
 def test_qwen3_vl_chunked_prefill_slices_deepstack_embeds_to_visual_window():

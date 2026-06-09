@@ -11,6 +11,54 @@ logger = logging.getLogger(__name__)
 _APPLIED = False
 
 
+def _is_gemma4_unused_shared_kv_weight(owner, key: str) -> bool:
+    """Return true for Gemma4 k/v weights materialized on shared-KV layers."""
+    prefixes = (
+        "language_model.model.layers.",
+        "model.language_model.model.layers.",
+    )
+    prefix = next((item for item in prefixes if key.startswith(item)), None)
+    if prefix is None:
+        return False
+    rest = key[len(prefix) :]
+    parts = rest.split(".")
+    if len(parts) < 4 or parts[1] != "self_attn":
+        return False
+    try:
+        layer_idx = int(parts[0])
+    except ValueError:
+        return False
+
+    layers = getattr(owner, "layers", None)
+    if layers is None:
+        language_model = getattr(owner, "language_model", None)
+        inner_model = getattr(language_model, "model", None)
+        layers = getattr(inner_model, "layers", None)
+    if layers is None or layer_idx >= len(layers):
+        return False
+    attn = getattr(layers[layer_idx], "self_attn", None)
+    return bool(
+        getattr(attn, "is_kv_shared_layer", False)
+        and parts[2] in {"k_proj", "v_proj", "k_norm", "v_norm"}
+    )
+
+
+def _drop_gemma4_unused_shared_kv_weights(owner, weights):
+    if isinstance(weights, dict):
+        return {
+            key: value
+            for key, value in weights.items()
+            if not _is_gemma4_unused_shared_kv_weight(owner, key)
+        }
+    if isinstance(weights, list):
+        return [
+            (key, value)
+            for key, value in weights
+            if not _is_gemma4_unused_shared_kv_weight(owner, key)
+        ]
+    return weights
+
+
 def install() -> None:
     """Install all mlx_vlm compatibility patches once."""
     global _APPLIED
@@ -176,32 +224,6 @@ def _patch_gemma4_shared_kv_layers() -> None:
         _vmlx_gemma4_text_init._vmlx_gemma4_shared_kv_init_patch = True  # type: ignore[attr-defined]
         text_model_cls.__init__ = _vmlx_gemma4_text_init
 
-    def _is_unused_shared_kv_weight(owner, key: str) -> bool:
-        prefix = "language_model.model.layers."
-        if not key.startswith(prefix):
-            return False
-        rest = key[len(prefix) :]
-        parts = rest.split(".")
-        if len(parts) < 4 or parts[1] != "self_attn":
-            return False
-        try:
-            layer_idx = int(parts[0])
-        except ValueError:
-            return False
-
-        layers = getattr(owner, "layers", None)
-        if layers is None:
-            language_model = getattr(owner, "language_model", None)
-            inner_model = getattr(language_model, "model", None)
-            layers = getattr(inner_model, "layers", None)
-        if layers is None or layer_idx >= len(layers):
-            return False
-        attn = getattr(layers[layer_idx], "self_attn", None)
-        return bool(
-            getattr(attn, "is_kv_shared_layer", False)
-            and parts[2] in {"k_proj", "v_proj", "k_norm", "v_norm"}
-        )
-
     model_cls = getattr(gemma4, "Model", None)
     original_sanitize = getattr(model_cls, "sanitize", None)
     if original_sanitize is not None and not getattr(
@@ -210,14 +232,30 @@ def _patch_gemma4_shared_kv_layers() -> None:
 
         def _vmlx_gemma4_sanitize(self, weights):
             sanitized = original_sanitize(self, weights)
-            return {
-                key: value
-                for key, value in sanitized.items()
-                if not _is_unused_shared_kv_weight(self, key)
-            }
+            return _drop_gemma4_unused_shared_kv_weights(self, sanitized)
 
         _vmlx_gemma4_sanitize._vmlx_gemma4_shared_kv_sanitize_patch = True  # type: ignore[attr-defined]
         model_cls.sanitize = _vmlx_gemma4_sanitize
+
+    original_load_weights = getattr(model_cls, "load_weights", None)
+    if original_load_weights is not None and not getattr(
+        original_load_weights, "_vmlx_gemma4_shared_kv_load_weights_patch", False
+    ):
+
+        def _vmlx_gemma4_load_weights(self, file_or_weights, strict=True):
+            weights = file_or_weights
+            if isinstance(weights, str):
+                try:
+                    import mlx.core as mx
+
+                    weights = list(mx.load(weights).items())
+                except Exception:
+                    return original_load_weights(self, file_or_weights, strict=strict)
+            weights = _drop_gemma4_unused_shared_kv_weights(self, weights)
+            return original_load_weights(self, weights, strict=strict)
+
+        _vmlx_gemma4_load_weights._vmlx_gemma4_shared_kv_load_weights_patch = True  # type: ignore[attr-defined]
+        model_cls.load_weights = _vmlx_gemma4_load_weights
 
     language_model_cls = getattr(language, "LanguageModel", None)
     original_language_sanitize = getattr(language_model_cls, "sanitize", None)
@@ -228,11 +266,7 @@ def _patch_gemma4_shared_kv_layers() -> None:
 
     def _vmlx_gemma4_language_sanitize(self, weights):
         sanitized = original_language_sanitize(self, weights)
-        return {
-            key: value
-            for key, value in sanitized.items()
-            if not _is_unused_shared_kv_weight(self, key)
-        }
+        return _drop_gemma4_unused_shared_kv_weights(self, sanitized)
 
     _vmlx_gemma4_language_sanitize._vmlx_gemma4_shared_kv_sanitize_patch = True  # type: ignore[attr-defined]
     language_model_cls.sanitize = _vmlx_gemma4_language_sanitize

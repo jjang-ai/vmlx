@@ -6632,7 +6632,10 @@ class TestStartupCompatibilityGuards:
             "models/gemma4_unified/processing_gemma4_unified.py",
             "omni_multimodal.py",
             "prefix_cache.py",
+            "runtime_patches/__init__.py",
             "runtime_patches/gemma4_processing.py",
+            "runtime_patches/mlx_lm_compat.py",
+            "runtime_patches/mlx_vlm_compat.py",
             "scheduler.py",
             "tool_parsers/dsml_tool_parser.py",
         ):
