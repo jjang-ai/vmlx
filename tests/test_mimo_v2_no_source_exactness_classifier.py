@@ -13,7 +13,7 @@ def test_mimo_no_source_classifier_defaults_point_at_live_refresh_artifacts():
         "summary.json"
     )
     assert str(classifier.DEFAULT_OUT) == (
-        "build/current-mimo-v2-no-source-exactness-classifier-after-lossless-token-trace-20260609.json"
+        "build/current-mimo-v2-no-source-exactness-classifier-after-artifact-diagnosis-20260609.json"
     )
     assert str(classifier.DEFAULT_JANG2L_JSON_SENTINEL_ISOLATION) == (
         "build/current-all-local-model-smoke-mimo-v25-jang2l-live-refresh-20260608/"

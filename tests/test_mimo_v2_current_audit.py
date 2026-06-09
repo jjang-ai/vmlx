@@ -1672,7 +1672,7 @@ def test_mimo_current_audit_points_at_current_cache_and_classifier_artifacts():
         "build/current-mimo-v2-jang2l-current-audit-after-cache-vs-nocache-logprobs-20260609.json"
     )
     assert str(audit.NO_SOURCE_EXACTNESS_CLASSIFIER_ARTIFACT) == (
-        "build/current-mimo-v2-no-source-exactness-classifier-after-lossless-token-trace-20260609.json"
+        "build/current-mimo-v2-no-source-exactness-classifier-after-artifact-diagnosis-20260609.json"
     )
 
 
