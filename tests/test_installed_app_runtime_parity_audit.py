@@ -104,12 +104,22 @@ def test_installed_app_runtime_parity_hashes_packaged_engine_surface():
     assert _expected_tool_parser_hash_files().issubset(
         set(gate.CRITICAL_ENGINE_HASH_FILES)
     )
+    assert _expected_reasoning_parser_hash_files().issubset(
+        set(gate.CRITICAL_ENGINE_HASH_FILES)
+    )
 
 
 def _expected_tool_parser_hash_files() -> set[str]:
     return {
         str(path.relative_to("vmlx_engine"))
         for path in Path("vmlx_engine/tool_parsers").glob("*.py")
+    }
+
+
+def _expected_reasoning_parser_hash_files() -> set[str]:
+    return {
+        str(path.relative_to("vmlx_engine"))
+        for path in Path("vmlx_engine/reasoning").glob("*.py")
     }
 
 

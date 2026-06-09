@@ -601,6 +601,10 @@ def test_packaged_bundled_hash_gate_covers_runtime_files_changed_for_release():
         "utils/jang_loader.py",
         "utils/tokenizer.py",
     }
+    expected |= {
+        str(path.relative_to("vmlx_engine"))
+        for path in Path("vmlx_engine/reasoning").glob("*.py")
+    }
 
     assert expected.issubset(set(gate_module.BUNDLED_SOURCE_HASH_PATHS))
 

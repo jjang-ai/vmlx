@@ -12545,11 +12545,11 @@ def test_release_regression_manifest_requires_dirty_contract_unit_source_hashes(
         "vmlx_engine/model_configs.py",
         "vmlx_engine/mlx_memory.py",
         "vmlx_engine/reasoning/__init__.py",
-        "vmlx_engine/reasoning/think_xml_parser.py",
         "vmlx_engine/tool_parsers/__init__.py",
         "vmlx_engine/tool_parsers/xml_function_tool_parser.py",
         "vmlx_engine/tool_parsers/zaya_tool_parser.py",
     }
+    required |= {str(path) for path in Path("vmlx_engine/reasoning").glob("*.py")}
 
     assert required.issubset(set(manifest.CURRENT_SUITE_SOURCE_HASH_FILES))
     assert all(Path(path).exists() for path in required)

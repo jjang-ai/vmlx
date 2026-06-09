@@ -506,6 +506,9 @@ def test_staged_app_engine_hash_parity_rejects_stale_packaged_runtime(tmp_path):
     assert _expected_tool_parser_hash_files().issubset(
         set(runner.STAGED_APP_ENGINE_HASH_FILES)
     )
+    assert _expected_reasoning_parser_hash_files().issubset(
+        set(runner.STAGED_APP_ENGINE_HASH_FILES)
+    )
 
     source = tmp_path / "vmlx_engine/server.py"
     staged = (
@@ -529,6 +532,13 @@ def _expected_tool_parser_hash_files() -> set[str]:
     return {
         str(path.relative_to("vmlx_engine"))
         for path in Path("vmlx_engine/tool_parsers").glob("*.py")
+    }
+
+
+def _expected_reasoning_parser_hash_files() -> set[str]:
+    return {
+        str(path.relative_to("vmlx_engine"))
+        for path in Path("vmlx_engine/reasoning").glob("*.py")
     }
 
 
