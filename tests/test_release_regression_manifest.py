@@ -4101,7 +4101,7 @@ def test_release_regression_manifest_current_sweep_uses_latest_live_smoke_artifa
     assert "current-regression-suite-20260528-dsv4-continue-refresh.json" not in joined
     assert "current-regression-suite-after-pr-intake-matrix-refresh-20260609.json" in joined
     assert "current-regression-suite-after-structured-schema-decode-20260609.json" not in joined
-    assert "current-noheavy-api-cache-contract-after-xml-docs-boundary-20260609.json" in joined
+    assert "current-noheavy-api-cache-contract-after-responses-reasoning-empty-final-args-gateway-20260609.json" in joined
     assert "current-noheavy-api-cache-contract-after-structured-schema-decode-20260609.json" not in joined
     assert "current-regression-suite-gemma4-release-boundary-after-ui-e2e-fixes-dmg-build-20260604.json" not in joined
     assert "current-regression-suite-20260602-v1553-installed-tahoe-refresh.json" not in joined

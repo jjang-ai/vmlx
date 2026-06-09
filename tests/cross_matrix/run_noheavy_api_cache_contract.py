@@ -38,7 +38,7 @@ from pathlib import Path
 from typing import Any
 
 
-DEFAULT_OUT = Path("build/current-noheavy-api-cache-contract-after-xml-docs-boundary-20260609.json")
+DEFAULT_OUT = Path("build/current-noheavy-api-cache-contract-after-responses-reasoning-empty-final-args-gateway-20260609.json")
 SOURCE_HASH_FILES = (
     "vmlx_engine/server.py",
     "vmlx_engine/api/models.py",
@@ -149,6 +149,7 @@ REQUIRED_NOHEAVY_API_CACHE_TEST_MARKERS = (
     "allows gateway startup on ports used only by stopped or remote saved sessions",
     "auto-switches to a standby model by waking it before direct OpenAI streaming",
     "passes Responses function-call argument SSE through unchanged",
+    "passes Responses argument SSE with reasoning and empty final item arguments",
     "returns backend-unavailable for stale Responses session ports",
     "recovers Responses function-call arguments from argument delta and done events",
 )
@@ -373,6 +374,7 @@ COMMANDS: dict[str, list[str]] = {
             "allows gateway startup on ports used only by stopped or remote saved sessions|"
             "auto-switches to a standby model by waking it before direct OpenAI streaming|"
             "passes Responses function-call argument SSE through unchanged|"
+            "passes Responses argument SSE with reasoning and empty final item arguments|"
             "returns backend-unavailable for stale Responses session ports"
         ),
     ],
@@ -622,6 +624,11 @@ def build_artifact(root: Path) -> dict[str, Any]:
         "gateway_responses_function_call_arguments_streaming": (
             panel_gateway_ok
             and "passes Responses function-call argument SSE through unchanged"
+            not in missing_markers
+        ),
+        "gateway_responses_reasoning_empty_final_arguments_streaming": (
+            panel_gateway_ok
+            and "passes Responses argument SSE with reasoning and empty final item arguments"
             not in missing_markers
         ),
         "gateway_stale_responses_port_rejection": (

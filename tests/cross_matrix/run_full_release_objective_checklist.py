@@ -27,7 +27,7 @@ MIMO_NO_SOURCE_EXACTNESS_CLASSIFIER = Path(
     "build/current-mimo-v2-no-source-exactness-classifier-after-artifact-diagnosis-20260609.json"
 )
 NOHEAVY_API_CACHE = Path(
-    "build/current-noheavy-api-cache-contract-after-xml-docs-boundary-20260609.json"
+    "build/current-noheavy-api-cache-contract-after-responses-reasoning-empty-final-args-gateway-20260609.json"
 )
 API_SURFACE_CONTRACT = Path(
     "build/current-api-surface-contract-20260602-v1554-stream-cache-reuse-refresh.json"

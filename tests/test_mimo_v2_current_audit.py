@@ -645,7 +645,7 @@ def test_mimo_current_audit_separates_clean_artifact_from_runtime_blockers(
     )
     _write_json(
         tmp_path
-        / "build/current-noheavy-api-cache-contract-after-xml-docs-boundary-20260609.json",
+        / "build/current-noheavy-api-cache-contract-after-responses-reasoning-empty-final-args-gateway-20260609.json",
         {
             "status": "pass",
             "checks": {

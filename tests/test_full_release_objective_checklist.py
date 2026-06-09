@@ -10,7 +10,7 @@ _build = checklist._build
 
 def test_full_release_objective_checklist_uses_current_noheavy_api_cache_contract():
     assert checklist.NOHEAVY_API_CACHE == Path(
-        "build/current-noheavy-api-cache-contract-after-xml-docs-boundary-20260609.json"
+        "build/current-noheavy-api-cache-contract-after-responses-reasoning-empty-final-args-gateway-20260609.json"
     )
 
 

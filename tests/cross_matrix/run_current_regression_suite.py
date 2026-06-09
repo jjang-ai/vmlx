@@ -513,7 +513,7 @@ CURRENT_SUITE_COMMANDS: dict[str, list[str]] = {
         sys.executable,
         "tests/cross_matrix/run_noheavy_api_cache_contract.py",
         "--out",
-        "build/current-noheavy-api-cache-contract-after-xml-docs-boundary-20260609.json",
+        "build/current-noheavy-api-cache-contract-after-responses-reasoning-empty-final-args-gateway-20260609.json",
     ],
     "cache_architecture_contracts": [
         sys.executable,

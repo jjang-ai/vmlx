@@ -1117,8 +1117,15 @@ def test_noheavy_api_cache_contract_includes_responses_gateway_tool_and_stale_po
     markers = gate.REQUIRED_NOHEAVY_API_CACHE_TEST_MARKERS
 
     assert "passes Responses function-call argument SSE through unchanged" in markers
+    assert (
+        "passes Responses argument SSE with reasoning and empty final item arguments"
+        in markers
+    )
     assert "returns backend-unavailable for stale Responses session ports" in markers
     assert "gateway_responses_function_call_arguments_streaming" in (
+        manifest.EXPECTED_CURRENT_NOHEAVY_API_CACHE_CHECKS
+    )
+    assert "gateway_responses_reasoning_empty_final_arguments_streaming" in (
         manifest.EXPECTED_CURRENT_NOHEAVY_API_CACHE_CHECKS
     )
     assert "gateway_stale_responses_port_rejection" in (
@@ -1127,6 +1134,10 @@ def test_noheavy_api_cache_contract_includes_responses_gateway_tool_and_stale_po
     assert "panel/tests/api-gateway-single-model.behavior.test.ts" in gate.SOURCE_HASH_FILES
     command = " ".join(gate.COMMANDS["panel_gateway_contracts"])
     assert "passes Responses function-call argument SSE through unchanged" in command
+    assert (
+        "passes Responses argument SSE with reasoning and empty final item arguments"
+        in command
+    )
     assert "returns backend-unavailable for stale Responses session ports" in command
 
 
@@ -1190,7 +1201,7 @@ def test_noheavy_api_cache_contract_default_out_tracks_current_suite_artifact():
     from tests.cross_matrix import run_noheavy_api_cache_contract as gate
 
     assert gate.DEFAULT_OUT == Path(
-        "build/current-noheavy-api-cache-contract-after-xml-docs-boundary-20260609.json"
+        "build/current-noheavy-api-cache-contract-after-responses-reasoning-empty-final-args-gateway-20260609.json"
     )
 
 
@@ -1200,7 +1211,7 @@ def test_current_regression_suite_runs_noheavy_api_cache_to_current_artifact():
     command = " ".join(suite.CURRENT_SUITE_COMMANDS["noheavy_api_cache_contract"])
 
     assert (
-        "build/current-noheavy-api-cache-contract-after-xml-docs-boundary-20260609.json"
+        "build/current-noheavy-api-cache-contract-after-responses-reasoning-empty-final-args-gateway-20260609.json"
         in command
     )
     assert (

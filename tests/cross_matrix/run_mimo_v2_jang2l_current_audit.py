@@ -94,7 +94,7 @@ LATEST_DECODE_SPEED_ARTIFACT = Path(
     "build/current-mimo-v25-jangtq2-speed-boundary-after-singlebatch-tokenbuffer-skip-20260609.json"
 )
 NOHEAVY_API_CACHE_CONTRACT_ARTIFACT = Path(
-    "build/current-noheavy-api-cache-contract-after-xml-docs-boundary-20260609.json"
+    "build/current-noheavy-api-cache-contract-after-responses-reasoning-empty-final-args-gateway-20260609.json"
 )
 CLEANUP_LOG = Path("build/current-mimo-stale-local-cleanup-20260606.txt")
 

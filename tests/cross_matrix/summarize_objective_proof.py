@@ -193,7 +193,7 @@ DSV4_BATCH_GENERATOR_LOGIT_TRACE_REL = (
 DSV4_BATCH_GENERATOR_WARMUP_ABLATION_REL = (
     "build/current-dsv4-jang-batch-generator-warmup-ablation-20260524.json"
 )
-API_CACHE_CONTRACT_REL = "build/current-noheavy-api-cache-contract-after-xml-docs-boundary-20260609.json"
+API_CACHE_CONTRACT_REL = "build/current-noheavy-api-cache-contract-after-responses-reasoning-empty-final-args-gateway-20260609.json"
 CACHE_ARCHITECTURE_CONTRACT_REL = "build/current-cache-architecture-contract-after-noheavy-contract-refresh-20260608.json"
 N2_PRO_JANG1L_LOCAL_MEMORY_PREFLIGHT_REL = (
     "build/current-n2-pro-jang1l-local-memory-preflight-20260609.json"
