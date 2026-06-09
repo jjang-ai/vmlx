@@ -537,6 +537,7 @@ def _responses_raw_sse_parity_checks(data: dict[str, Any]) -> list[dict[str, Any
         "all_present_surfaces_have_authoritative_args",
         "authoritative_arguments_match_across_present_surfaces",
         "all_present_surfaces_have_required_reasoning",
+        "no_reasoning_disable_workaround",
     ]
     rows = _simple_artifact_checks("responses_raw_sse_parity", data)
     rows.extend(

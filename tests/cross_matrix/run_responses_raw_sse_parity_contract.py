@@ -248,6 +248,9 @@ def build_artifact(
     all_required_reasoning_present = bool(comparable) and all(
         required_reasoning_present.values()
     )
+    no_reasoning_disable_workaround = (
+        all_required_reasoning_present if require_reasoning_events else True
+    )
     models_by_surface = {
         name: str(row.get("model") or "")
         for name, row in captures.items()
@@ -301,6 +304,7 @@ def build_artifact(
             "all_present_surfaces_match_expected_arguments": all_expected_arguments_match,
             "all_present_surfaces_match_expected_model": all_expected_models_match,
             "all_present_surfaces_have_required_reasoning": all_required_reasoning_present,
+            "no_reasoning_disable_workaround": no_reasoning_disable_workaround,
             "all_present_surfaces_report_model": all_present_surfaces_report_model,
             "all_present_surfaces_same_model": all_present_surfaces_same_model,
             "all_required_surfaces_present": all_required_present,
@@ -316,7 +320,8 @@ def build_artifact(
             "pass requires direct local server, panel gateway, and tunnel raw SSE "
             "captures for the same model with valid output item indices, required "
             "reasoning events when requested, and matching expected authoritative "
-            "function_call arguments"
+            "function_call arguments. When reasoning events are required, this "
+            "also proves the capture did not use a reasoning-disable workaround."
         ),
     }
 

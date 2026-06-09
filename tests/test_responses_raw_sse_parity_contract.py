@@ -174,6 +174,7 @@ data: {"type":"response.reasoning_summary_text.delta","delta":"checking"}
 
     assert artifact["status"] == "fail"
     assert artifact["checks"]["all_present_surfaces_have_required_reasoning"] is False
+    assert artifact["checks"]["no_reasoning_disable_workaround"] is False
     assert artifact["captures"]["direct"]["has_required_reasoning_events"] is False
 
 
@@ -256,3 +257,4 @@ def test_raw_sse_parity_passes_when_all_surfaces_match(tmp_path):
     assert artifact["checks"]["all_present_surfaces_same_model"] is True
     assert artifact["checks"]["all_present_surfaces_match_expected_arguments"] is True
     assert artifact["checks"]["all_present_surfaces_have_required_reasoning"] is True
+    assert artifact["checks"]["no_reasoning_disable_workaround"] is True
