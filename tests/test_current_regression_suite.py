@@ -1197,6 +1197,21 @@ def test_noheavy_api_cache_contract_includes_response_format_docs_boundary():
     )
 
 
+def test_current_regression_suite_tracks_responses_raw_sse_parity_contract():
+    from tests.cross_matrix import run_current_regression_suite as suite
+
+    required = {
+        "tests/cross_matrix/run_responses_raw_sse_parity_contract.py",
+        "tests/test_responses_raw_sse_parity_contract.py",
+    }
+
+    assert required.issubset(set(suite.CURRENT_SUITE_SOURCE_HASH_FILES))
+    assert "responses_raw_sse_parity_contract" in suite.CURRENT_SUITE_COMMANDS
+    command = " ".join(suite.CURRENT_SUITE_COMMANDS["focused_regression_pytest"])
+    assert "tests/test_responses_raw_sse_parity_contract.py" in command
+    assert "responses_raw_sse_parity" in command
+
+
 def test_noheavy_api_cache_contract_default_out_tracks_current_suite_artifact():
     from tests.cross_matrix import run_noheavy_api_cache_contract as gate
 

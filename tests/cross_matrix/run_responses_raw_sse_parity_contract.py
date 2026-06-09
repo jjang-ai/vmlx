@@ -1,0 +1,192 @@
+#!/usr/bin/env python3
+"""Classify raw Responses SSE tool-argument parity across route surfaces.
+
+This intentionally does not launch a model or tunnel. It consumes captured raw
+SSE text from direct local server, panel gateway, and optional tunnel paths so
+the release board can distinguish missing evidence from argument corruption.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+from pathlib import Path
+from typing import Any
+
+
+DEFAULT_OUT = Path("build/current-responses-raw-sse-parity-20260609.json")
+
+
+def _event_payloads(sse_text: str) -> list[tuple[str, dict[str, Any]]]:
+    events: list[tuple[str, dict[str, Any]]] = []
+    for block in sse_text.replace("\r\n", "\n").split("\n\n"):
+        event_type = "message"
+        data_lines: list[str] = []
+        for raw_line in block.splitlines():
+            line = raw_line.strip()
+            if line.startswith("event:"):
+                event_type = line.removeprefix("event:").strip()
+            elif line.startswith("data:"):
+                data_lines.append(line.removeprefix("data:").strip())
+        if not data_lines:
+            continue
+        raw_data = "\n".join(data_lines)
+        if raw_data == "[DONE]":
+            continue
+        try:
+            payload = json.loads(raw_data)
+        except json.JSONDecodeError:
+            events.append((event_type, {"_raw": raw_data, "_parse_error": True}))
+            continue
+        if isinstance(payload, dict):
+            events.append((event_type, payload))
+    return events
+
+
+def classify_sse_capture(sse_text: str) -> dict[str, Any]:
+    events = _event_payloads(sse_text)
+    arg_deltas: list[str] = []
+    arg_done: list[str] = []
+    function_items: list[dict[str, Any]] = []
+    reasoning_events = 0
+    heartbeats = 0
+    parse_errors = 0
+
+    for event_type, payload in events:
+        payload_type = str(payload.get("type") or event_type)
+        if payload.get("_parse_error"):
+            parse_errors += 1
+        if payload_type in {
+            "response.reasoning_summary_text.delta",
+            "response.reasoning_summary_text.done",
+        }:
+            reasoning_events += 1
+        if payload_type == "response.heartbeat" or payload.get("tool_call_generating"):
+            heartbeats += 1
+        if payload_type == "response.function_call_arguments.delta":
+            arg_deltas.append(str(payload.get("delta", "")))
+        elif payload_type == "response.function_call_arguments.done":
+            arg_done.append(str(payload.get("arguments", "")))
+        elif payload_type in {"response.output_item.added", "response.output_item.done"}:
+            item = payload.get("item")
+            if isinstance(item, dict) and item.get("type") == "function_call":
+                function_items.append(item)
+
+    reconstructed = "".join(arg_deltas)
+    final_done = arg_done[-1] if arg_done else ""
+    final_item_args = ""
+    final_item_name = ""
+    if function_items:
+        final_item = function_items[-1]
+        final_item_args = str(final_item.get("arguments", ""))
+        final_item_name = str(final_item.get("name", ""))
+
+    # The done event is authoritative for Responses streaming. Some runtimes
+    # emit an empty final item.arguments while preserving done/delta args.
+    authoritative_args = final_done or reconstructed or final_item_args
+    empty_final_item_with_done_args = bool(final_done and final_item_args == "")
+
+    return {
+        "event_count": len(events),
+        "parse_errors": parse_errors,
+        "reasoning_events": reasoning_events,
+        "heartbeat_count": heartbeats,
+        "argument_delta_count": len(arg_deltas),
+        "argument_done_count": len(arg_done),
+        "function_item_count": len(function_items),
+        "function_name": final_item_name,
+        "reconstructed_arguments": reconstructed,
+        "done_arguments": final_done,
+        "final_item_arguments": final_item_args,
+        "authoritative_arguments": authoritative_args,
+        "has_authoritative_arguments": bool(authoritative_args),
+        "empty_final_item_with_done_args": empty_final_item_with_done_args,
+    }
+
+
+def build_artifact(
+    *,
+    direct_sse: Path | None,
+    gateway_sse: Path | None,
+    tunnel_sse: Path | None,
+) -> dict[str, Any]:
+    captures: dict[str, dict[str, Any]] = {}
+    missing: list[str] = []
+    for name, path in (
+        ("direct", direct_sse),
+        ("gateway", gateway_sse),
+        ("tunnel", tunnel_sse),
+    ):
+        if path is None or not path.exists():
+            captures[name] = {"present": False}
+            missing.append(name)
+            continue
+        captures[name] = {
+            "present": True,
+            "path": str(path),
+            **classify_sse_capture(path.read_text()),
+        }
+
+    comparable = [name for name, row in captures.items() if row.get("present")]
+    args_by_surface = {
+        name: row.get("authoritative_arguments", "")
+        for name, row in captures.items()
+        if row.get("present")
+    }
+    present_with_args = {
+        name: bool(row.get("has_authoritative_arguments"))
+        for name, row in captures.items()
+        if row.get("present")
+    }
+    mismatch = len(set(args_by_surface.values())) > 1 if args_by_surface else False
+    all_required_present = not missing
+    all_present_have_args = bool(comparable) and all(present_with_args.values())
+
+    if mismatch or (comparable and not all_present_have_args):
+        status = "fail"
+    elif all_required_present and all_present_have_args:
+        status = "pass"
+    else:
+        status = "open"
+
+    return {
+        "status": status,
+        "missing_captures": missing,
+        "captures": captures,
+        "checks": {
+            "direct_capture_present": captures["direct"].get("present") is True,
+            "gateway_capture_present": captures["gateway"].get("present") is True,
+            "tunnel_capture_present": captures["tunnel"].get("present") is True,
+            "all_present_surfaces_have_authoritative_args": all_present_have_args,
+            "authoritative_arguments_match_across_present_surfaces": not mismatch,
+            "all_required_surfaces_present": all_required_present,
+        },
+        "boundary": (
+            "pass requires direct local server, panel gateway, and tunnel raw SSE "
+            "captures with matching authoritative function_call arguments"
+        ),
+    }
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--direct-sse", type=Path)
+    parser.add_argument("--gateway-sse", type=Path)
+    parser.add_argument("--tunnel-sse", type=Path)
+    parser.add_argument("--out", type=Path, default=DEFAULT_OUT)
+    args = parser.parse_args()
+
+    artifact = build_artifact(
+        direct_sse=args.direct_sse,
+        gateway_sse=args.gateway_sse,
+        tunnel_sse=args.tunnel_sse,
+    )
+    args.out.parent.mkdir(parents=True, exist_ok=True)
+    args.out.write_text(json.dumps(artifact, indent=2, sort_keys=True) + "\n")
+    print(args.out)
+    print(f"status={artifact['status']}")
+    print(f"missing_captures={artifact['missing_captures']}")
+
+
+if __name__ == "__main__":
+    main()
