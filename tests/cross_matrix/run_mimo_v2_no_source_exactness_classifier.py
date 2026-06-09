@@ -16,10 +16,10 @@ from typing import Any
 
 
 DEFAULT_AUDIT = Path(
-    "build/current-mimo-v2-jang2l-current-audit-after-live-mimo-jangtq2-runtime-proof-20260609.json"
+    "build/current-mimo-v2-jang2l-current-audit-after-singlebatch-tokenbuffer-skip-speed-rerun-20260609.json"
 )
 DEFAULT_SMOKE = Path(
-    "build/current-all-local-model-smoke-mimo-v25-jangtq2-live-refresh-20260608/summary.json"
+    "build/current-all-local-model-smoke-mimo-v25-jangtq2-current-source-textonly-l2-after-capability-fix-20260609/summary.json"
 )
 DEFAULT_OUT = Path(
     "build/current-mimo-v2-no-source-exactness-classifier-after-lossless-token-trace-20260609.json"
@@ -58,7 +58,7 @@ DEFAULT_JANGTQ2_HYPHEN_DISTRIBUTION = Path(
     "build/current-mimo-v25-jangtq2-exactness-classification-20260608.json"
 )
 DEFAULT_JANGTQ2_CURRENT_ALL_LOCAL = Path(
-    "build/current-all-local-model-smoke-mimo-v25-jangtq2-live-refresh-20260608/JANGQ_MiMo-V2.5-JANGTQ_2/result.json"
+    "build/current-all-local-model-smoke-mimo-v25-jangtq2-current-source-textonly-l2-after-capability-fix-20260609/JANGQ_MiMo-V2.5-JANGTQ_2/result.json"
 )
 DEFAULT_JANGTQ2_CONSERVATIVE_NO_CB_NO_PREFIX = Path(
     "build/current-mimo-v25-jangtq2-conservative-no-cb-no-prefix-exactness-20260608/summary.json"
@@ -894,8 +894,15 @@ def build_classification(
         ),
     }
 
+    literal_variant_exactness_failed = (
+        literal_variant_summary["plain_literal_copy_pass"] is False
+        or literal_variant_summary["structured_literal_pass"] is False
+        or literal_variant_summary["tool_literal_pass"] is False
+    )
+
     unresolved_surfaces = {
-        "artifact_quantization_or_decode_logits_quality": bool(exactness_failures),
+        "artifact_quantization_or_decode_logits_quality": bool(exactness_failures)
+        or literal_variant_exactness_failed,
         "jangtq2_raw_decode_or_artifact_quality": (
             no_source_exactness["jangtq2_raw_completion_text"] != ""
             and not no_source_exactness["jangtq2_raw_completion_literal_preserved"]
@@ -1053,6 +1060,14 @@ def build_classification(
         )
 
     model_upload_action_reasons: list[str] = []
+    if (
+        literal_variant_summary["plain_literal_copy_pass"] is False
+        and literal_variant_summary["structured_literal_pass"] is False
+        and literal_variant_summary["tool_literal_pass"] is False
+    ):
+        model_upload_action_reasons.append(
+            "JANGTQ_2 current artifact fails plain, structured JSON, and parsed tool-argument literal exactness before parser or JSON repair; rebuild/reupload with a less lossy literal-safe profile unless source-vs-quant proves a runtime decode bug"
+        )
     if artifact_only_logit_diagnosis_present:
         model_upload_action_reasons.append(
             "JANGTQ_2 served artifact emits wrong compact-hyphen/sentinel literals as greedy top-1; rebuild/reupload with corrected quantization unless a runtime decode bug is proven"

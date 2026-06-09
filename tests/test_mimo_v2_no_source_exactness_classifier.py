@@ -6,10 +6,10 @@ from tests.cross_matrix.run_mimo_v2_no_source_exactness_classifier import (
 
 def test_mimo_no_source_classifier_defaults_point_at_live_refresh_artifacts():
     assert str(classifier.DEFAULT_AUDIT) == (
-        "build/current-mimo-v2-jang2l-current-audit-after-live-mimo-jangtq2-runtime-proof-20260609.json"
+        "build/current-mimo-v2-jang2l-current-audit-after-singlebatch-tokenbuffer-skip-speed-rerun-20260609.json"
     )
     assert str(classifier.DEFAULT_SMOKE) == (
-        "build/current-all-local-model-smoke-mimo-v25-jangtq2-live-refresh-20260608/"
+        "build/current-all-local-model-smoke-mimo-v25-jangtq2-current-source-textonly-l2-after-capability-fix-20260609/"
         "summary.json"
     )
     assert str(classifier.DEFAULT_OUT) == (
@@ -20,7 +20,7 @@ def test_mimo_no_source_classifier_defaults_point_at_live_refresh_artifacts():
         "summary.json"
     )
     assert str(classifier.DEFAULT_JANGTQ2_CURRENT_ALL_LOCAL) == (
-        "build/current-all-local-model-smoke-mimo-v25-jangtq2-live-refresh-20260608/"
+        "build/current-all-local-model-smoke-mimo-v25-jangtq2-current-source-textonly-l2-after-capability-fix-20260609/"
         "JANGQ_MiMo-V2.5-JANGTQ_2/result.json"
     )
 
@@ -449,8 +449,15 @@ def test_mimo_no_source_classifier_promotes_plain_literal_copy_failure():
     assert artifact["jang2l_literal_variant_summary"]["plain_chat_literal_copy_pass"] is True
     assert artifact["literal_variant_summary"]["structured_literal_pass"] is False
     assert artifact["literal_variant_summary"]["tool_literal_pass"] is False
+    assert artifact["unresolved_surfaces"]["artifact_quantization_or_decode_logits_quality"] is True
     assert artifact["unresolved_surfaces"]["jangtq2_plain_literal_copy"] is True
     assert artifact["unresolved_surfaces"]["jang2l_tool_memory_or_protocol"] is True
+    assert artifact["model_upload_action_required"] is True
+    assert any(
+        "JANGTQ_2 current artifact fails plain, structured JSON, and parsed tool-argument literal exactness"
+        in reason
+        for reason in artifact["model_upload_action_reasons"]
+    )
 
 
 def test_mimo_no_source_classifier_consumes_compact_hyphen_distribution_probe():
