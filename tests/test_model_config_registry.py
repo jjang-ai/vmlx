@@ -1210,6 +1210,77 @@ class TestModelConfigs:
         assert inner_moe.tool_parser == "qwen"
         assert inner_moe.reasoning_parser == "qwen3"
 
+    def test_n2_pro_qwen35_moe_hybrid_vl_metadata_routes_text_only_until_vl_ready(
+        self, registry, tmp_path
+    ):
+        """N2 Pro JANG_1L is a qwen3_5_moe hybrid/VL-shaped artifact.
+
+        It must keep Qwen tool/reasoning parsers and hybrid cache metadata, but
+        affine-JANG Qwen-MoE VL without indexed MTP tensors is not a release
+        claim for the VLM path. The engine should route it text-only until the
+        real Qwen/N2 VL path is implemented and live-proven.
+        """
+
+        (tmp_path / "config.json").write_text(
+            json.dumps(
+                {
+                    "model_type": "qwen3_5_moe",
+                    "architectures": ["Qwen3_5MoeForConditionalGeneration"],
+                    "text_config": {
+                        "model_type": "qwen3_5_moe_text",
+                        "layer_types": [
+                            "linear_attention",
+                            "linear_attention",
+                            "linear_attention",
+                            "full_attention",
+                        ],
+                        "mtp_num_hidden_layers": 1,
+                    },
+                    "vision_config": {"model_type": "qwen3_5_moe"},
+                }
+            )
+        )
+        (tmp_path / "jang_config.json").write_text(
+            json.dumps(
+                {
+                    "format": "jang",
+                    "architecture": {
+                        "type": "hybrid_moe_ssm",
+                        "has_vision": True,
+                        "has_ssm": True,
+                        "has_moe": True,
+                    },
+                    "runtime": {
+                        "bundle_has_mtp": False,
+                        "mtp_layers": 1,
+                        "mtp_mode": "metadata_only_missing_weights",
+                    },
+                    "mtp": {"kept": False, "enabled": False, "num_layers": 1},
+                    "capabilities": {
+                        "family": "qwen3_5_moe",
+                        "modality": "vision",
+                        "cache_type": "hybrid",
+                        "tool_parser": "qwen",
+                        "reasoning_parser": "qwen3",
+                        "think_in_template": True,
+                        "supports_tools": True,
+                        "supports_thinking": True,
+                    },
+                }
+            )
+        )
+
+        registry.clear_cache()
+        config = registry.lookup(str(tmp_path))
+
+        assert config.family_name == "qwen3_5_moe"
+        assert config.cache_type == "hybrid"
+        assert config.tool_parser == "qwen"
+        assert config.reasoning_parser == "qwen3"
+        assert config.think_in_template is True
+        assert config.supports_thinking is True
+        assert config.is_mllm is False
+
     def test_qwen3_5_linear_attention_config_uses_hybrid_cache(self, registry):
         """Qwen3.6 dense MXFP4 has no JANG stamp but text_config.layer_types
         declares linear_attention/full_attention. Registry must not report

@@ -860,6 +860,57 @@ describe('detectModelConfigFromDir JANG multimodal detection', () => {
     expect(detected.forceTextOnly).toBe(true)
   })
 
+  it('routes N2 Pro affine-JANG Qwen-MoE metadata text-only until VL is live-proven', () => {
+    const dir = makeModelDir(
+      {
+        model_type: 'qwen3_5_moe',
+        architectures: ['Qwen3_5MoeForConditionalGeneration'],
+        text_config: {
+          model_type: 'qwen3_5_moe_text',
+          layer_types: ['linear_attention', 'linear_attention', 'linear_attention', 'full_attention'],
+          mtp_num_hidden_layers: 1,
+        },
+        vision_config: { model_type: 'qwen3_5_moe' },
+      },
+      {
+        format: 'jang',
+        architecture: {
+          type: 'hybrid_moe_ssm',
+          has_vision: true,
+          has_ssm: true,
+          has_moe: true,
+        },
+        runtime: {
+          bundle_has_mtp: false,
+          mtp_layers: 1,
+          mtp_mode: 'metadata_only_missing_weights',
+        },
+        mtp: { kept: false, enabled: false, num_layers: 1 },
+        capabilities: {
+          family: 'qwen3_5_moe',
+          modality: 'vision',
+          cache_type: 'hybrid',
+          tool_parser: 'qwen',
+          reasoning_parser: 'qwen3',
+          think_in_template: true,
+          supports_tools: true,
+          supports_thinking: true,
+        },
+      },
+    )
+
+    const detected = detectModelConfigFromDir(dir)
+
+    expect(detected.family).toBe('qwen3.5-moe')
+    expect(detected.cacheType).toBe('hybrid')
+    expect(detected.usePagedCache).toBe(true)
+    expect(detected.toolParser).toBe('qwen')
+    expect(detected.reasoningParser).toBe('qwen3')
+    expect(detected.supportsThinking).toBe(true)
+    expect(detected.isMultimodal).toBe(false)
+    expect(detected.forceTextOnly).toBe(true)
+  })
+
   it('keeps affine-JANG Qwen native-MTP VL artifacts multimodal when indexed MTP and vision tensors exist', () => {
     const dir = makeModelDir(
       {

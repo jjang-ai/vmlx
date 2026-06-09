@@ -4,7 +4,8 @@
 This gate exists because broad parser/cache/model-artifact counts can hide
 whether the risky release rows actually ran. It pins the specific families and
 artifact formats Eric called out: DSV4, ZAYA/ZAYA1-VL, Ling/Bailing,
-Nemotron-H, Qwen 3.6 VL/video/hybrid/MXFP/MTP, MiniMax M2, and Hy3 JANGTQ.
+Nemotron-H, Qwen 3.6 VL/video/hybrid/MXFP/MTP, N2 Pro hybrid Qwen-MoE,
+MiniMax M2, and Hy3 JANGTQ.
 """
 
 from __future__ import annotations
@@ -41,11 +42,11 @@ SOURCE_HASH_FILES = (
 
 ENGINE_PATTERN = (
     "deepseek_v4 or zaya or ling or bailing or nemotron or qwen3_5 "
-    "or minimax or hy_v3 or step3p7 or step37 or lfm2 or decode_speed"
+    "or n2_pro or minimax or hy_v3 or step3p7 or step37 or lfm2 or decode_speed"
 )
 PANEL_PATTERN = (
     "ZAYA|zaya|Ling|Bailing|bailing|Nemotron|Qwen|MXFP|mxfp|JANGTQ|"
-    "MTP|MiniMax|minimax|Hy3|Step|step3p7|LFM|lfm2|backend-covered|TurboQuant|local high-risk"
+    "MTP|N2|MiniMax|minimax|Hy3|Step|step3p7|LFM|lfm2|backend-covered|TurboQuant|local high-risk"
 )
 
 COMMANDS: dict[str, tuple[Path, list[str]]] = {
@@ -115,6 +116,7 @@ REQUIRED_ROWS = (
     "qwen36_affine_jang_native_mtp_vl_video",
     "qwen36_mxfp4_mxfp8_vl",
     "qwen36_native_mtp_vl",
+    "n2_pro_qwen35_moe_hybrid_vl_policy",
     "minimax_m2_parser_alias",
     "hy3_jangtq_hunyuan_qwen3",
     "hy3_jangtq_k_reasoning_policy",
@@ -201,6 +203,10 @@ ROW_MARKERS: dict[str, tuple[str, ...]] = {
     ),
     "qwen36_native_mtp_vl": (
         "marks Qwen3.6 VL JANG bundles with indexed MTP tensors as native MTP capable",
+    ),
+    "n2_pro_qwen35_moe_hybrid_vl_policy": (
+        "test_n2_pro_qwen35_moe_hybrid_vl_metadata_routes_text_only_until_vl_ready",
+        "routes N2 Pro affine-JANG Qwen-MoE metadata text-only until VL is live-proven",
     ),
     "minimax_m2_parser_alias": (
         "uses the registered MiniMax reasoning parser",

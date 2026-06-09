@@ -58,6 +58,7 @@ def test_family_detection_contract_pins_named_release_rows():
         "decode_speed_plain_kv_cache_health_not_native",
         "decode_speed_local_high_risk_rows_match_engine_registry",
         "panel_local_high_risk_rows_match_detector_policy",
+        "n2_pro_qwen35_moe_hybrid_vl_policy",
     }.issubset(names)
 
 
