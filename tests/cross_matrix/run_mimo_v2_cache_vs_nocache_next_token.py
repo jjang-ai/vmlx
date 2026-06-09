@@ -210,11 +210,60 @@ def completion_payload(args: argparse.Namespace, *, skip_prefix_cache: bool) -> 
     }
 
 
-def row_from_response(mode: str, response: dict[str, Any]) -> dict[str, Any]:
-    body = response.get("body") if isinstance(response.get("body"), dict) else {}
-    choices = body.get("choices") if isinstance(body.get("choices"), list) else []
-    choice = choices[0] if choices and isinstance(choices[0], dict) else {}
+def chat_payload(args: argparse.Namespace, *, skip_prefix_cache: bool) -> dict[str, Any]:
+    return {
+        "model": args.served_model_name,
+        "messages": [{"role": "user", "content": args.prompt}],
+        "max_tokens": 1,
+        "temperature": 0.0,
+        "top_p": 1.0,
+        "top_k": 0,
+        "logprobs": True,
+        "top_logprobs": 10,
+        "skip_prefix_cache": skip_prefix_cache,
+    }
+
+
+def request_payload(
+    args: argparse.Namespace,
+    *,
+    skip_prefix_cache: bool,
+    endpoint: str,
+) -> dict[str, Any]:
+    if endpoint == "chat":
+        return chat_payload(args, skip_prefix_cache=skip_prefix_cache)
+    return completion_payload(args, skip_prefix_cache=skip_prefix_cache)
+
+
+def _choice_text(choice: dict[str, Any], endpoint: str) -> str:
+    if endpoint == "chat":
+        message = choice.get("message")
+        if isinstance(message, dict):
+            return str(message.get("content") or "")
+    return str(choice.get("text") or "")
+
+
+def _extract_logprob_row(choice: dict[str, Any], endpoint: str) -> tuple[Any, Any, list[dict[str, Any]]]:
     logprobs = choice.get("logprobs") if isinstance(choice.get("logprobs"), dict) else {}
+    if endpoint == "chat":
+        content = logprobs.get("content") if isinstance(logprobs.get("content"), list) else []
+        first = content[0] if content and isinstance(content[0], dict) else {}
+        top_items = (
+            first.get("top_logprobs")
+            if isinstance(first.get("top_logprobs"), list)
+            else []
+        )
+        top10 = [
+            {
+                "id": None,
+                "text": str(item.get("token") or ""),
+                "logprob": float(item.get("logprob")),
+            }
+            for item in top_items
+            if isinstance(item, dict) and item.get("logprob") is not None
+        ]
+        return first.get("token"), first.get("logprob"), top10
+
     top_logprobs = logprobs.get("top_logprobs") if isinstance(logprobs.get("top_logprobs"), list) else []
     first_top = top_logprobs[0] if top_logprobs and isinstance(top_logprobs[0], dict) else {}
     top10 = [
@@ -226,27 +275,68 @@ def row_from_response(mode: str, response: dict[str, Any]) -> dict[str, Any]:
         for token, value in first_top.items()
     ]
     tokens = logprobs.get("tokens") if isinstance(logprobs.get("tokens"), list) else []
+    token_logprobs = (
+        logprobs.get("token_logprobs")
+        if isinstance(logprobs.get("token_logprobs"), list)
+        else []
+    )
+    return (
+        tokens[0] if tokens else None,
+        token_logprobs[0] if token_logprobs else None,
+        top10,
+    )
+
+
+def row_from_response(
+    mode: str,
+    response: dict[str, Any],
+    *,
+    endpoint: str = "completions",
+) -> dict[str, Any]:
+    body = response.get("body") if isinstance(response.get("body"), dict) else {}
+    choices = body.get("choices") if isinstance(body.get("choices"), list) else []
+    choice = choices[0] if choices and isinstance(choices[0], dict) else {}
+    token, token_logprob, top10 = _extract_logprob_row(choice, endpoint)
     return {
         "mode": mode,
         "status_code": response.get("code"),
         "elapsed_s": response.get("elapsed_s"),
         "error": response.get("error"),
-        "text": str(choice.get("text") or ""),
+        "text": _choice_text(choice, endpoint),
         "finish_reason": choice.get("finish_reason"),
         "usage": body.get("usage"),
-        "token": tokens[0] if tokens else None,
-        "token_logprob": (
-            logprobs.get("token_logprobs", [None])[0]
-            if isinstance(logprobs.get("token_logprobs"), list)
-            and logprobs.get("token_logprobs")
-            else None
-        ),
+        "body": None if response.get("code") == 200 else body,
+        "token": token,
+        "token_logprob": token_logprob,
         "top10": top10,
     }
 
 
 def top10_signature(row: dict[str, Any]) -> list[tuple[Any, Any]]:
     return [(item.get("id"), item.get("text")) for item in row.get("top10") or []]
+
+
+def unsupported_logprobs_boundary(
+    rows: list[dict[str, Any]],
+    *,
+    endpoint: str,
+) -> dict[str, str] | None:
+    if endpoint != "chat" or not rows:
+        return None
+    details: list[str] = []
+    for row in rows:
+        if row.get("status_code") != 400:
+            return None
+        body = row.get("body") if isinstance(row.get("body"), dict) else {}
+        detail = str(body.get("detail") or "")
+        if "logprobs" not in detail or "multimodal/VLM" not in detail:
+            return None
+        details.append(detail)
+    return {
+        "status": "skipped",
+        "reason": "mllm_logprobs_unsupported",
+        "detail": details[0],
+    }
 
 
 def run(args: argparse.Namespace) -> dict[str, Any]:
@@ -287,27 +377,62 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             health = wait_health(args.port, proc, args.load_timeout_s)
             telemetry.append(resource_snapshot("after_health", proc))
 
-            url = f"http://127.0.0.1:{args.port}/v1/completions"
+            endpoint_path = (
+                "/v1/chat/completions"
+                if args.endpoint == "chat"
+                else "/v1/completions"
+            )
+            url = f"http://127.0.0.1:{args.port}{endpoint_path}"
             response_nocache = post_json(
                 url,
-                completion_payload(args, skip_prefix_cache=True),
+                request_payload(
+                    args,
+                    skip_prefix_cache=True,
+                    endpoint=args.endpoint,
+                ),
                 args.request_timeout_s,
             )
-            rows.append(row_from_response("no_cache_bypass", response_nocache))
+            rows.append(
+                row_from_response(
+                    "no_cache_bypass",
+                    response_nocache,
+                    endpoint=args.endpoint,
+                )
+            )
 
             response_cache_warm = post_json(
                 url,
-                completion_payload(args, skip_prefix_cache=False),
+                request_payload(
+                    args,
+                    skip_prefix_cache=False,
+                    endpoint=args.endpoint,
+                ),
                 args.request_timeout_s,
             )
-            rows.append(row_from_response("cache_warm_store", response_cache_warm))
+            rows.append(
+                row_from_response(
+                    "cache_warm_store",
+                    response_cache_warm,
+                    endpoint=args.endpoint,
+                )
+            )
 
             response_cache_hit = post_json(
                 url,
-                completion_payload(args, skip_prefix_cache=False),
+                request_payload(
+                    args,
+                    skip_prefix_cache=False,
+                    endpoint=args.endpoint,
+                ),
                 args.request_timeout_s,
             )
-            rows.append(row_from_response("cache_hit", response_cache_hit))
+            rows.append(
+                row_from_response(
+                    "cache_hit",
+                    response_cache_hit,
+                    endpoint=args.endpoint,
+                )
+            )
             final_health = get_json(f"http://127.0.0.1:{args.port}/health", timeout=5)
             telemetry.append(resource_snapshot("after_requests", proc))
     finally:
@@ -343,7 +468,11 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     cache_detail = (
         prompt_details.get("cache_detail") if isinstance(prompt_details, dict) else None
     )
+    unsupported = unsupported_logprobs_boundary(rows, endpoint=args.endpoint)
     status = (
+        unsupported["status"]
+        if unsupported is not None
+        else
         "pass"
         if top10_match
         and all(row.get("status_code") == 200 for row in rows)
@@ -360,6 +489,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "cmd": cmd,
         "port": args.port,
         "cache_mode": args.cache_mode,
+        "endpoint": args.endpoint,
         "prompt": args.prompt,
         "health": health,
         "final_health": final_health,
@@ -369,11 +499,12 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "top10_match": top10_match,
         "cache_hit_cached_tokens": cached_tokens,
         "cache_hit_cache_detail": cache_detail,
+        "unsupported_boundary": unsupported,
         "rows": rows,
         "release_boundary": (
-            "This proves MiMo JANGTQ2 cache/no-cache next-token distribution "
-            "equivalence only; it does not clear literal exactness, media, "
-            "JANG_2L, N2, UI, or speed rows."
+            "This proves cache/no-cache next-token distribution equivalence "
+            "for the configured model and endpoint only; it does not clear "
+            "literal exactness, media, UI, or speed rows."
         ),
     }
 
@@ -385,6 +516,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--port", type=int, default=8874)
     parser.add_argument("--served-model-name", default="mimo-v25-jangtq2-cache-proof")
     parser.add_argument("--prompt", default="Return exactly one word: ACK")
+    parser.add_argument(
+        "--endpoint",
+        choices=("completions", "chat"),
+        default="completions",
+        help="Use chat for MLLM/VLM-routed rows that reject /v1/completions.",
+    )
     parser.add_argument("--cache-dir", type=Path, default=DEFAULT_CACHE_DIR)
     parser.add_argument(
         "--cache-mode",
