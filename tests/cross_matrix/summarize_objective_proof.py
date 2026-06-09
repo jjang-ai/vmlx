@@ -7075,6 +7075,39 @@ def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
     gemma_qat_missing = gemma_qat_inventory.get("missing_required_rows")
     gemma_qat_open = gemma_qat_inventory.get("open_required_rows")
     gemma_qat_source_open = gemma_qat_inventory.get("source_live_smoke_open_rows")
+    gemma_qat_required_rows = (
+        gemma_qat_inventory.get("required_rows")
+        if isinstance(gemma_qat_inventory.get("required_rows"), dict)
+        else {}
+    )
+    gemma_qat_source_smoke_artifacts: dict[str, str] = {}
+    gemma_qat_media_backing: dict[str, dict[str, Any]] = {}
+    for key, row in gemma_qat_required_rows.items():
+        if not isinstance(row, dict):
+            continue
+        source_smoke = row.get("source_live_smoke")
+        if isinstance(source_smoke, dict) and source_smoke.get("artifact"):
+            gemma_qat_source_smoke_artifacts[str(key)] = str(
+                source_smoke.get("artifact")
+            )
+        matching_rows = row.get("matching_rows")
+        first_match = (
+            matching_rows[0]
+            if isinstance(matching_rows, list)
+            and matching_rows
+            and isinstance(matching_rows[0], dict)
+            else {}
+        )
+        backing = first_match.get("modality_backing")
+        if isinstance(backing, dict):
+            gemma_qat_media_backing[str(key)] = {
+                "audio_weight_backed": backing.get("audio_weight_backed"),
+                "audio_embed_only": backing.get("audio_embed_only"),
+                "vision_weight_backed": backing.get("vision_weight_backed"),
+                "video_runtime_proof_required": backing.get(
+                    "video_runtime_proof_required"
+                ),
+            }
     gemma_qat_release_ok = (
         gemma_qat_inventory.get("status") == "pass"
         and gemma_qat_checks.get("all_required_live_proofs_present") is True
@@ -7106,6 +7139,8 @@ def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
             "missing_required_rows": gemma_qat_missing,
             "open_required_rows": gemma_qat_open,
             "source_live_smoke_open_rows": gemma_qat_source_open,
+            "source_live_smoke_artifacts": gemma_qat_source_smoke_artifacts,
+            "media_backing": gemma_qat_media_backing,
             "checks": {
                 "all_required_source_live_smokes_present": gemma_qat_checks.get(
                     "all_required_source_live_smokes_present"
