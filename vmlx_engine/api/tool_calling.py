@@ -1883,6 +1883,14 @@ def _coerce_json_schema_value(value: Any, schema: Any) -> Any:
     if not isinstance(schema, dict):
         return value
     schema_type = schema.get("type")
+    if schema_type == "object" and isinstance(value, str):
+        try:
+            decoded = json.loads(value)
+        except json.JSONDecodeError:
+            return value
+        if isinstance(decoded, dict):
+            return _coerce_json_schema_value(decoded, schema)
+        return value
     if schema_type == "object" and isinstance(value, dict):
         props = schema.get("properties") if isinstance(schema.get("properties"), dict) else {}
         return {

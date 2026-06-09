@@ -950,11 +950,26 @@ def test_noheavy_api_cache_contract_includes_output_context_precedence_gate():
     assert "request_output_caps_override_server_default_without_touching_context_cap" in command
 
 
+def test_noheavy_api_cache_contract_includes_structured_schema_decode_repair():
+    from tests.cross_matrix import run_noheavy_api_cache_contract as gate
+
+    assert "test_json_schema_decodes_nested_object_string" in (
+        gate.REQUIRED_NOHEAVY_API_CACHE_TEST_MARKERS
+    )
+    assert "tests/test_structured_output.py" in gate.SOURCE_HASH_FILES
+    assert "vmlx_engine/api/tool_calling.py" in gate.SOURCE_HASH_FILES
+    assert any(
+        "tests/test_structured_output.py" in " ".join(cmd)
+        and "json_schema_decodes_nested_object_string" in " ".join(cmd)
+        for cmd in gate.COMMANDS.values()
+    )
+
+
 def test_noheavy_api_cache_contract_default_out_tracks_current_suite_artifact():
     from tests.cross_matrix import run_noheavy_api_cache_contract as gate
 
     assert gate.DEFAULT_OUT == Path(
-        "build/current-noheavy-api-cache-contract-after-gateway-stale-port-20260609.json"
+        "build/current-noheavy-api-cache-contract-after-structured-schema-decode-20260609.json"
     )
 
 
@@ -1098,7 +1113,7 @@ def test_current_regression_suite_refreshes_release_regression_manifest(monkeypa
     )
     assert any(
         name == "release_regression_manifest"
-        and "build/current-release-regression-manifest-after-mimo-live-refresh-20260608.json"
+        and "build/current-release-regression-manifest-after-structured-schema-decode-20260609.json"
         in cmd
         for name, cmd in seen_steps
     )
@@ -1530,7 +1545,7 @@ def test_current_regression_suite_refreshes_current_objective_digest_artifact(
 
     assert artifact["status"] == "pass"
     assert suite.CURRENT_OBJECTIVE_DIGEST_ARTIFACT == (
-        "build/current-objective-proof-after-mimo-n2-gateway-pointer-refresh-20260609.json"
+        "build/current-objective-proof-after-structured-schema-decode-20260609.json"
     )
     assert any(
         name == "objective_digest"
@@ -1953,7 +1968,7 @@ def test_current_regression_suite_runs_full_release_objective_checklist(
     assert any(name == "full_release_objective_checklist" for name, _cmd in seen_steps)
     assert any(
         "run_full_release_objective_checklist.py" in " ".join(cmd)
-        and "current-full-release-objective-checklist-after-mimo-live-refresh-20260608.json"
+        and "current-full-release-objective-checklist-after-structured-schema-decode-20260609.json"
         in " ".join(cmd)
         for _name, cmd in seen_steps
     )
@@ -1964,7 +1979,7 @@ def test_current_regression_suite_allows_open_full_release_objective_checklist(
 ):
     from tests.cross_matrix import run_current_regression_suite as suite
 
-    path = tmp_path / "build/current-full-release-objective-checklist-after-mimo-live-refresh-20260608.json"
+    path = tmp_path / "build/current-full-release-objective-checklist-after-structured-schema-decode-20260609.json"
     path.parent.mkdir(parents=True)
     path.write_text(json.dumps({"status": "open"}) + "\n")
 

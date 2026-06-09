@@ -165,6 +165,27 @@ class TestExtractJsonFromText:
         result = extract_json_from_text('{"visible_text": "single"}', schema)
         assert result == {"visible_text": ["single"]}
 
+    def test_decodes_schema_object_field_from_json_string(self):
+        schema = {
+            "type": "object",
+            "properties": {
+                "clip": {
+                    "type": "object",
+                    "properties": {
+                        "id": {"type": "string"},
+                        "score": {"type": "integer"},
+                    },
+                    "required": ["id", "score"],
+                }
+            },
+            "required": ["clip"],
+        }
+        result = extract_json_from_text(
+            '{"clip": "{\\"id\\":\\"CLIP-7\\",\\"score\\":3}"}',
+            schema,
+        )
+        assert result == {"clip": {"id": "CLIP-7", "score": 3}}
+
 
 class TestExtractXmlFromText:
     """Tests for conservative XML extraction from model output."""
@@ -315,6 +336,35 @@ class TestParseJsonOutput:
         assert is_valid is True
         assert error is None
 
+    def test_json_schema_decodes_nested_object_string(self):
+        response_format = {
+            "type": "json_schema",
+            "json_schema": {
+                "name": "clip",
+                "schema": {
+                    "type": "object",
+                    "properties": {
+                        "clip": {
+                            "type": "object",
+                            "properties": {
+                                "id": {"type": "string"},
+                                "score": {"type": "integer"},
+                            },
+                            "required": ["id", "score"],
+                        }
+                    },
+                    "required": ["clip"],
+                },
+            },
+        }
+        _, parsed, is_valid, error = parse_json_output(
+            '{"clip": "{\\"id\\":\\"CLIP-7\\",\\"score\\":3}"}',
+            response_format,
+        )
+        assert parsed == {"clip": {"id": "CLIP-7", "score": 3}}
+        assert is_valid is True
+        assert error is None
+
     def test_response_format_model(self):
         """Test with ResponseFormat Pydantic model."""
         text = '{"result": true}'
@@ -418,6 +468,38 @@ class TestRepairJsonOutput:
         }
         report = repair_json_output('{"visible_text": "CLIPFARM"}', response_format)
         assert report["parsed"] == {"visible_text": ["CLIPFARM"]}
+        assert report["is_valid"] is True
+        assert report["raw_json_ok"] is True
+        assert report["raw_schema_ok"] is False
+        assert report["repair_needed"] is True
+        assert "schema_type_coercion" in report["repair_actions"]
+
+    def test_reports_nested_object_json_string_schema_decode(self):
+        response_format = {
+            "type": "json_schema",
+            "json_schema": {
+                "name": "clip",
+                "schema": {
+                    "type": "object",
+                    "properties": {
+                        "clip": {
+                            "type": "object",
+                            "properties": {
+                                "id": {"type": "string"},
+                                "score": {"type": "integer"},
+                            },
+                            "required": ["id", "score"],
+                        }
+                    },
+                    "required": ["clip"],
+                },
+            },
+        }
+        report = repair_json_output(
+            '{"clip": "{\\"id\\":\\"CLIP-7\\",\\"score\\":3}"}',
+            response_format,
+        )
+        assert report["parsed"] == {"clip": {"id": "CLIP-7", "score": 3}}
         assert report["is_valid"] is True
         assert report["raw_json_ok"] is True
         assert report["raw_schema_ok"] is False

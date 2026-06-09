@@ -25,7 +25,7 @@ from typing import Any
 DEFAULT_MODEL_PATH = Path("/Users/example/.mlxstudio/models/JANGQ-AI/MiMo-V2.5-JANGTQ_2")
 DEFAULT_MANIFEST = Path("build/current-mimo-jangtq2-local-manifest-20260607.tsv")
 DEFAULT_OUT = Path(
-    "build/current-mimo-v2-jang2l-current-audit-after-cache-vs-nocache-logprobs-20260609.json"
+    "build/current-mimo-v2-jang2l-current-audit-after-structured-schema-decode-20260609.json"
 )
 
 STRUCTURAL_ARTIFACT = Path("build/current-mimo-jang2l-local-structural-verify-20260606.json")
@@ -94,7 +94,7 @@ LATEST_DECODE_SPEED_ARTIFACT = Path(
     "build/current-mimo-v25-jangtq2-speed-boundary-after-singlebatch-tokenbuffer-skip-20260609.json"
 )
 NOHEAVY_API_CACHE_CONTRACT_ARTIFACT = Path(
-    "build/current-noheavy-api-cache-contract-after-gateway-stale-port-20260609.json"
+    "build/current-noheavy-api-cache-contract-after-structured-schema-decode-20260609.json"
 )
 CLEANUP_LOG = Path("build/current-mimo-stale-local-cleanup-20260606.txt")
 

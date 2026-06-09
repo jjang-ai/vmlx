@@ -12,6 +12,7 @@ This helper intentionally does not load models. It runs focused tests that pin:
 - hybrid SSM partial reuse and cache-detail telemetry;
 - TurboQuant KV runtime and disk-cache serialization contracts.
 - MLXStudio gateway stale-port and standby-wake routing contracts.
+- Structured JSON/schema repair and post-generation repair diagnostics.
 """
 
 from __future__ import annotations
@@ -27,12 +28,15 @@ from pathlib import Path
 from typing import Any
 
 
-DEFAULT_OUT = Path("build/current-noheavy-api-cache-contract-after-gateway-stale-port-20260609.json")
+DEFAULT_OUT = Path("build/current-noheavy-api-cache-contract-after-structured-schema-decode-20260609.json")
 SOURCE_HASH_FILES = (
     "vmlx_engine/server.py",
+    "vmlx_engine/api/tool_calling.py",
     "vmlx_engine/tool_parsers/dsml_tool_parser.py",
     "vmlx_engine/api/anthropic_adapter.py",
     "vmlx_engine/api/ollama_adapter.py",
+    "tests/test_structured_output.py",
+    "tests/test_structured_output_repair_report.py",
     "tests/test_engine_audit.py",
     "tests/test_batching.py",
     "tests/test_mllm_scheduler_cache.py",
@@ -66,6 +70,8 @@ REQUIRED_NOHEAVY_API_CACHE_TEST_MARKERS = (
     "test_streaming_emits_error_on_strict_failure",
     "test_text_format_has_json_schema_field",
     "test_text_format_preserves_schema_data",
+    "test_json_schema_decodes_nested_object_string",
+    "test_reports_nested_object_json_string_schema_decode",
     "test_chat_stream_tracks_cache_detail_alongside_cached_tokens",
     "test_chat_stream_finish_chunks_emit_cache_detail",
     "test_responses_stream_tracks_cache_detail_alongside_cached",
@@ -221,6 +227,24 @@ COMMANDS: dict[str, list[str]] = {
             "or chained_response_helper_emits_warning_for_reasoning_only_predecessor"
         ),
     ],
+    "structured_output_repair_contracts": [
+        sys.executable,
+        "-m",
+        "pytest",
+        "-q",
+        "-vv",
+        "tests/test_structured_output.py",
+        "tests/test_structured_output_repair_report.py",
+        "-k",
+        (
+            "json_schema_decodes_nested_object_string "
+            "or reports_nested_object_json_string_schema_decode "
+            "or json_schema_repairs_qwen_adjacent_string_array "
+            "or json_schema_coerces_string_to_array "
+            "or chat_completion_repairs_and_canonicalizes_schema_json "
+            "or repair_records_preserves_raw_vs_repaired_counts"
+        ),
+    ],
     "panel_gateway_contracts": [
         "npm",
         "--prefix",
@@ -299,6 +323,7 @@ def build_artifact(root: Path) -> dict[str, Any]:
     tq_ok = commands["tq_and_mllm_cache_contracts"]["returncode"] == 0
     dsml_ok = commands["dsv4_dsml_tool_contracts"]["returncode"] == 0
     responses_history_ok = commands["responses_history_contracts"]["returncode"] == 0
+    structured_output_ok = commands["structured_output_repair_contracts"]["returncode"] == 0
     panel_gateway_ok = commands["panel_gateway_contracts"]["returncode"] == 0
     checks = {
         "openai_chat_sampling_kwargs": (
@@ -353,6 +378,13 @@ def build_artifact(root: Path) -> dict[str, Any]:
             api_ok
             and "test_text_format_has_json_schema_field" not in missing_markers
             and "test_text_format_preserves_schema_data" not in missing_markers
+        ),
+        "structured_schema_decode_repair": (
+            structured_output_ok
+            and "test_json_schema_decodes_nested_object_string"
+            not in missing_markers
+            and "test_reports_nested_object_json_string_schema_decode"
+            not in missing_markers
         ),
         "responses_previous_response_history": (
             responses_history_ok

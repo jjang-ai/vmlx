@@ -62,10 +62,10 @@ from tests.cross_matrix.release_regression_manifest import (
 
 
 DEFAULT_OUT = Path(
-    "build/current-objective-proof-after-cache-vs-nocache-logprobs-20260609.json"
+    "build/current-objective-proof-after-structured-schema-decode-20260609.json"
 )
 CURRENT_RELEASE_REGRESSION_MANIFEST_REL = (
-    "build/current-release-regression-manifest-after-mimo-live-refresh-20260608.json"
+    "build/current-release-regression-manifest-after-structured-schema-decode-20260609.json"
 )
 DSV4_QUALITY_CLEARANCE_REL = "build/current-dsv4-long-output-quality-clearance-20260521.json"
 DSV4_CURRENT_IDENTIFIER_CANARY_REL = (
@@ -193,7 +193,7 @@ DSV4_BATCH_GENERATOR_LOGIT_TRACE_REL = (
 DSV4_BATCH_GENERATOR_WARMUP_ABLATION_REL = (
     "build/current-dsv4-jang-batch-generator-warmup-ablation-20260524.json"
 )
-API_CACHE_CONTRACT_REL = "build/current-noheavy-api-cache-contract-after-gateway-stale-port-20260609.json"
+API_CACHE_CONTRACT_REL = "build/current-noheavy-api-cache-contract-after-structured-schema-decode-20260609.json"
 CACHE_ARCHITECTURE_CONTRACT_REL = "build/current-cache-architecture-contract-after-noheavy-contract-refresh-20260608.json"
 N2_PRO_JANG1L_LOCAL_MEMORY_PREFLIGHT_REL = (
     "build/current-n2-pro-jang1l-local-memory-preflight-20260609.json"
@@ -389,7 +389,7 @@ MIMO_V2_JANG2L_TOOL_DIALECT_REL = (
     "build/current-mimo-v2-jang2l-tool-dialect-failure-20260606.json"
 )
 MIMO_V2_JANG2L_CURRENT_AUDIT_REL = (
-    "build/current-mimo-v2-jang2l-current-audit-after-cache-vs-nocache-logprobs-20260609.json"
+    "build/current-mimo-v2-jang2l-current-audit-after-structured-schema-decode-20260609.json"
 )
 MIMO_V2_JANG2L_METADATA_TRUTH_REL = (
     "build/current-mimo-v25-jang2l-local-metadata-truth-patch-20260606.json"
