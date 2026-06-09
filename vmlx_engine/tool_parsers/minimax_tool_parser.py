@@ -89,6 +89,15 @@ class MiniMaxToolParser(ToolParser):
         re.DOTALL,
     )
 
+    # MiniMax live generations can emit a complete native invoke block without
+    # the outer <minimax:tool_call> wrapper. Treat only complete, explicitly
+    # closed invoke blocks as bare native calls; truncated calls remain scoped
+    # to the wrapped lenient path below.
+    BARE_INVOKE_PATTERN = re.compile(
+        r"<invoke name=([^>]+)>(.*?)</invoke>",
+        re.DOTALL,
+    )
+
     # Pattern to match <parameter name="key">value</parameter> within an invoke
     PARAM_PATTERN = re.compile(
         r"<parameter name=([^>]+)>(.*?)</parameter>",
@@ -136,6 +145,24 @@ class MiniMaxToolParser(ToolParser):
         cleaned_text = self.strip_think_tags(model_output)
 
         if "<minimax:tool_call>" not in cleaned_text:
+            tool_calls: list[dict[str, Any]] = []
+            for invoke_match in self.BARE_INVOKE_PATTERN.finditer(cleaned_text):
+                tool_call = self._tool_call_from_invoke(
+                    invoke_match.group(1),
+                    invoke_match.group(2),
+                    lenient=False,
+                )
+                if tool_call:
+                    tool_calls.append(tool_call)
+
+            if tool_calls:
+                content_text = self.BARE_INVOKE_PATTERN.sub("", cleaned_text).strip()
+                return ExtractedToolCallInformation(
+                    tools_called=True,
+                    tool_calls=tool_calls,
+                    content=content_text if content_text else None,
+                )
+
             return ExtractedToolCallInformation(
                 tools_called=False, tool_calls=[], content=cleaned_text
             )

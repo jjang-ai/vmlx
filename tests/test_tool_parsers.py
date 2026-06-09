@@ -968,6 +968,19 @@ class TestMiniMaxToolParser:
         assert not result.tools_called
         assert "<minimax:tool_call>" in result.content
 
+    def test_bare_invoke_parameter_block(self, parser):
+        """Live MiniMax can emit a complete invoke without the outer wrapper."""
+        text = '''<invoke name="record_fact">
+<parameter name="value">blue-cat</parameter>
+</invoke>'''
+        result = parser.extract_tool_calls(text)
+
+        assert result.tools_called
+        assert result.content is None
+        assert result.tool_calls[0]["name"] == "record_fact"
+        args = json.loads(result.tool_calls[0]["arguments"])
+        assert args == {"value": "blue-cat"}
+
     def test_empty_invoke(self, parser):
         """Test invoke with no parameters."""
         text = """<minimax:tool_call>
