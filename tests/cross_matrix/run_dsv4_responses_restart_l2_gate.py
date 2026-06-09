@@ -169,9 +169,14 @@ def resource_snapshot(name: str, proc: subprocess.Popen | None = None) -> dict[s
         import psutil
 
         vm = psutil.virtual_memory()
+        total_gib = round(vm.total / (1024**3), 2)
+        available_gib = round(vm.available / (1024**3), 2)
         snap["system_memory"] = {
-            "total_gb": round(vm.total / (1024**3), 2),
-            "available_gb": round(vm.available / (1024**3), 2),
+            "unit": "GiB",
+            "total_gib": total_gib,
+            "available_gib": available_gib,
+            "total_gb": total_gib,
+            "available_gb": available_gib,
             "percent": vm.percent,
         }
         if proc is not None and proc.poll() is None:
@@ -192,11 +197,19 @@ def blocked_by_memory_preflight(args: argparse.Namespace) -> dict[str, Any] | No
     if args.min_free_gb <= 0:
         return None
     snap = resource_snapshot("preflight")
-    available = (snap.get("system_memory") or {}).get("available_gb")
+    memory = snap.get("system_memory") or {}
+    available = memory.get("available_gib", memory.get("available_gb"))
     if isinstance(available, (int, float)) and available < args.min_free_gb:
+        gap_gib = round(max(0.0, args.min_free_gb - available), 2)
         return {
             "status": "skipped",
             "reason": "insufficient_free_memory",
+            "unit": "GiB",
+            "available_gib": available,
+            "available_gb": available,
+            "memory_gap_gib": gap_gib,
+            "memory_gap_gb": gap_gib,
+            "required_available_gib": args.min_free_gb,
             "required_available_gb": args.min_free_gb,
             "telemetry": [snap],
         }
