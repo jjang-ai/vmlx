@@ -4966,8 +4966,10 @@ class TestH4JsonSchemaStreaming:
 
         combined = f"{server_doc}\n{config_doc}".lower()
 
+        assert "llguidance" in combined
+        assert "guided json/schema token masking" in combined
         assert "post-generation repair" in combined
-        assert "not hard grammar-constrained decoding" in combined
+        assert "not universal hard grammar-constrained decoding" in combined
         assert "repair/validation" in combined
         assert "one json-only correction retry" in combined
         assert "force the model to return valid json" not in combined

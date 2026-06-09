@@ -125,7 +125,7 @@ Create `mcp.json`:
 | `stream` | Enable streaming | `true` |
 | `stop` | Stop sequences | None |
 | `tools` | Tool definitions | None |
-| `response_format` | Request `json_object` or `json_schema`; vMLX uses prompt instructions plus post-generation repair/validation, not hard grammar-constrained decoding. Non-streaming JSON/schema failures get one JSON-only correction retry before strict-mode rejection. | None |
+| `response_format` | Request `json_object` or `json_schema`; compatible text-generation paths use `llguidance` guided JSON/schema token masking plus post-generation repair/validation, while unsupported paths fall back to prompt instruction plus repair. This is not universal hard grammar-constrained decoding. Non-streaming JSON/schema failures get one JSON-only correction retry before strict-mode rejection. | None |
 
 ### Multimodal Options
 

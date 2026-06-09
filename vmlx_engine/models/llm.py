@@ -251,6 +251,7 @@ class MLXLanguageModel:
 
         want_logprobs = bool(kwargs.pop("logprobs", False))
         top_logprobs = int(kwargs.pop("top_logprobs", 0) or 0)
+        response_format = kwargs.pop("_vmlx_response_format", None)
 
         # Create sampler with all sampling parameters
         sampler = self._create_sampler(temperature, top_p, min_p=min_p, top_k=top_k)
@@ -262,6 +263,15 @@ class MLXLanguageModel:
             logits_processors = make_logits_processors(
                 repetition_penalty=repetition_penalty,
             )
+        if response_format:
+            from ..api.tool_calling import build_guided_json_logits_processor
+
+            guided_processor = build_guided_json_logits_processor(
+                response_format,
+                self.tokenizer,
+            )
+            if guided_processor is not None:
+                logits_processors = list(logits_processors or []) + [guided_processor]
 
         # Check for speculative decoding
         draft_model_arg = None
@@ -386,6 +396,7 @@ class MLXLanguageModel:
             self.load()
 
         from mlx_lm import stream_generate
+        response_format = kwargs.pop("_vmlx_response_format", None)
 
         # Create sampler with all sampling parameters
         sampler = self._create_sampler(temperature, top_p, min_p=min_p, top_k=top_k)
@@ -397,6 +408,15 @@ class MLXLanguageModel:
             logits_processors = make_logits_processors(
                 repetition_penalty=repetition_penalty,
             )
+        if response_format:
+            from ..api.tool_calling import build_guided_json_logits_processor
+
+            guided_processor = build_guided_json_logits_processor(
+                response_format,
+                self.tokenizer,
+            )
+            if guided_processor is not None:
+                logits_processors = list(logits_processors or []) + [guided_processor]
 
         token_count = 0
         accumulated_text = ""

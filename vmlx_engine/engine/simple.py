@@ -192,6 +192,7 @@ class SimpleEngine(BaseEngine):
         top_k = int(kwargs.pop("top_k", 0) or 0)
         min_p = float(kwargs.pop("min_p", 0.0) or 0.0)
         repetition_penalty = float(kwargs.pop("repetition_penalty", 1.0) or 1.0)
+        response_format = kwargs.pop("_vmlx_response_format", None)
         kwargs.pop("use_cache", None)
         kwargs.pop("tools", None)
 
@@ -206,6 +207,15 @@ class SimpleEngine(BaseEngine):
                     repetition_penalty=repetition_penalty,
                 )
             )
+        if response_format:
+            from ..api.tool_calling import build_guided_json_logits_processor
+
+            guided_processor = build_guided_json_logits_processor(
+                response_format,
+                tokenizer,
+            )
+            if guided_processor is not None:
+                logits_processors.append(guided_processor)
         if not logits_processors:
             logits_processors = None
 

@@ -16,6 +16,7 @@ from vmlx_engine.api.tool_calling import (
     parse_json_output,
     repair_json_output,
     repair_xml_output,
+    build_guided_json_logits_processor,
     build_json_system_prompt,
 )
 from vmlx_engine.api.models import ResponseFormat, ResponseFormatJsonSchema
@@ -599,6 +600,57 @@ class TestBuildJsonSystemPrompt:
         result = build_json_system_prompt(response_format)
         assert result is not None
         assert "output" in result
+
+
+class TestGuidedJsonLogitsProcessor:
+    """Tests for llguidance-backed JSON/schema token masking."""
+
+    def test_json_schema_processor_masks_non_json_start_token(self):
+        import mlx.core as mx
+        from tokenizers import Tokenizer
+        from tokenizers.decoders import ByteLevel as ByteLevelDecoder
+        from tokenizers.models import BPE
+        from tokenizers.pre_tokenizers import ByteLevel
+        from tokenizers.trainers import BpeTrainer
+        from transformers import PreTrainedTokenizerFast
+
+        tokenizer = Tokenizer(BPE(unk_token="<unk>"))
+        tokenizer.pre_tokenizer = ByteLevel(add_prefix_space=False)
+        tokenizer.decoder = ByteLevelDecoder()
+        tokenizer.train_from_iterator(
+            ['{"ok":true}', '{"ok":false}', "{}", "A"],
+            BpeTrainer(vocab_size=64, special_tokens=["<unk>", "<eos>"]),
+        )
+        hf_tokenizer = PreTrainedTokenizerFast(
+            tokenizer_object=tokenizer,
+            unk_token="<unk>",
+            eos_token="<eos>",
+        )
+        processor = build_guided_json_logits_processor(
+            {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "status",
+                    "schema": {
+                        "type": "object",
+                        "properties": {"ok": {"type": "boolean"}},
+                        "required": ["ok"],
+                        "additionalProperties": False,
+                    },
+                },
+            },
+            hf_tokenizer,
+        )
+
+        assert processor is not None
+        bad_token = hf_tokenizer.encode("A", add_special_tokens=False)[0]
+        prompt_token = hf_tokenizer.encode(" ", add_special_tokens=False)[0]
+        logits = mx.zeros((1, len(hf_tokenizer)))
+
+        masked = processor(mx.array([prompt_token]), logits)
+
+        assert mx.isneginf(masked[0, bad_token]).item() is True
+        assert getattr(processor, "_vmlx_guided_decoding", None) == "llguidance_json"
 
 
 class TestInjectJsonInstruction:

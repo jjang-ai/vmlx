@@ -14,6 +14,7 @@ This helper intentionally does not load models. It runs focused tests that pin:
 - MLXStudio gateway stale-port and standby-wake routing contracts.
 - Structured JSON/schema repair and post-generation repair diagnostics.
 - Structured XML repair/validation diagnostics for benchmark/catalog callers.
+- Guided JSON/schema token masking on compatible llguidance text paths.
 - One-shot strict JSON-only retry after unrecoverable repair/schema failure.
 - API docs boundary for repair/validation vs hard constrained decoding.
 """
@@ -42,6 +43,7 @@ SOURCE_HASH_FILES = (
     "docs/reference/configuration.md",
     "tests/test_structured_output.py",
     "tests/test_structured_output_repair_report.py",
+    "tests/test_llm.py",
     "tests/test_server.py",
     "tests/test_engine_audit.py",
     "tests/test_batching.py",
@@ -81,6 +83,10 @@ REQUIRED_NOHEAVY_API_CACHE_TEST_MARKERS = (
     "test_reports_nested_object_json_string_schema_decode",
     "test_reports_markdown_extraction_as_repair_with_required_fields",
     "test_repair_records_supports_xml_root_and_required_fields",
+    "test_json_schema_processor_masks_non_json_start_token",
+    "test_chat_response_format_forwards_guided_json_hint",
+    "test_responses_text_format_forwards_guided_json_hint",
+    "test_generate_installs_guided_json_logits_processor",
     "test_chat_response_format_strict_retries_failed_json_only",
     "test_responses_text_format_strict_retries_failed_json_only",
     "test_chat_stream_tracks_cache_detail_alongside_cached_tokens",
@@ -272,6 +278,23 @@ COMMANDS: dict[str, list[str]] = {
             "or responses_text_format_strict_retries_failed_json_only"
         ),
     ],
+    "structured_guided_decoding_contracts": [
+        sys.executable,
+        "-m",
+        "pytest",
+        "-q",
+        "-vv",
+        "tests/test_structured_output.py",
+        "tests/test_server.py",
+        "tests/test_llm.py",
+        "-k",
+        (
+            "json_schema_processor_masks_non_json_start_token "
+            "or chat_response_format_forwards_guided_json_hint "
+            "or responses_text_format_forwards_guided_json_hint "
+            "or generate_installs_guided_json_logits_processor"
+        ),
+    ],
     "panel_gateway_contracts": [
         "npm",
         "--prefix",
@@ -352,6 +375,7 @@ def build_artifact(root: Path) -> dict[str, Any]:
     responses_history_ok = commands["responses_history_contracts"]["returncode"] == 0
     structured_output_ok = commands["structured_output_repair_contracts"]["returncode"] == 0
     structured_retry_ok = commands["structured_output_retry_contracts"]["returncode"] == 0
+    structured_guided_ok = commands["structured_guided_decoding_contracts"]["returncode"] == 0
     panel_gateway_ok = commands["panel_gateway_contracts"]["returncode"] == 0
     checks = {
         "openai_chat_sampling_kwargs": (
@@ -431,6 +455,17 @@ def build_artifact(root: Path) -> dict[str, Any]:
             and "test_chat_response_format_strict_retries_failed_json_only"
             not in missing_markers
             and "test_responses_text_format_strict_retries_failed_json_only"
+            not in missing_markers
+        ),
+        "structured_guided_json_schema_token_masking": (
+            structured_guided_ok
+            and "test_json_schema_processor_masks_non_json_start_token"
+            not in missing_markers
+            and "test_chat_response_format_forwards_guided_json_hint"
+            not in missing_markers
+            and "test_responses_text_format_forwards_guided_json_hint"
+            not in missing_markers
+            and "test_generate_installs_guided_json_logits_processor"
             not in missing_markers
         ),
         "responses_previous_response_history": (

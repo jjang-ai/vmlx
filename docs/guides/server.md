@@ -337,10 +337,14 @@ See [Reasoning Models Guide](reasoning.md) for full details.
 ## Structured Output (JSON Mode)
 
 Request JSON-shaped output using `response_format`. vMLX adds JSON
-instructions to the prompt, then applies post-generation repair/validation to
-the model text before returning it. This is repair/validation support, not hard
-grammar-constrained decoding. Non-streaming Chat Completions and Responses also
-perform one JSON-only correction retry when deterministic repair still fails.
+instructions to the prompt. On compatible text-generation paths with
+`llguidance` and a fast tokenizer, vMLX also applies guided JSON/schema token
+masking while decoding. All paths still apply post-generation repair/validation
+to the model text before returning it. This is not universal hard
+grammar-constrained decoding: unsupported tokenizers, specialized runtime paths,
+and streaming fall back to prompt instruction plus repair/validation.
+Non-streaming Chat Completions and Responses also perform one JSON-only
+correction retry when deterministic repair still fails.
 
 ### JSON Object Mode
 
@@ -387,8 +391,9 @@ assert "colors" in data
 
 Notes:
 
-- `response_format` does not currently enable hard grammar-constrained decoding
-  in the runtime.
+- `response_format` can enable guided JSON/schema token masking through
+  `llguidance` on compatible text-generation paths, but it is not universal hard
+  grammar-constrained decoding across every runtime path.
 - Markdown fences, prose around JSON, trailing commas, Python booleans/nulls,
   safe schema coercions, and selected deterministic shape repairs can be fixed
   after generation.

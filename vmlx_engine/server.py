@@ -11148,6 +11148,12 @@ async def create_chat_completion(
         "top_p": _resolve_top_p(request.top_p, request.model),
         "max_prompt_tokens": _chat_max_prompt_tokens,
     }
+    if response_format:
+        chat_kwargs["_vmlx_response_format"] = (
+            response_format.model_dump(exclude_none=True, by_alias=True)
+            if hasattr(response_format, "model_dump")
+            else response_format
+        )
     # Forward stop sequences from request to engine
     if request.stop:
         chat_kwargs["stop"] = request.stop
@@ -12922,6 +12928,16 @@ async def create_response(
         "top_p": _resolve_top_p(request.top_p, request.model),
         "max_prompt_tokens": _responses_max_prompt_tokens,
     }
+    _response_text_format = None
+    if request.text and isinstance(request.text, dict):
+        _response_text_format = request.text
+    elif request.text and hasattr(request.text, "model_dump"):
+        _response_text_format = request.text.model_dump(exclude_none=True)
+    if (
+        isinstance(_response_text_format, dict)
+        and _response_text_format.get("type") not in (None, "text")
+    ):
+        chat_kwargs["_vmlx_response_format"] = _response_text_format
     # Forward stop sequences from request to engine
     if request.stop:
         chat_kwargs["stop"] = request.stop

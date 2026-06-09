@@ -51,6 +51,45 @@ def test_model_repr():
     assert "not loaded" in repr_str
 
 
+def test_generate_installs_guided_json_logits_processor(monkeypatch):
+    """response_format should become a logits processor when helper supports it."""
+    import mlx.core as mx
+
+    from vmlx_engine.models.llm import MLXLanguageModel
+
+    captured = {}
+
+    def fake_generate(*_args, **kwargs):
+        captured.update(kwargs)
+        return "{}"
+
+    def fake_processor(_tokens, logits):
+        return logits
+
+    fake_processor._vmlx_guided_decoding = "llguidance_json"
+
+    monkeypatch.setattr(
+        "vmlx_engine.api.tool_calling.build_guided_json_logits_processor",
+        lambda response_format, tokenizer: fake_processor,
+    )
+    monkeypatch.setattr("mlx_lm.generate", fake_generate)
+
+    model = MLXLanguageModel.__new__(MLXLanguageModel)
+    model._loaded = True
+    model.model = object()
+    model.tokenizer = type("_Tokenizer", (), {"encode": lambda self, text: [1, 2]})()
+    model._create_sampler = lambda *args, **kwargs: (lambda logits: mx.argmax(logits, axis=-1))
+
+    output = model.generate(
+        "Return JSON",
+        max_tokens=4,
+        _vmlx_response_format={"type": "json_object"},
+    )
+
+    assert output.text == "{}"
+    assert captured["logits_processors"] == [fake_processor]
+
+
 @pytest.mark.slow
 def test_model_load(small_model_name):
     """Test loading a model (slow test, downloads model)."""

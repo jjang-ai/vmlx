@@ -980,6 +980,27 @@ def test_noheavy_api_cache_contract_includes_structured_json_retry():
     )
 
 
+def test_noheavy_api_cache_contract_includes_guided_json_schema_decoding():
+    from tests.cross_matrix import run_noheavy_api_cache_contract as gate
+    from tests.cross_matrix import release_regression_manifest as manifest
+
+    markers = gate.REQUIRED_NOHEAVY_API_CACHE_TEST_MARKERS
+
+    assert "test_json_schema_processor_masks_non_json_start_token" in markers
+    assert "test_chat_response_format_forwards_guided_json_hint" in markers
+    assert "test_responses_text_format_forwards_guided_json_hint" in markers
+    assert "test_generate_installs_guided_json_logits_processor" in markers
+    assert "structured_guided_json_schema_token_masking" in (
+        manifest.EXPECTED_CURRENT_NOHEAVY_API_CACHE_CHECKS
+    )
+    assert "tests/test_structured_output.py" in gate.SOURCE_HASH_FILES
+    assert "tests/test_server.py" in gate.SOURCE_HASH_FILES
+    assert "tests/test_llm.py" in gate.SOURCE_HASH_FILES
+    command = " ".join(gate.COMMANDS["structured_guided_decoding_contracts"])
+    assert "tests/test_llm.py" in command
+    assert "generate_installs_guided_json_logits_processor" in command
+
+
 def test_noheavy_api_cache_contract_includes_structured_xml_repair():
     from tests.cross_matrix import run_noheavy_api_cache_contract as gate
     from tests.cross_matrix import release_regression_manifest as manifest
