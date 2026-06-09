@@ -701,6 +701,8 @@ def test_current_regression_suite_hashes_focused_pytest_gate_sources():
     required = {
         "tests/test_objective_proof_digest.py",
         "tests/test_agents_release_control_plane.py",
+        "tests/cross_matrix/run_mimo_v2_cache_vs_nocache_next_token.py",
+        "tests/test_mimo_v2_cache_vs_nocache_next_token.py",
         "tests/test_mimo_v2_no_source_exactness_classifier.py",
         "tests/test_full_release_objective_checklist.py",
         "tests/test_dsv4_default_cache_tool_loop_gate.py",
