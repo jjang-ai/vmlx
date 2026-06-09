@@ -126,6 +126,68 @@ async function startResponsesStreamingBackend(): Promise<BackendHandle> {
   return { server, port: await listen(server), bodies, paths };
 }
 
+async function startResponsesToolStreamingBackend(): Promise<BackendHandle> {
+  const bodies: any[] = [];
+  const paths: string[] = [];
+  const server = createServer((req, res) => {
+    const chunks: Buffer[] = [];
+    req.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
+    req.on("end", () => {
+      paths.push(req.url || "");
+      const raw = Buffer.concat(chunks).toString("utf8");
+      bodies.push(raw ? JSON.parse(raw) : {});
+      res.writeHead(200, {
+        "Content-Type": "text/event-stream",
+        "Cache-Control": "no-cache",
+      });
+      res.write(
+        `event: response.heartbeat
+data: {"type":"response.heartbeat","tool_call_generating":true}
+
+`,
+      );
+      res.write(
+        `event: response.output_item.added
+data: {"type":"response.output_item.added","output_index":1,"item":{"id":"fc_1","type":"function_call","status":"in_progress","call_id":"call_1","name":"lookup","arguments":""}}
+
+`,
+      );
+      res.write(
+        `event: response.function_call_arguments.delta
+data: {"type":"response.function_call_arguments.delta","item_id":"fc_1","output_index":1,"delta":"{\\"query\\":\\"alpha\\""}
+
+`,
+      );
+      res.write(
+        `event: response.function_call_arguments.delta
+data: {"type":"response.function_call_arguments.delta","item_id":"fc_1","output_index":1,"delta":",\\"limit\\":2}"}
+
+`,
+      );
+      res.write(
+        `event: response.function_call_arguments.done
+data: {"type":"response.function_call_arguments.done","item_id":"fc_1","output_index":1,"arguments":"{\\"query\\":\\"alpha\\",\\"limit\\":2}"}
+
+`,
+      );
+      res.write(
+        `event: response.output_item.done
+data: {"type":"response.output_item.done","output_index":1,"item":{"id":"fc_1","type":"function_call","status":"completed","call_id":"call_1","name":"lookup","arguments":"{\\"query\\":\\"alpha\\",\\"limit\\":2}"}}
+
+`,
+      );
+      res.write(
+        `event: response.completed
+data: {"type":"response.completed","response":{"status":"completed","output":[]}}
+
+`,
+      );
+      res.end();
+    });
+  });
+  return { server, port: await listen(server), bodies, paths };
+}
+
 describe("ApiGateway single-model mode behavior", () => {
   let gateway: any | undefined;
   let backend: BackendHandle | undefined;
@@ -834,6 +896,98 @@ describe("ApiGateway single-model mode behavior", () => {
     expect(text).toContain('"delta":"hel"');
     expect(text).toContain('"delta":"lo"');
     expect(text).toContain("response.completed");
+  });
+
+  it("passes Responses function-call argument SSE through unchanged", async () => {
+    backend = await startResponsesToolStreamingBackend();
+    const sessions = [
+      {
+        id: "target",
+        modelPath: "/models/Target-JANG",
+        modelName: "target-model",
+        host: "127.0.0.1",
+        port: backend.port,
+        status: "stopped",
+        type: "local",
+        config: JSON.stringify({ servedModelName: "target-alias" }),
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      },
+      {
+        id: "other",
+        modelPath: "/models/Other-JANG",
+        modelName: "other-model",
+        host: "127.0.0.1",
+        port: await freePort(),
+        status: "running",
+        type: "local",
+        config: JSON.stringify({ servedModelName: "other-alias" }),
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      },
+    ];
+    dbMock.getSetting.mockImplementation((key: string) =>
+      key === "gateway_single_model_mode" ? "true" : undefined,
+    );
+    dbMock.getSessions.mockReturnValue(sessions);
+    dbMock.getSession.mockImplementation((id: string) =>
+      sessions.find((session) => session.id === id),
+    );
+    sessionManagerMock.stopSession.mockImplementation(async (id: string) => {
+      const session = sessions.find((item) => item.id === id);
+      if (session) session.status = "stopped";
+    });
+    sessionManagerMock.startSession.mockImplementation(async (id: string) => {
+      const session = sessions.find((item) => item.id === id);
+      if (session) session.status = "running";
+    });
+
+    const { ApiGateway } = await import("../src/main/api-gateway");
+    gateway = new ApiGateway();
+    const port = await freePort();
+    await gateway.start(port, "127.0.0.1");
+
+    const requestBody = {
+      model: "target-alias",
+      stream: true,
+      input: [{ role: "user", content: "use lookup" }],
+      tools: [
+        {
+          type: "function",
+          name: "lookup",
+          parameters: {
+            type: "object",
+            properties: {
+              query: { type: "string" },
+              limit: { type: "integer" },
+            },
+            required: ["query", "limit"],
+          },
+        },
+      ],
+    };
+    const response = await fetch(`http://127.0.0.1:${port}/v1/responses`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(requestBody),
+    });
+    const text = await response.text();
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toContain("text/event-stream");
+    expect(sessionManagerMock.stopSession).toHaveBeenCalledWith("other");
+    expect(sessionManagerMock.startSession).toHaveBeenCalledWith("target");
+    expect(sessionManagerMock.touchSession).toHaveBeenCalledWith("target");
+    expect(backend.paths).toEqual(["/v1/responses"]);
+    expect(backend.bodies[0]).toEqual(requestBody);
+    expect(text).toContain("event: response.heartbeat");
+    expect(text).toContain('"tool_call_generating":true');
+    expect(text).toContain("event: response.function_call_arguments.delta");
+    expect(text).toContain('"{\\"query\\":\\"alpha\\""');
+    expect(text).toContain('",\\"limit\\":2}"');
+    expect(text).toContain("event: response.function_call_arguments.done");
+    expect(text).toContain("event: response.output_item.done");
+    expect(text).toContain('"{\\"query\\":\\"alpha\\",\\"limit\\":2}"');
   });
 
   it("auto-switches model capability requests by path model before proxying", async () => {

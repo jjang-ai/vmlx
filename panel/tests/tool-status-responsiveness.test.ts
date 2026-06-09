@@ -63,4 +63,21 @@ describe('tool status responsiveness contract', () => {
 
     expect(source).toContain("const isGenerating = isActive && lastStatus.phase === 'generating'")
   })
+
+  it('executes Responses function calls from completed output items with final arguments', () => {
+    const source = readFileSync('src/main/ipc/chat.ts', 'utf8')
+    const doneIdx = source.indexOf('responsesEventType === "response.output_item.done"')
+    const executeIdx = source.indexOf('const executeToolCalls = async')
+    const doneBlock = source.slice(doneIdx, source.indexOf('// Real-time usage', doneIdx))
+    const executeBlock = source.slice(executeIdx, source.indexOf('const handleToolLoop', executeIdx))
+
+    expect(doneIdx).toBeGreaterThan(0)
+    expect(executeIdx).toBeGreaterThan(doneIdx)
+    expect(doneBlock).toContain('parsed.item?.type === "function_call"')
+    expect(doneBlock).toContain('arguments: item.arguments || "{}"')
+    expect(doneBlock).toContain('emitToolStatus(')
+    expect(doneBlock).toContain('item.arguments || "{}"')
+    expect(executeBlock).toContain('arguments: tc.function.arguments')
+    expect(executeBlock).toContain('JSON.parse(tc.function.arguments || "{}")')
+  })
 })
