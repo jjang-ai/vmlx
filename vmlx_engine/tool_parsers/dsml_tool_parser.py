@@ -109,6 +109,11 @@ class DSMLToolParser(ToolParser):
         rf'<{re.escape(DSML_PREFIX)}parameter\s+name="([^"]+)"[^>]*>(.*?)</{re.escape(DSML_PREFIX)}>',
         re.DOTALL,
     )
+    _SCHEMA_KEYED_DSML_PARAM_RE = re.compile(
+        rf'<{re.escape(DSML_PREFIX)}parameter\s+([A-Za-z_][A-Za-z0-9_]*)\b[^>]*>'
+        rf'(.*?)</{re.escape(DSML_PREFIX)}parameter>',
+        re.DOTALL,
+    )
     _SELF_CLOSING_PARAM_RE = re.compile(
         rf'<{re.escape(DSML_PREFIX)}parameter\s+name="([^"]+)"[^>]*\s+'
         rf'(?:string|value)="([^"]*)"[^>]*/>',
@@ -199,6 +204,13 @@ class DSMLToolParser(ToolParser):
         for m in self._SHORT_DSML_PARAM_RE.finditer(body):
             name, raw = m.group(1), m.group(2)
             if name not in props or name in args:
+                continue
+            value = self._coerce_plain_param_value(raw, props.get(name))
+            if value != "":
+                args[name] = value
+        for m in self._SCHEMA_KEYED_DSML_PARAM_RE.finditer(body):
+            name, raw = m.group(1), m.group(2)
+            if name in {"name", "string", "value"} or name not in props or name in args:
                 continue
             value = self._coerce_plain_param_value(raw, props.get(name))
             if value != "":

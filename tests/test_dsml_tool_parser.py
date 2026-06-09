@@ -107,6 +107,53 @@ class TestDSMLToolParser:
         assert "THREE.WebGLRenderer" in args["content"]
         assert args["content"].endswith("renderer.render(scene, camera);")
 
+    def test_repairs_schema_keyed_dsml_parameter_without_rewriting_code(self, parser):
+        """Repair `<parameter content ...>` but preserve generated code bytes."""
+        generated_code = (
+            "const scene = new THREE.Scene();\n"
+            "const renderer = new THREE.WebWebGLRenderer();\n"
+            "const camera = new THREE.PerspectiveCamera(75, 1, 0.1, 1000);\n"
+            "const cube = new THREE.Mesh(new THREE.BoxGeometry(), new THREE.MMeshBasicMaterial());\n"
+            "scene.add(cube);\n"
+            "renderer.render(scene, camera);"
+        )
+        text = (
+            f"<{DSML_PREFIX}tool_calls>\n"
+            f'<{DSML_PREFIX}invoke name="write_file">\n'
+            f'<{DSML_PREFIX}parameter name="path" string="true">landing-p/scene.js</{DSML_PREFIX}parameter>\n'
+            f'<{DSML_PREFIX}parameter content string="true">{generated_code}</{DSML_PREFIX}parameter>\n'
+            f"</{DSML_PREFIX}inv>\n"
+            f"</{DSML_PREFIX}tool_cs>"
+        )
+        request = {
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "write_file",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "path": {"type": "string"},
+                                "content": {"type": "string"},
+                            },
+                            "required": ["path", "content"],
+                        },
+                    },
+                }
+            ]
+        }
+
+        out = parser.extract_tool_calls(text, request=request)
+
+        assert out.tools_called is True
+        assert out.tool_calls[0]["name"] == "write_file"
+        args = json.loads(out.tool_calls[0]["arguments"])
+        assert args == {"path": "landing-p/scene.js", "content": generated_code}
+        assert "THREE.WebWebGLRenderer" in args["content"]
+        assert "THREE.MMeshBasicMaterial" in args["content"]
+        assert out.content is None
+
     def test_invoke_with_typed_params_string_false_decodes_json(self, parser):
         """string="false" parameters parse as JSON (numbers, bools, arrays)."""
         text = (
