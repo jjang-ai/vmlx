@@ -732,18 +732,18 @@ def _gemma_qat_native_mxfp4_checks(data: dict[str, Any]) -> list[dict[str, Any]]
     }
     return _simple_artifact_checks("gemma_qat_native_mxfp4", data) + [
         _check(
-            "gemma_qat_native_mxfp4_gemma3n_e2b_present",
-            checks.get("gemma3n_e2b_qat_present") is True,
+            "gemma_qat_native_mxfp4_gemma4_e2b_present",
+            checks.get("gemma4_e2b_qat_native_mxfp4_present") is True,
             str(GEMMA_QAT_NATIVE_MXFP4_INVENTORY),
-            data.get("required_rows", {}).get("gemma3n_e2b_qat_native4")
+            data.get("required_rows", {}).get("gemma4_e2b_qat_native_mxfp4")
             if isinstance(data.get("required_rows"), dict)
             else None,
         ),
         _check(
-            "gemma_qat_native_mxfp4_gemma3n_e4b_present",
-            checks.get("gemma3n_e4b_qat_present") is True,
+            "gemma_qat_native_mxfp4_gemma4_e4b_present",
+            checks.get("gemma4_e4b_qat_native_mxfp4_present") is True,
             str(GEMMA_QAT_NATIVE_MXFP4_INVENTORY),
-            data.get("required_rows", {}).get("gemma3n_e4b_qat_native4")
+            data.get("required_rows", {}).get("gemma4_e4b_qat_native_mxfp4")
             if isinstance(data.get("required_rows"), dict)
             else None,
         ),

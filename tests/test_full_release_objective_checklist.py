@@ -999,8 +999,8 @@ def test_full_release_objective_checklist_blocks_open_gemma_qat_inventory():
         "status": "open",
         "count": 11,
         "missing_required_rows": [
-            "gemma3n_e2b_qat_native4",
-            "gemma3n_e4b_qat_native4",
+            "gemma4_e2b_qat_native_mxfp4",
+            "gemma4_e4b_qat_native_mxfp4",
         ],
         "open_required_rows": [
             "gemma4_12b_native_mxfp4",
@@ -1008,8 +1008,8 @@ def test_full_release_objective_checklist_blocks_open_gemma_qat_inventory():
             "gemma4_31v_or_31b_vl",
         ],
         "checks": {
-            "gemma3n_e2b_qat_present": False,
-            "gemma3n_e4b_qat_present": False,
+            "gemma4_e2b_qat_native_mxfp4_present": False,
+            "gemma4_e4b_qat_native_mxfp4_present": False,
             "gemma4_12b_native_mxfp4_present": True,
             "gemma4_26b_present": True,
             "gemma4_31v_or_31b_present": True,
@@ -1021,13 +1021,13 @@ def test_full_release_objective_checklist_blocks_open_gemma_qat_inventory():
     failed = {row["name"]: row for row in rows if not row["ok"]}
 
     assert "gemma_qat_native_mxfp4_status_pass" in failed
-    assert "gemma_qat_native_mxfp4_gemma3n_e2b_present" in failed
-    assert "gemma_qat_native_mxfp4_gemma3n_e4b_present" in failed
+    assert "gemma_qat_native_mxfp4_gemma4_e2b_present" in failed
+    assert "gemma_qat_native_mxfp4_gemma4_e4b_present" in failed
     assert "gemma_qat_native_mxfp4_all_live_proofs_present" in failed
     assert failed["gemma_qat_native_mxfp4_all_live_proofs_present"]["detail"] == {
         "missing_required_rows": [
-            "gemma3n_e2b_qat_native4",
-            "gemma3n_e4b_qat_native4",
+            "gemma4_e2b_qat_native_mxfp4",
+            "gemma4_e4b_qat_native_mxfp4",
         ],
         "open_required_rows": [
             "gemma4_12b_native_mxfp4",
@@ -1143,8 +1143,8 @@ def test_full_release_objective_checklist_can_pass_when_all_evidence_is_green(
             "missing_required_rows": [],
             "open_required_rows": [],
             "checks": {
-                "gemma3n_e2b_qat_present": True,
-                "gemma3n_e4b_qat_present": True,
+                "gemma4_e2b_qat_native_mxfp4_present": True,
+                "gemma4_e4b_qat_native_mxfp4_present": True,
                 "gemma4_12b_native_mxfp4_present": True,
                 "gemma4_26b_present": True,
                 "gemma4_31v_or_31b_present": True,

@@ -22,41 +22,41 @@ DEFAULT_ROOTS = (
 DEFAULT_OUT = Path("build/current-gemma-qat-native-mxfp4-local-inventory-20260609.json")
 
 REQUIRED_QAT_ROWS = {
-    "gemma3n_e2b_qat_native4": {
-        "display": "Gemma 3n E2B QAT/native 4-bit",
-        "path_markers": ("gemma-3n", "e2b"),
-        "expected_model_type": "gemma3n",
-        "tool_parser": "gemma3",
-        "reasoning_parser": None,
+    "gemma4_e2b_qat_native_mxfp4": {
+        "display": "Gemma 4 E2B QAT/native MXFP4",
+        "path_markers": ("gemma-4-e2b", "qat", "mxfp4"),
+        "expected_model_type": "gemma4",
+        "tool_parser": "gemma4",
+        "reasoning_parser": "gemma4",
         "requires": ("text", "vision", "audio"),
     },
-    "gemma3n_e4b_qat_native4": {
-        "display": "Gemma 3n E4B QAT/native 4-bit",
-        "path_markers": ("gemma-3n", "e4b"),
-        "expected_model_type": "gemma3n",
-        "tool_parser": "gemma3",
-        "reasoning_parser": None,
+    "gemma4_e4b_qat_native_mxfp4": {
+        "display": "Gemma 4 E4B QAT/native MXFP4",
+        "path_markers": ("gemma-4-e4b", "qat", "mxfp4"),
+        "expected_model_type": "gemma4",
+        "tool_parser": "gemma4",
+        "reasoning_parser": "gemma4",
         "requires": ("text", "vision", "audio"),
     },
     "gemma4_12b_native_mxfp4": {
         "display": "Gemma 4 12B native MXFP4/QAT-style",
-        "path_markers": ("gemma-4-12b", "mxfp4"),
+        "path_markers": ("gemma-4-12b", "qat", "mxfp4"),
         "expected_model_type": "gemma4_unified",
         "tool_parser": "gemma4",
         "reasoning_parser": "gemma4",
         "requires": ("text", "vision", "audio", "video"),
     },
     "gemma4_26b_vl": {
-        "display": "Gemma 4 26B VL/video",
-        "path_markers": ("gemma-4-26b",),
+        "display": "Gemma 4 26B QAT/native MXFP4 VL/video",
+        "path_markers": ("gemma-4-26b", "qat", "mxfp4"),
         "expected_model_type": "gemma4",
         "tool_parser": "gemma4",
         "reasoning_parser": "gemma4",
         "requires": ("text", "vision", "video"),
     },
     "gemma4_31v_or_31b_vl": {
-        "display": "Gemma 4 31V/31B VL/video",
-        "path_markers": ("gemma-4-31",),
+        "display": "Gemma 4 31V/31B QAT/native MXFP4 VL/video",
+        "path_markers": ("gemma-4-31", "qat", "mxfp4"),
         "expected_model_type": "gemma4",
         "tool_parser": "gemma4",
         "reasoning_parser": "gemma4",
@@ -229,8 +229,12 @@ def build_artifact(roots: tuple[Path, ...] = DEFAULT_ROOTS) -> dict[str, Any]:
         "rows": rows,
         "required_rows": classified,
         "checks": {
-            "gemma3n_e2b_qat_present": classified["gemma3n_e2b_qat_native4"]["status"] != "missing",
-            "gemma3n_e4b_qat_present": classified["gemma3n_e4b_qat_native4"]["status"] != "missing",
+            "gemma4_e2b_qat_native_mxfp4_present": (
+                classified["gemma4_e2b_qat_native_mxfp4"]["status"] != "missing"
+            ),
+            "gemma4_e4b_qat_native_mxfp4_present": (
+                classified["gemma4_e4b_qat_native_mxfp4"]["status"] != "missing"
+            ),
             "gemma4_12b_native_mxfp4_present": classified["gemma4_12b_native_mxfp4"]["status"] != "missing",
             "gemma4_26b_present": classified["gemma4_26b_vl"]["status"] != "missing",
             "gemma4_31v_or_31b_present": classified["gemma4_31v_or_31b_vl"]["status"] != "missing",
