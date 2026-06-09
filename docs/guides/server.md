@@ -334,17 +334,18 @@ for chunk in stream:
 
 See [Reasoning Models Guide](reasoning.md) for full details.
 
-## Structured Output (JSON Mode)
+## Structured Output (JSON/XML Mode)
 
-Request JSON-shaped output using `response_format`. vMLX adds JSON
+Request structured output using `response_format`. vMLX adds JSON or XML
 instructions to the prompt. On compatible text-generation paths with
 `llguidance` and a fast tokenizer, vMLX also applies guided JSON/schema token
 masking while decoding. All paths still apply post-generation repair/validation
 to the model text before returning it. This is not universal hard
 grammar-constrained decoding: unsupported tokenizers, specialized runtime paths,
 and streaming fall back to prompt instruction plus repair/validation.
-Non-streaming Chat Completions and Responses also perform one JSON-only
-correction retry when deterministic repair still fails.
+Non-streaming Chat Completions and Responses perform one JSON-only correction
+retry for failed JSON/schema output and one XML-only correction retry for failed
+XML output when deterministic repair still fails.
 
 ### JSON Object Mode
 
@@ -389,6 +390,26 @@ data = json.loads(response.choices[0].message.content)
 assert "colors" in data
 ```
 
+### XML Mode
+
+Returns XML after extraction/validation/repair. Use `xml_root_tag` to require a
+specific root element and `required_xml_fields` to require child elements:
+
+```python
+response = client.chat.completions.create(
+    model="default",
+    messages=[{"role": "user", "content": "Return the visible label as XML"}],
+    response_format={
+        "type": "xml",
+        "xml_root_tag": "catalog",
+        "required_xml_fields": ["visible_text"],
+        "strict": True,
+    },
+)
+```
+
+For the Responses API, pass the same format under `text`.
+
 Notes:
 
 - `response_format` can enable guided JSON/schema token masking through
@@ -398,10 +419,11 @@ Notes:
   safe schema coercions, and selected deterministic shape repairs can be fixed
   after generation.
 - If repair/validation still fails on a non-streaming request, vMLX performs
-  one JSON-only correction retry. Strict schema mode returns an error if that
-  retry still fails.
+  one JSON-only correction retry or XML-only correction retry, matching the
+  requested format. Strict mode returns an error if that retry still fails.
 - Streaming requests are validated at the end of the stream; strict failures
-  are surfaced as stream errors rather than retried mid-stream.
+  are surfaced as stream errors rather than retried mid-stream. Strict XML
+  stream failures use the `xml_validation_failed` error code.
 
 ### Curl Example
 

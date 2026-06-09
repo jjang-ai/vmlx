@@ -5017,6 +5017,10 @@ class TestH4JsonSchemaStreaming:
         assert "llguidance" in combined
         assert "guided json/schema token masking" in combined
         assert "post-generation repair" in combined
+        assert "xml_root_tag" in combined
+        assert "required_xml_fields" in combined
+        assert "xml-only correction retry" in combined
+        assert "xml_validation_failed" in combined
         assert "not universal hard grammar-constrained decoding" in combined
         assert "repair/validation" in combined
         assert "one json-only correction retry" in combined
