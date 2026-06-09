@@ -102,6 +102,22 @@ def test_objective_proof_digest_tracks_gemma_qat_native_mxfp4_release_blocker():
     assert row["details"]["source_live_smoke_open_rows"] == []
     assert row["details"]["checks"]["all_required_source_live_smokes_present"] is True
     assert row["details"]["checks"]["all_required_live_proofs_present"] is False
+    assert row["details"]["source_live_smoke_artifacts"] == {
+        "gemma4_e2b_qat_native_mxfp4": "build/current-all-local-model-smoke-gemma4-e2b-qat-mxfp4-fullmedia-tools-l2-after-tool-result-quoted-target-20260609/summary.json",
+        "gemma4_e4b_qat_native_mxfp4": "build/current-all-local-model-smoke-gemma4-e4b-qat-mxfp4-fullmedia-tools-l2-after-tool-result-quoted-target-20260609/summary.json",
+        "gemma4_12b_native_mxfp4": "build/current-all-local-model-smoke-gemma4-12b-qat-mxfp4-fullmedia-tools-l2-after-tool-result-quoted-target-20260609/summary.json",
+        "gemma4_26b_vl": "build/current-all-local-model-smoke-gemma4-26b-qat-mxfp4-tools-l2-after-audio-capability-gate-20260609/summary.json",
+        "gemma4_31v_or_31b_vl": "build/current-all-local-model-smoke-gemma4-31b-qat-mxfp4-tools-l2-after-audio-capability-gate-20260609/summary.json",
+    }
+    assert row["details"]["media_backing"]["gemma4_12b_native_mxfp4"] == {
+        "audio_weight_backed": False,
+        "audio_embed_only": True,
+        "vision_weight_backed": True,
+        "video_runtime_proof_required": True,
+    }
+    assert row["details"]["media_backing"]["gemma4_e2b_qat_native_mxfp4"][
+        "audio_weight_backed"
+    ] is True
     assert "installed-app startup and UI settings parity" in row["details"][
         "required_next_evidence"
     ]
