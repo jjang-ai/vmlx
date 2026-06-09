@@ -186,6 +186,49 @@ describe("ApiGateway single-model mode behavior", () => {
     expect(sessionManagerMock.stopSession).not.toHaveBeenCalled();
   });
 
+  it("allows gateway startup on ports used only by stopped or remote saved sessions", async () => {
+    const port = await freePort();
+    dbMock.getSetting.mockReturnValue(undefined);
+    dbMock.getSessions.mockReturnValue([
+      {
+        id: "stopped-local",
+        modelPath: "/models/Stopped-JANG",
+        modelName: "stopped-model",
+        host: "127.0.0.1",
+        port,
+        status: "stopped",
+        type: "local",
+        config: "{}",
+      },
+      {
+        id: "error-local",
+        modelPath: "/models/Error-JANG",
+        modelName: "error-model",
+        host: "127.0.0.1",
+        port,
+        status: "error",
+        type: "local",
+        config: "{}",
+      },
+      {
+        id: "remote",
+        modelPath: "/remote/model",
+        modelName: "remote-model",
+        host: "api.example.com",
+        port,
+        status: "running",
+        type: "remote",
+        config: "{}",
+      },
+    ]);
+
+    const { ApiGateway } = await import("../src/main/api-gateway");
+    gateway = new ApiGateway();
+
+    await expect(gateway.start(port, "127.0.0.1")).resolves.toBeUndefined();
+    expect(dbMock.setSetting).toHaveBeenCalledWith("gateway_port", String(port));
+  });
+
   it("reports failure when another active local session cannot be unloaded", async () => {
     dbMock.getSetting.mockImplementation((key: string) =>
       key === "gateway_single_model_mode" ? "true" : undefined,

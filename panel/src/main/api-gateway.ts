@@ -150,9 +150,20 @@ export class ApiGateway extends EventEmitter {
       parseInt(db.getSetting("gateway_port") || String(DEFAULT_PORT), 10);
     this.host = host ?? db.getSetting("gateway_host") ?? "127.0.0.1";
 
-    // Reject if a session is already using this port (#44)
+    // Reject only if an active local session is already binding this port (#44).
+    // Stopped/error rows and remote sessions can retain stale DB ports across
+    // app restarts or sleep/wake transitions; they must not block gateway
+    // startup because they do not own a local listener.
     const sessions = db.getSessions();
-    const sessionPorts = new Set(sessions.map((s: any) => s.port));
+    const sessionPorts = new Set(
+      sessions
+        .filter(
+          (s: any) =>
+            s.type !== "remote" &&
+            ["running", "loading", "standby"].includes(String(s.status || "")),
+        )
+        .map((s: any) => s.port),
+    );
     if (sessionPorts.has(this.port)) {
       throw new Error(
         `Gateway port ${this.port} conflicts with an existing session. ` +

@@ -11,6 +11,7 @@ This helper intentionally does not load models. It runs focused tests that pin:
 - plain attention/KV native cache status;
 - hybrid SSM partial reuse and cache-detail telemetry;
 - TurboQuant KV runtime and disk-cache serialization contracts.
+- MLXStudio gateway stale-port and standby-wake routing contracts.
 """
 
 from __future__ import annotations
@@ -39,6 +40,8 @@ SOURCE_HASH_FILES = (
     "tests/test_dsml_tool_parser.py",
     "tests/test_responses_history.py",
     "tests/test_tool_format.py",
+    "panel/src/main/api-gateway.ts",
+    "panel/tests/api-gateway-single-model.behavior.test.ts",
     "tests/cross_matrix/run_noheavy_api_cache_contract.py",
 )
 
@@ -95,6 +98,8 @@ REQUIRED_NOHEAVY_API_CACHE_TEST_MARKERS = (
     "test_serialize_tq_cache_mixed_hybrid",
     "test_tq_tensors_roundtrip_via_safetensors",
     "test_hybrid_ssm_capture_stores_block_aligned_checkpoints",
+    "allows gateway startup on ports used only by stopped or remote saved sessions",
+    "auto-switches to a standby model by waking it before direct OpenAI streaming",
 )
 
 COMMANDS: dict[str, list[str]] = {
@@ -216,18 +221,35 @@ COMMANDS: dict[str, list[str]] = {
             "or chained_response_helper_emits_warning_for_reasoning_only_predecessor"
         ),
     ],
+    "panel_gateway_contracts": [
+        "npm",
+        "--prefix",
+        "panel",
+        "exec",
+        "vitest",
+        "run",
+        "tests/api-gateway-single-model.behavior.test.ts",
+        "--",
+        "--reporter",
+        "verbose",
+        "--testNamePattern",
+        (
+            "allows gateway startup on ports used only by stopped or remote saved sessions|"
+            "auto-switches to a standby model by waking it before direct OpenAI streaming"
+        ),
+    ],
 }
 
 
 def _parse_counts(output: str) -> dict[str, int | None]:
     passed = None
     deselected = None
-    match = re.search(r"(\d+) passed", output)
-    if match:
-        passed = int(match.group(1))
-    match = re.search(r"(\d+) deselected", output)
-    if match:
-        deselected = int(match.group(1))
+    matches = re.findall(r"(\d+) passed", output)
+    if matches:
+        passed = int(matches[-1])
+    matches = re.findall(r"(\d+) deselected", output)
+    if matches:
+        deselected = int(matches[-1])
     return {"passed": passed, "deselected": deselected}
 
 
@@ -277,6 +299,7 @@ def build_artifact(root: Path) -> dict[str, Any]:
     tq_ok = commands["tq_and_mllm_cache_contracts"]["returncode"] == 0
     dsml_ok = commands["dsv4_dsml_tool_contracts"]["returncode"] == 0
     responses_history_ok = commands["responses_history_contracts"]["returncode"] == 0
+    panel_gateway_ok = commands["panel_gateway_contracts"]["returncode"] == 0
     checks = {
         "openai_chat_sampling_kwargs": (
             api_ok and "test_chat_and_responses_log_and_forward_supported_sampling_kwargs" not in missing_markers
@@ -351,6 +374,16 @@ def build_artifact(root: Path) -> dict[str, Any]:
             and "test_cache_entries_endpoint_lists_paged_prefix_blocks" not in missing_markers
             and "test_cache_warm_endpoint_prefills_and_stores_block_cache" not in missing_markers
             and "test_clear_cache_prefix_clears_prefix_l2_without_multimodal" not in missing_markers
+        ),
+        "gateway_stale_port_startup": (
+            panel_gateway_ok
+            and "allows gateway startup on ports used only by stopped or remote saved sessions"
+            not in missing_markers
+        ),
+        "gateway_standby_wake_routing": (
+            panel_gateway_ok
+            and "auto-switches to a standby model by waking it before direct OpenAI streaming"
+            not in missing_markers
         ),
         "dsv4_native_cache_status": (
             api_ok and scheduler_ok and "test_native_cache_status_reports_dsv4_separately_from_tq_kv" not in missing_markers
