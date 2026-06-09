@@ -1,3 +1,6 @@
+import sys
+from types import SimpleNamespace
+
 from tests.cross_matrix.run_dsv4_route_mode_code_exactness import (
     CASE_NAMES,
     EXACT_CODE,
@@ -91,6 +94,29 @@ def test_dsv4_code_exactness_probe_has_thinking_on_controls_for_chat_and_respons
     assert responses_rep_body["chat_template_kwargs"] == {"enable_thinking": True}
     assert responses_rep_body["repetition_penalty"] == 1.0
     assert responses_rep_body["skip_prefix_cache"] is True
+
+
+def test_dsv4_code_exactness_memory_snapshot_labels_binary_units(monkeypatch):
+    import tests.cross_matrix.run_dsv4_route_mode_code_exactness as gate
+
+    class FakePsutil:
+        @staticmethod
+        def virtual_memory():
+            return SimpleNamespace(
+                total=128 * 1024**3,
+                available=113.59 * 1024**3,
+                percent=11.3,
+            )
+
+    monkeypatch.setitem(sys.modules, "psutil", FakePsutil)
+
+    snapshot = gate.resource_snapshot("preflight")
+
+    assert snapshot["system_memory"]["unit"] == "GiB"
+    assert snapshot["system_memory"]["available_gib"] == 113.59
+    assert snapshot["system_memory"]["total_gib"] == 128.0
+    assert snapshot["system_memory"]["available_gb"] == 113.59
+    assert snapshot["system_memory"]["total_gb"] == 128.0
 
 
 def test_dsv4_code_exactness_probe_records_prompt_rail_diagnostics():
@@ -580,9 +606,14 @@ def test_dsv4_code_exactness_probe_memory_preflight_skips_before_spawn(monkeypat
     assert artifact["required_available_gb"] == 120.0
     assert artifact["required_free_gb"] == 120.0
     assert artifact["min_free_gb"] == 120.0
+    assert artifact["required_available_gib"] == 120.0
+    assert artifact["min_free_gib"] == 120.0
     assert artifact["available_gb"] == 74.0
+    assert artifact["available_gib"] == 74.0
     assert artifact["available_for_gate_gb"] == 74.0
+    assert artifact["available_for_gate_gib"] == 74.0
     assert artifact["memory_gap_gb"] == 46.0
+    assert artifact["memory_gap_gib"] == 46.0
     assert artifact["did_not_launch"] is True
     assert artifact["launch_decision"] == "do_not_launch"
     assert artifact["launch_allowed"] is False

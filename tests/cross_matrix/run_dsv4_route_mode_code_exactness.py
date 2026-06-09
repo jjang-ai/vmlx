@@ -241,9 +241,14 @@ def resource_snapshot(name: str, proc: subprocess.Popen[str] | None = None) -> d
         import psutil
 
         vm = psutil.virtual_memory()
+        total_gib = round(vm.total / (1024**3), 2)
+        available_gib = round(vm.available / (1024**3), 2)
         snap["system_memory"] = {
-            "total_gb": round(vm.total / (1024**3), 2),
-            "available_gb": round(vm.available / (1024**3), 2),
+            "unit": "GiB",
+            "total_gib": total_gib,
+            "available_gib": available_gib,
+            "total_gb": total_gib,
+            "available_gb": available_gib,
             "percent": vm.percent,
         }
         if proc is not None and proc.poll() is None:
@@ -350,6 +355,9 @@ def memory_preflight_artifact(
             "required_available_gb": min_free_gb,
             "required_free_gb": min_free_gb,
             "min_free_gb": min_free_gb,
+            "required_available_gib": min_free_gb,
+            "required_free_gib": min_free_gb,
+            "min_free_gib": min_free_gb,
             "required_model_margin_gb": DEFAULT_REQUIRED_MODEL_MARGIN_GB,
             "model_size_gb": size_gb,
             "safety_margin_gb": safety_margin_gb,
@@ -361,12 +369,24 @@ def memory_preflight_artifact(
                 if isinstance(available, (int, float))
                 else None
             ),
+            "available_gib": (
+                round(float(available), 2)
+                if isinstance(available, (int, float))
+                else None
+            ),
             "preflight_available_gb": round(gate_available, 2),
             "available_for_gate_gb": round(gate_available, 2),
+            "preflight_available_gib": round(gate_available, 2),
+            "available_for_gate_gib": round(gate_available, 2),
             "preflight_memory_source": memory_source,
             "strict_vm_stat_memory_gap_gb": memory_gap_gb if used_vm_stat else None,
+            "strict_vm_stat_memory_gap_gib": memory_gap_gb if used_vm_stat else None,
             "psutil_available_gap_gb": psutil_available_gap_gb,
+            "psutil_available_gap_gib": psutil_available_gap_gb,
             "free_plus_speculative_purgeable_gb": round(float(vm_available), 2)
+            if isinstance(vm_available, (int, float))
+            else None,
+            "free_plus_speculative_purgeable_gib": round(float(vm_available), 2)
             if isinstance(vm_available, (int, float))
             else None,
             "memory_pressure_free_percent": pressure_snapshot.get("free_percent"),
@@ -378,6 +398,7 @@ def memory_preflight_artifact(
                 if key in vm_breakdown
             },
             "memory_gap_gb": memory_gap_gb,
+            "memory_gap_gib": memory_gap_gb,
             "did_not_launch": True,
             "launch_decision": (
                 "launch_allowed" if status == "ready_to_launch" else "do_not_launch"
