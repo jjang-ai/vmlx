@@ -1055,7 +1055,9 @@ def _mtp_runtime_active(data: dict[str, Any]) -> bool:
 
 
 def _qwen27_cancel_checks(data: dict[str, Any]) -> list[dict[str, Any]]:
-    health = data.get("health_before") if isinstance(data.get("health_before"), dict) else {}
+    health = data.get("health_after") if isinstance(data.get("health_after"), dict) else {}
+    if not health:
+        health = data.get("health_before") if isinstance(data.get("health_before"), dict) else {}
     probe = data.get("probe") if isinstance(data.get("probe"), dict) else {}
     raw = data.get("raw") if isinstance(data.get("raw"), dict) else {}
     request = data.get("request") if isinstance(data.get("request"), dict) else {}
