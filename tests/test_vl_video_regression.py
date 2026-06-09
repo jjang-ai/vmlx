@@ -801,24 +801,29 @@ class TestIssueGuards:
         without coercing per-item; MLX 0.31+ rejects non-mx.array items
         and multi-image prompts produce exactly that mixed list.
 
-        Patch applied at build time via `panel/scripts/bundle-python.sh`
-        (idempotent marker: `mlxstudio#88`). Verify the marker is in the
-        bundled mlx_vlm source AND the per-item coercion actually works.
+        vMLX applies this through runtime_patches.gemma4_vision on
+        `import vmlx_engine` for source/dev Python runs, while the packaged
+        app still verifies bundled Python parity separately. Verify the engine
+        bootstrap installs the marker and the per-item coercion stays present.
         """
         import inspect
         import mlx.core as mx
         import numpy as np
+
+        import vmlx_engine  # noqa: F401 - bootstraps runtime_patches
         from mlx_vlm.models.gemma4 import vision as _g4v
 
         src = inspect.getsource(_g4v.VisionModel.__call__)
         assert "mlxstudio#88" in src, (
-            "mlxstudio#88 patch missing from bundled mlx_vlm/models/gemma4/"
-            "vision.py — Gemma 4 multi-image prompts will crash on concat. "
-            "Re-run panel/scripts/bundle-python.sh."
+            "mlxstudio#88 patch missing after vmlx_engine runtime bootstrap; "
+            "Gemma 4 multi-image prompts will crash on concat."
         )
         assert "isinstance(v, mx.array)" in src, (
             "mlxstudio#88 per-item coercion missing; list handling reverted "
             "to the broken all-mx.array-required form."
+        )
+        assert getattr(_g4v.VisionModel.__call__, "_vmlx_gemma4_pixel_values_patch", False), (
+            "Gemma 4 vision runtime patch marker missing after vmlx_engine import."
         )
 
         # Exercise the patched pattern end-to-end on a mixed list — this
