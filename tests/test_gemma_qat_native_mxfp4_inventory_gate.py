@@ -151,6 +151,56 @@ def test_gate_records_source_live_smoke_without_release_clearance(tmp_path):
     assert artifact["checks"]["all_required_live_proofs_present"] is False
 
 
+def test_gate_records_source_smoke_video_runtime_and_recovery_proof(tmp_path):
+    _bundle(
+        tmp_path,
+        "gemma-4-26B-A4B-it-qat-MXFP4",
+        model_type="gemma4",
+        text_model_type="gemma4_text",
+        weight_format="mxfp4",
+        audio=False,
+        video=True,
+    )
+    proof = tmp_path / gate.SOURCE_LIVE_SMOKE_PROOFS["gemma4_26b_vl"]
+    _write_json(
+        proof,
+        {
+            "status": "pass",
+            "failed": 0,
+            "completed": 1,
+            "row_count": 1,
+            "results": [
+                {
+                    "requests": [
+                        {
+                            "label": "vl_blue_video",
+                            "code": 200,
+                            "content": "Blue",
+                            "validation_failures": [],
+                        },
+                        {
+                            "label": "text_no_media_after_video",
+                            "code": 200,
+                            "content": "NONE",
+                            "validation_failures": [],
+                        },
+                    ]
+                }
+            ],
+        },
+    )
+
+    artifact = gate.build_artifact((tmp_path,), proof_root=tmp_path)
+    source_smoke = artifact["required_rows"]["gemma4_26b_vl"]["source_live_smoke"]
+
+    assert source_smoke["status"] == "pass"
+    assert source_smoke["video_runtime_proven"] is True
+    assert source_smoke["post_video_text_recovery_proven"] is True
+    assert artifact["checks"]["gemma4_26b_video_runtime_proof_required"] is True
+    assert artifact["checks"]["gemma4_26b_video_runtime_source_proven"] is True
+    assert artifact["checks"]["all_required_live_proofs_present"] is False
+
+
 def test_gate_uses_gemma4_e2b_e4b_row_ids_for_gemma4_qat_bundles(tmp_path):
     _bundle(
         tmp_path,

@@ -256,6 +256,9 @@ def _source_live_smoke_status(row_key: str, proof_root: Path) -> dict[str, Any]:
     status = "pass" if proof.get("status") == "pass" and int(proof.get("failed") or 0) == 0 else "missing"
     if path.exists() and status != "pass":
         status = "open"
+    requests = _source_smoke_requests(proof)
+    video_request = _request_by_label(requests, "vl_blue_video")
+    post_video_request = _request_by_label(requests, "text_no_media_after_video")
     return {
         "status": status,
         "artifact": str(rel),
@@ -263,7 +266,47 @@ def _source_live_smoke_status(row_key: str, proof_root: Path) -> dict[str, Any]:
         "failed": proof.get("failed"),
         "completed": proof.get("completed"),
         "row_count": proof.get("row_count"),
+        "video_runtime_proven": _request_passed_with_content(
+            video_request, expected_content="Blue"
+        ),
+        "post_video_text_recovery_proven": _request_passed_with_content(
+            post_video_request, expected_content="NONE"
+        ),
     }
+
+
+def _source_smoke_requests(proof: dict[str, Any]) -> list[dict[str, Any]]:
+    results = proof.get("results")
+    if not isinstance(results, list):
+        return []
+    requests: list[dict[str, Any]] = []
+    for result in results:
+        if not isinstance(result, dict):
+            continue
+        result_requests = result.get("requests")
+        if isinstance(result_requests, list):
+            requests.extend(req for req in result_requests if isinstance(req, dict))
+    return requests
+
+
+def _request_by_label(
+    requests: list[dict[str, Any]], label: str
+) -> dict[str, Any] | None:
+    return next((req for req in requests if req.get("label") == label), None)
+
+
+def _request_passed_with_content(
+    request: dict[str, Any] | None, *, expected_content: str
+) -> bool:
+    if not isinstance(request, dict):
+        return False
+    failures = request.get("validation_failures")
+    return (
+        request.get("code") == 200
+        and str(request.get("content") or "").strip().lower()
+        == expected_content.lower()
+        and (failures == [] or failures is None)
+    )
 
 
 def classify_required_rows(
@@ -362,6 +405,15 @@ def build_artifact(
         if row["status"] != "missing"
         and row.get("source_live_smoke", {}).get("status") != "pass"
     ]
+    def source_video_proven(row_key: str) -> bool:
+        source_live_smoke = classified.get(row_key, {}).get("source_live_smoke")
+        return (
+            isinstance(source_live_smoke, dict)
+            and source_live_smoke.get("status") == "pass"
+            and source_live_smoke.get("video_runtime_proven") is True
+            and source_live_smoke.get("post_video_text_recovery_proven") is True
+        )
+
     return {
         "status": "open" if missing or open_rows else "pass",
         "roots": [str(root) for root in roots],
@@ -386,11 +438,20 @@ def build_artifact(
             "gemma4_12b_video_runtime_proof_required": (
                 gemma12b_backing.get("video_runtime_proof_required") is True
             ),
+            "gemma4_12b_video_runtime_source_proven": source_video_proven(
+                "gemma4_12b_native_mxfp4"
+            ),
             "gemma4_26b_video_runtime_proof_required": (
                 gemma26b_backing.get("video_runtime_proof_required") is True
             ),
+            "gemma4_26b_video_runtime_source_proven": source_video_proven(
+                "gemma4_26b_vl"
+            ),
             "gemma4_31v_or_31b_video_runtime_proof_required": (
                 gemma31b_backing.get("video_runtime_proof_required") is True
+            ),
+            "gemma4_31v_or_31b_video_runtime_source_proven": source_video_proven(
+                "gemma4_31v_or_31b_vl"
             ),
         },
         "missing_required_rows": missing,

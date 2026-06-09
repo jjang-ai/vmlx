@@ -851,11 +851,15 @@ def _gemma_qat_native_mxfp4_checks(data: dict[str, Any]) -> list[dict[str, Any]]
         ),
         _check(
             "gemma_qat_native_mxfp4_gemma4_12b_video_runtime_proven",
-            checks.get("gemma4_12b_video_runtime_proof_required") is not True,
+            checks.get("gemma4_12b_video_runtime_proof_required") is not True
+            or checks.get("gemma4_12b_video_runtime_source_proven") is True,
             str(GEMMA_QAT_NATIVE_MXFP4_INVENTORY),
             {
                 "gemma4_12b_video_runtime_proof_required": checks.get(
                     "gemma4_12b_video_runtime_proof_required"
+                ),
+                "gemma4_12b_video_runtime_source_proven": checks.get(
+                    "gemma4_12b_video_runtime_source_proven"
                 ),
                 "row": data.get("required_rows", {}).get("gemma4_12b_native_mxfp4")
                 if isinstance(data.get("required_rows"), dict)
@@ -864,11 +868,15 @@ def _gemma_qat_native_mxfp4_checks(data: dict[str, Any]) -> list[dict[str, Any]]
         ),
         _check(
             "gemma_qat_native_mxfp4_gemma4_26b_video_runtime_proven",
-            checks.get("gemma4_26b_video_runtime_proof_required") is not True,
+            checks.get("gemma4_26b_video_runtime_proof_required") is not True
+            or checks.get("gemma4_26b_video_runtime_source_proven") is True,
             str(GEMMA_QAT_NATIVE_MXFP4_INVENTORY),
             {
                 "gemma4_26b_video_runtime_proof_required": checks.get(
                     "gemma4_26b_video_runtime_proof_required"
+                ),
+                "gemma4_26b_video_runtime_source_proven": checks.get(
+                    "gemma4_26b_video_runtime_source_proven"
                 ),
                 "row": data.get("required_rows", {}).get("gemma4_26b_vl")
                 if isinstance(data.get("required_rows"), dict)
@@ -877,11 +885,15 @@ def _gemma_qat_native_mxfp4_checks(data: dict[str, Any]) -> list[dict[str, Any]]
         ),
         _check(
             "gemma_qat_native_mxfp4_gemma4_31v_or_31b_video_runtime_proven",
-            checks.get("gemma4_31v_or_31b_video_runtime_proof_required") is not True,
+            checks.get("gemma4_31v_or_31b_video_runtime_proof_required") is not True
+            or checks.get("gemma4_31v_or_31b_video_runtime_source_proven") is True,
             str(GEMMA_QAT_NATIVE_MXFP4_INVENTORY),
             {
                 "gemma4_31v_or_31b_video_runtime_proof_required": checks.get(
                     "gemma4_31v_or_31b_video_runtime_proof_required"
+                ),
+                "gemma4_31v_or_31b_video_runtime_source_proven": checks.get(
+                    "gemma4_31v_or_31b_video_runtime_source_proven"
                 ),
                 "row": data.get("required_rows", {}).get("gemma4_31v_or_31b_vl")
                 if isinstance(data.get("required_rows"), dict)

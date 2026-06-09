@@ -7111,6 +7111,16 @@ def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
                 "video_runtime_proof_required": backing.get(
                     "video_runtime_proof_required"
                 ),
+                "video_runtime_source_proven": (
+                    source_smoke.get("video_runtime_proven")
+                    if isinstance(source_smoke, dict)
+                    else None
+                ),
+                "post_video_text_recovery_source_proven": (
+                    source_smoke.get("post_video_text_recovery_proven")
+                    if isinstance(source_smoke, dict)
+                    else None
+                ),
             }
     gemma_qat_release_ok = (
         gemma_qat_inventory.get("status") == "pass"

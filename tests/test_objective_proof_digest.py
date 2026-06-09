@@ -124,6 +124,8 @@ def test_objective_proof_digest_tracks_gemma_qat_native_mxfp4_release_blocker():
         "audio_embed_only": True,
         "vision_weight_backed": True,
         "video_runtime_proof_required": True,
+        "video_runtime_source_proven": True,
+        "post_video_text_recovery_source_proven": True,
     }
     assert row["details"]["media_backing"]["gemma4_e2b_qat_native_mxfp4"][
         "audio_weight_backed"

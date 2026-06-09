@@ -1124,8 +1124,11 @@ def test_full_release_objective_checklist_blocks_open_gemma_qat_inventory():
             "gemma4_12b_audio_honestly_gated": False,
             "gemma4_12b_vision_weight_backed": True,
             "gemma4_12b_video_runtime_proof_required": True,
+            "gemma4_12b_video_runtime_source_proven": False,
             "gemma4_26b_video_runtime_proof_required": True,
+            "gemma4_26b_video_runtime_source_proven": False,
             "gemma4_31v_or_31b_video_runtime_proof_required": True,
+            "gemma4_31v_or_31b_video_runtime_source_proven": False,
         },
     }
 
@@ -1153,6 +1156,49 @@ def test_full_release_objective_checklist_blocks_open_gemma_qat_inventory():
         ],
         "source_live_smoke_open_rows": None,
     }
+
+
+def test_full_release_objective_checklist_accepts_gemma_qat_source_video_proof():
+    data = {
+        "artifact": str(checklist.GEMMA_QAT_NATIVE_MXFP4_INVENTORY),
+        "exists": True,
+        "status": "open",
+        "count": 16,
+        "missing_required_rows": [],
+        "open_required_rows": [
+            "gemma4_e2b_qat_native_mxfp4",
+            "gemma4_e4b_qat_native_mxfp4",
+            "gemma4_12b_native_mxfp4",
+            "gemma4_26b_vl",
+            "gemma4_31v_or_31b_vl",
+        ],
+        "source_live_smoke_open_rows": [],
+        "checks": {
+            "gemma4_e2b_qat_native_mxfp4_present": True,
+            "gemma4_e4b_qat_native_mxfp4_present": True,
+            "gemma4_12b_native_mxfp4_present": True,
+            "gemma4_26b_present": True,
+            "gemma4_31v_or_31b_present": True,
+            "all_required_source_live_smokes_present": True,
+            "all_required_live_proofs_present": False,
+            "gemma4_12b_audio_weight_backed": False,
+            "gemma4_12b_audio_honestly_gated": True,
+            "gemma4_12b_video_runtime_proof_required": True,
+            "gemma4_12b_video_runtime_source_proven": True,
+            "gemma4_26b_video_runtime_proof_required": True,
+            "gemma4_26b_video_runtime_source_proven": True,
+            "gemma4_31v_or_31b_video_runtime_proof_required": True,
+            "gemma4_31v_or_31b_video_runtime_source_proven": True,
+        },
+    }
+
+    rows = checklist._gemma_qat_native_mxfp4_checks(data)
+    failed_names = {row["name"] for row in rows if not row["ok"]}
+
+    assert "gemma_qat_native_mxfp4_gemma4_12b_video_runtime_proven" not in failed_names
+    assert "gemma_qat_native_mxfp4_gemma4_26b_video_runtime_proven" not in failed_names
+    assert "gemma_qat_native_mxfp4_gemma4_31v_or_31b_video_runtime_proven" not in failed_names
+    assert "gemma_qat_native_mxfp4_all_live_proofs_present" in failed_names
 
 
 def test_full_release_objective_checklist_blocks_missing_responses_tunnel_capture():
