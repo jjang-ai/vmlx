@@ -3383,6 +3383,54 @@ class TestToolParserConcurrency:
             "command": 'echo "Tools are working correctly!"'
         }
 
+    def test_qwen_issue_192_plain_tool_line_uses_single_tool_schema(self):
+        """Qwen live output can be bare tool name + command text."""
+        import json
+
+        import vmlx_engine.server as srv
+
+        request = srv.ChatCompletionRequest(
+            model="qwen3-coder-next",
+            messages=[
+                srv.Message(
+                    role="user",
+                    content="test your tools with a bash echo command",
+                )
+            ],
+            tools=[
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "bash",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {"command": {"type": "string"}},
+                            "required": ["command"],
+                        },
+                    },
+                }
+            ],
+            tool_choice="required",
+        )
+        output = 'bash\necho "Tool test successful!"'
+
+        old_auto = srv._enable_auto_tool_choice
+        old_parser = srv._tool_call_parser
+        try:
+            srv._enable_auto_tool_choice = True
+            srv._tool_call_parser = "qwen"
+            cleaned, tool_calls = srv._parse_tool_calls_with_parser(output, request)
+        finally:
+            srv._enable_auto_tool_choice = old_auto
+            srv._tool_call_parser = old_parser
+
+        assert cleaned == ""
+        assert tool_calls and len(tool_calls) == 1
+        assert tool_calls[0].function.name == "bash"
+        assert json.loads(tool_calls[0].function.arguments) == {
+            "command": 'echo "Tool test successful!"'
+        }
+
     def test_dsv4_fallback_tool_prompt_uses_canonical_tool_calls_wrapper(self):
         """Fallback injection must not teach a non-canonical bare DSML invoke."""
         from vmlx_engine.api.tool_calling import check_and_inject_fallback_tools

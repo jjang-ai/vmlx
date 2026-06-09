@@ -38,6 +38,41 @@ class QwenToolParser(ToolParser):
     # Pattern for bracket-style: [Calling tool: func_name({...})]
     BRACKET_PATTERN = re.compile(r"\[Calling tool:\s*(\w+)\((\{.*?\})\)\]", re.DOTALL)
 
+    @classmethod
+    def _plain_tool_line_call(
+        cls, text: str, request: dict[str, Any] | None
+    ) -> dict[str, Any] | None:
+        lines = [line.strip() for line in text.strip().splitlines()]
+        lines = [line for line in lines if line]
+        if len(lines) < 2:
+            return None
+        tool_name = lines[0]
+        schema = cls._function_schema_for_tool(request, tool_name)
+        if not isinstance(schema, dict):
+            return None
+        properties = schema.get("properties")
+        required = schema.get("required")
+        if not isinstance(properties, dict) or not isinstance(required, list):
+            return None
+        required_names = [name for name in required if isinstance(name, str)]
+        if len(required_names) != 1:
+            return None
+        param_name = required_names[0]
+        param_schema = properties.get(param_name)
+        if not isinstance(param_schema, dict):
+            return None
+        param_type = param_schema.get("type")
+        if param_type not in (None, "string"):
+            return None
+        value = "\n".join(lines[1:]).strip()
+        if not value:
+            return None
+        return {
+            "id": generate_tool_id(),
+            "name": tool_name,
+            "arguments": json.dumps({param_name: value}, ensure_ascii=False),
+        }
+
     def extract_tool_calls(
         self, model_output: str, request: dict[str, Any] | None = None
     ) -> ExtractedToolCallInformation:
@@ -99,6 +134,13 @@ class QwenToolParser(ToolParser):
                 tools_called=True,
                 tool_calls=tool_calls,
                 content=cleaned_text if cleaned_text else None,
+            )
+        plain_call = self._plain_tool_line_call(cleaned_text, request)
+        if plain_call is not None:
+            return ExtractedToolCallInformation(
+                tools_called=True,
+                tool_calls=[plain_call],
+                content=None,
             )
         else:
             return ExtractedToolCallInformation(

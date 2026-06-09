@@ -21,6 +21,7 @@ def test_tool_call_contract_has_required_marker_gate():
     assert "TestHunyuanToolParser::test_visible_text_before_and_after_tool_calls_preserved" in required
     assert "TestXMLFunctionToolParser::test_visible_text_around_tool_call_has_no_xml_function_leak" in required
     assert "TestXMLFunctionToolParser::test_registry_aliases_resolve" in required
+    assert "qwen_issue_192_plain_tool_line_uses_single_tool_schema" in required
     assert "engine_family_tool_parser_matrix" in gate.COMMANDS
 
 
@@ -162,6 +163,7 @@ def test_tool_call_contract_emits_cross_model_raw_dialect_and_loop_metrics(
     raw_cases = artifact["raw_tool_dialect_cases"]
     assert raw_cases["step_xml_visible_leak"]["raw_tool_dialect_leak"] is True
     assert raw_cases["qwen_schema_xml_converted"]["raw_tool_dialect_leak"] is False
+    assert raw_cases["qwen_plain_tool_line_converted"]["raw_tool_dialect_leak"] is False
 
     loop_case = artifact["tool_loop_metric_cases"]["repeated_diagnostic_loop"]
     assert loop_case["tool_repeat_count"] == 2
@@ -183,4 +185,5 @@ def test_tool_call_contract_emits_cross_model_raw_dialect_and_loop_metrics(
         artifact["checks"]["required_single_tool_bare_json_arguments_repaired"]
         is True
     )
+    assert artifact["checks"]["qwen_issue_192_plain_tool_line_repaired"] is True
     assert "tests/cross_matrix/run_tool_call_contract.py" in artifact["source_hashes"]

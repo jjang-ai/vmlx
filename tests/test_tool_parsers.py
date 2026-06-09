@@ -242,6 +242,33 @@ class TestQwenToolParser:
         args = json.loads(result.tool_calls[0]["arguments"])
         assert args == {"command": 'echo "Tools are working correctly!"'}
 
+    def test_plain_tool_name_then_argument_uses_single_tool_schema(self, parser):
+        """Qwen3.6 can emit a bare tool name followed by the command text."""
+        request = {
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "bash",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {"command": {"type": "string"}},
+                            "required": ["command"],
+                        },
+                    },
+                }
+            ]
+        }
+
+        result = parser.extract_tool_calls('bash\necho "Tool test successful!"', request=request)
+
+        assert result.tools_called
+        assert result.content is None
+        assert len(result.tool_calls) == 1
+        assert result.tool_calls[0]["name"] == "bash"
+        args = json.loads(result.tool_calls[0]["arguments"])
+        assert args == {"command": 'echo "Tool test successful!"'}
+
     def test_bracket_format(self, parser):
         """Test parsing Qwen bracket format (Qwen3 style)."""
         text = '[Calling tool: add({"a": 5, "b": 3})]'

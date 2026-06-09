@@ -46,7 +46,8 @@ DSML_PATTERN = (
     "or tool_markup_residue_strips_all_registered_marker_families "
     "or tool_markup_residue_strips_interrupted_non_dsml_fragments "
     "or responses_api_no_fallback_on_suppressed_reasoning "
-    "or responses_extracts_suppressed_reasoning_tool_calls_before_finalize"
+    "or responses_extracts_suppressed_reasoning_tool_calls_before_finalize "
+    "or qwen_issue_192_plain_tool_line_uses_single_tool_schema"
 )
 
 REQUIRED_TOOL_CALL_TEST_MARKERS = (
@@ -61,6 +62,7 @@ REQUIRED_TOOL_CALL_TEST_MARKERS = (
     "dsv4_encoder_preserves_code_identifiers_on_direct_chat_rail",
     "responses_extracts_suppressed_reasoning_tool_calls_before_finalize",
     "qwen_issue_192_xml_string_arguments_use_request_schema",
+    "qwen_issue_192_plain_tool_line_uses_single_tool_schema",
     "tool_markup_residue_strips_all_registered_marker_families",
     "increments the auto-continue counter once per follow-up attempt",
     "resets text-chat tool streaming state before chained follow-up requests",
@@ -228,6 +230,14 @@ def build_raw_tool_dialect_cases() -> dict[str, dict[str, Any]]:
             "structured_tool_calls": [],
         },
         "qwen_schema_xml_converted": {
+            "family": "qwen3_5_moe",
+            "tools_supplied": True,
+            "visible_text": "",
+            "structured_tool_calls": [
+                {"name": "bash", "arguments": '{"command":"echo ok"}'}
+            ],
+        },
+        "qwen_plain_tool_line_converted": {
             "family": "qwen3_5_moe",
             "tools_supplied": True,
             "visible_text": "",
@@ -420,6 +430,11 @@ def build_artifact(root: Path) -> dict[str, Any]:
             and "server_repairs_required_single_tool_bare_json_arguments"
             not in missing_markers
         ),
+        "qwen_issue_192_plain_tool_line_repaired": (
+            not failed
+            and "qwen_issue_192_plain_tool_line_uses_single_tool_schema"
+            not in missing_markers
+        ),
         "panel_tool_executor_blocks_unsafe_paths_and_commands": not failed and panel_passed >= 10,
         "panel_max_tool_iterations_caps_tool_loops": not failed and panel_passed >= 10,
         "family_tool_parser_matrix_covers_no_leak_and_alias_edges": (
@@ -429,6 +444,10 @@ def build_artifact(root: Path) -> dict[str, Any]:
             raw_tool_dialect_cases["step_xml_visible_leak"]["raw_tool_dialect_leak"]
             is True
             and raw_tool_dialect_cases["qwen_schema_xml_converted"][
+                "raw_tool_dialect_leak"
+            ]
+            is False
+            and raw_tool_dialect_cases["qwen_plain_tool_line_converted"][
                 "raw_tool_dialect_leak"
             ]
             is False
