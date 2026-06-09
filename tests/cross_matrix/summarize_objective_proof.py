@@ -7099,10 +7099,11 @@ def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
             "N2 Pro 397B JANG1L/JANGTQ is now tracked as an explicit release "
             "blocker. The current no-heavy parser/cache/family policy contracts "
             "are present, and the local JANG_1L model/index preflight is "
-            "registered, but the preflight says not to launch on this host. Do "
-            "not sign, notarize, tag, or publish a release claiming N2 support "
-            "until both quant profiles pass the same live runtime/cache/API/UI "
-            "gates as the other release-critical families."
+            "registered. Treat JANG_1L as a careful-RAM live-proof scheduling "
+            "problem, not as permanent model infeasibility; do not sign, "
+            "notarize, tag, or publish a release claiming N2 support until both "
+            "quant profiles pass the same live runtime/cache/API/UI gates as "
+            "the other release-critical families."
         ),
         details={
             "local_artifact_probe": {
@@ -7122,8 +7123,9 @@ def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
                 ),
                 "boundary": (
                     "The local N2 JANG_1L artifact/index is registered, but the "
-                    "memory preflight says not to launch it on this host. This "
-                    "is not live runtime proof."
+                    "current memory preflight is only a launch-safety warning. "
+                    "JANG_1L should be treated as careful-RAM live-proof work, "
+                    "not permanent infeasibility; this is not live runtime proof."
                 ),
             },
             "noheavy_contracts": {
