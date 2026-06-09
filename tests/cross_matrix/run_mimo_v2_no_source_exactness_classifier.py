@@ -74,6 +74,39 @@ def _load(path: Path) -> dict[str, Any]:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def _load_optional(path: Path) -> dict[str, Any]:
+    if not path.exists():
+        return {}
+    return _load(path)
+
+
+def _probe_rows(artifact: dict[str, Any] | None) -> list[dict[str, Any]]:
+    if not isinstance(artifact, dict):
+        return []
+    rows = artifact.get("requests")
+    if not isinstance(rows, list):
+        rows = artifact.get("cases")
+    if isinstance(rows, list):
+        return [row for row in rows if isinstance(row, dict)]
+    if isinstance(rows, dict):
+        out: list[dict[str, Any]] = []
+        for label, row in rows.items():
+            if isinstance(row, dict):
+                item = dict(row)
+                item.setdefault("label", str(label))
+                out.append(item)
+        return out
+    return []
+
+
+def _probe_case_map(artifact: dict[str, Any] | None) -> dict[str, dict[str, Any]]:
+    return {
+        str(row.get("label")): row
+        for row in _probe_rows(artifact)
+        if row.get("label") is not None
+    }
+
+
 def _failures(smoke: dict[str, Any]) -> list[dict[str, Any]]:
     rows = smoke.get("results")
     if not isinstance(rows, list):
@@ -99,6 +132,8 @@ def _server_log_text(smoke: dict[str, Any]) -> str:
 
 
 def _choice_text(case: dict[str, Any], *, completion: bool = False) -> str:
+    if isinstance(case.get("content"), str):
+        return str(case.get("content") or "")
     body = case.get("body") if isinstance(case, dict) else None
     if not isinstance(body, dict):
         return ""
@@ -113,6 +148,9 @@ def _choice_text(case: dict[str, Any], *, completion: bool = False) -> str:
 
 
 def _first_tool_arguments(case: dict[str, Any]) -> str:
+    parsed = case.get("parsed") if isinstance(case, dict) else None
+    if isinstance(parsed, dict):
+        return json.dumps(parsed, sort_keys=True)
     body = case.get("body") if isinstance(case, dict) else None
     if not isinstance(body, dict):
         return ""
@@ -135,13 +173,25 @@ def _exactness_probe_summary(
     jang2l: dict[str, Any] | None,
 ) -> dict[str, Any]:
     expected = "B7-CAT-09"
-    tq_cases = jangtq2.get("cases", {}) if isinstance(jangtq2, dict) else {}
-    j2_cases = jang2l.get("cases", {}) if isinstance(jang2l, dict) else {}
-    tq_copy = _choice_text(tq_cases.get("completion_copy_b7", {}), completion=True)
-    j2_copy = _choice_text(j2_cases.get("completion_copy_b7", {}), completion=True)
-    tq_tool_args = _first_tool_arguments(tq_cases.get("chat_tool_b7", {}))
-    j2_tool_args = _first_tool_arguments(j2_cases.get("chat_tool_b7", {}))
-    j2_tool_text = _choice_text(j2_cases.get("chat_tool_b7", {}))
+    tq_cases = _probe_case_map(jangtq2)
+    j2_cases = _probe_case_map(jang2l)
+    tq_copy_case = tq_cases.get("completion_copy_b7") or tq_cases.get(
+        "plain_exact_sentinel", {}
+    )
+    j2_copy_case = j2_cases.get("completion_copy_b7") or j2_cases.get(
+        "plain_exact_sentinel", {}
+    )
+    tq_tool_case = tq_cases.get("chat_tool_b7") or tq_cases.get(
+        "tool_sentinel_json_call", {}
+    )
+    j2_tool_case = j2_cases.get("chat_tool_b7") or j2_cases.get(
+        "tool_sentinel_json_call", {}
+    )
+    tq_copy = _choice_text(tq_copy_case, completion=True)
+    j2_copy = _choice_text(j2_copy_case, completion=True)
+    tq_tool_args = _first_tool_arguments(tq_tool_case)
+    j2_tool_args = _first_tool_arguments(j2_tool_case)
+    j2_tool_text = _choice_text(j2_tool_case)
     return {
         "expected_literal": expected,
         "jangtq2_raw_completion_text": tq_copy,
@@ -159,10 +209,13 @@ def _exactness_probe_summary(
 def _diagnostic_copy_preserved(artifact: dict[str, Any] | None) -> bool | None:
     if not isinstance(artifact, dict):
         return None
-    cases = artifact.get("cases")
-    if not isinstance(cases, dict):
+    cases = _probe_case_map(artifact)
+    if not cases:
         return None
-    text = _choice_text(cases.get("completion_copy_b7", {}), completion=True)
+    text = _choice_text(
+        cases.get("completion_copy_b7") or cases.get("plain_exact_sentinel", {}),
+        completion=True,
+    )
     if not text:
         return None
     return text.strip() == "B7-CAT-09"
@@ -183,8 +236,8 @@ def _tq_kernel_parity_passed(artifact: dict[str, Any] | None) -> bool | None:
 
 
 def _literal_variant_summary(artifact: dict[str, Any] | None) -> dict[str, Any]:
-    requests = artifact.get("requests") if isinstance(artifact, dict) else None
-    if not isinstance(requests, list):
+    requests = _probe_rows(artifact)
+    if not requests:
         return {
             "exists": False,
             "plain_literal_copy_pass": None,
@@ -199,7 +252,9 @@ def _literal_variant_summary(artifact: dict[str, Any] | None) -> dict[str, Any]:
     failures = [
         {
             "label": str(request.get("label")),
-            "content": request.get("content"),
+            "content": _choice_text(
+                request, completion=str(request.get("route") or "") == "completions"
+            ),
             "parsed": request.get("parsed"),
             "expected": request.get("expected"),
         }
@@ -1184,7 +1239,7 @@ def main() -> int:
     )
     artifact = build_classification(
         _load(args.audit),
-        _load(args.smoke),
+        _load_optional(args.smoke),
         jangtq2=jangtq2,
         jang2l=jang2l,
         no_switchglu_fastpath=no_switchglu_fastpath,
