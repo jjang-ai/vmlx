@@ -10654,5 +10654,5 @@ def test_objective_proof_digest_uses_current_mimo_no_source_classifier_artifact(
     from tests.cross_matrix import summarize_objective_proof as objective
 
     assert objective.MIMO_V2_NO_SOURCE_EXACTNESS_CLASSIFIER_REL == (
-        "build/current-mimo-v2-no-source-exactness-classifier-after-jangtq2-live-refresh-20260608.json"
+        "build/current-mimo-v2-no-source-exactness-classifier-after-lossless-token-trace-20260609.json"
     )

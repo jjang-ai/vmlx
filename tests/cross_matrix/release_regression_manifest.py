@@ -872,7 +872,7 @@ CURRENT_MIMO_V2_JANG2L_TOOL_DIALECT_ARTIFACT = (
     "build/current-mimo-v2-jang2l-tool-dialect-failure-20260606.json"
 )
 CURRENT_MIMO_V2_JANG2L_CURRENT_AUDIT_ARTIFACT = (
-    "build/current-mimo-v2-jang2l-current-audit-after-local-structural-proof-20260609.json"
+    "build/current-mimo-v2-jang2l-current-audit-after-mimo-n2-runtime-refresh-20260609.json"
 )
 CURRENT_MIMO_V2_JANG2L_METADATA_TRUTH_ARTIFACT = (
     "build/current-mimo-v25-jang2l-local-metadata-truth-patch-20260606.json"
@@ -881,7 +881,7 @@ CURRENT_MIMO_V2_JANG2L_SOURCE_VS_QUANT_ARTIFACT = (
     "build/current-mimo-v2-jangtq2-source-vs-quant-first-divergence-preflight-20260607.json"
 )
 CURRENT_MIMO_V2_JANG2L_NO_SOURCE_EXACTNESS_CLASSIFIER_ARTIFACT = (
-    "build/current-mimo-v2-no-source-exactness-classifier-after-jangtq2-live-refresh-20260608.json"
+    "build/current-mimo-v2-no-source-exactness-classifier-after-lossless-token-trace-20260609.json"
 )
 CURRENT_DIAGNOSTIC_LIVE_SMOKE_ARTIFACTS = {
     # Retired 2026-06-07: old expected-failure diagnostic rows pointed at
