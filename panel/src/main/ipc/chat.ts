@@ -1956,6 +1956,42 @@ export function registerChatHandlers(
         isReasoning = false;
         let currentEventType = ""; // Track SSE event type for Responses API
         const seenResponsesApiEvents = new Set<string>();
+        const responsesFunctionCallArgsByKey = new Map<
+          string,
+          { value: string }
+        >();
+        const responsesFunctionCallItemKey = (
+          itemId: unknown,
+          outputIndex: unknown,
+        ): string => {
+          if (typeof itemId === "string" && itemId.length > 0) {
+            return `item:${itemId}`;
+          }
+          if (typeof outputIndex === "number") {
+            return `output:${outputIndex}`;
+          }
+          return "";
+        };
+        const responsesFunctionCallArgsBuffer = (
+          itemId: unknown,
+          outputIndex: unknown,
+        ): { value: string } | undefined => {
+          const itemKey = responsesFunctionCallItemKey(itemId, undefined);
+          const outputKey = responsesFunctionCallItemKey(undefined, outputIndex);
+          const key = itemKey || outputKey;
+          if (!key) return undefined;
+          let argsBuffer =
+            responsesFunctionCallArgsByKey.get(itemKey) ||
+            responsesFunctionCallArgsByKey.get(outputKey);
+          if (!argsBuffer) {
+            argsBuffer = { value: "" };
+          }
+          if (itemKey) responsesFunctionCallArgsByKey.set(itemKey, argsBuffer);
+          if (outputKey) {
+            responsesFunctionCallArgsByKey.set(outputKey, argsBuffer);
+          }
+          return argsBuffer;
+        };
 
         // Track whether server sends real token counts (via usage in each SSE chunk)
         let serverSendsUsage = false;
@@ -2385,10 +2421,35 @@ export function registerChatHandlers(
               // Handle function_call items (tool calls) from Responses API
               // response.output_item.done carries the complete tool call: { item: { type, call_id, name, arguments } }
               if (
+                responsesEventType === "response.function_call_arguments.delta" &&
+                typeof parsed.delta === "string"
+              ) {
+                const argsBuffer = responsesFunctionCallArgsBuffer(
+                  parsed.item_id,
+                  parsed.output_index,
+                );
+                if (argsBuffer) argsBuffer.value += parsed.delta;
+              }
+              if (
+                responsesEventType === "response.function_call_arguments.done" &&
+                typeof parsed.arguments === "string"
+              ) {
+                const argsBuffer = responsesFunctionCallArgsBuffer(
+                  parsed.item_id,
+                  parsed.output_index,
+                );
+                if (argsBuffer) argsBuffer.value = parsed.arguments;
+              }
+              if (
                 responsesEventType === "response.output_item.done" &&
                 parsed.item?.type === "function_call"
               ) {
                 const item = parsed.item;
+                const argsBuffer = responsesFunctionCallArgsBuffer(
+                  item.id,
+                  parsed.output_index,
+                );
+                const finalArguments = item.arguments || argsBuffer?.value || "{}";
                 const toolCallId =
                   item.call_id ||
                   `call_${uuidv4().replace(/-/g, "").slice(0, 16)}`;
@@ -2396,13 +2457,13 @@ export function registerChatHandlers(
                   id: toolCallId,
                   function: {
                     name: item.name,
-                    arguments: item.arguments || "{}",
+                    arguments: finalArguments,
                   },
                 });
                 emitToolStatus(
                   "calling",
                   item.name,
-                  item.arguments || "{}",
+                  finalArguments,
                   toolIteration,
                   toolCallId,
                 );

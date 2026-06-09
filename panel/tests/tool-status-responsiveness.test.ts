@@ -74,10 +74,28 @@ describe('tool status responsiveness contract', () => {
     expect(doneIdx).toBeGreaterThan(0)
     expect(executeIdx).toBeGreaterThan(doneIdx)
     expect(doneBlock).toContain('parsed.item?.type === "function_call"')
-    expect(doneBlock).toContain('arguments: item.arguments || "{}"')
+    expect(doneBlock).toContain('const finalArguments =')
+    expect(doneBlock).toContain('arguments: finalArguments')
     expect(doneBlock).toContain('emitToolStatus(')
-    expect(doneBlock).toContain('item.arguments || "{}"')
+    expect(doneBlock).toContain('finalArguments')
     expect(executeBlock).toContain('arguments: tc.function.arguments')
     expect(executeBlock).toContain('JSON.parse(tc.function.arguments || "{}")')
+  })
+
+  it('recovers Responses function-call arguments from argument delta and done events', () => {
+    const source = readFileSync('src/main/ipc/chat.ts', 'utf8')
+    const responsesParser = source.slice(
+      source.indexOf('// ── Responses API SSE parsing ──'),
+      source.indexOf('// Real-time usage from response.usage events'),
+    )
+
+    expect(source).toContain('responsesFunctionCallArgsByKey')
+    expect(source).toContain('responsesFunctionCallItemKey')
+    expect(responsesParser).toContain('response.function_call_arguments.delta')
+    expect(responsesParser).toContain('response.function_call_arguments.done')
+    expect(responsesParser).toContain('argsBuffer.value += parsed.delta')
+    expect(responsesParser).toContain('argsBuffer.value = parsed.arguments')
+    expect(responsesParser).toContain('const finalArguments =')
+    expect(responsesParser).toContain('item.arguments || argsBuffer?.value || "{}"')
   })
 })
