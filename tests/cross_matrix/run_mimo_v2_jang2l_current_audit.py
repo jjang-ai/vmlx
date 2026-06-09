@@ -25,7 +25,7 @@ from typing import Any
 DEFAULT_MODEL_PATH = Path("/Users/example/.mlxstudio/models/JANGQ-AI/MiMo-V2.5-JANGTQ_2")
 DEFAULT_MANIFEST = Path("build/current-mimo-jangtq2-local-manifest-20260607.tsv")
 DEFAULT_OUT = Path(
-    "build/current-mimo-v2-jang2l-current-audit-after-current-jangtq2-l2-proof-20260609.json"
+    "build/current-mimo-v2-jang2l-current-audit-after-mllm-inputs-embeds-proof-20260609.json"
 )
 
 STRUCTURAL_ARTIFACT = Path("build/current-mimo-jang2l-local-structural-verify-20260606.json")
@@ -88,7 +88,7 @@ CB_METAL_BASELINE_ARTIFACT = Path(
     "build/current-mimo-v2-jangtq2-cb-cache-lossless-auto-live-20260609.json"
 )
 MLLM_INPUTS_EMBEDS_INTERFACE_ARTIFACT = Path(
-    "build/current-mimo-v2-mllm-inputs-embeds-interface-fix-20260606.json"
+    "build/current-mimo-v2-mllm-inputs-embeds-interface-proof-20260609.json"
 )
 LATEST_DECODE_SPEED_ARTIFACT = Path(
     "build/current-mimo-v25-jangtq2-speed-boundary-after-singlebatch-tokenbuffer-skip-20260609.json"

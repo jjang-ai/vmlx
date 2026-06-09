@@ -260,7 +260,7 @@ def test_mimo_v2_audio_projection_bridge_splices_audio_token(
     sys.modules.pop("mlx_vlm.models.mimo_v2", None)
 
 
-def test_mimo_v2_stale_text_runtime_metadata_does_not_disable_media_modules(
+def test_mimo_v2_text_runtime_metadata_keeps_media_modules_unwired(
     tmp_path,
     monkeypatch,
 ):
@@ -301,9 +301,9 @@ def test_mimo_v2_stale_text_runtime_metadata_does_not_disable_media_modules(
         )
     )
 
-    assert model.visual is not None
-    assert model.audio_encoder is not None
-    assert model.speech_embeddings is not None
+    assert model.visual is None
+    assert model.audio_encoder is None
+    assert model.speech_embeddings is None
     sys.modules.pop("mlx_vlm.models.mimo_v2", None)
 
 
@@ -593,6 +593,7 @@ def test_mimo_v2_jangtq_fast_path_binds_indexed_media_weights(tmp_path, monkeypa
         module.ModelConfig.from_dict(
             {
                 "model_type": "mimo_v2",
+                "multimodal_status": "media_runtime_enabled",
                 "vision_config": {
                     "hidden_size": 4,
                     "out_hidden_size": 16,

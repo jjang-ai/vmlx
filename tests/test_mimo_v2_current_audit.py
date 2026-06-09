@@ -640,7 +640,7 @@ def test_mimo_current_audit_separates_clean_artifact_from_runtime_blockers(
         },
     )
     _write_json(
-        tmp_path / "build/current-mimo-v2-mllm-inputs-embeds-interface-fix-20260606.json",
+        tmp_path / "build/current-mimo-v2-mllm-inputs-embeds-interface-proof-20260609.json",
         {"status": "pass"},
     )
     _write_json(

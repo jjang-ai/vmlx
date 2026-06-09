@@ -1277,12 +1277,21 @@ def _register_mimo_v2_mlx_vlm_runtime() -> None:
                 "multimodal_status",
                 "weights_preserved_text_runtime",
             )
+            preserved_modalities = kwargs.get("preserved_modalities")
             self.preserved_modalities = list(
-                kwargs.get("preserved_modalities") or ["vision", "image", "video", "audio"]
+                preserved_modalities
+                if preserved_modalities is not None
+                else ["vision", "image", "video", "audio"]
             )
-            self.unwired_modalities = list(
-                kwargs.get("unwired_modalities") or ["vision", "image", "video", "audio"]
-            )
+            unwired_modalities = kwargs.get("unwired_modalities")
+            if unwired_modalities is None:
+                status = str(self.media_runtime_status or "").lower()
+                unwired_modalities = (
+                    []
+                    if status in {"media_runtime_enabled", "runtime_enabled", "wired"}
+                    else ["vision", "image", "video", "audio"]
+                )
+            self.unwired_modalities = list(unwired_modalities)
 
         @property
         def media_runtime_wired(self) -> bool:
