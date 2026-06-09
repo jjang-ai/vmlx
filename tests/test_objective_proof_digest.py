@@ -10730,3 +10730,31 @@ def test_objective_proof_digest_uses_current_mimo_no_source_classifier_artifact(
     assert objective.MIMO_V2_NO_SOURCE_EXACTNESS_CLASSIFIER_REL == (
         "build/current-mimo-v2-no-source-exactness-classifier-after-lossless-token-trace-20260609.json"
     )
+
+
+def test_objective_proof_digest_tracks_current_mimo_evidence_without_stale_missing():
+    from tests.cross_matrix import summarize_objective_proof as objective
+
+    digest = objective.build_digest(Path("."))
+    rows = {item["requirement"]: item for item in digest["requirements"]}
+    row = rows[
+        "MiMo V2.5 JANG_2L runtime/tool/long-prompt quality is release-cleared"
+    ]
+
+    assert row["status"] == "open"
+    assert row["evidence"] == [
+        objective.MIMO_V2_JANG2L_STRUCTURAL_VERIFY_REL,
+        objective.MIMO_V2_JANG2L_CURRENT_AUDIT_REL,
+        objective.MIMO_V2_NO_SOURCE_EXACTNESS_CLASSIFIER_REL,
+        objective.MIMO_V2_JANGTQ2_CACHE_VS_NOCACHE_UNIT_REL,
+    ]
+    assert row["details"]["missing_evidence"] == []
+    assert row["details"]["current_evidence_missing"] == []
+    assert row["details"]["cache_vs_nocache_status"] == "pass"
+    assert row["details"]["classifier_classification"] == (
+        "jangtq2_plain_literal_copy_fails_before_parser_or_json_repair"
+    )
+    assert (
+        "build/current-mimo-jang2l-live-text-cache-smoke-20260606.json"
+        not in row["evidence"]
+    )

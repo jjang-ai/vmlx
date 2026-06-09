@@ -412,6 +412,9 @@ MIMO_V2_JANG2L_NOMEDIA_TOOL_CACHE_REL = (
 MIMO_V2_NO_SOURCE_EXACTNESS_CLASSIFIER_REL = (
     "build/current-mimo-v2-no-source-exactness-classifier-after-lossless-token-trace-20260609.json"
 )
+MIMO_V2_JANGTQ2_CACHE_VS_NOCACHE_UNIT_REL = (
+    "build/current-mimo-v2-jangtq2-cache-vs-nocache-next-token-logprobs-after-unit-label-20260609.json"
+)
 ALL_LOCAL_MODEL_SMOKE_DSV4_JANGTQ_K_REL = (
     "build/current-all-local-model-smoke-dsv4-jangtq-k-tools-cache-20260606/summary.json"
 )
@@ -4888,12 +4891,24 @@ def _mimo_v2_jang2l_quality_detail(root: Path) -> tuple[bool, dict[str, Any]]:
         "conservative_diagnostic": MIMO_V2_JANG2L_CONSERVATIVE_DIAGNOSTIC_REL,
         "nomedia_tool_cache": MIMO_V2_JANG2L_NOMEDIA_TOOL_CACHE_REL,
         "no_source_exactness_classifier": MIMO_V2_NO_SOURCE_EXACTNESS_CLASSIFIER_REL,
+        "cache_vs_nocache": MIMO_V2_JANGTQ2_CACHE_VS_NOCACHE_UNIT_REL,
     }
     payloads = {key: _load(root, rel) for key, rel in artifacts.items()}
+    current_evidence_artifacts = {
+        "structural_verify": MIMO_V2_JANG2L_STRUCTURAL_VERIFY_REL,
+        "current_audit": MIMO_V2_JANG2L_CURRENT_AUDIT_REL,
+        "no_source_exactness_classifier": MIMO_V2_NO_SOURCE_EXACTNESS_CLASSIFIER_REL,
+        "cache_vs_nocache": MIMO_V2_JANGTQ2_CACHE_VS_NOCACHE_UNIT_REL,
+    }
     missing = [
         rel
-        for rel in artifacts.values()
+        for rel in current_evidence_artifacts.values()
         if not (root / rel).exists()
+    ]
+    legacy_missing = [
+        rel
+        for key, rel in artifacts.items()
+        if key not in current_evidence_artifacts and not (root / rel).exists()
     ]
     current_audit = payloads["current_audit"]
     current_audit_component_ok = current_audit.get("component_ok")
@@ -5135,7 +5150,10 @@ def _mimo_v2_jang2l_quality_detail(root: Path) -> tuple[bool, dict[str, Any]]:
     )
     return ok, {
         "artifacts": artifacts,
+        "current_evidence_artifacts": current_evidence_artifacts,
         "missing": missing,
+        "current_evidence_missing": missing,
+        "legacy_evidence_missing": legacy_missing,
         "current_audit_status": current_audit.get("status"),
         "manifest_integrity_passed": manifest_integrity_passed,
         "stale_local_state_absent": stale_local_state_absent,
@@ -5162,6 +5180,7 @@ def _mimo_v2_jang2l_quality_detail(root: Path) -> tuple[bool, dict[str, Any]]:
         "classifier_status": classifier.get("status"),
         "classifier_classification": classifier.get("classification"),
         "classifier_secondary_classification": classifier.get("secondary_classification"),
+        "cache_vs_nocache_status": payloads["cache_vs_nocache"].get("status"),
         "mimo_media_wired": audit_media_wired,
         "conservative_tool_failures": conservative_tool_failures,
         "nomedia_tool_cache_status": nomedia_tool_cache.get("status"),
@@ -7132,12 +7151,9 @@ def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
         _status(mimo_quality_ok),
         [
             MIMO_V2_JANG2L_STRUCTURAL_VERIFY_REL,
-            MIMO_V2_JANG2L_TEXT_CACHE_REL,
-            MIMO_V2_JANG2L_SWITCHGLU_PARITY_REL,
-            MIMO_V2_JANG2L_LENGTH_SWEEP_REL,
-            MIMO_V2_JANG2L_TOOL_DIALECT_REL,
             MIMO_V2_JANG2L_CURRENT_AUDIT_REL,
-            MIMO_V2_JANG2L_NOMEDIA_TOOL_CACHE_REL,
+            MIMO_V2_NO_SOURCE_EXACTNESS_CLASSIFIER_REL,
+            MIMO_V2_JANGTQ2_CACHE_VS_NOCACHE_UNIT_REL,
         ],
         caveat=(
             None
