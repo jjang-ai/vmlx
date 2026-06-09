@@ -180,3 +180,49 @@ def test_n2_chat_cache_gate_builds_responses_tool_followup_payload():
         {"role": "user", "content": "No more tools. Reply exactly DONE."},
     ]
     assert payload["tool_choice"] == "none"
+
+
+def test_n2_chat_cache_gate_builds_streaming_responses_tool_payload():
+    args = SimpleNamespace(
+        served_model_name="n2-pro-jangtq2-chat-proof",
+        responses_tool_prompt="Use lookup for query alpha. Do not answer in prose.",
+        tool_name="lookup",
+        tool_query="alpha",
+        responses_max_output_tokens=64,
+    )
+
+    payload = runner.responses_stream_tool_payload(args)
+
+    assert payload["model"] == "n2-pro-jangtq2-chat-proof"
+    assert payload["stream"] is True
+    assert payload["store"] is True
+    assert payload["tool_choice"] == "required"
+    assert payload["enable_thinking"] is False
+
+
+def test_n2_chat_cache_gate_extracts_streaming_responses_tool_args_from_sse():
+    raw = "\n\n".join(
+        [
+            'event: response.output_item.added\ndata: {"type":"response.output_item.added","output_index":1,"item":{"id":"fc_1","type":"function_call","status":"in_progress","call_id":"call_1","name":"lookup","arguments":""}}',
+            'event: response.function_call_arguments.delta\ndata: {"type":"response.function_call_arguments.delta","item_id":"fc_1","output_index":1,"delta":"{\\"query\\":"}',
+            'event: response.function_call_arguments.delta\ndata: {"type":"response.function_call_arguments.delta","item_id":"fc_1","output_index":1,"delta":"\\"alpha\\"}"}',
+            'event: response.function_call_arguments.done\ndata: {"type":"response.function_call_arguments.done","item_id":"fc_1","output_index":1,"arguments":"{\\"query\\":\\"alpha\\"}"}',
+            'event: response.output_item.done\ndata: {"type":"response.output_item.done","output_index":1,"item":{"id":"fc_1","type":"function_call","status":"completed","call_id":"call_1","name":"lookup","arguments":"{\\"query\\":\\"alpha\\"}"}}',
+            'event: response.completed\ndata: {"type":"response.completed","response":{"id":"resp_1","status":"completed","output":[{"id":"fc_1","type":"function_call","call_id":"call_1","name":"lookup","arguments":"{\\"query\\":\\"alpha\\"}"}],"usage":{"input_tokens_details":{"cached_tokens":9,"cache_detail":"paged+ssm"}}}}',
+        ]
+    )
+
+    events = runner.parse_sse_events(raw)
+    row = runner.responses_stream_row_from_sse(
+        "responses_stream_tool_required",
+        {"code": 200, "elapsed_s": 1.0, "error": None, "raw": raw, "events": events},
+    )
+
+    assert row["status_code"] == 200
+    assert row["function_call_names"] == ["lookup"]
+    assert row["function_call_arguments"] == [{"query": "alpha"}]
+    assert row["argument_delta_text_by_item"] == {"fc_1": '{"query":"alpha"}'}
+    assert row["argument_done_text_by_item"] == {"fc_1": '{"query":"alpha"}'}
+    assert row["output_item_done_arguments_by_item"] == {"fc_1": '{"query":"alpha"}'}
+    assert row["cached_tokens"] == 9
+    assert row["cache_detail"] == "paged+ssm"

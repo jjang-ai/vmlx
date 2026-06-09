@@ -182,6 +182,69 @@ def post_json(url: str, body: dict[str, Any], timeout: int) -> dict[str, Any]:
         }
 
 
+def parse_sse_events(raw: str) -> list[dict[str, Any]]:
+    events: list[dict[str, Any]] = []
+    for block in raw.replace("\r\n", "\n").split("\n\n"):
+        event_type = "message"
+        data_lines: list[str] = []
+        for line in block.splitlines():
+            if not line or line.startswith(":"):
+                continue
+            if line.startswith("event:"):
+                event_type = line.split(":", 1)[1].strip()
+            elif line.startswith("data:"):
+                data_lines.append(line.split(":", 1)[1].lstrip())
+        if not data_lines:
+            continue
+        data_text = "\n".join(data_lines)
+        if data_text == "[DONE]":
+            events.append({"event": event_type, "data": "[DONE]"})
+            continue
+        try:
+            data = json.loads(data_text)
+        except Exception:
+            data = {"_raw": data_text}
+        events.append({"event": event_type, "data": data})
+    return events
+
+
+def post_sse(url: str, body: dict[str, Any], timeout: int) -> dict[str, Any]:
+    started = time.monotonic()
+    request = urllib.request.Request(
+        url,
+        data=json.dumps(body).encode("utf-8"),
+        headers={"content-type": "application/json", "accept": "text/event-stream"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            raw = response.read().decode("utf-8", "replace")
+            return {
+                "code": response.status,
+                "elapsed_s": round(time.monotonic() - started, 3),
+                "raw": raw,
+                "events": parse_sse_events(raw),
+                "error": None,
+            }
+    except urllib.error.HTTPError as exc:
+        raw = exc.read().decode("utf-8", "replace")
+        return {
+            "code": exc.code,
+            "elapsed_s": round(time.monotonic() - started, 3),
+            "raw": raw,
+            "events": parse_sse_events(raw),
+            "error": repr(exc),
+        }
+    except Exception as exc:  # noqa: BLE001 - live diagnostic artifact
+        return {
+            "code": None,
+            "elapsed_s": round(time.monotonic() - started, 3),
+            "raw": "",
+            "events": [],
+            "error": f"{type(exc).__name__}: {exc}",
+        }
+
+
 def wait_health(port: int, proc: subprocess.Popen, timeout_s: int) -> dict[str, Any]:
     deadline = time.monotonic() + timeout_s
     last_error: Exception | None = None
@@ -263,6 +326,12 @@ def responses_tool_payload(args: argparse.Namespace) -> dict[str, Any]:
         ],
         "tool_choice": "required",
     }
+
+
+def responses_stream_tool_payload(args: argparse.Namespace) -> dict[str, Any]:
+    payload = responses_tool_payload(args)
+    payload["stream"] = True
+    return payload
 
 
 def responses_tool_followup_payload(
@@ -462,6 +531,107 @@ def responses_row_from_body(mode: str, body: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _event_data(event: dict[str, Any]) -> dict[str, Any]:
+    data = event.get("data")
+    return data if isinstance(data, dict) else {}
+
+
+def _responses_completed_response(events: list[dict[str, Any]]) -> dict[str, Any]:
+    for event in reversed(events):
+        if event.get("event") != "response.completed":
+            continue
+        data = _event_data(event)
+        response = data.get("response")
+        return response if isinstance(response, dict) else {}
+    return {}
+
+
+def _responses_stream_function_calls(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    calls_by_item: dict[str, dict[str, Any]] = {}
+    for event in events:
+        data = _event_data(event)
+        item = data.get("item") if isinstance(data.get("item"), dict) else None
+        if not item or item.get("type") != "function_call":
+            continue
+        item_id = str(item.get("id") or "")
+        if not item_id:
+            continue
+        calls_by_item[item_id] = {
+            "item_id": item_id,
+            "call_id": str(item.get("call_id") or ""),
+            "name": str(item.get("name") or ""),
+            "arguments": str(item.get("arguments") or ""),
+        }
+    return list(calls_by_item.values())
+
+
+def _responses_stream_argument_surfaces(
+    events: list[dict[str, Any]],
+) -> tuple[dict[str, str], dict[str, str], dict[str, str]]:
+    delta_by_item: dict[str, str] = {}
+    done_by_item: dict[str, str] = {}
+    final_by_item: dict[str, str] = {}
+    for event in events:
+        data = _event_data(event)
+        event_type = str(event.get("event") or data.get("type") or "")
+        if event_type == "response.function_call_arguments.delta":
+            item_id = str(data.get("item_id") or "")
+            if item_id:
+                delta_by_item[item_id] = delta_by_item.get(item_id, "") + str(
+                    data.get("delta") or ""
+                )
+        elif event_type == "response.function_call_arguments.done":
+            item_id = str(data.get("item_id") or "")
+            if item_id:
+                done_by_item[item_id] = str(data.get("arguments") or "")
+        elif event_type == "response.output_item.done":
+            item = data.get("item") if isinstance(data.get("item"), dict) else {}
+            if item.get("type") == "function_call":
+                item_id = str(item.get("id") or "")
+                if item_id:
+                    final_by_item[item_id] = str(item.get("arguments") or "")
+    return delta_by_item, done_by_item, final_by_item
+
+
+def responses_stream_row_from_sse(
+    mode: str,
+    response: dict[str, Any],
+) -> dict[str, Any]:
+    events = response.get("events") if isinstance(response.get("events"), list) else []
+    completed = _responses_completed_response(events)
+    usage = completed.get("usage") if isinstance(completed.get("usage"), dict) else {}
+    details = (
+        usage.get("input_tokens_details")
+        if isinstance(usage.get("input_tokens_details"), dict)
+        else {}
+    )
+    calls = _responses_stream_function_calls(events)
+    delta_by_item, done_by_item, final_by_item = _responses_stream_argument_surfaces(
+        events
+    )
+    return {
+        "mode": mode,
+        "status_code": response.get("code"),
+        "elapsed_s": response.get("elapsed_s"),
+        "http_error": response.get("error"),
+        "event_types": [event.get("event") for event in events],
+        "heartbeat_count": sum(
+            1 for event in events if event.get("event") == "response.heartbeat"
+        ),
+        "completed_status": completed.get("status"),
+        "completed_response_id": completed.get("id"),
+        "cached_tokens": details.get("cached_tokens"),
+        "cache_detail": details.get("cache_detail"),
+        "function_calls": calls,
+        "function_call_names": [call["name"] for call in calls],
+        "function_call_arguments": [_parse_tool_args(call["arguments"]) for call in calls],
+        "argument_delta_text_by_item": delta_by_item,
+        "argument_done_text_by_item": done_by_item,
+        "output_item_done_arguments_by_item": final_by_item,
+        "raw_preview": str(response.get("raw") or "")[:4000],
+    }
+
+
 def run(args: argparse.Namespace) -> dict[str, Any]:
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.cache_dir.mkdir(parents=True, exist_ok=True)
@@ -570,6 +740,19 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                         "tool_outputs": tool_outputs,
                     }
                 )
+            if args.include_responses_stream_probe:
+                responses_url = f"http://127.0.0.1:{args.port}/v1/responses"
+                responses_stream = post_sse(
+                    responses_url,
+                    responses_stream_tool_payload(args),
+                    args.request_timeout_s,
+                )
+                responses_rows.append(
+                    responses_stream_row_from_sse(
+                        "responses_stream_tool_required",
+                        responses_stream,
+                    )
+                )
             final_health = get_json(f"http://127.0.0.1:{args.port}/health", timeout=5)
             telemetry.append(resource_snapshot("after_requests", proc))
     finally:
@@ -639,6 +822,34 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             and responses_round2.get("previous_response_id_used") is True
         )
     )
+    responses_stream_row = next(
+        (
+            row
+            for row in locals().get("responses_rows", [])
+            if row.get("mode") == "responses_stream_tool_required"
+        ),
+        None,
+    )
+    responses_stream_probe_pass = (
+        not args.include_responses_stream_probe
+        or (
+            isinstance(responses_stream_row, dict)
+            and responses_stream_row.get("status_code") == 200
+            and responses_stream_row.get("function_call_names") == [args.tool_name]
+            and responses_stream_row.get("function_call_arguments")
+            == [{"query": args.tool_query}]
+            and all(
+                text
+                for surface in (
+                    responses_stream_row.get("argument_delta_text_by_item"),
+                    responses_stream_row.get("argument_done_text_by_item"),
+                    responses_stream_row.get("output_item_done_arguments_by_item"),
+                )
+                if isinstance(surface, dict)
+                for text in surface.values()
+            )
+        )
+    )
     status = (
         "pass"
         if all(row.get("status_code") == 200 for row in rows)
@@ -647,6 +858,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         and cached_tokens > 0
         and tool_probe_pass
         and responses_probe_pass
+        and responses_stream_probe_pass
         else "fail"
     )
     return {
@@ -661,6 +873,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "stable_text": stable_text,
         "tool_probe_pass": tool_probe_pass,
         "responses_probe_pass": responses_probe_pass,
+        "responses_stream_probe_pass": responses_stream_probe_pass,
         "cache_hit_cached_tokens": cached_tokens,
         "cache_hit_cache_detail": (
             prompt_details.get("cache_detail")
@@ -685,6 +898,7 @@ def main() -> int:
     parser.add_argument("--prompt", default="Return only ACK.")
     parser.add_argument("--include-tool-probe", action="store_true")
     parser.add_argument("--include-responses-probe", action="store_true")
+    parser.add_argument("--include-responses-stream-probe", action="store_true")
     parser.add_argument(
         "--tool-prompt",
         default="Use lookup for query alpha. Do not answer in prose.",
