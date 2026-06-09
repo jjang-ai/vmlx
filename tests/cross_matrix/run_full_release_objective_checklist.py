@@ -1563,6 +1563,16 @@ def _issue179_checks(data: dict[str, Any]) -> list[dict[str, Any]]:
         if isinstance(data.get("local_reporter_prompt_reproduction"), dict)
         else {}
     )
+    current_source_smoke = (
+        data.get("current_source_minimax_small_smoke")
+        if isinstance(data.get("current_source_minimax_small_smoke"), dict)
+        else {}
+    )
+    current_source_smoke_checks = (
+        current_source_smoke.get("checks")
+        if isinstance(current_source_smoke.get("checks"), dict)
+        else {}
+    )
     not_proven = data.get("not_proven") if isinstance(data.get("not_proven"), list) else []
     return [
         _check(
@@ -1652,6 +1662,18 @@ def _issue179_checks(data: dict[str, Any]) -> list[dict[str, Any]]:
                     "reporter_log_has_abort_before_visible_content"
                 ),
                 "reporter_repro": reporter_repro,
+            },
+        ),
+        _check(
+            "issue179_current_source_minimax_small_smoke",
+            current_source_smoke.get("all_checks_pass") is True
+            and all(current_source_smoke_checks.values()),
+            str(ISSUE179_AUDIT),
+            {
+                "path": current_source_smoke.get("path"),
+                "status": current_source_smoke.get("status"),
+                "checks": current_source_smoke_checks,
+                "release_boundary": current_source_smoke.get("release_boundary"),
             },
         ),
     ]

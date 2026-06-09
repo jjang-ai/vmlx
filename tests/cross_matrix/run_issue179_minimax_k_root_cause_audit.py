@@ -82,6 +82,9 @@ LOCAL_REPORTER_PROMPT_REPRODUCTION_FALLBACKS = (
     Path("build/current-issue179-minimax-k-responses-cancel-probe-after-mimo-dsv4-ledger-20260607.json"),
     Path("build/current-issue179-minimax-k-responses-cancel-probe-20260606-live-refresh.json"),
 )
+CURRENT_SOURCE_MINIMAX_SMALL_SMOKE = Path(
+    "build/current-all-local-model-smoke-minimax-small-jangtq-cache-language-after-bare-invoke-tool-20260609/summary.json"
+)
 LOCAL_MODEL_MANIFEST = Path(
     "build/current-issue179-minimax-k-local-model-manifest-20260527.json"
 )
@@ -1038,6 +1041,111 @@ def analyze_local_model_manifest(root: Path) -> dict[str, Any]:
     }
 
 
+def _request_by_label(requests: Any, label: str) -> dict[str, Any]:
+    if not isinstance(requests, list):
+        return {}
+    for request in requests:
+        if isinstance(request, dict) and request.get("label") == label:
+            return request
+    return {}
+
+
+def _request_clean(request: dict[str, Any]) -> bool:
+    return request.get("code") == 200 and request.get("validation_failures") == []
+
+
+def analyze_current_source_minimax_small_smoke(root: Path) -> dict[str, Any]:
+    path = root / CURRENT_SOURCE_MINIMAX_SMALL_SMOKE
+    data = read_json(path)
+    results = data.get("results") if isinstance(data.get("results"), list) else []
+    result = results[0] if results and isinstance(results[0], dict) else {}
+    row = result.get("row") if isinstance(result.get("row"), dict) else {}
+    requests = result.get("requests") if isinstance(result.get("requests"), list) else []
+    labels = {
+        str(request.get("label")) for request in requests if isinstance(request, dict)
+    }
+
+    cache_repeat = _request_by_label(requests, "text_cache_repeat_2")
+    reasoning = _request_by_label(requests, "reasoning_on")
+    tool_required = _request_by_label(requests, "tool_required")
+    tool_result = _request_by_label(requests, "tool_result_continuation")
+    structured_json = _request_by_label(requests, "structured_json_exact")
+    exact_code = _request_by_label(requests, "exact_code_whitespace")
+    l2_restart = result.get("l2_restart") if isinstance(result.get("l2_restart"), dict) else {}
+    capabilities = result.get("capabilities") if isinstance(result.get("capabilities"), dict) else {}
+    capability_body = (
+        capabilities.get("body") if isinstance(capabilities.get("body"), dict) else {}
+    )
+    cache_body = capability_body.get("cache") if isinstance(capability_body.get("cache"), dict) else {}
+    native_cache = (
+        cache_body.get("native") if isinstance(cache_body.get("native"), dict) else {}
+    )
+    l2_usage = l2_restart.get("usage") if isinstance(l2_restart.get("usage"), dict) else {}
+    l2_prompt_details = (
+        l2_usage.get("prompt_tokens_details")
+        if isinstance(l2_usage.get("prompt_tokens_details"), dict)
+        else {}
+    )
+    cache_usage = cache_repeat.get("usage") if isinstance(cache_repeat.get("usage"), dict) else {}
+    cache_prompt_details = (
+        cache_usage.get("prompt_tokens_details")
+        if isinstance(cache_usage.get("prompt_tokens_details"), dict)
+        else {}
+    )
+    tool_calls = tool_required.get("tool_calls")
+    tool_call = tool_calls[0] if isinstance(tool_calls, list) and tool_calls else {}
+    function = tool_call.get("function") if isinstance(tool_call, dict) else {}
+    if not isinstance(function, dict):
+        function = {}
+
+    checks = {
+        "status_pass": data.get("status") == "pass"
+        and data.get("failed") == 0
+        and result.get("status") == "pass"
+        and result.get("failures") == [],
+        "model_family_minimax": row.get("model_type") == "minimax_m2"
+        and capability_body.get("family") == "minimax",
+        "tool_parser_minimax": capability_body.get("tool_parser") == "minimax",
+        "reasoning_parser_minimax_m2": capability_body.get("reasoning_parser")
+        == "minimax_m2",
+        "reasoning_separated": _request_clean(reasoning)
+        and reasoning.get("content") == "FINAL=OK"
+        and int(reasoning.get("reasoning_chars") or 0) > 0,
+        "required_tool_call_parsed": _request_clean(tool_required)
+        and function.get("name") == "record_fact"
+        and function.get("arguments") == '{"value": "blue-cat"}',
+        "tool_result_continuation_exact": _request_clean(tool_result)
+        and tool_result.get("content") == "STORED blue-cat.",
+        "structured_json_exact": _request_clean(structured_json),
+        "exact_code_whitespace": _request_clean(exact_code),
+        "cache_second_hit_tq": _request_clean(cache_repeat)
+        and int(cache_prompt_details.get("cached_tokens") or 0) > 0
+        and cache_prompt_details.get("cache_detail") == "paged+tq",
+        "block_disk_l2_restart_restore": l2_restart.get("status") == "completed"
+        and int(l2_prompt_details.get("cached_tokens") or 0) > 0
+        and l2_prompt_details.get("cache_detail") == "paged+disk+tq",
+        "native_cache_reports_tq_l2": native_cache.get("block_disk_l2") is True
+        and ((native_cache.get("generic_turboquant_kv") or {}).get("enabled") is True)
+        and ((native_cache.get("storage_quantization") or {}).get("enabled") is True),
+    }
+    return {
+        "path": str(CURRENT_SOURCE_MINIMAX_SMALL_SMOKE),
+        "exists": path.exists(),
+        "sha256": sha256_file(path),
+        "status": data.get("status") or "missing",
+        "model_name": row.get("name"),
+        "served_name": row.get("served_name"),
+        "request_labels": sorted(labels),
+        "checks": checks,
+        "all_checks_pass": all(checks.values()),
+        "release_boundary": (
+            "Current-source MiniMax Small JANGTQ proof only. This validates "
+            "the parser/cache/L2 path used by source smokes, but it does not "
+            "prove reporter MiniMax-K artifact/session parity or close #179."
+        ),
+    }
+
+
 def analyze_local_model_metadata_fallback() -> dict[str, Any]:
     model_path = next((path for path in LOCAL_MODEL_PATH_CANDIDATES if path.exists()), None)
     if model_path is None:
@@ -1657,6 +1765,7 @@ def build_language_planning_leak_isolation(
     local: dict[str, Any],
     local_reporter_prompt_reproduction: dict[str, Any],
     local_model_manifest: dict[str, Any],
+    current_source_smoke: dict[str, Any],
 ) -> dict[str, Any]:
     """No-heavy MiniMax leak isolation map.
 
@@ -1690,6 +1799,12 @@ def build_language_planning_leak_isolation(
     )
     local_clean = local.get("all_required_clean") is True
     exact_local_clean = local_reporter_prompt_reproduction.get("clean") is True
+    current_source_checks = (
+        current_source_smoke.get("checks")
+        if isinstance(current_source_smoke.get("checks"), dict)
+        else {}
+    )
+    current_source_clean = current_source_smoke.get("all_checks_pass") is True
     axes = [
         {
             "axis": "reporter_exact_prompt_reproduction",
@@ -1739,6 +1854,7 @@ def build_language_planning_leak_isolation(
             "status": (
                 "partial"
                 if local_clean
+                or current_source_clean
                 or reporter.get("reasoning_parser_seen")
                 or reporter.get("tool_parser_seen")
                 else "open"
@@ -1747,6 +1863,10 @@ def build_language_planning_leak_isolation(
                 "local_parser_leak_checks_clean"
                 if local_clean
                 else "local_parser_leak_checks_not_all_clean",
+                "current_source_minimax_small_tool_and_reasoning_clean"
+                if current_source_checks.get("required_tool_call_parsed")
+                and current_source_checks.get("reasoning_separated")
+                else "current_source_minimax_small_tool_or_reasoning_not_proven",
                 "reporter_reasoning_parser_seen"
                 if reporter.get("reasoning_parser_seen")
                 else "reporter_reasoning_parser_unknown",
@@ -1765,12 +1885,18 @@ def build_language_planning_leak_isolation(
             "axis": "paged_prefix_cache",
             "status": (
                 "partial"
-                if cache_hit_seen or reporter.get("paged_cache_seen") else "open"
+                if cache_hit_seen
+                or current_source_checks.get("cache_second_hit_tq")
+                or reporter.get("paged_cache_seen")
+                else "open"
             ),
             "current_evidence": [
                 "local_cache_hit_telemetry_seen"
                 if cache_hit_seen
                 else "local_cache_hit_telemetry_missing",
+                "current_source_minimax_small_paged_tq_second_hit"
+                if current_source_checks.get("cache_second_hit_tq")
+                else "current_source_minimax_small_cache_hit_not_proven",
                 "reporter_paged_cache_flag_seen"
                 if reporter.get("paged_cache_seen")
                 else "reporter_paged_cache_flag_unknown",
@@ -1786,7 +1912,10 @@ def build_language_planning_leak_isolation(
             "axis": "block_disk_l2",
             "status": (
                 "partial"
-                if local_clean or reporter.get("block_disk_cache_seen") else "open"
+                if local_clean
+                or current_source_checks.get("block_disk_l2_restart_restore")
+                or reporter.get("block_disk_cache_seen")
+                else "open"
             ),
             "current_evidence": [
                 "local_installed_cache_flags_seen"
@@ -1794,6 +1923,9 @@ def build_language_planning_leak_isolation(
                     "all_installed_have_cache_flags"
                 )
                 else "local_installed_cache_flags_missing",
+                "current_source_minimax_small_l2_restart_restore"
+                if current_source_checks.get("block_disk_l2_restart_restore")
+                else "current_source_minimax_small_l2_restore_not_proven",
                 "reporter_block_disk_cache_flag_seen"
                 if reporter.get("block_disk_cache_seen")
                 else "reporter_block_disk_cache_flag_unknown",
@@ -1811,6 +1943,7 @@ def build_language_planning_leak_isolation(
                 "partial"
                 if reporter_runtime.get("runtime_cache_all_turboquant") is True
                 or local_clean
+                or current_source_checks.get("native_cache_reports_tq_l2")
                 else "open"
             ),
             "current_evidence": [
@@ -1820,6 +1953,9 @@ def build_language_planning_leak_isolation(
                 "local_clean_with_current_cache_path"
                 if local_clean
                 else "local_current_cache_path_not_all_clean",
+                "current_source_minimax_small_native_tq_cache_reported"
+                if current_source_checks.get("native_cache_reports_tq_l2")
+                else "current_source_minimax_small_native_tq_cache_not_proven",
             ],
             "required_next_evidence": [
                 "tq_kv_off_same_prompt",
@@ -1833,6 +1969,13 @@ def build_language_planning_leak_isolation(
         "status": "open",
         "local_clean_rows": clean_rows,
         "local_surfaces": sorted(local_surfaces),
+        "current_source_minimax_small": {
+            "path": current_source_smoke.get("path"),
+            "status": current_source_smoke.get("status"),
+            "all_checks_pass": current_source_smoke.get("all_checks_pass"),
+            "checks": current_source_checks,
+            "release_boundary": current_source_smoke.get("release_boundary"),
+        },
         "axes": axes,
         "release_boundary": (
             "single_axis_runtime_ab_required: this matrix is proof planning and "
@@ -1885,6 +2028,7 @@ def build_audit(root: Path) -> dict[str, Any]:
         root
     )
     local_model_manifest = analyze_local_model_manifest(root)
+    current_source_smoke = analyze_current_source_minimax_small_smoke(root)
     reporter_parity_artifact = analyze_reporter_parity_artifact(root)
     public_dmg = analyze_public_release_dmg_contract(root)
     public_dmgs = analyze_public_release_dmg_contracts(root)
@@ -1938,6 +2082,7 @@ def build_audit(root: Path) -> dict[str, Any]:
         local=local,
         local_reporter_prompt_reproduction=local_reporter_prompt_reproduction,
         local_model_manifest=local_model_manifest,
+        current_source_smoke=current_source_smoke,
     )
     proven = {
         "reporter_log_installed_app_bundled_python_seen": reporter[
@@ -2086,6 +2231,7 @@ def build_audit(root: Path) -> dict[str, Any]:
         "live_probe_memory_preflight": live_probe_memory_preflight,
         "local_reporter_prompt_reproduction": local_reporter_prompt_reproduction,
         "local_model_manifest": local_model_manifest,
+        "current_source_minimax_small_smoke": current_source_smoke,
         "root_cause_discriminators": discriminators,
         "language_planning_leak_isolation": language_planning_leak_isolation,
         "proven": proven,

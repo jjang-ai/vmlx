@@ -756,6 +756,26 @@ def _write_issue179_green_artifact(tmp_path: Path) -> None:
             "reporter_parity_comparison": {"status": "pass", "failures": []},
             "reporter_server_hash_parity": {"status": "pass"},
             "local_reporter_prompt_reproduction": {"clean": True},
+            "current_source_minimax_small_smoke": {
+                "path": "build/current-all-local-model-smoke-minimax-small-jangtq-cache-language-after-bare-invoke-tool-20260609/summary.json",
+                "status": "pass",
+                "all_checks_pass": True,
+                "checks": {
+                    "status_pass": True,
+                    "model_family_minimax": True,
+                    "tool_parser_minimax": True,
+                    "reasoning_parser_minimax_m2": True,
+                    "reasoning_separated": True,
+                    "required_tool_call_parsed": True,
+                    "tool_result_continuation_exact": True,
+                    "structured_json_exact": True,
+                    "exact_code_whitespace": True,
+                    "cache_second_hit_tq": True,
+                    "block_disk_l2_restart_restore": True,
+                    "native_cache_reports_tq_l2": True,
+                },
+                "release_boundary": "current-source boundary proof only",
+            },
         },
     )
 

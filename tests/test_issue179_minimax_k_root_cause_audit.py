@@ -105,12 +105,58 @@ def test_issue179_audit_tracks_language_planning_leak_isolation_axes():
     assert rows["paged_prefix_cache"]["status"] in {"partial", "open"}
     assert rows["block_disk_l2"]["status"] in {"partial", "open"}
     assert rows["turboquant_kv"]["status"] in {"partial", "open"}
+    assert (
+        "current_source_minimax_small_tool_and_reasoning_clean"
+        in rows["parser_template_reasoning"]["current_evidence"]
+    )
+    assert (
+        "current_source_minimax_small_paged_tq_second_hit"
+        in rows["paged_prefix_cache"]["current_evidence"]
+    )
+    assert (
+        "current_source_minimax_small_l2_restart_restore"
+        in rows["block_disk_l2"]["current_evidence"]
+    )
+    assert (
+        "current_source_minimax_small_native_tq_cache_reported"
+        in rows["turboquant_kv"]["current_evidence"]
+    )
     assert "cache_on_off_same_prompt" in rows["paged_prefix_cache"]["required_next_evidence"]
     assert "fresh_process_l2_restore_same_prompt" in rows["block_disk_l2"]["required_next_evidence"]
     assert "tq_kv_off_same_prompt" in rows["turboquant_kv"]["required_next_evidence"]
     assert "rendered_chat_template_hash" in rows["parser_template_reasoning"]["required_next_evidence"]
     assert "generation_config_hash_match" in rows["generation_config_and_sampling"]["required_next_evidence"]
+    assert isolation["current_source_minimax_small"]["all_checks_pass"] is True
+    assert (
+        "does not prove reporter MiniMax-K artifact/session parity"
+        in isolation["current_source_minimax_small"]["release_boundary"]
+    )
     assert "single_axis_runtime_ab_required" in isolation["release_boundary"]
+
+
+def test_issue179_current_source_minimax_small_smoke_is_scoped_boundary():
+    smoke = gate.analyze_current_source_minimax_small_smoke(Path("."))
+
+    assert smoke["exists"] is True
+    assert smoke["status"] == "pass"
+    assert smoke["all_checks_pass"] is True
+    assert smoke["checks"] == {
+        "status_pass": True,
+        "model_family_minimax": True,
+        "tool_parser_minimax": True,
+        "reasoning_parser_minimax_m2": True,
+        "reasoning_separated": True,
+        "required_tool_call_parsed": True,
+        "tool_result_continuation_exact": True,
+        "structured_json_exact": True,
+        "exact_code_whitespace": True,
+        "cache_second_hit_tq": True,
+        "block_disk_l2_restart_restore": True,
+        "native_cache_reports_tq_l2": True,
+    }
+    assert "tool_required" in smoke["request_labels"]
+    assert "text_cache_repeat_2" in smoke["request_labels"]
+    assert "Current-source MiniMax Small JANGTQ proof only" in smoke["release_boundary"]
 
 
 def test_issue179_local_model_manifest_falls_back_to_direct_metadata(
