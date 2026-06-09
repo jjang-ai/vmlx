@@ -1,4 +1,5 @@
 from tests.cross_matrix.run_remote_max2_dsv4_readiness import (
+    build_readiness,
     free_plus_speculative_purgeable_gb,
     launch_decision,
     parse_vm_stat,
@@ -48,3 +49,42 @@ def test_remote_max2_dsv4_readiness_blocks_stale_or_unimportable_source():
 
     assert decision["launch_allowed"] is False
     assert decision["launch_blockers"] == ["version_mismatch", "source_import_failed"]
+
+
+def test_remote_max2_dsv4_readiness_labels_binary_memory_units(monkeypatch):
+    def fake_remote_json_probe(**kwargs):
+        return {
+            "version_ok": True,
+            "import_ok": True,
+            "model_present": True,
+        }
+
+    def fake_ssh(host, command, *, connect_timeout):
+        if command == "vm_stat":
+            return """
+Mach Virtual Memory Statistics: (page size of 16384 bytes)
+Pages free:                             7864320.
+Pages speculative:                            0.
+Pages purgeable:                              0.
+"""
+        if command.startswith("pgrep"):
+            return ""
+        if command.startswith("ps "):
+            return "PID RSS COMMAND\n"
+        raise AssertionError(f"unexpected command: {command}")
+
+    monkeypatch.setattr(
+        "tests.cross_matrix.run_remote_max2_dsv4_readiness._remote_json_probe",
+        fake_remote_json_probe,
+    )
+    monkeypatch.setattr("tests.cross_matrix.run_remote_max2_dsv4_readiness._ssh", fake_ssh)
+
+    result = build_readiness(required_available_gb=120.0)
+
+    assert result["memory"]["unit"] == "GiB"
+    assert result["memory"]["free_plus_speculative_purgeable_gb"] == 120.0
+    assert result["memory"]["free_plus_speculative_purgeable_gib"] == 120.0
+    assert result["memory"]["required_available_gb"] == 120.0
+    assert result["memory"]["required_available_gib"] == 120.0
+    assert result["memory"]["memory_gap_gb"] == 0.0
+    assert result["memory"]["memory_gap_gib"] == 0.0

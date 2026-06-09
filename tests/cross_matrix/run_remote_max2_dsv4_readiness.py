@@ -180,6 +180,7 @@ def build_readiness(
     vm_text = _ssh(host, "vm_stat", connect_timeout=connect_timeout)
     vm = parse_vm_stat(vm_text)
     available_gb = free_plus_speculative_purgeable_gb(vm)
+    memory_gap_gb = round(max(0.0, required_available_gb - available_gb), 2)
     heavy_processes = _ssh(
         host,
         f"pgrep -af {shlex.quote(HEAVY_PROCESS_PATTERN)} || true",
@@ -207,8 +208,13 @@ def build_readiness(
         "model": str(model),
         "source": source,
         "memory": {
+            "unit": "GiB",
             "free_plus_speculative_purgeable_gb": available_gb,
+            "free_plus_speculative_purgeable_gib": available_gb,
             "required_available_gb": required_available_gb,
+            "required_available_gib": required_available_gb,
+            "memory_gap_gb": memory_gap_gb,
+            "memory_gap_gib": memory_gap_gb,
             "vm_stat": vm,
         },
         "heavy_processes": heavy_processes,
