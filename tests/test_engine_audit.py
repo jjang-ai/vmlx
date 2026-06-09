@@ -4592,6 +4592,36 @@ class TestMediaDiagnostics:
         assert caps["media"]["status_by_modality"]["audio"] == "preserved_unwired"
         assert caps["media"]["status_by_modality"]["text"] == "runtime_supported"
 
+    @pytest.mark.asyncio
+    async def test_mimo_v2_text_only_capabilities_do_not_fallback_to_vision_when_registry_misses(
+        self, monkeypatch
+    ):
+        import vmlx_engine.model_config_registry as registry
+        import vmlx_engine.server as server
+
+        class _Registry:
+            def lookup(self, _model_key):
+                return SimpleNamespace(
+                    family_name="unknown",
+                    reasoning_parser=None,
+                    tool_parser=None,
+                    think_in_template=False,
+                    is_mllm=True,
+                    supports_thinking=False,
+                )
+
+        monkeypatch.setattr(server, "_engine", SimpleNamespace(is_mllm=True))
+        monkeypatch.setattr(server, "_model_path", "/tmp/MiMo-V2.5-JANGTQ_2")
+        monkeypatch.setattr(server, "_model_name", "mimo-live-alias")
+        monkeypatch.setattr(server, "_loaded_omni_modalities", lambda: None)
+        monkeypatch.setattr(server, "_loaded_runtime_modalities", lambda: ["text"])
+        monkeypatch.setattr(server, "_mimo_v2_runtime_modalities", lambda _path: ["text"])
+        monkeypatch.setattr(registry, "get_model_config_registry", lambda: _Registry())
+
+        caps = await server.model_capabilities("mimo-live-alias")
+
+        assert caps["modalities"] == ["text"]
+
     def test_qwen_vl_runtime_modalities_keep_explicit_video(
         self, monkeypatch, tmp_path
     ):

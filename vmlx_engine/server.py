@@ -2014,6 +2014,20 @@ def _mimo_v2_media_runtime_auto_enabled(
     """
     if module is None or not isinstance(cfg, dict):
         return False
+    caps = cfg.get("capabilities") if isinstance(cfg.get("capabilities"), dict) else {}
+    runtime = cfg.get("runtime") if isinstance(cfg.get("runtime"), dict) else {}
+    explicit_modes = {
+        str(caps.get("multimodal_status") or "").lower(),
+        str(runtime.get("multimodal_mode") or "").lower(),
+    }
+    if explicit_modes & {
+        "weights_preserved_text_runtime",
+        "text_runtime",
+        "text_only",
+        "unwired",
+        "preserved_disabled",
+    }:
+        return False
     bundle = Path(bundle_path or "")
     has_vision_runtime = all(
         hasattr(module, name)
@@ -8052,10 +8066,12 @@ async def model_capabilities(model_id: str) -> dict:
         else registry_is_mllm
     )
     modalities = _loaded_runtime_modalities()
+    mimo_runtime_modalities = _mimo_v2_runtime_modalities(_model_path or model_key)
     if (
         modalities == ["text"]
         and engine_is_mllm
         and family != "mimo_v2"
+        and mimo_runtime_modalities is None
     ):
         modalities = ["text", "vision"]
     supports_thinking_explicit = getattr(cfg, "supports_thinking", None) if cfg is not None else None

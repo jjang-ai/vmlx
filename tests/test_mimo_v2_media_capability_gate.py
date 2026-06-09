@@ -113,6 +113,10 @@ def test_mimo_v2_runtime_modalities_auto_enable_when_runtime_and_sidecars_are_co
     from vmlx_engine import server
 
     _write_mimo_bundle(tmp_path, audio_token=True, media_runtime=False)
+    cfg = json.loads((tmp_path / "config.json").read_text(encoding="utf-8"))
+    cfg.pop("capabilities", None)
+    cfg.pop("runtime", None)
+    (tmp_path / "config.json").write_text(json.dumps(cfg), encoding="utf-8")
     (tmp_path / "preprocessor_config.json").write_text("{}", encoding="utf-8")
     (tmp_path / "model.safetensors.index.json").write_text(
         json.dumps(
