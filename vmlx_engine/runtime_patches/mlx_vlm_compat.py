@@ -16,9 +16,81 @@ def install() -> None:
     global _APPLIED
     if _APPLIED:
         return
+    _patch_qwen3_vl_chunked_prefill_deepstack_alignment()
     _patch_gemma4_video_processor_hf_kwargs()
     _patch_gemma4_shared_kv_layers()
     _APPLIED = True
+
+
+def _patch_qwen3_vl_chunked_prefill_deepstack_alignment() -> None:
+    """Backport mlx-vlm#1325/#1332: align Qwen3-VL visual state per chunk."""
+
+    def _patch_language_model(module_name: str) -> None:
+        try:
+            module = __import__(module_name, fromlist=["LanguageModel"])
+        except Exception as exc:
+            logger.debug("mlx_vlm_compat: %s unavailable: %s", module_name, exc)
+            return
+
+        language_model_cls = getattr(module, "LanguageModel", None)
+        original_call = getattr(language_model_cls, "__call__", None)
+        if original_call is None or getattr(
+            original_call, "_vmlx_qwen3_vl_deepstack_alignment_patch", False
+        ):
+            return
+
+        def _vmlx_qwen3_vl_call(
+            self,
+            inputs,
+            inputs_embeds=None,
+            mask=None,
+            cache=None,
+            visual_pos_masks=None,
+            deepstack_visual_embeds=None,
+            **kwargs,
+        ):
+            n_to_process = kwargs.pop("n_to_process", None)
+            if (
+                n_to_process is not None
+                and visual_pos_masks is not None
+                and deepstack_visual_embeds is not None
+            ):
+                try:
+                    start = int(n_to_process)
+                    window = int(inputs.shape[1])
+                    window_masks = visual_pos_masks[:, start : start + window]
+                    n_before = int(visual_pos_masks[:, :start].sum().item())
+                    n_window = int(window_masks.sum().item())
+                    deepstack_visual_embeds = [
+                        embeds[n_before : n_before + n_window]
+                        for embeds in deepstack_visual_embeds
+                    ]
+                    visual_pos_masks = window_masks
+                except Exception as exc:
+                    logger.debug(
+                        "mlx_vlm_compat: Qwen3-VL deepstack alignment skipped: %s",
+                        exc,
+                    )
+                    kwargs["n_to_process"] = n_to_process
+            elif n_to_process is not None:
+                kwargs["n_to_process"] = n_to_process
+
+            return original_call(
+                self,
+                inputs,
+                inputs_embeds=inputs_embeds,
+                mask=mask,
+                cache=cache,
+                visual_pos_masks=visual_pos_masks,
+                deepstack_visual_embeds=deepstack_visual_embeds,
+                **kwargs,
+            )
+
+        _vmlx_qwen3_vl_call._vmlx_qwen3_vl_deepstack_alignment_patch = True  # type: ignore[attr-defined]
+        language_model_cls.__call__ = _vmlx_qwen3_vl_call
+
+    _patch_language_model("mlx_vlm.models.qwen3_vl.language")
+    _patch_language_model("mlx_vlm.models.qwen3_vl_moe.language")
 
 
 def _patch_gemma4_shared_kv_layers() -> None:

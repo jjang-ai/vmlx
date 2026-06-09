@@ -247,3 +247,62 @@ def test_mlx_vlm_gemma4_shared_kv_layers_drop_unused_kv_modules_and_weights():
     assert "language_model.model.layers.2.self_attn.q_proj.weight" in weights
     assert "language_model.model.layers.2.self_attn.k_proj.weight" not in weights
     assert "language_model.model.layers.3.self_attn.v_proj.weight" not in weights
+
+
+def test_qwen3_vl_chunked_prefill_slices_deepstack_embeds_to_visual_window():
+    import vmlx_engine.runtime_patches.mlx_vlm_compat as compat
+
+    compat.install()
+
+    for module_name in (
+        "mlx_vlm.models.qwen3_vl.language",
+        "mlx_vlm.models.qwen3_vl_moe.language",
+    ):
+        module = __import__(module_name, fromlist=["LanguageModel"])
+        captured = {}
+
+        class FakeModel:
+            def __call__(
+                self,
+                inputs,
+                *,
+                cache=None,
+                inputs_embeds=None,
+                position_ids=None,
+                visual_pos_masks=None,
+                deepstack_visual_embeds=None,
+            ):
+                captured["visual_pos_masks"] = visual_pos_masks
+                captured["deepstack_visual_embeds"] = deepstack_visual_embeds
+                return mx.zeros((inputs.shape[0], inputs.shape[1], 4))
+
+        class FakeHead:
+            def __call__(self, out):
+                return out
+
+        language_model = module.LanguageModel.__new__(module.LanguageModel)
+        language_model.model = FakeModel()
+        language_model.lm_head = FakeHead()
+        language_model.args = SimpleNamespace(tie_word_embeddings=False)
+        language_model._rope_deltas = None
+        language_model._position_ids = None
+
+        visual_pos_masks = mx.array([[1, 0, 1, 1, 0, 1]], dtype=mx.int32)
+        deepstack = [mx.arange(32, dtype=mx.float32).reshape(4, 8)]
+
+        language_model(
+            mx.array([[10, 11, 12]], dtype=mx.int32),
+            position_ids=mx.zeros((3, 1, 3), dtype=mx.int32),
+            visual_pos_masks=visual_pos_masks,
+            deepstack_visual_embeds=deepstack,
+            n_to_process=2,
+        )
+
+        mx.eval(
+            captured["visual_pos_masks"],
+            captured["deepstack_visual_embeds"][0],
+        )
+        assert captured["visual_pos_masks"].tolist() == [[1, 1, 0]]
+        assert captured["deepstack_visual_embeds"][0].tolist() == deepstack[0][
+            1:3
+        ].tolist()
