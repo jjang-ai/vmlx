@@ -990,6 +990,66 @@ describe("ApiGateway single-model mode behavior", () => {
     expect(text).toContain('"{\\"query\\":\\"alpha\\",\\"limit\\":2}"');
   });
 
+  it("returns backend-unavailable for stale Responses session ports", async () => {
+    const stalePort = await freePort();
+    const sessions = [
+      {
+        id: "target",
+        modelPath: "/models/Target-JANG",
+        modelName: "target-model",
+        host: "127.0.0.1",
+        port: stalePort,
+        status: "running",
+        type: "local",
+        config: JSON.stringify({ servedModelName: "target-alias" }),
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      },
+    ];
+    dbMock.getSetting.mockImplementation((key: string) =>
+      key === "gateway_single_model_mode" ? "false" : undefined,
+    );
+    dbMock.getSessions.mockReturnValue(sessions);
+    dbMock.getSession.mockImplementation((id: string) =>
+      sessions.find((session) => session.id === id),
+    );
+
+    const { ApiGateway } = await import("../src/main/api-gateway");
+    gateway = new ApiGateway();
+    const port = await freePort();
+    await gateway.start(port, "127.0.0.1");
+
+    const response = await fetch(`http://127.0.0.1:${port}/v1/responses`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: "target-alias",
+        stream: true,
+        input: [{ role: "user", content: "use lookup" }],
+        previous_response_id: "resp_stale_cache_boundary",
+        tools: [
+          {
+            type: "function",
+            name: "lookup",
+            parameters: {
+              type: "object",
+              properties: { query: { type: "string" } },
+              required: ["query"],
+            },
+          },
+        ],
+      }),
+    });
+    const body = await response.json();
+
+    expect(response.status).toBe(502);
+    expect(body.error.type).toBe("server_error");
+    expect(body.error.message).toContain("Backend unavailable");
+    expect(sessionManagerMock.startSession).not.toHaveBeenCalled();
+    expect(sessionManagerMock.wakeSession).not.toHaveBeenCalled();
+    expect(sessionManagerMock.touchSession).toHaveBeenCalledWith("target");
+  });
+
   it("auto-switches model capability requests by path model before proxying", async () => {
     const paths: string[] = [];
     backend = {
