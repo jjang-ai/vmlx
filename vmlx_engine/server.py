@@ -11776,24 +11776,51 @@ async def create_chat_completion(
 
     # Enforce tool_choice="required": model MUST produce at least one tool call
     if _is_required_tool_choice(_tool_choice) and not tool_calls:
-        tool_required_preview = (_cc_parse_text or content_for_parsing or "")
-        tool_required_preview = tool_required_preview.replace("\n", "\\n")[:500]
-        logger.warning(
-            f"tool_choice='required' but model produced no tool calls. "
-            f"Returning error to client. raw_preview={tool_required_preview!r}"
+        _retry_output = await _retry_required_tool_call_once(
+            engine=engine,
+            messages=messages,
+            chat_kwargs=chat_kwargs,
+            invalid_text=_cc_parse_text or content_for_parsing or "",
+            timeout=timeout,
+            fastapi_request=fastapi_request,
+            request_id=f"{response_id}-required-tool-retry",
+            endpoint="Chat Completions",
         )
-        raise HTTPException(
-            status_code=400,
-            detail={
-                "message": (
-                    "tool_choice='required' was set but the model did not produce "
-                    "any tool calls. Try rephrasing your prompt or using a model "
-                    "with better tool-calling support."
-                ),
-                "raw_preview": tool_required_preview,
-            },
-        )
-
+        if _retry_output is not None:
+            _retry_parse_text = _strip_think_for_tool_parse(
+                getattr(_retry_output, "raw_text", "") or _retry_output.text or ""
+            )
+            _retry_cleaned, _retry_calls = _parse_tool_calls_with_parser(
+                _retry_parse_text,
+                request,
+            )
+            if _retry_calls:
+                output = _retry_output
+                reasoning_text = None
+                content_for_parsing = _retry_output.text or ""
+                _cc_parse_text = _retry_parse_text
+                cleaned_text = _retry_cleaned
+                tool_calls = _retry_calls
+        if tool_calls:
+            logger.info("Chat Completions: required tool_choice retry produced tool calls")
+        else:
+            tool_required_preview = (_cc_parse_text or content_for_parsing or "")
+            tool_required_preview = tool_required_preview.replace("\n", "\\n")[:500]
+            logger.warning(
+                f"tool_choice='required' but model produced no tool calls. "
+                f"Returning error to client. raw_preview={tool_required_preview!r}"
+            )
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "message": (
+                        "tool_choice='required' was set but the model did not produce "
+                        "any tool calls. Try rephrasing your prompt or using a model "
+                        "with better tool-calling support."
+                    ),
+                    "raw_preview": tool_required_preview,
+                },
+            )
     # Determine finish reason
     finish_reason = "tool_calls" if tool_calls else output.finish_reason
     response_content = clean_output_text(cleaned_text) if cleaned_text else None
@@ -12320,6 +12347,60 @@ async def _retry_structured_output_xml_once(
     if retry_report.get("is_valid"):
         retry_report = _structured_xml_retry_report(retry_report)
     return retry_output, retry_report
+
+
+async def _retry_required_tool_call_once(
+    *,
+    engine: Any,
+    messages: list[dict[str, Any]],
+    chat_kwargs: dict[str, Any],
+    invalid_text: str,
+    timeout: float,
+    fastapi_request: Request | None,
+    request_id: str,
+    endpoint: str,
+) -> GenerationOutput | None:
+    retry_messages = list(messages or [])
+    if invalid_text:
+        retry_messages.append({"role": "assistant", "content": invalid_text})
+    retry_messages.append(
+        {
+            "role": "user",
+            "content": (
+                "The previous assistant output violated tool_choice=required "
+                "because it answered in prose without a tool call. Retry this "
+                "turn now. Your entire next assistant output must be exactly "
+                "one native tool call using the available schema, with all "
+                "required arguments present and non-empty. Do not include "
+                "review prose, markdown, analysis, or a tool result."
+            ),
+        }
+    )
+
+    retry_kwargs = dict(chat_kwargs)
+    retry_kwargs["enable_thinking"] = False
+
+    logger.info(
+        "%s: retrying required tool_choice turn after model emitted prose",
+        endpoint,
+    )
+    try:
+        return await _await_chat_with_disconnect_abort(
+            engine,
+            messages=retry_messages,
+            chat_kwargs=retry_kwargs,
+            timeout=timeout,
+            fastapi_request=fastapi_request,
+            request_id=request_id,
+            endpoint=f"{endpoint} required tool retry",
+        )
+    except Exception:
+        logger.warning(
+            "%s: required tool_choice retry failed before producing output",
+            endpoint,
+            exc_info=True,
+        )
+        return None
 
 
 def _structured_output_repair_warning(report: dict | None) -> list[str] | None:
@@ -13848,23 +13929,51 @@ async def create_response(
     # Enforce tool_choice="required": model MUST produce at least one tool call
     _resp_tool_choice = getattr(request, "tool_choice", None)
     if _is_required_tool_choice(_resp_tool_choice) and not tool_calls:
-        tool_required_preview = (parse_text or content_for_parsing or "")
-        tool_required_preview = tool_required_preview.replace("\n", "\\n")[:500]
-        logger.warning(
-            f"tool_choice='required' but model produced no tool calls. "
-            f"Returning error to client. raw_preview={tool_required_preview!r}"
+        _retry_output = await _retry_required_tool_call_once(
+            engine=engine,
+            messages=messages,
+            chat_kwargs=chat_kwargs,
+            invalid_text=parse_text or content_for_parsing or "",
+            timeout=timeout,
+            fastapi_request=fastapi_request,
+            request_id=f"{response_id}-required-tool-retry",
+            endpoint="Responses API",
         )
-        raise HTTPException(
-            status_code=400,
-            detail={
-                "message": (
-                    "tool_choice='required' was set but the model did not produce "
-                    "any tool calls. Try rephrasing your prompt or using a model "
-                    "with better tool-calling support."
-                ),
-                "raw_preview": tool_required_preview,
-            },
-        )
+        if _retry_output is not None:
+            _retry_parse_text = _strip_think_for_tool_parse(
+                getattr(_retry_output, "raw_text", "") or _retry_output.text or ""
+            )
+            _retry_cleaned, _retry_calls = _parse_tool_calls_with_parser(
+                _retry_parse_text,
+                request,
+            )
+            if _retry_calls:
+                output = _retry_output
+                reasoning_text = None
+                content_for_parsing = _retry_output.text or ""
+                parse_text = _retry_parse_text
+                cleaned_text = _retry_cleaned
+                tool_calls = _retry_calls
+        if tool_calls:
+            logger.info("Responses API: required tool_choice retry produced tool calls")
+        else:
+            tool_required_preview = (parse_text or content_for_parsing or "")
+            tool_required_preview = tool_required_preview.replace("\n", "\\n")[:500]
+            logger.warning(
+                f"tool_choice='required' but model produced no tool calls. "
+                f"Returning error to client. raw_preview={tool_required_preview!r}"
+            )
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "message": (
+                        "tool_choice='required' was set but the model did not produce "
+                        "any tool calls. Try rephrasing your prompt or using a model "
+                        "with better tool-calling support."
+                    ),
+                    "raw_preview": tool_required_preview,
+                },
+            )
 
     # Build output array
     output_items = []

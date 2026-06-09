@@ -11895,6 +11895,9 @@ class TestTurboQuantKVTelemetry:
             "_tools_enabled_for_turn",
             "resolve_tool_calls_in_turn",
             "Tool results are provided. Produce a visible answer",
+            "_tool_resolution_input",
+            "Use the tool result above",
+            "TOOL_EVIDENCE: <exact path:line>",
             "require_tool_call_each_turn",
             "tool_call_each_required_turn",
             "_max_cached_tokens",
@@ -12158,6 +12161,26 @@ class TestTurboQuantKVTelemetry:
         assert ungrounded["grounded"] is False
         assert "vmlx_engine/scheduler.py:2431" in ungrounded["markers"]
 
+    def test_responses_long_context_tool_cache_gate_resolution_input_prompts_exact_evidence(self):
+        import runpy
+
+        gate = runpy.run_path("./tests/cross_matrix/run_responses_long_tool_cache_gate.py")
+        tool_resolution_input = gate["_tool_resolution_input"]
+
+        tool_outputs = [
+            {
+                "type": "function_call_output",
+                "call_id": "call_1",
+                "output": "vmlx_engine/server.py:104: ResponsesObject,",
+            }
+        ]
+
+        payload = tool_resolution_input(tool_outputs)
+        assert payload[0] is tool_outputs[0]
+        assert payload[1]["role"] == "user"
+        assert "TOOL_EVIDENCE: <exact path:line>" in payload[1]["content"]
+        assert "Do not call another tool" in payload[1]["content"]
+
     def test_responses_long_context_tool_cache_gate_can_force_deterministic_sampling(self):
         import runpy
         from types import SimpleNamespace
@@ -12282,7 +12305,8 @@ class TestTurboQuantKVTelemetry:
         prompt = gate["_build_prompt"](Path("."), 1, 200)
         instructions = gate["_instructions"]()
 
-        assert "must call exactly one provided tool" in prompt
+        assert "first assistant output" in prompt
+        assert "answer only after the tool result is provided" in prompt
         assert "must call exactly one provided tool" in instructions
         assert "When tools are not available, answer directly" in instructions
 

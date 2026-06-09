@@ -186,8 +186,9 @@ def _build_prompt(repo_root: Path, turn: int, target_chars_per_turn: int) -> str
     return (
         f"Turn {turn} of a long coding review. Keep track of prior turns.\n"
         "Task: review this cache/scheduler slice for correctness, identify one "
-        "specific risk, and when tools are available you must call exactly one "
-        "provided tool before answering.\n\n"
+        "specific risk. When tools are available, your first assistant output "
+        "for this turn must be exactly one provided tool call and no review "
+        "prose; answer only after the tool result is provided.\n\n"
         f"FILE={file_rel} OFFSET={offset}\n"
         f"```python\n{chunk}\n```\n\n"
         "Return: (1) one risk or confirmation, (2) the function most relevant "
@@ -541,6 +542,20 @@ def _tool_grounding(visible: str, tool_outputs: list[dict[str, Any]]) -> dict[st
     }
 
 
+def _tool_resolution_input(tool_outputs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [
+        *tool_outputs,
+        {
+            "role": "user",
+            "content": (
+                "Use the tool result above. Produce the final visible answer now "
+                "and include TOOL_EVIDENCE: <exact path:line> copied from the "
+                "function_call_output. Do not call another tool."
+            ),
+        },
+    ]
+
+
 def _resolution_tools_enabled(resolution_tool_choice: str) -> bool:
     return resolution_tool_choice in {"auto", "required"}
 
@@ -811,11 +826,12 @@ def main() -> int:
             round_index += 1
             current_body = {
                 "model": args.model,
-                "input": tool_outputs,
+                "input": _tool_resolution_input(tool_outputs),
                 "instructions": (
                     _instructions()
                     + " Tool results are provided. Produce a visible answer "
-                    "now; do not call another tool in this resolution round."
+                    "now with TOOL_EVIDENCE copied from the result; do not call "
+                    "another tool in this resolution round."
                 ),
                 "store": True,
                 "stream": False,
