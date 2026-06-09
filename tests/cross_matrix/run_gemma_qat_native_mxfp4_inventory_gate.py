@@ -161,7 +161,7 @@ SOURCE_LIVE_SMOKE_PROOFS = {
         "build/current-all-local-model-smoke-gemma4-e2b-qat-jang4m-tools-nomedia-l2-20260609/JANGQ_gemma-4-E2B-it-qat-JANG_4M/result.json"
     ),
     "gemma4_12b_qat_jang4m": Path(
-        "build/current-all-local-model-smoke-gemma4-12b-qat-jang4m-tools-nomedia-l2-20260609/JANGQ_gemma-4-12B-it-qat-JANG_4M/result.json"
+        "build/current-all-local-model-smoke-gemma4-12b-qat-jang4m-tools-nomedia-l2-after-modality-token-clean-20260609/JANGQ_gemma-4-12B-it-qat-JANG_4M/result.json"
     ),
     "gemma4_e2b_qat_native_mxfp4": Path(
         "build/current-all-local-model-smoke-gemma4-e2b-qat-mxfp4-fullmedia-tools-l2-after-tool-result-quoted-target-20260609/summary.json"

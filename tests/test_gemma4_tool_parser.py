@@ -63,6 +63,19 @@ class TestGemma4ToolParser:
         assert json.loads(out.tool_calls[0]["arguments"]) == {"value": "blue-cat"}
         assert out.content is None
 
+    def test_native_tool_call_strips_bare_modality_sentinel_leak(self, parser):
+        text = (
+            '<|tool_call>call:record_fact{value:<|"|>blue-cat<|"|>}<tool_call|>'
+            '<audio|>'
+        )
+
+        out = parser.extract_tool_calls(text)
+
+        assert out.tools_called is True
+        assert out.tool_calls[0]["name"] == "record_fact"
+        assert json.loads(out.tool_calls[0]["arguments"]) == {"value": "blue-cat"}
+        assert out.content is None
+
     def test_native_format_multiple_args(self, parser):
         text = '<|tool_call>call:set_temperature{celsius:22.5,auto_adjust:true,label:<|"|>kitchen<|"|>}<tool_call|>'
         out = parser.extract_tool_calls(text)

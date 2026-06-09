@@ -346,6 +346,9 @@ class Gemma4ToolParser(ToolParser):
             '<|tool_response>', '<tool_response|>',
             '<|tool>', '<tool|>',
             '<|channel>', '<channel|>',
+            '<|image|>', '<image|>',
+            '<|audio|>', '<audio|>',
+            '<|video|>', '<video|>',
         ]
         for token in tokens_to_strip:
             text = text.replace(token, '')
