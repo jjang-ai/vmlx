@@ -316,6 +316,35 @@ def test_current_regression_suite_hashes_dsv4_generation_boundary_sources():
     assert all(Path(path).exists() for path in required)
 
 
+def test_current_regression_suite_hashes_gemma_qat_inventory_gate_sources():
+    from tests.cross_matrix import run_current_regression_suite as suite
+
+    required = {
+        "tests/cross_matrix/run_gemma_qat_native_mxfp4_inventory_gate.py",
+        "tests/test_gemma_qat_native_mxfp4_inventory_gate.py",
+        "tests/test_model_config_registry.py",
+    }
+
+    assert required.issubset(set(suite.CURRENT_SUITE_SOURCE_HASH_FILES))
+    assert all(Path(path).exists() for path in required)
+
+
+def test_current_regression_suite_runs_gemma_qat_inventory_gate():
+    from tests.cross_matrix import run_current_regression_suite as suite
+
+    command = suite.CURRENT_SUITE_COMMANDS["gemma_qat_native_mxfp4_inventory_gate"]
+
+    assert command[:2] == [
+        suite.sys.executable,
+        "tests/cross_matrix/run_gemma_qat_native_mxfp4_inventory_gate.py",
+    ]
+    assert "--out" in command
+    assert (
+        command[command.index("--out") + 1]
+        == "build/current-gemma-qat-native-mxfp4-local-inventory-20260609.json"
+    )
+
+
 def test_current_regression_suite_source_hash_list_matches_release_manifest():
     from tests.cross_matrix import release_regression_manifest as manifest
     from tests.cross_matrix import run_current_regression_suite as suite
