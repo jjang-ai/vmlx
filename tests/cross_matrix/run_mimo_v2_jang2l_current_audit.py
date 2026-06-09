@@ -85,7 +85,7 @@ CB_NATIVE_THINKING_OFF_ARTIFACT = Path(
     "build/current-mimo-v2-jang2l-cb-cache-after-native-thinking-off-live-20260606.json"
 )
 CB_METAL_BASELINE_ARTIFACT = Path(
-    "build/current-mimo-v2-jangtq2-cb-cache-after-bookend-audit-20260608.json"
+    "build/current-mimo-v2-jangtq2-cb-cache-lossless-auto-live-20260609.json"
 )
 MLLM_INPUTS_EMBEDS_INTERFACE_ARTIFACT = Path(
     "build/current-mimo-v2-mllm-inputs-embeds-interface-fix-20260606.json"
@@ -2394,6 +2394,16 @@ def _cb_metal_baseline_evidence(data: dict[str, Any]) -> dict[str, Any]:
         and "503" not in str(probe.get("error") or "")
         and "Service Unavailable" not in str(probe.get("error") or "")
     )
+    native_cache = summary.get("native_cache")
+    native_cache = native_cache if isinstance(native_cache, dict) else {}
+    storage_quantization = native_cache.get("storage_quantization")
+    storage_quantization = (
+        storage_quantization if isinstance(storage_quantization, dict) else {}
+    )
+    texts = summary.get("texts")
+    texts = texts if isinstance(texts, dict) else {}
+    repeat_1 = texts.get("exact_repeat_1")
+    repeat_2 = texts.get("exact_repeat_2")
     return {
         "exists": True,
         "status": data.get("status"),
@@ -2402,12 +2412,18 @@ def _cb_metal_baseline_evidence(data: dict[str, Any]) -> dict[str, Any]:
         "first_token_system_probe_text": probe.get("text"),
         "cache_hit_tokens": summary.get("cache_hit_tokens"),
         "l2_tokens_on_disk": summary.get("l2_tokens_on_disk"),
-        "native_cache": summary.get("native_cache"),
-        "texts": summary.get("texts"),
+        "native_cache": native_cache,
+        "native_cache_type": native_cache.get("cache_type"),
+        "storage_quantization_disabled": storage_quantization.get("enabled") is False,
+        "cache_repeat_stable": bool(repeat_1 and repeat_1 == repeat_2),
+        "cache_repeat_exact": bool(
+            summary.get("exact_repeat_1") and summary.get("exact_repeat_2")
+        ),
+        "texts": texts,
         "boundary": (
             "This live proof clears the post-load Metal working-set 503 path only. "
-            "It does not clear MiMo literal exactness, tool argument exactness, "
-            "or prefix/paged/block-L2 cache reuse by itself."
+            "It also proves lossless native mixed-SWA paged-cache repeat stability, "
+            "but it does not clear MiMo literal exactness or tool argument exactness."
         ),
     }
 

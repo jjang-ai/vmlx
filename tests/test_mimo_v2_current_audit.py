@@ -664,53 +664,57 @@ def test_mimo_current_audit_separates_clean_artifact_from_runtime_blockers(
     )
     _write_json(
         tmp_path
-        / "build/current-mimo-v2-jang2l-cb-cache-after-native-thinking-off-live-20260606.json",
+        / "build/current-mimo-v2-jangtq2-cb-cache-lossless-auto-live-20260609.json",
         {
-            "status": "open",
+            "status": "pass",
             "summary": {
-                "exact_repeat_1": True,
-                "exact_repeat_2": True,
+                "memory_pressure_cleared": True,
+                "exact_repeat_1": False,
+                "exact_repeat_2": False,
                 "no_think_tags": True,
-                "cache_hit_tokens": 33,
-                "l2_tokens_on_disk": 33,
+                "cache_hit_tokens": 46,
+                "l2_tokens_on_disk": 78,
                 "native_cache": {
                     "cache_type": "mixed_swa_kv",
-                    "storage_quantization": {"enabled": True, "bits": 8},
+                    "storage_quantization": {"enabled": False, "bits": None},
                 },
                 "texts": {
-                    "exact_repeat_1": "ACK-CB-742",
-                    "exact_repeat_2": "ACK-CB-742",
-                    "first_token_system_probe": "",
+                    "exact_repeat_1": "ACKCB-742",
+                    "exact_repeat_2": "ACKCB-742",
+                    "first_token_system_probe": "OK.",
                 },
                 "finish_reasons": {
                     "exact_repeat_1": "stop",
                     "exact_repeat_2": "stop",
-                    "first_token_system_probe": None,
+                    "first_token_system_probe": "stop",
                 },
             },
             "rows": [
                 {
                     "name": "exact_repeat_1",
                     "ok": True,
-                    "elapsed_s": 22.0,
-                    "usage": {"completion_tokens": 8},
-                    "text": "ACK-CB-742",
+                    "status": 200,
+                    "elapsed_s": 1.9,
+                    "usage": {"completion_tokens": 7},
+                    "text": "ACKCB-742",
                 },
                 {
                     "name": "exact_repeat_2",
                     "ok": True,
-                    "elapsed_s": 5.0,
-                    "usage": {"completion_tokens": 8},
-                    "text": "ACK-CB-742",
+                    "status": 200,
+                    "elapsed_s": 0.24,
+                    "usage": {"completion_tokens": 7},
+                    "text": "ACKCB-742",
                 },
                 {
                     "name": "first_token_system_probe",
-                    "ok": False,
-                    "error": "<HTTPError 503: 'Service Unavailable'>",
-                    "text": "",
+                    "ok": True,
+                    "status": 200,
+                    "error": None,
+                    "text": "OK.",
                 },
             ],
-            "log_tail": "Metal working-set pressure reject: 98.5% of 107.5GB",
+            "log_tail": [],
         },
     )
     _write_json(
