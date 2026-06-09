@@ -30,6 +30,7 @@ STEP_TIMEOUT_RETURNCODE = 124
 
 EXPECTED_OPEN_REQUIREMENTS = [
     "Cross-family live multi-turn smoke matrix is release-cleared",
+    "Gemma QAT/native MXFP4 E2B/E4B/12B/26B/31B runtime/media/cache/API/UI quality is release-cleared",
     "MiMo V2.5 JANG_2L runtime/tool/long-prompt quality is release-cleared",
     "N2 Pro 397B JANG1L/JANGTQ runtime/cache/API/UI quality is release-cleared",
     "MiniMax-M2.7-JANGTQ_K reporter parity/root cause is release-cleared",
