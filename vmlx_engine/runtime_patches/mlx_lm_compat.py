@@ -16,11 +16,45 @@ def install() -> None:
     global _APPLIED
     if _APPLIED:
         return
+    _patch_gemma4_unified_text_mapping()
     _patch_tokenizer_wrapper_find_bounds()
     _patch_batch_rotating_kv_meta_state()
     _patch_lfm2_moe_sigmoid_routing()
     _patch_gemma4_channel_thinking_detection()
     _APPLIED = True
+
+
+def _patch_gemma4_unified_text_mapping() -> None:
+    """Backport mlx-lm#1349: load Gemma4 Unified on Gemma4 text runtime."""
+    try:
+        from mlx_lm import utils
+        from mlx_lm.models import gemma4
+    except Exception as exc:
+        logger.debug("mlx_lm_compat: Gemma4 unified mapping unavailable: %s", exc)
+        return
+
+    model_remapping = getattr(utils, "MODEL_REMAPPING", None)
+    if isinstance(model_remapping, dict):
+        model_remapping.setdefault("gemma4_unified", "gemma4")
+
+    model_cls = getattr(gemma4, "Model", None)
+    original_sanitize = getattr(model_cls, "sanitize", None)
+    if original_sanitize is None or getattr(
+        original_sanitize, "_vmlx_gemma4_unified_sanitize_patch", False
+    ):
+        return
+
+    def _vmlx_gemma4_sanitize(self, weights):
+        filtered = {}
+        for key, value in weights.items():
+            probe = key.removeprefix("model.")
+            if probe.startswith("vision_embedder"):
+                continue
+            filtered[key] = value
+        return original_sanitize(self, filtered)
+
+    _vmlx_gemma4_sanitize._vmlx_gemma4_unified_sanitize_patch = True  # type: ignore[attr-defined]
+    model_cls.sanitize = _vmlx_gemma4_sanitize
 
 
 def _patch_tokenizer_wrapper_find_bounds() -> None:

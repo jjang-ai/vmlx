@@ -155,3 +155,95 @@ def test_gemma4_video_processor_accepts_hf_config_kwargs():
 
     assert processor.max_soft_tokens == 70
     assert processor.num_frames == 32
+
+
+def test_mlx_lm_gemma4_unified_maps_to_text_runtime_and_strips_vision_embedder():
+    import vmlx_engine.runtime_patches.mlx_lm_compat as compat
+    from mlx_lm import utils
+    from mlx_lm.models import gemma4
+
+    compat.install()
+
+    assert utils.MODEL_REMAPPING["gemma4_unified"] == "gemma4"
+
+    model = gemma4.Model.__new__(gemma4.Model)
+    model.language_model = SimpleNamespace(sanitize=lambda weights: weights)
+    weights = model.sanitize(
+        {
+            "model.vision_embedder.proj.weight": mx.array([1.0]),
+            "model.language_model.layers.0.self_attn.q_proj.weight": mx.array([2.0]),
+        }
+    )
+
+    assert "vision_embedder.proj.weight" not in weights
+    assert "language_model.model.layers.0.self_attn.q_proj.weight" in weights
+
+
+def test_mlx_vlm_gemma4_shared_kv_layers_drop_unused_kv_modules_and_weights():
+    import vmlx_engine.runtime_patches.mlx_vlm_compat as compat
+    from mlx_vlm.models import gemma4
+
+    compat.install()
+
+    text_config = gemma4.TextConfig(
+        hidden_size=16,
+        num_hidden_layers=4,
+        intermediate_size=32,
+        num_attention_heads=2,
+        num_key_value_heads=1,
+        head_dim=8,
+        global_head_dim=8,
+        vocab_size=32,
+        vocab_size_per_layer_input=32,
+        hidden_size_per_layer_input=0,
+        num_kv_shared_layers=2,
+        sliding_window=32,
+        sliding_window_pattern=2,
+        layer_types=[
+            "sliding_attention",
+            "full_attention",
+            "sliding_attention",
+            "full_attention",
+        ],
+        rope_parameters={},
+    )
+    model = gemma4.Model(
+        gemma4.ModelConfig(
+            text_config=text_config,
+            vision_config=gemma4.VisionConfig(
+                hidden_size=16,
+                intermediate_size=32,
+                num_hidden_layers=1,
+                num_attention_heads=2,
+                num_key_value_heads=2,
+                head_dim=8,
+                global_head_dim=8,
+                patch_size=16,
+                position_embedding_size=32,
+                layer_types=["full_attention"],
+                rope_parameters={"rope_theta": 10000.0},
+            ),
+            model_type="gemma4",
+            vocab_size=32,
+            image_token_id=30,
+            audio_config=None,
+        )
+    )
+
+    assert hasattr(model.layers[1].self_attn, "k_proj")
+    assert not hasattr(model.layers[2].self_attn, "k_proj")
+    assert not hasattr(model.layers[3].self_attn, "v_proj")
+
+    weights = model.sanitize(
+        {
+            "model.language_model.layers.1.self_attn.k_proj.weight": mx.zeros((8, 16)),
+            "model.language_model.layers.2.self_attn.k_proj.weight": mx.zeros((8, 16)),
+            "model.language_model.layers.2.self_attn.q_proj.weight": mx.zeros((16, 16)),
+            "model.language_model.layers.3.self_attn.v_proj.weight": mx.zeros((8, 16)),
+        }
+    )
+
+    assert "language_model.model.layers.1.self_attn.k_proj.weight" in weights
+    assert "language_model.model.layers.2.self_attn.q_proj.weight" in weights
+    assert "language_model.model.layers.2.self_attn.k_proj.weight" not in weights
+    assert "language_model.model.layers.3.self_attn.v_proj.weight" not in weights
