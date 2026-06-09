@@ -190,6 +190,7 @@ def _mllm_media_cache_extra_keys(request: Any) -> Optional[Dict[str, str]]:
         or getattr(request, "audio_codes", None) is not None
         or getattr(request, "audio_embeds", None) is not None
         or getattr(request, "audio_features", None) is not None
+        or getattr(request, "audio_input_features", None) is not None
         or getattr(request, "audio", None)
         or getattr(request, "audios", None)
         or getattr(request, "pixel_values", None) is not None
@@ -236,6 +237,11 @@ def _mllm_media_cache_extra_keys(request: Any) -> Optional[Dict[str, str]]:
     _hash_array("audio_codes", getattr(request, "audio_codes", None))
     _hash_array("audio_embeds", getattr(request, "audio_embeds", None))
     _hash_array("audio_features", getattr(request, "audio_features", None))
+    _hash_array("audio_input_features", getattr(request, "audio_input_features", None))
+    _hash_array(
+        "audio_input_features_mask",
+        getattr(request, "audio_input_features_mask", None),
+    )
     if not media_sources:
         # Fallback for callers that hand us preprocessed pixel tensors without
         # source URLs/paths. Do not hash attention_mask: it changes with text
@@ -1035,6 +1041,35 @@ def _call_processor_direct(
     if params and not any(p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values()):
         kwargs = {k: v for k, v in kwargs.items() if k in params}
     return _as_input_mapping(processor(**kwargs))
+
+
+def _ensure_gemma4_audio_placeholders(
+    prompt: str,
+    *,
+    processor: Any,
+    audio_count: int,
+) -> str:
+    """Ensure Gemma4 processor can expand OpenAI input_audio into audio tokens."""
+
+    if audio_count <= 0:
+        return prompt
+    tokenizer = getattr(processor, "tokenizer", None)
+    audio_token = (
+        getattr(processor, "audio_token", None)
+        or getattr(tokenizer, "audio_token", None)
+    )
+    if not audio_token:
+        return prompt
+    audio_token = str(audio_token)
+    missing = max(0, int(audio_count) - prompt.count(audio_token))
+    if missing == 0:
+        return prompt
+    addition = " ".join(audio_token for _ in range(missing))
+    for marker in ("<end_of_turn>", "<|im_end|>", "</s>"):
+        idx = prompt.rfind(marker)
+        if idx >= 0:
+            return prompt[:idx] + addition + prompt[idx:]
+    return prompt + "\n" + addition
 
 
 def _resolve_mimo_audio_bundle_path(model: Any, processor: Any) -> Optional[Path]:
@@ -2990,6 +3025,8 @@ class MLLMBatchRequest:
     audio_codes: Optional[mx.array] = None
     audio_embeds: Optional[mx.array] = None
     audio_features: Optional[mx.array] = None
+    audio_input_features: Optional[mx.array] = None
+    audio_input_features_mask: Optional[mx.array] = None
     extra_kwargs: Dict[str, Any] = field(default_factory=dict)
 
     # Generation state
@@ -4207,6 +4244,11 @@ class MLLMBatchGenerator:
             "gemma4",
             "gemma4_unified",
         }:
+            request.prompt = _ensure_gemma4_audio_placeholders(
+                request.prompt,
+                processor=self.processor,
+                audio_count=len(all_audio),
+            )
             processor_audio = _gemma4_audio_waveforms_from_paths(
                 all_audio,
                 self.processor,
@@ -4306,6 +4348,12 @@ class MLLMBatchGenerator:
         request.audio_features = _ensure_mx_array(
             request.extra_kwargs.pop("audio_features", None)
         )
+        request.audio_input_features = _ensure_mx_array(
+            request.extra_kwargs.pop("input_features", None)
+        )
+        request.audio_input_features_mask = _ensure_mx_array(
+            request.extra_kwargs.pop("input_features_mask", None)
+        )
         if (
             all_audio
             and self._model_type == "mimo_v2"
@@ -4315,6 +4363,7 @@ class MLLMBatchGenerator:
                     request.audio_codes,
                     request.audio_embeds,
                     request.audio_features,
+                    request.audio_input_features,
                 )
             )
         ):
@@ -4349,15 +4398,16 @@ class MLLMBatchGenerator:
                 request.audio_codes,
                 request.audio_embeds,
                 request.audio_features,
+                request.audio_input_features,
             )
         ):
             raise UnsupportedMediaModalityError(
                 "audio",
                 (
                     "raw audio reached the VLM processor, but the processor "
-                    "returned no audio_codes, audio_embeds, or audio_features. "
-                    "A real waveform-to-MiMo-audio-codes bridge is required; "
-                    "continuing as text-only would hide an unsupported audio path."
+                    "returned no audio_codes, audio_embeds, audio_features, "
+                    "or Gemma4 input_features. Continuing as text-only would "
+                    "hide an unsupported audio path."
                 ),
                 family=str(self._model_type or "mllm"),
                 request_id=request.request_id,
@@ -4749,6 +4799,8 @@ class MLLMBatchGenerator:
 
     def _run_vision_encoding_inner(self, request: "MLLMBatchRequest", cache: Optional[List[Any]] = None) -> "mx.array":
         kwargs = dict(request.extra_kwargs)
+        audio_input_features = getattr(request, "audio_input_features", None)
+        audio_input_features_mask = getattr(request, "audio_input_features_mask", None)
         # Only pass pixel_values when non-None. Smelt-loaded models use a
         # text-only wrapper whose __call__ does NOT accept pixel_values at
         # all — passing even None triggers `unexpected keyword argument
@@ -4766,6 +4818,7 @@ class MLLMBatchGenerator:
                 or request.audio_codes is not None
                 or request.audio_embeds is not None
                 or request.audio_features is not None
+                or audio_input_features is not None
             )
         )
         if request.attention_mask is not None and not has_mimo_media_payload:
@@ -4784,6 +4837,10 @@ class MLLMBatchGenerator:
             # model bridge. Raw waveform/mel-to-code tokenization is a separate
             # runtime component and must not be implied by this alias.
             kwargs["audio_embeds"] = request.audio_features
+        if audio_input_features is not None:
+            kwargs["input_features"] = audio_input_features
+        if audio_input_features_mask is not None:
+            kwargs["input_features_mask"] = audio_input_features_mask
         if cache is not None:
             kwargs["cache"] = cache
 
@@ -4799,6 +4856,7 @@ class MLLMBatchGenerator:
             request.audio_codes is not None
             or request.audio_embeds is not None
             or request.audio_features is not None
+            or audio_input_features is not None
         )
         has_media_payload = has_images or has_audio_payload
         seq_len = input_ids.shape[1]

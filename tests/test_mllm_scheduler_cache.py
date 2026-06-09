@@ -428,9 +428,85 @@ def test_mllm_processor_audio_outputs_are_promoted_to_request_fields():
     assert 'request.extra_kwargs.pop("audio_codes", None)' in source
     assert 'request.extra_kwargs.pop("audio_embeds", None)' in source
     assert 'request.extra_kwargs.pop("audio_features", None)' in source
+    assert 'request.extra_kwargs.pop("input_features", None)' in source
+    assert 'request.extra_kwargs.pop("input_features_mask", None)' in source
     assert "request.audio_codes = _ensure_mx_array(" in source
     assert "request.audio_embeds = _ensure_mx_array(" in source
     assert "request.audio_features = _ensure_mx_array(" in source
+    assert "request.audio_input_features = _ensure_mx_array(" in source
+    assert "request.audio_input_features_mask = _ensure_mx_array(" in source
+
+
+def test_gemma4_audio_input_features_forward_to_model_kwargs():
+    """Gemma4 processor audio features must reach the model as input_features."""
+    import mlx.core as mx
+
+    from vmlx_engine.mllm_batch_generator import MLLMBatchGenerator
+
+    class CapturingModel:
+        def __call__(self, input_ids, **kwargs):
+            self.input_ids = input_ids
+            self.kwargs = kwargs
+            return mx.zeros((1, input_ids.shape[-1], 4))
+
+    model = CapturingModel()
+    generator = MLLMBatchGenerator.__new__(MLLMBatchGenerator)
+    generator.model = model
+    generator.language_model = object()
+    generator._is_hybrid = False
+    generator._model_type = "gemma4"
+    generator.prefill_step_size = 128
+
+    request = SimpleNamespace(
+        input_ids=mx.array([1, 258881, 2]),
+        pixel_values=None,
+        attention_mask=None,
+        image_grid_thw=None,
+        video_pixel_values=None,
+        video_grid_thw=None,
+        audio_codes=None,
+        audio_embeds=None,
+        audio_features=None,
+        audio_input_features=mx.ones((1, 3, 4), dtype=mx.float16),
+        audio_input_features_mask=mx.array([[1, 1, 0]], dtype=mx.bool_),
+        extra_kwargs={},
+        vision_encoded=False,
+    )
+
+    logits = generator._run_vision_encoding_inner(request, cache=[])
+
+    assert logits.shape == (1, 3, 4)
+    assert "audio_embeds" not in model.kwargs
+    assert model.kwargs["input_features"].shape == (1, 3, 4)
+    assert model.kwargs["input_features_mask"].tolist() == [[True, True, False]]
+    assert request.vision_encoded is True
+
+
+def test_gemma4_audio_processor_prompt_gets_missing_audio_placeholder():
+    from vmlx_engine.mllm_batch_generator import _ensure_gemma4_audio_placeholders
+
+    processor = SimpleNamespace(
+        audio_token="<|audio|>",
+        tokenizer=SimpleNamespace(audio_token="<|audio|>"),
+    )
+
+    prompt = "<bos><start_of_turn>user\nTranscribe the word only.<end_of_turn>"
+
+    fixed = _ensure_gemma4_audio_placeholders(
+        prompt,
+        processor=processor,
+        audio_count=2,
+    )
+
+    assert fixed.count("<|audio|>") == 2
+    assert fixed.startswith("<bos><start_of_turn>user\nTranscribe the word only.")
+    assert fixed.endswith("<end_of_turn>")
+    assert "<|audio|> <|audio|><end_of_turn>" in fixed
+    assert _ensure_gemma4_audio_placeholders(
+        "already <|audio|>",
+        processor=processor,
+        audio_count=1,
+    ) == "already <|audio|>"
 
 
 def test_mllm_processor_direct_forwards_raw_audio_to_processor():
