@@ -1599,6 +1599,16 @@ def test_validate_probe_response_accepts_exact_tool_result_sentence():
     assert failures == []
 
 
+def test_tool_result_continuation_payload_quotes_exact_target_sentence():
+    mod = load_module()
+
+    payload = mod._tool_result_continuation_payload("model-id", 24)
+    final_user_message = payload["messages"][-1]["content"]
+
+    assert '"STORED blue-cat."' in final_user_message
+    assert "including the final period" in final_user_message
+
+
 def test_collect_probe_failures_uses_semantic_validation():
     mod = load_module()
     requests = [
