@@ -93,3 +93,90 @@ def test_n2_chat_cache_gate_checks_stable_text_only_on_cache_rows():
     ]
 
     assert runner.cache_rows_stable_text(rows)
+
+
+def test_n2_chat_cache_gate_builds_responses_tool_payload():
+    args = SimpleNamespace(
+        served_model_name="n2-pro-jangtq2-chat-proof",
+        responses_tool_prompt="Use lookup for query alpha. Do not answer in prose.",
+        tool_name="lookup",
+        tool_query="alpha",
+        responses_max_output_tokens=64,
+    )
+
+    payload = runner.responses_tool_payload(args)
+
+    assert payload["model"] == "n2-pro-jangtq2-chat-proof"
+    assert payload["input"] == "Use lookup for query alpha. Do not answer in prose."
+    assert payload["store"] is True
+    assert payload["stream"] is False
+    assert payload["max_output_tokens"] == 64
+    assert payload["enable_thinking"] is False
+    assert payload["tools"] == [
+        {
+            "type": "function",
+            "name": "lookup",
+            "description": "Look up a short value by query.",
+            "parameters": {
+                "type": "object",
+                "properties": {"query": {"type": "string"}},
+                "required": ["query"],
+            },
+        }
+    ]
+    assert payload["tool_choice"] == "required"
+
+
+def test_n2_chat_cache_gate_extracts_responses_calls_and_text():
+    response = {
+        "id": "resp_1",
+        "output": [
+            {
+                "type": "function_call",
+                "call_id": "call_1",
+                "name": "lookup",
+                "arguments": '{"query":"alpha"}',
+            },
+            {
+                "type": "message",
+                "content": [{"type": "output_text", "text": "DONE"}],
+            },
+        ],
+        "usage": {
+            "input_tokens_details": {"cached_tokens": 12, "cache_detail": "paged+ssm"}
+        },
+    }
+
+    assert runner.responses_function_calls(response) == [
+        {
+            "call_id": "call_1",
+            "name": "lookup",
+            "arguments": '{"query":"alpha"}',
+        }
+    ]
+    assert runner.responses_output_text(response) == "DONE"
+    assert runner.responses_cached_tokens(response) == 12
+
+
+def test_n2_chat_cache_gate_builds_responses_tool_followup_payload():
+    args = SimpleNamespace(
+        served_model_name="n2-pro-jangtq2-chat-proof",
+        responses_max_output_tokens=64,
+    )
+    tool_outputs = [
+        {"type": "function_call_output", "call_id": "call_1", "output": "lookup=alpha-ok"}
+    ]
+
+    payload = runner.responses_tool_followup_payload(
+        args,
+        previous_response_id="resp_1",
+        tool_outputs=tool_outputs,
+    )
+
+    assert payload["model"] == "n2-pro-jangtq2-chat-proof"
+    assert payload["previous_response_id"] == "resp_1"
+    assert payload["input"] == [
+        *tool_outputs,
+        {"role": "user", "content": "No more tools. Reply exactly DONE."},
+    ]
+    assert payload["tool_choice"] == "none"

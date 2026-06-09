@@ -238,6 +238,57 @@ def tool_payload(args: argparse.Namespace) -> dict[str, Any]:
     }
 
 
+def responses_tool_payload(args: argparse.Namespace) -> dict[str, Any]:
+    return {
+        "model": args.served_model_name,
+        "input": args.responses_tool_prompt,
+        "store": True,
+        "stream": False,
+        "max_output_tokens": args.responses_max_output_tokens,
+        "temperature": 0.0,
+        "top_p": 1.0,
+        "top_k": 0,
+        "enable_thinking": False,
+        "tools": [
+            {
+                "type": "function",
+                "name": args.tool_name,
+                "description": "Look up a short value by query.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"query": {"type": "string"}},
+                    "required": ["query"],
+                },
+            }
+        ],
+        "tool_choice": "required",
+    }
+
+
+def responses_tool_followup_payload(
+    args: argparse.Namespace,
+    *,
+    previous_response_id: str,
+    tool_outputs: list[dict[str, Any]],
+) -> dict[str, Any]:
+    return {
+        "model": args.served_model_name,
+        "input": [
+            *tool_outputs,
+            {"role": "user", "content": "No more tools. Reply exactly DONE."},
+        ],
+        "previous_response_id": previous_response_id,
+        "store": True,
+        "stream": False,
+        "max_output_tokens": args.responses_max_output_tokens,
+        "temperature": 0.0,
+        "top_p": 1.0,
+        "top_k": 0,
+        "enable_thinking": False,
+        "tool_choice": "none",
+    }
+
+
 def response_text(body: dict[str, Any] | None) -> str:
     if not isinstance(body, dict):
         return ""
@@ -287,6 +338,88 @@ def _parse_tool_args(raw: str) -> dict[str, Any] | None:
     return parsed if isinstance(parsed, dict) else None
 
 
+def responses_function_calls(body: dict[str, Any] | None) -> list[dict[str, Any]]:
+    if not isinstance(body, dict):
+        return []
+    output = body.get("output")
+    if not isinstance(output, list):
+        return []
+    rows: list[dict[str, Any]] = []
+    for item in output:
+        if not isinstance(item, dict) or item.get("type") != "function_call":
+            continue
+        rows.append(
+            {
+                "call_id": str(item.get("call_id") or item.get("id") or ""),
+                "name": str(item.get("name") or ""),
+                "arguments": str(item.get("arguments") or ""),
+            }
+        )
+    return rows
+
+
+def responses_output_text(body: dict[str, Any] | None) -> str:
+    if not isinstance(body, dict):
+        return ""
+    output = body.get("output")
+    if not isinstance(output, list):
+        return ""
+    chunks: list[str] = []
+    for item in output:
+        if not isinstance(item, dict) or item.get("type") != "message":
+            continue
+        content = item.get("content")
+        if not isinstance(content, list):
+            continue
+        for part in content:
+            if isinstance(part, dict) and part.get("type") == "output_text":
+                text = part.get("text")
+                if isinstance(text, str):
+                    chunks.append(text)
+    return "\n".join(chunks).strip()
+
+
+def responses_cached_tokens(body: dict[str, Any] | None) -> int | None:
+    if not isinstance(body, dict):
+        return None
+    usage = body.get("usage")
+    if not isinstance(usage, dict):
+        return None
+    details = usage.get("input_tokens_details")
+    if not isinstance(details, dict):
+        return None
+    cached = details.get("cached_tokens")
+    return cached if isinstance(cached, int) else None
+
+
+def responses_cache_detail(body: dict[str, Any] | None) -> str | None:
+    if not isinstance(body, dict):
+        return None
+    usage = body.get("usage")
+    if not isinstance(usage, dict):
+        return None
+    details = usage.get("input_tokens_details")
+    if not isinstance(details, dict):
+        return None
+    detail = details.get("cache_detail")
+    return detail if isinstance(detail, str) else None
+
+
+def responses_tool_output(args: argparse.Namespace, call: dict[str, Any]) -> dict[str, Any]:
+    call_id = str(call.get("call_id") or call.get("id") or "")
+    try:
+        parsed = json.loads(str(call.get("arguments") or "{}"))
+    except Exception:
+        parsed = {}
+    query = parsed.get("query") if isinstance(parsed, dict) else None
+    output = (
+        f"lookup={query}-ok"
+        if query == args.tool_query
+        else f"lookup=unexpected-query:{query}"
+    )
+    return {"type": "function_call_output", "call_id": call_id, "output": output}
+
+
 def cache_rows_stable_text(rows: list[dict[str, Any]]) -> bool:
     cache_texts = [
         row.get("text")
@@ -310,6 +443,22 @@ def row_from_response(mode: str, response: dict[str, Any]) -> dict[str, Any]:
         "tool_calls": tool_calls,
         "tool_call_names": [tc["name"] for tc in tool_calls],
         "tool_call_arguments": [_parse_tool_args(tc["arguments"]) for tc in tool_calls],
+    }
+
+
+def responses_row_from_body(mode: str, body: dict[str, Any]) -> dict[str, Any]:
+    calls = responses_function_calls(body)
+    return {
+        "mode": mode,
+        "id": body.get("id"),
+        "status": body.get("status"),
+        "error": body.get("error"),
+        "text": responses_output_text(body),
+        "cached_tokens": responses_cached_tokens(body),
+        "cache_detail": responses_cache_detail(body),
+        "function_calls": calls,
+        "function_call_names": [call["name"] for call in calls],
+        "function_call_arguments": [_parse_tool_args(call["arguments"]) for call in calls],
     }
 
 
@@ -374,6 +523,53 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                         ),
                     )
                 )
+            responses_rows: list[dict[str, Any]] = []
+            if args.include_responses_probe:
+                responses_url = f"http://127.0.0.1:{args.port}/v1/responses"
+                responses_round1 = post_json(
+                    responses_url,
+                    responses_tool_payload(args),
+                    args.request_timeout_s,
+                )
+                responses_body1 = (
+                    responses_round1.get("body")
+                    if isinstance(responses_round1.get("body"), dict)
+                    else {}
+                )
+                responses_rows.append(
+                    {
+                        **responses_row_from_body("responses_tool_required", responses_body1),
+                        "status_code": responses_round1.get("code"),
+                        "elapsed_s": responses_round1.get("elapsed_s"),
+                        "http_error": responses_round1.get("error"),
+                    }
+                )
+                calls = responses_function_calls(responses_body1)
+                tool_outputs = [responses_tool_output(args, call) for call in calls]
+                responses_round2 = post_json(
+                    responses_url,
+                    responses_tool_followup_payload(
+                        args,
+                        previous_response_id=str(responses_body1.get("id") or ""),
+                        tool_outputs=tool_outputs,
+                    ),
+                    args.request_timeout_s,
+                )
+                responses_body2 = (
+                    responses_round2.get("body")
+                    if isinstance(responses_round2.get("body"), dict)
+                    else {}
+                )
+                responses_rows.append(
+                    {
+                        **responses_row_from_body("responses_tool_followup", responses_body2),
+                        "status_code": responses_round2.get("code"),
+                        "elapsed_s": responses_round2.get("elapsed_s"),
+                        "http_error": responses_round2.get("error"),
+                        "previous_response_id_used": bool(responses_body1.get("id")),
+                        "tool_outputs": tool_outputs,
+                    }
+                )
             final_health = get_json(f"http://127.0.0.1:{args.port}/health", timeout=5)
             telemetry.append(resource_snapshot("after_requests", proc))
     finally:
@@ -420,6 +616,29 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             and tool_args == [{"query": args.tool_query}]
         )
     )
+    responses_round1 = next(
+        (row for row in locals().get("responses_rows", []) if row.get("mode") == "responses_tool_required"),
+        None,
+    )
+    responses_round2 = next(
+        (row for row in locals().get("responses_rows", []) if row.get("mode") == "responses_tool_followup"),
+        None,
+    )
+    responses_probe_pass = (
+        not args.include_responses_probe
+        or (
+            isinstance(responses_round1, dict)
+            and isinstance(responses_round2, dict)
+            and responses_round1.get("status_code") == 200
+            and responses_round1.get("function_call_names") == [args.tool_name]
+            and responses_round1.get("function_call_arguments")
+            == [{"query": args.tool_query}]
+            and responses_round2.get("status_code") == 200
+            and not responses_round2.get("function_calls")
+            and responses_round2.get("text") == "DONE"
+            and responses_round2.get("previous_response_id_used") is True
+        )
+    )
     status = (
         "pass"
         if all(row.get("status_code") == 200 for row in rows)
@@ -427,6 +646,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         and isinstance(cached_tokens, int)
         and cached_tokens > 0
         and tool_probe_pass
+        and responses_probe_pass
         else "fail"
     )
     return {
@@ -440,6 +660,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "rows": rows,
         "stable_text": stable_text,
         "tool_probe_pass": tool_probe_pass,
+        "responses_probe_pass": responses_probe_pass,
         "cache_hit_cached_tokens": cached_tokens,
         "cache_hit_cache_detail": (
             prompt_details.get("cache_detail")
@@ -449,6 +670,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "telemetry": telemetry,
         "server_log": str(log_path),
         "server_exit": server_exit,
+        "responses_rows": locals().get("responses_rows", []),
     }
 
 
@@ -462,6 +684,7 @@ def main() -> int:
     parser.add_argument("--served-model-name", default="n2-pro-jangtq2-chat-proof")
     parser.add_argument("--prompt", default="Return only ACK.")
     parser.add_argument("--include-tool-probe", action="store_true")
+    parser.add_argument("--include-responses-probe", action="store_true")
     parser.add_argument(
         "--tool-prompt",
         default="Use lookup for query alpha. Do not answer in prose.",
@@ -469,6 +692,11 @@ def main() -> int:
     parser.add_argument("--tool-name", default="lookup")
     parser.add_argument("--tool-query", default="alpha")
     parser.add_argument("--tool-max-tokens", type=int, default=64)
+    parser.add_argument(
+        "--responses-tool-prompt",
+        default="Use lookup for query alpha. Do not answer in prose.",
+    )
+    parser.add_argument("--responses-max-output-tokens", type=int, default=64)
     parser.add_argument("--max-tokens", type=int, default=4)
     parser.add_argument("--server-max-tokens", type=int, default=16)
     parser.add_argument("--cache-dir", type=Path, default=DEFAULT_CACHE_DIR)
