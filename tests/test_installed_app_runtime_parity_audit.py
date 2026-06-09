@@ -77,6 +77,12 @@ def test_installed_app_runtime_parity_hashes_packaged_engine_surface():
     assert "tool_parsers/dsml_tool_parser.py" in gate.CRITICAL_ENGINE_HASH_FILES
     assert "patches/mlx_vlm_mtp/qwen35_vl.py" in gate.CRITICAL_ENGINE_HASH_FILES
     assert "cache_record_validator.py" in gate.CRITICAL_ENGINE_HASH_FILES
+    assert "native_mtp.py" in gate.CRITICAL_ENGINE_HASH_FILES
+    assert "patches/mlx_lm_mtp/__init__.py" in gate.CRITICAL_ENGINE_HASH_FILES
+    assert "patches/mlx_lm_mtp/batch_generator.py" in gate.CRITICAL_ENGINE_HASH_FILES
+    assert "patches/mlx_lm_mtp/cache_rollback.py" in gate.CRITICAL_ENGINE_HASH_FILES
+    assert "patches/mlx_lm_mtp/deepseek_v4_model.py" in gate.CRITICAL_ENGINE_HASH_FILES
+    assert "patches/mlx_lm_mtp/qwen35_model.py" in gate.CRITICAL_ENGINE_HASH_FILES
     assert "tq_disk_store.py" in gate.CRITICAL_ENGINE_HASH_FILES
     assert "utils/hybrid_tq_cache.py" in gate.CRITICAL_ENGINE_HASH_FILES
     assert "utils/ssm_companion_cache.py" in gate.CRITICAL_ENGINE_HASH_FILES
