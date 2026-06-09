@@ -2247,6 +2247,236 @@ class TestOpenAILogprobsFormatting:
         assert visible == "Answer  done"
         assert done_text == "Answer  done"
 
+    @pytest.mark.asyncio
+    async def test_streaming_responses_tool_call_arguments_survive_buffering(
+        self, monkeypatch
+    ):
+        """Responses SSE heartbeats must not replace final tool arguments."""
+        import json
+        from types import SimpleNamespace
+
+        import vmlx_engine.server as server
+        from vmlx_engine.api.models import ResponsesRequest
+        from vmlx_engine.engine.base import GenerationOutput
+
+        class _Engine:
+            tokenizer = SimpleNamespace(has_thinking=False)
+
+            async def stream_chat(self, *, messages, **kwargs):
+                chunks = (
+                    (
+                        '<tool_call>{"name":"lookup","arguments":{"query":"alpha"',
+                        False,
+                        None,
+                    ),
+                    (',"limit":2}}</tool_call>', True, "stop"),
+                )
+                text = ""
+                for idx, (delta, finished, reason) in enumerate(chunks, start=1):
+                    text += delta
+                    yield GenerationOutput(
+                        text=text,
+                        new_text=delta,
+                        tokens=[],
+                        prompt_tokens=5,
+                        completion_tokens=idx,
+                        finished=finished,
+                        finish_reason=reason,
+                    )
+
+        monkeypatch.setattr(server, "_default_timeout", 5.0)
+        monkeypatch.setattr(server, "_model_name", "unit-tool-model")
+        monkeypatch.setattr(server, "_model_path", None)
+        monkeypatch.setattr(server, "_reasoning_parser", None)
+        monkeypatch.setattr(server, "_tool_call_parser", "auto")
+
+        request = ResponsesRequest(
+            model="unit-tool-model",
+            input="use lookup",
+            stream=True,
+            tools=[
+                {
+                    "type": "function",
+                    "name": "lookup",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "query": {"type": "string"},
+                            "limit": {"type": "integer"},
+                        },
+                        "required": ["query", "limit"],
+                    },
+                }
+            ],
+        )
+
+        payloads: list[tuple[str, dict]] = []
+        async for event in server.stream_responses_api(
+            _Engine(),
+            [{"role": "user", "content": "use lookup"}],
+            request,
+            fastapi_request=None,
+        ):
+            if not event.startswith("event: "):
+                continue
+            event_type = event.splitlines()[0].removeprefix("event: ")
+            data_line = next(
+                line for line in event.splitlines() if line.startswith("data: ")
+            )
+            payloads.append((event_type, json.loads(data_line.removeprefix("data: "))))
+
+        arg_deltas = [
+            payload["delta"]
+            for event_type, payload in payloads
+            if event_type == "response.function_call_arguments.delta"
+        ]
+        arg_done = [
+            payload["arguments"]
+            for event_type, payload in payloads
+            if event_type == "response.function_call_arguments.done"
+        ]
+        function_items = [
+            payload["item"]
+            for event_type, payload in payloads
+            if event_type == "response.output_item.done"
+            and payload.get("item", {}).get("type") == "function_call"
+        ]
+
+        expected_args = {"query": "alpha", "limit": 2}
+        assert any(
+            event_type == "response.heartbeat"
+            and payload.get("tool_call_generating") is True
+            for event_type, payload in payloads
+        )
+        assert json.loads("".join(arg_deltas)) == expected_args
+        assert json.loads(arg_done[-1]) == expected_args
+        assert function_items[-1]["name"] == "lookup"
+        assert json.loads(function_items[-1]["arguments"]) == expected_args
+
+    @pytest.mark.asyncio
+    async def test_streaming_responses_reasoning_tool_call_keeps_arguments(
+        self, monkeypatch
+    ):
+        """Reasoning-channel tool calls must not finalize with `{}` args."""
+        import json
+        from types import SimpleNamespace
+
+        import vmlx_engine.server as server
+        from vmlx_engine.api.models import ResponsesRequest
+        from vmlx_engine.engine.base import GenerationOutput
+        from vmlx_engine.reasoning.base import DeltaMessage
+
+        class _ReasoningParser:
+            def reset_state(self, **_kwargs):
+                pass
+
+            def extract_reasoning_streaming(
+                self, previous_text, current_text, delta_text
+            ):
+                return DeltaMessage(reasoning=delta_text)
+
+            def extract_reasoning(self, model_output):
+                return model_output, None
+
+        class _Engine:
+            tokenizer = SimpleNamespace(has_thinking=True)
+
+            async def stream_chat(self, *, messages, **kwargs):
+                chunks = (
+                    (
+                        "<tool_call>",
+                        False,
+                        None,
+                    ),
+                    (
+                        '{"name":"lookup","arguments":{"query":"beta","limit":3}}</tool_call>',
+                        True,
+                        "stop",
+                    ),
+                )
+                text = ""
+                for idx, (delta, finished, reason) in enumerate(chunks, start=1):
+                    text += delta
+                    yield GenerationOutput(
+                        text=text,
+                        new_text=delta,
+                        tokens=[],
+                        prompt_tokens=5,
+                        completion_tokens=idx,
+                        finished=finished,
+                        finish_reason=reason,
+                    )
+
+        monkeypatch.setattr(server, "_default_timeout", 5.0)
+        monkeypatch.setattr(server, "_model_name", "reasoning-tool-model")
+        monkeypatch.setattr(server, "_model_path", None)
+        monkeypatch.setattr(server, "_reasoning_parser", _ReasoningParser())
+        monkeypatch.setattr(server, "_tool_call_parser", "auto")
+
+        request = ResponsesRequest(
+            model="reasoning-tool-model",
+            input="use lookup",
+            stream=True,
+            tools=[
+                {
+                    "type": "function",
+                    "name": "lookup",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "query": {"type": "string"},
+                            "limit": {"type": "integer"},
+                        },
+                        "required": ["query", "limit"],
+                    },
+                }
+            ],
+            enable_thinking=True,
+        )
+
+        payloads: list[tuple[str, dict]] = []
+        async for event in server.stream_responses_api(
+            _Engine(),
+            [{"role": "user", "content": "use lookup"}],
+            request,
+            fastapi_request=None,
+        ):
+            if not event.startswith("event: "):
+                continue
+            event_type = event.splitlines()[0].removeprefix("event: ")
+            data_line = next(
+                line for line in event.splitlines() if line.startswith("data: ")
+            )
+            payloads.append((event_type, json.loads(data_line.removeprefix("data: "))))
+
+        arg_deltas = [
+            payload["delta"]
+            for event_type, payload in payloads
+            if event_type == "response.function_call_arguments.delta"
+        ]
+        arg_done = [
+            payload["arguments"]
+            for event_type, payload in payloads
+            if event_type == "response.function_call_arguments.done"
+        ]
+        function_items = [
+            payload["item"]
+            for event_type, payload in payloads
+            if event_type == "response.output_item.done"
+            and payload.get("item", {}).get("type") == "function_call"
+        ]
+
+        expected_args = {"query": "beta", "limit": 3}
+        assert any(
+            event_type == "response.heartbeat"
+            and payload.get("tool_call_generating") is True
+            for event_type, payload in payloads
+        )
+        assert json.loads("".join(arg_deltas)) == expected_args
+        assert json.loads(arg_done[-1]) == expected_args
+        assert function_items[-1]["name"] == "lookup"
+        assert json.loads(function_items[-1]["arguments"]) == expected_args
+
 
 class TestAPIKeyVerification:
     """Test API key verification with timing attack prevention."""
