@@ -16,7 +16,7 @@ from typing import Any
 
 
 DEFAULT_AUDIT = Path(
-    "build/current-mimo-v2-jang2l-current-audit-after-singlebatch-tokenbuffer-skip-speed-rerun-20260609.json"
+    "build/current-mimo-v2-jang2l-current-audit-after-cache-vs-nocache-logprobs-20260609.json"
 )
 DEFAULT_SMOKE = Path(
     "build/current-all-local-model-smoke-mimo-v25-jangtq2-current-source-textonly-l2-after-capability-fix-20260609/summary.json"

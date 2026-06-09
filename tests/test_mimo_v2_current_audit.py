@@ -1665,11 +1665,14 @@ def test_mimo_current_audit_points_switchglu_at_current_parity_proof():
     )
 
 
-def test_mimo_current_audit_points_classifier_at_artifact_diagnosis():
+def test_mimo_current_audit_points_at_current_cache_and_classifier_artifacts():
     from tests.cross_matrix import run_mimo_v2_jang2l_current_audit as audit
 
+    assert str(audit.DEFAULT_OUT) == (
+        "build/current-mimo-v2-jang2l-current-audit-after-cache-vs-nocache-logprobs-20260609.json"
+    )
     assert str(audit.NO_SOURCE_EXACTNESS_CLASSIFIER_ARTIFACT) == (
-        "build/current-mimo-v2-no-source-exactness-classifier-after-artifact-diagnosis-20260609.json"
+        "build/current-mimo-v2-no-source-exactness-classifier-after-lossless-token-trace-20260609.json"
     )
 
 

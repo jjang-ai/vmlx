@@ -12111,6 +12111,20 @@ def test_current_mimo_v2_proof_artifact_constants_are_local_only():
     assert not any("/remote-" in artifact for artifact in artifacts)
 
 
+def test_current_mimo_v2_proof_artifact_constants_use_latest_pointer_set():
+    from tests.cross_matrix.release_regression_manifest import (
+        CURRENT_MIMO_V2_JANG2L_CURRENT_AUDIT_ARTIFACT,
+        CURRENT_MIMO_V2_JANG2L_NO_SOURCE_EXACTNESS_CLASSIFIER_ARTIFACT,
+    )
+
+    assert CURRENT_MIMO_V2_JANG2L_CURRENT_AUDIT_ARTIFACT == (
+        "build/current-mimo-v2-jang2l-current-audit-after-cache-vs-nocache-logprobs-20260609.json"
+    )
+    assert CURRENT_MIMO_V2_JANG2L_NO_SOURCE_EXACTNESS_CLASSIFIER_ARTIFACT == (
+        "build/current-mimo-v2-no-source-exactness-classifier-after-lossless-token-trace-20260609.json"
+    )
+
+
 def test_current_proof_sweep_tracks_mimo_root_cause_component():
     from tests.cross_matrix.release_regression_manifest import (
         validate_current_proof_sweep_artifacts,

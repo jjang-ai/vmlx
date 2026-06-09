@@ -21,10 +21,10 @@ DEFAULT_OUT = Path(
 )
 
 MIMO_AUDIT = Path(
-    "build/current-mimo-v2-jang2l-current-audit-after-structured-schema-decode-20260609.json"
+    "build/current-mimo-v2-jang2l-current-audit-after-cache-vs-nocache-logprobs-20260609.json"
 )
 MIMO_NO_SOURCE_EXACTNESS_CLASSIFIER = Path(
-    "build/current-mimo-v2-no-source-exactness-classifier-after-artifact-diagnosis-20260609.json"
+    "build/current-mimo-v2-no-source-exactness-classifier-after-lossless-token-trace-20260609.json"
 )
 NOHEAVY_API_CACHE = Path(
     "build/current-noheavy-api-cache-contract-after-responses-reasoning-empty-final-args-gateway-20260609.json"

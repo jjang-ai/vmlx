@@ -6,7 +6,7 @@ from tests.cross_matrix.run_mimo_v2_no_source_exactness_classifier import (
 
 def test_mimo_no_source_classifier_defaults_point_at_live_refresh_artifacts():
     assert str(classifier.DEFAULT_AUDIT) == (
-        "build/current-mimo-v2-jang2l-current-audit-after-singlebatch-tokenbuffer-skip-speed-rerun-20260609.json"
+        "build/current-mimo-v2-jang2l-current-audit-after-cache-vs-nocache-logprobs-20260609.json"
     )
     assert str(classifier.DEFAULT_SMOKE) == (
         "build/current-all-local-model-smoke-mimo-v25-jangtq2-current-source-textonly-l2-after-capability-fix-20260609/"

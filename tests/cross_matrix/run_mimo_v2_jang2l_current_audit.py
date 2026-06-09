@@ -25,7 +25,7 @@ from typing import Any
 DEFAULT_MODEL_PATH = Path("/Users/example/.mlxstudio/models/JANGQ-AI/MiMo-V2.5-JANGTQ_2")
 DEFAULT_MANIFEST = Path("build/current-mimo-jangtq2-local-manifest-20260607.tsv")
 DEFAULT_OUT = Path(
-    "build/current-mimo-v2-jang2l-current-audit-after-structured-schema-decode-20260609.json"
+    "build/current-mimo-v2-jang2l-current-audit-after-cache-vs-nocache-logprobs-20260609.json"
 )
 
 STRUCTURAL_ARTIFACT = Path("build/current-mimo-jang2l-local-structural-verify-20260606.json")
@@ -70,7 +70,7 @@ SOURCE_VS_QUANT_ARTIFACT = Path(
     "build/current-mimo-v2-jangtq2-source-vs-quant-first-divergence-preflight-20260607.json"
 )
 NO_SOURCE_EXACTNESS_CLASSIFIER_ARTIFACT = Path(
-    "build/current-mimo-v2-no-source-exactness-classifier-after-artifact-diagnosis-20260609.json"
+    "build/current-mimo-v2-no-source-exactness-classifier-after-lossless-token-trace-20260609.json"
 )
 SYNCED_LONG_TOOL_CACHE_ARTIFACT = Path(
     "build/current-mimo-v25-jang2l-synced-long-tool-cache-proof-20260606.json"
