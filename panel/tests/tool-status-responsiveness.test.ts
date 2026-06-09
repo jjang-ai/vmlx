@@ -1,9 +1,12 @@
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 
+const readPanelSource = (path: string) =>
+  readFileSync(new URL(`../${path}`, import.meta.url), 'utf8')
+
 describe('tool status responsiveness contract', () => {
   it('yields the Electron main loop after visible tool-status transitions', () => {
-    const source = readFileSync('src/main/ipc/chat.ts', 'utf8')
+    const source = readPanelSource('src/main/ipc/chat.ts')
 
     expect(source).toContain('const flushToolStatusToRenderer = async () =>')
     expect(source).toContain('await flushToolStatusToRenderer();')
@@ -11,7 +14,7 @@ describe('tool status responsiveness contract', () => {
   })
 
   it('flushes tool-status events while draining an already-buffered SSE chunk', () => {
-    const source = readFileSync('src/main/ipc/chat.ts', 'utf8')
+    const source = readPanelSource('src/main/ipc/chat.ts')
     const streamSseSource = source.slice(
       source.indexOf('const streamSSE = async'),
       source.indexOf('await streamSSE(reader);'),
@@ -24,7 +27,7 @@ describe('tool status responsiveness contract', () => {
   })
 
   it('detects partial ZAYA/Zyphra XML tool prefixes before raw markup renders', () => {
-    const source = readFileSync('src/main/ipc/chat.ts', 'utf8')
+    const source = readPanelSource('src/main/ipc/chat.ts')
 
     expect(source).toContain('<zyphra_tool_call\\b')
     expect(source).toContain('<function(?:=|\\b)')
@@ -36,7 +39,7 @@ describe('tool status responsiveness contract', () => {
   })
 
   it('has a stall watchdog while waiting for a buffered tool call to finish', () => {
-    const source = readFileSync('src/main/ipc/chat.ts', 'utf8')
+    const source = readPanelSource('src/main/ipc/chat.ts')
     const streamSseSource = source.slice(
       source.indexOf('const streamSSE = async'),
       source.indexOf('await streamSSE(reader);'),
@@ -50,7 +53,7 @@ describe('tool status responsiveness contract', () => {
   })
 
   it('marks tool status done whenever any tool status was shown', () => {
-    const source = readFileSync('src/main/ipc/chat.ts', 'utf8')
+    const source = readPanelSource('src/main/ipc/chat.ts')
     const doneIdx = source.indexOf('emitToolStatus("done", "", undefined')
     const preDone = source.substring(Math.max(0, doneIdx - 300), doneIdx)
 
@@ -59,13 +62,13 @@ describe('tool status responsiveness contract', () => {
   })
 
   it('does not leave a completed message summarized as generating', () => {
-    const source = readFileSync('src/renderer/src/components/chat/ToolCallStatus.tsx', 'utf8')
+    const source = readPanelSource('src/renderer/src/components/chat/ToolCallStatus.tsx')
 
     expect(source).toContain("const isGenerating = isActive && lastStatus.phase === 'generating'")
   })
 
   it('executes Responses function calls from completed output items with final arguments', () => {
-    const source = readFileSync('src/main/ipc/chat.ts', 'utf8')
+    const source = readPanelSource('src/main/ipc/chat.ts')
     const doneIdx = source.indexOf('responsesEventType === "response.output_item.done"')
     const executeIdx = source.indexOf('const executeToolCalls = async')
     const doneBlock = source.slice(doneIdx, source.indexOf('// Real-time usage', doneIdx))
@@ -83,7 +86,7 @@ describe('tool status responsiveness contract', () => {
   })
 
   it('recovers Responses function-call arguments from argument delta and done events', () => {
-    const source = readFileSync('src/main/ipc/chat.ts', 'utf8')
+    const source = readPanelSource('src/main/ipc/chat.ts')
     const responsesParser = source.slice(
       source.indexOf('// ── Responses API SSE parsing ──'),
       source.indexOf('// Real-time usage from response.usage events'),

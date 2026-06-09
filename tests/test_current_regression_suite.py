@@ -1082,6 +1082,22 @@ def test_noheavy_api_cache_contract_includes_responses_gateway_tool_and_stale_po
     assert "returns backend-unavailable for stale Responses session ports" in command
 
 
+def test_noheavy_api_cache_contract_includes_panel_tool_status_responses_argument_recovery():
+    from tests.cross_matrix import run_noheavy_api_cache_contract as gate
+    from tests.cross_matrix import release_regression_manifest as manifest
+
+    markers = gate.REQUIRED_NOHEAVY_API_CACHE_TEST_MARKERS
+
+    assert "recovers Responses function-call arguments from argument delta and done events" in markers
+    assert "panel_tool_status_responses_argument_recovery" in (
+        manifest.EXPECTED_CURRENT_NOHEAVY_API_CACHE_CHECKS
+    )
+    assert "panel/tests/tool-status-responsiveness.test.ts" in gate.SOURCE_HASH_FILES
+    command = " ".join(gate.COMMANDS["panel_tool_status_contracts"])
+    assert "tests/tool-status-responsiveness.test.ts" in command
+    assert "recovers Responses function-call arguments from argument delta and done events" in command
+
+
 def test_noheavy_api_cache_contract_includes_response_format_docs_boundary():
     from tests.cross_matrix import run_noheavy_api_cache_contract as gate
 

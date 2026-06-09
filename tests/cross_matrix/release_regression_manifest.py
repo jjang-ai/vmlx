@@ -219,6 +219,7 @@ EXPECTED_CURRENT_NOHEAVY_API_CACHE_CHECKS = (
     "gateway_standby_wake_routing",
     "gateway_responses_function_call_arguments_streaming",
     "gateway_stale_responses_port_rejection",
+    "panel_tool_status_responses_argument_recovery",
     "dsv4_native_cache_status",
     "dsv4_dsml_parser_residue_rejection",
     "dsv4_dsml_valid_tool_call_preserved",

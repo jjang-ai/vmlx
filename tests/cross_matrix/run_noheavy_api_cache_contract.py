@@ -58,7 +58,10 @@ SOURCE_HASH_FILES = (
     "tests/test_responses_history.py",
     "tests/test_tool_format.py",
     "panel/src/main/api-gateway.ts",
+    "panel/src/main/ipc/chat.ts",
+    "panel/src/renderer/src/components/chat/ToolCallStatus.tsx",
     "panel/tests/api-gateway-single-model.behavior.test.ts",
+    "panel/tests/tool-status-responsiveness.test.ts",
     "tests/cross_matrix/run_noheavy_api_cache_contract.py",
 )
 
@@ -133,6 +136,7 @@ REQUIRED_NOHEAVY_API_CACHE_TEST_MARKERS = (
     "auto-switches to a standby model by waking it before direct OpenAI streaming",
     "passes Responses function-call argument SSE through unchanged",
     "returns backend-unavailable for stale Responses session ports",
+    "recovers Responses function-call arguments from argument delta and done events",
 )
 
 COMMANDS: dict[str, list[str]] = {
@@ -338,6 +342,20 @@ COMMANDS: dict[str, list[str]] = {
             "returns backend-unavailable for stale Responses session ports"
         ),
     ],
+    "panel_tool_status_contracts": [
+        "npm",
+        "--prefix",
+        "panel",
+        "exec",
+        "vitest",
+        "run",
+        "tests/tool-status-responsiveness.test.ts",
+        "--",
+        "--reporter",
+        "verbose",
+        "--testNamePattern",
+        "recovers Responses function-call arguments from argument delta and done events",
+    ],
 }
 
 
@@ -404,6 +422,7 @@ def build_artifact(root: Path) -> dict[str, Any]:
     structured_guided_ok = commands["structured_guided_decoding_contracts"]["returncode"] == 0
     structured_smoke_ok = commands["structured_smoke_response_format_contracts"]["returncode"] == 0
     panel_gateway_ok = commands["panel_gateway_contracts"]["returncode"] == 0
+    panel_tool_status_ok = commands["panel_tool_status_contracts"]["returncode"] == 0
     checks = {
         "openai_chat_sampling_kwargs": (
             api_ok and "test_chat_and_responses_log_and_forward_supported_sampling_kwargs" not in missing_markers
@@ -546,6 +565,11 @@ def build_artifact(root: Path) -> dict[str, Any]:
         "gateway_stale_responses_port_rejection": (
             panel_gateway_ok
             and "returns backend-unavailable for stale Responses session ports"
+            not in missing_markers
+        ),
+        "panel_tool_status_responses_argument_recovery": (
+            panel_tool_status_ok
+            and "recovers Responses function-call arguments from argument delta and done events"
             not in missing_markers
         ),
         "dsv4_native_cache_status": (
