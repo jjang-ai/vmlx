@@ -1363,6 +1363,8 @@ def parse_tool_calls(text: str) -> Tuple[str, Optional[List[ToolCall]]]:
         # Parse parameters from <parameter=name>value</parameter> format
         param_pattern = r"<parameter=([^>]+)>\s*(.*?)\s*</parameter>"
         params = re.findall(param_pattern, params_block, re.DOTALL)
+        if not params:
+            continue
         arguments = {}
         for p_name, p_value in params:
             v = p_value.strip()
@@ -1401,6 +1403,8 @@ def parse_tool_calls(text: str) -> Tuple[str, Optional[List[ToolCall]]]:
             # Parse parameters: <parameter=key> value (terminated by next <parameter= or end)
             param_pattern = r"<parameter=([^>]+)>\s*(.*?)(?=\s*<parameter=|\s*$)"
             params = re.findall(param_pattern, params_block, re.DOTALL)
+            if not params:
+                continue
             arguments = {}
             for p_name, p_value in params:
                 v = p_value.strip()

@@ -548,6 +548,43 @@ class TestGenericToolCallParsing:
         cleaned, calls = parse_tool_calls(text)
         assert calls is None or len(calls) == 0
 
+    def test_generic_parser_rejects_empty_xml_function_arguments(self):
+        """Empty XML functions must not become executable `{}` tool args."""
+        from vmlx_engine.api.tool_calling import parse_tool_calls
+
+        text = (
+            "**Quick preamble:** Checking what's in `/tmp`...\n"
+            "<tool_call>\n"
+            "<function=exec_command>\n"
+            "</function>\n"
+            "</tool_call>"
+        )
+        cleaned, calls = parse_tool_calls(text)
+
+        assert calls is None
+        assert "Quick preamble" in cleaned
+
+    def test_generic_parser_keeps_xml_function_with_parameters(self):
+        """The empty-argument guard must not block valid XML parameters."""
+        import json
+
+        from vmlx_engine.api.tool_calling import parse_tool_calls
+
+        text = (
+            "<tool_call>"
+            "<function=exec_command>"
+            "<parameter=cmd>ls /tmp</parameter>"
+            "</function>"
+            "</tool_call>"
+        )
+        cleaned, calls = parse_tool_calls(text)
+
+        assert cleaned == ""
+        assert calls is not None
+        assert len(calls) == 1
+        assert calls[0].function.name == "exec_command"
+        assert json.loads(calls[0].function.arguments) == {"cmd": "ls /tmp"}
+
 
 # ──────────────────────────────────────────────────────────────────────
 # Cross-parser: reasoning + tool call in same output
