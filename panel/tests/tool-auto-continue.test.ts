@@ -68,6 +68,29 @@ describe('tool auto-continue policy', () => {
     }
   })
 
+  it('clears Responses tool-call buffers before follow-up and on stalled buffering', () => {
+    const source = readFileSync('src/main/ipc/chat.ts', 'utf8')
+    const toolLoopStart = source.indexOf('await executeToolCalls()')
+    const followUpStart = source.indexOf('if (!(await sendFollowUp())) break;', toolLoopStart)
+    const followUpBranch = source.slice(toolLoopStart, followUpStart)
+
+    expect(toolLoopStart).toBeGreaterThan(-1)
+    expect(followUpStart).toBeGreaterThan(toolLoopStart)
+    expect(followUpBranch).toContain('receivedToolCalls = []')
+    expect(followUpBranch).toContain('clientToolCallBuffering = false')
+    expect(followUpBranch.indexOf('receivedToolCalls = []')).toBeLessThan(
+      followUpBranch.indexOf('clientToolCallBuffering = false'),
+    )
+
+    const stallStart = source.indexOf('Tool call generation stalled')
+    const stallBranch = source.slice(stallStart, source.indexOf('await rdr.cancel()', stallStart) + 200)
+
+    expect(stallStart).toBeGreaterThan(-1)
+    expect(stallBranch).toContain('clientToolCallBuffering = false')
+    expect(stallBranch).toContain('await rdr.cancel()')
+    expect(stallBranch).not.toContain('executeToolCalls')
+  })
+
   it('responses stream parser accepts data-only event types from parsed payloads', () => {
     const source = readFileSync('src/main/ipc/chat.ts', 'utf8')
 
