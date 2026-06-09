@@ -748,6 +748,19 @@ class MLLMScheduler:
         if _is_mla and self.config.kv_cache_quantization != "none":
             logger.info("KV cache quantization disabled: MLA model (compressed KV latents)")
             self.config.kv_cache_quantization = "none"
+        if (
+            self._mixed_attention_cache_model
+            and getattr(self.config, "kv_cache_quantization_explicit", False) is False
+            and self.config.kv_cache_quantization != "none"
+        ):
+            logger.info(
+                "Mixed-SWA VLM cache detected — disabling auto q4/q8 stored-cache "
+                "quantization (was: %s). Native KVCache/RotatingKVCache prefix, "
+                "paged, and block-L2 cache remain active; explicit q4/q8 is a "
+                "diagnostic override until family-specific semantic parity is proven.",
+                self.config.kv_cache_quantization,
+            )
+            self.config.kv_cache_quantization = "none"
         if self.config.kv_cache_quantization != "none":
             if self.config.enable_prefix_cache:
                 bits = 4 if self.config.kv_cache_quantization == "q4" else 8

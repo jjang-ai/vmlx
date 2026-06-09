@@ -158,6 +158,39 @@ def test_qwen3_5_moe_linear_attention_keeps_selective_live_tq_and_stored_kv_q4(t
     assert os.environ.get("VMLX_FORCE_TQ_AUTO") == "1"
 
 
+def test_mimo_v2_auto_mode_keeps_prefix_cache_lossless_by_default(tmp_path, monkeypatch):
+    """MiMo mixed-SWA cache must not use lossy stored q4 in auto mode."""
+
+    (tmp_path / "config.json").write_text(json.dumps({
+        "model_type": "mimo_v2",
+        "num_hidden_layers": 48,
+        "head_dim": 192,
+        "v_head_dim": 128,
+        "num_attention_heads": 64,
+        "num_key_value_heads": 4,
+    }))
+    (tmp_path / "jang_config.json").write_text(json.dumps({
+        "architecture": {
+            "type": "mimo_v2",
+            "text_model_type": "mimo_v2",
+            "has_vision": True,
+            "has_audio": True,
+            "has_mtp_tensors": False,
+        }
+    }))
+    monkeypatch.delenv("VMLX_DISABLE_TQ_KV", raising=False)
+    monkeypatch.delenv("VMLX_FORCE_TQ_AUTO", raising=False)
+
+    args = _serve_args(str(tmp_path), kv_cache_quantization=None)
+
+    _run_serve_until_uvicorn(monkeypatch, args)
+
+    assert args.kv_cache_quantization == "none"
+    assert args.kv_cache_quantization_explicit is False
+    assert os.environ.get("VMLX_FORCE_TQ_AUTO") == "1"
+    assert os.environ.get("VMLX_DISABLE_TQ_KV") is None
+
+
 def test_explicit_kv_quantization_disables_loader_turboquant(tmp_path, monkeypatch):
     (tmp_path / "config.json").write_text(json.dumps({"model_type": "qwen3_5"}))
     monkeypatch.delenv("VMLX_DISABLE_TQ_KV", raising=False)
