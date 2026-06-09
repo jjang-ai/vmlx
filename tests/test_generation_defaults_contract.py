@@ -5,7 +5,7 @@ def test_generation_defaults_contract_default_out_tracks_current_release_proof_a
     from tests.cross_matrix import run_generation_defaults_contract as gate
 
     assert gate.DEFAULT_OUT == Path(
-        "build/current-generation-defaults-contract-after-do-sample-false-mimo-20260607.json"
+        "build/current-generation-defaults-contract-after-dsv4-preflight-refresh-20260608.json"
     )
 
 

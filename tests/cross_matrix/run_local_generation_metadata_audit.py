@@ -347,6 +347,12 @@ def audit_model(path_text: str) -> dict[str, Any]:
         and runtime_route["engine_is_mllm_force"] is False
     ):
         notes.append("step3p7_advertised_media_guarded_text_only")
+    if (
+        row["model_type"] == "step3p7"
+        and media_metadata["advertised_vision"]
+        and runtime_route["engine_is_mllm_default"] is True
+    ):
+        notes.append("step3p7_advertised_media_routes_mllm_by_default")
     if resolved_chat["max_tokens"] > 8192:
         notes.append("resolved_default_output_cap_above_8192")
     if resolved_chat["top_k"] < 0:

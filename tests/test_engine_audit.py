@@ -6547,10 +6547,17 @@ class TestStartupCompatibilityGuards:
         from vmlx_engine.utils import jang_loader
 
         seen = []
+        real_import_module = importlib.import_module
 
         def fake_import_module(name):
-            seen.append(name)
-            return SimpleNamespace()
+            if name in {
+                "jang_tools.hy3",
+                "mlx_lm.models.hy_v3",
+                "mlx_lm.models.bailing_hybrid",
+            }:
+                seen.append(name)
+                return SimpleNamespace()
+            return real_import_module(name)
 
         monkeypatch.setattr(jang_loader.importlib, "import_module", fake_import_module)
 
@@ -6572,18 +6579,29 @@ class TestStartupCompatibilityGuards:
         from vmlx_engine.utils import jang_loader
 
         seen = []
+        real_import_module = importlib.import_module
 
         def fake_import_module(name):
-            seen.append(name)
-            return SimpleNamespace()
+            if name == "jang_tools.mimo_v2.mlx_model":
+                seen.append(name)
+                return SimpleNamespace(Model=object, ModelArgs=object)
+            if name in {"jang_tools.mimo_v2.mlx_register", "mlx_lm.models.mimo_v2"}:
+                seen.append(name)
+                return SimpleNamespace()
+            return real_import_module(name)
 
         monkeypatch.setattr(jang_loader.importlib, "import_module", fake_import_module)
 
+        sys.modules.pop("mlx_vlm.models.mimo_v2", None)
         jang_loader._ensure_jang_family_runtime_supported(
             Path("/models/MiMo-V2.5-JANG_2L"), {"model_type": "mimo_v2"}
         )
 
-        assert seen == ["jang_tools.mimo_v2.mlx_register", "mlx_lm.models.mimo_v2"]
+        assert seen == [
+            "jang_tools.mimo_v2.mlx_register",
+            "mlx_lm.models.mimo_v2",
+            "jang_tools.mimo_v2.mlx_model",
+        ]
 
     def test_load_model_with_fallback_registers_mimo_v2_before_mlx_lm_resolution(
         self, monkeypatch
@@ -7702,10 +7720,10 @@ class TestStartupCompatibilityGuards:
         assert "sign_bundled_python_native_files()" in source
         assert 'find "$bundled_python" -type f' in source
         assert '-name "*.dylib" -o -name "*.so" -o -perm +111' in source
-        assert 'codesign --force --sign "$identity" "$native_file"' in source
+        assert 'codesign --force --timestamp --options runtime --sign "$identity" "$native_file"' in source
         assert "finalize_release_app_signature" in source
         assert (
-            'codesign --force --deep --options runtime --entitlements "$entitlements" '
+            'codesign --force --deep --timestamp --options runtime --entitlements "$entitlements" '
             '--sign "$identity" "$app_path"'
         ) in source
         assert 'codesign --verify --deep --strict --verbose=2 "$app_path"' in source
