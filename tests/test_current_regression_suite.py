@@ -334,8 +334,13 @@ def test_current_regression_suite_hashes_mlx_lm_runtime_patch_sources():
 
     required = {
         "vmlx_engine/runtime_patches/__init__.py",
+        "vmlx_engine/runtime_patches/deepseek_v4_register.py",
+        "vmlx_engine/runtime_patches/gemma4_processing.py",
+        "vmlx_engine/runtime_patches/gemma4_vision.py",
+        "vmlx_engine/runtime_patches/kimi_k25_mla.py",
         "vmlx_engine/runtime_patches/mlx_lm_compat.py",
         "vmlx_engine/runtime_patches/mlx_vlm_compat.py",
+        "tests/test_kimi_k25_mla_patch.py",
         "tests/test_mlx_lm_runtime_patches.py",
         "tests/test_single_active_batch_generator.py",
         "vmlx_engine/utils/single_batch_generator.py",

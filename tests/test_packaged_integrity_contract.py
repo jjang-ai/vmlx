@@ -500,6 +500,9 @@ def test_staged_app_engine_hash_parity_rejects_stale_packaged_runtime(tmp_path):
     assert "tq_disk_store.py" in runner.STAGED_APP_ENGINE_HASH_FILES
     assert "utils/hybrid_tq_cache.py" in runner.STAGED_APP_ENGINE_HASH_FILES
     assert "utils/mlx_vlm_compat.py" in runner.STAGED_APP_ENGINE_HASH_FILES
+    assert "runtime_patches/deepseek_v4_register.py" in runner.STAGED_APP_ENGINE_HASH_FILES
+    assert "runtime_patches/gemma4_vision.py" in runner.STAGED_APP_ENGINE_HASH_FILES
+    assert "runtime_patches/kimi_k25_mla.py" in runner.STAGED_APP_ENGINE_HASH_FILES
 
     source = tmp_path / "vmlx_engine/server.py"
     staged = (

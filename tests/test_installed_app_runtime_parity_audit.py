@@ -95,7 +95,10 @@ def test_installed_app_runtime_parity_hashes_packaged_engine_surface():
         in gate.CRITICAL_ENGINE_HASH_FILES
     )
     assert "runtime_patches/__init__.py" in gate.CRITICAL_ENGINE_HASH_FILES
+    assert "runtime_patches/deepseek_v4_register.py" in gate.CRITICAL_ENGINE_HASH_FILES
     assert "runtime_patches/gemma4_processing.py" in gate.CRITICAL_ENGINE_HASH_FILES
+    assert "runtime_patches/gemma4_vision.py" in gate.CRITICAL_ENGINE_HASH_FILES
+    assert "runtime_patches/kimi_k25_mla.py" in gate.CRITICAL_ENGINE_HASH_FILES
     assert "runtime_patches/mlx_lm_compat.py" in gate.CRITICAL_ENGINE_HASH_FILES
     assert "runtime_patches/mlx_vlm_compat.py" in gate.CRITICAL_ENGINE_HASH_FILES
 
