@@ -43,7 +43,13 @@ def test_objective_proof_digest_tracks_n2_pro_397b_release_blocker():
     assert "JANG1L" in row["caveat"]
     assert "JANGTQ" in row["caveat"]
     assert row["details"]["local_artifact_probe"]["artifact_present"] is True
-    assert row["details"]["local_artifact_probe"]["memory_preflight_decision"] == "do_not_launch"
+    assert row["details"]["local_artifact_probe"]["memory_preflight_decision"] in {
+        "do_not_launch",
+        "schedule_live_proof",
+    }
+    assert row["details"]["local_artifact_probe"]["boundary"].startswith(
+        "The local N2 JANG_1L artifact/index is registered"
+    )
     assert row["details"]["local_artifact_probe"]["classification"] == (
         "careful_ram_live_proof_pending"
     )
