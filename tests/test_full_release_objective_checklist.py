@@ -933,7 +933,7 @@ def test_full_release_objective_checklist_tracks_open_n2_pro_objective_row(
 ):
     _write_json(
         tmp_path
-        / "build/current-objective-proof-after-mimo-n2-gateway-pointer-refresh-20260609.json",
+        / "build/current-objective-proof-after-mimo-n2-runtime-refresh-20260609.json",
         {
             "requirements": [
                 {
@@ -944,23 +944,21 @@ def test_full_release_objective_checklist_tracks_open_n2_pro_objective_row(
                     "status": "open",
                     "evidence": [
                         "build/current-release-regression-manifest-after-mimo-live-refresh-20260608.json",
-                        "build/current-objective-proof-after-mimo-n2-gateway-pointer-refresh-20260609.json",
+                        "build/current-objective-proof-after-mimo-n2-runtime-refresh-20260609.json",
                     ],
                     "details": {
                         "local_artifact_probe": {
-                            "artifact_present": False,
-                            "searched_roots": [
-                                "/Users/example/.mlxstudio/models",
-                                "/Users/example/models",
-                            ],
-                            "patterns": [
-                                "*N2*",
-                                "*397*",
-                                "*JANG1L*",
-                                "*jang1l*",
-                            ],
+                            "artifact_present": True,
+                            "memory_preflight_decision": "do_not_launch",
+                            "launch_safe": False,
+                        },
+                        "noheavy_contracts": {
+                            "api_cache": "pass",
+                            "cache_architecture": "pass",
+                            "model_family_detection": "pass",
                         },
                         "required_next_evidence": [
+                            "memory_safe_live_launch_or_smaller_runtime_strategy",
                             "runtime_cache_api_ui_live_proof",
                             "typed_cache_prefix_paged_l2_restore",
                             "mlxstudio_settings_startup_parity",
@@ -982,7 +980,8 @@ def test_full_release_objective_checklist_tracks_open_n2_pro_objective_row(
     ]
     assert len(n2_rows) == 1
     assert n2_rows[0]["detail"]["status"] == "open"
-    assert n2_rows[0]["detail"]["local_artifact_probe"]["artifact_present"] is False
+    assert n2_rows[0]["detail"]["local_artifact_probe"]["artifact_present"] is True
+    assert n2_rows[0]["detail"]["local_artifact_probe"]["memory_preflight_decision"] == "do_not_launch"
     assert "runtime_cache_api_ui_live_proof" in n2_rows[0]["detail"][
         "required_next_evidence"
     ]

@@ -42,7 +42,7 @@ RELEASE_MANIFEST = Path(
     "build/current-release-regression-manifest-after-mimo-live-refresh-20260608.json"
 )
 OBJECTIVE_DIGEST = Path(
-    "build/current-objective-proof-after-mimo-n2-gateway-pointer-refresh-20260609.json"
+    "build/current-objective-proof-after-mimo-n2-runtime-refresh-20260609.json"
 )
 ISSUE179_AUDIT = Path(
     "build/current-issue179-minimax-k-root-cause-audit-after-parser-settings-parity-20260608.json"

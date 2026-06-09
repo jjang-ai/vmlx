@@ -18,7 +18,7 @@ def test_objective_proof_digest_default_out_tracks_current_release_proof_artifac
     from tests.cross_matrix import summarize_objective_proof as objective
 
     assert objective.DEFAULT_OUT == Path(
-        "build/current-objective-proof-after-mimo-n2-gateway-pointer-refresh-20260609.json"
+        "build/current-objective-proof-after-mimo-n2-runtime-refresh-20260609.json"
     )
 
 
@@ -34,7 +34,9 @@ def test_objective_proof_digest_tracks_n2_pro_397b_release_blocker():
     assert row["status"] == "open"
     assert "JANG1L" in row["caveat"]
     assert "JANGTQ" in row["caveat"]
-    assert row["details"]["local_artifact_probe"]["artifact_present"] is False
+    assert row["details"]["local_artifact_probe"]["artifact_present"] is True
+    assert row["details"]["local_artifact_probe"]["memory_preflight_decision"] == "do_not_launch"
+    assert row["details"]["noheavy_contracts"]["n2_family_policy"] is True
     assert "runtime_cache_api_ui_live_proof" in row["details"]["required_next_evidence"]
 
 

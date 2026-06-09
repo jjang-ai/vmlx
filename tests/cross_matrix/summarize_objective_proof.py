@@ -61,7 +61,7 @@ from tests.cross_matrix.release_regression_manifest import (
 )
 
 
-DEFAULT_OUT = Path("build/current-objective-proof-after-mimo-n2-gateway-pointer-refresh-20260609.json")
+DEFAULT_OUT = Path("build/current-objective-proof-after-mimo-n2-runtime-refresh-20260609.json")
 CURRENT_RELEASE_REGRESSION_MANIFEST_REL = (
     "build/current-release-regression-manifest-after-mimo-live-refresh-20260608.json"
 )
@@ -193,6 +193,15 @@ DSV4_BATCH_GENERATOR_WARMUP_ABLATION_REL = (
 )
 API_CACHE_CONTRACT_REL = "build/current-noheavy-api-cache-contract-after-gateway-stale-port-20260609.json"
 CACHE_ARCHITECTURE_CONTRACT_REL = "build/current-cache-architecture-contract-after-noheavy-contract-refresh-20260608.json"
+N2_PRO_JANG1L_LOCAL_MEMORY_PREFLIGHT_REL = (
+    "build/current-n2-pro-jang1l-local-memory-preflight-20260609.json"
+)
+N2_API_CACHE_CONTRACT_REL = (
+    "build/current-noheavy-api-cache-contract-after-mimo-n2-runtime-refresh-20260609.json"
+)
+N2_CACHE_ARCHITECTURE_CONTRACT_REL = (
+    "build/current-cache-architecture-contract-after-mimo-n2-runtime-refresh-20260609.json"
+)
 TOOL_CALL_CONTRACT_REL = "build/current-tool-call-contract-after-jangtq2-objective-refresh-20260607.json"
 PANEL_SETTINGS_CONTRACT_REL = "build/current-panel-settings-contract-proof-20260601-cache-ui-storage-quant.json"
 MAX_OUTPUT_CONTEXT_CONTRACT_REL = "build/current-max-output-context-contract-after-jangtq2-objective-refresh-20260607.json"
@@ -5504,6 +5513,9 @@ def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
         root, DSV4_BATCH_GENERATOR_WARMUP_ABLATION_REL
     )
     api_cache_contract = _load(root, API_CACHE_CONTRACT_REL)
+    n2_api_cache_contract = _load(root, N2_API_CACHE_CONTRACT_REL)
+    n2_cache_architecture_contract = _load(root, N2_CACHE_ARCHITECTURE_CONTRACT_REL)
+    n2_local_memory_preflight = _load(root, N2_PRO_JANG1L_LOCAL_MEMORY_PREFLIGHT_REL)
     panel_settings_contract = _load(root, PANEL_SETTINGS_CONTRACT_REL)
     max_output_context_contract_rel, max_output_context_contract = _load_first_present(
         root,
@@ -7076,29 +7088,73 @@ def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
         [
             CURRENT_RELEASE_REGRESSION_MANIFEST_REL,
             str(DEFAULT_OUT),
+            N2_PRO_JANG1L_LOCAL_MEMORY_PREFLIGHT_REL,
+            N2_API_CACHE_CONTRACT_REL,
+            N2_CACHE_ARCHITECTURE_CONTRACT_REL,
+            MODEL_FAMILY_CONTRACT_REL,
         ],
         caveat=(
             "N2 Pro 397B JANG1L/JANGTQ is now tracked as an explicit release "
-            "blocker. No current local artifact or live proof is registered in "
-            "the active worktree, so do not sign, notarize, tag, or publish a "
-            "release claiming N2 support until both quant profiles pass the "
-            "same runtime/cache/API/UI gates as the other release-critical "
-            "families."
+            "blocker. The current no-heavy parser/cache/family policy contracts "
+            "are present, and the local JANG_1L model/index preflight is "
+            "registered, but the preflight says not to launch on this host. Do "
+            "not sign, notarize, tag, or publish a release claiming N2 support "
+            "until both quant profiles pass the same live runtime/cache/API/UI "
+            "gates as the other release-critical families."
         ),
         details={
             "local_artifact_probe": {
-                "artifact_present": False,
-                "searched_roots": [
-                    "/Users/example/.mlxstudio/models",
-                    "/Users/example/models",
-                ],
-                "patterns": ["*N2*", "*397*", "*JANG1L*", "*jang1l*"],
+                "artifact_present": bool(n2_local_memory_preflight.get("model_exists")),
+                "index_exists": bool(n2_local_memory_preflight.get("index_exists")),
+                "model_path": n2_local_memory_preflight.get("model_path"),
+                "indexed_payload_gb_decimal": n2_local_memory_preflight.get(
+                    "indexed_payload_gb_decimal"
+                ),
+                "memory_preflight_decision": n2_local_memory_preflight.get("decision"),
+                "launch_safe": n2_local_memory_preflight.get("launch_safe"),
+                "vm_free_plus_speculative_gib": n2_local_memory_preflight.get(
+                    "vm_free_plus_speculative_gib"
+                ),
+                "required_extra_headroom_gib": n2_local_memory_preflight.get(
+                    "required_extra_headroom_gib"
+                ),
                 "boundary": (
-                    "No matching local N2 Pro 397B JANG1L/JANGTQ artifact was "
-                    "found during the 2026-06-08 focused no-heavy probe."
+                    "The local N2 JANG_1L artifact/index is registered, but the "
+                    "memory preflight says not to launch it on this host. This "
+                    "is not live runtime proof."
+                ),
+            },
+            "noheavy_contracts": {
+                "api_cache": n2_api_cache_contract.get("status"),
+                "cache_architecture": n2_cache_architecture_contract.get("status"),
+                "model_family_detection": model_family_contract.get("status"),
+                "n2_family_policy": (
+                    (model_family_contract.get("checks") or {}).get(
+                        "n2_pro_qwen35_moe_hybrid_vl_policy"
+                    )
+                    is True
+                ),
+                "turboquant_runtime_contract": (
+                    (n2_api_cache_contract.get("checks") or {}).get(
+                        "turboquant_kv_runtime_contract"
+                    )
+                    is True
+                ),
+                "turboquant_disk_roundtrip": (
+                    (n2_api_cache_contract.get("checks") or {}).get(
+                        "turboquant_disk_roundtrip"
+                    )
+                    is True
+                ),
+                "hybrid_cache_policy": (
+                    (n2_cache_architecture_contract.get("checks") or {}).get(
+                        "named_family_registry_cache_parser_contracts"
+                    )
+                    is True
                 ),
             },
             "required_next_evidence": [
+                "memory_safe_live_launch_or_smaller_runtime_strategy",
                 "runtime_cache_api_ui_live_proof",
                 "JANG1L local artifact metadata and structural verification",
                 "JANGTQ local artifact metadata and structural verification",
