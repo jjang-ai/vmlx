@@ -335,6 +335,7 @@ def test_current_regression_suite_hashes_mlx_lm_runtime_patch_sources():
     required = {
         "vmlx_engine/runtime_patches/__init__.py",
         "vmlx_engine/runtime_patches/mlx_lm_compat.py",
+        "vmlx_engine/runtime_patches/mlx_vlm_compat.py",
         "tests/test_mlx_lm_runtime_patches.py",
     }
 

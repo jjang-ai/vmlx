@@ -117,3 +117,29 @@ def test_lfm2_model_args_keeps_routed_scaling_default_for_old_configs():
         lfm2_moe.SwitchGLU = old_switch
 
     assert block.routed_scaling_factor == 1.0
+
+
+def test_gemma4_video_processor_accepts_hf_config_kwargs():
+    import vmlx_engine.runtime_patches.mlx_vlm_compat as compat
+    from mlx_vlm.models.gemma4.processing_gemma4 import Gemma4VideoProcessor
+
+    compat.install()
+
+    processor = Gemma4VideoProcessor(
+        patch_size=16,
+        pooling_kernel_size=3,
+        max_soft_tokens=70,
+        num_frames=32,
+        do_rescale=True,
+        rescale_factor=1 / 255,
+        do_normalize=True,
+        image_mean=[0.0, 0.0, 0.0],
+        image_std=[1.0, 1.0, 1.0],
+        do_convert_rgb=True,
+        do_sample_frames=True,
+        resample=3,
+        return_metadata=False,
+    )
+
+    assert processor.max_soft_tokens == 70
+    assert processor.num_frames == 32

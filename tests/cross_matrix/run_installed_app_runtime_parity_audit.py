@@ -51,6 +51,7 @@ CRITICAL_ENGINE_HASH_FILES = (
     "runtime_patches/__init__.py",
     "runtime_patches/gemma4_processing.py",
     "runtime_patches/mlx_lm_compat.py",
+    "runtime_patches/mlx_vlm_compat.py",
     "scheduler.py",
     "tool_parsers/dsml_tool_parser.py",
     "patches/mlx_vlm_mtp/qwen35_vl.py",

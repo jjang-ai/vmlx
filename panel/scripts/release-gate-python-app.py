@@ -466,6 +466,7 @@ BUNDLED_SOURCE_HASH_PATHS = (
     "runtime_patches/__init__.py",
     "runtime_patches/gemma4_processing.py",
     "runtime_patches/mlx_lm_compat.py",
+    "runtime_patches/mlx_vlm_compat.py",
     "scheduler.py",
     "patches/mlx_vlm_mtp/qwen35_vl.py",
     "utils/single_batch_generator.py",

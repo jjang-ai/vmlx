@@ -18,6 +18,7 @@ SOURCE_HASH_FILES = [
     "vmlx_engine/utils/jang_loader.py",
     "vmlx_engine/runtime_patches/__init__.py",
     "vmlx_engine/runtime_patches/mlx_lm_compat.py",
+    "vmlx_engine/runtime_patches/mlx_vlm_compat.py",
     "tests/test_jang_model_compat_pr155.py",
 ]
 COMMANDS = {

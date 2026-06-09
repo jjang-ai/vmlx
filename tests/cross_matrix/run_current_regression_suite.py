@@ -212,6 +212,7 @@ CURRENT_SUITE_SOURCE_HASH_FILES = (
     "vmlx_engine/prefix_cache.py",
     "vmlx_engine/runtime_patches/__init__.py",
     "vmlx_engine/runtime_patches/mlx_lm_compat.py",
+    "vmlx_engine/runtime_patches/mlx_vlm_compat.py",
     "vmlx_engine/reasoning/__init__.py",
     "vmlx_engine/reasoning/think_xml_parser.py",
     "vmlx_engine/reranker.py",
