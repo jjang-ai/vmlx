@@ -2064,6 +2064,125 @@ class TestOpenAILogprobsFormatting:
         }
 
     @pytest.mark.asyncio
+    async def test_streaming_chat_strict_xml_validates_final_text(
+        self, monkeypatch
+    ):
+        import json
+        from types import SimpleNamespace
+
+        import vmlx_engine.server as server
+        from vmlx_engine.api.models import ChatCompletionRequest, Message
+        from vmlx_engine.engine.base import GenerationOutput
+
+        class _Engine:
+            tokenizer = SimpleNamespace(has_thinking=False)
+
+            async def stream_chat(self, *, messages, **kwargs):
+                yield GenerationOutput(
+                    text="<catalog><label>CLIPFARM</label></catalog>",
+                    new_text="<catalog><label>CLIPFARM</label></catalog>",
+                    tokens=[],
+                    prompt_tokens=3,
+                    completion_tokens=1,
+                    finished=True,
+                    finish_reason="stop",
+                )
+
+        monkeypatch.setattr(server, "_default_timeout", 5.0)
+        monkeypatch.setattr(server, "_model_name", "loaded-model")
+        monkeypatch.setattr(server, "_model_path", None)
+        monkeypatch.setattr(server, "_reasoning_parser", None)
+        monkeypatch.setattr(server, "_tool_call_parser", None)
+
+        request = ChatCompletionRequest(
+            model="loaded-model",
+            messages=[Message(role="user", content="return catalog xml")],
+            stream=True,
+            response_format={
+                "type": "xml",
+                "xml_root_tag": "catalog",
+                "required_xml_fields": ["visible_text"],
+                "strict": True,
+            },
+        )
+
+        chunks = []
+        async for line in server.stream_chat_completion(
+            _Engine(),
+            [m.model_dump(exclude_none=True) for m in request.messages],
+            request,
+            fastapi_request=None,
+        ):
+            if line.startswith("data: ") and line.strip() != "data: [DONE]":
+                chunks.append(json.loads(line.removeprefix("data: ")))
+
+        errors = [chunk["error"] for chunk in chunks if "error" in chunk]
+        assert errors
+        assert errors[-1]["code"] == "xml_validation_failed"
+        assert "missing required XML fields" in errors[-1]["message"]
+        assert "visible_text" in errors[-1]["message"]
+
+    @pytest.mark.asyncio
+    async def test_streaming_responses_strict_xml_validates_final_text(
+        self, monkeypatch
+    ):
+        import json
+        from types import SimpleNamespace
+
+        import vmlx_engine.server as server
+        from vmlx_engine.api.models import ResponsesRequest
+        from vmlx_engine.engine.base import GenerationOutput
+
+        class _Engine:
+            tokenizer = SimpleNamespace(has_thinking=False)
+
+            async def stream_chat(self, *, messages, **kwargs):
+                yield GenerationOutput(
+                    text="<catalog><label>CLIPFARM</label></catalog>",
+                    new_text="<catalog><label>CLIPFARM</label></catalog>",
+                    tokens=[],
+                    prompt_tokens=3,
+                    completion_tokens=1,
+                    finished=True,
+                    finish_reason="stop",
+                )
+
+        monkeypatch.setattr(server, "_default_timeout", 5.0)
+        monkeypatch.setattr(server, "_model_name", "loaded-model")
+        monkeypatch.setattr(server, "_model_path", None)
+        monkeypatch.setattr(server, "_reasoning_parser", None)
+        monkeypatch.setattr(server, "_tool_call_parser", None)
+
+        request = ResponsesRequest(
+            model="loaded-model",
+            input="return catalog xml",
+            stream=True,
+            text={
+                "type": "xml",
+                "xml_root_tag": "catalog",
+                "required_xml_fields": ["visible_text"],
+                "strict": True,
+            },
+        )
+
+        events = []
+        async for chunk in server.stream_responses_api(
+            _Engine(),
+            [{"role": "user", "content": "return catalog xml"}],
+            request,
+            fastapi_request=None,
+        ):
+            for line in chunk.splitlines():
+                if line.startswith("data: "):
+                    events.append(json.loads(line.removeprefix("data: ")))
+
+        errors = [event for event in events if event.get("type") == "error"]
+        assert errors
+        assert errors[-1]["code"] == "xml_validation_failed"
+        assert "missing required XML fields" in errors[-1]["message"]
+        assert "visible_text" in errors[-1]["message"]
+
+    @pytest.mark.asyncio
     async def test_streaming_chat_suppresses_mid_text_dsml_partial_marker(
         self, monkeypatch
     ):

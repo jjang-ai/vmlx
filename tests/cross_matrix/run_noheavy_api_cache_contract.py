@@ -103,6 +103,8 @@ REQUIRED_NOHEAVY_API_CACHE_TEST_MARKERS = (
     "test_responses_text_format_strict_retries_failed_json_only",
     "test_chat_response_format_strict_retries_failed_xml_only",
     "test_responses_text_format_strict_retries_failed_xml_only",
+    "test_streaming_chat_strict_xml_validates_final_text",
+    "test_streaming_responses_strict_xml_validates_final_text",
     "test_chat_stream_tracks_cache_detail_alongside_cached_tokens",
     "test_chat_stream_finish_chunks_emit_cache_detail",
     "test_responses_stream_tracks_cache_detail_alongside_cached",
@@ -295,7 +297,9 @@ COMMANDS: dict[str, list[str]] = {
             "chat_response_format_strict_retries_failed_json_only "
             "or responses_text_format_strict_retries_failed_json_only "
             "or chat_response_format_strict_retries_failed_xml_only "
-            "or responses_text_format_strict_retries_failed_xml_only"
+            "or responses_text_format_strict_retries_failed_xml_only "
+            "or streaming_chat_strict_xml_validates_final_text "
+            "or streaming_responses_strict_xml_validates_final_text"
         ),
     ],
     "structured_guided_decoding_contracts": [
@@ -518,6 +522,13 @@ def build_artifact(root: Path) -> dict[str, Any]:
             and "test_chat_response_format_strict_retries_failed_xml_only"
             not in missing_markers
             and "test_responses_text_format_strict_retries_failed_xml_only"
+            not in missing_markers
+        ),
+        "structured_xml_stream_validation": (
+            structured_retry_ok
+            and "test_streaming_chat_strict_xml_validates_final_text"
+            not in missing_markers
+            and "test_streaming_responses_strict_xml_validates_final_text"
             not in missing_markers
         ),
         "structured_guided_json_schema_token_masking": (

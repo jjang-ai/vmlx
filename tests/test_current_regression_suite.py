@@ -981,7 +981,12 @@ def test_noheavy_api_cache_contract_includes_structured_json_retry():
     assert "test_responses_text_format_strict_retries_failed_json_only" in markers
     assert "test_chat_response_format_strict_retries_failed_xml_only" in markers
     assert "test_responses_text_format_strict_retries_failed_xml_only" in markers
+    assert "test_streaming_chat_strict_xml_validates_final_text" in markers
+    assert "test_streaming_responses_strict_xml_validates_final_text" in markers
     assert "structured_xml_retry_after_repair_failure" in (
+        manifest.EXPECTED_CURRENT_NOHEAVY_API_CACHE_CHECKS
+    )
+    assert "structured_xml_stream_validation" in (
         manifest.EXPECTED_CURRENT_NOHEAVY_API_CACHE_CHECKS
     )
     assert "tests/test_server.py" in gate.SOURCE_HASH_FILES
@@ -990,6 +995,8 @@ def test_noheavy_api_cache_contract_includes_structured_json_retry():
         "tests/test_server.py" in " ".join(cmd)
         and "strict_retries_failed_json_only" in " ".join(cmd)
         and "strict_retries_failed_xml_only" in " ".join(cmd)
+        and "streaming_chat_strict_xml_validates_final_text" in " ".join(cmd)
+        and "streaming_responses_strict_xml_validates_final_text" in " ".join(cmd)
         for cmd in gate.COMMANDS.values()
     )
 

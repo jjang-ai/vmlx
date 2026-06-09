@@ -15103,7 +15103,7 @@ async def stream_chat_completion(
         }
         yield f"data: {json.dumps(error_data)}\n\n"
 
-    # H4: Validate response_format (json_schema/json_object) at end of stream.
+    # H4: Validate response_format at end of stream.
     # Streaming can't reject mid-stream, so validate the accumulated output and
     # log a warning. For strict mode, emit an error SSE event.
     _rf = getattr(request, "response_format", None)
@@ -15112,31 +15112,59 @@ async def stream_chat_completion(
             accumulated_content.strip() if request_parser else accumulated_text.strip()
         )
         if _final_text:
-            _, parsed_json, is_valid, rf_error = parse_json_output(_final_text, _rf)
-            if not is_valid:
-                _rf_strict = False
-                if isinstance(_rf, dict):
-                    _rf_strict = _rf.get("json_schema", {}).get("strict", False)
-                elif hasattr(_rf, "json_schema") and _rf.json_schema:
-                    _rf_strict = getattr(_rf.json_schema, "strict", False)
-                if _rf_strict:
-                    logger.warning(
-                        f"Stream {response_id}: JSON schema validation failed (strict): {rf_error}"
-                    )
-                    error_data = {
-                        "id": response_id,
-                        "object": "chat.completion.chunk",
-                        "error": {
-                            "message": f"response_format strict mode: {rf_error}",
-                            "type": "invalid_request_error",
-                            "code": "json_validation_failed",
-                        },
-                    }
-                    yield f"data: {json.dumps(error_data)}\n\n"
-                else:
-                    logger.warning(
-                        f"Stream {response_id}: JSON validation failed: {rf_error}"
-                    )
+            _xml_config = _xml_response_format_config(_rf)
+            if _xml_config is not None:
+                _xml_report = repair_xml_output(
+                    _final_text,
+                    root_tag=_xml_config.get("root_tag"),
+                    required_fields=_xml_config.get("required_fields") or (),
+                )
+                if not _xml_report.get("is_valid"):
+                    rf_error = _xml_report.get("error")
+                    if _xml_config.get("strict"):
+                        logger.warning(
+                            f"Stream {response_id}: XML validation failed (strict): {rf_error}"
+                        )
+                        error_data = {
+                            "id": response_id,
+                            "object": "chat.completion.chunk",
+                            "error": {
+                                "message": f"response_format strict mode: {rf_error}",
+                                "type": "invalid_request_error",
+                                "code": "xml_validation_failed",
+                            },
+                        }
+                        yield f"data: {json.dumps(error_data)}\n\n"
+                    else:
+                        logger.warning(
+                            f"Stream {response_id}: XML validation failed: {rf_error}"
+                        )
+            else:
+                _, parsed_json, is_valid, rf_error = parse_json_output(_final_text, _rf)
+                if not is_valid:
+                    _rf_strict = False
+                    if isinstance(_rf, dict):
+                        _rf_strict = _rf.get("json_schema", {}).get("strict", False)
+                    elif hasattr(_rf, "json_schema") and _rf.json_schema:
+                        _rf_strict = getattr(_rf.json_schema, "strict", False)
+                    if _rf_strict:
+                        logger.warning(
+                            f"Stream {response_id}: JSON schema validation failed (strict): {rf_error}"
+                        )
+                        error_data = {
+                            "id": response_id,
+                            "object": "chat.completion.chunk",
+                            "error": {
+                                "message": f"response_format strict mode: {rf_error}",
+                                "type": "invalid_request_error",
+                                "code": "json_validation_failed",
+                            },
+                        }
+                        yield f"data: {json.dumps(error_data)}\n\n"
+                    else:
+                        logger.warning(
+                            f"Stream {response_id}: JSON validation failed: {rf_error}"
+                        )
 
     # Send final chunk with usage if requested
     if include_usage:
@@ -16201,7 +16229,7 @@ async def stream_responses_api(
             }
         )
 
-    # H4: Validate text format (json_schema/json_object) at end of stream.
+    # H4: Validate text format at end of stream.
     _text_fmt = getattr(request, "text", None)
     # Convert Pydantic model to dict for uniform access
     if _text_fmt and hasattr(_text_fmt, "model_dump"):
@@ -16212,10 +16240,33 @@ async def stream_responses_api(
         and _text_fmt.get("type") not in (None, "text")
     ):
         _rf_type = _text_fmt.get("type", "")
-        if (
-            _rf_type in ("json_schema", "json_object")
-            and display_text
-        ):
+        if _rf_type == "xml" and display_text:
+            _xml_config = _xml_response_format_config(_text_fmt)
+            if _xml_config is not None:
+                _xml_report = repair_xml_output(
+                    display_text,
+                    root_tag=_xml_config.get("root_tag"),
+                    required_fields=_xml_config.get("required_fields") or (),
+                )
+                if not _xml_report.get("is_valid"):
+                    _err = _xml_report.get("error")
+                    if _xml_config.get("strict"):
+                        logger.warning(
+                            f"Stream {response_id}: XML validation failed (strict): {_err}"
+                        )
+                        yield _sse(
+                            "error",
+                            {
+                                "type": "error",
+                                "message": f"response_format strict mode: {_err}",
+                                "code": "xml_validation_failed",
+                            },
+                        )
+                    else:
+                        logger.warning(
+                            f"Stream {response_id}: XML validation failed: {_err}"
+                        )
+        elif _rf_type in ("json_schema", "json_object") and display_text:
             _, _pj, _valid, _err = parse_json_output(display_text, _text_fmt)
             if not _valid:
                 _strict = _text_fmt.get("json_schema", {}).get("strict", False)
