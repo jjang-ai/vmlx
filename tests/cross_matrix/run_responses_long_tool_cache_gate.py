@@ -104,7 +104,21 @@ def _get_json(base_url: str, route: str, api_key: str | None, timeout: int = 60)
 def _post_json(base_url: str, route: str, api_key: str | None, body: dict[str, Any], timeout: int) -> dict[str, Any]:
     resp = requests.post(f"{base_url}{route}", headers=_headers(api_key), json=body, timeout=timeout)
     if resp.status_code >= 400:
-        raise RuntimeError(f"{route} HTTP {resp.status_code}: {resp.text[:2000]}")
+        return {
+            "id": None,
+            "object": "response",
+            "status": "http_error",
+            "http_status": resp.status_code,
+            "error": {
+                "route": route,
+                "status_code": resp.status_code,
+                "text": resp.text[:2000],
+            },
+            "output": [],
+            "output_text": "",
+            "usage": {},
+            "warnings": [f"{route} HTTP {resp.status_code}"],
+        }
     return resp.json()
 
 
@@ -142,7 +156,17 @@ def _fallback_file_line_marker(repo_root: Path, target: Path) -> str:
             key=lambda p: _tool_search_sort_key(repo_root, p),
         )
     else:
-        candidates = []
+        fallback_root = target.parent if target.parent.exists() else repo_root
+        candidates = sorted(
+            (
+                p
+                for p in fallback_root.rglob("*")
+                if p.is_file()
+                and p.suffix in {".py", ".ts", ".tsx", ".md"}
+                and GENERATED_TOOL_SEARCH_PARTS.isdisjoint(p.parts)
+            ),
+            key=lambda p: _tool_search_sort_key(repo_root, p),
+        )
     for candidate in candidates:
         try:
             lines = candidate.read_text(errors="replace").splitlines()
@@ -323,7 +347,11 @@ def _tool_output(repo_root: Path, call: dict[str, Any]) -> dict[str, Any]:
             else:
                 source_files = []
             if not source_files:
-                output = f"{rel} is not a readable file"
+                fallback = _fallback_file_line_marker(repo_root, target)
+                if fallback:
+                    output = f"{rel} is not a readable file\n{fallback}"
+                else:
+                    output = f"{rel} is not a readable file"
             else:
                 match_path: Path | None = None
                 match_lines: list[str] = []
@@ -751,6 +779,9 @@ def main() -> int:
                     "round": round_index,
                     "elapsed_s": round(elapsed_s, 3),
                     "response_id": previous_response_id,
+                    "http_status": response.get("http_status"),
+                    "status": response.get("status"),
+                    "error": response.get("error"),
                     "cached_tokens": _usage_cached_tokens(response),
                     "visible_chars": len(_extract_output_text(response)),
                     "reasoning_chars": len(_extract_reasoning(response)),

@@ -980,7 +980,10 @@ def _register_mimo_v2_mlx_vlm_runtime() -> None:
     import mlx.core as mx
 
     module_name = "mlx_vlm.models.mimo_v2"
-    if module_name in sys.modules:
+    existing_module = sys.modules.get(module_name)
+    if existing_module is not None and getattr(
+        existing_module, "_vmlx_mimo_v2_runtime_registered", False
+    ):
         return
 
     text_runtime = importlib.import_module("jang_tools.mimo_v2.mlx_model")
@@ -1272,6 +1275,20 @@ def _register_mimo_v2_mlx_vlm_runtime() -> None:
             self.unwired_modalities = list(
                 kwargs.get("unwired_modalities") or ["vision", "image", "video", "audio"]
             )
+
+        @property
+        def media_runtime_wired(self) -> bool:
+            status = str(self.media_runtime_status or "").lower()
+            if status in {
+                "",
+                "weights_preserved_text_runtime",
+                "text_runtime",
+                "text_only",
+                "unwired",
+                "preserved_disabled",
+            }:
+                return False
+            return not bool(self.unwired_modalities)
 
         @classmethod
         def from_dict(cls, params):
@@ -2857,8 +2874,11 @@ def _register_mimo_v2_mlx_vlm_runtime() -> None:
                 "speech_embeddings": 0,
             }
             self._mimo_v2_bind_media_weights = bool(
-                isinstance(getattr(config, "vision_config", None), VisionConfig)
-                or isinstance(getattr(config, "audio_config", None), AudioConfig)
+                getattr(config, "media_runtime_wired", False)
+                and (
+                    isinstance(getattr(config, "vision_config", None), VisionConfig)
+                    or isinstance(getattr(config, "audio_config", None), AudioConfig)
+                )
             )
             self.visual = (
                 VisionModel(config.vision_config)
@@ -3256,6 +3276,7 @@ def _register_mimo_v2_mlx_vlm_runtime() -> None:
     module.load_mimo_audio_rvq_from_bundle = load_mimo_audio_rvq_from_bundle
     module.load_mimo_audio_tokenizer_from_bundle = load_mimo_audio_tokenizer_from_bundle
     module.plan_mimo_audio_mel_segments = plan_mimo_audio_mel_segments
+    module._vmlx_mimo_v2_runtime_registered = True
     module.__file__ = getattr(text_runtime, "__file__", module_name)
     sys.modules[module_name] = module
 

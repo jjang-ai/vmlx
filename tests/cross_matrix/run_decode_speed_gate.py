@@ -248,7 +248,6 @@ ROWS: dict[str, Row] = {
         "/Users/example/.mlxstudio/models/JANGQ-AI/MiMo-V2.5-JANGTQ_2",
         is_mllm=True,
         tool_parser="xml_function",
-        reasoning_parser="think_xml",
         max_tokens=96,
         expected_min_tps=40.0,
         expected_min_pp=400.0,

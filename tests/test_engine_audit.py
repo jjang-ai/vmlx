@@ -6653,6 +6653,7 @@ class TestStartupCompatibilityGuards:
 
         monkeypatch.setattr(mllm.importlib, "import_module", fake_import_module)
 
+        sys.modules.pop("mlx_vlm.models.mimo_v2", None)
         mllm._register_local_mlx_vlm_runtime_if_needed(model_dir)
 
         assert seen == ["jang_tools.mimo_v2.mlx_model"]
@@ -7563,7 +7564,7 @@ class TestStartupCompatibilityGuards:
         source = Path("./vmlx_engine/mllm_batch_generator.py").read_text()
         start = source.index("_mimo_tight_text_prefill_requires_chunking = (")
         end = source.index(
-            "if not has_images and (not _hybrid_blocks_chunk",
+            "elif _mimo_tight_text_prefill_requires_chunking:",
             start,
         )
         block = source[start:end]
