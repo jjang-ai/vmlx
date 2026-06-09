@@ -786,7 +786,7 @@ def test_mimo_current_audit_separates_clean_artifact_from_runtime_blockers(
     assert result["component_ok"]["media_weights_preserved"] is False
     assert result["component_ok"]["media_runtime_capabilities_safe"] is False
     assert result["component_ok"]["media_model_metadata_text_only_contract"] is False
-    assert result["component_ok"]["media_runtime_implementation"] is True
+    assert result["component_ok"]["media_runtime_implementation"] is False
     assert result["component_ok"]["mimo_media_wired"] is False
     assert result["component_ok"]["manual_sink_does_not_clear_length_generation"] is True
     assert result["component_ok"]["disable_sink_does_not_clear_length_generation"] is True
@@ -794,7 +794,7 @@ def test_mimo_current_audit_separates_clean_artifact_from_runtime_blockers(
         "runtime_implementation_gap_with_model_metadata_overadvertising",
         "runtime_implementation_gap",
         "model_metadata_overadvertising",
-        "media_runtime_and_metadata_clear",
+        "media_components_present_runtime_capabilities_text_only",
     }
     assert result["diagnostics"]["mimo_media_runtime"]["config_parser_components"] == {
         "vision_config": True,
@@ -843,6 +843,11 @@ def test_mimo_current_audit_separates_clean_artifact_from_runtime_blockers(
         result["diagnostics"]["mimo_media_runtime"]["local_mimo_v2_multimodal_module"]
         is True
     )
+    assert (
+        result["diagnostics"]["mimo_media_runtime"]["source_media_components_present"]
+        is True
+    )
+    assert result["diagnostics"]["mimo_media_runtime"]["runtime_media_wired"] is False
     assert (
         result["diagnostics"]["mimo_media_runtime"]["missing_mimo_v2_multimodal_module"]
         is False

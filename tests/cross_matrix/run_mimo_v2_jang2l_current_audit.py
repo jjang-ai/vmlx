@@ -1945,7 +1945,6 @@ def _mimo_media_runtime_evidence(
                 "audio: Optional[List",
                 "process_audio_input",
                 "not request.images and not request.videos and not request.audio",
-                "audio=all_audio",
                 'kwargs["audio"] = audio',
                 "skip_audios_alias",
             )
@@ -2000,22 +1999,49 @@ def _mimo_media_runtime_evidence(
         or config_multimodal_status != "weights_preserved_text_runtime"
         or runtime_multimodal_mode != "weights_preserved_text_runtime"
     )
+    source_media_components_present = bool(
+        local_mimo_v2_multimodal_module_present
+        and media_weight_assignment_present
+        and mixed_inputs_embeds_present
+        and model_vision_bridge_present
+        and audio_projection_bridge_present
+        and audio_payload_forwarding_present
+        and audio_processor_output_bridge_present
+        and raw_audio_request_ingestion_present
+    )
     runtime_gap = bool(
         runtime_explicitly_unwired
         or missing_multimodal_module
         or not audio_tokenizer_runtime_execution_present
+        or not source_media_components_present
     )
+    runtime_media_supported = bool(runtime_caps.get("runtime_media_supported"))
+    runtime_media_wired = bool(
+        source_media_components_present and not runtime_gap and runtime_media_supported
+    )
+    runtime_capabilities_text_only = bool(
+        runtime_caps.get("safe_text_only_runtime_capabilities")
+    )
+    status_open = bool(
+        runtime_gap
+        or metadata_overadvertises
+        or not runtime_media_wired
+    )
+    if runtime_gap and metadata_overadvertises:
+        classification = "runtime_implementation_gap_with_model_metadata_overadvertising"
+    elif runtime_gap:
+        classification = "runtime_implementation_gap"
+    elif metadata_overadvertises:
+        classification = "model_metadata_overadvertising"
+    elif runtime_capabilities_text_only:
+        classification = "media_components_present_runtime_capabilities_text_only"
+    elif not runtime_media_supported:
+        classification = "media_components_present_runtime_capabilities_unwired"
+    else:
+        classification = "media_runtime_and_metadata_clear"
     return {
-        "status": "open" if runtime_gap or metadata_overadvertises else "pass",
-        "classification": (
-            "runtime_implementation_gap_with_model_metadata_overadvertising"
-            if runtime_gap and metadata_overadvertises
-            else "runtime_implementation_gap"
-            if runtime_gap
-            else "model_metadata_overadvertising"
-            if metadata_overadvertises
-            else "media_runtime_and_metadata_clear"
-        ),
+        "status": "open" if status_open else "pass",
+        "classification": classification,
         "config_error": config_error,
         "config_modalities": config_modalities,
         "config_preserved_modalities": config_preserved,
@@ -2040,8 +2066,9 @@ def _mimo_media_runtime_evidence(
             runtime_caps.get("runtime_capabilities_safe")
         ),
         "runtime_capabilities_media_supported": bool(
-            runtime_caps.get("runtime_media_supported")
+            runtime_media_supported
         ),
+        "source_media_components_present": bool(source_media_components_present),
         "runtime_explicitly_unwired": bool(runtime_explicitly_unwired),
         "missing_mimo_v2_multimodal_module": bool(missing_multimodal_module),
         "local_mimo_v2_multimodal_module": bool(
@@ -2079,7 +2106,7 @@ def _mimo_media_runtime_evidence(
         "audio_payload_forwarding": bool(audio_payload_forwarding_present),
         "audio_processor_output_bridge": bool(audio_processor_output_bridge_present),
         "raw_audio_request_ingestion": bool(raw_audio_request_ingestion_present),
-        "runtime_media_wired": False if runtime_gap else True,
+        "runtime_media_wired": bool(runtime_media_wired),
         "missing_runtime_components": (
             [
                 component
