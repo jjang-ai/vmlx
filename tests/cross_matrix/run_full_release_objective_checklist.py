@@ -29,6 +29,9 @@ MIMO_NO_SOURCE_EXACTNESS_CLASSIFIER = Path(
 NOHEAVY_API_CACHE = Path(
     "build/current-noheavy-api-cache-contract-after-responses-reasoning-empty-final-args-gateway-20260609.json"
 )
+RESPONSES_RAW_SSE_PARITY = Path(
+    "build/current-responses-raw-sse-parity-direct-gateway-gemma4-e2b-after-parser-20260609.json"
+)
 API_SURFACE_CONTRACT = Path(
     "build/current-api-surface-contract-20260602-v1554-stream-cache-reuse-refresh.json"
 )
@@ -515,6 +518,37 @@ def _panel_settings_contract_checks(data: dict[str, Any]) -> list[dict[str, Any]
     ]
     rows.extend(
         _check(f"panel_{name}", checks.get(name) is True, str(PANEL_SETTINGS_CONTRACT))
+        for name in required
+    )
+    return rows
+
+
+def _responses_raw_sse_parity_checks(data: dict[str, Any]) -> list[dict[str, Any]]:
+    checks = data.get("checks") if isinstance(data.get("checks"), dict) else {}
+    detail = {"missing_captures": data.get("missing_captures")}
+    required = [
+        "direct_capture_present",
+        "gateway_capture_present",
+        "tunnel_capture_present",
+        "all_required_surfaces_present",
+        "all_present_surfaces_parse_cleanly",
+        "all_present_surfaces_match_expected_function_name",
+        "all_present_surfaces_match_expected_arguments",
+        "all_present_surfaces_have_authoritative_args",
+        "authoritative_arguments_match_across_present_surfaces",
+        "all_present_surfaces_have_required_reasoning",
+    ]
+    rows = _simple_artifact_checks("responses_raw_sse_parity", data)
+    rows.extend(
+        _check(
+            f"responses_raw_sse_parity_{name}",
+            data.get("status") == "pass"
+            and checks.get(name) is True
+            if name == "all_required_surfaces_present"
+            else checks.get(name) is True,
+            str(RESPONSES_RAW_SSE_PARITY),
+            detail if name == "all_required_surfaces_present" else checks.get(name),
+        )
         for name in required
     )
     return rows
@@ -1552,6 +1586,7 @@ def _build(root: Path) -> dict[str, Any]:
     mimo = _load_json(root / MIMO_AUDIT)
     mimo_classifier = _load_json(root / MIMO_NO_SOURCE_EXACTNESS_CLASSIFIER)
     noheavy = _load_json(root / NOHEAVY_API_CACHE)
+    responses_raw_sse = _load_json(root / RESPONSES_RAW_SSE_PARITY)
     api_surface = _load_json(root / API_SURFACE_CONTRACT)
     panel_settings = _load_json(root / PANEL_SETTINGS_CONTRACT)
     tool_call = _load_json(root / TOOL_CALL_CONTRACT)
@@ -1580,6 +1615,9 @@ def _build(root: Path) -> dict[str, Any]:
     groups = {
         "release_packaging_ui": _release_manifest_checks(release_manifest),
         "api_cache_responses_contract": _noheavy_api_cache_checks(noheavy),
+        "responses_raw_sse_parity": _responses_raw_sse_parity_checks(
+            responses_raw_sse
+        ),
         "api_surface_endpoints_contract": _api_surface_contract_checks(api_surface),
         "ui_settings_parser_cache_contract": _panel_settings_contract_checks(panel_settings),
         "tool_json_xml_code_contract": _tool_call_contract_checks(tool_call),

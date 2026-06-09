@@ -14,6 +14,12 @@ def test_full_release_objective_checklist_uses_current_noheavy_api_cache_contrac
     )
 
 
+def test_full_release_objective_checklist_uses_current_responses_raw_sse_parity_contract():
+    assert checklist.RESPONSES_RAW_SSE_PARITY == Path(
+        "build/current-responses-raw-sse-parity-direct-gateway-gemma4-e2b-after-parser-20260609.json"
+    )
+
+
 def _write_json(path: Path, data: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(data) + "\n")
@@ -55,6 +61,28 @@ def _write_green_api_surface_artifact(tmp_path: Path) -> None:
                 "panel_performance_health_epipe_guard": True,
                 "panel_session_lifecycle_epipe_guard": True,
                 "all_required_panel_api_markers_present": True,
+            },
+        },
+    )
+
+
+def _write_green_responses_raw_sse_artifact(tmp_path: Path) -> None:
+    _write_json(
+        tmp_path / checklist.RESPONSES_RAW_SSE_PARITY,
+        {
+            "status": "pass",
+            "missing_captures": [],
+            "checks": {
+                "direct_capture_present": True,
+                "gateway_capture_present": True,
+                "tunnel_capture_present": True,
+                "all_required_surfaces_present": True,
+                "all_present_surfaces_parse_cleanly": True,
+                "all_present_surfaces_match_expected_function_name": True,
+                "all_present_surfaces_match_expected_arguments": True,
+                "all_present_surfaces_have_authoritative_args": True,
+                "authoritative_arguments_match_across_present_surfaces": True,
+                "all_present_surfaces_have_required_reasoning": True,
             },
         },
     )
@@ -1040,6 +1068,37 @@ def test_full_release_objective_checklist_blocks_open_gemma_qat_inventory():
     }
 
 
+def test_full_release_objective_checklist_blocks_missing_responses_tunnel_capture():
+    data = {
+        "artifact": str(checklist.RESPONSES_RAW_SSE_PARITY),
+        "exists": True,
+        "status": "open",
+        "missing_captures": ["tunnel"],
+        "checks": {
+            "direct_capture_present": True,
+            "gateway_capture_present": True,
+            "tunnel_capture_present": False,
+            "all_required_surfaces_present": False,
+            "all_present_surfaces_parse_cleanly": True,
+            "all_present_surfaces_match_expected_function_name": True,
+            "all_present_surfaces_match_expected_arguments": True,
+            "all_present_surfaces_have_authoritative_args": True,
+            "authoritative_arguments_match_across_present_surfaces": True,
+            "all_present_surfaces_have_required_reasoning": True,
+        },
+    }
+
+    rows = checklist._responses_raw_sse_parity_checks(data)
+    failed = {row["name"]: row for row in rows if not row["ok"]}
+
+    assert "responses_raw_sse_parity_status_pass" in failed
+    assert "responses_raw_sse_parity_tunnel_capture_present" in failed
+    assert "responses_raw_sse_parity_all_required_surfaces_present" in failed
+    assert failed["responses_raw_sse_parity_all_required_surfaces_present"][
+        "detail"
+    ] == {"missing_captures": ["tunnel"]}
+
+
 def test_full_release_objective_checklist_can_pass_when_all_evidence_is_green(
     tmp_path,
 ):
@@ -1136,6 +1195,7 @@ def test_full_release_objective_checklist_can_pass_when_all_evidence_is_green(
         },
     )
     _write_issue179_green_artifact(tmp_path)
+    _write_green_responses_raw_sse_artifact(tmp_path)
     _write_dsv4_green_artifact(tmp_path)
     _write_green_family_smokes(tmp_path)
     _write_json(
