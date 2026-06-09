@@ -63,6 +63,9 @@ DEFAULT_JANGTQ2_CURRENT_ALL_LOCAL = Path(
 DEFAULT_JANGTQ2_CONSERVATIVE_NO_CB_NO_PREFIX = Path(
     "build/current-mimo-v25-jangtq2-conservative-no-cb-no-prefix-exactness-20260608/summary.json"
 )
+DEFAULT_JANGTQ2_CACHE_VS_NOCACHE = Path(
+    "build/current-mimo-v2-jangtq2-cache-vs-nocache-next-token-logprobs-after-unit-label-20260609.json"
+)
 
 EXACTNESS_REASONS = {
     "expected_tool_argument_missing",
@@ -837,6 +840,36 @@ def _conservative_no_cb_no_prefix_summary(
     }
 
 
+def _cache_vs_nocache_summary(artifact: dict[str, Any] | None) -> dict[str, Any]:
+    if not isinstance(artifact, dict):
+        return {
+            "exists": False,
+            "status": None,
+            "top10_match": None,
+            "cache_hit_cached_tokens": None,
+            "cache_hit_cache_detail": None,
+            "all_modes_http_ok": None,
+            "modes": [],
+        }
+    rows = artifact.get("rows")
+    rows = rows if isinstance(rows, list) else []
+    modes = [str(row.get("mode")) for row in rows if isinstance(row, dict)]
+    expected_modes = {"no_cache_bypass", "cache_warm_store", "cache_hit"}
+    all_modes_present = expected_modes.issubset(set(modes))
+    all_modes_http_ok = all(
+        isinstance(row, dict) and row.get("status_code") == 200 for row in rows
+    )
+    return {
+        "exists": True,
+        "status": artifact.get("status"),
+        "top10_match": artifact.get("top10_match"),
+        "cache_hit_cached_tokens": artifact.get("cache_hit_cached_tokens"),
+        "cache_hit_cache_detail": artifact.get("cache_hit_cache_detail"),
+        "all_modes_http_ok": all_modes_present and all_modes_http_ok,
+        "modes": modes,
+    }
+
+
 def build_classification(
     audit: dict[str, Any],
     smoke: dict[str, Any],
@@ -854,6 +887,7 @@ def build_classification(
     jangtq2_hyphen_distribution: dict[str, Any] | None = None,
     jangtq2_current_all_local: dict[str, Any] | None = None,
     jangtq2_conservative_no_cb_no_prefix: dict[str, Any] | None = None,
+    jangtq2_cache_vs_nocache: dict[str, Any] | None = None,
     artifact_paths: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     component_ok = audit.get("component_ok") if isinstance(audit.get("component_ok"), dict) else {}
@@ -890,11 +924,21 @@ def build_classification(
     conservative_no_cb_no_prefix_summary = _conservative_no_cb_no_prefix_summary(
         jangtq2_conservative_no_cb_no_prefix
     )
+    cache_vs_nocache_summary = _cache_vs_nocache_summary(jangtq2_cache_vs_nocache)
 
     literal_no_cache_and_quant_disabled = bool(
         literal_variant_summary["plain_literal_no_cache_reuse_failed"] is True
         and jangtq2_current_all_local_summary["runtime_kv_quantization_disabled"] is True
         and jangtq2_current_all_local_summary["native_storage_quantization_disabled"] is True
+    )
+    cache_vs_nocache_excludes_cache_path = bool(
+        cache_vs_nocache_summary["status"] == "pass"
+        and cache_vs_nocache_summary["top10_match"] is True
+        and cache_vs_nocache_summary["all_modes_http_ok"] is True
+        and int(cache_vs_nocache_summary["cache_hit_cached_tokens"] or 0) > 0
+        and str(cache_vs_nocache_summary["cache_hit_cache_detail"] or "").startswith(
+            "paged"
+        )
     )
     excluded_surfaces = {
         "prompt_template_literal_corruption": (
@@ -909,7 +953,9 @@ def build_classification(
         ),
         "parser_argument_rewrite": parser_structure_valid,
         "prefix_paged_l2_or_kv_quant_primary_cause": (
-            cache_kv_l2_excluded or literal_no_cache_and_quant_disabled
+            cache_kv_l2_excluded
+            or literal_no_cache_and_quant_disabled
+            or cache_vs_nocache_excludes_cache_path
         ),
         "hidden_stochastic_sampling_primary_cause": deterministic_sampling_seen,
         "continuous_batching_primary_cause": (
@@ -1153,6 +1199,7 @@ def build_classification(
         "jangtq2_conservative_no_cb_no_prefix_artifact": str(
             DEFAULT_JANGTQ2_CONSERVATIVE_NO_CB_NO_PREFIX
         ),
+        "jangtq2_cache_vs_nocache_artifact": str(DEFAULT_JANGTQ2_CACHE_VS_NOCACHE),
     }
     if artifact_paths:
         paths.update(artifact_paths)
@@ -1178,6 +1225,7 @@ def build_classification(
         "jangtq2_conservative_no_cb_no_prefix_summary": (
             conservative_no_cb_no_prefix_summary
         ),
+        "jangtq2_cache_vs_nocache_summary": cache_vs_nocache_summary,
         "no_source_runtime_diagnostics": no_source_runtime_diagnostics,
         "exactness_failures": exactness_failures,
         "excluded_surfaces": excluded_surfaces,
@@ -1247,6 +1295,11 @@ def main() -> int:
         type=Path,
         default=DEFAULT_JANGTQ2_CONSERVATIVE_NO_CB_NO_PREFIX,
     )
+    parser.add_argument(
+        "--jangtq2-cache-vs-nocache",
+        type=Path,
+        default=DEFAULT_JANGTQ2_CACHE_VS_NOCACHE,
+    )
     parser.add_argument("--out", type=Path, default=DEFAULT_OUT)
     args = parser.parse_args()
 
@@ -1307,6 +1360,11 @@ def main() -> int:
         if args.jangtq2_conservative_no_cb_no_prefix.exists()
         else None
     )
+    jangtq2_cache_vs_nocache = (
+        _load(args.jangtq2_cache_vs_nocache)
+        if args.jangtq2_cache_vs_nocache.exists()
+        else None
+    )
     artifact = build_classification(
         _load(args.audit),
         _load_optional(args.smoke),
@@ -1325,6 +1383,7 @@ def main() -> int:
         jangtq2_conservative_no_cb_no_prefix=(
             jangtq2_conservative_no_cb_no_prefix
         ),
+        jangtq2_cache_vs_nocache=jangtq2_cache_vs_nocache,
         artifact_paths={
             "audit_artifact": str(args.audit),
             "smoke_artifact": str(args.smoke),
@@ -1349,6 +1408,9 @@ def main() -> int:
             "jangtq2_current_all_local_artifact": str(args.jangtq2_current_all_local),
             "jangtq2_conservative_no_cb_no_prefix_artifact": str(
                 args.jangtq2_conservative_no_cb_no_prefix
+            ),
+            "jangtq2_cache_vs_nocache_artifact": str(
+                args.jangtq2_cache_vs_nocache
             ),
         },
     )

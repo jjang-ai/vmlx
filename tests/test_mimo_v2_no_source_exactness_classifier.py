@@ -678,6 +678,70 @@ def test_mimo_no_source_classifier_excludes_cache_kv_from_no_cache_plain_literal
     )
 
 
+def test_mimo_no_source_classifier_excludes_cache_from_logprob_match_artifact():
+    audit = {
+        "component_ok": {
+            "api_cache_responses_contract": True,
+            "tool_protocol": True,
+            "exactness_cache_kv_quant_excluded": False,
+            "decode_speed_target": False,
+            "source_vs_quant_first_divergence": False,
+            "long_prompt_coherence": True,
+            "cb_system_prompt_working_set_pressure": True,
+            "mimo_media_wired": False,
+        }
+    }
+    smoke = {
+        "results": [
+            {
+                "failures": [
+                    {
+                        "label": "tool_required",
+                        "reason": "expected_tool_argument_missing",
+                        "actual": {"value": "blue"},
+                    }
+                ],
+                "server_log_tail": [
+                    "Resolved sampling kwargs {'temperature': 0.0, 'top_p': 1.0}"
+                ],
+            }
+        ]
+    }
+    cache_vs_nocache = {
+        "status": "pass",
+        "top10_match": True,
+        "cache_hit_cached_tokens": 31,
+        "cache_hit_cache_detail": "paged",
+        "rows": [
+            {"mode": "no_cache_bypass", "status_code": 200},
+            {"mode": "cache_warm_store", "status_code": 200},
+            {"mode": "cache_hit", "status_code": 200},
+        ],
+    }
+
+    artifact = build_classification(
+        audit,
+        smoke,
+        jangtq2_cache_vs_nocache=cache_vs_nocache,
+    )
+
+    assert artifact["jangtq2_cache_vs_nocache_summary"] == {
+        "exists": True,
+        "status": "pass",
+        "top10_match": True,
+        "cache_hit_cached_tokens": 31,
+        "cache_hit_cache_detail": "paged",
+        "all_modes_http_ok": True,
+        "modes": ["no_cache_bypass", "cache_warm_store", "cache_hit"],
+    }
+    assert (
+        artifact["excluded_surfaces"]["prefix_paged_l2_or_kv_quant_primary_cause"]
+        is True
+    )
+    assert artifact["excluded_surfaces"]["hidden_stochastic_sampling_primary_cause"] is True
+    assert artifact["unresolved_surfaces"]["artifact_quantization_or_decode_logits_quality"] is True
+
+
 def test_mimo_no_source_classifier_tracks_jang2l_json_sentinel_separately():
     audit = {
         "component_ok": {
