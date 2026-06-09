@@ -484,7 +484,13 @@ def _case_generated_tokens_and_top1(case: dict[str, Any]) -> tuple[list[str], li
         top1: list[str] = []
         for entry in top_entries:
             if isinstance(entry, dict) and entry:
-                top1.append(str(next(iter(entry.keys()))))
+                best_token = max(
+                    entry.items(),
+                    key=lambda item: item[1]
+                    if isinstance(item[1], int | float)
+                    else float("-inf"),
+                )[0]
+                top1.append(str(best_token))
             else:
                 top1.append("")
         return tokens, top1
