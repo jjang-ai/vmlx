@@ -207,6 +207,7 @@ EXPECTED_CURRENT_NOHEAVY_API_CACHE_CHECKS = (
     "streaming_cache_detail_usage",
     "structured_schema_decode_repair",
     "structured_xml_repair_validation_boundary",
+    "structured_repair_report_rates",
     "structured_json_retry_after_repair_failure",
     "structured_guided_json_schema_token_masking",
     "structured_live_smoke_response_format_adoption",

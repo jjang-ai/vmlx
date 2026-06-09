@@ -14,6 +14,7 @@ This helper intentionally does not load models. It runs focused tests that pin:
 - MLXStudio gateway stale-port and standby-wake routing contracts.
 - Structured JSON/schema repair and post-generation repair diagnostics.
 - Structured XML repair/validation diagnostics for benchmark/catalog callers.
+- Structured repair benchmark raw-vs-repaired/validated summary rates.
 - Guided JSON/schema token masking on compatible llguidance text paths.
 - Live-smoke benchmark request adoption for JSON schema response_format.
 - One-shot strict JSON-only retry after unrecoverable repair/schema failure.
@@ -42,6 +43,7 @@ SOURCE_HASH_FILES = (
     "vmlx_engine/api/ollama_adapter.py",
     "docs/guides/server.md",
     "docs/reference/configuration.md",
+    "bench/structured_output_repair_report.py",
     "bench/all_local_model_smoke.py",
     "tests/test_all_local_model_smoke.py",
     "tests/test_structured_output.py",
@@ -86,6 +88,7 @@ REQUIRED_NOHEAVY_API_CACHE_TEST_MARKERS = (
     "test_reports_nested_object_json_string_schema_decode",
     "test_reports_markdown_extraction_as_repair_with_required_fields",
     "test_repair_records_supports_xml_root_and_required_fields",
+    "test_repair_records_reports_raw_and_repaired_rates",
     "test_json_schema_processor_masks_non_json_start_token",
     "test_chat_response_format_forwards_guided_json_hint",
     "test_responses_text_format_forwards_guided_json_hint",
@@ -266,6 +269,7 @@ COMMANDS: dict[str, list[str]] = {
             "or json_schema_coerces_string_to_array "
             "or chat_completion_repairs_and_canonicalizes_schema_json "
             "or repair_records_preserves_raw_vs_repaired_counts "
+            "or repair_records_reports_raw_and_repaired_rates "
             "or reports_markdown_extraction_as_repair_with_required_fields "
             "or repair_records_supports_xml_root_and_required_fields"
         ),
@@ -467,6 +471,11 @@ def build_artifact(root: Path) -> dict[str, Any]:
             and "test_reports_markdown_extraction_as_repair_with_required_fields"
             not in missing_markers
             and "test_repair_records_supports_xml_root_and_required_fields"
+            not in missing_markers
+        ),
+        "structured_repair_report_rates": (
+            structured_output_ok
+            and "test_repair_records_reports_raw_and_repaired_rates"
             not in missing_markers
         ),
         "structured_json_retry_after_repair_failure": (

@@ -1043,6 +1043,23 @@ def test_noheavy_api_cache_contract_includes_structured_xml_repair():
     )
 
 
+def test_noheavy_api_cache_contract_includes_structured_repair_rates():
+    from tests.cross_matrix import run_noheavy_api_cache_contract as gate
+    from tests.cross_matrix import release_regression_manifest as manifest
+
+    markers = gate.REQUIRED_NOHEAVY_API_CACHE_TEST_MARKERS
+
+    assert "test_repair_records_reports_raw_and_repaired_rates" in markers
+    assert "structured_repair_report_rates" in (
+        manifest.EXPECTED_CURRENT_NOHEAVY_API_CACHE_CHECKS
+    )
+    assert "bench/structured_output_repair_report.py" in gate.SOURCE_HASH_FILES
+    assert "tests/test_structured_output_repair_report.py" in gate.SOURCE_HASH_FILES
+    command = " ".join(gate.COMMANDS["structured_output_repair_contracts"])
+    assert "tests/test_structured_output_repair_report.py" in command
+    assert "repair_records_reports_raw_and_repaired_rates" in command
+
+
 def test_noheavy_api_cache_contract_includes_response_format_docs_boundary():
     from tests.cross_matrix import run_noheavy_api_cache_contract as gate
 
