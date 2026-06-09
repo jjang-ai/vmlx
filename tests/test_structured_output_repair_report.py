@@ -54,6 +54,25 @@ def test_repair_records_preserves_raw_vs_repaired_counts():
     assert repaired[2]["structured_output"]["is_valid"] is False
 
 
+def test_repair_records_does_not_store_schema_invalid_json_as_parsed_payload():
+    records = [
+        {
+            "id": "schema_invalid",
+            "text": '{"visible_text": 123}',
+        },
+    ]
+
+    repaired, summary = repair_records(records, response_format=_response_format())
+
+    assert summary["records"] == 1
+    assert summary["valid"] == 0
+    assert summary["invalid"] == 1
+    assert repaired[0]["structured_output"]["is_valid"] is False
+    assert repaired[0]["structured_output"]["raw_json_ok"] is True
+    assert repaired[0]["structured_output"]["raw_schema_ok"] is False
+    assert repaired[0]["structured_output"]["parsed"] is None
+
+
 def test_repair_records_supports_xml_root_and_required_fields():
     records = [
         {

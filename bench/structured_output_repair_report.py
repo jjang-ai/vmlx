@@ -94,27 +94,28 @@ def repair_records(
         else:
             report = repair_json_output(text, response_format)
         out = dict(record)
+        is_valid = bool(report["is_valid"])
         if response_format.get("type") == "xml":
             out["structured_output"] = {
                 "index": index,
-                "is_valid": report["is_valid"],
+                "is_valid": is_valid,
                 "error": report["error"],
                 "raw_xml_ok": report["raw_xml_ok"],
                 "raw_fields_ok": report["raw_fields_ok"],
                 "repair_needed": report["repair_needed"],
                 "repair_actions": report["repair_actions"],
-                "xml": report["xml"],
+                "xml": report["xml"] if is_valid else None,
             }
         else:
             out["structured_output"] = {
                 "index": index,
-                "is_valid": report["is_valid"],
+                "is_valid": is_valid,
                 "error": report["error"],
                 "raw_json_ok": report["raw_json_ok"],
                 "raw_schema_ok": report["raw_schema_ok"],
                 "repair_needed": report["repair_needed"],
                 "repair_actions": report["repair_actions"],
-                "parsed": report["parsed"],
+                "parsed": report["parsed"] if is_valid else None,
             }
         repaired_records.append(out)
 
