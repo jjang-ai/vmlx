@@ -1225,6 +1225,12 @@ def test_current_regression_suite_tracks_responses_raw_sse_parity_contract():
     command = " ".join(suite.CURRENT_SUITE_COMMANDS["focused_regression_pytest"])
     assert "tests/test_responses_raw_sse_parity_contract.py" in command
     assert "responses_raw_sse_parity" in command
+    parity_command = " ".join(
+        suite.CURRENT_SUITE_COMMANDS["responses_raw_sse_parity_contract"]
+    )
+    assert "--expected-function-name lookup" in parity_command
+    assert "--expected-arguments {\"query\":\"alpha\"}" in parity_command
+    assert "--require-reasoning-events" in parity_command
 
 
 def test_noheavy_api_cache_contract_default_out_tracks_current_suite_artifact():

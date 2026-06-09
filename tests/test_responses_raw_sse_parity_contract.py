@@ -82,6 +82,54 @@ def test_raw_sse_parity_fails_when_gateway_loses_arguments(tmp_path):
     )
 
 
+def test_raw_sse_parity_fails_when_capture_arguments_do_not_match_expected(tmp_path):
+    direct = tmp_path / "direct.sse"
+    gateway = tmp_path / "gateway.sse"
+    tunnel = tmp_path / "tunnel.sse"
+    for path in (direct, gateway, tunnel):
+        path.write_text(_sse(arguments='{"query":"wrong"}'))
+
+    artifact = build_artifact(
+        direct_sse=direct,
+        gateway_sse=gateway,
+        tunnel_sse=tunnel,
+        expected_function_name="lookup",
+        expected_arguments='{"query":"alpha"}',
+    )
+
+    assert artifact["status"] == "fail"
+    assert artifact["checks"]["all_present_surfaces_match_expected_arguments"] is False
+    assert artifact["captures"]["direct"]["expected_arguments_match"] is False
+
+
+def test_raw_sse_parity_can_require_reasoning_events(tmp_path):
+    direct = tmp_path / "direct.sse"
+    gateway = tmp_path / "gateway.sse"
+    tunnel = tmp_path / "tunnel.sse"
+    no_reasoning = _sse().replace(
+        """event: response.reasoning_summary_text.delta
+data: {"type":"response.reasoning_summary_text.delta","delta":"checking"}
+
+""",
+        "",
+    )
+    for path in (direct, gateway, tunnel):
+        path.write_text(no_reasoning)
+
+    artifact = build_artifact(
+        direct_sse=direct,
+        gateway_sse=gateway,
+        tunnel_sse=tunnel,
+        expected_function_name="lookup",
+        expected_arguments='{"query":"alpha"}',
+        require_reasoning_events=True,
+    )
+
+    assert artifact["status"] == "fail"
+    assert artifact["checks"]["all_present_surfaces_have_required_reasoning"] is False
+    assert artifact["captures"]["direct"]["has_required_reasoning_events"] is False
+
+
 def test_raw_sse_parity_passes_when_all_surfaces_match(tmp_path):
     direct = tmp_path / "direct.sse"
     gateway = tmp_path / "gateway.sse"
@@ -93,7 +141,12 @@ def test_raw_sse_parity_passes_when_all_surfaces_match(tmp_path):
         direct_sse=direct,
         gateway_sse=gateway,
         tunnel_sse=tunnel,
+        expected_function_name="lookup",
+        expected_arguments='{"query":"alpha"}',
+        require_reasoning_events=True,
     )
 
     assert artifact["status"] == "pass"
     assert artifact["checks"]["all_required_surfaces_present"] is True
+    assert artifact["checks"]["all_present_surfaces_match_expected_arguments"] is True
+    assert artifact["checks"]["all_present_surfaces_have_required_reasoning"] is True

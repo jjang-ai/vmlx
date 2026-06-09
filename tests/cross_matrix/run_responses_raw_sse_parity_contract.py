@@ -109,6 +109,9 @@ def build_artifact(
     direct_sse: Path | None,
     gateway_sse: Path | None,
     tunnel_sse: Path | None,
+    expected_function_name: str | None = None,
+    expected_arguments: str | None = None,
+    require_reasoning_events: bool = False,
 ) -> dict[str, Any]:
     captures: dict[str, dict[str, Any]] = {}
     missing: list[str] = []
@@ -121,10 +124,26 @@ def build_artifact(
             captures[name] = {"present": False}
             missing.append(name)
             continue
+        classified = classify_sse_capture(path.read_text())
+        classified["expected_function_name_match"] = (
+            True
+            if expected_function_name is None
+            else classified.get("function_name") == expected_function_name
+        )
+        classified["expected_arguments_match"] = (
+            True
+            if expected_arguments is None
+            else classified.get("authoritative_arguments") == expected_arguments
+        )
+        classified["has_required_reasoning_events"] = (
+            True
+            if not require_reasoning_events
+            else int(classified.get("reasoning_events") or 0) > 0
+        )
         captures[name] = {
             "present": True,
             "path": str(path),
-            **classify_sse_capture(path.read_text()),
+            **classified,
         }
 
     comparable = [name for name, row in captures.items() if row.get("present")]
@@ -138,11 +157,55 @@ def build_artifact(
         for name, row in captures.items()
         if row.get("present")
     }
+    present_without_parse_errors = {
+        name: int(row.get("parse_errors") or 0) == 0
+        for name, row in captures.items()
+        if row.get("present")
+    }
+    expected_function_matches = {
+        name: bool(row.get("expected_function_name_match"))
+        for name, row in captures.items()
+        if row.get("present")
+    }
+    expected_arguments_matches = {
+        name: bool(row.get("expected_arguments_match"))
+        for name, row in captures.items()
+        if row.get("present")
+    }
+    required_reasoning_present = {
+        name: bool(row.get("has_required_reasoning_events"))
+        for name, row in captures.items()
+        if row.get("present")
+    }
     mismatch = len(set(args_by_surface.values())) > 1 if args_by_surface else False
     all_required_present = not missing
     all_present_have_args = bool(comparable) and all(present_with_args.values())
+    all_present_parse_clean = bool(comparable) and all(
+        present_without_parse_errors.values()
+    )
+    all_expected_functions_match = bool(comparable) and all(
+        expected_function_matches.values()
+    )
+    all_expected_arguments_match = bool(comparable) and all(
+        expected_arguments_matches.values()
+    )
+    all_required_reasoning_present = bool(comparable) and all(
+        required_reasoning_present.values()
+    )
 
-    if mismatch or (comparable and not all_present_have_args):
+    if (
+        mismatch
+        or (
+            comparable
+            and not (
+                all_present_have_args
+                and all_present_parse_clean
+                and all_expected_functions_match
+                and all_expected_arguments_match
+                and all_required_reasoning_present
+            )
+        )
+    ):
         status = "fail"
     elif all_required_present and all_present_have_args:
         status = "pass"
@@ -158,12 +221,21 @@ def build_artifact(
             "gateway_capture_present": captures["gateway"].get("present") is True,
             "tunnel_capture_present": captures["tunnel"].get("present") is True,
             "all_present_surfaces_have_authoritative_args": all_present_have_args,
+            "all_present_surfaces_parse_cleanly": all_present_parse_clean,
             "authoritative_arguments_match_across_present_surfaces": not mismatch,
+            "all_present_surfaces_match_expected_function_name": all_expected_functions_match,
+            "all_present_surfaces_match_expected_arguments": all_expected_arguments_match,
+            "all_present_surfaces_have_required_reasoning": all_required_reasoning_present,
             "all_required_surfaces_present": all_required_present,
+        },
+        "expected": {
+            "function_name": expected_function_name,
+            "arguments": expected_arguments,
+            "require_reasoning_events": require_reasoning_events,
         },
         "boundary": (
             "pass requires direct local server, panel gateway, and tunnel raw SSE "
-            "captures with matching authoritative function_call arguments"
+            "captures with matching expected authoritative function_call arguments"
         ),
     }
 
@@ -173,6 +245,9 @@ def main() -> None:
     parser.add_argument("--direct-sse", type=Path)
     parser.add_argument("--gateway-sse", type=Path)
     parser.add_argument("--tunnel-sse", type=Path)
+    parser.add_argument("--expected-function-name")
+    parser.add_argument("--expected-arguments")
+    parser.add_argument("--require-reasoning-events", action="store_true")
     parser.add_argument("--out", type=Path, default=DEFAULT_OUT)
     args = parser.parse_args()
 
@@ -180,6 +255,9 @@ def main() -> None:
         direct_sse=args.direct_sse,
         gateway_sse=args.gateway_sse,
         tunnel_sse=args.tunnel_sse,
+        expected_function_name=args.expected_function_name,
+        expected_arguments=args.expected_arguments,
+        require_reasoning_events=args.require_reasoning_events,
     )
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(json.dumps(artifact, indent=2, sort_keys=True) + "\n")

@@ -711,6 +711,11 @@ CURRENT_SUITE_COMMANDS: dict[str, list[str]] = {
     "responses_raw_sse_parity_contract": [
         sys.executable,
         "tests/cross_matrix/run_responses_raw_sse_parity_contract.py",
+        "--expected-function-name",
+        "lookup",
+        "--expected-arguments",
+        '{"query":"alpha"}',
+        "--require-reasoning-events",
         "--out",
         "build/current-responses-raw-sse-parity-20260609.json",
     ],
