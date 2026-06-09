@@ -42,7 +42,7 @@ DEFERRED_RELEASE_OPEN_REQUIREMENTS = {
 }
 
 CURRENT_OBJECTIVE_DIGEST_ARTIFACT = (
-    "build/current-objective-proof-after-mimo-model-upload-action-20260608.json"
+    "build/current-objective-proof-after-mimo-n2-gateway-pointer-refresh-20260609.json"
 )
 
 CURRENT_SUITE_SOURCE_HASH_FILES = (

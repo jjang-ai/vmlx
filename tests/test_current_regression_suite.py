@@ -1530,7 +1530,7 @@ def test_current_regression_suite_refreshes_current_objective_digest_artifact(
 
     assert artifact["status"] == "pass"
     assert suite.CURRENT_OBJECTIVE_DIGEST_ARTIFACT == (
-        "build/current-objective-proof-after-mimo-model-upload-action-20260608.json"
+        "build/current-objective-proof-after-mimo-n2-gateway-pointer-refresh-20260609.json"
     )
     assert any(
         name == "objective_digest"

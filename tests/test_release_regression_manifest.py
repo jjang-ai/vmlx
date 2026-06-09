@@ -15162,7 +15162,7 @@ def test_release_regression_manifest_tracks_packaged_integrity_with_runner_artif
     assert "Version triples" in joined
     assert "bundled Python hash parity" in joined
     assert "objective proof digest" in joined
-    assert "current-objective-proof-after-mimo-model-upload-action-20260608.json" in joined
+    assert "current-objective-proof-after-mimo-n2-gateway-pointer-refresh-20260609.json" in joined
     assert "objective-gate-enforced" in joined
     assert "verify-bundled" in joined
 
@@ -15230,7 +15230,7 @@ def test_release_regression_manifest_tracks_current_updater_and_i18n_rechecks():
 
     ling = rows["ling-bailing-multilingual-quality-live"]
     ling_joined = " ".join(ling["commands"] + ling["artifacts"] + ling["proves"])
-    assert "current-objective-proof-after-mimo-model-upload-action-20260608.json" in ling_joined
+    assert "current-objective-proof-after-mimo-n2-gateway-pointer-refresh-20260609.json" in ling_joined
 
 
 def test_release_regression_manifest_tracks_live_only_boundaries():
