@@ -859,7 +859,16 @@ def _drop_tool_visible_channel_marker(
 ) -> str | None:
     if not text or not tool_calls:
         return text
-    if text.strip().lower() in {"thought", "analysis"}:
+    if text.strip().lower() in {
+        "thought",
+        "analysis",
+        "<|image|>",
+        "<image|>",
+        "<|audio|>",
+        "<audio|>",
+        "<|video|>",
+        "<video|>",
+    }:
         return None
     return text
 

@@ -8350,7 +8350,26 @@ class TestStartupCompatibilityGuards:
         assert ") and not is_xml_function_native_tool_prompt:" in source
         assert server_source.count("raw_preview={tool_required_preview!r}") >= 2
         assert "def _drop_tool_visible_channel_marker(" in server_source
-        assert 'text.strip().lower() in {"thought", "analysis"}' in server_source
+        assert "text.strip().lower() in {" in server_source
+        assert '"thought"' in server_source
+        assert '"analysis"' in server_source
+        assert '"<audio|>"' in server_source
+
+    def test_tool_visible_channel_marker_drops_exact_gemma4_modality_sentinels_only(self):
+        """Gemma4 tool-call responses must not expose lone modality sentinels."""
+        from vmlx_engine.server import _drop_tool_visible_channel_marker
+
+        tool_calls = [{"function": {"name": "record_fact", "arguments": "{}"}}]
+
+        assert _drop_tool_visible_channel_marker("<audio|>", tool_calls) is None
+        assert _drop_tool_visible_channel_marker("<|audio|>", tool_calls) is None
+        assert _drop_tool_visible_channel_marker("<image|>", tool_calls) is None
+        assert _drop_tool_visible_channel_marker("<video|>", tool_calls) is None
+        assert (
+            _drop_tool_visible_channel_marker("called record_fact <audio|>", tool_calls)
+            == "called record_fact <audio|>"
+        )
+        assert _drop_tool_visible_channel_marker("<audio|>", None) == "<audio|>"
 
     def test_cli_tool_parser_choices_include_registry_only_parsers(self):
         """Explicit CLI settings must accept parsers used by auto detection.
