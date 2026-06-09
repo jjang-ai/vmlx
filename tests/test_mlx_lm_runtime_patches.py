@@ -306,3 +306,48 @@ def test_qwen3_vl_chunked_prefill_slices_deepstack_embeds_to_visual_window():
         assert captured["deepstack_visual_embeds"][0].tolist() == deepstack[0][
             1:3
         ].tolist()
+
+
+def test_lfm25_vl_projector_materializes_layernorm_without_applying_when_disabled():
+    import vmlx_engine.runtime_patches.mlx_vlm_compat as compat
+    from mlx_vlm.models.lfm2_vl import lfm2_vl
+
+    compat.install()
+
+    projector = lfm2_vl.Lfm2VlMultiModalProjector(
+        SimpleNamespace(
+            vision_config=SimpleNamespace(hidden_size=2),
+            text_config=SimpleNamespace(hidden_size=2),
+            downsample_factor=1,
+            projector_use_layernorm=False,
+            projector_hidden_size=2,
+            projector_bias=False,
+        )
+    )
+
+    captured = {}
+
+    class ExplodingLayerNorm:
+        def __call__(self, x):
+            raise AssertionError("disabled LFM2.5 VL layernorm should not run")
+
+    class FakeLinear:
+        def __init__(self, name):
+            self.name = name
+
+        def __call__(self, x):
+            captured[self.name] = x
+            return x
+
+    assert not isinstance(projector.layer_norm, lfm2_vl.nn.Identity)
+    assert projector.projector_use_layernorm is False
+
+    projector.layer_norm = ExplodingLayerNorm()
+    projector.linear_1 = FakeLinear("linear_1")
+    projector.linear_2 = FakeLinear("linear_2")
+
+    x = mx.ones((1, 2), dtype=mx.float32)
+    out = projector(x)
+
+    mx.eval(out, captured["linear_1"])
+    assert captured["linear_1"].tolist() == x.tolist()

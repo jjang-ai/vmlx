@@ -17,9 +17,55 @@ def install() -> None:
     if _APPLIED:
         return
     _patch_qwen3_vl_chunked_prefill_deepstack_alignment()
+    _patch_lfm25_vl_projector_layernorm_loading()
     _patch_gemma4_video_processor_hf_kwargs()
     _patch_gemma4_shared_kv_layers()
     _APPLIED = True
+
+
+def _patch_lfm25_vl_projector_layernorm_loading() -> None:
+    """Backport mlx-vlm#1328: always materialize LFM2.5-VL projector layernorm."""
+    try:
+        from mlx_vlm.models.lfm2_vl import lfm2_vl
+    except Exception as exc:
+        logger.debug("mlx_vlm_compat: LFM2.5-VL projector unavailable: %s", exc)
+        return
+
+    projector_cls = getattr(lfm2_vl, "Lfm2VlMultiModalProjector", None)
+    original_init = getattr(projector_cls, "__init__", None)
+    if original_init is not None and not getattr(
+        original_init, "_vmlx_lfm25_vl_layernorm_load_patch", False
+    ):
+
+        def _vmlx_lfm25_vl_projector_init(self, config):
+            original_init(self, config)
+            self.projector_use_layernorm = bool(
+                getattr(config, "projector_use_layernorm", False)
+            )
+            in_channels = getattr(config.vision_config, "hidden_size") * (
+                getattr(config, "downsample_factor") ** 2
+            )
+            if isinstance(getattr(self, "layer_norm", None), lfm2_vl.nn.Identity):
+                self.layer_norm = lfm2_vl.nn.LayerNorm(in_channels)
+
+        _vmlx_lfm25_vl_projector_init._vmlx_lfm25_vl_layernorm_load_patch = True  # type: ignore[attr-defined]
+        projector_cls.__init__ = _vmlx_lfm25_vl_projector_init
+
+    original_call = getattr(projector_cls, "__call__", None)
+    if original_call is None or getattr(
+        original_call, "_vmlx_lfm25_vl_layernorm_load_patch", False
+    ):
+        return
+
+    def _vmlx_lfm25_vl_projector_call(self, x):
+        if getattr(self, "projector_use_layernorm", True):
+            x = self.layer_norm(x)
+        x = self.linear_1(x)
+        x = self.linear_2(lfm2_vl.nn.gelu(x))
+        return x
+
+    _vmlx_lfm25_vl_projector_call._vmlx_lfm25_vl_layernorm_load_patch = True  # type: ignore[attr-defined]
+    projector_cls.__call__ = _vmlx_lfm25_vl_projector_call
 
 
 def _patch_qwen3_vl_chunked_prefill_deepstack_alignment() -> None:
