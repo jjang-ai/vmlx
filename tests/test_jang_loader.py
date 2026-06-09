@@ -634,6 +634,45 @@ class TestJangDetection:
         assert model.proj.mode == "mxfp4"
         assert not hasattr(model.proj, "biases") or model.proj.biases is None
 
+    def test_gemma4_moe_mxfp_experts_split_to_switch_glu_float_weights(self):
+        import mlx.core as mx
+
+        from vmlx_engine.utils.jang_loader import (
+            _split_dequantize_gemma4_moe_mxfp_experts,
+        )
+
+        weights = {
+            "language_model.model.layers.0.experts.gate_up_proj.weight": mx.zeros(
+                (2, 4, 4), dtype=mx.uint32
+            ),
+            "language_model.model.layers.0.experts.gate_up_proj.scales": mx.ones(
+                (2, 4, 1), dtype=mx.uint8
+            ),
+            "language_model.model.layers.0.experts.down_proj.weight": mx.zeros(
+                (2, 6, 4), dtype=mx.uint32
+            ),
+            "language_model.model.layers.0.experts.down_proj.scales": mx.ones(
+                (2, 6, 1), dtype=mx.uint8
+            ),
+        }
+
+        out = _split_dequantize_gemma4_moe_mxfp_experts(weights)
+
+        assert "language_model.model.layers.0.experts.gate_up_proj.weight" not in out
+        assert "language_model.model.layers.0.experts.gate_up_proj.scales" not in out
+        assert out[
+            "language_model.model.layers.0.experts.switch_glu.gate_proj.weight"
+        ].shape == (2, 2, 32)
+        assert out[
+            "language_model.model.layers.0.experts.switch_glu.up_proj.weight"
+        ].shape == (2, 2, 32)
+        assert out[
+            "language_model.model.layers.0.experts.switch_glu.down_proj.weight"
+        ].shape == (2, 6, 32)
+        assert out[
+            "language_model.model.layers.0.experts.switch_glu.gate_proj.weight"
+        ].dtype == mx.float16
+
     def test_step37_text_loader_preserves_quantized_gate_sidecars(self):
         import mlx.core as mx
         import mlx.nn as nn

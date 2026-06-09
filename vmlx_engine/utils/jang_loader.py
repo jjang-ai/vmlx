@@ -194,6 +194,67 @@ def _configure_gemma4_quantized_ple_module(
     return True, bits, group_size, mode
 
 
+def _split_dequantize_gemma4_moe_mxfp_experts(
+    weights: dict[str, mx.array],
+) -> dict[str, mx.array]:
+    """Map Gemma4 fused native-MXFP expert tensors onto SwitchGLU weights.
+
+    Gemma4 A4B QAT bundles store MoE experts as packed native-MXFP tensors:
+    ``experts.gate_up_proj`` contains fused gate/up rows and
+    ``experts.down_proj`` contains down rows. The mlx-vlm runtime exposes plain
+    float ``experts.switch_glu.{gate,up,down}_proj`` SwitchLinear modules, so
+    leaving the packed keys in the shard means they are ignored under
+    ``strict=False`` and the model runs with random expert weights.
+    """
+    out = dict(weights)
+    for key in list(weights):
+        if not key.endswith(".weight"):
+            continue
+        if ".experts.gate_up_proj." not in key and ".experts.down_proj." not in key:
+            continue
+        weight = weights[key]
+        if weight.dtype != mx.uint32:
+            continue
+        base = key[: -len(".weight")]
+        scales_key = f"{base}.scales"
+        scales = weights.get(scales_key)
+        if scales is None or scales.dtype != mx.uint8:
+            continue
+
+        dequantized, bits, group_size, mode = _dequantize_gemma4_ple_tensor(
+            weight,
+            scales,
+            None,
+            key,
+        )
+        if mode not in {"mxfp4", "mxfp8"} or bits not in {4, 8} or group_size != 32:
+            continue
+        mx.eval(dequantized)
+
+        if ".experts.gate_up_proj." in key:
+            mid = int(dequantized.shape[-2]) // 2
+            gate = dequantized[..., :mid, :].astype(mx.float16)
+            up = dequantized[..., mid:, :].astype(mx.float16)
+            gate_base = base.replace(
+                ".experts.gate_up_proj", ".experts.switch_glu.gate_proj"
+            )
+            up_base = base.replace(
+                ".experts.gate_up_proj", ".experts.switch_glu.up_proj"
+            )
+            out[f"{gate_base}.weight"] = gate
+            out[f"{up_base}.weight"] = up
+        else:
+            down_base = base.replace(
+                ".experts.down_proj", ".experts.switch_glu.down_proj"
+            )
+            out[f"{down_base}.weight"] = dequantized.astype(mx.float16)
+
+        out.pop(key, None)
+        out.pop(scales_key, None)
+        out.pop(f"{base}.biases", None)
+    return out
+
+
 def _jangtq_bits_map_from_metadata(jang_cfg: dict, config: dict | None = None) -> dict:
     """Return JANGTQ per-projection bits from all model-owned metadata.
 
@@ -3463,6 +3524,9 @@ def _load_jang_v2_vlm(
             )
         except (KeyError, ValueError, AttributeError):
             pass
+
+        if _vlm_text_mt in ("gemma4", "gemma4_text") or config.get("model_type") == "gemma4":
+            shard_weights = _split_dequantize_gemma4_moe_mxfp_experts(shard_weights)
 
         # Dequantize vision conv weights that were incorrectly quantized
         for k in list(shard_weights.keys()):
