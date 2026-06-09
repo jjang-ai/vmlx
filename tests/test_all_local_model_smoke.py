@@ -1515,6 +1515,20 @@ def test_validate_probe_response_rejects_wider_cjk_kana_and_hangul_ranges():
     } in failures
 
 
+def test_validate_probe_response_accepts_exact_tool_result_sentence():
+    mod = load_module()
+
+    failures = mod.validate_probe_response(
+        "tool_result_continuation",
+        200,
+        "STORED blue-cat.",
+        "",
+        tool_calls=[],
+    )
+
+    assert failures == []
+
+
 def test_collect_probe_failures_uses_semantic_validation():
     mod = load_module()
     requests = [

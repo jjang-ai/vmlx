@@ -1391,12 +1391,12 @@ def validate_probe_response(
                     "tool_calls": tool_calls,
                 }
             )
-        if stripped != "STORED blue-cat":
+        if stripped != "STORED blue-cat.":
             failures.append(
                 {
                     "label": label,
                     "reason": "expected_tool_result_summary_missing",
-                    "expected": "STORED blue-cat",
+                    "expected": "STORED blue-cat.",
                 }
             )
         raw_markup_needles = (

@@ -87,7 +87,7 @@ STEP37_VLM_RUNTIME_AUDIT = Path(
     "build/current-step37-vlm-runtime-audit-after-source-live-media-proof-20260607.json"
 )
 LFM25_MXFP4_SMOKE = Path(
-    "build/current-all-local-model-smoke-lfm25-mxfp4-tools-nomedia-20260606/JANGQ_LFM2.5-8B-A1B-MXFP4/result.json"
+    "build/current-all-local-model-smoke-lfm25-mxfp4-tools-nomedia-20260609/JANGQ_LFM2.5-8B-A1B-MXFP4/result.json"
 )
 LFM25_MXFP8_SMOKE = Path(
     "build/current-all-local-model-smoke-lfm25-mxfp8-tools-nomedia-20260606/JANGQ_LFM2.5-8B-A1B-MXFP8/result.json"
