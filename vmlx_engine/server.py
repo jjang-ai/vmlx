@@ -2214,6 +2214,20 @@ def _bundle_declares_native_audio(bundle_path: str | None) -> bool:
     profile = str((jang or {}).get("profile") or "").lower()
     quant = (jang or {}).get("quantization") if isinstance(jang, dict) else {}
     selective = quant.get("selective_passthrough") if isinstance(quant, dict) else {}
+
+    def _has_audio_tower_weights() -> bool:
+        try:
+            index = _read_bundle_json(bundle_path, "model.safetensors.index.json")
+        except Exception:
+            index = {}
+        weight_map = index.get("weight_map") if isinstance(index, dict) else {}
+        if not isinstance(weight_map, dict):
+            return False
+        return any(
+            isinstance(key, str) and key.startswith("audio_tower.")
+            for key in weight_map
+        )
+
     has_audio_safe_mxfp_repair = bool(
         model_type == "gemma4_unified"
         and weight_format == "mxfp8"
@@ -2238,6 +2252,8 @@ def _bundle_declares_native_audio(bundle_path: str | None) -> bool:
         # raw `Audio present.` content, but the API path is not stable enough to
         # advertise audio.
         return False
+    if model_type == "gemma4":
+        return bool(isinstance(cfg.get("audio_config"), dict) and _has_audio_tower_weights())
     if cfg.get("audio_config") is not None:
         return True
     if model_type == "gemma4_unified":

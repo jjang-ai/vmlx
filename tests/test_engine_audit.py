@@ -4765,6 +4765,65 @@ class TestMediaDiagnostics:
 
         assert server._loaded_runtime_modalities() == ["text", "vision"]
 
+    def test_gemma4_runtime_modalities_do_not_infer_audio_from_token_only_config(
+        self, monkeypatch, tmp_path
+    ):
+        import vmlx_engine.server as server
+
+        (tmp_path / "config.json").write_text(
+            json.dumps(
+                {
+                    "model_type": "gemma4",
+                    "vision_config": {"model_type": "siglip"},
+                    "audio_config": None,
+                    "audio_token_id": 258881,
+                }
+            )
+        )
+        (tmp_path / "model.safetensors.index.json").write_text(
+            json.dumps({"weight_map": {"language_model.model.embed_tokens.weight": "a.safetensors"}})
+        )
+
+        monkeypatch.setattr(server, "_engine", SimpleNamespace(is_mllm=True))
+        monkeypatch.setattr(server, "_model_path", str(tmp_path))
+        monkeypatch.setattr(server, "_model_name", "gemma4-audio-token-only-test")
+        monkeypatch.setattr(server, "_loaded_omni_modalities", lambda: None)
+
+        assert server._loaded_runtime_modalities() == ["text", "vision"]
+
+    def test_gemma4_runtime_modalities_advertise_audio_with_audio_tower_weights(
+        self, monkeypatch, tmp_path
+    ):
+        import vmlx_engine.server as server
+
+        (tmp_path / "config.json").write_text(
+            json.dumps(
+                {
+                    "model_type": "gemma4",
+                    "vision_config": {"model_type": "siglip"},
+                    "audio_config": {"model_type": "gemma4_audio"},
+                    "audio_token_id": 258881,
+                }
+            )
+        )
+        (tmp_path / "model.safetensors.index.json").write_text(
+            json.dumps(
+                {
+                    "weight_map": {
+                        "audio_tower.layers.0.feed_forward1.ffw_layer_1.linear.weight": "a.safetensors",
+                        "language_model.model.embed_tokens.weight": "b.safetensors",
+                    }
+                }
+            )
+        )
+
+        monkeypatch.setattr(server, "_engine", SimpleNamespace(is_mllm=True))
+        monkeypatch.setattr(server, "_model_path", str(tmp_path))
+        monkeypatch.setattr(server, "_model_name", "gemma4-audio-tower-test")
+        monkeypatch.setattr(server, "_loaded_omni_modalities", lambda: None)
+
+        assert server._loaded_runtime_modalities() == ["text", "vision", "audio"]
+
     def test_gemma4_unified_jang4m_runtime_modalities_advertise_audio(
         self, monkeypatch, tmp_path
     ):
