@@ -148,6 +148,9 @@ REQUIRED_LIVE_PROOF_SURFACES = (
 )
 
 SOURCE_LIVE_SMOKE_PROOFS = {
+    "gemma4_26b_qat_jang4m": Path(
+        "build/current-all-local-model-smoke-gemma4-26b-qat-jang4m-tools-nomedia-l2-20260609/JANGQ_gemma-4-26B-A4B-it-qat-JANG_4M/result.json"
+    ),
     "gemma4_e4b_qat_jang4m": Path(
         "build/current-all-local-model-smoke-gemma4-e4b-qat-jang4m-tools-nomedia-l2-20260609/JANGQ_gemma-4-E4B-it-qat-JANG_4M/result.json"
     ),
