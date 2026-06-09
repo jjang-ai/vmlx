@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import time
 from pathlib import Path
 from typing import Any
 
@@ -225,7 +224,6 @@ def build_artifact(roots: tuple[Path, ...] = DEFAULT_ROOTS) -> dict[str, Any]:
     open_rows = [key for key, row in classified.items() if row["status"] == "open"]
     return {
         "status": "open" if missing or open_rows else "pass",
-        "created_at_unix": time.time(),
         "roots": [str(root) for root in roots],
         "count": len(rows),
         "rows": rows,
