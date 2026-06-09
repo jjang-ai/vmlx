@@ -44,6 +44,31 @@ def test_n2_chat_cache_gate_builds_required_tool_payload():
     assert payload["enable_thinking"] is False
 
 
+def test_n2_chat_cache_gate_memory_preflight_labels_binary_units(monkeypatch):
+    monkeypatch.setattr(
+        runner,
+        "resource_snapshot",
+        lambda name: {
+            "name": name,
+            "system_memory": {
+                "unit": "GiB",
+                "available_gib": 94.25,
+                "available_gb": 94.25,
+            },
+        },
+    )
+
+    skipped = runner.memory_preflight(120.0)
+
+    assert skipped["status"] == "skipped"
+    assert skipped["unit"] == "GiB"
+    assert skipped["available_gib"] == 94.25
+    assert skipped["required_available_gib"] == 120.0
+    assert skipped["memory_gap_gib"] == 25.75
+    assert skipped["available_gb"] == 94.25
+    assert skipped["required_available_gb"] == 120.0
+
+
 def test_n2_chat_cache_gate_extracts_tool_call_arguments():
     response = {
         "code": 200,

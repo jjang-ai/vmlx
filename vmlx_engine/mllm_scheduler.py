@@ -568,18 +568,27 @@ class MLLMScheduler:
                         if self._is_hybrid and not self._uses_zaya_cache:
                             try:
                                 try:
+                                    default_ssm_budget_gb = max(
+                                        float(self.config.block_disk_cache_max_gb),
+                                        (
+                                            float(self.config.ssm_state_cache_size)
+                                            * float(
+                                                self.config.ssm_state_cache_max_mb
+                                                or 512
+                                            )
+                                        )
+                                        / 1024.0,
+                                    )
                                     ssm_budget_gb = float(
                                         os.environ.get(
                                             "VMLX_SSM_DISK_CACHE_MAX_GB",
-                                            str(self.config.block_disk_cache_max_gb),
+                                            str(default_ssm_budget_gb),
                                         )
                                     )
                                     if ssm_budget_gb <= 0:
-                                        ssm_budget_gb = (
-                                            self.config.block_disk_cache_max_gb
-                                        )
+                                        ssm_budget_gb = default_ssm_budget_gb
                                 except ValueError:
-                                    ssm_budget_gb = self.config.block_disk_cache_max_gb
+                                    ssm_budget_gb = default_ssm_budget_gb
                                 self._ssm_companion_disk_store = (
                                     SSMCompanionDiskStore(
                                         directory=os.path.join(
