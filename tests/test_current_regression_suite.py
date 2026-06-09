@@ -1146,6 +1146,28 @@ def test_noheavy_api_cache_contract_includes_panel_tool_status_responses_argumen
     assert "recovers Responses function-call arguments from argument delta and done events" in command
 
 
+def test_noheavy_api_cache_contract_includes_server_responses_tool_streaming_order():
+    from tests.cross_matrix import run_noheavy_api_cache_contract as gate
+    from tests.cross_matrix import release_regression_manifest as manifest
+
+    markers = gate.REQUIRED_NOHEAVY_API_CACHE_TEST_MARKERS
+
+    assert "test_streaming_responses_tool_call_arguments_survive_buffering" in markers
+    assert "test_streaming_responses_reasoning_tool_call_keeps_arguments" in markers
+    assert "test_streaming_responses_tool_call_uses_next_output_index_without_text" in markers
+    assert "test_streaming_responses_required_empty_xml_tool_call_is_rejected" in markers
+    assert "responses_streaming_tool_call_arguments_and_indexes" in (
+        manifest.EXPECTED_CURRENT_NOHEAVY_API_CACHE_CHECKS
+    )
+    assert "tests/test_server.py" in gate.SOURCE_HASH_FILES
+    command = " ".join(gate.COMMANDS["responses_streaming_tool_contracts"])
+    assert "tests/test_server.py" in command
+    assert "streaming_responses_tool_call_arguments_survive_buffering" in command
+    assert "streaming_responses_reasoning_tool_call_keeps_arguments" in command
+    assert "streaming_responses_tool_call_uses_next_output_index_without_text" in command
+    assert "streaming_responses_required_empty_xml_tool_call_is_rejected" in command
+
+
 def test_noheavy_api_cache_contract_includes_response_format_docs_boundary():
     from tests.cross_matrix import run_noheavy_api_cache_contract as gate
 

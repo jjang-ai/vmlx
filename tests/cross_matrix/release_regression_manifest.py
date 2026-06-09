@@ -215,6 +215,7 @@ EXPECTED_CURRENT_NOHEAVY_API_CACHE_CHECKS = (
     "structured_live_smoke_response_format_adoption",
     "response_format_docs_repair_validation_boundary",
     "responses_previous_response_history",
+    "responses_streaming_tool_call_arguments_and_indexes",
     "cache_reuse_endpoints",
     "cache_stats_reuse_skip_telemetry",
     "gateway_stale_port_startup",

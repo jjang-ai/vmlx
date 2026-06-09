@@ -21,6 +21,8 @@ This helper intentionally does not load models. It runs focused tests that pin:
 - One-shot strict XML-only retry after unrecoverable XML repair failure.
 - Strict stream-end XML validation for Chat and Responses SSE.
 - API docs boundary for repair/validation vs hard constrained decoding.
+- Responses SSE function-call argument, output-index, and required-arg fail-closed
+  contracts.
 """
 
 from __future__ import annotations
@@ -107,6 +109,10 @@ REQUIRED_NOHEAVY_API_CACHE_TEST_MARKERS = (
     "test_responses_text_format_strict_retries_failed_xml_only",
     "test_streaming_chat_strict_xml_validates_final_text",
     "test_streaming_responses_strict_xml_validates_final_text",
+    "test_streaming_responses_tool_call_arguments_survive_buffering",
+    "test_streaming_responses_reasoning_tool_call_keeps_arguments",
+    "test_streaming_responses_tool_call_uses_next_output_index_without_text",
+    "test_streaming_responses_required_empty_xml_tool_call_is_rejected",
     "test_chat_stream_tracks_cache_detail_alongside_cached_tokens",
     "test_chat_stream_finish_chunks_emit_cache_detail",
     "test_responses_stream_tracks_cache_detail_alongside_cached",
@@ -304,6 +310,21 @@ COMMANDS: dict[str, list[str]] = {
             "or streaming_responses_strict_xml_validates_final_text"
         ),
     ],
+    "responses_streaming_tool_contracts": [
+        sys.executable,
+        "-m",
+        "pytest",
+        "-q",
+        "-vv",
+        "tests/test_server.py",
+        "-k",
+        (
+            "streaming_responses_tool_call_arguments_survive_buffering "
+            "or streaming_responses_reasoning_tool_call_keeps_arguments "
+            "or streaming_responses_tool_call_uses_next_output_index_without_text "
+            "or streaming_responses_required_empty_xml_tool_call_is_rejected"
+        ),
+    ],
     "structured_guided_decoding_contracts": [
         sys.executable,
         "-m",
@@ -430,6 +451,7 @@ def build_artifact(root: Path) -> dict[str, Any]:
     responses_history_ok = commands["responses_history_contracts"]["returncode"] == 0
     structured_output_ok = commands["structured_output_repair_contracts"]["returncode"] == 0
     structured_retry_ok = commands["structured_output_retry_contracts"]["returncode"] == 0
+    responses_stream_tools_ok = commands["responses_streaming_tool_contracts"]["returncode"] == 0
     structured_guided_ok = commands["structured_guided_decoding_contracts"]["returncode"] == 0
     structured_smoke_ok = commands["structured_smoke_response_format_contracts"]["returncode"] == 0
     panel_gateway_ok = commands["panel_gateway_contracts"]["returncode"] == 0
@@ -558,6 +580,17 @@ def build_artifact(root: Path) -> dict[str, Any]:
             and "test_responses_streaming_reasoning_only_stores_placeholder_and_marker"
             not in missing_markers
             and "test_chained_response_helper_emits_warning_for_reasoning_only_predecessor"
+            not in missing_markers
+        ),
+        "responses_streaming_tool_call_arguments_and_indexes": (
+            responses_stream_tools_ok
+            and "test_streaming_responses_tool_call_arguments_survive_buffering"
+            not in missing_markers
+            and "test_streaming_responses_reasoning_tool_call_keeps_arguments"
+            not in missing_markers
+            and "test_streaming_responses_tool_call_uses_next_output_index_without_text"
+            not in missing_markers
+            and "test_streaming_responses_required_empty_xml_tool_call_is_rejected"
             not in missing_markers
         ),
         "cache_stats_reuse_skip_telemetry": (
