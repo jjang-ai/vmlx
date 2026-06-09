@@ -80,6 +80,9 @@ GEMMA4_12B_JANG4M_SMOKE = Path(
 GEMMA4_12B_JANG4M_MEDIA_SMOKE = Path(
     "build/current-gemma4-12b-jang4m-media-smoke-after-vlm-prefill-guard-20260607.json"
 )
+GEMMA_QAT_NATIVE_MXFP4_INVENTORY = Path(
+    "build/current-gemma-qat-native-mxfp4-local-inventory-20260609.json"
+)
 STEP37_TEXTONLY_SMOKE = Path(
     "build/current-all-local-model-smoke-step37-jang2l-crack-tools-nomedia-textonly-harness-20260606/other_Step-3.7-Flash-JANG_2L-CRACK/result.json"
 )
@@ -718,6 +721,56 @@ def _gemma4_12b_media_checks(data: dict[str, Any]) -> list[dict[str, Any]]:
                 "checks": checks,
             },
         )
+    ]
+
+
+def _gemma_qat_native_mxfp4_checks(data: dict[str, Any]) -> list[dict[str, Any]]:
+    checks = data.get("checks") if isinstance(data.get("checks"), dict) else {}
+    detail = {
+        "missing_required_rows": data.get("missing_required_rows"),
+        "open_required_rows": data.get("open_required_rows"),
+    }
+    return _simple_artifact_checks("gemma_qat_native_mxfp4", data) + [
+        _check(
+            "gemma_qat_native_mxfp4_gemma3n_e2b_present",
+            checks.get("gemma3n_e2b_qat_present") is True,
+            str(GEMMA_QAT_NATIVE_MXFP4_INVENTORY),
+            data.get("required_rows", {}).get("gemma3n_e2b_qat_native4")
+            if isinstance(data.get("required_rows"), dict)
+            else None,
+        ),
+        _check(
+            "gemma_qat_native_mxfp4_gemma3n_e4b_present",
+            checks.get("gemma3n_e4b_qat_present") is True,
+            str(GEMMA_QAT_NATIVE_MXFP4_INVENTORY),
+            data.get("required_rows", {}).get("gemma3n_e4b_qat_native4")
+            if isinstance(data.get("required_rows"), dict)
+            else None,
+        ),
+        _check(
+            "gemma_qat_native_mxfp4_gemma4_12b_present",
+            checks.get("gemma4_12b_native_mxfp4_present") is True,
+            str(GEMMA_QAT_NATIVE_MXFP4_INVENTORY),
+        ),
+        _check(
+            "gemma_qat_native_mxfp4_gemma4_26b_present",
+            checks.get("gemma4_26b_present") is True,
+            str(GEMMA_QAT_NATIVE_MXFP4_INVENTORY),
+        ),
+        _check(
+            "gemma_qat_native_mxfp4_gemma4_31v_or_31b_present",
+            checks.get("gemma4_31v_or_31b_present") is True,
+            str(GEMMA_QAT_NATIVE_MXFP4_INVENTORY),
+        ),
+        _check(
+            "gemma_qat_native_mxfp4_all_live_proofs_present",
+            data.get("status") == "pass"
+            and checks.get("all_required_live_proofs_present") is True
+            and data.get("missing_required_rows") == []
+            and data.get("open_required_rows") == [],
+            str(GEMMA_QAT_NATIVE_MXFP4_INVENTORY),
+            detail,
+        ),
     ]
 
 
@@ -1469,6 +1522,7 @@ def _build(root: Path) -> dict[str, Any]:
     qwen35_installed_video = _load_json(root / QWEN35_INSTALLED_VIDEO)
     gemma4 = _load_json(root / GEMMA4_12B_JANG4M_SMOKE)
     gemma4_media = _load_json(root / GEMMA4_12B_JANG4M_MEDIA_SMOKE)
+    gemma_qat = _load_json(root / GEMMA_QAT_NATIVE_MXFP4_INVENTORY)
     step37 = _load_json(root / STEP37_TEXTONLY_SMOKE)
     step37_vlm = _load_json(root / STEP37_VLM_RUNTIME_AUDIT)
     lfm4 = _load_json(root / LFM25_MXFP4_SMOKE)
@@ -1517,6 +1571,7 @@ def _build(root: Path) -> dict[str, Any]:
             cache_detail="paged+mixed_swa",
         )
         + _gemma4_12b_media_checks(gemma4_media),
+        "gemma_qat_native_mxfp4": _gemma_qat_native_mxfp4_checks(gemma_qat),
         "step37_flash": _smoke_mixed_swa_checks(
             "step37_textonly_nomedia",
             step37,

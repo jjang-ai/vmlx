@@ -992,6 +992,51 @@ def test_full_release_objective_checklist_tracks_open_n2_pro_objective_row(
     ]
 
 
+def test_full_release_objective_checklist_blocks_open_gemma_qat_inventory():
+    data = {
+        "artifact": str(checklist.GEMMA_QAT_NATIVE_MXFP4_INVENTORY),
+        "exists": True,
+        "status": "open",
+        "count": 11,
+        "missing_required_rows": [
+            "gemma3n_e2b_qat_native4",
+            "gemma3n_e4b_qat_native4",
+        ],
+        "open_required_rows": [
+            "gemma4_12b_native_mxfp4",
+            "gemma4_26b_vl",
+            "gemma4_31v_or_31b_vl",
+        ],
+        "checks": {
+            "gemma3n_e2b_qat_present": False,
+            "gemma3n_e4b_qat_present": False,
+            "gemma4_12b_native_mxfp4_present": True,
+            "gemma4_26b_present": True,
+            "gemma4_31v_or_31b_present": True,
+            "all_required_live_proofs_present": False,
+        },
+    }
+
+    rows = checklist._gemma_qat_native_mxfp4_checks(data)
+    failed = {row["name"]: row for row in rows if not row["ok"]}
+
+    assert "gemma_qat_native_mxfp4_status_pass" in failed
+    assert "gemma_qat_native_mxfp4_gemma3n_e2b_present" in failed
+    assert "gemma_qat_native_mxfp4_gemma3n_e4b_present" in failed
+    assert "gemma_qat_native_mxfp4_all_live_proofs_present" in failed
+    assert failed["gemma_qat_native_mxfp4_all_live_proofs_present"]["detail"] == {
+        "missing_required_rows": [
+            "gemma3n_e2b_qat_native4",
+            "gemma3n_e4b_qat_native4",
+        ],
+        "open_required_rows": [
+            "gemma4_12b_native_mxfp4",
+            "gemma4_26b_vl",
+            "gemma4_31v_or_31b_vl",
+        ],
+    }
+
+
 def test_full_release_objective_checklist_can_pass_when_all_evidence_is_green(
     tmp_path,
 ):
@@ -1090,6 +1135,23 @@ def test_full_release_objective_checklist_can_pass_when_all_evidence_is_green(
     _write_issue179_green_artifact(tmp_path)
     _write_dsv4_green_artifact(tmp_path)
     _write_green_family_smokes(tmp_path)
+    _write_json(
+        tmp_path / checklist.GEMMA_QAT_NATIVE_MXFP4_INVENTORY,
+        {
+            "status": "pass",
+            "count": 5,
+            "missing_required_rows": [],
+            "open_required_rows": [],
+            "checks": {
+                "gemma3n_e2b_qat_present": True,
+                "gemma3n_e4b_qat_present": True,
+                "gemma4_12b_native_mxfp4_present": True,
+                "gemma4_26b_present": True,
+                "gemma4_31v_or_31b_present": True,
+                "all_required_live_proofs_present": True,
+            },
+        },
+    )
     _write_qwen_green_artifacts(tmp_path)
     _write_green_n2_objective_digest(tmp_path)
 
