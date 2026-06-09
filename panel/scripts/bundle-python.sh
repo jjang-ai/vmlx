@@ -69,8 +69,9 @@ restore_python_runtime_files() {
 echo "==> Downloading Python ${PYTHON_VERSION}..."
 curl -L "$URL" -o "$STANDALONE_TARBALL"
 tar xzf "$STANDALONE_TARBALL" -C "$BUNDLE_DIR"
+restore_python_runtime_files
 
-PYTHON="$BUNDLE_DIR/python/bin/python3"
+PYTHON="$BUNDLE_DIR/python/bin/python3.12"
 
 # Verify Python works
 "$PYTHON" --version
@@ -132,6 +133,8 @@ echo "==> Installing MLX $MLX_VERSION wheels for $MLX_WHEEL_PLATFORM..."
   --implementation py --python-version 312 --abi none \
   "mlx-metal==$MLX_VERSION"
 "$PYTHON" -m pip install "$WHEELHOUSE"/mlx-"$MLX_VERSION"-*.whl "$WHEELHOUSE"/mlx_metal-"$MLX_VERSION"-*.whl
+restore_python_runtime_files
+PYTHON="$BUNDLE_DIR/python/bin/python3"
 
 echo "==> Installing dependencies..."
 "$PYTHON" -m pip install \

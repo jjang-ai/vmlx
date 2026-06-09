@@ -6592,6 +6592,22 @@ class TestStartupCompatibilityGuards:
         assert "python/lib/libpython3.12.dylib" in bundle_script
         assert "restore_python_runtime_files" in dependency_block
 
+    def test_bundled_python_restores_launcher_before_dependency_install(self):
+        bundle_script = Path("./panel/scripts/bundle-python.sh").read_text()
+        extract_idx = bundle_script.index('tar xzf "$STANDALONE_TARBALL" -C "$BUNDLE_DIR"')
+        pip_upgrade_idx = bundle_script.index('echo "==> Upgrading pip..."')
+        mlx_install_idx = bundle_script.index(
+            '"$PYTHON" -m pip install "$WHEELHOUSE"/mlx-"$MLX_VERSION"'
+        )
+        dependency_install_idx = bundle_script.index('echo "==> Installing dependencies..."')
+        bootstrap_block = bundle_script[extract_idx:pip_upgrade_idx]
+        mlx_install_block = bundle_script[mlx_install_idx:dependency_install_idx]
+
+        assert "restore_python_runtime_files" in bootstrap_block
+        assert 'PYTHON="$BUNDLE_DIR/python/bin/python3.12"' in bootstrap_block
+        assert "restore_python_runtime_files" in mlx_install_block
+        assert 'PYTHON="$BUNDLE_DIR/python/bin/python3"' in mlx_install_block
+
     def test_local_installer_installs_node_deps_before_typecheck(self):
         install_script = Path("./panel/scripts/build-and-install.sh").read_text()
 
