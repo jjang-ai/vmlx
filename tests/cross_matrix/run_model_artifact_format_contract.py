@@ -74,6 +74,7 @@ REQUIRED_ARTIFACT_TEST_MARKERS = (
     "test_gemma4_qat_mxfp4_quantized_ple_stays_packed",
     "test_native_mxfp_uint8_scales_select_mxfp_kernel",
     "test_gemma4_moe_mxfp_experts_split_to_switch_glu_float_weights",
+    "test_gemma4_moe_mxfp_expert_cross_shard_sidecars_are_hydrated",
 )
 
 COMMANDS: dict[str, list[str]] = {

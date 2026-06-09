@@ -255,6 +255,67 @@ def _split_dequantize_gemma4_moe_mxfp_experts(
     return out
 
 
+def _hydrate_gemma4_moe_mxfp_cross_shard_sidecars(
+    weights: dict[str, mx.array],
+    model_path: Path,
+    weight_map: dict[str, str] | None,
+) -> dict[str, mx.array]:
+    """Add missing Gemma4 MoE MXFP sidecars when index split them across shards.
+
+    The Gemma4 26B-A4B QAT/native-MXFP4 bundle can place
+    ``experts.*.weight`` in one safetensor and its ``.scales`` sidecar in the
+    next safetensor. The loader processes shards one at a time; without this
+    hydration, ``_split_dequantize_gemma4_moe_mxfp_experts`` skips that expert
+    tensor, the packed key is ignored by ``strict=False`` load, and the runtime
+    keeps random SwitchGLU expert weights.
+    """
+    if not weight_map:
+        return weights
+
+    hydrated = dict(weights)
+    loaded_sidecar_shards: dict[str, dict[str, mx.array]] = {}
+    for key, value in list(weights.items()):
+        if not key.endswith(".weight"):
+            continue
+        if value.dtype != mx.uint32:
+            continue
+        if ".experts.gate_up_proj." not in key and ".experts.down_proj." not in key:
+            continue
+
+        base = key[: -len(".weight")]
+        scales_key = f"{base}.scales"
+        if scales_key in hydrated:
+            continue
+        sidecar_name = weight_map.get(scales_key)
+        if not sidecar_name:
+            continue
+        sidecar_tensors = loaded_sidecar_shards.get(sidecar_name)
+        if sidecar_tensors is None:
+            sidecar_path = model_path / sidecar_name
+            if not sidecar_path.exists():
+                continue
+            sidecar_tensors = mx.load(str(sidecar_path))
+            loaded_sidecar_shards[sidecar_name] = sidecar_tensors
+        sidecar = sidecar_tensors.get(scales_key)
+        if sidecar is not None:
+            hydrated[scales_key] = sidecar
+
+        biases_key = f"{base}.biases"
+        if biases_key not in hydrated:
+            biases_name = weight_map.get(biases_key)
+            if biases_name:
+                bias_tensors = loaded_sidecar_shards.get(biases_name)
+                if bias_tensors is None:
+                    bias_path = model_path / biases_name
+                    if bias_path.exists():
+                        bias_tensors = mx.load(str(bias_path))
+                        loaded_sidecar_shards[biases_name] = bias_tensors
+                if bias_tensors is not None and biases_key in bias_tensors:
+                    hydrated[biases_key] = bias_tensors[biases_key]
+
+    return hydrated
+
+
 def _jangtq_bits_map_from_metadata(jang_cfg: dict, config: dict | None = None) -> dict:
     """Return JANGTQ per-projection bits from all model-owned metadata.
 
@@ -3344,6 +3405,22 @@ def _load_jang_v2_vlm(
     _pre_fix_bits_from_metadata(model, _shape_map_xshard, block_size)
     del _shape_map_xshard
 
+    _index_weight_map: dict[str, str] = {}
+    _index_path = path / "model.safetensors.index.json"
+    if _index_path.exists():
+        try:
+            _index_payload = json.loads(_index_path.read_text())
+            _maybe_weight_map = _index_payload.get("weight_map", {})
+            if isinstance(_maybe_weight_map, dict):
+                _index_weight_map = {
+                    str(k): str(v) for k, v in _maybe_weight_map.items()
+                }
+        except Exception as _index_err:
+            logger.warning(
+                "Could not read safetensors index for Gemma4 sidecar hydration: %s",
+                _index_err,
+            )
+
     for sf in weight_files:
         shard_weights = mx.load(str(sf))
         shard_weights = {
@@ -3526,6 +3603,11 @@ def _load_jang_v2_vlm(
             pass
 
         if _vlm_text_mt in ("gemma4", "gemma4_text") or config.get("model_type") == "gemma4":
+            shard_weights = _hydrate_gemma4_moe_mxfp_cross_shard_sidecars(
+                shard_weights,
+                path,
+                _index_weight_map,
+            )
             shard_weights = _split_dequantize_gemma4_moe_mxfp_experts(shard_weights)
 
         # Dequantize vision conv weights that were incorrectly quantized

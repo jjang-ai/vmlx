@@ -673,6 +673,61 @@ class TestJangDetection:
             "language_model.model.layers.0.experts.switch_glu.gate_proj.weight"
         ].dtype == mx.float16
 
+    def test_gemma4_moe_mxfp_expert_cross_shard_sidecars_are_hydrated(
+        self,
+        tmp_path,
+    ):
+        import mlx.core as mx
+
+        from vmlx_engine.utils.jang_loader import (
+            _hydrate_gemma4_moe_mxfp_cross_shard_sidecars,
+            _split_dequantize_gemma4_moe_mxfp_experts,
+        )
+
+        weight_key = "language_model.model.layers.10.experts.gate_up_proj.weight"
+        scales_key = "language_model.model.layers.10.experts.gate_up_proj.scales"
+        shard_weights = {
+            weight_key: mx.zeros((2, 4, 4), dtype=mx.uint32),
+        }
+        scales_shard = tmp_path / "model-00002.safetensors"
+        mx.save_safetensors(
+            str(scales_shard),
+            {
+                scales_key: mx.ones((2, 4, 1), dtype=mx.uint8),
+            },
+        )
+        weight_map = {
+            weight_key: "model-00001.safetensors",
+            scales_key: scales_shard.name,
+        }
+
+        hydrated = _hydrate_gemma4_moe_mxfp_cross_shard_sidecars(
+            dict(shard_weights),
+            tmp_path,
+            weight_map,
+        )
+        out = _split_dequantize_gemma4_moe_mxfp_experts(hydrated)
+
+        assert scales_key in hydrated
+        assert weight_key not in out
+        assert (
+            "language_model.model.layers.10.experts.switch_glu.gate_proj.weight"
+            in out
+        )
+
+    def test_gemma4_moe_mxfp_vlm_loader_initializes_sidecar_weight_map(self):
+        import inspect
+
+        from vmlx_engine.utils.jang_loader import _load_jang_v2_vlm
+
+        source = inspect.getsource(_load_jang_v2_vlm)
+        init_idx = source.find("_index_weight_map =")
+        hydrate_idx = source.find("_hydrate_gemma4_moe_mxfp_cross_shard_sidecars")
+
+        assert init_idx != -1
+        assert hydrate_idx != -1
+        assert init_idx < hydrate_idx
+
     def test_step37_text_loader_preserves_quantized_gate_sidecars(self):
         import mlx.core as mx
         import mlx.nn as nn

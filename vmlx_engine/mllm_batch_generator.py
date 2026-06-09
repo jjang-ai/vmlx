@@ -1291,6 +1291,34 @@ def _build_mimo_audio_codes_from_paths(
     codes = mx.concatenate([mx.array(c).astype(mx.int32) for c in codes_per_audio], axis=0)
     return codes[:, :channels]
 
+
+def _gemma4_audio_waveforms_from_paths(
+    audio_paths: List[str],
+    processor: Any,
+) -> List[Any]:
+    """Decode Gemma4 raw audio file paths to waveform arrays for its processor.
+
+    Gemma4/Gemma4 Unified audio processors expect raw waveform arrays. Passing
+    temp WAV path strings reaches ``np.asarray(path, dtype=float32)`` and fails
+    with ``could not convert string to float`` before the model forward starts.
+    """
+
+    if not audio_paths:
+        return []
+    import numpy as np
+    import librosa
+
+    audio_processor = getattr(processor, "audio_processor", None)
+    target_sr = int(getattr(audio_processor, "sampling_rate", 16000) or 16000)
+    waveforms: List[Any] = []
+    for path in audio_paths:
+        waveform, _ = librosa.load(str(path), sr=target_sr, mono=True)
+        waveform = np.asarray(waveform, dtype=np.float32).reshape(-1)
+        if waveform.size == 0:
+            raise ValueError(f"Gemma4 audio input is empty: {path}")
+        waveforms.append(waveform)
+    return waveforms
+
 def _should_use_safe_processor_path(
     processor: Any,
     *,
@@ -4174,17 +4202,27 @@ class MLLMBatchGenerator:
         # get their images processed through that path. When the prompt has images but
         # no "<image>" literal, bypass prepare_inputs and call process_inputs directly
         # which invokes the processor's native __call__ (handles any image token format).
+        processor_audio = all_audio
+        if all_audio and str(self._model_type or "").lower() in {
+            "gemma4",
+            "gemma4_unified",
+        }:
+            processor_audio = _gemma4_audio_waveforms_from_paths(
+                all_audio,
+                self.processor,
+            )
+
         if _should_use_safe_processor_path(
             self.processor,
             has_image_literal="<image>" in request.prompt,
             has_images=bool(all_images),
-        ) or bool(video_inputs) or bool(all_audio):
+        ) or bool(video_inputs) or bool(processor_audio):
             inputs = _call_processor_direct(
                 self.processor,
                 prompts=request.prompt,
                 images=all_images,
                 videos=video_inputs,
-                audio=all_audio,
+                audio=processor_audio,
                 add_special_tokens=False,
             )
         else:
@@ -4888,7 +4926,7 @@ class MLLMBatchGenerator:
             ),
             seq_len=seq_len,
             generation_tokens=int(getattr(request, "max_tokens", 0) or 0),
-            request_id=request.request_id,
+            request_id=getattr(request, "request_id", "unknown"),
         )
         if (
             not has_media_payload
