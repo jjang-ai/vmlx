@@ -62,7 +62,7 @@ from tests.cross_matrix.release_regression_manifest import (
 
 
 DEFAULT_OUT = Path(
-    "build/current-objective-proof-after-n2-jangtq2-l2-live-proof-20260609.json"
+    "build/current-objective-proof-after-n2-jang1l-memory-refresh-20260609.json"
 )
 CURRENT_RELEASE_REGRESSION_MANIFEST_REL = (
     "build/current-release-regression-manifest-after-pr-intake-matrix-refresh-20260609.json"

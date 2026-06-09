@@ -18,7 +18,7 @@ def test_objective_proof_digest_default_out_tracks_current_release_proof_artifac
     from tests.cross_matrix import summarize_objective_proof as objective
 
     assert objective.DEFAULT_OUT == Path(
-        "build/current-objective-proof-after-n2-jangtq2-l2-live-proof-20260609.json"
+        "build/current-objective-proof-after-n2-jang1l-memory-refresh-20260609.json"
     )
 
 
