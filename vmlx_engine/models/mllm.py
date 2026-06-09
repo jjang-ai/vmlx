@@ -129,6 +129,10 @@ def _install_mimo_v2_compiled_router_if_missing(text_runtime: Any) -> bool:
     original implementation for non-decode/batched shapes or compile failures.
     """
 
+    if os.environ.get("VMLINUX_DISABLE_MIMO_V2_COMPILED_ROUTER") == "1":
+        logger.info("MiMo-V2 compiled decode router patch disabled by environment")
+        return False
+
     if hasattr(text_runtime, "run_compiled_mimo_decode_router"):
         return False
 
@@ -219,6 +223,10 @@ def _install_mimo_v2_affine_switchglu_decode_fast_path() -> bool:
     keeps the same MLX affine `gather_qmm` math, but compiles the decode-shape
     gate/up/SwiGLU/down sequence as one callable per shape.
     """
+
+    if os.environ.get("VMLINUX_DISABLE_MIMO_V2_SWITCHGLU_FAST_PATH") == "1":
+        logger.info("MiMo-V2 SwitchGLU decode fast path disabled by environment")
+        return False
 
     try:
         from mlx_lm.models.switch_layers import SwitchGLU
