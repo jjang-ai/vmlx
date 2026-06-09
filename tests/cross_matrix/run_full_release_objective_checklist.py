@@ -48,13 +48,13 @@ ISSUE179_AUDIT = Path(
     "build/current-issue179-minimax-k-root-cause-audit-after-parser-settings-parity-20260608.json"
 )
 QWEN27_RESPONSES_CANCEL = Path(
-    "build/current-qwen27-mxfp4-mtp-responses-cancel-mtp-deterministic-20260607.json"
+    "build/current-qwen27-mxfp4-mtp-responses-cancel-mtp-deterministic-20260609.json"
 )
 QWEN27_API_PARITY = Path(
     "build/current-qwen27-mxfp4-mtp-api-parity-20260607/summary.json"
 )
 QWEN27_RESTART_L2_RESTORE = Path(
-    "build/current-qwen27-mxfp4-mtp-restart-l2-restore-20260607/summary.json"
+    "build/current-qwen27-mxfp4-mtp-restart-l2-restore-20260609/summary.json"
 )
 QWEN27_INSTALLED_VIDEO = Path(
     "docs/internal/agent-notes/current-real-ui-installed-app-qwen36-27b-jang4m-mtp-responses-tools-video-reasoning-cachecontrols-max512-20260607-proof.json"
@@ -1095,14 +1095,49 @@ def _qwen27_api_parity_checks(data: dict[str, Any]) -> list[dict[str, Any]]:
 def _qwen27_restart_l2_checks(data: dict[str, Any]) -> list[dict[str, Any]]:
     phase1 = _get(data, "phases", "phase1", default={})
     phase2 = _get(data, "phases", "phase2", default={})
+    if not phase1 or not phase2:
+        results = data.get("results") if isinstance(data.get("results"), list) else []
+        if results and isinstance(results[0], dict):
+            phase1 = results[0].get("first") if isinstance(results[0].get("first"), dict) else phase1
+            phase2 = results[0].get("second") if isinstance(results[0].get("second"), dict) else phase2
+    phase1_block = (
+        _get(phase1, "block_disk_cache", default={})
+        or _get(phase1, "cache_stats", "block_disk_cache", default={})
+        or _get(phase1, "cache_after", "body", "block_disk_cache", default={})
+        or _get(phase1, "health_after", "cache", "block_disk_cache", default={})
+    )
+    phase1_ssm = (
+        _get(phase1, "ssm_companion_disk", default={})
+        or _get(phase1, "cache_stats", "ssm_companion", "disk", default={})
+        or _get(phase1, "cache_after", "body", "ssm_companion", "disk", default={})
+        or _get(phase1, "health_after", "cache", "ssm_companion", "disk", default={})
+    )
+    phase2_block = (
+        _get(phase2, "block_disk_cache", default={})
+        or _get(phase2, "cache_stats", "block_disk_cache", default={})
+        or _get(phase2, "cache_after", "body", "block_disk_cache", default={})
+        or _get(phase2, "health_after", "cache", "block_disk_cache", default={})
+    )
+    phase2_usage_detail = (
+        _get(phase2, "usage", "prompt_tokens_details", default={})
+        or _get(phase2, "response", "usage", "prompt_tokens_details", default={})
+    )
+    phase2_cache_hit_tokens = (
+        _get(phase2, "cache_hit_tokens")
+        or _get(phase2, "cached_tokens")
+        or _get(phase2_usage_detail, "cached_tokens")
+        or _get(phase2, "health_after", "scheduler", "cache_hit_tokens")
+    )
+    phase2_native = _get(phase2, "native_cache", default={}) or _get(phase2, "health_after", "native_cache", default={})
+    phase2_mtp = _get(phase2, "mtp", default={}) or _get(phase2, "health_after", "mtp", default={})
     return [
         _check("qwen27_restart_artifact_exists", data.get("exists") is True, str(QWEN27_RESTART_L2_RESTORE), data.get("status")),
         _check("qwen27_restart_status_pass", data.get("status") == "pass", str(QWEN27_RESTART_L2_RESTORE), data.get("status")),
-        _check("qwen27_restart_phase1_store", _positive_number(_get(phase1, "block_disk_cache", "disk_writes")) and _positive_number(_get(phase1, "ssm_companion_disk", "stores")), str(QWEN27_RESTART_L2_RESTORE)),
-        _check("qwen27_restart_phase2_disk_hit", _positive_number(_get(phase2, "cache_hit_tokens")) and _get(phase2, "usage", "prompt_tokens_details", "cache_detail") == "paged+ssm+disk", str(QWEN27_RESTART_L2_RESTORE)),
-        _check("qwen27_restart_phase2_block_l2_hit", _positive_number(_get(phase2, "block_disk_cache", "disk_hits")), str(QWEN27_RESTART_L2_RESTORE)),
-        _check("qwen27_restart_phase2_native_cache", _native_hybrid_cache_ok(_get(phase2, "native_cache", default={})), str(QWEN27_RESTART_L2_RESTORE)),
-        _check("qwen27_restart_phase2_mtp_active", _mtp_runtime_active(_get(phase2, "mtp", default={})), str(QWEN27_RESTART_L2_RESTORE)),
+        _check("qwen27_restart_phase1_store", _positive_number(_get(phase1_block, "disk_writes")) and _positive_number(_get(phase1_ssm, "stores")), str(QWEN27_RESTART_L2_RESTORE)),
+        _check("qwen27_restart_phase2_disk_hit", _positive_number(phase2_cache_hit_tokens) and _get(phase2_usage_detail, "cache_detail") == "paged+ssm+disk", str(QWEN27_RESTART_L2_RESTORE)),
+        _check("qwen27_restart_phase2_block_l2_hit", _positive_number(_get(phase2_block, "disk_hits")), str(QWEN27_RESTART_L2_RESTORE)),
+        _check("qwen27_restart_phase2_native_cache", _native_hybrid_cache_ok(phase2_native), str(QWEN27_RESTART_L2_RESTORE)),
+        _check("qwen27_restart_phase2_mtp_active", _mtp_runtime_active(phase2_mtp), str(QWEN27_RESTART_L2_RESTORE)),
     ]
 
 

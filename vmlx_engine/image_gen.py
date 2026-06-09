@@ -532,10 +532,10 @@ class ImageGenEngine:
 
         # Load from local path (NEVER silently download from HuggingFace)
         logger.info(f"Loading {resolved_class} from local path: {model_path}")
-        requested_lora = bool(lora_paths) or lora_scales is not None
-        if lora_scales is not None and not lora_paths:
+        requested_lora = bool(lora_paths) or bool(lora_scales)
+        if lora_scales and not lora_paths:
             raise ValueError("--lora-scales requires --lora-paths")
-        if lora_paths is not None and lora_scales is not None and len(lora_paths) != len(lora_scales):
+        if lora_paths and lora_scales and len(lora_paths) != len(lora_scales):
             raise ValueError("--lora-scales must have the same length as --lora-paths")
 
         model_kwargs = {
@@ -558,14 +558,14 @@ class ImageGenEngine:
                     f"{resolved_class} does not support LoRA constructor argument "
                     "'lora_paths'; use a LoRA-capable mflux model class."
                 )
-            if lora_scales is not None and not accepts_lora_scales:
+            if lora_scales and not accepts_lora_scales:
                 raise ValueError(
                     f"{resolved_class} does not support LoRA constructor argument "
                     "'lora_scales'; omit --lora-scales or use a compatible mflux model class."
                 )
             if accepts_lora_paths:
                 model_kwargs["lora_paths"] = list(lora_paths or [])
-            if lora_scales is not None and accepts_lora_scales:
+            if lora_scales and accepts_lora_scales:
                 model_kwargs["lora_scales"] = list(lora_scales)
         except (TypeError, ValueError):
             if requested_lora:

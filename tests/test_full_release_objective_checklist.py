@@ -384,13 +384,13 @@ def _write_green_panel_settings_artifact(tmp_path: Path) -> None:
 def _write_qwen_green_artifacts(tmp_path: Path) -> None:
     _write_json(
         tmp_path
-        / "build/current-qwen27-mxfp4-mtp-responses-cancel-mtp-deterministic-20260607.json",
+        / "build/current-qwen27-mxfp4-mtp-responses-cancel-mtp-deterministic-20260609.json",
         {
             "status": "pass",
             "request": {"stream": True},
             "probe": {"cancel_route_present": True, "bad_text_captured": False},
             "raw": {"response_id": "resp_ok", "cancel_status": 200, "stream_error": None},
-            "health_before": {"mtp": _mtp(), "native_cache": _native_cache()},
+            "health_after": {"mtp": _mtp(), "native_cache": _native_cache()},
         },
     )
     _write_json(
@@ -418,7 +418,7 @@ def _write_qwen_green_artifacts(tmp_path: Path) -> None:
     )
     _write_json(
         tmp_path
-        / "build/current-qwen27-mxfp4-mtp-restart-l2-restore-20260607/summary.json",
+        / "build/current-qwen27-mxfp4-mtp-restart-l2-restore-20260609/summary.json",
         {
             "status": "pass",
             "phases": {

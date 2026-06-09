@@ -1526,6 +1526,8 @@ def _write_expected_issue175_179_release_boundary_audit(root: Path) -> None:
                             "serve_cli_lora_scales": True,
                             "image_load_lora_signature_guard": True,
                             "focused_regression_test_present": True,
+                            "empty_lora_lists_noop_regression_test_present": True,
+                            "lora_scale_without_path_still_rejected": True,
                             "text_lora_flags_rejected": True,
                             "installed_app_lora_surface_proven": True,
                         },

@@ -1111,6 +1111,65 @@ class TestLoadMethod:
         assert engine._model.kwargs["lora_paths"] == ["/tmp/style.safetensors"]
         assert engine._model.kwargs["lora_scales"] == [0.7]
 
+    def test_load_treats_empty_lora_lists_as_no_lora_request(self, tmp_path):
+        """Default CLI empty LoRA lists must not require LoRA constructor args."""
+        (tmp_path / "transformer").mkdir()
+        (tmp_path / "transformer" / "0.safetensors").write_bytes(b"fake")
+        (tmp_path / "text_encoder_2").mkdir()
+        (tmp_path / "text_encoder_2" / "0.safetensors").write_bytes(b"fake")
+
+        mocks = _mock_mflux_modules()
+        mocks["mlx_lm"] = MagicMock()
+        mocks["mlx_lm.models"] = MagicMock()
+        mocks["mlx_lm.models.base"] = MagicMock()
+        mocks["mlx_lm.models.cache"] = MagicMock()
+
+        class MockFlux1:
+            def __init__(self, *, model_config, quantize, model_path):
+                self.kwargs = {
+                    "model_config": model_config,
+                    "quantize": quantize,
+                    "model_path": model_path,
+                }
+
+        mocks["mflux.models.flux.variants.txt2img.flux"].Flux1 = MockFlux1
+
+        with patch.dict(sys.modules, mocks):
+            from vmlx_engine.image_gen import ImageGenEngine
+
+            engine = ImageGenEngine()
+            engine.load(
+                "dev",
+                model_path=str(tmp_path),
+                lora_paths=[],
+                lora_scales=[],
+            )
+
+        assert engine._model.kwargs["model_path"] == str(tmp_path)
+        assert engine._lora_paths == []
+        assert engine._lora_scales == []
+
+    def test_load_rejects_nonempty_lora_scales_without_paths(self, tmp_path):
+        """A real scale value still needs a matching LoRA path."""
+        (tmp_path / "transformer").mkdir()
+        (tmp_path / "transformer" / "0.safetensors").write_bytes(b"fake")
+        (tmp_path / "text_encoder_2").mkdir()
+        (tmp_path / "text_encoder_2" / "0.safetensors").write_bytes(b"fake")
+
+        mocks = _mock_mflux_modules()
+
+        with patch.dict(sys.modules, mocks):
+            from vmlx_engine.image_gen import ImageGenEngine
+
+            engine = ImageGenEngine()
+            with pytest.raises(ValueError, match="--lora-scales requires --lora-paths"):
+                engine.load(
+                    "dev",
+                    model_path=str(tmp_path),
+                    lora_paths=[],
+                    lora_scales=[0.7],
+                )
+
     def test_load_uses_signature_not_broad_typeerror_fallback(self):
         """Unsupported LoRA kwargs should be filtered before constructor call."""
         source = Path("vmlx_engine/image_gen.py").read_text()

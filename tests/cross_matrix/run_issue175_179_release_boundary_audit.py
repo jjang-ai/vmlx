@@ -251,6 +251,14 @@ def build_audit(root: Path) -> dict[str, Any]:
         and "lora_scales" in image_gen,
         "focused_regression_test_present": "test_load_passes_lora_paths_and_scales_when_supported"
         in _read(root / "tests/test_image_gen.py"),
+        "empty_lora_lists_noop_regression_test_present": (
+            "test_load_treats_empty_lora_lists_as_no_lora_request"
+            in _read(root / "tests/test_image_gen.py")
+        ),
+        "lora_scale_without_path_still_rejected": (
+            "test_load_rejects_nonempty_lora_scales_without_paths"
+            in _read(root / "tests/test_image_gen.py")
+        ),
         "text_lora_flags_rejected": "test_cli_lora_flags_fail_clearly_for_text_models"
         in _read(root / "tests/test_image_api.py")
         and "_validate_lora_args_for_model_type(args, is_image=_is_image)" in cli,

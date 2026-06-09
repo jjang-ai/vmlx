@@ -5185,6 +5185,8 @@ def _validate_current_issue175_179_release_boundary_audit(root: Path) -> dict[st
             "serve_cli_lora_scales",
             "image_load_lora_signature_guard",
             "focused_regression_test_present",
+            "empty_lora_lists_noop_regression_test_present",
+            "lora_scale_without_path_still_rejected",
             "text_lora_flags_rejected",
             "installed_app_lora_surface_proven",
         },
