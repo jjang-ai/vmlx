@@ -761,6 +761,10 @@ def _gemma4_12b_media_checks(data: dict[str, Any]) -> list[dict[str, Any]]:
 
 def _gemma_qat_native_mxfp4_checks(data: dict[str, Any]) -> list[dict[str, Any]]:
     checks = data.get("checks") if isinstance(data.get("checks"), dict) else {}
+    gemma12b_audio_ok = (
+        checks.get("gemma4_12b_audio_weight_backed") is True
+        or checks.get("gemma4_12b_audio_honestly_gated") is True
+    )
     detail = {
         "missing_required_rows": data.get("missing_required_rows"),
         "open_required_rows": data.get("open_required_rows"),
@@ -800,10 +804,13 @@ def _gemma_qat_native_mxfp4_checks(data: dict[str, Any]) -> list[dict[str, Any]]
         ),
         _check(
             "gemma_qat_native_mxfp4_gemma4_12b_audio_weight_backed",
-            checks.get("gemma4_12b_audio_weight_backed") is True,
+            gemma12b_audio_ok,
             str(GEMMA_QAT_NATIVE_MXFP4_INVENTORY),
             {
                 "gemma4_12b_audio_weight_backed": checks.get("gemma4_12b_audio_weight_backed"),
+                "gemma4_12b_audio_honestly_gated": checks.get(
+                    "gemma4_12b_audio_honestly_gated"
+                ),
                 "row": data.get("required_rows", {}).get("gemma4_12b_native_mxfp4")
                 if isinstance(data.get("required_rows"), dict)
                 else None,

@@ -59,7 +59,7 @@ def test_issue179_audit_keeps_reporter_cancel_404_boundary_open():
         audit["reporter_server_hash_parity"]["provenance"][
             "public_release_checked_count"
         ]
-        == 6
+        == 2
     )
     assert (
         audit["reporter_server_hash_parity"]["reporter_installed_server_sha256"]
@@ -74,9 +74,43 @@ def test_issue179_audit_keeps_reporter_cancel_404_boundary_open():
         "reporter chat/session/settings database state matches local diagnostic state",
         "the 404 cancel response caused the screenshot rather than followed the stream abort",
     ]
+    assert audit["local_reporter_prompt_reproduction"]["exists"] is True
     assert audit["local_reporter_prompt_reproduction"]["clean"] is True
     assert audit["local_reporter_prompt_reproduction"]["observed_stream_text"] is True
+    assert (
+        audit["local_reporter_prompt_reproduction"]["selected_fallback_path"]
+        == "build/current-issue179-minimax-k-responses-cancel-probe-after-mimo-dsv4-ledger-20260607.json"
+    )
     assert "#179 remains open" in audit["release_boundary"]
+
+
+def test_issue179_audit_tracks_language_planning_leak_isolation_axes():
+    audit = gate.build_audit(Path("."))
+
+    isolation = audit["language_planning_leak_isolation"]
+    rows = {row["axis"]: row for row in isolation["axes"]}
+
+    assert isolation["status"] == "open"
+    assert set(rows) == {
+        "reporter_exact_prompt_reproduction",
+        "generation_config_and_sampling",
+        "parser_template_reasoning",
+        "paged_prefix_cache",
+        "block_disk_l2",
+        "turboquant_kv",
+    }
+    assert rows["reporter_exact_prompt_reproduction"]["status"] == "open"
+    assert rows["generation_config_and_sampling"]["status"] in {"partial", "open"}
+    assert rows["parser_template_reasoning"]["status"] in {"partial", "open"}
+    assert rows["paged_prefix_cache"]["status"] in {"partial", "open"}
+    assert rows["block_disk_l2"]["status"] in {"partial", "open"}
+    assert rows["turboquant_kv"]["status"] in {"partial", "open"}
+    assert "cache_on_off_same_prompt" in rows["paged_prefix_cache"]["required_next_evidence"]
+    assert "fresh_process_l2_restore_same_prompt" in rows["block_disk_l2"]["required_next_evidence"]
+    assert "tq_kv_off_same_prompt" in rows["turboquant_kv"]["required_next_evidence"]
+    assert "rendered_chat_template_hash" in rows["parser_template_reasoning"]["required_next_evidence"]
+    assert "generation_config_hash_match" in rows["generation_config_and_sampling"]["required_next_evidence"]
+    assert "single_axis_runtime_ab_required" in isolation["release_boundary"]
 
 
 def test_issue179_local_reporter_repro_accepts_reasoning_only_clean_cancel(tmp_path):

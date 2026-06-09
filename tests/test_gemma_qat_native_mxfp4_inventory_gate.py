@@ -204,6 +204,7 @@ def test_gate_does_not_treat_gemma4_audio_token_metadata_as_native_audio(tmp_pat
     assert match["modality_backing"]["audio_embed_only"] is True
     assert match["modality_backing"]["vision_weight_backed"] is True
     assert artifact["checks"]["gemma4_12b_audio_weight_backed"] is False
+    assert artifact["checks"]["gemma4_12b_audio_honestly_gated"] is True
     assert "gemma-4-12B-it-qat-MXFP4: audio metadata present without audio_tower weights" in (
         artifact["required_rows"]["gemma4_12b_native_mxfp4"]["notes"]
     )

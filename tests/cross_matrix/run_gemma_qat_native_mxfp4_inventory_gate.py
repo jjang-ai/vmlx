@@ -349,6 +349,11 @@ def build_artifact(
     gemma12b_backing = backing("gemma4_12b_native_mxfp4")
     gemma26b_backing = backing("gemma4_26b_vl")
     gemma31b_backing = backing("gemma4_31v_or_31b_vl")
+    gemma12b_audio_honestly_gated = (
+        gemma12b_backing.get("audio_advertised_by_config") is True
+        and gemma12b_backing.get("audio_weight_backed") is not True
+        and gemma12b_backing.get("audio_embed_only") is True
+    )
     missing = [key for key, row in classified.items() if row["status"] == "missing"]
     open_rows = [key for key, row in classified.items() if row["status"] == "open"]
     source_smoke_open = [
@@ -376,6 +381,7 @@ def build_artifact(
             "all_required_source_live_smokes_present": not source_smoke_open,
             "all_required_live_proofs_present": False,
             "gemma4_12b_audio_weight_backed": gemma12b_backing.get("audio_weight_backed") is True,
+            "gemma4_12b_audio_honestly_gated": gemma12b_audio_honestly_gated,
             "gemma4_12b_vision_weight_backed": gemma12b_backing.get("vision_weight_backed") is True,
             "gemma4_12b_video_runtime_proof_required": (
                 gemma12b_backing.get("video_runtime_proof_required") is True

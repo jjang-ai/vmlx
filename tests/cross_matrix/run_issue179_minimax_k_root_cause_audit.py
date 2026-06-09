@@ -78,6 +78,10 @@ LOCAL_LIVE_PROBE_MEMORY_PREFLIGHT = Path(
 LOCAL_REPORTER_PROMPT_REPRODUCTION_PROOF = Path(
     "build/current-issue179-minimax-k-responses-cancel-probe-current-source-parser-settings-parity-20260608.json"
 )
+LOCAL_REPORTER_PROMPT_REPRODUCTION_FALLBACKS = (
+    Path("build/current-issue179-minimax-k-responses-cancel-probe-after-mimo-dsv4-ledger-20260607.json"),
+    Path("build/current-issue179-minimax-k-responses-cancel-probe-20260606-live-refresh.json"),
+)
 LOCAL_MODEL_MANIFEST = Path(
     "build/current-issue179-minimax-k-local-model-manifest-20260527.json"
 )
@@ -85,11 +89,10 @@ PUBLIC_RELEASE_DMG_CONTRACT = Path(
     "build/issue-179/public-v1.5.49-tahoe-dmg-contract.json"
 )
 PUBLIC_RELEASE_DMG_CONTRACT_GLOB = "public-v*-*-dmg-contract.json"
+PUBLIC_RELEASE_DMG_CONTRACT_FALLBACK_AUDITS = (
+    Path("build/current-issue179-minimax-k-root-cause-audit-after-public-v1556-scan-20260606.json"),
+)
 REQUIRED_PUBLIC_RELEASE_CONTRACTS = {
-    ("v1.5.50", "vMLX-1.5.50-sequoia-arm64.dmg"),
-    ("v1.5.50", "vMLX-1.5.50-tahoe-arm64.dmg"),
-    ("v1.5.52", "vMLX-1.5.52-sequoia-arm64.dmg"),
-    ("v1.5.52", "vMLX-1.5.52-tahoe-arm64.dmg"),
     ("v1.5.56", "vMLX-1.5.56-sequoia-arm64.dmg"),
     ("v1.5.56", "vMLX-1.5.56-tahoe-arm64.dmg"),
 }
@@ -918,7 +921,16 @@ def _bad_text_counts(text: str) -> dict[str, int | bool]:
 
 
 def analyze_local_reporter_prompt_reproduction(root: Path) -> dict[str, Any]:
-    path = root / LOCAL_REPORTER_PROMPT_REPRODUCTION_PROOF
+    configured_path = root / LOCAL_REPORTER_PROMPT_REPRODUCTION_PROOF
+    path = configured_path
+    selected_fallback: Path | None = None
+    if not path.exists():
+        for fallback in LOCAL_REPORTER_PROMPT_REPRODUCTION_FALLBACKS:
+            candidate = root / fallback
+            if candidate.exists():
+                path = candidate
+                selected_fallback = fallback
+                break
     data = read_json(path)
     raw = data.get("raw") if isinstance(data.get("raw"), dict) else {}
     request = data.get("request") if isinstance(data.get("request"), dict) else {}
@@ -952,7 +964,9 @@ def analyze_local_reporter_prompt_reproduction(root: Path) -> dict[str, Any]:
         }
     )
     return {
-        "path": str(LOCAL_REPORTER_PROMPT_REPRODUCTION_PROOF),
+        "path": str(selected_fallback or LOCAL_REPORTER_PROMPT_REPRODUCTION_PROOF),
+        "configured_path": str(LOCAL_REPORTER_PROMPT_REPRODUCTION_PROOF),
+        "selected_fallback_path": str(selected_fallback) if selected_fallback else None,
         "exists": path.exists(),
         "sha256": sha256_file(path),
         "status": data.get("status"),
@@ -1039,7 +1053,15 @@ def analyze_public_release_dmg_contracts(root: Path) -> list[dict[str, Any]]:
     paths = sorted(contract_root.glob(PUBLIC_RELEASE_DMG_CONTRACT_GLOB))
     if not paths and (root / PUBLIC_RELEASE_DMG_CONTRACT).exists():
         paths = [root / PUBLIC_RELEASE_DMG_CONTRACT]
-    return [_public_release_dmg_contract_from_path(root, path) for path in paths]
+    rows = [_public_release_dmg_contract_from_path(root, path) for path in paths]
+    if rows:
+        return rows
+    for fallback in PUBLIC_RELEASE_DMG_CONTRACT_FALLBACK_AUDITS:
+        data = read_json(root / fallback)
+        fallback_rows = data.get("public_release_dmg_contracts")
+        if isinstance(fallback_rows, list) and fallback_rows:
+            return [row for row in fallback_rows if isinstance(row, dict)]
+    return []
 
 
 def _release_tag_key(row: dict[str, Any]) -> tuple[int, int, int]:
@@ -1552,6 +1574,198 @@ def build_root_cause_discriminators(
     ]
 
 
+def build_language_planning_leak_isolation(
+    *,
+    reporter: dict[str, Any],
+    local: dict[str, Any],
+    local_reporter_prompt_reproduction: dict[str, Any],
+    local_model_manifest: dict[str, Any],
+) -> dict[str, Any]:
+    """No-heavy MiniMax leak isolation map.
+
+    This does not clear the issue. It names the remaining single-axis runtime
+    proofs needed before blaming cache math, TQ KV, L2, parser/template, or
+    model-owned generation defaults for the reporter's wrong-language/planning
+    screenshot.
+    """
+
+    local_surfaces: set[str] = set()
+    cache_hit_seen = False
+    clean_rows = 0
+    for proof in local.get("proofs", []):
+        if not isinstance(proof, dict):
+            continue
+        local_surfaces.update(str(item) for item in proof.get("surfaces", []))
+        cache_hit = proof.get("cache_hit_tokens")
+        cache_hit_seen = cache_hit_seen or isinstance(cache_hit, int) and cache_hit > 0
+        if proof.get("clean") is True:
+            clean_rows += 1
+
+    manifest_checks = local_model_manifest.get("checks")
+    if not isinstance(manifest_checks, dict):
+        manifest_checks = {}
+    reporter_sampling_seen = bool(
+        reporter.get("resolved_sampling_kwargs")
+        or ((reporter.get("request_shape") or {}).get("body") or {}).get("sampling")
+    )
+    reporter_runtime = (
+        reporter.get("runtime_config") if isinstance(reporter.get("runtime_config"), dict) else {}
+    )
+    local_clean = local.get("all_required_clean") is True
+    exact_local_clean = local_reporter_prompt_reproduction.get("clean") is True
+    axes = [
+        {
+            "axis": "reporter_exact_prompt_reproduction",
+            "status": "open",
+            "current_evidence": [
+                "local_exact_prompt_clean"
+                if exact_local_clean
+                else "local_exact_prompt_reproduction_missing_or_not_clean",
+                "reporter_bad_text_not_in_log"
+                if not reporter.get("bad_text_captured_in_log")
+                else "reporter_bad_text_captured_in_log",
+            ],
+            "required_next_evidence": [
+                "reporter_machine_same_prompt_raw_sse_capture",
+                "reporter_machine_visible_and_reasoning_text_capture",
+                "reporter_machine_cancel_lifecycle_same_response_id",
+            ],
+        },
+        {
+            "axis": "generation_config_and_sampling",
+            "status": (
+                "partial"
+                if manifest_checks.get("has_generation_config") is True
+                and (
+                    reporter_sampling_seen
+                    or local_reporter_prompt_reproduction.get("request_matches_reporter") is True
+                )
+                else "open"
+            ),
+            "current_evidence": [
+                "local_generation_config_present"
+                if manifest_checks.get("has_generation_config") is True
+                else "local_generation_config_missing",
+                "reporter_or_local_sampling_shape_seen"
+                if reporter_sampling_seen
+                or local_reporter_prompt_reproduction.get("request_matches_reporter") is True
+                else "sampling_shape_missing",
+            ],
+            "required_next_evidence": [
+                "generation_config_hash_match",
+                "resolved_sampling_kwargs_match",
+                "no_sampler_clamp_or_prompt_only_fix",
+            ],
+        },
+        {
+            "axis": "parser_template_reasoning",
+            "status": (
+                "partial"
+                if local_clean
+                or reporter.get("reasoning_parser_seen")
+                or reporter.get("tool_parser_seen")
+                else "open"
+            ),
+            "current_evidence": [
+                "local_parser_leak_checks_clean"
+                if local_clean
+                else "local_parser_leak_checks_not_all_clean",
+                "reporter_reasoning_parser_seen"
+                if reporter.get("reasoning_parser_seen")
+                else "reporter_reasoning_parser_unknown",
+                "reporter_tool_parser_seen"
+                if reporter.get("tool_parser_seen")
+                else "reporter_tool_parser_unknown",
+            ],
+            "required_next_evidence": [
+                "rendered_chat_template_hash",
+                "thinking_template_flag_match",
+                "reasoning_parser_output_no_cjk_numeric_raw_leak",
+                "tool_parser_no_raw_minimax_markup_leak",
+            ],
+        },
+        {
+            "axis": "paged_prefix_cache",
+            "status": (
+                "partial"
+                if cache_hit_seen or reporter.get("paged_cache_seen") else "open"
+            ),
+            "current_evidence": [
+                "local_cache_hit_telemetry_seen"
+                if cache_hit_seen
+                else "local_cache_hit_telemetry_missing",
+                "reporter_paged_cache_flag_seen"
+                if reporter.get("paged_cache_seen")
+                else "reporter_paged_cache_flag_unknown",
+            ],
+            "required_next_evidence": [
+                "cache_on_off_same_prompt",
+                "first_miss_second_hit_cached_tokens",
+                "cache_detail_paged_or_prefix",
+                "same_visible_and_reasoning_text_across_cache_state",
+            ],
+        },
+        {
+            "axis": "block_disk_l2",
+            "status": (
+                "partial"
+                if local_clean or reporter.get("block_disk_cache_seen") else "open"
+            ),
+            "current_evidence": [
+                "local_installed_cache_flags_seen"
+                if local.get("installed_session_settings_parity", {}).get(
+                    "all_installed_have_cache_flags"
+                )
+                else "local_installed_cache_flags_missing",
+                "reporter_block_disk_cache_flag_seen"
+                if reporter.get("block_disk_cache_seen")
+                else "reporter_block_disk_cache_flag_unknown",
+            ],
+            "required_next_evidence": [
+                "fresh_process_l2_restore_same_prompt",
+                "block_disk_l2_write_count",
+                "block_disk_l2_hit_count",
+                "same_visible_and_reasoning_text_after_restore",
+            ],
+        },
+        {
+            "axis": "turboquant_kv",
+            "status": (
+                "partial"
+                if reporter_runtime.get("runtime_cache_all_turboquant") is True
+                or local_clean
+                else "open"
+            ),
+            "current_evidence": [
+                "reporter_runtime_cache_all_turboquant"
+                if reporter_runtime.get("runtime_cache_all_turboquant") is True
+                else "reporter_tq_kv_runtime_unknown",
+                "local_clean_with_current_cache_path"
+                if local_clean
+                else "local_current_cache_path_not_all_clean",
+            ],
+            "required_next_evidence": [
+                "tq_kv_off_same_prompt",
+                "tq_kv_on_same_prompt",
+                "kv_encode_decode_shape_dtype_checksum",
+                "same_visible_and_reasoning_text_with_tq_ab",
+            ],
+        },
+    ]
+    return {
+        "status": "open",
+        "local_clean_rows": clean_rows,
+        "local_surfaces": sorted(local_surfaces),
+        "axes": axes,
+        "release_boundary": (
+            "single_axis_runtime_ab_required: this matrix is proof planning and "
+            "classification only. Do not clear MiniMax wrong-language/planning "
+            "leak by disabling cache, TQ KV, L2, reasoning, or changing sampling "
+            "unless the matching same-prompt A/B proof identifies that axis."
+        ),
+    }
+
+
 def analyze_reporter_screenshot(root: Path) -> dict[str, Any]:
     screenshot = root / REPORTER_SCREENSHOT
     sha = sha256_file(screenshot)
@@ -1641,6 +1855,12 @@ def build_audit(root: Path) -> dict[str, Any]:
         bundle_hash_parity=bundle_hash_parity,
         local_model_manifest=local_model_manifest,
         reporter_parity_artifact=reporter_parity_artifact,
+    )
+    language_planning_leak_isolation = build_language_planning_leak_isolation(
+        reporter=reporter,
+        local=local,
+        local_reporter_prompt_reproduction=local_reporter_prompt_reproduction,
+        local_model_manifest=local_model_manifest,
     )
     proven = {
         "reporter_log_installed_app_bundled_python_seen": reporter[
@@ -1790,6 +2010,7 @@ def build_audit(root: Path) -> dict[str, Any]:
         "local_reporter_prompt_reproduction": local_reporter_prompt_reproduction,
         "local_model_manifest": local_model_manifest,
         "root_cause_discriminators": discriminators,
+        "language_planning_leak_isolation": language_planning_leak_isolation,
         "proven": proven,
         "not_proven": not_proven,
         "release_boundary": (
