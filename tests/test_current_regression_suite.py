@@ -2260,7 +2260,7 @@ def test_current_regression_suite_runs_full_release_objective_checklist(
     assert any(name == "full_release_objective_checklist" for name, _cmd in seen_steps)
     assert any(
         "run_full_release_objective_checklist.py" in " ".join(cmd)
-        and "current-full-release-objective-checklist-after-pr-intake-matrix-refresh-20260609.json"
+        and "current-full-release-objective-checklist-after-responses-raw-sse-gemma-surface-20260609.json"
         in " ".join(cmd)
         for _name, cmd in seen_steps
     )
@@ -2271,7 +2271,7 @@ def test_current_regression_suite_allows_open_full_release_objective_checklist(
 ):
     from tests.cross_matrix import run_current_regression_suite as suite
 
-    path = tmp_path / "build/current-full-release-objective-checklist-after-pr-intake-matrix-refresh-20260609.json"
+    path = tmp_path / "build/current-full-release-objective-checklist-after-responses-raw-sse-gemma-surface-20260609.json"
     path.parent.mkdir(parents=True)
     path.write_text(json.dumps({"status": "open"}) + "\n")
 

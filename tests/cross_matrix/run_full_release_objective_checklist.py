@@ -17,7 +17,7 @@ from typing import Any
 
 
 DEFAULT_OUT = Path(
-    "build/current-full-release-objective-checklist-after-pr-intake-matrix-refresh-20260609.json"
+    "build/current-full-release-objective-checklist-after-responses-raw-sse-gemma-surface-20260609.json"
 )
 
 MIMO_AUDIT = Path(
