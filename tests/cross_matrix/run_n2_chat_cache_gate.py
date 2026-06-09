@@ -208,6 +208,36 @@ def chat_payload(args: argparse.Namespace, *, skip_prefix_cache: bool) -> dict[s
     }
 
 
+def tool_payload(args: argparse.Namespace) -> dict[str, Any]:
+    return {
+        "model": args.served_model_name,
+        "messages": [{"role": "user", "content": args.tool_prompt}],
+        "max_tokens": args.tool_max_tokens,
+        "temperature": 0.0,
+        "top_p": 1.0,
+        "top_k": 0,
+        "enable_thinking": False,
+        "tools": [
+            {
+                "type": "function",
+                "function": {
+                    "name": args.tool_name,
+                    "description": "Look up a short value by query.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"query": {"type": "string"}},
+                        "required": ["query"],
+                    },
+                },
+            }
+        ],
+        "tool_choice": {
+            "type": "function",
+            "function": {"name": args.tool_name},
+        },
+    }
+
+
 def response_text(body: dict[str, Any] | None) -> str:
     if not isinstance(body, dict):
         return ""
@@ -221,8 +251,54 @@ def response_text(body: dict[str, Any] | None) -> str:
     return str(choice.get("text") or "")
 
 
+def response_tool_calls(body: dict[str, Any] | None) -> list[dict[str, Any]]:
+    if not isinstance(body, dict):
+        return []
+    choices = body.get("choices")
+    if not isinstance(choices, list) or not choices:
+        return []
+    choice = choices[0] if isinstance(choices[0], dict) else {}
+    message = choice.get("message")
+    tool_calls = (
+        message.get("tool_calls")
+        if isinstance(message, dict) and isinstance(message.get("tool_calls"), list)
+        else []
+    )
+    rows: list[dict[str, Any]] = []
+    for tc in tool_calls:
+        if not isinstance(tc, dict):
+            continue
+        fn = tc.get("function") if isinstance(tc.get("function"), dict) else {}
+        rows.append(
+            {
+                "id": str(tc.get("id") or ""),
+                "name": str(fn.get("name") or ""),
+                "arguments": str(fn.get("arguments") or ""),
+            }
+        )
+    return rows
+
+
+def _parse_tool_args(raw: str) -> dict[str, Any] | None:
+    try:
+        parsed = json.loads(raw or "{}")
+    except Exception:
+        return None
+    return parsed if isinstance(parsed, dict) else None
+
+
+def cache_rows_stable_text(rows: list[dict[str, Any]]) -> bool:
+    cache_texts = [
+        row.get("text")
+        for row in rows
+        if row.get("mode") in {"no_cache_bypass", "cache_warm_store", "cache_hit"}
+    ]
+    return bool(cache_texts and all(text == cache_texts[0] for text in cache_texts))
+
+
 def row_from_response(mode: str, response: dict[str, Any]) -> dict[str, Any]:
     body = response.get("body") if isinstance(response.get("body"), dict) else None
+    tool_calls = response_tool_calls(body)
     return {
         "mode": mode,
         "status_code": response.get("code"),
@@ -231,6 +307,9 @@ def row_from_response(mode: str, response: dict[str, Any]) -> dict[str, Any]:
         "text": response_text(body),
         "usage": body.get("usage") if isinstance(body, dict) else None,
         "body": None if response.get("code") == 200 else body,
+        "tool_calls": tool_calls,
+        "tool_call_names": [tc["name"] for tc in tool_calls],
+        "tool_call_arguments": [_parse_tool_args(tc["arguments"]) for tc in tool_calls],
     }
 
 
@@ -284,6 +363,17 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                         ),
                     )
                 )
+            if args.include_tool_probe:
+                rows.append(
+                    row_from_response(
+                        "tool_required",
+                        post_json(
+                            url,
+                            tool_payload(args),
+                            args.request_timeout_s,
+                        ),
+                    )
+                )
             final_health = get_json(f"http://127.0.0.1:{args.port}/health", timeout=5)
             telemetry.append(resource_snapshot("after_requests", proc))
     finally:
@@ -314,14 +404,29 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         if isinstance(prompt_details, dict)
         else None
     )
-    texts = [row.get("text") for row in rows]
-    stable_text = bool(texts and all(text == texts[0] for text in texts))
+    stable_text = cache_rows_stable_text(rows)
+    tool_row = next((row for row in rows if row.get("mode") == "tool_required"), None)
+    tool_args = (
+        tool_row.get("tool_call_arguments")
+        if isinstance(tool_row, dict)
+        and isinstance(tool_row.get("tool_call_arguments"), list)
+        else []
+    )
+    tool_probe_pass = (
+        tool_row is None
+        or (
+            tool_row.get("status_code") == 200
+            and tool_row.get("tool_call_names") == [args.tool_name]
+            and tool_args == [{"query": args.tool_query}]
+        )
+    )
     status = (
         "pass"
         if all(row.get("status_code") == 200 for row in rows)
         and stable_text
         and isinstance(cached_tokens, int)
         and cached_tokens > 0
+        and tool_probe_pass
         else "fail"
     )
     return {
@@ -334,6 +439,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "final_health": final_health,
         "rows": rows,
         "stable_text": stable_text,
+        "tool_probe_pass": tool_probe_pass,
         "cache_hit_cached_tokens": cached_tokens,
         "cache_hit_cache_detail": (
             prompt_details.get("cache_detail")
@@ -355,6 +461,14 @@ def main() -> int:
     parser.add_argument("--port", type=int, default=8876)
     parser.add_argument("--served-model-name", default="n2-pro-jangtq2-chat-proof")
     parser.add_argument("--prompt", default="Return only ACK.")
+    parser.add_argument("--include-tool-probe", action="store_true")
+    parser.add_argument(
+        "--tool-prompt",
+        default="Use lookup for query alpha. Do not answer in prose.",
+    )
+    parser.add_argument("--tool-name", default="lookup")
+    parser.add_argument("--tool-query", default="alpha")
+    parser.add_argument("--tool-max-tokens", type=int, default=64)
     parser.add_argument("--max-tokens", type=int, default=4)
     parser.add_argument("--server-max-tokens", type=int, default=16)
     parser.add_argument("--cache-dir", type=Path, default=DEFAULT_CACHE_DIR)
