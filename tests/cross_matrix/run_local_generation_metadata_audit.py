@@ -33,6 +33,9 @@ HIGH_RISK_MODEL_CANDIDATES = (
     "/Users/example/models/dealign.ai/Ling-2.6-flash-JANGTQ2-CRACK",
     "/Users/example/models/JANGQ/Gemma-4-31B-it-JANG_4M-MTP",
     "/Users/example/models/dealign.ai/Gemma-4-26B-A4B-it-JANG_4M-CRACK",
+    "/Users/example/models/dealignai/Step-3.7-Flash-JANG_2L-CRACK",
+    "/Users/example/models/dealignai/Step-3.7-Flash-JANG_K-CRACK",
+    "/Users/example/models/JANGQ/Step-3.7-Flash-JANG_K",
     "/Users/example/models/JANGQ/DeepSeek-V4-Flash-JANGTQ-K",
     "/Users/example/models/JANGQ/DeepSeek-V4-Flash-JANG",
 )
@@ -209,11 +212,14 @@ def _media_metadata_row(cfg: dict[str, Any], jang: dict[str, Any]) -> dict[str, 
 
 
 def _runtime_route_row(model_path: Path) -> dict[str, Any]:
-    from vmlx_engine.api.utils import is_mllm_model
+    from vmlx_engine.api import utils
 
     return {
-        "engine_is_mllm_default": bool(is_mllm_model(str(model_path))),
-        "engine_is_mllm_force": bool(is_mllm_model(str(model_path), force_mllm=True)),
+        "engine_is_mllm_default": bool(utils.is_mllm_model(str(model_path))),
+        "engine_is_mllm_force": bool(utils.is_mllm_model(str(model_path), force_mllm=True)),
+        "step3p7_source_vlm_runtime_available": bool(
+            utils._source_step3p7_vlm_runtime_available()
+        ),
     }
 
 
@@ -351,6 +357,14 @@ def audit_model(path_text: str) -> dict[str, Any]:
         row["model_type"] == "step3p7"
         and media_metadata["advertised_vision"]
         and runtime_route["engine_is_mllm_default"] is True
+        and runtime_route["step3p7_source_vlm_runtime_available"] is True
+    ):
+        notes.append("step3p7_advertised_media_routes_source_vlm_runtime")
+    if (
+        row["model_type"] == "step3p7"
+        and media_metadata["advertised_vision"]
+        and runtime_route["engine_is_mllm_default"] is True
+        and runtime_route["step3p7_source_vlm_runtime_available"] is False
     ):
         notes.append("step3p7_advertised_media_routes_mllm_by_default")
     if resolved_chat["max_tokens"] > 8192:

@@ -6,6 +6,18 @@ from pathlib import Path
 import pytest
 
 
+def test_local_generation_metadata_audit_defaults_include_step3p7_repro_paths():
+    from tests.cross_matrix.run_local_generation_metadata_audit import (
+        HIGH_RISK_MODEL_CANDIDATES,
+    )
+
+    candidates = set(HIGH_RISK_MODEL_CANDIDATES)
+
+    assert "/Users/example/models/dealignai/Step-3.7-Flash-JANG_2L-CRACK" in candidates
+    assert "/Users/example/models/dealignai/Step-3.7-Flash-JANG_K-CRACK" in candidates
+    assert "/Users/example/models/JANGQ/Step-3.7-Flash-JANG_K" in candidates
+
+
 def test_local_generation_metadata_audit_reports_high_risk_rows(tmp_path):
     from tests.cross_matrix.run_local_generation_metadata_audit import build_artifact
 
@@ -83,7 +95,7 @@ def test_local_generation_metadata_audit_accepts_template_budget_support(tmp_pat
     assert "thinking_budget_override_forwarded_but_template_does_not_enforce" not in row["notes"]
 
 
-def test_local_generation_metadata_audit_reports_step3p7_advertised_media_guard(tmp_path):
+def test_local_generation_metadata_audit_reports_step3p7_source_runtime_route(tmp_path):
     from tests.cross_matrix.run_local_generation_metadata_audit import audit_model
 
     (tmp_path / "config.json").write_text(
@@ -116,4 +128,48 @@ def test_local_generation_metadata_audit_reports_step3p7_advertised_media_guard(
     assert row["media_metadata"]["advertised_vision"] is True
     assert row["runtime_route"]["engine_is_mllm_default"] is True
     assert row["runtime_route"]["engine_is_mllm_force"] is True
-    assert "step3p7_advertised_media_routes_mllm_by_default" in row["notes"]
+    assert row["runtime_route"]["step3p7_source_vlm_runtime_available"] is True
+    assert "step3p7_advertised_media_routes_source_vlm_runtime" in row["notes"]
+    assert "step3p7_advertised_media_routes_mllm_by_default" not in row["notes"]
+
+
+def test_local_generation_metadata_audit_reports_step3p7_guard_when_runtime_missing(
+    tmp_path,
+    monkeypatch,
+):
+    from tests.cross_matrix.run_local_generation_metadata_audit import audit_model
+    from vmlx_engine.api import utils
+
+    (tmp_path / "config.json").write_text(
+        json.dumps(
+            {
+                "model_type": "step3p7",
+                "architectures": ["Step3p7ForConditionalGeneration"],
+                "vision_config": {"hidden_size": 4096},
+                "image_token_id": 128001,
+            }
+        ),
+        encoding="utf-8",
+    )
+    (tmp_path / "jang_config.json").write_text(
+        json.dumps(
+            {
+                "architecture": {
+                    "type": "step3p7",
+                    "text_model_type": "step3p5",
+                    "has_vision": True,
+                    "has_audio": False,
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(utils, "_source_step3p7_vlm_runtime_available", lambda: False)
+
+    row = audit_model(str(tmp_path))
+
+    assert row["media_metadata"]["advertised_vision"] is True
+    assert row["runtime_route"]["engine_is_mllm_default"] is False
+    assert row["runtime_route"]["engine_is_mllm_force"] is False
+    assert row["runtime_route"]["step3p7_source_vlm_runtime_available"] is False
+    assert "step3p7_advertised_media_guarded_text_only" in row["notes"]
