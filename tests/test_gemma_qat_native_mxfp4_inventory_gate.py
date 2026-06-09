@@ -119,6 +119,31 @@ def test_gate_keeps_jangq_gemma4_e2b_e4b_qat_open_until_live_proof_exists(tmp_pa
     assert artifact["checks"]["all_required_live_proofs_present"] is False
 
 
+def test_gate_records_source_live_smoke_without_release_clearance(tmp_path):
+    _bundle(
+        tmp_path,
+        "gemma-4-E2B-it-qat-MXFP4",
+        model_type="gemma4",
+        text_model_type="gemma4_text",
+        weight_format="mxfp4",
+    )
+    proof = tmp_path / gate.SOURCE_LIVE_SMOKE_PROOFS["gemma4_e2b_qat_native_mxfp4"]
+    _write_json(
+        proof,
+        {"status": "pass", "failed": 0, "completed": 1, "row_count": 1},
+    )
+
+    artifact = gate.build_artifact((tmp_path,), proof_root=tmp_path)
+
+    row = artifact["required_rows"]["gemma4_e2b_qat_native_mxfp4"]
+    assert row["status"] == "open"
+    assert row["source_live_smoke"]["status"] == "pass"
+    assert row["source_live_smoke"]["artifact"] == str(
+        gate.SOURCE_LIVE_SMOKE_PROOFS["gemma4_e2b_qat_native_mxfp4"]
+    )
+    assert artifact["checks"]["all_required_live_proofs_present"] is False
+
+
 def test_gate_uses_gemma4_e2b_e4b_row_ids_for_gemma4_qat_bundles(tmp_path):
     _bundle(
         tmp_path,

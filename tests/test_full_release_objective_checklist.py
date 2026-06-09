@@ -1013,6 +1013,7 @@ def test_full_release_objective_checklist_blocks_open_gemma_qat_inventory():
             "gemma4_12b_native_mxfp4_present": True,
             "gemma4_26b_present": True,
             "gemma4_31v_or_31b_present": True,
+            "all_required_source_live_smokes_present": False,
             "all_required_live_proofs_present": False,
         },
     }
@@ -1023,6 +1024,7 @@ def test_full_release_objective_checklist_blocks_open_gemma_qat_inventory():
     assert "gemma_qat_native_mxfp4_status_pass" in failed
     assert "gemma_qat_native_mxfp4_gemma4_e2b_present" in failed
     assert "gemma_qat_native_mxfp4_gemma4_e4b_present" in failed
+    assert "gemma_qat_native_mxfp4_all_source_live_smokes_present" in failed
     assert "gemma_qat_native_mxfp4_all_live_proofs_present" in failed
     assert failed["gemma_qat_native_mxfp4_all_live_proofs_present"]["detail"] == {
         "missing_required_rows": [
@@ -1034,6 +1036,7 @@ def test_full_release_objective_checklist_blocks_open_gemma_qat_inventory():
             "gemma4_26b_vl",
             "gemma4_31v_or_31b_vl",
         ],
+        "source_live_smoke_open_rows": None,
     }
 
 
@@ -1142,12 +1145,14 @@ def test_full_release_objective_checklist_can_pass_when_all_evidence_is_green(
             "count": 5,
             "missing_required_rows": [],
             "open_required_rows": [],
+            "source_live_smoke_open_rows": [],
             "checks": {
                 "gemma4_e2b_qat_native_mxfp4_present": True,
                 "gemma4_e4b_qat_native_mxfp4_present": True,
                 "gemma4_12b_native_mxfp4_present": True,
                 "gemma4_26b_present": True,
                 "gemma4_31v_or_31b_present": True,
+                "all_required_source_live_smokes_present": True,
                 "all_required_live_proofs_present": True,
             },
         },

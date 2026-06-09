@@ -69,6 +69,22 @@ def test_n2_chat_cache_gate_memory_preflight_labels_binary_units(monkeypatch):
     assert skipped["required_available_gb"] == 120.0
 
 
+def test_n2_chat_cache_gate_records_requested_probes_for_skipped_runs():
+    args = SimpleNamespace(
+        include_tool_probe=True,
+        include_responses_probe=True,
+        include_responses_stream_probe=False,
+        include_l2_restart_probe=True,
+    )
+
+    assert runner.requested_probes(args) == {
+        "tool": True,
+        "responses": True,
+        "responses_stream": False,
+        "l2_restart": True,
+    }
+
+
 def test_n2_chat_cache_gate_extracts_tool_call_arguments():
     response = {
         "code": 200,
@@ -251,3 +267,43 @@ def test_n2_chat_cache_gate_extracts_streaming_responses_tool_args_from_sse():
     assert row["output_item_done_arguments_by_item"] == {"fc_1": '{"query":"alpha"}'}
     assert row["cached_tokens"] == 9
     assert row["cache_detail"] == "paged+ssm"
+
+
+def test_n2_chat_cache_gate_l2_restart_probe_requires_block_and_ssm_disk_hits():
+    probe = {
+        "status": "pass",
+        "row": {
+            "status_code": 200,
+            "usage": {
+                "prompt_tokens_details": {
+                    "cached_tokens": 56,
+                    "cache_detail": "paged+ssm+disk",
+                }
+            },
+        },
+        "after_health_cache": {
+            "block_disk_cache": {"disk_hits": 1},
+            "ssm_companion_disk": {"hits": 1},
+        },
+    }
+
+    assert runner.l2_restart_probe_passed(probe) is True
+
+    probe["after_health_cache"]["ssm_companion_disk"]["hits"] = 0
+    assert runner.l2_restart_probe_passed(probe) is False
+
+
+def test_n2_chat_cache_gate_extracts_l2_restart_health_cache_stats():
+    health = {
+        "cache": {
+            "block_disk_cache": {"disk_hits": 2, "disk_writes": 3},
+            "ssm_companion": {"disk": {"hits": 1, "stores": 4}},
+            "totals": {"l2_tokens_on_disk": 128},
+        }
+    }
+
+    stats = runner._health_cache_stats(health)
+
+    assert stats["block_disk_cache"] == {"disk_hits": 2, "disk_writes": 3}
+    assert stats["ssm_companion_disk"] == {"hits": 1, "stores": 4}
+    assert stats["totals"] == {"l2_tokens_on_disk": 128}

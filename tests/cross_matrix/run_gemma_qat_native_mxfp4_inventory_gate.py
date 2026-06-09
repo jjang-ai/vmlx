@@ -95,6 +95,24 @@ REQUIRED_LIVE_PROOF_SURFACES = (
     "installed_app_startup_and_settings_parity",
 )
 
+SOURCE_LIVE_SMOKE_PROOFS = {
+    "gemma4_e2b_qat_native_mxfp4": Path(
+        "build/current-all-local-model-smoke-gemma4-e2b-qat-mxfp4-fullmedia-tools-l2-after-tool-result-quoted-target-20260609/summary.json"
+    ),
+    "gemma4_e4b_qat_native_mxfp4": Path(
+        "build/current-all-local-model-smoke-gemma4-e4b-qat-mxfp4-fullmedia-tools-l2-after-tool-result-quoted-target-20260609/summary.json"
+    ),
+    "gemma4_12b_native_mxfp4": Path(
+        "build/current-all-local-model-smoke-gemma4-12b-qat-mxfp4-fullmedia-tools-l2-after-tool-result-quoted-target-20260609/summary.json"
+    ),
+    "gemma4_26b_vl": Path(
+        "build/current-all-local-model-smoke-gemma4-26b-qat-mxfp4-tools-l2-after-audio-capability-gate-20260609/summary.json"
+    ),
+    "gemma4_31v_or_31b_vl": Path(
+        "build/current-all-local-model-smoke-gemma4-31b-qat-mxfp4-tools-l2-after-audio-capability-gate-20260609/summary.json"
+    ),
+}
+
 
 def _load_json(path: Path) -> dict[str, Any]:
     try:
@@ -172,7 +190,30 @@ def _matches_required(row: dict[str, Any], markers: tuple[str, ...]) -> bool:
     return all(marker.lower() in path for marker in markers)
 
 
-def classify_required_rows(rows: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+def _source_live_smoke_status(row_key: str, proof_root: Path) -> dict[str, Any]:
+    rel = SOURCE_LIVE_SMOKE_PROOFS.get(row_key)
+    if rel is None:
+        return {"status": "missing", "artifact": None}
+    path = proof_root / rel
+    proof = _load_json(path)
+    status = "pass" if proof.get("status") == "pass" and int(proof.get("failed") or 0) == 0 else "missing"
+    if path.exists() and status != "pass":
+        status = "open"
+    return {
+        "status": status,
+        "artifact": str(rel),
+        "summary_status": proof.get("status"),
+        "failed": proof.get("failed"),
+        "completed": proof.get("completed"),
+        "row_count": proof.get("row_count"),
+    }
+
+
+def classify_required_rows(
+    rows: list[dict[str, Any]],
+    *,
+    proof_root: Path = Path("."),
+) -> dict[str, dict[str, Any]]:
     classified: dict[str, dict[str, Any]] = {}
     for key, spec in REQUIRED_QAT_ROWS.items():
         matches = [row for row in rows if _matches_required(row, spec["path_markers"])]
@@ -202,6 +243,7 @@ def classify_required_rows(rows: list[dict[str, Any]]) -> dict[str, dict[str, An
                         "does not prove native MXFP4"
                     )
 
+        source_live_smoke = _source_live_smoke_status(key, proof_root)
         classified[key] = {
             "display": spec["display"],
             "status": proof_status,
@@ -213,15 +255,26 @@ def classify_required_rows(rows: list[dict[str, Any]]) -> dict[str, dict[str, An
             "notes": notes,
             "live_proof_required": list(REQUIRED_LIVE_PROOF_SURFACES),
             "live_proof_status": "missing",
+            "source_live_smoke": source_live_smoke,
         }
     return classified
 
 
-def build_artifact(roots: tuple[Path, ...] = DEFAULT_ROOTS) -> dict[str, Any]:
+def build_artifact(
+    roots: tuple[Path, ...] = DEFAULT_ROOTS,
+    *,
+    proof_root: Path = Path("."),
+) -> dict[str, Any]:
     rows = inventory_gemma_models(roots)
-    classified = classify_required_rows(rows)
+    classified = classify_required_rows(rows, proof_root=proof_root)
     missing = [key for key, row in classified.items() if row["status"] == "missing"]
     open_rows = [key for key, row in classified.items() if row["status"] == "open"]
+    source_smoke_open = [
+        key
+        for key, row in classified.items()
+        if row["status"] != "missing"
+        and row.get("source_live_smoke", {}).get("status") != "pass"
+    ]
     return {
         "status": "open" if missing or open_rows else "pass",
         "roots": [str(root) for root in roots],
@@ -238,14 +291,18 @@ def build_artifact(roots: tuple[Path, ...] = DEFAULT_ROOTS) -> dict[str, Any]:
             "gemma4_12b_native_mxfp4_present": classified["gemma4_12b_native_mxfp4"]["status"] != "missing",
             "gemma4_26b_present": classified["gemma4_26b_vl"]["status"] != "missing",
             "gemma4_31v_or_31b_present": classified["gemma4_31v_or_31b_vl"]["status"] != "missing",
+            "all_required_source_live_smokes_present": not source_smoke_open,
             "all_required_live_proofs_present": False,
         },
         "missing_required_rows": missing,
         "open_required_rows": open_rows,
+        "source_live_smoke_open_rows": source_smoke_open,
         "boundary": (
             "No-heavy inventory only. A present row remains open until live "
             "media/cache/tool/Responses/UI/installed-app proof artifacts cover "
-            "the row's advertised modalities and parser/cache requirements."
+            "the row's advertised modalities and parser/cache requirements. "
+            "source_live_smoke records narrower current-source all_local_model_smoke "
+            "evidence and is not installed-app or release clearance."
         ),
     }
 
