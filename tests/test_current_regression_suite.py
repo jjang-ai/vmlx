@@ -307,6 +307,7 @@ def test_current_regression_suite_hashes_dsv4_generation_boundary_sources():
         "tests/cross_matrix/run_gemma4_12b_speed_gate.py",
         "tests/test_dsv4_route_mode_code_exactness.py",
         "tests/test_dsv4_default_cache_tool_loop_gate.py",
+        "tests/test_dsv4_responses_restart_l2_gate.py",
         "tests/test_gemma4_12b_speed_gate.py",
         "tests/test_objective_proof_digest.py",
     }

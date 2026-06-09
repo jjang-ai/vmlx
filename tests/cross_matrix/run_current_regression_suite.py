@@ -88,6 +88,7 @@ CURRENT_SUITE_SOURCE_HASH_FILES = (
     "tests/cross_matrix/run_dsv4_responses_restart_l2_gate.py",
     "tests/cross_matrix/run_dsv4_responses_one_tool_stop_gate.py",
     "tests/cross_matrix/run_dsv4_route_mode_code_exactness.py",
+    "tests/test_dsv4_responses_restart_l2_gate.py",
     "tests/cross_matrix/run_generation_defaults_contract.py",
     "tests/cross_matrix/run_gemma4_12b_speed_gate.py",
     "tests/cross_matrix/run_decode_speed_gate.py",
