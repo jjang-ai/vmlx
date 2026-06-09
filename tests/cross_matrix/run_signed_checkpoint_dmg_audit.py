@@ -218,6 +218,29 @@ def notary_status() -> dict[str, Any]:
     }
 
 
+def required_next_steps(
+    *,
+    signing: dict[str, Any],
+    notary: dict[str, Any],
+    existing_dmgs_current_for_head: bool,
+) -> list[str]:
+    steps: list[str] = []
+    if signing.get("status") != "pass":
+        steps.extend(
+            [
+                "unlock_vmlx_build_keychain",
+                "restore_codesign_partition_list",
+                "rerun_fresh_developer_id_signing_probe",
+            ]
+        )
+    if not existing_dmgs_current_for_head:
+        steps.append("rebuild_current_source_dmg_flavors")
+    if notary.get("status") != "pass":
+        steps.append("restore_vmlx_notary_keychain_profile")
+    steps.append("notarize_staple_and_verify_current_dmgs")
+    return steps
+
+
 def build_audit(root: Path, out: Path = DEFAULT_OUT) -> dict[str, Any]:
     root = root.resolve()
     head = git_head(root)
@@ -227,6 +250,7 @@ def build_audit(root: Path, out: Path = DEFAULT_OUT) -> dict[str, Any]:
     installed = current_installed_app()
     keychains = keychain_status()
     all_existing_dmgs_signed = bool(dmgs) and all(row.get("signed_and_stapled") for row in dmgs)
+    existing_dmgs_current_for_head = False
     fresh_release_ready = (
         signing["status"] == "pass"
         and notary["status"] == "pass"
@@ -240,18 +264,16 @@ def build_audit(root: Path, out: Path = DEFAULT_OUT) -> dict[str, Any]:
         "status": "pass" if fresh_release_ready else "open",
         "existing_dmgs": dmgs,
         "existing_dmgs_signed_and_stapled": all_existing_dmgs_signed,
-        "existing_dmgs_current_for_head": False,
+        "existing_dmgs_current_for_head": existing_dmgs_current_for_head,
         "current_installed_app": installed,
         "fresh_signing_probe": signing,
         "keychains": keychains,
         "notarization": notary,
-        "required_next_steps": [
-            "unlock_vmlx_build_keychain",
-            "restore_codesign_partition_list",
-            "rerun_fresh_developer_id_signing_probe",
-            "rebuild_current_source_dmg_flavors",
-            "notarize_staple_and_verify_current_dmgs",
-        ],
+        "required_next_steps": required_next_steps(
+            signing=signing,
+            notary=notary,
+            existing_dmgs_current_for_head=existing_dmgs_current_for_head,
+        ),
         "release_boundary": (
             "Existing local DMGs may be signed/stapled, but they are not current-source "
             "checkpoint proof unless rebuilt after this HEAD and verified again."
