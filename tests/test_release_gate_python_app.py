@@ -798,6 +798,10 @@ def test_verify_bundled_python_hash_gate_covers_release_runtime_files():
         "utils/jang_loader.py",
         "utils/tokenizer.py",
     }
+    expected_engine_files |= {
+        str(path.relative_to("vmlx_engine"))
+        for path in Path("vmlx_engine/tool_parsers").glob("*.py")
+    }
     expected_jang_tools_files = {
         "capabilities.py",
         "convert.py",

@@ -6643,6 +6643,11 @@ class TestStartupCompatibilityGuards:
             "tool_parsers/dsml_tool_parser.py",
         ):
             assert f'"{rel}"' in verify_script
+        for rel in sorted(
+            str(path.relative_to("vmlx_engine"))
+            for path in Path("vmlx_engine/tool_parsers").glob("*.py")
+        ):
+            assert f'"{rel}"' in verify_script
 
     def test_bundled_python_hash_gate_covers_critical_jang_tools_files(self):
         verify_script = Path("./panel/scripts/verify-bundled-python.sh").read_text()
