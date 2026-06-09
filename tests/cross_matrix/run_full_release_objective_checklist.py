@@ -21,7 +21,7 @@ DEFAULT_OUT = Path(
 )
 
 MIMO_AUDIT = Path(
-    "build/current-mimo-v2-jang2l-current-audit-after-live-refresh-20260608.json"
+    "build/current-mimo-v2-jang2l-current-audit-after-local-structural-proof-20260609.json"
 )
 MIMO_NO_SOURCE_EXACTNESS_CLASSIFIER = Path(
     "build/current-mimo-v2-no-source-exactness-classifier-after-jangtq2-live-refresh-20260608.json"
