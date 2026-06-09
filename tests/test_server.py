@@ -2788,6 +2788,120 @@ class TestOpenAILogprobsFormatting:
         assert "tool_calls_required" in error_codes
 
     @pytest.mark.asyncio
+    async def test_streaming_responses_preamble_empty_xml_tool_call_never_emits_empty_arguments(
+        self, monkeypatch
+    ):
+        """A streamed preamble plus empty XML function must fail closed, never emit `{}`."""
+        import json
+        from types import SimpleNamespace
+
+        import vmlx_engine.server as server
+        from vmlx_engine.api.models import ResponsesRequest
+        from vmlx_engine.engine.base import GenerationOutput
+
+        class _Engine:
+            tokenizer = SimpleNamespace(has_thinking=False)
+
+            async def stream_chat(self, *, messages, **kwargs):
+                chunks = (
+                    ("**Quick preamble:** Checking what's in `/tmp`...\n", False, None),
+                    (
+                        "<tool_call>\n"
+                        "<function=exec_command>\n"
+                        "</function>\n"
+                        "</tool_call>",
+                        True,
+                        "stop",
+                    ),
+                )
+                text = ""
+                for idx, (delta, finished, reason) in enumerate(chunks, start=1):
+                    text += delta
+                    yield GenerationOutput(
+                        text=text,
+                        new_text=delta,
+                        tokens=[],
+                        prompt_tokens=5,
+                        completion_tokens=idx,
+                        finished=finished,
+                        finish_reason=reason,
+                    )
+
+        monkeypatch.setattr(server, "_default_timeout", 5.0)
+        monkeypatch.setattr(server, "_model_name", "unit-tool-model")
+        monkeypatch.setattr(server, "_model_path", None)
+        monkeypatch.setattr(server, "_reasoning_parser", None)
+        monkeypatch.setattr(server, "_tool_call_parser", "auto")
+
+        request = ResponsesRequest(
+            model="unit-tool-model",
+            input="list /tmp",
+            stream=True,
+            tool_choice="required",
+            tools=[
+                {
+                    "type": "function",
+                    "name": "exec_command",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"cmd": {"type": "string"}},
+                        "required": ["cmd"],
+                    },
+                }
+            ],
+        )
+
+        payloads: list[tuple[str, dict]] = []
+        async for event in server.stream_responses_api(
+            _Engine(),
+            [{"role": "user", "content": "list /tmp"}],
+            request,
+            fastapi_request=None,
+        ):
+            if not event.startswith("event: "):
+                continue
+            event_type = event.splitlines()[0].removeprefix("event: ")
+            data_line = next(
+                line for line in event.splitlines() if line.startswith("data: ")
+            )
+            payloads.append((event_type, json.loads(data_line.removeprefix("data: "))))
+
+        visible_deltas = [
+            payload.get("delta", "")
+            for event_type, payload in payloads
+            if event_type == "response.output_text.delta"
+        ]
+        function_items = [
+            payload.get("item", {})
+            for event_type, payload in payloads
+            if event_type in {"response.output_item.added", "response.output_item.done"}
+            and payload.get("item", {}).get("type") == "function_call"
+        ]
+        argument_events = [
+            payload
+            for event_type, payload in payloads
+            if event_type
+            in {
+                "response.function_call_arguments.delta",
+                "response.function_call_arguments.done",
+            }
+        ]
+        error_codes = [
+            payload.get("error", {}).get("code") or payload.get("code")
+            for event_type, payload in payloads
+            if event_type == "error"
+        ]
+        serialized_events = "\n".join(
+            json.dumps(payload, sort_keys=True) for _, payload in payloads
+        )
+
+        assert visible_deltas == ["**Quick preamble:** Checking what's in `/tmp`...\n"]
+        assert function_items == []
+        assert argument_events == []
+        assert '"arguments": "{}"' not in serialized_events
+        assert "tool_calls_required" in error_codes
+
+    @pytest.mark.asyncio
     async def test_streaming_responses_reasoning_tool_call_keeps_arguments(
         self, monkeypatch
     ):

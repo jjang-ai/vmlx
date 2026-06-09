@@ -113,6 +113,7 @@ REQUIRED_NOHEAVY_API_CACHE_TEST_MARKERS = (
     "test_streaming_responses_reasoning_tool_call_keeps_arguments",
     "test_streaming_responses_tool_call_uses_next_output_index_without_text",
     "test_streaming_responses_required_empty_xml_tool_call_is_rejected",
+    "test_streaming_responses_preamble_empty_xml_tool_call_never_emits_empty_arguments",
     "test_chat_stream_tracks_cache_detail_alongside_cached_tokens",
     "test_chat_stream_finish_chunks_emit_cache_detail",
     "test_responses_stream_tracks_cache_detail_alongside_cached",
@@ -322,7 +323,8 @@ COMMANDS: dict[str, list[str]] = {
             "streaming_responses_tool_call_arguments_survive_buffering "
             "or streaming_responses_reasoning_tool_call_keeps_arguments "
             "or streaming_responses_tool_call_uses_next_output_index_without_text "
-            "or streaming_responses_required_empty_xml_tool_call_is_rejected"
+            "or streaming_responses_required_empty_xml_tool_call_is_rejected "
+            "or streaming_responses_preamble_empty_xml_tool_call_never_emits_empty_arguments"
         ),
     ],
     "structured_guided_decoding_contracts": [
@@ -591,6 +593,8 @@ def build_artifact(root: Path) -> dict[str, Any]:
             and "test_streaming_responses_tool_call_uses_next_output_index_without_text"
             not in missing_markers
             and "test_streaming_responses_required_empty_xml_tool_call_is_rejected"
+            not in missing_markers
+            and "test_streaming_responses_preamble_empty_xml_tool_call_never_emits_empty_arguments"
             not in missing_markers
         ),
         "cache_stats_reuse_skip_telemetry": (
