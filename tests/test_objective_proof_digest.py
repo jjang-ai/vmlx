@@ -18,7 +18,7 @@ def test_objective_proof_digest_default_out_tracks_current_release_proof_artifac
     from tests.cross_matrix import summarize_objective_proof as objective
 
     assert objective.DEFAULT_OUT == Path(
-        "build/current-objective-proof-after-artifact-diagnosis-20260609.json"
+        "build/current-objective-proof-after-cache-vs-nocache-logprobs-20260609.json"
     )
 
 

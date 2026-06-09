@@ -311,7 +311,7 @@ def test_mimo_current_audit_separates_clean_artifact_from_runtime_blockers(
         },
     )
     _write_json(
-        tmp_path / "build/current-mimo-v2-jang2l-cache-vs-nocache-next-token-20260606.json",
+        tmp_path / audit.CACHE_VS_NOCACHE_ARTIFACT,
         {
             "rows": [
                 {"mode": "no_cache", "top10": [{"id": 1, "text": "A"}]},

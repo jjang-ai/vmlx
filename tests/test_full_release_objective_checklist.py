@@ -932,8 +932,7 @@ def test_full_release_objective_checklist_tracks_open_n2_pro_objective_row(
     tmp_path,
 ):
     _write_json(
-        tmp_path
-        / "build/current-objective-proof-after-artifact-diagnosis-20260609.json",
+        tmp_path / checklist.OBJECTIVE_DIGEST,
         {
             "requirements": [
                 {
@@ -944,7 +943,7 @@ def test_full_release_objective_checklist_tracks_open_n2_pro_objective_row(
                     "status": "open",
                     "evidence": [
                         "build/current-release-regression-manifest-after-mimo-live-refresh-20260608.json",
-                        "build/current-objective-proof-after-artifact-diagnosis-20260609.json",
+                        str(checklist.OBJECTIVE_DIGEST),
                     ],
                     "details": {
                         "local_artifact_probe": {

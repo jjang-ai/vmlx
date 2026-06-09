@@ -25,7 +25,7 @@ from typing import Any
 DEFAULT_MODEL_PATH = Path("/Users/example/.mlxstudio/models/JANGQ-AI/MiMo-V2.5-JANGTQ_2")
 DEFAULT_MANIFEST = Path("build/current-mimo-jangtq2-local-manifest-20260607.tsv")
 DEFAULT_OUT = Path(
-    "build/current-mimo-v2-jang2l-current-audit-after-artifact-diagnosis-20260609.json"
+    "build/current-mimo-v2-jang2l-current-audit-after-cache-vs-nocache-logprobs-20260609.json"
 )
 
 STRUCTURAL_ARTIFACT = Path("build/current-mimo-jang2l-local-structural-verify-20260606.json")
@@ -49,7 +49,7 @@ KVNONE_NOPREFIX_SMOKE_ARTIFACT = Path(
     "build/current-all-local-model-smoke-mimo-v25-jangtq2-bundled-tools-nomedia-kvnone-noprefix-20260607/summary.json"
 )
 CACHE_VS_NOCACHE_ARTIFACT = Path(
-    "build/current-mimo-v2-jang2l-cache-vs-nocache-next-token-20260606.json"
+    "build/current-mimo-v2-jangtq2-cache-vs-nocache-next-token-logprobs-20260609.json"
 )
 SINK_MODE_LENGTH_DIAGNOSTIC_ARTIFACT = Path(
     "build/current-mimo-v2-jang2l-sink-mode-length-diagnostic-20260606.json"
