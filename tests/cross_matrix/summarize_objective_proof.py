@@ -191,13 +191,13 @@ DSV4_BATCH_GENERATOR_LOGIT_TRACE_REL = (
 DSV4_BATCH_GENERATOR_WARMUP_ABLATION_REL = (
     "build/current-dsv4-jang-batch-generator-warmup-ablation-20260524.json"
 )
-API_CACHE_CONTRACT_REL = "build/current-noheavy-api-cache-contract-after-dsv4-preflight-refresh-20260608.json"
+API_CACHE_CONTRACT_REL = "build/current-noheavy-api-cache-contract-after-gateway-stale-port-20260609.json"
 CACHE_ARCHITECTURE_CONTRACT_REL = "build/current-cache-architecture-contract-after-noheavy-contract-refresh-20260608.json"
 TOOL_CALL_CONTRACT_REL = "build/current-tool-call-contract-after-jangtq2-objective-refresh-20260607.json"
 PANEL_SETTINGS_CONTRACT_REL = "build/current-panel-settings-contract-proof-20260601-cache-ui-storage-quant.json"
 MAX_OUTPUT_CONTEXT_CONTRACT_REL = "build/current-max-output-context-contract-after-jangtq2-objective-refresh-20260607.json"
 MAX_OUTPUT_CONTEXT_CONTRACT_FALLBACK_REL = "build/current-max-output-context-contract-20260521.json"
-MODEL_FAMILY_CONTRACT_REL = "build/current-model-family-detection-contract-after-jangtq2-objective-refresh-20260607.json"
+MODEL_FAMILY_CONTRACT_REL = "build/current-model-family-detection-contract-after-n2-policy-row-20260609.json"
 PARSER_REGISTRY_CONTRACT_REL = "build/current-parser-registry-contract-after-jangtq2-objective-refresh-20260607.json"
 MODEL_ARTIFACT_FORMAT_CONTRACT_REL = "build/current-model-artifact-format-contract-after-mllm-tight-memory-guard-20260607.json"
 GENERATION_DEFAULTS_CONTRACT_REL = "build/current-generation-defaults-contract-after-dsv4-preflight-refresh-20260608.json"

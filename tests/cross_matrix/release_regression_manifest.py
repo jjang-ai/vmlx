@@ -365,7 +365,7 @@ REQUIRED_RELEASE_DOMAINS = {
 }
 
 CURRENT_POST_BUDGET_EDGE_ARTIFACTS = {
-    "noheavy-api-cache-endpoint-runtime": "build/current-noheavy-api-cache-contract-after-dsv4-preflight-refresh-20260608.json",
+    "noheavy-api-cache-endpoint-runtime": "build/current-noheavy-api-cache-contract-after-gateway-stale-port-20260609.json",
     "chat-settings-max-output-context-ui": "build/current-max-output-context-contract-after-jangtq2-objective-refresh-20260607.json",
     "panel-session-cache-settings-family-gating": "build/current-panel-settings-contract-proof-20260601-cache-ui-storage-quant.json",
     "generation-defaults-no-hidden-forcing": "build/current-generation-defaults-contract-after-dsv4-preflight-refresh-20260608.json",
@@ -377,7 +377,7 @@ CURRENT_POST_BUDGET_EDGE_ARTIFACTS = {
     "cache-architecture-family-classification": "build/current-cache-architecture-contract-after-noheavy-contract-refresh-20260608.json",
     "jang-model-compat-runtime-boundary": "build/current-jang-model-compat-contract-20260528-pr155-runtime-boundary.json",
     "model-artifact-format-detection": "build/current-model-artifact-format-contract-after-mllm-tight-memory-guard-20260607.json",
-    "model-family-detection-noheavy": "build/current-model-family-detection-contract-after-jangtq2-objective-refresh-20260607.json",
+    "model-family-detection-noheavy": "build/current-model-family-detection-contract-after-n2-policy-row-20260609.json",
     "native-mtp-d3-effect-policy": "build/current-native-mtp-contract-after-noheavy-contract-refresh-20260608.json",
     "mcp-policy-ui-gateway": "build/current-mcp-policy-contract-20260531-post-step-lfm-refresh.json",
     "vl-media-cache-tool-followup": "build/current-vl-media-cache-contract-after-dsv4-preflight-refresh-20260608.json",
@@ -1200,10 +1200,10 @@ _ROWS: list[dict[str, Any]] = [
             "DSV4 DSML tool parsing repairs and residue rejection remain schema-gated and cannot be hidden by broader API surface checks",
         ],
         "commands": [
-            ".venv/bin/python tests/cross_matrix/run_noheavy_api_cache_contract.py --out build/current-noheavy-api-cache-contract-after-dsv4-preflight-refresh-20260608.json",
+            ".venv/bin/python tests/cross_matrix/run_noheavy_api_cache_contract.py --out build/current-noheavy-api-cache-contract-after-gateway-stale-port-20260609.json",
         ],
         "artifacts": [
-            "build/current-noheavy-api-cache-contract-after-dsv4-preflight-refresh-20260608.json",
+            "build/current-noheavy-api-cache-contract-after-gateway-stale-port-20260609.json",
             "build/current-api-cache-contract-api-surface-check-20260602-cache-detail-zero-cached.json",
         ],
     },
@@ -1572,10 +1572,10 @@ _ROWS: list[dict[str, Any]] = [
             "This is source/static compatibility proof only; live multi-turn output quality remains a separate live row",
         ],
         "commands": [
-            ".venv/bin/python tests/cross_matrix/run_model_family_detection_contract.py --out build/current-model-family-detection-contract-after-jangtq2-objective-refresh-20260607.json",
+            ".venv/bin/python tests/cross_matrix/run_model_family_detection_contract.py --out build/current-model-family-detection-contract-after-n2-policy-row-20260609.json",
         ],
         "artifacts": [
-            "build/current-model-family-detection-contract-after-jangtq2-objective-refresh-20260607.json",
+            "build/current-model-family-detection-contract-after-n2-policy-row-20260609.json",
             "build/current-model-family-detection-contract-20260527-after-think-xml-registry-fix.json",
             "build/current-model-family-detection-contract-20260527-issues-175-178-bundled-sync.json",
             "build/current-model-family-detection-contract-20260523-post-budget-edge.json",

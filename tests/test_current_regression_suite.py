@@ -954,7 +954,7 @@ def test_noheavy_api_cache_contract_default_out_tracks_current_suite_artifact():
     from tests.cross_matrix import run_noheavy_api_cache_contract as gate
 
     assert gate.DEFAULT_OUT == Path(
-        "build/current-noheavy-api-cache-contract-after-dsv4-preflight-refresh-20260608.json"
+        "build/current-noheavy-api-cache-contract-after-gateway-stale-port-20260609.json"
     )
 
 
@@ -1692,7 +1692,7 @@ def test_current_regression_suite_runs_model_family_detection_contracts(monkeypa
         for _name, cmd in seen_steps
     )
     assert any(
-        "build/current-model-family-detection-contract-after-jangtq2-objective-refresh-20260607.json"
+        "build/current-model-family-detection-contract-after-n2-policy-row-20260609.json"
         in " ".join(cmd)
         for _name, cmd in seen_steps
     )

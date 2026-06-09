@@ -504,7 +504,7 @@ CURRENT_SUITE_COMMANDS: dict[str, list[str]] = {
         sys.executable,
         "tests/cross_matrix/run_noheavy_api_cache_contract.py",
         "--out",
-        "build/current-noheavy-api-cache-contract-after-dsv4-preflight-refresh-20260608.json",
+        "build/current-noheavy-api-cache-contract-after-gateway-stale-port-20260609.json",
     ],
     "cache_architecture_contracts": [
         sys.executable,
@@ -608,7 +608,7 @@ CURRENT_SUITE_COMMANDS: dict[str, list[str]] = {
         sys.executable,
         "tests/cross_matrix/run_model_family_detection_contract.py",
         "--out",
-        "build/current-model-family-detection-contract-after-jangtq2-objective-refresh-20260607.json",
+        "build/current-model-family-detection-contract-after-n2-policy-row-20260609.json",
     ],
     "native_mtp_contracts": [
         sys.executable,

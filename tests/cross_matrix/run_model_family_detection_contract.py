@@ -21,7 +21,7 @@ from pathlib import Path
 from typing import Any
 
 
-DEFAULT_OUT = Path("build/current-model-family-detection-contract-after-jangtq2-objective-refresh-20260607.json")
+DEFAULT_OUT = Path("build/current-model-family-detection-contract-after-n2-policy-row-20260609.json")
 
 SOURCE_HASH_FILES = (
     "vmlx_engine/model_config_registry.py",

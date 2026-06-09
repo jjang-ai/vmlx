@@ -27,7 +27,7 @@ from pathlib import Path
 from typing import Any
 
 
-DEFAULT_OUT = Path("build/current-noheavy-api-cache-contract-after-dsv4-preflight-refresh-20260608.json")
+DEFAULT_OUT = Path("build/current-noheavy-api-cache-contract-after-gateway-stale-port-20260609.json")
 SOURCE_HASH_FILES = (
     "vmlx_engine/server.py",
     "vmlx_engine/tool_parsers/dsml_tool_parser.py",

@@ -15676,7 +15676,7 @@ def test_release_regression_manifest_tracks_named_model_family_detection_with_ru
 
     assert row["domain"] == "model_family_detection"
     assert "run_model_family_detection_contract.py" in joined
-    assert "current-model-family-detection-contract-after-jangtq2-objective-refresh-20260607.json" in joined
+    assert "current-model-family-detection-contract-after-n2-policy-row-20260609.json" in joined
     assert "current-model-family-detection-contract-20260602-step-jangtq-boundary.json" not in joined
     assert "current-model-family-detection-contract-20260531-post-step-lfm-refresh.json" not in joined
     assert "current-model-family-detection-contract-20260522-plain-kv-cache-health.json" in joined

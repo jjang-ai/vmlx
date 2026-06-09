@@ -300,7 +300,7 @@ def test_mimo_current_audit_separates_clean_artifact_from_runtime_blockers(
     )
     _write_json(
         tmp_path
-        / "build/current-all-local-model-smoke-mimo-v25-jangtq2-media-l2-after-cache-cap-20260608/summary.json",
+        / "build/current-all-local-model-smoke-mimo-v25-jangtq2-live-refresh-20260608/summary.json",
         {
             "status": "fail",
             "results": [
@@ -391,7 +391,7 @@ def test_mimo_current_audit_separates_clean_artifact_from_runtime_blockers(
     )
     _write_json(
         tmp_path
-        / "build/current-all-local-model-smoke-mimo-v25-jang2l-media-l2-runtime-modalities-20260608/summary.json",
+        / "build/current-all-local-model-smoke-mimo-v25-jang2l-live-refresh-20260608/summary.json",
         {
             "status": "fail",
             "results": [
@@ -616,7 +616,7 @@ def test_mimo_current_audit_separates_clean_artifact_from_runtime_blockers(
     )
     _write_json(
         tmp_path
-        / "build/current-noheavy-api-cache-contract-after-dsv4-preflight-refresh-20260608.json",
+        / "build/current-noheavy-api-cache-contract-after-gateway-stale-port-20260609.json",
         {
             "status": "pass",
             "checks": {
@@ -745,10 +745,10 @@ def test_mimo_current_audit_separates_clean_artifact_from_runtime_blockers(
     assert result["component_ok"]["cache_vs_nocache_next_token"] is True
     assert result["component_ok"]["long_prompt_coherence"] is True
     assert result["component_ok"]["tool_protocol"] is True
-    assert result["component_ok"]["exact_cache_prompt_following"] is True
+    assert result["component_ok"]["exact_cache_prompt_following"] is False
     assert result["component_ok"]["decode_speed_target"] is False
     assert result["component_ok"]["system_prompt_first_token_stop"] is True
-    assert result["component_ok"]["cb_system_prompt_working_set_pressure"] is False
+    assert result["component_ok"]["cb_system_prompt_working_set_pressure"] is True
     assert result["component_ok"]["source_vs_quant_first_divergence"] is False
     assert result["component_ok"]["source_vs_quant_policy_skipped"] is True
     assert result["component_ok"]["source_vs_quant_requirement_satisfied"] is True
@@ -915,7 +915,6 @@ def test_mimo_current_audit_separates_clean_artifact_from_runtime_blockers(
         "raw audio request bridge from API/UI to processor"
         not in result["diagnostics"]["mimo_media_runtime"]["missing_runtime_components"]
     )
-    assert result["diagnostics"]["all_local_smoke"]["tool_protocol_pass"] is True
     assert result["diagnostics"]["prompt_shape_first_token"]["blocked"] is True
     assert (
         result["diagnostics"]["prompt_shape_first_token"]["classification"]
@@ -924,19 +923,16 @@ def test_mimo_current_audit_separates_clean_artifact_from_runtime_blockers(
     assert result["diagnostics"]["prompt_shape_first_token"]["failing_top_token"][
         "text"
     ] == "<|im_end|>"
-    assert result["diagnostics"]["cb_native_thinking_off"][
-        "cache_exact_pass"
-    ] is True
-    assert result["diagnostics"]["cb_native_thinking_off"][
-        "prefix_paged_l2_cache_reproved"
-    ] is True
+    assert result["diagnostics"]["cb_metal_baseline"]["memory_pressure_cleared"] is True
     assert (
-        result["diagnostics"]["all_local_smoke"][
-            "block_disk_l2_restart_restore_status"
-        ]
-        == "pass"
+        result["diagnostics"]["cb_metal_baseline"]["storage_quantization_disabled"]
+        is True
     )
-    assert result["diagnostics"]["all_local_smoke"]["bundle_kind"] == "jangtq2"
+    assert result["diagnostics"]["cb_metal_baseline"]["cache_repeat_stable"] is True
+    assert result["diagnostics"]["cb_metal_baseline"]["cache_repeat_exact"] is False
+    assert result["diagnostics"]["cb_metal_baseline"]["cache_hit_tokens"] == 46
+    assert result["diagnostics"]["cb_metal_baseline"]["l2_tokens_on_disk"] == 78
+    assert result["diagnostics"]["cb_metal_baseline"]["native_cache_type"] == "mixed_swa_kv"
     assert result["component_ok"]["mimo_jangtq2_live_media_l2"] is False
     assert result["component_ok"]["mimo_jang2l_live_media_l2"] is False
     assert result["component_ok"]["mimo_jang2l_l2_restart_cache_hit"] is True
@@ -954,6 +950,7 @@ def test_mimo_current_audit_separates_clean_artifact_from_runtime_blockers(
     )
     assert "mimo_jangtq2_live_media_l2_missing" in result["blockers"]
     assert "mimo_jang2l_live_media_l2_missing" in result["blockers"]
+    assert "mimo_exact_cache_prompt_following_blocked" in result["blockers"]
     assert "mimo_jang2l_media_capability_downscoped_to_text" not in result["blockers"]
     assert "mimo_jang2l_media_capability_memory_gated" in result["blockers"]
     assert "mimo_jang2l_l2_restart_visible_output_blocked" not in result["blockers"]
@@ -992,9 +989,7 @@ def test_mimo_current_audit_separates_clean_artifact_from_runtime_blockers(
         ]
         == []
     )
-    assert result["diagnostics"]["cb_native_thinking_off"][
-        "memory_pressure_blocked"
-    ] is True
+    assert result["diagnostics"]["cb_metal_baseline"]["memory_pressure_cleared"] is True
     assert result["diagnostics"]["api_cache_responses_contract"]["pass"] is True
     assert result["diagnostics"]["source_vs_quant_policy_skip"]["policy_skipped"] is True
     assert (

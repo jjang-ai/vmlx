@@ -94,7 +94,7 @@ LATEST_DECODE_SPEED_ARTIFACT = Path(
     "build/current-decode-speed-live-mimo-v25-jang2l-source-after-jangtq2-local-refresh-20260607.json"
 )
 NOHEAVY_API_CACHE_CONTRACT_ARTIFACT = Path(
-    "build/current-noheavy-api-cache-contract-after-dsv4-preflight-refresh-20260608.json"
+    "build/current-noheavy-api-cache-contract-after-gateway-stale-port-20260609.json"
 )
 CLEANUP_LOG = Path("build/current-mimo-stale-local-cleanup-20260606.txt")
 
