@@ -569,7 +569,7 @@ def _write_qwen_green_artifacts(tmp_path: Path) -> None:
                         "scheduler": {
                             "last_cache_execution": {
                                 "cached_tokens": 31646,
-                                "cache_detail": "paged+ssm",
+                                "cache_detail": "paged+ssm+disk",
                             }
                         },
                         "native_cache": _native_cache(),
