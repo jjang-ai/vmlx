@@ -15910,18 +15910,54 @@ async def stream_responses_api(
     tool_calls = None
     cleaned_text = full_text
     if not _suppress_tools:
-        # Use content-only text when reasoning parser separated it (avoids losing
-        # tool calls that appear inside <think> blocks during regex stripping).
-        # If content is empty but reasoning has tool markers, check reasoning too.
-        if request_parser and accumulated_content.strip():
-            parse_text = accumulated_content.strip()
-        elif request_parser and accumulated_reasoning.strip():
-            parse_text = accumulated_reasoning.strip()
+        # Try the real parser against the separated content/reasoning streams
+        # before falling back to stripped full text. Reasoning-capable models can
+        # emit native tool syntax after a thinking pass, while content may be
+        # empty or contain a partial/empty dialect fragment. Prefer parsed calls
+        # with non-empty arguments, but never synthesize missing arguments.
+        parse_candidates: list[str] = []
+        if request_parser:
+            parse_candidates.extend(
+                [
+                    accumulated_content.strip(),
+                    accumulated_reasoning.strip(),
+                ]
+            )
+        parse_candidates.append(_strip_think_for_tool_parse(full_text))
+        parse_candidates.append(full_text)
+
+        fallback_cleaned = ""
+        fallback_tool_calls = None
+        seen_parse_candidates: set[str] = set()
+
+        def _responses_tool_call_arguments(tc: Any) -> str:
+            func = tc.function if hasattr(tc, "function") else tc
+            if hasattr(func, "arguments"):
+                return str(func.arguments or "")
+            if isinstance(func, dict):
+                return str(func.get("arguments", "") or "")
+            return ""
+
+        for parse_text in parse_candidates:
+            if not parse_text or parse_text in seen_parse_candidates:
+                continue
+            seen_parse_candidates.add(parse_text)
+            candidate_cleaned, candidate_calls = _parse_tool_calls_with_parser(
+                parse_text, request
+            )
+            if not candidate_calls:
+                continue
+            if fallback_tool_calls is None:
+                fallback_cleaned = candidate_cleaned
+                fallback_tool_calls = candidate_calls
+            if any(_responses_tool_call_arguments(tc) for tc in candidate_calls):
+                cleaned_text = candidate_cleaned
+                tool_calls = candidate_calls
+                break
         else:
-            parse_text = _strip_think_for_tool_parse(full_text)
-        cleaned_text, tool_calls = _parse_tool_calls_with_parser(
-            parse_text or full_text, request
-        )
+            if fallback_tool_calls is not None:
+                cleaned_text = fallback_cleaned
+                tool_calls = fallback_tool_calls
     else:
         cleaned_text = _clean_suppressed_tool_markup_for_display(
             full_text,
