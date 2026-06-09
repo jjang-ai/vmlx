@@ -7122,6 +7122,37 @@ def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
                     else None
                 ),
             }
+    gemma_qat_jang4m_keys = (
+        "gemma4_e2b_qat_jang4m",
+        "gemma4_e4b_qat_jang4m",
+        "gemma4_12b_qat_jang4m",
+        "gemma4_26b_qat_jang4m",
+        "gemma4_31b_qat_jang4m",
+    )
+    gemma_qat_jang4m_rows: dict[str, Any] = {}
+    for key in gemma_qat_jang4m_keys:
+        row = gemma_qat_required_rows.get(key)
+        gemma_qat_jang4m_rows[key] = (
+            row
+            if isinstance(row, dict)
+            else {
+                "status": "missing",
+                "variant": "qat_jang4m",
+                "live_proof_status": "missing",
+                "live_proof_required": [
+                    "autodetect_model_family_and_qat_jang4m_variant",
+                    "model_owned_generation_config_defaults",
+                    "Gemma4 tool/reasoning parser",
+                    "mixed_swa_prefix_cache_first_miss_second_hit",
+                    "turboquant_kv_encode_decode_boundary_where_valid",
+                    "block_disk_l2_write",
+                    "responses_streaming_args_and_content_deltas",
+                    "media_honesty",
+                    "ui_cli_parity",
+                    "installed_app_parity",
+                ],
+            }
+        )
     gemma_qat_release_ok = (
         gemma_qat_inventory.get("status") == "pass"
         and gemma_qat_checks.get("all_required_live_proofs_present") is True
@@ -7155,6 +7186,7 @@ def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
             "source_live_smoke_open_rows": gemma_qat_source_open,
             "source_live_smoke_artifacts": gemma_qat_source_smoke_artifacts,
             "media_backing": gemma_qat_media_backing,
+            "qat_jang4m_rows": gemma_qat_jang4m_rows,
             "checks": {
                 "all_required_source_live_smokes_present": gemma_qat_checks.get(
                     "all_required_source_live_smokes_present"
@@ -7169,6 +7201,7 @@ def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
                 "visual/audio/video live proof for each advertised bundle modality",
                 "mixed-SWA cache telemetry, TurboQuant KV boundaries, and L2 restart restore",
                 "model-owned generation defaults plus parser/reasoning/tool behavior",
+                "Gemma4 QAT JANG_4M autodetect, Responses streaming args/content deltas, media honesty, UI/CLI, and installed-app parity",
             ],
         },
     )

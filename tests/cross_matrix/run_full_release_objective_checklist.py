@@ -807,7 +807,45 @@ def _gemma_qat_native_mxfp4_checks(data: dict[str, Any]) -> list[dict[str, Any]]
         "open_required_rows": data.get("open_required_rows"),
         "source_live_smoke_open_rows": data.get("source_live_smoke_open_rows"),
     }
-    return _simple_artifact_checks("gemma_qat_native_mxfp4", data) + [
+    required_rows = data.get("required_rows", {})
+    required_rows = required_rows if isinstance(required_rows, dict) else {}
+    qat_jang4m_keys = (
+        "gemma4_e2b_qat_jang4m",
+        "gemma4_e4b_qat_jang4m",
+        "gemma4_12b_qat_jang4m",
+        "gemma4_26b_qat_jang4m",
+        "gemma4_31b_qat_jang4m",
+    )
+    qat_jang4m_checks: list[dict[str, Any]] = []
+    for row_key in qat_jang4m_keys:
+        row = required_rows.get(row_key)
+        row = row if isinstance(row, dict) else {}
+        check_prefix = f"gemma_qat_native_mxfp4_{row_key}"
+        qat_jang4m_checks.extend(
+            [
+                _check(
+                    f"{check_prefix}_present",
+                    checks.get(f"{row_key}_present") is True or bool(row),
+                    str(GEMMA_QAT_NATIVE_MXFP4_INVENTORY),
+                    row,
+                ),
+                _check(
+                    f"{check_prefix}_open",
+                    row.get("status") == "pass"
+                    and row.get("live_proof_status") == "pass",
+                    str(GEMMA_QAT_NATIVE_MXFP4_INVENTORY),
+                    row
+                    or (
+                        "Gemma4 QAT JANG_4M must remain open until autodetect, "
+                        "generation_config defaults, Gemma4 parser, mixed-SWA/prefix "
+                        "cache, TurboQuant KV boundary, L2, Responses streaming "
+                        "args/content deltas, media honesty, UI/CLI, and installed-app "
+                        "parity are live-proven."
+                    ),
+                ),
+            ]
+        )
+    return _simple_artifact_checks("gemma_qat_native_mxfp4", data) + qat_jang4m_checks + [
         _check(
             "gemma_qat_native_mxfp4_gemma4_e2b_present",
             checks.get("gemma4_e2b_qat_native_mxfp4_present") is True,

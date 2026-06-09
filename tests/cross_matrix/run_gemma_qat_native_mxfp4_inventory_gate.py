@@ -24,6 +24,51 @@ DEFAULT_OUT = Path(
 )
 
 REQUIRED_QAT_ROWS = {
+    "gemma4_e2b_qat_jang4m": {
+        "display": "Gemma 4 E2B QAT JANG_4M",
+        "path_markers": ("gemma-4-e2b", "qat", "jang_4m"),
+        "expected_model_type": "gemma4",
+        "tool_parser": "gemma4",
+        "reasoning_parser": "gemma4",
+        "requires": ("text", "vision", "audio", "video"),
+        "variant": "qat_jang4m",
+    },
+    "gemma4_e4b_qat_jang4m": {
+        "display": "Gemma 4 E4B QAT JANG_4M",
+        "path_markers": ("gemma-4-e4b", "qat", "jang_4m"),
+        "expected_model_type": "gemma4",
+        "tool_parser": "gemma4",
+        "reasoning_parser": "gemma4",
+        "requires": ("text", "vision", "audio", "video"),
+        "variant": "qat_jang4m",
+    },
+    "gemma4_12b_qat_jang4m": {
+        "display": "Gemma 4 12B QAT JANG_4M",
+        "path_markers": ("gemma-4-12b", "qat", "jang_4m"),
+        "expected_model_type": "gemma4_unified",
+        "tool_parser": "gemma4",
+        "reasoning_parser": "gemma4",
+        "requires": ("text", "vision", "audio", "video"),
+        "variant": "qat_jang4m",
+    },
+    "gemma4_26b_qat_jang4m": {
+        "display": "Gemma 4 26B QAT JANG_4M",
+        "path_markers": ("gemma-4-26b", "qat", "jang_4m"),
+        "expected_model_type": "gemma4",
+        "tool_parser": "gemma4",
+        "reasoning_parser": "gemma4",
+        "requires": ("text", "vision", "video"),
+        "variant": "qat_jang4m",
+    },
+    "gemma4_31b_qat_jang4m": {
+        "display": "Gemma 4 31B QAT JANG_4M",
+        "path_markers": ("gemma-4-31", "qat", "jang_4m"),
+        "expected_model_type": "gemma4",
+        "tool_parser": "gemma4",
+        "reasoning_parser": "gemma4",
+        "requires": ("text", "vision", "video"),
+        "variant": "qat_jang4m",
+    },
     "gemma4_e2b_qat_native_mxfp4": {
         "display": "Gemma 4 E2B QAT/native MXFP4",
         "path_markers": ("gemma-4-e2b", "qat", "mxfp4"),
@@ -67,11 +112,13 @@ REQUIRED_QAT_ROWS = {
 }
 
 REQUIRED_LIVE_PROOF_SURFACES = (
+    "autodetect_model_family_and_qat_jang4m_variant",
     "model_owned_generation_config_defaults",
     "chat_completions_nonstream_visible",
     "chat_completions_stream_content_delta",
     "responses_nonstream_visible",
     "responses_stream_content_delta",
+    "responses_streaming_args_and_content_deltas",
     "responses_function_call_arguments_delta_done_output_item",
     "required_tool_call",
     "auto_tool_call",
@@ -87,6 +134,7 @@ REQUIRED_LIVE_PROOF_SURFACES = (
     "post_media_text_recovery",
     "media_salted_cache_no_cross_reuse",
     "prefix_cache_first_miss_second_hit",
+    "mixed_swa_prefix_cache_first_miss_second_hit",
     "paged_or_native_cache_telemetry",
     "mixed_swa_component_state",
     "turboquant_kv_encode_decode_boundary_where_valid",
@@ -95,9 +143,14 @@ REQUIRED_LIVE_PROOF_SURFACES = (
     "async_rederive_or_clean_partial_hit_policy",
     "cli_ui_parser_reasoning_cache_max_token_parity",
     "installed_app_startup_and_settings_parity",
+    "ui_cli_parity",
+    "installed_app_parity",
 )
 
 SOURCE_LIVE_SMOKE_PROOFS = {
+    "gemma4_12b_qat_jang4m": Path(
+        "build/current-all-local-model-smoke-gemma4-12b-jang4m-tools-nomedia-current-20260609/JANGQ_gemma-4-12B-it-JANG_4M/result.json"
+    ),
     "gemma4_e2b_qat_native_mxfp4": Path(
         "build/current-all-local-model-smoke-gemma4-e2b-qat-mxfp4-fullmedia-tools-l2-after-tool-result-quoted-target-20260609/summary.json"
     ),
@@ -361,6 +414,7 @@ def classify_required_rows(
         classified[key] = {
             "display": spec["display"],
             "status": proof_status,
+            "variant": spec.get("variant", "qat_native_mxfp4"),
             "expected_model_type": spec["expected_model_type"],
             "tool_parser": spec["tool_parser"],
             "reasoning_parser": spec["reasoning_parser"],
@@ -421,6 +475,21 @@ def build_artifact(
         "rows": rows,
         "required_rows": classified,
         "checks": {
+            "gemma4_e2b_qat_jang4m_present": (
+                classified["gemma4_e2b_qat_jang4m"]["status"] != "missing"
+            ),
+            "gemma4_e4b_qat_jang4m_present": (
+                classified["gemma4_e4b_qat_jang4m"]["status"] != "missing"
+            ),
+            "gemma4_12b_qat_jang4m_present": (
+                classified["gemma4_12b_qat_jang4m"]["status"] != "missing"
+            ),
+            "gemma4_26b_qat_jang4m_present": (
+                classified["gemma4_26b_qat_jang4m"]["status"] != "missing"
+            ),
+            "gemma4_31b_qat_jang4m_present": (
+                classified["gemma4_31b_qat_jang4m"]["status"] != "missing"
+            ),
             "gemma4_e2b_qat_native_mxfp4_present": (
                 classified["gemma4_e2b_qat_native_mxfp4"]["status"] != "missing"
             ),

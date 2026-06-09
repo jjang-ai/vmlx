@@ -1168,6 +1168,52 @@ def test_full_release_objective_checklist_blocks_open_gemma_qat_inventory():
     }
 
 
+def test_full_release_objective_checklist_blocks_open_gemma_qat_jang4m_rows():
+    jang4m_rows = {
+        key: {
+            "status": "open",
+            "variant": "qat_jang4m",
+            "live_proof_status": "missing",
+            "live_proof_required": [
+                "autodetect_model_family_and_qat_jang4m_variant",
+                "responses_streaming_args_and_content_deltas",
+                "installed_app_parity",
+            ],
+        }
+        for key in [
+            "gemma4_e2b_qat_jang4m",
+            "gemma4_e4b_qat_jang4m",
+            "gemma4_12b_qat_jang4m",
+            "gemma4_26b_qat_jang4m",
+            "gemma4_31b_qat_jang4m",
+        ]
+    }
+    data = {
+        "artifact": str(checklist.GEMMA_QAT_NATIVE_MXFP4_INVENTORY),
+        "exists": True,
+        "status": "open",
+        "missing_required_rows": [],
+        "open_required_rows": list(jang4m_rows),
+        "source_live_smoke_open_rows": [],
+        "required_rows": jang4m_rows,
+        "checks": {
+            f"{key}_present": True for key in jang4m_rows
+        }
+        | {
+            "all_required_source_live_smokes_present": True,
+            "all_required_live_proofs_present": False,
+        },
+    }
+
+    rows = checklist._gemma_qat_native_mxfp4_checks(data)
+    failed = {row["name"]: row for row in rows if not row["ok"]}
+
+    for key in jang4m_rows:
+        failed_key = f"gemma_qat_native_mxfp4_{key}_open"
+        assert failed_key in failed
+        assert failed[failed_key]["detail"]["variant"] == "qat_jang4m"
+
+
 def test_full_release_objective_checklist_accepts_gemma_qat_source_video_proof():
     data = {
         "artifact": str(checklist.GEMMA_QAT_NATIVE_MXFP4_INVENTORY),

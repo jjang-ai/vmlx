@@ -282,3 +282,76 @@ def test_gate_records_gemma4_video_as_runtime_proof_required_not_weight_backed(t
     assert "gemma-4-26B-A4B-it-qat-MXFP4: video metadata requires live frame-through-vision proof" in (
         artifact["required_rows"]["gemma4_26b_vl"]["notes"]
     )
+
+
+def test_gate_tracks_all_gemma4_qat_jang4m_as_separate_open_proof_map_rows(tmp_path):
+    for name, model_type, text_type in [
+        ("gemma-4-E2B-it-qat-JANG_4M", "gemma4", "gemma4_text"),
+        ("gemma-4-E4B-it-qat-JANG_4M", "gemma4", "gemma4_text"),
+        ("gemma-4-12B-it-qat-JANG_4M", "gemma4_unified", "gemma4_unified_text"),
+        ("gemma-4-26B-A4B-it-qat-JANG_4M", "gemma4", "gemma4_text"),
+        ("gemma-4-31B-it-qat-JANG_4M", "gemma4", "gemma4_text"),
+    ]:
+        _bundle(
+            tmp_path,
+            name,
+            model_type=model_type,
+            text_model_type=text_type,
+            weight_format="jang_4m",
+        )
+    _bundle(
+        tmp_path,
+        "gemma-4-12B-it-qat-MXFP4",
+        model_type="gemma4_unified",
+        text_model_type="gemma4_unified_text",
+        weight_format="mxfp4",
+    )
+
+    artifact = gate.build_artifact((tmp_path,))
+
+    for key, path_name in {
+        "gemma4_e2b_qat_jang4m": "gemma-4-E2B-it-qat-JANG_4M",
+        "gemma4_e4b_qat_jang4m": "gemma-4-E4B-it-qat-JANG_4M",
+        "gemma4_12b_qat_jang4m": "gemma-4-12B-it-qat-JANG_4M",
+        "gemma4_26b_qat_jang4m": "gemma-4-26B-A4B-it-qat-JANG_4M",
+        "gemma4_31b_qat_jang4m": "gemma-4-31B-it-qat-JANG_4M",
+    }.items():
+        row = artifact["required_rows"][key]
+        assert row["status"] == "open"
+        assert row["variant"] == "qat_jang4m"
+        assert row["matching_paths"] == [str(tmp_path / path_name)]
+        assert artifact["checks"][f"{key}_present"] is True
+        assert key in artifact["open_required_rows"]
+        assert "autodetect_model_family_and_qat_jang4m_variant" in row["live_proof_required"]
+        assert "mixed_swa_prefix_cache_first_miss_second_hit" in row["live_proof_required"]
+        assert "responses_streaming_args_and_content_deltas" in row["live_proof_required"]
+        assert "installed_app_parity" in row["live_proof_required"]
+        assert row["live_proof_status"] == "missing"
+
+    assert "gemma4_12b_native_mxfp4" in artifact["open_required_rows"]
+
+
+def test_gate_does_not_count_non_qat_jang4m_as_qat_jang4m_row(tmp_path):
+    _bundle(
+        tmp_path,
+        "gemma-4-12B-it-JANG_4M",
+        model_type="gemma4_unified",
+        text_model_type="gemma4_unified_text",
+        weight_format="jang_4m",
+    )
+    _bundle(
+        tmp_path,
+        "gemma-4-12B-it-qat-MXFP4",
+        model_type="gemma4_unified",
+        text_model_type="gemma4_unified_text",
+        weight_format="mxfp4",
+    )
+
+    artifact = gate.build_artifact((tmp_path,))
+    row = artifact["required_rows"]["gemma4_12b_qat_jang4m"]
+
+    assert row["status"] == "missing"
+    assert row["matching_paths"] == []
+    assert artifact["checks"]["gemma4_12b_qat_jang4m_present"] is False
+    assert "gemma4_12b_qat_jang4m" in artifact["missing_required_rows"]
+    assert "gemma4_12b_native_mxfp4" in artifact["open_required_rows"]

@@ -109,16 +109,33 @@ def test_objective_proof_digest_tracks_gemma_qat_native_mxfp4_release_blocker():
 
     assert row["status"] == "open"
     assert row["details"]["missing_required_rows"] == []
-    assert row["details"]["source_live_smoke_open_rows"] == []
-    assert row["details"]["checks"]["all_required_source_live_smokes_present"] is True
+    assert row["details"]["source_live_smoke_open_rows"] == [
+        "gemma4_e2b_qat_jang4m",
+        "gemma4_e4b_qat_jang4m",
+        "gemma4_12b_qat_jang4m",
+        "gemma4_26b_qat_jang4m",
+        "gemma4_31b_qat_jang4m",
+    ]
+    assert row["details"]["checks"]["all_required_source_live_smokes_present"] is False
     assert row["details"]["checks"]["all_required_live_proofs_present"] is False
     assert row["details"]["source_live_smoke_artifacts"] == {
+        "gemma4_12b_qat_jang4m": "build/current-all-local-model-smoke-gemma4-12b-jang4m-tools-nomedia-current-20260609/JANGQ_gemma-4-12B-it-JANG_4M/result.json",
         "gemma4_e2b_qat_native_mxfp4": "build/current-all-local-model-smoke-gemma4-e2b-qat-mxfp4-fullmedia-tools-l2-after-tool-result-quoted-target-20260609/summary.json",
         "gemma4_e4b_qat_native_mxfp4": "build/current-all-local-model-smoke-gemma4-e4b-qat-mxfp4-fullmedia-tools-l2-after-tool-result-quoted-target-20260609/summary.json",
         "gemma4_12b_native_mxfp4": "build/current-all-local-model-smoke-gemma4-12b-qat-mxfp4-fullmedia-tools-l2-after-tool-result-quoted-target-20260609/summary.json",
         "gemma4_26b_vl": "build/current-all-local-model-smoke-gemma4-26b-qat-mxfp4-tools-l2-after-audio-capability-gate-20260609/summary.json",
         "gemma4_31v_or_31b_vl": "build/current-all-local-model-smoke-gemma4-31b-qat-mxfp4-tools-l2-after-audio-capability-gate-20260609/summary.json",
     }
+    assert set(row["details"]["qat_jang4m_rows"]) == {
+        "gemma4_e2b_qat_jang4m",
+        "gemma4_e4b_qat_jang4m",
+        "gemma4_12b_qat_jang4m",
+        "gemma4_26b_qat_jang4m",
+        "gemma4_31b_qat_jang4m",
+    }
+    assert row["details"]["qat_jang4m_rows"]["gemma4_e2b_qat_jang4m"][
+        "variant"
+    ] == "qat_jang4m"
     assert row["details"]["media_backing"]["gemma4_12b_native_mxfp4"] == {
         "audio_weight_backed": False,
         "audio_embed_only": True,
@@ -130,6 +147,17 @@ def test_objective_proof_digest_tracks_gemma_qat_native_mxfp4_release_blocker():
     assert row["details"]["media_backing"]["gemma4_e2b_qat_native_mxfp4"][
         "audio_weight_backed"
     ] is True
+    for key in sorted(row["details"]["qat_jang4m_rows"]):
+        qrow = row["details"]["qat_jang4m_rows"][key]
+        assert qrow["status"] == "open"
+        assert qrow["variant"] == "qat_jang4m"
+        assert "autodetect_model_family_and_qat_jang4m_variant" in qrow[
+            "live_proof_required"
+        ]
+        assert "responses_streaming_args_and_content_deltas" in qrow[
+            "live_proof_required"
+        ]
+        assert "installed_app_parity" in qrow["live_proof_required"]
     assert "installed-app startup and UI settings parity" in row["details"][
         "required_next_evidence"
     ]
