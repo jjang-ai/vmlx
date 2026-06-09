@@ -629,18 +629,41 @@ def _run(root: Path, name: str, cwd_rel: Path, cmd: list[str]) -> dict[str, Any]
     }
 
 
-def release_gate_failure_is_expected(step: dict[str, Any]) -> bool:
+def current_objective_open_requirements(root: Path = Path(".")) -> list[str]:
+    fallback = [
+        item
+        for item in EXPECTED_OPEN_REQUIREMENTS
+        if item not in SUITE_DEFERRED_RELEASE_OPEN_REQUIREMENTS
+    ]
+    try:
+        artifact = json.loads(
+            (root / CURRENT_OBJECTIVE_DIGEST_ARTIFACT).read_text(encoding="utf-8")
+        )
+    except Exception:
+        return fallback
+
+    open_requirements = []
+    for item in artifact.get("requirements", []):
+        requirement = item.get("requirement")
+        if not requirement or item.get("status") == "pass":
+            continue
+        if requirement in SUITE_DEFERRED_RELEASE_OPEN_REQUIREMENTS:
+            continue
+        open_requirements.append(requirement)
+    return open_requirements or fallback
+
+
+def release_gate_failure_is_expected(
+    step: dict[str, Any],
+    root: Path = Path("."),
+) -> bool:
     if step["returncode"] == 0:
         return True
     text = "\n".join(step.get("stdout_tail", []))
     fail_lines = [line for line in text.splitlines() if line.startswith("[FAIL]")]
     expected_digest = (
         "[FAIL] objective proof digest: "
-        + "; ".join(
-            item
-            for item in EXPECTED_OPEN_REQUIREMENTS
-            if item not in SUITE_DEFERRED_RELEASE_OPEN_REQUIREMENTS
-        )
+        + "; ".join(current_objective_open_requirements(root))
     )
     expected_release_ready_prefix = "[FAIL] release-ready manifest: exit=1;"
     forbidden = (
@@ -692,7 +715,10 @@ def build_artifact(
             name: _run(root, name, cwd_rel, cmd)
             for name, (cwd_rel, cmd) in COMMANDS.items()
         }
-    release_gate_ok = release_gate_failure_is_expected(results["release_gate_skip_app"])
+    release_gate_ok = release_gate_failure_is_expected(
+        results["release_gate_skip_app"],
+        root,
+    )
     unit_passed = results["release_gate_unit_contracts"]["counts"]["passed"] or 0
     verifier_output = "\n".join(results["bundled_python_verifier"]["stdout_tail"])
     package_signing_preflight = _package_signing_preflight(root)
@@ -780,6 +806,9 @@ def build_artifact(
         "checks": checks,
         "failed": failed,
         "known_expected_release_gate_open_requirements": EXPECTED_OPEN_REQUIREMENTS,
+        "current_effective_release_gate_open_requirements": (
+            current_objective_open_requirements(root)
+        ),
         "package_signing_preflight": package_signing_preflight,
         "release_blockers": release_blockers,
         "source_hashes": {

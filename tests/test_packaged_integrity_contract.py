@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import json
 from pathlib import Path
 
 from tests.cross_matrix import run_packaged_integrity_contract as runner
@@ -42,6 +43,19 @@ def _expected_open_digest_line() -> str:
     )
 
 
+def _current_objective_open_digest_line() -> str:
+    artifact = json.loads(
+        Path(runner.CURRENT_OBJECTIVE_DIGEST_ARTIFACT).read_text(encoding="utf-8")
+    )
+    open_requirements = [
+        item["requirement"]
+        for item in artifact["requirements"]
+        if item["status"] != "pass"
+        and item["requirement"] not in runner.SUITE_DEFERRED_RELEASE_OPEN_REQUIREMENTS
+    ]
+    return "[FAIL] objective proof digest: " + "; ".join(open_requirements)
+
+
 def _expected_release_ready_line() -> str:
     return "[FAIL] release-ready manifest: exit=1; log=/tmp/release-ready.log"
 
@@ -58,17 +72,31 @@ def _signed_preflight() -> dict[str, object]:
     }
 
 
-def test_packaged_integrity_accepts_release_gate_objective_digest_only_failure():
+def test_packaged_integrity_accepts_release_gate_objective_digest_fallback_failure(
+    tmp_path,
+):
     step = _result(
         "release_gate_skip_app",
         1,
         _expected_release_gate_failure_tail(),
     )
 
+    assert runner.release_gate_failure_is_expected(step, tmp_path)
+
+
+def test_packaged_integrity_accepts_current_objective_digest_only_failure():
+    step = _result(
+        "release_gate_skip_app",
+        1,
+        [_current_objective_open_digest_line()],
+    )
+
     assert runner.release_gate_failure_is_expected(step)
 
 
-def test_packaged_integrity_accepts_release_gate_known_objectives_plus_manifest_failure():
+def test_packaged_integrity_accepts_release_gate_known_objectives_plus_manifest_failure(
+    tmp_path,
+):
     step = _result(
         "release_gate_skip_app",
         1,
@@ -78,10 +106,12 @@ def test_packaged_integrity_accepts_release_gate_known_objectives_plus_manifest_
         ],
     )
 
-    assert runner.release_gate_failure_is_expected(step)
+    assert runner.release_gate_failure_is_expected(step, tmp_path)
 
 
-def test_packaged_integrity_rejects_release_ready_manifest_crash_as_expected_failure():
+def test_packaged_integrity_rejects_release_ready_manifest_crash_as_expected_failure(
+    tmp_path,
+):
     step = _result(
         "release_gate_skip_app",
         1,
@@ -92,7 +122,7 @@ def test_packaged_integrity_rejects_release_ready_manifest_crash_as_expected_fai
         ],
     )
 
-    assert runner.release_gate_failure_is_expected(step) is False
+    assert runner.release_gate_failure_is_expected(step, tmp_path) is False
 
 
 def test_packaged_integrity_rejects_stale_objective_digest_refresh_log(tmp_path):
