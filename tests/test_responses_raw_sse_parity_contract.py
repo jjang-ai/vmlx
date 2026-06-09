@@ -178,6 +178,48 @@ data: {"type":"response.reasoning_summary_text.delta","delta":"checking"}
     assert artifact["captures"]["direct"]["has_required_reasoning_events"] is False
 
 
+def test_raw_sse_parity_distinguishes_enabled_reasoning_from_missing_events(tmp_path):
+    direct = tmp_path / "direct.sse"
+    gateway = tmp_path / "gateway.sse"
+    tunnel = tmp_path / "tunnel.sse"
+    direct_log = tmp_path / "direct.log"
+    gateway_log = tmp_path / "gateway.log"
+    tunnel_log = tmp_path / "tunnel.log"
+    no_reasoning = _sse().replace(
+        """event: response.reasoning_summary_text.delta
+data: {"type":"response.reasoning_summary_text.delta","delta":"checking"}
+
+""",
+        "",
+    )
+    for path in (direct, gateway, tunnel):
+        path.write_text(no_reasoning)
+    for path in (direct_log, gateway_log, tunnel_log):
+        path.write_text(
+            "Reasoning: ENABLED (parser: Gemma4ReasoningParser)\n"
+            "Resolved sampling kwargs route=/v1/responses "
+            "kwargs={'enable_thinking': True, 'max_tokens': 512}\n"
+        )
+
+    artifact = build_artifact(
+        direct_sse=direct,
+        gateway_sse=gateway,
+        tunnel_sse=tunnel,
+        direct_log=direct_log,
+        gateway_log=gateway_log,
+        tunnel_log=tunnel_log,
+        expected_function_name="lookup",
+        expected_arguments='{"query":"alpha"}',
+        require_reasoning_events=True,
+    )
+
+    assert artifact["status"] == "fail"
+    assert artifact["checks"]["all_present_surfaces_have_required_reasoning"] is False
+    assert artifact["checks"]["no_reasoning_disable_workaround"] is True
+    assert artifact["captures"]["direct"]["reasoning_enabled_by_server_log"] is True
+    assert artifact["captures"]["direct"]["enable_thinking_resolved_true"] is True
+
+
 def test_raw_sse_parity_fails_when_surface_reuses_message_output_index_for_tool(
     tmp_path,
 ):

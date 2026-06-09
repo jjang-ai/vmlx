@@ -1230,8 +1230,25 @@ def test_current_regression_suite_tracks_responses_raw_sse_parity_contract():
     parity_command = " ".join(
         suite.CURRENT_SUITE_COMMANDS["responses_raw_sse_parity_contract"]
     )
-    assert "--expected-function-name lookup" in parity_command
-    assert "--expected-arguments {\"query\":\"alpha\"}" in parity_command
+    assert (
+        "--direct-sse build/responses-sse-captures-20260609/"
+        "direct-gemma4-e2b-after-gemma4-parser.sse"
+    ) in parity_command
+    assert (
+        "--gateway-sse build/responses-sse-captures-20260609/"
+        "gateway-gemma4-e2b-after-parser.sse"
+    ) in parity_command
+    assert (
+        "--direct-log build/responses-sse-captures-20260609/"
+        "direct-gemma4-e2b-after-gemma4-parser.server.log"
+    ) in parity_command
+    assert (
+        "--gateway-log build/responses-sse-captures-20260609/"
+        "gateway-gemma4-e2b-live-backend.server.log"
+    ) in parity_command
+    assert "--expected-function-name record_fact" in parity_command
+    assert '--expected-arguments {"value": "blue-cat"}' in parity_command
+    assert "--expected-model gemma4-e2b-sse" in parity_command
     assert "--require-reasoning-events" in parity_command
     assert "--require-same-model" in parity_command
 

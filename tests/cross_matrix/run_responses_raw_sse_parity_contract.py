@@ -137,11 +137,38 @@ def classify_sse_capture(sse_text: str) -> dict[str, Any]:
     }
 
 
+def classify_server_log(log_text: str) -> dict[str, Any]:
+    reasoning_enabled = "Reasoning: ENABLED" in log_text
+    reasoning_disabled = "Reasoning: DISABLED" in log_text
+    enable_thinking_true = (
+        "'enable_thinking': True" in log_text
+        or '"enable_thinking": true' in log_text
+    )
+    enable_thinking_false = (
+        "'enable_thinking': False" in log_text
+        or '"enable_thinking": false' in log_text
+    )
+    return {
+        "reasoning_enabled_by_server_log": reasoning_enabled,
+        "reasoning_disabled_by_server_log": reasoning_disabled,
+        "enable_thinking_resolved_true": enable_thinking_true,
+        "enable_thinking_resolved_false": enable_thinking_false,
+        "no_reasoning_disable_workaround": (
+            (reasoning_enabled or enable_thinking_true)
+            and not reasoning_disabled
+            and not enable_thinking_false
+        ),
+    }
+
+
 def build_artifact(
     *,
     direct_sse: Path | None,
     gateway_sse: Path | None,
     tunnel_sse: Path | None,
+    direct_log: Path | None = None,
+    gateway_log: Path | None = None,
+    tunnel_log: Path | None = None,
     expected_function_name: str | None = None,
     expected_arguments: str | None = None,
     expected_model: str | None = None,
@@ -185,6 +212,14 @@ def build_artifact(
             "path": str(path),
             **classified,
         }
+        log_path = {
+            "direct": direct_log,
+            "gateway": gateway_log,
+            "tunnel": tunnel_log,
+        }[name]
+        if log_path is not None and log_path.exists():
+            captures[name]["log_path"] = str(log_path)
+            captures[name].update(classify_server_log(log_path.read_text()))
 
     comparable = [name for name, row in captures.items() if row.get("present")]
     args_by_surface = {
@@ -227,6 +262,11 @@ def build_artifact(
         for name, row in captures.items()
         if row.get("present")
     }
+    no_reasoning_disable_by_surface = {
+        name: bool(row.get("no_reasoning_disable_workaround"))
+        for name, row in captures.items()
+        if row.get("present") and "no_reasoning_disable_workaround" in row
+    }
     mismatch = len(set(args_by_surface.values())) > 1 if args_by_surface else False
     all_required_present = not missing
     all_present_have_args = bool(comparable) and all(present_with_args.values())
@@ -249,7 +289,9 @@ def build_artifact(
         required_reasoning_present.values()
     )
     no_reasoning_disable_workaround = (
-        all_required_reasoning_present if require_reasoning_events else True
+        all(no_reasoning_disable_by_surface.values())
+        if no_reasoning_disable_by_surface
+        else (all_required_reasoning_present if require_reasoning_events else True)
     )
     models_by_surface = {
         name: str(row.get("model") or "")
@@ -305,6 +347,7 @@ def build_artifact(
             "all_present_surfaces_match_expected_model": all_expected_models_match,
             "all_present_surfaces_have_required_reasoning": all_required_reasoning_present,
             "no_reasoning_disable_workaround": no_reasoning_disable_workaround,
+            "reasoning_not_disabled_by_surface": no_reasoning_disable_by_surface,
             "all_present_surfaces_report_model": all_present_surfaces_report_model,
             "all_present_surfaces_same_model": all_present_surfaces_same_model,
             "all_required_surfaces_present": all_required_present,
@@ -331,6 +374,9 @@ def main() -> None:
     parser.add_argument("--direct-sse", type=Path)
     parser.add_argument("--gateway-sse", type=Path)
     parser.add_argument("--tunnel-sse", type=Path)
+    parser.add_argument("--direct-log", type=Path)
+    parser.add_argument("--gateway-log", type=Path)
+    parser.add_argument("--tunnel-log", type=Path)
     parser.add_argument("--expected-function-name")
     parser.add_argument("--expected-arguments")
     parser.add_argument("--expected-model")
@@ -343,6 +389,9 @@ def main() -> None:
         direct_sse=args.direct_sse,
         gateway_sse=args.gateway_sse,
         tunnel_sse=args.tunnel_sse,
+        direct_log=args.direct_log,
+        gateway_log=args.gateway_log,
+        tunnel_log=args.tunnel_log,
         expected_function_name=args.expected_function_name,
         expected_arguments=args.expected_arguments,
         expected_model=args.expected_model,
