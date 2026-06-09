@@ -408,3 +408,68 @@ class TestSingleActiveBatchGenerator:
         # Model received only the tail tokens, never re-processed the prefix.
         flat_calls = [t for call in model.calls for t in call]
         assert flat_calls == [201, 202]
+
+    def test_single_active_generator_skips_token_buffer_without_processors(
+        self, monkeypatch
+    ):
+        from vmlx_engine.utils import single_batch_generator as single
+
+        calls = []
+
+        class RecordingTokenBuffer:
+            def __init__(self, tokens):
+                self.tokens = list(tokens)
+
+            def update_and_fetch(self, tokens):
+                calls.append(tokens)
+                return tokens
+
+        monkeypatch.setattr(single, "TokenBuffer", RecordingTokenBuffer)
+
+        generator = single.SingleBatchGenerator(
+            model=_TinyModel(),
+            max_tokens=2,
+            sampler=lambda logits: mx.argmax(logits, axis=-1),
+        )
+        generator.insert([[11, 12]], max_tokens=[2], logits_processors=[[]])
+
+        prompt_responses, _ = generator.next()
+        assert prompt_responses[0].token == 3
+        _, generation_responses = generator.next()
+        assert generation_responses[0].token == 3
+        assert calls == []
+
+    def test_single_active_generator_keeps_token_buffer_for_processors(
+        self, monkeypatch
+    ):
+        from vmlx_engine.utils import single_batch_generator as single
+
+        calls = []
+
+        class RecordingTokenBuffer:
+            def __init__(self, tokens):
+                self.tokens = list(tokens)
+
+            def update_and_fetch(self, tokens):
+                calls.append(tokens)
+                return tokens
+
+        def passthrough_processor(_context, logits):
+            return logits
+
+        monkeypatch.setattr(single, "TokenBuffer", RecordingTokenBuffer)
+
+        generator = single.SingleBatchGenerator(
+            model=_TinyModel(),
+            max_tokens=1,
+            sampler=lambda logits: mx.argmax(logits, axis=-1),
+        )
+        generator.insert(
+            [[11, 12]],
+            max_tokens=[1],
+            logits_processors=[[passthrough_processor]],
+        )
+
+        prompt_responses, _ = generator.next()
+        assert prompt_responses[0].token == 3
+        assert len(calls) == 2

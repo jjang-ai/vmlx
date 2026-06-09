@@ -91,7 +91,7 @@ MLLM_INPUTS_EMBEDS_INTERFACE_ARTIFACT = Path(
     "build/current-mimo-v2-mllm-inputs-embeds-interface-fix-20260606.json"
 )
 LATEST_DECODE_SPEED_ARTIFACT = Path(
-    "build/current-mimo-v25-jangtq2-exactness-boundary-after-runtime-isolation-20260609.json"
+    "build/current-mimo-v25-jangtq2-speed-boundary-after-singlebatch-tokenbuffer-skip-20260609.json"
 )
 NOHEAVY_API_CACHE_CONTRACT_ARTIFACT = Path(
     "build/current-noheavy-api-cache-contract-after-gateway-stale-port-20260609.json"

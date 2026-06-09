@@ -325,7 +325,8 @@ class SingleBatchGenerator:
             with self._stream_context():
                 self._model_call(chunk, req)
                 req.context_tokens.extend(chunk)
-                req.token_context.update_and_fetch(mx.array(chunk, dtype=mx.int32))
+                if req.logits_processors:
+                    req.token_context.update_and_fetch(mx.array(chunk, dtype=mx.int32))
             self._sync()
             if not _prefill_keep_alloc:
                 if hasattr(mx, "clear_cache"):
@@ -349,8 +350,6 @@ class SingleBatchGenerator:
             token_context = req.token_context.update_and_fetch(input_tokens)
             for processor in req.logits_processors:
                 logits = processor(token_context, logits)
-        else:
-            req.token_context.update_and_fetch(input_tokens)
 
         sampler = req.sampler or self.sampler
         wants_logprobs = self._logprobs_required(req)
