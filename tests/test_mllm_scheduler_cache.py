@@ -509,6 +509,32 @@ def test_gemma4_audio_processor_prompt_gets_missing_audio_placeholder():
     ) == "already <|audio|>"
 
 
+def test_gemma4_audio_processor_prompt_uses_turn_pipe_terminator():
+    from vmlx_engine.mllm_batch_generator import _ensure_gemma4_audio_placeholders
+
+    processor = SimpleNamespace(
+        audio_token="<|audio|>",
+        tokenizer=SimpleNamespace(audio_token="<|audio|>"),
+    )
+    prompt = (
+        "<bos><|turn>user\n"
+        "The audio says one color word.<turn|>\n"
+        "<|turn>model\n"
+    )
+
+    fixed = _ensure_gemma4_audio_placeholders(
+        prompt,
+        processor=processor,
+        audio_count=1,
+    )
+
+    assert fixed == (
+        "<bos><|turn>user\n"
+        "The audio says one color word.<|audio|><turn|>\n"
+        "<|turn>model\n"
+    )
+
+
 def test_mllm_processor_direct_forwards_raw_audio_to_processor():
     """Raw audio request inputs must reach processors that expose audio kwargs."""
     from vmlx_engine.mllm_batch_generator import _call_processor_direct

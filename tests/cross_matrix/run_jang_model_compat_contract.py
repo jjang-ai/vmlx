@@ -17,6 +17,7 @@ DEFAULT_OUT = Path("build/current-jang-model-compat-contract-20260528-pr155-runt
 SOURCE_HASH_FILES = [
     "vmlx_engine/utils/jang_loader.py",
     "vmlx_engine/runtime_patches/__init__.py",
+    "vmlx_engine/runtime_patches/mlx_lm_compat.py",
     "tests/test_jang_model_compat_pr155.py",
 ]
 COMMANDS = {

@@ -1065,7 +1065,7 @@ def _ensure_gemma4_audio_placeholders(
     if missing == 0:
         return prompt
     addition = " ".join(audio_token for _ in range(missing))
-    for marker in ("<end_of_turn>", "<|im_end|>", "</s>"):
+    for marker in ("<turn|>", "<end_of_turn>", "<|im_end|>", "</s>"):
         idx = prompt.rfind(marker)
         if idx >= 0:
             return prompt[:idx] + addition + prompt[idx:]

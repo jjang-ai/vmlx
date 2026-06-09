@@ -329,6 +329,19 @@ def test_current_regression_suite_hashes_gemma_qat_inventory_gate_sources():
     assert all(Path(path).exists() for path in required)
 
 
+def test_current_regression_suite_hashes_mlx_lm_runtime_patch_sources():
+    from tests.cross_matrix import run_current_regression_suite as suite
+
+    required = {
+        "vmlx_engine/runtime_patches/__init__.py",
+        "vmlx_engine/runtime_patches/mlx_lm_compat.py",
+        "tests/test_mlx_lm_runtime_patches.py",
+    }
+
+    assert required.issubset(set(suite.CURRENT_SUITE_SOURCE_HASH_FILES))
+    assert all(Path(path).exists() for path in required)
+
+
 def test_current_regression_suite_runs_gemma_qat_inventory_gate():
     from tests.cross_matrix import run_current_regression_suite as suite
 
@@ -748,6 +761,7 @@ def test_current_regression_suite_hashes_focused_pytest_gate_sources():
         "tests/test_dsv4_batch_generator_speed.py",
         "tests/test_scheduler_repetition_context.py",
         "tests/test_dsv4_paged_cache.py",
+        "tests/test_mlx_lm_runtime_patches.py",
     }
 
     assert required.issubset(set(suite.CURRENT_SUITE_SOURCE_HASH_FILES))

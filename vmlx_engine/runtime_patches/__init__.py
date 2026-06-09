@@ -17,6 +17,7 @@ Registered patches (auto-installed on ``import vmlx_engine.runtime_patches``):
   * ``deepseek_v4_register``  — DSV4 mlx_lm.models.deepseek_v4 registration
   * ``gemma4_vision``         — Gemma 4 mixed pixel_values list coercion
   * ``gemma4_processing``     — Gemma 4 tiny RGB image layout inference
+  * ``mlx_lm_compat``         — pinned mlx_lm cache/router/tokenizer fixes
 """
 
 # Eagerly install every patch on first import so they land before any
@@ -26,7 +27,9 @@ from . import deepseek_v4_register  # noqa: F401
 from . import gemma4_processing as _gemma4_processing
 from . import gemma4_vision as _gemma4_vision
 from . import kimi_k25_mla as _kimi_k25_mla
+from . import mlx_lm_compat as _mlx_lm_compat
 
 _gemma4_processing.install()
 _gemma4_vision.install()
 _kimi_k25_mla.install()
+_mlx_lm_compat.install()
