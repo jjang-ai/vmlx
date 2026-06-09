@@ -774,7 +774,7 @@ def test_mimo_current_audit_separates_clean_artifact_from_runtime_blockers(
     assert result["component_ok"]["cache_vs_nocache_next_token"] is True
     assert result["component_ok"]["long_prompt_coherence"] is True
     assert result["component_ok"]["tool_protocol"] is True
-    assert result["component_ok"]["exact_cache_prompt_following"] is False
+    assert result["component_ok"]["exact_cache_prompt_following"] is True
     assert result["component_ok"]["decode_speed_target"] is False
     assert result["component_ok"]["system_prompt_first_token_stop"] is True
     assert result["component_ok"]["cb_system_prompt_working_set_pressure"] is True
@@ -979,7 +979,7 @@ def test_mimo_current_audit_separates_clean_artifact_from_runtime_blockers(
     )
     assert "mimo_jangtq2_live_media_l2_missing" in result["blockers"]
     assert "mimo_jang2l_live_media_l2_missing" in result["blockers"]
-    assert "mimo_exact_cache_prompt_following_blocked" in result["blockers"]
+    assert "mimo_exact_cache_prompt_following_blocked" not in result["blockers"]
     assert "mimo_jang2l_media_capability_downscoped_to_text" not in result["blockers"]
     assert "mimo_jang2l_media_capability_memory_gated" in result["blockers"]
     assert "mimo_jang2l_l2_restart_visible_output_blocked" not in result["blockers"]
@@ -1607,7 +1607,7 @@ def test_mimo_current_audit_points_jangtq2_at_latest_cache_cap_smoke():
     from tests.cross_matrix import run_mimo_v2_jang2l_current_audit as audit
 
     assert str(audit.ALL_LOCAL_SMOKE_ARTIFACT) == (
-        "build/current-all-local-model-smoke-mimo-v25-jangtq2-live-runtime-proof-20260609/"
+        "build/current-all-local-model-smoke-mimo-v25-jangtq2-current-source-textonly-l2-after-capability-fix-20260609/"
         "JANGQ_MiMo-V2.5-JANGTQ_2/result.json"
     )
 

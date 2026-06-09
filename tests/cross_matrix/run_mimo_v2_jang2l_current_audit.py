@@ -25,7 +25,7 @@ from typing import Any
 DEFAULT_MODEL_PATH = Path("/Users/example/.mlxstudio/models/JANGQ-AI/MiMo-V2.5-JANGTQ_2")
 DEFAULT_MANIFEST = Path("build/current-mimo-jangtq2-local-manifest-20260607.tsv")
 DEFAULT_OUT = Path(
-    "build/current-mimo-v2-jang2l-current-audit-after-live-mimo-jangtq2-runtime-proof-20260609.json"
+    "build/current-mimo-v2-jang2l-current-audit-after-current-jangtq2-l2-proof-20260609.json"
 )
 
 STRUCTURAL_ARTIFACT = Path("build/current-mimo-jang2l-local-structural-verify-20260606.json")
@@ -40,7 +40,7 @@ TOOL_FAILURE_ARTIFACT = Path(
     "build/current-mimo-v2-jang2l-tool-dialect-failure-20260606.json"
 )
 ALL_LOCAL_SMOKE_ARTIFACT = Path(
-    "build/current-all-local-model-smoke-mimo-v25-jangtq2-live-runtime-proof-20260609/JANGQ_MiMo-V2.5-JANGTQ_2/result.json"
+    "build/current-all-local-model-smoke-mimo-v25-jangtq2-current-source-textonly-l2-after-capability-fix-20260609/JANGQ_MiMo-V2.5-JANGTQ_2/result.json"
 )
 JANG2L_ALL_LOCAL_SMOKE_ARTIFACT = Path(
     "build/current-all-local-model-smoke-mimo-v25-jang2l-live-refresh-20260608/summary.json"
