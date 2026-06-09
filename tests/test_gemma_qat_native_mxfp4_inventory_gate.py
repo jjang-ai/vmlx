@@ -49,6 +49,13 @@ def _bundle(
     return path
 
 
+def _write_index(path: Path, keys: list[str]) -> None:
+    _write_json(
+        path / "model.safetensors.index.json",
+        {"weight_map": {key: "model-00001.safetensors" for key in keys}},
+    )
+
+
 def test_gate_reports_missing_gemma4_e2b_e4b_qat_and_open_present_gemma4_rows(tmp_path):
     _bundle(
         tmp_path,
@@ -168,3 +175,59 @@ def test_gate_uses_gemma4_e2b_e4b_row_ids_for_gemma4_qat_bundles(tmp_path):
     assert "gemma3n_e4b_qat_native4" not in artifact["required_rows"]
     assert artifact["checks"]["gemma4_e2b_qat_native_mxfp4_present"] is True
     assert artifact["checks"]["gemma4_e4b_qat_native_mxfp4_present"] is True
+
+
+def test_gate_does_not_treat_gemma4_audio_token_metadata_as_native_audio(tmp_path):
+    bundle = _bundle(
+        tmp_path,
+        "gemma-4-12B-it-qat-MXFP4",
+        model_type="gemma4_unified",
+        text_model_type="gemma4_unified_text",
+        weight_format="mxfp4",
+        audio=True,
+        video=True,
+    )
+    _write_index(
+        bundle,
+        [
+            "embed_audio.embedding_projection.weight",
+            "embed_vision.embedding_projection.weight",
+            "vision_embedder.patch_dense.weight",
+        ],
+    )
+
+    artifact = gate.build_artifact((tmp_path,))
+    match = artifact["required_rows"]["gemma4_12b_native_mxfp4"]["matching_rows"][0]
+
+    assert match["modality_backing"]["audio_advertised_by_config"] is True
+    assert match["modality_backing"]["audio_weight_backed"] is False
+    assert match["modality_backing"]["audio_embed_only"] is True
+    assert match["modality_backing"]["vision_weight_backed"] is True
+    assert artifact["checks"]["gemma4_12b_audio_weight_backed"] is False
+    assert "gemma-4-12B-it-qat-MXFP4: audio metadata present without audio_tower weights" in (
+        artifact["required_rows"]["gemma4_12b_native_mxfp4"]["notes"]
+    )
+
+
+def test_gate_records_gemma4_video_as_runtime_proof_required_not_weight_backed(tmp_path):
+    bundle = _bundle(
+        tmp_path,
+        "gemma-4-26B-A4B-it-qat-MXFP4",
+        model_type="gemma4",
+        text_model_type="gemma4_text",
+        weight_format="mxfp4",
+        audio=False,
+        video=True,
+    )
+    _write_index(bundle, ["vision_tower.encoder.layers.0.input_layernorm.weight"])
+
+    artifact = gate.build_artifact((tmp_path,))
+    match = artifact["required_rows"]["gemma4_26b_vl"]["matching_rows"][0]
+
+    assert match["modality_backing"]["video_advertised_by_config"] is True
+    assert match["modality_backing"]["video_weight_backed"] is False
+    assert match["modality_backing"]["video_runtime_proof_required"] is True
+    assert artifact["checks"]["gemma4_26b_video_runtime_proof_required"] is True
+    assert "gemma-4-26B-A4B-it-qat-MXFP4: video metadata requires live frame-through-vision proof" in (
+        artifact["required_rows"]["gemma4_26b_vl"]["notes"]
+    )

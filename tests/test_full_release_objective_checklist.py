@@ -1044,6 +1044,11 @@ def test_full_release_objective_checklist_blocks_open_gemma_qat_inventory():
             "gemma4_31v_or_31b_present": True,
             "all_required_source_live_smokes_present": False,
             "all_required_live_proofs_present": False,
+            "gemma4_12b_audio_weight_backed": False,
+            "gemma4_12b_vision_weight_backed": True,
+            "gemma4_12b_video_runtime_proof_required": True,
+            "gemma4_26b_video_runtime_proof_required": True,
+            "gemma4_31v_or_31b_video_runtime_proof_required": True,
         },
     }
 
@@ -1053,6 +1058,10 @@ def test_full_release_objective_checklist_blocks_open_gemma_qat_inventory():
     assert "gemma_qat_native_mxfp4_status_pass" in failed
     assert "gemma_qat_native_mxfp4_gemma4_e2b_present" in failed
     assert "gemma_qat_native_mxfp4_gemma4_e4b_present" in failed
+    assert "gemma_qat_native_mxfp4_gemma4_12b_audio_weight_backed" in failed
+    assert "gemma_qat_native_mxfp4_gemma4_12b_video_runtime_proven" in failed
+    assert "gemma_qat_native_mxfp4_gemma4_26b_video_runtime_proven" in failed
+    assert "gemma_qat_native_mxfp4_gemma4_31v_or_31b_video_runtime_proven" in failed
     assert "gemma_qat_native_mxfp4_all_source_live_smokes_present" in failed
     assert "gemma_qat_native_mxfp4_all_live_proofs_present" in failed
     assert failed["gemma_qat_native_mxfp4_all_live_proofs_present"]["detail"] == {
