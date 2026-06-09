@@ -29,7 +29,7 @@ INSTALLED_APP_PYTHON = Path(
 STAGED_SEQUOIA_APP = Path("panel/release/sequoia-app/mac-arm64/vMLX.app")
 STAGED_TAHOE_APP = Path("panel/release/tahoe-app/mac-arm64/vMLX.app")
 TOOL_CALL_CONTRACT = Path(
-    "build/current-tool-call-contract-after-jangtq2-objective-refresh-20260607.json"
+    "build/current-tool-call-contract-after-cross-model-loop-metrics-20260609.json"
 )
 INSTALLED_APP_RUNTIME_PARITY = Path(
     "build/current-installed-app-runtime-parity-audit-after-installed-app-rebuild-20260606.json"

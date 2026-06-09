@@ -1927,7 +1927,7 @@ def test_current_regression_suite_runs_tool_call_contracts(monkeypatch, tmp_path
     assert any(name == "tool_call_contracts" for name, _cmd in seen_steps)
     assert any(
         "run_tool_call_contract.py" in " ".join(cmd)
-        and "current-tool-call-contract-after-jangtq2-objective-refresh-20260607.json" in " ".join(cmd)
+        and "current-tool-call-contract-after-cross-model-loop-metrics-20260609.json" in " ".join(cmd)
         for _name, cmd in seen_steps
     )
 

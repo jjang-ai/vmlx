@@ -432,7 +432,7 @@ def _step_is_ok(name: str, step: dict[str, Any], root: Path) -> bool:
     if name == "tool_call_contracts":
         if step["returncode"] == 0:
             return True
-        path = root / "build/current-tool-call-contract-after-jangtq2-objective-refresh-20260607.json"
+        path = root / "build/current-tool-call-contract-after-cross-model-loop-metrics-20260609.json"
         try:
             artifact = json.loads(path.read_text(encoding="utf-8"))
         except Exception:
@@ -558,7 +558,7 @@ CURRENT_SUITE_COMMANDS: dict[str, list[str]] = {
         sys.executable,
         "tests/cross_matrix/run_tool_call_contract.py",
         "--out",
-        "build/current-tool-call-contract-after-jangtq2-objective-refresh-20260607.json",
+        "build/current-tool-call-contract-after-cross-model-loop-metrics-20260609.json",
     ],
     "mcp_policy_contracts": [
         sys.executable,

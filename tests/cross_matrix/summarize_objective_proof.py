@@ -204,7 +204,7 @@ N2_API_CACHE_CONTRACT_REL = (
 N2_CACHE_ARCHITECTURE_CONTRACT_REL = (
     "build/current-cache-architecture-contract-after-mimo-n2-runtime-refresh-20260609.json"
 )
-TOOL_CALL_CONTRACT_REL = "build/current-tool-call-contract-after-jangtq2-objective-refresh-20260607.json"
+TOOL_CALL_CONTRACT_REL = "build/current-tool-call-contract-after-cross-model-loop-metrics-20260609.json"
 PANEL_SETTINGS_CONTRACT_REL = "build/current-panel-settings-contract-proof-20260601-cache-ui-storage-quant.json"
 MAX_OUTPUT_CONTEXT_CONTRACT_REL = "build/current-max-output-context-contract-after-jangtq2-objective-refresh-20260607.json"
 MAX_OUTPUT_CONTEXT_CONTRACT_FALLBACK_REL = "build/current-max-output-context-contract-20260521.json"
