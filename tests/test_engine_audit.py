@@ -9757,7 +9757,7 @@ class TestJangVLMFallbacks:
         assert utils.is_mllm_model(str(model_dir)) is False
         assert utils.is_mllm_model(str(model_dir), force_mllm=True) is False
 
-    def test_mimo_v2_stale_text_runtime_routes_mllm_when_media_sidecars_are_wired(
+    def test_mimo_v2_text_runtime_metadata_stays_text_only_with_media_sidecars(
         self,
         tmp_path,
         monkeypatch,
@@ -9815,8 +9815,8 @@ class TestJangVLMFallbacks:
         monkeypatch.setattr(server, "_mimo_v2_runtime_module", lambda: module)
         utils._IS_MLLM_CACHE.clear()
 
-        assert utils.is_mllm_model(str(model_dir)) is True
-        assert utils.is_mllm_model(str(model_dir), force_mllm=True) is True
+        assert utils.is_mllm_model(str(model_dir)) is False
+        assert utils.is_mllm_model(str(model_dir), force_mllm=True) is False
 
     def test_gemma4_unified_routes_multimodal_when_source_runtime_available(
         self,

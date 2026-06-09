@@ -25,13 +25,13 @@ from typing import Any
 DEFAULT_MODEL_PATH = Path("/Users/example/.mlxstudio/models/JANGQ-AI/MiMo-V2.5-JANGTQ_2")
 DEFAULT_MANIFEST = Path("build/current-mimo-jangtq2-local-manifest-20260607.tsv")
 DEFAULT_OUT = Path(
-    "build/current-mimo-v2-jang2l-current-audit-after-current-text-cache-proof-20260609.json"
+    "build/current-mimo-v2-jang2l-current-audit-after-switchglu-parity-proof-20260609.json"
 )
 
 STRUCTURAL_ARTIFACT = Path("build/current-mimo-jang2l-local-structural-verify-20260606.json")
 TEXT_CACHE_ARTIFACT = Path("build/current-mimo-jang2l-live-text-cache-smoke-20260606.json")
 SWITCHGLU_ARTIFACT = Path(
-    "build/current-mimo-v2-jang2l-quantized-switchglu-parity-20260606.json"
+    "build/current-mimo-v2-switchglu-selected-expert-parity-20260609.json"
 )
 LENGTH_SWEEP_ARTIFACT = Path(
     "build/current-mimo-v2-jang2l-direct-length-sweep-20260606.json"

@@ -302,7 +302,7 @@ def test_mimo_current_audit_separates_clean_artifact_from_runtime_blockers(
         },
     )
     _write_json(
-        tmp_path / "build/current-mimo-v2-jang2l-quantized-switchglu-parity-20260606.json",
+        tmp_path / "build/current-mimo-v2-switchglu-selected-expert-parity-20260609.json",
         {
             "got_shape": [2, 3, 4096],
             "manual_shape": [2, 3, 4096],
@@ -1654,6 +1654,14 @@ def test_mimo_current_audit_points_jangtq2_at_latest_cache_cap_smoke():
     assert str(audit.ALL_LOCAL_SMOKE_ARTIFACT) == (
         "build/current-all-local-model-smoke-mimo-v25-jangtq2-current-source-textonly-l2-after-capability-fix-20260609/"
         "JANGQ_MiMo-V2.5-JANGTQ_2/result.json"
+    )
+
+
+def test_mimo_current_audit_points_switchglu_at_current_parity_proof():
+    from tests.cross_matrix import run_mimo_v2_jang2l_current_audit as audit
+
+    assert str(audit.SWITCHGLU_ARTIFACT) == (
+        "build/current-mimo-v2-switchglu-selected-expert-parity-20260609.json"
     )
 
 
