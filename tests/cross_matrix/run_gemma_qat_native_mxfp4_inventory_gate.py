@@ -20,7 +20,7 @@ DEFAULT_ROOTS = (
     Path("/Users/example/.mlxstudio/models"),
 )
 DEFAULT_OUT = Path(
-    "build/current-gemma-qat-native-mxfp4-local-inventory-after-12b-jang4m-fullmedia-20260610.json"
+    "build/current-gemma-qat-native-mxfp4-local-inventory-after-26b-jang4m-fullmedia-20260610.json"
 )
 
 REQUIRED_QAT_ROWS = {
@@ -189,6 +189,9 @@ SOURCE_FULLMEDIA_SMOKE_PROOFS = {
     ),
     "gemma4_12b_qat_jang4m": Path(
         "build/current-all-local-model-smoke-gemma4-12b-qat-jang4m-fullmedia-tools-l2-20260610/JANGQ_gemma-4-12B-it-qat-JANG_4M/result.json"
+    ),
+    "gemma4_26b_qat_jang4m": Path(
+        "build/current-all-local-model-smoke-gemma4-26b-qat-jang4m-fullmedia-tools-l2-20260610/JANGQ_gemma-4-26B-A4B-it-qat-JANG_4M/result.json"
     ),
 }
 
