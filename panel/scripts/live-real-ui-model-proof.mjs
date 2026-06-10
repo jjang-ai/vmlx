@@ -80,6 +80,12 @@ const defaultPromptTwo = builtinToolsEnabled
 const promptOne = promptOneOverride || defaultPromptOne
 const promptTwo = promptTwoOverride || defaultPromptTwo
 const secondTurnEnabled = envBool('VMLINUX_REAL_UI_SECOND_TURN', true)
+const expectedAssistantOne = process.env.VMLINUX_REAL_UI_EXPECT_ASSISTANT_1
+  || process.env.VMLX_REAL_UI_EXPECT_ASSISTANT_1
+  || ''
+const expectedAssistantTwo = process.env.VMLINUX_REAL_UI_EXPECT_ASSISTANT_2
+  || process.env.VMLX_REAL_UI_EXPECT_ASSISTANT_2
+  || ''
 const checkServerCacheControls = envBool('VMLINUX_REAL_UI_CHECK_SERVER_CACHE_CONTROLS', false)
 const checkMedia = envBool('VMLINUX_REAL_UI_CHECK_MEDIA', false)
 const checkVideo = envBool('VMLINUX_REAL_UI_CHECK_VIDEO', false)
@@ -651,6 +657,12 @@ function assertResult(result) {
   if (result.remoteSessionStarted !== true) failures.push('remote session did not start through Electron UI API')
   if (!chat.turns?.some((m) => m.role === 'assistant' && m.content)) failures.push('assistant content is empty')
   if (!chat.finalVisibleText) failures.push('final visible assistant content is empty')
+  if (result.expectedAssistantOne && (result.firstAssistantContent || '').trim() !== result.expectedAssistantOne) {
+    failures.push(`first assistant content mismatch: expected ${JSON.stringify(result.expectedAssistantOne)}, got ${JSON.stringify((result.firstAssistantContent || '').trim())}`)
+  }
+  if (result.expectedAssistantTwo && (result.secondAssistantContent || '').trim() !== result.expectedAssistantTwo) {
+    failures.push(`second assistant content mismatch: expected ${JSON.stringify(result.expectedAssistantTwo)}, got ${JSON.stringify((result.secondAssistantContent || '').trim())}`)
+  }
   const visibleAssistantTurnsComplete = visibleAssistantAfterEachUser(chat.turns)
   if (!visibleAssistantTurnsComplete) {
     failures.push('UI turn ended with empty visible assistant content')
@@ -1445,6 +1457,8 @@ async function main() {
             chatOverrides,
             sendErrors,
             rendererFailureStage,
+            expectedAssistantOne: ${JSON.stringify(expectedAssistantOne)},
+            expectedAssistantTwo: ${JSON.stringify(expectedAssistantTwo)},
             media: mediaEvidence,
             messageCount: messages.length,
             assistantCount: assistants.length,
@@ -1510,6 +1524,8 @@ async function main() {
           promptOne,
           promptTwo,
           secondTurnEnabled,
+          expectedAssistantOne,
+          expectedAssistantTwo,
           requestMaxTokens,
           requestMaxPromptTokens,
           maxToolIterations,
@@ -1741,6 +1757,8 @@ async function main() {
         promptOne,
         promptTwo,
         secondTurnEnabled,
+        expectedAssistantOne,
+        expectedAssistantTwo,
         requestMaxTokens,
         requestMaxPromptTokens,
         maxToolIterations,
