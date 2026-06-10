@@ -62,7 +62,7 @@ from tests.cross_matrix.release_regression_manifest import (
 
 
 DEFAULT_OUT = Path(
-    "build/current-objective-proof-after-n2-jang1l-memory-refresh-20260609.json"
+    "build/current-objective-proof-after-mimo-n2-dev-app-proof-refresh-20260610.json"
 )
 CURRENT_RELEASE_REGRESSION_MANIFEST_REL = (
     "build/current-release-regression-manifest-after-pr-intake-matrix-refresh-20260609.json"
@@ -199,7 +199,13 @@ N2_PRO_JANG1L_LOCAL_MEMORY_PREFLIGHT_REL = (
     "build/current-n2-pro-jang1l-local-memory-preflight-20260609.json"
 )
 N2_PRO_JANG1L_CHAT_CACHE_PROOF_REL = (
-    "build/current-n2-jang1l-chat-cache-proof-20260609.json"
+    "build/current-n2-jang1l-live-chat-cache-forced-after-gemma-video-20260610.json"
+)
+N2_PRO_JANG1L_REAL_UI_ONE_TURN_PROOF_REL = (
+    "build/current-real-ui-dev-app-n2-jang1l-one-turn-visible-proof-20260610.json"
+)
+N2_PRO_JANG1L_REAL_UI_BOUNDED_PROOF_REL = (
+    "build/current-real-ui-dev-app-n2-jang1l-bounded-chat-proof-20260610.json"
 )
 N2_API_CACHE_CONTRACT_REL = (
     "build/current-noheavy-api-cache-contract-after-mimo-n2-runtime-refresh-20260609.json"
@@ -5554,6 +5560,12 @@ def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
         root, N2_JANGTQ2_CHAT_CACHE_RESPONSES_L2_PROOF_REL
     )
     n2_jang1l_chat_cache_proof = _load(root, N2_PRO_JANG1L_CHAT_CACHE_PROOF_REL)
+    n2_jang1l_real_ui_one_turn_proof = _load(
+        root, N2_PRO_JANG1L_REAL_UI_ONE_TURN_PROOF_REL
+    )
+    n2_jang1l_real_ui_bounded_proof = _load(
+        root, N2_PRO_JANG1L_REAL_UI_BOUNDED_PROOF_REL
+    )
     gemma_qat_inventory = _load(root, GEMMA_QAT_NATIVE_MXFP4_INVENTORY_REL)
     panel_settings_contract = _load(root, PANEL_SETTINGS_CONTRACT_REL)
     max_output_context_contract_rel, max_output_context_contract = _load_first_present(
@@ -7260,6 +7272,8 @@ def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
             str(DEFAULT_OUT),
             N2_PRO_JANG1L_LOCAL_MEMORY_PREFLIGHT_REL,
             N2_PRO_JANG1L_CHAT_CACHE_PROOF_REL,
+            N2_PRO_JANG1L_REAL_UI_ONE_TURN_PROOF_REL,
+            N2_PRO_JANG1L_REAL_UI_BOUNDED_PROOF_REL,
             N2_JANGTQ2_CHAT_CACHE_RESPONSES_PROOF_REL,
             N2_JANGTQ2_CHAT_CACHE_RESPONSES_L2_PROOF_REL,
             N2_API_CACHE_CONTRACT_REL,
@@ -7269,12 +7283,13 @@ def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
         caveat=(
             "N2 Pro 397B JANG1L/JANGTQ is now tracked as an explicit release "
             "blocker. The current no-heavy parser/cache/family policy contracts "
-            "are present, and the local JANG_1L model/index preflight is "
-            "registered. Treat JANG_1L as a careful-RAM live-proof scheduling "
-            "problem, not as permanent model infeasibility; do not sign, "
-            "notarize, tag, or publish a release claiming N2 support until both "
-            "quant profiles pass the same live runtime/cache/API/UI gates as "
-            "the other release-critical families."
+            "are present, the local JANG_1L model/index preflight is registered, "
+            "and current-source plus real Electron dev-app probes have loaded "
+            "JANG_1L on the 128 GB host. Treat JANG_1L as careful-RAM live-proof "
+            "work, not permanent model infeasibility; do not sign, notarize, tag, "
+            "or publish a release claiming N2 support until both quant profiles "
+            "pass the same live runtime/cache/API/UI gates as the other "
+            "release-critical families."
         ),
         details={
             "local_artifact_probe": {
@@ -7334,6 +7349,98 @@ def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
                 "release_boundary": n2_jang1l_chat_cache_proof.get(
                     "release_boundary"
                 ),
+                "first_chat_status_code": (
+                    (n2_jang1l_chat_cache_proof.get("rows") or [{}])[0].get(
+                        "status_code"
+                    )
+                    if isinstance(n2_jang1l_chat_cache_proof.get("rows"), list)
+                    and n2_jang1l_chat_cache_proof.get("rows")
+                    else None
+                ),
+                "first_chat_visible_text": (
+                    (n2_jang1l_chat_cache_proof.get("rows") or [{}])[0].get("text")
+                    if isinstance(n2_jang1l_chat_cache_proof.get("rows"), list)
+                    and n2_jang1l_chat_cache_proof.get("rows")
+                    else None
+                ),
+                "cache_warm_status_code": (
+                    (n2_jang1l_chat_cache_proof.get("rows") or [{}, {}])[1].get(
+                        "status_code"
+                    )
+                    if isinstance(n2_jang1l_chat_cache_proof.get("rows"), list)
+                    and len(n2_jang1l_chat_cache_proof.get("rows") or []) > 1
+                    else None
+                ),
+                "cache_hit_status_code": (
+                    (n2_jang1l_chat_cache_proof.get("rows") or [{}, {}, {}])[2].get(
+                        "status_code"
+                    )
+                    if isinstance(n2_jang1l_chat_cache_proof.get("rows"), list)
+                    and len(n2_jang1l_chat_cache_proof.get("rows") or []) > 2
+                    else None
+                ),
+                "visible_quality_pass": bool(
+                    (
+                        (n2_jang1l_chat_cache_proof.get("rows") or [{}])[0].get(
+                            "text"
+                        )
+                        if isinstance(n2_jang1l_chat_cache_proof.get("rows"), list)
+                        and n2_jang1l_chat_cache_proof.get("rows")
+                        else ""
+                    )
+                ),
+                "cache_reuse_pass": (
+                    n2_jang1l_chat_cache_proof.get("cache_hit_cached_tokens") or 0
+                )
+                > 0,
+            },
+            "jang1l_real_ui_one_turn": {
+                "artifact": N2_PRO_JANG1L_REAL_UI_ONE_TURN_PROOF_REL,
+                "status": n2_jang1l_real_ui_one_turn_proof.get("status"),
+                "classification": n2_jang1l_real_ui_one_turn_proof.get(
+                    "classification"
+                ),
+                "model_path": n2_jang1l_real_ui_one_turn_proof.get("model_path"),
+                "served_model": n2_jang1l_real_ui_one_turn_proof.get(
+                    "served_model"
+                ),
+                "harness_contract": n2_jang1l_real_ui_one_turn_proof.get(
+                    "harness_contract"
+                ),
+                "positive_evidence": n2_jang1l_real_ui_one_turn_proof.get(
+                    "positive_evidence"
+                ),
+                "red_evidence": n2_jang1l_real_ui_one_turn_proof.get(
+                    "red_evidence"
+                ),
+                "runtime_detection": n2_jang1l_real_ui_one_turn_proof.get(
+                    "runtime_detection"
+                ),
+                "quantization": n2_jang1l_real_ui_one_turn_proof.get(
+                    "quantization"
+                ),
+                "runtime_cache": n2_jang1l_real_ui_one_turn_proof.get(
+                    "runtime_cache"
+                ),
+                "cache_after": n2_jang1l_real_ui_one_turn_proof.get("cache_after"),
+                "memory": n2_jang1l_real_ui_one_turn_proof.get("memory"),
+                "speed": n2_jang1l_real_ui_one_turn_proof.get("speed"),
+                "release_boundary": n2_jang1l_real_ui_one_turn_proof.get(
+                    "release_boundary"
+                ),
+            },
+            "jang1l_real_ui_bounded": {
+                "artifact": N2_PRO_JANG1L_REAL_UI_BOUNDED_PROOF_REL,
+                "status": n2_jang1l_real_ui_bounded_proof.get("status"),
+                "model_path": n2_jang1l_real_ui_bounded_proof.get("model_path"),
+                "served_model": n2_jang1l_real_ui_bounded_proof.get(
+                    "served_model"
+                ),
+                "proven": n2_jang1l_real_ui_bounded_proof.get("proven"),
+                "red": n2_jang1l_real_ui_bounded_proof.get("red"),
+                "runtime": n2_jang1l_real_ui_bounded_proof.get("runtime"),
+                "cache": n2_jang1l_real_ui_bounded_proof.get("cache"),
+                "boundary": n2_jang1l_real_ui_bounded_proof.get("boundary"),
             },
             "noheavy_contracts": {
                 "api_cache": n2_api_cache_contract.get("status"),

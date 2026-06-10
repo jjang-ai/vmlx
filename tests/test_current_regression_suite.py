@@ -1886,7 +1886,7 @@ def test_current_regression_suite_refreshes_current_objective_digest_artifact(
 
     assert artifact["status"] == "pass"
     assert suite.CURRENT_OBJECTIVE_DIGEST_ARTIFACT == (
-        "build/current-objective-proof-after-n2-jang1l-memory-refresh-20260609.json"
+        "build/current-objective-proof-after-mimo-n2-dev-app-proof-refresh-20260610.json"
     )
     assert any(
         name == "objective_digest"

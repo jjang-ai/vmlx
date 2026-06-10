@@ -18,7 +18,7 @@ def test_objective_proof_digest_default_out_tracks_current_release_proof_artifac
     from tests.cross_matrix import summarize_objective_proof as objective
 
     assert objective.DEFAULT_OUT == Path(
-        "build/current-objective-proof-after-n2-jang1l-memory-refresh-20260609.json"
+        "build/current-objective-proof-after-mimo-n2-dev-app-proof-refresh-20260610.json"
     )
 
 
@@ -61,16 +61,38 @@ def test_objective_proof_digest_tracks_n2_pro_397b_release_blocker():
         "build/current-n2-jangtq2-chat-cache-responses-proof-after-responses-parser-20260609.json"
         in row["evidence"]
     )
-    assert "build/current-n2-jang1l-chat-cache-proof-20260609.json" in row["evidence"]
+    assert (
+        "build/current-n2-jang1l-live-chat-cache-forced-after-gemma-video-20260610.json"
+        in row["evidence"]
+    )
+    assert (
+        "build/current-real-ui-dev-app-n2-jang1l-one-turn-visible-proof-20260610.json"
+        in row["evidence"]
+    )
     assert row["details"]["jang1l_live_gate"]["artifact"] == (
-        "build/current-n2-jang1l-chat-cache-proof-20260609.json"
+        "build/current-n2-jang1l-live-chat-cache-forced-after-gemma-video-20260610.json"
     )
-    assert row["details"]["jang1l_live_gate"]["status"] == "skipped"
-    assert row["details"]["jang1l_live_gate"]["reason"] == (
-        "n2_jang1l_insufficient_available_memory"
+    assert row["details"]["jang1l_live_gate"]["status"] == "fail"
+    assert row["details"]["jang1l_live_gate"]["first_chat_status_code"] == 200
+    assert row["details"]["jang1l_live_gate"]["first_chat_visible_text"] == ""
+    assert row["details"]["jang1l_live_gate"]["cache_warm_status_code"] == 503
+    assert row["details"]["jang1l_live_gate"]["cache_hit_status_code"] == 503
+    assert row["details"]["jang1l_live_gate"]["visible_quality_pass"] is False
+    assert row["details"]["jang1l_live_gate"]["cache_reuse_pass"] is False
+    assert row["details"]["jang1l_real_ui_one_turn"]["status"] == "fail"
+    assert row["details"]["jang1l_real_ui_one_turn"]["classification"] == (
+        "first_turn_whitespace_visible_output"
     )
-    assert row["details"]["jang1l_live_gate"]["indexed_payload_gib"] == 110.57
-    assert row["details"]["jang1l_live_gate"]["required_available_gib"] == 118.57
+    assert row["details"]["jang1l_real_ui_one_turn"]["runtime_detection"][
+        "model_type"
+    ] == "qwen3_5_moe"
+    assert row["details"]["jang1l_real_ui_one_turn"]["runtime_cache"][
+        "schema"
+    ] == "hybrid_ssm_v1"
+    assert row["details"]["jang1l_real_ui_one_turn"]["cache_after"][
+        "l2_ssm_tokens_on_disk"
+    ] > 0
+    assert row["details"]["jang1l_real_ui_bounded"]["status"] == "fail"
     assert (
         "build/current-n2-jangtq2-chat-cache-responses-l2-proof-20260609.json"
         in row["evidence"]
