@@ -196,6 +196,58 @@ def test_raw_sse_parity_fails_when_capture_arguments_do_not_match_expected(tmp_p
     assert artifact["captures"]["direct"]["expected_arguments_match"] is False
 
 
+def test_raw_sse_parity_accepts_json_argument_formatting_differences(tmp_path):
+    direct = tmp_path / "direct.sse"
+    gateway = tmp_path / "gateway.sse"
+    tunnel = tmp_path / "tunnel.sse"
+    direct.write_text(_sse(arguments='{"query": "alpha"}'))
+    gateway.write_text(_sse(arguments='{"query":"alpha"}'))
+    tunnel.write_text(_sse(arguments='{\n  "query": "alpha"\n}'))
+
+    artifact = build_artifact(
+        direct_sse=direct,
+        gateway_sse=gateway,
+        tunnel_sse=tunnel,
+        expected_function_name="lookup",
+        expected_arguments='{"query":"alpha"}',
+        require_reasoning_events=True,
+    )
+
+    assert artifact["status"] == "pass"
+    assert (
+        artifact["checks"]["authoritative_arguments_match_across_present_surfaces"]
+        is True
+    )
+    assert artifact["checks"]["all_present_surfaces_match_expected_arguments"] is True
+    assert artifact["captures"]["direct"]["authoritative_arguments"] == '{"query": "alpha"}'
+
+
+def test_raw_sse_parity_still_fails_on_json_argument_value_mismatch(tmp_path):
+    direct = tmp_path / "direct.sse"
+    gateway = tmp_path / "gateway.sse"
+    tunnel = tmp_path / "tunnel.sse"
+    direct.write_text(_sse(arguments='{"query":"alpha"}'))
+    gateway.write_text(_sse(arguments='{"query":"alpha"}'))
+    tunnel.write_text(_sse(arguments='{"query":"beta"}'))
+
+    artifact = build_artifact(
+        direct_sse=direct,
+        gateway_sse=gateway,
+        tunnel_sse=tunnel,
+        expected_function_name="lookup",
+        expected_arguments='{"query":"alpha"}',
+        require_reasoning_events=True,
+    )
+
+    assert artifact["status"] == "fail"
+    assert (
+        artifact["checks"]["authoritative_arguments_match_across_present_surfaces"]
+        is False
+    )
+    assert artifact["checks"]["all_present_surfaces_match_expected_arguments"] is False
+    assert artifact["captures"]["tunnel"]["expected_arguments_match"] is False
+
+
 def test_raw_sse_parity_can_require_reasoning_events(tmp_path):
     direct = tmp_path / "direct.sse"
     gateway = tmp_path / "gateway.sse"
