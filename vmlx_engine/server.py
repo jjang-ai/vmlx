@@ -2026,6 +2026,18 @@ def _mimo_v2_media_runtime_auto_enabled(
         return False
     caps = cfg.get("capabilities") if isinstance(cfg.get("capabilities"), dict) else {}
     runtime = cfg.get("runtime") if isinstance(cfg.get("runtime"), dict) else {}
+    explicit_modes = {
+        str(caps.get("multimodal_status") or "").lower(),
+        str(runtime.get("multimodal_mode") or "").lower(),
+    }
+    if explicit_modes & {
+        "weights_preserved_text_runtime",
+        "text_runtime",
+        "text_only",
+        "unwired",
+        "preserved_disabled",
+    }:
+        return False
     bundle = Path(bundle_path or "")
     processor_config = cfg.get("processor_config")
     if not isinstance(processor_config, dict):
