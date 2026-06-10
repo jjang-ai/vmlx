@@ -240,6 +240,15 @@ INSTALLED_APP_UI_PROOFS = {
     ),
 }
 
+REJECTED_INSTALLED_APP_UI_PROOFS = {
+    "gemma4_26b_vl": Path(
+        "docs/internal/agent-notes/current-real-ui-installed-app-gemma4-26b-vl-mxfp4-responses-tools-cachecontrols-bundled-python-reasoning-explicit-20260610-proof.json"
+    ),
+    "gemma4_31v_or_31b_vl": Path(
+        "docs/internal/agent-notes/current-real-ui-installed-app-gemma4-31b-mxfp4-responses-tools-cachecontrols-bundled-python-reasoning-explicitbrief-max1024-20260610-proof.json"
+    ),
+}
+
 
 def _load_json(path: Path) -> dict[str, Any]:
     try:
@@ -546,7 +555,10 @@ def _installed_app_ui_proof_status(
 ) -> dict[str, Any]:
     rel = INSTALLED_APP_UI_PROOFS.get(row_key)
     if rel is None:
-        return {"status": "missing", "artifact": None, "reason": "no_proof_registered_for_row"}
+        rejected_rel = REJECTED_INSTALLED_APP_UI_PROOFS.get(row_key)
+        if rejected_rel is None:
+            return {"status": "missing", "artifact": None, "reason": "no_proof_registered_for_row"}
+        rel = rejected_rel
     path = proof_root / rel
     if not path.exists():
         return {"status": "missing", "artifact": str(rel)}
@@ -591,9 +603,16 @@ def _installed_app_ui_proof_status(
     }
     screenshots = proof.get("screenshots") if isinstance(proof.get("screenshots"), dict) else {}
     chat = proof.get("chat") if isinstance(proof.get("chat"), dict) else {}
+    assertion_failures = (
+        proof.get("assertionFailures")
+        if isinstance(proof.get("assertionFailures"), list)
+        else []
+    )
     return {
         "status": "pass" if all(checks.values()) else "fail",
         "artifact": str(rel),
+        "registered_as_pass_candidate": row_key in INSTALLED_APP_UI_PROOFS,
+        "assertion_failures": assertion_failures,
         "checks": checks,
         "missing_surfaces": missing_surfaces,
         "proven_surfaces": sorted(surfaces),
@@ -603,6 +622,11 @@ def _installed_app_ui_proof_status(
         "served_model": proof.get("servedModel"),
         "chat_screenshot": screenshots.get("chat"),
         "final_visible": chat.get("finalVisibleText"),
+        "first_assistant_content": proof.get("firstAssistantContent"),
+        "second_assistant_content": proof.get("secondAssistantContent"),
+        "visible_assistant_turns_complete": proof.get("visibleAssistantTurnsComplete"),
+        "persisted_reasoning_count": proof.get("persistedReasoningCount"),
+        "persisted_tool_count": proof.get("persistedToolCount"),
         "cache_hit_tokens": _nested(proof, "server", "health", "scheduler", "cache_hit_tokens"),
         "l2_block_tokens_on_disk": cache_totals.get("l2_block_tokens_on_disk"),
     }
@@ -713,6 +737,12 @@ def classify_required_rows(
             and installed_app_ui_proof.get("status") == "pass"
             else "missing"
         )
+        if (
+            live_proof_status == "missing"
+            and installed_app_ui_proof.get("status") == "fail"
+            and _nested(installed_app_ui_proof, "checks", "model_path_matches_row") is True
+        ):
+            live_proof_status = "fail"
         if proof_status != "missing" and live_proof_status == "pass":
             proof_status = "pass"
         classified[key] = {
