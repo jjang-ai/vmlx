@@ -448,6 +448,21 @@ def _env_int(name: str, default: int, legacy_name: str | None = None) -> int:
         return default
 
 
+def _effective_ssm_state_cache_size(args) -> int:
+    """Scale hybrid SSM entry count when callers reserve a larger MB budget."""
+
+    requested_entries = max(1, int(getattr(args, "ssm_state_cache_size", 8) or 8))
+    requested_mb = getattr(args, "ssm_state_cache_mb", None)
+    try:
+        budget_mb = int(requested_mb) if requested_mb is not None else 512
+    except (TypeError, ValueError):
+        budget_mb = 512
+    if budget_mb <= 512:
+        return requested_entries
+    budget_scaled_entries = max(8, min(64, budget_mb // 128))
+    return max(requested_entries, budget_scaled_entries)
+
+
 def _suppress_image_resource_tracker_warning() -> None:
     """Hide benign mflux multiprocessing semaphore cleanup noise on shutdown."""
     import warnings
@@ -1234,7 +1249,7 @@ def serve_command(args):
             cache_memory_mb=args.cache_memory_mb,
             cache_memory_percent=args.cache_memory_percent,
             cache_ttl_minutes=getattr(args, 'cache_ttl_minutes', 0),
-            ssm_state_cache_size=max(1, int(getattr(args, 'ssm_state_cache_size', 8))),
+            ssm_state_cache_size=_effective_ssm_state_cache_size(args),
             ssm_state_cache_max_mb=(
                 max(1, int(args.ssm_state_cache_mb))
                 if getattr(args, 'ssm_state_cache_mb', None) is not None
@@ -1598,7 +1613,7 @@ def bench_command(args):
             cache_memory_mb=args.cache_memory_mb,
             cache_memory_percent=args.cache_memory_percent,
             cache_ttl_minutes=getattr(args, 'cache_ttl_minutes', 0),
-            ssm_state_cache_size=max(1, int(getattr(args, 'ssm_state_cache_size', 8))),
+            ssm_state_cache_size=_effective_ssm_state_cache_size(args),
             ssm_state_cache_max_mb=(
                 max(1, int(args.ssm_state_cache_mb))
                 if getattr(args, 'ssm_state_cache_mb', None) is not None
