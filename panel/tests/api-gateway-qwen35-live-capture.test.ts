@@ -35,6 +35,16 @@ function requiredEnv(name: string): string {
   return value;
 }
 
+function optionalJsonListEnv(name: string, fallback: string[]): string[] {
+  const raw = process.env[name];
+  if (!raw) return fallback;
+  const parsed = JSON.parse(raw);
+  if (!Array.isArray(parsed) || !parsed.every((item) => typeof item === "string")) {
+    throw new Error(`${name} must be a JSON string array`);
+  }
+  return parsed;
+}
+
 function freePort(): Promise<number> {
   return new Promise((resolve, reject) => {
     const server = createServer();
@@ -77,11 +87,22 @@ describe("Qwen35 live Responses capture through ApiGateway", () => {
     const requestBody = JSON.parse(
       requiredEnv("VMLINUX_QWEN35_GATEWAY_PAYLOAD_JSON"),
     );
+    const expectedSubstrings = optionalJsonListEnv(
+      "VMLINUX_QWEN35_GATEWAY_EXPECT_CONTAINS_JSON",
+      [
+        "response.reasoning_summary_text",
+        "response.function_call_arguments.delta",
+        "response.function_call_arguments.done",
+        "blue-cat",
+      ],
+    );
     const sessions = [
       {
         id: "qwen35-live",
         modelPath,
-        modelName: "Qwen3.6-35B-A3B-MXFP8-MTP",
+        modelName:
+          process.env.VMLINUX_QWEN35_GATEWAY_MODEL_NAME ||
+          "Qwen3.6-35B-A3B-MXFP8-MTP",
         host: "127.0.0.1",
         port: backendPort,
         status: "running",
@@ -149,9 +170,8 @@ describe("Qwen35 live Responses capture through ApiGateway", () => {
     expect(response.status).toBe(200);
     expect(response.headers.get("content-type")).toContain("text/event-stream");
     expect(sessionManagerMock.touchSession).toHaveBeenCalledWith("qwen35-live");
-    expect(raw).toContain("response.reasoning_summary_text");
-    expect(raw).toContain("response.function_call_arguments.delta");
-    expect(raw).toContain("response.function_call_arguments.done");
-    expect(raw).toContain("blue-cat");
+    for (const expected of expectedSubstrings) {
+      expect(raw).toContain(expected);
+    }
   });
 });
