@@ -1710,6 +1710,7 @@ export function registerChatHandlers(
         let responsesToolFollowupInput:
           | Array<{ type: "function_call_output"; call_id: string; output: string }>
           | undefined;
+        let suppressExplicitToolChoiceForToolFollowup = false;
 
         // Build request body — shared between initial request and tool follow-ups
         const buildRequestBody = (): Record<string, any> => {
@@ -1890,7 +1891,9 @@ export function registerChatHandlers(
                 obj.tools,
                 false,
               );
-              if (explicitToolChoice) obj.tool_choice = explicitToolChoice;
+              if (explicitToolChoice && !suppressExplicitToolChoiceForToolFollowup) {
+                obj.tool_choice = explicitToolChoice;
+              }
             }
             // enable_thinking: explicit user override sent to both local and remote.
             // When undefined (auto), local omits the field so the native
@@ -3307,6 +3310,7 @@ export function registerChatHandlers(
             responsesToolFollowupPreviousResponseId = undefined;
             responsesToolFollowupInput = undefined;
           }
+          suppressExplicitToolChoiceForToolFollowup = receivedToolCalls.length > 0;
 
           // Inject media from read_image/read_video tool results as multimodal
           // content parts. VL models can only process media in content arrays,
