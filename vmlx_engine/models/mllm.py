@@ -3123,11 +3123,30 @@ def _register_mimo_v2_mlx_vlm_runtime() -> None:
                     assigned += 1
                 except Exception as exc:
                     failures.append(f"{key}: {type(exc).__name__}: {exc}")
+            zero_filled = []
+            for key in (
+                "visual.merger.ln_q.bias",
+                "visual.merger.mlp.0.bias",
+                "visual.merger.mlp.2.bias",
+            ):
+                if key in self._mimo_v2_media_weights:
+                    continue
+                try:
+                    existing = _mimo_v2_get_module(self, key)
+                    _mimo_v2_assign_weight(self, key, mx.zeros_like(existing))
+                    zero_filled.append(key)
+                except Exception:
+                    pass
             if failures:
                 preview = "; ".join(failures[:8])
                 raise RuntimeError(
                     "MiMo-V2 media-enabled load could not bind preserved media "
                     f"weights ({len(failures)} failures): {preview}"
+                )
+            if zero_filled:
+                logger.info(
+                    "MiMo-V2 media load zero-filled missing visual bias tensors: %s",
+                    ", ".join(zero_filled),
                 )
             return assigned
 
