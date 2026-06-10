@@ -72,6 +72,23 @@ function buildRequestBody(
             thinking_budget: thinkingBudget,
         }
     }
+    const toolNameOf = (tool: any): string | undefined => {
+        const name = tool?.function?.name ?? tool?.name
+        return typeof name === 'string' && name ? name : undefined
+    }
+    const inferExplicitToolChoice = (responseApi: boolean): any | undefined => {
+        if (!overrides?.builtinToolsEnabled || !Array.isArray(tools) || tools.length === 0) return undefined
+        const latestUserText = [...requestMessages].reverse()
+            .find((m: any) => m?.role === 'user' && typeof m.content === 'string')
+            ?.content || ''
+        const names = tools.map(toolNameOf).filter(Boolean) as string[]
+        const named = names.filter(name => new RegExp(`(^|[^A-Za-z0-9_])${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}([^A-Za-z0-9_]|$)`).test(latestUserText))
+        const unique = [...new Set(named)]
+        if (unique.length !== 1) return undefined
+        return responseApi
+            ? { type: 'function', name: unique[0] }
+            : { type: 'function', function: { name: unique[0] } }
+    }
 
     if (wireApi === 'responses') {
         const systemMessages = requestMessages.filter(m => m.role === 'system')
@@ -103,6 +120,8 @@ function buildRequestBody(
                 parameters: t.function.parameters
             }))
         }
+        const explicitToolChoice = inferExplicitToolChoice(true)
+        if (explicitToolChoice) obj.tool_choice = explicitToolChoice
         if (effectiveEnableThinkingOverride !== undefined) {
             obj.enable_thinking = effectiveEnableThinkingOverride
         } else if (isRemote) {
@@ -130,6 +149,8 @@ function buildRequestBody(
         if (tools) {
             obj.tools = tools
         }
+        const explicitToolChoice = inferExplicitToolChoice(false)
+        if (explicitToolChoice) obj.tool_choice = explicitToolChoice
         if (effectiveEnableThinkingOverride !== undefined) {
             obj.enable_thinking = effectiveEnableThinkingOverride
         } else if (isRemote) {
@@ -705,6 +726,14 @@ describe('buildRequestBody — Tool format', () => {
                 description: 'Read a file',
                 parameters: { type: 'object', properties: { path: { type: 'string' } } }
             }
+        },
+        {
+            type: 'function',
+            function: {
+                name: 'run_command',
+                description: 'Run a command',
+                parameters: { type: 'object', properties: { command: { type: 'string' } } }
+            }
         }
     ]
 
@@ -740,6 +769,74 @@ describe('buildRequestBody — Tool format', () => {
         expect(body.instructions).toBe(augmentedSystemPrompt)
         expect(body.input).toEqual([{ role: 'user', content: 'Create index.html' }])
         expect(body.tools[0].name).toBe('read_file')
+    })
+
+    it('pins Chat tool_choice when latest user explicitly names one available built-in tool', () => {
+        const body = buildRequestBody(
+            'completions',
+            'model',
+            [
+                { role: 'system', content: 'You are helpful.' },
+                { role: 'user', content: 'Use the run_command tool exactly once.' },
+            ],
+            { builtinToolsEnabled: true },
+            false,
+            false,
+            sampleTools,
+        )
+
+        expect(body.tool_choice).toEqual({
+            type: 'function',
+            function: { name: 'run_command' },
+        })
+    })
+
+    it('pins Responses tool_choice when latest user explicitly names one available built-in tool', () => {
+        const body = buildRequestBody(
+            'responses',
+            'model',
+            [
+                { role: 'system', content: 'You are helpful.' },
+                { role: 'user', content: 'Use the run_command tool exactly once.' },
+            ],
+            { builtinToolsEnabled: true },
+            false,
+            false,
+            sampleTools,
+        )
+
+        expect(body.tool_choice).toEqual({
+            type: 'function',
+            name: 'run_command',
+        })
+    })
+
+    it('does not pin Chat tool_choice when no available tool is explicitly named', () => {
+        const body = buildRequestBody(
+            'completions',
+            'model',
+            [{ role: 'user', content: 'Explain the current project.' }],
+            { builtinToolsEnabled: true },
+            false,
+            false,
+            sampleTools,
+        )
+
+        expect(body.tool_choice).toBeUndefined()
+    })
+
+    it('does not pin tool_choice when the latest user names multiple available tools', () => {
+        const body = buildRequestBody(
+            'completions',
+            'model',
+            [{ role: 'user', content: 'Use read_file first, then run_command.' }],
+            { builtinToolsEnabled: true },
+            false,
+            false,
+            sampleTools,
+        )
+
+        expect(body.tool_choice).toBeUndefined()
     })
 
     it('agentic tool prompts do not override explicit exact-output user formats', () => {

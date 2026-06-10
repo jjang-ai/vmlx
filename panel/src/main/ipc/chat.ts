@@ -571,6 +571,36 @@ function filterTools(
   return BUILTIN_TOOLS.filter((t: any) => !disabled.has(t.function.name));
 }
 
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function toolNameOf(tool: any): string | undefined {
+  const name = tool?.function?.name ?? tool?.name;
+  return typeof name === "string" && name ? name : undefined;
+}
+
+function inferExplicitBuiltinToolChoice(
+  latestUserText: string,
+  tools: any[] | undefined,
+  responseApi: boolean,
+): any | undefined {
+  if (!Array.isArray(tools) || tools.length === 0 || !latestUserText) return undefined;
+  const namedTools = tools
+    .map(toolNameOf)
+    .filter((name): name is string => typeof name === "string" && name.length > 0)
+    .filter((name) =>
+      new RegExp(`(^|[^A-Za-z0-9_])${escapeRegExp(name)}([^A-Za-z0-9_]|$)`).test(
+        latestUserText,
+      ),
+    );
+  const unique = Array.from(new Set(namedTools));
+  if (unique.length !== 1) return undefined;
+  return responseApi
+    ? { type: "function", name: unique[0] }
+    : { type: "function", function: { name: unique[0] } };
+}
+
 // Track active requests per chat for abort/concurrency (B5/B6)
 const activeRequests = new Map<
   string,
@@ -1753,14 +1783,21 @@ export function registerChatHandlers(
             if (overrides?.repeatPenalty != null)
               obj.repetition_penalty = overrides.repeatPenalty;
             if (overrides?.builtinToolsEnabled) {
-              obj.tools = filterTools(overrides, {
+              const filteredTools = filterTools(overrides, {
                 hasDirectMediaAttachments: hasMediaAttachments,
-              }).map((t) => ({
+              });
+              obj.tools = filteredTools.map((t) => ({
                 type: "function",
                 name: t.function.name,
                 description: t.function.description,
                 parameters: t.function.parameters,
               }));
+              const explicitToolChoice = inferExplicitBuiltinToolChoice(
+                latestUserText,
+                filteredTools,
+                true,
+              );
+              if (explicitToolChoice) obj.tool_choice = explicitToolChoice;
             }
             // enable_thinking: explicit user override sent to both local and remote.
             // When undefined (auto), local omits the field so the native
@@ -1832,6 +1869,12 @@ export function registerChatHandlers(
               obj.tools = filterTools(overrides, {
                 hasDirectMediaAttachments: hasMediaAttachments,
               });
+              const explicitToolChoice = inferExplicitBuiltinToolChoice(
+                latestUserText,
+                obj.tools,
+                false,
+              );
+              if (explicitToolChoice) obj.tool_choice = explicitToolChoice;
             }
             // enable_thinking: explicit user override sent to both local and remote.
             // When undefined (auto), local omits the field so the native
