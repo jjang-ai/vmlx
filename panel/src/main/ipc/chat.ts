@@ -2526,6 +2526,9 @@ export function registerChatHandlers(
                 const toolCallId =
                   item.call_id ||
                   `call_${uuidv4().replace(/-/g, "").slice(0, 16)}`;
+                console.log(
+                  `[CHAT] Responses function_call item: output_index=${parsed.output_index ?? ""} item_id=${item.id || ""} call_id=${toolCallId} name=${item.name || ""} arguments_len=${String(finalArguments).length}`,
+                );
                 receivedToolCalls.push({
                   id: toolCallId,
                   function: {
