@@ -5950,6 +5950,26 @@ def _model_mtp_status(bundle_path: str | None) -> dict:
         drop_mtp_raw is not None and not isinstance(drop_mtp_raw, bool)
     )
     drop_mtp = drop_mtp_raw if isinstance(drop_mtp_raw, bool) else None
+    mtp_sidecar = jang_cfg.get("mtp") if isinstance(jang_cfg.get("mtp"), dict) else {}
+    mtp_sidecar_declares_dropped = (
+        mtp_sidecar.get("enabled") is False or mtp_sidecar.get("kept") is False
+    )
+    runtime_sidecar = (
+        jang_cfg.get("runtime") if isinstance(jang_cfg.get("runtime"), dict) else {}
+    )
+    runtime_bundle_has_mtp = runtime_sidecar.get("bundle_has_mtp")
+    runtime_mtp_mode = runtime_sidecar.get("mtp_mode")
+    runtime_declares_dropped_mtp = (
+        runtime_bundle_has_mtp is False
+        and isinstance(runtime_mtp_mode, str)
+        and (
+            "drop" in runtime_mtp_mode.lower()
+            or "missing_weight" in runtime_mtp_mode.lower()
+            or "metadata_only" in runtime_mtp_mode.lower()
+        )
+    )
+    if mtp_sidecar_declares_dropped or runtime_declares_dropped_mtp:
+        drop_mtp = True
     has_mtp_tensors, index_error = _bundle_index_tensor_prefix_status(
         bundle_path,
         "mtp.",
@@ -5984,7 +6004,12 @@ def _model_mtp_status(bundle_path: str | None) -> dict:
         issues.append(
             "bundle indexes mtp.* tensors but config disables MTP runtime"
         )
-    if drop_mtp is True and config_layers not in (None, 0):
+    if (
+        drop_mtp is True
+        and config_layers not in (None, 0)
+        and not mtp_sidecar_declares_dropped
+        and not runtime_declares_dropped_mtp
+    ):
         issues.append(
             "jang_config.drop_mtp=true but config.num_nextn_predict_layers="
             f"{config_layers}"
@@ -6026,7 +6051,15 @@ def _model_mtp_status(bundle_path: str | None) -> dict:
         runtime_reason = "metadata_inconsistent"
     elif drop_mtp is True:
         status = "dropped"
-        runtime_reason = "jang_config.drop_mtp=true"
+        runtime_reason = (
+            "jang_config.runtime.bundle_has_mtp=false"
+            if runtime_declares_dropped_mtp
+            else "jang_config.mtp.enabled=false"
+            if mtp_sidecar.get("enabled") is False
+            else "jang_config.mtp.kept=false"
+            if mtp_sidecar.get("kept") is False
+            else "jang_config.drop_mtp=true"
+        )
     elif artifact_available:
         status = "weights_present_runtime_unwired"
         if runtime_supported:
