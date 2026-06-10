@@ -5874,7 +5874,7 @@ class MLXMultimodalLM:
             if isinstance(self.config, dict)
             else str(getattr(self.config, "model_type", "") or "").lower()
         )
-        if model_type in {"gemma4_unified", "step3p7"} and video_frame_counts:
+        if model_type in {"gemma4_unified", "step3p7", "mimo_v2"} and video_frame_counts:
             chat_messages = _expand_video_placeholders_to_image_frames(
                 chat_messages,
                 video_frame_counts,
@@ -6212,7 +6212,7 @@ class MLXMultimodalLM:
             if isinstance(self.config, dict)
             else str(getattr(self.config, "model_type", "") or "").lower()
         )
-        if model_type == "gemma4_unified" and video_frame_counts:
+        if model_type in {"gemma4_unified", "step3p7", "mimo_v2"} and video_frame_counts:
             chat_messages = _expand_video_placeholders_to_image_frames(
                 chat_messages,
                 video_frame_counts,

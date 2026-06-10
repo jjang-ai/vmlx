@@ -55,6 +55,8 @@ class PixelCacheEntry:
     attention_mask: Optional[mx.array]
     image_grid_thw: Optional[mx.array]
     extra_kwargs: Dict[str, Any]
+    video_pixel_values: Optional[mx.array] = None
+    video_grid_thw: Optional[mx.array] = None
     processing_time: float = 0.0
 
 
@@ -174,6 +176,8 @@ class VisionEmbeddingCache:
         input_ids: mx.array,
         attention_mask: Optional[mx.array] = None,
         image_grid_thw: Optional[mx.array] = None,
+        video_pixel_values: Optional[mx.array] = None,
+        video_grid_thw: Optional[mx.array] = None,
         extra_kwargs: Optional[Dict[str, Any]] = None,
         processing_time: float = 0.0,
     ) -> None:
@@ -198,6 +202,8 @@ class VisionEmbeddingCache:
             input_ids=input_ids,
             attention_mask=attention_mask,
             image_grid_thw=image_grid_thw,
+            video_pixel_values=video_pixel_values,
+            video_grid_thw=video_grid_thw,
             extra_kwargs=extra_kwargs or {},
             processing_time=processing_time,
         )
