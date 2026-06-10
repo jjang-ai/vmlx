@@ -20,7 +20,7 @@ DEFAULT_ROOTS = (
     Path("/Users/eric/.mlxstudio/models"),
 )
 DEFAULT_OUT = Path(
-    "build/current-gemma-qat-native-mxfp4-local-inventory-after-all-jang4m-fullmedia-20260610.json"
+    "build/current-gemma-qat-native-mxfp4-local-inventory-after-12b-installed-app-ui-proof-20260610.json"
 )
 
 REQUIRED_QAT_ROWS = {
@@ -210,6 +210,18 @@ SOURCE_FULLMEDIA_SMOKE_PROOFS = {
     ),
     "gemma4_31v_or_31b_vl": Path(
         "build/current-all-local-model-smoke-gemma4-31b-qat-mxfp4-tools-l2-after-audio-capability-gate-20260609/JANGQ_gemma-4-31B-it-qat-MXFP4/result.json"
+    ),
+}
+
+INSTALLED_APP_UI_PROOFS = {
+    "gemma4_e2b_qat_jang4m": Path(
+        "docs/internal/agent-notes/current-real-ui-installed-app-gemma4-e2b-qat-jang4m-responses-tools-cachecontrols-visible-chat-20260610-proof.json"
+    ),
+    "gemma4_e4b_qat_jang4m": Path(
+        "docs/internal/agent-notes/current-real-ui-installed-app-gemma4-e4b-qat-jang4m-responses-tools-cachecontrols-visible-chat-20260610-proof.json"
+    ),
+    "gemma4_12b_qat_jang4m": Path(
+        "docs/internal/agent-notes/current-real-ui-installed-app-gemma4-12b-qat-jang4m-responses-tools-cachecontrols-visible-chat-20260610-proof.json"
     ),
 }
 
@@ -511,6 +523,76 @@ def _source_fullmedia_smoke_status(
     }
 
 
+def _installed_app_ui_proof_status(
+    row_key: str,
+    proof_root: Path,
+    *,
+    matching_paths: list[str],
+) -> dict[str, Any]:
+    rel = INSTALLED_APP_UI_PROOFS.get(row_key)
+    if rel is None:
+        return {"status": "missing", "artifact": None, "reason": "no_proof_registered_for_row"}
+    path = proof_root / rel
+    if not path.exists():
+        return {"status": "missing", "artifact": str(rel)}
+    proof = _load_json(path)
+    surfaces = {
+        str(item)
+        for item in proof.get("provenSurfaces", [])
+        if isinstance(item, str)
+    }
+    required_surfaces = {
+        "installed_app_ui",
+        "real_loaded_model",
+        "chat_completions",
+        "responses_api",
+        "responses_delta_streaming",
+        "long_tool_loop",
+        "reasoning_display",
+        "server_cache_controls",
+        "cache_hit_telemetry",
+        "native_cache_status",
+        "l2_disk_storage",
+        "settings_persistence",
+        "parser_leak_check",
+        "language_leak_check",
+    }
+    missing_surfaces = sorted(required_surfaces - surfaces)
+    native_cache = _nested(proof, "server", "health", "native_cache") or {}
+    cache_totals = _nested(proof, "cache", "after", "cache_totals") or {}
+    checks = {
+        "status_pass": proof.get("status") == "pass",
+        "model_path_matches_row": proof.get("modelPath") in set(matching_paths),
+        "installed_app_mode": proof.get("uiLaunchMode") == "installed-app",
+        "installed_app_path": str(proof.get("installedAppPath") or "").startswith(
+            "/Applications/vMLX.app"
+        ),
+        "bundled_python": "/Applications/vMLX.app/" in str(proof.get("python") or ""),
+        "visible_chat_screenshot": proof.get("chatActivatedForScreenshot") is True,
+        "required_surfaces_present": not missing_surfaces,
+        "gemma4_mixed_swa_native_cache": native_cache.get("family") == "gemma4"
+        and native_cache.get("schema") == "mixed_swa_kv_v1",
+        "block_l2_tokens_on_disk": int(cache_totals.get("l2_block_tokens_on_disk") or 0) > 0,
+    }
+    screenshots = proof.get("screenshots") if isinstance(proof.get("screenshots"), dict) else {}
+    chat = proof.get("chat") if isinstance(proof.get("chat"), dict) else {}
+    return {
+        "status": "pass" if all(checks.values()) else "fail",
+        "artifact": str(rel),
+        "checks": checks,
+        "missing_surfaces": missing_surfaces,
+        "proven_surfaces": sorted(surfaces),
+        "ui_launch_mode": proof.get("uiLaunchMode"),
+        "installed_app_path": proof.get("installedAppPath"),
+        "bundled_python": proof.get("python"),
+        "served_model": proof.get("servedModel"),
+        "chat_screenshot": screenshots.get("chat"),
+        "final_visible": chat.get("finalVisibleText"),
+        "cache_hit_tokens": _nested(proof, "server", "health", "scheduler", "cache_hit_tokens"),
+        "l2_block_tokens_on_disk": cache_totals.get("l2_block_tokens_on_disk"),
+    }
+
+
 def _source_smoke_requests(proof: dict[str, Any]) -> list[dict[str, Any]]:
     direct_requests = proof.get("requests")
     if isinstance(direct_requests, list):
@@ -605,6 +687,17 @@ def classify_required_rows(
             proof_root,
             required_modalities=required_modalities,
         )
+        installed_app_ui_proof = _installed_app_ui_proof_status(
+            key,
+            proof_root,
+            matching_paths=[row["path"] for row in matches],
+        )
+        live_proof_status = (
+            "partial"
+            if source_fullmedia_smoke.get("status") == "pass"
+            and installed_app_ui_proof.get("status") == "pass"
+            else "missing"
+        )
         classified[key] = {
             "display": spec["display"],
             "status": proof_status,
@@ -618,9 +711,10 @@ def classify_required_rows(
             "matching_rows": matches,
             "notes": notes,
             "live_proof_required": list(REQUIRED_LIVE_PROOF_SURFACES),
-            "live_proof_status": "missing",
+            "live_proof_status": live_proof_status,
             "source_live_smoke": source_live_smoke,
             "source_fullmedia_smoke": source_fullmedia_smoke,
+            "installed_app_ui_proof": installed_app_ui_proof,
         }
     return classified
 
@@ -674,11 +768,29 @@ def build_artifact(
             "gemma4_e2b_qat_jang4m_present": (
                 classified["gemma4_e2b_qat_jang4m"]["status"] != "missing"
             ),
+            "gemma4_e2b_qat_jang4m_installed_app_ui_api_cache_proven": (
+                classified["gemma4_e2b_qat_jang4m"]
+                .get("installed_app_ui_proof", {})
+                .get("status")
+                == "pass"
+            ),
             "gemma4_e4b_qat_jang4m_present": (
                 classified["gemma4_e4b_qat_jang4m"]["status"] != "missing"
             ),
+            "gemma4_e4b_qat_jang4m_installed_app_ui_api_cache_proven": (
+                classified["gemma4_e4b_qat_jang4m"]
+                .get("installed_app_ui_proof", {})
+                .get("status")
+                == "pass"
+            ),
             "gemma4_12b_qat_jang4m_present": (
                 classified["gemma4_12b_qat_jang4m"]["status"] != "missing"
+            ),
+            "gemma4_12b_qat_jang4m_installed_app_ui_api_cache_proven": (
+                classified["gemma4_12b_qat_jang4m"]
+                .get("installed_app_ui_proof", {})
+                .get("status")
+                == "pass"
             ),
             "gemma4_26b_qat_jang4m_present": (
                 classified["gemma4_26b_qat_jang4m"]["status"] != "missing"

@@ -45,6 +45,67 @@ function optionalJsonListEnv(name: string, fallback: string[]): string[] {
   return parsed;
 }
 
+function optionalJsonEnv(name: string): any | undefined {
+  const raw = process.env[name];
+  if (!raw) return undefined;
+  return JSON.parse(raw);
+}
+
+function optionalEnv(name: string): string | undefined {
+  const value = process.env[name];
+  return value && value.length > 0 ? value : undefined;
+}
+
+function parseSsePayloads(raw: string): any[] {
+  return raw
+    .replace(/\r\n/g, "\n")
+    .split("\n\n")
+    .flatMap((block) => {
+      const data = block
+        .split("\n")
+        .filter((line) => line.startsWith("data:"))
+        .map((line) => line.replace(/^data:\s?/, ""))
+        .join("\n");
+      if (!data || data === "[DONE]") return [];
+      try {
+        return [JSON.parse(data)];
+      } catch {
+        return [];
+      }
+    });
+}
+
+function firstResponseId(raw: string): string | undefined {
+  for (const payload of parseSsePayloads(raw)) {
+    const responseId = payload?.response?.id ?? payload?.id;
+    if (typeof responseId === "string" && responseId.length > 0) {
+      return responseId;
+    }
+  }
+  return undefined;
+}
+
+function firstFunctionCallId(raw: string): string | undefined {
+  for (const payload of parseSsePayloads(raw)) {
+    const item = payload?.item;
+    if (item?.type === "function_call" && typeof item.call_id === "string") {
+      return item.call_id;
+    }
+  }
+  return undefined;
+}
+
+function substituteContinuationIds(body: any, raw: string): any {
+  const encoded = JSON.stringify(body);
+  const responseId = firstResponseId(raw);
+  const callId = firstFunctionCallId(raw);
+  return JSON.parse(
+    encoded
+      .replaceAll("$VMLINUX_RESPONSE_ID", responseId ?? "")
+      .replaceAll("$VMLINUX_CALL_ID", callId ?? ""),
+  );
+}
+
 function freePort(): Promise<number> {
   return new Promise((resolve, reject) => {
     const server = createServer();
@@ -84,8 +145,17 @@ describe("Qwen35 live Responses capture through ApiGateway", () => {
     const modelPath = requiredEnv("VMLINUX_QWEN35_GATEWAY_MODEL_PATH");
     const outPath = requiredEnv("VMLINUX_QWEN35_GATEWAY_OUT");
     const logPath = requiredEnv("VMLINUX_QWEN35_GATEWAY_LOG");
+    const continuationOutPath = optionalEnv(
+      "VMLINUX_QWEN35_GATEWAY_CONTINUATION_OUT",
+    );
+    const continuationLogPath = optionalEnv(
+      "VMLINUX_QWEN35_GATEWAY_CONTINUATION_LOG",
+    );
     const requestBody = JSON.parse(
       requiredEnv("VMLINUX_QWEN35_GATEWAY_PAYLOAD_JSON"),
+    );
+    const continuationRequestBody = optionalJsonEnv(
+      "VMLINUX_QWEN35_GATEWAY_CONTINUATION_PAYLOAD_JSON",
     );
     const expectedSubstrings = optionalJsonListEnv(
       "VMLINUX_QWEN35_GATEWAY_EXPECT_CONTAINS_JSON",
@@ -136,6 +206,83 @@ describe("Qwen35 live Responses capture through ApiGateway", () => {
       body: JSON.stringify(requestBody),
     });
     const raw = await response.text();
+    let continuationStatus: number | undefined;
+    let continuationContentType: string | null | undefined;
+    let continuationRaw = "";
+
+    if (continuationRequestBody) {
+      const resolvedContinuationRequestBody = substituteContinuationIds(
+        continuationRequestBody,
+        raw,
+      );
+      const continuationResponse = await fetch(
+        `http://127.0.0.1:${gatewayPort}/v1/responses`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Accept: "text/event-stream",
+          },
+          body: JSON.stringify(resolvedContinuationRequestBody),
+        },
+      );
+      continuationStatus = continuationResponse.status;
+      continuationContentType = continuationResponse.headers.get("content-type");
+      continuationRaw = await continuationResponse.text();
+      if (continuationOutPath) {
+        mkdirSync(dirname(continuationOutPath), { recursive: true });
+        writeFileSync(continuationOutPath, continuationRaw, "utf8");
+      }
+      if (continuationLogPath) {
+        mkdirSync(dirname(continuationLogPath), { recursive: true });
+        writeFileSync(
+          continuationLogPath,
+          JSON.stringify(
+            {
+              status: continuationStatus,
+              contentType: continuationContentType,
+              gatewayPort,
+              backendPort,
+              servedModel,
+              modelPath,
+              requestModel: resolvedContinuationRequestBody.model,
+              requestKwargs: {
+                stream: resolvedContinuationRequestBody.stream,
+                max_output_tokens:
+                  resolvedContinuationRequestBody.max_output_tokens,
+                temperature: resolvedContinuationRequestBody.temperature,
+                top_p: resolvedContinuationRequestBody.top_p,
+                top_k: resolvedContinuationRequestBody.top_k,
+                enable_thinking: resolvedContinuationRequestBody.enable_thinking,
+                reasoning: resolvedContinuationRequestBody.reasoning,
+                previous_response_id:
+                  resolvedContinuationRequestBody.previous_response_id,
+                input_count: Array.isArray(resolvedContinuationRequestBody.input)
+                  ? resolvedContinuationRequestBody.input.length
+                  : undefined,
+                first_input_type: Array.isArray(resolvedContinuationRequestBody.input)
+                  ? resolvedContinuationRequestBody.input[0]?.type
+                  : undefined,
+                first_call_id: Array.isArray(resolvedContinuationRequestBody.input)
+                  ? resolvedContinuationRequestBody.input[0]?.call_id
+                  : undefined,
+              },
+              touchedSessions: sessionManagerMock.touchSession.mock.calls,
+              responseBytes: continuationRaw.length,
+              containsOutputText: continuationRaw.includes(
+                "response.output_text.delta",
+              ),
+              containsFunctionCall: continuationRaw.includes(
+                "\"type\":\"function_call\"",
+              ),
+            },
+            null,
+            2,
+          ) + "\n",
+          "utf8",
+        );
+      }
+    }
 
     mkdirSync(dirname(outPath), { recursive: true });
     mkdirSync(dirname(logPath), { recursive: true });
@@ -158,6 +305,7 @@ describe("Qwen35 live Responses capture through ApiGateway", () => {
             top_p: requestBody.top_p,
             top_k: requestBody.top_k,
             enable_thinking: requestBody.enable_thinking,
+            reasoning: requestBody.reasoning,
             tool_choice: requestBody.tool_choice,
             tool_count: Array.isArray(requestBody.tools)
               ? requestBody.tools.length
@@ -175,6 +323,21 @@ describe("Qwen35 live Responses capture through ApiGateway", () => {
           containsFunctionDone: raw.includes(
             "response.function_call_arguments.done",
           ),
+          continuation: continuationRequestBody
+            ? {
+                status: continuationStatus,
+                contentType: continuationContentType,
+                outPath: continuationOutPath,
+                logPath: continuationLogPath,
+                responseBytes: continuationRaw.length,
+                containsOutputText: continuationRaw.includes(
+                  "response.output_text.delta",
+                ),
+                containsFunctionCall: continuationRaw.includes(
+                  "\"type\":\"function_call\"",
+                ),
+              }
+            : undefined,
         },
         null,
         2,
@@ -188,5 +351,10 @@ describe("Qwen35 live Responses capture through ApiGateway", () => {
     for (const expected of expectedSubstrings) {
       expect(raw).toContain(expected);
     }
-  });
+    if (continuationRequestBody) {
+      expect(continuationStatus).toBe(200);
+      expect(continuationContentType).toContain("text/event-stream");
+      expect(continuationRaw).toContain("response.output_text.delta");
+    }
+  }, 300_000);
 });

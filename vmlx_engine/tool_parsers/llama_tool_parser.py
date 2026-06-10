@@ -103,7 +103,7 @@ class LlamaToolParser(ToolParser):
 
         # If we detect end of function, parse
         if "</function>" in delta_text:
-            result = self.extract_tool_calls(current_text)
+            result = self.extract_tool_calls(current_text, request=request)
             if result.tools_called:
                 return {
                     "tool_calls": [

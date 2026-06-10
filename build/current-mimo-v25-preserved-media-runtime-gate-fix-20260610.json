@@ -1,0 +1,136 @@
+{
+  "artifact": "current-mimo-v25-preserved-media-runtime-gate-fix-20260610",
+  "status": "pass",
+  "date": "2026-06-10",
+  "scope": [
+    "MiMo V2.5 JANGTQ_2 preserved-media capability gate",
+    "MiMo V2.5 JANG_2L preserved-media capability gate",
+    "source runtime parity",
+    "generated bundled Python runtime parity"
+  ],
+  "root_cause": {
+    "summary": "MiMo V2.5 bundles can preserve vision/audio/video sidecars and token metadata while explicitly stamping text-runtime status. The server-side auto-enable path was willing to advertise media from importable runtime classes plus sidecars alone.",
+    "affected_function": "vmlx_engine.server._mimo_v2_media_runtime_auto_enabled",
+    "risk": "image, video, and audio could be advertised as runtime-supported for bundles marked weights_preserved_text_runtime or text_runtime"
+  },
+  "source_fix": {
+    "file": "vmlx_engine/server.py",
+    "behavior": "fail closed before sidecar/runtime-class detection when capabilities.multimodal_status or runtime.multimodal_mode is weights_preserved_text_runtime, text_runtime, text_only, unwired, or preserved_disabled",
+    "fake_fix_avoided": [
+      "no media success claim",
+      "no parser or JSON repair",
+      "no sampling clamp",
+      "no tool argument synthesis",
+      "no hidden capability override"
+    ]
+  },
+  "regression_test": {
+    "file": "tests/test_mimo_v2_media_capability_gate.py",
+    "case": "test_mimo_v2_runtime_modalities_fail_closed_for_preserved_text_runtime",
+    "fixture_change": "preserved text-runtime fixture now includes visual, audio_encoder, and speech_embeddings index entries so preserved sidecars cannot override explicit text-runtime metadata"
+  },
+  "verification": {
+    "py_compile": {
+      "command": ".venv/bin/python -m py_compile vmlx_engine/server.py tests/test_mimo_v2_media_capability_gate.py",
+      "status": "pass"
+    },
+    "focused_pytest": {
+      "command": ".venv/bin/python -m pytest -q tests/test_mimo_v2_media_capability_gate.py -k 'fail_closed_for_preserved_text_runtime or auto_enable_when_runtime_and_sidecars_are_complete or component_and_token_gated or use_processor_audio_token_id or filter_runtime_supported_unwired_modalities'",
+      "status": "pass",
+      "result": "5 passed, 4 deselected"
+    },
+    "bundled_python_parity": {
+      "command": "./panel/scripts/verify-bundled-python.sh",
+      "status": "pass"
+    }
+  },
+  "real_bundle_source_probe": {
+    "command": ".venv/bin/python source capability probe against real local MiMo bundles",
+    "status": "pass",
+    "rows": [
+      {
+        "path": "/Users/eric/.mlxstudio/models/JANGQ-AI/MiMo-V2.5-JANGTQ_2",
+        "runtime_modalities_static": [
+          "text"
+        ],
+        "loaded_runtime_modalities": [
+          "text"
+        ],
+        "status_by_modality": {
+          "text": "runtime_supported",
+          "vision": "preserved_unwired",
+          "image": "preserved_unwired",
+          "video": "preserved_unwired",
+          "audio": "preserved_unwired"
+        },
+        "memory_gate_reason": "no_runtime_media_modalities"
+      },
+      {
+        "path": "/Users/eric/.mlxstudio/models/JANGQ-AI/MiMo-V2.5-JANG_2L",
+        "runtime_modalities_static": [
+          "text"
+        ],
+        "loaded_runtime_modalities": [
+          "text"
+        ],
+        "status_by_modality": {
+          "text": "runtime_supported",
+          "vision": "preserved_unwired",
+          "image": "preserved_unwired",
+          "video": "preserved_unwired",
+          "audio": "preserved_unwired"
+        },
+        "memory_gate_reason": "no_runtime_media_modalities"
+      }
+    ]
+  },
+  "real_bundle_bundled_python_probe": {
+    "command": "PYTHONDONTWRITEBYTECODE=1 PYTHONNOUSERSITE=1 PYTHONPATH= panel/bundled-python/python/bin/python3 -B -s bundled capability probe against real local MiMo bundles",
+    "status": "pass",
+    "rows": [
+      {
+        "path": "/Users/eric/.mlxstudio/models/JANGQ-AI/MiMo-V2.5-JANGTQ_2",
+        "runtime_modalities_static": [
+          "text"
+        ],
+        "loaded_runtime_modalities": [
+          "text"
+        ],
+        "status_by_modality": {
+          "text": "runtime_supported",
+          "vision": "preserved_unwired",
+          "image": "preserved_unwired",
+          "video": "preserved_unwired",
+          "audio": "preserved_unwired"
+        },
+        "memory_gate_reason": "no_runtime_media_modalities"
+      },
+      {
+        "path": "/Users/eric/.mlxstudio/models/JANGQ-AI/MiMo-V2.5-JANG_2L",
+        "runtime_modalities_static": [
+          "text"
+        ],
+        "loaded_runtime_modalities": [
+          "text"
+        ],
+        "status_by_modality": {
+          "text": "runtime_supported",
+          "vision": "preserved_unwired",
+          "image": "preserved_unwired",
+          "video": "preserved_unwired",
+          "audio": "preserved_unwired"
+        },
+        "memory_gate_reason": "no_runtime_media_modalities"
+      }
+    ]
+  },
+  "boundary": {
+    "not_fixed_or_claimed": [
+      "MiMo V2.5 JANGTQ_2 literal/exactness red rows remain open",
+      "MiMo V2.5 media semantic success is not claimed",
+      "N2 JANG_1L is untouched",
+      "release, signing, notarization, package upload, PyPI, updater, download, and website actions were not performed"
+    ],
+    "other_agent_next_action": "If MiMo media is intended for these exact bundles, produce or restamp an explicit multimodal-runtime artifact and live-prove image, video, and audio through the app/API. Do not override preserved/text-runtime metadata in the server."
+  }
+}

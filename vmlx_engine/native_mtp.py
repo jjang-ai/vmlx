@@ -421,7 +421,10 @@ def inspect_native_mtp_bundle(bundle_path: str | Path | None) -> dict[str, Any]:
         )
 
     mtp_sidecar = jang_cfg.get("mtp") if isinstance(jang_cfg.get("mtp"), dict) else {}
-    if mtp_sidecar.get("enabled") is False or mtp_sidecar.get("kept") is False:
+    mtp_sidecar_declares_dropped = (
+        mtp_sidecar.get("enabled") is False or mtp_sidecar.get("kept") is False
+    )
+    if mtp_sidecar_declares_dropped:
         drop_mtp = True
     runtime_sidecar = (
         jang_cfg.get("runtime") if isinstance(jang_cfg.get("runtime"), dict) else {}
@@ -431,7 +434,11 @@ def inspect_native_mtp_bundle(bundle_path: str | Path | None) -> dict[str, Any]:
     runtime_declares_dropped_mtp = (
         runtime_bundle_has_mtp is False
         and isinstance(runtime_mtp_mode, str)
-        and "drop" in runtime_mtp_mode.lower()
+        and (
+            "drop" in runtime_mtp_mode.lower()
+            or "missing_weight" in runtime_mtp_mode.lower()
+            or "metadata_only" in runtime_mtp_mode.lower()
+        )
     )
     if runtime_declares_dropped_mtp:
         drop_mtp = True
@@ -459,6 +466,7 @@ def inspect_native_mtp_bundle(bundle_path: str | Path | None) -> dict[str, Any]:
         drop_mtp is True
         and config_layers not in (None, 0)
         and not runtime_declares_dropped_mtp
+        and not mtp_sidecar_declares_dropped
     ):
         issues.append(
             "jang_config.drop_mtp=true but config declares "
@@ -526,6 +534,10 @@ def inspect_native_mtp_bundle(bundle_path: str | Path | None) -> dict[str, Any]:
         runtime_reason = (
             "jang_config.runtime.bundle_has_mtp=false"
             if runtime_declares_dropped_mtp
+            else "jang_config.mtp.enabled=false"
+            if mtp_sidecar.get("enabled") is False
+            else "jang_config.mtp.kept=false"
+            if mtp_sidecar.get("kept") is False
             else "jang_config.drop_mtp=true"
         )
     elif runtime_available:

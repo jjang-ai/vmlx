@@ -163,7 +163,9 @@ class AutoToolParser(ToolParser):
             from .minimax_tool_parser import MiniMaxToolParser
 
             minimax_parser = MiniMaxToolParser()
-            minimax_result = minimax_parser.extract_tool_calls(cleaned_text)
+            minimax_result = minimax_parser.extract_tool_calls(
+                cleaned_text, request=request
+            )
             if minimax_result.tools_called:
                 tool_calls.extend(minimax_result.tool_calls)
                 cleaned_text = minimax_result.content or ""
@@ -363,7 +365,7 @@ class AutoToolParser(ToolParser):
         # Check for completion markers
         end_markers = ["</tool_call>", "</function>", ")]"]
         if any(m in delta_text for m in end_markers):
-            result = self.extract_tool_calls(current_text)
+            result = self.extract_tool_calls(current_text, request=request)
             if result.tools_called:
                 return {
                     "tool_calls": [

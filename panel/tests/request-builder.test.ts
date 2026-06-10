@@ -36,6 +36,7 @@ function buildRequestBody(
     tools?: any[],
     detectedFamily?: string,
     thinkingBudgetSupported?: boolean,
+    suppressPinnedToolChoiceForLoopback = false,
 ): Record<string, any> {
     const stopSequences = overrides?.stopSequences
         ? overrides.stopSequences.split(',').map(s => s.trim()).filter(Boolean)
@@ -121,7 +122,8 @@ function buildRequestBody(
             }))
         }
         const explicitToolChoice = inferExplicitToolChoice(true)
-        if (explicitToolChoice) obj.tool_choice = explicitToolChoice
+        const suppressToolChoice = suppressPinnedToolChoiceForLoopback && detectedFamily !== 'gemma4'
+        if (explicitToolChoice && !suppressToolChoice) obj.tool_choice = explicitToolChoice
         if (effectiveEnableThinkingOverride !== undefined) {
             obj.enable_thinking = effectiveEnableThinkingOverride
         } else if (isRemote) {
@@ -150,7 +152,8 @@ function buildRequestBody(
             obj.tools = tools
         }
         const explicitToolChoice = inferExplicitToolChoice(false)
-        if (explicitToolChoice) obj.tool_choice = explicitToolChoice
+        const suppressToolChoice = suppressPinnedToolChoiceForLoopback && detectedFamily !== 'gemma4'
+        if (explicitToolChoice && !suppressToolChoice) obj.tool_choice = explicitToolChoice
         if (effectiveEnableThinkingOverride !== undefined) {
             obj.enable_thinking = effectiveEnableThinkingOverride
         } else if (isRemote) {
@@ -803,6 +806,50 @@ describe('buildRequestBody — Tool format', () => {
             false,
             false,
             sampleTools,
+        )
+
+        expect(body.tool_choice).toEqual({
+            type: 'function',
+            name: 'run_command',
+        })
+    })
+
+    it('does not pin tool_choice for non-Gemma loopback remote vMLX sessions', () => {
+        const body = buildRequestBody(
+            'responses',
+            'model',
+            [
+                { role: 'system', content: 'You are helpful.' },
+                { role: 'user', content: 'Use the run_command tool exactly once.' },
+            ],
+            { builtinToolsEnabled: true },
+            true,
+            false,
+            sampleTools,
+            'qwen3',
+            undefined,
+            true,
+        )
+
+        expect(body.tools?.[0]?.name).toBe('read_file')
+        expect(body.tool_choice).toBeUndefined()
+    })
+
+    it('pins tool_choice for Gemma4 loopback remote vMLX sessions', () => {
+        const body = buildRequestBody(
+            'responses',
+            'model',
+            [
+                { role: 'system', content: 'You are helpful.' },
+                { role: 'user', content: 'Use the run_command tool exactly once.' },
+            ],
+            { builtinToolsEnabled: true },
+            true,
+            false,
+            sampleTools,
+            'gemma4',
+            undefined,
+            true,
         )
 
         expect(body.tool_choice).toEqual({

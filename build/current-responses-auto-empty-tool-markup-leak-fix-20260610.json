@@ -1,0 +1,42 @@
+{
+  "created_at": "2026-06-10T08:58:00-07:00",
+  "status": "passed",
+  "scope": "Responses API auto-tool streaming empty XML tool-call fail-closed behavior",
+  "reported_shape": {
+    "model_family": "Qwen/Qwen-coder style XML tool call",
+    "output": "Quick preamble before <tool_call><function=exec_command></function></tool_call>",
+    "required_schema": {
+      "tool": "exec_command",
+      "required": ["cmd"]
+    }
+  },
+  "root_cause": "Current parser/filtering already drops the empty exec_command call because required argument cmd is missing, so it does not emit arguments={}. The remaining source bug was in Responses streaming auto-tool finalization: after a buffered invalid tool call was dropped, the no-tool path used accumulated_content as final visible text, which leaked the raw <tool_call>/<function=...> markup into response.output_text.done and response.completed.output_text.",
+  "fix": "When no tool call survives parsing but the full stream contains tool-call markers, the Responses no-tool finalization path now strips native tool markup from final visible text. It does not synthesize arguments, does not convert malformed XML into a tool call, and does not disable reasoning.",
+  "proof": {
+    "manual_repro_after_fix": {
+      "visible_deltas": ["Quick preamble. Checking tmp...\n"],
+      "output_text_done": ["Quick preamble. Checking tmp..."],
+      "completed_status": "completed",
+      "completed_output_text": "Quick preamble. Checking tmp...",
+      "function_items": []
+    },
+    "parser_warning": "Dropping parsed tool call for exec_command because required argument cmd is missing or empty",
+    "forbidden_outputs_absent": [
+      "response function_call item",
+      "response.function_call_arguments.delta with empty args",
+      "\"arguments\": \"{}\"",
+      "<tool_call",
+      "<function=exec_command"
+    ]
+  },
+  "verification_commands": [
+    ".venv/bin/python -m pytest -q tests/test_server.py -k 'streaming_responses_auto_empty_xml_tool_call_strips_final_markup or streaming_responses_preamble_empty_xml_tool_call_never_emits_empty_arguments or streaming_responses_required_empty_xml_tool_call_is_rejected or tool_parser_drops_empty_xml_call_and_strips_markup_for_nonstream_paths or streaming_responses_tool_call_arguments_survive_buffering or streaming_responses_tool_call_uses_next_output_index_without_text'",
+    ".venv/bin/python - <<'PY' ... manual stream_responses_api repro ... PY"
+  ],
+  "boundaries": [
+    "This is a source/API fail-closed and markup-cleanup fix.",
+    "It does not claim same-model direct/gateway/tunnel live raw SSE is complete.",
+    "It does not sign, notarize, package, publish, or release anything.",
+    "It does not touch N2 JANG_1L."
+  ]
+}

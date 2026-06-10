@@ -89,6 +89,19 @@ def test_mimo_v2_runtime_modalities_fail_closed_for_preserved_text_runtime(
     from vmlx_engine import server
 
     _write_mimo_bundle(tmp_path, audio_token=True, media_runtime=False)
+    (tmp_path / "preprocessor_config.json").write_text("{}", encoding="utf-8")
+    (tmp_path / "model.safetensors.index.json").write_text(
+        json.dumps(
+            {
+                "weight_map": {
+                    "visual.patch_embed.proj.weight": "model-00001.safetensors",
+                    "audio_encoder.input_local_transformer.weight": "model-00002.safetensors",
+                    "speech_embeddings.weight": "model-00002.safetensors",
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
     _install_fake_mimo_runtime(monkeypatch)
 
     assert server._mimo_v2_runtime_modalities(str(tmp_path)) == ["text"]

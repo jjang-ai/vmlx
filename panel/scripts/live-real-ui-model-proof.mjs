@@ -102,6 +102,9 @@ const toolResultMaxChars = Number(process.env.VMLINUX_REAL_UI_TOOL_RESULT_MAX_CH
 const imageDataUrl = process.env.VMLINUX_REAL_UI_IMAGE_DATA_URL
   || process.env.VMLX_REAL_UI_IMAGE_DATA_URL
   || 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC'
+const imagePrompt = process.env.VMLINUX_REAL_UI_IMAGE_PROMPT
+  || process.env.VMLX_REAL_UI_IMAGE_PROMPT
+  || 'What is the dominant color of the attached image? Reply with one color word in English.'
 const imageExpectRegex = process.env.VMLINUX_REAL_UI_IMAGE_EXPECT_REGEX
   || process.env.VMLX_REAL_UI_IMAGE_EXPECT_REGEX
   || '\\bred\\b'
@@ -427,6 +430,58 @@ async function capturePng(cdp, filePath) {
   })
   writeFileSync(filePath, Buffer.from(shot.data, 'base64'))
   return filePath
+}
+
+async function dismissBlockingUpdateModal(cdp) {
+  return await evaluate(cdp, `
+    (async () => {
+      const modalButtons = [...document.querySelectorAll('button')];
+      const dismiss = modalButtons.find((button) => {
+        const text = (button.innerText || '').replace(/\\s+/g, ' ').trim();
+        const label = (button.getAttribute('aria-label') || '').replace(/\\s+/g, ' ').trim();
+        return text.includes("Got it")
+          || text.includes("don't show until next update")
+          || label === 'Close'
+          || label === 'Dismiss';
+      });
+      if (!dismiss) return false;
+      dismiss.scrollIntoView({ block: 'center' });
+      dismiss.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window }));
+      dismiss.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, view: window }));
+      dismiss.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
+      await new Promise((resolve) => setTimeout(resolve, 250));
+      return true;
+    })()
+  `, 10_000).catch(() => false)
+}
+
+async function activateChatForScreenshot(cdp, chatId, sessionId, expectedText) {
+  if (!chatId) return false
+  await evaluate(cdp, `
+    (async () => {
+      await window.api?.settings?.set?.('appMode', 'chat').catch(() => null);
+      await window.api?.settings?.set?.('lastActiveChatId', ${JSON.stringify(chatId)}).catch(() => null);
+      if (${JSON.stringify(sessionId || '')}) {
+        await window.api?.settings?.set?.('lastActiveSessionId', ${JSON.stringify(sessionId || '')}).catch(() => null);
+      }
+      window.location.reload();
+      return true;
+    })()
+  `, 10_000).catch(() => false)
+  await sleep(1200)
+  return await evaluate(cdp, `
+    new Promise((resolve) => {
+      const expectedText = ${JSON.stringify(expectedText || '')};
+      const started = Date.now();
+      const check = () => {
+        const text = document.body?.innerText || '';
+        if (!expectedText || text.includes(expectedText)) return resolve(true);
+        if (Date.now() - started > 15000) return resolve(false);
+        setTimeout(check, 200);
+      };
+      check();
+    })
+  `, 20_000).catch(() => false)
 }
 
 function startRealServer(port, outDir) {
@@ -1207,6 +1262,7 @@ async function main() {
         const checkVideo = ${JSON.stringify(checkVideo)};
         const checkAudio = ${JSON.stringify(checkAudio)};
         const imageDataUrl = ${JSON.stringify(imageDataUrl)};
+        const imagePrompt = ${JSON.stringify(imagePrompt)};
         const imageExpectRegex = ${JSON.stringify(imageExpectRegex)};
         const videoDataUrl = ${JSON.stringify(videoDataUrl)};
         const videoExpectRegex = ${JSON.stringify(videoExpectRegex)};
@@ -1238,6 +1294,19 @@ async function main() {
           };
           check();
         });
+        const updateDismiss = [...document.querySelectorAll('button')]
+          .find((b) => {
+            const text = (b.innerText || '').replace(/\\s+/g, ' ').trim();
+            const label = (b.getAttribute('aria-label') || '').replace(/\\s+/g, ' ').trim();
+            return text.includes("Got it")
+              || text.includes("don't show until next update")
+              || label === 'Close'
+              || label === 'Dismiss';
+          });
+        if (updateDismiss) {
+          updateDismiss.click();
+          await new Promise((resolve) => setTimeout(resolve, 250));
+        }
         await window.api.engine.checkInstallation().catch(() => null);
         await window.api.chat.clearAllLocks().catch(() => null);
         const events = { stream: [], tool: [], reasoningDone: [], complete: [] };
@@ -1300,7 +1369,7 @@ async function main() {
             await sendMessageWithCapture(2, 'second_send_message', ${JSON.stringify(promptTwo)});
           }
           if (checkMedia && !rendererFailureStage) {
-            await sendMessageWithCapture(3, 'image_send_message', 'What is the dominant color of the attached image? Reply with one color word in English.', [
+            await sendMessageWithCapture(3, 'image_send_message', imagePrompt, [
               {
                 name: 'real-ui-proof-image.png',
                 type: 'image/png',
@@ -1497,6 +1566,7 @@ async function main() {
         .catch((healthError) => ({ error: healthError.message }))
       let chatScreenshot = null
       try {
+        await dismissBlockingUpdateModal(cdp)
         chatScreenshot = await capturePng(
           cdp,
           path.join(proofDir, `${proofBasename}-chat.png`),
@@ -1594,6 +1664,14 @@ async function main() {
       }
       throw error
     }
+    const visibleTextForScreenshot = rendererResult.secondAssistantContent || rendererResult.firstAssistantContent || ''
+    const chatActivatedForScreenshot = await activateChatForScreenshot(
+      cdp,
+      rendererResult.chatId,
+      rendererResult.remoteSessionId,
+      visibleTextForScreenshot,
+    )
+    await dismissBlockingUpdateModal(cdp)
     const chatScreenshot = await capturePng(
       cdp,
       path.join(proofDir, `${proofBasename}-chat.png`),
@@ -1814,6 +1892,7 @@ async function main() {
         chat: path.resolve(chatScreenshot),
       },
       ...rendererResult,
+      chatActivatedForScreenshot,
       serverCacheControls,
       toolProbeFiles,
       streamTrace: rendererResult.streamTraceByMessage || [],

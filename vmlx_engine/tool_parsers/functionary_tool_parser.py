@@ -168,7 +168,7 @@ class FunctionaryToolParser(ToolParser):
 
         end_markers = ["<|content|>", "</function>", "]"]
         if any(m in delta_text for m in end_markers):
-            result = self.extract_tool_calls(current_text)
+            result = self.extract_tool_calls(current_text, request=request)
             if result.tools_called:
                 return {
                     "tool_calls": [

@@ -1,0 +1,1070 @@
+{
+  "base_url": "http://127.0.0.1:8906",
+  "model": "models/Qwen3.6-35B-A3B-MXFP8-CRACK-MTP",
+  "turns": 3,
+  "target_chars_per_turn": 800,
+  "final_turn_no_tools": true,
+  "final_turn_disable_thinking": true,
+  "resolve_tool_calls_in_turn": true,
+  "tool_choice_mode": "auto",
+  "resolution_tool_choice": "none",
+  "sampling": {
+    "temperature": 0.0,
+    "top_p": 1.0,
+    "top_k": 0,
+    "repetition_penalty": 1.0
+  },
+  "require_tool_call_each_turn": true,
+  "require_tool_evidence": true,
+  "require_cache_each_turn_after_first": true,
+  "overall_pass": true,
+  "rows": [
+    {
+      "turn": 1,
+      "elapsed_s": 18.942,
+      "response_id": "resp_0c5af7f37dae",
+      "previous_response_id": null,
+      "cached_tokens": 0,
+      "input_tokens": 647,
+      "output_tokens": 818,
+      "tools_enabled": true,
+      "enable_thinking": true,
+      "rounds": [
+        {
+          "round": 0,
+          "elapsed_s": 6.24,
+          "response_id": "resp_5598d5b081f9",
+          "http_status": null,
+          "status": "completed",
+          "error": null,
+          "cached_tokens": 0,
+          "visible_chars": 0,
+          "reasoning_chars": 1454,
+          "function_calls": [
+            {
+              "name": "grep_repo",
+              "call_id": "call_e202e20f"
+            }
+          ],
+          "warnings": []
+        },
+        {
+          "round": 1,
+          "elapsed_s": 12.702,
+          "response_id": "resp_0c5af7f37dae",
+          "http_status": null,
+          "status": "completed",
+          "error": null,
+          "cached_tokens": 0,
+          "visible_chars": 448,
+          "reasoning_chars": 2987,
+          "function_calls": [],
+          "warnings": []
+        }
+      ],
+      "function_calls": [
+        {
+          "name": "grep_repo",
+          "call_id": "call_e202e20f"
+        }
+      ],
+      "function_call_outputs_next_turn": 0,
+      "warnings": [],
+      "visible_chars": 448,
+      "reasoning_chars": 4442,
+      "loop_like": false,
+      "tool_markup_leak": false,
+      "tool_grounded": true,
+      "tool_evidence_marker": "vmlx_engine/server.py:1",
+      "tool_evidence_markers": [
+        "vmlx_engine/server.py:1"
+      ],
+      "tool_evidence_reason": "exact_file_line_mentioned",
+      "tail_review": "TOOL_EVIDENCE: vmlx_engine/server.py:1\n\n(1) **Risk**: The server file contains no cache management logic, implying that KV cache state is managed externally. This creates a risk of state leakage or improper cache clearing if the external scheduler does not strictly isolate contexts per request.\n(2) **Function**: Not applicable in this file (tool search confirmed zero matches for 'cache' in `vmlx_engine/server.py`).\n(3) **Depends on tool**: Yes.",
+      "cache_totals": {
+        "ram_tokens_cached": 1177,
+        "l2_prompt_tokens_on_disk": 0,
+        "l2_block_tokens_on_disk": 1177,
+        "l2_ssm_tokens_on_disk": 2521,
+        "ssm_tokens_on_disk": 2521,
+        "l2_tokens_on_disk": 3698,
+        "l2_tokens_on_disk_store_sum": 3698,
+        "l2_tokens_on_disk_note": "store_sum_across_prompt_block_ssm_l2; tiers_may_overlap"
+      },
+      "scheduler_stats": {
+        "num_waiting": 0,
+        "num_running": 0,
+        "engine_path": null,
+        "batch_generator": {
+          "prompt_tokens": 1253,
+          "prompt_time": 1.058598792005796,
+          "prompt_tps": 1183.640118864919,
+          "generation_tokens": 1218,
+          "generation_time": 17.159234738122905,
+          "generation_tps": 70.98218647792916,
+          "vision_encoding_time": 0,
+          "num_images_processed": 0,
+          "peak_memory": 39.143142492,
+          "hybrid_kv_without_ssm_hits": 1,
+          "hybrid_kv_without_ssm_tokens": 64,
+          "last_hybrid_kv_without_ssm": {
+            "request_id": "resp_0c5af7f37dae",
+            "cached_tokens": 64,
+            "reason": "no_ssm_companion_state",
+            "ssm_prefix_lookup": {
+              "max_len": 64,
+              "candidate_lengths": [],
+              "matched": false,
+              "reason": "no_candidate_lengths",
+              "store_size": 2,
+              "disk_enabled": true
+            }
+          },
+          "last_cache_execution": null,
+          "last_native_mtp": {
+            "request_id": "resp_0c5af7f37dae",
+            "finish_reason": "stop",
+            "final_depth": 1,
+            "cycles": 518,
+            "accepts": 299,
+            "rejects": 219,
+            "init_emits": 2,
+            "draft_emits": 299,
+            "bonus_emits": 298,
+            "verify_emits": 219,
+            "drafted_tokens": 518,
+            "accepted_tokens": 299,
+            "acceptance_rate": 0.5772200772200772,
+            "accepted_by_depth": [
+              299,
+              0,
+              0
+            ],
+            "drafted_by_depth": [
+              518,
+              0,
+              0
+            ],
+            "depth_acceptance_rates": {
+              "d1": 0.5772200772200772,
+              "d2": null,
+              "d3": null
+            },
+            "forwards": {
+              "seed_main": 1,
+              "verify_main": 518,
+              "replay_main": 219,
+              "mtp": 519
+            },
+            "timings_ms": {
+              "verify": 1152.025080169551,
+              "sample": 7759.273595060222,
+              "draft": 2424.780254106736,
+              "snapshot": 17.047536850441247,
+              "restore": 16.20574077242054,
+              "replay": 442.4928678490687,
+              "materialize": 2.636051969602704,
+              "total": 11814.461126778042,
+              "avg_cycle": 22.807840013085023
+            },
+            "fallback_reason": null
+          },
+          "last_prefill_trace": null
+        },
+        "single_active_decode": false,
+        "num_requests_processed": 2,
+        "total_prompt_tokens": 1243,
+        "total_completion_tokens": 1218,
+        "ewma_ttft_seconds": 0,
+        "cache_hit_requests": 0,
+        "cache_hit_tokens": 0,
+        "cache_hit_tokens_by_detail": {},
+        "hybrid_kv_without_ssm_hits": 1,
+        "hybrid_kv_without_ssm_tokens": 64,
+        "last_hybrid_kv_without_ssm": {
+          "request_id": "resp_0c5af7f37dae",
+          "cached_tokens": 64,
+          "reason": "no_ssm_companion_state",
+          "ssm_prefix_lookup": {
+            "max_len": 64,
+            "candidate_lengths": [],
+            "matched": false,
+            "reason": "no_candidate_lengths",
+            "store_size": 2,
+            "disk_enabled": true
+          }
+        },
+        "cache_reuse_skips": 0,
+        "cache_reuse_skip_tokens": 0,
+        "last_cache_reuse_skip": null,
+        "cache_reuse_partial_downgrades": 0,
+        "cache_reuse_partial_tokens": 0,
+        "last_cache_reuse_partial": null,
+        "last_cache_selection": null,
+        "last_cache_execution": null
+      },
+      "scheduler_cache": {
+        "pixel_cache_hits": 0,
+        "pixel_cache_misses": 0,
+        "pixel_hit_rate": 0.0,
+        "total_time_saved": 0.0,
+        "total_images_processed": 0,
+        "pixel_cache_size": 0,
+        "hits": 1,
+        "misses": 1,
+        "hit_rate": 0.5,
+        "tokens_saved": 64,
+        "active_requests": 0,
+        "entries_by_type": {
+          "assistant": 2,
+          "user": 0,
+          "system": 0
+        },
+        "block_size": 64,
+        "max_blocks": 1000,
+        "allocated_blocks": 21,
+        "free_blocks": 979,
+        "shared_blocks": 1,
+        "total_tokens_cached": 1177,
+        "utilization": 0.021,
+        "cache_hit_rate": 0.07692307692307693,
+        "cache_hits": 2,
+        "cache_misses": 24,
+        "disk_hits": 0,
+        "disk_misses": 4,
+        "cow_copies": 0,
+        "evictions": 0
+      },
+      "block_disk_cache": {
+        "blocks_on_disk": 20,
+        "disk_size_bytes": 179999028,
+        "disk_size_gb": 0.168,
+        "total_accesses": 2,
+        "total_tokens_on_disk": 1177,
+        "total_cached_tokens": 1177,
+        "disk_hits": 2,
+        "disk_misses": 4,
+        "disk_writes": 20,
+        "disk_evictions": 0
+      },
+      "ssm_companion": {
+        "entries": 5,
+        "max_entries": 64,
+        "nbytes": 329318400,
+        "nbytes_mb": 314.06,
+        "disk_enabled": true,
+        "disk_directory": "build/current-qwen35-mxfp8-mtp-responses-tool-result-auto-no-tool-after-ssm-size-scale-20260610/block-cache/ssm_companion",
+        "disk": {
+          "enabled": true,
+          "directory": "build/current-qwen35-mxfp8-mtp-responses-tool-result-auto-no-tool-after-ssm-size-scale-20260610/block-cache/ssm_companion",
+          "entries": 5,
+          "total_tokens_on_disk": 2521,
+          "total_cached_tokens": 2521,
+          "bytes": 329363018,
+          "bytes_mb": 314.11,
+          "budget_bytes": 549755813888,
+          "budget_gb": 512.0,
+          "stores": 5,
+          "hits": 0,
+          "misses": 1,
+          "hit_rate": 0.0
+        }
+      },
+      "health_cache": {
+        "scheduler_cache": {
+          "pixel_cache_hits": 0,
+          "pixel_cache_misses": 0,
+          "pixel_hit_rate": 0.0,
+          "total_time_saved": 0.0,
+          "total_images_processed": 0,
+          "pixel_cache_size": 0,
+          "hits": 1,
+          "misses": 1,
+          "hit_rate": 0.5,
+          "tokens_saved": 64,
+          "active_requests": 0,
+          "entries_by_type": {
+            "assistant": 2,
+            "user": 0,
+            "system": 0
+          },
+          "block_size": 64,
+          "max_blocks": 1000,
+          "allocated_blocks": 21,
+          "free_blocks": 979,
+          "shared_blocks": 1,
+          "total_tokens_cached": 1177,
+          "utilization": 0.021,
+          "cache_hit_rate": 0.07692307692307693,
+          "cache_hits": 2,
+          "cache_misses": 24,
+          "disk_hits": 0,
+          "disk_misses": 4,
+          "cow_copies": 0,
+          "evictions": 0
+        },
+        "block_disk_cache": {
+          "blocks_on_disk": 20,
+          "disk_size_bytes": 179999028,
+          "disk_size_gb": 0.168,
+          "total_accesses": 2,
+          "total_tokens_on_disk": 1177,
+          "total_cached_tokens": 1177,
+          "disk_hits": 2,
+          "disk_misses": 4,
+          "disk_writes": 20,
+          "disk_evictions": 0
+        },
+        "ssm_companion": {
+          "entries": 5,
+          "max_entries": 64,
+          "nbytes": 329318400,
+          "nbytes_mb": 314.06,
+          "disk_enabled": true,
+          "disk_directory": "build/current-qwen35-mxfp8-mtp-responses-tool-result-auto-no-tool-after-ssm-size-scale-20260610/block-cache/ssm_companion",
+          "disk": {
+            "enabled": true,
+            "directory": "build/current-qwen35-mxfp8-mtp-responses-tool-result-auto-no-tool-after-ssm-size-scale-20260610/block-cache/ssm_companion",
+            "entries": 5,
+            "total_tokens_on_disk": 2521,
+            "total_cached_tokens": 2521,
+            "bytes": 329363018,
+            "bytes_mb": 314.11,
+            "budget_bytes": 549755813888,
+            "budget_gb": 512.0,
+            "stores": 5,
+            "hits": 0,
+            "misses": 1,
+            "hit_rate": 0.0
+          }
+        },
+        "totals": {
+          "ram_tokens_cached": 1177,
+          "l2_prompt_tokens_on_disk": 0,
+          "l2_block_tokens_on_disk": 1177,
+          "l2_ssm_tokens_on_disk": 2521,
+          "ssm_tokens_on_disk": 2521,
+          "l2_tokens_on_disk": 3698,
+          "l2_tokens_on_disk_store_sum": 3698,
+          "l2_tokens_on_disk_note": "store_sum_across_prompt_block_ssm_l2; tiers_may_overlap"
+        }
+      }
+    },
+    {
+      "turn": 2,
+      "elapsed_s": 28.219,
+      "response_id": "resp_db03d1c88158",
+      "previous_response_id": "resp_0c5af7f37dae",
+      "cached_tokens": 128,
+      "input_tokens": 1392,
+      "output_tokens": 649,
+      "tools_enabled": true,
+      "enable_thinking": true,
+      "rounds": [
+        {
+          "round": 0,
+          "elapsed_s": 16.03,
+          "response_id": "resp_7204cd3bae04",
+          "http_status": null,
+          "status": "completed",
+          "error": null,
+          "cached_tokens": 64,
+          "visible_chars": 0,
+          "reasoning_chars": 3950,
+          "function_calls": [
+            {
+              "name": "grep_repo",
+              "call_id": "call_30a71c07"
+            }
+          ],
+          "warnings": []
+        },
+        {
+          "round": 1,
+          "elapsed_s": 12.189,
+          "response_id": "resp_db03d1c88158",
+          "http_status": null,
+          "status": "completed",
+          "error": null,
+          "cached_tokens": 128,
+          "visible_chars": 475,
+          "reasoning_chars": 2254,
+          "function_calls": [],
+          "warnings": []
+        }
+      ],
+      "function_calls": [
+        {
+          "name": "grep_repo",
+          "call_id": "call_30a71c07"
+        }
+      ],
+      "function_call_outputs_next_turn": 0,
+      "warnings": [],
+      "visible_chars": 475,
+      "reasoning_chars": 6205,
+      "loop_like": false,
+      "tool_markup_leak": false,
+      "tool_grounded": true,
+      "tool_evidence_marker": "vmlx_engine/scheduler.py:1",
+      "tool_evidence_markers": [
+        "vmlx_engine/scheduler.py:1"
+      ],
+      "tool_evidence_reason": "exact_file_line_mentioned",
+      "tail_review": "TOOL_EVIDENCE: vmlx_engine/scheduler.py:1\n\n(1) **Risk**: The scheduler file contains no cache management logic, meaning cache state is entirely delegated to external modules. This creates a risk of state leakage or improper cache clearing if the external inference engine does not strictly isolate contexts per request.\n(2) **Function**: Not applicable in this file (tool search confirmed zero matches for 'cache' in `vmlx_engine/scheduler.py`).\n(3) **Depends on tool**: Yes.",
+      "cache_totals": {
+        "ram_tokens_cached": 3520,
+        "l2_prompt_tokens_on_disk": 0,
+        "l2_block_tokens_on_disk": 3520,
+        "l2_ssm_tokens_on_disk": 8256,
+        "ssm_tokens_on_disk": 8256,
+        "l2_tokens_on_disk": 11776,
+        "l2_tokens_on_disk_store_sum": 11776,
+        "l2_tokens_on_disk_note": "store_sum_across_prompt_block_ssm_l2; tiers_may_overlap"
+      },
+      "scheduler_stats": {
+        "num_waiting": 0,
+        "num_running": 0,
+        "engine_path": null,
+        "batch_generator": {
+          "prompt_tokens": 1255,
+          "prompt_time": 2.613854042981984,
+          "prompt_tps": 480.1339246043931,
+          "generation_tokens": 2896,
+          "generation_time": 42.88470325729577,
+          "generation_tps": 67.52990647095868,
+          "vision_encoding_time": 0,
+          "num_images_processed": 0,
+          "peak_memory": 40.54935327,
+          "hybrid_kv_without_ssm_hits": 1,
+          "hybrid_kv_without_ssm_tokens": 64,
+          "last_hybrid_kv_without_ssm": {
+            "request_id": "resp_0c5af7f37dae",
+            "cached_tokens": 64,
+            "reason": "no_ssm_companion_state",
+            "ssm_prefix_lookup": {
+              "max_len": 64,
+              "candidate_lengths": [],
+              "matched": false,
+              "reason": "no_candidate_lengths",
+              "store_size": 2,
+              "disk_enabled": true
+            }
+          },
+          "last_cache_execution": {
+            "request_id": "resp_db03d1c88158",
+            "cache_detail": "paged+ssm",
+            "cached_tokens": 128,
+            "blocks": 0,
+            "selection": "paged",
+            "disk_hit": false,
+            "reconstructed": true,
+            "dequantized": true,
+            "reconstruction_seconds": 0.008758,
+            "dequantization_seconds": 5e-06,
+            "total_worker_cache_seconds": 0.008951,
+            "reconstruction_ok": true,
+            "dequantization_ok": true
+          },
+          "last_native_mtp": {
+            "request_id": "resp_db03d1c88158",
+            "finish_reason": "stop",
+            "final_depth": 1,
+            "cycles": 406,
+            "accepts": 242,
+            "rejects": 164,
+            "init_emits": 2,
+            "draft_emits": 242,
+            "bonus_emits": 241,
+            "verify_emits": 164,
+            "drafted_tokens": 406,
+            "accepted_tokens": 242,
+            "acceptance_rate": 0.5960591133004927,
+            "accepted_by_depth": [
+              242,
+              0,
+              0
+            ],
+            "drafted_by_depth": [
+              406,
+              0,
+              0
+            ],
+            "depth_acceptance_rates": {
+              "d1": 0.5960591133004927,
+              "d2": null,
+              "d3": null
+            },
+            "forwards": {
+              "seed_main": 1,
+              "verify_main": 406,
+              "replay_main": 164,
+              "mtp": 407
+            },
+            "timings_ms": {
+              "verify": 1071.8969063891564,
+              "sample": 7242.654959001811,
+              "draft": 2139.8477118927985,
+              "snapshot": 16.174339165445417,
+              "restore": 15.841535874642432,
+              "replay": 398.3606191468425,
+              "materialize": 2.3868048447184265,
+              "total": 10887.162876315415,
+              "avg_cycle": 26.81567210915127
+            },
+            "fallback_reason": null
+          },
+          "last_prefill_trace": null
+        },
+        "single_active_decode": false,
+        "num_requests_processed": 4,
+        "total_prompt_tokens": 3972,
+        "total_completion_tokens": 2896,
+        "ewma_ttft_seconds": 0,
+        "cache_hit_requests": 2,
+        "cache_hit_tokens": 192,
+        "cache_hit_tokens_by_detail": {
+          "paged+ssm": 192
+        },
+        "hybrid_kv_without_ssm_hits": 1,
+        "hybrid_kv_without_ssm_tokens": 64,
+        "last_hybrid_kv_without_ssm": {
+          "request_id": "resp_0c5af7f37dae",
+          "cached_tokens": 64,
+          "reason": "no_ssm_companion_state",
+          "ssm_prefix_lookup": {
+            "max_len": 64,
+            "candidate_lengths": [],
+            "matched": false,
+            "reason": "no_candidate_lengths",
+            "store_size": 2,
+            "disk_enabled": true
+          }
+        },
+        "cache_reuse_skips": 0,
+        "cache_reuse_skip_tokens": 0,
+        "last_cache_reuse_skip": null,
+        "cache_reuse_partial_downgrades": 0,
+        "cache_reuse_partial_tokens": 0,
+        "last_cache_reuse_partial": null,
+        "last_cache_selection": null,
+        "last_cache_execution": {
+          "request_id": "resp_db03d1c88158",
+          "cache_detail": "paged+ssm",
+          "cached_tokens": 128,
+          "blocks": 0,
+          "selection": "paged",
+          "disk_hit": false,
+          "reconstructed": true,
+          "dequantized": true,
+          "reconstruction_seconds": 0.008758,
+          "dequantization_seconds": 5e-06,
+          "total_worker_cache_seconds": 0.008951,
+          "reconstruction_ok": true,
+          "dequantization_ok": true
+        }
+      },
+      "scheduler_cache": {
+        "pixel_cache_hits": 0,
+        "pixel_cache_misses": 0,
+        "pixel_hit_rate": 0.0,
+        "total_time_saved": 0.0,
+        "total_images_processed": 0,
+        "pixel_cache_size": 0,
+        "hits": 3,
+        "misses": 1,
+        "hit_rate": 0.75,
+        "tokens_saved": 448,
+        "active_requests": 0,
+        "entries_by_type": {
+          "assistant": 4,
+          "user": 0,
+          "system": 0
+        },
+        "block_size": 64,
+        "max_blocks": 1000,
+        "allocated_blocks": 58,
+        "free_blocks": 942,
+        "shared_blocks": 4,
+        "total_tokens_cached": 3520,
+        "utilization": 0.058,
+        "cache_hit_rate": 0.17721518987341772,
+        "cache_hits": 14,
+        "cache_misses": 65,
+        "disk_hits": 0,
+        "disk_misses": 8,
+        "cow_copies": 0,
+        "evictions": 0
+      },
+      "block_disk_cache": {
+        "blocks_on_disk": 57,
+        "disk_size_bytes": 407796621,
+        "disk_size_gb": 0.38,
+        "total_accesses": 17,
+        "total_tokens_on_disk": 3520,
+        "total_cached_tokens": 3520,
+        "disk_hits": 17,
+        "disk_misses": 8,
+        "disk_writes": 57,
+        "disk_evictions": 0
+      },
+      "ssm_companion": {
+        "entries": 11,
+        "max_entries": 64,
+        "nbytes": 724500480,
+        "nbytes_mb": 690.94,
+        "disk_enabled": true,
+        "disk_directory": "build/current-qwen35-mxfp8-mtp-responses-tool-result-auto-no-tool-after-ssm-size-scale-20260610/block-cache/ssm_companion",
+        "disk": {
+          "enabled": true,
+          "directory": "build/current-qwen35-mxfp8-mtp-responses-tool-result-auto-no-tool-after-ssm-size-scale-20260610/block-cache/ssm_companion",
+          "entries": 11,
+          "total_tokens_on_disk": 8256,
+          "total_cached_tokens": 8256,
+          "bytes": 724598647,
+          "bytes_mb": 691.03,
+          "budget_bytes": 549755813888,
+          "budget_gb": 512.0,
+          "stores": 11,
+          "hits": 0,
+          "misses": 3,
+          "hit_rate": 0.0
+        }
+      },
+      "health_cache": {
+        "scheduler_cache": {
+          "pixel_cache_hits": 0,
+          "pixel_cache_misses": 0,
+          "pixel_hit_rate": 0.0,
+          "total_time_saved": 0.0,
+          "total_images_processed": 0,
+          "pixel_cache_size": 0,
+          "hits": 3,
+          "misses": 1,
+          "hit_rate": 0.75,
+          "tokens_saved": 448,
+          "active_requests": 0,
+          "entries_by_type": {
+            "assistant": 4,
+            "user": 0,
+            "system": 0
+          },
+          "block_size": 64,
+          "max_blocks": 1000,
+          "allocated_blocks": 58,
+          "free_blocks": 942,
+          "shared_blocks": 4,
+          "total_tokens_cached": 3520,
+          "utilization": 0.058,
+          "cache_hit_rate": 0.17721518987341772,
+          "cache_hits": 14,
+          "cache_misses": 65,
+          "disk_hits": 0,
+          "disk_misses": 8,
+          "cow_copies": 0,
+          "evictions": 0
+        },
+        "block_disk_cache": {
+          "blocks_on_disk": 57,
+          "disk_size_bytes": 407796621,
+          "disk_size_gb": 0.38,
+          "total_accesses": 17,
+          "total_tokens_on_disk": 3520,
+          "total_cached_tokens": 3520,
+          "disk_hits": 17,
+          "disk_misses": 8,
+          "disk_writes": 57,
+          "disk_evictions": 0
+        },
+        "ssm_companion": {
+          "entries": 11,
+          "max_entries": 64,
+          "nbytes": 724500480,
+          "nbytes_mb": 690.94,
+          "disk_enabled": true,
+          "disk_directory": "build/current-qwen35-mxfp8-mtp-responses-tool-result-auto-no-tool-after-ssm-size-scale-20260610/block-cache/ssm_companion",
+          "disk": {
+            "enabled": true,
+            "directory": "build/current-qwen35-mxfp8-mtp-responses-tool-result-auto-no-tool-after-ssm-size-scale-20260610/block-cache/ssm_companion",
+            "entries": 11,
+            "total_tokens_on_disk": 8256,
+            "total_cached_tokens": 8256,
+            "bytes": 724598647,
+            "bytes_mb": 691.03,
+            "budget_bytes": 549755813888,
+            "budget_gb": 512.0,
+            "stores": 11,
+            "hits": 0,
+            "misses": 3,
+            "hit_rate": 0.0
+          }
+        },
+        "totals": {
+          "ram_tokens_cached": 3520,
+          "l2_prompt_tokens_on_disk": 0,
+          "l2_block_tokens_on_disk": 3520,
+          "l2_ssm_tokens_on_disk": 8256,
+          "ssm_tokens_on_disk": 8256,
+          "l2_tokens_on_disk": 11776,
+          "l2_tokens_on_disk_store_sum": 11776,
+          "l2_tokens_on_disk_note": "store_sum_across_prompt_block_ssm_l2; tiers_may_overlap"
+        }
+      }
+    },
+    {
+      "turn": 3,
+      "elapsed_s": 6.174,
+      "response_id": "resp_546ddf4818a8",
+      "previous_response_id": "resp_db03d1c88158",
+      "cached_tokens": 256,
+      "input_tokens": 1931,
+      "output_tokens": 248,
+      "tools_enabled": false,
+      "enable_thinking": false,
+      "rounds": [
+        {
+          "round": 0,
+          "elapsed_s": 6.174,
+          "response_id": "resp_546ddf4818a8",
+          "http_status": null,
+          "status": "completed",
+          "error": null,
+          "cached_tokens": 256,
+          "visible_chars": 1114,
+          "reasoning_chars": 0,
+          "function_calls": [],
+          "warnings": []
+        }
+      ],
+      "function_calls": [],
+      "function_call_outputs_next_turn": 0,
+      "warnings": [],
+      "visible_chars": 1114,
+      "reasoning_chars": 0,
+      "loop_like": false,
+      "tool_markup_leak": false,
+      "tool_grounded": false,
+      "tool_evidence_marker": null,
+      "tool_evidence_markers": [],
+      "tool_evidence_reason": "no_file_line_tool_evidence",
+      "tail_review": " hybrid SSM handling and MoE CacheList support introduces a risk of state inconsistency if the merge logic does not correctly handle offset boundaries or mixed model types.\n(2) **Function**: `_BatchOffsetSafeCache` (implied by the comment) and the cache merge logic for hybrid SSM.\n(3) **Depends on tool**: No (this is the final synthesis turn).\n\n**Final Synthesis**:\nThe prior cache/tool conversation was coherent. The review correctly identified that `server.py` and `scheduler.py` lacked cache logic (confirmed by tool results showing no matches), while `mllm_batch_generator.py` contains the actual cache implementation. `cached_tokens` were not explicitly observed as a variable name in the provided snippets, but cache *management* (via `_BatchOffsetSafeCache`) is the core mechanism described.",
+      "cache_totals": {
+        "ram_tokens_cached": 5130,
+        "l2_prompt_tokens_on_disk": 0,
+        "l2_block_tokens_on_disk": 5130,
+        "l2_ssm_tokens_on_disk": 12426,
+        "ssm_tokens_on_disk": 12426,
+        "l2_tokens_on_disk": 17556,
+        "l2_tokens_on_disk_store_sum": 17556,
+        "l2_tokens_on_disk_note": "store_sum_across_prompt_block_ssm_l2; tiers_may_overlap"
+      },
+      "scheduler_stats": {
+        "num_waiting": 0,
+        "num_running": 0,
+        "engine_path": null,
+        "batch_generator": {
+          "prompt_tokens": 1256,
+          "prompt_time": 3.5978809599764645,
+          "prompt_tps": 349.09437359712314,
+          "generation_tokens": 3144,
+          "generation_time": 47.66688917425927,
+          "generation_tps": 65.95773406790306,
+          "vision_encoding_time": 0,
+          "num_images_processed": 0,
+          "peak_memory": 41.343235254,
+          "hybrid_kv_without_ssm_hits": 1,
+          "hybrid_kv_without_ssm_tokens": 64,
+          "last_hybrid_kv_without_ssm": {
+            "request_id": "resp_0c5af7f37dae",
+            "cached_tokens": 64,
+            "reason": "no_ssm_companion_state",
+            "ssm_prefix_lookup": {
+              "max_len": 64,
+              "candidate_lengths": [],
+              "matched": false,
+              "reason": "no_candidate_lengths",
+              "store_size": 2,
+              "disk_enabled": true
+            }
+          },
+          "last_cache_execution": {
+            "request_id": "resp_546ddf4818a8",
+            "cache_detail": "paged+ssm",
+            "cached_tokens": 256,
+            "blocks": 0,
+            "selection": "paged",
+            "disk_hit": false,
+            "reconstructed": true,
+            "dequantized": true,
+            "reconstruction_seconds": 0.009559,
+            "dequantization_seconds": 8e-06,
+            "total_worker_cache_seconds": 0.009805,
+            "reconstruction_ok": true,
+            "dequantization_ok": true
+          },
+          "last_native_mtp": {
+            "request_id": "resp_546ddf4818a8",
+            "finish_reason": "stop",
+            "final_depth": 1,
+            "cycles": 163,
+            "accepts": 83,
+            "rejects": 80,
+            "init_emits": 2,
+            "draft_emits": 83,
+            "bonus_emits": 83,
+            "verify_emits": 80,
+            "drafted_tokens": 163,
+            "accepted_tokens": 83,
+            "acceptance_rate": 0.50920245398773,
+            "accepted_by_depth": [
+              83,
+              0,
+              0
+            ],
+            "drafted_by_depth": [
+              163,
+              0,
+              0
+            ],
+            "depth_acceptance_rates": {
+              "d1": 0.50920245398773,
+              "d2": null,
+              "d3": null
+            },
+            "forwards": {
+              "seed_main": 1,
+              "verify_main": 163,
+              "replay_main": 80,
+              "mtp": 164
+            },
+            "timings_ms": {
+              "verify": 439.00629284325987,
+              "sample": 3030.5641579034273,
+              "draft": 1077.4780871288385,
+              "snapshot": 7.172666286351159,
+              "restore": 8.156838011927903,
+              "replay": 199.7075430699624,
+              "materialize": 1.0355387057643384,
+              "total": 4763.1211239495315,
+              "avg_cycle": 29.22160198742044
+            },
+            "fallback_reason": null
+          },
+          "last_prefill_trace": null
+        },
+        "single_active_decode": false,
+        "num_requests_processed": 5,
+        "total_prompt_tokens": 5903,
+        "total_completion_tokens": 3144,
+        "ewma_ttft_seconds": 0,
+        "cache_hit_requests": 3,
+        "cache_hit_tokens": 448,
+        "cache_hit_tokens_by_detail": {
+          "paged+ssm": 448
+        },
+        "hybrid_kv_without_ssm_hits": 1,
+        "hybrid_kv_without_ssm_tokens": 64,
+        "last_hybrid_kv_without_ssm": {
+          "request_id": "resp_0c5af7f37dae",
+          "cached_tokens": 64,
+          "reason": "no_ssm_companion_state",
+          "ssm_prefix_lookup": {
+            "max_len": 64,
+            "candidate_lengths": [],
+            "matched": false,
+            "reason": "no_candidate_lengths",
+            "store_size": 2,
+            "disk_enabled": true
+          }
+        },
+        "cache_reuse_skips": 0,
+        "cache_reuse_skip_tokens": 0,
+        "last_cache_reuse_skip": null,
+        "cache_reuse_partial_downgrades": 0,
+        "cache_reuse_partial_tokens": 0,
+        "last_cache_reuse_partial": null,
+        "last_cache_selection": null,
+        "last_cache_execution": {
+          "request_id": "resp_546ddf4818a8",
+          "cache_detail": "paged+ssm",
+          "cached_tokens": 256,
+          "blocks": 0,
+          "selection": "paged",
+          "disk_hit": false,
+          "reconstructed": true,
+          "dequantized": true,
+          "reconstruction_seconds": 0.009559,
+          "dequantization_seconds": 8e-06,
+          "total_worker_cache_seconds": 0.009805,
+          "reconstruction_ok": true,
+          "dequantization_ok": true
+        }
+      },
+      "scheduler_cache": {
+        "pixel_cache_hits": 0,
+        "pixel_cache_misses": 0,
+        "pixel_hit_rate": 0.0,
+        "total_time_saved": 0.0,
+        "total_images_processed": 0,
+        "pixel_cache_size": 0,
+        "hits": 4,
+        "misses": 1,
+        "hit_rate": 0.8,
+        "tokens_saved": 768,
+        "active_requests": 0,
+        "entries_by_type": {
+          "assistant": 5,
+          "user": 0,
+          "system": 0
+        },
+        "block_size": 64,
+        "max_blocks": 1000,
+        "allocated_blocks": 84,
+        "free_blocks": 916,
+        "shared_blocks": 5,
+        "total_tokens_cached": 5130,
+        "utilization": 0.084,
+        "cache_hit_rate": 0.20512820512820512,
+        "cache_hits": 24,
+        "cache_misses": 93,
+        "disk_hits": 0,
+        "disk_misses": 10,
+        "cow_copies": 0,
+        "evictions": 0
+      },
+      "block_disk_cache": {
+        "blocks_on_disk": 83,
+        "disk_size_bytes": 539673665,
+        "disk_size_gb": 0.503,
+        "total_accesses": 31,
+        "total_tokens_on_disk": 5130,
+        "total_cached_tokens": 5130,
+        "disk_hits": 31,
+        "disk_misses": 10,
+        "disk_writes": 83,
+        "disk_evictions": 0
+      },
+      "ssm_companion": {
+        "entries": 14,
+        "max_entries": 64,
+        "nbytes": 922091520,
+        "nbytes_mb": 879.38,
+        "disk_enabled": true,
+        "disk_directory": "build/current-qwen35-mxfp8-mtp-responses-tool-result-auto-no-tool-after-ssm-size-scale-20260610/block-cache/ssm_companion",
+        "disk": {
+          "enabled": true,
+          "directory": "build/current-qwen35-mxfp8-mtp-responses-tool-result-auto-no-tool-after-ssm-size-scale-20260610/block-cache/ssm_companion",
+          "entries": 14,
+          "total_tokens_on_disk": 12426,
+          "total_cached_tokens": 12426,
+          "bytes": 922216462,
+          "bytes_mb": 879.49,
+          "budget_bytes": 549755813888,
+          "budget_gb": 512.0,
+          "stores": 14,
+          "hits": 0,
+          "misses": 4,
+          "hit_rate": 0.0
+        }
+      },
+      "health_cache": {
+        "scheduler_cache": {
+          "pixel_cache_hits": 0,
+          "pixel_cache_misses": 0,
+          "pixel_hit_rate": 0.0,
+          "total_time_saved": 0.0,
+          "total_images_processed": 0,
+          "pixel_cache_size": 0,
+          "hits": 4,
+          "misses": 1,
+          "hit_rate": 0.8,
+          "tokens_saved": 768,
+          "active_requests": 0,
+          "entries_by_type": {
+            "assistant": 5,
+            "user": 0,
+            "system": 0
+          },
+          "block_size": 64,
+          "max_blocks": 1000,
+          "allocated_blocks": 84,
+          "free_blocks": 916,
+          "shared_blocks": 5,
+          "total_tokens_cached": 5130,
+          "utilization": 0.084,
+          "cache_hit_rate": 0.20512820512820512,
+          "cache_hits": 24,
+          "cache_misses": 93,
+          "disk_hits": 0,
+          "disk_misses": 10,
+          "cow_copies": 0,
+          "evictions": 0
+        },
+        "block_disk_cache": {
+          "blocks_on_disk": 83,
+          "disk_size_bytes": 539673665,
+          "disk_size_gb": 0.503,
+          "total_accesses": 31,
+          "total_tokens_on_disk": 5130,
+          "total_cached_tokens": 5130,
+          "disk_hits": 31,
+          "disk_misses": 10,
+          "disk_writes": 83,
+          "disk_evictions": 0
+        },
+        "ssm_companion": {
+          "entries": 14,
+          "max_entries": 64,
+          "nbytes": 922091520,
+          "nbytes_mb": 879.38,
+          "disk_enabled": true,
+          "disk_directory": "build/current-qwen35-mxfp8-mtp-responses-tool-result-auto-no-tool-after-ssm-size-scale-20260610/block-cache/ssm_companion",
+          "disk": {
+            "enabled": true,
+            "directory": "build/current-qwen35-mxfp8-mtp-responses-tool-result-auto-no-tool-after-ssm-size-scale-20260610/block-cache/ssm_companion",
+            "entries": 14,
+            "total_tokens_on_disk": 12426,
+            "total_cached_tokens": 12426,
+            "bytes": 922216462,
+            "bytes_mb": 879.49,
+            "budget_bytes": 549755813888,
+            "budget_gb": 512.0,
+            "stores": 14,
+            "hits": 0,
+            "misses": 4,
+            "hit_rate": 0.0
+          }
+        },
+        "totals": {
+          "ram_tokens_cached": 5130,
+          "l2_prompt_tokens_on_disk": 0,
+          "l2_block_tokens_on_disk": 5130,
+          "l2_ssm_tokens_on_disk": 12426,
+          "ssm_tokens_on_disk": 12426,
+          "l2_tokens_on_disk": 17556,
+          "l2_tokens_on_disk_store_sum": 17556,
+          "l2_tokens_on_disk_note": "store_sum_across_prompt_block_ssm_l2; tiers_may_overlap"
+        }
+      }
+    }
+  ],
+  "acceptance": {
+    "turns_completed": true,
+    "previous_response_id_used": true,
+    "cache_reuse_observed": true,
+    "require_cache_each_turn_after_first": true,
+    "cache_reuse_each_turn_after_first": true,
+    "tool_call_observed": true,
+    "require_tool_call_each_turn": true,
+    "tool_call_each_required_turn": true,
+    "require_tool_evidence": true,
+    "tool_evidence_each_required_turn": true,
+    "final_turn_tools_disabled": true,
+    "final_turn_thinking_disabled": true,
+    "visible_or_tool_output_each_turn": true,
+    "visible_output_observed": true,
+    "final_turn_visible_output": true,
+    "no_loop_like_tail": true,
+    "no_tool_markup_leak": true
+  }
+}

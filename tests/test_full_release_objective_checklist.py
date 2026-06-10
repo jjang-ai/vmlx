@@ -16,13 +16,13 @@ def test_full_release_objective_checklist_uses_current_noheavy_api_cache_contrac
 
 def test_full_release_objective_checklist_uses_current_responses_raw_sse_parity_contract():
     assert checklist.RESPONSES_RAW_SSE_PARITY == Path(
-        "build/current-responses-raw-sse-parity-qwen35-direct-gateway-tunnel-after-missing-required-args-failclosed-20260610.json"
+        "build/current-responses-raw-sse-parity-direct-gateway-tunnel-gemma4-12b-mxfp8-crack-20260610.json"
     )
 
 
 def test_full_release_objective_checklist_uses_current_qwen35_raw_sse_parity_contract():
     assert checklist.QWEN35_RAW_SSE_PARITY == Path(
-        "build/current-responses-raw-sse-parity-qwen35-direct-gateway-tunnel-after-missing-required-args-failclosed-20260610.json"
+        "build/current-responses-raw-sse-parity-qwen35-direct-gateway-tunnel-after-public-recapture-20260610.json"
     )
 
 
@@ -1796,8 +1796,11 @@ def test_full_release_objective_checklist_can_pass_when_all_evidence_is_green(
                 "gemma4_26b_present": True,
                 "gemma4_31v_or_31b_present": True,
                 "gemma4_e2b_qat_jang4m_present": True,
+                "gemma4_e2b_qat_jang4m_installed_app_ui_api_cache_proven": True,
                 "gemma4_e4b_qat_jang4m_present": True,
+                "gemma4_e4b_qat_jang4m_installed_app_ui_api_cache_proven": True,
                 "gemma4_12b_qat_jang4m_present": True,
+                "gemma4_12b_qat_jang4m_installed_app_ui_api_cache_proven": True,
                 "gemma4_26b_qat_jang4m_present": True,
                 "gemma4_31b_qat_jang4m_present": True,
                 "all_required_source_live_smokes_present": True,

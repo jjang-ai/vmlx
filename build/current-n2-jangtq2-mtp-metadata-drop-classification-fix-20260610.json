@@ -1,0 +1,45 @@
+{
+  "status": "pass",
+  "blocker": "n2_jangtq2_mtp_metadata_classification",
+  "model_path": "/Users/eric/.mlxstudio/models/JANGQ-AI/Nex-N2-Pro-JANGTQ2",
+  "root_cause": "The real N2 JANGTQ2 bundle intentionally has metadata-only MTP with no mtp.* tensors: jang_config.mtp.enabled=false, jang_config.mtp.kept=false, runtime.bundle_has_mtp=false, and runtime.mtp_mode=metadata_only_missing_weights. The Python native-MTP inspector only treated runtime modes containing 'drop' as intentionally dropped, so this valid dropped-MTP sidecar shape was incorrectly reported as metadata_inconsistent.",
+  "source_fix": [
+    "vmlx_engine/native_mtp.py now treats jang_config.mtp.enabled=false, jang_config.mtp.kept=false, runtime.bundle_has_mtp=false with metadata_only/missing_weight modes as explicit dropped-MTP metadata.",
+    "vmlx_engine/server.py fallback status path uses the same dropped-MTP sidecar classification.",
+    "tests/test_native_mtp_autodetect.py adds a qwen3_5_moe JANGTQ2 metadata_only_missing_weights regression."
+  ],
+  "real_bundle_after_fix": {
+    "config_num_nextn_predict_layers": 1,
+    "config_mtp_layer_source": "config.text_config.mtp_num_hidden_layers",
+    "jang_mtp_layers": 1,
+    "jang_drop_mtp": true,
+    "index_has_mtp_tensors": false,
+    "mtp_tensor_count": 0,
+    "artifact_available": false,
+    "family": "qwen3_5_moe",
+    "has_vision_config": true,
+    "has_vision_weights": true,
+    "vision_tensor_count": 333,
+    "cache_type": "hybrid",
+    "runtime_supported": false,
+    "runtime_available": false,
+    "runtime_active": false,
+    "runtime_bundle_has_mtp": false,
+    "runtime_mtp_mode": "metadata_only_missing_weights",
+    "runtime_reason": "jang_config.runtime.bundle_has_mtp=false",
+    "status": "dropped",
+    "issues": []
+  },
+  "verification": [
+    ".venv/bin/python -m py_compile vmlx_engine/native_mtp.py vmlx_engine/server.py tests/test_native_mtp_autodetect.py",
+    ".venv/bin/python -m pytest -q tests/test_native_mtp_autodetect.py tests/test_mtp_telemetry_edge_cases.py tests/test_engine_audit.py -k 'runtime_metadata_can_explicitly_drop_configured_mtp or jang_mtp_sidecar_can_explicitly_drop_configured_metadata_only_mtp or drop_mtp_true_strict_bool_still_works or drop_mtp_false_strict_bool_still_works or mtp_status_reports_dropped_dsv4_artifact'",
+    "git diff --check -- vmlx_engine/native_mtp.py vmlx_engine/server.py tests/test_native_mtp_autodetect.py .agents/STATUS.md .agents/LOG.md"
+  ],
+  "not_proven": [
+    "No new model generation run was launched for this proof.",
+    "This does not make N2 JANGTQ2 native MTP active; it honestly reports that this artifact dropped MTP weights.",
+    "This does not clear N2 JANG_1L.",
+    "This does not clear audio support; current N2 JANGTQ2 audio proof remains failed/unsupported unless separately fixed or proven.",
+    "This does not enter package, sign, notarize, PyPI, updater, download, or public release work."
+  ]
+}

@@ -418,7 +418,7 @@ class MiniMaxToolParser(ToolParser):
 
         # Tool call block just completed — parse the full accumulated text
         if "</minimax:tool_call>" in delta_text:
-            result = self.extract_tool_calls(current_text)
+            result = self.extract_tool_calls(current_text, request=request)
             if result.tools_called:
                 return {
                     "tool_calls": [

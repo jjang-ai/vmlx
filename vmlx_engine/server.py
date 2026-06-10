@@ -900,6 +900,49 @@ def _responses_messages_have_tool_result_after_latest_user(messages: list[dict])
     return False
 
 
+def _responses_is_terminal_tool_result_synthesis(
+    messages: list[dict],
+    request: Any,
+    chat_kwargs: dict[str, Any],
+) -> bool:
+    """Return True when a Responses continuation should produce final text.
+
+    A previous tool result followed by no new tool schema is a synthesis turn,
+    not another tool-selection turn. Qwen3-style templates otherwise open a
+    fresh ``<think>`` rail for the assistant prefix and the model can spend the
+    whole max-output budget reasoning about the already-completed tool result.
+    """
+    if not _responses_messages_have_tool_result_after_latest_user(messages):
+        return False
+    if getattr(request, "tools", None):
+        return False
+    if chat_kwargs.get("tools"):
+        return False
+    tool_choice = getattr(request, "tool_choice", None)
+    if tool_choice not in (None, "auto", "none"):
+        return False
+    return True
+
+
+def _reasoning_parser_is_qwen3(parser: Any) -> bool:
+    return type(parser).__name__ == "Qwen3ReasoningParser"
+
+
+def _responses_terminal_synthesis_visible_finalization(kwargs: dict[str, Any]) -> bool:
+    return bool(kwargs.get("_vmlx_terminal_tool_result_visible_finalization"))
+
+
+def _prompt_suffix_completes_qwen3_thinking(kwargs: dict[str, Any]) -> bool:
+    if not kwargs.get("skip_generation_prompt"):
+        return False
+    suffix = str(kwargs.get("prompt_suffix") or "")
+    return (
+        suffix.startswith("<|im_start|>assistant")
+        and "<think>" in suffix
+        and "</think>" in suffix
+    )
+
+
 def _responses_fast_path_visible_text(output: Any, request: Any) -> str:
     text = getattr(output, "raw_text", "") or getattr(output, "text", "") or ""
     if getattr(request, "enable_thinking", None) is False and "</think>" in text:
@@ -2009,6 +2052,46 @@ def _mimo_v2_bundle_has_index_prefix(bundle_path: str | None, prefixes: tuple[st
     )
 
 
+def _mimo_v2_bundle_can_use_media_runtime_overlay(
+    bundle_path: str | None,
+    cfg: dict[str, Any],
+) -> bool:
+    """Return True for promoted MiMo JANG/JANGTQ bundles eligible for overlay.
+
+    Older local MiMo artifacts can be stamped ``weights_preserved_text_runtime``
+    because media wiring landed after conversion. Only let source override that
+    stamp for known quantized MiMo runtime bundles; generic preserved-media
+    fixtures or incomplete artifacts must remain text-only.
+    """
+    if not isinstance(cfg, dict):
+        return False
+    if str(cfg.get("model_type") or "").lower() != "mimo_v2":
+        return False
+    jang = _read_bundle_json(bundle_path, "jang_config.json")
+    candidates = (
+        cfg.get("format"),
+        cfg.get("weight_format"),
+        cfg.get("jang_profile"),
+        cfg.get("jang_version"),
+        cfg.get("profile"),
+        jang.get("format") if isinstance(jang, dict) else None,
+        jang.get("weight_format") if isinstance(jang, dict) else None,
+        jang.get("profile") if isinstance(jang, dict) else None,
+        jang.get("family") if isinstance(jang, dict) else None,
+        (jang.get("quantization") or {}).get("format")
+        if isinstance(jang.get("quantization"), dict)
+        else None,
+        (jang.get("quantization") or {}).get("weight_format")
+        if isinstance(jang.get("quantization"), dict)
+        else None,
+    )
+    lowered = {str(value or "").lower() for value in candidates if value is not None}
+    return any(
+        "jang" in value or "mxtq" in value
+        for value in lowered
+    )
+
+
 def _mimo_v2_media_runtime_auto_enabled(
     bundle_path: str | None,
     cfg: dict[str, Any],
@@ -2026,6 +2109,18 @@ def _mimo_v2_media_runtime_auto_enabled(
         return False
     caps = cfg.get("capabilities") if isinstance(cfg.get("capabilities"), dict) else {}
     runtime = cfg.get("runtime") if isinstance(cfg.get("runtime"), dict) else {}
+    explicit_modes = {
+        str(caps.get("multimodal_status") or "").lower(),
+        str(runtime.get("multimodal_mode") or "").lower(),
+    }
+    if explicit_modes & {
+        "weights_preserved_text_runtime",
+        "text_runtime",
+        "text_only",
+        "unwired",
+        "preserved_disabled",
+    } and not _mimo_v2_bundle_can_use_media_runtime_overlay(bundle_path, cfg):
+        return False
     bundle = Path(bundle_path or "")
     processor_config = cfg.get("processor_config")
     if not isinstance(processor_config, dict):
@@ -5950,6 +6045,26 @@ def _model_mtp_status(bundle_path: str | None) -> dict:
         drop_mtp_raw is not None and not isinstance(drop_mtp_raw, bool)
     )
     drop_mtp = drop_mtp_raw if isinstance(drop_mtp_raw, bool) else None
+    mtp_sidecar = jang_cfg.get("mtp") if isinstance(jang_cfg.get("mtp"), dict) else {}
+    mtp_sidecar_declares_dropped = (
+        mtp_sidecar.get("enabled") is False or mtp_sidecar.get("kept") is False
+    )
+    runtime_sidecar = (
+        jang_cfg.get("runtime") if isinstance(jang_cfg.get("runtime"), dict) else {}
+    )
+    runtime_bundle_has_mtp = runtime_sidecar.get("bundle_has_mtp")
+    runtime_mtp_mode = runtime_sidecar.get("mtp_mode")
+    runtime_declares_dropped_mtp = (
+        runtime_bundle_has_mtp is False
+        and isinstance(runtime_mtp_mode, str)
+        and (
+            "drop" in runtime_mtp_mode.lower()
+            or "missing_weight" in runtime_mtp_mode.lower()
+            or "metadata_only" in runtime_mtp_mode.lower()
+        )
+    )
+    if mtp_sidecar_declares_dropped or runtime_declares_dropped_mtp:
+        drop_mtp = True
     has_mtp_tensors, index_error = _bundle_index_tensor_prefix_status(
         bundle_path,
         "mtp.",
@@ -5984,7 +6099,12 @@ def _model_mtp_status(bundle_path: str | None) -> dict:
         issues.append(
             "bundle indexes mtp.* tensors but config disables MTP runtime"
         )
-    if drop_mtp is True and config_layers not in (None, 0):
+    if (
+        drop_mtp is True
+        and config_layers not in (None, 0)
+        and not mtp_sidecar_declares_dropped
+        and not runtime_declares_dropped_mtp
+    ):
         issues.append(
             "jang_config.drop_mtp=true but config.num_nextn_predict_layers="
             f"{config_layers}"
@@ -6026,7 +6146,15 @@ def _model_mtp_status(bundle_path: str | None) -> dict:
         runtime_reason = "metadata_inconsistent"
     elif drop_mtp is True:
         status = "dropped"
-        runtime_reason = "jang_config.drop_mtp=true"
+        runtime_reason = (
+            "jang_config.runtime.bundle_has_mtp=false"
+            if runtime_declares_dropped_mtp
+            else "jang_config.mtp.enabled=false"
+            if mtp_sidecar.get("enabled") is False
+            else "jang_config.mtp.kept=false"
+            if mtp_sidecar.get("kept") is False
+            else "jang_config.drop_mtp=true"
+        )
     elif artifact_available:
         status = "weights_present_runtime_unwired"
         if runtime_supported:
@@ -13530,6 +13658,18 @@ async def create_response(
                 len(historical_tools),
             )
 
+    if (
+        _reasoning_parser_is_qwen3(_reasoning_parser)
+        and chat_kwargs.get("enable_thinking") is True
+        and _responses_is_terminal_tool_result_synthesis(messages, request, chat_kwargs)
+    ):
+        chat_kwargs["enable_thinking"] = False
+        chat_kwargs["_vmlx_terminal_tool_result_visible_finalization"] = True
+        logger.info(
+            "Qwen3 Responses terminal tool-result synthesis: using model-owned "
+            "closed thinking branch for visible finalization"
+        )
+
     # Inject Harmony analysis prefix for GPT-OSS models (same as Chat Completions path)
     if isinstance(_reasoning_parser, GptOssReasoningParser):
         _think_val = chat_kwargs.get("enable_thinking")
@@ -13618,10 +13758,21 @@ async def create_response(
             _omni_resp_err,
         )
 
+    _terminal_tool_result_visible_finalization = bool(
+        chat_kwargs.pop("_vmlx_terminal_tool_result_visible_finalization", False)
+    )
+
     if request.stream:
         return StreamingResponse(
             stream_responses_api(
-                engine, messages, request, fastapi_request, **chat_kwargs
+                engine,
+                messages,
+                request,
+                fastapi_request,
+                _vmlx_terminal_tool_result_visible_finalization=(
+                    _terminal_tool_result_visible_finalization
+                ),
+                **chat_kwargs,
             ),
             media_type="text/event-stream",
         )
@@ -15340,6 +15491,9 @@ async def stream_responses_api(
     markers are detected mid-stream, switches to buffered mode and emits
     structured function_call events at the end.
     """
+    _terminal_tool_result_visible_finalization = bool(
+        kwargs.pop("_vmlx_terminal_tool_result_visible_finalization", False)
+    )
     response_id = f"resp_{uuid.uuid4().hex[:12]}"
     kwargs["request_id"] = response_id
     seq = 0
@@ -15398,6 +15552,9 @@ async def stream_responses_api(
     )
 
     _suppress_tools = getattr(request, "tool_choice", None) == "none"
+    _required_tool_choice_stream = _is_required_tool_choice(
+        getattr(request, "tool_choice", None)
+    )
     _request_has_tools = bool(getattr(request, "tools", None))
     _stream_tools_available = bool(kwargs.get("tools")) or _request_has_tools
     tool_call_active = _stream_tools_available and not _suppress_tools
@@ -15488,6 +15645,8 @@ async def stream_responses_api(
         engine=engine,
     ):
         think_in_template = True
+    if _terminal_tool_result_visible_finalization:
+        think_in_template = False
 
     # The parser seed must match the final prompt the engine renders. Tool
     # requests may intentionally leave reasoning open; no-tool thinking-off
@@ -15860,17 +16019,18 @@ async def stream_responses_api(
                             # Emit content as standard text delta
                             if emit_content:
                                 content_was_emitted = True
-                                streamed_text += emit_content
-                                yield _sse(
-                                    "response.output_text.delta",
-                                    {
-                                        "type": "response.output_text.delta",
-                                        "item_id": msg_id,
-                                        "output_index": 0,
-                                        "content_index": 0,
-                                        "delta": emit_content,
-                                    },
-                                )
+                                if not _required_tool_choice_stream:
+                                    streamed_text += emit_content
+                                    yield _sse(
+                                        "response.output_text.delta",
+                                        {
+                                            "type": "response.output_text.delta",
+                                            "item_id": msg_id,
+                                            "output_index": 0,
+                                            "content_index": 0,
+                                            "delta": emit_content,
+                                        },
+                                    )
                 else:
                     # Standard path without reasoning parsing
                     content = delta_text
@@ -15911,17 +16071,18 @@ async def stream_responses_api(
 
                         if content:
                             content_was_emitted = True
-                            streamed_text += content
-                            yield _sse(
-                                "response.output_text.delta",
-                                {
-                                    "type": "response.output_text.delta",
-                                    "item_id": msg_id,
-                                    "output_index": 0,
-                                    "content_index": 0,
-                                    "delta": content,
-                                },
-                            )
+                            if not _required_tool_choice_stream:
+                                streamed_text += content
+                                yield _sse(
+                                    "response.output_text.delta",
+                                    {
+                                        "type": "response.output_text.delta",
+                                        "item_id": msg_id,
+                                        "output_index": 0,
+                                        "content_index": 0,
+                                        "delta": content,
+                                    },
+                                )
 
             # Emit per-chunk usage when include_usage is enabled (for real-time metrics)
             if include_usage and (prompt_tokens or completion_tokens):
@@ -16151,6 +16312,99 @@ async def stream_responses_api(
 
     display_text = ""
 
+    if _required_tool_choice_stream and not tool_calls:
+        logger.warning(
+            f"Stream {response_id}: tool_choice='required' but no tool calls produced"
+        )
+        yield _sse(
+            "response.output_text.done",
+            {
+                "type": "response.output_text.done",
+                "item_id": msg_id,
+                "output_index": 0,
+                "content_index": 0,
+                "text": "",
+            },
+        )
+        yield _sse(
+            "response.content_part.done",
+            {
+                "type": "response.content_part.done",
+                "item_id": msg_id,
+                "output_index": 0,
+                "content_index": 0,
+                "part": {"type": "output_text", "text": "", "annotations": []},
+            },
+        )
+        yield _sse(
+            "response.output_item.done",
+            {
+                "type": "response.output_item.done",
+                "output_index": 0,
+                "item": {
+                    "id": msg_id,
+                    "type": "message",
+                    "status": "incomplete",
+                    "role": "assistant",
+                    "content": [],
+                },
+            },
+        )
+        yield _sse(
+            "error",
+            {
+                "type": "error",
+                "message": (
+                    "tool_choice='required' was set but the model did not produce "
+                    "any tool calls. Try rephrasing your prompt or using a model "
+                    "with better tool-calling support."
+                ),
+                "code": "tool_calls_required",
+            },
+        )
+        completed_response = {
+            "id": response_id,
+            "object": "response",
+            "created_at": created_at,
+            "status": "failed",
+            "model": request.model,
+            "output_text": "",
+            "output": [],
+            "error": {
+                "type": "invalid_request_error",
+                "message": (
+                    "tool_choice='required' was set but the model did not produce "
+                    "any tool calls."
+                ),
+                "code": "tool_calls_required",
+            },
+            "usage": {
+                "input_tokens": prompt_tokens,
+                "output_tokens": completion_tokens,
+                "total_tokens": prompt_tokens + completion_tokens,
+                **(
+                    {
+                        "input_tokens_details": (
+                            {"cached_tokens": _cached, "cache_detail": _cache_detail}
+                            if _cache_detail
+                            else {"cached_tokens": _cached}
+                        )
+                    }
+                    if _cached > 0 or _cache_detail
+                    else {}
+                ),
+            },
+        }
+        _responses_store_history(response_id, messages, reasoning_only=False)
+        yield _sse(
+            "response.completed",
+            {
+                "type": "response.completed",
+                "response": completed_response,
+            },
+        )
+        return
+
     if tool_calls:
         # Apply reasoning parser to the cleaned (pre-tool-call) text
         if request_parser and cleaned_text:
@@ -16163,7 +16417,7 @@ async def stream_responses_api(
                 cleaned_text = reasoning_text
 
         # Finalize the text message with whatever content was before the tool call
-        final_text = (cleaned_text or "").strip()
+        final_text = "" if _required_tool_choice_stream else (cleaned_text or "").strip()
         final_text = _finalize_visible_text_for_request(final_text, request)
         yield _sse(
             "response.output_text.done",
@@ -16393,6 +16647,8 @@ async def stream_responses_api(
                 display_text,
                 request,
             )
+        elif display_text and _has_tool_marker_or_partial_suffix(full_text):
+            display_text = _strip_tool_markup_residue_for_display(display_text)
         if display_text:
             display_text = _finalize_visible_text_for_request(display_text, request)
 
@@ -16514,25 +16770,6 @@ async def stream_responses_api(
                     logger.warning(
                         f"Stream {response_id}: JSON validation failed: {_err}"
                     )
-
-    # Enforce tool_choice="required" in Responses API streaming
-    _resp_stream_tc = getattr(request, "tool_choice", None)
-    if _is_required_tool_choice(_resp_stream_tc) and not tool_calls:
-        logger.warning(
-            f"Stream {response_id}: tool_choice='required' but no tool calls produced"
-        )
-        yield _sse(
-            "error",
-            {
-                "type": "error",
-                "message": (
-                    "tool_choice='required' was set but the model did not produce "
-                    "any tool calls. Try rephrasing your prompt or using a model "
-                    "with better tool-calling support."
-                ),
-                "code": "tool_calls_required",
-            },
-        )
 
     # Emit response.completed — use "incomplete" status when max_tokens was hit
     _resp_finish = getattr(last_output, "finish_reason", None) if last_output else None
