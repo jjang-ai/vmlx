@@ -15405,6 +15405,8 @@ async def stream_responses_api(
     accumulated_reasoning = ""  # Reasoning text for fallback
     content_was_emitted = False
     reasoning_was_streamed = False  # Whether reasoning was sent to client as deltas
+    reasoning_item_id: str | None = None
+    reasoning_output_index = 1
     prompt_tokens = 0
     completion_tokens = 0
     _cached = 0
@@ -15825,13 +15827,28 @@ async def stream_responses_api(
 
                             # Emit reasoning as OpenAI Responses reasoning-summary events.
                             if emit_reasoning:
+                                if reasoning_item_id is None:
+                                    reasoning_item_id = f"rs_{uuid.uuid4().hex[:12]}"
+                                    yield _sse(
+                                        "response.output_item.added",
+                                        {
+                                            "type": "response.output_item.added",
+                                            "output_index": reasoning_output_index,
+                                            "item": {
+                                                "id": reasoning_item_id,
+                                                "type": "reasoning",
+                                                "status": "in_progress",
+                                                "content": [],
+                                            },
+                                        },
+                                    )
                                 reasoning_was_streamed = True
                                 yield _sse(
                                     "response.reasoning_summary_text.delta",
                                     {
                                         "type": "response.reasoning_summary_text.delta",
-                                        "item_id": msg_id,
-                                        "output_index": 0,
+                                        "item_id": reasoning_item_id,
+                                        "output_index": reasoning_output_index,
                                         "summary_index": 0,
                                         "delta": emit_reasoning,
                                     },
@@ -16006,15 +16023,43 @@ async def stream_responses_api(
         return
 
     # Emit reasoning summary done event if reasoning was produced (skip when suppressed)
+    if accumulated_reasoning and not suppress_reasoning and reasoning_item_id is None:
+        reasoning_item_id = f"rs_{uuid.uuid4().hex[:12]}"
+        yield _sse(
+            "response.output_item.added",
+            {
+                "type": "response.output_item.added",
+                "output_index": reasoning_output_index,
+                "item": {
+                    "id": reasoning_item_id,
+                    "type": "reasoning",
+                    "status": "in_progress",
+                    "content": [],
+                },
+            },
+        )
     if accumulated_reasoning and not suppress_reasoning:
         yield _sse(
             "response.reasoning_summary_text.done",
             {
                 "type": "response.reasoning_summary_text.done",
-                "item_id": msg_id,
-                "output_index": 0,
+                "item_id": reasoning_item_id,
+                "output_index": reasoning_output_index,
                 "summary_index": 0,
                 "text": accumulated_reasoning,
+            },
+        )
+        yield _sse(
+            "response.output_item.done",
+            {
+                "type": "response.output_item.done",
+                "output_index": reasoning_output_index,
+                "item": {
+                    "id": reasoning_item_id,
+                    "type": "reasoning",
+                    "status": "completed",
+                    "content": [{"type": "reasoning", "text": accumulated_reasoning}],
+                },
             },
         )
 
@@ -16155,6 +16200,16 @@ async def stream_responses_api(
         )
         all_output_items.append(message_item)
         output_index += 1
+        if reasoning_item_id is not None:
+            all_output_items.append(
+                {
+                    "id": reasoning_item_id,
+                    "type": "reasoning",
+                    "status": "completed",
+                    "content": [{"type": "reasoning", "text": accumulated_reasoning}],
+                }
+            )
+            output_index = max(output_index, reasoning_output_index + 1)
 
         # Emit each tool call as a function_call output item
         for tc in tool_calls:
@@ -16388,6 +16443,15 @@ async def stream_responses_api(
                 ],
             }
         )
+        if reasoning_item_id is not None:
+            all_output_items.append(
+                {
+                    "id": reasoning_item_id,
+                    "type": "reasoning",
+                    "status": "completed",
+                    "content": [{"type": "reasoning", "text": accumulated_reasoning}],
+                }
+            )
 
     # H4: Validate text format at end of stream.
     _text_fmt = getattr(request, "text", None)
@@ -16472,7 +16536,7 @@ async def stream_responses_api(
     _resp_extra: dict = {}
     if _resp_status == "incomplete":
         _resp_extra["incomplete_details"] = {"reason": "max_output_tokens"}
-    if accumulated_reasoning and not suppress_reasoning:
+    if accumulated_reasoning and not suppress_reasoning and reasoning_item_id is None:
         all_output_items.append(
             {
                 "id": f"rs_{uuid.uuid4().hex[:12]}",
