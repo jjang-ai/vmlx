@@ -160,6 +160,29 @@ class TestStep3p5ToolParser:
         assert out.tool_calls[0]["name"] == "fn_a"
         assert out.tool_calls[1]["name"] == "fn_b"
 
+    def test_empty_function_with_required_schema_fails_closed(self, parser):
+        text = "<tool_call><function=exec_command></function></tool_call>"
+        request = {
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "exec_command",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {"cmd": {"type": "string"}},
+                            "required": ["cmd"],
+                        },
+                    },
+                }
+            ]
+        }
+
+        out = parser.extract_tool_calls(text, request=request)
+
+        assert out.tools_called is False
+        assert out.tool_calls == []
+
     def test_registry_aliases_resolve(self):
         """Step3p5ToolParser must register under both `step3p5` and `stepfun`."""
         from vmlx_engine.tool_parsers.abstract_tool_parser import ToolParserManager

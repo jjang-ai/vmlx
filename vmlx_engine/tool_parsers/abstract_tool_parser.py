@@ -196,6 +196,37 @@ class ToolParser(ABC):
         return None
 
     @classmethod
+    def _arguments_satisfy_required_schema(
+        cls,
+        tool_name: str,
+        arguments: Any,
+        request: dict[str, Any] | None = None,
+    ) -> bool:
+        schema = cls._function_schema_for_tool(request, tool_name)
+        required = schema.get("required") if isinstance(schema, dict) else None
+        if not isinstance(required, list) or not required:
+            return True
+        if isinstance(arguments, dict):
+            args = arguments
+        elif isinstance(arguments, str) and arguments.strip():
+            try:
+                parsed = json.loads(arguments)
+            except json.JSONDecodeError:
+                return False
+            if not isinstance(parsed, dict):
+                return False
+            args = parsed
+        else:
+            return False
+        for name in required:
+            if not isinstance(name, str) or not name:
+                continue
+            value = args.get(name)
+            if value is None or (isinstance(value, str) and value.strip() == ""):
+                return False
+        return True
+
+    @classmethod
     def _serialize_tool_arguments(
         cls,
         tool_name: str,

@@ -3431,6 +3431,54 @@ class TestToolParserConcurrency:
             "command": 'echo "Tool test successful!"'
         }
 
+    def test_xml_function_empty_required_args_fail_closed_at_server_boundary(self):
+        """Parameterless XML function tags must not emit arguments={} calls."""
+        import vmlx_engine.server as srv
+
+        request = srv.ChatCompletionRequest(
+            model="qwen3-coder-next",
+            messages=[
+                srv.Message(
+                    role="user",
+                    content="List /tmp using exec_command.",
+                )
+            ],
+            tools=[
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "exec_command",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {"cmd": {"type": "string"}},
+                            "required": ["cmd"],
+                        },
+                    },
+                }
+            ],
+            tool_choice="required",
+        )
+        output = (
+            "Quick preamble: Checking what's in `/tmp`...\n"
+            "<tool_call>\n"
+            "<function=exec_command>\n"
+            "</function>\n"
+            "</tool_call>"
+        )
+
+        old_auto = srv._enable_auto_tool_choice
+        old_parser = srv._tool_call_parser
+        try:
+            srv._enable_auto_tool_choice = True
+            srv._tool_call_parser = "xml_function"
+            cleaned, tool_calls = srv._parse_tool_calls_with_parser(output, request)
+        finally:
+            srv._enable_auto_tool_choice = old_auto
+            srv._tool_call_parser = old_parser
+
+        assert tool_calls is None
+        assert cleaned == output
+
     def test_dsv4_fallback_tool_prompt_uses_canonical_tool_calls_wrapper(self):
         """Fallback injection must not teach a non-canonical bare DSML invoke."""
         from vmlx_engine.api.tool_calling import check_and_inject_fallback_tools

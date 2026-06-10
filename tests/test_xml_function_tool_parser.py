@@ -267,3 +267,64 @@ Done.
         assert out.tools_called is False
         assert out.tool_calls == []
         assert out.content == "<tool_call>"
+
+    def test_empty_function_with_required_schema_fails_closed(self, parser):
+        text = """Quick preamble.
+<tool_call>
+<function=exec_command>
+</function>
+</tool_call>"""
+
+        out = parser.extract_tool_calls(
+            text,
+            request={
+                "tools": [
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": "exec_command",
+                            "parameters": {
+                                "type": "object",
+                                "properties": {"cmd": {"type": "string"}},
+                                "required": ["cmd"],
+                            },
+                        },
+                    }
+                ]
+            },
+        )
+
+        assert out.tools_called is False
+        assert out.tool_calls == []
+        assert out.content == text
+
+    def test_nested_invoke_missing_required_schema_fails_closed(self, parser):
+        text = """<tool_call>
+<invoke>
+<tool_name>exec_command</tool_name>
+<arguments></arguments>
+</invoke>
+</tool_call>"""
+
+        out = parser.extract_tool_calls(
+            text,
+            request={
+                "tools": [
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": "exec_command",
+                            "parameters": {
+                                "type": "object",
+                                "properties": {"cmd": {"type": "string"}},
+                                "required": ["cmd"],
+                            },
+                        },
+                    }
+                ]
+            },
+        )
+
+        assert out.tools_called is False
+        assert out.tool_calls == []
+        assert out.content == text

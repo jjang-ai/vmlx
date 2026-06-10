@@ -93,7 +93,11 @@ class XMLFunctionToolParser(ToolParser):
 
     @classmethod
     def _parse_functions(
-        cls, text: str, *, allowed_names: set[str] | None = None
+        cls,
+        text: str,
+        *,
+        allowed_names: set[str] | None = None,
+        request: dict[str, Any] | None = None,
     ) -> list[dict[str, Any]]:
         tool_calls: list[dict[str, Any]] = []
         for func_name, body in cls.FUNCTION_PATTERN.findall(text):
@@ -103,6 +107,8 @@ class XMLFunctionToolParser(ToolParser):
             arguments: dict[str, Any] = {}
             for param_name, param_value in cls.PARAM_PATTERN.findall(body):
                 arguments[param_name.strip()] = cls._coerce_value(param_value)
+            if not cls._arguments_satisfy_required_schema(name, arguments, request):
+                continue
             tool_calls.append(
                 {
                     "id": generate_tool_id(),
@@ -114,7 +120,11 @@ class XMLFunctionToolParser(ToolParser):
 
     @classmethod
     def _parse_nested_invoke_functions(
-        cls, text: str, *, allowed_names: set[str] | None = None
+        cls,
+        text: str,
+        *,
+        allowed_names: set[str] | None = None,
+        request: dict[str, Any] | None = None,
     ) -> list[dict[str, Any]]:
         tool_calls: list[dict[str, Any]] = []
         for body in cls.INVOKE_PATTERN.findall(text):
@@ -130,6 +140,8 @@ class XMLFunctionToolParser(ToolParser):
                 args_body = args_match.group(1)
                 for arg_name, arg_value in cls.SIMPLE_XML_ARG_PATTERN.findall(args_body):
                     arguments[arg_name.strip()] = cls._coerce_value(arg_value)
+            if not cls._arguments_satisfy_required_schema(name, arguments, request):
+                continue
             tool_calls.append(
                 {
                     "id": generate_tool_id(),
@@ -163,7 +175,9 @@ class XMLFunctionToolParser(ToolParser):
                 and "<function=" in model_output
             ):
                 repaired_calls = self._parse_functions(
-                    model_output, allowed_names=allowed_names
+                    model_output,
+                    allowed_names=allowed_names,
+                    request=request,
                 )
                 if repaired_calls:
                     cleaned_text = self._strip_repaired_function_blocks(model_output)
@@ -180,9 +194,11 @@ class XMLFunctionToolParser(ToolParser):
 
         tool_calls: list[dict[str, Any]] = []
         for block in self.TOOL_CALL_PATTERN.findall(model_output):
-            tool_calls.extend(self._parse_functions(block))
+            tool_calls.extend(self._parse_functions(block, request=request))
             if not tool_calls:
-                tool_calls.extend(self._parse_nested_invoke_functions(block))
+                tool_calls.extend(
+                    self._parse_nested_invoke_functions(block, request=request)
+                )
 
         cleaned_text = self.TOOL_CALL_PATTERN.sub("", model_output).strip()
         if not tool_calls:
@@ -191,6 +207,7 @@ class XMLFunctionToolParser(ToolParser):
                 repaired_calls = self._parse_functions(
                     model_output,
                     allowed_names=allowed_names,
+                    request=request,
                 )
                 if repaired_calls:
                     cleaned_text = self._strip_repaired_function_blocks(model_output)
@@ -203,6 +220,7 @@ class XMLFunctionToolParser(ToolParser):
                 repaired_calls = self._parse_nested_invoke_functions(
                     model_output,
                     allowed_names=allowed_names,
+                    request=request,
                 )
                 if repaired_calls:
                     cleaned_text = self._strip_repaired_function_blocks(model_output)
