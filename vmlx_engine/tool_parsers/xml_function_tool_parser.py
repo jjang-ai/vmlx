@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import re
+from html import unescape
 from collections.abc import Sequence
 from typing import Any
 
@@ -40,7 +41,7 @@ class XMLFunctionToolParser(ToolParser):
         re.DOTALL,
     )
     PARAM_PATTERN = re.compile(
-        r"<parameter=([^>]+)>\s*(.*?)\s*</parameter>",
+        r"<parameter=([^>]+)>(.*?)</parameter>",
         re.DOTALL,
     )
     INVOKE_PATTERN = re.compile(
@@ -56,7 +57,7 @@ class XMLFunctionToolParser(ToolParser):
         re.DOTALL,
     )
     SIMPLE_XML_ARG_PATTERN = re.compile(
-        r"<([A-Za-z_][A-Za-z0-9_]*)>\s*(.*?)\s*</\1>",
+        r"<([A-Za-z_][A-Za-z0-9_]*)>(.*?)</\1>",
         re.DOTALL,
     )
     VALUE_WRAPPER_PATTERN = re.compile(
@@ -66,14 +67,15 @@ class XMLFunctionToolParser(ToolParser):
 
     @classmethod
     def _coerce_value(cls, value: str) -> Any:
-        value = value.strip()
-        wrapped = cls.VALUE_WRAPPER_PATTERN.match(value)
+        stripped = value.strip()
+        wrapped = cls.VALUE_WRAPPER_PATTERN.match(stripped)
         if wrapped:
-            value = wrapped.group(1).strip()
+            value = wrapped.group(1)
+            stripped = value.strip()
         try:
-            return json.loads(value)
+            return json.loads(stripped)
         except (json.JSONDecodeError, ValueError):
-            return value
+            return unescape(value)
 
     @staticmethod
     def _request_tool_names(request: dict[str, Any] | None) -> set[str]:

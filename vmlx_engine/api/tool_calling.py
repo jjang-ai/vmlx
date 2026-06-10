@@ -16,6 +16,7 @@ import logging
 import re
 import shlex
 import uuid
+from html import unescape
 from typing import Any, Dict, List, Optional, Tuple, Union
 import xml.etree.ElementTree as ET
 
@@ -25,6 +26,14 @@ from .models import FunctionCall, ResponseFormat, ToolCall
 
 logger = logging.getLogger(__name__)
 _LLGUIDANCE_TOKENIZER_CACHE: Dict[Tuple[int, int], Any] = {}
+
+
+def _coerce_xml_tool_value(value: str) -> Any:
+    stripped = value.strip()
+    try:
+        return json.loads(stripped)
+    except (json.JSONDecodeError, ValueError):
+        return unescape(value)
 
 
 def _tool_instruction_scope(prompt: str) -> str:
@@ -1361,24 +1370,21 @@ def parse_tool_calls(text: str) -> Tuple[str, Optional[List[ToolCall]]]:
 
     for name, params_block in nemotron_matches:
         # Parse parameters from <parameter=name>value</parameter> format
-        param_pattern = r"<parameter=([^>]+)>\s*(.*?)\s*</parameter>"
+        param_pattern = r"<parameter=([^>]+)>(.*?)</parameter>"
         params = re.findall(param_pattern, params_block, re.DOTALL)
         if not params:
             continue
         arguments = {}
         for p_name, p_value in params:
-            v = p_value.strip()
-            try:
-                arguments[p_name.strip()] = json.loads(v)
-            except (json.JSONDecodeError, ValueError):
-                arguments[p_name.strip()] = v
+            arguments[p_name.strip()] = _coerce_xml_tool_value(p_value)
 
         tool_calls.append(
             ToolCall(
                 id=f"call_{uuid.uuid4().hex[:8]}",
                 type="function",
                 function=FunctionCall(
-                    name=name.strip(), arguments=json.dumps(arguments)
+                    name=name.strip(),
+                    arguments=json.dumps(arguments, ensure_ascii=False),
                 ),
             )
         )
@@ -1407,17 +1413,14 @@ def parse_tool_calls(text: str) -> Tuple[str, Optional[List[ToolCall]]]:
                 continue
             arguments = {}
             for p_name, p_value in params:
-                v = p_value.strip()
-                try:
-                    arguments[p_name.strip()] = json.loads(v)
-                except (json.JSONDecodeError, ValueError):
-                    arguments[p_name.strip()] = v
+                arguments[p_name.strip()] = _coerce_xml_tool_value(p_value)
             tool_calls.append(
                 ToolCall(
                     id=f"call_{uuid.uuid4().hex[:8]}",
                     type="function",
                     function=FunctionCall(
-                        name=name.strip(), arguments=json.dumps(arguments)
+                        name=name.strip(),
+                        arguments=json.dumps(arguments, ensure_ascii=False),
                     ),
                 )
             )

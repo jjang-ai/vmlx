@@ -38,6 +38,7 @@ from vmlx_engine.tool_parsers import (
     DeepSeekToolParser,
     ToolParserManager,
 )
+from vmlx_engine.tool_parsers.xml_function_tool_parser import XMLFunctionToolParser
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -585,6 +586,24 @@ class TestGenericToolCallParsing:
         assert calls[0].function.name == "exec_command"
         assert json.loads(calls[0].function.arguments) == {"cmd": "ls /tmp"}
 
+    def test_generic_parser_preserves_xml_parameter_spacing_and_entities(self):
+        """Shell/code/file arguments must preserve spacing and XML entities."""
+        from vmlx_engine.api.tool_calling import parse_tool_calls
+
+        raw_cmd = "  printf 'a b' && printf '<x>&y'  "
+        text = (
+            "<tool_call>"
+            "<function=exec_command>"
+            "<parameter=cmd>  printf 'a b' &amp;&amp; printf '&lt;x&gt;&amp;y'  </parameter>"
+            "</function>"
+            "</tool_call>"
+        )
+        cleaned, calls = parse_tool_calls(text)
+
+        assert cleaned == ""
+        assert calls is not None
+        assert json.loads(calls[0].function.arguments) == {"cmd": raw_cmd}
+
 
 # ──────────────────────────────────────────────────────────────────────
 # Cross-parser: reasoning + tool call in same output
@@ -812,3 +831,55 @@ class TestQwenToolParserEdgeCases:
         result = parser.extract_tool_calls(text)
         assert result.tools_called
         assert result.tool_calls[0]["name"] == "test"
+
+
+class TestXMLFunctionToolParserEdgeCases:
+    """MiMo/XML function parser spacing and escaping edge cases."""
+
+    def test_preserves_spacing_unicode_paths_and_entities(self):
+        parser = XMLFunctionToolParser(tokenizer=None)
+        text = (
+            "Preamble.\n"
+            "<tool_call>\n"
+            "<function=exec_command>\n"
+            "<parameter=cmd>  mkdir -p '/tmp/vMLX space/日本語' &amp;&amp; printf '&lt;ok&gt;'  </parameter>\n"
+            "</function>\n"
+            "</tool_call>"
+        )
+
+        result = parser.extract_tool_calls(text)
+
+        assert result.tools_called is True
+        assert result.content == "Preamble."
+        args = json.loads(result.tool_calls[0]["arguments"])
+        assert args["cmd"] == "  mkdir -p '/tmp/vMLX space/日本語' && printf '<ok>'  "
+
+    def test_whitespace_only_required_argument_fails_closed(self):
+        parser = XMLFunctionToolParser(tokenizer=None)
+        request = {
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "exec_command",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {"cmd": {"type": "string"}},
+                            "required": ["cmd"],
+                        },
+                    },
+                }
+            ]
+        }
+        text = (
+            "<tool_call>"
+            "<function=exec_command>"
+            "<parameter=cmd>   \n\t   </parameter>"
+            "</function>"
+            "</tool_call>"
+        )
+
+        result = parser.extract_tool_calls(text, request=request)
+
+        assert result.tools_called is False
+        assert result.tool_calls == []
