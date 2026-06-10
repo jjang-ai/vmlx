@@ -6835,7 +6835,7 @@ def _native_cache_status(scheduler=None, *, family: str | None = None, cfg=None)
                 "mode": "storage_boundary",
                 "bits": stored_kv_bits if stored_kv_bits > 0 else None,
                 "group_size": stored_kv_group if stored_kv_bits > 0 else None,
-                "applies_to": "full_and_sliding_attention_kv",
+                "applies_to": "full_attention_kv_only",
                 "metadata_policy": "preserve_rotating_window_metadata",
             },
             "prefix": bool(block_aware_cache is not None),

@@ -38,6 +38,12 @@ def test_full_release_objective_checklist_uses_current_gemma4_12b_jang4m_nomedia
     )
 
 
+def test_full_release_objective_checklist_uses_current_gemma4_12b_autoq4_cache_proof():
+    assert checklist.GEMMA4_12B_JANG4M_AUTOQ4_CACHE == Path(
+        "build/current-gemma4-12b-jang4m-autoq4-mixed-swa-cache-live-20260610.json"
+    )
+
+
 def test_full_release_objective_checklist_uses_current_gemma4_12b_jang4m_media_proof():
     assert checklist.GEMMA4_12B_JANG4M_MEDIA_SMOKE == Path(
         "build/current-gemma4-12b-mxfp4-jang4m-media-smoke-live-20260610.json"
@@ -275,6 +281,29 @@ def _write_green_family_smokes(tmp_path: Path) -> None:
             cache_detail="paged+mixed_swa",
             native=_mixed_swa_native("gemma4"),
         ),
+    )
+    _write_json(
+        tmp_path
+        / "build/current-gemma4-12b-jang4m-autoq4-mixed-swa-cache-live-20260610.json",
+        {
+            "status": "pass",
+            "checks": {"cache_second_hit": True},
+            "native_cache": _mixed_swa_native("gemma4"),
+            "second": {
+                "usage": {
+                    "prompt_tokens_details": {
+                        "cached_tokens": 20,
+                        "cache_detail": "paged+mixed_swa",
+                    }
+                }
+            },
+            "cache_after": {
+                "body": {
+                    "block_disk_cache": {"disk_writes": 1},
+                    "cache_totals": {"l2_block_tokens_on_disk": 20},
+                }
+            },
+        },
     )
     _write_json(
         tmp_path

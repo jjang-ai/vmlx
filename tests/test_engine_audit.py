@@ -12485,7 +12485,7 @@ class TestTurboQuantKVTelemetry:
             "mode": "storage_boundary",
             "bits": 4,
             "group_size": 64,
-            "applies_to": "full_and_sliding_attention_kv",
+            "applies_to": "full_attention_kv_only",
             "metadata_policy": "preserve_rotating_window_metadata",
         }
         assert status["paged"] is True
@@ -12514,9 +12514,7 @@ class TestTurboQuantKVTelemetry:
         assert status["family"] == "step-3.7-flash"
         assert status["schema"] == "mixed_swa_kv_v1"
         assert status["cache_type"] == "mixed_swa_kv"
-        assert status["storage_quantization"]["applies_to"] == (
-            "full_and_sliding_attention_kv"
-        )
+        assert status["storage_quantization"]["applies_to"] == "full_attention_kv_only"
         assert status["storage_quantization"]["metadata_policy"] == (
             "preserve_rotating_window_metadata"
         )
@@ -12545,9 +12543,7 @@ class TestTurboQuantKVTelemetry:
         assert status["schema"] == "mixed_swa_kv_v1"
         assert status["cache_type"] == "mixed_swa_kv"
         assert status["cache_subtype"] == "mimo_v2_asymmetric_swa"
-        assert status["storage_quantization"]["applies_to"] == (
-            "full_and_sliding_attention_kv"
-        )
+        assert status["storage_quantization"]["applies_to"] == "full_attention_kv_only"
         assert status["storage_quantization"]["metadata_policy"] == (
             "preserve_rotating_window_metadata"
         )

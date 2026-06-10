@@ -83,6 +83,9 @@ QWEN35_INSTALLED_VIDEO = Path(
 GEMMA4_12B_JANG4M_SMOKE = Path(
     "build/current-all-local-model-smoke-gemma4-12b-jang4m-tools-nomedia-current-20260609/JANGQ_gemma-4-12B-it-JANG_4M/result.json"
 )
+GEMMA4_12B_JANG4M_AUTOQ4_CACHE = Path(
+    "build/current-gemma4-12b-jang4m-autoq4-mixed-swa-cache-live-20260610.json"
+)
 GEMMA4_12B_ISSUE191_STARTUP_VISIBLE = Path(
     "build/current-gemma4-12b-issue191-source-startup-visible-proof-20260609.json"
 )
@@ -725,21 +728,38 @@ def _smoke_mixed_swa_checks(
     expected_mllm: bool,
     cache_detail: str,
     subtype: str | None = None,
+    cache_proof: dict[str, Any] | None = None,
+    cache_path: Path | None = None,
 ) -> list[dict[str, Any]]:
     row = data.get("row") if isinstance(data.get("row"), dict) else {}
     capabilities = _get(data, "capabilities", "body", default={})
-    native = _get(data, "cache_after", "body", "native_cache", default={})
-    block_disk = _get(data, "cache_after", "body", "block_disk_cache", default={})
-    totals = _get(data, "cache_after", "body", "cache_totals", default={})
+    cache_source = cache_proof if isinstance(cache_proof, dict) else data
+    cache_evidence = cache_path or path
+    native = (
+        cache_source.get("native_cache")
+        if isinstance(cache_source.get("native_cache"), dict)
+        else _get(cache_source, "cache_after", "body", "native_cache", default={})
+    )
+    block_disk = _get(cache_source, "cache_after", "block_disk_cache", default={})
+    if not isinstance(block_disk, dict) or not block_disk:
+        block_disk = _get(cache_source, "cache_after", "body", "block_disk_cache", default={})
+    totals = _get(cache_source, "cache_after", "cache_totals", default={})
+    if not isinstance(totals, dict) or not totals:
+        totals = _get(cache_source, "cache_after", "body", "cache_totals", default={})
+    cache_reuse_ok = _has_cache_reuse_request(data, cache_detail) or (
+        _get(cache_source, "checks", "cache_second_hit") is True
+        and _get(cache_source, "second", "usage", "prompt_tokens_details", "cache_detail")
+        == cache_detail
+    )
     return _simple_artifact_checks(name, data) + [
         _check(f"{name}_request_validations_clean", _all_request_validations_clean(data), str(path), data.get("failures")),
         _check(f"{name}_mllm_classification", row.get("is_mllm") is expected_mllm, str(path), row.get("is_mllm")),
         _check(f"{name}_tool_parser", capabilities.get("tool_parser") == tool_parser, str(path), capabilities.get("tool_parser")),
         _check(f"{name}_reasoning_parser", capabilities.get("reasoning_parser") == reasoning_parser, str(path), capabilities.get("reasoning_parser")),
         _check(f"{name}_tool_call_record_fact", _has_record_fact_tool_call(data), str(path)),
-        _check(f"{name}_cache_reuse_detail", _has_cache_reuse_request(data, cache_detail), str(path), cache_detail),
-        _check(f"{name}_native_mixed_swa_cache", _native_mixed_swa_cache_ok(native, family=family, subtype=subtype), str(path), native),
-        _check(f"{name}_block_l2_written", _positive_number(_get(block_disk, "disk_writes")) and _positive_number(_get(totals, "l2_block_tokens_on_disk")), str(path), block_disk),
+        _check(f"{name}_cache_reuse_detail", cache_reuse_ok, str(cache_evidence), cache_detail),
+        _check(f"{name}_native_mixed_swa_cache", _native_mixed_swa_cache_ok(native, family=family, subtype=subtype), str(cache_evidence), native),
+        _check(f"{name}_block_l2_written", _positive_number(_get(block_disk, "disk_writes")) and _positive_number(_get(totals, "l2_block_tokens_on_disk")), str(cache_evidence), block_disk),
     ]
 
 
@@ -1797,6 +1817,7 @@ def _build(root: Path) -> dict[str, Any]:
     qwen35_raw_sse = _load_json(root / QWEN35_RAW_SSE_PARITY)
     qwen35_installed_video = _load_json(root / QWEN35_INSTALLED_VIDEO)
     gemma4 = _load_json(root / GEMMA4_12B_JANG4M_SMOKE)
+    gemma4_autoq4_cache = _load_json(root / GEMMA4_12B_JANG4M_AUTOQ4_CACHE)
     gemma4_issue191_startup = _load_json(root / GEMMA4_12B_ISSUE191_STARTUP_VISIBLE)
     gemma4_media = _load_json(root / GEMMA4_12B_JANG4M_MEDIA_SMOKE)
     gemma_qat = _load_json(root / GEMMA_QAT_NATIVE_MXFP4_INVENTORY)
@@ -1850,6 +1871,8 @@ def _build(root: Path) -> dict[str, Any]:
             reasoning_parser="gemma4",
             expected_mllm=True,
             cache_detail="paged+mixed_swa",
+            cache_proof=gemma4_autoq4_cache,
+            cache_path=GEMMA4_12B_JANG4M_AUTOQ4_CACHE,
         )
         + _gemma4_12b_issue191_startup_checks(gemma4_issue191_startup)
         + _gemma4_12b_media_checks(gemma4_media),
