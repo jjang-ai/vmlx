@@ -1410,9 +1410,7 @@ def _register_mimo_v2_mlx_vlm_runtime() -> None:
             num_kv_heads = int(
                 getattr(self.config, "num_key_value_heads", num_heads) or num_heads
             )
-            head_dim = int(getattr(self.config, "qk_channels", 0) or 0)
-            if head_dim <= 0:
-                head_dim = max(1, self.hidden_size // max(1, num_heads))
+            head_dim = int(getattr(self.config, "qk_channels", 64) or 64)
             self.vision_head_dim = head_dim
             rms_norm_eps = float(getattr(self.config, "rms_norm_eps", 1e-6) or 1e-6)
             hidden_act = str(getattr(self.config, "hidden_act", "silu") or "silu")
