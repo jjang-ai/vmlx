@@ -877,6 +877,46 @@ def _inject_chat_template_if_missing(tokenizer, model_path) -> str | None:
     return None
 
 
+def _should_defer_jang_startup_eval(local_model_path: str) -> bool:
+    """Return True for huge affine JANG rows that should eval lazily.
+
+    Nex/N2 Pro JANG_1L is an affine 397B-class artifact. Eagerly evaluating all
+    mmap-loaded parameters at startup can push the entire bundle into Metal
+    residency before any request exists, causing command-buffer OOM on 128GB
+    hosts. The JANG loader already supports ``skip_eval`` for lower-peak
+    loading; keep this narrow so ordinary JANG and JANGTQ rows retain their
+    existing startup behavior.
+    """
+    try:
+        import json as _json
+
+        path = Path(local_model_path)
+        cfg_path = path / "config.json"
+        jang_path = path / "jang_config.json"
+        if not cfg_path.exists() or not jang_path.exists():
+            return False
+        cfg = _json.loads(cfg_path.read_text())
+        jang_cfg = _json.loads(jang_path.read_text())
+        quant = jang_cfg.get("quantization") or cfg.get("quantization") or {}
+        model_type = str(
+            cfg.get("model_type")
+            or (cfg.get("text_config") or {}).get("model_type")
+            or ""
+        ).lower()
+        profile = str(quant.get("profile") or jang_cfg.get("profile") or "").upper()
+        weight_format = str(
+            jang_cfg.get("weight_format") or jang_cfg.get("format") or ""
+        ).lower()
+        has_tq = weight_format in {"mxtq", "jangtq"} or "TQ" in profile
+        return (
+            model_type == "qwen3_5_moe"
+            and profile == "JANG_1L"
+            and not has_tq
+        )
+    except Exception:
+        return False
+
+
 def load_model_with_fallback(model_name: str, tokenizer_config: dict = None, skip_turboquant: bool = False):
     """
     Load model and tokenizer with fallback for non-standard tokenizers.
@@ -1122,7 +1162,13 @@ def load_model_with_fallback(model_name: str, tokenizer_config: dict = None, ski
 
         from .jang_loader import load_jang_model
 
-        _m, _t = load_jang_model(local_model_path)
+        _skip_startup_eval = _should_defer_jang_startup_eval(local_model_path)
+        if _skip_startup_eval:
+            logger.info(
+                "Nex/N2 JANG_1L affine bundle detected — deferring JANG "
+                "startup parameter eval to reduce Metal residency peak"
+            )
+        _m, _t = load_jang_model(local_model_path, skip_eval=_skip_startup_eval)
         _inject_chat_template_if_missing(_t, local_model_path)
         return _m, _t
 
