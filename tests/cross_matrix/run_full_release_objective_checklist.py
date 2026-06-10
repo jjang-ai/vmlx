@@ -17,14 +17,23 @@ from typing import Any
 
 
 DEFAULT_OUT = Path(
-    "build/current-full-release-objective-checklist-after-gemma12-code-column-prompt-20260610.json"
+    "build/current-full-release-objective-checklist-after-mimo-current-media-accounting-20260610.json"
 )
 
 MIMO_AUDIT = Path(
     "build/current-mimo-v2-jang2l-current-audit-after-cache-vs-nocache-logprobs-20260609.json"
 )
 MIMO_NO_SOURCE_EXACTNESS_CLASSIFIER = Path(
-    "build/current-mimo-v2-no-source-exactness-classifier-after-artifact-diagnosis-20260609.json"
+    "build/current-mimo-v2-no-source-exactness-classifier-after-devapp-jangtq2-exactness-20260610.json"
+)
+MIMO_JANGTQ2_MEDIA_RUNTIME_SOURCE = Path(
+    "build/current-mimo-v25-jangtq2-media-runtime-source-proof-20260610.json"
+)
+MIMO_JANGTQ2_VIDEO_AUDIO_SOURCE = Path(
+    "build/current-mimo-v25-jangtq2-video-audio-source-proof-20260610.json"
+)
+MIMO_JANGTQ2_RESPONSES_TOOLS_CACHE_UI = Path(
+    "build/current-real-ui-dev-app-mimo-v25-jangtq2-responses-tools-cache-20260610.json"
 )
 NOHEAVY_API_CACHE = Path(
     "build/current-noheavy-api-cache-contract-after-responses-reasoning-empty-final-args-gateway-20260609.json"
@@ -295,7 +304,107 @@ def _mimo_classifier_checks(
     ]
 
 
-def _mimo_checks(data: dict[str, Any], classifier: dict[str, Any]) -> list[dict[str, Any]]:
+def _mimo_media_current_checks(
+    media_runtime: dict[str, Any],
+    video_audio: dict[str, Any],
+    responses_tools_cache_ui: dict[str, Any],
+) -> list[dict[str, Any]]:
+    runtime_proven = media_runtime.get("proven")
+    runtime_proven = runtime_proven if isinstance(runtime_proven, dict) else {}
+    runtime_not_proven = media_runtime.get("not_proven")
+    runtime_not_proven = runtime_not_proven if isinstance(runtime_not_proven, dict) else {}
+    video_audio_proven = video_audio.get("proven")
+    video_audio_proven = video_audio_proven if isinstance(video_audio_proven, dict) else {}
+    video_audio_not_proven = video_audio.get("not_proven")
+    video_audio_not_proven = (
+        video_audio_not_proven if isinstance(video_audio_not_proven, dict) else {}
+    )
+    ui_cache = responses_tools_cache_ui.get("cache")
+    ui_cache = ui_cache if isinstance(ui_cache, dict) else {}
+    ui_runtime = responses_tools_cache_ui.get("runtime")
+    ui_runtime = ui_runtime if isinstance(ui_runtime, dict) else {}
+    source_media_runtime_green = (
+        media_runtime.get("exists") is True
+        and runtime_proven.get("api_routes_mllm") is True
+        and runtime_proven.get("loader_overlay_auto_enabled") is True
+        and runtime_proven.get("preserved_media_weights_bound") is True
+        and runtime_proven.get("live_chat_image_200") is True
+        and runtime_proven.get("prior_unsupported_media_400_cleared_for_source_image")
+        is True
+    )
+    source_video_audio_route_green = (
+        video_audio.get("exists") is True
+        and video_audio_proven.get("source_server_loads_as_mllm") is True
+        and video_audio_proven.get("media_weights_bound") is True
+        and video_audio_proven.get("video_request_reaches_runtime") is True
+        and video_audio_proven.get("video_http_200") is True
+        and video_audio_proven.get("audio_request_reaches_runtime") is True
+        and video_audio_proven.get("audio_http_200") is True
+    )
+    ui_responses_cache_green = (
+        responses_tools_cache_ui.get("exists") is True
+        and responses_tools_cache_ui.get("status") == "pass"
+        and responses_tools_cache_ui.get("classification")
+        == "dev_app_responses_tools_cache_green_exactness_still_bounded"
+        and ui_cache.get("nativeCacheSubtype") == "mimo_v2_asymmetric_swa"
+        and _positive_number(ui_cache.get("cacheHitTokens"))
+        and _positive_number(ui_cache.get("l2TokensOnDisk"))
+        and ui_runtime.get("quantizationProfile") == "JANGTQ_2"
+    )
+    return [
+        _check(
+            "mimo_jangtq2_current_source_media_runtime",
+            source_media_runtime_green,
+            str(MIMO_JANGTQ2_MEDIA_RUNTIME_SOURCE),
+            {
+                "status": media_runtime.get("status"),
+                "proven": runtime_proven,
+                "not_proven": runtime_not_proven,
+            },
+        ),
+        _check(
+            "mimo_jangtq2_current_source_video_audio_routes",
+            source_video_audio_route_green,
+            str(MIMO_JANGTQ2_VIDEO_AUDIO_SOURCE),
+            {
+                "status": video_audio.get("status"),
+                "proven": video_audio_proven,
+                "not_proven": video_audio_not_proven,
+            },
+        ),
+        _check(
+            "mimo_jangtq2_dev_app_responses_tools_cache",
+            ui_responses_cache_green,
+            str(MIMO_JANGTQ2_RESPONSES_TOOLS_CACHE_UI),
+            {
+                "status": responses_tools_cache_ui.get("status"),
+                "classification": responses_tools_cache_ui.get("classification"),
+                "cache": ui_cache,
+                "runtime": ui_runtime,
+            },
+        ),
+        _check(
+            "mimo_jangtq2_media_semantics_release_quality",
+            video_audio_not_proven.get("video_semantic_correctness") is not True
+            and video_audio_not_proven.get("solid_color_image_semantic_correctness")
+            is not True
+            and runtime_not_proven.get("mimo_exactness") is not True,
+            str(MIMO_JANGTQ2_VIDEO_AUDIO_SOURCE),
+            {
+                "source_not_proven": video_audio_not_proven,
+                "runtime_not_proven": runtime_not_proven,
+            },
+        ),
+    ]
+
+
+def _mimo_checks(
+    data: dict[str, Any],
+    classifier: dict[str, Any],
+    media_runtime: dict[str, Any],
+    video_audio: dict[str, Any],
+    responses_tools_cache_ui: dict[str, Any],
+) -> list[dict[str, Any]]:
     component_ok = data.get("component_ok")
     component_ok = component_ok if isinstance(component_ok, dict) else {}
     blockers = data.get("blockers")
@@ -310,6 +419,16 @@ def _mimo_checks(data: dict[str, Any], classifier: dict[str, Any]) -> list[dict[
     classifier_unresolved = (
         classifier_unresolved if isinstance(classifier_unresolved, dict) else {}
     )
+    media_runtime_rows = _mimo_media_current_checks(
+        media_runtime, video_audio, responses_tools_cache_ui
+    )
+    media_current_by_name = {row["name"]: row for row in media_runtime_rows}
+    current_source_media_runtime = media_current_by_name[
+        "mimo_jangtq2_current_source_media_runtime"
+    ]["ok"]
+    current_source_video_audio_routes = media_current_by_name[
+        "mimo_jangtq2_current_source_video_audio_routes"
+    ]["ok"]
     artifact_exactness_detail = {
         "blockers": blockers,
         "jangtq2_boundary": all_local_smoke.get("artifact_exactness_boundary"),
@@ -361,14 +480,36 @@ def _mimo_checks(data: dict[str, Any], classifier: dict[str, Any]) -> list[dict[
     ]
     for name in required:
         detail = artifact_exactness_detail if name == "artifact_exactness" else None
+        ok = component_ok.get(name) is True
+        if name == "media_runtime_implementation":
+            ok = ok or current_source_media_runtime
+            detail = {
+                "audit_component_ok": component_ok.get(name),
+                "current_source_media_runtime": current_source_media_runtime,
+                "source_evidence": str(MIMO_JANGTQ2_MEDIA_RUNTIME_SOURCE),
+            }
+        elif name == "mimo_media_wired":
+            ok = ok or (
+                current_source_media_runtime and current_source_video_audio_routes
+            )
+            detail = {
+                "audit_component_ok": component_ok.get(name),
+                "current_source_media_runtime": current_source_media_runtime,
+                "current_source_video_audio_routes": current_source_video_audio_routes,
+                "source_evidence": [
+                    str(MIMO_JANGTQ2_MEDIA_RUNTIME_SOURCE),
+                    str(MIMO_JANGTQ2_VIDEO_AUDIO_SOURCE),
+                ],
+            }
         rows.append(
             _check(
                 f"mimo_{name}",
-                component_ok.get(name) is True,
+                ok,
                 str(MIMO_AUDIT),
                 detail,
             )
         )
+    rows.extend(media_runtime_rows)
     rows.extend(_mimo_classifier_checks(data, classifier))
     return rows
 
@@ -1799,6 +1940,11 @@ def _build(root: Path) -> dict[str, Any]:
     release_manifest = _load_json(root / RELEASE_MANIFEST)
     mimo = _load_json(root / MIMO_AUDIT)
     mimo_classifier = _load_json(root / MIMO_NO_SOURCE_EXACTNESS_CLASSIFIER)
+    mimo_media_runtime = _load_json(root / MIMO_JANGTQ2_MEDIA_RUNTIME_SOURCE)
+    mimo_video_audio = _load_json(root / MIMO_JANGTQ2_VIDEO_AUDIO_SOURCE)
+    mimo_responses_tools_cache_ui = _load_json(
+        root / MIMO_JANGTQ2_RESPONSES_TOOLS_CACHE_UI
+    )
     noheavy = _load_json(root / NOHEAVY_API_CACHE)
     responses_raw_sse = _load_json(root / RESPONSES_RAW_SSE_PARITY)
     api_surface = _load_json(root / API_SURFACE_CONTRACT)
@@ -1839,7 +1985,13 @@ def _build(root: Path) -> dict[str, Any]:
         "ui_settings_parser_cache_contract": _panel_settings_contract_checks(panel_settings),
         "tool_json_xml_code_contract": _tool_call_contract_checks(tool_call),
         "n2_pro_397b": _n2_pro_397b_checks(objective_digest),
-        "mimo_v25_jangtq2": _mimo_checks(mimo, mimo_classifier),
+        "mimo_v25_jangtq2": _mimo_checks(
+            mimo,
+            mimo_classifier,
+            mimo_media_runtime,
+            mimo_video_audio,
+            mimo_responses_tools_cache_ui,
+        ),
         "qwen36_mtp": _qwen27_cancel_checks(qwen27)
         + _qwen27_api_parity_checks(qwen27_api)
         + _qwen27_restart_l2_checks(qwen27_restart)

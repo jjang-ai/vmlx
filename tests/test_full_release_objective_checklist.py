@@ -272,8 +272,7 @@ def _write_green_family_smokes(tmp_path: Path) -> None:
         },
     )
     _write_json(
-        tmp_path
-        / "build/current-all-local-model-smoke-gemma4-12b-jang4m-tools-nomedia-current-20260609/JANGQ_gemma-4-12B-it-JANG_4M/result.json",
+        tmp_path / checklist.GEMMA4_12B_JANG4M_SMOKE,
         _smoke_artifact(
             mllm=True,
             tool_parser="gemma4",
@@ -746,6 +745,16 @@ def _write_qwen_green_artifacts(tmp_path: Path) -> None:
             "status": "pass",
             "missing_captures": [],
             "checks": {
+                "direct_capture_present": True,
+                "gateway_capture_present": True,
+                "tunnel_capture_present": True,
+                "all_required_surfaces_present": True,
+                "all_present_surfaces_parse_cleanly": True,
+                "all_present_surfaces_match_expected_function_name": True,
+                "authoritative_arguments_match_across_present_surfaces": True,
+                "tunnel_expected_model_advertised": True,
+                "gateway_argument_stream_passthrough_guard": True,
+                "responses_previous_response_history_guard": True,
                 "all_present_surfaces_same_model": True,
                 "all_present_surfaces_match_expected_model": True,
                 "all_present_surfaces_have_authoritative_args": True,
@@ -863,7 +872,7 @@ def _write_dsv4_green_artifact(tmp_path: Path) -> None:
 
 def _write_green_n2_objective_digest(tmp_path: Path) -> None:
     assert checklist.OBJECTIVE_DIGEST == Path(
-        "build/current-objective-proof-after-mimo-n2-dev-app-proof-refresh-20260610.json"
+        "build/current-objective-proof-after-n2-jangtq2-devapp-prevresp-consumed-20260610.json"
     )
     _write_json(
         tmp_path / checklist.OBJECTIVE_DIGEST,
@@ -1019,6 +1028,55 @@ def test_full_release_objective_checklist_keeps_open_rows_visible(tmp_path):
         },
     )
     _write_json(
+        tmp_path / checklist.MIMO_JANGTQ2_MEDIA_RUNTIME_SOURCE,
+        {
+            "status": "open",
+            "proven": {
+                "api_routes_mllm": True,
+                "loader_overlay_auto_enabled": True,
+                "preserved_media_weights_bound": True,
+                "live_chat_image_200": True,
+                "prior_unsupported_media_400_cleared_for_source_image": True,
+            },
+            "not_proven": {
+                "mimo_exactness": True,
+                "release_clearance": True,
+            },
+        },
+    )
+    _write_json(
+        tmp_path / checklist.MIMO_JANGTQ2_VIDEO_AUDIO_SOURCE,
+        {
+            "status": "open",
+            "proven": {
+                "source_server_loads_as_mllm": True,
+                "media_weights_bound": True,
+                "video_request_reaches_runtime": True,
+                "video_http_200": True,
+                "audio_request_reaches_runtime": True,
+                "audio_http_200": True,
+            },
+            "not_proven": {
+                "video_semantic_correctness": True,
+                "solid_color_image_semantic_correctness": True,
+                "release_clearance": True,
+            },
+        },
+    )
+    _write_json(
+        tmp_path / checklist.MIMO_JANGTQ2_RESPONSES_TOOLS_CACHE_UI,
+        {
+            "status": "pass",
+            "classification": "dev_app_responses_tools_cache_green_exactness_still_bounded",
+            "cache": {
+                "nativeCacheSubtype": "mimo_v2_asymmetric_swa",
+                "cacheHitTokens": 4548,
+                "l2TokensOnDisk": 4225,
+            },
+            "runtime": {"quantizationProfile": "JANGTQ_2"},
+        },
+    )
+    _write_json(
         tmp_path / checklist.GEMMA4_12B_ISSUE191_STARTUP_VISIBLE,
         {
             "status": "pass",
@@ -1050,8 +1108,9 @@ def test_full_release_objective_checklist_keeps_open_rows_visible(tmp_path):
     assert "real_ui_live_model_matrix" in failed_names
     assert "mimo_tool_protocol" in failed_names
     assert "mimo_media_model_metadata_text_only_contract" in failed_names
-    assert "mimo_media_runtime_implementation" in failed_names
-    assert "mimo_mimo_media_wired" in failed_names
+    assert "mimo_media_runtime_implementation" not in failed_names
+    assert "mimo_mimo_media_wired" not in failed_names
+    assert "mimo_jangtq2_media_semantics_release_quality" in failed_names
     assert "mimo_source_vs_quant_first_divergence" not in failed_names
     assert "mimo_source_vs_quant_requirement_satisfied" not in failed_names
     assert "mimo_no_source_classifier_tracks_exactness_boundary" not in failed_names
@@ -1100,6 +1159,15 @@ def test_full_release_objective_checklist_keeps_open_rows_visible(tmp_path):
         "JANGTQ gate=3/up=2/down=3",
         "JANGTQ gate=3/up=3/down=3",
     ]
+    mimo_media_rows = {
+        row["name"]: row
+        for row in result["groups"]["mimo_v25_jangtq2"]
+        if row["name"].startswith("mimo_jangtq2_")
+    }
+    assert mimo_media_rows["mimo_jangtq2_current_source_media_runtime"]["ok"] is True
+    assert mimo_media_rows["mimo_jangtq2_current_source_video_audio_routes"]["ok"] is True
+    assert mimo_media_rows["mimo_jangtq2_dev_app_responses_tools_cache"]["ok"] is True
+    assert mimo_media_rows["mimo_jangtq2_media_semantics_release_quality"]["ok"] is False
     gemma_startup_rows = [
         row
         for row in result["groups"]["gemma4_12b"]
@@ -1654,6 +1722,48 @@ def test_full_release_objective_checklist_can_pass_when_all_evidence_is_green(
                 "hidden_stochastic_sampling_primary_cause": True,
             },
             "unresolved_surfaces": {},
+        },
+    )
+    _write_json(
+        tmp_path / checklist.MIMO_JANGTQ2_MEDIA_RUNTIME_SOURCE,
+        {
+            "status": "pass",
+            "proven": {
+                "api_routes_mllm": True,
+                "loader_overlay_auto_enabled": True,
+                "preserved_media_weights_bound": True,
+                "live_chat_image_200": True,
+                "prior_unsupported_media_400_cleared_for_source_image": True,
+            },
+            "not_proven": {},
+        },
+    )
+    _write_json(
+        tmp_path / checklist.MIMO_JANGTQ2_VIDEO_AUDIO_SOURCE,
+        {
+            "status": "pass",
+            "proven": {
+                "source_server_loads_as_mllm": True,
+                "media_weights_bound": True,
+                "video_request_reaches_runtime": True,
+                "video_http_200": True,
+                "audio_request_reaches_runtime": True,
+                "audio_http_200": True,
+            },
+            "not_proven": {},
+        },
+    )
+    _write_json(
+        tmp_path / checklist.MIMO_JANGTQ2_RESPONSES_TOOLS_CACHE_UI,
+        {
+            "status": "pass",
+            "classification": "dev_app_responses_tools_cache_green_exactness_still_bounded",
+            "cache": {
+                "nativeCacheSubtype": "mimo_v2_asymmetric_swa",
+                "cacheHitTokens": 1,
+                "l2TokensOnDisk": 1,
+            },
+            "runtime": {"quantizationProfile": "JANGTQ_2"},
         },
     )
     _write_issue179_green_artifact(tmp_path)
