@@ -17,7 +17,7 @@ from typing import Any
 
 
 DEFAULT_OUT = Path(
-    "build/current-full-release-objective-checklist-after-qwen-mimo-gemma-refresh-20260610.json"
+    "build/current-full-release-objective-checklist-after-gemma12-code-column-prompt-20260610.json"
 )
 
 MIMO_AUDIT = Path(
@@ -81,7 +81,7 @@ QWEN35_INSTALLED_VIDEO = Path(
     "docs/internal/agent-notes/current-real-ui-installed-app-qwen36-35b-mxfp8-mtp-responses-tools-video-reasoning-cachecontrols-max512-20260607-proof.json"
 )
 GEMMA4_12B_JANG4M_SMOKE = Path(
-    "build/current-all-local-model-smoke-gemma4-12b-jang4m-tools-nomedia-current-20260609/JANGQ_gemma-4-12B-it-JANG_4M/result.json"
+    "build/current-all-local-model-smoke-gemma4-12b-jang4m-tools-nomedia-after-code-column-prompt-20260610/JANGQ_gemma-4-12B-it-JANG_4M/result.json"
 )
 GEMMA4_12B_JANG4M_AUTOQ4_CACHE = Path(
     "build/current-gemma4-12b-jang4m-autoq4-mixed-swa-cache-live-20260610.json"

@@ -34,7 +34,7 @@ def test_full_release_objective_checklist_uses_current_gemma4_12b_issue191_start
 
 def test_full_release_objective_checklist_uses_current_gemma4_12b_jang4m_nomedia_proof():
     assert checklist.GEMMA4_12B_JANG4M_SMOKE == Path(
-        "build/current-all-local-model-smoke-gemma4-12b-jang4m-tools-nomedia-current-20260609/JANGQ_gemma-4-12B-it-JANG_4M/result.json"
+        "build/current-all-local-model-smoke-gemma4-12b-jang4m-tools-nomedia-after-code-column-prompt-20260610/JANGQ_gemma-4-12B-it-JANG_4M/result.json"
     )
 
 
