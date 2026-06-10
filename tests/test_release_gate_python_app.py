@@ -415,6 +415,32 @@ def test_release_dmg_final_sign_preserves_hardened_runtime_entitlements():
     assert "build/entitlements.mac.plist" in final_sign_block
 
 
+def test_release_dmg_build_default_still_requires_prepackage_ready():
+    script = Path("panel/scripts/build-release-dmgs.sh").read_text()
+
+    strict_block = script[
+        script.index('else\n  (') : script.index("fi\n\nsign_bundled_python_native_files")
+    ]
+
+    assert "VMLX_CHECKPOINT_RELEASE_OVERRIDE" in script
+    assert "--require-prepackage-ready" in strict_block
+    assert "run_release_regression_manifest.py" in strict_block
+
+
+def test_release_dmg_checkpoint_override_records_open_manifest_without_require_flag():
+    script = Path("panel/scripts/build-release-dmgs.sh").read_text()
+
+    override_block = script[
+        script.index('if [[ "$CHECKPOINT_RELEASE_OVERRIDE" = "1" ]]')
+        : script.index("else\n  (")
+    ]
+
+    assert "building a checkpoint DMG with open rows" in override_block
+    assert "Release notes must list open rows" in override_block
+    assert "--out" in override_block
+    assert "--require-prepackage-ready" not in override_block
+
+
 def test_bundled_verifier_rejects_non_relocatable_console_shebangs():
     verifier = Path("panel/scripts/verify-bundled-python.sh").read_text()
 

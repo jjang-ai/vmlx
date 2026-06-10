@@ -26,14 +26,25 @@ if [[ ! -x "$PYTHON_BIN" ]]; then
 fi
 PREPACKAGE_READY_MANIFEST_OUT="${VMLX_PREPACKAGE_READY_MANIFEST_OUT:-${VMLINUX_PREPACKAGE_READY_MANIFEST_OUT:-$ROOT_DIR/build/current-release-regression-manifest-pre-dmg-release-build.json}}"
 RELEASE_CODESIGN_IDENTITY="${VMLX_RELEASE_CODESIGN_IDENTITY:-${VMLINUX_RELEASE_CODESIGN_IDENTITY:-${CSC_NAME:-Developer ID Application: ShieldStack LLC (55KGF2S5AY)}}}"
+CHECKPOINT_RELEASE_OVERRIDE="${VMLX_CHECKPOINT_RELEASE_OVERRIDE:-${VMLINUX_CHECKPOINT_RELEASE_OVERRIDE:-0}}"
 
 echo "==> Checking pre-package release ledger before public DMG build"
-(
-  cd "$ROOT_DIR"
-  "$PYTHON_BIN" "tests/cross_matrix/run_release_regression_manifest.py" \
-    --require-prepackage-ready \
-    --out "$PREPACKAGE_READY_MANIFEST_OUT"
-)
+if [[ "$CHECKPOINT_RELEASE_OVERRIDE" = "1" ]]; then
+  echo "WARNING: VMLX_CHECKPOINT_RELEASE_OVERRIDE=1 — building a checkpoint DMG with open rows." >&2
+  echo "WARNING: Release notes must list open rows from: $PREPACKAGE_READY_MANIFEST_OUT" >&2
+  (
+    cd "$ROOT_DIR"
+    "$PYTHON_BIN" "tests/cross_matrix/run_release_regression_manifest.py" \
+      --out "$PREPACKAGE_READY_MANIFEST_OUT"
+  )
+else
+  (
+    cd "$ROOT_DIR"
+    "$PYTHON_BIN" "tests/cross_matrix/run_release_regression_manifest.py" \
+      --require-prepackage-ready \
+      --out "$PREPACKAGE_READY_MANIFEST_OUT"
+  )
+fi
 
 sign_bundled_python_native_files() {
   local bundled_python="$1"
