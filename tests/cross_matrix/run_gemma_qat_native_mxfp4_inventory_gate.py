@@ -20,7 +20,7 @@ DEFAULT_ROOTS = (
     Path("/Users/example/.mlxstudio/models"),
 )
 DEFAULT_OUT = Path(
-    "build/current-gemma-qat-native-mxfp4-local-inventory-after-e4b-jang4m-fullmedia-20260610.json"
+    "build/current-gemma-qat-native-mxfp4-local-inventory-after-12b-jang4m-fullmedia-20260610.json"
 )
 
 REQUIRED_QAT_ROWS = {
@@ -187,6 +187,9 @@ SOURCE_FULLMEDIA_SMOKE_PROOFS = {
     "gemma4_e4b_qat_jang4m": Path(
         "build/current-all-local-model-smoke-gemma4-e4b-qat-jang4m-fullmedia-tools-l2-20260610/JANGQ_gemma-4-E4B-it-qat-JANG_4M/result.json"
     ),
+    "gemma4_12b_qat_jang4m": Path(
+        "build/current-all-local-model-smoke-gemma4-12b-qat-jang4m-fullmedia-tools-l2-20260610/JANGQ_gemma-4-12B-it-qat-JANG_4M/result.json"
+    ),
 }
 
 
@@ -352,10 +355,17 @@ def _source_live_smoke_status(row_key: str, proof_root: Path) -> dict[str, Any]:
     }
 
 
-def _source_fullmedia_smoke_status(row_key: str, proof_root: Path) -> dict[str, Any]:
+def _source_fullmedia_smoke_status(
+    row_key: str,
+    proof_root: Path,
+    *,
+    required_modalities: list[str] | None = None,
+) -> dict[str, Any]:
     rel = SOURCE_FULLMEDIA_SMOKE_PROOFS.get(row_key)
     if rel is None:
         return {"status": "missing", "artifact": None}
+    required_modality_set = set(required_modalities or REQUIRED_QAT_ROWS[row_key]["requires"])
+    requires_audio = "audio" in required_modality_set
     path = proof_root / rel
     proof = _load_json(path)
     requests = _source_smoke_requests(proof)
@@ -392,9 +402,9 @@ def _source_fullmedia_smoke_status(row_key: str, proof_root: Path) -> dict[str, 
         "vl_red_image_changed",
         "vl_blue_video",
         "text_no_media_after_video",
-        "audio_blue",
-        "text_no_media_after_audio",
     )
+    if requires_audio:
+        required_labels = required_labels + ("audio_blue", "text_no_media_after_audio")
     missing_labels = [label for label in required_labels if label not in by_label]
     failed_labels = [
         label
@@ -427,17 +437,23 @@ def _source_fullmedia_smoke_status(row_key: str, proof_root: Path) -> dict[str, 
         "video_blue": _request_passed_with_content(
             by_label.get("vl_blue_video"), expected_content="Blue"
         ),
-        "audio_blue": _request_passed_with_content(
+        "audio_blue": True
+        if not requires_audio
+        else _request_passed_with_content(
             by_label.get("audio_blue"), expected_content="Blue"
         ),
         "post_media_text_recovery": _request_passed_with_content(
-            by_label.get("text_no_media_after_audio"), expected_content="NONE"
-        )
-        and _request_passed_with_content(
             by_label.get("text_no_media_after_video"), expected_content="NONE"
         )
         and _request_passed_with_content(
             by_label.get("text_no_media_after_image"), expected_content="NONE"
+        )
+        and (
+            True
+            if not requires_audio
+            else _request_passed_with_content(
+                by_label.get("text_no_media_after_audio"), expected_content="NONE"
+            )
         ),
         "mixed_swa_native_cache": native_cache.get("schema") == "mixed_swa_kv_v1"
         and native_cache.get("generic_turboquant_kv", {}).get("enabled") is False,
@@ -463,6 +479,7 @@ def _source_fullmedia_smoke_status(row_key: str, proof_root: Path) -> dict[str, 
         "missing_labels": missing_labels,
         "failed_labels": failed_labels,
         "checks": checks,
+        "requires_audio": requires_audio,
         "request_count": len(requests),
         "l2_restart": {
             "status": l2_restart.get("status"),
@@ -562,7 +579,11 @@ def classify_required_rows(
                     )
 
         source_live_smoke = _source_live_smoke_status(key, proof_root)
-        source_fullmedia_smoke = _source_fullmedia_smoke_status(key, proof_root)
+        source_fullmedia_smoke = _source_fullmedia_smoke_status(
+            key,
+            proof_root,
+            required_modalities=required_modalities,
+        )
         classified[key] = {
             "display": spec["display"],
             "status": proof_status,
