@@ -17,11 +17,11 @@ from typing import Any
 
 
 DEFAULT_OUT = Path(
-    "build/current-full-release-objective-checklist-after-qwen-missing-required-args-failclosed-20260610.json"
+    "build/current-full-release-objective-checklist-after-mimo-media-route-proof-20260610.json"
 )
 
 MIMO_AUDIT = Path(
-    "build/current-mimo-v2-jang2l-current-audit-after-cache-vs-nocache-logprobs-20260609.json"
+    "build/current-mimo-v2-jang2l-current-audit-after-media-route-proof-20260610.json"
 )
 MIMO_NO_SOURCE_EXACTNESS_CLASSIFIER = Path(
     "build/current-mimo-v2-no-source-exactness-classifier-after-devapp-jangtq2-exactness-20260610.json"

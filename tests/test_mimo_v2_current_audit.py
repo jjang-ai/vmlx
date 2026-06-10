@@ -764,6 +764,55 @@ def test_mimo_current_audit_separates_clean_artifact_from_runtime_blockers(
             },
         },
     )
+    _write_json(
+        tmp_path / audit.JANGTQ2_SOURCE_MEDIA_PROOF_ARTIFACT,
+        {
+            "status": "open",
+            "proven": {
+                "source_server_loads_as_mllm": True,
+                "media_weights_bound": True,
+                "video_request_reaches_runtime": True,
+                "video_http_200": True,
+                "audio_request_reaches_runtime": True,
+                "audio_http_200": True,
+            },
+            "not_proven": {
+                "video_semantic_correctness": True,
+                "fresh_process_l2_restore": True,
+                "release_clearance": True,
+            },
+        },
+    )
+    _write_json(
+        tmp_path / audit.JANGTQ2_DEV_APP_VIDEO_MEDIA_PROOF_ARTIFACT,
+        {
+            "status": "open",
+            "transport_status": "pass",
+            "semantic_status": "fail",
+            "checks": {
+                "real_electron_dev_build": True,
+                "real_model_loaded": True,
+                "mllm_flag_used": True,
+                "server_media_diag_video_url": True,
+                "http_200": True,
+                "block_l2_write": True,
+                "video_semantic_red_fixture": False,
+            },
+        },
+    )
+    _write_json(
+        tmp_path / audit.JANGTQ2_VIDEO_CACHE_PROOF_ARTIFACT,
+        {
+            "status": "open",
+            "proven": {
+                "real_mimo_jangtq2_model_loaded": True,
+                "video_request_reaches_runtime": True,
+                "repeated_video_request_http_200": True,
+                "video_pixel_cache_hit_after_first_request": True,
+                "video_cache_contract_preserves_video_tensor_fields_in_source": True,
+            },
+        },
+    )
 
     result = audit.build_audit(tmp_path, model_path, manifest)
 
@@ -786,16 +835,28 @@ def test_mimo_current_audit_separates_clean_artifact_from_runtime_blockers(
     assert result["component_ok"]["media_weights_preserved"] is False
     assert result["component_ok"]["media_runtime_capabilities_safe"] is False
     assert result["component_ok"]["media_model_metadata_text_only_contract"] is False
-    assert result["component_ok"]["media_runtime_implementation"] is False
+    assert result["component_ok"]["media_runtime_implementation"] is True
     assert result["component_ok"]["mimo_media_wired"] is False
     assert result["component_ok"]["manual_sink_does_not_clear_length_generation"] is True
     assert result["component_ok"]["disable_sink_does_not_clear_length_generation"] is True
-    assert result["diagnostics"]["mimo_media_runtime"]["classification"] in {
-        "runtime_implementation_gap_with_model_metadata_overadvertising",
-        "runtime_implementation_gap",
-        "model_metadata_overadvertising",
-        "media_components_present_runtime_capabilities_text_only",
-    }
+    assert (
+        result["diagnostics"]["mimo_media_runtime"]["classification"]
+        == "forced_mllm_media_transport_and_cache_live_semantics_red"
+    )
+    assert (
+        result["diagnostics"]["mimo_media_runtime"][
+            "runtime_media_wired_superseded_by_route_proof"
+        ]
+        is True
+    )
+    assert (
+        result["diagnostics"]["mimo_jangtq2_media_route"]["transport_proven"]
+        is True
+    )
+    assert (
+        result["diagnostics"]["mimo_jangtq2_media_route"]["semantic_quality_proven"]
+        is False
+    )
     assert result["diagnostics"]["mimo_media_runtime"]["config_parser_components"] == {
         "vision_config": True,
         "audio_config": True,
@@ -984,6 +1045,7 @@ def test_mimo_current_audit_separates_clean_artifact_from_runtime_blockers(
     )
     assert "mimo_jangtq2_live_media_l2_missing" in result["blockers"]
     assert "mimo_jang2l_live_media_l2_missing" in result["blockers"]
+    assert "mimo_media_runtime_implementation_missing" not in result["blockers"]
     assert "mimo_exact_cache_prompt_following_blocked" not in result["blockers"]
     assert "mimo_jang2l_media_capability_downscoped_to_text" not in result["blockers"]
     assert "mimo_jang2l_media_capability_memory_gated" in result["blockers"]
