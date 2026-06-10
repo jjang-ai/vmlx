@@ -733,7 +733,7 @@ CURRENT_SUITE_COMMANDS: dict[str, list[str]] = {
         sys.executable,
         "tests/cross_matrix/run_gemma_qat_native_mxfp4_inventory_gate.py",
         "--out",
-        "build/current-gemma-qat-native-mxfp4-local-inventory-after-all-jang4m-fullmedia-20260610.json",
+        "build/current-gemma-qat-native-mxfp4-local-inventory-after-e2b-installed-app-ui-proof-20260610.json",
     ],
     "responses_raw_sse_parity_contract": [
         sys.executable,

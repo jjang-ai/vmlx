@@ -429,6 +429,58 @@ async function capturePng(cdp, filePath) {
   return filePath
 }
 
+async function dismissBlockingUpdateModal(cdp) {
+  return await evaluate(cdp, `
+    (async () => {
+      const modalButtons = [...document.querySelectorAll('button')];
+      const dismiss = modalButtons.find((button) => {
+        const text = (button.innerText || '').replace(/\\s+/g, ' ').trim();
+        const label = (button.getAttribute('aria-label') || '').replace(/\\s+/g, ' ').trim();
+        return text.includes("Got it")
+          || text.includes("don't show until next update")
+          || label === 'Close'
+          || label === 'Dismiss';
+      });
+      if (!dismiss) return false;
+      dismiss.scrollIntoView({ block: 'center' });
+      dismiss.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window }));
+      dismiss.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, view: window }));
+      dismiss.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
+      await new Promise((resolve) => setTimeout(resolve, 250));
+      return true;
+    })()
+  `, 10_000).catch(() => false)
+}
+
+async function activateChatForScreenshot(cdp, chatId, sessionId, expectedText) {
+  if (!chatId) return false
+  await evaluate(cdp, `
+    (async () => {
+      await window.api?.settings?.set?.('appMode', 'chat').catch(() => null);
+      await window.api?.settings?.set?.('lastActiveChatId', ${JSON.stringify(chatId)}).catch(() => null);
+      if (${JSON.stringify(sessionId || '')}) {
+        await window.api?.settings?.set?.('lastActiveSessionId', ${JSON.stringify(sessionId || '')}).catch(() => null);
+      }
+      window.location.reload();
+      return true;
+    })()
+  `, 10_000).catch(() => false)
+  await sleep(1200)
+  return await evaluate(cdp, `
+    new Promise((resolve) => {
+      const expectedText = ${JSON.stringify(expectedText || '')};
+      const started = Date.now();
+      const check = () => {
+        const text = document.body?.innerText || '';
+        if (!expectedText || text.includes(expectedText)) return resolve(true);
+        if (Date.now() - started > 15000) return resolve(false);
+        setTimeout(check, 200);
+      };
+      check();
+    })
+  `, 20_000).catch(() => false)
+}
+
 function startRealServer(port, outDir) {
   const conservativeRuntime = envBool('VMLINUX_REAL_UI_CONSERVATIVE_RUNTIME', false)
   const runtimeArgs = conservativeRuntime
@@ -1238,6 +1290,19 @@ async function main() {
           };
           check();
         });
+        const updateDismiss = [...document.querySelectorAll('button')]
+          .find((b) => {
+            const text = (b.innerText || '').replace(/\\s+/g, ' ').trim();
+            const label = (b.getAttribute('aria-label') || '').replace(/\\s+/g, ' ').trim();
+            return text.includes("Got it")
+              || text.includes("don't show until next update")
+              || label === 'Close'
+              || label === 'Dismiss';
+          });
+        if (updateDismiss) {
+          updateDismiss.click();
+          await new Promise((resolve) => setTimeout(resolve, 250));
+        }
         await window.api.engine.checkInstallation().catch(() => null);
         await window.api.chat.clearAllLocks().catch(() => null);
         const events = { stream: [], tool: [], reasoningDone: [], complete: [] };
@@ -1497,6 +1562,7 @@ async function main() {
         .catch((healthError) => ({ error: healthError.message }))
       let chatScreenshot = null
       try {
+        await dismissBlockingUpdateModal(cdp)
         chatScreenshot = await capturePng(
           cdp,
           path.join(proofDir, `${proofBasename}-chat.png`),
@@ -1594,6 +1660,14 @@ async function main() {
       }
       throw error
     }
+    const visibleTextForScreenshot = rendererResult.secondAssistantContent || rendererResult.firstAssistantContent || ''
+    const chatActivatedForScreenshot = await activateChatForScreenshot(
+      cdp,
+      rendererResult.chatId,
+      rendererResult.remoteSessionId,
+      visibleTextForScreenshot,
+    )
+    await dismissBlockingUpdateModal(cdp)
     const chatScreenshot = await capturePng(
       cdp,
       path.join(proofDir, `${proofBasename}-chat.png`),
@@ -1814,6 +1888,7 @@ async function main() {
         chat: path.resolve(chatScreenshot),
       },
       ...rendererResult,
+      chatActivatedForScreenshot,
       serverCacheControls,
       toolProbeFiles,
       streamTrace: rendererResult.streamTraceByMessage || [],

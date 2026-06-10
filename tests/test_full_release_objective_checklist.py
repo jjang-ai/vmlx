@@ -1796,6 +1796,7 @@ def test_full_release_objective_checklist_can_pass_when_all_evidence_is_green(
                 "gemma4_26b_present": True,
                 "gemma4_31v_or_31b_present": True,
                 "gemma4_e2b_qat_jang4m_present": True,
+                "gemma4_e2b_qat_jang4m_installed_app_ui_api_cache_proven": True,
                 "gemma4_e4b_qat_jang4m_present": True,
                 "gemma4_12b_qat_jang4m_present": True,
                 "gemma4_26b_qat_jang4m_present": True,
