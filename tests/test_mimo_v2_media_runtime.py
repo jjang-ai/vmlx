@@ -209,6 +209,47 @@ def test_mimo_v2_vision_forward_uses_grid_aware_window_reorder(
     sys.modules.pop("mlx_vlm.models.mimo_v2", None)
 
 
+def test_mimo_v2_vision_attention_keeps_image_grid_segments_independent(
+    tmp_path,
+    monkeypatch,
+):
+    module = _register_fake_mimo_runtime(monkeypatch, tmp_path)
+    cfg = module.VisionConfig.from_dict(
+        {
+            "hidden_size": 8,
+            "out_hidden_size": 8,
+            "patch_size": 2,
+            "temporal_patch_size": 1,
+            "in_channels": 1,
+            "spatial_merge_size": 1,
+            "depth": 1,
+            "intermediate_size": 16,
+            "num_heads": 2,
+            "num_key_value_heads": 1,
+            "qk_channels": 4,
+            "fullatt_block_indexes": [0],
+        }
+    )
+    vision = module.VisionModel(cfg)
+
+    first = mx.ones((4, 4))
+    second = mx.zeros((4, 4))
+    grid_one = mx.array([[1, 2, 2]])
+    joint = vision(
+        pixel_values=mx.concatenate([first, second], axis=0),
+        grid_thw=mx.array([[1, 2, 2], [1, 2, 2]]),
+    )
+    separate = mx.concatenate(
+        [
+            vision(pixel_values=first, grid_thw=grid_one),
+            vision(pixel_values=second, grid_thw=grid_one),
+        ],
+        axis=0,
+    )
+    assert np.allclose(np.asarray(joint), np.asarray(separate), atol=1e-5)
+    sys.modules.pop("mlx_vlm.models.mimo_v2", None)
+
+
 def test_mimo_v2_model_splices_image_pixels_through_vision_tower(
     tmp_path,
     monkeypatch,
