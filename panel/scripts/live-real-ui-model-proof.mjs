@@ -102,6 +102,9 @@ const toolResultMaxChars = Number(process.env.VMLINUX_REAL_UI_TOOL_RESULT_MAX_CH
 const imageDataUrl = process.env.VMLINUX_REAL_UI_IMAGE_DATA_URL
   || process.env.VMLX_REAL_UI_IMAGE_DATA_URL
   || 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC'
+const imagePrompt = process.env.VMLINUX_REAL_UI_IMAGE_PROMPT
+  || process.env.VMLX_REAL_UI_IMAGE_PROMPT
+  || 'What is the dominant color of the attached image? Reply with one color word in English.'
 const imageExpectRegex = process.env.VMLINUX_REAL_UI_IMAGE_EXPECT_REGEX
   || process.env.VMLX_REAL_UI_IMAGE_EXPECT_REGEX
   || '\\bred\\b'
@@ -1259,6 +1262,7 @@ async function main() {
         const checkVideo = ${JSON.stringify(checkVideo)};
         const checkAudio = ${JSON.stringify(checkAudio)};
         const imageDataUrl = ${JSON.stringify(imageDataUrl)};
+        const imagePrompt = ${JSON.stringify(imagePrompt)};
         const imageExpectRegex = ${JSON.stringify(imageExpectRegex)};
         const videoDataUrl = ${JSON.stringify(videoDataUrl)};
         const videoExpectRegex = ${JSON.stringify(videoExpectRegex)};
@@ -1365,7 +1369,7 @@ async function main() {
             await sendMessageWithCapture(2, 'second_send_message', ${JSON.stringify(promptTwo)});
           }
           if (checkMedia && !rendererFailureStage) {
-            await sendMessageWithCapture(3, 'image_send_message', 'What is the dominant color of the attached image? Reply with one color word in English.', [
+            await sendMessageWithCapture(3, 'image_send_message', imagePrompt, [
               {
                 name: 'real-ui-proof-image.png',
                 type: 'image/png',
