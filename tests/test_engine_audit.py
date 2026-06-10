@@ -5037,6 +5037,65 @@ class TestMediaDiagnostics:
 
         assert server._loaded_runtime_modalities() == ["text", "vision", "audio"]
 
+    def test_gemma4_chat_audio_request_rejects_when_audio_not_weight_backed(
+        self, monkeypatch, tmp_path
+    ):
+        from fastapi.testclient import TestClient
+        import vmlx_engine.server as server
+
+        (tmp_path / "config.json").write_text(
+            json.dumps(
+                {
+                    "model_type": "gemma4_unified",
+                    "vision_config": {"model_type": "gemma4_unified_vision"},
+                    "audio_config": {"model_type": "gemma4_unified_audio"},
+                    "audio_token_id": 258881,
+                }
+            )
+        )
+        (tmp_path / "jang_config.json").write_text(
+            json.dumps({"weight_format": "jang_4m", "profile": "jang_4m"})
+        )
+        (tmp_path / "model.safetensors.index.json").write_text(
+            json.dumps(
+                {
+                    "weight_map": {
+                        "embed_audio.embedding_projection.weight": "a.safetensors",
+                        "language_model.model.embed_tokens.weight": "b.safetensors",
+                    }
+                }
+            )
+        )
+
+        monkeypatch.setattr(server, "_engine", SimpleNamespace(is_mllm=True))
+        monkeypatch.setattr(server, "_model_path", str(tmp_path))
+        monkeypatch.setattr(server, "_model_name", "gemma4-unified-audio-gate-test")
+        monkeypatch.setattr(server, "_loaded_omni_modalities", lambda: None)
+
+        response = TestClient(server.app).post(
+            "/v1/chat/completions",
+            json={
+                "model": "gemma4-unified-audio-gate-test",
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": "Transcribe this audio."},
+                            {
+                                "type": "input_audio",
+                                "input_audio": {"data": "AAAA", "format": "wav"},
+                            },
+                        ],
+                    }
+                ],
+                "max_tokens": 8,
+            },
+        )
+
+        assert response.status_code == 400
+        assert "unsupported media modality audio" in response.text
+        assert "text, vision" in response.text
+
     def test_video_request_on_image_only_mllm_rejects_instead_of_crashing(
         self, monkeypatch, tmp_path
     ):
@@ -5964,6 +6023,46 @@ class TestResponsesStreamingExactToolResult:
         )
 
         assert _responses_fast_path_visible_text(output, request) == "REAL_UI_LIVE_TOOL_TWO"
+
+
+class TestResponsesQwenTerminalToolResultSynthesis:
+    """Qwen terminal tool-result turns must finalize visibly without parser repair."""
+
+    def test_terminal_tool_result_synthesis_requires_no_new_tools(self):
+        from types import SimpleNamespace
+        from vmlx_engine.server import _responses_is_terminal_tool_result_synthesis
+
+        messages = [
+            {"role": "user", "content": "Use the tool."},
+            {"role": "assistant", "tool_calls": [{"id": "call_1"}]},
+            {"role": "tool", "tool_call_id": "call_1", "content": "recorded blue-cat"},
+        ]
+
+        assert _responses_is_terminal_tool_result_synthesis(
+            messages,
+            SimpleNamespace(tools=None, tool_choice=None),
+            {},
+        )
+        assert not _responses_is_terminal_tool_result_synthesis(
+            messages,
+            SimpleNamespace(tools=[{"type": "function", "name": "record_fact"}], tool_choice="auto"),
+            {},
+        )
+        assert not _responses_is_terminal_tool_result_synthesis(
+            messages,
+            SimpleNamespace(tools=None, tool_choice="required"),
+            {},
+        )
+
+    def test_qwen_terminal_synthesis_sets_private_visible_finalization_flag(self):
+        from vmlx_engine.server import (
+            _responses_terminal_synthesis_visible_finalization,
+        )
+
+        assert _responses_terminal_synthesis_visible_finalization(
+            {"_vmlx_terminal_tool_result_visible_finalization": True}
+        )
+        assert not _responses_terminal_synthesis_visible_finalization({})
 
 
 class TestNonStreamingDisconnectAbort:
@@ -10107,6 +10206,8 @@ class TestJangVLMFallbacks:
             json.dumps(
                 {
                     "model_type": "mimo_v2",
+                    "format": "jangtq",
+                    "jang_profile": "JANGTQ_2",
                     "vision_config": {"model_type": "mimo_v2_vision"},
                     "audio_config": {"model_type": "mimo_v2_audio"},
                     "image_token_id": 151655,
@@ -10122,6 +10223,15 @@ class TestJangVLMFallbacks:
                     "runtime": {
                         "multimodal_mode": "weights_preserved_text_runtime",
                     },
+                }
+            )
+        )
+        (model_dir / "jang_config.json").write_text(
+            json.dumps(
+                {
+                    "format": "jangtq",
+                    "family": "mimo_v2",
+                    "profile": "JANGTQ_2",
                 }
             )
         )

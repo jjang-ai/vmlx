@@ -1,0 +1,275 @@
+{
+  "status": "pass",
+  "date": "2026-06-10",
+  "lane": "MiMo V2.5 JANGTQ_2 CLI media and block-disk L2 parity after overlay fix",
+  "model_path": "/Users/eric/.mlxstudio/models/JANGQ-AI/MiMo-V2.5-JANGTQ_2",
+  "served_model_name": "mimo-v25-jangtq2-cli-media-l2-after-overlay-fix-20260610",
+  "source_fix": {
+    "files": [
+      "vmlx_engine/server.py",
+      "tests/test_engine_audit.py"
+    ],
+    "root_cause": "MiMo media auto-enable helper rejected explicit weights_preserved_text_runtime metadata before checking complete promoted JANG/JANGTQ sidecars/runtime, so CLI serve --is-mllm loaded the real bundle text-only.",
+    "fix": "Allow media-runtime overlay only for MiMo JANG/JANGTQ/MXTQ runtime bundles with complete sidecars and local runtime classes; generic preserved-media bundles remain text-only.",
+    "focused_checks": [
+      ".venv/bin/python -m py_compile vmlx_engine/server.py tests/test_engine_audit.py",
+      ".venv/bin/python -m pytest -q tests/test_mimo_v2_media_capability_gate.py -k 'mimo_v2_runtime_modalities_auto_enable_when_runtime_and_sidecars_are_complete or preserved_text_runtime_routes_text_only or runtime_modalities_fail_closed_for_preserved_text_runtime' -> 3 passed",
+      ".venv/bin/python -m pytest -q tests/test_engine_audit.py -k 'mimo_v2_text_runtime_metadata_auto_enables_complete_media_bundle' -> 1 passed"
+    ]
+  },
+  "server_launch": {
+    "surface": "vmlx_engine.cli serve --is-mllm",
+    "port": 8877,
+    "block_disk_cache_dir": "build/mimo-jangtq2-cli-media-l2-after-overlay-fix-20260610",
+    "server_stopped_after_run": true,
+    "port_8877_listener_after_run": false
+  },
+  "startup_proof": {
+    "model_type_before_request": "mllm",
+    "model_type_after_image": "mllm",
+    "native_cache": {
+      "family": "mimo_v2",
+      "schema": "mixed_swa_kv_v1",
+      "cache_type": "mixed_swa_kv",
+      "cache_subtype": "mimo_v2_asymmetric_swa",
+      "components": [
+        "full_attention_kv",
+        "sliding_window_kv",
+        "rotating_window_metadata"
+      ],
+      "generic_turboquant_kv": {
+        "enabled": false,
+        "reason": "not_active"
+      },
+      "storage_quantization": {
+        "enabled": false,
+        "mode": "storage_boundary",
+        "bits": null,
+        "group_size": null,
+        "applies_to": "full_attention_kv_only",
+        "metadata_policy": "preserve_rotating_window_metadata"
+      },
+      "prefix": true,
+      "paged": true,
+      "block_disk_l2": true
+    }
+  },
+  "media_proof": {
+    "request_file": "build/mimo-jangtq2-cli-media-l2-after-overlay-fix-requests-20260610/image-request.json",
+    "response_file": "build/mimo-jangtq2-cli-media-l2-after-overlay-fix-requests-20260610/image-response.json",
+    "http_status": 200,
+    "output": "vMLX",
+    "status": "pass",
+    "boundary": "Image request reached MLLM runtime and returned visible vMLX; media prompt cache was intentionally not stored because media embeddings are path-dependent.",
+    "cache_after_image": {
+      "pixel_cache_misses": 1,
+      "l2_tokens_on_disk": 0
+    }
+  },
+  "cache_l2_proof": {
+    "text_request_file": "build/mimo-jangtq2-cli-media-l2-after-overlay-fix-requests-20260610/text-cache-request.json",
+    "first_response_file": "build/mimo-jangtq2-cli-media-l2-after-overlay-fix-requests-20260610/text-cache-response-1.json",
+    "second_response_file": "build/mimo-jangtq2-cli-media-l2-after-overlay-fix-requests-20260610/text-cache-response-2.json",
+    "restart_response_file": "build/mimo-jangtq2-cli-media-l2-after-overlay-fix-requests-20260610/text-cache-response-after-restart.json",
+    "first_output": "MIMO L2 20260610",
+    "second_usage": {
+      "prompt_tokens": 56,
+      "completion_tokens": 14,
+      "total_tokens": 70,
+      "prompt_tokens_details": {
+        "cached_tokens": 55,
+        "cache_detail": "paged"
+      }
+    },
+    "restart_usage": {
+      "prompt_tokens": 56,
+      "completion_tokens": 14,
+      "total_tokens": 70,
+      "prompt_tokens_details": {
+        "cached_tokens": 55,
+        "cache_detail": "paged+disk"
+      }
+    },
+    "after_first": {
+      "block_disk_cache": {
+        "blocks_on_disk": 1,
+        "disk_size_bytes": 24522966,
+        "disk_size_gb": 0.023,
+        "total_accesses": 0,
+        "total_tokens_on_disk": 55,
+        "total_cached_tokens": 55,
+        "disk_hits": 0,
+        "disk_misses": 2,
+        "disk_writes": 1,
+        "disk_evictions": 0
+      },
+      "cache_totals": {
+        "ram_tokens_cached": 55,
+        "l2_prompt_tokens_on_disk": 0,
+        "l2_block_tokens_on_disk": 55,
+        "l2_ssm_tokens_on_disk": 0,
+        "ssm_tokens_on_disk": 0,
+        "l2_tokens_on_disk": 55,
+        "l2_tokens_on_disk_store_sum": 55,
+        "l2_tokens_on_disk_note": "store_sum_across_prompt_block_ssm_l2; tiers_may_overlap"
+      }
+    },
+    "after_second": {
+      "scheduler_cache": {
+        "pixel_cache_hits": 0,
+        "pixel_cache_misses": 1,
+        "pixel_hit_rate": 0.0,
+        "total_time_saved": 0.0,
+        "total_images_processed": 1,
+        "pixel_cache_size": 1,
+        "hits": 1,
+        "misses": 1,
+        "hit_rate": 0.5,
+        "tokens_saved": 55,
+        "active_requests": 0,
+        "entries_by_type": {
+          "assistant": 1,
+          "user": 0,
+          "system": 0
+        },
+        "block_size": 64,
+        "max_blocks": 1000,
+        "allocated_blocks": 2,
+        "free_blocks": 998,
+        "shared_blocks": 1,
+        "total_tokens_cached": 55,
+        "utilization": 0.002,
+        "cache_hit_rate": 0.6666666666666666,
+        "cache_hits": 2,
+        "cache_misses": 1,
+        "disk_hits": 0,
+        "disk_misses": 0,
+        "cow_copies": 0,
+        "evictions": 0
+      },
+      "block_disk_cache": {
+        "blocks_on_disk": 1,
+        "disk_size_bytes": 24522966,
+        "disk_size_gb": 0.023,
+        "total_accesses": 0,
+        "total_tokens_on_disk": 55,
+        "total_cached_tokens": 55,
+        "disk_hits": 0,
+        "disk_misses": 3,
+        "disk_writes": 1,
+        "disk_evictions": 0
+      },
+      "cache_totals": {
+        "ram_tokens_cached": 55,
+        "l2_prompt_tokens_on_disk": 0,
+        "l2_block_tokens_on_disk": 55,
+        "l2_ssm_tokens_on_disk": 0,
+        "ssm_tokens_on_disk": 0,
+        "l2_tokens_on_disk": 55,
+        "l2_tokens_on_disk_store_sum": 55,
+        "l2_tokens_on_disk_note": "store_sum_across_prompt_block_ssm_l2; tiers_may_overlap"
+      }
+    },
+    "after_restart_before_request": {
+      "block_disk_cache": {
+        "blocks_on_disk": 1,
+        "disk_size_bytes": 24522966,
+        "disk_size_gb": 0.023,
+        "total_accesses": 0,
+        "total_tokens_on_disk": 55,
+        "total_cached_tokens": 55,
+        "disk_hits": 0,
+        "disk_misses": 0,
+        "disk_writes": 0,
+        "disk_evictions": 0
+      },
+      "cache_totals": {
+        "ram_tokens_cached": 0,
+        "l2_prompt_tokens_on_disk": 0,
+        "l2_block_tokens_on_disk": 55,
+        "l2_ssm_tokens_on_disk": 0,
+        "ssm_tokens_on_disk": 0,
+        "l2_tokens_on_disk": 55,
+        "l2_tokens_on_disk_store_sum": 55,
+        "l2_tokens_on_disk_note": "store_sum_across_prompt_block_ssm_l2; tiers_may_overlap"
+      }
+    },
+    "after_restart_request": {
+      "scheduler_cache": {
+        "pixel_cache_hits": 0,
+        "pixel_cache_misses": 0,
+        "pixel_hit_rate": 0.0,
+        "total_time_saved": 0.0,
+        "total_images_processed": 0,
+        "pixel_cache_size": 0,
+        "hits": 1,
+        "misses": 0,
+        "hit_rate": 1.0,
+        "tokens_saved": 55,
+        "active_requests": 0,
+        "entries_by_type": {
+          "assistant": 0,
+          "user": 0,
+          "system": 0
+        },
+        "block_size": 64,
+        "max_blocks": 1000,
+        "allocated_blocks": 2,
+        "free_blocks": 998,
+        "shared_blocks": 0,
+        "total_tokens_cached": 55,
+        "utilization": 0.002,
+        "cache_hit_rate": 1.0,
+        "cache_hits": 1,
+        "cache_misses": 0,
+        "disk_hits": 1,
+        "disk_misses": 0,
+        "cow_copies": 0,
+        "evictions": 0
+      },
+      "block_disk_cache": {
+        "blocks_on_disk": 1,
+        "disk_size_bytes": 24522966,
+        "disk_size_gb": 0.023,
+        "total_accesses": 1,
+        "total_tokens_on_disk": 55,
+        "total_cached_tokens": 55,
+        "disk_hits": 1,
+        "disk_misses": 1,
+        "disk_writes": 0,
+        "disk_evictions": 0
+      },
+      "cache_totals": {
+        "ram_tokens_cached": 55,
+        "l2_prompt_tokens_on_disk": 0,
+        "l2_block_tokens_on_disk": 55,
+        "l2_ssm_tokens_on_disk": 0,
+        "ssm_tokens_on_disk": 0,
+        "l2_tokens_on_disk": 55,
+        "l2_tokens_on_disk_store_sum": 55,
+        "l2_tokens_on_disk_note": "store_sum_across_prompt_block_ssm_l2; tiers_may_overlap"
+      }
+    }
+  },
+  "proven": [
+    "CLI serve --is-mllm now loads the promoted MiMo V2.5 JANGTQ_2 bundle as mllm instead of text-only.",
+    "Current source auto-enables preserved MiMo media runtime only when JANG/JANGTQ/MXTQ metadata plus complete sidecars/runtime classes are present.",
+    "Image Chat Completions request returned HTTP 200 and visible text vMLX.",
+    "MiMo native mixed_swa_kv_v1 cache stayed active with generic TurboQuant KV not substituted.",
+    "Block-disk L2 wrote one block / 55 tokens after text prompt.",
+    "Same-process repeated text prompt hit paged cache for 55 tokens.",
+    "Fresh-process restart initialized with one disk block and the same text prompt restored with cache_detail paged+disk, cached_tokens=55, disk_hits=1."
+  ],
+  "not_proven": [
+    "MiMo semantic/literal exactness is still red from earlier artifacts and was not fixed here.",
+    "Video red semantic answer and audio hygiene/exactness are not cleared by this proof.",
+    "Media prompt KV is not stored to L2; the code intentionally skips media-context cache storage.",
+    "Responses tool streaming/tool-result continuation, UI installed-app parity, package/sign/notarize, and release readiness remain open."
+  ],
+  "other_agent_instructions": [
+    "Use this as MiMo CLI media/L2 parity proof, not as MiMo exactness proof.",
+    "Do not revert the JANG/JANGTQ/MXTQ overlay eligibility guard to a broad force-MiMo-media rule.",
+    "Keep generic weights_preserved_text_runtime MiMo bundles text-only unless complete sidecars and current runtime metadata prove the overlay path.",
+    "Next MiMo work should target exactness/artifact-logit/quant contract or video/audio quality, plus UI/installed-app parity once source is packaged."
+  ]
+}

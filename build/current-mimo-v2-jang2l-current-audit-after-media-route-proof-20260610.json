@@ -1,0 +1,1122 @@
+{
+  "artifacts": {
+    "all_local_smoke": "build/current-all-local-model-smoke-mimo-v25-jangtq2-current-source-textonly-l2-after-capability-fix-20260609/JANGQ_MiMo-V2.5-JANGTQ_2/result.json",
+    "api_cache_responses_contract": "build/current-noheavy-api-cache-contract-after-responses-reasoning-empty-final-args-gateway-20260609.json",
+    "cache_vs_nocache": "build/current-mimo-v2-jangtq2-cache-vs-nocache-next-token-logprobs-after-unit-label-20260609.json",
+    "cb_metal_baseline_live_proof": "build/current-mimo-v2-jangtq2-cb-cache-lossless-auto-live-20260609.json",
+    "cb_native_thinking_off_live_proof": "build/current-mimo-v2-jang2l-cb-cache-after-native-thinking-off-live-20260606.json",
+    "cb_oneshot_prefill_live_proof": "build/current-mimo-v2-jang2l-cb-cache-after-mimo-oneshot-prefill-20260606.json",
+    "disable_sink_length_diagnostic": "build/current-mimo-v2-jang2l-disable-sink-length-diagnostic-20260606.json",
+    "first_token_probe": "build/current-mimo-v2-jang2l-first-token-probe-registered-20260606.json",
+    "jang2l_all_local_smoke": "build/current-all-local-model-smoke-mimo-v25-jang2l-live-refresh-20260608/summary.json",
+    "jangtq2_dev_app_video_media_proof": "build/current-real-ui-dev-app-mimo-v25-jangtq2-video-after-mllm-source-media-20260610.json",
+    "jangtq2_source_media_proof": "build/current-mimo-v25-jangtq2-video-audio-source-proof-20260610.json",
+    "jangtq2_video_cache_proof": "build/current-mimo-v25-jangtq2-video-cache-proof-after-video-tensor-cache-fix-20260610.json",
+    "kvnone_noprefix_smoke": "build/current-all-local-model-smoke-mimo-v25-jangtq2-bundled-tools-nomedia-kvnone-noprefix-20260607/summary.json",
+    "latest_decode_speed": "build/current-mimo-v25-jangtq2-speed-boundary-after-singlebatch-tokenbuffer-skip-20260609.json",
+    "length_sweep": "build/current-mimo-v2-jang2l-direct-length-sweep-20260606.json",
+    "mllm_inputs_embeds_interface": "build/current-mimo-v2-mllm-inputs-embeds-interface-proof-20260609.json",
+    "no_source_exactness_classifier": "build/current-mimo-v2-no-source-exactness-classifier-after-artifact-diagnosis-20260609.json",
+    "prompt_shape_sweep": "build/current-mimo-v2-jang2l-prompt-shape-sweep-20260606.json",
+    "rendered_prompt_compare": "build/current-mimo-v2-jang2l-rendered-prompt-compare-20260606.json",
+    "sink_mode_length_diagnostic": "build/current-mimo-v2-jang2l-sink-mode-length-diagnostic-20260606.json",
+    "source_vs_quant_first_divergence": "build/current-mimo-v2-jangtq2-source-vs-quant-first-divergence-preflight-20260607.json",
+    "structural": "build/current-mimo-jang2l-local-structural-verify-20260606.json",
+    "switchglu": "build/current-mimo-v2-switchglu-selected-expert-parity-20260609.json",
+    "synced_long_tool_cache": "build/current-mimo-v25-jang2l-synced-long-tool-cache-proof-20260606.json",
+    "text_cache": "build/current-mimo-jang2l-live-text-cache-smoke-20260606.json",
+    "text_route_live_proof": "build/current-mimo-v2-jang2l-text-route-live-proof-20260606.json",
+    "tool_failure": "build/current-mimo-v2-jang2l-tool-dialect-failure-20260606.json"
+  },
+  "blockers": [
+    "mimo_jangtq2_artifact_exactness_blocked",
+    "mimo_decode_speed_below_release_target",
+    "mimo_vl_audio_video_unwired",
+    "mimo_image_video_live_e2e_missing",
+    "mimo_audio_waveform_live_e2e_missing",
+    "mimo_jangtq2_live_media_l2_missing",
+    "mimo_jang2l_live_media_l2_missing"
+  ],
+  "component_ok": {
+    "api_cache_responses_contract": true,
+    "artifact_exactness": false,
+    "block_disk_l2_restart_restore": true,
+    "bookend_quantization_sidecars": true,
+    "cache_vs_nocache_next_token": true,
+    "cb_system_prompt_working_set_pressure": true,
+    "decode_speed_target": false,
+    "disable_sink_does_not_clear_length_generation": false,
+    "exact_cache_prompt_following": true,
+    "exactness_cache_kv_quant_excluded": false,
+    "long_prompt_coherence": true,
+    "manifest_integrity": true,
+    "manual_sink_does_not_clear_length_generation": false,
+    "media_model_metadata_text_only_contract": true,
+    "media_runtime_capabilities_safe": true,
+    "media_runtime_implementation": true,
+    "media_weights_preserved": true,
+    "mimo_audio_waveform_live_e2e": false,
+    "mimo_image_video_live_e2e": false,
+    "mimo_jang2l_l2_restart_cache_hit": false,
+    "mimo_jang2l_l2_restart_visible_output": false,
+    "mimo_jang2l_live_media_l2": false,
+    "mimo_jang2l_media_capability_downscoped_to_text": false,
+    "mimo_jang2l_media_capability_memory_gated": true,
+    "mimo_jang2l_media_prefill_budget": true,
+    "mimo_jang2l_post_media_working_set_pressure": true,
+    "mimo_jang2l_tight_memory_prompt_budget": true,
+    "mimo_jang2l_tool_long_prompt_metal_oom": true,
+    "mimo_jangtq2_l2_restart_cache_hit": true,
+    "mimo_jangtq2_l2_restart_visible_output": true,
+    "mimo_jangtq2_live_media_l2": false,
+    "mimo_live_media_e2e": false,
+    "mimo_media_wired": false,
+    "mllm_inputs_embeds_interface": true,
+    "prefix_paged_l2_cache_reproved": true,
+    "source_vs_quant_first_divergence": false,
+    "source_vs_quant_policy_skipped": true,
+    "source_vs_quant_requirement_satisfied": true,
+    "stale_local_state_absent": true,
+    "structural_verify": true,
+    "switchglu_selected_expert_parity": true,
+    "system_prompt_first_token_stop": true,
+    "text_cache_narrow": true,
+    "text_route_long_prompt": true,
+    "text_route_long_prompt_supersedes_length_sweep": true,
+    "text_route_tool_call": true,
+    "tool_protocol": true
+  },
+  "diagnostics": {
+    "all_local_smoke": {
+      "artifact_exactness_boundary": {
+        "classification": "model_generated_literal_mutation_after_valid_parser_structure",
+        "empty_visible_output": false,
+        "examples": [
+          {
+            "actual": {
+              "value": "blue-1"
+            },
+            "content_head": "",
+            "expected": {
+              "value": "blue-cat"
+            },
+            "label": "tool_required",
+            "parser_structure_valid": true,
+            "reason": "expected_tool_argument_missing",
+            "structure_kind": "openai_tool_call_json_arguments"
+          },
+          {
+            "actual": {
+              "value": "B7CAT-09"
+            },
+            "content_head": "",
+            "expected": {
+              "value": "B7-CAT-09"
+            },
+            "label": "mimo_tool_required_sentinel",
+            "parser_structure_valid": true,
+            "reason": "expected_tool_argument_missing",
+            "structure_kind": "openai_tool_call_json_arguments"
+          },
+          {
+            "actual": null,
+            "content_head": "STORED blue-cat",
+            "expected": "STORED blue-cat.",
+            "label": "tool_result_continuation",
+            "parser_structure_valid": true,
+            "reason": "expected_tool_result_summary_missing",
+            "structure_kind": "visible_tool_result_continuation_text"
+          },
+          {
+            "actual": {
+              "count": 3,
+              "status": "ok",
+              "value": "bluecat"
+            },
+            "content_head": "{\"status\":\"ok\",\"value\":\"bluecat\",\"count\":3}",
+            "expected": {
+              "count": 3,
+              "status": "ok",
+              "value": "blue-cat"
+            },
+            "label": "structured_json_exact",
+            "parser_structure_valid": true,
+            "reason": "json_exact_object_mismatch",
+            "structure_kind": "visible_json_object"
+          },
+          {
+            "actual": {
+              "count": 3,
+              "status": "ok",
+              "value": "B7CCAT-09"
+            },
+            "content_head": "{\"status\":\"ok\",\"value\":\"B7CCAT-09\",\"count\":3}",
+            "expected": {
+              "count": 3,
+              "status": "ok",
+              "value": "B7-CAT-09"
+            },
+            "label": "mimo_structured_json_sentinel",
+            "parser_structure_valid": true,
+            "reason": "json_exact_object_mismatch",
+            "structure_kind": "visible_json_object"
+          }
+        ],
+        "failed_labels": [
+          "tool_required",
+          "mimo_tool_required_sentinel",
+          "tool_result_continuation",
+          "structured_json_exact",
+          "mimo_structured_json_sentinel"
+        ],
+        "metal_oom_crash": false,
+        "model_generated_literal_mutation": true,
+        "parser_structure_valid_for_failed_rows": true,
+        "release_boundary": "Do not clear MiMo exactness by rewriting parsed tool arguments, repairing generated JSON values, disabling cache, or hiding the failed rows. Valid parser structure plus wrong literal values means the remaining blocker is model/runtime decode quality or artifact quantization, not XML/JSON parser mutation.",
+        "server_died_mid_probe": false,
+        "typed_tight_memory_prompt_rejection": false
+      },
+      "artifact_exactness_failures": [
+        {
+          "actual": {
+            "value": "blue-1"
+          },
+          "content_head": "",
+          "expected": {
+            "value": "blue-cat"
+          },
+          "label": "tool_required",
+          "reason": "expected_tool_argument_missing",
+          "reasoning_chars": 0
+        },
+        {
+          "actual": {
+            "value": "B7CAT-09"
+          },
+          "content_head": "",
+          "expected": {
+            "value": "B7-CAT-09"
+          },
+          "label": "mimo_tool_required_sentinel",
+          "reason": "expected_tool_argument_missing",
+          "reasoning_chars": 0
+        },
+        {
+          "content_head": "STORED blue-cat",
+          "expected": "STORED blue-cat.",
+          "label": "tool_result_continuation",
+          "reason": "expected_tool_result_summary_missing",
+          "reasoning_chars": 0
+        },
+        {
+          "actual": {
+            "count": 3,
+            "status": "ok",
+            "value": "bluecat"
+          },
+          "content_head": "{\"status\":\"ok\",\"value\":\"bluecat\",\"count\":3}",
+          "expected": {
+            "count": 3,
+            "status": "ok",
+            "value": "blue-cat"
+          },
+          "label": "structured_json_exact",
+          "reason": "json_exact_object_mismatch",
+          "reasoning_chars": 0
+        },
+        {
+          "actual": {
+            "count": 3,
+            "status": "ok",
+            "value": "B7CCAT-09"
+          },
+          "content_head": "{\"status\":\"ok\",\"value\":\"B7CCAT-09\",\"count\":3}",
+          "expected": {
+            "count": 3,
+            "status": "ok",
+            "value": "B7-CAT-09"
+          },
+          "label": "mimo_structured_json_sentinel",
+          "reason": "json_exact_object_mismatch",
+          "reasoning_chars": 0
+        }
+      ],
+      "artifact_exactness_pass": false,
+      "audio_waveform_e2e_classification": "audio_waveform_e2e_missing_or_failed",
+      "audio_waveform_e2e_failures": [
+        {
+          "label": "audio_blue",
+          "reason": "missing_request"
+        },
+        {
+          "label": "text_no_media_after_audio",
+          "reason": "missing_request"
+        }
+      ],
+      "audio_waveform_e2e_labels": [],
+      "audio_waveform_e2e_pass": false,
+      "audio_waveform_e2e_status": "missing_or_failed",
+      "block_disk_l2_restart_cache_hit": true,
+      "block_disk_l2_restart_restore_pass": true,
+      "block_disk_l2_restart_restore_reason": "pass",
+      "block_disk_l2_restart_restore_status": "pass",
+      "block_disk_l2_restart_restore_summary": {
+        "cache_hit_tokens": 60,
+        "cache_summary": {
+          "cache_hit_tokens": 60,
+          "cache_hits": 1,
+          "disk_hits": 2,
+          "has_cache_hit": true,
+          "has_hybrid_kv_without_ssm": false,
+          "hybrid_kv_without_ssm_hits": 0,
+          "hybrid_kv_without_ssm_tokens": 0,
+          "mentions_media_salt": false,
+          "mentions_rotating": true,
+          "mentions_ssm": true,
+          "mentions_turboquant": true
+        },
+        "disk_hits": 2,
+        "pass": true,
+        "reason": "pass",
+        "status": "pass"
+      },
+      "block_disk_l2_restart_visible_output_pass": true,
+      "bundle_kind": "jangtq2",
+      "bundle_media_l2_coverage": {
+        "jang2l": {
+          "block_disk_l2_restart_cache_hit": false,
+          "block_disk_l2_restart_restore_pass": false,
+          "block_disk_l2_restart_visible_output_pass": false,
+          "bundle_name": null,
+          "live_media_e2e_pass": false
+        },
+        "jangtq2": {
+          "block_disk_l2_restart_cache_hit": true,
+          "block_disk_l2_restart_restore_pass": true,
+          "block_disk_l2_restart_visible_output_pass": true,
+          "bundle_name": "MiMo-V2.5-JANGTQ_2",
+          "live_media_e2e_pass": false
+        }
+      },
+      "bundle_name": "MiMo-V2.5-JANGTQ_2",
+      "exact_cache_blocked": false,
+      "exists": true,
+      "failures": [
+        {
+          "actual": {
+            "value": "blue-1"
+          },
+          "content_head": "",
+          "expected": {
+            "value": "blue-cat"
+          },
+          "label": "tool_required",
+          "reason": "expected_tool_argument_missing",
+          "reasoning_chars": 0
+        },
+        {
+          "actual": {
+            "value": "B7CAT-09"
+          },
+          "content_head": "",
+          "expected": {
+            "value": "B7-CAT-09"
+          },
+          "label": "mimo_tool_required_sentinel",
+          "reason": "expected_tool_argument_missing",
+          "reasoning_chars": 0
+        },
+        {
+          "content_head": "STORED blue-cat",
+          "expected": "STORED blue-cat.",
+          "label": "tool_result_continuation",
+          "reason": "expected_tool_result_summary_missing",
+          "reasoning_chars": 0
+        },
+        {
+          "actual": {
+            "count": 3,
+            "status": "ok",
+            "value": "bluecat"
+          },
+          "content_head": "{\"status\":\"ok\",\"value\":\"bluecat\",\"count\":3}",
+          "expected": {
+            "count": 3,
+            "status": "ok",
+            "value": "blue-cat"
+          },
+          "label": "structured_json_exact",
+          "reason": "json_exact_object_mismatch",
+          "reasoning_chars": 0
+        },
+        {
+          "actual": {
+            "count": 3,
+            "status": "ok",
+            "value": "B7CCAT-09"
+          },
+          "content_head": "{\"status\":\"ok\",\"value\":\"B7CCAT-09\",\"count\":3}",
+          "expected": {
+            "count": 3,
+            "status": "ok",
+            "value": "B7-CAT-09"
+          },
+          "label": "mimo_structured_json_sentinel",
+          "reason": "json_exact_object_mismatch",
+          "reasoning_chars": 0
+        }
+      ],
+      "generation_tps": null,
+      "live_media_e2e_failures": [
+        {
+          "label": "vl_blue_image",
+          "reason": "missing_request"
+        },
+        {
+          "label": "vl_blue_image_repeat",
+          "reason": "missing_request"
+        },
+        {
+          "label": "vl_red_image_changed",
+          "reason": "missing_request"
+        },
+        {
+          "label": "text_no_media_after_image",
+          "reason": "missing_request"
+        },
+        {
+          "label": "vl_blue_video",
+          "reason": "missing_request"
+        },
+        {
+          "label": "text_no_media_after_video",
+          "reason": "missing_request"
+        }
+      ],
+      "live_media_e2e_labels": [],
+      "live_media_e2e_pass": false,
+      "live_media_e2e_status": "missing_or_failed",
+      "media_capability_downscoped_to_text": false,
+      "media_capability_memory_gate": {
+        "applicable": true,
+        "media_modalities": [],
+        "reason": "no_runtime_media_modalities",
+        "safe": true
+      },
+      "media_capability_memory_gated": false,
+      "media_capability_modalities": [
+        "text"
+      ],
+      "media_capability_preserved_modalities": [
+        "vision",
+        "image",
+        "video",
+        "audio"
+      ],
+      "media_capability_status_by_modality": {
+        "audio": "preserved_unwired",
+        "image": "preserved_unwired",
+        "text": "runtime_supported",
+        "video": "preserved_unwired",
+        "vision": "preserved_unwired"
+      },
+      "metal_oom_crash": false,
+      "post_media_working_set_pressure_rejection": false,
+      "post_media_working_set_pressure_rejection_labels": [],
+      "runtime_crash_error_excerpt": null,
+      "server_died_mid_probe": false,
+      "speed_blocked": true,
+      "text_cache_narrow_pass": true,
+      "tool_protocol_pass": true,
+      "typed_media_prefill_budget_rejection": false,
+      "typed_media_prefill_budget_rejection_labels": [],
+      "typed_tight_memory_prompt_rejection": false,
+      "typed_tight_memory_prompt_rejection_labels": []
+    },
+    "api_cache_responses_contract": {
+      "boundary": "No-heavy source contract only. This proves API/cache/Responses route behavior, telemetry, and endpoint wiring; it does not replace live MiMo model output, tool, cache-hit, L2/restart, media, or UI proof.",
+      "exists": true,
+      "missing_markers": [],
+      "missing_required_checks": [],
+      "pass": true,
+      "required_checks": {
+        "anthropic_bundle_defaults": true,
+        "cache_reuse_endpoints": true,
+        "cache_stats_reuse_skip_telemetry": true,
+        "ollama_adapter_surface": true,
+        "prompt_context_caps_stay_separate_from_output_caps": true,
+        "request_output_caps_override_server_default": true,
+        "responses_previous_response_history": true,
+        "responses_sampling_kwargs": true,
+        "streaming_cache_detail_usage": true
+      },
+      "status": "pass"
+    },
+    "bookend_quantization": {
+      "boundary": "This no-load check only proves lm_head/embed_tokens affine sidecars exist with q8-compatible shapes. It does not clear MiMo exactness; literal mutation can still be artifact/logit or runtime decode quality.",
+      "keys": {
+        "lm_head.biases": {
+          "dtype": "float16",
+          "file": "model-00076-of-00076-bookends.safetensors",
+          "shape": [
+            152576,
+            64
+          ]
+        },
+        "lm_head.scales": {
+          "dtype": "float16",
+          "file": "model-00076-of-00076-bookends.safetensors",
+          "shape": [
+            152576,
+            64
+          ]
+        },
+        "lm_head.weight": {
+          "dtype": "uint32",
+          "file": "model-00076-of-00076-bookends.safetensors",
+          "shape": [
+            152576,
+            1024
+          ]
+        },
+        "model.embed_tokens.biases": {
+          "dtype": "float16",
+          "file": "model-00076-of-00076-bookends.safetensors",
+          "shape": [
+            152576,
+            64
+          ]
+        },
+        "model.embed_tokens.scales": {
+          "dtype": "float16",
+          "file": "model-00076-of-00076-bookends.safetensors",
+          "shape": [
+            152576,
+            64
+          ]
+        },
+        "model.embed_tokens.weight": {
+          "dtype": "uint32",
+          "file": "model-00076-of-00076-bookends.safetensors",
+          "shape": [
+            152576,
+            1024
+          ]
+        }
+      },
+      "missing_keys": [],
+      "q8_shape_compatible": true,
+      "required_keys": [
+        "lm_head.weight",
+        "lm_head.scales",
+        "lm_head.biases",
+        "model.embed_tokens.weight",
+        "model.embed_tokens.scales",
+        "model.embed_tokens.biases"
+      ],
+      "status": "pass"
+    },
+    "cache_vs_nocache_next_token_match": true,
+    "cb_metal_baseline": {
+      "boundary": "This live proof clears the post-load Metal working-set 503 path only. It also proves lossless native mixed-SWA paged-cache repeat stability, but it does not clear MiMo literal exactness or tool argument exactness.",
+      "cache_hit_tokens": 46,
+      "cache_repeat_exact": false,
+      "cache_repeat_stable": true,
+      "exists": true,
+      "first_token_system_probe_http_ok": true,
+      "first_token_system_probe_text": "OK.",
+      "l2_tokens_on_disk": 78,
+      "memory_pressure_cleared": true,
+      "native_cache": {
+        "block_disk_l2": true,
+        "cache_subtype": "mimo_v2_asymmetric_swa",
+        "cache_type": "mixed_swa_kv",
+        "components": [
+          "full_attention_kv",
+          "sliding_window_kv",
+          "rotating_window_metadata"
+        ],
+        "family": "mimo_v2",
+        "generic_turboquant_kv": {
+          "enabled": false,
+          "reason": "not_active"
+        },
+        "paged": true,
+        "prefix": true,
+        "schema": "mixed_swa_kv_v1",
+        "storage_quantization": {
+          "applies_to": "full_and_sliding_attention_kv",
+          "bits": null,
+          "enabled": false,
+          "group_size": null,
+          "metadata_policy": "preserve_rotating_window_metadata",
+          "mode": "storage_boundary"
+        }
+      },
+      "native_cache_type": "mixed_swa_kv",
+      "status": "pass",
+      "storage_quantization_disabled": true,
+      "texts": {
+        "exact_repeat_1": "ACKCB-742",
+        "exact_repeat_2": "ACKCB-742",
+        "first_token_system_probe": "OK."
+      }
+    },
+    "cb_native_thinking_off": {
+      "cache_exact_pass": true,
+      "cache_hit_tokens": 33,
+      "exists": true,
+      "finish_reasons": {
+        "exact_repeat_1": "stop",
+        "exact_repeat_2": "stop",
+        "first_token_system_probe": null
+      },
+      "l2_tokens_on_disk": 33,
+      "memory_pressure_blocked": true,
+      "mixed_swa_native_cache": true,
+      "no_think_tags": true,
+      "prefix_paged_l2_cache_reproved": true,
+      "speed_blocked": true,
+      "speed_max_tps": 1.5203344735841886,
+      "status": "open",
+      "storage_quantization_q8": true,
+      "texts": {
+        "exact_repeat_1": "ACK-CB-742",
+        "exact_repeat_2": "ACK-CB-742",
+        "first_token_system_probe": ""
+      }
+    },
+    "cb_oneshot_prefill": {
+      "cache1_elapsed_s": 22.552,
+      "cache2_elapsed_s": 5.263,
+      "cache_exact_pass": true,
+      "exists": true,
+      "generation_tps": 1.7935474741903232,
+      "long_prompt_crashed": true,
+      "long_prompt_error": "RemoteDisconnected('Remote end closed connection without response')",
+      "prefix_paged_l2_cache_reproved": true,
+      "speed_blocked": true,
+      "tool_content_head": "\uff0c\uff0c\u7684\uff0c\n\n\n\uff0c\uff0c\uff0c\n\n\n\n\uff0c\uff0c\uff0c\uff0c\n\n\uff0c\uff0c\uff0c\uff0c\n\n\n\n\n\n\uff0c\uff0c\uff0c\n\n\n\n\n\n\uff0c\uff0c\uff0c\uff0c\n\n\n\n\uff0c\uff0c\n\n\n\n\n\n:\uff0c\uff0c\n\n\n\n\n\n\n\uff0c",
+      "tool_protocol_blocked": true
+    },
+    "disable_sink_clears_length_generation": null,
+    "exactness_bookend_boundary": "Current MiMo JANGTQ_2 exactness is not the old missing lm_head/embed_tokens sidecar failure class when bookend_quantization.status=pass; focus corrected routed TQ/quantization or runtime decode/logit proof.",
+    "exactness_cache_boundary": "The no-prefix/KV-none smoke reproduced the same MiMo literal mutations with runtime KV quantization, native cache storage quantization, prefix cache, paged cache, block-disk L2, and cache hits disabled. Do not chase prefix-cache reuse, L2 disk cache, or runtime KV quantization as the primary current MiMo exactness cause.",
+    "jang2l_all_local_smoke": {
+      "exists": false
+    },
+    "kvnone_noprefix_exactness_isolation": {
+      "exists": false
+    },
+    "manual_sink_sdpa_clears_length_generation": null,
+    "mimo_jangtq2_media_route": {
+      "boundary": "MiMo JANGTQ2 has current source/dev-app evidence that media weights bind and video/audio requests reach the MLLM runtime when launched as MLLM. This clears the stale 'implementation missing' wording only. It does not clear default metadata-gated text-only capability, image color semantics, video semantic quality, audio transcript semantics, fresh-process L2 restore for media, installed-app parity, or release readiness.",
+      "classification": "forced_mllm_media_transport_and_cache_live_semantics_red",
+      "dev_app_video_artifact": "/Users/eric/mlx/vllm-mlx-finite-launch-guard/build/current-real-ui-dev-app-mimo-v25-jangtq2-video-after-mllm-source-media-20260610.json",
+      "dev_app_video_transport_proven": true,
+      "exists": true,
+      "must_not_claim": [
+        "Do not advertise preserved-text-runtime MiMo bundles as media-capable by default.",
+        "Do not claim MiMo visual or audio semantic quality is release-green.",
+        "Do not use this route proof to clear MiMo literal/tool/JSON exactness."
+      ],
+      "semantic_quality_proven": false,
+      "semantic_status": "fail",
+      "source_artifact": "/Users/eric/mlx/vllm-mlx-finite-launch-guard/build/current-mimo-v25-jangtq2-video-audio-source-proof-20260610.json",
+      "source_mllm_media_transport_proven": true,
+      "status": "open",
+      "transport_proven": true,
+      "video_cache_artifact": "/Users/eric/mlx/vllm-mlx-finite-launch-guard/build/current-mimo-v25-jangtq2-video-cache-proof-after-video-tensor-cache-fix-20260610.json",
+      "video_cache_proven": true
+    },
+    "mimo_media_runtime": {
+      "audio_code_local_transformer": true,
+      "audio_payload_forwarding": true,
+      "audio_processor_output_bridge": true,
+      "audio_projection_bridge": true,
+      "audio_tensor_count": 95,
+      "audio_tokenizer_config_segmenter": true,
+      "audio_tokenizer_model_execution": true,
+      "audio_tokenizer_rvq_codebook": true,
+      "audio_tokenizer_rvq_weight_loader": true,
+      "audio_waveform_live_e2e_boundary": "Object image/video live E2E does not clear audio waveform ingestion, tokenizer, audio-code splice, cache salt, and post-audio recovery proof.",
+      "audio_waveform_live_e2e_failures": [
+        {
+          "label": "audio_blue",
+          "reason": "missing_request"
+        },
+        {
+          "label": "text_no_media_after_audio",
+          "reason": "missing_request"
+        }
+      ],
+      "audio_waveform_live_e2e_status": "missing_or_failed",
+      "classification": "forced_mllm_media_transport_and_cache_live_semantics_red",
+      "config_error": null,
+      "config_modalities": [
+        "text"
+      ],
+      "config_multimodal_status": "weights_preserved_text_runtime",
+      "config_parser_components": {
+        "audio_config": true,
+        "processor_config": true,
+        "vision_config": true
+      },
+      "config_preserved_modalities": [
+        "vision",
+        "audio"
+      ],
+      "config_text_only_contract": true,
+      "config_unwired_modalities": [
+        "vision",
+        "audio"
+      ],
+      "has_audio_tokenizer_config": true,
+      "has_audio_tokenizer_dir": true,
+      "has_audio_tokenizer_weights": true,
+      "has_preprocessor_config": true,
+      "live_media_e2e_boundary": "Source-level MiMo media capability wiring is not a substitute for live image/audio/video server output proof.",
+      "live_media_e2e_failures": [
+        {
+          "label": "vl_blue_image",
+          "reason": "missing_request"
+        },
+        {
+          "label": "vl_blue_image_repeat",
+          "reason": "missing_request"
+        },
+        {
+          "label": "vl_red_image_changed",
+          "reason": "missing_request"
+        },
+        {
+          "label": "text_no_media_after_image",
+          "reason": "missing_request"
+        },
+        {
+          "label": "vl_blue_video",
+          "reason": "missing_request"
+        },
+        {
+          "label": "text_no_media_after_video",
+          "reason": "missing_request"
+        }
+      ],
+      "live_media_e2e_status": "missing_or_failed",
+      "load_weights_bindings": {
+        "audio": true,
+        "visual": true
+      },
+      "local_mimo_v2_multimodal_module": true,
+      "media_aware_prefix_l2_cache": true,
+      "media_route_evidence": {
+        "boundary": "MiMo JANGTQ2 has current source/dev-app evidence that media weights bind and video/audio requests reach the MLLM runtime when launched as MLLM. This clears the stale 'implementation missing' wording only. It does not clear default metadata-gated text-only capability, image color semantics, video semantic quality, audio transcript semantics, fresh-process L2 restore for media, installed-app parity, or release readiness.",
+        "classification": "forced_mllm_media_transport_and_cache_live_semantics_red",
+        "dev_app_video_artifact": "/Users/eric/mlx/vllm-mlx-finite-launch-guard/build/current-real-ui-dev-app-mimo-v25-jangtq2-video-after-mllm-source-media-20260610.json",
+        "dev_app_video_transport_proven": true,
+        "exists": true,
+        "must_not_claim": [
+          "Do not advertise preserved-text-runtime MiMo bundles as media-capable by default.",
+          "Do not claim MiMo visual or audio semantic quality is release-green.",
+          "Do not use this route proof to clear MiMo literal/tool/JSON exactness."
+        ],
+        "semantic_quality_proven": false,
+        "semantic_status": "fail",
+        "source_artifact": "/Users/eric/mlx/vllm-mlx-finite-launch-guard/build/current-mimo-v25-jangtq2-video-audio-source-proof-20260610.json",
+        "source_mllm_media_transport_proven": true,
+        "status": "open",
+        "transport_proven": true,
+        "video_cache_artifact": "/Users/eric/mlx/vllm-mlx-finite-launch-guard/build/current-mimo-v25-jangtq2-video-cache-proof-after-video-tensor-cache-fix-20260610.json",
+        "video_cache_proven": true
+      },
+      "media_weight_assignment": true,
+      "media_weights_preserved": true,
+      "metadata_overadvertises_runtime_media": false,
+      "missing_mimo_v2_multimodal_module": false,
+      "missing_runtime_components": [],
+      "mixed_inputs_embeds_splice": true,
+      "model_vision_bridge": true,
+      "raw_audio_request_ingestion": true,
+      "required_model_metadata_if_runtime_unwired": {
+        "capabilities.modalities": [
+          "text"
+        ],
+        "capabilities.multimodal_status": "weights_preserved_text_runtime",
+        "capabilities.preserved_modalities": [
+          "vision",
+          "audio"
+        ],
+        "capabilities.unwired_modalities": [
+          "vision",
+          "audio"
+        ],
+        "runtime.multimodal_mode": "weights_preserved_text_runtime"
+      },
+      "runtime_capabilities": {
+        "exists": true,
+        "media": {
+          "declared_modalities": [
+            "text",
+            "vision",
+            "image",
+            "video",
+            "audio"
+          ],
+          "memory_gate": {
+            "applicable": false,
+            "reason": "model_not_loaded",
+            "safe": true
+          },
+          "preserved_modalities": [
+            "vision",
+            "image",
+            "video",
+            "audio"
+          ],
+          "runtime_modalities": [
+            "text"
+          ],
+          "status_by_modality": {
+            "audio": "preserved_unwired",
+            "image": "preserved_unwired",
+            "text": "runtime_supported",
+            "video": "preserved_unwired",
+            "vision": "preserved_unwired"
+          },
+          "unwired_modalities": [
+            "vision",
+            "image",
+            "video",
+            "audio"
+          ]
+        },
+        "preserved_modalities": [
+          "vision",
+          "image",
+          "video",
+          "audio"
+        ],
+        "runtime_capabilities_safe": true,
+        "runtime_media_supported": false,
+        "runtime_modalities": [
+          "text"
+        ],
+        "safe_text_only_runtime_capabilities": true,
+        "source": "server_detector",
+        "status_by_modality": {
+          "audio": "preserved_unwired",
+          "image": "preserved_unwired",
+          "text": "runtime_supported",
+          "video": "preserved_unwired",
+          "vision": "preserved_unwired"
+        },
+        "unwired_modalities": [
+          "vision",
+          "image",
+          "video",
+          "audio"
+        ]
+      },
+      "runtime_capabilities_media_supported": false,
+      "runtime_capabilities_safe": true,
+      "runtime_capabilities_text_only_safe": true,
+      "runtime_explicitly_unwired": false,
+      "runtime_media_wired": false,
+      "runtime_media_wired_boundary": "MiMo JANGTQ2 has current source/dev-app evidence that media weights bind and video/audio requests reach the MLLM runtime when launched as MLLM. This clears the stale 'implementation missing' wording only. It does not clear default metadata-gated text-only capability, image color semantics, video semantic quality, audio transcript semantics, fresh-process L2 restore for media, installed-app parity, or release readiness.",
+      "runtime_media_wired_superseded_by_live_e2e": false,
+      "runtime_media_wired_superseded_by_route_proof": true,
+      "runtime_multimodal_mode": "weights_preserved_text_runtime",
+      "smoke_runtime_capabilities": {
+        "exists": true,
+        "media": {
+          "declared_modalities": [
+            "text",
+            "vision",
+            "image",
+            "video",
+            "audio"
+          ],
+          "memory_gate": {
+            "applicable": true,
+            "media_modalities": [],
+            "reason": "no_runtime_media_modalities",
+            "safe": true
+          },
+          "preserved_modalities": [
+            "vision",
+            "image",
+            "video",
+            "audio"
+          ],
+          "runtime_modalities": [
+            "text"
+          ],
+          "status_by_modality": {
+            "audio": "preserved_unwired",
+            "image": "preserved_unwired",
+            "text": "runtime_supported",
+            "video": "preserved_unwired",
+            "vision": "preserved_unwired"
+          },
+          "unwired_modalities": [
+            "vision",
+            "image",
+            "video",
+            "audio"
+          ]
+        },
+        "preserved_modalities": [
+          "vision",
+          "image",
+          "video",
+          "audio"
+        ],
+        "runtime_capabilities_safe": true,
+        "runtime_media_supported": false,
+        "runtime_modalities": [
+          "text"
+        ],
+        "safe_text_only_runtime_capabilities": true,
+        "source": "live_smoke",
+        "status_by_modality": {
+          "audio": "preserved_unwired",
+          "image": "preserved_unwired",
+          "text": "runtime_supported",
+          "video": "preserved_unwired",
+          "vision": "preserved_unwired"
+        },
+        "unwired_modalities": [
+          "vision",
+          "image",
+          "video",
+          "audio"
+        ]
+      },
+      "source_media_components_present": true,
+      "status": "open",
+      "text_route_media_unwired_superseded_by_source": false,
+      "vision_attention_block_modules": true,
+      "vision_grid_forward": true,
+      "vision_merger_module": true,
+      "vision_patch_embed_module": true,
+      "visual_tensor_count": 364
+    },
+    "mllm_inputs_embeds_interface": {
+      "checks": {
+        "audio_embedding_spliced": true,
+        "direct_inputs_embeds_forwarded": true,
+        "image_embedding_spliced": true,
+        "registered_module_present": true,
+        "text_tokens_preserved_as_embeddings": true,
+        "video_embedding_spliced": true
+      },
+      "details": {
+        "direct_forward_call": {
+          "cache_present": true,
+          "input_ids_shape": [
+            1,
+            3
+          ],
+          "inputs_embeds_shape": [
+            1,
+            3,
+            16
+          ],
+          "kwargs": [],
+          "mask_present": false
+        },
+        "modal_logits_shape": [
+          1,
+          7,
+          16
+        ],
+        "modal_positions": {
+          "audio": [
+            3.0,
+            3.0,
+            3.0,
+            3.0
+          ],
+          "image": [
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ],
+          "text_head": [
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          "video": [
+            2.0,
+            2.0,
+            2.0,
+            2.0
+          ]
+        }
+      },
+      "generated_at": 1780979199,
+      "release_boundary": "This clears only the MiMo MLLM inputs_embeds interface proof. It does not clear live image/video/audio E2E, artifact exactness, decode speed, JANG_2L memory-safe live rows, or installed-app UI parity.",
+      "status": "pass"
+    },
+    "prompt_shape_first_token": {
+      "blocked": false,
+      "classification": "missing_prompt_shape_first_token_artifact"
+    },
+    "sink_boundary": "Manual sink SDPA and disabling SWA sink do not clear the current MiMo length-generation failures; do not classify the blocker as an MLX sink-kernel-only issue.",
+    "source_vs_quant_first_divergence": {
+      "artifact": "build/current-mimo-v2-jangtq2-source-vs-quant-first-divergence-preflight-20260607.json",
+      "classification": "missing_local_source_vs_quant_first_divergence",
+      "status": "missing"
+    },
+    "source_vs_quant_policy_skip": {
+      "boundary": "source-vs-quant was not run because policy/RAM disallows it; this removes only the source-comparison blocker and does not release-clear unresolved MiMo exactness, long-prompt, CB, or media rows",
+      "classification": "jangtq2_plain_literal_copy_fails_before_parser_or_json_repair",
+      "classifier_status": "open",
+      "policy_skipped": true,
+      "reason": "user_disallowed_source_vs_quant_due_ram",
+      "required_exclusions": {
+        "hidden_stochastic_sampling_primary_cause": true,
+        "parser_argument_rewrite": true,
+        "prefix_paged_l2_or_kv_quant_primary_cause": true
+      },
+      "secondary_classification": null,
+      "unresolved_surfaces": {
+        "artifact_quantization_or_decode_logits_quality": true,
+        "continuous_batching_system_prompt_pressure": false,
+        "jang2l_chat_tool_quality": false,
+        "jang2l_json_sentinel_exactness": false,
+        "jang2l_tool_memory_or_protocol": false,
+        "jangtq2_compact_hyphen_decode_quality": false,
+        "jangtq2_compiled_router": true,
+        "jangtq2_conservative_no_cb_no_prefix_literal_mutation": false,
+        "jangtq2_current_all_local_literal_mutation": true,
+        "jangtq2_plain_literal_copy": true,
+        "jangtq2_raw_decode_or_artifact_quality": false,
+        "jangtq2_switchglu_fastpath": true,
+        "jangtq2_tq_gather_kernel": true,
+        "long_prompt_coherence": false,
+        "mimo_media_runtime": true,
+        "source_vs_quant_first_divergence": true
+      }
+    },
+    "synced_long_tool_cache": {
+      "exists": true,
+      "failed_checks": [
+        {
+          "failure": "expected_exact_text_missing",
+          "label": "cache_repeat_1",
+          "text_head": ""
+        },
+        {
+          "failure": "expected_exact_text_missing",
+          "label": "cache_repeat_2",
+          "text_head": ""
+        },
+        {
+          "failure": "long_prompt_recall_missing_or_empty",
+          "label": "long_prompt_recall",
+          "text_head": ""
+        },
+        {
+          "failure": "expected_tool_call_missing",
+          "label": "tool_required",
+          "text_head": ""
+        },
+        {
+          "failure": "decode_speed_below_30_tok_s_or_short_generation",
+          "label": "speed_80_words",
+          "text_head": ""
+        }
+      ],
+      "long_prompt_blocked": true,
+      "long_prompt_elapsed_s": 4.281,
+      "long_prompt_text_head": "",
+      "short_cache_exact_pass": false,
+      "tool_elapsed_s": 0.0,
+      "tool_protocol_blocked": true,
+      "tool_text_head": "",
+      "verdict": "blocked"
+    },
+    "text_route": {
+      "cache_l2_not_reproved": false,
+      "cache_release_exact_pass": false,
+      "cache_visible_pass": true,
+      "exists": true,
+      "fix_status": "partial",
+      "long_prompt_oom_cleared": true,
+      "long_prompt_recall_pass": true,
+      "media_unwired": true,
+      "release_boundary": "Text-only MiMo runtime is materially improved but not release-cleared. Long-prompt OOM and tool parse are fixed for this focused simple-engine route; speed, exactness, cache/L2 proof, source-vs-quant, packaged/UI parity, and media remain open.",
+      "remaining_blockers": [
+        "decode_speed_below_release_target",
+        "exact_cache_prompt_following_still_returns_ACK_not_ACK_CACHE_742",
+        "prefix_paged_l2_cache_hit_not_reproved_on_continuous_batching_route",
+        "source_vs_quant_first_divergence_missing",
+        "mimo_vl_audio_video_unwired"
+      ],
+      "source_vs_quant_missing": true,
+      "speed_blocked": true,
+      "status": "open",
+      "tool_call_pass": true
+    }
+  },
+  "latest_decode_speed_evidence": {
+    "bundle_decode_tps": 39.2,
+    "classification": "current_text_runtime_release_path_speed_boundary",
+    "current_source_long_decode_artifact": "build/current-mimo-v25-jangtq2-current-source-sustained-decode-speed-after-singlebatch-tokenbuffer-skip-20260609/result.json",
+    "exists": true,
+    "notes": "open_because_current_text_runtime_decode_is_below_40_after_singlebatch_eval_and_tokenbuffer_fixes",
+    "speed_blocked": true,
+    "stale_forced_mllm_generation_tps": null,
+    "stale_forced_mllm_speed_artifact": null,
+    "status": "open",
+    "wall_decode_tps": 39.12980168982385
+  },
+  "local_release_clearance": false,
+  "manifest_integrity": {
+    "manifest": "build/current-mimo-jangtq2-local-manifest-20260607.tsv",
+    "mismatched_files": [],
+    "missing_files": [],
+    "model_parent": "/Users/eric/.mlxstudio/models/JANGQ-AI",
+    "ok_files": 117,
+    "rows": 117,
+    "status": "pass",
+    "total_bytes": 85304837837
+  },
+  "model_path": "/Users/eric/.mlxstudio/models/JANGQ-AI/MiMo-V2.5-JANGTQ_2",
+  "release_boundary": "MiMo local artifact integrity is clean, but release remains blocked until long-prompt coherence, tool protocol/artifact exactness, decode speed, CB system prompt working-set pressure, API/cache/Responses contracts, local source-vs-quant first-divergence or an equivalent current-artifact classification, and media wiring proof pass without fake parser injection, hidden thinking-mode rewrites, forced fallback, or cache disabling.",
+  "stale_local_state": {
+    "all_stale_targets_absent": true,
+    "cleanup_log": "/Users/eric/mlx/vllm-mlx-finite-launch-guard/build/current-mimo-stale-local-cleanup-20260606.txt",
+    "targets": [
+      {
+        "exists": false,
+        "path": "/Users/eric/vmlx-sync-backups/local-installed-mimo-v2-mlx-model-20260527-swa-mask"
+      },
+      {
+        "exists": false,
+        "path": "/Users/eric/.cache/huggingface/modules/transformers_modules/MiMo_hyphen_V2_dot_5_hyphen_JANG_2L"
+      },
+      {
+        "exists": false,
+        "path": "build/mimo-block-cache"
+      },
+      {
+        "exists": false,
+        "path": "build/current-mimo-jang2l-block-cache-20260606"
+      },
+      {
+        "exists": false,
+        "path": "build/current-mimo-jang2l-tool-block-cache-20260606"
+      },
+      {
+        "exists": false,
+        "path": "build/current-mimo-jang2l-block-cache-after-head-fix-20260606"
+      }
+    ]
+  },
+  "status": "open"
+}

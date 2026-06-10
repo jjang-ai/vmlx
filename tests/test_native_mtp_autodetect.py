@@ -338,6 +338,66 @@ class TestNativeMtpAutodetect:
         assert status["runtime_reason"] == "jang_config.runtime.bundle_has_mtp=false"
         assert status["issues"] == []
 
+    def test_jang_mtp_sidecar_can_explicitly_drop_configured_metadata_only_mtp(self, tmp_path):
+        from vmlx_engine.server import _model_mtp_status
+
+        (tmp_path / "config.json").write_text(
+            json.dumps(
+                {
+                    "model_type": "qwen3_5_moe",
+                    "text_config": {
+                        "model_type": "qwen3_5_moe_text",
+                        "mtp_num_hidden_layers": 1,
+                    },
+                    "vision_config": {},
+                }
+            )
+        )
+        (tmp_path / "jang_config.json").write_text(
+            json.dumps(
+                {
+                    "format": "jangtq",
+                    "weight_format": "mxtq",
+                    "profile": "JANGTQ2",
+                    "mtp": {"enabled": False, "kept": False, "num_layers": 1},
+                    "runtime": {
+                        "bundle_has_mtp": False,
+                        "mtp_layers": 1,
+                        "mtp_mode": "metadata_only_missing_weights",
+                    },
+                    "capabilities": {
+                        "family": "qwen3_5_moe",
+                        "cache_type": "hybrid",
+                    },
+                }
+            )
+        )
+        (tmp_path / "model.safetensors.index.json").write_text(
+            json.dumps(
+                {
+                    "weight_map": {
+                        "vision_tower.blocks.0.attn.qkv.weight": "model.safetensors",
+                        "model.layers.0.self_attn.q_proj.weight": "model.safetensors",
+                    }
+                }
+            )
+        )
+
+        status = _model_mtp_status(str(tmp_path))
+
+        assert status["config_num_nextn_predict_layers"] == 1
+        assert status["jang_mtp_layers"] == 1
+        assert status["jang_drop_mtp"] is True
+        assert status["index_has_mtp_tensors"] is False
+        assert status["artifact_available"] is False
+        assert status["runtime_available"] is False
+        assert status["runtime_active"] is False
+        assert status["status"] == "dropped"
+        assert status["runtime_bundle_has_mtp"] is False
+        assert status["runtime_mtp_mode"] == "metadata_only_missing_weights"
+        assert status["runtime_reason"] == "jang_config.runtime.bundle_has_mtp=false"
+        assert status["issues"] == []
+
     def test_native_mtp_detection_scans_safetensors_headers_without_index(self, tmp_path):
         import numpy as np
         from safetensors.numpy import save_file

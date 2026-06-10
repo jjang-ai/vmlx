@@ -143,7 +143,7 @@ class KimiToolParser(ToolParser):
             return {"content": delta_text}
 
         if self.TOOL_CALL_END in delta_text:
-            result = self.extract_tool_calls(current_text)
+            result = self.extract_tool_calls(current_text, request=request)
             if result.tools_called:
                 return {
                     "tool_calls": [

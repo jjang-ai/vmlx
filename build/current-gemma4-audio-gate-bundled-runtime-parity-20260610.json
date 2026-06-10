@@ -1,0 +1,51 @@
+{
+  "created_at": "2026-06-10T08:50:00-07:00",
+  "status": "passed",
+  "scope": "Gemma4 JANG/MXFP audio capability honesty and bundled runtime parity",
+  "root_cause": "Current source correctly requires Gemma4/Gemma4 unified audio to be weight-backed by audio_tower.* weights, but bundled/staged app runtime copies were stale and still advertised gemma4_unified audio from audio_config alone. That allowed installed-app chat audio requests to enter generation and decode base64 audio instead of returning the unsupported-modality guard.",
+  "fix": {
+    "source_logic": "No fake audio support was added. Source still gates Gemma4 audio on actual audio_tower.* weights and MXFP audio remains off unless explicitly experimental.",
+    "bundled_runtime": [
+      "panel/bundled-python/python/lib/python3.12/site-packages/vmlx_engine",
+      "panel/release/sequoia-app/mac-arm64/vMLX.app/Contents/Resources/bundled-python/python/lib/python3.12/site-packages/vmlx_engine",
+      "panel/release/tahoe-app/mac-arm64/vMLX.app/Contents/Resources/bundled-python/python/lib/python3.12/site-packages/vmlx_engine",
+      "panel/release/sequoia-app/mac-arm64/vMLX.app/Contents/Resources/vmlx-engine-source/vmlx_engine",
+      "panel/release/tahoe-app/mac-arm64/vMLX.app/Contents/Resources/vmlx-engine-source/vmlx_engine"
+    ],
+    "runtime_hash": {
+      "source_vmlx_engine_server_py_sha256_prefix": "9632a23b0d8b861d",
+      "all_synced_runtime_server_py_sha256_prefix": "9632a23b0d8b861d"
+    }
+  },
+  "proof": {
+    "source_route_probe": {
+      "requested_modalities": ["audio"],
+      "loaded_modalities": ["text", "vision"],
+      "http_status": 400,
+      "detail_contains": "unsupported media modality audio"
+    },
+    "bundled_route_probe": {
+      "server_file": "panel/bundled-python/python/lib/python3.12/site-packages/vmlx_engine/server.py",
+      "loaded_modalities": ["text", "vision"],
+      "http_status": 400,
+      "detail": "/v1/chat/completions received unsupported media modality audio. Supported modalities: text, vision."
+    },
+    "verified_real_bundles_without_audio_tower": [
+      "/Users/eric/models/JANGQ-AI/gemma-4-12B-it-JANG_4M",
+      "/Users/eric/models/JANGQ-AI/gemma-4-12B-it-qat-MXFP4",
+      "/Users/eric/models/OsaurusAI/gemma-4-12B-it-MXFP4",
+      "/Users/eric/.mlxstudio/models/JANGQ-AI/Nex-N2-Pro-JANGTQ2"
+    ]
+  },
+  "verification_commands": [
+    "./panel/scripts/verify-bundled-python.sh",
+    "PYTHONDONTWRITEBYTECODE=1 PYTHONNOUSERSITE=1 PYTHONPATH= panel/bundled-python/python/bin/python3 -B -s /tmp/vmlx-gemma-audio-gate-bundled/check.py",
+    ".venv/bin/python -m pytest -q tests/test_engine_audit.py -k 'gemma4_chat_audio_request_rejects_when_audio_not_weight_backed or gemma4_runtime_modalities_do_not_infer_audio_from_token_only_config or gemma4_unified_jang4m_runtime_modalities_gate_config_only_audio or gemma4_unified_mxfp_runtime_modalities_gate_unproven_audio'"
+  ],
+  "boundaries": [
+    "This does not claim Gemma4 audio works.",
+    "This does not claim N2 audio works.",
+    "This does not sign, notarize, publish, upload, or release anything.",
+    "This only makes source, bundled Python, and staged app runtime copies agree that unsupported audio is rejected."
+  ]
+}

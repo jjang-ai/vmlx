@@ -1,0 +1,29 @@
+{
+  "status": 200,
+  "contentType": "text/event-stream; charset=utf-8",
+  "gatewayPort": 53294,
+  "backendPort": 8898,
+  "servedModel": "models/Qwen3.6-35B-A3B-MXFP8-CRACK-MTP",
+  "modelPath": "/Users/eric/models/JANGQ/Qwen3.6-35B-A3B-MXFP8-MTP",
+  "requestModel": "models/Qwen3.6-35B-A3B-MXFP8-CRACK-MTP",
+  "requestKwargs": {
+    "stream": true,
+    "max_output_tokens": 512,
+    "temperature": 0,
+    "top_p": 1,
+    "top_k": 0,
+    "enable_thinking": true,
+    "tool_choice": "required",
+    "tool_count": 1,
+    "first_tool_name": "record_fact"
+  },
+  "touchedSessions": [
+    [
+      "qwen35-live"
+    ]
+  ],
+  "responseBytes": 10883,
+  "containsReasoning": true,
+  "containsFunctionDelta": true,
+  "containsFunctionDone": true
+}

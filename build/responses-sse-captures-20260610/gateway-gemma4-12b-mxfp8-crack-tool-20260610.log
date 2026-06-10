@@ -1,0 +1,29 @@
+{
+  "status": 200,
+  "contentType": "text/event-stream; charset=utf-8",
+  "gatewayPort": 54509,
+  "backendPort": 8896,
+  "servedModel": "models/Gemma-4-12B-it-MXFP8-CRACK",
+  "modelPath": "/Users/eric/models/dealignai/Gemma-4-12B-it-MXFP8-CRACK",
+  "requestModel": "models/Gemma-4-12B-it-MXFP8-CRACK",
+  "requestKwargs": {
+    "stream": true,
+    "max_output_tokens": 512,
+    "temperature": 0,
+    "top_p": 1,
+    "top_k": 0,
+    "enable_thinking": true,
+    "tool_choice": "required",
+    "tool_count": 1,
+    "first_tool_name": "record_fact"
+  },
+  "touchedSessions": [
+    [
+      "qwen35-live"
+    ]
+  ],
+  "responseBytes": 19504,
+  "containsReasoning": true,
+  "containsFunctionDelta": true,
+  "containsFunctionDone": true
+}

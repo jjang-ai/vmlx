@@ -1,0 +1,47 @@
+{
+  "created_at": "2026-06-10T08:59:00-07:00",
+  "status": "passed",
+  "scope": "Bundled Python/runtime parity after Responses invalid-tool markup fix",
+  "initial_failure": {
+    "command": "./panel/scripts/verify-bundled-python.sh",
+    "failed_on": "bundled vmlx_engine/server.py content drift",
+    "source_sha256_prefix": "0d84fe5280867cc7",
+    "bundled_sha256_prefix_before_sync": "9632a23b0d8b861d"
+  },
+  "sync": {
+    "method": "mechanically synced current vmlx_engine/ into generated bundled Python and staged app runtime/source copies",
+    "synced_paths": [
+      "panel/bundled-python/python/lib/python3.12/site-packages/vmlx_engine",
+      "panel/release/sequoia-app/mac-arm64/vMLX.app/Contents/Resources/bundled-python/python/lib/python3.12/site-packages/vmlx_engine",
+      "panel/release/tahoe-app/mac-arm64/vMLX.app/Contents/Resources/bundled-python/python/lib/python3.12/site-packages/vmlx_engine",
+      "panel/release/sequoia-app/mac-arm64/vMLX.app/Contents/Resources/vmlx-engine-source/vmlx_engine",
+      "panel/release/tahoe-app/mac-arm64/vMLX.app/Contents/Resources/vmlx-engine-source/vmlx_engine"
+    ],
+    "server_py_sha256_prefix_after_sync": "0d84fe5280867cc7"
+  },
+  "verification": {
+    "bundled_parity": {
+      "command": "./panel/scripts/verify-bundled-python.sh",
+      "result": "passed",
+      "critical_vmlx_engine_files_match_source": true,
+      "critical_jang_tools_files_match_source": true
+    },
+    "bundled_responses_repro": {
+      "server_file": "panel/bundled-python/python/lib/python3.12/site-packages/vmlx_engine/server.py",
+      "visible_deltas": ["Quick preamble. Checking tmp...\n"],
+      "output_text_done": ["Quick preamble. Checking tmp..."],
+      "completed_status": "completed",
+      "completed_output_text": "Quick preamble. Checking tmp...",
+      "function_items": [],
+      "has_function_argument_events": false,
+      "has_empty_args_string": false,
+      "has_tool_xml": false
+    }
+  },
+  "boundaries": [
+    "No signing, notarization, DMG packaging, PyPI publish, updater, or website release action was run.",
+    "Generated runtime sync is local build state; this artifact records the proof needed before a future package/sign lane.",
+    "Same-model live direct/gateway/tunnel raw SSE remains a separate proof lane.",
+    "No N2 JANG_1L work was performed."
+  ]
+}

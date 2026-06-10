@@ -1674,6 +1674,15 @@ export function registerChatHandlers(
         const apiUrl = useResponsesApi
           ? `${baseUrl}/v1/responses`
           : `${baseUrl}/v1/chat/completions`;
+        const loopbackModelIdentity = `${chatDetectedFamily || ""} ${chat.modelPath || ""} ${chat.modelId || ""} ${resolvedSession?.remoteModel || ""}`.toLowerCase();
+        const allowPinnedToolChoiceForLoopback =
+          chatDetectedFamily === "gemma4" ||
+          loopbackModelIdentity.includes("gemma-4") ||
+          loopbackModelIdentity.includes("gemma4");
+        const suppressPinnedToolChoiceForLoopback =
+          isRemote &&
+          isLoopbackUrl(apiUrl) &&
+          !allowPinnedToolChoiceForLoopback;
         console.log(
           `[CHAT] Sending to: ${apiUrl} (wire: ${wireApi}, remote: ${isRemote})`,
         );
@@ -1812,7 +1821,11 @@ export function registerChatHandlers(
                 filteredTools,
                 true,
               );
-              if (explicitToolChoice && !isResponsesToolFollowup) {
+              if (
+                explicitToolChoice &&
+                !isResponsesToolFollowup &&
+                !suppressPinnedToolChoiceForLoopback
+              ) {
                 obj.tool_choice = explicitToolChoice;
               }
             }
@@ -1891,7 +1904,11 @@ export function registerChatHandlers(
                 obj.tools,
                 false,
               );
-              if (explicitToolChoice && !suppressExplicitToolChoiceForToolFollowup) {
+              if (
+                explicitToolChoice &&
+                !suppressExplicitToolChoiceForToolFollowup &&
+                !suppressPinnedToolChoiceForLoopback
+              ) {
                 obj.tool_choice = explicitToolChoice;
               }
             }
@@ -2516,6 +2533,9 @@ export function registerChatHandlers(
                 const toolCallId =
                   item.call_id ||
                   `call_${uuidv4().replace(/-/g, "").slice(0, 16)}`;
+                console.log(
+                  `[CHAT] Responses function_call item: output_index=${parsed.output_index ?? ""} item_id=${item.id || ""} call_id=${toolCallId} name=${item.name || ""} arguments_len=${String(finalArguments).length}`,
+                );
                 receivedToolCalls.push({
                   id: toolCallId,
                   function: {
@@ -2892,6 +2912,7 @@ export function registerChatHandlers(
                 "[CHAT] Error processing SSE line:",
                 (e as Error).message,
               );
+              throw e;
             }
           }
         };
@@ -3982,7 +4003,7 @@ export function registerChatHandlers(
           partialContent ||
           abortReasoningContent.trim() ||
           collectedToolStatuses.length > 0 ||
-          abortTotalTokens > 0;
+          (wasAborted && abortTotalTokens > 0);
 
         // Save message if we have any content, reasoning, or visible tool activity
         if (hadVisibleActivity) {

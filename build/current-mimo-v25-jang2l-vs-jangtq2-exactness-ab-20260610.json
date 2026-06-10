@@ -1,0 +1,110 @@
+{
+  "schema": "vmlx-mimo-v2-jang2l-vs-jangtq2-exactness-ab-v1",
+  "status": "open",
+  "classification": "JANG_2L materially improves MiMo literal, JSON, and tool-argument exactness compared with JANGTQ_2, but MiMo is not fully release-green because visible sentinel exactness still drifts.",
+  "created_at": "2026-06-10T10:55:00-07:00",
+  "scope": {
+    "model_family": "mimo_v2",
+    "blocked_lane": "MiMo V2.5 exactness and artifact quality",
+    "source_worktree": "/Users/eric/mlx/vllm-mlx-finite-launch-guard",
+    "no_claims": [
+      "not a parser repair",
+      "not a JSON repair",
+      "not a sampling clamp",
+      "not source-vs-quant first-divergence proof",
+      "not release clearance",
+      "not installed-app parity"
+    ]
+  },
+  "jang2l_probe": {
+    "artifact": "build/current-mimo-v25-jang2l-exactness-variant-ab-20260610/result.json",
+    "model_path": "/Users/eric/.mlxstudio/models/JANGQ-AI/MiMo-V2.5-JANG_2L",
+    "served_model": "mimo-v25-jang2l-exactness-ab-20260610",
+    "runtime_profile": "JANG_2L_322_D3E16",
+    "role_bits": {
+      "gate": 3,
+      "up": 2,
+      "down": 2
+    },
+    "native_cache": {
+      "type": "mixed_swa_kv_v1",
+      "subtype": "mimo_v2_asymmetric_swa",
+      "paged": true,
+      "block_disk_l2": true,
+      "generic_turboquant_kv": false
+    },
+    "memory_mb": {
+      "active_after_health": 104985.5,
+      "peak_after_health": 104985.5
+    },
+    "pass_count": 5,
+    "fail_count": 3,
+    "passed_labels": [
+      "plain_exact_blue_cat",
+      "plain_exact_chat_blue_cat",
+      "json_blue_cat",
+      "tool_blue_cat",
+      "tool_sentinel_json_call"
+    ],
+    "failed_labels": [
+      "plain_exact_sentinel",
+      "plain_exact_chat_sentinel",
+      "json_sentinel"
+    ],
+    "key_outputs": {
+      "plain_exact_blue_cat": "blue-cat",
+      "plain_exact_sentinel": "B7-CAD-09",
+      "plain_exact_chat_blue_cat": "blue-cat",
+      "plain_exact_chat_sentinel": "B7-C44-09",
+      "json_blue_cat": "{\"status\":\"ok\",\"value\":\"blue-cat\",\"count\":3}",
+      "json_sentinel": "{\"status\":\"ok\",\"value\":\"B7-CAT-09\"}",
+      "tool_blue_cat_args": "{\"value\":\"blue-cat\"}",
+      "tool_sentinel_json_call_args": "{\"value\":\"B7-CAT-09\"}"
+    },
+    "cache_evidence": {
+      "final_tool_request_cached_tokens": 192,
+      "cache_detail": "paged"
+    }
+  },
+  "jangtq2_baseline": {
+    "artifact": "build/current-mimo-v25-jangtq2-exactness-variant-live-20260610/result.json",
+    "contract_artifacts": [
+      "build/current-mimo-v25-jangtq2-exactness-classifier-after-no-fastpath-live-20260610.json",
+      "build/current-mimo-v25-jangtq2-native-tq-contract-classifier-20260610.json",
+      "build/current-mimo-v25-jangtq2-native-tq-allproj-contract-20260610.json"
+    ],
+    "runtime_profile": "JANGTQ_2",
+    "pass_count": 0,
+    "fail_count": 8,
+    "failed_labels": [
+      "plain_exact_blue_cat",
+      "plain_exact_sentinel",
+      "plain_exact_chat_blue_cat",
+      "plain_exact_chat_sentinel",
+      "json_blue_cat",
+      "json_sentinel",
+      "tool_blue_cat",
+      "tool_sentinel_json_call"
+    ],
+    "key_mutations": {
+      "plain_exact_blue_cat": "blue",
+      "plain_exact_chat_blue_cat": "blue grass",
+      "json_blue_cat_value": "blue",
+      "tool_blue_cat_args": "{\"value\":\"blue\"}",
+      "sentinel_mutations": [
+        "B7 CAT-09",
+        "B7CAT-09"
+      ]
+    }
+  },
+  "interpretation": [
+    "JANG_2L proves the MiMo runtime, parser, tool protocol, and cache path can preserve the common blue-cat literal and tool args on the same probe shape.",
+    "JANGTQ_2 still mutates every exactness row despite prior checks excluding tokenizer/template corruption, vMLX SwitchGLU fast path, obvious sidecar table mismatch, parser/JSON repair, cache/L2, and continuous batching as primary causes.",
+    "The remaining JANGTQ_2 work is artifact, requant profile, source-vs-quant first divergence, or decode/logit quality, not semantic post-processing."
+  ],
+  "next_actions_for_parallel_agent": [
+    "Bring up a MiMo source or dequant reference and compare first divergent logits for the exact blue-cat and B7-CAT-09 probes.",
+    "If source/dequant is unavailable, rebuild a higher-fidelity JANGTQ artifact or corrected requant profile and rerun the same eight-row probe.",
+    "Do not mask MiMo exactness by parser repair, JSON repair, string post-processing, sampling clamps, or cache changes."
+  ]
+}

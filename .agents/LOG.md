@@ -1,3 +1,559 @@
+# 2026-06-10 - MiMo local runtime/cache lane selected
+
+- Request: continue toward production readiness for the named model families
+  without broad test-suite churn or fake fixes.
+- Current state: Qwen27/Qwen35 direct/gateway/tunnel raw SSE rows are now green
+  for the captured Qwen3.6 surfaces; Qwen-coder-next remains unavailable
+  locally.
+- Selected blocker: MiMo V2.5 local runtime/API/cache readiness, specifically
+  JANG_2L long-prompt first-request Metal OOM / Responses-L2 accounting versus
+  current green subproofs.
+- Boundary: MiMo JANGTQ_2 semantic exactness remains artifact/source-vs-quant
+  blocked. Do not fix it by parser repair, JSON repair, string postprocessing,
+  sampling clamps, or cache changes without new contrary evidence.
+- Constraints: no release/sign/notarize/PyPI/updater/download/site action, no
+  N2 JANG_1L, no subagents, stop any server started by this lane before final.
+
+# 2026-06-10 - Qwen27 MXFP8 direct/gateway/tunnel raw SSE green
+
+- Action: captured public tunnel raw SSE for
+  `models/Qwen3.6-27B-MXFP8-CRACK-MTP`, then ran current-source direct server
+  plus real panel gateway through the existing raw-SSE capture/parity runner
+  using local `/Users/eric/models/JANGQ/Qwen3.6-27B-MXFP8-MTP` served as the
+  same tunnel model name.
+- Commands:
+  - `curl https://testapi.adlabus.dev/v1/responses ... >
+    build/responses-sse-captures-20260610/tunnel-qwen27-mxfp8-mtp-tool-20260610.sse`
+  - `.venv/bin/python tests/cross_matrix/run_qwen35_responses_raw_sse_capture.py
+    --model /Users/eric/models/JANGQ/Qwen3.6-27B-MXFP8-MTP --port 8895
+    --served-model-name models/Qwen3.6-27B-MXFP8-CRACK-MTP --out
+    build/current-responses-raw-sse-parity-qwen27-mxfp8-direct-gateway-tunnel-20260610.json
+    ... --require-reasoning-events`
+- Artifact:
+  - `build/current-responses-raw-sse-parity-qwen27-mxfp8-direct-gateway-tunnel-20260610.json`
+    is `status=pass`.
+- Raw captures:
+  - `build/responses-sse-captures-20260610/direct-qwen27-mxfp8-mtp-tool-20260610.sse`
+  - `build/responses-sse-captures-20260610/gateway-qwen27-mxfp8-mtp-tool-20260610.sse`
+  - `build/responses-sse-captures-20260610/tunnel-qwen27-mxfp8-mtp-tool-20260610.sse`
+- Proven:
+  - direct, gateway, and public tunnel all report the same model
+    `models/Qwen3.6-27B-MXFP8-CRACK-MTP`;
+  - all three preserve authoritative `record_fact` args
+    `{"value": "blue-cat"}`;
+  - all three have required reasoning events, parse errors `0`, complete
+    reasoning lifecycle, function-call argument delta/done, valid output
+    indices, and final response consistency;
+  - direct/gateway output indices are
+    `message=[0]`, `reasoning=[1]`, `function_call=[2]`; tunnel indices are
+    `message=[0]`, `function_call=[1]`;
+  - local runtime health proved Qwen27 MXFP8 native MTP active at effective
+    depth 3, hybrid SSM cache, attention-only TurboQuant KV, paged cache, block
+    L2, and SSM companion/async rederive. Direct wrote 222 block-L2 tokens;
+    gateway hit `paged+ssm` reuse for 222 tokens.
+- Matrix update:
+  - Added a Qwen27 MXFP8 Responses Raw SSE section to
+    `.agents/PROOF_MATRIX_128GB_MIMO_N2_GEMMA_20260610.md`.
+- Not proven:
+  - Qwen-coder-next, Qwen27 tunnel tool-result continuation, installed-app UI,
+    media/VL/audio/video rows, all parser families, or release readiness.
+- No-claims:
+  - no release/sign/notarize/PyPI/updater/download/site action; no N2 JANG_1L;
+    no synthetic args; no parser repair; no reasoning-disable workaround.
+
+# 2026-06-10 - Qwen27 MXFP8 direct/gateway/tunnel row selected
+
+- Artifact search: no local Qwen-coder-next artifact was found under
+  `/Users/eric/models`; available Qwen3.6 artifacts include local
+  `/Users/eric/models/JANGQ/Qwen3.6-27B-MXFP8-MTP`.
+- Public tunnel context: existing tunnel availability proof advertises
+  `models/Qwen3.6-27B-MXFP8-CRACK-MTP`.
+- Selected row: same-model Qwen27 MXFP8 MTP direct current source, panel
+  gateway, and public tunnel raw Responses SSE with reasoning enabled and
+  required `record_fact` args.
+- No-claims: this will not prove Qwen-coder-next, all parser families,
+  installed app, release readiness, or tunnel tool-result continuation unless
+  those are separately captured.
+
+# 2026-06-10 - Qwen-coder/Qwen tunnel/API continuation lane selected
+
+- Request: continue the persistent objective by reducing real unproven
+  runtime/API/tool-parser blockers instead of drifting into broad test-suite
+  work.
+- Current state: commit `29bfea184` is pushed to `origin/main` and
+  `origin/codex/pr-intake-manifest`; Qwen27 direct and panel gateway
+  required-tool plus tool-result continuation are green from current-source raw
+  SSE artifacts.
+- Selected next blocker: adjacent Qwen/Qwen-coder raw SSE/API surface that is
+  still unproven: Qwen27 tunnel if available, otherwise Qwen-coder-next
+  same-family direct/gateway required-tool plus continuation proof.
+- Constraints: no release/sign/notarize/PyPI/updater/download/site action, no
+  N2 JANG_1L, no subagents, no broad test-suite churn, no synthetic arguments,
+  no parser repair to hide missing args, no reasoning-disable workaround, and
+  no stripping raw XML after parser failure.
+- Next action: locate current model artifacts and existing capture route
+  surfaces, then run one real live proof on the highest-value unproven row.
+
+# 2026-06-10 - Qwen27 gateway/API continuation parity proven
+
+- Request: prove the adjacent local gateway/current-source Responses parity for
+  the same Qwen27 JANG_4M-MTP required-tool plus terminal tool-result
+  continuation flow that direct source now proves green.
+- Source change: extended
+  `panel/tests/api-gateway-qwen35-live-capture.test.ts` so the existing real
+  `ApiGateway` live capture can optionally parse `response.id` and `call_id`
+  from the first raw SSE stream, substitute them into a continuation payload,
+  and post `previous_response_id` + `function_call_output` through the same
+  gateway route. The test timeout is now explicit at 300s for live model proof.
+- Commands/proof:
+  - `cd panel && npm exec tsc -- --noEmit --pretty false` passed.
+  - launched `/Users/eric/models/JANGQ/Qwen3.6-27B-JANG_4M-MTP` on port 8894
+    as `qwen36-27b-jang4m-mtp-direct-sse-20260610` with paged cache, block L2,
+    SSM companion cache, and default thinking enabled.
+  - `cd panel && npm exec vitest -- run tests/api-gateway-qwen35-live-capture.test.ts`
+    passed after the live timeout was made explicit.
+  - raw SSE classifier over both gateway captures passed the expected shape.
+- Artifacts:
+  - `build/current-qwen27-gateway-responses-tool-continuation-parity-after-visible-finalization-seed-fix-20260610.json`
+  - `build/responses-sse-captures-20260610/gateway-qwen27-jang4m-mtp-required-tool-after-visible-finalization-seed-fix-20260610.sse`
+  - `build/responses-sse-captures-20260610/gateway-qwen27-jang4m-mtp-tool-result-continuation-after-visible-finalization-seed-fix-20260610.sse`
+  - `build/responses-sse-captures-20260610/gateway-qwen27-jang4m-mtp-health-after-gateway-continuation-20260610.json`
+- Proven:
+  - required-tool gateway raw SSE completed with `record_fact`,
+    `{"value": "blue-cat"}`, two argument deltas, one argument done event,
+    message/reasoning/function output indices `0/1/2`, and final response
+    consistency.
+  - gateway continuation used actual previous response/call IDs, streamed
+    visible output `The fact "blue-cat" has been recorded.`, emitted no extra
+    function call, and kept final object consistency.
+  - gateway logs preserved request kwargs: stream, max output tokens,
+    temperature, top_p, top_k, reasoning object, required tool choice, tool
+    schema, previous_response_id, and function_call_output call_id.
+  - runtime/cache health after proof showed native MTP active, hybrid SSM cache,
+    attention-only TurboQuant KV, `paged+ssm` cache hit of 202 tokens, block L2
+    276 tokens, SSM L2 532 tokens, and total L2 808 tokens.
+- Not proven:
+  - Qwen27 tunnel, Qwen-coder-next, all parser families, installed-app bundle
+    parity, media/VL/audio/video rows, and release readiness.
+- No-claims:
+  - no synthetic arguments, no reasoning-disable workaround for the required
+    tool request, no release/sign/notarize/PyPI/updater/download/site action,
+    and no N2 JANG_1L work.
+- Other-agent note:
+  - Treat this as current-source panel gateway evidence for Qwen27. Continue
+    with Qwen27 tunnel or Qwen-coder-next same-model raw SSE when available.
+    Keep missing-required-arg fail-closed behavior; do not infer args from a
+    visible preamble.
+
+# 2026-06-10 - Current-turn AGENTS routing note recorded
+
+- Request: keep the latest instruction set in `AGENTS.md` / agent state and do
+  not drift back into deprecated `/Users/eric/vmlx` app/runtime work.
+- Action: re-read the active worktree `AGENTS.md` and confirmed it already
+  carries the current no-subagent, no-N2-JANG_1L, parser/API priority,
+  release-lock, and write-every-movement rules. Recorded this current-turn
+  routing note here and in `.agents/STATUS.md`.
+- Proven: active work remains routed to
+  `/Users/eric/mlx/vllm-mlx-finite-launch-guard`; `/Users/eric/vmlx` remains a
+  deprecated wrapper/history checkout for this task.
+- Not proven: no new runtime/model/API proof was run by this note alone.
+- Next: continue Qwen27 gateway/API parity proof from the active worktree.
+
+# 2026-06-10 - Qwen27 gateway/API continuation parity lane
+
+- Request: continue the persistent objective by moving from the direct Qwen27
+  Responses continuation fix to adjacent gateway/API proof, without broad test
+  churn or release action.
+- Current lane: local gateway/current-source Responses raw SSE parity for the
+  same Qwen27 JANG_4M-MTP required-tool plus terminal tool-result continuation
+  flow that direct source now proves green.
+- Constraints: no release/sign/notarize/PyPI/updater/download/site action, no
+  N2 JANG_1L, no subagents, no synthetic tool args, no disabling reasoning as
+  a workaround, and stop any live process started here before final response.
+- Planned movement: inspect existing gateway capture tooling, run the smallest
+  live source+gateway proof that checks request kwargs, raw SSE deltas, final
+  object consistency, previous_response/tool-result continuation, and cache
+  telemetry. Patch only if the gateway or request builder drops kwargs/history
+  or regresses streaming shape.
+
+# 2026-06-10 - Qwen27 reasoning tool-result continuation lane
+
+- Request: continue the persistent goal by fixing/proving current blockers
+  without drifting into broad test-suite work or recursive agent behavior.
+- Current lane: Qwen/Qwen-coder Responses API tool-result continuation with
+  reasoning enabled, focused on the Qwen27 JANG_4M-MTP live failure where a
+  required tool call is green but the follow-up `previous_response_id` response
+  stays reasoning-only and incomplete.
+- Constraints: no release/sign/notarize/PyPI/updater/download/site action, no
+  N2 JANG_1L, no subagents, no synthetic tool args, no disabling reasoning as
+  a workaround, no hidden reasoning leak, and no broad harness churn.
+- Planned movement: inspect current raw SSE artifacts and the Qwen
+  template/render/parser boundary, patch only a confirmed root cause, then
+  verify with focused source checks and one live same-model Qwen27 raw SSE
+  continuation proof including cache telemetry.
+- Root-cause result: Qwen terminal tool-result continuation was rendered with
+  the normal reasoning-enabled generation prompt `<|im_start|>assistant\n<think>\n`.
+  The model then generated no visible `</think>` boundary within the output
+  budget, and the Qwen parser correctly classified the whole output as
+  reasoning. The thinking-off diagnostic completing visibly is explained by
+  the template's closed empty think block, not by a parser-argument issue.
+- Source fix: for Responses terminal tool-result synthesis with Qwen3 parser,
+  `enable_thinking=True`, and no new request/engine tools, vMLX now skips the
+  normal generation prompt and appends a Qwen assistant prefix with an already
+  closed empty think block before visible final text. Streaming and nonstream
+  parser seed logic now treat that suffix as not starting inside reasoning.
+  Required-tool turns are unchanged, and no tool args are synthesized or
+  repaired.
+- Focused verification: `py_compile vmlx_engine/server.py
+  tests/test_engine_audit.py`, `git diff --check -- vmlx_engine/server.py
+  tests/test_engine_audit.py`, and focused pytest for
+  `TestResponsesQwenTerminalToolResultSynthesis` plus
+  `TestResponsesStreamingExactToolResult` all passed (`5/5` pytest).
+- Next movement: run same-model live Qwen27 direct raw SSE required-tool plus
+  reasoning-enabled tool-result continuation and record artifacts.
+- First live result: required-tool SSE stayed green, but the prompt-suffix
+  terminal-continuation attempt was red. Artifact
+  `build/responses-sse-captures-20260610/direct-qwen27-jang4m-mtp-tool-result-continuation-after-channel-fix-20260610.sse`
+  contains only response creation/content-part start plus keepalives before
+  abort; no output text, reasoning, function call, or completed event. Server
+  log confirmed the new suffix branch fired, so the branch selection is not the
+  blocker. That prompt-suffix approach is not sufficient and must not be
+  claimed green.
+- Next hypothesis: use Qwen's native closed-thinking template branch for this
+  terminal synthesis turn instead of a custom suffix. This is still scoped to
+  no-new-tool tool-result continuation and must not affect required tool turns
+  or synthesize arguments.
+- Second source result: the terminal no-new-tool synthesis branch now uses
+  Qwen's native `enable_thinking=False` template path for rendering only, with
+  a private `_vmlx_terminal_tool_result_visible_finalization` parser-seed flag
+  consumed before engine generation. This keeps required-tool reasoning turns
+  unchanged and prevents the private flag from leaking into engine kwargs.
+- Second focused verification: `py_compile`, `git diff --check`, and focused
+  pytest for the Qwen terminal synthesis/exact tool-result classes passed
+  (`5/5`). Next movement is a fresh live Qwen27 direct raw SSE proof.
+- Final live proof: fresh current-source server loaded
+  `/Users/eric/models/JANGQ/Qwen3.6-27B-JANG_4M-MTP` on port `8894` with native
+  MTP, hybrid SSM cache, attention-only TurboQuant KV, paged cache, block L2,
+  and SSM companion disk.
+- Required-tool artifact:
+  `build/responses-sse-captures-20260610/direct-qwen27-jang4m-mtp-required-tool-after-visible-finalization-seed-fix-20260610.sse`.
+  It is green: reasoning deltas at `output_index=1`, message at `0`, function
+  call at `2`, final function args `{"value": "blue-cat"}`, status completed,
+  no empty `{}` arguments.
+- Tool-result continuation artifact:
+  `build/responses-sse-captures-20260610/direct-qwen27-jang4m-mtp-tool-result-continuation-after-visible-finalization-seed-fix-20260610.sse`.
+  It is green: streamed visible `response.output_text.delta` chunks for
+  `The fact "blue-cat" has been recorded.`, final `output_text` matches,
+  `status=completed`, no reasoning-only warning, no additional function call,
+  and no hidden-reasoning-to-output copy.
+- Runtime/cache artifact:
+  `build/responses-sse-captures-20260610/direct-qwen27-jang4m-mtp-health-after-visible-finalization-seed-fix-20260610.json`.
+  It proves native MTP active, hybrid SSM cache, attention-only TurboQuant KV,
+  block L2 `disk_writes=7`, `l2_block_tokens_on_disk=292`, SSM companion
+  `l2_ssm_tokens_on_disk=548`, and total `l2_tokens_on_disk=840`.
+- Red intermediate artifacts: `...after-channel-fix...` only emitted
+  keepalives before abort, and the first `...after-visible-finalization-seed-fix...`
+  continuation was accidentally sent with placeholder IDs and was overwritten
+  by the real green continuation. Do not use those red attempts as proof.
+- Boundary: this clears current-source direct Qwen27 terminal tool-result
+  continuation. It does not by itself clear gateway/tunnel recapture, Qwen35
+  continuation, installed-app parity, MiMo exactness/media, Gemma remaining
+  media/UI rows, or release/PyPI actions.
+- Cleanup verification: patch review found two stray Chat Completions
+  parser-seed references from an earlier edit. They were removed; `py_compile`,
+  `git diff --check`, and focused pytest `5/5` passed after the cleanup.
+- Commit/push: committed as `c468d9b17 Fix Qwen Responses tool-result
+  finalization` and pushed to `origin/codex/pr-intake-manifest` and
+  `origin/main`.
+
+# 2026-06-10 - AGENTS.md hard carry-forward refresh
+
+- Request: Eric said "into agents.md" and reinforced that every instruction,
+  every status movement, every action, and every no-claim boundary must be
+  written down and checked.
+- Current lane: documentation/control-plane only.
+- Constraints: no model launch, no runtime code edit, no release/sign/
+  notarize/PyPI/updater/download/site action, no N2 JANG_1L work, no subagents,
+  and no fake parser/tool/cache/media claims.
+- Planned movement: update active `AGENTS.md` with an explicit continuation
+  checklist covering current-goal check, written-state logging, no-subagent
+  rule, parser/API/tool streaming priority, Qwen empty-args fail-closed policy,
+  N2 JANG_1L off-limits boundary, live-proof preference, release lock, and
+  other-agent handoff requirements.
+- Commit movement: first `git add` attempt failed because `.agents` is ignored
+  by repo rules. The follow-up commit must force-add only `.agents/STATUS.md`
+  and `.agents/LOG.md` plus `AGENTS.md`; do not stage unrelated dirty build or
+  `node_modules` paths.
+- Commit/push: committed as `42979d90d Record active Codex lane guard` and
+  pushed to `origin/codex/pr-intake-manifest` and `origin/main`.
+- Boundary: this edit will not be claimed as a runtime proof or release
+  readiness signal. It only makes future continuations check the right written
+  state before resuming MiMo/Gemma/Qwen/N2-JANGTQ blocker work.
+
+# 2026-06-10 - Continuation blocker selection
+
+- Request: continue the persistent objective to get current blockers fixed,
+  built, and proven for Nex/N2 JANGTQ/non-JANG_1L, MiMo V2.5 JANG/JANGTQ,
+  Gemma JANG/MXFP/QAT, VL/audio/video, cache/L2/TurboQuant, reasoning/tool
+  parsers, gateway/API, and UI/runtime proof without wasting time on broad
+  low-value test-suite churn or recursive agent behavior.
+- Current lane: checklist-driven blocker selection from
+  `build/current-full-release-objective-checklist-after-qwen35-public-sse-pointer-20260610.json`.
+- Constraints: no subagents; no N2 JANG_1L; no release/sign/notarize/PyPI/
+  updater/download/site action; no fake parser/sampling/JSON/cache/modality
+  fixes; direct Python is allowed only for local artifact inspection/proofs.
+- Planned movement: inspect current failed rows, pick one allowed blocker with a
+  real evidence gap, then either apply a scoped root-cause fix or run one live
+  proof that reduces the blocker.
+- Selection result: Gemma4 E2B QAT JANG_4M installed-app/UI/API/cache proof.
+  The latest checklist shows source fullmedia/tool/L2 proofs are already green
+  for Gemma QAT JANG_4M rows, but live installed-app/UI parity remains missing.
+  `/Applications/vMLX.app` and
+  `/Users/eric/models/JANGQ-AI/gemma-4-E2B-it-qat-JANG_4M` both exist. Next
+  movement is one real installed-app proof through
+  `panel/scripts/live-real-ui-model-proof.mjs`; no package/sign/notarize/PyPI/
+  updater/download/site action is allowed or intended.
+- Harness fix: `panel/scripts/live-real-ui-model-proof.mjs` now dismisses the
+  blocking update/what's-new modal before interaction/capture and activates the
+  created chat/session before taking the chat screenshot. This fixes the proof
+  artifact gap where JSON proved persisted turns but screenshots showed the
+  modal or empty chat landing screen.
+- Proof: real installed app `/Applications/vMLX.app` loaded
+  `/Users/eric/models/JANGQ-AI/gemma-4-E2B-it-qat-JANG_4M` with bundled Python
+  and produced passing artifact
+  `docs/internal/agent-notes/current-real-ui-installed-app-gemma4-e2b-qat-jang4m-responses-tools-cachecontrols-visible-chat-20260610-proof.json`.
+  Screenshot
+  `docs/internal/agent-notes/current-real-ui-installed-app-gemma4-e2b-qat-jang4m-responses-tools-cachecontrols-visible-chat-20260610-chat.png`
+  visibly shows the chat, reasoning panels, tool executions, cache/TPS footer,
+  and final `REAL_UI_LIVE_TOOL_TWO` answer.
+- Proven surfaces: installed app UI, real loaded model, Responses API,
+  Responses delta streaming, built-in long tool loop, reasoning display,
+  parser leak check, language leak check, settings persistence, generation
+  defaults, server cache controls, native Gemma4 `mixed_swa_kv_v1`, paged cache
+  hit telemetry, and block L2 disk storage. Cache hit tokens `9428`; L2 block
+  tokens on disk `3779`; active memory about `7465.1 MB`, peak `8347.5 MB`.
+- Accounting: new inventory artifact
+  `build/current-gemma-qat-native-mxfp4-local-inventory-after-e2b-installed-app-ui-proof-20260610.json`
+  records `gemma4_e2b_qat_jang4m.live_proof_status=partial` and
+  `installed_app_ui_proof.status=pass`; full checklist
+  `build/current-full-release-objective-checklist-after-gemma-e2b-installed-app-ui-proof-20260610.json`
+  remains `status=open`, `failed_count=56`, `release_ready=false`.
+- Boundary: this is not full Gemma release clearance. Installed-app media/CLI
+  parity and all other Gemma QAT/native MXFP rows remain open. The installed
+  app log reports bundled vmlx_engine `1.5.56` from dist-info, so this artifact
+  proves the currently installed app only, not a newer packaged build.
+- Verification: `node --check panel/scripts/live-real-ui-model-proof.mjs`,
+  `py_compile` for the changed Python checklist files, focused pytest selection
+  `32 passed`, and `git diff --check` passed. Process cleanup check found no
+  remaining proof server or `/Applications/vMLX.app` process.
+
+# 2026-06-10 - Deprecated wrapper AGENTS.md carry-forward
+
+- Request: Eric said "into agents.md" after reinforcing that the no
+  Python/subagent constraint, parser/API/tool-loop priority, N2 JANG_1L
+  boundary, and every status movement must be written down.
+- Current lane: instruction/control-plane update only.
+- Action: updated `/Users/eric/vmlx/AGENTS.md`, the deprecated wrapper
+  checkout guard, with routing-only carry-forward instructions that send future
+  active vMLX work back to the active Python/Electron worktree and preserve the
+  current constraints.
+- Added boundaries: no subagent delegation; parser/API/tool streaming is
+  release-critical; Qwen3.6/Qwen-coder empty `arguments: {}` must fail closed
+  for 27B/35B XML dialects without synthetic args or reasoning-disable
+  workarounds; N2 JANG_1L is Eric-owned/off-limits unless explicitly reopened;
+  no release/sign/notarize/PyPI/updater/download/site actions without a
+  current-turn override; write proven/not-proven status and other-agent handoff
+  notes into active `.agents` files.
+- Commit/push state: active worktree `.agents` status/log was committed and
+  pushed as `c478fb100` to `origin/codex/pr-intake-manifest` and `origin/main`.
+  The deprecated wrapper `AGENTS.md` was committed locally in `/Users/eric/vmlx`
+  as `142adad`, but `git push origin main` failed because that checkout has no
+  `origin` remote configured. Do not claim the wrapper guard is pushed until a
+  remote is explicitly configured or the file is applied through a canonical
+  checkout.
+- Boundary: no runtime code was changed, no model was launched, no release
+  action was taken, and no proof/readiness claim is made from this doc edit.
+
+# 2026-06-10 - Next blocker selection after Qwen35 raw-SSE consumption
+
+- Request: keep moving toward production-quality blockers without broad
+  test-suite churn or release action.
+- Current state: Qwen35 raw-SSE proof-accounting commit `2b6a524ca` is pushed
+  to `origin/main` and `origin/codex/pr-intake-manifest`.
+- Current lane: inspect latest checklist
+  `build/current-full-release-objective-checklist-after-qwen35-public-sse-pointer-20260610.json`
+  and select the next concrete Gemma/MiMo/N2-JANGTQ/parser/cache/UI blocker.
+- Constraints: no release/sign/notarize/PyPI/updater/download/site action, no
+  N2 JANG_1L, no subagents, no broad suite churn, and no fake parser/cache/media
+  claims.
+
+# 2026-06-10 - Qwen parser/API missing-args lane
+
+- Request: continue fixing blockers efficiently, with emphasis on auto tool
+  usage, content/reasoning/tool deltas, API/gateway usability, parser
+  correctness, and opencode/Codex-style harness loops.
+- Current lane: Qwen/Qwen-coder Responses/tool parser correctness for empty or
+  missing required tool arguments and final object consistency.
+- Constraints: no release/sign/notarize/PyPI/updater/download/site action, no
+  N2 JANG_1L, no subagents, no synthetic tool args, no disabling reasoning, and
+  no parser cleanup that hides raw protocol failure.
+- Planned movement: trace current parser-to-Responses behavior, find the
+  precise source boundary for `arguments: {}` when required params are missing,
+  and patch fail-closed validation only if current source still allows it.
+- Source trace result: `vmlx_engine/tool_parsers/xml_function_tool_parser.py`
+  rejects `<function=exec_command></function>` when the request schema requires
+  `cmd`; `vmlx_engine/server.py::_parse_tool_calls_with_parser()` also filters
+  any parsed call whose request-visible required args are missing or empty.
+  Responses streaming passes the full request into final buffered parsing.
+- Verification: focused source proof passed `10/10`:
+  `tests/test_server.py::TestOpenAILogprobsFormatting::test_streaming_responses_tool_call_arguments_survive_buffering`,
+  `...::test_streaming_responses_tool_call_uses_next_output_index_without_text`,
+  `...::test_streaming_responses_required_empty_xml_tool_call_is_rejected`,
+  `...::test_streaming_responses_preamble_empty_xml_tool_call_never_emits_empty_arguments`,
+  `...::test_streaming_responses_auto_empty_xml_tool_call_strips_final_markup`,
+  `...::test_tool_parser_drops_empty_xml_call_and_strips_markup_for_nonstream_paths`,
+  `...::test_streaming_chat_preamble_empty_xml_tool_call_never_emits_empty_arguments`,
+  `...::test_streaming_responses_reasoning_tool_call_keeps_arguments`,
+  plus the two XML parser missing-required tests.
+- Boundary: no runtime patch made in this movement because current source
+  already rejects the reported local failure shape. Remaining issue boundary is
+  current direct/gateway/tunnel raw SSE parity and any deployed/tunnel stale
+  path that still duplicates output indices or leaks `{}`.
+- Tunnel parity result: classifier regenerated
+  `build/current-responses-raw-sse-parity-qwen35-direct-gateway-tunnel-current-20260610.json`
+  from current direct/gateway captures plus
+  `build/responses-sse-captures-20260610/tunnel-qwen35-mxfp8-mtp-tool-recapture-after-strict-source-20260610.sse`.
+  Result is `status=pass`: same model
+  `models/Qwen3.6-35B-A3B-MXFP8-CRACK-MTP`, expected arguments
+  `{"value":"blue-cat"}`, required reasoning checks, valid output indices,
+  final object consistency, and previous-response history/source guards are
+  green. This supersedes the stale June 9 tunnel duplicate-index failure.
+- Checklist pointer movement: retargeted `QWEN35_RAW_SSE_PARITY` in
+  `tests/cross_matrix/run_full_release_objective_checklist.py` from the older
+  missing-required label to
+  `build/current-responses-raw-sse-parity-qwen35-direct-gateway-tunnel-after-public-recapture-20260610.json`.
+- Checklist regeneration:
+  `build/current-full-release-objective-checklist-after-qwen35-public-sse-pointer-20260610.json`
+  is still `status=open`, `failed_count=56`, `prepackage_ready=false`, and
+  `release_ready=false`. This movement clears the current Qwen35 raw-SSE
+  proof accounting boundary only; remaining blockers are still mainly N2
+  JANG_1L external lane, MiMo exactness/media, Gemma matrix rows,
+  installed-app/package parity, Step3.7/LFM/Nemotron rows, and release gates.
+
+# 2026-06-10 - AGENTS.md current-turn carry-forward
+
+- Request: Eric said "into agents.md" after instructing that every instruction,
+  status movement, no-subagent constraint, parser/API/tool streaming priority,
+  and N2 JANG_1L boundary must be written down and checked.
+- Current lane: instruction/control-plane update only.
+- Constraints: no release/sign/notarize/package/PyPI/updater/download/site
+  action, no model launch, no subagents, no N2 JANG_1L, no synthetic tool args,
+  and no runtime-fix claims from a documentation edit.
+- Planned movement: update active `AGENTS.md` with a concise current-turn
+  hard-carry-forward that future continuations must check before work.
+
+# 2026-06-10 - N2 JANGTQ2 source API/cache/tools lane selected
+
+- Request: continue toward production-quality runtime proof for requested
+  model families without broad test-suite churn.
+- Current lane: Nex/N2 JANGTQ2 only. N2 JANG_1L remains Eric-owned/out of
+  scope and must not be loaded or claimed.
+- Constraints: no release/sign/notarize/package/PyPI/updater/download/site
+  work, no subagents, no synthetic tool args, no disabling reasoning to hide
+  parser/tool failures, and stop any server started in this lane before final
+  response.
+- Planned movement: inspect current N2 JANGTQ2 artifacts and model metadata,
+  then run one focused live source API/cache/tools/reasoning proof only if it
+  closes a real current gap.
+
+# 2026-06-10 - MiMo source-vs-quant endpoint launch attempt
+
+- Request: continue reducing MiMo exactness blockers with real E2E evidence,
+  not more proxy harness work.
+- Current lane: MiMo V2.5 JANGTQ_2 source-vs-quant first divergence on the
+  exact failing literals and tool args.
+- Constraints: check local and max2 memory/ports/repo paths before loading;
+  no N2 JANG_1L; no release/sign/notarize/package/PyPI/updater/download/site
+  work; no subagents; stop any server this lane starts before final response.
+- Planned movement: verify whether `erics-m5-max2.local:8126` and local
+  `127.0.0.1:8897` can be started for the existing first-divergence harness.
+- Result: local quant endpoint launched and stopped cleanly. Source TP4 was not
+  launched because the active AdLab doc requires a deliberate Swift TP4
+  relaunch through `adlab-pair`; no `8126` source listener exists.
+- Proof artifacts:
+  `build/current-mimo-v25-jangtq2-source-vs-quant-first-divergence-quant-only-exact-probes-20260610.json`
+  and
+  `build/current-mimo-v25-jangtq2-source-vs-quant-quant-only-health-after-20260610.json`.
+- Quant proof: real local `/Users/eric/.mlxstudio/models/JANGQ-AI/MiMo-V2.5-JANGTQ_2`
+  loaded as `mimo-v2-jangtq2`, native JANGTQ TQ active, native
+  `mixed_swa_kv_v1` / `mimo_v2_asymmetric_swa`, paged cache, block L2, and
+  generic TQ KV intentionally disabled for exactness isolation.
+- Current exactness: quant returned HTTP `200` for all rows but still mutated
+  `blue-cat -> blue`, `B7-CAT-09 -> B7CAT-09`, JSON values, and required tool
+  args to `{"value":"blue cat"}`. ACK proxy rows pass, which confirms the
+  updated literal rows are necessary.
+- Harness fix: `_post_json` now records connection-refused `URLError` as a
+  row-level `request_failed` instead of aborting before quant execution.
+- Boundary: source-vs-quant is still not complete. Next external action is the
+  AdLab Swift MiMo TP4 source relaunch on `8126`, then rerun the same harness.
+
+# 2026-06-10 - MiMo exactness root-cause continuation
+
+- Request: continue toward production-quality runtime fixes without broad
+  test-suite churn or recursive subagent behavior.
+- Current lane: MiMo V2.5 JANG/JANGTQ exactness, specifically source/dequant
+  reference availability and current-source runtime/quant path inspection.
+- Constraints: no release/sign/notarize/package/PyPI/updater/download/website
+  action, no N2 JANG_1L, no subagents, no parser/JSON/string repair masking,
+  no sampling clamp or cache change presented as a MiMo exactness fix.
+- Planned movement: check whether the source/dequant reference is available
+  now; inspect the JANGTQ prestacked routed expert/decode path; patch only if
+  evidence identifies a current-source root cause, otherwise record the exact
+  remaining artifact/requant blocker and next proof needed.
+- Result: the existing first-divergence harness had a stale quant served-model
+  default (`mimo-v2-jang2l`) while pointing at the JANGTQ_2 artifact, and its
+  prompt set did not include the current failing `blue-cat` / `B7-CAT-09`
+  literal and JSON rows. Updated
+  `tests/cross_matrix/run_mimo_v2_source_vs_quant_first_divergence.py` to use
+  `mimo-v2-jangtq2` and to include those exact rows.
+- Verification: `py_compile` passed. Preflight artifact
+  `build/current-mimo-v25-jangtq2-source-vs-quant-first-divergence-preflight-exact-probes-20260610.json`
+  is `status=missing_prerequisites`; source and quant model paths both exist,
+  but `http://erics-m5-max2.local:8126/health` and
+  `http://127.0.0.1:8897/health` are connection-refused.
+- Boundary: no runtime fix or release clearance. Runtime/code inspection found
+  existing dp-bit/codebook safeguards and current artifacts already exclude
+  tokenizer/template/parser/cache/vMLX-fastpath/native gather shape causes.
+  Next useful proof is running both endpoints and executing the updated
+  source-vs-quant harness to classify source-also-fails vs quant-diverges.
+
+# 2026-06-10 - MiMo JANG_2L vs JANGTQ_2 exactness A/B
+
+- Ran real MiMo V2.5 JANG_2L on port `8897` with continuous batching, native
+  mixed full/SWA cache, paged cache, and block L2:
+  `/Users/eric/.mlxstudio/models/JANGQ-AI/MiMo-V2.5-JANG_2L`.
+- Probe artifact:
+  `build/current-mimo-v25-jang2l-exactness-variant-ab-20260610/result.json`.
+  Summary artifact:
+  `build/current-mimo-v25-jang2l-vs-jangtq2-exactness-ab-20260610.json`.
+- Result: `status=open`, `5/8` exactness rows passed. JANG_2L preserved
+  `blue-cat` in plain completions, chat, JSON, and required tool-call args. It
+  also preserved `B7-CAT-09` inside required tool-call args.
+- Red rows: visible sentinel exactness still drifted
+  `B7-CAT-09 -> B7-CAD-09` / `B7-C44-09`, and sentinel JSON omitted `count`.
+- Contrast: MiMo JANGTQ_2 remains `0/8` on the same probe and mutates
+  `blue-cat` to `blue` / `blue grass`, JSON values, and required tool args.
+- Runtime/cache evidence: JANG_2L loaded as `JANG_2L_322_D3E16`, with
+  gate/up/down bits `3/2/2`, native `mixed_swa_kv_v1` /
+  `mimo_v2_asymmetric_swa`, paged cache, block L2, generic TurboQuant KV
+  inactive, about `104985.5 MB` active Metal after health, and a final tool
+  request cache hit of `192` tokens.
+- Boundary: this reduces the blocker but does not clear MiMo release support.
+  JANGTQ_2 remains an artifact/requant-profile/source-vs-quant
+  first-divergence or decode/logit quality issue. Do not patch by parser
+  repair, JSON repair, string post-processing, sampling clamps, or cache
+  changes.
+
 # 2026-06-10 - MiMo JANGTQ_2 vMLX fast-path A/B excluded
 
 - Ran MiMo V2.5 JANGTQ_2 with `VMLINUX_DISABLE_MIMO_V2_SWITCHGLU_FAST_PATH=1`
@@ -10165,3 +10721,1813 @@ MiniMax #179, real UI matrix, and DSV4 blockers.
   Responses/tools/cache are green; MiMo exactness, decode speed, media semantic
   quality, installed-app parity, package readiness, and release readiness remain
   red/open. No N2 JANG_1L action and no release action.
+
+# 2026-06-10 07:15 PDT - MiMo JANGTQ2 exactness lane resumed
+
+- Current lane: MiMo V2.5 JANGTQ_2 exactness/logit/artifact diagnosis.
+- Constraints: no subagents, no N2 JANG_1L, no release/sign/notarize/PyPI/
+  download action, no parser/JSON semantic repair, no hidden sampling clamp.
+- Next movement: inspect current exactness evidence and runtime TurboQuant /
+  prestacked SwitchMLP path for a real source fix or a stronger artifact/logit
+  boundary.
+
+# 2026-06-10 07:29 PDT - MiMo native TQ all-projection proof
+
+- Generated `build/current-mimo-v25-jangtq2-native-tq-allproj-contract-20260610.json`.
+- Result: `status=pass`, 24 real-tensor gate/up/down cases across layers
+  `1/2/23/47`, max abs diff `1.4901161193847656e-08`.
+- Boundary: closes the missing up-projection/multi-layer native gather evidence
+  gap. MiMo JANGTQ_2 exactness remains red and should move to
+  source/dequant/logit comparison or corrected artifact profile, not parser,
+  cache, sampling, or native gather shape chasing.
+
+# 2026-06-10 07:39 PDT - N2 JANGTQ2 dev-app tool-loop blocker selected
+
+- Current lane: Nex/N2 JANGTQ2 dev-app Responses/tool-loop behavior.
+- Constraints: no N2 JANG_1L, no subagents, no release/sign/notarize/PyPI/
+  download action, no fake tool-argument synthesis, no reasoning-disablement
+  workaround.
+- Next movement: inspect the red stricter N2 JANGTQ2 app proof and panel
+  request path to identify whether the blocker is app request shape,
+  `tool_choice` continuation handling, or model-output quality.
+
+# 2026-06-10 07:50 PDT - Latest AGENTS.md instruction checked
+
+- User asked to put the routing/status/no-subagent constraint into AGENTS.md.
+- `/Users/eric/vmlx/AGENTS.md` already contains that routing guard and
+  no-subagent-spawn language; it is untracked in a dirty deprecated wrapper
+  checkout, so this active runtime lane will not stage that wrapper state.
+- Continue in `/Users/eric/mlx/vllm-mlx-finite-launch-guard` on N2 JANGTQ2
+  dev-app Responses/tool-loop root-cause work.
+
+# 2026-06-10 08:05 PDT - Responses required-tool stream fail-closed source fix
+
+- Inspected the red N2 JANGTQ2 long-delta proof. The first `run_command` tool
+  call executed, but the second required-tool request streamed `128` visible
+  `!` deltas before `tool_calls_required`. This was a source Responses stream
+  contract bug, not a reason to synthesize arguments or disable reasoning.
+- Patched `vmlx_engine/server.py`: Responses streaming now buffers visible
+  content while `tool_choice=required` is active and fails closed with
+  `status=failed`, empty `output_text`, and empty `output` when no tool call is
+  parsed. Missing required args remain dropped; no executable `{}` call is
+  emitted.
+- Proof:
+  `build/current-responses-required-tool-stream-fail-closed-after-n2-longdelta-20260610.json`
+  is `status=pass` for preamble plus empty XML function missing `cmd`.
+- Verification passed: focused `test_server.py` required/empty XML stream tests
+  `2/2`; focused `test_engine_audit.py` required-tool guards `6/6`;
+  `py_compile` and `git diff --check`.
+- Boundary: live N2 JANGTQ2 dev-app rerun, same-model live Qwen 27B/35B route
+  recapture for this stricter behavior, installed-app parity, and release
+  clearance remain open.
+
+# 2026-06-10 08:28 PDT - N2 JANGTQ2 live fail-closed UI proof
+
+- Reran targeted current Electron dev-app N2 JANGTQ2 stricter Responses tool
+  proof after the server and panel patches.
+- Artifact:
+  `docs/internal/agent-notes/current-real-ui-live-model-n2-jangtq2-responses-tools-prevresp-longdelta-after-required-failclosed-no-placeholder-20260610-proof.json`.
+- Current behavior: first tool turn succeeds; second required-tool turn fails
+  with `tool_calls_required`; no `!` content is streamed/persisted; no fake
+  `[Generation interrupted]` assistant placeholder remains; persisted state is
+  `assistantCount=1`, `messageCount=3`.
+- Runtime/cache evidence: real N2 JANGTQ2 dev-app load, typed `hybrid_ssm_v1`,
+  live attention TurboQuant KV, paged+SSM hit `384`, block L2 `3405` tokens,
+  SSM companion disk `9421` tokens.
+- Boundary: stricter second required-tool loop remains model/tool-quality red
+  because `real_ui_tool_probe_2.txt` is not created. This is fail-closed proof,
+  not release clearance.
+
+# 2026-06-10 continuation - selecting next concrete release blocker
+
+- Continuing active objective after commit `051116e8`.
+- Constraints rechecked: active worktree only; N2 JANG_1L off-limits; no
+  release/sign/notarize/PyPI/download; no subagents; no fake parser/JSON/tool
+  repair; leave unrelated panel settings artifact and `node_modules/` alone.
+- Next movement: choose the next high-value live blocker from the release
+  tracker and reduce it with a source/runtime fix or honest proof boundary.
+
+# 2026-06-10 continuation - MiMo installed-app media parity blocker selected
+
+- Selected blocker: MiMo V2.5 JANGTQ_2 installed-app image/media routing.
+- Starting evidence: installed-app proof
+  `build/current-real-ui-installed-app-mimo-v25-jangtq2-image-proof-20260610.json`
+  is red because media is forced text-only even though source/dev MiMo media
+  rows have proof. Inspect root cause before patching.
+- Constraints: no N2 JANG_1L, no release actions, no fake modality
+  advertisement, no parser/JSON semantic repair.
+
+## 2026-06-10 continuation - MiMo JANGTQ2 source media predicate checked
+
+Direct `.venv` probe for `/Users/eric/.mlxstudio/models/JANGQ-AI/MiMo-V2.5-JANGTQ_2` returned source media detection green: `is_mllm_model` true with and without force, MiMo runtime module present, auto-wired predicate true, runtime modalities `text, vision, video, audio`. Next action is a focused live dev-app image proof to distinguish current source behavior from stale installed/bundled runtime parity.
+
+## 2026-06-10 continuation - MiMo JANGTQ2 dev-app image route refreshed
+
+Ran two focused dev-app image proofs for `/Users/eric/.mlxstudio/models/JANGQ-AI/MiMo-V2.5-JANGTQ_2` with `VMLINUX_REAL_UI_IS_MLLM=1`, one default red fixture and one 128x128 solid-red data URL. Both fresh runs got past the old text-only rejection: health reports `model_type=mllm`, media diag reports `engine_is_mllm=true`, the loader auto-enabled MiMo media from preserved sidecars, bound `visual=364`, `audio_encoder=75`, `speech_embeddings=20`, and processed one image. Both remain release-red because the assistant answered `Blue.` for red images, so `vl_image` semantic proof is still failed. Updated release tracker with the exact boundary.
+
+## 2026-06-10 continuation - MiMo JANGTQ2 direct color A/B classifier
+
+Started one direct source server for MiMo JANGTQ2 with `--is-mllm` and `VMLINUX_DISABLE_MIMO_V2_COMPILED_ROUTER=1`, sent text-only plus five solid-color image requests in one process, then shut the server down cleanly. Result: no-image prompt returned `Blue.`, every image color returned `White.`. This confirms current source routes and processes images but does not yet provide semantic `vl_image` correctness. Wrote classifier artifact `docs/internal/agent-notes/current-mimo-v25-jangtq2-direct-color-ab-20260610.md`.
+
+## 2026-06-10 07:21 PDT - AGENTS.md instruction persistence
+
+Eric asked to put the written-state discipline into `AGENTS.md`: every
+instruction, every status, and every movement must be recorded and checked
+before acting. Updating the active worktree guard now. This is not a release,
+signing, notarization, PyPI, download, or N2 JANG_1L action.
+
+## 2026-06-10 07:29 PDT - MiMo JANGTQ2 visual bias contract fix and live boundary
+
+Compared the MiMo V2.5 JANGTQ_2 preserved visual tower against the local Torch
+`modeling_mimo_v2.py` reference without loading the full language model. The
+sidecar is missing `merger.ln_q.bias`, `merger.mlp.0.bias`, and
+`merger.mlp.2.bias`; after zero-filling those absent biases, Torch-vs-MLX
+visual parity passed (`max_mean_abs_diff=0.0008475283`,
+`min_cosine=0.9999996424`). Patched `vmlx_engine/models/mllm.py` so media
+runtime load zero-fills those exact missing visual biases instead of leaving
+initializer values in the path.
+
+Reran patched-source MiMo JANGTQ2 direct API color A/B on port `8877` with
+`--mllm`, paged cache, native mixed-SWA cache, and the compiled router disabled.
+The live server logged `MiMo-V2 media load zero-filled missing visual bias
+tensors...`, bound `459` media tensors, processed image data URLs, and skipped
+media prompt cache store. Semantic color proof is still red:
+text-only sky=`Blue.`, red=`Black`, green=`White`, blue=`Black`, white=`Black`,
+black=`White...`. Artifact:
+`docs/internal/agent-notes/current-mimo-v25-jangtq2-direct-color-after-zero-bias-20260610.json`.
+Do not claim MiMo JANGTQ2 `vl_image` release clearance; next work is
+language-side multimodal splice/first-logit or artifact/source quant contract.
+
+## 2026-06-10 07:32 PDT - Qwen Responses/tool streaming lane selected
+
+Continuing after commit `8dc475fd`. Selected the Qwen/Qwen-coder Responses raw
+SSE/tool/reasoning streaming blocker because it directly affects opencode and
+Codex harness usability. Constraints rechecked: active worktree only, N2
+JANG_1L off-limits, no release/sign/notarize/PyPI/download, no subagents, no
+fake parser repair, no synthesized tool args, and no disabling reasoning to
+hide malformed tool calls. Next action is source/runtime tracing from current
+code before any fix.
+
+## 2026-06-10 07:38 PDT - Qwen35 Responses raw SSE direct/gateway/tunnel proof
+
+Ran focused source guards first: 34 passed across Responses streaming
+output-index, empty-XML fail-closed, reasoning-tool argument preservation,
+required-argument parser fail-closed, raw-SSE classifier, and Qwen35 capture
+scaffolding tests.
+
+Then ran live Qwen35 MXFP8-MTP same-model raw SSE. Direct-only artifact
+`build/current-responses-raw-sse-qwen35-mxfp8-mtp-direct-source-20260610.json`
+proved current source direct was green but red overall because gateway was
+skipped and the runner defaulted to stale 2026-06-09 tunnel SSE. Reran with
+gateway enabled:
+`build/current-responses-raw-sse-qwen35-mxfp8-mtp-direct-gateway-source-20260610.json`
+proved both direct and local gateway green; only stale tunnel remained red.
+Reclassified today’s direct/gateway captures against the current public tunnel
+capture `build/responses-sse-captures-20260610/tunnel-qwen35-mxfp8-mtp-tool-recapture-after-strict-source-20260610.sse`.
+
+Final artifact:
+`build/current-responses-raw-sse-parity-qwen35-direct-gateway-tunnel-refreshed-20260610.json`
+is `status=pass`. Direct/gateway/tunnel all preserve `record_fact` args
+`{"value": "blue-cat"}`, report
+`models/Qwen3.6-35B-A3B-MXFP8-CRACK-MTP`, include reasoning events without a
+reasoning-disable workaround, parse cleanly, keep final output consistent with
+the stream, and use valid output indices. Direct/gateway use
+`message=[0], reasoning=[1], function_call=[2]`; tunnel uses
+`message=[0], function_call=[1]`. This clears Qwen35 same-model raw-SSE
+direct/gateway/tunnel parity for this required-tool request. It does not clear
+all family tool-result continuation, installed-app, Gemma/MiMo/N2, or release
+readiness rows.
+
+## 2026-06-10 07:41 PDT - Qwen35 proof commit prep
+
+Preparing a proof-only commit for the Qwen35 same-model direct/gateway/tunnel
+raw-SSE parity evidence. Staging is limited to `.agents` status/proof-matrix
+updates plus the final Qwen parity JSON and matching current direct/gateway SSE
+captures/logs. Do not stage unrelated panel settings proof drift or
+`node_modules/`. No release, signing, notarization, tagging, upload, PyPI, or
+N2 JANG_1L action.
+
+Created commit this commit (`Prove Qwen35 Responses raw SSE parity`) with only
+the targeted Qwen proof artifacts and `.agents` updates. This commit is not a
+release claim and does not include unrelated panel settings drift or
+`node_modules/`.
+
+Pushed final commit `52fffd51` to both `origin/codex/pr-intake-manifest` and
+`origin/main`.
+
+## 2026-06-10 07:45 PDT - Qwen tool-result/auto/no-tool gap selected
+
+Next blocker is Qwen/Qwen-coder Responses API tool-result continuation plus
+auto/no-tool behavior and cache/API event consistency. Continue in the active
+worktree only. No release/sign/notarize/PyPI/download work, no N2 JANG_1L, no
+subagents, no synthesized tool args, no reasoning-disable workaround, and no
+post-hoc raw XML masking.
+
+Planned proof is a current-source Qwen35 MXFP8-MTP live server plus
+`tests/cross_matrix/run_responses_long_tool_cache_gate.py` with
+`tool_choice=auto`, in-turn `function_call_output`, final no-tools turn,
+`previous_response_id`, cache reuse, block L2, and SSM companion telemetry.
+
+First run against the live Qwen35 server is red:
+`build/current-qwen35-mxfp8-mtp-responses-tool-result-auto-no-tool-20260610/SUMMARY.json`
+has `overall_pass=false`. With `max_output_tokens=512`, turn 1 and the
+tool-result/final visible-answer phases were reasoning-only; turn 2 produced a
+structured `inspect_symbol` function call. No HTTP error, raw markup leak,
+empty-args parser emission, gateway issue, or L2 write failure was observed.
+Cache/L2 totals reached `l2_block_tokens_on_disk=7080`,
+`l2_ssm_tokens_on_disk=15144`, `l2_tokens_on_disk=22224`, with one paged+SSM
+hit. Rerun with a larger output budget before patching source.
+
+Second run:
+`build/current-qwen35-mxfp8-mtp-responses-tool-result-auto-no-tool-max1536-20260610/SUMMARY.json`
+is still red. It does prove `tool_choice=auto`, two structured function calls,
+two in-turn `function_call_output` HTTP 200 continuations, `previous_response_id`,
+post-first-turn `cached_tokens=256`, paged+SSM cache detail, and no tool markup
+leak. It remains red because turn 2 stopped before `TOOL_EVIDENCE` and the final
+no-tool turn with `enable_thinking=true` consumed the budget in reasoning-only
+output. Parser/API/cache are not the observed failure. Run a smaller-prompt
+final-thinking-off control next; do not claim that as full reasoning-enabled
+clearance.
+
+Final-thinking-off control:
+`build/current-qwen35-mxfp8-mtp-responses-tool-result-auto-no-tool-final-thinking-off-20260610/SUMMARY.json`
+is red only on strict cache reuse: visible final text, two auto tool calls,
+tool-result evidence, no raw markup leak, and final no-tool behavior passed,
+but `cached_tokens=0` on all rows. Trace showed paged KV blocks present with
+SSM companion misses. The launch reserved `--ssm-state-cache-mb 8192` while
+entry cap stayed at default `8`.
+
+Source fix: `vmlx_engine/cli.py` now derives effective SSM companion entry cap
+from the MB budget when the caller reserves more than default memory. Defaults
+stay conservative (`512 MB -> 8` entries); 128GB-style launch budget
+`8192 MB -> 64` entries unless an explicit larger `--ssm-state-cache-size` is
+provided. Focused validation passed `9/9` plus `py_compile`.
+
+Post-fix live proof:
+`build/current-qwen35-mxfp8-mtp-responses-tool-result-auto-no-tool-after-ssm-size-scale-20260610/SUMMARY.json`
+has `overall_pass=true`. Health showed `ssm_companion.max_entries=64` with the
+8192 MB budget. The gate proved auto tool calls, in-turn
+`function_call_output`, `previous_response_id`, final no-tools visible answer,
+tool-result evidence, no raw tool markup leak, block L2, SSM companion L2, and
+post-first cache hits (`cached_tokens=128`, then `256`). Boundary: the pass uses
+final-turn `enable_thinking=false`; it is not full reasoning-enabled final
+synthesis clearance. The Qwen35 server was stopped and port `8906` cleared.
+
+Generated block-cache directories from the Qwen35 proof were removed after the
+JSON/log artifacts captured cache totals and hits, reducing local proof
+storage from multi-GB to compact artifacts for commit.
+
+Prepared this commit (`Scale Qwen hybrid SSM cache entries`) with the CLI SSM
+entry-cap fix, focused tests, compact red/green Qwen proof artifacts, and
+`.agents` updates only. No release, N2 JANG_1L, unrelated panel proof drift, or
+`node_modules/` were staged.
+
+## 2026-06-10 07:58 PDT - MiMo JANGTQ2 exactness/splice lane selected
+
+Switching from Qwen to MiMo V2.5 JANGTQ_2 exactness and media-splice diagnosis.
+Current evidence says MiMo media routes load and visual tower parity is fixed,
+but live text exactness and visual semantics remain red. Work in active
+worktree only. No release/sign/notarize/PyPI/download, no N2 JANG_1L, no
+subagents, and no parser/string/JSON repair, sampling clamp, or prompt regex to
+mask MiMo failures. Next action is to inspect current MiMo artifacts and source
+path for language-side multimodal splice / first-logit / artifact-contract
+boundary before any runtime edit.
+
+## 2026-06-10 08:01 PDT - Eric correction recorded into AGENTS
+
+Eric explicitly directed that every instruction, movement, status, and proof
+boundary be written down, and that the no-Python-subagent constraint be
+recorded. Updated `AGENTS.md` in this active worktree with a dated correction
+block. This is an explicit override to the usual local guard against committing
+AGENTS edits.
+
+Current constraints remain: no release/sign/notarize/PyPI/download action; no
+subagents by Python, shell, MCP, browser, or wrappers; N2 JANG_1L stays
+Eric-owned/off-limits unless reopened in the current turn; and parser/API fixes
+must not synthesize arguments, disable reasoning, silently drop malformed tool
+calls, strip raw XML after the fact, or use prompt regex/string repair to fake
+correctness.
+
+Active parser/API emphasis now written into AGENTS: auto tool usage,
+required/no-tool modes, tool-result continuation, content deltas, reasoning
+deltas, interleaved reasoning/tool streaming, request kwargs passthrough,
+parser selection, gateway/API/raw SSE parity, cache reuse telemetry, final
+object consistency, and all reasoning/tool parser families including
+Qwen/Qwen-coder XML, Gemma4, MiMo think-XML, MiniMax, DeepSeek/R1-style think
+parsers, XML function parsers, and gateway/tunnel routes.
+
+Parallel-agent handoff: prioritize public tunnel/backend rebuild and recapture
+for Qwen SSE parity plus Electron UI media rows. Do not duplicate this lane's
+MiMo JANGTQ_2 runtime inspection unless coordinating through `.agents`.
+
+## 2026-06-10 08:10 PDT - MiMo JANGTQ2 segmented media fix and live route proof
+
+Fixed a real MiMo media runtime drift from the upstream Torch implementation:
+vMLX's embedded MiMo vision attention now receives per-grid `cu_seqlens` and
+keeps separate image/video-frame segments isolated during vision attention.
+This matters for multi-image and video-frame routes; it is not a fake semantic
+repair and does not touch parser/string/color outputs.
+
+Validation:
+
+- `./.venv/bin/python -m pytest -q tests/test_mimo_v2_media_runtime.py`
+  passed `18/18`.
+- `./.venv/bin/python -m py_compile vmlx_engine/models/mllm.py tests/test_mimo_v2_media_runtime.py`
+  passed.
+- `build/current-mimo-v25-jangtq2-processor-splice-preflight-20260610.json`
+  proves the local artifact processor emits the expected image slots/tensors:
+  four `151655` image slots, pixel tensor `[16,1536]`, and grid `[[1,4,4]]`
+  for 64x64 images.
+- `build/current-mimo-v25-jangtq2-segmented-media-live-after-fix-20260610.json`
+  records a real local MiMo JANGTQ2 source-server proof on port `8912`.
+  The model loaded with preserved media weights bound (`visual=364`,
+  `audio_encoder=75`, `speech_embeddings=20`), native mixed full/SWA cache,
+  paged cache, and block L2. Multi-image and video Chat Completions returned
+  HTTP 200 and visible text; video decoded two frames through the numpy video
+  reader.
+
+Boundary: live semantic color is still red (`black/white` for red/green media)
+and MiMo JANGTQ2 text exactness remains red. Do not claim visual semantic
+quality, text exactness, installed-app parity, or release readiness from this
+fix. The server was stopped cleanly, port `8912` is clear, and the temporary
+block-cache directory was removed.
+
+Next other-agent action: rerun Electron dev-app MiMo JANGTQ2 image/video UI
+rows after this source commit is bundled. For semantic quality, compare
+source/dequant/reference visual logits or rebuild the JANGTQ artifact; do not
+mask with parser repair, string normalization, prompt hacks, or color
+post-processing.
+
+## 2026-06-10 08:13 PDT - Qwen Responses/tool streaming lane selected
+
+Switching to the release-critical Responses API/parser lane for Qwen/Qwen-coder
+style XML tool output. The immediate target is the reported `arguments:{}` /
+missing required argument failure and the adjacent streaming contract: content
+deltas, reasoning deltas, interleaved reasoning/tool calls, output indices,
+same-model direct/gateway/tunnel raw SSE parity, tool-result continuation,
+auto/required/no-tool modes, and request kwargs passthrough.
+
+Boundaries: no release/sign/notarize/PyPI/download in this lane, no N2
+JANG_1L, no subagents, and no fake fix that invents missing tool arguments,
+turns off reasoning to avoid the issue, silently treats malformed tool output
+as success, or masks raw model output with prompt/string regex repair.
+
+Next action is proof reconciliation first: inspect the newest Qwen35 raw SSE
+artifacts and focused parser/server coverage against current source. If current
+direct/gateway/tunnel proof is green, record exactly what is proven and move to
+the next live parser/API gap. If any active route still emits empty required
+args or duplicate output indices, patch that route and prove it.
+
+## 2026-06-10 08:17 PDT - Qwen empty-args/output-index proof reconciled
+
+Focused current-source guards passed with `8 passed`:
+
+`./.venv/bin/python -m pytest -q tests/test_server.py::TestOpenAILogprobsFormatting::test_streaming_responses_tool_call_uses_next_output_index_without_text tests/test_server.py::TestOpenAILogprobsFormatting::test_streaming_responses_required_empty_xml_tool_call_is_rejected tests/test_server.py::TestOpenAILogprobsFormatting::test_streaming_responses_preamble_empty_xml_tool_call_never_emits_empty_arguments tests/test_server.py::TestOpenAILogprobsFormatting::test_tool_parser_drops_empty_xml_call_and_strips_markup_for_nonstream_paths tests/test_server.py::TestOpenAILogprobsFormatting::test_streaming_chat_preamble_empty_xml_tool_call_never_emits_empty_arguments tests/test_responses_raw_sse_parity_contract.py::test_classifier_tracks_interleaved_reasoning_content_tool_and_final_output tests/test_responses_raw_sse_parity_contract.py::test_classifier_flags_function_call_reusing_message_output_index tests/test_responses_raw_sse_parity_contract.py::test_raw_sse_parity_fails_when_surface_reuses_message_output_index_for_tool`
+
+Latest combined Qwen35 artifact is green:
+`build/current-responses-raw-sse-parity-qwen35-direct-gateway-tunnel-after-missing-required-args-failclosed-20260610.json`.
+It proves same-model direct/gateway/tunnel raw SSE for
+`models/Qwen3.6-35B-A3B-MXFP8-CRACK-MTP`, expected function `record_fact`,
+authoritative arguments `{"value":"blue-cat"}`, valid output item indices,
+reasoning events/lifecycle, gateway request kwargs passthrough, local empty XML
+fail-closed behavior, previous-response history guard, and no
+reasoning-disable workaround.
+
+Boundary: this closes the current source-side Qwen empty required args and
+duplicate output-index lane for the captured Qwen35 model. It does not prove
+every Qwen/Qwen-coder size, public deployment freshness, installed app parity,
+or all auto/no-tool/tool-result cache reuse loops.
+
+## 2026-06-10 08:25 PDT - Continuation after Qwen proof push
+
+Continuing from `29935d83e`, which is pushed to both `main` and
+`codex/pr-intake-manifest`. This checkpoint contains the active AGENTS
+constraint update, MiMo segmented vision media fix, and Qwen Responses parser
+proof boundary. It is not a release-ready state.
+
+Current constraints rechecked: active worktree only, no release/sign/notarize/
+PyPI/download action, no N2 JANG_1L, no subagents, no fake parser/cache/
+sampling repair, and avoid broad test-suite churn unless a focused guard
+directly proves the blocker.
+
+Next action is to audit the latest open objective/checklist rows and pick one
+concrete source/live runtime blocker that can move now: MiMo JANGTQ2
+exactness/media semantics if source-vs-quant or runtime logits are available;
+otherwise cross-family parser/API/tool/reasoning contract, Gemma honest
+media/cache/UI rows, or N2 JANGTQ2 API/cache/UI rows.
+
+## 2026-06-10 08:37 PDT - Streaming parser schema propagation fix
+
+Request/action: Eric asked to record every instruction/status movement, keep
+the Qwen/Qwen-coder empty-args issue active, and put the constraints into
+`AGENTS.md`. The current action reduced the cross-family streaming
+parser/API blocker without entering release/sign/notarize/PyPI/download work.
+
+Edits:
+
+- `AGENTS.md`: added the dated parser/API carry-forward so future agents know
+  streaming parser paths must propagate request schemas and must not fake tool
+  args from preambles or by disabling reasoning.
+- `vmlx_engine/tool_parsers/auto_tool_parser.py`: propagated `request` through
+  Auto streaming close-marker parsing and Auto-to-MiniMax fallback parsing.
+- `vmlx_engine/tool_parsers/deepseek_tool_parser.py`,
+  `functionary_tool_parser.py`, `granite_tool_parser.py`,
+  `kimi_tool_parser.py`, `llama_tool_parser.py`, `minimax_tool_parser.py`,
+  `nemotron_tool_parser.py`, `qwen_tool_parser.py`, and
+  `xlam_tool_parser.py`: propagated `request` into streaming close-marker
+  full-output parse calls.
+- `tests/test_tool_parsers.py`: added Qwen streaming regressions for missing
+  required `cmd` and preserved valid `cmd`.
+
+Verification:
+
+- `./.venv/bin/python -m pytest -q tests/test_tool_parsers.py::TestQwenToolParser::test_streaming_xml_empty_required_args_fail_closed tests/test_tool_parsers.py::TestQwenToolParser::test_streaming_xml_required_args_preserved`
+  passed `2/2`.
+- `./.venv/bin/python -m py_compile ...` passed for all touched parser files
+  and `tests/test_tool_parsers.py`.
+- `rg -n "extract_tool_calls\\(current_text\\)|minimax_parser\\.extract_tool_calls\\(" vmlx_engine/tool_parsers`
+  shows no remaining dropped `current_text` request propagation; the remaining
+  Auto MiniMax hit includes `request=request`.
+
+Proven: Qwen streaming parser no longer emits a tool call for empty required
+`exec_command` args when a schema is present, and still emits valid required
+args unchanged.
+
+Not proven: this is not a new same-model direct/gateway/tunnel raw SSE capture,
+not an installed-app proof, not a full cross-family live parser sweep, and not
+a release/sign/notarize step.
+
+Next other-agent action: continue live API proof on remaining open rows:
+direct/gateway/tunnel raw SSE where stale, family-specific auto/required/no-tool
+and tool-result loops, and cache reuse telemetry. Do not synthesize missing
+arguments, suppress reasoning, or call a family green from parser-unit proof
+alone.
+
+## 2026-06-10 08:26 PDT - Goal continuation: open-row runtime/API blocker audit
+
+Request/action: continue the active goal toward production-quality runtime/API/
+model fixes for N2 JANGTQ2, MiMo JANG/JANGTQ, Gemma JANG/MXFP/QAT, Qwen/tool
+parser/reasoning/cache/media surfaces while avoiding recursive agent behavior
+and broad test-suite churn.
+
+Constraint check: stay in this active worktree; no release/sign/notarize/PyPI/
+download update; no N2 JANG_1L; no subagents; no fake parser/cache/sampling
+repair; do not claim completion from narrow tests or stale artifacts.
+
+Next action: inspect the latest current proof/checklist artifacts and select
+one source/runtime/API blocker that can actually move now. Candidate lanes are
+MiMo exactness/media semantics, Gemma honest media/cache/UI/API rows,
+Qwen/parser/API/gateway loop rows, or N2 JANGTQ/non-JANG_1L API/cache/UI rows.
+
+## 2026-06-10 08:31 PDT - MiMo JANGTQ2 dev-app video MLLM route proof
+
+Request/action: reduce the MiMo media/API blocker without broad suite churn or
+release actions. The stale dev-app video proof had failed with text-only
+runtime routing. The current proof reran the existing real UI harness with
+`VMLINUX_REAL_UI_IS_MLLM=1` against the real local MiMo JANGTQ2 artifact.
+
+Command:
+
+`VMLINUX_REAL_UI_MODEL_PATH=/Users/eric/.mlxstudio/models/JANGQ-AI/MiMo-V2.5-JANGTQ_2 VMLINUX_REAL_UI_PROOF_BASENAME=current-real-ui-dev-app-mimo-v25-jangtq2-video-after-mllm-source-media-20260610 VMLINUX_REAL_UI_IS_MLLM=1 VMLINUX_REAL_UI_CHECK_VIDEO=1 VMLINUX_REAL_UI_VIDEO_DATA_URL=data:video/mp4;base64,... VMLINUX_REAL_UI_VIDEO_EXPECT_REGEX='red|solid|video|frame|screen' VMLINUX_REAL_UI_SECOND_TURN=0 VMLINUX_REAL_UI_MAX_TOKENS=64 VMLINUX_REAL_UI_MAX_PROMPT_TOKENS=12000 VMLINUX_REAL_UI_TEMPERATURE=0 VMLINUX_REAL_UI_TOP_P=1 VMLINUX_REAL_UI_CHECK_SERVER_CACHE_CONTROLS=1 VMLINUX_REAL_UI_ALLOW_FAIL=1 node panel/scripts/live-real-ui-model-proof.mjs`
+
+Artifacts:
+
+- Raw proof:
+  `docs/internal/agent-notes/current-real-ui-dev-app-mimo-v25-jangtq2-video-after-mllm-source-media-20260610-proof.json`
+- Screenshot:
+  `docs/internal/agent-notes/current-real-ui-dev-app-mimo-v25-jangtq2-video-after-mllm-source-media-20260610-chat.png`
+- Summary:
+  `build/current-real-ui-dev-app-mimo-v25-jangtq2-video-after-mllm-source-media-20260610.json`
+
+Proven:
+
+- Real Electron dev build launched.
+- Real `/Users/eric/.mlxstudio/models/JANGQ-AI/MiMo-V2.5-JANGTQ_2` loaded as
+  `model_type=mllm`.
+- Server command included `--is-mllm`.
+- Loader auto-enabled MiMo media from preserved bundle contract and bound
+  `visual=364`, `audio_encoder=75`, `speech_embeddings=20`.
+- App persisted a video attachment and server `MEDIA_DIAG` recorded
+  `engine_is_mllm=true`, `registry_is_mllm=true`, and one `video_url`.
+- Server decoded the base64 MP4 and the numpy video reader saw frames.
+- Chat Completions returned HTTP 200 and visible assistant output.
+- Native MiMo mixed-SWA cache and block L2 remained active:
+  `schema=mixed_swa_kv_v1`, `cache_subtype=mimo_v2_asymmetric_swa`,
+  `ram_tokens_cached=34`, `l2_block_tokens_on_disk=34`, one block-disk write.
+- Live speed recorded about `44.5 tok/s` for the video turn.
+
+Not proven / still red:
+
+- Video semantic quality is not green. The fixture was solid red, but the
+  visible answer described a phone/dog scene. Do not claim MiMo JANGTQ2 video
+  understanding or color semantics green from this route proof.
+- MiMo JANGTQ2 literal/JSON/tool exactness, image color semantics, audio
+  semantics, installed-app parity, source-vs-quant first divergence, and
+  release readiness remain open.
+
+Next other-agent action: for MiMo media quality, compare source/dequant/
+reference visual embeddings/logits or rebuild the JANGTQ artifact. Do not
+mask the failure with prompt wording, parser repair, semantic post-processing,
+or color normalization.
+
+## 2026-06-10 08:33 PDT - Continuation after MiMo video route proof
+
+Request/action: continue the active goal from `97a6e73be` and keep reducing
+runtime/API/model blockers one at a time. The prior proof clears MiMo JANGTQ2
+current dev-app video route/transport only; it does not clear semantic video
+quality, image color semantics, audio, exactness, or release readiness.
+
+Constraint check: no release/sign/notarize/PyPI/download action; no N2
+JANG_1L; no subagents; no fake parser/cache/sampling/semantic repair; avoid
+broad test-suite churn unless it directly proves a blocker.
+
+Next action: inspect current proof/checklist artifacts for Gemma, N2 JANGTQ,
+MiMo, and Qwen parser/API rows, then choose one current blocker that can move
+with either a real live proof or a source trace.
+
+## 2026-06-10 08:46 PDT - AGENTS.md active-lane anchor requested
+
+Request/action: Eric asked to put the current constraints into `AGENTS.md` so
+future continuations are forced to check the active goal and not drift.
+
+Touched files:
+
+- `AGENTS.md`
+- `.agents/STATUS.md`
+- `.agents/LOG.md`
+
+Recorded in `AGENTS.md`:
+
+- work one blocker at a time on MiMo, Gemma, Qwen/Qwen-coder, and N2
+  JANGTQ/non-JANG_1L runtime/API/UI/cache/model proof;
+- keep N2 JANG_1L out of this lane unless Eric explicitly reopens it in the
+  current turn;
+- no Python/shell/MCP/wrapper subagent delegation;
+- harsh priority on auto/required/no-tool modes, tool-result continuation,
+  content deltas, reasoning deltas, interleaved reasoning/tool streaming,
+  request kwargs, parser selection, gateway/API/raw SSE parity, cache reuse,
+  and final response object consistency;
+- Qwen3.6/Qwen-coder empty `arguments: {}` handling for both 27B and 35B style
+  XML dialects must fail closed and must not synthesize args from visible
+  preambles or disable reasoning;
+- no fake parser/cache/sampling/semantic repairs;
+- every instruction, action, proof, blocker, no-claim boundary, commit, push,
+  and other-agent handoff must be written into `.agents/STATUS.md` and
+  `.agents/LOG.md`;
+- no signing/notarization/tagging/PyPI/updater/download/public release action
+  without explicit current-turn release instruction.
+
+Boundary: this is a durable instruction/status update only. It does not claim
+any model row green and it does not enter release work.
+
+## 2026-06-10 09:00 PDT - Goal continuation after AGENTS guard commit
+
+Request/action: continue the persistent objective after `dcd4f45d4` without
+changing the goal into a narrower task. The current turn should reduce real
+runtime/API/UI/cache/model blockers for MiMo, Gemma, Qwen, or N2
+JANGTQ/non-JANG_1L.
+
+Constraint check:
+
+- active worktree: `/Users/eric/mlx/vllm-mlx-finite-launch-guard`;
+- current branch/head: `codex/pr-intake-manifest` at `dcd4f45d4`, already
+  pushed to `origin/main` and `origin/codex/pr-intake-manifest`;
+- do not work N2 JANG_1L unless Eric explicitly reopens it;
+- do not use subagents or recursive wrapper delegation;
+- do not synthesize tool args, disable reasoning, rewrite parser values, hide
+  raw XML, or patch semantics/cache to fake green rows;
+- do not enter release/sign/notarize/PyPI/updater/download work in this
+  movement;
+- avoid broad test-suite churn unless a focused verifier directly proves a
+  changed blocker.
+
+Next action: inspect current open rows and choose one blocker with a clear
+root-cause/proof path. Source-only proof may reduce a source row but must not
+be counted as installed-app or release parity.
+
+## 2026-06-10 09:12 PDT - N2 JANGTQ2 metadata-only MTP classification fixed
+
+Request/action: reduce a real N2 JANGTQ2 autodetect/runtime metadata blocker
+without touching N2 JANG_1L, release packaging, or broad suite churn.
+
+Evidence before fix:
+
+- Current N2 JANGTQ2 dev/installed proofs show real
+  `/Users/eric/.mlxstudio/models/JANGQ-AI/Nex-N2-Pro-JANGTQ2` rows passing for
+  Responses/tools/cache, image, and video, with native hybrid SSM cache and
+  JANGTQ2/TurboQuant codebook runtime.
+- The same proofs reported `mtp_status=metadata_inconsistent` with issue
+  `jang_config.drop_mtp=true but config declares 1 MTP layer(s)`.
+- Direct bundle metadata shows no top-level `num_nextn_predict_layers`, no
+  `mtp.*` tensors in the index, `jang_config.mtp.enabled=false`,
+  `jang_config.mtp.kept=false`, `runtime.bundle_has_mtp=false`, and
+  `runtime.mtp_mode=metadata_only_missing_weights`.
+
+Root cause:
+
+`vmlx_engine/native_mtp.py` treated only runtime MTP modes containing `drop` as
+intentional dropped-MTP declarations. N2 JANGTQ2 uses
+`metadata_only_missing_weights`, so the explicit no-MTP sidecar was classified
+as corrupt metadata. The `vmlx_engine/server.py` fallback had the same narrow
+classification.
+
+Touched files:
+
+- `vmlx_engine/native_mtp.py`
+- `vmlx_engine/server.py`
+- `tests/test_native_mtp_autodetect.py`
+- `build/current-n2-jangtq2-mtp-metadata-drop-classification-fix-20260610.json`
+
+Fix:
+
+- Treat `jang_config.mtp.enabled=false` or `jang_config.mtp.kept=false` as an
+  explicit dropped-MTP sidecar.
+- Treat `runtime.bundle_has_mtp=false` with `mtp_mode` containing
+  `metadata_only` or `missing_weight` as an explicit dropped-MTP declaration.
+- Preserve true corrupt metadata checks when MTP tensors remain indexed or no
+  explicit sidecar drop exists.
+
+Proof:
+
+- Direct real-bundle inspection now reports `status=dropped`,
+  `runtime_reason=jang_config.runtime.bundle_has_mtp=false`,
+  `index_has_mtp_tensors=false`, `mtp_tensor_count=0`, `runtime_active=false`,
+  and `issues=[]`.
+- Proof artifact:
+  `build/current-n2-jangtq2-mtp-metadata-drop-classification-fix-20260610.json`.
+- Verification commands:
+  - `.venv/bin/python -m py_compile vmlx_engine/native_mtp.py vmlx_engine/server.py tests/test_native_mtp_autodetect.py`
+  - `.venv/bin/python -m pytest -q tests/test_native_mtp_autodetect.py tests/test_mtp_telemetry_edge_cases.py tests/test_engine_audit.py -k 'runtime_metadata_can_explicitly_drop_configured_mtp or jang_mtp_sidecar_can_explicitly_drop_configured_metadata_only_mtp or drop_mtp_true_strict_bool_still_works or drop_mtp_false_strict_bool_still_works or mtp_status_reports_dropped_dsv4_artifact'`
+  - `git diff --check -- vmlx_engine/native_mtp.py vmlx_engine/server.py tests/test_native_mtp_autodetect.py .agents/STATUS.md .agents/LOG.md`
+
+Result:
+
+- Focused pytest passed `5/5`.
+- The real N2 JANGTQ2 bundle is now classified honestly as dropped-MTP rather
+  than metadata-inconsistent.
+
+Boundary:
+
+- This does not make native MTP active for N2 JANGTQ2; it records that this
+  artifact intentionally has metadata-only/no MTP weights.
+- This does not touch or clear N2 JANG_1L.
+- This does not clear N2 audio, MiMo exactness/media semantics, Gemma
+  installed-app parity, package/sign/notarize, PyPI, updater, download, or
+  public release rows.
+
+## 2026-06-10 09:20 PDT - Continuation after N2 MTP metadata fix
+
+Request/action: continue the persistent production-readiness objective from
+`009e02085`, keeping the scope on real runtime/API/UI/cache/model blockers.
+
+Constraint check:
+
+- current head `009e02085` is pushed to `origin/main` and
+  `origin/codex/pr-intake-manifest`;
+- no release/sign/notarize/PyPI/updater/download action in this movement;
+- no N2 JANG_1L work unless Eric explicitly reopens it;
+- no subagents or recursive wrapper delegation;
+- no fake parser/cache/sampling/semantic repairs;
+- avoid broad test churn unless directly tied to a changed blocker.
+
+Next action: inspect N2 JANGTQ2 audio/capability evidence and current checklist
+rows. If the local artifact has no audio weights, fix capability/UI/API gating
+and proof accounting honestly rather than attempting to force unsupported audio
+green.
+
+## 2026-06-10 08:50 PDT - Gemma4 unsupported-audio installed/bundled parity
+
+Request/action: trace why the installed-app Gemma4 12B audio proof reached
+generation and returned empty content even though the local bundles do not have
+weight-backed Gemma4 audio.
+
+Findings:
+
+- Source request parsing recognizes OpenAI-style `input_audio` as requested
+  audio.
+- Source `_bundle_declares_native_audio()` returns `False` for the local
+  Gemma4 12B JANG_4M, Gemma4 12B QAT MXFP4, Osaurus Gemma4 12B MXFP4, and
+  Nex-N2-Pro-JANGTQ2 bundles because no `audio_tower.*` weights are indexed.
+- Source `/v1/chat/completions` already returns `400` for the synthetic
+  Gemma4-unified `audio_config`-only route probe.
+- Bundled/staged runtime copies were stale versus source. The stale copy
+  returned `True` for `model_type == gemma4_unified` when `audio_config`
+  existed, explaining the installed-app behavior that decoded base64 audio and
+  entered generation.
+
+Edits:
+
+- Synced current `vmlx_engine` into `panel/bundled-python` and both staged
+  Sequoia/Tahoe app runtime/source copies.
+- Added a focused chat-completions regression for Gemma4 audio requests without
+  audio-tower weights.
+- Added proof artifact
+  `build/current-gemma4-audio-gate-bundled-runtime-parity-20260610.json`.
+
+Verification so far:
+
+- `./panel/scripts/verify-bundled-python.sh` passed, including critical
+  `vmlx_engine` source-vs-bundled hash checks.
+- Bundled Python route probe returned HTTP 400 with `Supported modalities:
+  text, vision`.
+
+Boundary:
+
+- This is an honest unsupported-modality gate and bundled runtime parity fix.
+- It does not make Gemma4 or N2 audio supported.
+- It does not sign, notarize, publish, release, upload, or touch N2 JANG_1L.
+
+## 2026-06-10 08:52 PDT - Responses/tool/reasoning streaming lane
+
+Request/action: continue the persistent objective after `d27c2d3c7`, with the
+next lane focused on API usability for coding agents and harnesses.
+
+Scope:
+
+- Qwen/Qwen-coder empty tool-call args report must be traced from current
+  source, not assumed.
+- Responses streaming must preserve content deltas, reasoning summaries,
+  function-call argument events, final object consistency, output-index
+  ordering, tool-result continuation, and auto/required/no-tool modes.
+- Do not synthesize missing args, hide malformed calls as success, disable
+  reasoning, or patch prompt/string semantics to fake a pass.
+
+Next action: inspect current server/tool parser paths and focused existing
+tests/proofs, then make a scoped source change only if the current route still
+fails.
+
+## 2026-06-10 08:58 PDT - Responses auto-tool invalid XML final leak
+
+Request/action: trace the reported Qwen/Qwen-coder style preamble plus empty
+XML tool call without assuming the provided root cause was fully current.
+
+Reproduction:
+
+- Simulated a Responses stream with:
+  `Quick preamble. Checking tmp...\n<tool_call><function=exec_command></function></tool_call>`
+  and a tool schema requiring `cmd`.
+- Current parser/filtering dropped the invalid tool call; it did not emit an
+  executable `{}` call.
+- Before the source patch, auto-tool mode still finalized
+  `response.output_text.done` and `response.completed.output_text` with the raw
+  XML appended, because the no-tool finalizer reused `accumulated_content`.
+
+Fix:
+
+- In the Responses no-tool finalization path, when the full stream contains
+  tool-call markers but no tool call survives parsing, strip native tool markup
+  from final visible text.
+- This preserves the streamed preamble in auto mode, fails closed for the bad
+  tool call, and avoids raw XML/history leakage.
+
+Verification:
+
+- Focused pytest passed `6/6`:
+  `streaming_responses_auto_empty_xml_tool_call_strips_final_markup`,
+  required-tool empty XML rejection, preamble empty XML no-empty-arguments,
+  nonstream parser cleanup, buffered argument survival, and output-index guard.
+- Manual repro after fix produced preamble-only final text, no function-call
+  item, no function-call argument events, no `"arguments": "{}"`, and no raw
+  XML.
+- Proof artifact:
+  `build/current-responses-auto-empty-tool-markup-leak-fix-20260610.json`.
+
+Boundary:
+
+- No fake argument synthesis, no hidden semantic repair, no reasoning disable.
+- Same-model live direct/gateway/tunnel raw SSE remains a separate proof lane.
+- No release/sign/notarize/package/PyPI/updater/download work and no N2 JANG_1L.
+
+## 2026-06-10 08:58 PDT - Bundled runtime parity check after Responses source fix
+
+Request/action: verify generated bundled runtime after `e49ad2319` before
+running installed-app or bundled proof.
+
+Finding:
+
+- `./panel/scripts/verify-bundled-python.sh` failed on
+  `vmlx_engine/server.py` content drift.
+- Source sha prefix: `0d84fe5280867cc7`.
+- Bundled sha prefix: `9632a23b0d8b861d`.
+- This means bundled Python lacks the latest Responses invalid-tool markup
+  cleanup and would still be stale for app/API proof.
+
+Next action: sync generated runtime copies from current source, rerun parity,
+and verify the bundled Responses repro. No release action.
+
+## 2026-06-10 08:59 PDT - Bundled runtime parity restored after source sync
+
+Action:
+
+- Synced current `vmlx_engine/` into generated bundled Python and staged
+  Sequoia/Tahoe app runtime/source copies.
+- Re-ran bundled parity and a bundled Python Responses empty XML repro.
+
+Results:
+
+- `./panel/scripts/verify-bundled-python.sh` passed.
+- Critical `vmlx_engine` files match source content.
+- Critical `jang_tools` files match source content.
+- Bundled runtime imports for MLX, MLX-LM, MLX-VLM, Gemma4, MiMo, Step3.7,
+  JANGTQ loaders, TurboQuant kernels, and vMLX runtime modules passed.
+- Bundled Responses repro from the bundled `server.py` produced preamble-only
+  final text, no function-call item, no argument events, no `{}` args, and no
+  raw XML.
+
+Proof artifact:
+
+- `build/current-bundled-runtime-parity-after-responses-markup-fix-20260610.json`
+
+Boundary:
+
+- This is local generated-runtime parity for future app proof. It is not a
+  release/sign/notarize/package/PyPI/updater/download/website action.
+- Same-model direct/gateway/tunnel live raw SSE remains separate.
+- No N2 JANG_1L work was performed.
+
+## 2026-06-10 09:00 PDT - Model-family blocker scan
+
+Request/action: continue after bundled Responses parity and return to concrete
+model-family blockers.
+
+Scope:
+
+- Nex/N2 JANGTQ2, MiMo V2.5 JANG/JANGTQ, Gemma JANG/MXFP.
+- Prioritize runtime/API/UI/cache/media/tool/reasoning proof rows over release
+  mechanics and broad test churn.
+- Do not touch N2 JANG_1L, do not use subagents, and do not fake media/tool
+  success through metadata or parser repairs.
+
+Next action: inspect current proof artifacts and pick one red row with a clear
+source or capability-gating path.
+
+## 2026-06-10 09:06 PDT - MiMo preserved-media capability gate fix in progress
+
+Request/action: stay on one concrete model-family blocker and fix/prove the
+MiMo V2.5 JANG/JANGTQ media capability gate without release work.
+
+Finding:
+
+- Real MiMo V2.5 JANGTQ_2 and JANG_2L local bundles carry preserved vision/audio
+  sidecars and token metadata while explicitly stamping text-runtime status.
+- The server-side auto-enable path could still advertise image/video/audio from
+  runtime-class and sidecar presence alone.
+- That is a false capability claim for bundles marked
+  `weights_preserved_text_runtime`.
+
+Source change under verification:
+
+- `_mimo_v2_media_runtime_auto_enabled()` now treats explicit
+  `weights_preserved_text_runtime`, `text_runtime`, `text_only`, `unwired`, and
+  `preserved_disabled` modes as fail-closed before checking runtime classes or
+  sidecars.
+- Focused test fixture now includes the same kind of preserved visual/audio
+  index entries as the real bundles, proving those sidecars do not override the
+  explicit text-runtime stamp.
+
+Planned proof:
+
+- Focused MiMo media-gate pytest.
+- Real local JANGTQ_2 and JANG_2L capability check from source.
+- Generated bundled runtime sync and `verify-bundled-python.sh`.
+- Bundled Python real-bundle capability check.
+
+Boundary:
+
+- No media success claim, no MiMo exactness claim, no parser/JSON repair, no
+  release/sign/notarize/package/PyPI/updater/download work, and no N2 JANG_1L.
+
+## 2026-06-10 09:10 PDT - MiMo preserved-media capability gate fixed and proven
+
+Action:
+
+- Patched `_mimo_v2_media_runtime_auto_enabled()` to fail closed when explicit
+  MiMo metadata says `weights_preserved_text_runtime`, `text_runtime`,
+  `text_only`, `unwired`, or `preserved_disabled`.
+- Strengthened the focused regression fixture to include preserved visual/audio
+  weight-map entries.
+- Synced generated bundled Python and staged app runtime/source copies after
+  the source edit.
+
+Verification:
+
+- `py_compile` passed for `vmlx_engine/server.py` and
+  `tests/test_mimo_v2_media_capability_gate.py`.
+- Focused MiMo media-gate pytest passed `5/5`.
+- `./panel/scripts/verify-bundled-python.sh` passed after runtime sync.
+- Source real-bundle probe and bundled-Python real-bundle probe both returned
+  `runtime_modalities_static=["text"]` and `loaded_runtime_modalities=["text"]`
+  for:
+  - `/Users/eric/.mlxstudio/models/JANGQ-AI/MiMo-V2.5-JANGTQ_2`
+  - `/Users/eric/.mlxstudio/models/JANGQ-AI/MiMo-V2.5-JANG_2L`
+
+Proof artifact:
+
+- `build/current-mimo-v25-preserved-media-runtime-gate-fix-20260610.json`
+
+Proven:
+
+- Preserved MiMo JANG/JANGTQ bundles no longer falsely advertise image, video,
+  or audio runtime support just because sidecars/classes/tokens exist.
+- Media modalities are reported as `preserved_unwired` until the artifact opts
+  into the runtime and is live-proven.
+
+Not proven:
+
+- MiMo JANGTQ_2 exact literal generation remains red.
+- MiMo image/video/audio semantic success is not claimed.
+- N2 JANG_1L, release/sign/notarize/package/PyPI/updater/download/website work
+  were not touched.
+
+Other-agent next action:
+
+- For MiMo media support, build or restamp an explicit multimodal-runtime MiMo
+  artifact and run real API/app image/video/audio proof. Do not bypass the
+  text-runtime metadata in server detection.
+
+## 2026-06-10 09:18 PDT - N2 JANGTQ2 audio/capability honesty lane active
+
+Request/action: continue the checkpoint runtime blocker work by selecting one
+current red/open row with source-fix potential.
+
+Selected blocker:
+
+- Nex/N2 JANGTQ2 audio/capability honesty. Existing records show strong N2
+  JANGTQ2 chat/tools/cache/image/video evidence, but audio is still not cleared.
+
+Constraints:
+
+- No N2 JANG_1L.
+- No release/sign/notarize/package/PyPI/updater/download/website action.
+- No subagents.
+- No fake audio claim from config/token metadata alone.
+- No parser/tool argument synthesis or reasoning-disable workaround.
+
+Next action:
+
+- Inspect the real N2 JANGTQ2 bundle metadata and current server modality
+  detection/API guard. If audio is not weight-backed and wired, make the server
+  fail closed; if audio is actually wired, prove it through focused source and
+  bundled API behavior.
+
+## 2026-06-10 09:23 PDT - N2 audio checked; pivot to stricter Responses tool loop
+
+Finding:
+
+- Real bundle:
+  `/Users/eric/.mlxstudio/models/JANGQ-AI/Nex-N2-Pro-JANGTQ2`.
+- `config.json` has `vision_config`, `image_token_id`, and `video_token_id`.
+- `config.json` does not have `audio_config` or audio token metadata.
+- `jang_config.json` says `capabilities.modality=vision`.
+- Existing dev-app and installed-app audio proofs are red through the explicit
+  unsupported-modality guard with supported modalities `text, vision, video`.
+
+Classification:
+
+- No source fix is needed for N2 audio in this pass. It is already honestly
+  gated; advertising audio would violate the no-fake-media constraint.
+
+Pivot:
+
+- Continue within N2 JANGTQ2 but switch to the still-red stricter Responses
+  long-delta/tool-loop proof. That failure is directly in the requested
+  auto-tool/content-delta/reasoning-tool/API harness lane.
+
+## 2026-06-10 09:36 PDT - N2 loopback required-tool error reduced, strict row still red
+
+Action:
+
+- Patched panel request construction so loopback remote vMLX sessions do not
+  pin explicit built-in `tool_choice`. The request still sends the tool list;
+  it only avoids converting a local loopback model into a generic remote
+  required-tool call.
+
+Root cause/evidence:
+
+- Before patch, the strict N2 proof logged:
+  `tool_choice='required' was set but the model did not produce any tool calls`.
+- The same run persisted a 128-character `!` output after the server error.
+- This happened in a loopback vMLX proof session reported as `isRemote=true`.
+
+Verification:
+
+- `cd panel && npm run typecheck` passed.
+- `cd panel && npm test -- tests/request-builder.test.ts tests/tool-auto-continue.test.ts`
+  passed `79/79`.
+- `cd panel && npm test -- tests/settings-flow.test.ts -t 'uses --is-mllm|forceTextOnly|video sampling controls'`
+  passed `3/3`.
+- Strict live N2 rerun was executed with the same APP_DELTA prompts against
+  `/Users/eric/.mlxstudio/models/JANGQ-AI/Nex-N2-Pro-JANGTQ2`.
+
+Proof artifact:
+
+- `build/current-n2-jangtq2-loopback-toolchoice-required-error-reduced-20260610.json`
+
+Live result:
+
+- Raw proof:
+  `docs/internal/agent-notes/current-real-ui-live-model-n2-jangtq2-responses-tools-prevresp-longdelta-after-loopback-toolchoice-20260610-proof.json`
+- Still `status=fail`.
+- Previous required-tool API error is gone.
+- Previous repeated `!` visible output is gone.
+- The run returned `Created`, created only `real_ui_tool_probe_1.txt`, and did
+  not create `real_ui_tool_probe_2.txt`.
+
+Classification:
+
+- Reduced, not cleared. The API hard-error path is fixed for loopback vMLX
+  remote sessions, but the strict long-delta/tool-adherence row remains red.
+
+Not proven:
+
+- Strict N2 JANGTQ2 long-delta row is not green.
+- Second tool call and APP_DELTA_STREAM markers are not proven.
+- N2 JANG_1L, release/sign/notarize/package/PyPI/updater/download/website work
+  were not touched.
+
+Other-agent next action:
+
+- Compare strict prompt behavior in true local session mode versus loopback
+  remote mode, and inspect prompt/template/tool-schema pressure for N2. Do not
+  call this strict row green from the loopback tool-choice reduction.
+
+## 2026-06-10 09:44 PDT - Responses required-tool fail-closed lane active
+
+Request/action: continue with a source-relevant Responses/tool blocker rather
+than pushing on N2 strict prompt quality without a new root cause.
+
+Selected lane:
+
+- Responses required-tool fail-closed behavior for N2/Qwen-style harnesses.
+- Artifact to inspect:
+  `build/current-responses-required-tool-stream-fail-closed-after-n2-longdelta-20260610.json`.
+
+Constraints:
+
+- No release/sign/notarize/package/PyPI/updater/download/website action.
+- No N2 JANG_1L.
+- No subagents.
+- No synthetic tool calls, argument repair, or parser masking.
+
+Next action:
+
+- Inspect artifact and current server handling. Patch only if the evidence
+  shows a source/API bug; otherwise record the honest boundary and move on.
+
+## 2026-06-10 09:50 PDT - Gemma audio/modality current-state audit active
+
+Finding from previous lane:
+
+- `build/current-responses-required-tool-stream-fail-closed-after-n2-longdelta-20260610.json`
+  is already `status=pass`.
+- It proves in-process Responses streaming required-tool fail-closed behavior:
+  empty final output, failed completed response, `tool_calls_required`, no
+  function call item, no argument delta/done, and no `{}` arguments.
+- No source patch is appropriate for that already-green contract.
+
+Selected lane:
+
+- Gemma JANG/MXFP/QAT audio/modality honesty. Current matrix entries include
+  older semantic-audio failures and newer unsupported-audio guard rows, so the
+  next useful action is to verify current source and bundled truth.
+
+Constraints:
+
+- No release/sign/notarize/package/PyPI/updater/download/website action.
+- No N2 JANG_1L.
+- No subagents.
+- Do not advertise audio from config/projection metadata alone.
+
+Next action:
+
+- Probe current source and bundled runtime modality detection plus audio request
+  guard behavior for local Gemma JANG/MXFP/QAT rows that exist.
+
+## 2026-06-10 09:56 PDT - Gemma audio current-state proof added
+
+Action:
+
+- Probed local Gemma 12B QAT MXFP4, 12B JANG_4M, 12B QAT JANG_4M, 26B QAT
+  JANG_4M, 31B QAT JANG_4M, and native 12B MXFP4 config/index metadata.
+- Probed current source and bundled Python server helpers for
+  `_bundle_declares_native_audio` and `_loaded_runtime_modalities`.
+- Updated the proof matrix to state the current audio boundary.
+
+Proof artifact:
+
+- `build/current-gemma-jang-mxfp-audio-modality-current-state-20260610.json`
+
+Proven:
+
+- Source and bundled runtime agree: runtime modalities are `text`, `vision`,
+  and `video`.
+- No checked row has `audio_tower.*` weights.
+- 12B unified/MXFP rows have audio config/token/projection metadata only, so
+  audio is declared but not runtime-supported.
+- 26B/31B rows do not advertise audio config and have no audio tower.
+
+Not proven:
+
+- Gemma audio support.
+- Gemma audio semantic E2E.
+- Release readiness.
+
+Boundary:
+
+- This is proof/matrix cleanup, not a source patch. Do not claim audio works
+  unless a future artifact contains real audio tower weights and passes live
+  audio E2E. No release/sign/notarize/package/PyPI/updater/download/website
+  action and no N2 JANG_1L.
+
+## 2026-06-10 10:02 PDT - Active AGENTS routing guard updated
+
+Request:
+
+- Eric provided the `/Users/eric/vmlx` `AGENTS.md` guard stating that the
+  wrapper checkout is deprecated for active vMLX runtime/app work and said to
+  put it into `AGENTS.md`.
+
+Action:
+
+- Updated this active worktree's `AGENTS.md` with a narrow
+  "Deprecated wrapper checkout guard" section.
+
+Proven:
+
+- Future continuations are directed away from `/Users/eric/vmlx` and old Swift
+  or wrapper notes, back to this active Python/Electron worktree and the current
+  `.agents` state.
+
+Boundary:
+
+- Docs-only guard update. No runtime source change, no release/sign/notarize/
+  package/PyPI/updater/download/website action, and no N2 JANG_1L.
+
+## 2026-06-10 10:12 PDT - Continuation objective recorded
+
+Request:
+
+- Continue reducing blockers for Nex/N2 JANGTQ2, MiMo V2.5 JANG/JANGTQ, Gemma
+  JANG/MXFP/QAT, Qwen/Responses tools/reasoning, media, cache reuse,
+  TurboQuant/JANG/JANGTQ/MXFP, UI/API, and agentic tool loops.
+- Avoid wasting time on broad test-suite churn, recursive subagent-style
+  scripting, or fixes that do not move the release-critical runtime state.
+
+Selected lane:
+
+- Qwen/Qwen3.6 Responses raw SSE tunnel/source/gateway parity and tool/
+  reasoning streaming contract, because this is directly tied to opencode/
+  Codex harness usability, empty tool arguments, output indices, content
+  deltas, reasoning deltas, and tool-result continuation.
+
+Constraints:
+
+- No N2 JANG_1L.
+- No release/sign/notarize/package/PyPI/updater/download/website action.
+- No subagents.
+- No synthetic tool args, no disabling reasoning to hide failures, no parser/
+  JSON repair masking.
+
+Next action:
+
+- Inspect current Qwen raw SSE artifacts, route code, and tunnel recapture
+  options. Patch only if current source is responsible; otherwise record the
+  exact deployed tunnel rebuild/recapture boundary for the other lane.
+
+## 2026-06-10 10:18 PDT - Responses lane pivot to Gemma tunnel availability
+
+Finding:
+
+- Qwen35 same-model direct/gateway/public-tunnel raw SSE parity is already
+  green in
+  `build/current-responses-raw-sse-parity-qwen35-direct-gateway-tunnel-after-public-recapture-20260610.json`.
+
+Selected lane:
+
+- Remaining generic Gemma raw SSE parity, especially the tunnel/model-
+  availability row still pointing at
+  `build/current-responses-raw-sse-parity-direct-gateway-tunnel-gemma4-e2b-after-parser-20260609.json`.
+
+Constraints:
+
+- No release/sign/notarize/package/PyPI/updater/download/website action.
+- No N2 JANG_1L.
+- No subagents.
+- No synthetic tool args and no reasoning-disable workaround.
+
+Next action:
+
+- Inspect the Gemma raw SSE artifact and current public tunnel model
+  availability. Patch source only if source/gateway is responsible; otherwise
+  write the exact route/redeploy/recapture boundary.
+
+## 2026-06-10 10:31 PDT - Gemma same-model public Responses SSE parity green
+
+Action:
+
+- Launched `/Users/eric/models/dealignai/Gemma-4-12B-it-MXFP8-CRACK` locally as
+  `models/Gemma-4-12B-it-MXFP8-CRACK` on port `8896`.
+- Captured the same required-tool Responses request from direct source, the
+  panel gateway, and the public tunnel `https://testapi.adlabus.dev/v1/responses`.
+- Updated generic Responses raw SSE parity pointers away from the old
+  unavailable `gemma4-e2b-sse` tunnel alias and onto the new same-model Gemma
+  12B MXFP8 CRACK proof.
+
+Proof artifacts:
+
+- `build/responses-sse-captures-20260610/direct-gemma4-12b-mxfp8-crack-tool-20260610.sse`
+- `build/responses-sse-captures-20260610/gateway-gemma4-12b-mxfp8-crack-tool-20260610.sse`
+- `build/responses-sse-captures-20260610/tunnel-gemma4-12b-mxfp8-crack-tool-20260610.sse`
+- `build/current-responses-raw-sse-parity-direct-gateway-tunnel-gemma4-12b-mxfp8-crack-20260610.json`
+- `build/current-full-release-objective-checklist-after-gemma12-mxfp8-public-sse-parity-20260610.json`
+
+Proven:
+
+- Parity artifact is `status=pass`.
+- Direct, gateway, and tunnel all report
+  `models/Gemma-4-12B-it-MXFP8-CRACK`.
+- Required `record_fact` arguments are preserved as `{"value":"blue-cat"}`.
+- Reasoning events are present with no reasoning-disable workaround.
+- Function-call argument delta/done events are present.
+- Final objects are consistent with the stream.
+- Output indices are valid: source/gateway use message `0`, reasoning `1`,
+  function_call `2`; tunnel uses message `0`, function_call `1`.
+- Gateway request kwargs were preserved:
+  `stream=true`, `max_output_tokens=512`, `temperature=0`, `top_p=1`,
+  `top_k=0`, `enable_thinking=true`, `tool_choice=required`, one tool named
+  `record_fact`.
+- Local source cache path wrote block L2 and hit paged cache on the gateway
+  request: 2 blocks / 102 tokens written, then 102 cached tokens reused.
+
+Verification:
+
+- `py_compile` for touched runners passed.
+- Focused pointer tests passed `3/3`:
+  `tests/test_full_release_objective_checklist.py`
+  `tests/test_current_regression_suite.py`
+  with `-k 'responses_raw_sse_parity or qwen35_raw_sse_parity'`.
+- Regenerated checklist is still `status=open`, `release_ready=false`,
+  `failed_count=56`, and has no failed row containing `responses_raw_sse` or
+  `qwen35_raw_sse`.
+
+Boundary:
+
+- This clears the generic Gemma/Qwen Responses raw SSE parity board row for the
+  advertised same-model proof. It does not clear all model-family parser loops,
+  MiMo exactness/media, Gemma QAT full release matrix, installed-app parity,
+  package/sign/notarize/PyPI/updater/download/website work, or N2 JANG_1L.
+## 2026-06-10 10:20 PDT - MiMo blocker lane selected
+
+Request:
+
+- Continue the persistent release-quality objective for Nex/N2 JANGTQ2, MiMo
+  V2.5 JANG/JANGTQ, Gemma JANG/MXFP/QAT, Qwen/Responses tools/reasoning, media,
+  cache reuse, TurboQuant/JANG/JANGTQ/MXFP, UI/API, and agentic tool loops.
+- Avoid broad test-suite churn, recursive subagent-style work, fake parser/
+  cache/sampling fixes, and metadata-only proof.
+
+Selected lane:
+
+- MiMo V2.5 JANG/JANGTQ exactness/media/API/cache. The prior written state says
+  Qwen35 and generic Gemma same-model Responses raw SSE parity are green, while
+  MiMo exactness/media/runtime rows remain release blockers.
+
+Constraints:
+
+- No N2 JANG_1L.
+- No release/sign/notarize/package/PyPI/updater/download/website action.
+- No subagents.
+- No parser/JSON/string repair, sampling clamp, prompt-only masking, or cache
+  blame unless current evidence proves that path is the root cause.
+
+Next action:
+
+- Inspect current MiMo proof artifacts, manifests, and loader/decode/media code
+  to identify the next reproducible blocker. Patch only if root-cause evidence
+  points to a source defect; otherwise record the exact not-proven boundary and
+  what the parallel agent should pick up.
+
+## 2026-06-10 10:28 PDT - MiMo media route proof consumed by audit
+
+Action:
+
+- Updated `tests/cross_matrix/run_mimo_v2_jang2l_current_audit.py` so the MiMo
+  audit consumes current route proof artifacts instead of continuing to report
+  the stale `mimo_media_runtime_implementation_missing` blocker.
+- Updated `tests/test_mimo_v2_current_audit.py` to assert the exact boundary:
+  forced-MLLM/source media transport and video cache are live, but semantic
+  release quality and default preserved-text-runtime capability remain red.
+- Updated `tests/cross_matrix/run_full_release_objective_checklist.py` to point
+  at the corrected MiMo audit artifact.
+
+Proof artifacts consumed:
+
+- `build/current-mimo-v25-jangtq2-video-audio-source-proof-20260610.json`
+- `build/current-real-ui-dev-app-mimo-v25-jangtq2-video-after-mllm-source-media-20260610.json`
+- `build/current-mimo-v25-jangtq2-video-cache-proof-after-video-tensor-cache-fix-20260610.json`
+
+New artifacts:
+
+- `build/current-mimo-v2-jang2l-current-audit-after-media-route-proof-20260610.json`
+- `build/current-full-release-objective-checklist-after-mimo-media-route-proof-20260610.json`
+
+Proven:
+
+- MiMo JANGTQ2 media weights bind and video/audio requests reach the MLLM
+  runtime when launched as MLLM.
+- Dev-app video transport/cache route is live under the current source proof.
+- Video tensor cache preservation is proven for repeated video requests.
+- The old "media implementation missing" wording is no longer accurate and is
+  removed from the current MiMo audit blockers.
+
+Not proven:
+
+- Default preserved-text-runtime bundles are still not advertised as
+  media-capable.
+- MiMo image/video semantic quality remains red.
+- Audio transcript semantics, full image/video/audio E2E release quality,
+  media L2, installed-app media parity, literal/tool/JSON exactness, speed, and
+  release readiness remain open.
+
+Verification:
+
+- `.venv/bin/python -m py_compile tests/cross_matrix/run_full_release_objective_checklist.py tests/cross_matrix/run_mimo_v2_jang2l_current_audit.py tests/test_mimo_v2_current_audit.py tests/test_full_release_objective_checklist.py`
+- `.venv/bin/python -m pytest -q tests/test_mimo_v2_current_audit.py` -> `21 passed`.
+- `.venv/bin/python -m pytest -q tests/test_mimo_v2_current_audit.py tests/test_full_release_objective_checklist.py -k 'mimo or full_release_objective_checklist'` -> `40 passed`.
+- `git diff --check` for touched files passed.
+
+Boundary:
+
+- No model launch, release/sign/notarize/package/PyPI/updater/download/website
+  action, N2 JANG_1L work, parser repair, sampling clamp, color post-processing,
+  or cache/L2 fake fix was performed.
+
+Other-agent action:
+
+- Use the corrected audit artifact for MiMo board status.
+- For MiMo media quality, compare source/dequant/reference visual embeddings or
+  logits, or rebuild the JANGTQ artifact. Do not mask visual/audio failures
+  with prompt wording, parser repair, sampling clamps, color post-processing, or
+  cache/L2 changes.
+
+## 2026-06-10 10:28 PDT - Gemma E4B installed-app proof lane selected
+
+Request:
+
+- Continue the persistent release-quality objective with concrete live model/
+  app proof and avoid broad test-suite churn or recursive subagent behavior.
+
+Selected lane:
+
+- Gemma 4 E4B QAT JANG_4M installed-app UI/API/cache parity. Source fullmedia
+  proof is already green, but the Gemma inventory/checklist still reports the
+  E4B installed-app proof as missing.
+
+Constraints:
+
+- No release/sign/notarize/package/PyPI/updater/download/website action.
+- No N2 JANG_1L.
+- No subagents.
+- No fake parser/cache/modality claim.
+- Use the real `/Applications/vMLX.app` installed-app route and inspect visible
+  chat proof before updating trackers.
+
+Next action:
+
+- Run the existing real UI proof harness against
+  `/Users/eric/models/JANGQ-AI/gemma-4-E4B-it-qat-JANG_4M`, then classify the
+  exact installed-app/API/cache surfaces proven or red.
+
+# 2026-06-10 10:32 PDT - Gemma E4B installed-app proof registered
+
+- First E4B installed-app proof used repo `.venv` as `python`, so the existing
+  installed-app gate correctly rejected it as not bundled-Python proof.
+- Reran the same Gemma 4 E4B QAT JANG_4M proof with
+  `VMLINUX_REAL_UI_PYTHON=/Applications/vMLX.app/Contents/Resources/bundled-python/python/bin/python3`.
+- Corrected proof:
+  `docs/internal/agent-notes/current-real-ui-installed-app-gemma4-e4b-qat-jang4m-responses-tools-cachecontrols-visible-chat-20260610-proof.json`,
+  `status=pass`; screenshot:
+  `docs/internal/agent-notes/current-real-ui-installed-app-gemma4-e4b-qat-jang4m-responses-tools-cachecontrols-visible-chat-20260610-chat.png`.
+- Proven surfaces: `/Applications/vMLX.app`, bundled Python server command,
+  Responses API, built-in tool loop, reasoning display, parser/language leak
+  checks, server cache controls, Gemma4 mixed-SWA native cache, storage-boundary
+  4-bit full-attention KV, `cache_hit_tokens=9317`, and
+  `l2_block_tokens_on_disk=3528`.
+- Updated inventory gate:
+  `build/current-gemma-qat-native-mxfp4-local-inventory-after-e4b-installed-app-ui-proof-20260610.json`
+  records E2B and E4B installed-app UI/API/cache checks true, while the
+  inventory remains `status=open` and E4B remains `live_proof_status=partial`.
+- Full checklist regenerated:
+  `build/current-full-release-objective-checklist-after-gemma-e4b-installed-app-ui-proof-20260610.json`;
+  it remains `status=open`, `release_ready=false`, `failed_count=56`.
+- Verification: py_compile passed for touched files; focused pytest selected
+  `32/32` passed; `git diff --check` passed; process cleanup check found no
+  lingering model/app/proof processes.
+- Boundary: no release/sign/notarize/package/PyPI/updater/download/website
+  action; no N2 JANG_1L; no parser/cache/modality fake fix. Gemma 12B/26B/31B
+  installed-app rows and full release parity remain open.
+
+# 2026-06-10 10:35 PDT - Gemma 12B installed-app proof lane selected
+
+- Selected next concrete blocker: Gemma 4 12B QAT JANG_4M installed-app
+  UI/API/cache proof.
+- Reason: E2B/E4B installed-app rows are now registered as partial-green; 12B
+  remains unregistered and is the next release-relevant Gemma row.
+- Constraints: no release/sign/notarize/package/PyPI/updater/download/website,
+  no N2 JANG_1L, no subagents, no fake parser/cache/modality claims.
+- Planned command: run the real UI proof harness with `/Applications/vMLX.app`
+  and
+  `VMLINUX_REAL_UI_PYTHON=/Applications/vMLX.app/Contents/Resources/bundled-python/python/bin/python3`.
+
+# 2026-06-10 10:40 PDT - Gemma 12B installed-app proof registered
+
+- Ran bundled-Python installed-app proof for
+  `/Users/eric/models/JANGQ-AI/gemma-4-12B-it-qat-JANG_4M`; result
+  `status=pass`.
+- Proof JSON:
+  `docs/internal/agent-notes/current-real-ui-installed-app-gemma4-12b-qat-jang4m-responses-tools-cachecontrols-visible-chat-20260610-proof.json`;
+  screenshot:
+  `docs/internal/agent-notes/current-real-ui-installed-app-gemma4-12b-qat-jang4m-responses-tools-cachecontrols-visible-chat-20260610-chat.png`.
+- Visible proof: first answer includes `REAL_UI_LIVE_TOOL_ONE`; second answer
+  includes `REAL_UI_LIVE_TOOL_TWO` and "second UI turn"; screenshot shows two
+  tool executions and `paged+mixed_swa cached` telemetry.
+- Cache/runtime proof: bundled Python server command, Gemma4 mixed-SWA native
+  cache, storage-boundary 4-bit full-attention KV, `cache_hit_tokens=9340`,
+  `l2_block_tokens_on_disk=3538`.
+- Registered 12B in the Gemma inventory gate and full checklist. New inventory:
+  `build/current-gemma-qat-native-mxfp4-local-inventory-after-12b-installed-app-ui-proof-20260610.json`;
+  new checklist:
+  `build/current-full-release-objective-checklist-after-gemma-12b-installed-app-ui-proof-20260610.json`.
+- Verification: py_compile passed; focused pytest selected `32/32` passed;
+  artifact check shows E2B/E4B/12B installed-app booleans true and no failed
+  installed-app rows for those three; `git diff --check` passed.
+- Boundary: 12B UI proof has a post-answer reasoning-only auto-continue
+  warning. Visible answer completed, but keep this as UI polish/open-boundary
+  evidence. Gemma remains `status=open`, `release_ready=false`; 26B/31B
+  installed-app rows and full release parity remain open.
+
+# 2026-06-10 10:43 PDT - Gemma 26B installed-app proof lane selected
+
+- Selected next concrete blocker: Gemma 4 26B QAT JANG_4M installed-app
+  UI/API/cache proof.
+- Reason: E2B/E4B/12B installed-app rows are registered partial-green; 26B
+  remains unregistered in the Gemma inventory.
+- Constraints: no release/sign/notarize/package/PyPI/updater/download/website,
+  no N2 JANG_1L, no subagents, no fake parser/cache/modality claims.
+- Planned command: run the real UI proof harness with `/Applications/vMLX.app`,
+  bundled Python, Responses wire API, built-in tools, reasoning, and server
+  cache controls.
+
+# 2026-06-10 10:45 PDT - Gemma 26B installed-app proof classified red for duplicate tool loop
+
+- Ran bundled-Python installed-app proof for
+  `/Users/eric/models/JANGQ-AI/gemma-4-26B-A4B-it-qat-JANG_4M`.
+- Proof JSON:
+  `docs/internal/agent-notes/current-real-ui-installed-app-gemma4-26b-qat-jang4m-responses-tools-cachecontrols-visible-chat-20260610-proof.json`;
+  screenshot:
+  `docs/internal/agent-notes/current-real-ui-installed-app-gemma4-26b-qat-jang4m-responses-tools-cachecontrols-visible-chat-20260610-chat.png`.
+- Top-level harness result was `status=pass`, but detailed evidence is red for
+  release agentic behavior: second turn emitted six duplicate `run_command`
+  calls and the follow-up emitted six more duplicate `run_command` calls for
+  the same command. Screenshot shows twelve repeated command rows.
+- Positive evidence still captured: bundled Python, installed app route,
+  visible first/second answers, parser leak checks clean, Gemma4 mixed-SWA
+  native cache, storage-boundary 4-bit full-attention KV,
+  `cache_hit_tokens=7151`, `l2_block_tokens_on_disk=4884`.
+- Decision: keep 26B out of the green installed-app inventory until duplicate
+  tool-call loop behavior is fixed or cleanly disproven. This is not release
+  clearance.
+- Next useful work: raw Responses SSE + panel event trace for 26B duplicate
+  tool calls to locate whether duplication starts in model output, server
+  Responses assembly, or panel tool-loop replay.
+
+# 2026-06-10 10:48 PDT - Gemma 26B raw SSE duplicate-tool root-cause lane selected
+
+- Selected lane: direct server raw SSE capture for the Gemma 26B duplicate
+  `run_command` tool-loop blocker.
+- First question: does direct `/v1/responses` SSE already contain duplicate
+  function calls, or is duplication introduced later by gateway/panel replay?
+- Constraints: no release/sign/notarize/package/PyPI/updater/download/website,
+  no N2 JANG_1L, no subagents, no fake dedupe/drop fix before raw event
+  evidence.
+
+# 2026-06-10 10:50 PDT - Gemma 26B direct Responses SSE captured
+
+- Launched direct bundled-Python server on `127.0.0.1:55570`:
+  `/Applications/vMLX.app/Contents/Resources/bundled-python/python/bin/python3 -B -s -m vmlx_engine.cli serve /Users/eric/models/JANGQ-AI/gemma-4-26B-A4B-it-qat-JANG_4M ... --enable-auto-tool-choice --tool-call-parser auto`.
+- Health proof confirmed:
+  - model loaded as MLLM, Gemma4 tool/reasoning parsers auto-selected.
+  - native cache schema `mixed_swa_kv_v1`.
+  - `generic_turboquant_kv.enabled=false` for mixed sliding/full attention.
+  - storage-boundary q4 full-attention KV, paged cache, block-disk L2 enabled.
+- Raw SSE capture with `enable_thinking=true`:
+  `build/responses-sse-captures-20260610/direct-gemma4-26b-jang4m-duplicate-run-command-20260610.sse`.
+  Result: no function call, no arguments-done, final `tool_calls_required`
+  error because the 384-token budget was consumed by reasoning. This proves a
+  required-tool/reasoning interleaving failure mode, not a duplicate-call origin.
+- Raw SSE capture with `enable_thinking=false`:
+  `build/responses-sse-captures-20260610/direct-gemma4-26b-jang4m-duplicate-run-command-no-thinking-20260610.sse`.
+  Result: exactly one `response.output_item.done` function_call, exactly one
+  `response.function_call_arguments.done`, correct output indexes, and command:
+  `printf REAL_UI_LIVE_TOOL_TWO > real_ui_tool_probe_2.txt && cat real_ui_tool_probe_2.txt`.
+- Classification:
+  - Direct server/default no-thinking path does not reproduce the installed-app
+    six-plus-six duplicate `run_command` loop.
+  - The next fix lane should trace panel/gateway request defaults and tool-loop
+    replay, especially tool-result continuation and repeated execution of the
+    same call_id/item, before touching parser logic.
+  - Do not register Gemma 26B installed-app green yet.
+
+# 2026-06-10 10:55 PDT - Gemma 26B exact direct multi-turn thinking-on reproduction selected
+
+- The installed-app proof had `requestedEnableThinking=true` and panel logs showed second-turn `receivedToolCalls.length=6`; direct single-turn no-thinking proof emitted exactly one call.
+- Next action is direct two-turn Responses SSE with thinking enabled and tool-result continuation to decide whether the six-call behavior appears without panel replay.
+
+# 2026-06-10 10:59 PDT - Gemma 26B direct multi-turn thinking-on reproduction did not reproduce duplicate loop
+
+- Direct turn 1 thinking-on required tool: exactly one `run_command` call, one arguments-done event, then `max_output_tokens`.
+- Direct tool-result continuation with `previous_response_id`: completed final text, no extra calls.
+- Direct turn 2 with `previous_response_id`: exactly one `run_command` call.
+- Direct turn 2 with reconstructed Responses full-history input: exactly one `run_command` call.
+- Direct turn 2 with panel agentic instructions plus auto tool mode: exactly one `run_command` call.
+- Direct turn 2 with panel agentic instructions plus required tool mode: failed closed with `tool_calls_required` and no calls.
+- Classification: direct API/server parser is still not reproducing the installed-app six-plus-six duplicate loop. Need panel raw request/SSE capture before source fix; do not blind-dedupe parser/server.
+
+# 2026-06-10 11:03 PDT - Panel Responses function-call identity logging added
+
+- Edited `panel/src/main/ipc/chat.ts` to log each Responses `function_call` item as it enters `receivedToolCalls`: output index, item id, call id, name, and argument length.
+- This is intentionally non-mutating; it is for the next installed-app raw panel proof of the Gemma 26B six-plus-six duplicate tool loop.
+- Verification passed: `npm run typecheck` from `panel/`; `git diff --check`.
+
+# 2026-06-10 11:06 PDT - Continuation objective rechecked; next panel evidence lane selected
+
+- Re-read active guards/status. The next useful blocker reduction is not another direct server curl; it is panel-side raw function-call identity capture for the Gemma 26B installed-app duplicate tool-loop proof.
+- Will use existing proof harness/dev-app route where possible; no broad test-suite churn, no release action, no subagents, no N2 JANG_1L.
+
+# 2026-06-10 12:26 PDT - MiMo no-thinking visible planning leak selected
+
+- After pushed commit `48372bd4c`, the current-source dev-app image route is
+  green but the proof artifact shows visible planning-style prose under
+  `enableThinking=false`: the assistant output started with "The user wants me
+  to return only..." before mentioning `vMLX`.
+- Selected next blocker: inspect MiMo `enableThinking=false` template/parser/
+  runtime handling. Do not patch by deleting arbitrary prose from outputs or
+  hiding semantic failures; only make a source change if the root cause is a
+  real request/template/parser mismatch.
+- Constraints remain: no release/sign/notarize/PyPI/download action, no N2
+  JANG_1L, no subagents, no broad harness work, no parser repair that masks
+  MiMo exactness.
+
+# 2026-06-10 12:22 PDT - MiMo panel/dev-app media parity lane selected
+
+- Continuing the active checkpoint-readiness goal after commit `51abb2953`.
+- Selected blocker: prove whether the panel/dev-app launch path now inherits
+  the current-source MiMo JANGTQ_2 media overlay fix. The CLI path is green, but
+  UI/dev-app and installed-app media parity remain unproven.
+- Constraints: do not release/sign/notarize/PyPI/update downloads, do not touch
+  N2 JANG_1L, do not spawn subagents, do not build broad new harnesses, and do
+  not claim MiMo exactness/video/audio quality from a media-routing proof.
+- Planned movement: inspect existing panel live-proof scripts and launch
+  arguments, run the smallest real dev-app proof for MiMo image/media plus
+  cache/L2, patch panel launch only if evidence shows it still gates MiMo
+  text-only.
+
+# 2026-06-10 12:22 PDT - MiMo dev-app image proof needs prompt override
+
+- Existing parallel-lane artifacts show current Electron dev-app launches MiMo
+  JANGTQ_2 with `--is-mllm`, loads as `mllm`, auto-enables preserved media,
+  and sends image/video through `/v1/chat/completions` with `engine_is_mllm=true`.
+- Existing video artifact
+  `docs/internal/agent-notes/current-real-ui-dev-app-mimo-v25-jangtq2-video-after-mllm-source-media-20260610-proof.json`
+  is `status=pass`.
+- Existing image artifacts are not text-only failures anymore; they fail
+  release assertions because the proof script hardcodes a dominant-color prompt
+  and MiMo answers `Blue.` for red fixtures. That keeps image semantics red but
+  proves the request reached media runtime.
+- Next narrow edit: let `panel/scripts/live-real-ui-model-proof.mjs` accept an
+  image prompt env override, then rerun current dev-app against the same vMLX
+  icon image that passed CLI media proof. This is proof tooling for real UI
+  evidence, not broad suite building.
+
+# 2026-06-10 12:24 PDT - MiMo dev-app icon image proof passed
+
+- Added `VMLINUX_REAL_UI_IMAGE_PROMPT` / `VMLX_REAL_UI_IMAGE_PROMPT` support to
+  the existing live UI proof script so image prompts can match the fixture.
+- Ran current Electron dev-app proof with `panel/resources/icon.png`,
+  `VMLINUX_REAL_UI_IMAGE_PROMPT='Return only the visible text in the attached image.'`,
+  and `VMLINUX_REAL_UI_IMAGE_EXPECT_REGEX='vMLX'`.
+- Proof artifact:
+  `docs/internal/agent-notes/current-real-ui-dev-app-mimo-v25-jangtq2-icon-image-after-overlay-fix-20260610-proof.json`
+  has `status=pass`; screenshot:
+  `docs/internal/agent-notes/current-real-ui-dev-app-mimo-v25-jangtq2-icon-image-after-overlay-fix-20260610-chat.png`.
+- Proven: current Electron dev app, Chat Completions, `vl_image`, MiMo MLLM
+  load, `MEDIA_DIAG engine_is_mllm=true` for image input, server cache
+  controls, native MiMo `mixed_swa_kv_v1` cache, block L2 write, no raw parser
+  tags, and visible `vMLX` in the assistant output.
+- Not proven: MiMo red-square color semantics, no-thinking output hygiene,
+  audio exactness, Responses tool continuation, installed-app parity, and
+  release readiness. The visible answer included planning-style prose under
+  `enableThinking=false`, so keep that as an open MiMo parser/template/runtime
+  hygiene issue rather than claiming clean no-thinking behavior.
+
+# 2026-06-10 12:13 PDT - MiMo CLI media/L2 parity blocker resumed
+
+- Eric asked to put the carry-forward instructions into `AGENTS.md`; the active
+  worktree `AGENTS.md` already carries the current routing guard, no-subagent
+  rule, no-N2-JANG_1L boundary, parser/API priority, release lock, and
+  write-every-movement discipline.
+- Current selected blocker: MiMo V2.5 JANGTQ_2 CLI/API parity for media plus
+  block-disk L2. The last live run reproduced that
+  `vmlx_engine.cli serve --is-mllm` loaded the MiMo bundle as text-only and
+  rejected image input, while earlier `vmlx_engine.server --mllm` source proof
+  routed media through the local MiMo runtime.
+- Root-cause investigation target: compare CLI `force_mllm` / `is_mllm_model`
+  behavior with the server media-runtime auto-enable path. Patch only if the
+  code proves the mismatch; do not force all preserved MiMo bundles to media,
+  do not fake media support from metadata, and do not touch MiMo exactness by
+  parser repair.
+- Constraints remain: no release/sign/notarize/PyPI/download/site action, no
+  N2 JANG_1L work, no subagents, stop any live server before final, and write
+  proof/not-proof boundaries after every movement.
+
+# 2026-06-10 12:24 PDT - MiMo CLI media auto-enable source fix ready for live proof
+
+- Root cause confirmed: `server._mimo_v2_media_runtime_auto_enabled()` refused
+  every explicit `weights_preserved_text_runtime` bundle before checking
+  complete local MiMo runtime sidecars, so `cli serve --is-mllm` routed the real
+  MiMo V2.5 JANGTQ_2 bundle text-only and the API rejected image input.
+- Patch: allow the media-runtime overlay only for MiMo bundles with JANG/
+  JANGTQ/MXTQ runtime metadata plus complete sidecars and source runtime
+  classes. Generic preserved-media MiMo fixtures still fail closed as
+  text-only.
+- Focused verification:
+  - `.venv/bin/python -m py_compile vmlx_engine/server.py tests/test_engine_audit.py`
+  - `.venv/bin/python -m pytest -q tests/test_mimo_v2_media_capability_gate.py -k 'mimo_v2_runtime_modalities_auto_enable_when_runtime_and_sidecars_are_complete or preserved_text_runtime_routes_text_only or runtime_modalities_fail_closed_for_preserved_text_runtime'` -> 3 passed
+  - `.venv/bin/python -m pytest -q tests/test_engine_audit.py -k 'mimo_v2_text_runtime_metadata_auto_enables_complete_media_bundle'` -> 1 passed
+- Next proof: relaunch the same MiMo JANGTQ_2 CLI `serve --is-mllm` path with
+  block-disk L2 enabled, send an image request, capture health/cache artifacts,
+  and stop the server before final.
+
+# 2026-06-10 12:42 PDT - MiMo CLI media and fresh-process L2 proof passed
+
+- Live artifact written:
+  `build/current-mimo-v25-jangtq2-cli-media-l2-after-overlay-fix-20260610.json`
+  with `status=pass`.
+- First live CLI run loaded the real MiMo V2.5 JANGTQ_2 bundle as `mllm=True`,
+  auto-enabled the preserved media runtime, bound `459` preserved media tensors,
+  quantized `101` runtime modules, and reported native
+  `mixed_swa_kv_v1` / `mimo_v2_asymmetric_swa` with block L2 enabled.
+- Image request artifact:
+  `build/mimo-jangtq2-cli-media-l2-after-overlay-fix-requests-20260610/image-response.json`
+  returned HTTP `200` and visible `vMLX`.
+- Text cache artifacts showed first-request block-disk write of one block /
+  `55` tokens, same-process repeat `cached_tokens=55` with `cache_detail=paged`,
+  and fresh-process restart `cached_tokens=55` with
+  `cache_detail=paged+disk`, `disk_hits=1`.
+- Both live server processes were stopped cleanly; port `8877` was verified
+  clear before the proof artifact was written.
+- Updated
+  `.agents/PROOF_MATRIX_128GB_MIMO_N2_GEMMA_20260610.md` with the new proof
+  and marked older dev-app media 400 rows as stale until rerun from this
+  source.
+- Boundary: this is not MiMo exactness, video/audio quality, Responses
+  tool-result continuation, installed-app parity, signing/notarization, or
+  release readiness. Media-context KV remains intentionally skipped for L2
+  storage.
+
+# 2026-06-10 11:11 PDT - Gemma 26B panel prompt-conflict root cause selected for narrow fix
+
+- Dev-app proof with function-call identity logging showed one extra same-turn `run_command` after tool output and a later reasoning-only visible-empty second turn.
+- The new evidence points to prompt/request construction: the generic agentic system prompt conflicts with explicit `tool exactly once` instructions. I am patching that prompt injection narrowly rather than touching parser/server dedupe.
+
+# 2026-06-10 11:19 PDT - Prompt fix partially proved; Gemma4 loopback tool_choice pin selected
+
+- The agentic prompt wording fix removed the extra same-turn tool call and produced a visible first answer, but second-turn Gemma4 still skipped the explicit tool call.
+- Next patch: scope the loopback `tool_choice` suppression so Gemma4 can pin explicit named tools; keep the N2-oriented suppression for other families.
+
+# 2026-06-10 11:27 PDT - Gemma 26B dev-app Responses tool loop proved after scoped request fixes
+
+- Fixed the panel request side instead of parser/server dedupe: agentic prompt now respects exact one-tool requests, and Gemma4 loopback vMLX sessions keep explicit named `tool_choice` pins.
+- Live proof passed: `docs/internal/agent-notes/current-real-ui-dev-app-gemma4-26b-qat-jang4m-responses-tools-cachecontrols-gemma4-identity-toolchoice-20260610-proof.json`.
+- Proof showed two visible assistant turns, one `run_command` per explicit user turn, correct probe files, Responses streaming, reasoning display, mixed-SWA paged cache hits, server cache controls, and block-disk L2 writes.
+- Boundaries: dev-app Gemma4 26B only; not installed-app bundle parity, not media, not gateway/tunnel, not Qwen empty-args, not MiMo exactness, and no release action.
+
+# 2026-06-10 11:35 PDT - MiMo JANGTQ_2 exactness/logit-artifact lane selected
+
+- Re-read active directives/status/checklist after the Gemma4 panel fix. Selected MiMo V2.5 JANGTQ_2 exactness/logit/artifact diagnosis as the next blocker because the current checklist says parser structure is valid but literal values mutate.
+- Next action: inspect the current MiMo JANGTQ_2 proof artifacts and runtime/quant loader path before proposing any fix. No parser/JSON repair, no cache-only chase, no release action, no N2 JANG_1L.
+
+# 2026-06-10 11:45 PDT - MiMo JANGTQ_2 exactness boundary rechecked; moving to Qwen parser/API lane
+
+- Inspected the current MiMo JANGTQ_2 exactness artifacts and loader/kernel path. Existing evidence already excludes tokenizer/template, parser/JSON repair, cache/L2, vMLX compiled router, vMLX SwitchGLU fast path, sidecar table mismatch, sampled prestack shape mismatch, and native gather TQ selected-expert shape semantics.
+- Source endpoint `http://erics-m5-max2.local:8126/health` is unavailable and local quant endpoint `127.0.0.1:8897` is not running, so no fresh source-vs-quant first-divergent-logit proof can be made from the current state.
+- Classification remains artifact/logit/quant-quality or corrected requant profile. No local parser/cache/runtime patch is justified without new evidence.
+- Next lane: Qwen/Qwen-coder Responses raw SSE/parser parity for Codex/opencode harness usability.
+
+# 2026-06-10 11:48 PDT - Qwen/Qwen-coder Responses parser/API parity lane selected
+
+- Moving to Qwen/Qwen-coder Responses parser/API parity. Goal is usable Codex/opencode harness behavior: fail closed for missing required XML parameters, valid args preserved, deltas/final object/output indices consistent, and no fake fixes.
+
+# 2026-06-10 11:20 PDT - Qwen35 public recapture and focused parser guards reverified
+
+- Inspected `build/current-responses-raw-sse-parity-qwen35-direct-gateway-tunnel-after-public-recapture-20260610.json`.
+- Current artifact status is `pass` for direct local server, panel gateway, and tunnel raw SSE on `models/Qwen3.6-35B-A3B-MXFP8-CRACK-MTP`.
+- Argument proof: all required surfaces match final/function-call arguments `{"value": "blue-cat"}` with argument delta/done consistency and final-object consistency.
+- Reasoning/tool proof: direct and gateway kept reasoning enabled, did not use a reasoning-disable workaround, and had valid message/reasoning/function-call item ordering; tunnel capture is present and matches expected model/function/arguments.
+- Source guard verification:
+  - `.venv/bin/python -m pytest -q tests/test_engine_audit.py -k 'qwen_issue_192 or empty_required_args or function_call_arguments_delta'` -> 3 passed.
+  - `.venv/bin/python -m pytest -q tests/test_full_release_objective_checklist.py -k 'qwen35_raw_sse or raw_sse'` -> 4 passed.
+- Boundary: Qwen35 MXFP8 MTP public recapture/source guard is green from current evidence; do not claim Qwen27, Qwen-coder-next, all model parser families, MiMo exactness, Gemma media, installed-app parity, or release readiness from this row.
+- Other-agent note: keep fail-closed required-arg validation intact. Do not synthesize missing Qwen XML arguments from text preambles, disable reasoning, or strip parser leaks as a fake fix. Expand live parser/API proof to Qwen27/Qwen-coder-next and non-Qwen parser families before claiming full Codex/opencode harness readiness.
+
+# 2026-06-10 11:24 PDT - Gemma4 31B audio proof classified as clean unsupported-modality gate
+
+- Inspected `docs/internal/agent-notes/current-real-ui-dev-app-gemma4-31b-jang4m-audio-20260610-proof.json`.
+- The proof failed at `audio_send_message`, but the error was a clean 400 response: `/v1/chat/completions received unsupported media modality audio. Supported modalities: text, vision, video.`
+- The artifact metadata for `/Users/eric/models/JANGQ-AI/gemma-4-31B-it-qat-JANG_4M` says `audio_config=null`, `has_audio=false`, `has_video=false`, `has_vision=true`.
+- Focused server guard passed:
+  - `.venv/bin/python -m pytest -q tests/test_engine_audit.py -k 'gemma4_runtime_modalities_do_not_infer_audio_from_token_only_config or gemma4_chat_audio_request_rejects_when_audio_not_weight_backed or gemma4_runtime_modalities_advertise_audio_with_audio_tower_weights'` -> 3 passed.
+- Boundary: Gemma4 31B QAT JANG_4M has live dev-app text/cache and separate image/exact proof artifacts, but audio is not supported by this artifact and must not be advertised or cleared without a weight-backed audio tower and live proof.
+- Other-agent note: classify this row as clean audio gate / unsupported-by-artifact, not runtime audio support. Keep token-only/config-only audio inference forbidden.
+
+# 2026-06-10 11:25 PDT - Qwen27 direct raw SSE lane selected
+
+- Next movement: direct `/v1/responses` raw SSE capture for `/Users/eric/models/JANGQ/Qwen3.6-27B-JANG_4M-MTP`.
+- Reason: Qwen35 direct/gateway/tunnel recapture is green, but Eric explicitly called out the 27B/35B XML empty-arguments family risk and opencode/Codex harness usability.
+- Proof target: reasoning enabled, required `record_fact` tool, argument delta/done, final object consistency, output indices, parser leak check, and cache telemetry where exposed.
+- No release action, no N2 JANG_1L, no fake parser repair.
+
+# 2026-06-10 11:25 PDT - Qwen27 direct proof split: required tool green, reasoning-enabled continuation red
+
+- Loaded `/Users/eric/models/JANGQ/Qwen3.6-27B-JANG_4M-MTP` on local port 8894 as `qwen36-27b-jang4m-mtp-direct-sse-20260610`.
+- Runtime health proved native MTP active (`effective_depth=3`, text+vl), `hybrid_ssm_v1` cache, live attention TurboQuant KV, q4 storage-boundary attention KV, paged cache, block L2, and SSM companion disk.
+- Required-tool raw SSE artifact green:
+  - `build/responses-sse-captures-20260610/direct-qwen27-jang4m-mtp-required-tool-after-continuation-fix-20260610.sse`
+  - Two argument deltas, done args `{"value": "blue-cat"}`, final function_call args `{"value": "blue-cat"}`, output types `[message, reasoning, function_call]`, completed status.
+- Reasoning-enabled tool-result continuation artifact red:
+  - `build/responses-sse-captures-20260610/direct-qwen27-jang4m-mtp-tool-result-continuation-after-fix-20260610.sse`
+  - 312 reasoning deltas, no visible text deltas, final `status=incomplete`, `output_text=""`, warning `reasoning only`, max output exhausted at 512.
+  - Reasoning repeatedly said it would output `recorded blue-cat` but never left the reasoning channel.
+- Diagnostic only:
+  - `build/responses-sse-captures-20260610/direct-qwen27-jang4m-mtp-tool-result-continuation-thinkingoff-diagnostic-20260610.sse`
+  - With `enable_thinking=false`, the same continuation completed with visible text and `cached_tokens=101`, `cache_detail=paged+ssm`.
+  - This is evidence of a reasoning-channel/final-synthesis issue, not an acceptable release workaround.
+- A local prompt-anchor source change was tried, failed to improve the live result, and was reverted before commit.
+- Other-agent note: do not claim Qwen27 Responses tool-result continuation green. Fix should target Qwen reasoning/template/channel finalization after tool outputs while preserving reasoning-enabled required-tool calls and fail-closed missing-arg validation.
+
+# 2026-06-10 12:29 PDT - Current proof boundaries written into AGENTS.md
+
+- Updated `AGENTS.md` because Eric asked that current goals, instructions, movement, and hard no-claims be written into agent guidance.
+- Added current proof carry-forward:
+  - Qwen35 direct/gateway/tunnel raw SSE is green only for the cited public recapture row.
+  - Qwen27 required-tool direct raw SSE is green for valid args, but reasoning-enabled tool-result continuation is red.
+  - Gemma4 QAT JANG_4M no-media smokes are green from the parallel lane; Gemma audio remains weight-backed-only and Gemma4 31B audio is an honest unsupported gate.
+  - MiMo V2.5 JANGTQ_2 CLI media/L2 and dev-app image route are green, but exactness, audio/video semantics, Responses continuation, installed-app parity, and no-thinking visible planning hygiene remain open.
+- No release/sign/notarize/PyPI/updater/download/site action was performed.
+- Other-agent handoff: future continuations must start from `AGENTS.md` plus `.agents` state and must not clear any release row from older chat memory or partial artifacts.
+
+# 2026-06-10 12:31 PDT - MiMo neutral-prompt no-thinking proof launch
+
+- Running one focused live proof to classify MiMo no-thinking visible planning leakage.
+- Proof target: current dev-app, MiMo V2.5 JANGTQ_2, image data URL icon, enableThinking=false, neutral first text turn.
+- No source edit or release action before evidence.
+
+# 2026-06-10 12:33 PDT - MiMo neutral-prompt no-thinking proof passed
+
+- Ran dev-app proof `current-real-ui-dev-app-mimo-v25-jangtq2-icon-image-neutral-first-turn-20260610` with `VMLINUX_REAL_UI_PROMPT_1=Reply exactly: OK`, image prompt `Return only the visible text in the attached image.`, and `enableThinking=false`.
+- Saved artifact `docs/internal/agent-notes/current-real-ui-dev-app-mimo-v25-jangtq2-icon-image-neutral-first-turn-20260610-proof.json`; screenshot saved beside it.
+- Output was clean: `OK.` then `vMLX`, no persisted reasoning, no raw parser leak, no tool calls, app stream logs showed reasoning chars `0` for both turns.
+- Classification: no source fix needed for MiMo no-thinking prose from the prior icon proof; the proof harness default first-turn instruction contaminated the later media turn. Keep exactness/audio/video/Responses/installed-app rows open.
+- Post-run process checks found no listener on ports 56814 or 8080 and no matching MiMo server/dev-app process.
+
+# 2026-06-10 12:34 PDT - Qwen27 reasoning-enabled tool-result continuation lane selected
+
+- Switching from MiMo classification to Qwen27 Responses continuation because it directly affects Codex/opencode-style agent loops.
+- Evidence to inspect: required-tool green SSE and continuation red SSE under `build/responses-sse-captures-20260610/`.
+- No source edit before root-cause trace.
+
+# 2026-06-10 12:36 PDT - Qwen27 direct post-tool continuation reclassified green from current seed-fix proof
+
+- Inspected current source and newer Qwen27 SSE artifacts after `c468d9b17`.
+- Required-tool seed-fix SSE preserves reasoning-enabled function-call args `blue-cat`; terminal continuation seed-fix SSE emits visible output deltas and completed final object.
+- Focused guards passed: 11 Responses history tests and 2 terminal synthesis/visible finalization source guards.
+- Scope remains direct server only; gateway/tunnel and Qwen-coder-next remain open.
+
+# 2026-06-10 12:37 PDT - MiMo JANGTQ2 image semantics/source splice lane selected
+
+- Moving to MiMo JANGTQ2 image semantics because route/load/cache/icon text is green but color semantics remain red.
+- First action: inspect existing artifacts and source splice path; no source edit before root-cause evidence.
+
+# 2026-06-10 12:41 PDT - MiMo combined-media splice bug selected for source fix
+
+- Source-vs-quant endpoints are unavailable, so color first-divergence remains blocked by external state.
+- Found source bug in MiMo wrapper combined media flow; patching all-media single-pass splice.
+
+# 2026-06-10 12:49 PDT - MiMo combined-media splice source fix proven
+
+- Patched `vmlx_engine/models/mllm.py` so MiMo image/video/audio inputs are spliced together in a single `get_input_embeddings(...)` call before `input_ids` is cleared.
+- Added regression `test_mimo_v2_model_splices_image_and_audio_in_one_forward`.
+- Verified:
+  - `.venv/bin/python -m py_compile vmlx_engine/models/mllm.py tests/test_mimo_v2_media_runtime.py`
+  - `.venv/bin/python -m pytest -q tests/test_mimo_v2_media_runtime.py -k 'image_and_audio_in_one_forward or model_splices_image_pixels_through_vision_tower or audio_projection_bridge_splices_audio_token'` -> `3 passed, 16 deselected`.
+- Boundary: this proves source combined-media splice correctness only. It does not clear MiMo color semantics, exactness, live audio/video semantics, installed-app parity, or release readiness.

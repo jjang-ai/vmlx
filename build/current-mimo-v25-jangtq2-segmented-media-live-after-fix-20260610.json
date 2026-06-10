@@ -1,0 +1,590 @@
+{
+  "boundary": "This proves live route/no-crash after the segment-isolation fix. It does not clear MiMo semantic color quality or JANGTQ2 text exactness.",
+  "checks": {
+    "media_weights_bound_from_server_log": true,
+    "multi_image_http_200": true,
+    "multi_image_visible_nonempty": true,
+    "server_healthy_after": true,
+    "server_healthy_before": true,
+    "video_http_200": true,
+    "video_visible_nonempty": true
+  },
+  "evidence_notes": {
+    "media_weights_bound_from_server_log": "startup log reported MiMo-V2 load bound preserved media weights: visual=364 audio_encoder=75 speech_embeddings=20; health does not currently expose this field",
+    "semantic_quality": "live visible outputs were black/white for red/green media, so semantic color quality remains red"
+  },
+  "generated_at": 1781104182,
+  "health_after": {
+    "acceleration": {
+      "host": {
+        "brand": "Apple M5 Max",
+        "reason": null,
+        "supported": true
+      },
+      "jangtq_acceleration": {
+        "active": false,
+        "available": false,
+        "mode": "off",
+        "reason": "disabled",
+        "requested": false,
+        "uses_mlx_quantized_matmul": false
+      },
+      "kernel_type": "turboquant_codebook",
+      "metal_na_active_on_host": false,
+      "metal_na_capable": false,
+      "metal_na_symbols": {
+        "affine_gather_qmm_symbols": 3456,
+        "affine_qmm_symbols": 4212,
+        "available": true,
+        "nax_symbols": 4668,
+        "naxtile_symbols": 4154
+      },
+      "reason": "turboquant_custom_kernels_do_not_use_mlx_na"
+    },
+    "cache": {
+      "block_disk_cache": {
+        "blocks_on_disk": 0,
+        "disk_evictions": 0,
+        "disk_hits": 0,
+        "disk_misses": 0,
+        "disk_size_bytes": 0,
+        "disk_size_gb": 0.0,
+        "disk_writes": 0,
+        "total_accesses": 0,
+        "total_cached_tokens": 0,
+        "total_tokens_on_disk": 0
+      },
+      "scheduler_cache": {
+        "active_requests": 0,
+        "allocated_blocks": 1,
+        "block_size": 64,
+        "cache_hit_rate": 0,
+        "cache_hits": 0,
+        "cache_misses": 0,
+        "cow_copies": 0,
+        "disk_hits": 0,
+        "disk_misses": 0,
+        "entries_by_type": {
+          "assistant": 0,
+          "system": 0,
+          "user": 0
+        },
+        "evictions": 0,
+        "free_blocks": 999,
+        "hit_rate": 0,
+        "hits": 0,
+        "max_blocks": 1000,
+        "misses": 0,
+        "pixel_cache_hits": 0,
+        "pixel_cache_misses": 2,
+        "pixel_cache_size": 2,
+        "pixel_hit_rate": 0.0,
+        "shared_blocks": 0,
+        "tokens_saved": 0,
+        "total_images_processed": 3,
+        "total_time_saved": 0.0,
+        "total_tokens_cached": 0,
+        "utilization": 0.001
+      },
+      "ssm_companion": {
+        "disk_directory": null,
+        "disk_enabled": false,
+        "entries": 0,
+        "max_entries": 8,
+        "nbytes": 0,
+        "nbytes_mb": 0.0
+      },
+      "totals": {
+        "l2_block_tokens_on_disk": 0,
+        "l2_prompt_tokens_on_disk": 0,
+        "l2_ssm_tokens_on_disk": 0,
+        "l2_tokens_on_disk": 0,
+        "l2_tokens_on_disk_note": "store_sum_across_prompt_block_ssm_l2; tiers_may_overlap",
+        "l2_tokens_on_disk_store_sum": 0,
+        "ram_tokens_cached": 0,
+        "ssm_tokens_on_disk": 0
+      }
+    },
+    "engine_type": "batched",
+    "kv_cache_quantization": {
+      "enabled": false
+    },
+    "last_request_time": 1781104180.6490119,
+    "max_prompt_tokens": 12000,
+    "mcp": null,
+    "memory": {
+      "active_mb": 78344.1,
+      "cache_mb": 60.0,
+      "peak_mb": 79739.6
+    },
+    "model_loaded": true,
+    "model_name": "JANGQ-AI/MiMo-V2.5-JANGTQ_2",
+    "model_type": "mllm",
+    "mtp": {
+      "artifact_available": false,
+      "cache_type": null,
+      "config_mtp_layer_source": null,
+      "config_num_nextn_predict_layers": null,
+      "effective_depth": null,
+      "effective_depth_source": null,
+      "family": "mimo_v2",
+      "has_vision_config": true,
+      "has_vision_weights": true,
+      "index_has_mtp_tensors": false,
+      "index_mtp_layer_count": null,
+      "issues": [],
+      "jang_drop_mtp": null,
+      "jang_mtp_layers": null,
+      "mtp_tensor_count": 0,
+      "request_gate": "temperature=0,repetition_penalty=1.0",
+      "request_policy": "compatible-only",
+      "runtime_active": false,
+      "runtime_available": false,
+      "runtime_bundle_has_mtp": null,
+      "runtime_mtp_mode": null,
+      "runtime_reason": "config does not request MTP",
+      "runtime_scope": null,
+      "runtime_supported": false,
+      "runtime_validation_blocked": false,
+      "status": "not_configured",
+      "vision_tensor_count": 364,
+      "vl_runtime_available": false
+    },
+    "native_cache": {
+      "block_disk_l2": true,
+      "cache_subtype": "mimo_v2_asymmetric_swa",
+      "cache_type": "mixed_swa_kv",
+      "components": [
+        "full_attention_kv",
+        "sliding_window_kv",
+        "rotating_window_metadata"
+      ],
+      "family": "mimo_v2",
+      "generic_turboquant_kv": {
+        "enabled": false,
+        "reason": "not_active"
+      },
+      "paged": true,
+      "prefix": true,
+      "schema": "mixed_swa_kv_v1",
+      "storage_quantization": {
+        "applies_to": "full_attention_kv_only",
+        "bits": null,
+        "enabled": false,
+        "group_size": null,
+        "metadata_policy": "preserve_rotating_window_metadata",
+        "mode": "storage_boundary"
+      }
+    },
+    "quantization": {
+      "codec": "turboquant_codebook",
+      "config_bits": 8,
+      "group_size": 64,
+      "mxtq_bits_by_role": {
+        "routed_expert": {
+          "down_proj": 2,
+          "gate_proj": 2,
+          "up_proj": 2
+        }
+      },
+      "profile": "JANGTQ_2",
+      "routed_expert_bits_by_projection": {
+        "down_proj": 2,
+        "gate_proj": 2,
+        "up_proj": 2
+      },
+      "routed_expert_bits_label": "gate=2/up=2/down=2-bit",
+      "sidecar": {
+        "jang_config": true,
+        "jangtq_runtime": true,
+        "prestacked_bundle": true
+      },
+      "target_bits": 2,
+      "weight_index": {
+        "index_file": "/Users/eric/.mlxstudio/models/JANGQ-AI/MiMo-V2.5-JANGTQ_2/model.safetensors.index.json",
+        "mtp_tensor_count": 0,
+        "routed_layout_counts": {
+          "prestacked_switch": 423,
+          "split_expert": 0
+        },
+        "sample_tq_packed_targets": [
+          "model.layers.1.mlp.switch_mlp.down_proj",
+          "model.layers.1.mlp.switch_mlp.gate_proj",
+          "model.layers.1.mlp.switch_mlp.up_proj",
+          "model.layers.10.mlp.switch_mlp.down_proj",
+          "model.layers.10.mlp.switch_mlp.gate_proj",
+          "model.layers.10.mlp.switch_mlp.up_proj",
+          "model.layers.11.mlp.switch_mlp.down_proj",
+          "model.layers.11.mlp.switch_mlp.gate_proj",
+          "model.layers.11.mlp.switch_mlp.up_proj",
+          "model.layers.12.mlp.switch_mlp.down_proj",
+          "model.layers.12.mlp.switch_mlp.gate_proj",
+          "model.layers.12.mlp.switch_mlp.up_proj"
+        ],
+        "suffix_counts": {
+          "biases": 101,
+          "scales": 101,
+          "tq_bits": 141,
+          "tq_norms": 141,
+          "tq_packed": 141,
+          "weight": 522
+        },
+        "total_tensors": 1415,
+        "tq_target_counts": {
+          "routed_expert": 423
+        }
+      },
+      "weight_matmul_dispatch": {
+        "metal_na_eligible": false,
+        "primary": "jang_tools_turboquant_custom_kernels",
+        "reason": "turboquant_codebook_uses_custom_tq_kernels",
+        "uses_mlx_quantized_matmul": false
+      }
+    },
+    "quantization_format": {
+      "actual_bits": null,
+      "block_size": 64,
+      "target_bits": null,
+      "type": "jang"
+    },
+    "routing": {
+      "effective_active_experts": 8,
+      "effective_active_experts_source": "trained_default",
+      "n_routed_experts": 256,
+      "override_env": null,
+      "trained_active_experts": 8,
+      "trained_active_experts_source": "config.num_experts_per_tok"
+    },
+    "scheduler": {
+      "batch_generator": {
+        "generation_time": 0.33463675202801824,
+        "generation_tokens": 17,
+        "generation_tps": 50.80135369762564,
+        "hybrid_kv_without_ssm_hits": 0,
+        "hybrid_kv_without_ssm_tokens": 0,
+        "last_cache_execution": null,
+        "last_hybrid_kv_without_ssm": null,
+        "last_native_mtp": null,
+        "last_prefill_trace": null,
+        "num_images_processed": 3,
+        "peak_memory": 83.613081812,
+        "prompt_time": 2.8783182080369443,
+        "prompt_tokens": 2,
+        "prompt_tps": 0.6948502060736467,
+        "vision_encoding_time": 0.07652554201195017
+      },
+      "cache_hit_requests": 0,
+      "cache_hit_tokens": 0,
+      "cache_hit_tokens_by_detail": {},
+      "cache_reuse_partial_downgrades": 0,
+      "cache_reuse_partial_tokens": 0,
+      "cache_reuse_skip_tokens": 0,
+      "cache_reuse_skips": 0,
+      "engine_path": null,
+      "ewma_ttft_seconds": 0,
+      "hybrid_kv_without_ssm_hits": 0,
+      "hybrid_kv_without_ssm_tokens": 0,
+      "last_cache_execution": null,
+      "last_cache_reuse_partial": null,
+      "last_cache_reuse_skip": null,
+      "last_cache_selection": null,
+      "last_hybrid_kv_without_ssm": null,
+      "num_running": 0,
+      "num_waiting": 0,
+      "single_active_decode": false
+    },
+    "speculative_decoding": "not_configured",
+    "status": "healthy",
+    "turboquant_kv_cache": {
+      "enabled": false
+    }
+  },
+  "health_before": {
+    "acceleration": {
+      "host": {
+        "brand": "Apple M5 Max",
+        "reason": null,
+        "supported": true
+      },
+      "jangtq_acceleration": {
+        "active": false,
+        "available": false,
+        "mode": "off",
+        "reason": "disabled",
+        "requested": false,
+        "uses_mlx_quantized_matmul": false
+      },
+      "kernel_type": "turboquant_codebook",
+      "metal_na_active_on_host": false,
+      "metal_na_capable": false,
+      "metal_na_symbols": {
+        "affine_gather_qmm_symbols": 3456,
+        "affine_qmm_symbols": 4212,
+        "available": true,
+        "nax_symbols": 4668,
+        "naxtile_symbols": 4154
+      },
+      "reason": "turboquant_custom_kernels_do_not_use_mlx_na"
+    },
+    "cache": {
+      "block_disk_cache": {
+        "blocks_on_disk": 0,
+        "disk_evictions": 0,
+        "disk_hits": 0,
+        "disk_misses": 0,
+        "disk_size_bytes": 0,
+        "disk_size_gb": 0.0,
+        "disk_writes": 0,
+        "total_accesses": 0,
+        "total_cached_tokens": 0,
+        "total_tokens_on_disk": 0
+      },
+      "scheduler_cache": {
+        "active_requests": 0,
+        "allocated_blocks": 1,
+        "block_size": 64,
+        "cache_hit_rate": 0,
+        "cache_hits": 0,
+        "cache_misses": 0,
+        "cow_copies": 0,
+        "disk_hits": 0,
+        "disk_misses": 0,
+        "entries_by_type": {
+          "assistant": 0,
+          "system": 0,
+          "user": 0
+        },
+        "evictions": 0,
+        "free_blocks": 999,
+        "hit_rate": 0,
+        "hits": 0,
+        "max_blocks": 1000,
+        "misses": 0,
+        "shared_blocks": 0,
+        "tokens_saved": 0,
+        "total_tokens_cached": 0,
+        "utilization": 0.001
+      },
+      "totals": {
+        "l2_block_tokens_on_disk": 0,
+        "l2_prompt_tokens_on_disk": 0,
+        "l2_ssm_tokens_on_disk": 0,
+        "l2_tokens_on_disk": 0,
+        "l2_tokens_on_disk_note": "store_sum_across_prompt_block_ssm_l2; tiers_may_overlap",
+        "l2_tokens_on_disk_store_sum": 0,
+        "ram_tokens_cached": 0,
+        "ssm_tokens_on_disk": 0
+      }
+    },
+    "engine_type": "batched",
+    "kv_cache_quantization": {
+      "enabled": false
+    },
+    "last_request_time": null,
+    "max_prompt_tokens": 12000,
+    "mcp": null,
+    "memory": {
+      "active_mb": 78331.8,
+      "cache_mb": 0.0,
+      "peak_mb": 78366.9
+    },
+    "model_loaded": true,
+    "model_name": "JANGQ-AI/MiMo-V2.5-JANGTQ_2",
+    "model_type": "mllm",
+    "mtp": {
+      "artifact_available": false,
+      "cache_type": null,
+      "config_mtp_layer_source": null,
+      "config_num_nextn_predict_layers": null,
+      "effective_depth": null,
+      "effective_depth_source": null,
+      "family": "mimo_v2",
+      "has_vision_config": true,
+      "has_vision_weights": true,
+      "index_has_mtp_tensors": false,
+      "index_mtp_layer_count": null,
+      "issues": [],
+      "jang_drop_mtp": null,
+      "jang_mtp_layers": null,
+      "mtp_tensor_count": 0,
+      "request_gate": "temperature=0,repetition_penalty=1.0",
+      "request_policy": "compatible-only",
+      "runtime_active": false,
+      "runtime_available": false,
+      "runtime_bundle_has_mtp": null,
+      "runtime_mtp_mode": null,
+      "runtime_reason": "config does not request MTP",
+      "runtime_scope": null,
+      "runtime_supported": false,
+      "runtime_validation_blocked": false,
+      "status": "not_configured",
+      "vision_tensor_count": 364,
+      "vl_runtime_available": false
+    },
+    "native_cache": {
+      "block_disk_l2": true,
+      "cache_subtype": "mimo_v2_asymmetric_swa",
+      "cache_type": "mixed_swa_kv",
+      "components": [
+        "full_attention_kv",
+        "sliding_window_kv",
+        "rotating_window_metadata"
+      ],
+      "family": "mimo_v2",
+      "generic_turboquant_kv": {
+        "enabled": false,
+        "reason": "not_active"
+      },
+      "paged": true,
+      "prefix": true,
+      "schema": "mixed_swa_kv_v1",
+      "storage_quantization": {
+        "applies_to": "full_attention_kv_only",
+        "bits": null,
+        "enabled": false,
+        "group_size": null,
+        "metadata_policy": "preserve_rotating_window_metadata",
+        "mode": "storage_boundary"
+      }
+    },
+    "quantization": {
+      "codec": "turboquant_codebook",
+      "config_bits": 8,
+      "group_size": 64,
+      "mxtq_bits_by_role": {
+        "routed_expert": {
+          "down_proj": 2,
+          "gate_proj": 2,
+          "up_proj": 2
+        }
+      },
+      "profile": "JANGTQ_2",
+      "routed_expert_bits_by_projection": {
+        "down_proj": 2,
+        "gate_proj": 2,
+        "up_proj": 2
+      },
+      "routed_expert_bits_label": "gate=2/up=2/down=2-bit",
+      "sidecar": {
+        "jang_config": true,
+        "jangtq_runtime": true,
+        "prestacked_bundle": true
+      },
+      "target_bits": 2,
+      "weight_index": {
+        "index_file": "/Users/eric/.mlxstudio/models/JANGQ-AI/MiMo-V2.5-JANGTQ_2/model.safetensors.index.json",
+        "mtp_tensor_count": 0,
+        "routed_layout_counts": {
+          "prestacked_switch": 423,
+          "split_expert": 0
+        },
+        "sample_tq_packed_targets": [
+          "model.layers.1.mlp.switch_mlp.down_proj",
+          "model.layers.1.mlp.switch_mlp.gate_proj",
+          "model.layers.1.mlp.switch_mlp.up_proj",
+          "model.layers.10.mlp.switch_mlp.down_proj",
+          "model.layers.10.mlp.switch_mlp.gate_proj",
+          "model.layers.10.mlp.switch_mlp.up_proj",
+          "model.layers.11.mlp.switch_mlp.down_proj",
+          "model.layers.11.mlp.switch_mlp.gate_proj",
+          "model.layers.11.mlp.switch_mlp.up_proj",
+          "model.layers.12.mlp.switch_mlp.down_proj",
+          "model.layers.12.mlp.switch_mlp.gate_proj",
+          "model.layers.12.mlp.switch_mlp.up_proj"
+        ],
+        "suffix_counts": {
+          "biases": 101,
+          "scales": 101,
+          "tq_bits": 141,
+          "tq_norms": 141,
+          "tq_packed": 141,
+          "weight": 522
+        },
+        "total_tensors": 1415,
+        "tq_target_counts": {
+          "routed_expert": 423
+        }
+      },
+      "weight_matmul_dispatch": {
+        "metal_na_eligible": false,
+        "primary": "jang_tools_turboquant_custom_kernels",
+        "reason": "turboquant_codebook_uses_custom_tq_kernels",
+        "uses_mlx_quantized_matmul": false
+      }
+    },
+    "quantization_format": {
+      "actual_bits": null,
+      "block_size": 64,
+      "target_bits": null,
+      "type": "jang"
+    },
+    "routing": {
+      "effective_active_experts": 8,
+      "effective_active_experts_source": "trained_default",
+      "n_routed_experts": 256,
+      "override_env": null,
+      "trained_active_experts": 8,
+      "trained_active_experts_source": "config.num_experts_per_tok"
+    },
+    "scheduler": {
+      "batch_generator": {},
+      "cache_hit_requests": 0,
+      "cache_hit_tokens": 0,
+      "cache_hit_tokens_by_detail": {},
+      "cache_reuse_partial_downgrades": 0,
+      "cache_reuse_partial_tokens": 0,
+      "cache_reuse_skip_tokens": 0,
+      "cache_reuse_skips": 0,
+      "engine_path": null,
+      "ewma_ttft_seconds": 0,
+      "hybrid_kv_without_ssm_hits": 0,
+      "hybrid_kv_without_ssm_tokens": 0,
+      "last_cache_execution": null,
+      "last_cache_reuse_partial": null,
+      "last_cache_reuse_skip": null,
+      "last_cache_selection": null,
+      "last_hybrid_kv_without_ssm": null,
+      "num_running": 0,
+      "num_waiting": 0,
+      "single_active_decode": false
+    },
+    "speculative_decoding": "not_configured",
+    "status": "healthy",
+    "turboquant_kv_cache": {
+      "enabled": false
+    }
+  },
+  "model_path": "/Users/eric/.mlxstudio/models/JANGQ-AI/MiMo-V2.5-JANGTQ_2",
+  "purpose": "Live MiMo JANGTQ2 media route after segmented vision-attention fix.",
+  "requests": {
+    "multi_image": {
+      "body_keys": [
+        "choices",
+        "created",
+        "id",
+        "model",
+        "object",
+        "usage",
+        "warnings"
+      ],
+      "status_code": 200,
+      "visible": "The images are solid black and white."
+    },
+    "video": {
+      "body_keys": [
+        "choices",
+        "created",
+        "id",
+        "model",
+        "object",
+        "usage",
+        "warnings"
+      ],
+      "status_code": 200,
+      "visible": "The colors are black and white."
+    }
+  },
+  "served_model": "mimo-v25-jangtq2-segment-fix-20260610",
+  "source_fix": "vmlx_engine.models.mllm MiMo vision attention now honors per-grid cu_seqlens for multi-image/video-frame isolation.",
+  "status": "open"
+}

@@ -17,11 +17,11 @@ from typing import Any
 
 
 DEFAULT_OUT = Path(
-    "build/current-full-release-objective-checklist-after-qwen-missing-required-args-failclosed-20260610.json"
+    "build/current-full-release-objective-checklist-after-mimo-media-route-proof-20260610.json"
 )
 
 MIMO_AUDIT = Path(
-    "build/current-mimo-v2-jang2l-current-audit-after-cache-vs-nocache-logprobs-20260609.json"
+    "build/current-mimo-v2-jang2l-current-audit-after-media-route-proof-20260610.json"
 )
 MIMO_NO_SOURCE_EXACTNESS_CLASSIFIER = Path(
     "build/current-mimo-v2-no-source-exactness-classifier-after-devapp-jangtq2-exactness-20260610.json"
@@ -39,7 +39,7 @@ NOHEAVY_API_CACHE = Path(
     "build/current-noheavy-api-cache-contract-after-responses-reasoning-empty-final-args-gateway-20260609.json"
 )
 RESPONSES_RAW_SSE_PARITY = Path(
-    "build/current-responses-raw-sse-parity-qwen35-direct-gateway-tunnel-after-missing-required-args-failclosed-20260610.json"
+    "build/current-responses-raw-sse-parity-direct-gateway-tunnel-gemma4-12b-mxfp8-crack-20260610.json"
 )
 API_SURFACE_CONTRACT = Path(
     "build/current-api-surface-contract-20260602-v1554-stream-cache-reuse-refresh.json"
@@ -84,7 +84,7 @@ QWEN35_RESTART_L2_RESTORE = Path(
     "build/current-qwen35-mxfp8-mtp-restart-l2-restore-20260607/summary.json"
 )
 QWEN35_RAW_SSE_PARITY = Path(
-    "build/current-responses-raw-sse-parity-qwen35-direct-gateway-tunnel-after-missing-required-args-failclosed-20260610.json"
+    "build/current-responses-raw-sse-parity-qwen35-direct-gateway-tunnel-after-public-recapture-20260610.json"
 )
 QWEN35_INSTALLED_VIDEO = Path(
     "docs/internal/agent-notes/current-real-ui-installed-app-qwen36-35b-mxfp8-mtp-responses-tools-video-reasoning-cachecontrols-max512-20260607-proof.json"
@@ -102,7 +102,7 @@ GEMMA4_12B_JANG4M_MEDIA_SMOKE = Path(
     "build/current-gemma4-12b-mxfp4-jang4m-media-smoke-live-20260610.json"
 )
 GEMMA_QAT_NATIVE_MXFP4_INVENTORY = Path(
-    "build/current-gemma-qat-native-mxfp4-local-inventory-after-all-jang4m-fullmedia-20260610.json"
+    "build/current-gemma-qat-native-mxfp4-local-inventory-after-12b-installed-app-ui-proof-20260610.json"
 )
 STEP37_TEXTONLY_SMOKE = Path(
     "build/current-all-local-model-smoke-step37-jang2l-crack-tools-nomedia-textonly-harness-20260606/other_Step-3.7-Flash-JANG_2L-CRACK/result.json"
@@ -1021,6 +1021,14 @@ def _gemma_qat_native_mxfp4_checks(data: dict[str, Any]) -> list[dict[str, Any]]
             else None,
         ),
         _check(
+            "gemma_qat_native_mxfp4_gemma4_e2b_qat_jang4m_installed_app_ui_api_cache_proven",
+            checks.get("gemma4_e2b_qat_jang4m_installed_app_ui_api_cache_proven") is True,
+            str(GEMMA_QAT_NATIVE_MXFP4_INVENTORY),
+            data.get("required_rows", {}).get("gemma4_e2b_qat_jang4m")
+            if isinstance(data.get("required_rows"), dict)
+            else None,
+        ),
+        _check(
             "gemma_qat_native_mxfp4_gemma4_e4b_present",
             checks.get("gemma4_e4b_qat_native_mxfp4_present") is True,
             str(GEMMA_QAT_NATIVE_MXFP4_INVENTORY),
@@ -1029,9 +1037,25 @@ def _gemma_qat_native_mxfp4_checks(data: dict[str, Any]) -> list[dict[str, Any]]
             else None,
         ),
         _check(
+            "gemma_qat_native_mxfp4_gemma4_e4b_qat_jang4m_installed_app_ui_api_cache_proven",
+            checks.get("gemma4_e4b_qat_jang4m_installed_app_ui_api_cache_proven") is True,
+            str(GEMMA_QAT_NATIVE_MXFP4_INVENTORY),
+            data.get("required_rows", {}).get("gemma4_e4b_qat_jang4m")
+            if isinstance(data.get("required_rows"), dict)
+            else None,
+        ),
+        _check(
             "gemma_qat_native_mxfp4_gemma4_12b_present",
             checks.get("gemma4_12b_native_mxfp4_present") is True,
             str(GEMMA_QAT_NATIVE_MXFP4_INVENTORY),
+        ),
+        _check(
+            "gemma_qat_native_mxfp4_gemma4_12b_qat_jang4m_installed_app_ui_api_cache_proven",
+            checks.get("gemma4_12b_qat_jang4m_installed_app_ui_api_cache_proven") is True,
+            str(GEMMA_QAT_NATIVE_MXFP4_INVENTORY),
+            data.get("required_rows", {}).get("gemma4_12b_qat_jang4m")
+            if isinstance(data.get("required_rows"), dict)
+            else None,
         ),
         _check(
             "gemma_qat_native_mxfp4_gemma4_26b_present",

@@ -1,0 +1,1118 @@
+{
+  "base_url": "http://127.0.0.1:8906",
+  "model": "models/Qwen3.6-35B-A3B-MXFP8-CRACK-MTP",
+  "turns": 3,
+  "target_chars_per_turn": 800,
+  "final_turn_no_tools": true,
+  "final_turn_disable_thinking": true,
+  "resolve_tool_calls_in_turn": true,
+  "tool_choice_mode": "auto",
+  "resolution_tool_choice": "none",
+  "sampling": {
+    "temperature": 0.0,
+    "top_p": 1.0,
+    "top_k": 0,
+    "repetition_penalty": 1.0
+  },
+  "require_tool_call_each_turn": true,
+  "require_tool_evidence": true,
+  "require_cache_each_turn_after_first": true,
+  "overall_pass": false,
+  "rows": [
+    {
+      "turn": 1,
+      "elapsed_s": 20.293,
+      "response_id": "resp_d96e3f38cf7d",
+      "previous_response_id": null,
+      "cached_tokens": 0,
+      "input_tokens": 661,
+      "output_tokens": 639,
+      "tools_enabled": true,
+      "enable_thinking": true,
+      "rounds": [
+        {
+          "round": 0,
+          "elapsed_s": 8.522,
+          "response_id": "resp_a2b215f784da",
+          "http_status": null,
+          "status": "completed",
+          "error": null,
+          "cached_tokens": 0,
+          "visible_chars": 0,
+          "reasoning_chars": 1631,
+          "function_calls": [
+            {
+              "name": "grep_repo",
+              "call_id": "call_70e0c51b"
+            }
+          ],
+          "warnings": []
+        },
+        {
+          "round": 1,
+          "elapsed_s": 11.771,
+          "response_id": "resp_d96e3f38cf7d",
+          "http_status": null,
+          "status": "completed",
+          "error": null,
+          "cached_tokens": 0,
+          "visible_chars": 567,
+          "reasoning_chars": 2121,
+          "function_calls": [],
+          "warnings": []
+        }
+      ],
+      "function_calls": [
+        {
+          "name": "grep_repo",
+          "call_id": "call_70e0c51b"
+        }
+      ],
+      "function_call_outputs_next_turn": 0,
+      "warnings": [],
+      "visible_chars": 567,
+      "reasoning_chars": 3753,
+      "loop_like": false,
+      "tool_markup_leak": false,
+      "tool_grounded": true,
+      "tool_evidence_marker": "vmlx_engine/server.py:1",
+      "tool_evidence_markers": [
+        "vmlx_engine/server.py:1"
+      ],
+      "tool_evidence_reason": "exact_file_line_mentioned",
+      "tail_review": "(1) **Risk**: The server file `vmlx_engine/server.py` contains no cache management logic, meaning cache reuse behavior is entirely dependent on the underlying inference engine (e.g., `mlx-lm`/`mlx-vlm`). If the engine's cache implementation has bugs or misconfigurations, the server will pass them through without validation, leading to silent cache misses or memory leaks.\n(2) **Function**: No function in `vmlx_engine/server.py` handles cache reuse; it delegates to external inference libraries.\n(3) **Depends on tool**: Yes.\n\nTOOL_EVIDENCE: vmlx_engine/server.py:1",
+      "cache_totals": {
+        "ram_tokens_cached": 15031,
+        "l2_prompt_tokens_on_disk": 0,
+        "l2_block_tokens_on_disk": 15031,
+        "l2_ssm_tokens_on_disk": 38327,
+        "ssm_tokens_on_disk": 38327,
+        "l2_tokens_on_disk": 53358,
+        "l2_tokens_on_disk_store_sum": 53358,
+        "l2_tokens_on_disk_note": "store_sum_across_prompt_block_ssm_l2; tiers_may_overlap"
+      },
+      "scheduler_stats": {
+        "num_waiting": 0,
+        "num_running": 0,
+        "engine_path": null,
+        "batch_generator": {
+          "prompt_tokens": 5879,
+          "prompt_time": 11.886922873934964,
+          "prompt_tps": 494.57711321499113,
+          "generation_tokens": 9286,
+          "generation_time": 157.0999998759362,
+          "generation_tps": 59.10884791427924,
+          "vision_encoding_time": 0,
+          "num_images_processed": 0,
+          "peak_memory": 42.886952942,
+          "hybrid_kv_without_ssm_hits": 4,
+          "hybrid_kv_without_ssm_tokens": 1216,
+          "last_hybrid_kv_without_ssm": {
+            "request_id": "resp_d96e3f38cf7d",
+            "cached_tokens": 448,
+            "reason": "no_ssm_companion_state",
+            "ssm_prefix_lookup": {
+              "max_len": 448,
+              "candidate_lengths": [
+                320,
+                256
+              ],
+              "matched": false,
+              "reason": "prefix_hash_mismatch",
+              "store_size": 8
+            }
+          },
+          "last_cache_execution": {
+            "request_id": "resp_0832ffe194d2",
+            "cache_detail": "paged+ssm",
+            "cached_tokens": 256,
+            "blocks": 0,
+            "selection": "paged",
+            "disk_hit": false,
+            "reconstructed": true,
+            "dequantized": true,
+            "reconstruction_seconds": 0.008483,
+            "dequantization_seconds": 9e-06,
+            "total_worker_cache_seconds": 0.008717,
+            "reconstruction_ok": true,
+            "dequantization_ok": true
+          },
+          "last_native_mtp": {
+            "request_id": "resp_d96e3f38cf7d",
+            "finish_reason": "stop",
+            "final_depth": 1,
+            "cycles": 400,
+            "accepts": 237,
+            "rejects": 163,
+            "init_emits": 2,
+            "draft_emits": 237,
+            "bonus_emits": 237,
+            "verify_emits": 163,
+            "drafted_tokens": 400,
+            "accepted_tokens": 237,
+            "acceptance_rate": 0.5925,
+            "accepted_by_depth": [
+              237,
+              0,
+              0
+            ],
+            "drafted_by_depth": [
+              400,
+              0,
+              0
+            ],
+            "depth_acceptance_rates": {
+              "d1": 0.5925,
+              "d2": null,
+              "d3": null
+            },
+            "forwards": {
+              "seed_main": 1,
+              "verify_main": 400,
+              "replay_main": 163,
+              "mtp": 401
+            },
+            "timings_ms": {
+              "verify": 1259.554549033055,
+              "sample": 6973.495654703584,
+              "draft": 1996.5666623611469,
+              "snapshot": 14.456957986112684,
+              "restore": 12.436544056981802,
+              "replay": 395.7444211409893,
+              "materialize": 1.891583960969001,
+              "total": 10654.146373242838,
+              "avg_cycle": 26.635365933107096
+            },
+            "fallback_reason": null
+          },
+          "last_prefill_trace": null
+        },
+        "single_active_decode": false,
+        "num_requests_processed": 11,
+        "total_prompt_tokens": 18917,
+        "total_completion_tokens": 9286,
+        "ewma_ttft_seconds": 0,
+        "cache_hit_requests": 6,
+        "cache_hit_tokens": 1763,
+        "cache_hit_tokens_by_detail": {
+          "paged+ssm": 1763
+        },
+        "hybrid_kv_without_ssm_hits": 4,
+        "hybrid_kv_without_ssm_tokens": 1216,
+        "last_hybrid_kv_without_ssm": {
+          "request_id": "resp_d96e3f38cf7d",
+          "cached_tokens": 448,
+          "reason": "no_ssm_companion_state",
+          "ssm_prefix_lookup": {
+            "max_len": 448,
+            "candidate_lengths": [
+              320,
+              256
+            ],
+            "matched": false,
+            "reason": "prefix_hash_mismatch",
+            "store_size": 8
+          }
+        },
+        "cache_reuse_skips": 0,
+        "cache_reuse_skip_tokens": 0,
+        "last_cache_reuse_skip": null,
+        "cache_reuse_partial_downgrades": 0,
+        "cache_reuse_partial_tokens": 0,
+        "last_cache_reuse_partial": null,
+        "last_cache_selection": null,
+        "last_cache_execution": {
+          "request_id": "resp_0832ffe194d2",
+          "cache_detail": "paged+ssm",
+          "cached_tokens": 256,
+          "blocks": 0,
+          "selection": "paged",
+          "disk_hit": false,
+          "reconstructed": true,
+          "dequantized": true,
+          "reconstruction_seconds": 0.008483,
+          "dequantization_seconds": 9e-06,
+          "total_worker_cache_seconds": 0.008717,
+          "reconstruction_ok": true,
+          "dequantization_ok": true
+        }
+      },
+      "scheduler_cache": {
+        "pixel_cache_hits": 0,
+        "pixel_cache_misses": 0,
+        "pixel_hit_rate": 0.0,
+        "total_time_saved": 0.0,
+        "total_images_processed": 0,
+        "pixel_cache_size": 0,
+        "hits": 10,
+        "misses": 1,
+        "hit_rate": 0.9090909090909091,
+        "tokens_saved": 3875,
+        "active_requests": 0,
+        "entries_by_type": {
+          "assistant": 10,
+          "user": 0,
+          "system": 0
+        },
+        "block_size": 64,
+        "max_blocks": 1000,
+        "allocated_blocks": 241,
+        "free_blocks": 759,
+        "shared_blocks": 34,
+        "total_tokens_cached": 15031,
+        "utilization": 0.241,
+        "cache_hit_rate": 0.3193717277486911,
+        "cache_hits": 122,
+        "cache_misses": 260,
+        "disk_hits": 0,
+        "disk_misses": 20,
+        "cow_copies": 0,
+        "evictions": 0
+      },
+      "block_disk_cache": {
+        "blocks_on_disk": 240,
+        "disk_size_bytes": 1274938100,
+        "disk_size_gb": 1.187,
+        "total_accesses": 150,
+        "total_tokens_on_disk": 15031,
+        "total_cached_tokens": 15031,
+        "disk_hits": 150,
+        "disk_misses": 21,
+        "disk_writes": 240,
+        "disk_evictions": 0
+      },
+      "ssm_companion": {
+        "entries": 8,
+        "max_entries": 8,
+        "nbytes": 526909440,
+        "nbytes_mb": 502.5,
+        "disk_enabled": true,
+        "disk_directory": "build/current-qwen35-mxfp8-mtp-responses-tool-result-auto-no-tool-20260610/block-cache/ssm_companion",
+        "disk": {
+          "enabled": true,
+          "directory": "build/current-qwen35-mxfp8-mtp-responses-tool-result-auto-no-tool-20260610/block-cache/ssm_companion",
+          "entries": 28,
+          "total_tokens_on_disk": 38327,
+          "total_cached_tokens": 38327,
+          "bytes": 1844432945,
+          "bytes_mb": 1758.99,
+          "budget_bytes": 68719476736,
+          "budget_gb": 64.0,
+          "stores": 29,
+          "hits": 1,
+          "misses": 12,
+          "hit_rate": 0.077
+        }
+      },
+      "health_cache": {
+        "scheduler_cache": {
+          "pixel_cache_hits": 0,
+          "pixel_cache_misses": 0,
+          "pixel_hit_rate": 0.0,
+          "total_time_saved": 0.0,
+          "total_images_processed": 0,
+          "pixel_cache_size": 0,
+          "hits": 10,
+          "misses": 1,
+          "hit_rate": 0.9090909090909091,
+          "tokens_saved": 3875,
+          "active_requests": 0,
+          "entries_by_type": {
+            "assistant": 10,
+            "user": 0,
+            "system": 0
+          },
+          "block_size": 64,
+          "max_blocks": 1000,
+          "allocated_blocks": 241,
+          "free_blocks": 759,
+          "shared_blocks": 34,
+          "total_tokens_cached": 15031,
+          "utilization": 0.241,
+          "cache_hit_rate": 0.3193717277486911,
+          "cache_hits": 122,
+          "cache_misses": 260,
+          "disk_hits": 0,
+          "disk_misses": 20,
+          "cow_copies": 0,
+          "evictions": 0
+        },
+        "block_disk_cache": {
+          "blocks_on_disk": 240,
+          "disk_size_bytes": 1274938100,
+          "disk_size_gb": 1.187,
+          "total_accesses": 150,
+          "total_tokens_on_disk": 15031,
+          "total_cached_tokens": 15031,
+          "disk_hits": 150,
+          "disk_misses": 21,
+          "disk_writes": 240,
+          "disk_evictions": 0
+        },
+        "ssm_companion": {
+          "entries": 8,
+          "max_entries": 8,
+          "nbytes": 526909440,
+          "nbytes_mb": 502.5,
+          "disk_enabled": true,
+          "disk_directory": "build/current-qwen35-mxfp8-mtp-responses-tool-result-auto-no-tool-20260610/block-cache/ssm_companion",
+          "disk": {
+            "enabled": true,
+            "directory": "build/current-qwen35-mxfp8-mtp-responses-tool-result-auto-no-tool-20260610/block-cache/ssm_companion",
+            "entries": 28,
+            "total_tokens_on_disk": 38327,
+            "total_cached_tokens": 38327,
+            "bytes": 1844432945,
+            "bytes_mb": 1758.99,
+            "budget_bytes": 68719476736,
+            "budget_gb": 64.0,
+            "stores": 29,
+            "hits": 1,
+            "misses": 12,
+            "hit_rate": 0.077
+          }
+        },
+        "totals": {
+          "ram_tokens_cached": 15031,
+          "l2_prompt_tokens_on_disk": 0,
+          "l2_block_tokens_on_disk": 15031,
+          "l2_ssm_tokens_on_disk": 38327,
+          "ssm_tokens_on_disk": 38327,
+          "l2_tokens_on_disk": 53358,
+          "l2_tokens_on_disk_store_sum": 53358,
+          "l2_tokens_on_disk_note": "store_sum_across_prompt_block_ssm_l2; tiers_may_overlap"
+        }
+      }
+    },
+    {
+      "turn": 2,
+      "elapsed_s": 32.526,
+      "response_id": "resp_7189453976bc",
+      "previous_response_id": "resp_d96e3f38cf7d",
+      "cached_tokens": 0,
+      "input_tokens": 1450,
+      "output_tokens": 1017,
+      "tools_enabled": true,
+      "enable_thinking": true,
+      "rounds": [
+        {
+          "round": 0,
+          "elapsed_s": 13.928,
+          "response_id": "resp_7d6231f68127",
+          "http_status": null,
+          "status": "completed",
+          "error": null,
+          "cached_tokens": 0,
+          "visible_chars": 0,
+          "reasoning_chars": 2737,
+          "function_calls": [
+            {
+              "name": "grep_repo",
+              "call_id": "call_0b3b638d"
+            }
+          ],
+          "warnings": []
+        },
+        {
+          "round": 1,
+          "elapsed_s": 18.598,
+          "response_id": "resp_7189453976bc",
+          "http_status": null,
+          "status": "completed",
+          "error": null,
+          "cached_tokens": 0,
+          "visible_chars": 559,
+          "reasoning_chars": 3793,
+          "function_calls": [],
+          "warnings": []
+        }
+      ],
+      "function_calls": [
+        {
+          "name": "grep_repo",
+          "call_id": "call_0b3b638d"
+        }
+      ],
+      "function_call_outputs_next_turn": 0,
+      "warnings": [],
+      "visible_chars": 559,
+      "reasoning_chars": 6531,
+      "loop_like": false,
+      "tool_markup_leak": false,
+      "tool_grounded": true,
+      "tool_evidence_marker": "vmlx_engine/scheduler.py:1",
+      "tool_evidence_markers": [
+        "vmlx_engine/scheduler.py:1"
+      ],
+      "tool_evidence_reason": "exact_file_line_mentioned",
+      "tail_review": "(1) **Risk**: The scheduler file contains no explicit cache management logic, meaning it relies entirely on the underlying `BatchGenerator` or inference engine. If the engine's cache implementation fails to properly handle prefix caching or SSM state across continuous batches, the scheduler will propagate this failure silently, leading to degraded performance or incorrect generation.\n(2) **Function**: None in this file; delegates to `BatchGenerator` or external inference libraries.\n(3) **Depends on tool**: Yes.\n\nTOOL_EVIDENCE: vmlx_engine/scheduler.py:1",
+      "cache_totals": {
+        "ram_tokens_cached": 16517,
+        "l2_prompt_tokens_on_disk": 0,
+        "l2_block_tokens_on_disk": 16476,
+        "l2_ssm_tokens_on_disk": 45253,
+        "ssm_tokens_on_disk": 45253,
+        "l2_tokens_on_disk": 61729,
+        "l2_tokens_on_disk_store_sum": 61729,
+        "l2_tokens_on_disk_note": "store_sum_across_prompt_block_ssm_l2; tiers_may_overlap"
+      },
+      "scheduler_stats": {
+        "num_waiting": 0,
+        "num_running": 0,
+        "engine_path": null,
+        "batch_generator": {
+          "prompt_tokens": 8721,
+          "prompt_time": 14.24622537396499,
+          "prompt_tps": 612.1621532070978,
+          "generation_tokens": 11038,
+          "generation_time": 186.41268526861677,
+          "generation_tps": 59.212708534799944,
+          "vision_encoding_time": 0,
+          "num_images_processed": 0,
+          "peak_memory": 42.886952942,
+          "hybrid_kv_without_ssm_hits": 6,
+          "hybrid_kv_without_ssm_tokens": 2560,
+          "last_hybrid_kv_without_ssm": {
+            "request_id": "resp_7189453976bc",
+            "cached_tokens": 640,
+            "reason": "no_ssm_companion_state",
+            "ssm_prefix_lookup": {
+              "max_len": 640,
+              "candidate_lengths": [
+                640,
+                595,
+                576,
+                448
+              ],
+              "matched": false,
+              "reason": "prefix_hash_mismatch",
+              "store_size": 8
+            }
+          },
+          "last_cache_execution": {
+            "request_id": "resp_0832ffe194d2",
+            "cache_detail": "paged+ssm",
+            "cached_tokens": 256,
+            "blocks": 0,
+            "selection": "paged",
+            "disk_hit": false,
+            "reconstructed": true,
+            "dequantized": true,
+            "reconstruction_seconds": 0.008483,
+            "dequantization_seconds": 9e-06,
+            "total_worker_cache_seconds": 0.008717,
+            "reconstruction_ok": true,
+            "dequantization_ok": true
+          },
+          "last_native_mtp": {
+            "request_id": "resp_7189453976bc",
+            "finish_reason": "stop",
+            "final_depth": 1,
+            "cycles": 630,
+            "accepts": 385,
+            "rejects": 245,
+            "init_emits": 2,
+            "draft_emits": 385,
+            "bonus_emits": 385,
+            "verify_emits": 245,
+            "drafted_tokens": 630,
+            "accepted_tokens": 385,
+            "acceptance_rate": 0.6111111111111112,
+            "accepted_by_depth": [
+              385,
+              0,
+              0
+            ],
+            "drafted_by_depth": [
+              630,
+              0,
+              0
+            ],
+            "depth_acceptance_rates": {
+              "d1": 0.6111111111111112,
+              "d2": null,
+              "d3": null
+            },
+            "forwards": {
+              "seed_main": 1,
+              "verify_main": 630,
+              "replay_main": 245,
+              "mtp": 631
+            },
+            "timings_ms": {
+              "verify": 1990.476619132096,
+              "sample": 11193.490335921524,
+              "draft": 3051.7385207349434,
+              "snapshot": 23.83194019785151,
+              "restore": 19.40461396588944,
+              "replay": 603.4646600892302,
+              "materialize": 2.9708480287808925,
+              "total": 16885.377538070315,
+              "avg_cycle": 26.80218656836558
+            },
+            "fallback_reason": null
+          },
+          "last_prefill_trace": null
+        },
+        "single_active_decode": false,
+        "num_requests_processed": 13,
+        "total_prompt_tokens": 21749,
+        "total_completion_tokens": 11038,
+        "ewma_ttft_seconds": 0,
+        "cache_hit_requests": 6,
+        "cache_hit_tokens": 1763,
+        "cache_hit_tokens_by_detail": {
+          "paged+ssm": 1763
+        },
+        "hybrid_kv_without_ssm_hits": 6,
+        "hybrid_kv_without_ssm_tokens": 2560,
+        "last_hybrid_kv_without_ssm": {
+          "request_id": "resp_7189453976bc",
+          "cached_tokens": 640,
+          "reason": "no_ssm_companion_state",
+          "ssm_prefix_lookup": {
+            "max_len": 640,
+            "candidate_lengths": [
+              640,
+              595,
+              576,
+              448
+            ],
+            "matched": false,
+            "reason": "prefix_hash_mismatch",
+            "store_size": 8
+          }
+        },
+        "cache_reuse_skips": 0,
+        "cache_reuse_skip_tokens": 0,
+        "last_cache_reuse_skip": null,
+        "cache_reuse_partial_downgrades": 0,
+        "cache_reuse_partial_tokens": 0,
+        "last_cache_reuse_partial": null,
+        "last_cache_selection": null,
+        "last_cache_execution": {
+          "request_id": "resp_0832ffe194d2",
+          "cache_detail": "paged+ssm",
+          "cached_tokens": 256,
+          "blocks": 0,
+          "selection": "paged",
+          "disk_hit": false,
+          "reconstructed": true,
+          "dequantized": true,
+          "reconstruction_seconds": 0.008483,
+          "dequantization_seconds": 9e-06,
+          "total_worker_cache_seconds": 0.008717,
+          "reconstruction_ok": true,
+          "dequantization_ok": true
+        }
+      },
+      "scheduler_cache": {
+        "pixel_cache_hits": 0,
+        "pixel_cache_misses": 0,
+        "pixel_hit_rate": 0.0,
+        "total_time_saved": 0.0,
+        "total_images_processed": 0,
+        "pixel_cache_size": 0,
+        "hits": 12,
+        "misses": 1,
+        "hit_rate": 0.9230769230769231,
+        "tokens_saved": 5219,
+        "active_requests": 0,
+        "entries_by_type": {
+          "assistant": 12,
+          "user": 0,
+          "system": 0
+        },
+        "block_size": 64,
+        "max_blocks": 1000,
+        "allocated_blocks": 265,
+        "free_blocks": 735,
+        "shared_blocks": 46,
+        "total_tokens_cached": 16517,
+        "utilization": 0.265,
+        "cache_hit_rate": 0.36283185840707965,
+        "cache_hits": 164,
+        "cache_misses": 288,
+        "disk_hits": 0,
+        "disk_misses": 24,
+        "cow_copies": 0,
+        "evictions": 0
+      },
+      "block_disk_cache": {
+        "blocks_on_disk": 263,
+        "disk_size_bytes": 1400049829,
+        "disk_size_gb": 1.304,
+        "total_accesses": 192,
+        "total_tokens_on_disk": 16476,
+        "total_cached_tokens": 16476,
+        "disk_hits": 192,
+        "disk_misses": 25,
+        "disk_writes": 263,
+        "disk_evictions": 0
+      },
+      "ssm_companion": {
+        "entries": 8,
+        "max_entries": 8,
+        "nbytes": 526909440,
+        "nbytes_mb": 502.5,
+        "disk_enabled": true,
+        "disk_directory": "build/current-qwen35-mxfp8-mtp-responses-tool-result-auto-no-tool-20260610/block-cache/ssm_companion",
+        "disk": {
+          "enabled": true,
+          "directory": "build/current-qwen35-mxfp8-mtp-responses-tool-result-auto-no-tool-20260610/block-cache/ssm_companion",
+          "entries": 34,
+          "total_tokens_on_disk": 45253,
+          "total_cached_tokens": 45253,
+          "bytes": 2239668581,
+          "bytes_mb": 2135.91,
+          "budget_bytes": 68719476736,
+          "budget_gb": 64.0,
+          "stores": 35,
+          "hits": 1,
+          "misses": 24,
+          "hit_rate": 0.04
+        }
+      },
+      "health_cache": {
+        "scheduler_cache": {
+          "pixel_cache_hits": 0,
+          "pixel_cache_misses": 0,
+          "pixel_hit_rate": 0.0,
+          "total_time_saved": 0.0,
+          "total_images_processed": 0,
+          "pixel_cache_size": 0,
+          "hits": 12,
+          "misses": 1,
+          "hit_rate": 0.9230769230769231,
+          "tokens_saved": 5219,
+          "active_requests": 0,
+          "entries_by_type": {
+            "assistant": 12,
+            "user": 0,
+            "system": 0
+          },
+          "block_size": 64,
+          "max_blocks": 1000,
+          "allocated_blocks": 265,
+          "free_blocks": 735,
+          "shared_blocks": 46,
+          "total_tokens_cached": 16517,
+          "utilization": 0.265,
+          "cache_hit_rate": 0.36283185840707965,
+          "cache_hits": 164,
+          "cache_misses": 288,
+          "disk_hits": 0,
+          "disk_misses": 24,
+          "cow_copies": 0,
+          "evictions": 0
+        },
+        "block_disk_cache": {
+          "blocks_on_disk": 264,
+          "disk_size_bytes": 1467603008,
+          "disk_size_gb": 1.367,
+          "total_accesses": 192,
+          "total_tokens_on_disk": 16517,
+          "total_cached_tokens": 16517,
+          "disk_hits": 192,
+          "disk_misses": 25,
+          "disk_writes": 264,
+          "disk_evictions": 0
+        },
+        "ssm_companion": {
+          "entries": 8,
+          "max_entries": 8,
+          "nbytes": 526909440,
+          "nbytes_mb": 502.5,
+          "disk_enabled": true,
+          "disk_directory": "build/current-qwen35-mxfp8-mtp-responses-tool-result-auto-no-tool-20260610/block-cache/ssm_companion",
+          "disk": {
+            "enabled": true,
+            "directory": "build/current-qwen35-mxfp8-mtp-responses-tool-result-auto-no-tool-20260610/block-cache/ssm_companion",
+            "entries": 34,
+            "total_tokens_on_disk": 45253,
+            "total_cached_tokens": 45253,
+            "bytes": 2239668581,
+            "bytes_mb": 2135.91,
+            "budget_bytes": 68719476736,
+            "budget_gb": 64.0,
+            "stores": 35,
+            "hits": 1,
+            "misses": 24,
+            "hit_rate": 0.04
+          }
+        },
+        "totals": {
+          "ram_tokens_cached": 16517,
+          "l2_prompt_tokens_on_disk": 0,
+          "l2_block_tokens_on_disk": 16517,
+          "l2_ssm_tokens_on_disk": 45253,
+          "ssm_tokens_on_disk": 45253,
+          "l2_tokens_on_disk": 61770,
+          "l2_tokens_on_disk_store_sum": 61770,
+          "l2_tokens_on_disk_note": "store_sum_across_prompt_block_ssm_l2; tiers_may_overlap"
+        }
+      }
+    },
+    {
+      "turn": 3,
+      "elapsed_s": 6.272,
+      "response_id": "resp_44e2067ffdc6",
+      "previous_response_id": "resp_7189453976bc",
+      "cached_tokens": 0,
+      "input_tokens": 1999,
+      "output_tokens": 257,
+      "tools_enabled": false,
+      "enable_thinking": false,
+      "rounds": [
+        {
+          "round": 0,
+          "elapsed_s": 6.272,
+          "response_id": "resp_44e2067ffdc6",
+          "http_status": null,
+          "status": "completed",
+          "error": null,
+          "cached_tokens": 0,
+          "visible_chars": 1166,
+          "reasoning_chars": 0,
+          "function_calls": [],
+          "warnings": []
+        }
+      ],
+      "function_calls": [],
+      "function_call_outputs_next_turn": 0,
+      "warnings": [],
+      "visible_chars": 1166,
+      "reasoning_chars": 0,
+      "loop_like": false,
+      "tool_markup_leak": false,
+      "tool_grounded": false,
+      "tool_evidence_marker": null,
+      "tool_evidence_markers": [],
+      "tool_evidence_reason": "no_file_line_tool_evidence",
+      "tail_review": "oder's output length is not accounted for in the KV cache offsets.\n(2) **Function**: `_BatchOffsetSafeCache` (implied by header) or the batch generation loop handling `BatchKVCache`.\n(3) **Depends on tool**: No (Final synthesis).\n\n**Final Synthesis**:\nThe prior cache/tool conversation was coherent, consistently identifying that `server.py` and `scheduler.py` delegate cache logic to lower-level components. However, **cached_tokens were not observed** in the provided code snippets for `server.py` or `scheduler.py` because they contain no cache-specific code. The actual cache behavior is defined in `mllm_batch_generator.py`, which was not fully inspected in previous turns, leaving the specific correctness of prefix/L2/SSM reuse unverified.\n\nTOOL_EVIDENCE: vmlx_engine/mllm_batch_generator.py:1",
+      "cache_totals": {
+        "ram_tokens_cached": 17811,
+        "l2_prompt_tokens_on_disk": 0,
+        "l2_block_tokens_on_disk": 17811,
+        "l2_ssm_tokens_on_disk": 49939,
+        "ssm_tokens_on_disk": 49939,
+        "l2_tokens_on_disk": 67750,
+        "l2_tokens_on_disk_store_sum": 67750,
+        "l2_tokens_on_disk_note": "store_sum_across_prompt_block_ssm_l2; tiers_may_overlap"
+      },
+      "scheduler_stats": {
+        "num_waiting": 0,
+        "num_running": 0,
+        "engine_path": null,
+        "batch_generator": {
+          "prompt_tokens": 10727,
+          "prompt_time": 15.682581665954785,
+          "prompt_tps": 684.0072781694595,
+          "generation_tokens": 11295,
+          "generation_time": 190.88766102373484,
+          "generation_tps": 59.17092775627644,
+          "vision_encoding_time": 0,
+          "num_images_processed": 0,
+          "peak_memory": 42.886952942,
+          "hybrid_kv_without_ssm_hits": 7,
+          "hybrid_kv_without_ssm_tokens": 3264,
+          "last_hybrid_kv_without_ssm": {
+            "request_id": "resp_44e2067ffdc6",
+            "cached_tokens": 704,
+            "reason": "no_ssm_companion_state",
+            "ssm_prefix_lookup": {
+              "max_len": 704,
+              "candidate_lengths": [
+                704,
+                660,
+                640
+              ],
+              "matched": false,
+              "reason": "prefix_hash_mismatch",
+              "store_size": 8
+            }
+          },
+          "last_cache_execution": {
+            "request_id": "resp_0832ffe194d2",
+            "cache_detail": "paged+ssm",
+            "cached_tokens": 256,
+            "blocks": 0,
+            "selection": "paged",
+            "disk_hit": false,
+            "reconstructed": true,
+            "dequantized": true,
+            "reconstruction_seconds": 0.008483,
+            "dequantization_seconds": 9e-06,
+            "total_worker_cache_seconds": 0.008717,
+            "reconstruction_ok": true,
+            "dequantization_ok": true
+          },
+          "last_native_mtp": {
+            "request_id": "resp_44e2067ffdc6",
+            "finish_reason": "stop",
+            "final_depth": 1,
+            "cycles": 162,
+            "accepts": 93,
+            "rejects": 69,
+            "init_emits": 2,
+            "draft_emits": 93,
+            "bonus_emits": 93,
+            "verify_emits": 69,
+            "drafted_tokens": 162,
+            "accepted_tokens": 93,
+            "acceptance_rate": 0.5740740740740741,
+            "accepted_by_depth": [
+              93,
+              0,
+              0
+            ],
+            "drafted_by_depth": [
+              162,
+              0,
+              0
+            ],
+            "depth_acceptance_rates": {
+              "d1": 0.5740740740740741,
+              "d2": null,
+              "d3": null
+            },
+            "forwards": {
+              "seed_main": 1,
+              "verify_main": 162,
+              "replay_main": 69,
+              "mtp": 163
+            },
+            "timings_ms": {
+              "verify": 507.9215870355256,
+              "sample": 2911.322998115793,
+              "draft": 860.9786708257161,
+              "snapshot": 6.120423029642552,
+              "restore": 5.397248838562518,
+              "replay": 167.05666488269344,
+              "materialize": 0.7735028630122542,
+              "total": 4459.571095590945,
+              "avg_cycle": 27.528216639450278
+            },
+            "fallback_reason": null
+          },
+          "last_prefill_trace": null
+        },
+        "single_active_decode": false,
+        "num_requests_processed": 14,
+        "total_prompt_tokens": 23748,
+        "total_completion_tokens": 11295,
+        "ewma_ttft_seconds": 0,
+        "cache_hit_requests": 6,
+        "cache_hit_tokens": 1763,
+        "cache_hit_tokens_by_detail": {
+          "paged+ssm": 1763
+        },
+        "hybrid_kv_without_ssm_hits": 7,
+        "hybrid_kv_without_ssm_tokens": 3264,
+        "last_hybrid_kv_without_ssm": {
+          "request_id": "resp_44e2067ffdc6",
+          "cached_tokens": 704,
+          "reason": "no_ssm_companion_state",
+          "ssm_prefix_lookup": {
+            "max_len": 704,
+            "candidate_lengths": [
+              704,
+              660,
+              640
+            ],
+            "matched": false,
+            "reason": "prefix_hash_mismatch",
+            "store_size": 8
+          }
+        },
+        "cache_reuse_skips": 0,
+        "cache_reuse_skip_tokens": 0,
+        "last_cache_reuse_skip": null,
+        "cache_reuse_partial_downgrades": 0,
+        "cache_reuse_partial_tokens": 0,
+        "last_cache_reuse_partial": null,
+        "last_cache_selection": null,
+        "last_cache_execution": {
+          "request_id": "resp_0832ffe194d2",
+          "cache_detail": "paged+ssm",
+          "cached_tokens": 256,
+          "blocks": 0,
+          "selection": "paged",
+          "disk_hit": false,
+          "reconstructed": true,
+          "dequantized": true,
+          "reconstruction_seconds": 0.008483,
+          "dequantization_seconds": 9e-06,
+          "total_worker_cache_seconds": 0.008717,
+          "reconstruction_ok": true,
+          "dequantization_ok": true
+        }
+      },
+      "scheduler_cache": {
+        "pixel_cache_hits": 0,
+        "pixel_cache_misses": 0,
+        "pixel_hit_rate": 0.0,
+        "total_time_saved": 0.0,
+        "total_images_processed": 0,
+        "pixel_cache_size": 0,
+        "hits": 13,
+        "misses": 1,
+        "hit_rate": 0.9285714285714286,
+        "tokens_saved": 5923,
+        "active_requests": 0,
+        "entries_by_type": {
+          "assistant": 13,
+          "user": 0,
+          "system": 0
+        },
+        "block_size": 64,
+        "max_blocks": 1000,
+        "allocated_blocks": 286,
+        "free_blocks": 714,
+        "shared_blocks": 52,
+        "total_tokens_cached": 17811,
+        "utilization": 0.286,
+        "cache_hit_rate": 0.37424547283702214,
+        "cache_hits": 186,
+        "cache_misses": 311,
+        "disk_hits": 0,
+        "disk_misses": 26,
+        "cow_copies": 0,
+        "evictions": 0
+      },
+      "block_disk_cache": {
+        "blocks_on_disk": 285,
+        "disk_size_bytes": 1586525167,
+        "disk_size_gb": 1.478,
+        "total_accesses": 214,
+        "total_tokens_on_disk": 17811,
+        "total_cached_tokens": 17811,
+        "disk_hits": 214,
+        "disk_misses": 27,
+        "disk_writes": 285,
+        "disk_evictions": 0
+      },
+      "ssm_companion": {
+        "entries": 8,
+        "max_entries": 8,
+        "nbytes": 526909440,
+        "nbytes_mb": 502.5,
+        "disk_enabled": true,
+        "disk_directory": "build/current-qwen35-mxfp8-mtp-responses-tool-result-auto-no-tool-20260610/block-cache/ssm_companion",
+        "disk": {
+          "enabled": true,
+          "directory": "build/current-qwen35-mxfp8-mtp-responses-tool-result-auto-no-tool-20260610/block-cache/ssm_companion",
+          "entries": 37,
+          "total_tokens_on_disk": 49939,
+          "total_cached_tokens": 49939,
+          "bytes": 2437286397,
+          "bytes_mb": 2324.38,
+          "budget_bytes": 68719476736,
+          "budget_gb": 64.0,
+          "stores": 38,
+          "hits": 1,
+          "misses": 28,
+          "hit_rate": 0.034
+        }
+      },
+      "health_cache": {
+        "scheduler_cache": {
+          "pixel_cache_hits": 0,
+          "pixel_cache_misses": 0,
+          "pixel_hit_rate": 0.0,
+          "total_time_saved": 0.0,
+          "total_images_processed": 0,
+          "pixel_cache_size": 0,
+          "hits": 13,
+          "misses": 1,
+          "hit_rate": 0.9285714285714286,
+          "tokens_saved": 5923,
+          "active_requests": 0,
+          "entries_by_type": {
+            "assistant": 13,
+            "user": 0,
+            "system": 0
+          },
+          "block_size": 64,
+          "max_blocks": 1000,
+          "allocated_blocks": 286,
+          "free_blocks": 714,
+          "shared_blocks": 52,
+          "total_tokens_cached": 17811,
+          "utilization": 0.286,
+          "cache_hit_rate": 0.37424547283702214,
+          "cache_hits": 186,
+          "cache_misses": 311,
+          "disk_hits": 0,
+          "disk_misses": 26,
+          "cow_copies": 0,
+          "evictions": 0
+        },
+        "block_disk_cache": {
+          "blocks_on_disk": 285,
+          "disk_size_bytes": 1586525167,
+          "disk_size_gb": 1.478,
+          "total_accesses": 214,
+          "total_tokens_on_disk": 17811,
+          "total_cached_tokens": 17811,
+          "disk_hits": 214,
+          "disk_misses": 27,
+          "disk_writes": 285,
+          "disk_evictions": 0
+        },
+        "ssm_companion": {
+          "entries": 8,
+          "max_entries": 8,
+          "nbytes": 526909440,
+          "nbytes_mb": 502.5,
+          "disk_enabled": true,
+          "disk_directory": "build/current-qwen35-mxfp8-mtp-responses-tool-result-auto-no-tool-20260610/block-cache/ssm_companion",
+          "disk": {
+            "enabled": true,
+            "directory": "build/current-qwen35-mxfp8-mtp-responses-tool-result-auto-no-tool-20260610/block-cache/ssm_companion",
+            "entries": 37,
+            "total_tokens_on_disk": 49939,
+            "total_cached_tokens": 49939,
+            "bytes": 2437286397,
+            "bytes_mb": 2324.38,
+            "budget_bytes": 68719476736,
+            "budget_gb": 64.0,
+            "stores": 38,
+            "hits": 1,
+            "misses": 28,
+            "hit_rate": 0.034
+          }
+        },
+        "totals": {
+          "ram_tokens_cached": 17811,
+          "l2_prompt_tokens_on_disk": 0,
+          "l2_block_tokens_on_disk": 17811,
+          "l2_ssm_tokens_on_disk": 49939,
+          "ssm_tokens_on_disk": 49939,
+          "l2_tokens_on_disk": 67750,
+          "l2_tokens_on_disk_store_sum": 67750,
+          "l2_tokens_on_disk_note": "store_sum_across_prompt_block_ssm_l2; tiers_may_overlap"
+        }
+      }
+    }
+  ],
+  "acceptance": {
+    "turns_completed": true,
+    "previous_response_id_used": true,
+    "cache_reuse_observed": false,
+    "require_cache_each_turn_after_first": true,
+    "cache_reuse_each_turn_after_first": false,
+    "tool_call_observed": true,
+    "require_tool_call_each_turn": true,
+    "tool_call_each_required_turn": true,
+    "require_tool_evidence": true,
+    "tool_evidence_each_required_turn": true,
+    "final_turn_tools_disabled": true,
+    "final_turn_thinking_disabled": true,
+    "visible_or_tool_output_each_turn": true,
+    "visible_output_observed": true,
+    "final_turn_visible_output": true,
+    "no_loop_like_tail": true,
+    "no_tool_markup_leak": true
+  }
+}

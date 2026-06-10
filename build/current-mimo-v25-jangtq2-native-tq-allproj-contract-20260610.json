@@ -1,0 +1,667 @@
+{
+  "classification": "gate/up/down native gather kernels match explicit selected-expert dequant reference across sampled early/mid/late MiMo routed layers",
+  "model_path": "/Users/eric/.mlxstudio/models/JANGQ-AI/MiMo-V2.5-JANGTQ_2",
+  "must_not_claim": [
+    "This does not fix MiMo literal exactness.",
+    "This does not justify parser/JSON semantic repair.",
+    "This does not prove full source-vs-quant parity."
+  ],
+  "not_proven": [
+    "full source-vs-quant first divergent logit",
+    "full-vocab generation exactness",
+    "corrected MiMo JANGTQ artifact profile",
+    "MiMo release clearance"
+  ],
+  "reports": [
+    {
+      "bits": 2,
+      "experts_checked": [
+        0,
+        3,
+        17,
+        251
+      ],
+      "in_features": 4096,
+      "layer": 1,
+      "max_abs_diff": 1.4901161193847656e-08,
+      "mean_abs_diff": 2.943693289125804e-09,
+      "mode": "broadcast",
+      "out_rows_checked": 32,
+      "projection": "gate_proj",
+      "reference_shape": [
+        1,
+        4,
+        1,
+        32
+      ],
+      "shape": [
+        1,
+        4,
+        1,
+        32
+      ]
+    },
+    {
+      "bits": 2,
+      "experts_checked": [
+        0,
+        3,
+        17,
+        251
+      ],
+      "in_features": 4096,
+      "layer": 1,
+      "max_abs_diff": 1.4901161193847656e-08,
+      "mean_abs_diff": 3.3778633223846555e-09,
+      "mode": "sorted",
+      "out_rows_checked": 32,
+      "projection": "gate_proj",
+      "reference_shape": [
+        4,
+        1,
+        32
+      ],
+      "shape": [
+        4,
+        1,
+        32
+      ]
+    },
+    {
+      "bits": 2,
+      "experts_checked": [
+        0,
+        3,
+        17,
+        251
+      ],
+      "in_features": 4096,
+      "layer": 1,
+      "max_abs_diff": 7.450580596923828e-09,
+      "mean_abs_diff": 1.8384014310868224e-09,
+      "mode": "broadcast",
+      "out_rows_checked": 32,
+      "projection": "up_proj",
+      "reference_shape": [
+        1,
+        4,
+        1,
+        32
+      ],
+      "shape": [
+        1,
+        4,
+        1,
+        32
+      ]
+    },
+    {
+      "bits": 2,
+      "experts_checked": [
+        0,
+        3,
+        17,
+        251
+      ],
+      "in_features": 4096,
+      "layer": 1,
+      "max_abs_diff": 9.313225746154785e-09,
+      "mean_abs_diff": 1.915253733386635e-09,
+      "mode": "sorted",
+      "out_rows_checked": 32,
+      "projection": "up_proj",
+      "reference_shape": [
+        4,
+        1,
+        32
+      ],
+      "shape": [
+        4,
+        1,
+        32
+      ]
+    },
+    {
+      "bits": 2,
+      "experts_checked": [
+        0,
+        3,
+        17,
+        251
+      ],
+      "in_features": 2048,
+      "layer": 1,
+      "max_abs_diff": 4.6566128730773926e-09,
+      "mean_abs_diff": 1.174555563920876e-09,
+      "mode": "per_row",
+      "out_rows_checked": 32,
+      "projection": "down_proj",
+      "reference_shape": [
+        1,
+        4,
+        1,
+        32
+      ],
+      "shape": [
+        1,
+        4,
+        1,
+        32
+      ]
+    },
+    {
+      "bits": 2,
+      "experts_checked": [
+        0,
+        3,
+        17,
+        251
+      ],
+      "in_features": 2048,
+      "layer": 1,
+      "max_abs_diff": 4.6566128730773926e-09,
+      "mean_abs_diff": 1.174555563920876e-09,
+      "mode": "sorted",
+      "out_rows_checked": 32,
+      "projection": "down_proj",
+      "reference_shape": [
+        4,
+        1,
+        32
+      ],
+      "shape": [
+        4,
+        1,
+        32
+      ]
+    },
+    {
+      "bits": 2,
+      "experts_checked": [
+        0,
+        3,
+        17,
+        251
+      ],
+      "in_features": 4096,
+      "layer": 2,
+      "max_abs_diff": 1.0011717677116394e-08,
+      "mean_abs_diff": 2.009670652114437e-09,
+      "mode": "broadcast",
+      "out_rows_checked": 32,
+      "projection": "gate_proj",
+      "reference_shape": [
+        1,
+        4,
+        1,
+        32
+      ],
+      "shape": [
+        1,
+        4,
+        1,
+        32
+      ]
+    },
+    {
+      "bits": 2,
+      "experts_checked": [
+        0,
+        3,
+        17,
+        251
+      ],
+      "in_features": 4096,
+      "layer": 2,
+      "max_abs_diff": 7.450580596923828e-09,
+      "mean_abs_diff": 2.095362106047105e-09,
+      "mode": "sorted",
+      "out_rows_checked": 32,
+      "projection": "gate_proj",
+      "reference_shape": [
+        4,
+        1,
+        32
+      ],
+      "shape": [
+        4,
+        1,
+        32
+      ]
+    },
+    {
+      "bits": 2,
+      "experts_checked": [
+        0,
+        3,
+        17,
+        251
+      ],
+      "in_features": 4096,
+      "layer": 2,
+      "max_abs_diff": 9.313225746154785e-09,
+      "mean_abs_diff": 1.7392949303030036e-09,
+      "mode": "broadcast",
+      "out_rows_checked": 32,
+      "projection": "up_proj",
+      "reference_shape": [
+        1,
+        4,
+        1,
+        32
+      ],
+      "shape": [
+        1,
+        4,
+        1,
+        32
+      ]
+    },
+    {
+      "bits": 2,
+      "experts_checked": [
+        0,
+        3,
+        17,
+        251
+      ],
+      "in_features": 4096,
+      "layer": 2,
+      "max_abs_diff": 9.313225746154785e-09,
+      "mean_abs_diff": 1.9987282939837314e-09,
+      "mode": "sorted",
+      "out_rows_checked": 32,
+      "projection": "up_proj",
+      "reference_shape": [
+        4,
+        1,
+        32
+      ],
+      "shape": [
+        4,
+        1,
+        32
+      ]
+    },
+    {
+      "bits": 2,
+      "experts_checked": [
+        0,
+        3,
+        17,
+        251
+      ],
+      "in_features": 2048,
+      "layer": 2,
+      "max_abs_diff": 5.005858838558197e-09,
+      "mean_abs_diff": 1.1668390698105213e-09,
+      "mode": "per_row",
+      "out_rows_checked": 32,
+      "projection": "down_proj",
+      "reference_shape": [
+        1,
+        4,
+        1,
+        32
+      ],
+      "shape": [
+        1,
+        4,
+        1,
+        32
+      ]
+    },
+    {
+      "bits": 2,
+      "experts_checked": [
+        0,
+        3,
+        17,
+        251
+      ],
+      "in_features": 2048,
+      "layer": 2,
+      "max_abs_diff": 5.005858838558197e-09,
+      "mean_abs_diff": 1.1668390698105213e-09,
+      "mode": "sorted",
+      "out_rows_checked": 32,
+      "projection": "down_proj",
+      "reference_shape": [
+        4,
+        1,
+        32
+      ],
+      "shape": [
+        4,
+        1,
+        32
+      ]
+    },
+    {
+      "bits": 2,
+      "experts_checked": [
+        0,
+        3,
+        17,
+        251
+      ],
+      "in_features": 4096,
+      "layer": 23,
+      "max_abs_diff": 1.30385160446167e-08,
+      "mean_abs_diff": 3.286800165369641e-09,
+      "mode": "broadcast",
+      "out_rows_checked": 32,
+      "projection": "gate_proj",
+      "reference_shape": [
+        1,
+        4,
+        1,
+        32
+      ],
+      "shape": [
+        1,
+        4,
+        1,
+        32
+      ]
+    },
+    {
+      "bits": 2,
+      "experts_checked": [
+        0,
+        3,
+        17,
+        251
+      ],
+      "in_features": 4096,
+      "layer": 23,
+      "max_abs_diff": 1.30385160446167e-08,
+      "mean_abs_diff": 3.424643679750261e-09,
+      "mode": "sorted",
+      "out_rows_checked": 32,
+      "projection": "gate_proj",
+      "reference_shape": [
+        4,
+        1,
+        32
+      ],
+      "shape": [
+        4,
+        1,
+        32
+      ]
+    },
+    {
+      "bits": 2,
+      "experts_checked": [
+        0,
+        3,
+        17,
+        251
+      ],
+      "in_features": 4096,
+      "layer": 23,
+      "max_abs_diff": 1.1175870895385742e-08,
+      "mean_abs_diff": 3.3279263789154356e-09,
+      "mode": "broadcast",
+      "out_rows_checked": 32,
+      "projection": "up_proj",
+      "reference_shape": [
+        1,
+        4,
+        1,
+        32
+      ],
+      "shape": [
+        1,
+        4,
+        1,
+        32
+      ]
+    },
+    {
+      "bits": 2,
+      "experts_checked": [
+        0,
+        3,
+        17,
+        251
+      ],
+      "in_features": 4096,
+      "layer": 23,
+      "max_abs_diff": 1.1175870895385742e-08,
+      "mean_abs_diff": 3.6318397178547457e-09,
+      "mode": "sorted",
+      "out_rows_checked": 32,
+      "projection": "up_proj",
+      "reference_shape": [
+        4,
+        1,
+        32
+      ],
+      "shape": [
+        4,
+        1,
+        32
+      ]
+    },
+    {
+      "bits": 2,
+      "experts_checked": [
+        0,
+        3,
+        17,
+        251
+      ],
+      "in_features": 2048,
+      "layer": 23,
+      "max_abs_diff": 7.450580596923828e-09,
+      "mean_abs_diff": 1.5116938811843283e-09,
+      "mode": "per_row",
+      "out_rows_checked": 32,
+      "projection": "down_proj",
+      "reference_shape": [
+        1,
+        4,
+        1,
+        32
+      ],
+      "shape": [
+        1,
+        4,
+        1,
+        32
+      ]
+    },
+    {
+      "bits": 2,
+      "experts_checked": [
+        0,
+        3,
+        17,
+        251
+      ],
+      "in_features": 2048,
+      "layer": 23,
+      "max_abs_diff": 7.450580596923828e-09,
+      "mean_abs_diff": 1.5116938811843283e-09,
+      "mode": "sorted",
+      "out_rows_checked": 32,
+      "projection": "down_proj",
+      "reference_shape": [
+        4,
+        1,
+        32
+      ],
+      "shape": [
+        4,
+        1,
+        32
+      ]
+    },
+    {
+      "bits": 2,
+      "experts_checked": [
+        0,
+        3,
+        17,
+        251
+      ],
+      "in_features": 4096,
+      "layer": 47,
+      "max_abs_diff": 1.1175870895385742e-08,
+      "mean_abs_diff": 3.0560194375084393e-09,
+      "mode": "broadcast",
+      "out_rows_checked": 32,
+      "projection": "gate_proj",
+      "reference_shape": [
+        1,
+        4,
+        1,
+        32
+      ],
+      "shape": [
+        1,
+        4,
+        1,
+        32
+      ]
+    },
+    {
+      "bits": 2,
+      "experts_checked": [
+        0,
+        3,
+        17,
+        251
+      ],
+      "in_features": 4096,
+      "layer": 47,
+      "max_abs_diff": 1.1175870895385742e-08,
+      "mean_abs_diff": 2.8604780766272597e-09,
+      "mode": "sorted",
+      "out_rows_checked": 32,
+      "projection": "gate_proj",
+      "reference_shape": [
+        4,
+        1,
+        32
+      ],
+      "shape": [
+        4,
+        1,
+        32
+      ]
+    },
+    {
+      "bits": 2,
+      "experts_checked": [
+        0,
+        3,
+        17,
+        251
+      ],
+      "in_features": 4096,
+      "layer": 47,
+      "max_abs_diff": 1.1641532182693481e-08,
+      "mean_abs_diff": 3.2621301215840504e-09,
+      "mode": "broadcast",
+      "out_rows_checked": 32,
+      "projection": "up_proj",
+      "reference_shape": [
+        1,
+        4,
+        1,
+        32
+      ],
+      "shape": [
+        1,
+        4,
+        1,
+        32
+      ]
+    },
+    {
+      "bits": 2,
+      "experts_checked": [
+        0,
+        3,
+        17,
+        251
+      ],
+      "in_features": 4096,
+      "layer": 47,
+      "max_abs_diff": 1.1175870895385742e-08,
+      "mean_abs_diff": 3.3580249692022335e-09,
+      "mode": "sorted",
+      "out_rows_checked": 32,
+      "projection": "up_proj",
+      "reference_shape": [
+        4,
+        1,
+        32
+      ],
+      "shape": [
+        4,
+        1,
+        32
+      ]
+    },
+    {
+      "bits": 2,
+      "experts_checked": [
+        0,
+        3,
+        17,
+        251
+      ],
+      "in_features": 2048,
+      "layer": 47,
+      "max_abs_diff": 7.101334631443024e-09,
+      "mean_abs_diff": 1.7564616427989677e-09,
+      "mode": "per_row",
+      "out_rows_checked": 32,
+      "projection": "down_proj",
+      "reference_shape": [
+        1,
+        4,
+        1,
+        32
+      ],
+      "shape": [
+        1,
+        4,
+        1,
+        32
+      ]
+    },
+    {
+      "bits": 2,
+      "experts_checked": [
+        0,
+        3,
+        17,
+        251
+      ],
+      "in_features": 2048,
+      "layer": 47,
+      "max_abs_diff": 7.101334631443024e-09,
+      "mean_abs_diff": 1.7564616427989677e-09,
+      "mode": "sorted",
+      "out_rows_checked": 32,
+      "projection": "down_proj",
+      "reference_shape": [
+        4,
+        1,
+        32
+      ],
+      "shape": [
+        4,
+        1,
+        32
+      ]
+    }
+  ],
+  "scope": "MiMo V2.5 JANGTQ_2 native TurboQuant all-projection selected-expert contract",
+  "status": "pass"
+}
