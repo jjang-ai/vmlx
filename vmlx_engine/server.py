@@ -900,6 +900,49 @@ def _responses_messages_have_tool_result_after_latest_user(messages: list[dict])
     return False
 
 
+def _responses_is_terminal_tool_result_synthesis(
+    messages: list[dict],
+    request: Any,
+    chat_kwargs: dict[str, Any],
+) -> bool:
+    """Return True when a Responses continuation should produce final text.
+
+    A previous tool result followed by no new tool schema is a synthesis turn,
+    not another tool-selection turn. Qwen3-style templates otherwise open a
+    fresh ``<think>`` rail for the assistant prefix and the model can spend the
+    whole max-output budget reasoning about the already-completed tool result.
+    """
+    if not _responses_messages_have_tool_result_after_latest_user(messages):
+        return False
+    if getattr(request, "tools", None):
+        return False
+    if chat_kwargs.get("tools"):
+        return False
+    tool_choice = getattr(request, "tool_choice", None)
+    if tool_choice not in (None, "auto", "none"):
+        return False
+    return True
+
+
+def _reasoning_parser_is_qwen3(parser: Any) -> bool:
+    return type(parser).__name__ == "Qwen3ReasoningParser"
+
+
+def _responses_terminal_synthesis_visible_finalization(kwargs: dict[str, Any]) -> bool:
+    return bool(kwargs.get("_vmlx_terminal_tool_result_visible_finalization"))
+
+
+def _prompt_suffix_completes_qwen3_thinking(kwargs: dict[str, Any]) -> bool:
+    if not kwargs.get("skip_generation_prompt"):
+        return False
+    suffix = str(kwargs.get("prompt_suffix") or "")
+    return (
+        suffix.startswith("<|im_start|>assistant")
+        and "<think>" in suffix
+        and "</think>" in suffix
+    )
+
+
 def _responses_fast_path_visible_text(output: Any, request: Any) -> str:
     text = getattr(output, "raw_text", "") or getattr(output, "text", "") or ""
     if getattr(request, "enable_thinking", None) is False and "</think>" in text:
@@ -13575,6 +13618,18 @@ async def create_response(
                 len(historical_tools),
             )
 
+    if (
+        _reasoning_parser_is_qwen3(_reasoning_parser)
+        and chat_kwargs.get("enable_thinking") is True
+        and _responses_is_terminal_tool_result_synthesis(messages, request, chat_kwargs)
+    ):
+        chat_kwargs["enable_thinking"] = False
+        chat_kwargs["_vmlx_terminal_tool_result_visible_finalization"] = True
+        logger.info(
+            "Qwen3 Responses terminal tool-result synthesis: using model-owned "
+            "closed thinking branch for visible finalization"
+        )
+
     # Inject Harmony analysis prefix for GPT-OSS models (same as Chat Completions path)
     if isinstance(_reasoning_parser, GptOssReasoningParser):
         _think_val = chat_kwargs.get("enable_thinking")
@@ -13663,10 +13718,21 @@ async def create_response(
             _omni_resp_err,
         )
 
+    _terminal_tool_result_visible_finalization = bool(
+        chat_kwargs.pop("_vmlx_terminal_tool_result_visible_finalization", False)
+    )
+
     if request.stream:
         return StreamingResponse(
             stream_responses_api(
-                engine, messages, request, fastapi_request, **chat_kwargs
+                engine,
+                messages,
+                request,
+                fastapi_request,
+                _vmlx_terminal_tool_result_visible_finalization=(
+                    _terminal_tool_result_visible_finalization
+                ),
+                **chat_kwargs,
             ),
             media_type="text/event-stream",
         )
@@ -15385,6 +15451,9 @@ async def stream_responses_api(
     markers are detected mid-stream, switches to buffered mode and emits
     structured function_call events at the end.
     """
+    _terminal_tool_result_visible_finalization = bool(
+        kwargs.pop("_vmlx_terminal_tool_result_visible_finalization", False)
+    )
     response_id = f"resp_{uuid.uuid4().hex[:12]}"
     kwargs["request_id"] = response_id
     seq = 0
@@ -15536,6 +15605,8 @@ async def stream_responses_api(
         engine=engine,
     ):
         think_in_template = True
+    if _terminal_tool_result_visible_finalization:
+        think_in_template = False
 
     # The parser seed must match the final prompt the engine renders. Tool
     # requests may intentionally leave reasoning open; no-tool thinking-off

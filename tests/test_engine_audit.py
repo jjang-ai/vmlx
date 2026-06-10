@@ -6025,6 +6025,46 @@ class TestResponsesStreamingExactToolResult:
         assert _responses_fast_path_visible_text(output, request) == "REAL_UI_LIVE_TOOL_TWO"
 
 
+class TestResponsesQwenTerminalToolResultSynthesis:
+    """Qwen terminal tool-result turns must finalize visibly without parser repair."""
+
+    def test_terminal_tool_result_synthesis_requires_no_new_tools(self):
+        from types import SimpleNamespace
+        from vmlx_engine.server import _responses_is_terminal_tool_result_synthesis
+
+        messages = [
+            {"role": "user", "content": "Use the tool."},
+            {"role": "assistant", "tool_calls": [{"id": "call_1"}]},
+            {"role": "tool", "tool_call_id": "call_1", "content": "recorded blue-cat"},
+        ]
+
+        assert _responses_is_terminal_tool_result_synthesis(
+            messages,
+            SimpleNamespace(tools=None, tool_choice=None),
+            {},
+        )
+        assert not _responses_is_terminal_tool_result_synthesis(
+            messages,
+            SimpleNamespace(tools=[{"type": "function", "name": "record_fact"}], tool_choice="auto"),
+            {},
+        )
+        assert not _responses_is_terminal_tool_result_synthesis(
+            messages,
+            SimpleNamespace(tools=None, tool_choice="required"),
+            {},
+        )
+
+    def test_qwen_terminal_synthesis_sets_private_visible_finalization_flag(self):
+        from vmlx_engine.server import (
+            _responses_terminal_synthesis_visible_finalization,
+        )
+
+        assert _responses_terminal_synthesis_visible_finalization(
+            {"_vmlx_terminal_tool_result_visible_finalization": True}
+        )
+        assert not _responses_terminal_synthesis_visible_finalization({})
+
+
 class TestNonStreamingDisconnectAbort:
     """Non-streaming API requests must abort scheduler work on disconnect."""
 
