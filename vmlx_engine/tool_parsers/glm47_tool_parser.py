@@ -117,6 +117,10 @@ class Glm47ToolParser(ToolParser):
                     if key:
                         arguments[key] = value
 
+            if not self._arguments_satisfy_required_schema(
+                func_name, arguments, request
+            ):
+                continue
             tool_calls.append(
                 {
                     "id": generate_tool_id(),
@@ -138,6 +142,10 @@ class Glm47ToolParser(ToolParser):
                         if valid_names and name not in valid_names:
                             continue
                         args = data.get("arguments", data.get("parameters", {}))
+                        if not self._arguments_satisfy_required_schema(
+                            name, args, request
+                        ):
+                            continue
                         tool_calls.append(
                             {
                                 "id": generate_tool_id(),

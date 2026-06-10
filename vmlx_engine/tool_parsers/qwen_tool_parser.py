@@ -89,6 +89,10 @@ class QwenToolParser(ToolParser):
         for name, args_str in bracket_matches:
             try:
                 arguments = json.loads(args_str)
+                if not self._arguments_satisfy_required_schema(
+                    name.strip(), arguments, request
+                ):
+                    continue
                 tool_calls.append(
                     {
                         "id": generate_tool_id(),
