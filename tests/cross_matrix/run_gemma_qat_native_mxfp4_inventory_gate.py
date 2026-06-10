@@ -196,6 +196,15 @@ SOURCE_FULLMEDIA_SMOKE_PROOFS = {
     "gemma4_31b_qat_jang4m": Path(
         "build/current-all-local-model-smoke-gemma4-31b-qat-jang4m-fullmedia-tools-l2-20260610/JANGQ_gemma-4-31B-it-qat-JANG_4M/result.json"
     ),
+    "gemma4_e2b_qat_native_mxfp4": Path(
+        "build/current-all-local-model-smoke-gemma4-e2b-qat-mxfp4-fullmedia-tools-l2-after-tool-result-quoted-target-20260609/JANGQ_gemma-4-E2B-it-qat-MXFP4/result.json"
+    ),
+    "gemma4_e4b_qat_native_mxfp4": Path(
+        "build/current-all-local-model-smoke-gemma4-e4b-qat-mxfp4-fullmedia-tools-l2-after-tool-result-quoted-target-20260609/JANGQ_gemma-4-E4B-it-qat-MXFP4/result.json"
+    ),
+    "gemma4_12b_native_mxfp4": Path(
+        "build/current-all-local-model-smoke-gemma4-12b-qat-mxfp4-fullmedia-tools-l2-after-tool-result-quoted-target-20260609/JANGQ_gemma-4-12B-it-qat-MXFP4/result.json"
+    ),
 }
 
 
