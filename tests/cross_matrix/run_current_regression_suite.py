@@ -727,7 +727,7 @@ CURRENT_SUITE_COMMANDS: dict[str, list[str]] = {
         sys.executable,
         "tests/cross_matrix/run_public_app_issue_audit.py",
         "--out",
-        "build/current-public-app-issue-audit-after-issue179-memory-preflight-20260607.json",
+        "build/current-public-app-issue-audit-after-checkpoint-packaged-integrity-20260609.json",
     ],
     "gemma_qat_native_mxfp4_inventory_gate": [
         sys.executable,

@@ -19,7 +19,7 @@ from typing import Any
 
 
 DEFAULT_OUT = Path(
-    "build/current-public-app-issue-audit-after-issue179-memory-preflight-20260607.json"
+    "build/current-public-app-issue-audit-after-checkpoint-packaged-integrity-20260609.json"
 )
 INSTALLED_APP_ASAR = Path("/Applications/vMLX.app/Contents/Resources/app.asar")
 INSTALLED_APP = Path("/Applications/vMLX.app")

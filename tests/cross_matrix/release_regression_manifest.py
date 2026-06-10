@@ -429,7 +429,7 @@ CURRENT_ISSUE181_183_RUNTIME_AUDIT_ARTIFACT = (
     "build/current-issue181-183-runtime-audit-20260602-v1554-installed-tahoe-refresh.json"
 )
 CURRENT_PUBLIC_APP_ISSUE_AUDIT_ARTIFACT = (
-    "build/current-public-app-issue-audit-after-issue179-memory-preflight-20260607.json"
+    "build/current-public-app-issue-audit-after-checkpoint-packaged-integrity-20260609.json"
 )
 CURRENT_DEV_UI_PROOF_ARTIFACTS = {
     "proof": "docs/internal/agent-notes/2026-05-31-live-chat-tools-reasoning-proof.json",
