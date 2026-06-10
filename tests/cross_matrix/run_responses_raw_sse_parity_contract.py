@@ -315,6 +315,10 @@ def classify_noheavy_contract(path: Path | None) -> dict[str, Any]:
             "gateway_stale_responses_port_rejection"
         )
         is True,
+        "responses_previous_response_history": checks.get(
+            "responses_previous_response_history"
+        )
+        is True,
     }
     row.update(
         {
@@ -334,6 +338,9 @@ def classify_noheavy_contract(path: Path | None) -> dict[str, Any]:
             "gateway_stale_responses_port_rejection_guard": rows[
                 "gateway_stale_responses_port_rejection"
             ],
+            "responses_previous_response_history_guard": rows[
+                "responses_previous_response_history"
+            ],
         }
     )
     row["local_responses_streaming_guards_pass"] = (
@@ -343,6 +350,7 @@ def classify_noheavy_contract(path: Path | None) -> dict[str, Any]:
         and row["local_output_index_ordering_guard"]
         and row["gateway_argument_stream_passthrough_guard"]
         and row["gateway_stale_responses_port_rejection_guard"]
+        and row["responses_previous_response_history_guard"]
     )
     return row
 
@@ -599,6 +607,10 @@ def build_artifact(
             is True,
             "gateway_argument_stream_passthrough_guard": local_contract.get(
                 "gateway_argument_stream_passthrough_guard"
+            )
+            is True,
+            "responses_previous_response_history_guard": local_contract.get(
+                "responses_previous_response_history_guard"
             )
             is True,
         },

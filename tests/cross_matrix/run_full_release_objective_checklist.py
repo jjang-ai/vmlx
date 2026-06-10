@@ -547,6 +547,7 @@ def _responses_raw_sse_parity_checks(data: dict[str, Any]) -> list[dict[str, Any
         "local_empty_xml_arguments_fail_closed",
         "local_output_index_ordering_guard",
         "gateway_argument_stream_passthrough_guard",
+        "responses_previous_response_history_guard",
         "all_present_surfaces_have_valid_output_item_indices",
         "all_present_surfaces_have_required_reasoning",
         "no_reasoning_disable_workaround",
