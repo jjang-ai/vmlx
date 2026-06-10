@@ -4824,7 +4824,7 @@ class TestMediaDiagnostics:
 
         assert server._loaded_runtime_modalities() == ["text", "vision", "audio"]
 
-    def test_gemma4_unified_jang4m_runtime_modalities_advertise_audio(
+    def test_gemma4_unified_jang4m_runtime_modalities_gate_config_only_audio(
         self, monkeypatch, tmp_path
     ):
         import vmlx_engine.server as server
@@ -4845,6 +4845,41 @@ class TestMediaDiagnostics:
         monkeypatch.setattr(server, "_engine", SimpleNamespace(is_mllm=True))
         monkeypatch.setattr(server, "_model_path", str(tmp_path))
         monkeypatch.setattr(server, "_model_name", "gemma4-unified-jang4m-test")
+        monkeypatch.setattr(server, "_loaded_omni_modalities", lambda: None)
+
+        assert server._loaded_runtime_modalities() == ["text", "vision"]
+
+    def test_gemma4_unified_jang4m_runtime_modalities_advertise_weight_backed_audio(
+        self, monkeypatch, tmp_path
+    ):
+        import vmlx_engine.server as server
+
+        (tmp_path / "config.json").write_text(
+            json.dumps(
+                {
+                    "model_type": "gemma4_unified",
+                    "vision_config": {"model_type": "gemma4_unified_vision"},
+                    "audio_config": {"model_type": "gemma4_unified_audio"},
+                }
+            )
+        )
+        (tmp_path / "jang_config.json").write_text(
+            json.dumps({"weight_format": "jang_4m", "profile": "jang_4m"})
+        )
+        (tmp_path / "model.safetensors.index.json").write_text(
+            json.dumps(
+                {
+                    "weight_map": {
+                        "audio_tower.layers.0.feed_forward1.ffw_layer_1.linear.weight": "a.safetensors",
+                        "embed_audio.embedding_projection.weight": "b.safetensors",
+                    }
+                }
+            )
+        )
+
+        monkeypatch.setattr(server, "_engine", SimpleNamespace(is_mllm=True))
+        monkeypatch.setattr(server, "_model_path", str(tmp_path))
+        monkeypatch.setattr(server, "_model_name", "gemma4-unified-jang4m-audio-test")
         monkeypatch.setattr(server, "_loaded_omni_modalities", lambda: None)
 
         assert server._loaded_runtime_modalities() == ["text", "vision", "audio"]

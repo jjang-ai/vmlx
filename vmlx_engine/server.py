@@ -2261,11 +2261,9 @@ def _bundle_declares_native_audio(bundle_path: str | None) -> bool:
         # raw `Audio present.` content, but the API path is not stable enough to
         # advertise audio.
         return False
-    if model_type == "gemma4":
+    if model_type in {"gemma4", "gemma4_unified"}:
         return bool(isinstance(cfg.get("audio_config"), dict) and _has_audio_tower_weights())
     if cfg.get("audio_config") is not None:
-        return True
-    if model_type == "gemma4_unified":
         return True
     for obj in (cfg, cfg.get("text_config")):
         if not isinstance(obj, dict):
