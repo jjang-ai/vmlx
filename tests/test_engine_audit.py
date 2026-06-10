@@ -10309,6 +10309,7 @@ class TestJangVLMFallbacks:
         monkeypatch,
     ):
         from vmlx_engine.utils import jang_loader
+        from vmlx_engine.models import gemma4_unified_register
         import mlx_vlm.utils as vlm_utils
 
         model_dir = tmp_path
@@ -10325,6 +10326,11 @@ class TestJangVLMFallbacks:
         }
 
         monkeypatch.setattr(vlm_utils, "load_config", lambda path: dict(config))
+        monkeypatch.setattr(
+            gemma4_unified_register,
+            "gemma4_unified_runtime_available",
+            lambda: False,
+        )
         monkeypatch.setattr(
             vlm_utils,
             "get_model_and_args",
