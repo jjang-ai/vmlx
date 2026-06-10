@@ -68,6 +68,64 @@ def _infer_bits_from_shapes(
     return native_bits or 4
 
 
+def _mxfp_quant_params(
+    weight: mx.array, scales: mx.array
+) -> Optional[Tuple[str, int, int]]:
+    """Return (mode, bits, group_size) for native MXFP expert weights."""
+    if scales.dtype != mx.uint8:
+        return None
+    w_cols = int(weight.shape[-1])
+    s_cols = int(scales.shape[-1])
+    if s_cols * 32 == w_cols * 8:
+        return ("mxfp4", 4, 32)
+    if s_cols * 32 == w_cols * 4:
+        return ("mxfp8", 8, 32)
+    return None
+
+
+def _quantized_expert_matmul(
+    x_in: mx.array,
+    weight: mx.array,
+    scales: mx.array,
+    biases: Optional[mx.array],
+    in_dim: int,
+    default_group_size: int,
+    native_bits: Optional[int],
+) -> mx.array:
+    """Expert projection matmul for affine or native MXFP JANG bundles."""
+    mxfp = _mxfp_quant_params(weight, scales)
+    if mxfp is not None:
+        mode, bits, group_size = mxfp
+        return mx.quantized_matmul(
+            x_in,
+            weight,
+            scales,
+            None,
+            group_size=group_size,
+            bits=bits,
+            mode=mode,
+            transpose=True,
+        )
+
+    if biases is None:
+        biases = mx.zeros_like(scales)
+    bits = _infer_bits_from_shapes(
+        {"weight": weight, "scales": scales},
+        in_dim,
+        default_group_size,
+        native_bits,
+    )
+    return mx.quantized_matmul(
+        x_in,
+        weight,
+        scales,
+        biases,
+        group_size=default_group_size,
+        bits=bits,
+        transpose=True,
+    )
+
+
 def _apply_expert_tensors(
     x: mx.array,
     ews,
@@ -88,17 +146,17 @@ def _apply_expert_tensors(
 
     def _matmul(x_in: mx.array, proj_tensors: Dict, in_dim: int) -> mx.array:
         weight = proj_tensors["weight"]
-        if "scales" in proj_tensors:
-            scales = proj_tensors["scales"]
-            biases = proj_tensors.get("biases")
-            bits = _infer_bits_from_shapes(
-                proj_tensors, in_dim, default_group_size, native_bits
-            )
-            return mx.quantized_matmul(
-                x_in, weight, scales, biases,
-                group_size=default_group_size, bits=bits, transpose=True,
-            )
-        return x_in @ weight.T
+        if "scales" not in proj_tensors:
+            return x_in @ weight.T
+        return _quantized_expert_matmul(
+            x_in,
+            weight,
+            proj_tensors["scales"],
+            proj_tensors.get("biases"),
+            in_dim,
+            default_group_size,
+            native_bits,
+        )
 
     hidden_size = x.shape[-1]
 

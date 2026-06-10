@@ -238,3 +238,53 @@ class TestFlashMoEIntegration:
     def test_import_free_expert_weights(self):
         from vmlx_engine.models.flash_moe_integration import free_expert_weights
         assert callable(free_expert_weights)
+
+
+class TestFlashMoEQuantizedMatmul:
+    """MXFP8/MXFP4 expert bundles must not use affine quantized_matmul."""
+
+    def test_mxfp8_shape_contract(self):
+        import mlx.core as mx
+        from vmlx_engine.models.flash_moe_integration import _mxfp_quant_params
+
+        weight = mx.zeros((64, 8), dtype=mx.uint32)
+        scales = mx.zeros((64, 1), dtype=mx.uint8)
+        assert _mxfp_quant_params(weight, scales) == ("mxfp8", 8, 32)
+
+    def test_mxfp4_shape_contract(self):
+        import mlx.core as mx
+        from vmlx_engine.models.flash_moe_integration import _mxfp_quant_params
+
+        weight = mx.zeros((64, 16), dtype=mx.uint32)
+        scales = mx.zeros((64, 1), dtype=mx.uint8)
+        assert _mxfp_quant_params(weight, scales) == ("mxfp4", 4, 32)
+
+    def test_affine_scales_not_mxfp(self):
+        import mlx.core as mx
+        from vmlx_engine.models.flash_moe_integration import _mxfp_quant_params
+
+        weight = mx.zeros((64, 8), dtype=mx.uint32)
+        scales = mx.zeros((64, 1), dtype=mx.float16)
+        assert _mxfp_quant_params(weight, scales) is None
+
+    def test_quantized_expert_matmul_mxfp8_uses_native_mode(self, monkeypatch):
+        import mlx.core as mx
+        from vmlx_engine.models import flash_moe_integration as fmi
+
+        weight = mx.zeros((4, 8), dtype=mx.uint32)
+        scales = mx.zeros((4, 1), dtype=mx.uint8)
+        x_in = mx.zeros((2, 16), dtype=mx.float16)
+        calls = []
+
+        def fake_qmm(*args, **kwargs):
+            calls.append(kwargs)
+            return x_in
+
+        monkeypatch.setattr(fmi.mx, "quantized_matmul", fake_qmm)
+        fmi._quantized_expert_matmul(
+            x_in, weight, scales, None, 16, 64, None
+        )
+        assert calls[0]["mode"] == "mxfp8"
+        assert calls[0]["bits"] == 8
+        assert calls[0]["group_size"] == 32
+        assert calls[0]["biases"] is None
