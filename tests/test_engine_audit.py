@@ -6504,7 +6504,7 @@ class TestStartupCompatibilityGuards:
         # Ling/Bailing hybrid needs the mlx-lm runtime floor that the bundle
         # uses before the local bailing_hybrid vendor file is applied.
         assert '"mlx-lm>=0.31.3"' in pyproject
-        assert pyproject.count('"jang>=2.5.29"') >= 3
+        assert pyproject.count('"jang>=2.5.30"') >= 3
 
     def test_bundled_python_installs_distutils_version_shim_for_radio(self):
         bundle_script = Path("./panel/scripts/bundle-python.sh").read_text()
@@ -6532,7 +6532,7 @@ class TestStartupCompatibilityGuards:
 
         assert '${VMLX_ALLOW_PYPI_JANG:-${VMLINUX_ALLOW_PYPI_JANG:-0}}' in bundle_script
         assert "RELEASE BLOCKED — local jang-tools source missing" in bundle_script
-        assert 'pip install --no-deps "jang>=2.5.29"' in bundle_script
+        assert 'pip install --no-deps "jang>=2.5.30"' in bundle_script
         assert '${VMLX_ALLOW_MISSING_JANG_SOURCE_HASH:-${VMLINUX_ALLOW_MISSING_JANG_SOURCE_HASH:-0}}' in verify_script
         assert "RELEASE BLOCKED — local jang_tools source unavailable for hash parity" in verify_script
 
@@ -7915,7 +7915,7 @@ class TestStartupCompatibilityGuards:
             lambda: (_ for _ in ()).throw(ImportError("missing bailing patch")),
         )
 
-        with pytest.raises(RuntimeError, match="jang>=2.5.29"):
+        with pytest.raises(RuntimeError, match="jang>=2.5.30"):
             jang_loader._ensure_jang_family_runtime_supported(
                 Path("/models/Hy3-preview-JANGTQ2"), {"model_type": "hy_v3"}
             )

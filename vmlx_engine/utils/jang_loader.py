@@ -1314,7 +1314,7 @@ def _ensure_jang_family_runtime_supported(path: Path, config: dict | None) -> No
             path=path,
             family="Hy3/hy_v3",
             remediation=(
-                "Install jang>=2.5.29 or bundle the current local "
+                "Install jang>=2.5.30 or bundle the current local "
                 "~/jang/jang-tools checkout"
             ),
         )
@@ -1324,7 +1324,7 @@ def _ensure_jang_family_runtime_supported(path: Path, config: dict | None) -> No
             family="Hy3/hy_v3",
             remediation=(
                 "Importing jang_tools.hy3 must register mlx_lm.models.hy_v3; "
-                "use jang>=2.5.29 and do not strip the hy3 runtime from the bundle"
+                "use jang>=2.5.30 and do not strip the hy3 runtime from the bundle"
             ),
         )
 
