@@ -3479,6 +3479,45 @@ class TestToolParserConcurrency:
         assert tool_calls is None
         assert cleaned == output
 
+    def test_responses_final_tool_emit_drops_empty_required_args(self):
+        """Responses final SSE guard must not emit empty required tool args."""
+        import vmlx_engine.server as srv
+
+        request = srv.ResponsesRequest(
+            model="qwen3-coder-next",
+            input="List /tmp using exec_command.",
+            tools=[
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "exec_command",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {"cmd": {"type": "string"}},
+                            "required": ["cmd"],
+                        },
+                    },
+                }
+            ],
+            tool_choice="required",
+        )
+        bad_call = srv.ToolCall(
+            id="call_empty",
+            type="function",
+            function=srv.FunctionCall(name="exec_command", arguments="{}"),
+        )
+        valid_no_required = srv.ToolCall(
+            id="call_no_required",
+            type="function",
+            function=srv.FunctionCall(name="no_required", arguments=""),
+        )
+
+        assert srv._drop_tool_calls_missing_required_args([bad_call], request) is None
+        assert (
+            srv._drop_tool_calls_missing_required_args([valid_no_required], request)
+            == [valid_no_required]
+        )
+
     def test_dsv4_fallback_tool_prompt_uses_canonical_tool_calls_wrapper(self):
         """Fallback injection must not teach a non-canonical bare DSML invoke."""
         from vmlx_engine.api.tool_calling import check_and_inject_fallback_tools

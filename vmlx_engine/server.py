@@ -2720,6 +2720,90 @@ def _effective_tools_for_tool_parsing(request: Any) -> Any:
     return getattr(request, "tools", None)
 
 
+def _request_tool_function_schemas(request: Any) -> dict[str, dict[str, Any]]:
+    effective_tools = _effective_tools_for_tool_parsing(request)
+    if not request or not effective_tools:
+        return {}
+    schemas: dict[str, dict[str, Any]] = {}
+    try:
+        template_tools = convert_tools_for_template(effective_tools) or []
+    except Exception:
+        template_tools = []
+    for tool in template_tools:
+        fn = tool.get("function") if isinstance(tool, dict) else None
+        name = fn.get("name") if isinstance(fn, dict) else None
+        if isinstance(name, str) and name:
+            schemas[name] = fn
+    return schemas
+
+
+def _tool_call_name_args_id(tc: Any) -> tuple[str | None, Any, str]:
+    try:
+        return tc.function.name, tc.function.arguments, getattr(tc, "id", "")
+    except Exception:
+        fn = tc.get("function") if isinstance(tc, dict) else None
+        if isinstance(fn, dict):
+            return fn.get("name"), fn.get("arguments") or "", tc.get("id", "")
+        if isinstance(tc, dict):
+            return tc.get("name"), tc.get("arguments") or "", tc.get("id", "")
+        return None, "", ""
+
+
+def _tool_call_missing_required_args(
+    tc: Any,
+    request: ChatCompletionRequest | ResponsesRequest | None = None,
+) -> list[str]:
+    name, raw_args, _ = _tool_call_name_args_id(tc)
+    if not name:
+        return []
+    schema = _request_tool_function_schemas(request).get(name) or {}
+    params = schema.get("parameters", {}) if isinstance(schema, dict) else {}
+    required = params.get("required", []) if isinstance(params, dict) else []
+    if not isinstance(required, list) or not required:
+        return []
+    if isinstance(raw_args, dict):
+        args = dict(raw_args)
+    elif isinstance(raw_args, str) and raw_args.strip():
+        try:
+            parsed_args = json.loads(raw_args)
+        except Exception:
+            parsed_args = {}
+        args = parsed_args if isinstance(parsed_args, dict) else {}
+    else:
+        args = {}
+    missing: list[str] = []
+    for key in required:
+        if not isinstance(key, str) or not key:
+            continue
+        value = args.get(key)
+        if value is None or (isinstance(value, str) and value.strip() == ""):
+            missing.append(key)
+    return missing
+
+
+def _drop_tool_calls_missing_required_args(
+    tool_calls: list | None,
+    request: ChatCompletionRequest | ResponsesRequest | None = None,
+) -> list | None:
+    if not tool_calls:
+        return tool_calls
+    kept = []
+    for tc in tool_calls:
+        name, _, call_id = _tool_call_name_args_id(tc)
+        missing = _tool_call_missing_required_args(tc, request)
+        if missing:
+            logger.warning(
+                "Dropping parsed tool call %s for %r because required "
+                "argument(s) are missing or empty: %s",
+                call_id or "<no-id>",
+                name,
+                ", ".join(missing),
+            )
+            continue
+        kept.append(tc)
+    return kept or None
+
+
 def _attach_effective_tools_for_tool_parsing(request: Any, tools: list[Any]) -> None:
     """Attach merged request+MCP tools without mutating the public API payload."""
     if request is None:
@@ -4219,29 +4303,6 @@ def _parse_tool_calls_with_parser(
         allowed = _allowed_tool_names()
         if not allowed:
             return tool_calls
-        schemas_by_name: dict[str, dict[str, Any]] = {}
-        try:
-            for tool in convert_tools_for_template(
-                _effective_tools_for_tool_parsing(request)
-            ) or []:
-                fn = tool.get("function") if isinstance(tool, dict) else None
-                name = fn.get("name") if isinstance(fn, dict) else None
-                if isinstance(name, str) and name:
-                    schemas_by_name[name] = fn
-        except Exception:
-            schemas_by_name = {}
-
-        def _function_payload(tc: Any) -> tuple[str | None, str, str]:
-            try:
-                return tc.function.name, tc.function.arguments, getattr(tc, "id", "")
-            except Exception:
-                fn = tc.get("function") if isinstance(tc, dict) else None
-                if isinstance(fn, dict):
-                    return fn.get("name"), fn.get("arguments") or "{}", tc.get("id", "")
-                if isinstance(tc, dict):
-                    return tc.get("name"), tc.get("arguments") or "{}", tc.get("id", "")
-                return None, "{}", ""
-
         def _coerce_json_args(raw_args: Any) -> dict[str, Any]:
             if isinstance(raw_args, dict):
                 return dict(raw_args)
@@ -4257,7 +4318,7 @@ def _parse_tool_calls_with_parser(
         def _missing_required_args(name: str | None, raw_args: Any) -> list[str]:
             if not name:
                 return []
-            schema = schemas_by_name.get(name) or {}
+            schema = _request_tool_function_schemas(request).get(name) or {}
             params = schema.get("parameters", {}) if isinstance(schema, dict) else {}
             required = params.get("required", []) if isinstance(params, dict) else []
             if not isinstance(required, list) or not required:
@@ -4273,7 +4334,7 @@ def _parse_tool_calls_with_parser(
             return missing
 
         def _rewrite_tool_alias(tc: Any) -> Any | None:
-            name, raw_args, call_id = _function_payload(tc)
+            name, raw_args, call_id = _tool_call_name_args_id(tc)
             if name != "create_file" or "write_file" not in allowed:
                 return None
             args = _coerce_json_args(raw_args)
@@ -4306,7 +4367,7 @@ def _parse_tool_calls_with_parser(
 
         filtered = []
         for tc in tool_calls:
-            name, raw_args, call_id = _function_payload(tc)
+            name, raw_args, call_id = _tool_call_name_args_id(tc)
             if name in allowed:
                 missing = _missing_required_args(name, raw_args)
                 if missing:
@@ -16399,6 +16460,7 @@ async def stream_responses_api(
             if fallback_tool_calls is not None:
                 cleaned_text = fallback_cleaned
                 tool_calls = fallback_tool_calls
+        tool_calls = _drop_tool_calls_missing_required_args(tool_calls, request)
     else:
         cleaned_text = _clean_suppressed_tool_markup_for_display(
             full_text,
