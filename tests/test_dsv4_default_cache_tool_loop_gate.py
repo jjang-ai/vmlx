@@ -3,6 +3,21 @@ from pathlib import Path
 from types import SimpleNamespace
 
 
+def test_dsv4_default_cache_tool_loop_gate_resolves_current_python_candidate(
+    tmp_path,
+):
+    from tests.cross_matrix.run_dsv4_default_cache_tool_loop_gate import (
+        resolve_default_python,
+    )
+
+    stale = tmp_path / "panel/release/mac-arm64/vMLX.app/python3"
+    current = tmp_path / "panel/release/sequoia-app/mac-arm64/vMLX.app/python3"
+    current.parent.mkdir(parents=True)
+    current.write_text("#!/bin/sh\n", encoding="utf-8")
+
+    assert resolve_default_python((stale, current)) == current
+
+
 def test_dsv4_default_cache_tool_loop_gate_dry_run_pins_default_cache_flags():
     from tests.cross_matrix.run_dsv4_default_cache_tool_loop_gate import run
 
