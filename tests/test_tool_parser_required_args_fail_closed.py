@@ -1,0 +1,122 @@
+# SPDX-License-Identifier: Apache-2.0
+"""Required-argument fail-closed coverage across tool parser families.
+
+These tests pin the parser-level contract for the empty-arguments class of
+agentic-loop failures: if a model emits a native tool envelope for a schema that
+requires ``value`` but omits that field, the parser must not return an
+executable ``{}`` argument payload. The server can then retry or fail closed for
+``tool_choice=required`` instead of handing clients a malformed call.
+"""
+
+import json
+
+import pytest
+
+from vmlx_engine.tool_parsers.gemma3_tool_parser import Gemma3ToolParser
+from vmlx_engine.tool_parsers.gemma4_tool_parser import Gemma4ToolParser
+from vmlx_engine.tool_parsers.glm47_tool_parser import Glm47ToolParser
+from vmlx_engine.tool_parsers.hunyuan_tool_parser import HunyuanToolParser
+from vmlx_engine.tool_parsers.kimi_tool_parser import KimiToolParser
+from vmlx_engine.tool_parsers.qwen_tool_parser import QwenToolParser
+from vmlx_engine.tool_parsers.zaya_tool_parser import ZayaToolParser
+
+
+RECORD_FACT_REQUEST = {
+    "tools": [
+        {
+            "type": "function",
+            "function": {
+                "name": "record_fact",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"value": {"type": "string"}},
+                    "required": ["value"],
+                },
+            },
+        }
+    ]
+}
+
+
+@pytest.mark.parametrize(
+    ("parser_cls", "missing_text", "valid_text"),
+    [
+        (
+            QwenToolParser,
+            '[Calling tool: record_fact({})]',
+            '[Calling tool: record_fact({"value":"blue-cat"})]',
+        ),
+        (
+            KimiToolParser,
+            (
+                "<|tool_calls_section_begin|>"
+                "<|tool_call_begin|>record_fact:0"
+                "<|tool_call_argument_begin|>{}"
+                "<|tool_call_end|><|tool_calls_section_end|>"
+            ),
+            (
+                "<|tool_calls_section_begin|>"
+                "<|tool_call_begin|>record_fact:0"
+                '<|tool_call_argument_begin|>{"value":"blue-cat"}'
+                "<|tool_call_end|><|tool_calls_section_end|>"
+            ),
+        ),
+        (
+            HunyuanToolParser,
+            (
+                "<tool_calls><tool_call>record_fact<tool_sep>"
+                "</tool_call></tool_calls>"
+            ),
+            (
+                "<tool_calls><tool_call>record_fact<tool_sep>"
+                "<arg_key>value</arg_key><arg_value>blue-cat</arg_value>"
+                "</tool_call></tool_calls>"
+            ),
+        ),
+        (
+            ZayaToolParser,
+            (
+                "<zyphra_tool_call><function=record_fact>"
+                "</function></zyphra_tool_call>"
+            ),
+            (
+                "<zyphra_tool_call><function=record_fact>"
+                "<parameter=value>blue-cat</parameter>"
+                "</function></zyphra_tool_call>"
+            ),
+        ),
+        (
+            Gemma4ToolParser,
+            "<|tool_call>call:record_fact{}<tool_call|>",
+            '<|tool_call>call:record_fact{value:<|"|>blue-cat<|"|>}<tool_call|>',
+        ),
+        (
+            Gemma3ToolParser,
+            "```tool_code\nrecord_fact()\n```",
+            '```tool_code\nrecord_fact(value="blue-cat")\n```',
+        ),
+        (
+            Glm47ToolParser,
+            "<tool_call>record_fact\n</tool_call>",
+            (
+                "<tool_call>record_fact\n"
+                "<arg_key>value</arg_key><arg_value>blue-cat</arg_value>"
+                "</tool_call>"
+            ),
+        ),
+    ],
+)
+def test_required_arguments_missing_fail_closed_but_valid_calls_survive(
+    parser_cls, missing_text, valid_text
+):
+    parser = parser_cls(tokenizer=None)
+
+    missing = parser.extract_tool_calls(missing_text, request=RECORD_FACT_REQUEST)
+    assert missing.tools_called is False
+    assert missing.tool_calls == []
+
+    valid = parser.extract_tool_calls(valid_text, request=RECORD_FACT_REQUEST)
+    assert valid.tools_called is True
+    assert len(valid.tool_calls) == 1
+    assert valid.tool_calls[0]["name"] == "record_fact"
+    assert json.loads(valid.tool_calls[0]["arguments"]) == {"value": "blue-cat"}

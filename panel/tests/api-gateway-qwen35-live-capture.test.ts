@@ -151,6 +151,21 @@ describe("Qwen35 live Responses capture through ApiGateway", () => {
           servedModel,
           modelPath,
           requestModel: requestBody.model,
+          requestKwargs: {
+            stream: requestBody.stream,
+            max_output_tokens: requestBody.max_output_tokens,
+            temperature: requestBody.temperature,
+            top_p: requestBody.top_p,
+            top_k: requestBody.top_k,
+            enable_thinking: requestBody.enable_thinking,
+            tool_choice: requestBody.tool_choice,
+            tool_count: Array.isArray(requestBody.tools)
+              ? requestBody.tools.length
+              : 0,
+            first_tool_name: Array.isArray(requestBody.tools)
+              ? requestBody.tools[0]?.name
+              : undefined,
+          },
           touchedSessions: sessionManagerMock.touchSession.mock.calls,
           responseBytes: raw.length,
           containsReasoning: raw.includes("response.reasoning_summary_text"),

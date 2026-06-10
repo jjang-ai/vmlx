@@ -17,20 +17,29 @@ from typing import Any
 
 
 DEFAULT_OUT = Path(
-    "build/current-full-release-objective-checklist-after-responses-raw-sse-gemma-surface-20260609.json"
+    "build/current-full-release-objective-checklist-after-qwen-missing-required-args-failclosed-20260610.json"
 )
 
 MIMO_AUDIT = Path(
     "build/current-mimo-v2-jang2l-current-audit-after-cache-vs-nocache-logprobs-20260609.json"
 )
 MIMO_NO_SOURCE_EXACTNESS_CLASSIFIER = Path(
-    "build/current-mimo-v2-no-source-exactness-classifier-after-artifact-diagnosis-20260609.json"
+    "build/current-mimo-v2-no-source-exactness-classifier-after-devapp-jangtq2-exactness-20260610.json"
+)
+MIMO_JANGTQ2_MEDIA_RUNTIME_SOURCE = Path(
+    "build/current-mimo-v25-jangtq2-media-runtime-source-proof-20260610.json"
+)
+MIMO_JANGTQ2_VIDEO_AUDIO_SOURCE = Path(
+    "build/current-mimo-v25-jangtq2-video-audio-source-proof-20260610.json"
+)
+MIMO_JANGTQ2_RESPONSES_TOOLS_CACHE_UI = Path(
+    "build/current-real-ui-dev-app-mimo-v25-jangtq2-responses-tools-cache-20260610.json"
 )
 NOHEAVY_API_CACHE = Path(
     "build/current-noheavy-api-cache-contract-after-responses-reasoning-empty-final-args-gateway-20260609.json"
 )
 RESPONSES_RAW_SSE_PARITY = Path(
-    "build/current-responses-raw-sse-parity-direct-gateway-tunnel-gemma4-e2b-after-parser-20260609.json"
+    "build/current-responses-raw-sse-parity-qwen35-direct-gateway-tunnel-after-missing-required-args-failclosed-20260610.json"
 )
 API_SURFACE_CONTRACT = Path(
     "build/current-api-surface-contract-20260602-v1554-stream-cache-reuse-refresh.json"
@@ -75,22 +84,25 @@ QWEN35_RESTART_L2_RESTORE = Path(
     "build/current-qwen35-mxfp8-mtp-restart-l2-restore-20260607/summary.json"
 )
 QWEN35_RAW_SSE_PARITY = Path(
-    "build/current-responses-raw-sse-parity-qwen35-direct-gateway-source-vs-tunnel-20260609.json"
+    "build/current-responses-raw-sse-parity-qwen35-direct-gateway-tunnel-after-missing-required-args-failclosed-20260610.json"
 )
 QWEN35_INSTALLED_VIDEO = Path(
     "docs/internal/agent-notes/current-real-ui-installed-app-qwen36-35b-mxfp8-mtp-responses-tools-video-reasoning-cachecontrols-max512-20260607-proof.json"
 )
 GEMMA4_12B_JANG4M_SMOKE = Path(
-    "build/current-all-local-model-smoke-gemma4-12b-jang4m-tools-nomedia-current-20260609/JANGQ_gemma-4-12B-it-JANG_4M/result.json"
+    "build/current-all-local-model-smoke-gemma4-12b-jang4m-tools-nomedia-after-code-column-prompt-20260610/JANGQ_gemma-4-12B-it-JANG_4M/result.json"
+)
+GEMMA4_12B_JANG4M_AUTOQ4_CACHE = Path(
+    "build/current-gemma4-12b-jang4m-autoq4-mixed-swa-cache-live-20260610.json"
 )
 GEMMA4_12B_ISSUE191_STARTUP_VISIBLE = Path(
     "build/current-gemma4-12b-issue191-source-startup-visible-proof-20260609.json"
 )
 GEMMA4_12B_JANG4M_MEDIA_SMOKE = Path(
-    "build/current-gemma4-12b-jang4m-media-smoke-after-vlm-prefill-guard-20260607.json"
+    "build/current-gemma4-12b-mxfp4-jang4m-media-smoke-live-20260610.json"
 )
 GEMMA_QAT_NATIVE_MXFP4_INVENTORY = Path(
-    "build/current-gemma-qat-native-mxfp4-local-inventory-after-source-smoke-map-20260609.json"
+    "build/current-gemma-qat-native-mxfp4-local-inventory-after-all-jang4m-fullmedia-20260610.json"
 )
 STEP37_TEXTONLY_SMOKE = Path(
     "build/current-all-local-model-smoke-step37-jang2l-crack-tools-nomedia-textonly-harness-20260606/other_Step-3.7-Flash-JANG_2L-CRACK/result.json"
@@ -292,7 +304,107 @@ def _mimo_classifier_checks(
     ]
 
 
-def _mimo_checks(data: dict[str, Any], classifier: dict[str, Any]) -> list[dict[str, Any]]:
+def _mimo_media_current_checks(
+    media_runtime: dict[str, Any],
+    video_audio: dict[str, Any],
+    responses_tools_cache_ui: dict[str, Any],
+) -> list[dict[str, Any]]:
+    runtime_proven = media_runtime.get("proven")
+    runtime_proven = runtime_proven if isinstance(runtime_proven, dict) else {}
+    runtime_not_proven = media_runtime.get("not_proven")
+    runtime_not_proven = runtime_not_proven if isinstance(runtime_not_proven, dict) else {}
+    video_audio_proven = video_audio.get("proven")
+    video_audio_proven = video_audio_proven if isinstance(video_audio_proven, dict) else {}
+    video_audio_not_proven = video_audio.get("not_proven")
+    video_audio_not_proven = (
+        video_audio_not_proven if isinstance(video_audio_not_proven, dict) else {}
+    )
+    ui_cache = responses_tools_cache_ui.get("cache")
+    ui_cache = ui_cache if isinstance(ui_cache, dict) else {}
+    ui_runtime = responses_tools_cache_ui.get("runtime")
+    ui_runtime = ui_runtime if isinstance(ui_runtime, dict) else {}
+    source_media_runtime_green = (
+        media_runtime.get("exists") is True
+        and runtime_proven.get("api_routes_mllm") is True
+        and runtime_proven.get("loader_overlay_auto_enabled") is True
+        and runtime_proven.get("preserved_media_weights_bound") is True
+        and runtime_proven.get("live_chat_image_200") is True
+        and runtime_proven.get("prior_unsupported_media_400_cleared_for_source_image")
+        is True
+    )
+    source_video_audio_route_green = (
+        video_audio.get("exists") is True
+        and video_audio_proven.get("source_server_loads_as_mllm") is True
+        and video_audio_proven.get("media_weights_bound") is True
+        and video_audio_proven.get("video_request_reaches_runtime") is True
+        and video_audio_proven.get("video_http_200") is True
+        and video_audio_proven.get("audio_request_reaches_runtime") is True
+        and video_audio_proven.get("audio_http_200") is True
+    )
+    ui_responses_cache_green = (
+        responses_tools_cache_ui.get("exists") is True
+        and responses_tools_cache_ui.get("status") == "pass"
+        and responses_tools_cache_ui.get("classification")
+        == "dev_app_responses_tools_cache_green_exactness_still_bounded"
+        and ui_cache.get("nativeCacheSubtype") == "mimo_v2_asymmetric_swa"
+        and _positive_number(ui_cache.get("cacheHitTokens"))
+        and _positive_number(ui_cache.get("l2TokensOnDisk"))
+        and ui_runtime.get("quantizationProfile") == "JANGTQ_2"
+    )
+    return [
+        _check(
+            "mimo_jangtq2_current_source_media_runtime",
+            source_media_runtime_green,
+            str(MIMO_JANGTQ2_MEDIA_RUNTIME_SOURCE),
+            {
+                "status": media_runtime.get("status"),
+                "proven": runtime_proven,
+                "not_proven": runtime_not_proven,
+            },
+        ),
+        _check(
+            "mimo_jangtq2_current_source_video_audio_routes",
+            source_video_audio_route_green,
+            str(MIMO_JANGTQ2_VIDEO_AUDIO_SOURCE),
+            {
+                "status": video_audio.get("status"),
+                "proven": video_audio_proven,
+                "not_proven": video_audio_not_proven,
+            },
+        ),
+        _check(
+            "mimo_jangtq2_dev_app_responses_tools_cache",
+            ui_responses_cache_green,
+            str(MIMO_JANGTQ2_RESPONSES_TOOLS_CACHE_UI),
+            {
+                "status": responses_tools_cache_ui.get("status"),
+                "classification": responses_tools_cache_ui.get("classification"),
+                "cache": ui_cache,
+                "runtime": ui_runtime,
+            },
+        ),
+        _check(
+            "mimo_jangtq2_media_semantics_release_quality",
+            video_audio_not_proven.get("video_semantic_correctness") is not True
+            and video_audio_not_proven.get("solid_color_image_semantic_correctness")
+            is not True
+            and runtime_not_proven.get("mimo_exactness") is not True,
+            str(MIMO_JANGTQ2_VIDEO_AUDIO_SOURCE),
+            {
+                "source_not_proven": video_audio_not_proven,
+                "runtime_not_proven": runtime_not_proven,
+            },
+        ),
+    ]
+
+
+def _mimo_checks(
+    data: dict[str, Any],
+    classifier: dict[str, Any],
+    media_runtime: dict[str, Any],
+    video_audio: dict[str, Any],
+    responses_tools_cache_ui: dict[str, Any],
+) -> list[dict[str, Any]]:
     component_ok = data.get("component_ok")
     component_ok = component_ok if isinstance(component_ok, dict) else {}
     blockers = data.get("blockers")
@@ -307,6 +419,16 @@ def _mimo_checks(data: dict[str, Any], classifier: dict[str, Any]) -> list[dict[
     classifier_unresolved = (
         classifier_unresolved if isinstance(classifier_unresolved, dict) else {}
     )
+    media_runtime_rows = _mimo_media_current_checks(
+        media_runtime, video_audio, responses_tools_cache_ui
+    )
+    media_current_by_name = {row["name"]: row for row in media_runtime_rows}
+    current_source_media_runtime = media_current_by_name[
+        "mimo_jangtq2_current_source_media_runtime"
+    ]["ok"]
+    current_source_video_audio_routes = media_current_by_name[
+        "mimo_jangtq2_current_source_video_audio_routes"
+    ]["ok"]
     artifact_exactness_detail = {
         "blockers": blockers,
         "jangtq2_boundary": all_local_smoke.get("artifact_exactness_boundary"),
@@ -358,14 +480,36 @@ def _mimo_checks(data: dict[str, Any], classifier: dict[str, Any]) -> list[dict[
     ]
     for name in required:
         detail = artifact_exactness_detail if name == "artifact_exactness" else None
+        ok = component_ok.get(name) is True
+        if name == "media_runtime_implementation":
+            ok = ok or current_source_media_runtime
+            detail = {
+                "audit_component_ok": component_ok.get(name),
+                "current_source_media_runtime": current_source_media_runtime,
+                "source_evidence": str(MIMO_JANGTQ2_MEDIA_RUNTIME_SOURCE),
+            }
+        elif name == "mimo_media_wired":
+            ok = ok or (
+                current_source_media_runtime and current_source_video_audio_routes
+            )
+            detail = {
+                "audit_component_ok": component_ok.get(name),
+                "current_source_media_runtime": current_source_media_runtime,
+                "current_source_video_audio_routes": current_source_video_audio_routes,
+                "source_evidence": [
+                    str(MIMO_JANGTQ2_MEDIA_RUNTIME_SOURCE),
+                    str(MIMO_JANGTQ2_VIDEO_AUDIO_SOURCE),
+                ],
+            }
         rows.append(
             _check(
                 f"mimo_{name}",
-                component_ok.get(name) is True,
+                ok,
                 str(MIMO_AUDIT),
                 detail,
             )
         )
+    rows.extend(media_runtime_rows)
     rows.extend(_mimo_classifier_checks(data, classifier))
     return rows
 
@@ -547,6 +691,7 @@ def _responses_raw_sse_parity_checks(data: dict[str, Any]) -> list[dict[str, Any
         "local_empty_xml_arguments_fail_closed",
         "local_output_index_ordering_guard",
         "gateway_argument_stream_passthrough_guard",
+        "responses_previous_response_history_guard",
         "all_present_surfaces_have_valid_output_item_indices",
         "all_present_surfaces_have_required_reasoning",
         "no_reasoning_disable_workaround",
@@ -724,21 +869,38 @@ def _smoke_mixed_swa_checks(
     expected_mllm: bool,
     cache_detail: str,
     subtype: str | None = None,
+    cache_proof: dict[str, Any] | None = None,
+    cache_path: Path | None = None,
 ) -> list[dict[str, Any]]:
     row = data.get("row") if isinstance(data.get("row"), dict) else {}
     capabilities = _get(data, "capabilities", "body", default={})
-    native = _get(data, "cache_after", "body", "native_cache", default={})
-    block_disk = _get(data, "cache_after", "body", "block_disk_cache", default={})
-    totals = _get(data, "cache_after", "body", "cache_totals", default={})
+    cache_source = cache_proof if isinstance(cache_proof, dict) else data
+    cache_evidence = cache_path or path
+    native = (
+        cache_source.get("native_cache")
+        if isinstance(cache_source.get("native_cache"), dict)
+        else _get(cache_source, "cache_after", "body", "native_cache", default={})
+    )
+    block_disk = _get(cache_source, "cache_after", "block_disk_cache", default={})
+    if not isinstance(block_disk, dict) or not block_disk:
+        block_disk = _get(cache_source, "cache_after", "body", "block_disk_cache", default={})
+    totals = _get(cache_source, "cache_after", "cache_totals", default={})
+    if not isinstance(totals, dict) or not totals:
+        totals = _get(cache_source, "cache_after", "body", "cache_totals", default={})
+    cache_reuse_ok = _has_cache_reuse_request(data, cache_detail) or (
+        _get(cache_source, "checks", "cache_second_hit") is True
+        and _get(cache_source, "second", "usage", "prompt_tokens_details", "cache_detail")
+        == cache_detail
+    )
     return _simple_artifact_checks(name, data) + [
         _check(f"{name}_request_validations_clean", _all_request_validations_clean(data), str(path), data.get("failures")),
         _check(f"{name}_mllm_classification", row.get("is_mllm") is expected_mllm, str(path), row.get("is_mllm")),
         _check(f"{name}_tool_parser", capabilities.get("tool_parser") == tool_parser, str(path), capabilities.get("tool_parser")),
         _check(f"{name}_reasoning_parser", capabilities.get("reasoning_parser") == reasoning_parser, str(path), capabilities.get("reasoning_parser")),
         _check(f"{name}_tool_call_record_fact", _has_record_fact_tool_call(data), str(path)),
-        _check(f"{name}_cache_reuse_detail", _has_cache_reuse_request(data, cache_detail), str(path), cache_detail),
-        _check(f"{name}_native_mixed_swa_cache", _native_mixed_swa_cache_ok(native, family=family, subtype=subtype), str(path), native),
-        _check(f"{name}_block_l2_written", _positive_number(_get(block_disk, "disk_writes")) and _positive_number(_get(totals, "l2_block_tokens_on_disk")), str(path), block_disk),
+        _check(f"{name}_cache_reuse_detail", cache_reuse_ok, str(cache_evidence), cache_detail),
+        _check(f"{name}_native_mixed_swa_cache", _native_mixed_swa_cache_ok(native, family=family, subtype=subtype), str(cache_evidence), native),
+        _check(f"{name}_block_l2_written", _positive_number(_get(block_disk, "disk_writes")) and _positive_number(_get(totals, "l2_block_tokens_on_disk")), str(cache_evidence), block_disk),
     ]
 
 
@@ -1778,6 +1940,11 @@ def _build(root: Path) -> dict[str, Any]:
     release_manifest = _load_json(root / RELEASE_MANIFEST)
     mimo = _load_json(root / MIMO_AUDIT)
     mimo_classifier = _load_json(root / MIMO_NO_SOURCE_EXACTNESS_CLASSIFIER)
+    mimo_media_runtime = _load_json(root / MIMO_JANGTQ2_MEDIA_RUNTIME_SOURCE)
+    mimo_video_audio = _load_json(root / MIMO_JANGTQ2_VIDEO_AUDIO_SOURCE)
+    mimo_responses_tools_cache_ui = _load_json(
+        root / MIMO_JANGTQ2_RESPONSES_TOOLS_CACHE_UI
+    )
     noheavy = _load_json(root / NOHEAVY_API_CACHE)
     responses_raw_sse = _load_json(root / RESPONSES_RAW_SSE_PARITY)
     api_surface = _load_json(root / API_SURFACE_CONTRACT)
@@ -1796,6 +1963,7 @@ def _build(root: Path) -> dict[str, Any]:
     qwen35_raw_sse = _load_json(root / QWEN35_RAW_SSE_PARITY)
     qwen35_installed_video = _load_json(root / QWEN35_INSTALLED_VIDEO)
     gemma4 = _load_json(root / GEMMA4_12B_JANG4M_SMOKE)
+    gemma4_autoq4_cache = _load_json(root / GEMMA4_12B_JANG4M_AUTOQ4_CACHE)
     gemma4_issue191_startup = _load_json(root / GEMMA4_12B_ISSUE191_STARTUP_VISIBLE)
     gemma4_media = _load_json(root / GEMMA4_12B_JANG4M_MEDIA_SMOKE)
     gemma_qat = _load_json(root / GEMMA_QAT_NATIVE_MXFP4_INVENTORY)
@@ -1817,7 +1985,13 @@ def _build(root: Path) -> dict[str, Any]:
         "ui_settings_parser_cache_contract": _panel_settings_contract_checks(panel_settings),
         "tool_json_xml_code_contract": _tool_call_contract_checks(tool_call),
         "n2_pro_397b": _n2_pro_397b_checks(objective_digest),
-        "mimo_v25_jangtq2": _mimo_checks(mimo, mimo_classifier),
+        "mimo_v25_jangtq2": _mimo_checks(
+            mimo,
+            mimo_classifier,
+            mimo_media_runtime,
+            mimo_video_audio,
+            mimo_responses_tools_cache_ui,
+        ),
         "qwen36_mtp": _qwen27_cancel_checks(qwen27)
         + _qwen27_api_parity_checks(qwen27_api)
         + _qwen27_restart_l2_checks(qwen27_restart)
@@ -1849,6 +2023,8 @@ def _build(root: Path) -> dict[str, Any]:
             reasoning_parser="gemma4",
             expected_mllm=True,
             cache_detail="paged+mixed_swa",
+            cache_proof=gemma4_autoq4_cache,
+            cache_path=GEMMA4_12B_JANG4M_AUTOQ4_CACHE,
         )
         + _gemma4_12b_issue191_startup_checks(gemma4_issue191_startup)
         + _gemma4_12b_media_checks(gemma4_media),

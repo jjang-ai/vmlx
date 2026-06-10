@@ -4276,7 +4276,7 @@ def _real_ui_mixed_swa_storage_quantization_seen(
         and storage.get("mode") == "storage_boundary"
         and storage.get("bits") == 4
         and storage.get("group_size") == 64
-        and storage.get("applies_to") == "full_and_sliding_attention_kv"
+        and storage.get("applies_to") == "full_attention_kv_only"
         and storage.get("metadata_policy") == "preserve_rotating_window_metadata"
     ):
         return True

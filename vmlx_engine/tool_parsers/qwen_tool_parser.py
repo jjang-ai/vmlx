@@ -89,6 +89,10 @@ class QwenToolParser(ToolParser):
         for name, args_str in bracket_matches:
             try:
                 arguments = json.loads(args_str)
+                if not self._arguments_satisfy_required_schema(
+                    name.strip(), arguments, request
+                ):
+                    continue
                 tool_calls.append(
                     {
                         "id": generate_tool_id(),
@@ -114,13 +118,18 @@ class QwenToolParser(ToolParser):
                 name = data.get("name", "")
                 arguments = data.get("arguments", {})
                 if name:
+                    serialized_arguments = self._serialize_tool_arguments(
+                        name, arguments, request
+                    )
+                    if not self._arguments_satisfy_required_schema(
+                        name, serialized_arguments, request
+                    ):
+                        continue
                     tool_calls.append(
                         {
                             "id": generate_tool_id(),
                             "name": name,
-                            "arguments": self._serialize_tool_arguments(
-                                name, arguments, request
-                            ),
+                            "arguments": serialized_arguments,
                         }
                     )
             except json.JSONDecodeError:

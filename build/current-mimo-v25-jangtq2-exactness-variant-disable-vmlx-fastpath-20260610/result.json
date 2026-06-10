@@ -1,0 +1,198 @@
+{
+  "base_url": "http://127.0.0.1:8897",
+  "failed_labels": [
+    "plain_exact_blue_cat",
+    "plain_exact_sentinel",
+    "plain_exact_chat_blue_cat",
+    "plain_exact_chat_sentinel",
+    "json_blue_cat",
+    "json_sentinel",
+    "tool_blue_cat",
+    "tool_sentinel_json_call"
+  ],
+  "model": "JANGQ-AI/MiMo-V2.5-JANGTQ_2",
+  "notes": [
+    "no source-vs-quant load",
+    "no parser-side semantic repair",
+    "no JSON repair scoring",
+    "expected values must be model-emitted exactly"
+  ],
+  "requests": [
+    {
+      "code": 200,
+      "content": "blue",
+      "elapsed_s": 1.279,
+      "error": null,
+      "expected": "blue-cat",
+      "finish_reason": "stop",
+      "label": "plain_exact_blue_cat",
+      "parsed": null,
+      "pass": false,
+      "raw": "{\"id\":\"cmpl-c92fc5ec\",\"object\":\"text_completion\",\"created\":1781086492,\"model\":\"JANGQ-AI/MiMo-V2.5-JANGTQ_2\",\"choices\":[{\"index\":0,\"text\":\"blue\",\"logprobs\":null,\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":37,\"completion_tokens\":2,\"total_tokens\":39,\"prompt_tokens_details\":null}}",
+      "route": "completions",
+      "usage": {
+        "completion_tokens": 2,
+        "prompt_tokens": 37,
+        "prompt_tokens_details": null,
+        "total_tokens": 39
+      }
+    },
+    {
+      "code": 200,
+      "content": "B7 CAT-09",
+      "elapsed_s": 0.809,
+      "error": null,
+      "expected": "B7-CAT-09",
+      "finish_reason": "stop",
+      "label": "plain_exact_sentinel",
+      "parsed": null,
+      "pass": false,
+      "raw": "{\"id\":\"cmpl-880067c2\",\"object\":\"text_completion\",\"created\":1781086493,\"model\":\"JANGQ-AI/MiMo-V2.5-JANGTQ_2\",\"choices\":[{\"index\":0,\"text\":\"B7 CAT-09\",\"logprobs\":null,\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":42,\"completion_tokens\":7,\"total_tokens\":49,\"prompt_tokens_details\":null}}",
+      "route": "completions",
+      "usage": {
+        "completion_tokens": 7,
+        "prompt_tokens": 42,
+        "prompt_tokens_details": null,
+        "total_tokens": 49
+      }
+    },
+    {
+      "code": 200,
+      "content": "blue grass",
+      "elapsed_s": 0.636,
+      "error": null,
+      "expected": "blue-cat",
+      "finish_reason": "stop",
+      "label": "plain_exact_chat_blue_cat",
+      "parsed": null,
+      "pass": false,
+      "raw": "{\"id\":\"chatcmpl-bdab361b\",\"object\":\"chat.completion\",\"created\":1781086494,\"model\":\"JANGQ-AI/MiMo-V2.5-JANGTQ_2\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"blue grass\",\"tool_calls\":null,\"reasoning_content\":null},\"logprobs\":null,\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":36,\"completion_tokens\":3,\"total_tokens\":39,\"prompt_tokens_details\":null},\"warnings\":null}",
+      "route": "chat",
+      "usage": {
+        "completion_tokens": 3,
+        "prompt_tokens": 36,
+        "prompt_tokens_details": null,
+        "total_tokens": 39
+      }
+    },
+    {
+      "code": 200,
+      "content": "B7 CAT-09",
+      "elapsed_s": 0.795,
+      "error": null,
+      "expected": "B7-CAT-09",
+      "finish_reason": "stop",
+      "label": "plain_exact_chat_sentinel",
+      "parsed": null,
+      "pass": false,
+      "raw": "{\"id\":\"chatcmpl-5a65c000\",\"object\":\"chat.completion\",\"created\":1781086494,\"model\":\"JANGQ-AI/MiMo-V2.5-JANGTQ_2\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"B7 CAT-09\",\"tool_calls\":null,\"reasoning_content\":null},\"logprobs\":null,\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":41,\"completion_tokens\":7,\"total_tokens\":48,\"prompt_tokens_details\":null},\"warnings\":null}",
+      "route": "chat",
+      "usage": {
+        "completion_tokens": 7,
+        "prompt_tokens": 41,
+        "prompt_tokens_details": null,
+        "total_tokens": 48
+      }
+    },
+    {
+      "code": 200,
+      "content": "{\"status\":\"ok\",\"value\":\"blue\",\"count\":3}",
+      "elapsed_s": 1.106,
+      "error": null,
+      "expected": {
+        "count": 3,
+        "status": "ok",
+        "value": "blue-cat"
+      },
+      "finish_reason": "stop",
+      "label": "json_blue_cat",
+      "parsed": {
+        "count": 3,
+        "status": "ok",
+        "value": "blue"
+      },
+      "pass": false,
+      "raw": "{\"id\":\"chatcmpl-7138164d\",\"object\":\"chat.completion\",\"created\":1781086496,\"model\":\"JANGQ-AI/MiMo-V2.5-JANGTQ_2\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"{\\\"status\\\":\\\"ok\\\",\\\"value\\\":\\\"blue\\\",\\\"count\\\":3}\",\"tool_calls\":null,\"reasoning_content\":null},\"logprobs\":null,\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":52,\"completion_tokens\":14,\"total_tokens\":66,\"prompt_tokens_details\":null},\"warnings\":null}",
+      "route": "chat",
+      "usage": {
+        "completion_tokens": 14,
+        "prompt_tokens": 52,
+        "prompt_tokens_details": null,
+        "total_tokens": 66
+      }
+    },
+    {
+      "code": 200,
+      "content": "{\"status\":\"ok\",\"value\":\"B7CAT-09\",\"count\":3}",
+      "elapsed_s": 1.316,
+      "error": null,
+      "expected": {
+        "count": 3,
+        "status": "ok",
+        "value": "B7-CAT-09"
+      },
+      "finish_reason": "stop",
+      "label": "json_sentinel",
+      "parsed": {
+        "count": 3,
+        "status": "ok",
+        "value": "B7CAT-09"
+      },
+      "pass": false,
+      "raw": "{\"id\":\"chatcmpl-0b57c737\",\"object\":\"chat.completion\",\"created\":1781086497,\"model\":\"JANGQ-AI/MiMo-V2.5-JANGTQ_2\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"{\\\"status\\\":\\\"ok\\\",\\\"value\\\":\\\"B7CAT-09\\\",\\\"count\\\":3}\",\"tool_calls\":null,\"reasoning_content\":null},\"logprobs\":null,\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":57,\"completion_tokens\":20,\"total_tokens\":77,\"prompt_tokens_details\":null},\"warnings\":null}",
+      "route": "chat",
+      "usage": {
+        "completion_tokens": 20,
+        "prompt_tokens": 57,
+        "prompt_tokens_details": null,
+        "total_tokens": 77
+      }
+    },
+    {
+      "code": 200,
+      "content": "",
+      "elapsed_s": 4.145,
+      "error": null,
+      "expected": {
+        "value": "blue-cat"
+      },
+      "finish_reason": "tool_calls",
+      "label": "tool_blue_cat",
+      "parsed": {
+        "value": "blue"
+      },
+      "pass": false,
+      "raw": "{\"id\":\"chatcmpl-84c3fa39\",\"object\":\"chat.completion\",\"created\":1781086501,\"model\":\"JANGQ-AI/MiMo-V2.5-JANGTQ_2\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"tool_calls\":[{\"id\":\"call_6bc8fa31\",\"type\":\"function\",\"function\":{\"name\":\"record_fact\",\"arguments\":\"{\\\"value\\\": \\\"blue\\\"}\"}}],\"content\":null},\"finish_reason\":\"tool_calls\"}],\"usage\":{\"prompt_tokens\":269,\"completion_tokens\":21,\"total_tokens\":290}}",
+      "route": "chat",
+      "usage": {
+        "completion_tokens": 21,
+        "prompt_tokens": 269,
+        "total_tokens": 290
+      }
+    },
+    {
+      "code": 200,
+      "content": "",
+      "elapsed_s": 4.484,
+      "error": null,
+      "expected": {
+        "value": "B7-CAT-09"
+      },
+      "finish_reason": "tool_calls",
+      "label": "tool_sentinel_json_call",
+      "parsed": {
+        "value": "B7CAT-09"
+      },
+      "pass": false,
+      "raw": "{\"id\":\"chatcmpl-f53281b1\",\"object\":\"chat.completion\",\"created\":1781086506,\"model\":\"JANGQ-AI/MiMo-V2.5-JANGTQ_2\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"tool_calls\":[{\"id\":\"call_d361a861\",\"type\":\"function\",\"function\":{\"name\":\"record_fact\",\"arguments\":\"{\\\"value\\\": \\\"B7CAT-09\\\"}\"}}],\"content\":null},\"finish_reason\":\"tool_calls\"}],\"usage\":{\"prompt_tokens\":281,\"completion_tokens\":25,\"total_tokens\":306}}",
+      "route": "chat",
+      "usage": {
+        "completion_tokens": 25,
+        "prompt_tokens": 281,
+        "total_tokens": 306
+      }
+    }
+  ],
+  "schema": "vmlx-mimo-v2-exactness-variant-probe-v1",
+  "status": "open"
+}

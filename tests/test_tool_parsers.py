@@ -286,6 +286,29 @@ class TestQwenToolParser:
         assert result.tools_called
         assert len(result.tool_calls) == 2
 
+    def test_xml_empty_arguments_with_required_schema_fails_closed(self, parser):
+        text = '<tool_call>{"name": "exec_command", "arguments": {}}</tool_call>'
+        request = {
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "exec_command",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {"cmd": {"type": "string"}},
+                            "required": ["cmd"],
+                        },
+                    },
+                }
+            ]
+        }
+
+        result = parser.extract_tool_calls(text, request=request)
+
+        assert not result.tools_called
+        assert result.tool_calls == []
+
     def test_no_tool_call(self, parser):
         """Test text without tool calls."""
         text = "I can help you with that question."
@@ -599,6 +622,29 @@ class TestNemotronToolParser:
 
         assert result.tools_called
         assert len(result.tool_calls) == 2
+
+    def test_empty_function_with_required_schema_fails_closed(self, parser):
+        text = "<tool_call><function=exec_command></function></tool_call>"
+        request = {
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "exec_command",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {"cmd": {"type": "string"}},
+                            "required": ["cmd"],
+                        },
+                    },
+                }
+            ]
+        }
+
+        result = parser.extract_tool_calls(text, request=request)
+
+        assert not result.tools_called
+        assert result.tool_calls == []
 
     def test_no_tool_call(self, parser):
         """Test text without tool calls."""

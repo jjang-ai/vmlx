@@ -1,0 +1,178 @@
+{
+  "status": "open",
+  "scope": "MiMo V2.5 JANGTQ_2 native TurboQuant sidecar and gather-kernel contract classifier",
+  "model_path": "/Users/eric/.mlxstudio/models/JANGQ-AI/MiMo-V2.5-JANGTQ_2",
+  "prior_live_exactness_artifact": "build/current-mimo-v25-jangtq2-exactness-classifier-after-no-fastpath-live-20260610.json",
+  "blocker_reduced": "MiMo JANGTQ_2 literal/tool/JSON exactness diagnosis after tokenizer/template/cache/parser/vMLX-fastpath exclusions",
+  "sidecar_contract": {
+    "command": ".venv/bin/python - <<'PY' ... compare jangtq_runtime.safetensors tables against jang_tools.turboquant.tq_kernel generated tables ... PY",
+    "runtime_sidecar": "/Users/eric/.mlxstudio/models/JANGQ-AI/MiMo-V2.5-JANGTQ_2/jangtq_runtime.safetensors",
+    "keys": [
+      "codebook.2048.2",
+      "codebook.4096.2",
+      "signs.2048.42",
+      "signs.4096.42"
+    ],
+    "comparisons": {
+      "codebook.2048.2": {
+        "sidecar_shape": [
+          4
+        ],
+        "generated_shape": [
+          4
+        ],
+        "sidecar_dtype": "float32",
+        "generated_dtype": "float32",
+        "max_abs_diff": 0.0,
+        "exact_same": true
+      },
+      "codebook.4096.2": {
+        "sidecar_shape": [
+          4
+        ],
+        "generated_shape": [
+          4
+        ],
+        "sidecar_dtype": "float32",
+        "generated_dtype": "float32",
+        "max_abs_diff": 0.0,
+        "exact_same": true
+      },
+      "signs.2048.42": {
+        "sidecar_shape": [
+          2048
+        ],
+        "generated_shape": [
+          2048
+        ],
+        "sidecar_dtype": "float32",
+        "generated_dtype": "float32",
+        "max_abs_diff": 0.0,
+        "exact_same": true
+      },
+      "signs.4096.42": {
+        "sidecar_shape": [
+          4096
+        ],
+        "generated_shape": [
+          4096
+        ],
+        "sidecar_dtype": "float32",
+        "generated_dtype": "float32",
+        "max_abs_diff": 0.0,
+        "exact_same": true
+      }
+    },
+    "classification": "vMLX using generated JANGTQ tables is equivalent to hydrating the current artifact sidecar tables for this bundle"
+  },
+  "artifact_layout": {
+    "command": ".venv/bin/python - <<'PY' ... inspect model.safetensors.index.json and selected safetensor headers ... PY",
+    "indexed_weight_keys": 1415,
+    "tq_packed_groups": 141,
+    "tq_norms_groups": 141,
+    "tq_bits_groups": 141,
+    "indexed_codebook_keys": 0,
+    "indexed_sign_keys": 0,
+    "sample_groups": {
+      "model.layers.1.mlp.switch_mlp.gate_proj": {
+        "packed_shape": [
+          256,
+          2048,
+          256
+        ],
+        "norms_shape": [
+          256,
+          2048
+        ],
+        "bits": 2,
+        "in_features": 4096
+      },
+      "model.layers.1.mlp.switch_mlp.up_proj": {
+        "packed_shape": [
+          256,
+          2048,
+          256
+        ],
+        "norms_shape": [
+          256,
+          2048
+        ],
+        "bits": 2,
+        "in_features": 4096
+      },
+      "model.layers.1.mlp.switch_mlp.down_proj": {
+        "packed_shape": [
+          256,
+          4096,
+          128
+        ],
+        "norms_shape": [
+          256,
+          4096
+        ],
+        "bits": 2,
+        "in_features": 2048
+      }
+    },
+    "classification": "prestacked SwitchMLP tensor shapes match the vMLX TurboQuantSwitchLinear binding expectations for current MiMo JANGTQ_2"
+  },
+  "kernel_contract": {
+    "command": ".venv/bin/python - <<'PY' ... compare jang_tools.turboquant.gather_tq_matmul against explicit selected-expert dequant reference for real MiMo tensors ... PY",
+    "tested_real_tensor_prefix": "model.layers.1.mlp.switch_mlp",
+    "tested_modes": {
+      "gate_proj_broadcast": {
+        "shape": [
+          1,
+          4,
+          1,
+          32
+        ],
+        "max_abs_diff": 0.00000095367431640625,
+        "mean_abs_diff": 0.0000002500019036233425
+      },
+      "gate_proj_sorted": {
+        "shape": [
+          4,
+          1,
+          32
+        ],
+        "max_abs_diff": 0.00000095367431640625,
+        "mean_abs_diff": 0.0000002362648956477642
+      },
+      "down_proj_per_row": {
+        "shape": [
+          1,
+          4,
+          1,
+          32
+        ],
+        "max_abs_diff": 0.00000035762786865234375,
+        "mean_abs_diff": 0.00000010368603398092091
+      }
+    },
+    "classification": "native gather TurboQuant kernel agrees with explicit selected-expert dequant reference for MiMo broadcast, sorted, and per-row shape contracts"
+  },
+  "excluded_causes": {
+    "different_sidecar_codebook_or_sign_tables_ignored_by_vmlx": true,
+    "prestacked_switch_mlp_shape_binding_mismatch_for_sampled_groups": true,
+    "native_gather_tq_matmul_shape_semantics_for_broadcast_sorted_per_row": true
+  },
+  "still_not_excluded": {
+    "full_source_vs_quant_first_divergent_logit": true,
+    "2bit_routed_expert_artifact_quality_or_logit_margin": true,
+    "full_layer_full_vocab_generation_quality": true,
+    "corrected_requant_profile_needed": true
+  },
+  "classification": "MiMo JANGTQ_2 exactness remains artifact/logit/quant-quality blocked. Current evidence does not justify a vMLX parser/cache/sidecar/gather-kernel fix for literal mutation.",
+  "must_not_claim": [
+    "Do not claim MiMo JANGTQ_2 exactness is fixed.",
+    "Do not claim MiMo JANGTQ_2 release clearance.",
+    "Do not rewrite tool args, JSON values, or visible text to hide literal mutations.",
+    "Do not keep chasing sidecar codebook hydration or gather shape semantics for this current artifact unless new evidence contradicts this classifier."
+  ],
+  "other_agent_next": [
+    "Use this artifact to avoid duplicating sidecar/codebook/gather-kernel investigation.",
+    "Next useful proof is source-vs-quant first divergent token/logit with the source endpoint running, or a corrected MiMo JANGTQ artifact profile such as gate=3/up=2/down=3 or gate=3/up=3/down=3.",
+    "If doing release work, keep MiMo exactness red and document it as a checkpoint limitation unless Eric explicitly accepts that limitation."
+  ]
+}

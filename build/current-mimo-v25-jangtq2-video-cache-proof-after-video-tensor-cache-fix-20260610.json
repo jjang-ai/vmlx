@@ -1,0 +1,102 @@
+{
+  "status": "open",
+  "scope": "MiMo V2.5 JANGTQ_2 video preprocessing cache and direct video-placeholder routing after source fix",
+  "base_commit": "6458a1ea",
+  "model_path": "/Users/eric/.mlxstudio/models/JANGQ-AI/MiMo-V2.5-JANGTQ_2",
+  "served_model_name": "mimo-v25-jangtq2-media-source",
+  "source_changes": {
+    "vmlx_engine/models/mllm.py": [
+      "Direct MLXMultimodalLM chat now expands video placeholders to image-frame placeholders for mimo_v2 as well as gemma4_unified and step3p7.",
+      "Direct MLXMultimodalLM stream_chat now uses the same gemma4_unified/step3p7/mimo_v2 video-placeholder expansion set as nonstream chat."
+    ],
+    "vmlx_engine/vision_embedding_cache.py": [
+      "PixelCacheEntry now carries optional video_pixel_values and video_grid_thw so video processor outputs can survive cache hits."
+    ],
+    "vmlx_engine/mllm_batch_generator.py": [
+      "Batched MLLM pixel-cache restore now restores video_pixel_values and video_grid_thw from cache entries.",
+      "Batched MLLM pixel-cache store now stores video-only requests when video_pixel_values is present, not only image requests with pixel_values."
+    ]
+  },
+  "verification": {
+    "py_compile": "passed: vmlx_engine/models/mllm.py vmlx_engine/mllm_batch_generator.py vmlx_engine/vision_embedding_cache.py",
+    "focused_tests": "passed: 26 selected MiMo media tests in tests/test_mimo_v2_media_runtime.py and tests/test_mimo_v2_media_capability_gate.py",
+    "git_diff_check": "passed"
+  },
+  "live_source_server": {
+    "command": "VMLINUX_DISABLE_AUTO_BROWSER=1 VMLX_L2_CACHE_DIR=build/mimo-jangtq2-media-live-l2-after-video-cache-20260610 .venv/bin/python -m vmlx_engine.server --model /Users/eric/.mlxstudio/models/JANGQ-AI/MiMo-V2.5-JANGTQ_2 --port 8877 --host 127.0.0.1 --mllm --served-model-name mimo-v25-jangtq2-media-source --max-tokens 64 --default-temperature 0 --default-top-p 1",
+    "startup": {
+      "model_loaded": true,
+      "media_overlay": "MiMo-V2 media runtime auto-enabled from preserved bundle contract: vision=True audio=True",
+      "media_bound": "MiMo-V2 load bound preserved media weights: visual=364 audio_encoder=75 speech_embeddings=20",
+      "media_assigned": "MiMo-V2 load assigned 459 preserved media tensors to runtime modules",
+      "cache_layout": "mixed full KVCache plus RotatingKVCache across 48 layers",
+      "generic_turboquant_kv": "skipped by design for MiMo native asymmetric full/SWA RotatingKVCache metadata",
+      "metal_baseline_active_gb": 76.5,
+      "metal_baseline_max_ws_gb": 107.5
+    }
+  },
+  "live_repeated_video_probe": {
+    "input": "build/media-fixtures/red-1s-64x64.mp4",
+    "request": {
+      "route": "/v1/chat/completions",
+      "content_type": "video_url",
+      "prompt": "What color dominates this video? Answer one word.",
+      "temperature": 0,
+      "top_p": 1,
+      "max_tokens": 48
+    },
+    "first_response": {
+      "status_code": 200,
+      "assistant_content": "White.",
+      "usage_prompt_tokens": 133,
+      "usage_completion_tokens": 3
+    },
+    "second_response": {
+      "status_code": 200,
+      "assistant_content": "White.",
+      "usage_prompt_tokens": 133,
+      "usage_completion_tokens": 3
+    },
+    "health_after_second_request": {
+      "pixel_cache_hits": 1,
+      "pixel_cache_misses": 1,
+      "pixel_hit_rate": 0.5,
+      "total_time_saved_seconds": 0.1368187080079224,
+      "pixel_cache_size": 1,
+      "native_cache_family": "mimo_v2",
+      "native_cache_subtype": "mimo_v2_asymmetric_swa",
+      "generic_turboquant_kv_enabled": false
+    },
+    "classification": "video preprocessing cache reuse is live and no longer structurally image-only; MiMo visual semantic correctness remains red because the red fixture was answered as White."
+  },
+  "proven": {
+    "source_compiles": true,
+    "focused_mimo_media_tests_pass": true,
+    "real_mimo_jangtq2_model_loaded": true,
+    "video_request_reaches_runtime": true,
+    "repeated_video_request_http_200": true,
+    "video_pixel_cache_hit_after_first_request": true,
+    "video_cache_contract_preserves_video_tensor_fields_in_source": true,
+    "generic_turboquant_kv_skipped_by_mimo_native_cache_contract": true
+  },
+  "not_proven": {
+    "mimo_video_semantic_correctness": true,
+    "mimo_solid_color_image_semantic_correctness": true,
+    "mimo_text_exactness": true,
+    "mimo_tool_exactness": true,
+    "mimo_json_exactness": true,
+    "fresh_process_l2_restore": true,
+    "installed_app_parity": true,
+    "release_clearance": true
+  },
+  "must_not_claim": [
+    "Do not claim MiMo JANGTQ_2 visual quality is green: the red video still answered White.",
+    "Do not claim MiMo exactness is fixed: text exactness still mutates MIMO-OK to MIMOOK in current live proof.",
+    "Do not claim release readiness, installed-app parity, or L2 restore from this artifact."
+  ],
+  "other_agent_next": [
+    "Consume the video-cache source fix when rebuilding the dev app or package; rerun MiMo JANGTQ_2 UI video cache rows after the app includes these files.",
+    "For MiMo JANGTQ_2 visual quality, compare source/dequant/reference vision embeddings or logits against the quant artifact; current evidence points beyond request routing/cache preservation.",
+    "For MiMo exactness, continue artifact/logit/quant-contract diagnosis rather than parser, JSON repair, sampling clamp, prefix cache, or L2 chasing."
+  ]
+}

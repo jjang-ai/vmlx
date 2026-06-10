@@ -6,6 +6,7 @@
       "argument_done_count": 1,
       "authoritative_arguments": "{\"value\": \"blue-cat\"}",
       "conflicting_output_indices": [],
+      "content_delta_count": 0,
       "done_arguments": "{\"value\": \"blue-cat\"}",
       "empty_final_item_with_done_args": false,
       "enable_thinking_resolved_false": false,
@@ -16,6 +17,13 @@
       "expected_model_advertised": true,
       "expected_model_match": true,
       "final_item_arguments": "{\"value\": \"blue-cat\"}",
+      "final_response_consistent_with_stream": true,
+      "final_response_function_arguments": "{\"value\": \"blue-cat\"}",
+      "final_response_message_text": "",
+      "final_response_output_types": [
+        "message",
+        "function_call"
+      ],
       "function_item_count": 2,
       "function_name": "record_fact",
       "has_authoritative_arguments": true,
@@ -40,15 +48,20 @@
       "path": "build/responses-sse-captures-20260609/direct-gemma4-e2b-after-gemma4-parser.sse",
       "present": true,
       "reasoning_disabled_by_server_log": false,
+      "reasoning_done_count": 0,
       "reasoning_enabled_by_server_log": true,
       "reasoning_events": 0,
-      "reconstructed_arguments": "{\"value\": \"blue-cat\"}"
+      "reasoning_lifecycle_complete": true,
+      "reasoning_output_item_count": 0,
+      "reconstructed_arguments": "{\"value\": \"blue-cat\"}",
+      "reconstructed_content": ""
     },
     "gateway": {
       "argument_delta_count": 2,
       "argument_done_count": 1,
       "authoritative_arguments": "{\"value\": \"blue-cat\"}",
       "conflicting_output_indices": [],
+      "content_delta_count": 0,
       "done_arguments": "{\"value\": \"blue-cat\"}",
       "empty_final_item_with_done_args": false,
       "enable_thinking_resolved_false": false,
@@ -59,6 +72,13 @@
       "expected_model_advertised": true,
       "expected_model_match": true,
       "final_item_arguments": "{\"value\": \"blue-cat\"}",
+      "final_response_consistent_with_stream": true,
+      "final_response_function_arguments": "{\"value\": \"blue-cat\"}",
+      "final_response_message_text": "",
+      "final_response_output_types": [
+        "message",
+        "function_call"
+      ],
       "function_item_count": 2,
       "function_name": "record_fact",
       "has_authoritative_arguments": true,
@@ -83,9 +103,13 @@
       "path": "build/responses-sse-captures-20260609/gateway-gemma4-e2b-after-parser.sse",
       "present": true,
       "reasoning_disabled_by_server_log": false,
+      "reasoning_done_count": 0,
       "reasoning_enabled_by_server_log": true,
       "reasoning_events": 0,
-      "reconstructed_arguments": "{\"value\": \"blue-cat\"}"
+      "reasoning_lifecycle_complete": true,
+      "reasoning_output_item_count": 0,
+      "reconstructed_arguments": "{\"value\": \"blue-cat\"}",
+      "reconstructed_content": ""
     },
     "tunnel": {
       "argument_delta_count": 0,
@@ -104,6 +128,7 @@
         "models/Step-3.7-Flash-JANG_2L-CRACK"
       ],
       "conflicting_output_indices": [],
+      "content_delta_count": 0,
       "done_arguments": "",
       "empty_final_item_with_done_args": false,
       "error_code": "model_not_found",
@@ -115,6 +140,10 @@
       "expected_model_advertised": false,
       "expected_model_match": false,
       "final_item_arguments": "",
+      "final_response_consistent_with_stream": true,
+      "final_response_function_arguments": "",
+      "final_response_message_text": "",
+      "final_response_output_types": [],
       "function_item_count": 0,
       "function_name": "",
       "has_authoritative_arguments": false,
@@ -128,12 +157,18 @@
       "path": "build/responses-sse-captures-20260609/tunnel-gemma4-e2b-after-parser.sse",
       "present": true,
       "raw_json_error": true,
+      "reasoning_done_count": 0,
       "reasoning_events": 0,
-      "reconstructed_arguments": ""
+      "reasoning_lifecycle_complete": true,
+      "reasoning_output_item_count": 0,
+      "reconstructed_arguments": "",
+      "reconstructed_content": ""
     }
   },
   "checks": {
     "all_present_surfaces_have_authoritative_args": false,
+    "all_present_surfaces_have_complete_reasoning_lifecycle": true,
+    "all_present_surfaces_have_consistent_final_output": true,
     "all_present_surfaces_have_required_reasoning": false,
     "all_present_surfaces_have_valid_output_item_indices": true,
     "all_present_surfaces_match_expected_arguments": false,
@@ -155,6 +190,7 @@
       "direct": true,
       "gateway": true
     },
+    "responses_previous_response_history_guard": true,
     "tunnel_capture_present": true,
     "tunnel_expected_model_advertised": false
   },
@@ -170,6 +206,7 @@
       "gateway_responses_function_call_arguments_streaming": true,
       "gateway_responses_reasoning_empty_final_arguments_streaming": true,
       "gateway_stale_responses_port_rejection": true,
+      "responses_previous_response_history": true,
       "responses_streaming_tool_call_arguments_and_indexes": true
     },
     "gateway_argument_stream_passthrough_guard": true,
@@ -180,6 +217,7 @@
     "missing_markers": [],
     "path": "build/current-noheavy-api-cache-contract-after-responses-reasoning-empty-final-args-gateway-20260609.json",
     "present": true,
+    "responses_previous_response_history_guard": true,
     "status": "pass"
   },
   "missing_captures": [],

@@ -1,0 +1,246 @@
+{
+  "request": {
+    "model": "gemma-4-12b-it-jang_4m-crack",
+    "messages": [
+      {
+        "role": "user",
+        "content": "Return exactly the following code and nothing else. The third line must start at column 1 with no leading space. Do not use markdown.\n\ndef add(a, b):\n    return a + b\nprint(add(2, 3))"
+      }
+    ],
+    "temperature": 0,
+    "max_tokens": 96,
+    "stream": false,
+    "enable_thinking": false
+  },
+  "response": {
+    "id": "chatcmpl-71e48b4f",
+    "object": "chat.completion",
+    "created": 1781092620,
+    "model": "gemma-4-12b-it-jang_4m-crack",
+    "choices": [
+      {
+        "index": 0,
+        "message": {
+          "role": "assistant",
+          "content": "def add(a, b):\n    return a + b\nprint(add(2, 3))",
+          "tool_calls": null,
+          "reasoning_content": null
+        },
+        "logprobs": null,
+        "finish_reason": "stop"
+      }
+    ],
+    "usage": {
+      "prompt_tokens": 58,
+      "completion_tokens": 28,
+      "total_tokens": 86,
+      "prompt_tokens_details": null
+    },
+    "warnings": null
+  },
+  "request_record": {
+    "label": "exact_code_whitespace",
+    "code": 200,
+    "elapsed_sec": 1.8398837910062866,
+    "content": "def add(a, b):\n    return a + b\nprint(add(2, 3))",
+    "content_head": "def add(a, b):\n    return a + b\nprint(add(2, 3))",
+    "reasoning_head": "",
+    "reasoning_chars": 0,
+    "tool_calls": [],
+    "usage": {
+      "prompt_tokens": 58,
+      "completion_tokens": 28,
+      "total_tokens": 86,
+      "prompt_tokens_details": null
+    },
+    "cache_stats_code": 200,
+    "cache_summary": {
+      "cache_hit_tokens": 56,
+      "cache_hits": 2,
+      "disk_hits": 0,
+      "hybrid_kv_without_ssm_hits": 0,
+      "hybrid_kv_without_ssm_tokens": 0,
+      "has_cache_hit": true,
+      "mentions_turboquant": true,
+      "mentions_ssm": true,
+      "mentions_media_salt": true,
+      "mentions_rotating": true,
+      "has_hybrid_kv_without_ssm": false
+    },
+    "validation_failures": []
+  },
+  "cache_stats": {
+    "scheduler_cache": {
+      "pixel_cache_hits": 0,
+      "pixel_cache_misses": 0,
+      "pixel_hit_rate": 0.0,
+      "total_time_saved": 0.0,
+      "total_images_processed": 0,
+      "pixel_cache_size": 0,
+      "hits": 1,
+      "misses": 7,
+      "hit_rate": 0.125,
+      "tokens_saved": 56,
+      "active_requests": 0,
+      "entries_by_type": {
+        "assistant": 7,
+        "user": 0,
+        "system": 0
+      },
+      "block_size": 64,
+      "max_blocks": 1000,
+      "allocated_blocks": 14,
+      "free_blocks": 986,
+      "shared_blocks": 1,
+      "total_tokens_cached": 669,
+      "utilization": 0.014,
+      "cache_hit_rate": 0.09523809523809523,
+      "cache_hits": 2,
+      "cache_misses": 19,
+      "disk_hits": 0,
+      "disk_misses": 6,
+      "cow_copies": 0,
+      "evictions": 0
+    },
+    "scheduler_stats": {
+      "num_waiting": 0,
+      "num_running": 0,
+      "engine_path": null,
+      "batch_generator": {
+        "prompt_tokens": 698,
+        "prompt_time": 1.7165614159748657,
+        "prompt_tps": 406.62687248133994,
+        "generation_tokens": 323,
+        "generation_time": 14.525322420915472,
+        "generation_tps": 22.23702790479212,
+        "vision_encoding_time": 0,
+        "num_images_processed": 0,
+        "peak_memory": 15.227362418,
+        "hybrid_kv_without_ssm_hits": 0,
+        "hybrid_kv_without_ssm_tokens": 0,
+        "last_hybrid_kv_without_ssm": null,
+        "last_cache_execution": {
+          "request_id": "chatcmpl-875af086",
+          "cache_detail": "paged+mixed_swa",
+          "cached_tokens": 56,
+          "blocks": 0,
+          "selection": "paged",
+          "disk_hit": false,
+          "reconstructed": true,
+          "dequantized": true,
+          "reconstruction_seconds": 0.002747,
+          "dequantization_seconds": 2.1e-05,
+          "total_worker_cache_seconds": 0.002996,
+          "reconstruction_ok": true,
+          "dequantization_ok": true
+        },
+        "last_native_mtp": null,
+        "last_prefill_trace": null
+      },
+      "single_active_decode": false,
+      "num_requests_processed": 8,
+      "total_prompt_tokens": 733,
+      "total_completion_tokens": 323,
+      "ewma_ttft_seconds": 0,
+      "cache_hit_requests": 1,
+      "cache_hit_tokens": 56,
+      "cache_hit_tokens_by_detail": {
+        "paged+mixed_swa": 56
+      },
+      "hybrid_kv_without_ssm_hits": 0,
+      "hybrid_kv_without_ssm_tokens": 0,
+      "last_hybrid_kv_without_ssm": null,
+      "cache_reuse_skips": 0,
+      "cache_reuse_skip_tokens": 0,
+      "last_cache_reuse_skip": null,
+      "cache_reuse_partial_downgrades": 0,
+      "cache_reuse_partial_tokens": 0,
+      "last_cache_reuse_partial": null,
+      "last_cache_selection": null,
+      "last_cache_execution": {
+        "request_id": "chatcmpl-875af086",
+        "cache_detail": "paged+mixed_swa",
+        "cached_tokens": 56,
+        "blocks": 0,
+        "selection": "paged",
+        "disk_hit": false,
+        "reconstructed": true,
+        "dequantized": true,
+        "reconstruction_seconds": 0.002747,
+        "dequantization_seconds": 2.1e-05,
+        "total_worker_cache_seconds": 0.002996,
+        "reconstruction_ok": true,
+        "dequantization_ok": true
+      }
+    },
+    "kv_cache_quantization": {
+      "enabled": true,
+      "bits": 4,
+      "group_size": 64
+    },
+    "turboquant_kv_cache": {
+      "enabled": false
+    },
+    "native_cache": {
+      "family": "gemma4",
+      "schema": "mixed_swa_kv_v1",
+      "cache_type": "mixed_swa_kv",
+      "cache_subtype": "mixed_swa_kv",
+      "components": [
+        "full_attention_kv",
+        "sliding_window_kv",
+        "rotating_window_metadata"
+      ],
+      "generic_turboquant_kv": {
+        "enabled": false,
+        "reason": "not_active"
+      },
+      "storage_quantization": {
+        "enabled": true,
+        "mode": "storage_boundary",
+        "bits": 4,
+        "group_size": 64,
+        "applies_to": "full_attention_kv_only",
+        "metadata_policy": "preserve_rotating_window_metadata"
+      },
+      "prefix": true,
+      "paged": true,
+      "block_disk_l2": true
+    },
+    "block_disk_cache": {
+      "blocks_on_disk": 13,
+      "disk_size_bytes": 346952102,
+      "disk_size_gb": 0.323,
+      "total_accesses": 0,
+      "total_tokens_on_disk": 669,
+      "total_cached_tokens": 669,
+      "disk_hits": 0,
+      "disk_misses": 27,
+      "disk_writes": 13,
+      "disk_evictions": 0
+    },
+    "cache_totals": {
+      "ram_tokens_cached": 669,
+      "l2_prompt_tokens_on_disk": 0,
+      "l2_block_tokens_on_disk": 669,
+      "l2_ssm_tokens_on_disk": 0,
+      "ssm_tokens_on_disk": 0,
+      "l2_tokens_on_disk": 669,
+      "l2_tokens_on_disk_store_sum": 669,
+      "l2_tokens_on_disk_note": "store_sum_across_prompt_block_ssm_l2; tiers_may_overlap"
+    },
+    "ssm_companion": {
+      "entries": 0,
+      "max_entries": 8,
+      "nbytes": 0,
+      "nbytes_mb": 0.0,
+      "disk_enabled": false,
+      "disk_directory": null
+    },
+    "memory": {
+      "active_mb": 9995.7,
+      "peak_mb": 14521.9,
+      "cache_mb": 182.1
+    }
+  }
+}

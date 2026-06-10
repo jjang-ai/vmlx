@@ -1,0 +1,37 @@
+{
+  "schema": "vmlx-mimo-v25-vision-head-dim-source-parity-v1",
+  "status": "pass",
+  "scope": "MiMo V2.5 vision runtime source-parity fix for missing qk_channels default",
+  "model_path": "/Users/eric/.mlxstudio/models/JANGQ-AI/MiMo-V2.5-JANGTQ_2",
+  "source_fix": {
+    "file": "vmlx_engine/models/mllm.py",
+    "upstream_default": "MiMoVisionTransformer uses qk_channels default 64",
+    "previous_vmlx_default": "hidden_size / num_heads, 40 for the current 1280 hidden / 32 head bundle",
+    "current_vmlx_default": 64
+  },
+  "direct_parity_probe": {
+    "description": "Compared upstream Torch MiMoVisionTransformer block0 and vMLX MLX VisionModel block0 with the bundle's real visual.blocks.0 weights and synthetic four-patch input.",
+    "vision_head_dim": 64,
+    "block_head_dim": 64,
+    "pt_shape": [4, 1280],
+    "mlx_shape": [4, 1280],
+    "max_abs_diff": 0.099334716796875,
+    "mean_abs_diff": 0.000536009669303894
+  },
+  "verification": {
+    "pytest": ".venv/bin/python -m pytest -q tests/test_mimo_v2_media_runtime.py -k 'vision or jangtq_fast_path_binds_indexed_media_weights or model_splices_image_pixels' -> 7 passed",
+    "py_compile": "python3 -m py_compile vmlx_engine/models/mllm.py -> passed"
+  },
+  "proven": {
+    "mimo_v2_vision_missing_qk_channels_default_matches_upstream": true,
+    "mimo_v2_vision_block0_parity_probe_uses_head_dim_64_without_loader_rescue": true,
+    "mimo_v2_jangtq_fast_path_media_weight_binding_regression_still_passes": true
+  },
+  "not_proven": {
+    "mimo_jangtq2_visual_semantic_correctness": true,
+    "mimo_jangtq2_exact_literal_release_clearance": true,
+    "mimo_installed_app_parity": true,
+    "mimo_release_clearance": true
+  },
+  "release_boundary": "This fixes a real source-parity default in the MiMo vision skeleton. It does not claim the existing MiMo JANGTQ_2 solid-color visual semantic failures are cleared; those require a fresh live media proof after this patch."
+}

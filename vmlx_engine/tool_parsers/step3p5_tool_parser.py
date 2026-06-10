@@ -139,12 +139,16 @@ class Step3p5ToolParser(ToolParser):
             content = content.strip()
             if content.startswith("{"):
                 try:
-                    json.loads(content)
+                    arguments = json.loads(content)
+                    if not self._arguments_satisfy_required_schema(
+                        func_name, arguments, request
+                    ):
+                        continue
                     tool_calls.append(
                         {
                             "id": generate_tool_id(),
                             "name": func_name,
-                            "arguments": content,
+                            "arguments": json.dumps(arguments, ensure_ascii=False),
                         }
                     )
                     continue
@@ -163,6 +167,10 @@ class Step3p5ToolParser(ToolParser):
                     schema = self._get_param_schema(func_name, param_name, request)
                     arguments[param_name] = self._coerce_value(param_value, schema)
 
+                if not self._arguments_satisfy_required_schema(
+                    func_name, arguments, request
+                ):
+                    continue
                 tool_calls.append(
                     {
                         "id": generate_tool_id(),
@@ -172,6 +180,10 @@ class Step3p5ToolParser(ToolParser):
                 )
             else:
                 # Raw content without parameter tags, or empty content
+                if not self._arguments_satisfy_required_schema(
+                    func_name, content, request
+                ):
+                    continue
                 tool_calls.append(
                     {
                         "id": generate_tool_id(),

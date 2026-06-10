@@ -1,0 +1,168 @@
+{
+  "status": "open",
+  "date": "2026-06-10",
+  "lane": "MiMo V2.5 JANGTQ_2 live media/tools/cache proof after vision head-dim source parity fix",
+  "model_path": "/Users/eric/.mlxstudio/models/JANGQ-AI/MiMo-V2.5-JANGTQ_2",
+  "served_model_name": "mimo-v25-jangtq2-media-after-head-dim",
+  "source_commits_required_before_run": [
+    "51477f05 Match MiMo vision qk head default"
+  ],
+  "raw_outputs_dir": "build/mimo-v25-after-head-dim-live-requests-20260610",
+  "server_launch": {
+    "port": 8877,
+    "server_stopped_after_run": true,
+    "port_8877_listener_after_run": false
+  },
+  "startup_proof": {
+    "loaded": true,
+    "jangtq_vlm_fast_path": true,
+    "mimo_media_runtime_enabled": true,
+    "preserved_media_tensors_bound": {
+      "visual": 364,
+      "audio_encoder": 75,
+      "speech_embeddings": 20,
+      "assigned_total": 459
+    },
+    "runtime_quantized_modules": 101,
+    "paged_cache_enabled": true,
+    "native_cache_schema": "mixed_swa_kv_v1",
+    "native_cache_subtype": "mimo_v2_asymmetric_swa",
+    "generic_turboquant_kv": {
+      "enabled": false,
+      "reason": "skipped_for_mimo_mixed_swa_contract"
+    }
+  },
+  "live_requests": {
+    "chat_text_exact": {
+      "request_file": "text.json",
+      "prompt": "Reply exactly: MIMO-OK",
+      "output": "MIMOOK",
+      "status": "fail",
+      "failure": "literal hyphen dropped before parser or JSON repair can matter"
+    },
+    "image_icon": {
+      "request_file": "image_icon.json",
+      "input": "panel/resources/icon.png data URL",
+      "prompt": "Return only the visible text.",
+      "output": "vMLX",
+      "status": "pass",
+      "boundary": "image transport, preserved vision weights, and logo text recognition passed for this simple image"
+    },
+    "video_red": {
+      "request_file": "video_red.json",
+      "input": "build/media-fixtures/red-1s-64x64.mp4",
+      "prompt": "What is the dominant color? Answer with one word.",
+      "output": "White.",
+      "status": "fail",
+      "failure": "video payload routed but visual semantic answer is wrong for the red fixture"
+    },
+    "audio_default": {
+      "request_file": "audio.json",
+      "input": "build/media-fixtures/audio-present.wav as input_audio",
+      "output": "The user wants me to transcribe the audio into a short phrase.\n\nThe audio contains a voice saying \"I'm fine\" followed by a sound effect.\n\nThe phrase is \"I'm fine\".\n\nI'll provide the transcription.",
+      "status": "partial",
+      "boundary": "audio decoded and heard the phrase, but visible planning/prose leaked and exact terse transcription is not proven"
+    },
+    "audio_no_think": {
+      "request_file": "audio_no_think.json",
+      "input": "build/media-fixtures/audio-present.wav as input_audio",
+      "enable_thinking": false,
+      "output": "I'm sorry, but I cannot transcribe the audio because no audio file was provided in your message. Please upload or attach the audio file so I can help you transcribe it.",
+      "status": "fail",
+      "failure": "request/log path routed audio, but model/runtime output denied receiving audio under explicit no-thinking request"
+    },
+    "responses_text_no_think": {
+      "request_file": "responses_text_no_think.json",
+      "prompt": "Reply exactly: MIMO-OK",
+      "enable_thinking": false,
+      "output": "MIMOOK",
+      "status": "fail",
+      "usage": {
+        "input_tokens": 28,
+        "output_tokens": 4,
+        "cached_tokens": 27,
+        "cache_detail": "paged"
+      }
+    },
+    "chat_required_tool": {
+      "request_file": "chat_required_tool.json",
+      "tool_choice": "required",
+      "expected_arguments": "{\"value\":\"blue-cat\"}",
+      "actual_arguments": "{\"value\": \"blue cat\"}",
+      "finish_reason": "tool_calls",
+      "status": "partial",
+      "boundary": "OpenAI tool-call structure is valid, but semantic literal exactness fails"
+    },
+    "responses_required_tool_stream": {
+      "request_file": "responses_required_tool_stream.sse",
+      "tool_choice": "required",
+      "expected_arguments": "{\"value\":\"blue-cat\"}",
+      "authoritative_arguments": "{\"value\": \"blue cat\"}",
+      "output_indices": {
+        "message": 0,
+        "function_call": 1
+      },
+      "argument_delta_count": 2,
+      "argument_done_count": 1,
+      "status": "partial",
+      "boundary": "Responses streaming event shape, argument delta/done, final object order, and output indices are valid for this run; model exactness still mutates the value"
+    }
+  },
+  "cache_proof": {
+    "request_file": "cache_stats_final.json",
+    "native_cache": {
+      "family": "mimo_v2",
+      "schema": "mixed_swa_kv_v1",
+      "cache_subtype": "mimo_v2_asymmetric_swa",
+      "components": [
+        "full_attention_kv",
+        "sliding_window_kv",
+        "rotating_window_metadata"
+      ],
+      "prefix": true,
+      "paged": true,
+      "block_disk_l2": false
+    },
+    "cache_hit_requests": 2,
+    "cache_hit_tokens": 280,
+    "cache_hit_tokens_by_detail": {
+      "paged": 280
+    },
+    "last_cache_execution": {
+      "request_id": "resp_31d9e1075164",
+      "cache_detail": "paged",
+      "cached_tokens": 253,
+      "disk_hit": false,
+      "reconstruction_ok": true,
+      "dequantization_ok": true
+    },
+    "ram_tokens_cached": 280,
+    "l2_tokens_on_disk": 0,
+    "boundary": "same-process paged/native MiMo cache hit is proven; block-disk L2 write and fresh-process restore were not enabled or proven in this launch"
+  },
+  "proven": [
+    "Current source loaded the MiMo V2.5 JANGTQ_2 bundle after the head-dim parity fix.",
+    "Preserved visual/audio/speech media tensors were bound into the runtime.",
+    "Simple image text recognition returned vMLX.",
+    "Video and audio payloads reached the media runtime path.",
+    "Chat Completions required-tool call emitted valid OpenAI tool-call structure.",
+    "Responses required-tool stream emitted valid message/function_call output indices 0/1 plus argument delta and done events.",
+    "Responses nonstream usage reported paged cache reuse.",
+    "Native MiMo mixed-SWA cache schema and paged same-process reuse were active.",
+    "Generic TurboQuant KV was not substituted for MiMo asymmetric SWA."
+  ],
+  "not_proven": [
+    "MiMo literal exactness remains red: MIMO-OK became MIMOOK and blue-cat became blue cat.",
+    "Red video semantic answer remains red: model answered White.",
+    "Audio exactness/hygiene remains red: default output leaked planning prose and no-thinking output denied receiving audio.",
+    "Block-disk L2 write and fresh-process restore were not proven in this launch.",
+    "Auto-tool, no-tool, tool-result continuation, cancellation cleanup, largest-context tail, UI, installed-app, package, signing, notarization, and release clearance remain open."
+  ],
+  "other_agent_instructions": [
+    "Do not mark MiMo media or exactness green from this proof.",
+    "Do not add parser-side semantic repair, tool-argument rewriting, prompt-only folding, or hidden sampling overrides to hide these MiMo exactness failures.",
+    "Next MiMo work should compare artifact/logit/quant contract or runtime decode behavior, especially why preserved media routing still fails red video and exact literals.",
+    "If L2 is required for MiMo, relaunch with explicit block-disk L2 settings and prove fresh-process restore separately.",
+    "Installed app must be rebuilt from a source containing 51477f05 before any MiMo UI/installed-app proof is meaningful."
+  ]
+}

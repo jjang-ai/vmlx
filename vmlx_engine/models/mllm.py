@@ -1309,7 +1309,14 @@ def _register_mimo_v2_mlx_vlm_runtime() -> None:
 
         @classmethod
         def from_dict(cls, params):
-            merged_text = dict(params)
+            media_auto_enabled = bool(
+                params.get("_vmlx_mimo_v2_media_runtime_auto_enabled")
+            )
+            merged_text = {
+                key: value
+                for key, value in dict(params).items()
+                if key != "_vmlx_mimo_v2_media_runtime_auto_enabled"
+            }
             if isinstance(params.get("text_config"), dict):
                 merged_text.update(params["text_config"])
             params["text_config"] = merged_text
@@ -1348,12 +1355,20 @@ def _register_mimo_v2_mlx_vlm_runtime() -> None:
                     or params.get("preserved_modalities")
                 ),
                 unwired_modalities=(
-                    (params.get("capabilities") or {}).get("unwired_modalities")
-                    or params.get("unwired_modalities")
+                    []
+                    if media_auto_enabled
+                    else (
+                        (params.get("capabilities") or {}).get("unwired_modalities")
+                        or params.get("unwired_modalities")
+                    )
                 ),
                 multimodal_status=(
-                    (params.get("capabilities") or {}).get("multimodal_status")
-                    or params.get("multimodal_status")
+                    "mimo_v2_multimodal_runtime"
+                    if media_auto_enabled
+                    else (
+                        (params.get("capabilities") or {}).get("multimodal_status")
+                        or params.get("multimodal_status")
+                    )
                 ),
             )
 
@@ -1395,9 +1410,7 @@ def _register_mimo_v2_mlx_vlm_runtime() -> None:
             num_kv_heads = int(
                 getattr(self.config, "num_key_value_heads", num_heads) or num_heads
             )
-            head_dim = int(getattr(self.config, "qk_channels", 0) or 0)
-            if head_dim <= 0:
-                head_dim = max(1, self.hidden_size // max(1, num_heads))
+            head_dim = int(getattr(self.config, "qk_channels", 64) or 64)
             self.vision_head_dim = head_dim
             rms_norm_eps = float(getattr(self.config, "rms_norm_eps", 1e-6) or 1e-6)
             hidden_act = str(getattr(self.config, "hidden_act", "silu") or "silu")
@@ -5861,7 +5874,7 @@ class MLXMultimodalLM:
             if isinstance(self.config, dict)
             else str(getattr(self.config, "model_type", "") or "").lower()
         )
-        if model_type in {"gemma4_unified", "step3p7"} and video_frame_counts:
+        if model_type in {"gemma4_unified", "step3p7", "mimo_v2"} and video_frame_counts:
             chat_messages = _expand_video_placeholders_to_image_frames(
                 chat_messages,
                 video_frame_counts,
@@ -6199,7 +6212,7 @@ class MLXMultimodalLM:
             if isinstance(self.config, dict)
             else str(getattr(self.config, "model_type", "") or "").lower()
         )
-        if model_type == "gemma4_unified" and video_frame_counts:
+        if model_type in {"gemma4_unified", "step3p7", "mimo_v2"} and video_frame_counts:
             chat_messages = _expand_video_placeholders_to_image_frames(
                 chat_messages,
                 video_frame_counts,

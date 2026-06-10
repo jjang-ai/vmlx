@@ -1,0 +1,120 @@
+{
+  "status": "open",
+  "scope": "MiMo V2.5 JANGTQ_2 source media-runtime routing and API proof",
+  "model_path": "/Users/eric/.mlxstudio/models/JANGQ-AI/MiMo-V2.5-JANGTQ_2",
+  "served_model_name": "mimo-v25-jangtq2-media-source",
+  "source_branch": "codex/pr-intake-manifest",
+  "proven": {
+    "api_routes_mllm": true,
+    "loader_overlay_auto_enabled": true,
+    "jangtq_skeleton_constructs_media_modules": true,
+    "preserved_media_weights_bound": true,
+    "live_server_loaded_real_model": true,
+    "live_chat_text_200": true,
+    "live_chat_image_200": true,
+    "prior_unsupported_media_400_cleared_for_source_image": true,
+    "paged_cache_reuse": true,
+    "generic_turboquant_kv_skipped_by_mimo_contract": true
+  },
+  "not_proven": {
+    "installed_app_parity": true,
+    "video_live_e2e": true,
+    "audio_live_e2e": true,
+    "fresh_process_l2_restore": true,
+    "block_or_prompt_l2_disk_enabled_in_this_launch": true,
+    "mimo_exactness": true,
+    "release_clearance": true
+  },
+  "source_checks": {
+    "py_compile": "passed: vmlx_engine/server.py vmlx_engine/models/mllm.py vmlx_engine/utils/jang_loader.py",
+    "focused_pytest": "passed: 57 selected MiMo tests in tests/test_mimo_v2_media_capability_gate.py tests/test_mimo_v2_media_runtime.py tests/test_mimo_v2_mllm_runtime_registration.py tests/test_engine_audit.py -k mimo_v2",
+    "direct_capability_check": {
+      "server_auto": true,
+      "server_modalities": ["text", "vision", "video", "audio"],
+      "api_is_mllm": true,
+      "api_force_mllm": true,
+      "loader_overlay_flag": true,
+      "loader_modalities": ["text", "image", "video", "audio"],
+      "loader_unwired": []
+    },
+    "skeleton_check": {
+      "model_class": "Model",
+      "bind_media": true,
+      "has_visual": true,
+      "has_audio_encoder": true,
+      "media_status": "mimo_v2_multimodal_runtime",
+      "unwired": [],
+      "processor_class": "Qwen2_5_VLProcessor"
+    },
+    "media_binding_counts": {
+      "visual": 364,
+      "audio_encoder": 75,
+      "speech_embeddings": 20
+    }
+  },
+  "live_source_server": {
+    "command": "VMLINUX_DISABLE_AUTO_BROWSER=1 VMLX_L2_CACHE_DIR=build/mimo-jangtq2-media-live-l2-20260610 .venv/bin/python -m vmlx_engine.server --model /Users/eric/.mlxstudio/models/JANGQ-AI/MiMo-V2.5-JANGTQ_2 --port 8877 --host 127.0.0.1 --mllm --served-model-name mimo-v25-jangtq2-media-source --max-tokens 64 --default-temperature 0 --default-top-p 1",
+    "startup": {
+      "model_type": "mllm",
+      "engine_type": "batched",
+      "media_overlay_log": "MiMo-V2 media runtime auto-enabled from preserved bundle contract: vision=True audio=True",
+      "media_bound_log": "MiMo-V2 load bound preserved media weights: visual=364 audio_encoder=75 speech_embeddings=20",
+      "media_assigned_log": "MiMo-V2 load assigned 459 preserved media tensors to runtime modules",
+      "runtime_quantized_modules": 101,
+      "jangtq_tq_groups": 141,
+      "prestacked_tq_groups": 141,
+      "turboquant_kv": "skipped: MiMo-V2 uses native asymmetric full/SWA RotatingKVCache metadata",
+      "cache_layout": "mixed full KVCache plus RotatingKVCache across 48 layers",
+      "metal_baseline_active_gb": 76.5,
+      "metal_baseline_max_ws_gb": 107.5
+    },
+    "health_after_load": {
+      "status_code": 200,
+      "model_loaded": true,
+      "model_type": "mllm",
+      "active_mb": 78331.8,
+      "peak_mb": 78366.9,
+      "kv_cache_quantization_enabled": false
+    },
+    "text_probe": {
+      "status_code": 200,
+      "prompt": "Reply exactly: MIMO-OK",
+      "assistant_content": "MIMOOK",
+      "classification": "transport green; exactness still red because hyphen dropped"
+    },
+    "image_probe": {
+      "status_code": 200,
+      "image_source": "panel/resources/icon.png as data:image/png;base64",
+      "assistant_content": "The text \"vMLX\"",
+      "usage_prompt_tokens": 1060,
+      "usage_completion_tokens": 8,
+      "server_media_diag": {
+        "engine_is_mllm": true,
+        "family": "mimo_v2",
+        "registry_is_mllm": true,
+        "media_type": "image_url",
+        "data_url": 1
+      },
+      "cache_policy": "media prefix cache store skipped because media embeddings are path-dependent and must not be rebuilt from text-only tokens"
+    },
+    "cache_probe": {
+      "first_status_code": 200,
+      "second_status_code": 200,
+      "second_prompt_tokens_details": {
+        "cached_tokens": 29,
+        "cache_detail": "paged"
+      },
+      "health_cache_hit_requests": 1,
+      "health_cache_hit_tokens": 29,
+      "health_ram_tokens_cached": 56,
+      "health_l2_tokens_on_disk": 0,
+      "classification": "paged/RAM cache reuse green; L2 disk was not enabled by this launch"
+    }
+  },
+  "other_agent_next": [
+    "Rebuild or relaunch the current Electron dev app with this source and rerun MiMo JANGTQ_2 image/video/audio UI rows.",
+    "Do not mark MiMo exactness green: live text still mutates MIMO-OK to MIMOOK and earlier exact-output rows remain red.",
+    "If audio/video still fail after installed-app rebuild, inspect processor input plumbing rather than changing capability metadata.",
+    "Run fresh-process block L2 restore only with explicit block/prompt L2 flags; this proof only covered paged/RAM cache reuse."
+  ]
+}

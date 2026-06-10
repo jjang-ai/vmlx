@@ -77,6 +77,33 @@ def test_mllm_tight_memory_text_prefill_chunks_short_tool_prompts():
     assert "chunk_size = min(_tight_text_prefill_step_size" in source
 
 
+def test_mllm_storage_quant_preserves_rotating_kv_cache():
+    """Gemma mixed-SWA storage quant must not quantize sliding-window metadata."""
+    mlx_lm_cache = pytest.importorskip("mlx_lm.models.cache")
+    mx = pytest.importorskip("mlx.core")
+
+    scheduler = MLLMScheduler.__new__(MLLMScheduler)
+    scheduler._kv_cache_bits = 4
+    scheduler._kv_cache_group_size = 64
+
+    full = mlx_lm_cache.KVCache()
+    full.keys = mx.zeros((1, 1, 4, 64))
+    full.values = mx.zeros((1, 1, 4, 64))
+    full.offset = 4
+
+    rotating = mlx_lm_cache.RotatingKVCache(max_size=8, keep=1)
+    rotating.keys = mx.zeros((1, 1, 4, 64))
+    rotating.values = mx.zeros((1, 1, 4, 64))
+    rotating.offset = 4
+    rotating._idx = 4
+
+    stored = scheduler._quantize_cache_for_storage([full, rotating])
+
+    assert isinstance(stored[0], mlx_lm_cache.QuantizedKVCache)
+    assert stored[1] is rotating
+    assert isinstance(stored[1], mlx_lm_cache.RotatingKVCache)
+
+
 def test_mimo_v2_generator_detects_inner_language_model_type_for_processors():
     """JANG VLM wrappers can have blank outer model_type; inner runtime wins."""
     import math

@@ -1,0 +1,88 @@
+{
+  "status": "pass",
+  "created_at": "2026-06-10T03:28:00-07:00",
+  "lane": "Gemma JANG/MXFP/QAT honest modality gating",
+  "source_commit_before_this_artifact": "bb5b1ce2",
+  "proof_type": "current-source helper and focused contract tests",
+  "commands": [
+    ".venv/bin/python -m pytest -q tests/test_engine_audit.py -k 'gemma4_runtime_modalities or gemma4_unified' tests/test_gemma_qat_native_mxfp4_inventory_gate.py",
+    ".venv/bin/python tests/cross_matrix/run_gemma_qat_native_mxfp4_inventory_gate.py --out build/current-gemma-native-mxfp4-inventory-gate-refresh-20260610.json",
+    ".venv/bin/python - <<'PY' ... server._bundle_declares_native_audio(path), server._loaded_runtime_modalities() ... PY"
+  ],
+  "verification": {
+    "focused_tests": {
+      "status": "pass",
+      "selected": 16,
+      "deselected": 556
+    },
+    "inventory_gate": {
+      "artifact": "build/current-gemma-native-mxfp4-inventory-gate-refresh-20260610.json",
+      "status": "open",
+      "count": 21,
+      "missing_required_rows": [],
+      "open_required_rows": [
+        "gemma4_e2b_qat_jang4m",
+        "gemma4_e4b_qat_jang4m",
+        "gemma4_12b_qat_jang4m",
+        "gemma4_26b_qat_jang4m",
+        "gemma4_31b_qat_jang4m",
+        "gemma4_e2b_qat_native_mxfp4",
+        "gemma4_e4b_qat_native_mxfp4",
+        "gemma4_12b_native_mxfp4",
+        "gemma4_26b_vl",
+        "gemma4_31v_or_31b_vl"
+      ]
+    }
+  },
+  "current_source_runtime_modalities": [
+    {
+      "path": "/Users/eric/models/JANGQ-AI/gemma-4-12B-it-JANG_4M",
+      "audio_declared": false,
+      "modalities": ["text", "vision", "video"],
+      "audio_weight_backed": false,
+      "audio_tower_weight_count": 0,
+      "audio_embed_only": true
+    },
+    {
+      "path": "/Users/eric/models/JANGQ-AI/gemma-4-12B-it-qat-MXFP4",
+      "audio_declared": false,
+      "modalities": ["text", "vision", "video"],
+      "audio_weight_backed": false,
+      "audio_tower_weight_count": 0,
+      "audio_embed_only": true
+    },
+    {
+      "path": "/Users/eric/models/JANGQ-AI/gemma-4-26B-A4B-it-qat-JANG_4M",
+      "audio_declared": false,
+      "modalities": ["text", "vision", "video"],
+      "audio_weight_backed": false,
+      "audio_tower_weight_count": 0,
+      "audio_embed_only": false
+    },
+    {
+      "path": "/Users/eric/models/JANGQ-AI/gemma-4-31B-it-qat-JANG_4M",
+      "audio_declared": false,
+      "modalities": ["text", "vision", "video"],
+      "audio_weight_backed": false,
+      "audio_tower_weight_count": 0,
+      "audio_embed_only": false
+    }
+  ],
+  "proven": [
+    "Current source does not infer Gemma audio support from audio_config, token ids, or embed_audio projection-only weights.",
+    "Current source gates the checked 12B JANG4M, 12B MXFP4, 26B JANG4M, and 31B JANG4M bundles to text/vision/video rather than audio.",
+    "Gemma4 Unified loader contract now distinguishes missing runtime fallback from source-runtime-available native path in tests."
+  ],
+  "not_proven": [
+    "Installed-app parity for the stale 12B audio proof is not green.",
+    "Audio generation is not proven for 12B/26B/31B JANG4M or MXFP4 bundles without audio_tower weights.",
+    "The broader Gemma inventory gate remains open until all required smoke/media rows are green.",
+    "Video capability still requires runtime-proven frame-through-vision evidence, not metadata alone."
+  ],
+  "parallel_agent_next": [
+    "Do not advertise audio for Gemma bundles unless audio_tower.* weights exist and live E2E audio proof passes.",
+    "Treat older installed-app audio rows that reached an empty audio turn as stale/red until rebuilt from current source and reproven.",
+    "For E2B/E4B bundles with audio_tower weights, run real audio E2E; do not generalize those results to 12B/26B/31B projection-only/no-audio bundles.",
+    "Keep Gemma video claims tied to actual frame-through-vision runtime proof."
+  ]
+}

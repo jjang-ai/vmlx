@@ -147,6 +147,32 @@ def test_mimo_v2_vision_attention_blocks_preserve_patch_hidden_shape(
     sys.modules.pop("mlx_vlm.models.mimo_v2", None)
 
 
+def test_mimo_v2_vision_default_qk_head_dim_matches_upstream(
+    tmp_path,
+    monkeypatch,
+):
+    module = _register_fake_mimo_runtime(monkeypatch, tmp_path)
+    cfg = module.VisionConfig.from_dict(
+        {
+            "hidden_size": 1280,
+            "out_hidden_size": 4096,
+            "patch_size": 16,
+            "temporal_patch_size": 2,
+            "in_channels": 3,
+            "spatial_merge_size": 2,
+            "depth": 1,
+            "intermediate_size": 4608,
+            "num_heads": 32,
+            "num_key_value_heads": 8,
+        }
+    )
+    vision = module.VisionModel(cfg)
+
+    assert vision.vision_head_dim == 64
+    assert vision.blocks[0].attn.head_dim == 64
+    sys.modules.pop("mlx_vlm.models.mimo_v2", None)
+
+
 def test_mimo_v2_vision_forward_uses_grid_aware_window_reorder(
     tmp_path,
     monkeypatch,
