@@ -184,6 +184,12 @@ def _post_json(
         except json.JSONDecodeError:
             payload = {"error": raw}
         return int(exc.code), payload, time.perf_counter() - started
+    except urllib.error.URLError as exc:
+        return (
+            0,
+            {"error": f"{type(exc.reason).__name__}: {exc.reason}"},
+            time.perf_counter() - started,
+        )
 
 
 def _get_json(url: str, *, timeout: float) -> tuple[int | None, dict[str, Any] | None, str | None]:
