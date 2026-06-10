@@ -4319,6 +4319,8 @@ def _parse_tool_calls_with_parser(
             calls = _filter_to_request_tools(calls)
             if calls:
                 return cleaned, calls
+            if _has_tool_marker_or_partial_suffix(text):
+                return _strip_tool_markup_residue_for_display(text), None
             return text, None
         repaired_cleaned, repaired_calls = _repair_instruction_echo_tool_call(text)
         if repaired_calls:
@@ -4360,7 +4362,7 @@ def _parse_tool_calls_with_parser(
         parser_instance = parser_cls(tokenizer)
     except Exception as e:
         logger.warning(f"Failed to initialize tool parser '{active_parser}': {e}")
-        return parse_tool_calls(output_text)
+        return _generic_parse_filtered(output_text)
 
     # Use the configured parser, fall back to generic if it finds nothing
     try:
@@ -4394,6 +4396,8 @@ def _parse_tool_calls_with_parser(
             # so clients do not receive hallucinated function calls like
             # README.md()/src()/tests() when the request only exposed
             # list_directory().
+            if _has_tool_marker_or_partial_suffix(output_text):
+                return _strip_tool_markup_residue_for_display(output_text), None
             return output_text, None
         else:
             # Specific parser found nothing — try generic parser as fallback

@@ -2901,6 +2901,166 @@ class TestOpenAILogprobsFormatting:
         assert '"arguments": "{}"' not in serialized_events
         assert "tool_calls_required" in error_codes
 
+    def test_tool_parser_drops_empty_xml_call_and_strips_markup_for_nonstream_paths(
+        self, monkeypatch
+    ):
+        """Shared Chat/Responses nonstream parser path must fail closed."""
+        import json
+
+        import vmlx_engine.server as server
+        from vmlx_engine.api.models import ChatCompletionRequest, Message
+
+        monkeypatch.setattr(server, "_model_name", "unit-qwen35-model")
+        monkeypatch.setattr(server, "_model_path", None)
+        monkeypatch.setattr(server, "_tool_call_parser", "auto")
+
+        request = ChatCompletionRequest(
+            model="unit-qwen35-model",
+            messages=[Message(role="user", content="list /tmp")],
+            tools=[
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "exec_command",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {"cmd": {"type": "string"}},
+                            "required": ["cmd"],
+                        },
+                    },
+                }
+            ],
+        )
+
+        empty_text = (
+            "**Quick preamble:** Checking what's in `/tmp`...\n"
+            "<tool_call>\n"
+            "<function=exec_command>\n"
+            "</function>\n"
+            "</tool_call>"
+        )
+        cleaned, calls = server._parse_tool_calls_with_parser(empty_text, request)
+
+        assert calls is None
+        assert cleaned == "**Quick preamble:** Checking what's in `/tmp`..."
+        assert "<tool_call" not in cleaned
+        assert "<function" not in cleaned
+
+        valid_text = (
+            "**Quick preamble:** Checking what's in `/tmp`...\n"
+            "<tool_call>\n"
+            "<function=exec_command>\n"
+            "<parameter=cmd>ls /tmp</parameter>\n"
+            "</function>\n"
+            "</tool_call>"
+        )
+        valid_cleaned, valid_calls = server._parse_tool_calls_with_parser(
+            valid_text, request
+        )
+
+        assert valid_cleaned == "**Quick preamble:** Checking what's in `/tmp`..."
+        assert valid_calls is not None
+        assert valid_calls[0].function.name == "exec_command"
+        assert json.loads(valid_calls[0].function.arguments) == {"cmd": "ls /tmp"}
+
+    @pytest.mark.asyncio
+    async def test_streaming_chat_preamble_empty_xml_tool_call_never_emits_empty_arguments(
+        self, monkeypatch
+    ):
+        """Chat Completions SSE must not emit executable `{}` tool args."""
+        import json
+        from types import SimpleNamespace
+
+        import vmlx_engine.server as server
+        from vmlx_engine.api.models import ChatCompletionRequest, Message
+        from vmlx_engine.engine.base import GenerationOutput
+
+        class _Engine:
+            tokenizer = SimpleNamespace(has_thinking=False)
+
+            async def stream_chat(self, *, messages, **kwargs):
+                chunks = (
+                    ("**Quick preamble:** Checking what's in `/tmp`...\n", False, None),
+                    (
+                        "<tool_call>\n"
+                        "<function=exec_command>\n"
+                        "</function>\n"
+                        "</tool_call>",
+                        True,
+                        "stop",
+                    ),
+                )
+                text = ""
+                for idx, (delta, finished, reason) in enumerate(chunks, start=1):
+                    text += delta
+                    yield GenerationOutput(
+                        text=text,
+                        new_text=delta,
+                        tokens=[],
+                        prompt_tokens=5,
+                        completion_tokens=idx,
+                        finished=finished,
+                        finish_reason=reason,
+                    )
+
+        monkeypatch.setattr(server, "_default_timeout", 5.0)
+        monkeypatch.setattr(server, "_model_name", "unit-qwen35-model")
+        monkeypatch.setattr(server, "_model_path", None)
+        monkeypatch.setattr(server, "_reasoning_parser", None)
+        monkeypatch.setattr(server, "_tool_call_parser", "auto")
+
+        request = ChatCompletionRequest(
+            model="unit-qwen35-model",
+            messages=[Message(role="user", content="list /tmp")],
+            stream=True,
+            tool_choice="required",
+            tools=[
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "exec_command",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {"cmd": {"type": "string"}},
+                            "required": ["cmd"],
+                        },
+                    },
+                }
+            ],
+        )
+
+        chunks = []
+        async for line in server.stream_chat_completion(
+            _Engine(),
+            [m.model_dump(exclude_none=True) for m in request.messages],
+            request,
+            fastapi_request=None,
+            tools=server.convert_tools_for_template(request.tools),
+        ):
+            if line.startswith("data: ") and line.strip() != "data: [DONE]":
+                chunks.append(json.loads(line.removeprefix("data: ")))
+
+        visible = "".join(
+            choice.get("delta", {}).get("content") or ""
+            for chunk in chunks
+            for choice in chunk.get("choices", [])
+        )
+        tool_deltas = [
+            choice.get("delta", {}).get("tool_calls")
+            for chunk in chunks
+            for choice in chunk.get("choices", [])
+            if choice.get("delta", {}).get("tool_calls")
+        ]
+        error_codes = [
+            chunk.get("error", {}).get("code") for chunk in chunks if chunk.get("error")
+        ]
+        serialized_chunks = "\n".join(json.dumps(chunk, sort_keys=True) for chunk in chunks)
+
+        assert visible == "**Quick preamble:** Checking what's in `/tmp`...\n"
+        assert tool_deltas == []
+        assert '"arguments": "{}"' not in serialized_chunks
+        assert "tool_calls_required" in error_codes
+
     @pytest.mark.asyncio
     async def test_streaming_responses_reasoning_tool_call_keeps_arguments(
         self, monkeypatch

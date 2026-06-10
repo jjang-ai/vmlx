@@ -1202,6 +1202,8 @@ def test_noheavy_api_cache_contract_includes_server_responses_tool_streaming_ord
     assert "test_streaming_responses_tool_call_uses_next_output_index_without_text" in markers
     assert "test_streaming_responses_required_empty_xml_tool_call_is_rejected" in markers
     assert "test_streaming_responses_preamble_empty_xml_tool_call_never_emits_empty_arguments" in markers
+    assert "test_tool_parser_drops_empty_xml_call_and_strips_markup_for_nonstream_paths" in markers
+    assert "test_streaming_chat_preamble_empty_xml_tool_call_never_emits_empty_arguments" in markers
     assert "responses_streaming_tool_call_arguments_and_indexes" in (
         manifest.EXPECTED_CURRENT_NOHEAVY_API_CACHE_CHECKS
     )
@@ -1213,6 +1215,8 @@ def test_noheavy_api_cache_contract_includes_server_responses_tool_streaming_ord
     assert "streaming_responses_tool_call_uses_next_output_index_without_text" in command
     assert "streaming_responses_required_empty_xml_tool_call_is_rejected" in command
     assert "streaming_responses_preamble_empty_xml_tool_call_never_emits_empty_arguments" in command
+    assert "tool_parser_drops_empty_xml_call_and_strips_markup_for_nonstream_paths" in command
+    assert "streaming_chat_preamble_empty_xml_tool_call_never_emits_empty_arguments" in command
 
 
 def test_noheavy_api_cache_contract_includes_response_format_docs_boundary():
