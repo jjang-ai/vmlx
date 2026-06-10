@@ -226,6 +226,9 @@ INSTALLED_APP_UI_PROOFS = {
     "gemma4_26b_qat_jang4m": Path(
         "docs/internal/agent-notes/current-real-ui-installed-app-gemma4-26b-qat-jang4m-responses-tools-cachecontrols-visible-chat-20260610-proof.json"
     ),
+    "gemma4_31b_qat_jang4m": Path(
+        "docs/internal/agent-notes/current-real-ui-installed-app-gemma4-31b-qat-jang4m-responses-tools-cachecontrols-visible-chat-short-second-tool-20260610-proof.json"
+    ),
 }
 
 
