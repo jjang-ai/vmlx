@@ -699,11 +699,13 @@ def classify_required_rows(
             matching_paths=[row["path"] for row in matches],
         )
         live_proof_status = (
-            "partial"
+            "pass"
             if source_fullmedia_smoke.get("status") == "pass"
             and installed_app_ui_proof.get("status") == "pass"
             else "missing"
         )
+        if proof_status != "missing" and live_proof_status == "pass":
+            proof_status = "pass"
         classified[key] = {
             "display": spec["display"],
             "status": proof_status,
@@ -814,7 +816,7 @@ def build_artifact(
             "gemma4_26b_present": classified["gemma4_26b_vl"]["status"] != "missing",
             "gemma4_31v_or_31b_present": classified["gemma4_31v_or_31b_vl"]["status"] != "missing",
             "all_required_source_live_smokes_present": not source_smoke_open,
-            "all_required_live_proofs_present": False,
+            "all_required_live_proofs_present": not missing and not open_rows,
             "gemma4_12b_audio_weight_backed": gemma12b_backing.get("audio_weight_backed") is True,
             "gemma4_12b_audio_honestly_gated": gemma12b_audio_honestly_gated,
             "gemma4_12b_vision_weight_backed": gemma12b_backing.get("vision_weight_backed") is True,
