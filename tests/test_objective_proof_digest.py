@@ -18,7 +18,7 @@ def test_objective_proof_digest_default_out_tracks_current_release_proof_artifac
     from tests.cross_matrix import summarize_objective_proof as objective
 
     assert objective.DEFAULT_OUT == Path(
-        "build/current-objective-proof-after-mimo-n2-dev-app-proof-refresh-20260610.json"
+        "build/current-objective-proof-after-n2-jangtq2-devapp-prevresp-consumed-20260610.json"
     )
 
 
@@ -97,6 +97,10 @@ def test_objective_proof_digest_tracks_n2_pro_397b_release_blocker():
         "build/current-n2-jangtq2-chat-cache-responses-l2-proof-20260609.json"
         in row["evidence"]
     )
+    assert (
+        "build/current-real-ui-live-model-n2-jangtq2-dev-app-prevresp-proof-20260610.json"
+        in row["evidence"]
+    )
     assert row["details"]["jangtq2_live_proof"]["status"] == "pass"
     assert row["details"]["jangtq2_live_proof"]["stable_text"] is True
     assert row["details"]["jangtq2_live_proof"]["tool_probe_pass"] is True
@@ -115,6 +119,31 @@ def test_objective_proof_digest_tracks_n2_pro_397b_release_blocker():
     assert row["details"]["jangtq2_l2_restart_proof"]["restart_cached_tokens"] > 0
     assert row["details"]["jangtq2_l2_restart_proof"]["block_disk_hits"] > 0
     assert row["details"]["jangtq2_l2_restart_proof"]["ssm_disk_hits"] > 0
+    assert row["details"]["jangtq2_real_ui_prevresp_proof"]["status"] == "pass"
+    assert row["details"]["jangtq2_real_ui_prevresp_proof"]["model"]["profile"] == (
+        "JANGTQ2"
+    )
+    assert row["details"]["jangtq2_real_ui_prevresp_proof"]["tool_loop"][
+        "visible_assistant_turns_complete"
+    ] is True
+    assert row["details"]["jangtq2_real_ui_prevresp_proof"]["tool_loop"][
+        "probe_files"
+    ] == {
+        "real_ui_tool_probe_1.txt": "REAL_UI_LIVE_TOOL_ONE",
+        "real_ui_tool_probe_2.txt": "REAL_UI_LIVE_TOOL_TWO",
+    }
+    assert row["details"]["jangtq2_real_ui_prevresp_proof"]["tool_loop"][
+        "event_counts"
+    ]["tool"] > 0
+    assert row["details"]["jangtq2_real_ui_prevresp_proof"]["runtime_cache"][
+        "native_cache"
+    ]["schema"] == "hybrid_ssm_v1"
+    assert row["details"]["jangtq2_real_ui_prevresp_proof"]["runtime_cache"][
+        "native_cache"
+    ]["live_attention_tq_kv"] is True
+    assert row["details"]["jangtq2_real_ui_prevresp_proof"]["runtime_cache"][
+        "cache_after"
+    ]["l2_tokens_on_disk"] > 0
     assert "JANG_1L runtime/cache/API/UI live proof" in row["details"][
         "required_next_evidence"
     ]

@@ -43,7 +43,7 @@ DEFERRED_RELEASE_OPEN_REQUIREMENTS = {
 }
 
 CURRENT_OBJECTIVE_DIGEST_ARTIFACT = (
-    "build/current-objective-proof-after-mimo-n2-dev-app-proof-refresh-20260610.json"
+    "build/current-objective-proof-after-n2-jangtq2-devapp-prevresp-consumed-20260610.json"
 )
 
 CURRENT_SUITE_SOURCE_HASH_FILES = (

@@ -62,7 +62,7 @@ from tests.cross_matrix.release_regression_manifest import (
 
 
 DEFAULT_OUT = Path(
-    "build/current-objective-proof-after-mimo-n2-dev-app-proof-refresh-20260610.json"
+    "build/current-objective-proof-after-n2-jangtq2-devapp-prevresp-consumed-20260610.json"
 )
 CURRENT_RELEASE_REGRESSION_MANIFEST_REL = (
     "build/current-release-regression-manifest-after-pr-intake-matrix-refresh-20260609.json"
@@ -218,6 +218,9 @@ N2_JANGTQ2_CHAT_CACHE_RESPONSES_PROOF_REL = (
 )
 N2_JANGTQ2_CHAT_CACHE_RESPONSES_L2_PROOF_REL = (
     "build/current-n2-jangtq2-chat-cache-responses-l2-proof-20260609.json"
+)
+N2_JANGTQ2_REAL_UI_PREVRESP_PROOF_REL = (
+    "build/current-real-ui-live-model-n2-jangtq2-dev-app-prevresp-proof-20260610.json"
 )
 GEMMA_QAT_NATIVE_MXFP4_INVENTORY_REL = (
     "build/current-gemma-qat-native-mxfp4-local-inventory-after-source-smoke-map-20260609.json"
@@ -5559,6 +5562,9 @@ def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
     n2_jangtq2_l2_proof = _load(
         root, N2_JANGTQ2_CHAT_CACHE_RESPONSES_L2_PROOF_REL
     )
+    n2_jangtq2_real_ui_prevresp_proof = _load(
+        root, N2_JANGTQ2_REAL_UI_PREVRESP_PROOF_REL
+    )
     n2_jang1l_chat_cache_proof = _load(root, N2_PRO_JANG1L_CHAT_CACHE_PROOF_REL)
     n2_jang1l_real_ui_one_turn_proof = _load(
         root, N2_PRO_JANG1L_REAL_UI_ONE_TURN_PROOF_REL
@@ -7276,6 +7282,7 @@ def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
             N2_PRO_JANG1L_REAL_UI_BOUNDED_PROOF_REL,
             N2_JANGTQ2_CHAT_CACHE_RESPONSES_PROOF_REL,
             N2_JANGTQ2_CHAT_CACHE_RESPONSES_L2_PROOF_REL,
+            N2_JANGTQ2_REAL_UI_PREVRESP_PROOF_REL,
             N2_API_CACHE_CONTRACT_REL,
             N2_CACHE_ARCHITECTURE_CONTRACT_REL,
             MODEL_FAMILY_CONTRACT_REL,
@@ -7602,6 +7609,29 @@ def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
                     "Current-source N2 JANGTQ2 fresh-process L2 restart proof only. "
                     "This does not clear N2 JANG_1L, installed-app/UI parity, "
                     "media rows, same-model tunnel parity, or full release support."
+                ),
+            },
+            "jangtq2_real_ui_prevresp_proof": {
+                "artifact": N2_JANGTQ2_REAL_UI_PREVRESP_PROOF_REL,
+                "status": n2_jangtq2_real_ui_prevresp_proof.get("status"),
+                "model": n2_jangtq2_real_ui_prevresp_proof.get("model"),
+                "ui": n2_jangtq2_real_ui_prevresp_proof.get("ui"),
+                "tool_loop": n2_jangtq2_real_ui_prevresp_proof.get("tool_loop"),
+                "runtime_detection": n2_jangtq2_real_ui_prevresp_proof.get(
+                    "runtime_detection"
+                ),
+                "runtime_cache": n2_jangtq2_real_ui_prevresp_proof.get(
+                    "runtime_cache"
+                ),
+                "red_followup": n2_jangtq2_real_ui_prevresp_proof.get(
+                    "red_followup"
+                ),
+                "boundary": (
+                    "Current Electron dev-app N2 JANGTQ2 default Responses "
+                    "tool/cache proof with previous_response_id continuation. "
+                    "This supports the checkpoint candidate profile but does "
+                    "not clear stricter long-delta prompts, audio, public "
+                    "tunnel parity, N2 JANG_1L, or full release support."
                 ),
             },
             "required_next_evidence": [
