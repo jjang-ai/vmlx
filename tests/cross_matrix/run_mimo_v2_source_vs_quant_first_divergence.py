@@ -33,6 +33,56 @@ DEFAULT_QUANT_MODEL_PATH = "/Users/example/.mlxstudio/models/JANGQ-AI/MiMo-V2.5-
 
 PROMPTS: tuple[dict[str, Any], ...] = (
     {
+        "name": "plain_exact_blue_cat",
+        "messages": [
+            {
+                "role": "user",
+                "content": "Reply with exactly blue-cat and no other text.",
+            },
+        ],
+        "expected": "blue-cat",
+        "max_tokens": 32,
+    },
+    {
+        "name": "plain_exact_sentinel",
+        "messages": [
+            {
+                "role": "user",
+                "content": "Reply with exactly B7-CAT-09 and no other text.",
+            },
+        ],
+        "expected": "B7-CAT-09",
+        "max_tokens": 32,
+    },
+    {
+        "name": "json_blue_cat",
+        "messages": [
+            {
+                "role": "user",
+                "content": (
+                    "Return only this JSON exactly: "
+                    "{\"status\":\"ok\",\"value\":\"blue-cat\",\"count\":3}"
+                ),
+            },
+        ],
+        "expected": "{\"status\":\"ok\",\"value\":\"blue-cat\",\"count\":3}",
+        "max_tokens": 64,
+    },
+    {
+        "name": "json_sentinel",
+        "messages": [
+            {
+                "role": "user",
+                "content": (
+                    "Return only this JSON exactly: "
+                    "{\"status\":\"ok\",\"value\":\"B7-CAT-09\",\"count\":3}"
+                ),
+            },
+        ],
+        "expected": "{\"status\":\"ok\",\"value\":\"B7-CAT-09\",\"count\":3}",
+        "max_tokens": 64,
+    },
+    {
         "name": "short_system_exact_ack",
         "messages": [
             {"role": "system", "content": "You answer exact probes."},
@@ -532,7 +582,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--source-base-url", default=DEFAULT_SOURCE_BASE_URL)
     parser.add_argument("--quant-base-url", default=DEFAULT_QUANT_BASE_URL)
     parser.add_argument("--source-model", default="mimo-v2-source")
-    parser.add_argument("--quant-model", default="mimo-v2-jang2l")
+    parser.add_argument("--quant-model", default="mimo-v2-jangtq2")
     parser.add_argument("--source-model-path", default=DEFAULT_SOURCE_MODEL_PATH)
     parser.add_argument("--quant-model-path", default=DEFAULT_QUANT_MODEL_PATH)
     parser.add_argument("--source-host", default=DEFAULT_SOURCE_HOST)
