@@ -1674,6 +1674,8 @@ export function registerChatHandlers(
         const apiUrl = useResponsesApi
           ? `${baseUrl}/v1/responses`
           : `${baseUrl}/v1/chat/completions`;
+        const suppressPinnedToolChoiceForLoopback =
+          isRemote && isLoopbackUrl(apiUrl);
         console.log(
           `[CHAT] Sending to: ${apiUrl} (wire: ${wireApi}, remote: ${isRemote})`,
         );
@@ -1812,7 +1814,11 @@ export function registerChatHandlers(
                 filteredTools,
                 true,
               );
-              if (explicitToolChoice && !isResponsesToolFollowup) {
+              if (
+                explicitToolChoice &&
+                !isResponsesToolFollowup &&
+                !suppressPinnedToolChoiceForLoopback
+              ) {
                 obj.tool_choice = explicitToolChoice;
               }
             }
@@ -1891,7 +1897,11 @@ export function registerChatHandlers(
                 obj.tools,
                 false,
               );
-              if (explicitToolChoice && !suppressExplicitToolChoiceForToolFollowup) {
+              if (
+                explicitToolChoice &&
+                !suppressExplicitToolChoiceForToolFollowup &&
+                !suppressPinnedToolChoiceForLoopback
+              ) {
                 obj.tool_choice = explicitToolChoice;
               }
             }

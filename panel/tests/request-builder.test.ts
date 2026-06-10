@@ -36,6 +36,7 @@ function buildRequestBody(
     tools?: any[],
     detectedFamily?: string,
     thinkingBudgetSupported?: boolean,
+    suppressPinnedToolChoiceForLoopback = false,
 ): Record<string, any> {
     const stopSequences = overrides?.stopSequences
         ? overrides.stopSequences.split(',').map(s => s.trim()).filter(Boolean)
@@ -121,7 +122,7 @@ function buildRequestBody(
             }))
         }
         const explicitToolChoice = inferExplicitToolChoice(true)
-        if (explicitToolChoice) obj.tool_choice = explicitToolChoice
+        if (explicitToolChoice && !suppressPinnedToolChoiceForLoopback) obj.tool_choice = explicitToolChoice
         if (effectiveEnableThinkingOverride !== undefined) {
             obj.enable_thinking = effectiveEnableThinkingOverride
         } else if (isRemote) {
@@ -150,7 +151,7 @@ function buildRequestBody(
             obj.tools = tools
         }
         const explicitToolChoice = inferExplicitToolChoice(false)
-        if (explicitToolChoice) obj.tool_choice = explicitToolChoice
+        if (explicitToolChoice && !suppressPinnedToolChoiceForLoopback) obj.tool_choice = explicitToolChoice
         if (effectiveEnableThinkingOverride !== undefined) {
             obj.enable_thinking = effectiveEnableThinkingOverride
         } else if (isRemote) {
@@ -809,6 +810,27 @@ describe('buildRequestBody — Tool format', () => {
             type: 'function',
             name: 'run_command',
         })
+    })
+
+    it('does not pin tool_choice for loopback remote vMLX sessions', () => {
+        const body = buildRequestBody(
+            'responses',
+            'model',
+            [
+                { role: 'system', content: 'You are helpful.' },
+                { role: 'user', content: 'Use the run_command tool exactly once.' },
+            ],
+            { builtinToolsEnabled: true },
+            true,
+            false,
+            sampleTools,
+            undefined,
+            undefined,
+            true,
+        )
+
+        expect(body.tools?.[0]?.name).toBe('read_file')
+        expect(body.tool_choice).toBeUndefined()
     })
 
     it('does not pin Chat tool_choice when no available tool is explicitly named', () => {
