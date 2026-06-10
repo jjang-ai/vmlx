@@ -1674,8 +1674,15 @@ export function registerChatHandlers(
         const apiUrl = useResponsesApi
           ? `${baseUrl}/v1/responses`
           : `${baseUrl}/v1/chat/completions`;
+        const loopbackModelIdentity = `${chatDetectedFamily || ""} ${chat.modelPath || ""} ${chat.modelId || ""} ${resolvedSession?.remoteModel || ""}`.toLowerCase();
+        const allowPinnedToolChoiceForLoopback =
+          chatDetectedFamily === "gemma4" ||
+          loopbackModelIdentity.includes("gemma-4") ||
+          loopbackModelIdentity.includes("gemma4");
         const suppressPinnedToolChoiceForLoopback =
-          isRemote && isLoopbackUrl(apiUrl);
+          isRemote &&
+          isLoopbackUrl(apiUrl) &&
+          !allowPinnedToolChoiceForLoopback;
         console.log(
           `[CHAT] Sending to: ${apiUrl} (wire: ${wireApi}, remote: ${isRemote})`,
         );
