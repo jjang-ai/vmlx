@@ -242,6 +242,72 @@ class TestQwenToolParser:
         args = json.loads(result.tool_calls[0]["arguments"])
         assert args == {"command": 'echo "Tools are working correctly!"'}
 
+    def test_streaming_xml_empty_required_args_fail_closed(self, parser):
+        """Streaming parse must keep request schema validation."""
+        request = {
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "exec_command",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {"cmd": {"type": "string"}},
+                            "required": ["cmd"],
+                        },
+                    },
+                }
+            ]
+        }
+        text = (
+            "Checking what's in /tmp.\n"
+            '<tool_call>{"name": "exec_command", "arguments": {}}</tool_call>'
+        )
+
+        result = parser.extract_tool_calls_streaming(
+            "",
+            text,
+            "</tool_call>",
+            request=request,
+        )
+
+        assert result is None
+
+    def test_streaming_xml_required_args_preserved(self, parser):
+        """Valid required arguments should still stream as a tool call."""
+        request = {
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "exec_command",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {"cmd": {"type": "string"}},
+                            "required": ["cmd"],
+                        },
+                    },
+                }
+            ]
+        }
+        text = (
+            "Checking what's in /tmp.\n"
+            '<tool_call>{"name": "exec_command", '
+            '"arguments": {"cmd": "ls /tmp"}}</tool_call>'
+        )
+
+        result = parser.extract_tool_calls_streaming(
+            "",
+            text,
+            "</tool_call>",
+            request=request,
+        )
+
+        assert result is not None
+        assert result["tool_calls"][0]["function"]["name"] == "exec_command"
+        args = json.loads(result["tool_calls"][0]["function"]["arguments"])
+        assert args == {"cmd": "ls /tmp"}
+
     def test_plain_tool_name_then_argument_uses_single_tool_schema(self, parser):
         """Qwen3.6 can emit a bare tool name followed by the command text."""
         request = {
