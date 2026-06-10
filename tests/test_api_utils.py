@@ -6,6 +6,8 @@ Tests clean_output_text, is_mllm_model, and extract_multimodal_content
 from vmlx_engine/api/utils.py. No MLX dependency.
 """
 
+from pathlib import Path
+
 from vmlx_engine.api.utils import (
     _IS_MLLM_CACHE,
     clean_output_text,
@@ -501,6 +503,18 @@ class TestResolveToLocalPath:
 
         result = resolve_to_local_path("org/model-name")
         assert result == str(snapshot_dir)
+
+    def test_hf_repo_id_resolved_from_local_models_cache(self, tmp_path, monkeypatch):
+        """Repo IDs are resolved from ~/models before falling through to HF cache."""
+        local_model = tmp_path / "models" / "JANGQ-AI" / "gemma-4-12B-it-qat-MXFP4"
+        local_model.mkdir(parents=True)
+        (local_model / "config.json").write_text("{}")
+
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+
+        result = resolve_to_local_path("JANGQ-AI/gemma-4-12B-it-qat-MXFP4")
+
+        assert result == str(local_model)
 
     def test_most_recent_revision_selected(self, tmp_path, monkeypatch):
         """When multiple revisions exist, the most recently modified is chosen."""

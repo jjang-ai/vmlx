@@ -3199,6 +3199,79 @@ def _template_completes_thinking(tokenizer, model_name: str) -> bool:
 _enable_auto_tool_choice: bool = False
 _tool_call_parser: str | None = None  # Parser name: auto, mistral, qwen, llama, hermes
 _tool_call_parser_disabled_explicitly: bool = False
+_reasoning_parser_disabled_explicitly: bool = False
+_reasoning_parser_explicit_name: str | None = None
+_tool_call_parser_explicit_name: str | None = None
+
+
+def _configure_loaded_model_parsers_from_registry(model_key: str | None = None) -> None:
+    """Refresh auto-detected parsers after the loaded model path is known."""
+    global _reasoning_parser, _tool_call_parser
+
+    registry_key = _registry_model_key(model_key)
+    if not registry_key:
+        return
+
+    try:
+        from .model_config_registry import get_model_config_registry
+
+        cfg = get_model_config_registry().lookup(registry_key)
+    except Exception as e:
+        logger.debug("Parser auto-detection skipped for %s: %s", registry_key, e)
+        return
+
+    if (
+        not _reasoning_parser_disabled_explicitly
+        and _reasoning_parser_explicit_name is None
+    ):
+        parser_name = getattr(cfg, "reasoning_parser", None)
+        if parser_name:
+            try:
+                from .reasoning import get_parser
+
+                parser_cls = get_parser(parser_name)
+                if _reasoning_parser is None or _reasoning_parser.__class__ is not parser_cls:
+                    _reasoning_parser = parser_cls()
+                    logger.info(
+                        "Auto-detected reasoning parser after model load: %s "
+                        "(registry key: %s)",
+                        parser_name,
+                        registry_key,
+                    )
+            except KeyError:
+                logger.warning(
+                    "Reasoning parser %r from loaded model config is not registered",
+                    parser_name,
+                )
+        elif _reasoning_parser is not None:
+            _reasoning_parser = None
+            logger.info(
+                "Cleared auto-detected reasoning parser after model load "
+                "(registry key: %s has no parser)",
+                registry_key,
+            )
+
+    if (
+        _enable_auto_tool_choice
+        and not _tool_call_parser_disabled_explicitly
+        and _tool_call_parser_explicit_name is None
+    ):
+        parser_name = getattr(cfg, "tool_parser", None)
+        if parser_name and _tool_call_parser != parser_name:
+            _tool_call_parser = parser_name
+            logger.info(
+                "Auto-detected tool call parser after model load: %s "
+                "(registry key: %s)",
+                parser_name,
+                registry_key,
+            )
+        elif not parser_name and _tool_call_parser not in (None, "auto"):
+            _tool_call_parser = None
+            logger.info(
+                "Cleared auto-detected tool call parser after model load "
+                "(registry key: %s has no parser)",
+                registry_key,
+            )
 
 # reasoning_effort → token budget mapping (mirrors OpenAI o-series behavior).
 # DSV4-Flash adds a "max" effort tier beyond OpenAI's low/medium/high
@@ -4853,7 +4926,21 @@ def _registry_model_key(requested_model: str | None = None) -> str:
     loaded artifact path/name so they can read config.json/jang_config.json and
     avoid false warnings like ``alias/config.json`` missing.
     """
-    return _model_path or _model_name or requested_model or ""
+    fallback = ""
+    for candidate in (_model_path, _model_name, requested_model):
+        if not candidate:
+            continue
+        if not fallback:
+            fallback = candidate
+        try:
+            from .api.utils import resolve_to_local_path
+
+            resolved = resolve_to_local_path(candidate)
+            if resolved and (resolved != candidate or os.path.isdir(resolved)):
+                return resolved
+        except Exception:
+            pass
+    return fallback
 
 
 def _get_raw_model_from_engine():
@@ -5105,6 +5192,7 @@ def load_model(
     _served_model_name = served_model_name  # Custom name override (may be None)
     if _served_model_name:
         logger.info(f"Serving model as: {_served_model_name} (actual: {_model_name})")
+    _configure_loaded_model_parsers_from_registry(model_name)
 
     # Log system memory before model load for diagnostics
     try:
@@ -17167,9 +17255,25 @@ Examples:
     global _native_mtp_sampling_policy
     global _inference_endpoints, _wake_timeout
     global _smelt_enabled, _smelt_experts
+    global _reasoning_parser_disabled_explicitly, _reasoning_parser_explicit_name
+    global _tool_call_parser_disabled_explicitly, _tool_call_parser_explicit_name
 
     _api_key = args.api_key or os.environ.get("VLLM_API_KEY")
     _default_timeout = args.timeout
+    _reasoning_parser_disabled_explicitly = args.reasoning_parser == "none"
+    _reasoning_parser_explicit_name = (
+        args.reasoning_parser
+        if args.reasoning_parser not in (None, "auto", "none")
+        else None
+    )
+    _tool_call_parser_disabled_explicitly = (
+        bool(args.enable_auto_tool_choice) and args.tool_call_parser == "none"
+    )
+    _tool_call_parser_explicit_name = (
+        args.tool_call_parser
+        if args.enable_auto_tool_choice and args.tool_call_parser not in (None, "auto", "none")
+        else None
+    )
     if getattr(args, "inference_endpoints", None):
         _inference_endpoints = [
             e.strip() for e in args.inference_endpoints.split(",") if e.strip()

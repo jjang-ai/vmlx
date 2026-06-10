@@ -133,6 +133,15 @@ def resolve_to_local_path(model_name: str) -> str:
     except Exception:
         pass
 
+    # Local developer/model cache used by vMLX proof and release lanes:
+    # ~/models/<org>/<name>/.
+    try:
+        local_models_path = Path.home() / "models" / model_name
+        if local_models_path.is_dir() and (local_models_path / "config.json").is_file():
+            return str(local_models_path)
+    except Exception:
+        pass
+
     # HuggingFace cache (no network, no download)
     try:
         from huggingface_hub import scan_cache_dir

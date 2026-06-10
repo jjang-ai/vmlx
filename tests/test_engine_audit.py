@@ -9029,6 +9029,84 @@ class TestZayaCCACachePolicy:
         assert cfg.supports_thinking is True
         assert cfg.think_in_template is False
 
+    def test_loaded_gemma4_mxfp_sidecar_refreshes_auto_parsers(
+        self, monkeypatch, tmp_path
+    ):
+        import vmlx_engine.server as server
+        from vmlx_engine.reasoning.gemma4_parser import Gemma4ReasoningParser
+
+        (tmp_path / "config.json").write_text(
+            json.dumps(
+                {
+                    "model_type": "gemma4_unified",
+                    "text_config": {"model_type": "gemma4_unified_text"},
+                    "vision_config": {"model_type": "gemma4_unified_vision"},
+                }
+            )
+        )
+        (tmp_path / "jang_config.json").write_text(
+            json.dumps(
+                {
+                    "weight_format": "mxfp4",
+                    "profile": "MXFP4",
+                    "capabilities": {
+                        "family": "gemma4",
+                        "reasoning_parser": "gemma4",
+                        "tool_parser": "gemma4",
+                        "supports_thinking": True,
+                        "supports_tools": True,
+                        "think_in_template": False,
+                        "modality": "vision",
+                        "cache_type": "kv",
+                    },
+                }
+            )
+        )
+
+        monkeypatch.setattr(server, "_model_path", str(tmp_path))
+        monkeypatch.setattr(server, "_model_name", "served-gemma4-alias")
+        monkeypatch.setattr(server, "_reasoning_parser", None)
+        monkeypatch.setattr(server, "_reasoning_parser_disabled_explicitly", False)
+        monkeypatch.setattr(server, "_reasoning_parser_explicit_name", None)
+        monkeypatch.setattr(server, "_enable_auto_tool_choice", True)
+        monkeypatch.setattr(server, "_tool_call_parser", None)
+        monkeypatch.setattr(server, "_tool_call_parser_disabled_explicitly", False)
+        monkeypatch.setattr(server, "_tool_call_parser_explicit_name", None)
+
+        server._configure_loaded_model_parsers_from_registry("served-gemma4-alias")
+
+        assert isinstance(server._reasoning_parser, Gemma4ReasoningParser)
+        assert server._tool_call_parser == "gemma4"
+
+    def test_loaded_model_parser_refresh_preserves_explicit_disables(
+        self, monkeypatch, tmp_path
+    ):
+        import vmlx_engine.server as server
+
+        (tmp_path / "config.json").write_text(
+            json.dumps(
+                {
+                    "model_type": "gemma4",
+                    "text_config": {"model_type": "gemma4_text"},
+                }
+            )
+        )
+
+        monkeypatch.setattr(server, "_model_path", str(tmp_path))
+        monkeypatch.setattr(server, "_model_name", "gemma4-explicit-none")
+        monkeypatch.setattr(server, "_reasoning_parser", None)
+        monkeypatch.setattr(server, "_reasoning_parser_disabled_explicitly", True)
+        monkeypatch.setattr(server, "_reasoning_parser_explicit_name", None)
+        monkeypatch.setattr(server, "_enable_auto_tool_choice", True)
+        monkeypatch.setattr(server, "_tool_call_parser", None)
+        monkeypatch.setattr(server, "_tool_call_parser_disabled_explicitly", True)
+        monkeypatch.setattr(server, "_tool_call_parser_explicit_name", None)
+
+        server._configure_loaded_model_parsers_from_registry(str(tmp_path))
+
+        assert server._reasoning_parser is None
+        assert server._tool_call_parser is None
+
     def test_cli_enables_typed_paged_cache_and_forces_tq_off_for_zaya_cca(self):
         source = Path("./vmlx_engine/cli.py").read_text()
 
