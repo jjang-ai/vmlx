@@ -1,0 +1,196 @@
+{
+  "base_url": "http://127.0.0.1:8897",
+  "failed_labels": [
+    "plain_exact_sentinel",
+    "plain_exact_chat_sentinel",
+    "json_sentinel"
+  ],
+  "model": "mimo-v25-jang2l-exactness-ab-20260610",
+  "notes": [
+    "no source-vs-quant load",
+    "no parser-side semantic repair",
+    "no JSON repair scoring",
+    "expected values must be model-emitted exactly"
+  ],
+  "requests": [
+    {
+      "code": 200,
+      "content": "blue-cat",
+      "elapsed_s": 30.858,
+      "error": null,
+      "expected": "blue-cat",
+      "finish_reason": "stop",
+      "label": "plain_exact_blue_cat",
+      "parsed": null,
+      "pass": true,
+      "raw": "{\"id\":\"cmpl-13371090\",\"object\":\"text_completion\",\"created\":1781109274,\"model\":\"mimo-v25-jang2l-exactness-ab-20260610\",\"choices\":[{\"index\":0,\"text\":\"blue-cat\",\"logprobs\":null,\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":37,\"completion_tokens\":3,\"total_tokens\":40,\"prompt_tokens_details\":null}}",
+      "route": "completions",
+      "usage": {
+        "completion_tokens": 3,
+        "prompt_tokens": 37,
+        "prompt_tokens_details": null,
+        "total_tokens": 40
+      }
+    },
+    {
+      "code": 200,
+      "content": "B7-CAD-09",
+      "elapsed_s": 7.798,
+      "error": null,
+      "expected": "B7-CAT-09",
+      "finish_reason": "stop",
+      "label": "plain_exact_sentinel",
+      "parsed": null,
+      "pass": false,
+      "raw": "{\"id\":\"cmpl-76c9ff75\",\"object\":\"text_completion\",\"created\":1781109282,\"model\":\"mimo-v25-jang2l-exactness-ab-20260610\",\"choices\":[{\"index\":0,\"text\":\"B7-CAD-09\",\"logprobs\":null,\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":42,\"completion_tokens\":8,\"total_tokens\":50,\"prompt_tokens_details\":null}}",
+      "route": "completions",
+      "usage": {
+        "completion_tokens": 8,
+        "prompt_tokens": 42,
+        "prompt_tokens_details": null,
+        "total_tokens": 50
+      }
+    },
+    {
+      "code": 200,
+      "content": "blue-cat",
+      "elapsed_s": 4.33,
+      "error": null,
+      "expected": "blue-cat",
+      "finish_reason": "stop",
+      "label": "plain_exact_chat_blue_cat",
+      "parsed": null,
+      "pass": true,
+      "raw": "{\"id\":\"chatcmpl-9a2987d4\",\"object\":\"chat.completion\",\"created\":1781109286,\"model\":\"mimo-v25-jang2l-exactness-ab-20260610\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"blue-cat\",\"tool_calls\":null,\"reasoning_content\":null},\"logprobs\":null,\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":36,\"completion_tokens\":3,\"total_tokens\":39,\"prompt_tokens_details\":null},\"warnings\":null}",
+      "route": "chat",
+      "usage": {
+        "completion_tokens": 3,
+        "prompt_tokens": 36,
+        "prompt_tokens_details": null,
+        "total_tokens": 39
+      }
+    },
+    {
+      "code": 200,
+      "content": "B7-C44-09",
+      "elapsed_s": 8.578,
+      "error": null,
+      "expected": "B7-CAT-09",
+      "finish_reason": "stop",
+      "label": "plain_exact_chat_sentinel",
+      "parsed": null,
+      "pass": false,
+      "raw": "{\"id\":\"chatcmpl-8d5e14a7\",\"object\":\"chat.completion\",\"created\":1781109295,\"model\":\"mimo-v25-jang2l-exactness-ab-20260610\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"B7-C44-09\",\"tool_calls\":null,\"reasoning_content\":null},\"logprobs\":null,\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":41,\"completion_tokens\":9,\"total_tokens\":50,\"prompt_tokens_details\":null},\"warnings\":null}",
+      "route": "chat",
+      "usage": {
+        "completion_tokens": 9,
+        "prompt_tokens": 41,
+        "prompt_tokens_details": null,
+        "total_tokens": 50
+      }
+    },
+    {
+      "code": 200,
+      "content": "{\"status\":\"ok\",\"value\":\"blue-cat\",\"count\":3}",
+      "elapsed_s": 12.841,
+      "error": null,
+      "expected": {
+        "count": 3,
+        "status": "ok",
+        "value": "blue-cat"
+      },
+      "finish_reason": "stop",
+      "label": "json_blue_cat",
+      "parsed": {
+        "count": 3,
+        "status": "ok",
+        "value": "blue-cat"
+      },
+      "pass": true,
+      "raw": "{\"id\":\"chatcmpl-11e43809\",\"object\":\"chat.completion\",\"created\":1781109308,\"model\":\"mimo-v25-jang2l-exactness-ab-20260610\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"{\\\"status\\\":\\\"ok\\\",\\\"value\\\":\\\"blue-cat\\\",\\\"count\\\":3}\",\"tool_calls\":null,\"reasoning_content\":null},\"logprobs\":null,\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":52,\"completion_tokens\":15,\"total_tokens\":67,\"prompt_tokens_details\":null},\"warnings\":null}",
+      "route": "chat",
+      "usage": {
+        "completion_tokens": 15,
+        "prompt_tokens": 52,
+        "prompt_tokens_details": null,
+        "total_tokens": 67
+      }
+    },
+    {
+      "code": 200,
+      "content": "{\"status\":\"ok\",\"value\":\"B7-CAT-09\"}",
+      "elapsed_s": 13.647,
+      "error": null,
+      "expected": {
+        "count": 3,
+        "status": "ok",
+        "value": "B7-CAT-09"
+      },
+      "finish_reason": "stop",
+      "label": "json_sentinel",
+      "parsed": {
+        "status": "ok",
+        "value": "B7-CAT-09"
+      },
+      "pass": false,
+      "raw": "{\"id\":\"chatcmpl-62cd275e\",\"object\":\"chat.completion\",\"created\":1781109321,\"model\":\"mimo-v25-jang2l-exactness-ab-20260610\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"{\\\"status\\\":\\\"ok\\\",\\\"value\\\":\\\"B7-CAT-09\\\"}\",\"tool_calls\":null,\"reasoning_content\":null},\"logprobs\":null,\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":57,\"completion_tokens\":16,\"total_tokens\":73,\"prompt_tokens_details\":null},\"warnings\":null}",
+      "route": "chat",
+      "usage": {
+        "completion_tokens": 16,
+        "prompt_tokens": 57,
+        "prompt_tokens_details": null,
+        "total_tokens": 73
+      }
+    },
+    {
+      "code": 200,
+      "content": "",
+      "elapsed_s": 20.322,
+      "error": null,
+      "expected": {
+        "value": "blue-cat"
+      },
+      "finish_reason": "tool_calls",
+      "label": "tool_blue_cat",
+      "parsed": {
+        "value": "blue-cat"
+      },
+      "pass": true,
+      "raw": "{\"id\":\"chatcmpl-7f93f9ba\",\"object\":\"chat.completion\",\"created\":1781109342,\"model\":\"mimo-v25-jang2l-exactness-ab-20260610\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"tool_calls\":[{\"id\":\"call_ee1a3f39\",\"type\":\"function\",\"function\":{\"name\":\"record_fact\",\"arguments\":\"{\\\"value\\\": \\\"blue-cat\\\"}\"}}],\"content\":null},\"finish_reason\":\"tool_calls\"}],\"usage\":{\"prompt_tokens\":269,\"completion_tokens\":22,\"total_tokens\":291}}",
+      "route": "chat",
+      "usage": {
+        "completion_tokens": 22,
+        "prompt_tokens": 269,
+        "total_tokens": 291
+      }
+    },
+    {
+      "code": 200,
+      "content": "",
+      "elapsed_s": 21.479,
+      "error": null,
+      "expected": {
+        "value": "B7-CAT-09"
+      },
+      "finish_reason": "tool_calls",
+      "label": "tool_sentinel_json_call",
+      "parsed": {
+        "value": "B7-CAT-09"
+      },
+      "pass": true,
+      "raw": "{\"id\":\"chatcmpl-dc76cd35\",\"object\":\"chat.completion\",\"created\":1781109363,\"model\":\"mimo-v25-jang2l-exactness-ab-20260610\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"tool_calls\":[{\"id\":\"call_0e08ddc9\",\"type\":\"function\",\"function\":{\"name\":\"record_fact\",\"arguments\":\"{\\\"value\\\": \\\"B7-CAT-09\\\"}\"}}],\"content\":null},\"finish_reason\":\"tool_calls\"}],\"usage\":{\"prompt_tokens\":281,\"completion_tokens\":26,\"total_tokens\":307,\"prompt_tokens_details\":{\"cached_tokens\":192,\"cache_detail\":\"paged\"}}}",
+      "route": "chat",
+      "usage": {
+        "completion_tokens": 26,
+        "prompt_tokens": 281,
+        "prompt_tokens_details": {
+          "cache_detail": "paged",
+          "cached_tokens": 192
+        },
+        "total_tokens": 307
+      }
+    }
+  ],
+  "schema": "vmlx-mimo-v2-exactness-variant-probe-v1",
+  "status": "open"
+}

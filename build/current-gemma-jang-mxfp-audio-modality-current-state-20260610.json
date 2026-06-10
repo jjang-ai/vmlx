@@ -1,0 +1,172 @@
+{
+  "artifact": "current-gemma-jang-mxfp-audio-modality-current-state-20260610",
+  "status": "pass",
+  "date": "2026-06-10",
+  "scope": [
+    "Gemma 4 12B QAT MXFP4",
+    "Gemma 4 12B JANG_4M",
+    "Gemma 4 12B QAT JANG_4M",
+    "Gemma 4 26B QAT JANG_4M",
+    "Gemma 4 31B QAT JANG_4M",
+    "Gemma 4 12B native MXFP4"
+  ],
+  "classification": "current source and bundled runtime audio capability honesty",
+  "summary": {
+    "source_runtime_modalities": [
+      "text",
+      "vision",
+      "video"
+    ],
+    "bundled_runtime_modalities": [
+      "text",
+      "vision",
+      "video"
+    ],
+    "audio_runtime_supported": false,
+    "video_runtime_supported": true,
+    "image_runtime_supported": true
+  },
+  "rows": [
+    {
+      "path": "/Users/eric/models/JANGQ-AI/gemma-4-12B-it-qat-MXFP4",
+      "model_type": "gemma4_unified",
+      "has_audio_config": true,
+      "audio_token_id": 258881,
+      "audio_tower_count": 0,
+      "embed_audio_count": 1,
+      "source_bundle_declares_native_audio": false,
+      "source_loaded_runtime_modalities": [
+        "text",
+        "vision",
+        "video"
+      ],
+      "bundled_bundle_declares_native_audio": false,
+      "bundled_loaded_runtime_modalities": [
+        "text",
+        "vision",
+        "video"
+      ],
+      "audio_status": "declared_not_runtime_supported"
+    },
+    {
+      "path": "/Users/eric/models/JANGQ-AI/gemma-4-12B-it-JANG_4M",
+      "model_type": "gemma4_unified",
+      "has_audio_config": true,
+      "audio_token_id": 258881,
+      "audio_tower_count": 0,
+      "embed_audio_count": 1,
+      "source_bundle_declares_native_audio": false,
+      "source_loaded_runtime_modalities": [
+        "text",
+        "vision",
+        "video"
+      ],
+      "bundled_bundle_declares_native_audio": false,
+      "bundled_loaded_runtime_modalities": [
+        "text",
+        "vision",
+        "video"
+      ],
+      "audio_status": "declared_not_runtime_supported"
+    },
+    {
+      "path": "/Users/eric/models/JANGQ-AI/gemma-4-12B-it-qat-JANG_4M",
+      "model_type": "gemma4_unified",
+      "has_audio_config": true,
+      "audio_token_id": 258881,
+      "audio_tower_count": 0,
+      "embed_audio_count": 1,
+      "source_bundle_declares_native_audio": false,
+      "source_loaded_runtime_modalities": [
+        "text",
+        "vision",
+        "video"
+      ],
+      "bundled_bundle_declares_native_audio": false,
+      "bundled_loaded_runtime_modalities": [
+        "text",
+        "vision",
+        "video"
+      ],
+      "audio_status": "declared_not_runtime_supported"
+    },
+    {
+      "path": "/Users/eric/models/JANGQ-AI/gemma-4-26B-A4B-it-qat-JANG_4M",
+      "model_type": "gemma4",
+      "has_audio_config": false,
+      "audio_token_id": 258881,
+      "audio_tower_count": 0,
+      "embed_audio_count": 0,
+      "source_bundle_declares_native_audio": false,
+      "source_loaded_runtime_modalities": [
+        "text",
+        "vision",
+        "video"
+      ],
+      "bundled_bundle_declares_native_audio": false,
+      "bundled_loaded_runtime_modalities": [
+        "text",
+        "vision",
+        "video"
+      ],
+      "audio_status": "not_advertised"
+    },
+    {
+      "path": "/Users/eric/models/JANGQ-AI/gemma-4-31B-it-qat-JANG_4M",
+      "model_type": "gemma4",
+      "has_audio_config": false,
+      "audio_token_id": 258881,
+      "audio_tower_count": 0,
+      "embed_audio_count": 0,
+      "source_bundle_declares_native_audio": false,
+      "source_loaded_runtime_modalities": [
+        "text",
+        "vision",
+        "video"
+      ],
+      "bundled_bundle_declares_native_audio": false,
+      "bundled_loaded_runtime_modalities": [
+        "text",
+        "vision",
+        "video"
+      ],
+      "audio_status": "not_advertised"
+    },
+    {
+      "path": "/Users/eric/models/OsaurusAI/gemma-4-12B-it-MXFP4",
+      "model_type": "gemma4_unified",
+      "has_audio_config": true,
+      "audio_token_id": 258881,
+      "audio_tower_count": 0,
+      "embed_audio_count": 1,
+      "source_bundle_declares_native_audio": false,
+      "source_loaded_runtime_modalities": [
+        "text",
+        "vision",
+        "video"
+      ],
+      "bundled_bundle_declares_native_audio": false,
+      "bundled_loaded_runtime_modalities": [
+        "text",
+        "vision",
+        "video"
+      ],
+      "audio_status": "declared_not_runtime_supported"
+    }
+  ],
+  "verification": {
+    "source_probe": ".venv/bin/python direct server helper probe with _engine.is_mllm=True",
+    "bundled_probe": "panel/bundled-python/python/bin/python3 direct server helper probe with _engine.is_mllm=True",
+    "config_index_probe": "config.json plus model.safetensors.index.json scan for audio_config, audio_token_id, audio_tower.*, and embed_audio.*"
+  },
+  "boundary": {
+    "not_claimed": [
+      "Gemma audio support",
+      "audio semantic E2E",
+      "release readiness",
+      "new signed/notarized package"
+    ],
+    "current_truth": "Gemma image and video can be runtime-supported for these rows, but audio must remain unsupported until bundles contain real audio_tower weights and pass live audio E2E.",
+    "other_agent_next_action": "Do not use older Gemma audio semantic-red rows as current audio support evidence. Treat them as superseded by current source/bundled unsupported-audio gating unless a new weight-backed audio_tower artifact is produced and live-proven."
+  }
+}

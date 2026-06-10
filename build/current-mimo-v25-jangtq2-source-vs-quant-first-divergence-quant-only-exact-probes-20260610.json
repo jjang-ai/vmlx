@@ -1,0 +1,260 @@
+{
+  "quant_base_url": "http://127.0.0.1:8897",
+  "quant_model": "mimo-v2-jangtq2",
+  "quant_model_path": "/Users/eric/.mlxstudio/models/JANGQ-AI/MiMo-V2.5-JANGTQ_2",
+  "remote_evidence_only": false,
+  "rows": [
+    {
+      "classification": "request_failed",
+      "expected": "blue-cat",
+      "expected_arguments": null,
+      "expected_tool": null,
+      "first_divergence": {
+        "char_index": 0,
+        "quant_suffix": "blue",
+        "source_suffix": ""
+      },
+      "prompt_name": "plain_exact_blue_cat",
+      "quant_elapsed_s": 1.573,
+      "quant_finish_reason": "stop",
+      "quant_http_status": 200,
+      "quant_output": "blue",
+      "quant_tool_calls": [],
+      "quant_usage": {
+        "completion_tokens": 2,
+        "prompt_tokens": 36,
+        "prompt_tokens_details": null,
+        "total_tokens": 38
+      },
+      "source_elapsed_s": 7.694,
+      "source_finish_reason": null,
+      "source_http_status": 0,
+      "source_output": "",
+      "source_tool_calls": [],
+      "source_usage": null
+    },
+    {
+      "classification": "request_failed",
+      "expected": "B7-CAT-09",
+      "expected_arguments": null,
+      "expected_tool": null,
+      "first_divergence": {
+        "char_index": 0,
+        "quant_suffix": "B7CAT-09",
+        "source_suffix": ""
+      },
+      "prompt_name": "plain_exact_sentinel",
+      "quant_elapsed_s": 1.752,
+      "quant_finish_reason": "stop",
+      "quant_http_status": 200,
+      "quant_output": "B7CAT-09",
+      "quant_tool_calls": [],
+      "quant_usage": {
+        "completion_tokens": 7,
+        "prompt_tokens": 41,
+        "prompt_tokens_details": null,
+        "total_tokens": 48
+      },
+      "source_elapsed_s": 7.645,
+      "source_finish_reason": null,
+      "source_http_status": 0,
+      "source_output": "",
+      "source_tool_calls": [],
+      "source_usage": null
+    },
+    {
+      "classification": "request_failed",
+      "expected": "{\"status\":\"ok\",\"value\":\"blue-cat\",\"count\":3}",
+      "expected_arguments": null,
+      "expected_tool": null,
+      "first_divergence": {
+        "char_index": 0,
+        "quant_suffix": "{\"status\":\"ok\",\"value\":\"blue\",\"count\":3}",
+        "source_suffix": ""
+      },
+      "prompt_name": "json_blue_cat",
+      "quant_elapsed_s": 1.994,
+      "quant_finish_reason": "stop",
+      "quant_http_status": 200,
+      "quant_output": "{\"status\":\"ok\",\"value\":\"blue\",\"count\":3}",
+      "quant_tool_calls": [],
+      "quant_usage": {
+        "completion_tokens": 14,
+        "prompt_tokens": 46,
+        "prompt_tokens_details": null,
+        "total_tokens": 60
+      },
+      "source_elapsed_s": 7.695,
+      "source_finish_reason": null,
+      "source_http_status": 0,
+      "source_output": "",
+      "source_tool_calls": [],
+      "source_usage": null
+    },
+    {
+      "classification": "request_failed",
+      "expected": "{\"status\":\"ok\",\"value\":\"B7-CAT-09\",\"count\":3}",
+      "expected_arguments": null,
+      "expected_tool": null,
+      "first_divergence": {
+        "char_index": 0,
+        "quant_suffix": "{\"status\":\"ok\",\"value\":\"B7CAT-09\",\"count\":3}",
+        "source_suffix": ""
+      },
+      "prompt_name": "json_sentinel",
+      "quant_elapsed_s": 2.202,
+      "quant_finish_reason": "stop",
+      "quant_http_status": 200,
+      "quant_output": "{\"status\":\"ok\",\"value\":\"B7CAT-09\",\"count\":3}",
+      "quant_tool_calls": [],
+      "quant_usage": {
+        "completion_tokens": 19,
+        "prompt_tokens": 51,
+        "prompt_tokens_details": null,
+        "total_tokens": 70
+      },
+      "source_elapsed_s": 7.491,
+      "source_finish_reason": null,
+      "source_http_status": 0,
+      "source_output": "",
+      "source_tool_calls": [],
+      "source_usage": null
+    },
+    {
+      "classification": "request_failed",
+      "expected": "ACK",
+      "expected_arguments": null,
+      "expected_tool": null,
+      "first_divergence": {
+        "char_index": 0,
+        "quant_suffix": "ACK",
+        "source_suffix": ""
+      },
+      "prompt_name": "short_system_exact_ack",
+      "quant_elapsed_s": 1.38,
+      "quant_finish_reason": "stop",
+      "quant_http_status": 200,
+      "quant_output": "ACK",
+      "quant_tool_calls": [],
+      "quant_usage": {
+        "completion_tokens": 2,
+        "prompt_tokens": 23,
+        "prompt_tokens_details": null,
+        "total_tokens": 25
+      },
+      "source_elapsed_s": 7.534,
+      "source_finish_reason": null,
+      "source_http_status": 0,
+      "source_output": "",
+      "source_tool_calls": [],
+      "source_usage": null
+    },
+    {
+      "classification": "request_failed",
+      "expected": "ACK",
+      "expected_arguments": null,
+      "expected_tool": null,
+      "first_divergence": {
+        "char_index": 0,
+        "quant_suffix": "ACK",
+        "source_suffix": ""
+      },
+      "prompt_name": "long_cache_system_exact_ack",
+      "quant_elapsed_s": 1.87,
+      "quant_finish_reason": "stop",
+      "quant_http_status": 200,
+      "quant_output": "ACK",
+      "quant_tool_calls": [],
+      "quant_usage": {
+        "completion_tokens": 2,
+        "prompt_tokens": 57,
+        "prompt_tokens_details": null,
+        "total_tokens": 59
+      },
+      "source_elapsed_s": 7.609,
+      "source_finish_reason": null,
+      "source_http_status": 0,
+      "source_output": "",
+      "source_tool_calls": [],
+      "source_usage": null
+    },
+    {
+      "classification": "request_failed",
+      "expected": "ACK",
+      "expected_arguments": null,
+      "expected_tool": null,
+      "first_divergence": {
+        "char_index": 0,
+        "quant_suffix": "ACK",
+        "source_suffix": ""
+      },
+      "prompt_name": "long_cache_no_system_exact_ack",
+      "quant_elapsed_s": 2.05,
+      "quant_finish_reason": "stop",
+      "quant_http_status": 200,
+      "quant_output": "ACK",
+      "quant_tool_calls": [],
+      "quant_usage": {
+        "completion_tokens": 2,
+        "prompt_tokens": 70,
+        "prompt_tokens_details": null,
+        "total_tokens": 72
+      },
+      "source_elapsed_s": 7.654,
+      "source_finish_reason": null,
+      "source_http_status": 0,
+      "source_output": "",
+      "source_tool_calls": [],
+      "source_usage": null
+    },
+    {
+      "classification": "request_failed",
+      "expected": null,
+      "expected_arguments": {
+        "value": "blue-cat"
+      },
+      "expected_tool": "record_fact",
+      "first_divergence": {
+        "quant_tool_calls": [
+          {
+            "arguments": "{\"value\": \"blue cat\"}",
+            "name": "record_fact"
+          }
+        ],
+        "source_tool_calls": []
+      },
+      "prompt_name": "xml_tool_required_record_fact",
+      "quant_elapsed_s": 6.975,
+      "quant_finish_reason": "tool_calls",
+      "quant_http_status": 200,
+      "quant_output": "",
+      "quant_tool_calls": [
+        {
+          "arguments": "{\"value\": \"blue cat\"}",
+          "name": "record_fact"
+        }
+      ],
+      "quant_usage": {
+        "completion_tokens": 66,
+        "prompt_tokens": 269,
+        "total_tokens": 335
+      },
+      "source_elapsed_s": 7.641,
+      "source_finish_reason": null,
+      "source_http_status": 0,
+      "source_output": "",
+      "source_tool_calls": [],
+      "source_usage": null
+    }
+  ],
+  "source_base_url": "http://erics-m5-max2.local:8126",
+  "source_model": "mimo-v2-source",
+  "source_model_path": "/Volumes/EricsLLMDrive/jangq-ai/sources/MiMo-V2.5",
+  "status": "fail",
+  "summary": {
+    "quant_diverges_from_source": 0,
+    "request_failed": 8,
+    "source_also_fails": 0,
+    "source_and_quant_match": 0
+  }
+}

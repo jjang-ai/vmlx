@@ -93,6 +93,15 @@ MLLM_INPUTS_EMBEDS_INTERFACE_ARTIFACT = Path(
 LATEST_DECODE_SPEED_ARTIFACT = Path(
     "build/current-mimo-v25-jangtq2-speed-boundary-after-singlebatch-tokenbuffer-skip-20260609.json"
 )
+JANGTQ2_SOURCE_MEDIA_PROOF_ARTIFACT = Path(
+    "build/current-mimo-v25-jangtq2-video-audio-source-proof-20260610.json"
+)
+JANGTQ2_DEV_APP_VIDEO_MEDIA_PROOF_ARTIFACT = Path(
+    "build/current-real-ui-dev-app-mimo-v25-jangtq2-video-after-mllm-source-media-20260610.json"
+)
+JANGTQ2_VIDEO_CACHE_PROOF_ARTIFACT = Path(
+    "build/current-mimo-v25-jangtq2-video-cache-proof-after-video-tensor-cache-fix-20260610.json"
+)
 NOHEAVY_API_CACHE_CONTRACT_ARTIFACT = Path(
     "build/current-noheavy-api-cache-contract-after-responses-reasoning-empty-final-args-gateway-20260609.json"
 )
@@ -2196,6 +2205,100 @@ def _mimo_media_runtime_evidence(
     }
 
 
+def _mimo_jangtq2_media_route_evidence(*artifacts: dict[str, Any]) -> dict[str, Any]:
+    source = artifacts[0] if len(artifacts) > 0 else {}
+    dev_video = artifacts[1] if len(artifacts) > 1 else {}
+    video_cache = artifacts[2] if len(artifacts) > 2 else {}
+    source_data = source.get("data") if isinstance(source.get("data"), dict) else {}
+    dev_video_data = (
+        dev_video.get("data") if isinstance(dev_video.get("data"), dict) else {}
+    )
+    video_cache_data = (
+        video_cache.get("data") if isinstance(video_cache.get("data"), dict) else {}
+    )
+    source_proven = (
+        source_data.get("proven") if isinstance(source_data.get("proven"), dict) else {}
+    )
+    dev_checks = (
+        dev_video_data.get("checks")
+        if isinstance(dev_video_data.get("checks"), dict)
+        else {}
+    )
+    cache_proven = (
+        video_cache_data.get("proven")
+        if isinstance(video_cache_data.get("proven"), dict)
+        else {}
+    )
+    transport_proven = bool(
+        source_proven.get("source_server_loads_as_mllm")
+        and source_proven.get("media_weights_bound")
+        and source_proven.get("video_request_reaches_runtime")
+        and source_proven.get("audio_request_reaches_runtime")
+        and source_proven.get("video_http_200")
+        and source_proven.get("audio_http_200")
+    )
+    dev_video_transport_proven = bool(
+        dev_video_data.get("transport_status") == "pass"
+        and dev_checks.get("real_electron_dev_build")
+        and dev_checks.get("real_model_loaded")
+        and dev_checks.get("mllm_flag_used")
+        and dev_checks.get("server_media_diag_video_url")
+        and dev_checks.get("http_200")
+        and dev_checks.get("block_l2_write")
+    )
+    video_cache_proven = bool(
+        cache_proven.get("real_mimo_jangtq2_model_loaded")
+        and cache_proven.get("video_request_reaches_runtime")
+        and cache_proven.get("repeated_video_request_http_200")
+        and cache_proven.get("video_pixel_cache_hit_after_first_request")
+        and cache_proven.get("video_cache_contract_preserves_video_tensor_fields_in_source")
+    )
+    semantic_green = bool(
+        dev_video_data.get("semantic_status") == "pass"
+        and dev_checks.get("video_semantic_red_fixture")
+    )
+    return {
+        "exists": bool(source.get("exists") or dev_video.get("exists") or video_cache.get("exists")),
+        "source_artifact": source.get("artifact"),
+        "dev_app_video_artifact": dev_video.get("artifact"),
+        "video_cache_artifact": video_cache.get("artifact"),
+        "status": (
+            "open"
+            if transport_proven or dev_video_transport_proven or video_cache_proven
+            else "missing"
+        ),
+        "transport_proven": bool(
+            transport_proven or dev_video_transport_proven or video_cache_proven
+        ),
+        "source_mllm_media_transport_proven": bool(transport_proven),
+        "dev_app_video_transport_proven": bool(dev_video_transport_proven),
+        "video_cache_proven": bool(video_cache_proven),
+        "semantic_quality_proven": bool(semantic_green),
+        "semantic_status": str(dev_video_data.get("semantic_status") or "missing"),
+        "classification": (
+            "forced_mllm_media_transport_and_cache_live_semantics_red"
+            if (transport_proven or dev_video_transport_proven or video_cache_proven)
+            and not semantic_green
+            else "forced_mllm_media_transport_semantics_green"
+            if semantic_green
+            else "missing_mimo_jangtq2_media_route_proof"
+        ),
+        "boundary": (
+            "MiMo JANGTQ2 has current source/dev-app evidence that media weights "
+            "bind and video/audio requests reach the MLLM runtime when launched "
+            "as MLLM. This clears the stale 'implementation missing' wording only. "
+            "It does not clear default metadata-gated text-only capability, image "
+            "color semantics, video semantic quality, audio transcript semantics, "
+            "fresh-process L2 restore for media, installed-app parity, or release readiness."
+        ),
+        "must_not_claim": [
+            "Do not advertise preserved-text-runtime MiMo bundles as media-capable by default.",
+            "Do not claim MiMo visual or audio semantic quality is release-green.",
+            "Do not use this route proof to clear MiMo literal/tool/JSON exactness.",
+        ],
+    }
+
+
 def _text_route_evidence(data: dict[str, Any]) -> dict[str, Any]:
     rows = data.get("live_rows")
     rows = rows if isinstance(rows, dict) else {}
@@ -2650,6 +2753,11 @@ def build_audit(root: Path, model_path: Path, manifest: Path) -> dict[str, Any]:
     cb_metal_baseline = _artifact(root / CB_METAL_BASELINE_ARTIFACT)
     mllm_inputs_embeds_interface = _artifact(root / MLLM_INPUTS_EMBEDS_INTERFACE_ARTIFACT)
     latest_decode_speed = _artifact(root / LATEST_DECODE_SPEED_ARTIFACT)
+    jangtq2_source_media_proof = _artifact(root / JANGTQ2_SOURCE_MEDIA_PROOF_ARTIFACT)
+    jangtq2_dev_app_video_media_proof = _artifact(
+        root / JANGTQ2_DEV_APP_VIDEO_MEDIA_PROOF_ARTIFACT
+    )
+    jangtq2_video_cache_proof = _artifact(root / JANGTQ2_VIDEO_CACHE_PROOF_ARTIFACT)
     api_cache_responses_contract = _artifact(root / NOHEAVY_API_CACHE_CONTRACT_ARTIFACT)
 
     structural_pass = structural.get("status") == "pass"
@@ -2864,6 +2972,11 @@ def build_audit(root: Path, model_path: Path, manifest: Path) -> dict[str, Any]:
         and isinstance(all_local_smoke.get("data"), dict)
         else None,
     )
+    media_route_evidence = _mimo_jangtq2_media_route_evidence(
+        jangtq2_source_media_proof,
+        jangtq2_dev_app_video_media_proof,
+        jangtq2_video_cache_proof,
+    )
     media_runtime_wired = bool(media_runtime_evidence.get("runtime_media_wired"))
     media_metadata_ok = not bool(
         media_runtime_evidence.get("metadata_overadvertises_runtime_media")
@@ -2947,6 +3060,20 @@ def build_audit(root: Path, model_path: Path, manifest: Path) -> dict[str, Any]:
         )
     else:
         media_runtime_evidence["runtime_media_wired_superseded_by_live_e2e"] = False
+    if media_route_evidence.get("transport_proven"):
+        media_runtime_wired = True
+        media_runtime_evidence["runtime_media_wired_superseded_by_route_proof"] = True
+        media_runtime_evidence["media_route_evidence"] = media_route_evidence
+        media_runtime_evidence["status"] = "open"
+        media_runtime_evidence["classification"] = str(
+            media_route_evidence.get("classification")
+        )
+        media_runtime_evidence["runtime_media_wired_boundary"] = str(
+            media_route_evidence.get("boundary")
+        )
+    else:
+        media_runtime_evidence["runtime_media_wired_superseded_by_route_proof"] = False
+        media_runtime_evidence["media_route_evidence"] = media_route_evidence
     if image_video_live_e2e_blocked:
         media_runtime_evidence["live_media_e2e_status"] = str(
             smoke_evidence.get("live_media_e2e_status") or "missing"
@@ -3237,6 +3364,11 @@ def build_audit(root: Path, model_path: Path, manifest: Path) -> dict[str, Any]:
             "mllm_inputs_embeds_interface": str(MLLM_INPUTS_EMBEDS_INTERFACE_ARTIFACT),
             "latest_decode_speed": str(LATEST_DECODE_SPEED_ARTIFACT),
             "api_cache_responses_contract": str(NOHEAVY_API_CACHE_CONTRACT_ARTIFACT),
+            "jangtq2_source_media_proof": str(JANGTQ2_SOURCE_MEDIA_PROOF_ARTIFACT),
+            "jangtq2_dev_app_video_media_proof": str(
+                JANGTQ2_DEV_APP_VIDEO_MEDIA_PROOF_ARTIFACT
+            ),
+            "jangtq2_video_cache_proof": str(JANGTQ2_VIDEO_CACHE_PROOF_ARTIFACT),
         },
         "diagnostics": {
             "cache_vs_nocache_next_token_match": bool(cache_match),
@@ -3260,6 +3392,7 @@ def build_audit(root: Path, model_path: Path, manifest: Path) -> dict[str, Any]:
             ),
             "api_cache_responses_contract": api_cache_responses_evidence,
             "mimo_media_runtime": media_runtime_evidence,
+            "mimo_jangtq2_media_route": media_route_evidence,
             "bookend_quantization": bookend_quantization,
             "source_vs_quant_first_divergence": (
                 source_vs_quant.get("data")

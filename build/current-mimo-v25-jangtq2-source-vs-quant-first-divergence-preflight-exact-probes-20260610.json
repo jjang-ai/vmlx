@@ -1,0 +1,54 @@
+{
+  "blockers": [
+    "missing_or_unhealthy_source_endpoint",
+    "missing_or_unhealthy_quant_endpoint"
+  ],
+  "endpoints": {
+    "quant": {
+      "base_url": "http://127.0.0.1:8897",
+      "error": "URLError: <urlopen error [Errno 61] Connection refused>",
+      "health": null,
+      "health_http_status": null,
+      "healthy": false
+    },
+    "source": {
+      "base_url": "http://erics-m5-max2.local:8126",
+      "error": "URLError: <urlopen error [Errno 61] Connection refused>",
+      "health": null,
+      "health_http_status": null,
+      "healthy": false
+    }
+  },
+  "paths": {
+    "quant": {
+      "exists": true,
+      "host": null,
+      "is_dir": true,
+      "path": "/Users/eric/.mlxstudio/models/JANGQ-AI/MiMo-V2.5-JANGTQ_2",
+      "remote": false
+    },
+    "source": {
+      "exists": true,
+      "host": "erics-m5-max2.local",
+      "is_dir": true,
+      "path": "/Volumes/EricsLLMDrive/jangq-ai/sources/MiMo-V2.5",
+      "remote": true
+    }
+  },
+  "quant_base_url": "http://127.0.0.1:8897",
+  "quant_host": null,
+  "quant_model_path": "/Users/eric/.mlxstudio/models/JANGQ-AI/MiMo-V2.5-JANGTQ_2",
+  "release_boundary": "This is preflight evidence only. It cannot clear MiMo release until source and quant endpoints both run and prompt rows execute.",
+  "remote_evidence_only": false,
+  "rows": [],
+  "source_base_url": "http://erics-m5-max2.local:8126",
+  "source_host": "erics-m5-max2.local",
+  "source_model_path": "/Volumes/EricsLLMDrive/jangq-ai/sources/MiMo-V2.5",
+  "status": "missing_prerequisites",
+  "summary": {
+    "quant_diverges_from_source": 0,
+    "request_failed": 0,
+    "source_also_fails": 0,
+    "source_and_quant_match": 0
+  }
+}

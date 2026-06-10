@@ -1,0 +1,42 @@
+event: response.created
+data: {"type": "response.created", "response": {"id": "resp_4fce712d6b1b", "object": "response", "created_at": 1781117553, "status": "in_progress", "model": "qwen36-27b-jang4m-mtp-direct-sse-20260610", "output": []}, "sequence_number": 0}
+
+event: response.output_item.added
+data: {"type": "response.output_item.added", "output_index": 0, "item": {"id": "item_f6e343ea5fe9", "type": "message", "status": "in_progress", "role": "assistant", "content": []}, "sequence_number": 1}
+
+event: response.content_part.added
+data: {"type": "response.content_part.added", "item_id": "item_f6e343ea5fe9", "output_index": 0, "content_index": 0, "part": {"type": "output_text", "text": "", "annotations": []}, "sequence_number": 2}
+
+event: response.output_text.delta
+data: {"type": "response.output_text.delta", "item_id": "item_f6e343ea5fe9", "output_index": 0, "content_index": 0, "delta": "The", "sequence_number": 3}
+
+event: response.output_text.delta
+data: {"type": "response.output_text.delta", "item_id": "item_f6e343ea5fe9", "output_index": 0, "content_index": 0, "delta": " fact", "sequence_number": 4}
+
+event: response.output_text.delta
+data: {"type": "response.output_text.delta", "item_id": "item_f6e343ea5fe9", "output_index": 0, "content_index": 0, "delta": " \"", "sequence_number": 5}
+
+event: response.output_text.delta
+data: {"type": "response.output_text.delta", "item_id": "item_f6e343ea5fe9", "output_index": 0, "content_index": 0, "delta": "blue-cat", "sequence_number": 6}
+
+event: response.output_text.delta
+data: {"type": "response.output_text.delta", "item_id": "item_f6e343ea5fe9", "output_index": 0, "content_index": 0, "delta": "\" has", "sequence_number": 7}
+
+event: response.output_text.delta
+data: {"type": "response.output_text.delta", "item_id": "item_f6e343ea5fe9", "output_index": 0, "content_index": 0, "delta": " been recorded", "sequence_number": 8}
+
+event: response.output_text.delta
+data: {"type": "response.output_text.delta", "item_id": "item_f6e343ea5fe9", "output_index": 0, "content_index": 0, "delta": ".", "sequence_number": 9}
+
+event: response.output_text.done
+data: {"type": "response.output_text.done", "item_id": "item_f6e343ea5fe9", "output_index": 0, "content_index": 0, "text": "The fact \"blue-cat\" has been recorded.", "sequence_number": 10}
+
+event: response.content_part.done
+data: {"type": "response.content_part.done", "item_id": "item_f6e343ea5fe9", "output_index": 0, "content_index": 0, "part": {"type": "output_text", "text": "The fact \"blue-cat\" has been recorded.", "annotations": []}, "sequence_number": 11}
+
+event: response.output_item.done
+data: {"type": "response.output_item.done", "output_index": 0, "item": {"id": "item_f6e343ea5fe9", "type": "message", "status": "completed", "role": "assistant", "content": [{"type": "output_text", "text": "The fact \"blue-cat\" has been recorded.", "annotations": []}]}, "sequence_number": 12}
+
+event: response.completed
+data: {"type": "response.completed", "response": {"id": "resp_4fce712d6b1b", "object": "response", "created_at": 1781117553, "status": "completed", "model": "qwen36-27b-jang4m-mtp-direct-sse-20260610", "output_text": "The fact \"blue-cat\" has been recorded.", "output": [{"id": "item_f6e343ea5fe9", "type": "message", "status": "completed", "role": "assistant", "content": [{"type": "output_text", "text": "The fact \"blue-cat\" has been recorded.", "annotations": []}]}], "usage": {"input_tokens": 75, "output_tokens": 11, "total_tokens": 86}}, "sequence_number": 13}
+

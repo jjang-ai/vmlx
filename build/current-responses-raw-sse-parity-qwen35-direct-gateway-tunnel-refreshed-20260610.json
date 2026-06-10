@@ -1,0 +1,242 @@
+{
+  "boundary": "pass requires direct local server, panel gateway, and tunnel raw SSE captures for the same model with valid output item indices, required reasoning events when requested, and matching expected authoritative function_call arguments. When reasoning events are required, this also proves the capture did not use a reasoning-disable workaround.",
+  "captures": {
+    "direct": {
+      "argument_delta_count": 2,
+      "argument_done_count": 1,
+      "authoritative_arguments": "{\"value\": \"blue-cat\"}",
+      "conflicting_output_indices": [],
+      "content_delta_count": 0,
+      "done_arguments": "{\"value\": \"blue-cat\"}",
+      "empty_final_item_with_done_args": false,
+      "enable_thinking_resolved_false": false,
+      "enable_thinking_resolved_true": true,
+      "event_count": 57,
+      "expected_arguments_match": true,
+      "expected_function_name_match": true,
+      "expected_model_advertised": true,
+      "expected_model_match": true,
+      "final_item_arguments": "{\"value\": \"blue-cat\"}",
+      "final_response_consistent_with_stream": true,
+      "final_response_function_arguments": "{\"value\": \"blue-cat\"}",
+      "final_response_message_text": "",
+      "final_response_output_types": [
+        "message",
+        "reasoning",
+        "function_call"
+      ],
+      "function_item_count": 2,
+      "function_name": "record_fact",
+      "has_authoritative_arguments": true,
+      "has_required_reasoning_events": true,
+      "heartbeat_count": 38,
+      "log_path": "build/responses-sse-captures-20260610/direct-qwen35-mxfp8-mtp-current-source-gateway-run-20260610.server.log",
+      "model": "models/Qwen3.6-35B-A3B-MXFP8-CRACK-MTP",
+      "models": [
+        "models/Qwen3.6-35B-A3B-MXFP8-CRACK-MTP"
+      ],
+      "no_reasoning_disable_workaround": true,
+      "output_indices_by_type": {
+        "function_call": [
+          2
+        ],
+        "message": [
+          0
+        ],
+        "reasoning": [
+          1
+        ]
+      },
+      "output_item_indices_valid": true,
+      "parse_errors": 0,
+      "path": "build/responses-sse-captures-20260610/direct-qwen35-mxfp8-mtp-tool-current-source-gateway-run-20260610.sse",
+      "present": true,
+      "reasoning_disabled_by_server_log": false,
+      "reasoning_done_count": 1,
+      "reasoning_enabled_by_server_log": true,
+      "reasoning_events": 5,
+      "reasoning_lifecycle_complete": true,
+      "reasoning_output_item_count": 1,
+      "reconstructed_arguments": "{\"value\": \"blue-cat\"}",
+      "reconstructed_content": ""
+    },
+    "gateway": {
+      "argument_delta_count": 2,
+      "argument_done_count": 1,
+      "authoritative_arguments": "{\"value\": \"blue-cat\"}",
+      "conflicting_output_indices": [],
+      "content_delta_count": 0,
+      "done_arguments": "{\"value\": \"blue-cat\"}",
+      "empty_final_item_with_done_args": false,
+      "enable_thinking_resolved_false": false,
+      "enable_thinking_resolved_true": true,
+      "event_count": 63,
+      "expected_arguments_match": true,
+      "expected_function_name_match": true,
+      "expected_model_advertised": true,
+      "expected_model_match": true,
+      "final_item_arguments": "{\"value\": \"blue-cat\"}",
+      "final_response_consistent_with_stream": true,
+      "final_response_function_arguments": "{\"value\": \"blue-cat\"}",
+      "final_response_message_text": "",
+      "final_response_output_types": [
+        "message",
+        "reasoning",
+        "function_call"
+      ],
+      "function_item_count": 2,
+      "function_name": "record_fact",
+      "gateway_expected_request_kwargs_present": true,
+      "has_authoritative_arguments": true,
+      "has_required_reasoning_events": true,
+      "heartbeat_count": 44,
+      "log_path": "build/responses-sse-captures-20260610/gateway-qwen35-mxfp8-mtp-current-source-20260610.log",
+      "model": "models/Qwen3.6-35B-A3B-MXFP8-CRACK-MTP",
+      "models": [
+        "models/Qwen3.6-35B-A3B-MXFP8-CRACK-MTP"
+      ],
+      "no_reasoning_disable_workaround": true,
+      "output_indices_by_type": {
+        "function_call": [
+          2
+        ],
+        "message": [
+          0
+        ],
+        "reasoning": [
+          1
+        ]
+      },
+      "output_item_indices_valid": true,
+      "parse_errors": 0,
+      "path": "build/responses-sse-captures-20260610/gateway-qwen35-mxfp8-mtp-tool-current-source-20260610.sse",
+      "present": true,
+      "reasoning_disabled_by_server_log": false,
+      "reasoning_done_count": 1,
+      "reasoning_enabled_by_server_log": true,
+      "reasoning_events": 5,
+      "reasoning_lifecycle_complete": true,
+      "reasoning_output_item_count": 1,
+      "reconstructed_arguments": "{\"value\": \"blue-cat\"}",
+      "reconstructed_content": "",
+      "request_kwargs": {
+        "enable_thinking": true,
+        "first_tool_name": "record_fact",
+        "max_output_tokens": 512,
+        "stream": true,
+        "temperature": 0,
+        "tool_choice": "required",
+        "tool_count": 1,
+        "top_k": 0,
+        "top_p": 1
+      }
+    },
+    "tunnel": {
+      "argument_delta_count": 2,
+      "argument_done_count": 1,
+      "authoritative_arguments": "{\"value\": \"blue-cat\"}",
+      "conflicting_output_indices": [],
+      "content_delta_count": 0,
+      "done_arguments": "{\"value\": \"blue-cat\"}",
+      "empty_final_item_with_done_args": false,
+      "event_count": 131,
+      "expected_arguments_match": true,
+      "expected_function_name_match": true,
+      "expected_model_advertised": true,
+      "expected_model_match": true,
+      "final_item_arguments": "{\"value\": \"blue-cat\"}",
+      "final_response_consistent_with_stream": true,
+      "final_response_function_arguments": "{\"value\": \"blue-cat\"}",
+      "final_response_message_text": "",
+      "final_response_output_types": [
+        "message",
+        "function_call",
+        "reasoning"
+      ],
+      "function_item_count": 2,
+      "function_name": "record_fact",
+      "has_authoritative_arguments": true,
+      "has_required_reasoning_events": true,
+      "heartbeat_count": 111,
+      "model": "models/Qwen3.6-35B-A3B-MXFP8-CRACK-MTP",
+      "models": [
+        "models/Qwen3.6-35B-A3B-MXFP8-CRACK-MTP"
+      ],
+      "output_indices_by_type": {
+        "function_call": [
+          1
+        ],
+        "message": [
+          0
+        ]
+      },
+      "output_item_indices_valid": true,
+      "parse_errors": 0,
+      "path": "build/responses-sse-captures-20260610/tunnel-qwen35-mxfp8-mtp-tool-recapture-after-strict-source-20260610.sse",
+      "present": true,
+      "reasoning_done_count": 1,
+      "reasoning_events": 8,
+      "reasoning_lifecycle_complete": true,
+      "reasoning_output_item_count": 0,
+      "reconstructed_arguments": "{\"value\": \"blue-cat\"}",
+      "reconstructed_content": ""
+    }
+  },
+  "checks": {
+    "all_present_surfaces_have_authoritative_args": true,
+    "all_present_surfaces_have_complete_reasoning_lifecycle": true,
+    "all_present_surfaces_have_consistent_final_output": true,
+    "all_present_surfaces_have_required_reasoning": true,
+    "all_present_surfaces_have_valid_output_item_indices": true,
+    "all_present_surfaces_match_expected_arguments": true,
+    "all_present_surfaces_match_expected_function_name": true,
+    "all_present_surfaces_match_expected_model": true,
+    "all_present_surfaces_parse_cleanly": true,
+    "all_present_surfaces_report_model": true,
+    "all_present_surfaces_same_model": true,
+    "all_required_surfaces_present": true,
+    "authoritative_arguments_match_across_present_surfaces": true,
+    "direct_capture_present": true,
+    "gateway_argument_stream_passthrough_guard": true,
+    "gateway_capture_present": true,
+    "local_empty_xml_arguments_fail_closed": true,
+    "local_output_index_ordering_guard": true,
+    "local_responses_streaming_guards_pass": true,
+    "no_reasoning_disable_workaround": true,
+    "reasoning_not_disabled_by_surface": {
+      "direct": true,
+      "gateway": true
+    },
+    "responses_previous_response_history_guard": true,
+    "tunnel_capture_present": true,
+    "tunnel_expected_model_advertised": true
+  },
+  "expected": {
+    "arguments": "{\"value\": \"blue-cat\"}",
+    "function_name": "record_fact",
+    "model": "models/Qwen3.6-35B-A3B-MXFP8-CRACK-MTP",
+    "require_reasoning_events": true,
+    "require_same_model": true
+  },
+  "local_source_contract": {
+    "checks": {
+      "gateway_responses_function_call_arguments_streaming": true,
+      "gateway_responses_reasoning_empty_final_arguments_streaming": true,
+      "gateway_stale_responses_port_rejection": true,
+      "responses_previous_response_history": true,
+      "responses_streaming_tool_call_arguments_and_indexes": true
+    },
+    "gateway_argument_stream_passthrough_guard": true,
+    "gateway_stale_responses_port_rejection_guard": true,
+    "local_empty_xml_arguments_fail_closed": true,
+    "local_output_index_ordering_guard": true,
+    "local_responses_streaming_guards_pass": true,
+    "missing_markers": [],
+    "path": "build/current-noheavy-api-cache-contract-after-responses-reasoning-empty-final-args-gateway-20260609.json",
+    "present": true,
+    "responses_previous_response_history_guard": true,
+    "status": "pass"
+  },
+  "missing_captures": [],
+  "status": "pass"
+}

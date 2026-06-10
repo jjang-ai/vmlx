@@ -181,7 +181,7 @@ class QwenToolParser(ToolParser):
         # For simplicity, return None during accumulation
         if "</tool_call>" in delta_text or ")]" in delta_text:
             # Tool call complete, parse the whole thing
-            result = self.extract_tool_calls(current_text)
+            result = self.extract_tool_calls(current_text, request=request)
             if result.tools_called:
                 return {
                     "tool_calls": [

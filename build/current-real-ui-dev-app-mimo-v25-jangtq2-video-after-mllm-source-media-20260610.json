@@ -1,0 +1,60 @@
+{
+  "status": "open",
+  "transport_status": "pass",
+  "semantic_status": "fail",
+  "classification": "MiMo JANGTQ2 current Electron dev-app video transport/frame decode/cache route is live with --is-mllm, but solid-red fixture semantic quality is not proven.",
+  "raw_proof": "docs/internal/agent-notes/current-real-ui-dev-app-mimo-v25-jangtq2-video-after-mllm-source-media-20260610-proof.json",
+  "screenshot": "docs/internal/agent-notes/current-real-ui-dev-app-mimo-v25-jangtq2-video-after-mllm-source-media-20260610-chat.png",
+  "model": "/Users/eric/.mlxstudio/models/JANGQ-AI/MiMo-V2.5-JANGTQ_2",
+  "ui_launch_mode": "electron-dev",
+  "server_mode": "mllm",
+  "checks": {
+    "real_electron_dev_build": true,
+    "real_model_loaded": true,
+    "mllm_flag_used": true,
+    "video_attachment_persisted": true,
+    "server_media_diag_video_url": true,
+    "base64_video_decoded": true,
+    "numpy_video_reader_frames": true,
+    "http_200": true,
+    "visible_assistant_output": true,
+    "no_raw_parser_or_reasoning_leak": true,
+    "native_mimo_mixed_swa_cache": true,
+    "block_l2_write": true,
+    "video_semantic_red_fixture": false
+  },
+  "runtime": {
+    "model_type": "mllm",
+    "active_memory_mb": 78360.9,
+    "peak_memory_mb": 79535.6,
+    "quantization_profile": "JANGTQ_2",
+    "quantization_codec": "turboquant_codebook",
+    "routed_expert_bits": "gate=2/up=2/down=2-bit",
+    "media_weights_bound": {
+      "visual": 364,
+      "audio_encoder": 75,
+      "speech_embeddings": 20
+    }
+  },
+  "cache": {
+    "cache_detail": "mimo_v2_asymmetric_swa",
+    "native_schema": "mixed_swa_kv_v1",
+    "ram_tokens_cached": 34,
+    "l2_block_tokens_on_disk": 34,
+    "l2_tokens_on_disk": 34,
+    "block_disk_writes": 1,
+    "generic_turboquant_kv": false
+  },
+  "speed": {
+    "text_turn_live_tps": 44.8,
+    "video_turn_live_tps": 44.5,
+    "video_generation_tps": 46.05930773224061,
+    "video_prompt_tps": 14.397843547382184
+  },
+  "boundary": [
+    "This clears the stale text-only video rejection for current dev/source when MiMo is launched as MLLM.",
+    "This does not clear MiMo JANGTQ2 video semantic quality: the solid-red fixture was answered as a phone/dog scene.",
+    "This does not clear MiMo JANGTQ2 literal/JSON/tool exactness, image color semantics, audio semantics, installed-app parity, or release readiness."
+  ],
+  "next_other_agent_action": "For MiMo media quality, compare source/dequant/reference visual embeddings/logits or rebuild the JANGTQ artifact; do not mask with prompt wording, parser repair, or color post-processing."
+}

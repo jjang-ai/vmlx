@@ -1,0 +1,207 @@
+{
+  "status": "pass",
+  "purpose": "MiMo V2.5 JANGTQ_2 preserved visual tower Torch reference vs vMLX MLX adapter parity for synthetic color images; does not load full language model.",
+  "model_path": "/Users/eric/.mlxstudio/models/JANGQ-AI/MiMo-V2.5-JANGTQ_2",
+  "visual_shards": [
+    "model-00073-of-00075.safetensors",
+    "model-00074-of-00075.safetensors",
+    "model-00075-of-00075.safetensors"
+  ],
+  "visual_weight_count": 364,
+  "missing_sidecar_biases_zero_filled_for_comparison": [
+    "merger.ln_q.bias",
+    "merger.mlp.0.bias",
+    "merger.mlp.2.bias"
+  ],
+  "colors": [
+    "red",
+    "green",
+    "blue",
+    "white",
+    "black"
+  ],
+  "torch_vs_mlx": {
+    "red": {
+      "shape": [
+        16,
+        4096
+      ],
+      "torch_norm": 106.35074615478516,
+      "mlx_norm": 106.21907806396484,
+      "mean_abs_diff": 0.0004267424810677767,
+      "max_abs_diff": 0.013047218322753906,
+      "cosine": 0.9999996423721313,
+      "torch_time_s": 0.17,
+      "grid_thw": [
+        [
+          1,
+          8,
+          8
+        ]
+      ]
+    },
+    "green": {
+      "shape": [
+        16,
+        4096
+      ],
+      "torch_norm": 95.1964340209961,
+      "mlx_norm": 95.1402816772461,
+      "mean_abs_diff": 0.00021445851598400623,
+      "max_abs_diff": 0.0059375762939453125,
+      "cosine": 0.9999997615814209,
+      "torch_time_s": 0.135,
+      "grid_thw": [
+        [
+          1,
+          8,
+          8
+        ]
+      ]
+    },
+    "blue": {
+      "shape": [
+        16,
+        4096
+      ],
+      "torch_norm": 109.15556335449219,
+      "mlx_norm": 108.80442810058594,
+      "mean_abs_diff": 0.0008475282811559737,
+      "max_abs_diff": 0.04024791717529297,
+      "cosine": 0.9999997615814209,
+      "torch_time_s": 0.135,
+      "grid_thw": [
+        [
+          1,
+          8,
+          8
+        ]
+      ]
+    },
+    "white": {
+      "shape": [
+        16,
+        4096
+      ],
+      "torch_norm": 113.65119171142578,
+      "mlx_norm": 113.55636596679688,
+      "mean_abs_diff": 0.0003184541710652411,
+      "max_abs_diff": 0.010968208312988281,
+      "cosine": 0.9999999403953552,
+      "torch_time_s": 0.133,
+      "grid_thw": [
+        [
+          1,
+          8,
+          8
+        ]
+      ]
+    },
+    "black": {
+      "shape": [
+        16,
+        4096
+      ],
+      "torch_norm": 91.32798767089844,
+      "mlx_norm": 91.45504760742188,
+      "mean_abs_diff": 0.00034844951005652547,
+      "max_abs_diff": 0.023217201232910156,
+      "cosine": 0.9999996423721313,
+      "torch_time_s": 0.136,
+      "grid_thw": [
+        [
+          1,
+          8,
+          8
+        ]
+      ]
+    }
+  },
+  "pairwise_color_distances": {
+    "torch": {
+      "red_vs_green": {
+        "mean_abs_diff": 0.05011121183633804,
+        "cosine": 0.9912915825843811
+      },
+      "red_vs_blue": {
+        "mean_abs_diff": 0.04465001821517944,
+        "cosine": 0.9914425015449524
+      },
+      "red_vs_white": {
+        "mean_abs_diff": 0.06508146226406097,
+        "cosine": 0.9826707243919373
+      },
+      "red_vs_black": {
+        "mean_abs_diff": 0.05945498123764992,
+        "cosine": 0.9882192611694336
+      },
+      "green_vs_blue": {
+        "mean_abs_diff": 0.05262378230690956,
+        "cosine": 0.9921806454658508
+      },
+      "green_vs_white": {
+        "mean_abs_diff": 0.0744757205247879,
+        "cosine": 0.9828486442565918
+      },
+      "green_vs_black": {
+        "mean_abs_diff": 0.04547255113720894,
+        "cosine": 0.9878342151641846
+      },
+      "blue_vs_white": {
+        "mean_abs_diff": 0.07666463404893875,
+        "cosine": 0.9757758975028992
+      },
+      "blue_vs_black": {
+        "mean_abs_diff": 0.06866985559463501,
+        "cosine": 0.9856792688369751
+      },
+      "white_vs_black": {
+        "mean_abs_diff": 0.07080492377281189,
+        "cosine": 0.9881930351257324
+      }
+    },
+    "mlx": {
+      "red_vs_green": {
+        "mean_abs_diff": 0.050018567591905594,
+        "cosine": 0.9912694692611694
+      },
+      "red_vs_blue": {
+        "mean_abs_diff": 0.04455319046974182,
+        "cosine": 0.9914053082466125
+      },
+      "red_vs_white": {
+        "mean_abs_diff": 0.06492999941110611,
+        "cosine": 0.9827342629432678
+      },
+      "red_vs_black": {
+        "mean_abs_diff": 0.059000443667173386,
+        "cosine": 0.9882734417915344
+      },
+      "green_vs_blue": {
+        "mean_abs_diff": 0.05212095379829407,
+        "cosine": 0.9921796917915344
+      },
+      "green_vs_white": {
+        "mean_abs_diff": 0.07431942224502563,
+        "cosine": 0.9828933477401733
+      },
+      "green_vs_black": {
+        "mean_abs_diff": 0.045359715819358826,
+        "cosine": 0.9878538250923157
+      },
+      "blue_vs_white": {
+        "mean_abs_diff": 0.07665246725082397,
+        "cosine": 0.9757419228553772
+      },
+      "blue_vs_black": {
+        "mean_abs_diff": 0.06790804862976074,
+        "cosine": 0.9857115149497986
+      },
+      "white_vs_black": {
+        "mean_abs_diff": 0.07038195431232452,
+        "cosine": 0.9882381558418274
+      }
+    }
+  },
+  "interpretation": "The MLX visual adapter matches the local Torch visual reference closely only after zero-filling missing visual sidecar biases. Runtime should not leave those missing biases at module initializer values. The earlier Blue/White generation failure still needs a post-fix live language/VL proof because parity here covers visual embeddings only."
+}

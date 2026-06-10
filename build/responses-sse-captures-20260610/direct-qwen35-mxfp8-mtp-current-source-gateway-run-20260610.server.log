@@ -1,0 +1,123 @@
+INFO:vmlx_engine.model_config_registry:Model config: detection_source=jang_stamped family=qwen3_5_moe reasoning_parser=qwen3 tool_parser=qwen think_in_template=True cache_type=hybrid cache_subtype=None is_mllm=True
+INFO:__main__:KV cache auto mode: TurboQuant enabled for compatible models; stored prefix cache quantization=q4
+INFO:__main__:Qwen3.6 hybrid/path-dependent cache model detected — keeping auto live TurboQuant enabled for attention KVCache layers only; SSM/GatedDelta companion state remains native full precision. Stored attention-KV quantization=q4 remains active for prefix/paged/L2 boundaries.
+INFO:__main__:Auto-configured tool parser from registry: qwen
+INFO:__main__:Auto-configured reasoning parser from registry: qwen3
+============================================================
+SECURITY CONFIGURATION
+============================================================
+  Authentication: DISABLED - Use --api-key to enable
+  Rate limiting: DISABLED - Use --rate-limit to enable
+  Request timeout: 900.0s
+  Tool calling: Use --enable-auto-tool-choice to enable
+  Reasoning: ENABLED (parser: Qwen3ReasoningParser)  [thinking model detected]
+  External speculative decoding: Use --speculative-model to enable
+  Native MTP: READY D3 (scope: text+vl, policy: compatible-only)
+    Request gate: temperature=0 and repetition_penalty=1.0 required
+============================================================
+Loading model: /Users/eric/models/JANGQ/Qwen3.6-35B-A3B-MXFP8-MTP
+Served model name: models/Qwen3.6-35B-A3B-MXFP8-CRACK-MTP
+Default max tokens override: 32
+Mode: Continuous batching (for multiple concurrent users)
+Stream interval: 1 tokens
+Paged cache: block_size=64, max_blocks=1000
+Block disk cache: max=4.0GB
+KV cache quantization: q4 (group_size=64)
+INFO:vmlx_engine.server:Serving model as: models/Qwen3.6-35B-A3B-MXFP8-CRACK-MTP (actual: JANGQ/Qwen3.6-35B-A3B-MXFP8-MTP)
+INFO:vmlx_engine.server:System memory before load: 112.8GB available / 128.0GB total (11.9% used)
+INFO:vmlx_engine.server:Force MLLM mode enabled via --mllm flag
+INFO:vmlx_engine.server:Loading model with BatchedEngine: /Users/eric/models/JANGQ/Qwen3.6-35B-A3B-MXFP8-MTP
+INFO:vmlx_engine:is_mllm_model(/Users/eric/models/JANGQ/Qwen3.6-35B-A3B-MXFP8-MTP): tier=native_mtp_vl_artifact result=True
+INFO:vmlx_engine.server:Model loaded (batched mode): /Users/eric/models/JANGQ/Qwen3.6-35B-A3B-MXFP8-MTP
+INFO:vmlx_engine.server:Metal GPU memory after load: 0.00GB active, 0.00GB peak
+INFO:vmlx_engine.server:System memory after load: 112.8GB available (11.9% used)
+INFO:vmlx_engine.server:Default max tokens override: 32
+Starting server at http://127.0.0.1:8898
+INFO:     Started server process [44333]
+INFO:     Waiting for application startup.
+INFO:vmlx_engine.server:Started caffeinate system wake lock for PID 44333
+INFO:vmlx_engine.models.mllm:Loading JANG VL model: /Users/eric/models/JANGQ/Qwen3.6-35B-A3B-MXFP8-MTP
+INFO:vmlx_engine.utils.jang_loader:JANG v2 VLM detected — loading via mmap (instant)
+INFO:vmlx_engine.patches.mlx_lm_mtp.qwen35_model:Qwen3.5/3.6 MTP model adapter applied
+INFO:vmlx_engine.patches.mlx_lm_mtp:mlx-lm MTP adapters applied
+INFO:vmlx_engine.patches.mlx_vlm_mtp.qwen35_vl:mlx-vlm Qwen3.5/3.6 MTP language adapter applied
+INFO:vmlx_engine.patches.mlx_vlm_mtp:mlx-vlm native MTP adapters applied
+INFO:vmlx_engine.native_mtp:Native MTP runtime active for /Users/eric/models/JANGQ/Qwen3.6-35B-A3B-MXFP8-MTP (family=qwen3_5_moe layers=1 tensors=31 cache=hybrid depth=3/vmlx_mtp_tuning.json:native_mtp.best_depth)
+INFO:vmlx_engine.utils.jang_loader:  Qwen3.5/3.6 native-MTP VL artifact detected by tensor metadata; using the real mlx-vlm loader with vMLX MTP/VL runtime adapters.
+INFO:vmlx_engine.utils.jang_loader:  Pre-fixed 120 module(s) cross-shard (jjang-ai/vmlx#114 — would have been silently skipped per-shard)
+INFO:vmlx_engine.utils.jang_loader:  Pre-fixed 2 module(s) with mixed-precision bit widths
+INFO:vmlx_engine.utils.jang_loader:  Pre-fixed 1 module(s) with mixed-precision bit widths
+INFO:vmlx_engine.utils.jang_loader:  Wired limit set to 55 GB (model 38 GB)
+INFO:vmlx_engine.utils.jang_loader:  TurboQuant auto-enabled via VMLX_FORCE_TQ_AUTO=1
+INFO:vmlx_engine.utils.jang_loader:  Hybrid model: 10 attention + 30 SSM layers
+INFO:vmlx_engine.utils.jang_loader:  TurboQuant enabled: 3-bit keys, 3-bit values, 6 critical layers
+INFO:vmlx_engine.utils.jang_loader:JANG v2 VLM loaded in 7.2s
+INFO:vmlx_engine.models.mllm:JANG VL model loaded: /Users/eric/models/JANGQ/Qwen3.6-35B-A3B-MXFP8-MTP
+INFO:vmlx_engine.mllm_scheduler:VLM hybrid model detected (MambaCache + KVCache layers). Mamba batching support enabled.
+INFO:vmlx_engine.block_disk_store:BlockDiskStore initialized: dir=build/current-responses-raw-sse-qwen35-direct-gateway-source-cache-20260610, max_size=4.0GB, entries=0, size=0.00GB
+INFO:vmlx_engine.mllm_scheduler:VLM block disk cache enabled: dir=build/current-responses-raw-sse-qwen35-direct-gateway-source-cache-20260610, max=4.0GB
+INFO:vmlx_engine.mllm_scheduler:VLM hybrid SSM companion L2 enabled: dir=build/current-responses-raw-sse-qwen35-direct-gateway-source-cache-20260610/ssm_companion, max=64GB
+INFO:vmlx_engine.paged_cache:PagedCacheManager initialized: block_size=64, max_blocks=1000, max_tokens=64000
+INFO:vmlx_engine.mllm_scheduler:VLM Paged cache enabled: block_size=64, max_blocks=1000
+INFO:vmlx_engine.mllm_scheduler:VLM KV quant round-trip test passed: bits=4, group_size=64
+INFO:vmlx_engine.mllm_scheduler:VLM KV cache quantization enabled: q4 (bits=4, group_size=64)
+INFO:vmlx_engine.mllm_scheduler:VLM TurboQuantKVCache live decode preserving configured batching (batch cache API=turboquant_kv_v1).
+INFO:vmlx_engine.mllm_scheduler:Runtime cache layout: model_type=qwen3_5_moe layers=40 layout=0:ArraysCache;1:ArraysCache;2:ArraysCache;3:TurboQuantKVCache;4:ArraysCache;5:ArraysCache;6:ArraysCache;7:TurboQuantKVCache;8:ArraysCache;9:ArraysCache;10:ArraysCache;11:TurboQuantKVCache;12:ArraysCache;13:ArraysCache;14:ArraysCache;15:TurboQuantKVCache;16:ArraysCache;17:ArraysCache;18:ArraysCache;19:TurboQuantKVCache;20:ArraysCache;21:ArraysCache;22:ArraysCache;23:TurboQuantKVCache;24:ArraysCache;25:ArraysCache;26:ArraysCache;27:TurboQuantKVCache;28:ArraysCache;29:ArraysCache;30:ArraysCache;31:TurboQuantKVCache;32:ArraysCache;33:ArraysCache;34:ArraysCache;35:TurboQuantKVCache;36:ArraysCache;37:ArraysCache;38:ArraysCache;39:TurboQuantKVCache
+INFO:vmlx_engine.mllm_scheduler:MLLM Scheduler initialized: cache_mode=paged, hybrid=True, zaya_cca=False, kv_quant=q4, prompt_l2=False, block_l2=True, max_seqs=1
+INFO:vmlx_engine.mllm_scheduler:MLLM Scheduler started with max_num_seqs=1
+INFO:vmlx_engine.engine.batched:MLLM Scheduler started with continuous batching: max_num_seqs=1, prefill_batch=512, completion_batch=128
+INFO:vmlx_engine.engine.batched:BatchedEngine loaded: /Users/eric/models/JANGQ/Qwen3.6-35B-A3B-MXFP8-MTP (mllm=True)
+INFO:vmlx_engine.server:Recorded Metal working-set model baseline: active=35.0GB max=107.5GB reason=lifespan_engine_start
+INFO:vmlx_engine.mcp.config:No MCP config file found, using empty config
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://127.0.0.1:8898 (Press CTRL+C to quit)
+INFO:     127.0.0.1:53292 - "GET /health HTTP/1.1" 200 OK
+WARNING:vmlx_engine.server:SECURITY WARNING: Server running without API key authentication. Anyone can access the API. Use --api-key to enable authentication.
+INFO:vmlx_engine.server:Resolved sampling kwargs route=/v1/responses model=/Users/eric/models/JANGQ/Qwen3.6-35B-A3B-MXFP8-MTP kwargs={'temperature': 0.0, 'top_p': 1.0, 'max_tokens': 512, 'enable_thinking': True}
+INFO:     127.0.0.1:53293 - "POST /v1/responses HTTP/1.1" 200 OK
+WARNING:vmlx_engine.api.tool_calling:Chat template needs fallback tool schema injection.
+WARNING:vmlx_engine.api.tool_calling:Chat template needs fallback tool schema injection.
+INFO:vmlx_engine.mllm_batch_generator:MLLMBatchGenerator: Using VLM's language_model for batched generation
+INFO:vmlx_engine.mllm_batch_generator:MLLMBatchGenerator: Vision cache enabled (size=16)
+INFO:vmlx_engine.mllm_batch_generator:Metal cache limit set to 26.88GB (max_ws=107.5GB, active=35.0GB, free=72.6GB; base=26.88GB safety=36.28GB; mlxstudio#78)
+INFO:vmlx_engine.mllm_batch_generator:vmlx#109: captured clean SSM at prefill boundary for resp_2e9eb9f7c3e5 (30 layers, key=192 tokens, is_complete=True — no re-derive needed)
+INFO:vmlx_engine.mllm_batch_generator:vmlx#109: captured clean SSM at prefill boundary for resp_2e9eb9f7c3e5 (30 layers, key=222 tokens, is_complete=True — no re-derive needed)
+INFO:vmlx_engine.mllm_batch_generator:vmlx#109: stored inline-captured SSM for resp_2e9eb9f7c3e5 (30 layers, 192-token key, no re-derive)
+INFO:vmlx_engine.mllm_batch_generator:vmlx#109: stored inline-captured SSM for resp_2e9eb9f7c3e5 (30 layers, 222-token key, no re-derive)
+INFO:vmlx_engine.mllm_batch_generator:MLLM native MTP depth capped to D1 for request=resp_2e9eb9f7c3e5 because tools are present (configured D3)
+INFO:vmlx_engine.mllm_batch_generator:MLLM native MTP path activated for request=resp_2e9eb9f7c3e5 depth=1
+INFO:vmlx_engine.mllm_batch_generator:MLLM MTP[resp_2e9eb9f7c3e5] finish=stop cycles=41 accepted=35/41 (85.4%) emits[init=2,draft=35,bonus=35,verify=6]
+INFO:vmlx_engine.mllm_batch_generator:MLLM MTP[resp_2e9eb9f7c3e5] accept_by_depth[d1=35/41,d2=0/0,d3=0/0] forwards[seed_main=1,verify_main=41,replay_main=6,mtp=42]
+INFO:vmlx_engine.mllm_batch_generator:MLLM MTP[resp_2e9eb9f7c3e5] timings_ms[verify=90.61 sample=603.14 draft=74.41 snapshot=1.34 restore=0.41 replay=11.91 materialize=0.19 avg_cycle=19.07]
+INFO:vmlx_engine.prefix_cache:Block disk write-through: disk_store=present, is_tensor_data=True, new_tokens=222, num_new_blocks=4, frugal=True
+INFO:vmlx_engine.prefix_cache:Block disk: np_sources has 10 positional layers (out of 40 total)
+INFO:vmlx_engine.prefix_cache:Block disk: queuing write for block 1 (10 kv layers, 64 tokens)
+INFO:vmlx_engine.prefix_cache:Block disk: queuing write for block 2 (10 kv layers, 64 tokens)
+INFO:vmlx_engine.prefix_cache:Block disk: queuing write for block 3 (10 kv layers, 64 tokens)
+INFO:vmlx_engine.prefix_cache:Block disk: queuing write for block 4 (10 kv layers, cumulative=30, 30 tokens)
+INFO:vmlx_engine.prefix_cache:Block disk: writing 4 blocks to SSD
+INFO:vmlx_engine.mllm_scheduler:VLM Scheduler stored paged Prefix Cache for resp_2e9eb9f7c3e5: 40 layers, truncated to 222 tokens
+INFO:vmlx_engine.server:Resolved sampling kwargs route=/v1/responses model=/Users/eric/models/JANGQ/Qwen3.6-35B-A3B-MXFP8-MTP kwargs={'temperature': 0.0, 'top_p': 1.0, 'max_tokens': 512, 'enable_thinking': True}
+INFO:     127.0.0.1:53296 - "POST /v1/responses HTTP/1.1" 200 OK
+WARNING:vmlx_engine.api.tool_calling:Chat template needs fallback tool schema injection.
+WARNING:vmlx_engine.api.tool_calling:Chat template needs fallback tool schema injection.
+INFO:vmlx_engine.prefix_cache:Paged cache hit for resp_04f0d40ba459: 4 blocks, 222 tokens
+INFO:vmlx_engine.mllm_batch_generator:VLM HYBRID cache HIT for resp_04f0d40ba459: 222 cached (KV+SSM), 6 remaining (incl. 5-token gen-prompt suffix)
+INFO:vmlx_engine.mllm_batch_generator:Re-compressed 10 KV layers to TurboQuant (5x memory savings)
+INFO:vmlx_engine.mllm_batch_generator:Captured SSM state for resp_04f0d40ba459: 30 layers, 222-token key, is_complete=False (gen_prompt_len=5)
+INFO:vmlx_engine.mllm_batch_generator:MLLM native MTP depth capped to D1 for request=resp_04f0d40ba459 because tools are present (configured D3)
+INFO:vmlx_engine.mllm_batch_generator:MLLM native MTP path activated for request=resp_04f0d40ba459 depth=1
+INFO:vmlx_engine.mllm_batch_generator:MLLM MTP[resp_04f0d40ba459] finish=stop cycles=47 accepted=38/47 (80.9%) emits[init=2,draft=38,bonus=38,verify=9]
+INFO:vmlx_engine.mllm_batch_generator:MLLM MTP[resp_04f0d40ba459] accept_by_depth[d1=38/47,d2=0/0,d3=0/0] forwards[seed_main=1,verify_main=47,replay_main=9,mtp=48]
+INFO:vmlx_engine.mllm_batch_generator:MLLM MTP[resp_04f0d40ba459] timings_ms[verify=102.27 sample=690.87 draft=107.28 snapshot=1.67 restore=0.65 replay=17.49 materialize=0.21 avg_cycle=19.58]
+INFO:vmlx_engine.mllm_scheduler:Skipping VLM paged cache store for resp_04f0d40ba459: resolved extracted cache is empty (mixed_swa=False, zaya_cca=False, prompt_tokens=223, cache_callable=False)
+INFO:vmlx_engine.mllm_batch_generator:MLLM SSM re-derive: clean prefill for resp_04f0d40ba459 (222 prompt tokens, 0 remaining)
+INFO:vmlx_engine.mllm_batch_generator:MLLM SSM re-derive: stored clean companion for resp_04f0d40ba459: 30 SSM layers, 222-token key
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:vmlx_engine.mllm_scheduler:MLLM Scheduler stopped
+INFO:vmlx_engine.engine.batched:BatchedEngine stopped
+INFO:vmlx_engine.server:Engine stopped
+INFO:vmlx_engine.server:Caffeinate process terminated
+INFO:     Application shutdown complete.
+INFO:     Finished server process [44333]

@@ -1,0 +1,130 @@
+{
+  "generated_at": 1781103917,
+  "model_path": "/Users/eric/.mlxstudio/models/JANGQ-AI/MiMo-V2.5-JANGTQ_2",
+  "results": {
+    "blue": {
+      "image_grid_thw": [
+        [
+          1,
+          4,
+          4
+        ]
+      ],
+      "image_path": "/var/folders/55/4db45j8d3sdblm_7mqz34b1c0000gn/T/tmp3nxryee5.png",
+      "image_token_count_151655": 4,
+      "input_ids_shape": [
+        1,
+        42
+      ],
+      "keys": [
+        "attention_mask",
+        "image_grid_thw",
+        "input_ids",
+        "mm_token_type_ids",
+        "pixel_values"
+      ],
+      "pixel_values_mean_head": [
+        -1.7922619581222534,
+        -1.7922619581222534,
+        -1.7922619581222534,
+        -1.7922619581222534,
+        -1.7922619581222534,
+        -1.7922619581222534
+      ],
+      "pixel_values_minmax": [
+        -1.7922625541687012,
+        2.145897150039673
+      ],
+      "pixel_values_shape": [
+        16,
+        1536
+      ],
+      "prompt": null,
+      "vision_end_count_151653": 1,
+      "vision_start_count_151652": 1
+    },
+    "green": {
+      "image_grid_thw": [
+        [
+          1,
+          4,
+          4
+        ]
+      ],
+      "image_path": "/var/folders/55/4db45j8d3sdblm_7mqz34b1c0000gn/T/tmp55q2xj2m.png",
+      "image_token_count_151655": 4,
+      "input_ids_shape": [
+        1,
+        42
+      ],
+      "keys": [
+        "attention_mask",
+        "image_grid_thw",
+        "input_ids",
+        "mm_token_type_ids",
+        "pixel_values"
+      ],
+      "pixel_values_mean_head": [
+        -1.7922619581222534,
+        -1.7922619581222534,
+        -1.7922619581222534,
+        -1.7922619581222534,
+        -1.7922619581222534,
+        -1.7922619581222534
+      ],
+      "pixel_values_minmax": [
+        -1.7922625541687012,
+        2.074883460998535
+      ],
+      "pixel_values_shape": [
+        16,
+        1536
+      ],
+      "prompt": null,
+      "vision_end_count_151653": 1,
+      "vision_start_count_151652": 1
+    },
+    "red": {
+      "image_grid_thw": [
+        [
+          1,
+          4,
+          4
+        ]
+      ],
+      "image_path": "/var/folders/55/4db45j8d3sdblm_7mqz34b1c0000gn/T/tmp2or0tltq.png",
+      "image_token_count_151655": 4,
+      "input_ids_shape": [
+        1,
+        42
+      ],
+      "keys": [
+        "attention_mask",
+        "image_grid_thw",
+        "input_ids",
+        "mm_token_type_ids",
+        "pixel_values"
+      ],
+      "pixel_values_mean_head": [
+        1.9303359985351562,
+        1.9303359985351562,
+        1.9303359985351562,
+        1.9303359985351562,
+        1.9303359985351562,
+        1.9303359985351562
+      ],
+      "pixel_values_minmax": [
+        -1.7520970106124878,
+        1.9303362369537354
+      ],
+      "pixel_values_shape": [
+        16,
+        1536
+      ],
+      "prompt": "<|im_start|>system\nYou are MiMo, a helpful AI assistant engineered by Xiaomi.<|im_end|><|im_start|>user\n<|vision_start|><|image_pad|><|vision_end|>What is the dominant color? Answer one word.<|im_end|><|im_start|>assistant\n<think></think>",
+      "vision_end_count_151653": 1,
+      "vision_start_count_151652": 1
+    }
+  },
+  "status": "pass"
+}

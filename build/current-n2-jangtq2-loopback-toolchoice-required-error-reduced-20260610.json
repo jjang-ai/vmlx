@@ -1,0 +1,89 @@
+{
+  "artifact": "current-n2-jangtq2-loopback-toolchoice-required-error-reduced-20260610",
+  "status": "open",
+  "date": "2026-06-10",
+  "scope": [
+    "N2 JANGTQ2 Responses API",
+    "Electron dev-app loopback remote session",
+    "built-in run_command tool loop",
+    "strict long-delta prompt"
+  ],
+  "root_cause": {
+    "previous_failure": "The strict N2 JANGTQ2 long-delta proof used a loopback vMLX endpoint through the panel's remote-session path. The panel pinned an explicit tool_choice for a second user turn. The vMLX Responses stream then returned tool_calls_required when the model did not produce a tool call, and the UI persisted 128 exclamation marks as visible output.",
+    "evidence_before_fix": "docs/internal/agent-notes/current-real-ui-live-model-n2-jangtq2-responses-tools-prevresp-longdelta-20260610-proof.json",
+    "relevant_before_fix_log": "Responses API error event: tool_choice='required' was set but the model did not produce any tool calls"
+  },
+  "source_fix": {
+    "file": "panel/src/main/ipc/chat.ts",
+    "behavior": "Loopback remote vMLX sessions no longer pin explicit built-in tool_choice. The request still sends tools, so the model can choose tool calls normally, but the UI no longer turns a local vMLX loopback model into a strict generic remote required-tool request.",
+    "fake_fix_avoided": [
+      "no synthetic tool calls",
+      "no tool argument rewrite",
+      "no reasoning disable workaround",
+      "no parser repair",
+      "no release or packaging action"
+    ]
+  },
+  "verification": {
+    "typecheck": {
+      "command": "cd panel && npm run typecheck",
+      "status": "pass"
+    },
+    "focused_panel_tests": {
+      "command": "cd panel && npm test -- tests/request-builder.test.ts tests/tool-auto-continue.test.ts",
+      "status": "pass",
+      "result": "79 passed"
+    },
+    "settings_flow_slice": {
+      "command": "cd panel && npm test -- tests/settings-flow.test.ts -t 'uses --is-mllm|forceTextOnly|video sampling controls'",
+      "status": "pass",
+      "result": "3 passed, 251 skipped"
+    },
+    "strict_live_rerun": {
+      "command": "node panel/scripts/live-real-ui-model-proof.mjs with N2 JANGTQ2, Responses, built-in tools, strict APP_DELTA prompts, max_output_tokens=128, max_prompt_tokens=4096",
+      "status": "fail",
+      "raw_proof": "docs/internal/agent-notes/current-real-ui-live-model-n2-jangtq2-responses-tools-prevresp-longdelta-after-loopback-toolchoice-20260610-proof.json",
+      "classification": "reduced_not_cleared"
+    }
+  },
+  "strict_live_rerun_result": {
+    "status": "fail",
+    "previous_required_tool_error_present": false,
+    "previous_exclamation_degenerate_output_present": false,
+    "final_visible_text": "Created",
+    "first_assistant_content": "Created",
+    "second_assistant_content": "Created",
+    "tool_probe_files": {
+      "real_ui_tool_probe_1.txt": "REAL_UI_LIVE_TOOL_ONE",
+      "real_ui_tool_probe_2.txt": null
+    },
+    "proven_surfaces": [
+      "responses_api",
+      "responses_cache_detail_usage",
+      "cache_hit_telemetry",
+      "server_cache_controls",
+      "native_cache_status",
+      "l2_disk_storage",
+      "settings_persistence",
+      "parser_leak_check",
+      "language_leak_check",
+      "real_loaded_model",
+      "current_electron_dev_build"
+    ],
+    "not_proven": [
+      "long_tool_loop",
+      "responses_delta_streaming for the strict run",
+      "second run_command call",
+      "APP_DELTA_STREAM_ONE/APP_DELTA_STREAM_TWO visible text"
+    ]
+  },
+  "boundary": {
+    "classification": "The API hard-error path is reduced, but the strict long-delta row remains red because N2 did not call the second tool and did not satisfy the requested visible markers.",
+    "other_agent_next_action": "For this strict prompt, compare tool adherence under local-session mode versus loopback-remote mode and test prompt/template/tool schema pressure. Do not call the strict row green from this patch. The default N2 JANGTQ2 tool/cache/delta proof remains the green checkpoint row.",
+    "no_claims": [
+      "N2 JANGTQ2 strict long-delta row is not green",
+      "N2 JANG_1L was not touched",
+      "No release/sign/notarize/package/PyPI/updater/download/website action was performed"
+    ]
+  }
+}
