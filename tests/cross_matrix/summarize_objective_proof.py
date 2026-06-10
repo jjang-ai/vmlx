@@ -223,7 +223,7 @@ N2_JANGTQ2_REAL_UI_PREVRESP_PROOF_REL = (
     "build/current-real-ui-live-model-n2-jangtq2-dev-app-prevresp-proof-20260610.json"
 )
 GEMMA_QAT_NATIVE_MXFP4_INVENTORY_REL = (
-    "build/current-gemma-qat-native-mxfp4-local-inventory-after-source-smoke-map-20260609.json"
+    "build/current-gemma-qat-native-mxfp4-local-inventory-after-audio-runtime-gate-20260610.json"
 )
 TOOL_CALL_CONTRACT_REL = "build/current-tool-call-contract-after-cross-model-loop-metrics-20260609.json"
 PANEL_SETTINGS_CONTRACT_REL = "build/current-panel-settings-contract-proof-20260601-cache-ui-storage-quant.json"

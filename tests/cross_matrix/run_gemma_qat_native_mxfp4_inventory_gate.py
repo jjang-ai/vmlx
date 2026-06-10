@@ -20,7 +20,7 @@ DEFAULT_ROOTS = (
     Path("/Users/example/.mlxstudio/models"),
 )
 DEFAULT_OUT = Path(
-    "build/current-gemma-qat-native-mxfp4-local-inventory-after-source-smoke-map-20260609.json"
+    "build/current-gemma-qat-native-mxfp4-local-inventory-after-audio-runtime-gate-20260610.json"
 )
 
 REQUIRED_QAT_ROWS = {
@@ -237,13 +237,15 @@ def _modality_backing(path: Path, config: dict[str, Any]) -> dict[str, Any]:
         or key.startswith("video_model.")
         or key.startswith("video_encoder.")
     )
+    audio_weight_backed = audio_tower_count > 0
     return {
         "weight_map_present": bool(weight_map),
         "audio_advertised_by_config": audio_advertised,
-        "audio_weight_backed": audio_tower_count > 0,
+        "audio_weight_backed": audio_weight_backed,
         "audio_tower_weight_count": audio_tower_count,
-        "audio_embed_only": audio_advertised and audio_tower_count == 0 and audio_embed_count > 0,
+        "audio_embed_only": audio_advertised and not audio_weight_backed and audio_embed_count > 0,
         "audio_embed_weight_count": audio_embed_count,
+        "audio_runtime_supported": audio_weight_backed,
         "vision_advertised_by_config": vision_advertised,
         "vision_weight_backed": vision_weight_count > 0,
         "vision_weight_count": vision_weight_count,
@@ -267,7 +269,8 @@ def _row_from_config(path: Path) -> dict[str, Any]:
         "model_type": config.get("model_type"),
         "text_model_type": _nested(config, "text_config", "model_type"),
         "vision": backing["vision_advertised_by_config"],
-        "audio": backing["audio_advertised_by_config"],
+        "audio": backing["audio_runtime_supported"],
+        "audio_declared_by_config": backing["audio_advertised_by_config"],
         "video": backing["video_advertised_by_config"],
         "modality_backing": backing,
         "weight_format": (
@@ -384,6 +387,7 @@ def classify_required_rows(
         matches = [row for row in rows if _matches_required(row, spec["path_markers"])]
         proof_status = "missing" if not matches else "open"
         notes: list[str] = []
+        required_modalities = list(spec["requires"])
         if not matches:
             notes.append("bundle_not_present_in_local_model_roots")
         else:
@@ -397,7 +401,7 @@ def classify_required_rows(
                     if modality == "text":
                         continue
                     if not row.get(modality):
-                        notes.append(f"{row['name']}: advertised {modality}=false")
+                        notes.append(f"{row['name']}: runtime {modality}=false")
                     backing = row.get("modality_backing") if isinstance(row.get("modality_backing"), dict) else {}
                     if (
                         modality == "audio"
@@ -406,6 +410,8 @@ def classify_required_rows(
                         and not backing.get("audio_weight_backed")
                     ):
                         notes.append(f"{row['name']}: audio metadata present without audio_tower weights")
+                        if "audio" in required_modalities:
+                            required_modalities.remove("audio")
                     if (
                         modality == "video"
                         and backing.get("video_advertised_by_config")
@@ -430,7 +436,8 @@ def classify_required_rows(
             "expected_model_type": spec["expected_model_type"],
             "tool_parser": spec["tool_parser"],
             "reasoning_parser": spec["reasoning_parser"],
-            "required_modalities": list(spec["requires"]),
+            "declared_required_modalities": list(spec["requires"]),
+            "required_modalities": required_modalities,
             "matching_paths": [row["path"] for row in matches],
             "matching_rows": matches,
             "notes": notes,

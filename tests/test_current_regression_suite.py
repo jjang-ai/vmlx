@@ -372,7 +372,7 @@ def test_current_regression_suite_runs_gemma_qat_inventory_gate():
     assert "--out" in command
     assert (
         command[command.index("--out") + 1]
-        == "build/current-gemma-qat-native-mxfp4-local-inventory-after-source-smoke-map-20260609.json"
+        == "build/current-gemma-qat-native-mxfp4-local-inventory-after-audio-runtime-gate-20260610.json"
     )
 
 
