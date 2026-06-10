@@ -232,6 +232,9 @@ INSTALLED_APP_UI_PROOFS = {
     "gemma4_e2b_qat_native_mxfp4": Path(
         "docs/internal/agent-notes/current-real-ui-installed-app-gemma4-e2b-mxfp4-responses-tools-cachecontrols-bundled-python-reasoning-shorttool-20260610-proof.json"
     ),
+    "gemma4_e4b_qat_native_mxfp4": Path(
+        "docs/internal/agent-notes/current-real-ui-installed-app-gemma4-e4b-mxfp4-responses-tools-cachecontrols-bundled-python-reasoning-strictfinal-20260610-proof.json"
+    ),
     "gemma4_12b_native_mxfp4": Path(
         "docs/internal/agent-notes/current-real-ui-installed-app-gemma4-12b-mxfp4-responses-tools-cachecontrols-bundled-python-reasoning-20260610-proof.json"
     ),
