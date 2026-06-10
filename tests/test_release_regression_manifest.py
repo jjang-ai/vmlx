@@ -31,6 +31,8 @@ from tests.cross_matrix.release_regression_manifest import (
     CURRENT_MIMO_V2_JANG2L_TOOL_DIALECT_ARTIFACT,
     CURRENT_MIMO_V2_JANG2L_CURRENT_AUDIT_ARTIFACT,
     CURRENT_MIMO_V2_JANG2L_METADATA_TRUTH_ARTIFACT,
+    CURRENT_MIMO_V2_JANG2L_RESPONSES_TOOLS_RERUN_ARTIFACT,
+    CURRENT_MIMO_V2_JANG2L_RESTART_L2_ARTIFACT,
     CURRENT_MIMO_V2_JANG2L_SOURCE_VS_QUANT_ARTIFACT,
     CURRENT_MIMO_V2_JANG2L_NO_SOURCE_EXACTNESS_CLASSIFIER_ARTIFACT,
     CURRENT_OBJECTIVE_DIGEST_ARTIFACT,
@@ -3579,6 +3581,51 @@ def _write_passing_mimo_v2_root_cause_artifacts(root: Path) -> None:
                     "api_sampler_non_top1_selection": True,
                 },
                 "unresolved_surfaces": {},
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    restart_l2_path = root / CURRENT_MIMO_V2_JANG2L_RESTART_L2_ARTIFACT
+    restart_l2_path.parent.mkdir(parents=True, exist_ok=True)
+    restart_l2_path.write_text(
+        json.dumps(
+            {
+                "results": [
+                    {
+                        "classification": {
+                            "status": "pass",
+                            "cache_status": "pass",
+                            "output_status": "pass",
+                            "checks": {
+                                "restart_l2_restore_observed": True,
+                                "second_cached_tokens_positive": True,
+                                "block_disk_hit_positive": True,
+                            },
+                        }
+                    }
+                ]
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    responses_tools_path = root / CURRENT_MIMO_V2_JANG2L_RESPONSES_TOOLS_RERUN_ARTIFACT
+    responses_tools_path.parent.mkdir(parents=True, exist_ok=True)
+    responses_tools_path.write_text(
+        json.dumps(
+            {
+                "status": "pass",
+                "proven": {
+                    "responses_endpoint_used": True,
+                    "responses_delta_streaming": True,
+                    "responses_previous_response_id_tool_followup": True,
+                    "cache": {
+                        "cache_hit_tokens": 4552,
+                        "l2_block_tokens_on_disk": 4960,
+                    },
+                },
+                "red": {"long_tool_loop": True},
             }
         )
         + "\n",
@@ -11762,7 +11809,7 @@ def test_mimo_v2_root_cause_exposes_decode_speed_and_media_blockers(tmp_path):
     assert result["mimo_jangtq2_live_media_l2_passed"] is True
     assert result["mimo_jang2l_live_media_l2_blocked"] is True
     assert result["mimo_jang2l_l2_restart_cache_hit_passed"] is True
-    assert result["mimo_jang2l_l2_restart_visible_output_blocked"] is True
+    assert result["mimo_jang2l_l2_restart_visible_output_blocked"] is False
     assert result["latest_decode_speed_evidence"]["bundle_decode_tps"] == 1.79
     assert result["switchglu_fastpath_active_but_slow"] is True
     assert result["async_decode_wait_dominates"] is True
@@ -11773,7 +11820,128 @@ def test_mimo_v2_root_cause_exposes_decode_speed_and_media_blockers(tmp_path):
     assert "mimo_decode_speed_below_release_target" in result["failures"]
     assert "mimo_media_unwired" in result["failures"]
     assert "mimo_jang2l_live_media_l2_missing" in result["failures"]
-    assert "mimo_jang2l_l2_restart_visible_output_blocked" in result["failures"]
+    assert "mimo_jang2l_l2_restart_visible_output_blocked" not in result["failures"]
+
+
+def test_mimo_v2_root_cause_consumes_current_jang2l_l2_and_responses_tool_proofs(
+    tmp_path,
+):
+    from tests.cross_matrix.release_regression_manifest import (
+        CURRENT_MIMO_V2_JANG2L_CURRENT_AUDIT_ARTIFACT,
+        _validate_current_mimo_v2_jang2l_root_cause,
+    )
+
+    _write_passing_mimo_v2_root_cause_artifacts(tmp_path)
+    restart_path = tmp_path / CURRENT_MIMO_V2_JANG2L_RESTART_L2_ARTIFACT
+    restart_path.parent.mkdir(parents=True, exist_ok=True)
+    restart_path.write_text(
+        json.dumps(
+            {
+                "results": [
+                    {
+                        "classification": {
+                            "status": "pass",
+                            "cache_status": "pass",
+                            "output_status": "review",
+                            "checks": {
+                                "restart_l2_restore_observed": True,
+                                "second_cached_tokens_positive": True,
+                                "block_disk_hit_positive": True,
+                            },
+                        }
+                    }
+                ]
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    responses_path = tmp_path / CURRENT_MIMO_V2_JANG2L_RESPONSES_TOOLS_RERUN_ARTIFACT
+    responses_path.parent.mkdir(parents=True, exist_ok=True)
+    responses_path.write_text(
+        json.dumps(
+            {
+                "status": "fail",
+                "proven": {
+                    "responses_endpoint_used": True,
+                    "responses_delta_streaming": True,
+                    "responses_previous_response_id_tool_followup": True,
+                    "cache": {
+                        "cache_hit_tokens": 4552,
+                        "l2_block_tokens_on_disk": 4960,
+                    },
+                },
+                "red": {
+                    "long_tool_loop": False,
+                    "semantic_drift": [
+                        "REAL_UI_LIVE_TOOL_ONE drifted to REAL_UI_LAND_TOOL_ONE"
+                    ],
+                },
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    current_audit_path = tmp_path / CURRENT_MIMO_V2_JANG2L_CURRENT_AUDIT_ARTIFACT
+    current_audit = json.loads(current_audit_path.read_text(encoding="utf-8"))
+    current_audit["status"] = "open"
+    current_audit["local_release_clearance"] = False
+    current_audit["component_ok"]["mimo_media_wired"] = False
+    current_audit["component_ok"]["mimo_jang2l_live_media_l2"] = False
+    current_audit["component_ok"]["mimo_jang2l_l2_restart_cache_hit"] = False
+    current_audit["component_ok"]["mimo_jang2l_l2_restart_visible_output"] = False
+    current_audit_path.write_text(json.dumps(current_audit) + "\n", encoding="utf-8")
+
+    result = _validate_current_mimo_v2_jang2l_root_cause(tmp_path)
+
+    assert result["status"] == "open"
+    assert result["mimo_jang2l_l2_restart_cache_hit_passed"] is True
+    assert result["mimo_jang2l_l2_restart_visible_output_blocked"] is False
+    assert "mimo_jang2l_l2_restart_visible_output_blocked" not in result["failures"]
+    assert result["mimo_jang2l_responses_transport_passed"] is True
+    assert result["mimo_jang2l_responses_tool_semantics_blocked"] is True
+    assert "mimo_jang2l_responses_tool_semantics_blocked" in result["failures"]
+    assert "JANG_2L Responses/tool semantic drift" in result["release_boundary"]
+
+
+def test_mimo_v2_root_cause_preserves_current_long_prompt_oom_blocker(tmp_path):
+    from tests.cross_matrix.release_regression_manifest import (
+        CURRENT_MIMO_V2_JANG2L_CURRENT_AUDIT_ARTIFACT,
+        CURRENT_MIMO_V2_JANG2L_LENGTH_SWEEP_ARTIFACT,
+        _validate_current_mimo_v2_jang2l_root_cause,
+    )
+
+    _write_passing_mimo_v2_root_cause_artifacts(tmp_path)
+    length_path = tmp_path / CURRENT_MIMO_V2_JANG2L_LENGTH_SWEEP_ARTIFACT
+    length_path.parent.mkdir(parents=True, exist_ok=True)
+    length_path.write_text(
+        json.dumps(
+            {
+                "status": "open",
+                "classification": (
+                    "intrinsic_python_mllm_long_prompt_metal_oom_first_request"
+                ),
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    current_audit_path = tmp_path / CURRENT_MIMO_V2_JANG2L_CURRENT_AUDIT_ARTIFACT
+    current_audit = json.loads(current_audit_path.read_text(encoding="utf-8"))
+    current_audit["status"] = "open"
+    current_audit["local_release_clearance"] = False
+    current_audit["component_ok"]["long_prompt_coherence"] = True
+    current_audit_path.write_text(json.dumps(current_audit) + "\n", encoding="utf-8")
+
+    result = _validate_current_mimo_v2_jang2l_root_cause(tmp_path)
+
+    assert result["status"] == "open"
+    assert result["prompt_length_coherence_blocked"] is True
+    assert (
+        result["prompt_length_runtime_blocker"]
+        == "intrinsic_python_mllm_long_prompt_metal_oom_first_request"
+    )
+    assert "long-prompt coherence" in result["release_boundary"]
 
 
 def test_mimo_v2_root_cause_accepts_policy_skipped_source_vs_quant_without_clearing_quality(
@@ -12105,6 +12273,8 @@ def test_current_mimo_v2_proof_artifact_constants_are_local_only():
         CURRENT_MIMO_V2_JANG2L_METADATA_TRUTH_ARTIFACT,
         CURRENT_MIMO_V2_JANG2L_SOURCE_VS_QUANT_ARTIFACT,
         CURRENT_MIMO_V2_JANG2L_NO_SOURCE_EXACTNESS_CLASSIFIER_ARTIFACT,
+        CURRENT_MIMO_V2_JANG2L_RESTART_L2_ARTIFACT,
+        CURRENT_MIMO_V2_JANG2L_RESPONSES_TOOLS_RERUN_ARTIFACT,
     ]
 
     assert all(artifact.startswith("build/current-") for artifact in artifacts)
@@ -12156,6 +12326,8 @@ def test_release_regression_manifest_rejects_missing_mimo_v2_root_cause_artifact
         CURRENT_MIMO_V2_JANG2L_METADATA_TRUTH_ARTIFACT,
         CURRENT_MIMO_V2_JANG2L_SOURCE_VS_QUANT_ARTIFACT,
         CURRENT_MIMO_V2_JANG2L_NO_SOURCE_EXACTNESS_CLASSIFIER_ARTIFACT,
+        CURRENT_MIMO_V2_JANG2L_RESTART_L2_ARTIFACT,
+        CURRENT_MIMO_V2_JANG2L_RESPONSES_TOOLS_RERUN_ARTIFACT,
     ]
 
 

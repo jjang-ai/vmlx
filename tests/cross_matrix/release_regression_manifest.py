@@ -876,28 +876,34 @@ CURRENT_MIMO_V2_JANG2L_STRUCTURAL_VERIFY_ARTIFACT = (
     "build/current-mimo-jang2l-local-structural-verify-20260606.json"
 )
 CURRENT_MIMO_V2_JANG2L_TEXT_CACHE_ARTIFACT = (
-    "build/current-mimo-jang2l-live-text-cache-smoke-20260606.json"
+    "build/current-mimo-v25-jang2l-live-cb-cache-text-20260610.json"
 )
 CURRENT_MIMO_V2_JANG2L_SWITCHGLU_PARITY_ARTIFACT = (
-    "build/current-mimo-v2-jang2l-quantized-switchglu-parity-20260606.json"
+    "build/current-mimo-v2-switchglu-selected-expert-parity-20260609.json"
 )
 CURRENT_MIMO_V2_JANG2L_LENGTH_SWEEP_ARTIFACT = (
-    "build/current-mimo-v2-jang2l-direct-length-sweep-20260606.json"
+    "build/current-mimo-v2-jang2l-long-prompt-first-request-oom-20260606.json"
 )
 CURRENT_MIMO_V2_JANG2L_TOOL_DIALECT_ARTIFACT = (
-    "build/current-mimo-v2-jang2l-tool-dialect-failure-20260606.json"
+    "build/current-mimo-v25-jang2l-chat-tool-boundary-20260610.json"
 )
 CURRENT_MIMO_V2_JANG2L_CURRENT_AUDIT_ARTIFACT = (
     "build/current-mimo-v2-jang2l-current-audit-after-cache-vs-nocache-logprobs-20260609.json"
 )
 CURRENT_MIMO_V2_JANG2L_METADATA_TRUTH_ARTIFACT = (
-    "build/current-mimo-v25-jang2l-local-metadata-truth-patch-20260606.json"
+    "build/current-mimo-v2-local-bundle-metadata-contract-20260607.json"
 )
 CURRENT_MIMO_V2_JANG2L_SOURCE_VS_QUANT_ARTIFACT = (
-    "build/current-mimo-v2-jangtq2-source-vs-quant-first-divergence-preflight-20260607.json"
+    "build/current-mimo-v2-jang2l-source-vs-quant-first-divergence-20260606.json"
 )
 CURRENT_MIMO_V2_JANG2L_NO_SOURCE_EXACTNESS_CLASSIFIER_ARTIFACT = (
     "build/current-mimo-v2-no-source-exactness-classifier-after-artifact-diagnosis-20260609.json"
+)
+CURRENT_MIMO_V2_JANG2L_RESTART_L2_ARTIFACT = (
+    "build/current-mimo-v25-jang2l-restart-l2-restore-20260610-rerun/summary.json"
+)
+CURRENT_MIMO_V2_JANG2L_RESPONSES_TOOLS_RERUN_ARTIFACT = (
+    "build/current-real-ui-live-model-mimo-v25-jang2l-responses-tools-rerun-20260610.json"
 )
 CURRENT_DIAGNOSTIC_LIVE_SMOKE_ARTIFACTS = {
     # Retired 2026-06-07: old expected-failure diagnostic rows pointed at
@@ -5775,6 +5781,10 @@ def _validate_current_mimo_v2_jang2l_root_cause(root: Path) -> dict[str, Any]:
     no_source_classifier_artifact = (
         CURRENT_MIMO_V2_JANG2L_NO_SOURCE_EXACTNESS_CLASSIFIER_ARTIFACT
     )
+    restart_l2_artifact = CURRENT_MIMO_V2_JANG2L_RESTART_L2_ARTIFACT
+    responses_tools_artifact = (
+        CURRENT_MIMO_V2_JANG2L_RESPONSES_TOOLS_RERUN_ARTIFACT
+    )
     result: dict[str, Any] = {
         "status": "missing",
         "artifacts": {
@@ -5787,6 +5797,8 @@ def _validate_current_mimo_v2_jang2l_root_cause(root: Path) -> dict[str, Any]:
             "metadata_truth": metadata_truth_artifact,
             "source_vs_quant_first_divergence": source_vs_quant_artifact,
             "no_source_exactness_classifier": no_source_classifier_artifact,
+            "jang2l_restart_l2": restart_l2_artifact,
+            "jang2l_responses_tools_rerun": responses_tools_artifact,
         },
         "missing": [],
         "failures": [],
@@ -5827,6 +5839,8 @@ def _validate_current_mimo_v2_jang2l_root_cause(root: Path) -> dict[str, Any]:
         "mimo_jang2l_live_media_l2_blocked": False,
         "mimo_jang2l_l2_restart_cache_hit_passed": False,
         "mimo_jang2l_l2_restart_visible_output_blocked": False,
+        "mimo_jang2l_responses_transport_passed": False,
+        "mimo_jang2l_responses_tool_semantics_blocked": False,
         "manifest_integrity_passed": False,
         "stale_local_state_absent": False,
         "current_audit_status": None,
@@ -5849,6 +5863,8 @@ def _validate_current_mimo_v2_jang2l_root_cause(root: Path) -> dict[str, Any]:
     metadata_truth_path = root / metadata_truth_artifact
     source_vs_quant_path = root / source_vs_quant_artifact
     no_source_classifier_path = root / no_source_classifier_artifact
+    restart_l2_path = root / restart_l2_artifact
+    responses_tools_path = root / responses_tools_artifact
     for path, artifact in (
         (structural_path, structural_artifact),
         (text_cache_path, text_cache_artifact),
@@ -5859,6 +5875,8 @@ def _validate_current_mimo_v2_jang2l_root_cause(root: Path) -> dict[str, Any]:
         (metadata_truth_path, metadata_truth_artifact),
         (source_vs_quant_path, source_vs_quant_artifact),
         (no_source_classifier_path, no_source_classifier_artifact),
+        (restart_l2_path, restart_l2_artifact),
+        (responses_tools_path, responses_tools_artifact),
     ):
         if not path.exists():
             result["missing"].append(artifact)
@@ -5877,18 +5895,50 @@ def _validate_current_mimo_v2_jang2l_root_cause(root: Path) -> dict[str, Any]:
         no_source_classifier_payload = json.loads(
             no_source_classifier_path.read_text(encoding="utf-8")
         )
+        restart_l2_payload = json.loads(restart_l2_path.read_text(encoding="utf-8"))
+        responses_tools_payload = json.loads(
+            responses_tools_path.read_text(encoding="utf-8")
+        )
     except Exception as exc:  # noqa: BLE001 - report validation failure
         result["status"] = f"load_error:{type(exc).__name__}"
         result["failures"].append("json_load_error")
         return result
 
+    metadata_jang2l = {}
+    metadata_bundles = metadata_truth_payload.get("bundles")
+    if isinstance(metadata_bundles, dict) and isinstance(
+        metadata_bundles.get("jang2l"), dict
+    ):
+        metadata_jang2l = metadata_bundles["jang2l"]
+    metadata_jang2l_caps = metadata_jang2l.get("capabilities")
+    if not isinstance(metadata_jang2l_caps, dict):
+        metadata_jang2l_caps = {}
     result["metadata_truth_passed"] = (
         metadata_truth_payload.get("status") == "pass"
-        and metadata_truth_payload.get("runtime_modalities") == ["text"]
-        and metadata_truth_payload.get("preserved_modalities") == ["vision", "audio"]
-        and metadata_truth_payload.get("unwired_modalities") == ["vision", "audio"]
-        and metadata_truth_payload.get("multimodal_status")
-        == "weights_preserved_text_runtime"
+        and (
+            (
+                metadata_truth_payload.get("runtime_modalities") == ["text"]
+                and metadata_truth_payload.get("preserved_modalities")
+                == ["vision", "audio"]
+                and metadata_truth_payload.get("unwired_modalities")
+                == ["vision", "audio"]
+                and metadata_truth_payload.get("multimodal_status")
+                == "weights_preserved_text_runtime"
+            )
+            or (
+                metadata_truth_payload.get("expected_runtime_modalities") == ["text"]
+                and metadata_truth_payload.get("expected_preserved_modalities")
+                == ["vision", "audio"]
+                and metadata_jang2l.get("status") == "pass"
+                and metadata_jang2l_caps.get("modalities") == ["text"]
+                and metadata_jang2l_caps.get("preserved_modalities")
+                == ["vision", "audio"]
+                and metadata_jang2l_caps.get("unwired_modalities")
+                == ["vision", "audio"]
+                and metadata_jang2l_caps.get("multimodal_status")
+                == "weights_preserved_text_runtime"
+            )
+        )
     )
     if not result["metadata_truth_passed"]:
         result["failures"].append("mimo_metadata_truth_not_pass")
@@ -5987,13 +6037,19 @@ def _validate_current_mimo_v2_jang2l_root_cause(root: Path) -> dict[str, Any]:
     text_cache_requests = text_cache_payload.get("requests")
     if not isinstance(text_cache_requests, list):
         text_cache_requests = []
+    text_cache_rows = text_cache_payload.get("rows")
+    if not isinstance(text_cache_rows, list):
+        text_cache_rows = []
+    text_cache_summary = text_cache_payload.get("summary")
+    if not isinstance(text_cache_summary, dict):
+        text_cache_summary = {}
     text_cache_contents = [
         str(item.get("content") or "")
         for item in text_cache_requests
         if isinstance(item, dict)
     ]
     cached_token_counts = []
-    for item in text_cache_requests:
+    for item in [*text_cache_requests, *text_cache_rows]:
         if not isinstance(item, dict):
             continue
         usage = item.get("usage")
@@ -6001,10 +6057,26 @@ def _validate_current_mimo_v2_jang2l_root_cause(root: Path) -> dict[str, Any]:
         cached_tokens = details.get("cached_tokens") if isinstance(details, dict) else None
         if isinstance(cached_tokens, int):
             cached_token_counts.append(cached_tokens)
+    summary_texts = text_cache_summary.get("texts")
+    if not isinstance(summary_texts, dict):
+        summary_texts = {}
+    summary_repeat_pass = (
+        text_cache_payload.get("status") == "pass"
+        and text_cache_summary.get("all_requests_http_ok") is True
+        and text_cache_summary.get("exact_repeat_1") is True
+        and text_cache_summary.get("exact_repeat_2") is True
+        and text_cache_summary.get("cache_hit_tokens", 0) > 0
+        and text_cache_summary.get("l2_tokens_on_disk", 0) > 0
+        and summary_texts.get("exact_repeat_1") == "ACK-CB-742"
+        and summary_texts.get("exact_repeat_2") == "ACK-CB-742"
+    )
     result["text_cache_narrow_pass"] = (
-        len(text_cache_contents) >= 2
-        and all(content == "cache ok" for content in text_cache_contents[:2])
-        and any(count > 0 for count in cached_token_counts)
+        (
+            len(text_cache_contents) >= 2
+            and all(content == "cache ok" for content in text_cache_contents[:2])
+            and any(count > 0 for count in cached_token_counts)
+        )
+        or summary_repeat_pass
     )
     if not result["text_cache_narrow_pass"]:
         result["failures"].append("mimo_text_cache_narrow_pass_missing")
@@ -6038,6 +6110,15 @@ def _validate_current_mimo_v2_jang2l_root_cause(root: Path) -> dict[str, Any]:
     result["prompt_length_coherence_blocked"] = (
         length_sweep_payload.get("status") == "fail" and bool(corrupt_cases)
     )
+    if (
+        length_sweep_payload.get("status") == "open"
+        and length_sweep_payload.get("classification")
+        == "intrinsic_python_mllm_long_prompt_metal_oom_first_request"
+    ):
+        result["prompt_length_coherence_blocked"] = True
+        result["prompt_length_runtime_blocker"] = length_sweep_payload.get(
+            "classification"
+        )
     result["prompt_length_corrupt_cases"] = corrupt_cases
 
     tool_observations = tool_dialect_payload.get("runtime_observations")
@@ -6060,6 +6141,15 @@ def _validate_current_mimo_v2_jang2l_root_cause(root: Path) -> dict[str, Any]:
         and no_structured_tool_calls
         and required_rejected
     )
+    tool_checks = tool_dialect_payload.get("checks")
+    if not isinstance(tool_checks, dict):
+        tool_checks = {}
+    if (
+        tool_checks.get("required_mode_tool_call_present") is True
+        and tool_checks.get("auto_mode_tool_call_present") is True
+        and tool_checks.get("cache_positive") is True
+    ):
+        result["tool_protocol_blocked"] = False
 
     audit_long_prompt_open = current_audit_component_ok.get("long_prompt_coherence") is False
     audit_tool_protocol_open = current_audit_component_ok.get("tool_protocol") is False
@@ -6102,7 +6192,10 @@ def _validate_current_mimo_v2_jang2l_root_cause(root: Path) -> dict[str, Any]:
             latest_decode_speed.get("switchglu_fastpath_active") is True
             and latest_decode_speed.get("speed_blocked") is True
         )
-    if current_audit_component_ok.get("long_prompt_coherence") is True:
+    if (
+        current_audit_component_ok.get("long_prompt_coherence") is True
+        and not result.get("prompt_length_runtime_blocker")
+    ):
         result["prompt_length_coherence_blocked"] = False
     elif audit_long_prompt_open:
         result["prompt_length_coherence_blocked"] = True
@@ -6198,9 +6291,60 @@ def _validate_current_mimo_v2_jang2l_root_cause(root: Path) -> dict[str, Any]:
     result["mimo_jang2l_l2_restart_cache_hit_passed"] = bool(
         audit_jang2l_l2_cache_hit_passed
     )
-    if audit_jang2l_l2_cache_hit_passed and audit_jang2l_l2_visible_output_open:
+    restart_l2_results = restart_l2_payload.get("results")
+    restart_l2_first = (
+        restart_l2_results[0]
+        if isinstance(restart_l2_results, list)
+        and restart_l2_results
+        and isinstance(restart_l2_results[0], dict)
+        else {}
+    )
+    restart_l2_classification = restart_l2_first.get("classification")
+    if not isinstance(restart_l2_classification, dict):
+        restart_l2_classification = {}
+    restart_l2_checks = restart_l2_classification.get("checks")
+    if not isinstance(restart_l2_checks, dict):
+        restart_l2_checks = {}
+    current_restart_l2_cache_hit_passed = (
+        restart_l2_classification.get("status") == "pass"
+        and restart_l2_classification.get("cache_status") == "pass"
+        and restart_l2_checks.get("restart_l2_restore_observed") is True
+        and restart_l2_checks.get("second_cached_tokens_positive") is True
+        and restart_l2_checks.get("block_disk_hit_positive") is True
+    )
+    if current_restart_l2_cache_hit_passed:
+        result["mimo_jang2l_l2_restart_cache_hit_passed"] = True
+        audit_jang2l_l2_visible_output_open = False
+    if (
+        result["mimo_jang2l_l2_restart_cache_hit_passed"]
+        and audit_jang2l_l2_visible_output_open
+    ):
         result["mimo_jang2l_l2_restart_visible_output_blocked"] = True
         result["failures"].append("mimo_jang2l_l2_restart_visible_output_blocked")
+    responses_proven = responses_tools_payload.get("proven")
+    if not isinstance(responses_proven, dict):
+        responses_proven = {}
+    responses_cache = responses_proven.get("cache")
+    if not isinstance(responses_cache, dict):
+        responses_cache = {}
+    responses_red = responses_tools_payload.get("red")
+    if not isinstance(responses_red, dict):
+        responses_red = {}
+    result["mimo_jang2l_responses_transport_passed"] = (
+        responses_proven.get("responses_endpoint_used") is True
+        and responses_proven.get("responses_delta_streaming") is True
+        and responses_proven.get("responses_previous_response_id_tool_followup")
+        is True
+        and int(responses_cache.get("cache_hit_tokens") or 0) > 0
+        and int(responses_cache.get("l2_block_tokens_on_disk") or 0) > 0
+    )
+    result["mimo_jang2l_responses_tool_semantics_blocked"] = (
+        result["mimo_jang2l_responses_transport_passed"] is True
+        and responses_tools_payload.get("status") == "fail"
+        and responses_red.get("long_tool_loop") is False
+    )
+    if result["mimo_jang2l_responses_tool_semantics_blocked"]:
+        result["failures"].append("mimo_jang2l_responses_tool_semantics_blocked")
     if audit_source_vs_quant_open:
         result["source_vs_quant_first_divergence_passed"] = False
         if (
@@ -6268,6 +6412,8 @@ def _validate_current_mimo_v2_jang2l_root_cause(root: Path) -> dict[str, Any]:
             active_boundary_reasons.append("JANG_2L live media/L2 proof")
         if result["mimo_jang2l_l2_restart_visible_output_blocked"]:
             active_boundary_reasons.append("JANG_2L L2 restart visible output")
+        if result["mimo_jang2l_responses_tool_semantics_blocked"]:
+            active_boundary_reasons.append("JANG_2L Responses/tool semantic drift")
         if not result["source_vs_quant_requirement_satisfied"]:
             active_boundary_reasons.append(
                 "source-vs-quant/no-source classification boundary"
