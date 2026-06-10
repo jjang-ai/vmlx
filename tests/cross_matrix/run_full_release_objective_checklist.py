@@ -17,7 +17,7 @@ from typing import Any
 
 
 DEFAULT_OUT = Path(
-    "build/current-full-release-objective-checklist-after-gemma-all-jang4m-fullmedia-20260610.json"
+    "build/current-full-release-objective-checklist-after-qwen-missing-required-args-failclosed-20260610.json"
 )
 
 MIMO_AUDIT = Path(
@@ -39,7 +39,7 @@ NOHEAVY_API_CACHE = Path(
     "build/current-noheavy-api-cache-contract-after-responses-reasoning-empty-final-args-gateway-20260609.json"
 )
 RESPONSES_RAW_SSE_PARITY = Path(
-    "build/current-responses-raw-sse-parity-qwen35-direct-gateway-tunnel-after-public-recapture-20260610.json"
+    "build/current-responses-raw-sse-parity-qwen35-direct-gateway-tunnel-after-missing-required-args-failclosed-20260610.json"
 )
 API_SURFACE_CONTRACT = Path(
     "build/current-api-surface-contract-20260602-v1554-stream-cache-reuse-refresh.json"
@@ -84,7 +84,7 @@ QWEN35_RESTART_L2_RESTORE = Path(
     "build/current-qwen35-mxfp8-mtp-restart-l2-restore-20260607/summary.json"
 )
 QWEN35_RAW_SSE_PARITY = Path(
-    "build/current-responses-raw-sse-parity-qwen35-direct-gateway-tunnel-after-public-recapture-20260610.json"
+    "build/current-responses-raw-sse-parity-qwen35-direct-gateway-tunnel-after-missing-required-args-failclosed-20260610.json"
 )
 QWEN35_INSTALLED_VIDEO = Path(
     "docs/internal/agent-notes/current-real-ui-installed-app-qwen36-35b-mxfp8-mtp-responses-tools-video-reasoning-cachecontrols-max512-20260607-proof.json"
