@@ -1309,7 +1309,14 @@ def _register_mimo_v2_mlx_vlm_runtime() -> None:
 
         @classmethod
         def from_dict(cls, params):
-            merged_text = dict(params)
+            media_auto_enabled = bool(
+                params.get("_vmlx_mimo_v2_media_runtime_auto_enabled")
+            )
+            merged_text = {
+                key: value
+                for key, value in dict(params).items()
+                if key != "_vmlx_mimo_v2_media_runtime_auto_enabled"
+            }
             if isinstance(params.get("text_config"), dict):
                 merged_text.update(params["text_config"])
             params["text_config"] = merged_text
@@ -1348,12 +1355,20 @@ def _register_mimo_v2_mlx_vlm_runtime() -> None:
                     or params.get("preserved_modalities")
                 ),
                 unwired_modalities=(
-                    (params.get("capabilities") or {}).get("unwired_modalities")
-                    or params.get("unwired_modalities")
+                    []
+                    if media_auto_enabled
+                    else (
+                        (params.get("capabilities") or {}).get("unwired_modalities")
+                        or params.get("unwired_modalities")
+                    )
                 ),
                 multimodal_status=(
-                    (params.get("capabilities") or {}).get("multimodal_status")
-                    or params.get("multimodal_status")
+                    "mimo_v2_multimodal_runtime"
+                    if media_auto_enabled
+                    else (
+                        (params.get("capabilities") or {}).get("multimodal_status")
+                        or params.get("multimodal_status")
+                    )
                 ),
             )
 

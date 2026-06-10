@@ -2026,19 +2026,10 @@ def _mimo_v2_media_runtime_auto_enabled(
         return False
     caps = cfg.get("capabilities") if isinstance(cfg.get("capabilities"), dict) else {}
     runtime = cfg.get("runtime") if isinstance(cfg.get("runtime"), dict) else {}
-    explicit_modes = {
-        str(caps.get("multimodal_status") or "").lower(),
-        str(runtime.get("multimodal_mode") or "").lower(),
-    }
-    if explicit_modes & {
-        "weights_preserved_text_runtime",
-        "text_runtime",
-        "text_only",
-        "unwired",
-        "preserved_disabled",
-    }:
-        return False
     bundle = Path(bundle_path or "")
+    processor_config = cfg.get("processor_config")
+    if not isinstance(processor_config, dict):
+        processor_config = {}
     has_vision_runtime = all(
         hasattr(module, name)
         for name in (
@@ -2059,13 +2050,24 @@ def _mimo_v2_media_runtime_auto_enabled(
     has_vision_bundle = (
         has_vision_runtime
         and isinstance(cfg.get("vision_config"), dict)
-        and (cfg.get("image_token_id") is not None or cfg.get("video_token_id") is not None)
+        and (
+            cfg.get("image_token_id") is not None
+            or cfg.get("video_token_id") is not None
+            or processor_config.get("image_token_id") is not None
+            or processor_config.get("video_token_id") is not None
+        )
         and (bundle / "preprocessor_config.json").is_file()
         and _mimo_v2_bundle_has_index_prefix(bundle_path, ("visual.",))
     )
     has_audio_bundle = (
         has_audio_runtime
         and isinstance(cfg.get("audio_config"), dict)
+        and (
+            cfg.get("audio_token_id") is not None
+            or cfg.get("audio_token_index") is not None
+            or processor_config.get("audio_token_id") is not None
+            or processor_config.get("audio_token_index") is not None
+        )
         and (bundle / "audio_tokenizer" / "model.safetensors").is_file()
         and _mimo_v2_bundle_has_index_prefix(
             bundle_path,
