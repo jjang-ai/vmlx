@@ -688,15 +688,15 @@ CURRENT_SUITE_COMMANDS: dict[str, list[str]] = {
         "--app",
         "panel/release/sequoia-app/mac-arm64/vMLX.app",
         "--out",
-        "build/current-installed-app-runtime-parity-audit-after-installed-app-rebuild-20260606.json",
+        "build/current-installed-app-runtime-parity-audit-sequoia-checkpoint-dmg-20260609.json",
     ],
     "staged_app_runtime_parity_audit": [
         sys.executable,
         "tests/cross_matrix/run_installed_app_runtime_parity_audit.py",
         "--app",
-        "panel/release/sequoia-app/mac-arm64/vMLX.app",
+        "panel/release/tahoe-app/mac-arm64/vMLX.app",
         "--out",
-        "build/current-staged-app-runtime-parity-audit-gemma4-release-boundary-after-ui-e2e-fixes-dmg-build-20260604.json",
+        "build/current-installed-app-runtime-parity-audit-tahoe-checkpoint-dmg-20260609.json",
     ],
     "issue179_minimax_k_root_cause_audit": [
         sys.executable,

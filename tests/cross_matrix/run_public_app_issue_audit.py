@@ -32,7 +32,7 @@ TOOL_CALL_CONTRACT = Path(
     "build/current-tool-call-contract-after-cross-model-loop-metrics-20260609.json"
 )
 INSTALLED_APP_RUNTIME_PARITY = Path(
-    "build/current-installed-app-runtime-parity-audit-after-installed-app-rebuild-20260606.json"
+    "build/current-installed-app-runtime-parity-audit-sequoia-checkpoint-dmg-20260609.json"
 )
 REASONING_TEMPLATE_CONTRACT = Path(
     "build/current-reasoning-template-contract-20260526-settings-audit.json"

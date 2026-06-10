@@ -19,7 +19,7 @@ from typing import Any
 
 
 DEFAULT_OUT = Path(
-    "build/current-installed-app-runtime-parity-audit-after-installed-app-rebuild-20260606.json"
+    "build/current-installed-app-runtime-parity-audit-sequoia-checkpoint-dmg-20260609.json"
 )
 INSTALLED_PYTHON = Path(
     "/Applications/vMLX.app/Contents/Resources/bundled-python/python/bin/python3"

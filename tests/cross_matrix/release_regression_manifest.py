@@ -408,10 +408,10 @@ CURRENT_ISSUE175_179_RELEASE_BOUNDARY_AUDIT_ARTIFACT = (
     "build/current-issue175-179-release-boundary-audit-after-issue179-memory-preflight-20260607.json"
 )
 CURRENT_INSTALLED_APP_RUNTIME_PARITY_AUDIT_ARTIFACT = (
-    "build/current-installed-app-runtime-parity-audit-after-installed-app-rebuild-20260606.json"
+    "build/current-installed-app-runtime-parity-audit-sequoia-checkpoint-dmg-20260609.json"
 )
 CURRENT_STAGED_APP_RUNTIME_PARITY_AUDIT_ARTIFACT = (
-    "build/current-staged-app-runtime-parity-audit-gemma4-release-boundary-after-ui-e2e-fixes-dmg-build-20260604.json"
+    "build/current-installed-app-runtime-parity-audit-tahoe-checkpoint-dmg-20260609.json"
 )
 CURRENT_ISSUE175_177_INSTALLED_RUNTIME_AUDIT_ARTIFACT = (
     "build/current-issue175-177-installed-runtime-audit-20260602-v1554-installed-tahoe.json"
@@ -2104,8 +2104,8 @@ _ROWS: list[dict[str, Any]] = [
             "VMLINUX_REAL_UI_APP_PATH=/Applications/vMLX.app VMLINUX_REAL_UI_MODEL_PATH=/Users/example/models/JANGQ/MiniMax-M2.7-JANGTQ_K VMLINUX_REAL_UI_PROOF_BASENAME=diagnostic-installed-ui-live-model-minimax-m27-jangtq-k-issue179-512-20260527 VMLINUX_REAL_UI_WIRE_API=responses VMLINUX_REAL_UI_MAX_TOKENS=512 node panel/scripts/live-real-ui-model-proof.mjs",
             ".venv/bin/python tests/cross_matrix/run_issue179_responses_cancel_probe.py --out build/current-issue179-minimax-k-responses-cancel-probe-after-mimo-dsv4-ledger-20260607.json --port 8897 --load-timeout 240 --request-timeout 180 --stream-seconds 8 --cancel-delay 0.25 --max-lines-after-cancel 20",
             ".venv/bin/python tests/cross_matrix/run_issue175_179_release_boundary_audit.py --out build/current-issue175-179-release-boundary-audit-after-issue179-memory-preflight-20260607.json",
-            ".venv/bin/python tests/cross_matrix/run_installed_app_runtime_parity_audit.py --app panel/release/sequoia-app/mac-arm64/vMLX.app --out build/current-installed-app-runtime-parity-audit-after-installed-app-rebuild-20260606.json",
-            ".venv/bin/python tests/cross_matrix/run_installed_app_runtime_parity_audit.py --app panel/release/sequoia-app/mac-arm64/vMLX.app --out build/current-staged-app-runtime-parity-audit-gemma4-release-boundary-after-ui-e2e-fixes-dmg-build-20260604.json",
+            ".venv/bin/python tests/cross_matrix/run_installed_app_runtime_parity_audit.py --app panel/release/sequoia-app/mac-arm64/vMLX.app --out build/current-installed-app-runtime-parity-audit-sequoia-checkpoint-dmg-20260609.json",
+            ".venv/bin/python tests/cross_matrix/run_installed_app_runtime_parity_audit.py --app panel/release/tahoe-app/mac-arm64/vMLX.app --out build/current-installed-app-runtime-parity-audit-tahoe-checkpoint-dmg-20260609.json",
             ".venv/bin/python tests/cross_matrix/run_issue175_177_installed_runtime_audit.py --out build/current-issue175-177-installed-runtime-audit-20260602-v1554-installed-tahoe.json",
             ".venv/bin/python tests/cross_matrix/run_issue175_177_live_runtime_audit.py --out build/current-issue175-177-live-runtime-audit-20260601-local-refresh.json",
             ".venv/bin/python tests/cross_matrix/run_issue179_minimax_k_root_cause_audit.py --out build/current-issue179-minimax-k-root-cause-audit-after-parser-settings-parity-20260608.json",
@@ -2156,8 +2156,8 @@ _ROWS: list[dict[str, Any]] = [
             "docs/internal/agent-notes/diagnostic-installed-ui-live-model-minimax-m27-jangtq-k-issue179-512-20260527-chat.png",
             "build/current-issue179-minimax-k-responses-cancel-probe-after-mimo-dsv4-ledger-20260607.json",
             "build/current-issue175-179-release-boundary-audit-after-issue179-memory-preflight-20260607.json",
-            "build/current-installed-app-runtime-parity-audit-after-installed-app-rebuild-20260606.json",
-            "build/current-staged-app-runtime-parity-audit-gemma4-release-boundary-after-ui-e2e-fixes-dmg-build-20260604.json",
+            "build/current-installed-app-runtime-parity-audit-sequoia-checkpoint-dmg-20260609.json",
+            "build/current-installed-app-runtime-parity-audit-tahoe-checkpoint-dmg-20260609.json",
             "build/current-installed-app-runtime-parity-audit-20260528-userdata-epipe-scan.json",
             "build/current-issue175-177-installed-runtime-audit-20260602-v1554-installed-tahoe.json",
             "build/current-issue175-177-live-runtime-audit-20260601-local-refresh.json",

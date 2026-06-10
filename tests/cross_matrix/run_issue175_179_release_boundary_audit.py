@@ -18,7 +18,7 @@ DEFAULT_OUT = Path(
     "build/current-issue175-179-release-boundary-audit-after-issue179-memory-preflight-20260607.json"
 )
 INSTALLED_APP_RUNTIME_PARITY_AUDIT_ARTIFACT = Path(
-    "build/current-installed-app-runtime-parity-audit-after-installed-app-rebuild-20260606.json"
+    "build/current-installed-app-runtime-parity-audit-sequoia-checkpoint-dmg-20260609.json"
 )
 ISSUE175_177_INSTALLED_RUNTIME_AUDIT_ARTIFACT = Path(
     "build/current-issue175-177-installed-runtime-audit-20260602-v1554-installed-tahoe.json"
