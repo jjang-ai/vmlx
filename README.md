@@ -731,29 +731,29 @@ pip install vmlx[image,jang]  # Multiple extras
 
 ```
 +--------------------------------------------+
-|          Desktop App (Electron)             |
+|          Desktop App (Electron)            |
 |   Chat | Server | Image | Tools | API      |
 +--------------------------------------------+
-|          Session Manager (TypeScript)       |
-|   Process spawn | Health monitor | Tray     |
+|          Session Manager (TypeScript)      |
+|   Process spawn | Health monitor | Tray    |
 +--------------------------------------------+
-|         vMLX Engine (Python / FastAPI)       |
+|         vMLX Engine (Python / FastAPI)     |
 |  +--------+  +---------+  +-----------+    |
 |  |Simple  |  | Batched |  | ImageGen  |    |
 |  |Engine  |  | Engine  |  | Engine    |    |
 |  +---+----+  +----+----+  +-----+-----+    |
-|      |            |              |          |
+|      |            |             |          |
 |  +---+------------+--+    +-----+-----+    |
 |  | mlx-lm / mlx-vlm  |    |  mflux    |    |
-|  +--------+-----------+    +-----------+    |
-|           |                                 |
-|  +--------+----------------------------+    |
-|  |       MLX Metal GPU Backend          |    |
-|  | quantized_matmul | KV cache | SDPA   |    |
-|  +--------------------------------------+    |
+|  +--------+----------+    +-----------+    |
+|           |                                |
+|  +--------+----------------------------+   |
+|  |       MLX Metal GPU Backend         |   |
+|  | quantized_matmul | KV cache | SDPA  |   |
+|  +--------------------------------------+  |
 +--------------------------------------------+
-|  L1: Prefix Cache (Memory-Aware / Paged)    |
-|  L2: Disk Cache (Persistent / Block Store)  |
+|  L1: Prefix Cache (Memory-Aware / Paged)   |
+|  L2: Disk Cache (Persistent / Block Store  |
 |  KV Quant: q4/q8 at storage boundary       |
 +--------------------------------------------+
 ```
@@ -778,6 +778,8 @@ cd panel && npm install
 npm run dev                      # Development mode with hot reload
 npx vitest run                   # 1545+ tests
 ```
+
+</details>
 
 ### Project Structure
 

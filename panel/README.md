@@ -132,27 +132,27 @@ App.tsx (view routing)
 ### Three-Layer Electron Architecture
 
 ```
-┌─────────────────────────────────────────────────┐
-│  Renderer (React + TypeScript + Tailwind)        │
-│  SetupScreen / SessionDashboard / CreateSession  │
-│  SessionView / ChatInterface / UpdateManager     │
-│  CachePanel / BenchmarkPanel / ReasoningBox      │
-└────────────────────┬────────────────────────────┘
-                     │  IPC (contextBridge)
-┌────────────────────┴────────────────────────────┐
-│  Preload (preload/index.ts)                      │
-│  window.api.sessions / chat / models / vllm      │
-│  window.api.cache / benchmark / export           │
-└────────────────────┬────────────────────────────┘
-                     │  ipcMain.handle
-┌────────────────────┴────────────────────────────┐
-│  Main Process (Node.js)                          │
-│  SessionManager  → spawn/kill vMLX Engine processes │
-│  DatabaseManager → SQLite WAL (chats, sessions)  │
-│  VllmManager     → install/update/detect vMLX Engine│
-│  IPC Handlers    → sessions, chat, models, vllm  │
-│                  → cache, benchmark, export       │
-└─────────────────────────────────────────────────┘
+  ┌──────────────────────────────────────────────────┐
+  │  Renderer (React + TypeScript + Tailwind)        │
+  │  SetupScreen / SessionDashboard / CreateSession  │
+  │  SessionView / ChatInterface / UpdateManager     │
+  │  CachePanel / BenchmarkPanel / ReasoningBox      │
+  └────────────────────┬─────────────────────────────┘
+                       │  IPC (contextBridge)
+  ┌────────────────────┴─────────────────────────────┐
+  │  Preload (preload/index.ts)                      │
+  │  window.api.sessions / chat / models / vllm      │
+  │  w─indow.api.cache / benchmark / export          │
+  └────────────────────┬─────────────────────────────┘
+                       │  ipcMain.handle
+┌──────────────────────┴────────────────────────────────┐
+│  Main Process (Node.js)                               │
+│  SessionManager  → spawn/kill vMLX Engine processes   │
+│  DatabaseManager → SQLite WAL (chats, sessions)       │
+│  VllmManager     → install/update/detect vMLX Engine  │
+│  IPC Handlers    → sessions, chat, models, vllm       │
+│                  → cache, benchmark, export           │
+└───────────────────────────────────────────────────────┘
 ```
 
 ### Key Files

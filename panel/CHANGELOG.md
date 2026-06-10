@@ -1,5 +1,29 @@
 # Changelog
 
+## Unreleased — Build Makefile ergonomics (local dev)
+
+### Added
+- Repo-root and `panel/` Makefiles: `make help`, `first-dmg`, `release`, `engine-app`, `engine-and-install`, `engine-dmg`, `install`.
+- `sync-bundled-local-packages.sh`, `hash-release-artifacts.sh`, `install-from-release.sh`, `freshen-repo.sh`.
+- SHA256 checksum file auto-written to `panel/release/SHA256SUMS` after DMG build.
+
+### Changed
+- `make install` builds a staged `.app` when needed (`make app`); DMG is optional for local testing.
+- `make install` / `make app` rebuild when panel, bundled-python, or engine/jang sources change (mtime stamps).
+- `make release` packages the current staged `.app` into a DMG (`--prepackaged`), then removes `release/mac-arm64/`. Stale DMGs are pruned on sync or app rebuild.
+- `resolve-jang-tools.sh`: discover `../jang/jang-tools` (sibling clone) before `~/jang`.
+- `install-from-release.sh`: macOS BSD `find` fix for bundled-Python codesign (was signing 0 Mach-O files).
+- Makefiles prepend `/usr/bin:/bin:…` to PATH so BSD find/tar win over GNU coreutils.
+- `sync-bundled-local-packages.sh` no longer re-runs full verify (release/beforePack still gates DMG).
+- `npm run build` compiles the Electron panel only (no automatic full Python rebundle).
+- `build-and-install.sh` delegates to `make install` (staged `.app`, not forced DMG).
+- `bundle-python.sh`: macOS BSD tar fix; clearer post-bundle next steps.
+
+### Docs
+- README Contributing and `docs/development/build-test-deploy.md` point to `make help`.
+- See `docs/development/build-makefile-enhancements-2026-06-09.md` for PR notes.
+- Cleaned up alignment in teh panel README.md diagram.
+
 ## v1.5.44 - 2026-05-19 - Hardening Sweep, Tool Streaming, and VLM Fixes
 
 ### Fixed

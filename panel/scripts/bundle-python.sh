@@ -12,7 +12,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PANEL_DIR="$(dirname "$SCRIPT_DIR")"
 REPO_DIR="$(dirname "$PANEL_DIR")"
 BUNDLE_DIR="$PANEL_DIR/bundled-python"
-JANG_LOCAL="${VMLX_JANG_TOOLS_SOURCE:-${VMLINUX_JANG_TOOLS_SOURCE:-$HOME/jang/jang-tools}}"
+JANG_LOCAL="$(bash "$REPO_DIR/scripts/resolve-jang-tools.sh" "$REPO_DIR")"
 
 echo "==> Bundling Python $PYTHON_VERSION for standalone vMLX distribution"
 
@@ -54,10 +54,11 @@ trap 'rm -f "$STANDALONE_TARBALL"' EXIT
 restore_python_runtime_files() {
   local RESTORE_TMP
   RESTORE_TMP="$(mktemp -d)"
+  # Member paths must omit the "./" prefix: BSD tar on macOS rejects
+  # "./python/..." even when those files exist in the archive.
   tar xzf "$STANDALONE_TARBALL" -C "$RESTORE_TMP" \
-    "./python/bin/python3" \
-    "./python/bin/python3.12" \
-    "./python/lib/libpython3.12.dylib"
+    "python/bin/python3.12" \
+    "python/lib/libpython3.12.dylib"
   mkdir -p "$BUNDLE_DIR/python/bin" "$BUNDLE_DIR/python/lib"
   cp -f "$RESTORE_TMP/python/bin/python3.12" "$BUNDLE_DIR/python/bin/python3.12"
   cp -f "$RESTORE_TMP/python/lib/libpython3.12.dylib" "$BUNDLE_DIR/python/lib/libpython3.12.dylib"
@@ -69,9 +70,8 @@ restore_python_runtime_files() {
 echo "==> Downloading Python ${PYTHON_VERSION}..."
 curl -L "$URL" -o "$STANDALONE_TARBALL"
 tar xzf "$STANDALONE_TARBALL" -C "$BUNDLE_DIR"
-restore_python_runtime_files
 
-PYTHON="$BUNDLE_DIR/python/bin/python3.12"
+PYTHON="$BUNDLE_DIR/python/bin/python3"
 
 # Verify Python works
 "$PYTHON" --version
@@ -133,8 +133,6 @@ echo "==> Installing MLX $MLX_VERSION wheels for $MLX_WHEEL_PLATFORM..."
   --implementation py --python-version 312 --abi none \
   "mlx-metal==$MLX_VERSION"
 "$PYTHON" -m pip install "$WHEELHOUSE"/mlx-"$MLX_VERSION"-*.whl "$WHEELHOUSE"/mlx_metal-"$MLX_VERSION"-*.whl
-restore_python_runtime_files
-PYTHON="$BUNDLE_DIR/python/bin/python3"
 
 echo "==> Installing dependencies..."
 "$PYTHON" -m pip install \
@@ -205,7 +203,7 @@ if [ -f "$JANG_LOCAL/pyproject.toml" ]; then
 else
   if [ "${VMLX_ALLOW_PYPI_JANG:-${VMLINUX_ALLOW_PYPI_JANG:-0}}" = "1" ]; then
     echo "    local jang-tools missing; VMLX_ALLOW_PYPI_JANG=1 so using PyPI fallback"
-    "$PYTHON" -m pip install --no-deps "jang>=2.5.30"
+    "$PYTHON" -m pip install --no-deps "jang>=2.5.29"
   else
     echo "ERROR: RELEASE BLOCKED — local jang-tools source missing: $JANG_LOCAL" >&2
     echo "       vMLX release builds must bundle the checked-out JANG runtime," >&2
@@ -699,4 +697,10 @@ echo "==> Bundle size:"
 du -sh "$BUNDLE_DIR"
 echo ""
 echo "==> Done! Bundled Python ready at: $BUNDLE_DIR"
-echo "    Next: npm run build && npx electron-builder --mac"
+echo
+echo "✓ bundled-python ready"
+date -u +%Y-%m-%dT%H:%M:%SZ > "$BUNDLE_DIR/.bundle-stamp"
+echo "  Next:     cd .. && make app && make install   (local, no DMG)"
+echo "  Ship:     cd .. && make release               (DMG + SHA256SUMS)"
+echo "  Engine:   make engine-and-install             (sync + app + /Applications)"
+echo "  Ship eng: make engine-dmg                       (sync + DMG for distribution)"

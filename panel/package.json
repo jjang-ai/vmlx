@@ -1,6 +1,6 @@
 {
   "name": "vmlx",
-  "version": "1.5.57",
+  "version": "1.5.56",
   "description": "The most complete MLX inference engine for Mac — voice, vision, Mamba, 5-layer caching, 20+ agentic tools",
   "main": "dist/main/index.mjs",
   "author": "Jinho Jang <eric@jangq.ai>",
@@ -8,7 +8,10 @@
   "homepage": "https://vmlx.net",
   "scripts": {
     "dev": "electron-vite dev",
-    "build": "./scripts/bundle-python.sh && ./scripts/verify-bundled-python.sh && electron-vite build",
+    "build:bundle": "./scripts/bundle-python.sh && ./scripts/verify-bundled-python.sh",
+    "build:panel": "electron-vite build",
+    "build": "npm run build:panel",
+    "build:full": "npm run build:bundle && npm run build:panel",
     "release:gate": "./scripts/release-gate-python-app.py",
     "release:ready": "cd .. && ${PYTHON:-.venv/bin/python} tests/cross_matrix/run_release_regression_manifest.py --require-release-ready --out build/current-release-regression-manifest-pre-panel-dist.json",
     "release:prepackage": "cd .. && ${PYTHON:-.venv/bin/python} tests/cross_matrix/run_release_regression_manifest.py --require-prepackage-ready --out build/current-release-regression-manifest-pre-panel-dist.json",
@@ -22,6 +25,7 @@
     "icons": "node generate-icons.js",
     "package": "electron-builder --dir",
     "dist": "npm run release:prepackage && electron-builder --mac",
+    "dist:local": "echo 'Use: cd .. && make release  (local DMG, no release manifest gate)' && exit 1",
     "postinstall": "electron-builder install-app-deps"
   },
   "dependencies": {

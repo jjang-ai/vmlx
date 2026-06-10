@@ -207,7 +207,13 @@ done
 echo "  ok   bundled critical vmlx_engine files match source content"
 
 BUNDLED_JANG_TOOLS_DIR="$(run_bundled_python -c 'import pathlib, jang_tools; print(pathlib.Path(jang_tools.__file__).resolve().parent)' 2>/dev/null || true)"
-JANG_TOOLS_SOURCE_DIR="${VMLX_JANG_TOOLS_SOURCE:-${VMLINUX_JANG_TOOLS_SOURCE:-$HOME/jang/jang-tools}}/jang_tools"
+REPO_ROOT="$(cd "$PANEL/.." && pwd)"
+JANG_TOOLS_ROOT="$(bash "$REPO_ROOT/scripts/resolve-jang-tools.sh" --try "$REPO_ROOT" 2>/dev/null || true)"
+if [[ -n "$JANG_TOOLS_ROOT" ]]; then
+  JANG_TOOLS_SOURCE_DIR="$JANG_TOOLS_ROOT/jang_tools"
+else
+  JANG_TOOLS_SOURCE_DIR=""
+fi
 HASH_GATED_JANG_TOOLS_FILES=(
   "capabilities.py"
   "convert.py"

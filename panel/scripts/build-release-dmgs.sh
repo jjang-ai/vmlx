@@ -25,40 +25,15 @@ if [[ ! -x "$PYTHON_BIN" ]]; then
   PYTHON_BIN="${PYTHON:-python3}"
 fi
 PREPACKAGE_READY_MANIFEST_OUT="${VMLX_PREPACKAGE_READY_MANIFEST_OUT:-${VMLINUX_PREPACKAGE_READY_MANIFEST_OUT:-$ROOT_DIR/build/current-release-regression-manifest-pre-dmg-release-build.json}}"
-case "$PREPACKAGE_READY_MANIFEST_OUT" in
-  /*) ;;
-  *) PREPACKAGE_READY_MANIFEST_OUT="$ROOT_DIR/$PREPACKAGE_READY_MANIFEST_OUT" ;;
-esac
 RELEASE_CODESIGN_IDENTITY="${VMLX_RELEASE_CODESIGN_IDENTITY:-${VMLINUX_RELEASE_CODESIGN_IDENTITY:-${CSC_NAME:-Developer ID Application: ShieldStack LLC (55KGF2S5AY)}}}"
-CHECKPOINT_RELEASE_OVERRIDE="${VMLX_CHECKPOINT_RELEASE_OVERRIDE:-${VMLINUX_CHECKPOINT_RELEASE_OVERRIDE:-0}}"
 
 echo "==> Checking pre-package release ledger before public DMG build"
-if [[ "$CHECKPOINT_RELEASE_OVERRIDE" = "1" ]]; then
-  echo "WARNING: VMLX_CHECKPOINT_RELEASE_OVERRIDE=1 — building a checkpoint DMG with open rows." >&2
-  echo "WARNING: Release notes must list open rows from: $PREPACKAGE_READY_MANIFEST_OUT" >&2
-  set +e
-  (
-    cd "$ROOT_DIR"
-    "$PYTHON_BIN" "tests/cross_matrix/run_release_regression_manifest.py" \
-      --out "$PREPACKAGE_READY_MANIFEST_OUT"
-  )
-  manifest_rc=$?
-  set -e
-  if [[ ! -f "$PREPACKAGE_READY_MANIFEST_OUT" ]]; then
-    echo "ERROR: checkpoint override did not produce pre-package manifest: $PREPACKAGE_READY_MANIFEST_OUT" >&2
-    exit "${manifest_rc:-1}"
-  fi
-  if [[ "$manifest_rc" -ne 0 ]]; then
-    echo "WARNING: checkpoint pre-package manifest exited $manifest_rc; continuing only because override is explicit." >&2
-  fi
-else
-  (
-    cd "$ROOT_DIR"
-    "$PYTHON_BIN" "tests/cross_matrix/run_release_regression_manifest.py" \
-      --require-prepackage-ready \
-      --out "$PREPACKAGE_READY_MANIFEST_OUT"
-  )
-fi
+(
+  cd "$ROOT_DIR"
+  "$PYTHON_BIN" "tests/cross_matrix/run_release_regression_manifest.py" \
+    --require-prepackage-ready \
+    --out "$PREPACKAGE_READY_MANIFEST_OUT"
+)
 
 sign_bundled_python_native_files() {
   local bundled_python="$1"
@@ -76,7 +51,12 @@ sign_bundled_python_native_files() {
       codesign --force --timestamp --options runtime --sign "$identity" "$native_file" >/dev/null
       signed_count=$((signed_count + 1))
     fi
-  done < <(find "$bundled_python" -type f \( -name "*.dylib" -o -name "*.so" -o -perm +111 \))
+  done < <(
+    {
+      find "$bundled_python" -type f \( -name "*.dylib" -o -name "*.so" \) 2>/dev/null
+      find "$bundled_python/python/bin" -type f 2>/dev/null
+    } | sort -u
+  )
   echo "  signed $signed_count bundled Python native files"
 }
 
