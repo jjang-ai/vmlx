@@ -20,7 +20,7 @@ DEFAULT_ROOTS = (
     Path("/Users/example/.mlxstudio/models"),
 )
 DEFAULT_OUT = Path(
-    "build/current-gemma-qat-native-mxfp4-local-inventory-after-e4b-installed-app-ui-proof-20260610.json"
+    "build/current-gemma-qat-native-mxfp4-local-inventory-after-12b-installed-app-ui-proof-20260610.json"
 )
 
 REQUIRED_QAT_ROWS = {
@@ -219,6 +219,9 @@ INSTALLED_APP_UI_PROOFS = {
     ),
     "gemma4_e4b_qat_jang4m": Path(
         "docs/internal/agent-notes/current-real-ui-installed-app-gemma4-e4b-qat-jang4m-responses-tools-cachecontrols-visible-chat-20260610-proof.json"
+    ),
+    "gemma4_12b_qat_jang4m": Path(
+        "docs/internal/agent-notes/current-real-ui-installed-app-gemma4-12b-qat-jang4m-responses-tools-cachecontrols-visible-chat-20260610-proof.json"
     ),
 }
 
@@ -782,6 +785,12 @@ def build_artifact(
             ),
             "gemma4_12b_qat_jang4m_present": (
                 classified["gemma4_12b_qat_jang4m"]["status"] != "missing"
+            ),
+            "gemma4_12b_qat_jang4m_installed_app_ui_api_cache_proven": (
+                classified["gemma4_12b_qat_jang4m"]
+                .get("installed_app_ui_proof", {})
+                .get("status")
+                == "pass"
             ),
             "gemma4_26b_qat_jang4m_present": (
                 classified["gemma4_26b_qat_jang4m"]["status"] != "missing"

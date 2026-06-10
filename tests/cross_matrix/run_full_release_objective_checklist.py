@@ -102,7 +102,7 @@ GEMMA4_12B_JANG4M_MEDIA_SMOKE = Path(
     "build/current-gemma4-12b-mxfp4-jang4m-media-smoke-live-20260610.json"
 )
 GEMMA_QAT_NATIVE_MXFP4_INVENTORY = Path(
-    "build/current-gemma-qat-native-mxfp4-local-inventory-after-e4b-installed-app-ui-proof-20260610.json"
+    "build/current-gemma-qat-native-mxfp4-local-inventory-after-12b-installed-app-ui-proof-20260610.json"
 )
 STEP37_TEXTONLY_SMOKE = Path(
     "build/current-all-local-model-smoke-step37-jang2l-crack-tools-nomedia-textonly-harness-20260606/other_Step-3.7-Flash-JANG_2L-CRACK/result.json"
@@ -1048,6 +1048,14 @@ def _gemma_qat_native_mxfp4_checks(data: dict[str, Any]) -> list[dict[str, Any]]
             "gemma_qat_native_mxfp4_gemma4_12b_present",
             checks.get("gemma4_12b_native_mxfp4_present") is True,
             str(GEMMA_QAT_NATIVE_MXFP4_INVENTORY),
+        ),
+        _check(
+            "gemma_qat_native_mxfp4_gemma4_12b_qat_jang4m_installed_app_ui_api_cache_proven",
+            checks.get("gemma4_12b_qat_jang4m_installed_app_ui_api_cache_proven") is True,
+            str(GEMMA_QAT_NATIVE_MXFP4_INVENTORY),
+            data.get("required_rows", {}).get("gemma4_12b_qat_jang4m")
+            if isinstance(data.get("required_rows"), dict)
+            else None,
         ),
         _check(
             "gemma_qat_native_mxfp4_gemma4_26b_present",

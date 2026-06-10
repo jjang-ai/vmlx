@@ -372,7 +372,7 @@ def test_current_regression_suite_runs_gemma_qat_inventory_gate():
     assert "--out" in command
     assert (
         command[command.index("--out") + 1]
-        == "build/current-gemma-qat-native-mxfp4-local-inventory-after-e4b-installed-app-ui-proof-20260610.json"
+        == "build/current-gemma-qat-native-mxfp4-local-inventory-after-12b-installed-app-ui-proof-20260610.json"
     )
 
 
