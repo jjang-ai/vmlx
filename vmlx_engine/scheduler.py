@@ -4552,6 +4552,56 @@ class Scheduler:
             # Re-append gpl suffix to remaining so model sees template trailer.
             if _gpl_suffix_tokens:
                 remaining = list(remaining or []) + list(_gpl_suffix_tokens)
+            if (
+                block_table
+                and block_table.num_tokens > 0
+                and getattr(self, "_mixed_attention_cache_model", False)
+                and not self._uses_dsv4_cache
+                and not self._uses_zaya_cache
+            ):
+                try:
+                    min_mixed_hit_tokens = int(
+                        os.environ.get(
+                            "VMLINUX_MIXED_SWA_MIN_PAGED_HIT_TOKENS",
+                            "256",
+                        )
+                        or "256"
+                    )
+                except ValueError:
+                    min_mixed_hit_tokens = 256
+                if (
+                    min_mixed_hit_tokens > 0
+                    and int(getattr(block_table, "num_tokens", 0) or 0)
+                    < min_mixed_hit_tokens
+                ):
+                    cached_for_log = int(getattr(block_table, "num_tokens", 0) or 0)
+                    logger.info(
+                        "Request %s: ignoring short mixed-SWA paged cache hit "
+                        "(cached_tokens=%d < %d); full prefill is cheaper and "
+                        "avoids tiny-prefix RotatingKVCache reconstruct stalls.",
+                        request.request_id,
+                        cached_for_log,
+                        min_mixed_hit_tokens,
+                    )
+                    try:
+                        self.block_aware_cache.paged_cache.release_request_refs(
+                            block_table
+                        )
+                        self.block_aware_cache.paged_cache.detach_request(
+                            request.request_id
+                        )
+                    except Exception:
+                        pass
+                    request._cache_selection = {
+                        "selected": "miss",
+                        "rejected": "paged",
+                        "reason": "short_mixed_swa_paged_hit",
+                        "paged_cached_tokens": cached_for_log,
+                        "min_cached_tokens": min_mixed_hit_tokens,
+                    }
+                    self._last_cache_selection = request._cache_selection
+                    block_table = None
+                    remaining = request.prompt_token_ids
             if block_table and block_table.num_tokens > 0:
                 paged_cold_tokens = self._paged_cold_block_tokens(block_table)
                 warm_cache = None
