@@ -17,7 +17,7 @@ from typing import Any
 
 
 DEFAULT_OUT = Path(
-    "build/current-full-release-objective-checklist-after-mimo-current-media-accounting-20260610.json"
+    "build/current-full-release-objective-checklist-after-gemma-e4b-jang4m-fullmedia-20260610.json"
 )
 
 MIMO_AUDIT = Path(
@@ -102,7 +102,7 @@ GEMMA4_12B_JANG4M_MEDIA_SMOKE = Path(
     "build/current-gemma4-12b-mxfp4-jang4m-media-smoke-live-20260610.json"
 )
 GEMMA_QAT_NATIVE_MXFP4_INVENTORY = Path(
-    "build/current-gemma-qat-native-mxfp4-local-inventory-after-e2b-jang4m-fullmedia-20260610.json"
+    "build/current-gemma-qat-native-mxfp4-local-inventory-after-e4b-jang4m-fullmedia-20260610.json"
 )
 STEP37_TEXTONLY_SMOKE = Path(
     "build/current-all-local-model-smoke-step37-jang2l-crack-tools-nomedia-textonly-harness-20260606/other_Step-3.7-Flash-JANG_2L-CRACK/result.json"
