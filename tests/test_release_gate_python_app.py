@@ -423,6 +423,7 @@ def test_release_dmg_build_default_still_requires_prepackage_ready():
     ]
 
     assert "VMLX_CHECKPOINT_RELEASE_OVERRIDE" in script
+    assert 'PREPACKAGE_READY_MANIFEST_OUT="$ROOT_DIR/$PREPACKAGE_READY_MANIFEST_OUT"' in script
     assert "--require-prepackage-ready" in strict_block
     assert "run_release_regression_manifest.py" in strict_block
 
