@@ -88,7 +88,7 @@ function cacheTypeRequiresPaged(cacheType?: string): boolean {
 }
 
 function cacheSubtypeRequiresPaged(cacheSubtype?: string): boolean {
-  return cacheSubtype === 'step3p7_full_sliding_kv' || cacheSubtype === 'mixed_swa_kv'
+  return cacheSubtype === 'step3p7_full_sliding_kv' || cacheSubtype === 'mixed_swa_kv' || cacheSubtype === 'mimo_v2_asymmetric_swa'
 }
 
 const DSV4_PAGED_CACHE_BLOCK_SIZE = 256

@@ -123,8 +123,28 @@ registerFamily('qwen2-vl', { cacheType: 'kv', toolParser: 'qwen', enableAutoTool
 registerFamily('qwen2', { cacheType: 'kv', toolParser: 'qwen', enableAutoToolChoice: true, description: 'Qwen 2', priority: 20 })
 registerFamily('qwen-mamba', { cacheType: 'mamba', toolParser: 'qwen', usePagedCache: true, description: 'Qwen Mamba', priority: 5 })
 // MiMo-V2.5 JANG_2L keeps multimodal assets. Its template emits generic XML
-// function calls and <think> reasoning, not Qwen tool JSON.
-registerFamily('mimo_v2', { cacheType: 'kv', toolParser: 'xml_function', reasoningParser: 'think_xml', supportsThinking: true, thinkInTemplate: false, enableAutoToolChoice: true, isMultimodal: true, description: 'MiMo V2.5 multimodal MoE', priority: 4 })
+// function calls, not Qwen tool JSON. Keep reasoning hidden until live proof
+// shows requested thinking returns a visible final answer.
+registerFamily('mimo_v2', {
+  cacheType: 'kv',
+  cacheSubtype: 'mimo_v2_asymmetric_swa',
+  architectureHints: {
+    runtimeMtpMode: 'absent',
+    fullAttentionKvHeads: 4,
+    swaAttentionKvHeads: 8,
+    attentionValueScale: 0.707,
+    swaWindow: 128,
+    swaAttentionSinkBias: true,
+  },
+  toolParser: 'xml_function',
+  supportsThinking: false,
+  thinkInTemplate: false,
+  enableAutoToolChoice: true,
+  isMultimodal: true,
+  usePagedCache: true,
+  description: 'MiMo V2.5 multimodal MoE',
+  priority: 4,
+})
 
 // Llama
 registerFamily('llama4', { cacheType: 'kv', toolParser: 'llama', enableAutoToolChoice: true, description: 'Llama 4', priority: 5 })
@@ -352,7 +372,9 @@ const MODEL_TYPE_TO_FAMILY: Record<string, string> = {
   'gemma3n': 'gemma3n',
   'gemma3n_text': 'gemma3n-text',
   'gemma4': 'gemma4',
+  'gemma4_unified': 'gemma4',
   'gemma4_text': 'gemma4-text',
+  'gemma4_unified_text': 'gemma4-text',
   // ── Phi family ──
   'phi3': 'phi3',
   'phi3v': 'phi3-vision',
@@ -872,8 +894,8 @@ function applyJangCapabilities(
   } else if (next.family === 'minimax') {
     next.reasoningParser = 'minimax_m2'
   } else if (next.family === 'mimo_v2') {
-    next.reasoningParser = 'think_xml'
-    next.supportsThinking = true
+    next.reasoningParser = undefined
+    next.supportsThinking = false
     next.thinkInTemplate = false
   } else if (next.family === 'ling') {
     next.reasoningParser = undefined
