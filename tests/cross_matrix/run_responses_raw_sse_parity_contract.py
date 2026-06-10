@@ -169,6 +169,19 @@ def classify_sse_capture(sse_text: str) -> dict[str, Any]:
 
 
 def classify_server_log(log_text: str) -> dict[str, Any]:
+    try:
+        payload = json.loads(log_text)
+    except json.JSONDecodeError:
+        payload = None
+    if isinstance(payload, dict):
+        contains_reasoning = payload.get("containsReasoning") is True
+        return {
+            "reasoning_enabled_by_server_log": contains_reasoning,
+            "reasoning_disabled_by_server_log": False,
+            "enable_thinking_resolved_true": contains_reasoning,
+            "enable_thinking_resolved_false": False,
+            "no_reasoning_disable_workaround": contains_reasoning,
+        }
     reasoning_enabled = "Reasoning: ENABLED" in log_text
     reasoning_disabled = "Reasoning: DISABLED" in log_text
     enable_thinking_true = (

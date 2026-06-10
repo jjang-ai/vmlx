@@ -75,6 +75,7 @@ CURRENT_SUITE_SOURCE_HASH_FILES = (
     "panel/src/shared/reasoningParserAliases.ts",
     "panel/tests/api-gateway-ollama-behavior.test.ts",
     "panel/tests/api-gateway-ollama.test.ts",
+    "panel/tests/api-gateway-qwen35-live-capture.test.ts",
     "panel/tests/api-gateway-single-model.behavior.test.ts",
     "panel/tests/image-system.test.ts",
     "panel/tests/interleaved-reasoning-render.test.ts",

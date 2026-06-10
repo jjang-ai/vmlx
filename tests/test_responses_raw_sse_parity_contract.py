@@ -2,6 +2,7 @@ import json
 
 from tests.cross_matrix.run_responses_raw_sse_parity_contract import (
     build_artifact,
+    classify_server_log,
     classify_sse_capture,
 )
 
@@ -264,6 +265,24 @@ data: {"type":"response.reasoning_summary_text.delta","delta":"checking"}
     assert artifact["checks"]["no_reasoning_disable_workaround"] is True
     assert artifact["captures"]["direct"]["reasoning_enabled_by_server_log"] is True
     assert artifact["captures"]["direct"]["enable_thinking_resolved_true"] is True
+
+
+def test_raw_sse_parity_accepts_structured_gateway_reasoning_log():
+    row = classify_server_log(
+        json.dumps(
+            {
+                "status": 200,
+                "containsReasoning": True,
+                "containsFunctionDelta": True,
+                "containsFunctionDone": True,
+            }
+        )
+    )
+
+    assert row["reasoning_enabled_by_server_log"] is True
+    assert row["reasoning_disabled_by_server_log"] is False
+    assert row["enable_thinking_resolved_true"] is True
+    assert row["no_reasoning_disable_workaround"] is True
 
 
 def test_raw_sse_parity_fails_when_surface_reuses_message_output_index_for_tool(

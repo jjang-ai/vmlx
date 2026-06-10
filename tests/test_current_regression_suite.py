@@ -1239,6 +1239,7 @@ def test_current_regression_suite_tracks_responses_raw_sse_parity_contract():
         "tests/test_responses_raw_sse_parity_contract.py",
         "tests/cross_matrix/run_qwen35_responses_raw_sse_capture.py",
         "tests/test_qwen35_responses_raw_sse_capture.py",
+        "panel/tests/api-gateway-qwen35-live-capture.test.ts",
     }
 
     assert required.issubset(set(suite.CURRENT_SUITE_SOURCE_HASH_FILES))

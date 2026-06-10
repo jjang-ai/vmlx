@@ -38,6 +38,9 @@ DEFAULT_CAPTURE_DIR = REPO / "build/responses-sse-captures-20260609"
 DEFAULT_DIRECT_SSE = (
     DEFAULT_CAPTURE_DIR / "direct-qwen35-mxfp8-mtp-tool-current-source-20260609.sse"
 )
+DEFAULT_GATEWAY_SSE = (
+    DEFAULT_CAPTURE_DIR / "gateway-qwen35-mxfp8-mtp-tool-current-source-20260609.sse"
+)
 DEFAULT_TUNNEL_SSE = (
     DEFAULT_CAPTURE_DIR
     / "tunnel-qwen35-mxfp8-mtp-tool-recapture-max512-20260609.sse"
@@ -49,6 +52,9 @@ DEFAULT_OUT = (
 DEFAULT_CACHE_DIR = (
     REPO
     / "build/current-responses-raw-sse-qwen35-direct-source-cache-20260609"
+)
+DEFAULT_GATEWAY_LOG = (
+    DEFAULT_CAPTURE_DIR / "gateway-qwen35-mxfp8-mtp-current-source.log"
 )
 DEFAULT_SERVED_MODEL = "models/Qwen3.6-35B-A3B-MXFP8-CRACK-MTP"
 EXPECTED_ARGUMENTS = '{"value": "blue-cat"}'
@@ -106,6 +112,63 @@ def post_raw_sse(url: str, payload: dict[str, Any], timeout: int) -> str:
         return response.read().decode("utf-8", errors="replace")
 
 
+def gateway_capture_env(args: argparse.Namespace, backend_port: int) -> dict[str, str]:
+    env = os.environ.copy()
+    env.update(
+        {
+            "VMLINUX_QWEN35_GATEWAY_LIVE_CAPTURE": "1",
+            "VMLINUX_QWEN35_GATEWAY_BACKEND_PORT": str(backend_port),
+            "VMLINUX_QWEN35_GATEWAY_SERVED_MODEL": args.served_model_name,
+            "VMLINUX_QWEN35_GATEWAY_MODEL_PATH": str(args.model.resolve()),
+            "VMLINUX_QWEN35_GATEWAY_OUT": str(args.gateway_sse.resolve()),
+            "VMLINUX_QWEN35_GATEWAY_LOG": str(args.gateway_log.resolve()),
+            "VMLINUX_QWEN35_GATEWAY_PAYLOAD_JSON": json.dumps(
+                responses_tool_stream_payload(args),
+                separators=(",", ":"),
+            ),
+        }
+    )
+    return env
+
+
+def capture_gateway_sse(args: argparse.Namespace, backend_port: int) -> dict[str, Any]:
+    if args.skip_gateway_capture:
+        return {"status": "skipped", "reason": "skip_gateway_capture"}
+    if args.gateway_sse is None:
+        return {"status": "skipped", "reason": "gateway_sse_missing"}
+
+    args.gateway_sse.parent.mkdir(parents=True, exist_ok=True)
+    if args.gateway_log is not None:
+        args.gateway_log.parent.mkdir(parents=True, exist_ok=True)
+
+    command = [
+        "npm",
+        "exec",
+        "vitest",
+        "--",
+        "run",
+        "tests/api-gateway-qwen35-live-capture.test.ts",
+    ]
+    completed = subprocess.run(
+        command,
+        cwd=REPO / "panel",
+        env=gateway_capture_env(args, backend_port),
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        timeout=args.gateway_timeout_s,
+        check=False,
+    )
+    return {
+        "status": "pass" if completed.returncode == 0 else "fail",
+        "command": command,
+        "returncode": completed.returncode,
+        "stdout_tail": completed.stdout[-4000:],
+        "gateway_sse": str(args.gateway_sse),
+        "gateway_log": str(args.gateway_log) if args.gateway_log else None,
+    }
+
+
 def stop_server(proc: subprocess.Popen | None) -> int | None:
     if proc is None:
         return None
@@ -158,6 +221,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             )
             args.direct_sse.write_text(raw_sse, encoding="utf-8")
             direct = classify_sse_capture(raw_sse)
+            gateway_capture = capture_gateway_sse(args, args.port)
             parity = _build_parity_artifact(
                 direct_sse=args.direct_sse,
                 gateway_sse=args.gateway_sse,
@@ -178,6 +242,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                     "served_model_name": args.served_model_name,
                     "health": health,
                     "direct_capture_summary": direct,
+                    "gateway_capture_run": gateway_capture,
                     "telemetry": telemetry,
                     "server_log": str(args.server_log),
                     "release_boundary": (
@@ -208,23 +273,25 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--served-model-name", default=DEFAULT_SERVED_MODEL)
     parser.add_argument("--out", type=Path, default=DEFAULT_OUT)
     parser.add_argument("--direct-sse", type=Path, default=DEFAULT_DIRECT_SSE)
-    parser.add_argument("--gateway-sse", type=Path)
+    parser.add_argument("--gateway-sse", type=Path, default=DEFAULT_GATEWAY_SSE)
     parser.add_argument("--tunnel-sse", type=Path, default=DEFAULT_TUNNEL_SSE)
     parser.add_argument(
         "--server-log",
         type=Path,
         default=DEFAULT_CAPTURE_DIR / "direct-qwen35-mxfp8-mtp-current-source.server.log",
     )
-    parser.add_argument("--gateway-log", type=Path)
+    parser.add_argument("--gateway-log", type=Path, default=DEFAULT_GATEWAY_LOG)
     parser.add_argument("--tunnel-log", type=Path)
     parser.add_argument("--cache-dir", type=Path, default=DEFAULT_CACHE_DIR)
     parser.add_argument("--load-timeout-s", type=int, default=600)
     parser.add_argument("--request-timeout-s", type=int, default=300)
+    parser.add_argument("--gateway-timeout-s", type=int, default=300)
     parser.add_argument("--min-available-gb", type=float, default=64.0)
     parser.add_argument("--ssm-state-cache-mb", type=int, default=8192)
     parser.add_argument("--block-disk-cache-max-gb", type=float, default=4.0)
     parser.add_argument("--max-output-tokens", type=int, default=512)
     parser.add_argument("--require-reasoning-events", action="store_true")
+    parser.add_argument("--skip-gateway-capture", action="store_true")
     return parser.parse_args(argv)
 
 

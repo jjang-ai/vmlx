@@ -14,6 +14,8 @@ def _args() -> SimpleNamespace:
         served_model_name="models/Qwen3.6-35B-A3B-MXFP8-CRACK-MTP",
         ssm_state_cache_mb=8192,
         cache_dir=Path("/tmp/cache"),
+        gateway_sse=Path("build/gateway.sse"),
+        gateway_log=Path("build/gateway.log"),
         block_disk_cache_max_gb=4.0,
         max_output_tokens=512,
     )
@@ -39,6 +41,28 @@ def test_qwen35_raw_sse_capture_payload_requires_reasoning_tool_stream() -> None
     assert payload["tools"][0]["name"] == "record_fact"
     assert payload["tools"][0]["parameters"]["required"] == ["value"]
     assert payload["max_output_tokens"] == 512
+
+
+def test_qwen35_raw_sse_capture_gateway_env_uses_same_payload() -> None:
+    args = _args()
+    env = runner.gateway_capture_env(args, backend_port=8898)
+
+    assert env["VMLINUX_QWEN35_GATEWAY_LIVE_CAPTURE"] == "1"
+    assert env["VMLINUX_QWEN35_GATEWAY_BACKEND_PORT"] == "8898"
+    assert env["VMLINUX_QWEN35_GATEWAY_SERVED_MODEL"] == (
+        "models/Qwen3.6-35B-A3B-MXFP8-CRACK-MTP"
+    )
+    assert env["VMLINUX_QWEN35_GATEWAY_MODEL_PATH"].startswith("/")
+    assert env["VMLINUX_QWEN35_GATEWAY_OUT"].endswith("/build/gateway.sse")
+    assert env["VMLINUX_QWEN35_GATEWAY_LOG"].endswith("/build/gateway.log")
+    assert env["VMLINUX_QWEN35_GATEWAY_OUT"].startswith("/")
+    assert env["VMLINUX_QWEN35_GATEWAY_LOG"].startswith("/")
+    payload = env["VMLINUX_QWEN35_GATEWAY_PAYLOAD_JSON"]
+    assert '"stream":true' in payload
+    assert '"enable_thinking":true' in payload
+    assert '"tool_choice":"required"' in payload
+    assert '"record_fact"' in payload
+    assert "blue-cat" in payload
 
 
 def test_qwen35_raw_sse_capture_classifier_flags_duplicate_tunnel_index(tmp_path) -> None:
