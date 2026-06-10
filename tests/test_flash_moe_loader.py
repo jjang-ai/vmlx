@@ -255,7 +255,7 @@ class TestFlashMoEQuantizedMatmul:
         import mlx.core as mx
         from vmlx_engine.models.flash_moe_integration import _mxfp_quant_params
 
-        weight = mx.zeros((64, 16), dtype=mx.uint32)
+        weight = mx.zeros((64, 4), dtype=mx.uint32)
         scales = mx.zeros((64, 1), dtype=mx.uint8)
         assert _mxfp_quant_params(weight, scales) == ("mxfp4", 4, 32)
 
@@ -277,14 +277,15 @@ class TestFlashMoEQuantizedMatmul:
         calls = []
 
         def fake_qmm(*args, **kwargs):
-            calls.append(kwargs)
+            calls.append((args, kwargs))
             return x_in
 
         monkeypatch.setattr(fmi.mx, "quantized_matmul", fake_qmm)
         fmi._quantized_expert_matmul(
             x_in, weight, scales, None, 16, 64, None
         )
-        assert calls[0]["mode"] == "mxfp8"
-        assert calls[0]["bits"] == 8
-        assert calls[0]["group_size"] == 32
-        assert calls[0]["biases"] is None
+        args, kwargs = calls[0]
+        assert kwargs["mode"] == "mxfp8"
+        assert kwargs["bits"] == 8
+        assert kwargs["group_size"] == 32
+        assert args[3] is None
