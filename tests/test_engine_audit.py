@@ -5037,6 +5037,65 @@ class TestMediaDiagnostics:
 
         assert server._loaded_runtime_modalities() == ["text", "vision", "audio"]
 
+    def test_gemma4_chat_audio_request_rejects_when_audio_not_weight_backed(
+        self, monkeypatch, tmp_path
+    ):
+        from fastapi.testclient import TestClient
+        import vmlx_engine.server as server
+
+        (tmp_path / "config.json").write_text(
+            json.dumps(
+                {
+                    "model_type": "gemma4_unified",
+                    "vision_config": {"model_type": "gemma4_unified_vision"},
+                    "audio_config": {"model_type": "gemma4_unified_audio"},
+                    "audio_token_id": 258881,
+                }
+            )
+        )
+        (tmp_path / "jang_config.json").write_text(
+            json.dumps({"weight_format": "jang_4m", "profile": "jang_4m"})
+        )
+        (tmp_path / "model.safetensors.index.json").write_text(
+            json.dumps(
+                {
+                    "weight_map": {
+                        "embed_audio.embedding_projection.weight": "a.safetensors",
+                        "language_model.model.embed_tokens.weight": "b.safetensors",
+                    }
+                }
+            )
+        )
+
+        monkeypatch.setattr(server, "_engine", SimpleNamespace(is_mllm=True))
+        monkeypatch.setattr(server, "_model_path", str(tmp_path))
+        monkeypatch.setattr(server, "_model_name", "gemma4-unified-audio-gate-test")
+        monkeypatch.setattr(server, "_loaded_omni_modalities", lambda: None)
+
+        response = TestClient(server.app).post(
+            "/v1/chat/completions",
+            json={
+                "model": "gemma4-unified-audio-gate-test",
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": "Transcribe this audio."},
+                            {
+                                "type": "input_audio",
+                                "input_audio": {"data": "AAAA", "format": "wav"},
+                            },
+                        ],
+                    }
+                ],
+                "max_tokens": 8,
+            },
+        )
+
+        assert response.status_code == 400
+        assert "unsupported media modality audio" in response.text
+        assert "text, vision" in response.text
+
     def test_video_request_on_image_only_mllm_rejects_instead_of_crashing(
         self, monkeypatch, tmp_path
     ):
