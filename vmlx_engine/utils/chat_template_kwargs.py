@@ -84,17 +84,18 @@ def ensure_thinking_off_sentinel(
     the token cap instead of reaching the tool marker.
     """
 
+    fam = (family_name or "").lower()
+    name = (model_name or "").lower()
+    is_lfm2 = fam in {"lfm2", "lfm2_moe"} or "lfm2" in name
+    is_step37 = fam in {"step3p7", "step37"} or "step3" in name or "step-3" in name
+    if tools_present and not (is_lfm2 or is_step37):
+        return prompt
+
     last_open = prompt.rfind("<think>")
     if last_open >= 0:
         after_open = prompt[last_open + len("<think>") :]
         if "</think>" not in after_open:
             return prompt[: last_open + len("<think>")] + "\n</think>\n\n"
-        return prompt
-
-    fam = (family_name or "").lower()
-    name = (model_name or "").lower()
-    is_lfm2 = fam in {"lfm2", "lfm2_moe"} or "lfm2" in name
-    if tools_present and not is_lfm2:
         return prompt
 
     needs_empty_think = fam == "minimax" or "minimax" in name or is_lfm2

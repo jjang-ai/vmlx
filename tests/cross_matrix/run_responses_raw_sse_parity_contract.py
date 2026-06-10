@@ -77,12 +77,16 @@ def classify_sse_capture(sse_text: str) -> dict[str, Any]:
             }
     arg_deltas: list[str] = []
     arg_done: list[str] = []
+    content_deltas: list[str] = []
     function_items: list[dict[str, Any]] = []
+    reasoning_items_by_id: dict[str, dict[str, Any]] = {}
     item_output_indexes: dict[str, dict[str, Any]] = {}
     models: list[str] = []
     reasoning_events = 0
+    reasoning_done_count = 0
     heartbeats = 0
     parse_errors = 0
+    final_response_output: list[dict[str, Any]] = []
 
     for event_type, payload in events:
         payload_type = str(payload.get("type") or event_type)
@@ -93,6 +97,8 @@ def classify_sse_capture(sse_text: str) -> dict[str, Any]:
             "response.reasoning_summary_text.done",
         }:
             reasoning_events += 1
+            if payload_type == "response.reasoning_summary_text.done":
+                reasoning_done_count += 1
         if payload_type == "response.heartbeat" or payload.get("tool_call_generating"):
             heartbeats += 1
         if payload_type in {"response.created", "response.completed"}:
@@ -101,6 +107,14 @@ def classify_sse_capture(sse_text: str) -> dict[str, Any]:
                 model_name = str(response.get("model"))
                 if model_name not in models:
                     models.append(model_name)
+            if payload_type == "response.completed" and isinstance(response, dict):
+                output = response.get("output")
+                if isinstance(output, list):
+                    final_response_output = [
+                        item for item in output if isinstance(item, dict)
+                    ]
+        if payload_type == "response.output_text.delta":
+            content_deltas.append(str(payload.get("delta", "")))
         if payload_type == "response.function_call_arguments.delta":
             arg_deltas.append(str(payload.get("delta", "")))
         elif payload_type == "response.function_call_arguments.done":
@@ -116,6 +130,8 @@ def classify_sse_capture(sse_text: str) -> dict[str, Any]:
                 }
                 if item_type == "function_call":
                     function_items.append(item)
+                elif item_type == "reasoning":
+                    reasoning_items_by_id[item_id] = item
 
     reconstructed = "".join(arg_deltas)
     final_done = arg_done[-1] if arg_done else ""
@@ -130,6 +146,38 @@ def classify_sse_capture(sse_text: str) -> dict[str, Any]:
     # emit an empty final item.arguments while preserving done/delta args.
     authoritative_args = final_done or reconstructed or final_item_args
     empty_final_item_with_done_args = bool(final_done and final_item_args == "")
+    reconstructed_content = "".join(content_deltas)
+    final_response_types = [str(item.get("type") or "") for item in final_response_output]
+    final_response_message_text = ""
+    final_response_function_arguments = ""
+    for item in final_response_output:
+        item_type = str(item.get("type") or "")
+        if item_type == "message":
+            content = item.get("content")
+            if isinstance(content, list):
+                final_response_message_text = "".join(
+                    str(part.get("text") or "")
+                    for part in content
+                    if isinstance(part, dict)
+                    and str(part.get("type") or "") in {"output_text", "text"}
+                )
+        elif item_type == "function_call":
+            final_response_function_arguments = str(item.get("arguments") or "")
+    final_response_consistent_with_stream = True
+    if final_response_output:
+        if reconstructed_content and final_response_message_text != reconstructed_content:
+            final_response_consistent_with_stream = False
+        if authoritative_args and final_response_function_arguments != authoritative_args:
+            final_response_consistent_with_stream = False
+    reasoning_lifecycle_complete = (
+        True
+        if not reasoning_items_by_id
+        else reasoning_done_count > 0
+        and any(
+            str(item.get("status") or "") == "completed"
+            for item in reasoning_items_by_id.values()
+        )
+    )
     output_indices_by_type: dict[str, list[int]] = {}
     for item in item_output_indexes.values():
         item_type = str(item.get("type") or "")
@@ -148,7 +196,12 @@ def classify_sse_capture(sse_text: str) -> dict[str, Any]:
         "event_count": len(events),
         "parse_errors": parse_errors,
         "reasoning_events": reasoning_events,
+        "reasoning_done_count": reasoning_done_count,
+        "reasoning_output_item_count": len(reasoning_items_by_id),
+        "reasoning_lifecycle_complete": reasoning_lifecycle_complete,
         "heartbeat_count": heartbeats,
+        "content_delta_count": len(content_deltas),
+        "reconstructed_content": reconstructed_content,
         "argument_delta_count": len(arg_deltas),
         "argument_done_count": len(arg_done),
         "function_item_count": len(function_items),
@@ -162,6 +215,10 @@ def classify_sse_capture(sse_text: str) -> dict[str, Any]:
         "output_indices_by_type": output_indices_by_type,
         "conflicting_output_indices": conflicting_output_indices,
         "output_item_indices_valid": not conflicting_output_indices,
+        "final_response_output_types": final_response_types,
+        "final_response_message_text": final_response_message_text,
+        "final_response_function_arguments": final_response_function_arguments,
+        "final_response_consistent_with_stream": final_response_consistent_with_stream,
         "models": models,
         "model": models[-1] if models else "",
         **raw_json_error,
@@ -175,12 +232,33 @@ def classify_server_log(log_text: str) -> dict[str, Any]:
         payload = None
     if isinstance(payload, dict):
         contains_reasoning = payload.get("containsReasoning") is True
+        request_kwargs = (
+            payload.get("requestKwargs")
+            if isinstance(payload.get("requestKwargs"), dict)
+            else {}
+        )
+        expected_kwargs = {
+            "stream": True,
+            "enable_thinking": True,
+            "tool_choice": "required",
+        }
+        expected_kwargs_present = all(
+            request_kwargs.get(key) == value for key, value in expected_kwargs.items()
+        )
+        expected_kwargs_present = expected_kwargs_present and bool(
+            request_kwargs.get("max_output_tokens")
+        )
+        expected_kwargs_present = expected_kwargs_present and bool(
+            request_kwargs.get("tool_count")
+        )
         return {
             "reasoning_enabled_by_server_log": contains_reasoning,
             "reasoning_disabled_by_server_log": False,
             "enable_thinking_resolved_true": contains_reasoning,
             "enable_thinking_resolved_false": False,
             "no_reasoning_disable_workaround": contains_reasoning,
+            "request_kwargs": request_kwargs,
+            "gateway_expected_request_kwargs_present": expected_kwargs_present,
         }
     reasoning_enabled = "Reasoning: ENABLED" in log_text
     reasoning_disabled = "Reasoning: DISABLED" in log_text
@@ -371,6 +449,16 @@ def build_artifact(
         for name, row in captures.items()
         if row.get("present")
     }
+    present_with_consistent_final_output = {
+        name: bool(row.get("final_response_consistent_with_stream"))
+        for name, row in captures.items()
+        if row.get("present")
+    }
+    present_with_reasoning_lifecycle = {
+        name: bool(row.get("reasoning_lifecycle_complete"))
+        for name, row in captures.items()
+        if row.get("present")
+    }
     expected_function_matches = {
         name: bool(row.get("expected_function_name_match"))
         for name, row in captures.items()
@@ -404,6 +492,12 @@ def build_artifact(
     )
     all_present_output_indices_valid = bool(comparable) and all(
         present_with_valid_output_indices.values()
+    )
+    all_present_final_output_consistent = bool(comparable) and all(
+        present_with_consistent_final_output.values()
+    )
+    all_present_reasoning_lifecycle_complete = bool(comparable) and all(
+        present_with_reasoning_lifecycle.values()
     )
     all_expected_functions_match = bool(comparable) and all(
         expected_function_matches.values()
@@ -451,6 +545,8 @@ def build_artifact(
                 all_present_have_args
                 and all_present_parse_clean
                 and all_present_output_indices_valid
+                and all_present_final_output_consistent
+                and all_present_reasoning_lifecycle_complete
                 and all_expected_functions_match
                 and all_expected_arguments_match
                 and all_expected_models_match
@@ -476,6 +572,8 @@ def build_artifact(
             "all_present_surfaces_have_authoritative_args": all_present_have_args,
             "all_present_surfaces_parse_cleanly": all_present_parse_clean,
             "all_present_surfaces_have_valid_output_item_indices": all_present_output_indices_valid,
+            "all_present_surfaces_have_consistent_final_output": all_present_final_output_consistent,
+            "all_present_surfaces_have_complete_reasoning_lifecycle": all_present_reasoning_lifecycle_complete,
             "authoritative_arguments_match_across_present_surfaces": not mismatch,
             "all_present_surfaces_match_expected_function_name": all_expected_functions_match,
             "all_present_surfaces_match_expected_arguments": all_expected_arguments_match,
