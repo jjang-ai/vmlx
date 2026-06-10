@@ -1705,6 +1705,11 @@ export function registerChatHandlers(
               .map((s: string) => s.trim())
               .filter(Boolean)
           : undefined;
+        let latestResponsesResponseId: string | undefined;
+        let responsesToolFollowupPreviousResponseId: string | undefined;
+        let responsesToolFollowupInput:
+          | Array<{ type: "function_call_output"; call_id: string; output: string }>
+          | undefined;
 
         // Build request body — shared between initial request and tool follow-ups
         const buildRequestBody = (): Record<string, any> => {
@@ -1756,9 +1761,15 @@ export function registerChatHandlers(
             const inputMessages = requestMessages.filter(
               (m: any) => m.role !== "system",
             );
+            const isResponsesToolFollowup =
+              !!responsesToolFollowupPreviousResponseId &&
+              Array.isArray(responsesToolFollowupInput) &&
+              responsesToolFollowupInput.length > 0;
             const obj: Record<string, any> = {
               model: modelName,
-              input: inputMessages,
+              input: isResponsesToolFollowup
+                ? responsesToolFollowupInput
+                : inputMessages,
               instructions,
               // Only send temperature/top_p when explicitly set in chat overrides.
               // When omitted, the server resolves bundle metadata/family fallback.
@@ -1772,6 +1783,9 @@ export function registerChatHandlers(
               stream: true,
               stream_options: { include_usage: true },
             };
+            if (isResponsesToolFollowup) {
+              obj.previous_response_id = responsesToolFollowupPreviousResponseId;
+            }
             if (stopSequences) obj.stop = stopSequences;
             const effectiveTopK = overrides?.topK;
             if (effectiveTopK != null && effectiveTopK > 0)
@@ -1797,7 +1811,9 @@ export function registerChatHandlers(
                 filteredTools,
                 true,
               );
-              if (explicitToolChoice) obj.tool_choice = explicitToolChoice;
+              if (explicitToolChoice && !isResponsesToolFollowup) {
+                obj.tool_choice = explicitToolChoice;
+              }
             }
             // enable_thinking: explicit user override sent to both local and remote.
             // When undefined (auto), local omits the field so the native
@@ -2347,6 +2363,7 @@ export function registerChatHandlers(
               // Server wraps in { response: { id: "resp_..." } }
               const respId = parsed.response?.id || parsed.id;
               if (responsesEventType === "response.created" && respId) {
+                latestResponsesResponseId = respId;
                 const entry = activeRequests.get(chatId);
                 if (entry && !entry.responseId) {
                   entry.responseId = respId;
@@ -2993,6 +3010,11 @@ export function registerChatHandlers(
 
         // ─── Helper: execute tool calls and push results to messages ───────
         const executeToolCalls = async () => {
+          const responsesToolOutputItems: Array<{
+            type: "function_call_output";
+            call_id: string;
+            output: string;
+          }> = [];
           if (useResponsesApi) {
             // Responses API: push individual output items (not Chat Completions format)
             if (fullContent) {
@@ -3046,11 +3068,15 @@ export function registerChatHandlers(
                 );
                 requestMessages.push(
                   useResponsesApi
-                    ? {
-                        type: "function_call_output",
-                        call_id: tc.id,
-                        output: resultText,
-                      }
+                    ? (() => {
+                        const item = {
+                          type: "function_call_output",
+                          call_id: tc.id,
+                          output: resultText,
+                        } as const;
+                        responsesToolOutputItems.push(item);
+                        return item;
+                      })()
                     : {
                         role: "tool",
                         tool_call_id: tc.id,
@@ -3253,13 +3279,33 @@ export function registerChatHandlers(
 
             requestMessages.push(
               useResponsesApi
-                ? {
-                    type: "function_call_output",
-                    call_id: tc.id,
-                    output: resultText,
-                  }
+                ? (() => {
+                    const item = {
+                      type: "function_call_output",
+                      call_id: tc.id,
+                      output: resultText,
+                    } as const;
+                    responsesToolOutputItems.push(item);
+                    return item;
+                  })()
                 : { role: "tool", tool_call_id: tc.id, content: resultText },
             );
+          }
+          if (
+            useResponsesApi &&
+            latestResponsesResponseId &&
+            responsesToolOutputItems.length > 0
+          ) {
+            responsesToolFollowupPreviousResponseId = latestResponsesResponseId;
+            responsesToolFollowupInput = responsesToolOutputItems.map((item) => ({
+              ...item,
+            }));
+            console.log(
+              `[CHAT] Responses tool follow-up using previous_response_id=${latestResponsesResponseId} with ${responsesToolOutputItems.length} function_call_output item(s)`,
+            );
+          } else {
+            responsesToolFollowupPreviousResponseId = undefined;
+            responsesToolFollowupInput = undefined;
           }
 
           // Inject media from read_image/read_video tool results as multimodal
