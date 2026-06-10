@@ -38,7 +38,7 @@ REASONING_TEMPLATE_CONTRACT = Path(
     "build/current-reasoning-template-contract-20260526-settings-audit.json"
 )
 PACKAGED_INTEGRITY_CONTRACT = Path(
-    "build/current-packaged-integrity-contract-after-bundled-python-sync-20260608.json"
+    "build/current-packaged-integrity-contract-after-checkpoint-app-parity-20260609.json"
 )
 GEMMA4_INSTALLED_SPEED_ARTIFACTS = (
     Path(

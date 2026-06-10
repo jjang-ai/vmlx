@@ -397,7 +397,7 @@ CURRENT_POST_BUDGET_EDGE_ARTIFACTS = {
     "native-mtp-d3-effect-policy": "build/current-native-mtp-contract-after-noheavy-contract-refresh-20260608.json",
     "mcp-policy-ui-gateway": "build/current-mcp-policy-contract-20260531-post-step-lfm-refresh.json",
     "vl-media-cache-tool-followup": "build/current-vl-media-cache-contract-after-dsv4-preflight-refresh-20260608.json",
-    "packaged-release-integrity": "build/current-packaged-integrity-contract-after-bundled-python-sync-20260608.json",
+    "packaged-release-integrity": "build/current-packaged-integrity-contract-after-checkpoint-app-parity-20260609.json",
     "public-release-surface-preflight": "build/current-release-surface-contract-20260602-v154-live-public-after-site-fix.json",
 }
 
@@ -1187,6 +1187,7 @@ def _live_smoke_cache_validation_failures(request: dict[str, Any]) -> list[str]:
 
 EXPECTED_CURRENT_OPEN_REQUIREMENTS = [
     "Cross-family live multi-turn smoke matrix is release-cleared",
+    "Gemma QAT/native MXFP4 E2B/E4B/12B/26B/31B runtime/media/cache/API/UI quality is release-cleared",
     "MiMo V2.5 JANG_2L runtime/tool/long-prompt quality is release-cleared",
     "N2 Pro 397B JANG1L/JANGTQ runtime/cache/API/UI quality is release-cleared",
     "MiniMax-M2.7-JANGTQ_K reporter parity/root cause is release-cleared",
@@ -1707,13 +1708,13 @@ _ROWS: list[dict[str, Any]] = [
             "packaged Python has no __pycache__/*.pyc files that would invalidate the signed app seal",
         ],
         "commands": [
-            ".venv/bin/python tests/cross_matrix/run_packaged_integrity_contract.py --out build/current-packaged-integrity-contract-after-bundled-python-sync-20260608.json",
+            ".venv/bin/python tests/cross_matrix/run_packaged_integrity_contract.py --out build/current-packaged-integrity-contract-after-checkpoint-app-parity-20260609.json",
             ".venv/bin/python tests/cross_matrix/run_packaged_integrity_contract.py --jang-tools-source /Users/example/jang/jang-tools --out build/current-packaged-integrity-contract-20260524-pycache-seal-check.json",
             ".venv/bin/python tests/cross_matrix/run_packaged_integrity_contract.py --jang-tools-source /Users/example/jang/.worktrees/vmlx-release-clean-b5f66a7/jang-tools --out build/current-packaged-integrity-contract-20260522-recheck-bundled-release-gate.json",
         ],
         "artifacts": [
             "build/current-objective-proof-after-n2-jang1l-memory-refresh-20260609.json",
-            "build/current-packaged-integrity-contract-after-bundled-python-sync-20260608.json",
+            "build/current-packaged-integrity-contract-after-checkpoint-app-parity-20260609.json",
             "build/current-packaged-integrity-contract-20260601-dsv4-preflight-refresh.json",
             "build/current-packaged-integrity-contract-20260601-qwen3vl-minicpm-mpp-staged-refresh.json",
             "build/current-packaged-integrity-contract-20260531-after-adhoc-reseal.json",

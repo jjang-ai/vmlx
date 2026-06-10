@@ -14,7 +14,7 @@ def test_packaged_integrity_known_open_rows_match_current_suite():
 
 def test_packaged_integrity_default_out_tracks_current_release_proof_artifact():
     assert runner.DEFAULT_OUT == Path(
-        "build/current-packaged-integrity-contract-after-bundled-python-sync-20260608.json"
+        "build/current-packaged-integrity-contract-after-checkpoint-app-parity-20260609.json"
     )
 
 
