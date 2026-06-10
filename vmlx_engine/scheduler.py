@@ -149,6 +149,7 @@ class SchedulingPolicy(Enum):
 # a paged cache hit. The companion cache LRU and queue cap bound memory.
 SSM_REDERIVE_MIN_TOKENS = 1
 SSM_REDERIVE_QUEUE_CAP = 8
+MIXED_SWA_STORE_QUEUE_CAP = 8
 
 
 @dataclass
@@ -486,6 +487,7 @@ class Scheduler:
                 )
         except Exception as e:
             logger.debug(f"Mixed-attention detection failed: {e}")
+        self._mixed_swa_store_queue = deque()
 
         # Per-model SequenceStateMachine for token-level reasoning/stop detection.
         # Lazy-built on first request because we need the reasoning parser instance
@@ -2053,6 +2055,125 @@ class Scheduler:
             logger.warning(f"Prefill-only pass failed: {e}")
             logger.debug(traceback.format_exc())
             return None
+
+    def _queue_mixed_swa_prompt_cache_store(
+        self,
+        *,
+        request_id: str,
+        cache_key_tokens: List[int],
+        prompt_token_count: int,
+        cache_type: str,
+    ) -> bool:
+        if not cache_key_tokens or self.block_aware_cache is None:
+            return False
+        if os.environ.get("VMLINUX_MIXED_SWA_SYNC_CACHE_STORE", "").lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }:
+            return False
+        cap = max(
+            1,
+            int(
+                os.environ.get(
+                    "VMLINUX_MIXED_SWA_STORE_QUEUE_CAP",
+                    MIXED_SWA_STORE_QUEUE_CAP,
+                )
+            ),
+        )
+        while len(self._mixed_swa_store_queue) >= cap:
+            dropped = self._mixed_swa_store_queue.popleft()
+            logger.info(
+                "Mixed-SWA deferred cache store queue full; dropped oldest "
+                "request %s (%d cache-key tokens).",
+                dropped.get("request_id"),
+                len(dropped.get("cache_key_tokens") or []),
+            )
+        self._mixed_swa_store_queue.append(
+            {
+                "request_id": request_id,
+                "cache_key_tokens": list(cache_key_tokens),
+                "prompt_token_count": int(prompt_token_count),
+                "cache_type": cache_type,
+            }
+        )
+        logger.info(
+            "Mixed-SWA prefix cache store queued for idle clean prompt-boundary "
+            "re-prefill (%d cache-key tokens from %d prompt tokens, queue=%d).",
+            len(cache_key_tokens),
+            prompt_token_count,
+            len(self._mixed_swa_store_queue),
+        )
+        return True
+
+    def _run_deferred_mixed_swa_cache_store(self) -> bool:
+        if not self._mixed_swa_store_queue or self.block_aware_cache is None:
+            return False
+        task = self._mixed_swa_store_queue.popleft()
+        request_id = str(task.get("request_id") or "unknown")
+        cache_key_tokens = list(task.get("cache_key_tokens") or [])
+        if not cache_key_tokens:
+            return False
+        t0 = time.perf_counter()
+        try:
+            logger.info(
+                "Mixed-SWA deferred cache store: running idle clean "
+                "prompt-boundary re-prefill for %s (%d cache-key tokens, "
+                "%d remaining in queue).",
+                request_id,
+                len(cache_key_tokens),
+                len(self._mixed_swa_store_queue),
+            )
+            cache_for_extract = self._prefill_for_prompt_only_cache(cache_key_tokens)
+            if cache_for_extract is None:
+                logger.warning(
+                    "Mixed-SWA deferred cache store skipped for %s: "
+                    "prompt-only prefill produced no cache.",
+                    request_id,
+                )
+                return False
+            if getattr(self, "_kv_cache_bits", 0):
+                cache_for_extract = self._quantize_cache_for_storage(cache_for_extract)
+            extracted_cache = self._extract_cache_states(cache_for_extract)
+            if not extracted_cache:
+                logger.warning(
+                    "Mixed-SWA deferred cache store skipped for %s: "
+                    "cache extraction returned empty.",
+                    request_id,
+                )
+                return False
+            self.block_aware_cache.store_cache(
+                request_id,
+                cache_key_tokens,
+                extracted_cache,
+                cache_type=str(
+                    task.get("cache_type") or self.config.prefix_cache_default_type
+                ),
+            )
+            logger.info(
+                "Mixed-SWA deferred cache store complete for %s "
+                "(%d cache-key tokens from %d prompt tokens, %d layers, %.2fs).",
+                request_id,
+                len(cache_key_tokens),
+                int(task.get("prompt_token_count") or 0),
+                len(extracted_cache),
+                time.perf_counter() - t0,
+            )
+            return True
+        except Exception as exc:
+            logger.warning(
+                "Mixed-SWA deferred cache store failed for %s: %s",
+                request_id,
+                exc,
+            )
+            logger.debug(traceback.format_exc())
+            return False
+        finally:
+            try:
+                clear_mlx_memory_cache(log=logger)
+            except Exception:
+                pass
 
     def _dsv4_trace_timing(
         self,
@@ -6127,24 +6248,36 @@ class Scheduler:
                                             else []
                                         )
                                         if mixed_key_tokens:
-                                            logger.info(
-                                                "Mixed-SWA prefix cache store using "
-                                                "clean prompt-boundary re-prefill "
-                                                "(%d cache-key tokens from %d "
-                                                "prompt tokens).",
-                                                len(mixed_key_tokens),
-                                                len(mixed_prompt_tokens),
+                                            queued = self._queue_mixed_swa_prompt_cache_store(
+                                                request_id=request.request_id,
+                                                cache_key_tokens=list(mixed_key_tokens),
+                                                prompt_token_count=len(mixed_prompt_tokens),
+                                                cache_type=self._pick_cache_type_for_request(
+                                                    request
+                                                ),
                                             )
-                                            cache_for_extract = (
-                                                self._prefill_for_prompt_only_cache(
-                                                    mixed_key_tokens
+                                            if queued:
+                                                cache_for_extract = None
+                                                request._mixed_swa_cache_store_deferred = True
+                                            else:
+                                                logger.info(
+                                                    "Mixed-SWA prefix cache store using "
+                                                    "clean prompt-boundary re-prefill "
+                                                    "(%d cache-key tokens from %d "
+                                                    "prompt tokens).",
+                                                    len(mixed_key_tokens),
+                                                    len(mixed_prompt_tokens),
                                                 )
-                                            )
-                                            if cache_for_extract is not None:
-                                                request._extracted_cache_key_tokens = (
-                                                    list(mixed_key_tokens)
+                                                cache_for_extract = (
+                                                    self._prefill_for_prompt_only_cache(
+                                                        mixed_key_tokens
+                                                    )
                                                 )
-                                                request._extracted_cache_from_prompt_snapshot = True
+                                                if cache_for_extract is not None:
+                                                    request._extracted_cache_key_tokens = (
+                                                        list(mixed_key_tokens)
+                                                    )
+                                                    request._extracted_cache_from_prompt_snapshot = True
                                         else:
                                             cache_for_extract = None
                                     else:
@@ -6249,6 +6382,12 @@ class Scheduler:
                                     elif getattr(
                                         request,
                                         "_dsv4_cache_hit_store_skipped",
+                                        False,
+                                    ):
+                                        pass
+                                    elif getattr(
+                                        request,
+                                        "_mixed_swa_cache_store_deferred",
                                         False,
                                     ):
                                         pass
@@ -7857,6 +7996,17 @@ class Scheduler:
         # SSM state for future prefix cache hits.
         _has_unprocessed = bool(getattr(self, "unprocessed_requests", []))
         _has_waiting = bool(getattr(self, "waiting", []))
+        if (
+            self.config.enable_prefix_cache
+            and self._mixed_attention_cache_model
+            and not self.running
+            and not _has_waiting
+            and not _has_unprocessed
+            and self._mixed_swa_store_queue
+        ):
+            if self._run_deferred_mixed_swa_cache_store():
+                output.has_work = True
+
         if (
             self._is_hybrid
             and not self._uses_zaya_cache

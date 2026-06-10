@@ -617,6 +617,11 @@ _FAMILY_FALLBACK_DEFAULTS: dict[str, tuple[float | None, float | None, float | N
 # resolved kwargs and remains overrideable by request/CLI/bundle metadata.
 _FAMILY_TOP_K_DEFAULTS: dict[str, int] = {
     "ling": 20,
+    # MiMo-V2.5 JANG_2L ships no top_k and do_sample=false, but live source
+    # proof showed unbounded top-p sampling spends seconds/token in full-vocab
+    # logsoftmax/categorical while model forward is ~2ms. Bound omitted top_k
+    # to use vMLX's compact sampler unless the caller or bundle overrides it.
+    "mimo_v2": 64,
 }
 
 
@@ -1388,6 +1393,7 @@ def _resolve_top_k(request_value: int | None, model_name: str = "") -> int:
     if _default_top_k is not None:
         return max(0, int(_default_top_k))
     bundle_path = _model_path or model_name
+    family = _model_family_for_defaults(model_name)
     v = _bundle_sampling_default(model_name, "top_k")
     if v is not None:
         if (
@@ -1396,11 +1402,12 @@ def _resolve_top_k(request_value: int | None, model_name: str = "") -> int:
         ):
             return 0
         return max(0, int(v))
+    if family in _FAMILY_TOP_K_DEFAULTS and (
+        family == "mimo_v2" or not _generation_config_declares_greedy_sampling(model_name)
+    ):
+        return max(0, int(_FAMILY_TOP_K_DEFAULTS[family]))
     if _generation_config_declares_greedy_sampling(model_name):
         return 0
-    family = _model_family_for_defaults(model_name)
-    if family in _FAMILY_TOP_K_DEFAULTS:
-        return max(0, int(_FAMILY_TOP_K_DEFAULTS[family]))
     return 0
 
 

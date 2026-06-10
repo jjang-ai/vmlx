@@ -271,6 +271,7 @@ export async function readGenerationDefaults(
       if (mimoV2ChatDefault) {
         defaults.temperature = 0.7;
         defaults.topP = 0.95;
+        defaults.topK = 64;
       } else {
         if (typeof config.temperature === "number")
           defaults.temperature = generationConfigDisablesSampling
@@ -278,11 +279,11 @@ export async function readGenerationDefaults(
             : config.temperature;
         if (typeof config.top_p === "number")
           defaults.topP = generationConfigDisablesSampling ? 1 : config.top_p;
+        if (typeof config.top_k === "number")
+          defaults.topK = generationConfigDisablesSampling
+            ? 0
+            : Math.max(0, Math.round(config.top_k));
       }
-      if (typeof config.top_k === "number")
-        defaults.topK = generationConfigDisablesSampling
-          ? 0
-          : Math.max(0, Math.round(config.top_k));
       if (typeof config.min_p === "number") defaults.minP = config.min_p;
       if (typeof config.repetition_penalty === "number")
         defaults.repeatPenalty = config.repetition_penalty;

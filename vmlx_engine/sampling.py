@@ -71,11 +71,15 @@ def _make_compact_top_k_sampler(
         top_indices = mx.take_along_axis(top_indices, order, axis=-1)
 
         if top_p > 0.0 and top_p < 1.0:
-            probs = mx.exp(top_logits - mx.logsumexp(logits, axis=-1, keepdims=True))
+            # Apply nucleus filtering inside the already selected top-k set.
+            # The old full-vocabulary normalization kept exact global top-p
+            # semantics but made large-vocab MiMo spend hundreds of ms/token in
+            # sampling even after top-k bounded the candidate set.
+            probs = mx.exp(
+                top_logits - mx.logsumexp(top_logits, axis=-1, keepdims=True)
+            )
             cumulative = mx.cumsum(probs, axis=-1)
             # Keep the token that crosses top_p as well as all earlier tokens.
-            # This matches the full-vocabulary nucleus cutoff, then applies the
-            # top-k bound without sampling over masked-out vocabulary entries.
             keep = (cumulative - probs) < top_p
             top_logits = mx.where(keep, top_logits, -float("inf"))
 

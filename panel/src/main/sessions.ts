@@ -451,11 +451,12 @@ function readBundleStartupDefaults(modelPath?: string): BundleStartupDefaults {
     if (mimoV2ChatDefault) {
       out.defaultTemperature = 70
       out.defaultTopP = 95
+      out.defaultTopK = 64
     } else {
       if (typeof gen.temperature === 'number') out.defaultTemperature = generationConfigDisablesSampling ? 0 : Math.round(gen.temperature * 100)
       if (typeof gen.top_p === 'number') out.defaultTopP = generationConfigDisablesSampling ? 100 : Math.round(gen.top_p * 100)
+      if (typeof gen.top_k === 'number') out.defaultTopK = generationConfigDisablesSampling ? 0 : Math.max(0, Math.round(gen.top_k))
     }
-    if (typeof gen.top_k === 'number') out.defaultTopK = generationConfigDisablesSampling ? 0 : Math.max(0, Math.round(gen.top_k))
     if (typeof gen.min_p === 'number') out.defaultMinP = Math.max(0, Math.round(gen.min_p * 100))
     if (typeof gen.repetition_penalty === 'number') out.defaultRepetitionPenalty = Math.round(gen.repetition_penalty * 100)
     if (hasSamplingDefaultsRecord(gen, ['temperature', 'top_p', 'top_k', 'min_p', 'repetition_penalty'])) {
