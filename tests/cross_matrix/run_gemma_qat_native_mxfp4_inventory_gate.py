@@ -205,6 +205,12 @@ SOURCE_FULLMEDIA_SMOKE_PROOFS = {
     "gemma4_12b_native_mxfp4": Path(
         "build/current-all-local-model-smoke-gemma4-12b-qat-mxfp4-fullmedia-tools-l2-after-tool-result-quoted-target-20260609/JANGQ_gemma-4-12B-it-qat-MXFP4/result.json"
     ),
+    "gemma4_26b_vl": Path(
+        "build/current-all-local-model-smoke-gemma4-26b-qat-mxfp4-tools-l2-after-audio-capability-gate-20260609/JANGQ_gemma-4-26B-A4B-it-qat-MXFP4/result.json"
+    ),
+    "gemma4_31v_or_31b_vl": Path(
+        "build/current-all-local-model-smoke-gemma4-31b-qat-mxfp4-tools-l2-after-audio-capability-gate-20260609/JANGQ_gemma-4-31B-it-qat-MXFP4/result.json"
+    ),
 }
 
 
