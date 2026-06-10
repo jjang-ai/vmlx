@@ -3479,6 +3479,40 @@ class TestToolParserConcurrency:
         assert tool_calls is None
         assert cleaned == output
 
+    def test_generic_parser_empty_required_args_fail_closed_at_shared_boundary(self):
+        """Shared Chat/Responses parser boundary rejects missing required args."""
+        import vmlx_engine.server as srv
+
+        request = srv.ChatCompletionRequest(
+            model="llama-ish",
+            messages=[srv.Message(role="user", content="Run exec_command.")],
+            tools=[
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "exec_command",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {"cmd": {"type": "string"}},
+                            "required": ["cmd"],
+                        },
+                    },
+                }
+            ],
+            tool_choice="required",
+        )
+        output = "<function=exec_command>{}</function>"
+
+        old_parser = srv._tool_call_parser
+        try:
+            srv._tool_call_parser = "auto"
+            cleaned, tool_calls = srv._parse_tool_calls_with_parser(output, request)
+        finally:
+            srv._tool_call_parser = old_parser
+
+        assert tool_calls is None
+        assert cleaned == srv._strip_tool_markup_residue_for_display(output)
+
     def test_responses_final_tool_emit_drops_empty_required_args(self):
         """Responses final SSE guard must not emit empty required tool args."""
         import vmlx_engine.server as srv

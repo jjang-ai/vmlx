@@ -4571,6 +4571,7 @@ def _parse_tool_calls_with_parser(
         cleaned, calls = parse_tool_calls(text)
         if calls:
             calls = _filter_to_request_tools(calls)
+            calls = _drop_tool_calls_missing_required_args(calls, request)
             if calls:
                 return cleaned, calls
             if _has_tool_marker_or_partial_suffix(text):
@@ -4644,6 +4645,10 @@ def _parse_tool_calls_with_parser(
                 for tc in result.tool_calls
             ]
             filtered_tool_calls = _filter_to_request_tools(tool_calls)
+            filtered_tool_calls = _drop_tool_calls_missing_required_args(
+                filtered_tool_calls,
+                request,
+            )
             if filtered_tool_calls:
                 return result.content or "", filtered_tool_calls
             # Parser consumed only unavailable tool names. Treat as plain text
