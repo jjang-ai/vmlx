@@ -16,7 +16,7 @@ def test_full_release_objective_checklist_uses_current_noheavy_api_cache_contrac
 
 def test_full_release_objective_checklist_uses_current_responses_raw_sse_parity_contract():
     assert checklist.RESPONSES_RAW_SSE_PARITY == Path(
-        "build/current-responses-raw-sse-parity-qwen35-direct-gateway-tunnel-after-missing-required-args-failclosed-20260610.json"
+        "build/current-responses-raw-sse-parity-direct-gateway-tunnel-gemma4-12b-mxfp8-crack-20260610.json"
     )
 
 

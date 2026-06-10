@@ -1257,33 +1257,29 @@ def test_current_regression_suite_tracks_responses_raw_sse_parity_contract():
         suite.CURRENT_SUITE_COMMANDS["responses_raw_sse_parity_contract"]
     )
     assert (
-        "--direct-sse build/responses-sse-captures-20260609/"
-        "direct-gemma4-e2b-after-gemma4-parser.sse"
+        "--direct-sse build/responses-sse-captures-20260610/"
+        "direct-gemma4-12b-mxfp8-crack-tool-20260610.sse"
     ) in parity_command
     assert (
-        "--gateway-sse build/responses-sse-captures-20260609/"
-        "gateway-gemma4-e2b-after-parser.sse"
+        "--gateway-sse build/responses-sse-captures-20260610/"
+        "gateway-gemma4-12b-mxfp8-crack-tool-20260610.sse"
     ) in parity_command
     assert (
-        "--tunnel-sse build/responses-sse-captures-20260609/"
-        "tunnel-gemma4-e2b-after-parser.sse"
+        "--tunnel-sse build/responses-sse-captures-20260610/"
+        "tunnel-gemma4-12b-mxfp8-crack-tool-20260610.sse"
     ) in parity_command
     assert (
-        "--direct-log build/responses-sse-captures-20260609/"
-        "direct-gemma4-e2b-after-gemma4-parser.server.log"
-    ) in parity_command
-    assert (
-        "--gateway-log build/responses-sse-captures-20260609/"
-        "gateway-gemma4-e2b-live-backend.server.log"
+        "--gateway-log build/responses-sse-captures-20260610/"
+        "gateway-gemma4-12b-mxfp8-crack-tool-20260610.log"
     ) in parity_command
     assert "--expected-function-name record_fact" in parity_command
     assert '--expected-arguments {"value": "blue-cat"}' in parity_command
-    assert "--expected-model gemma4-e2b-sse" in parity_command
+    assert "--expected-model models/Gemma-4-12B-it-MXFP8-CRACK" in parity_command
     assert "--require-reasoning-events" in parity_command
     assert "--require-same-model" in parity_command
     assert (
         "--out build/current-responses-raw-sse-parity-direct-gateway-tunnel-"
-        "gemma4-e2b-after-parser-20260609.json"
+        "gemma4-12b-mxfp8-crack-20260610.json"
     ) in parity_command
 
 
