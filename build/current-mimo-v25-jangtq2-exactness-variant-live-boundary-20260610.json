@@ -1,0 +1,129 @@
+{
+  "schema": "vmlx-mimo-v25-jangtq2-exactness-boundary-v1",
+  "status": "open",
+  "primary_artifact": "build/current-mimo-v25-jangtq2-exactness-variant-live-20260610/result.json",
+  "model_path": "/Users/eric/.mlxstudio/models/JANGQ-AI/MiMo-V2.5-JANGTQ_2",
+  "served_model_name": "JANGQ-AI/MiMo-V2.5-JANGTQ_2",
+  "proof_type": "live_no_source_exactness_variant",
+  "source_endpoint": {
+    "base_url": "http://erics-m5-max2.local:8126",
+    "status": "unavailable",
+    "last_check_error": "curl timeout after 3s"
+  },
+  "runtime_proven": {
+    "loaded_real_artifact": true,
+    "codec": "turboquant_codebook",
+    "profile": "JANGTQ_2",
+    "routed_expert_bits_label": "gate=2/up=2/down=2-bit",
+    "prestacked_routed_experts": 423,
+    "native_cache_schema": "mixed_swa_kv_v1",
+    "native_cache_subtype": "mimo_v2_asymmetric_swa",
+    "native_cache_components": [
+      "full_attention_kv",
+      "sliding_window_kv",
+      "rotating_window_metadata"
+    ],
+    "generic_turboquant_kv_enabled": false,
+    "generic_turboquant_kv_reason": "not_active_for_mimo_mixed_swa_cache_contract",
+    "paged_cache_enabled": true,
+    "block_l2_enabled": true,
+    "block_l2_tokens_on_disk_after_probe": 807,
+    "block_l2_disk_writes_after_probe": 10,
+    "ram_tokens_cached_after_probe": 807,
+    "active_memory_mb_after_probe": 76812.2,
+    "peak_memory_mb_after_probe": 78037.5
+  },
+  "exactness_failures": [
+    {
+      "label": "plain_exact_blue_cat",
+      "route": "completions",
+      "expected": "blue-cat",
+      "actual": "blue"
+    },
+    {
+      "label": "plain_exact_sentinel",
+      "route": "completions",
+      "expected": "B7-CAT-09",
+      "actual": "B7 CAT-09"
+    },
+    {
+      "label": "plain_exact_chat_blue_cat",
+      "route": "chat",
+      "expected": "blue-cat",
+      "actual": "blue grass"
+    },
+    {
+      "label": "plain_exact_chat_sentinel",
+      "route": "chat",
+      "expected": "B7-CAT-09",
+      "actual": "B7 CAT-09"
+    },
+    {
+      "label": "json_blue_cat",
+      "route": "chat",
+      "expected": {
+        "status": "ok",
+        "value": "blue-cat",
+        "count": 3
+      },
+      "actual": {
+        "status": "ok",
+        "value": "blue",
+        "count": 3
+      }
+    },
+    {
+      "label": "json_sentinel",
+      "route": "chat",
+      "expected": {
+        "status": "ok",
+        "value": "B7-CAT-09",
+        "count": 3
+      },
+      "actual": {
+        "status": "ok",
+        "value": "B7CAT-09",
+        "count": 3
+      }
+    },
+    {
+      "label": "tool_blue_cat",
+      "route": "chat",
+      "expected": {
+        "value": "blue-cat"
+      },
+      "actual": {
+        "value": "blue"
+      }
+    },
+    {
+      "label": "tool_sentinel_json_call",
+      "route": "chat",
+      "expected": {
+        "value": "B7-CAT-09"
+      },
+      "actual": {
+        "value": "B7CAT-09"
+      }
+    }
+  ],
+  "classification": {
+    "parser_json_repair_primary_cause": false,
+    "tool_protocol_primary_cause": false,
+    "cache_primary_cause": false,
+    "media_primary_cause": false,
+    "remaining_primary_class": "artifact_logit_codebook_or_decode_quality",
+    "why": "The same live runtime successfully returns HTTP 200 and valid tool_calls/JSON shapes, but literal hyphenated values are semantically changed across completions, chat, JSON, and required-tool arguments."
+  },
+  "next_other_agent_action": [
+    "Bring up the source MiMo V2.5 endpoint or a dequant/reference artifact and run source-vs-quant first-divergence on these exact literals.",
+    "If source emits the exact literals, compare JANGTQ_2 routed-expert/codebook logits or TurboQuantSwitchLinear output against the reference for the selected experts.",
+    "Do not hide this with parser repair, JSON repair, forced string post-processing, sampling clamps, or cache changes."
+  ],
+  "no_claims": [
+    "Does not prove MiMo JANGTQ_2 release-clear.",
+    "Does not prove source-vs-quant divergence because the source endpoint was unavailable.",
+    "Does not prove media support.",
+    "Does not prove installed-app parity."
+  ]
+}

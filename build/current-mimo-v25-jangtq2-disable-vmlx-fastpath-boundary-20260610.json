@@ -1,0 +1,86 @@
+{
+  "schema": "vmlx-mimo-v25-jangtq2-fastpath-ab-boundary-v1",
+  "status": "open",
+  "baseline_artifact": "build/current-mimo-v25-jangtq2-exactness-variant-live-20260610/result.json",
+  "ab_artifact": "build/current-mimo-v25-jangtq2-exactness-variant-disable-vmlx-fastpath-20260610/result.json",
+  "ab_environment": {
+    "VMLINUX_DISABLE_MIMO_V2_SWITCHGLU_FAST_PATH": "1",
+    "port": 8897,
+    "model_path": "/Users/eric/.mlxstudio/models/JANGQ-AI/MiMo-V2.5-JANGTQ_2",
+    "served_model_name": "JANGQ-AI/MiMo-V2.5-JANGTQ_2"
+  },
+  "proven": {
+    "vmlx_mimo_switchglu_fastpath_is_not_primary_cause": true,
+    "ab_outputs_match_baseline": true,
+    "tokenizer_roundtrip_preserves_literals": true,
+    "source_endpoint_available": false,
+    "remote_source_checkpoint_present": true
+  },
+  "source_reference": {
+    "host": "erics-m5-max2.local",
+    "health_url": "http://127.0.0.1:8126/health",
+    "health_status": "not_running",
+    "source_path": "/Volumes/EricsLLMDrive/jangq-ai/sources/MiMo-V2.5",
+    "source_size": "294G",
+    "remote_total_ram": "128G",
+    "boundary": "Source checkpoint exists but no source server is running; source-vs-quant live comparison remains unproven."
+  },
+  "tokenizer_roundtrip": {
+    "blue-cat": ["blue", "-cat"],
+    "B7-CAT-09": ["B", "7", "-C", "AT", "-", "0", "9"],
+    "ACK-CB-742": ["ACK", "-C", "B", "-", "7", "4", "2"]
+  },
+  "same_failures_with_vmlx_fastpath_disabled": [
+    {
+      "label": "plain_exact_blue_cat",
+      "expected": "blue-cat",
+      "actual": "blue"
+    },
+    {
+      "label": "plain_exact_sentinel",
+      "expected": "B7-CAT-09",
+      "actual": "B7 CAT-09"
+    },
+    {
+      "label": "plain_exact_chat_blue_cat",
+      "expected": "blue-cat",
+      "actual": "blue grass"
+    },
+    {
+      "label": "plain_exact_chat_sentinel",
+      "expected": "B7-CAT-09",
+      "actual": "B7 CAT-09"
+    },
+    {
+      "label": "json_blue_cat",
+      "expected": {"status": "ok", "value": "blue-cat", "count": 3},
+      "actual": {"status": "ok", "value": "blue", "count": 3}
+    },
+    {
+      "label": "json_sentinel",
+      "expected": {"status": "ok", "value": "B7-CAT-09", "count": 3},
+      "actual": {"status": "ok", "value": "B7CAT-09", "count": 3}
+    },
+    {
+      "label": "tool_blue_cat",
+      "expected": {"value": "blue-cat"},
+      "actual": {"value": "blue"}
+    },
+    {
+      "label": "tool_sentinel_json_call",
+      "expected": {"value": "B7-CAT-09"},
+      "actual": {"value": "B7CAT-09"}
+    }
+  ],
+  "classification": {
+    "excluded": [
+      "vmlx_mimo_switchglu_fastpath",
+      "tokenizer_roundtrip",
+      "parser_json_repair",
+      "tool_protocol_shape",
+      "prefix_paged_l2_cache"
+    ],
+    "remaining_primary_class": "jangtq_codebook_artifact_or_model_quality",
+    "next_action": "Run source/dequant reference first-divergence or rebuild a higher-fidelity MiMo JANGTQ/JANG artifact; do not patch parser/cache/sampling to hide literal mutation."
+  }
+}

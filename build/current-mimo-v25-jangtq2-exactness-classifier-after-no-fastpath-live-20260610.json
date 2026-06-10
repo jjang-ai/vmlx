@@ -1,0 +1,123 @@
+{
+  "status": "open",
+  "scope": "MiMo V2.5 JANGTQ_2 literal exactness classifier after tokenizer/template and no-fastpath live checks",
+  "model_path": "/Users/eric/.mlxstudio/models/JANGQ-AI/MiMo-V2.5-JANGTQ_2",
+  "served_model_name": "mimo-v25-jangtq2-no-fastpaths",
+  "prior_context": {
+    "video_cache_fix_commit": "3b15642d",
+    "latest_no_source_classifier": "build/current-mimo-v2-no-source-exactness-classifier-after-lossless-token-trace-20260609.json",
+    "latest_live_media_tools_cache": "build/current-mimo-v25-jangtq2-live-media-tools-cache-after-head-dim-20260610.json"
+  },
+  "tokenizer_template_check": {
+    "command": ".venv/bin/python - <<'PY' ... AutoTokenizer.from_pretrained(...); encode/decode literals; apply_chat_template(... enable_thinking=False) ... PY",
+    "literals": {
+      "MIMO-OK": {
+        "ids": [44, 83404, 12, 3925],
+        "decoded": "MIMO-OK",
+        "roundtrip_ok": true
+      },
+      "blue-cat": {
+        "ids": [12203, 83892],
+        "decoded": "blue-cat",
+        "roundtrip_ok": true
+      },
+      "B7-CAT-09": {
+        "ids": [33, 22, 7658, 828, 12, 15, 24],
+        "decoded": "B7-CAT-09",
+        "roundtrip_ok": true
+      },
+      "ACK-CB-742": {
+        "ids": [4032, 7658, 33, 12, 22, 19, 17],
+        "decoded": "ACK-CB-742",
+        "roundtrip_ok": true
+      },
+      "{\"status\":\"ok\",\"value\":\"blue-cat\",\"count\":3}": {
+        "ids": [4913, 2829, 3252, 562, 2198, 957, 3252, 12203, 83892, 2198, 1830, 788, 18, 92],
+        "decoded": "{\"status\":\"ok\",\"value\":\"blue-cat\",\"count\":3}",
+        "roundtrip_ok": true
+      }
+    },
+    "chat_template_prompts": {
+      "exact_text_contains_literal": true,
+      "json_contains_literal": true,
+      "generation_prompt_contains_thinking_off_sentinel": true
+    },
+    "classification": "input tokenizer and chat template preserve the exact literals before generation"
+  },
+  "live_no_fastpath_probe": {
+    "command": "VMLINUX_DISABLE_AUTO_BROWSER=1 VMLINUX_DISABLE_MIMO_V2_COMPILED_ROUTER=1 VMLINUX_DISABLE_MIMO_V2_SWITCHGLU_FAST_PATH=1 VMLX_L2_CACHE_DIR=build/mimo-jangtq2-exactness-fastpath-disabled-l2-20260610 .venv/bin/python -m vmlx_engine.server --model /Users/eric/.mlxstudio/models/JANGQ-AI/MiMo-V2.5-JANGTQ_2 --port 8877 --host 127.0.0.1 --mllm --served-model-name mimo-v25-jangtq2-no-fastpaths --max-tokens 64 --default-temperature 0 --default-top-p 1",
+    "startup_evidence": {
+      "vmlx_compiled_router_disabled": true,
+      "vmlx_switchglu_fast_path_disabled": true,
+      "mimo_keep0_rotating_cache_patch_enabled": true,
+      "real_model_loaded": true,
+      "media_weights_bound": {
+        "visual": 364,
+        "audio_encoder": 75,
+        "speech_embeddings": 20
+      },
+      "native_jangtq_turboquant_path_active": true,
+      "native_cache_schema": "mixed_swa_kv_v1",
+      "native_cache_subtype": "mimo_v2_asymmetric_swa",
+      "generic_turboquant_kv_enabled": false,
+      "metal_baseline_active_gb": 76.5,
+      "metal_baseline_max_ws_gb": 107.5
+    },
+    "probes": {
+      "exact_text": {
+        "request": "Reply exactly: MIMO-OK",
+        "enable_thinking": false,
+        "temperature": 0,
+        "top_p": 1,
+        "status_code": 200,
+        "assistant_content": "MIMOOK",
+        "expected": "MIMO-OK",
+        "passed": false
+      },
+      "exact_json": {
+        "request": "Return only this JSON exactly: {\"status\":\"ok\",\"value\":\"blue-cat\",\"count\":3}",
+        "enable_thinking": false,
+        "temperature": 0,
+        "top_p": 1,
+        "status_code": 200,
+        "assistant_content": "{\"status\":\"ok\",\"value\":\"blue\",\"count\":3}",
+        "expected_contains": "\"value\":\"blue-cat\"",
+        "passed": false
+      }
+    },
+    "cache_boundary": {
+      "cache_hits": 0,
+      "cache_misses": 2,
+      "ram_tokens_cached_after_probes": 67,
+      "classification": "failures occurred on cold prompts before cache-hit reuse"
+    }
+  },
+  "excluded_causes": {
+    "tokenizer_roundtrip": true,
+    "chat_template_literal_corruption": true,
+    "hidden_stochastic_sampling": true,
+    "vmlx_compiled_router_fastpath": true,
+    "vmlx_switchglu_decode_fastpath": true,
+    "generic_turboquant_kv_cache": true,
+    "cache_hit_reuse": true,
+    "parser_or_json_repair": true
+  },
+  "remaining_likely_causes": {
+    "native_jangtq_turboquant_codebook_artifact_or_kernel": true,
+    "prestacked_switch_mlp_quant_contract": true,
+    "source_vs_quant_first_divergence": true,
+    "full_source_model_baseline_missing_locally": true
+  },
+  "classification": "MiMo JANGTQ_2 literal exactness remains a JANGTQ artifact/native quant-logit/decode-quality blocker, not a tokenizer/template/parser/cache/vMLX-accelerator blocker.",
+  "must_not_claim": [
+    "Do not claim MiMo JANGTQ_2 exactness is fixed.",
+    "Do not patch parser or JSON repair to rewrite semantic values.",
+    "Do not disable reasoning, clamp sampling, or hide failed rows as a release fix.",
+    "Do not treat this as installed-app, UI, source-vs-quant, media semantic, or release clearance."
+  ],
+  "next_actions": [
+    "Compare JANGTQ_2 native TurboQuant codebook outputs against JANG_2L or source/dequant logits for the first divergent token on the exact literal prompt.",
+    "If source model remains unavailable locally, inspect or rebuild the MiMo JANGTQ_2 artifact quant contract around prestacked_switch_mlp routed experts, codebook seed, and 2-bit routed expert layout.",
+    "Keep MiMo exactness release-red until a corrected artifact/runtime produces exact literals without parser/JSON repair."
+  ]
+}

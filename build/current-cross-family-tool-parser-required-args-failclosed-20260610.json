@@ -1,0 +1,59 @@
+{
+  "status": "pass",
+  "scope": "cross-family parser-level required tool argument fail-closed guard",
+  "blocker_reduced": "agentic tool-loop safety for models that emit native tool envelopes with missing required arguments",
+  "source_patch": {
+    "files": [
+      "vmlx_engine/tool_parsers/qwen_tool_parser.py",
+      "vmlx_engine/tool_parsers/kimi_tool_parser.py",
+      "vmlx_engine/tool_parsers/hunyuan_tool_parser.py",
+      "vmlx_engine/tool_parsers/zaya_tool_parser.py",
+      "vmlx_engine/tool_parsers/gemma4_tool_parser.py",
+      "vmlx_engine/tool_parsers/gemma3_tool_parser.py",
+      "vmlx_engine/tool_parsers/glm47_tool_parser.py"
+    ],
+    "behavior": "complete-response parsers now apply the shared required-schema helper before returning tool calls for parser-family paths that previously accepted missing or empty required fields",
+    "no_fake_repair": true,
+    "does_not_synthesize_arguments": true,
+    "does_not_disable_reasoning": true,
+    "does_not_rewrite_semantic_values": true
+  },
+  "covered_parser_paths": {
+    "qwen_bracket": "Qwen bracket syntax [Calling tool: name({...})]",
+    "kimi_tool_section": "Kimi/Moonshot <|tool_call_begin|>...<|tool_call_argument_begin|>...",
+    "hunyuan_hy3_xml": "Hunyuan/Hy3 <tool_calls><tool_call>NAME<tool_sep>...",
+    "zaya_zyphra_xml": "ZAYA/Zyphra <zyphra_tool_call><function=name>...",
+    "gemma4_native_and_hermes": "Gemma4 native <|tool_call>call:name{...}<tool_call|> and Hermes JSON fallback",
+    "gemma3_tool_code": "Gemma3/Gemma3n ```tool_code function(...) ``` blocks",
+    "glm47_xml_and_json": "GLM-4.7 XML arg and JSON-in-tool_call formats"
+  },
+  "verification": [
+    {
+      "command": ".venv/bin/python -m pytest tests/test_tool_parser_required_args_fail_closed.py -q",
+      "result": "7 passed"
+    },
+    {
+      "command": ".venv/bin/python -m py_compile vmlx_engine/tool_parsers/qwen_tool_parser.py vmlx_engine/tool_parsers/kimi_tool_parser.py vmlx_engine/tool_parsers/hunyuan_tool_parser.py vmlx_engine/tool_parsers/zaya_tool_parser.py vmlx_engine/tool_parsers/gemma4_tool_parser.py vmlx_engine/tool_parsers/gemma3_tool_parser.py vmlx_engine/tool_parsers/glm47_tool_parser.py tests/test_tool_parser_required_args_fail_closed.py",
+      "result": "pass"
+    },
+    {
+      "command": ".venv/bin/python -m pytest tests/test_hunyuan_tool_parser.py tests/test_gemma4_tool_parser.py tests/test_glm47_tool_parser.py tests/test_gemma3_tool_parser.py tests/test_xml_function_tool_parser.py -q",
+      "result": "52 passed"
+    }
+  ],
+  "classification": "Parser families covered by this patch no longer return executable tool calls with missing required schema fields in the tested native dialect paths. Required tool requests can retry or fail closed instead of forwarding {} arguments to coding harnesses.",
+  "not_proven": [
+    "live same-model direct/gateway/tunnel raw SSE for every parser family",
+    "all auto/no-tool/tool-result continuation modes for every model family",
+    "installed-app UI parity",
+    "Gemma media proof",
+    "MiMo exactness/media release clearance",
+    "N2 JANG_1L, which remains off-limits in this lane",
+    "checkpoint release readiness"
+  ],
+  "other_agent_next": [
+    "Use this source fix when rebuilding the bundled Python/app runtime.",
+    "For live proof, run direct/gateway/tunnel raw SSE captures per family with reasoning enabled and required/auto/no-tool/tool-result continuation.",
+    "Do not add argument synthesis or parser repair to hide model failures; missing required fields should stay fail-closed."
+  ]
+}

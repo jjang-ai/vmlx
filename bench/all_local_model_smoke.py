@@ -729,8 +729,9 @@ def _exact_code_payload(model: str, max_tokens: int) -> dict[str, Any]:
             {
                 "role": "user",
                 "content": (
-                    "Output exactly these three Python lines, preserving spaces, "
-                    "newlines, punctuation, and capitalization. Do not use markdown.\n"
+                    "Return exactly the following code and nothing else. The third "
+                    "line must start at column 1 with no leading space. Do not use "
+                    "markdown.\n\n"
                     "def add(a, b):\n"
                     "    return a + b\n"
                     "print(add(2, 3))"

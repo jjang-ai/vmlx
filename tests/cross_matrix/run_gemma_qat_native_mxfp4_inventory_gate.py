@@ -20,7 +20,7 @@ DEFAULT_ROOTS = (
     Path("/Users/eric/.mlxstudio/models"),
 )
 DEFAULT_OUT = Path(
-    "build/current-gemma-qat-native-mxfp4-local-inventory-after-source-smoke-map-20260609.json"
+    "build/current-gemma-qat-native-mxfp4-local-inventory-after-all-jang4m-fullmedia-20260610.json"
 )
 
 REQUIRED_QAT_ROWS = {
@@ -180,6 +180,39 @@ SOURCE_LIVE_SMOKE_PROOFS = {
     ),
 }
 
+SOURCE_FULLMEDIA_SMOKE_PROOFS = {
+    "gemma4_e2b_qat_jang4m": Path(
+        "build/current-all-local-model-smoke-gemma4-e2b-qat-jang4m-fullmedia-tools-l2-20260610/JANGQ_gemma-4-E2B-it-qat-JANG_4M/result.json"
+    ),
+    "gemma4_e4b_qat_jang4m": Path(
+        "build/current-all-local-model-smoke-gemma4-e4b-qat-jang4m-fullmedia-tools-l2-20260610/JANGQ_gemma-4-E4B-it-qat-JANG_4M/result.json"
+    ),
+    "gemma4_12b_qat_jang4m": Path(
+        "build/current-all-local-model-smoke-gemma4-12b-qat-jang4m-fullmedia-tools-l2-20260610/JANGQ_gemma-4-12B-it-qat-JANG_4M/result.json"
+    ),
+    "gemma4_26b_qat_jang4m": Path(
+        "build/current-all-local-model-smoke-gemma4-26b-qat-jang4m-fullmedia-tools-l2-20260610/JANGQ_gemma-4-26B-A4B-it-qat-JANG_4M/result.json"
+    ),
+    "gemma4_31b_qat_jang4m": Path(
+        "build/current-all-local-model-smoke-gemma4-31b-qat-jang4m-fullmedia-tools-l2-20260610/JANGQ_gemma-4-31B-it-qat-JANG_4M/result.json"
+    ),
+    "gemma4_e2b_qat_native_mxfp4": Path(
+        "build/current-all-local-model-smoke-gemma4-e2b-qat-mxfp4-fullmedia-tools-l2-after-tool-result-quoted-target-20260609/JANGQ_gemma-4-E2B-it-qat-MXFP4/result.json"
+    ),
+    "gemma4_e4b_qat_native_mxfp4": Path(
+        "build/current-all-local-model-smoke-gemma4-e4b-qat-mxfp4-fullmedia-tools-l2-after-tool-result-quoted-target-20260609/JANGQ_gemma-4-E4B-it-qat-MXFP4/result.json"
+    ),
+    "gemma4_12b_native_mxfp4": Path(
+        "build/current-all-local-model-smoke-gemma4-12b-qat-mxfp4-fullmedia-tools-l2-after-tool-result-quoted-target-20260609/JANGQ_gemma-4-12B-it-qat-MXFP4/result.json"
+    ),
+    "gemma4_26b_vl": Path(
+        "build/current-all-local-model-smoke-gemma4-26b-qat-mxfp4-tools-l2-after-audio-capability-gate-20260609/JANGQ_gemma-4-26B-A4B-it-qat-MXFP4/result.json"
+    ),
+    "gemma4_31v_or_31b_vl": Path(
+        "build/current-all-local-model-smoke-gemma4-31b-qat-mxfp4-tools-l2-after-audio-capability-gate-20260609/JANGQ_gemma-4-31B-it-qat-MXFP4/result.json"
+    ),
+}
+
 
 def _load_json(path: Path) -> dict[str, Any]:
     try:
@@ -237,13 +270,15 @@ def _modality_backing(path: Path, config: dict[str, Any]) -> dict[str, Any]:
         or key.startswith("video_model.")
         or key.startswith("video_encoder.")
     )
+    audio_weight_backed = audio_tower_count > 0
     return {
         "weight_map_present": bool(weight_map),
         "audio_advertised_by_config": audio_advertised,
-        "audio_weight_backed": audio_tower_count > 0,
+        "audio_weight_backed": audio_weight_backed,
         "audio_tower_weight_count": audio_tower_count,
-        "audio_embed_only": audio_advertised and audio_tower_count == 0 and audio_embed_count > 0,
+        "audio_embed_only": audio_advertised and not audio_weight_backed and audio_embed_count > 0,
         "audio_embed_weight_count": audio_embed_count,
+        "audio_runtime_supported": audio_weight_backed,
         "vision_advertised_by_config": vision_advertised,
         "vision_weight_backed": vision_weight_count > 0,
         "vision_weight_count": vision_weight_count,
@@ -267,7 +302,8 @@ def _row_from_config(path: Path) -> dict[str, Any]:
         "model_type": config.get("model_type"),
         "text_model_type": _nested(config, "text_config", "model_type"),
         "vision": backing["vision_advertised_by_config"],
-        "audio": backing["audio_advertised_by_config"],
+        "audio": backing["audio_runtime_supported"],
+        "audio_declared_by_config": backing["audio_advertised_by_config"],
         "video": backing["video_advertised_by_config"],
         "modality_backing": backing,
         "weight_format": (
@@ -340,7 +376,145 @@ def _source_live_smoke_status(row_key: str, proof_root: Path) -> dict[str, Any]:
     }
 
 
+def _source_fullmedia_smoke_status(
+    row_key: str,
+    proof_root: Path,
+    *,
+    required_modalities: list[str] | None = None,
+) -> dict[str, Any]:
+    rel = SOURCE_FULLMEDIA_SMOKE_PROOFS.get(row_key)
+    if rel is None:
+        return {"status": "missing", "artifact": None}
+    required_modality_set = set(required_modalities or REQUIRED_QAT_ROWS[row_key]["requires"])
+    requires_audio = "audio" in required_modality_set
+    path = proof_root / rel
+    proof = _load_json(path)
+    requests = _source_smoke_requests(proof)
+    by_label = {
+        str(request.get("label")): request
+        for request in requests
+        if isinstance(request, dict) and request.get("label")
+    }
+    capabilities = proof.get("capabilities")
+    capabilities_body = (
+        capabilities.get("body") if isinstance(capabilities, dict) else None
+    )
+    capabilities_body = capabilities_body if isinstance(capabilities_body, dict) else {}
+    cache_after = proof.get("cache_after")
+    cache_body = cache_after.get("body") if isinstance(cache_after, dict) else None
+    cache_body = cache_body if isinstance(cache_body, dict) else {}
+    l2_restart = proof.get("l2_restart") if isinstance(proof.get("l2_restart"), dict) else {}
+    l2_usage = l2_restart.get("usage") if isinstance(l2_restart.get("usage"), dict) else {}
+    l2_details = l2_usage.get("prompt_tokens_details") if isinstance(l2_usage.get("prompt_tokens_details"), dict) else {}
+    l2_stats = l2_restart.get("cache_stats") if isinstance(l2_restart.get("cache_stats"), dict) else {}
+    l2_block = l2_stats.get("block_disk_cache") if isinstance(l2_stats.get("block_disk_cache"), dict) else {}
+    required_labels = (
+        "text_cache_repeat_1",
+        "text_cache_repeat_2",
+        "text_multiturn_recall",
+        "reasoning_on",
+        "tool_required",
+        "tool_result_continuation",
+        "structured_json_exact",
+        "exact_code_whitespace",
+        "vl_blue_image",
+        "text_no_media_after_image",
+        "vl_blue_image_repeat",
+        "vl_red_image_changed",
+        "vl_blue_video",
+        "text_no_media_after_video",
+    )
+    if requires_audio:
+        required_labels = required_labels + ("audio_blue", "text_no_media_after_audio")
+    missing_labels = [label for label in required_labels if label not in by_label]
+    failed_labels = [
+        label
+        for label, request in by_label.items()
+        if request.get("validation_failures") not in ([], None)
+        or request.get("code") != 200
+    ]
+    tool_required = by_label.get("tool_required") or {}
+    tool_calls = tool_required.get("tool_calls")
+    first_tool = tool_calls[0] if isinstance(tool_calls, list) and tool_calls else {}
+    function = first_tool.get("function") if isinstance(first_tool, dict) else {}
+    function = function if isinstance(function, dict) else {}
+    native_cache = cache_body.get("native_cache")
+    native_cache = native_cache if isinstance(native_cache, dict) else {}
+    block_disk = cache_body.get("block_disk_cache")
+    block_disk = block_disk if isinstance(block_disk, dict) else {}
+    checks = {
+        "artifact_exists": path.exists(),
+        "status_pass": proof.get("status") == "pass",
+        "all_required_labels_present": not missing_labels,
+        "request_validations_clean": not failed_labels,
+        "capability_family_gemma4": capabilities_body.get("family") == "gemma4",
+        "tool_parser_gemma4": capabilities_body.get("tool_parser") == "gemma4",
+        "reasoning_parser_gemma4": capabilities_body.get("reasoning_parser") == "gemma4",
+        "required_tool_args_exact": function.get("name") == "record_fact"
+        and function.get("arguments") == '{"value": "blue-cat"}',
+        "vision_image_blue": _request_passed_with_content(
+            by_label.get("vl_blue_image"), expected_content="Blue"
+        ),
+        "video_blue": _request_passed_with_content(
+            by_label.get("vl_blue_video"), expected_content="Blue"
+        ),
+        "audio_blue": True
+        if not requires_audio
+        else _request_passed_with_content(
+            by_label.get("audio_blue"), expected_content="Blue"
+        ),
+        "post_media_text_recovery": _request_passed_with_content(
+            by_label.get("text_no_media_after_video"), expected_content="NONE"
+        )
+        and _request_passed_with_content(
+            by_label.get("text_no_media_after_image"), expected_content="NONE"
+        )
+        and (
+            True
+            if not requires_audio
+            else _request_passed_with_content(
+                by_label.get("text_no_media_after_audio"), expected_content="NONE"
+            )
+        ),
+        "mixed_swa_native_cache": native_cache.get("schema") == "mixed_swa_kv_v1"
+        and native_cache.get("generic_turboquant_kv", {}).get("enabled") is False,
+        "block_l2_written": (block_disk.get("disk_writes") or 0) > 0
+        and (block_disk.get("total_tokens_on_disk") or 0) > 0,
+        "fresh_process_l2_restore": l2_restart.get("status") == "completed"
+        and l2_details.get("cached_tokens", 0) > 0
+        and "disk" in str(l2_details.get("cache_detail") or "")
+        and (l2_block.get("disk_hits") or 0) > 0,
+    }
+    status = (
+        "pass"
+        if path.exists()
+        and all(checks.values())
+        else "open"
+        if path.exists()
+        else "missing"
+    )
+    return {
+        "status": status,
+        "artifact": str(rel),
+        "summary_status": proof.get("status"),
+        "missing_labels": missing_labels,
+        "failed_labels": failed_labels,
+        "checks": checks,
+        "requires_audio": requires_audio,
+        "request_count": len(requests),
+        "l2_restart": {
+            "status": l2_restart.get("status"),
+            "cached_tokens": l2_details.get("cached_tokens"),
+            "cache_detail": l2_details.get("cache_detail"),
+            "disk_hits": l2_block.get("disk_hits"),
+        },
+    }
+
+
 def _source_smoke_requests(proof: dict[str, Any]) -> list[dict[str, Any]]:
+    direct_requests = proof.get("requests")
+    if isinstance(direct_requests, list):
+        return [req for req in direct_requests if isinstance(req, dict)]
     results = proof.get("results")
     if not isinstance(results, list):
         return []
@@ -384,6 +558,7 @@ def classify_required_rows(
         matches = [row for row in rows if _matches_required(row, spec["path_markers"])]
         proof_status = "missing" if not matches else "open"
         notes: list[str] = []
+        required_modalities = list(spec["requires"])
         if not matches:
             notes.append("bundle_not_present_in_local_model_roots")
         else:
@@ -397,7 +572,7 @@ def classify_required_rows(
                     if modality == "text":
                         continue
                     if not row.get(modality):
-                        notes.append(f"{row['name']}: advertised {modality}=false")
+                        notes.append(f"{row['name']}: runtime {modality}=false")
                     backing = row.get("modality_backing") if isinstance(row.get("modality_backing"), dict) else {}
                     if (
                         modality == "audio"
@@ -406,6 +581,8 @@ def classify_required_rows(
                         and not backing.get("audio_weight_backed")
                     ):
                         notes.append(f"{row['name']}: audio metadata present without audio_tower weights")
+                        if "audio" in required_modalities:
+                            required_modalities.remove("audio")
                     if (
                         modality == "video"
                         and backing.get("video_advertised_by_config")
@@ -423,6 +600,11 @@ def classify_required_rows(
                     )
 
         source_live_smoke = _source_live_smoke_status(key, proof_root)
+        source_fullmedia_smoke = _source_fullmedia_smoke_status(
+            key,
+            proof_root,
+            required_modalities=required_modalities,
+        )
         classified[key] = {
             "display": spec["display"],
             "status": proof_status,
@@ -430,13 +612,15 @@ def classify_required_rows(
             "expected_model_type": spec["expected_model_type"],
             "tool_parser": spec["tool_parser"],
             "reasoning_parser": spec["reasoning_parser"],
-            "required_modalities": list(spec["requires"]),
+            "declared_required_modalities": list(spec["requires"]),
+            "required_modalities": required_modalities,
             "matching_paths": [row["path"] for row in matches],
             "matching_rows": matches,
             "notes": notes,
             "live_proof_required": list(REQUIRED_LIVE_PROOF_SURFACES),
             "live_proof_status": "missing",
             "source_live_smoke": source_live_smoke,
+            "source_fullmedia_smoke": source_fullmedia_smoke,
         }
     return classified
 

@@ -5,6 +5,62 @@ Scope: current Python engine worktree
 release/checkpoint lane. Do not use it to claim full release clearance; it
 separates what was actually loaded and proven from what remains red.
 
+## Latest Proof Additions
+
+### Qwen35 Responses Raw SSE
+
+Artifact:
+
+- `build/current-responses-raw-sse-parity-qwen35-direct-gateway-source-vs-tunnel-after-reasoning-item-index-20260610.json`
+
+Proven:
+
+- Current-source direct and real panel gateway both preserve required
+  `record_fact` arguments `{"value":"blue-cat"}` with reasoning enabled.
+- Both source surfaces emit valid output indices:
+  `message=[0]`, `reasoning=[1]`, `function_call=[2]`.
+- Direct/gateway both advertise the same served model:
+  `models/Qwen3.6-35B-A3B-MXFP8-CRACK-MTP`.
+- Runtime health in the direct capture proves native MTP active, hybrid SSM
+  cache, live attention TurboQuant KV, block-disk L2, and Qwen tool/reasoning
+  parser defaults.
+
+Still red:
+
+- The artifact remains `status=fail` only because the reused public tunnel SSE
+  is stale and still has `message=[0]`, `function_call=[0]`.
+- Parallel-lane action: rebuild/redeploy the tunnel/backend from current source
+  containing `841e5f40` or newer, then recapture the tunnel with the same
+  request/model. Do not synthesize tool args or disable reasoning.
+
+### MiMo JANGTQ_2 Loader Contract
+
+Artifact:
+
+- `build/current-mimo-v25-jangtq2-load-module-contract-20260610.json`
+
+Proven:
+
+- The vMLX MiMo runtime registration is required; vanilla `mlx_vlm.load` does
+  not support `mimo_v2`.
+- With vMLX registration, MiMo JANGTQ_2 load completes in about `7.0s`.
+- `config.quantization` reaches MiMo `text_config`.
+- `lm_head` is q8 `QuantizedLinear`; `model.embed_tokens` is q8
+  `QuantizedEmbedding`.
+- Sampled attention projections are q4 `QuantizedLinear`.
+- Sampled routed experts are 2-bit prestacked
+  `jang_tools.turboquant.tq_kernel.TurboQuantSwitchLinear`.
+
+Still red:
+
+- This excludes the obvious sidecar-binding loader bug, but it does not clear
+  exactness. The current dev-app exactness proof still shows
+  `ACK-CB-742 -> ACKCB-742` and `blue-cat -> blue`.
+- Parallel-lane action: either run source-vs-quant first-divergence/logit proof
+  or compare TurboQuant selected-expert outputs/logits against dequant/reference.
+  Do not patch semantic values in parser/JSON repair and do not chase cache/L2
+  as the primary cause without contrary logits evidence.
+
 ## Proven Live On 128GB Host
 
 ### Current Release-Manifest Accounting

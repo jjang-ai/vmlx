@@ -1,0 +1,103 @@
+{
+  "schema": "vmlx-mimo-v25-jangtq2-exactness-root-cause-boundary-v1",
+  "status": "open",
+  "classification": "artifact_logit_codebook_or_decode_quality_remaining",
+  "generated_at": "2026-06-10T03:07:00-0700",
+  "model_path": "/Users/eric/.mlxstudio/models/JANGQ-AI/MiMo-V2.5-JANGTQ_2",
+  "user_lane_guard": ".agents/CODEX_ACTIVE_DIRECTIVES_20260610.md",
+  "source_artifacts": {
+    "load_module_contract": "build/current-mimo-v25-jangtq2-load-module-contract-20260610.json",
+    "dev_app_exactness": "build/current-real-ui-dev-app-mimo-v25-jangtq2-exact-output-harness-assert-proof-20260610.json",
+    "variant_probe": "build/current-mimo-v25-jangtq2-exactness-variant-probe-live-after-lossless-token-trace-20260609/result.json",
+    "nocache_isolation": "build/current-mimo-v25-jangtq2-nocache-exactness-isolation-20260609.json",
+    "token_trace": "build/current-mimo-v2-jangtq2-cb-cache-lossless-token-trace-live-20260609.json",
+    "cache_vs_nocache_logprobs": "build/current-mimo-v2-jangtq2-cache-vs-nocache-next-token-logprobs-after-unit-label-20260609.json",
+    "classifier": "build/current-mimo-v2-no-source-exactness-classifier-after-devapp-jangtq2-exactness-20260610.json"
+  },
+  "proven": {
+    "loader_binds_jangtq_runtime": true,
+    "top_level_quantization_reaches_mimo_text_config": true,
+    "q8_bookend_modules_bound": true,
+    "q4_attention_modules_bound": true,
+    "routed_experts_bound_to_turboquant_switch_linear": true,
+    "tokenizer_roundtrip_preserves_literals": true,
+    "chat_template_preserves_prompt_literals": true,
+    "cache_hit_matches_nocache_top10": true,
+    "no_cache_isolation_still_mutates_literals": true,
+    "parser_structure_can_emit_tools": true,
+    "dev_app_and_installed_app_exactness_rows_are_red": true
+  },
+  "literal_tokenization_check": {
+    "ACK-CB-742": {
+      "tokens": ["ACK", "-C", "B", "-", "7", "4", "2"],
+      "roundtrip": "ACK-CB-742"
+    },
+    "ACKCB-742": {
+      "tokens": ["ACK", "CB", "-", "7", "4", "2"],
+      "roundtrip": "ACKCB-742"
+    },
+    "blue-cat": {
+      "tokens": ["blue", "-cat"],
+      "roundtrip": "blue-cat"
+    },
+    "blue cat": {
+      "tokens": ["blue", " cat"],
+      "roundtrip": "blue cat"
+    },
+    "{\"status\":\"ok\",\"value\":\"blue-cat\"}": {
+      "tokens": ["{\"", "status", "\":\"", "ok", "\",\"", "value", "\":\"", "blue", "-cat", "\"}"],
+      "roundtrip": "{\"status\":\"ok\",\"value\":\"blue-cat\"}"
+    }
+  },
+  "current_failures": [
+    {
+      "surface": "dev_app_chat_exact",
+      "expected": "ACK-CB-742",
+      "actual": "ACKCB-742"
+    },
+    {
+      "surface": "dev_app_chat_exact_json",
+      "expected": "{\"status\":\"ok\",\"value\":\"blue-cat\"}",
+      "actual": "{\"status\":\"ok\",\"value\":\"blue\"}"
+    },
+    {
+      "surface": "plain_completion",
+      "expected": "blue-cat",
+      "actual": "blue cat"
+    },
+    {
+      "surface": "plain_chat",
+      "expected": "blue-cat",
+      "actual": "blue grass"
+    },
+    {
+      "surface": "structured_json",
+      "expected": "{\"status\":\"ok\",\"value\":\"blue-cat\",\"count\":3}",
+      "actual": "{\"status\":\"ok\",\"value\":\"blue\",\"count\":3}"
+    },
+    {
+      "surface": "tool_call",
+      "expected": "{\"value\":\"blue-cat\"}",
+      "actual": "{\"value\":\"blue\"}"
+    }
+  ],
+  "excluded_primary_causes": {
+    "template_literal_corruption": true,
+    "tokenizer_roundtrip_corruption": true,
+    "missing_jangtq_runtime_binding": true,
+    "missing_turboquant_switch_linear_binding": true,
+    "parser_json_repair": true,
+    "tool_protocol_shape": true,
+    "prefix_paged_l2_or_kv_quant_cache": true,
+    "continuous_batching_only": true,
+    "hidden_stochastic_sampling": true
+  },
+  "not_proven": {
+    "source_vs_quant_first_divergence": true,
+    "turboquant_selected_expert_kernel_parity_against_reference": true,
+    "codebook_or_artifact_rebuild_contract": true,
+    "mimo_jangtq2_exactness_release_clearance": true,
+    "mimo_jangtq2_media_release_clearance": true
+  },
+  "release_boundary": "MiMo V2.5 JANGTQ_2 exactness remains red. Do not patch parser/JSON repair, prompt text, cache, or sampling clamps to hide these failures. The next real fix is an artifact/logit/codebook/decode investigation or replacement artifact with a literal-safe quantization contract."
+}

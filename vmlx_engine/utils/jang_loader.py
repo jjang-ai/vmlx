@@ -2991,6 +2991,7 @@ def _load_jang_v2_vlm(
         fallback_bits=[4],
         context="JANG v2 VLM",
     )
+    config = _enable_mimo_v2_media_runtime_overlay(path, config)
     config["quantization"].setdefault("mode", _jang_quant_mode(jang_cfg, config))
     quant_mode = str(config["quantization"].get("mode") or "affine")
 
@@ -3257,7 +3258,12 @@ def _load_jang_v2_vlm(
                 f"  seed={_vlm_mxtq_seed}, bits_map={_vlm_bits_map}",
                 flush=True,
             )
-            _vlm_model, _vlm_processor, _, _vlm_model_config = _jangtq_vlm_skeleton(path)
+            _vlm_model, _vlm_processor, _, _vlm_model_config = (
+                _with_mimo_v2_media_config_overlay(
+                    path,
+                    lambda: _jangtq_vlm_skeleton(path),
+                )
+            )
             _hydrate_jangtq_model(
                 model=_vlm_model,
                 model_path=path,
@@ -3266,7 +3272,10 @@ def _load_jang_v2_vlm(
                 model_config=_vlm_model_config,
             )
         else:
-            _vlm_model, _vlm_processor = _load_vlm(path)
+            _vlm_model, _vlm_processor = _with_mimo_v2_media_config_overlay(
+                path,
+                lambda: _load_vlm(path),
+            )
 
         # Match the rest of the VLM-path post-processing that would normally
         # fire at the bottom of this function: attach config if missing and
@@ -3974,6 +3983,162 @@ def _v2_bundle_has_tq_packed(path: Path, weight_files: list[Path] | None = None)
     except Exception:
         pass
     return False
+
+
+def _mimo_v2_index_has_prefixes(path: Path, prefixes: tuple[str, ...]) -> bool:
+    index_path = path / "model.safetensors.index.json"
+    if not index_path.exists():
+        return False
+    try:
+        weight_map = json.loads(index_path.read_text()).get("weight_map", {})
+    except Exception:
+        return False
+    if not isinstance(weight_map, dict):
+        return False
+    return any(str(key).startswith(prefixes) for key in weight_map)
+
+
+def _mimo_v2_config_token(config: dict, names: tuple[str, ...]) -> Any | None:
+    processor = config.get("processor_config") or {}
+    for name in names:
+        value = config.get(name)
+        if value is None and isinstance(processor, dict):
+            value = processor.get(name)
+        if value is not None:
+            return value
+    return None
+
+
+def _mimo_v2_local_media_runtime_available() -> bool:
+    try:
+        from vmlx_engine.models import mllm as _mimo_mllm
+
+        _mimo_mllm._register_mimo_v2_mlx_vlm_runtime()
+        module = sys.modules.get("mlx_vlm.models.mimo_v2")
+    except Exception:
+        return False
+    if module is None:
+        return False
+    vision_ready = all(
+        hasattr(module, name)
+        for name in (
+            "VisionModel",
+            "MiMoVisionPatchEmbed",
+            "MiMoVisionPatchMerger",
+            "MiMoVisionBlock",
+        )
+    )
+    audio_ready = all(
+        hasattr(module, name)
+        for name in (
+            "AudioModel",
+            "MiMoAudioTokenizer",
+            "load_mimo_audio_tokenizer_from_bundle",
+        )
+    )
+    return bool(vision_ready or audio_ready)
+
+
+def _enable_mimo_v2_media_runtime_overlay(path: Path, config: dict) -> dict:
+    """Enable MiMo-V2 media only when preserved runtime assets are complete."""
+
+    if str(config.get("model_type") or "").lower() != "mimo_v2":
+        return config
+    if not _mimo_v2_local_media_runtime_available():
+        return config
+
+    processor = config.get("processor_config") or {}
+    has_vision_bundle = (
+        isinstance(config.get("vision_config"), dict)
+        and (path / "preprocessor_config.json").exists()
+        and _mimo_v2_index_has_prefixes(path, ("visual.",))
+        and _mimo_v2_config_token(
+            config,
+            (
+                "image_token_id",
+                "image_token_index",
+                "video_token_id",
+                "video_token_index",
+            ),
+        )
+        is not None
+    )
+    has_audio_bundle = (
+        isinstance(config.get("audio_config"), dict)
+        and (path / "audio_tokenizer" / "model.safetensors").exists()
+        and _mimo_v2_index_has_prefixes(path, ("audio_encoder.",))
+        and _mimo_v2_index_has_prefixes(path, ("speech_embeddings.",))
+        and _mimo_v2_config_token(
+            config,
+            ("audio_token_id", "audio_token_index", "audio_start_token_id"),
+        )
+        is not None
+    )
+    if not has_vision_bundle and not has_audio_bundle:
+        return config
+
+    patched = dict(config)
+    patched["processor_config"] = dict(processor) if isinstance(processor, dict) else {}
+    patched["_vmlx_mimo_v2_media_runtime_auto_enabled"] = True
+
+    capabilities = dict(patched.get("capabilities") or {})
+    modalities = ["text"]
+    if has_vision_bundle:
+        modalities.extend(["image", "video"])
+    if has_audio_bundle:
+        modalities.append("audio")
+    capabilities["modalities"] = modalities
+    capabilities["multimodal_status"] = "mimo_v2_multimodal_runtime"
+    capabilities["preserved_modalities"] = list(
+        capabilities.get("preserved_modalities") or ["vision", "audio"]
+    )
+    unwired = set(capabilities.get("unwired_modalities") or [])
+    if has_vision_bundle:
+        unwired.difference_update({"vision", "image", "video"})
+    if has_audio_bundle:
+        unwired.discard("audio")
+    capabilities["unwired_modalities"] = sorted(unwired)
+    patched["capabilities"] = capabilities
+
+    runtime = dict(patched.get("runtime") or {})
+    runtime["multimodal_mode"] = "mimo_v2_multimodal_runtime"
+    patched["runtime"] = runtime
+    patched["multimodal_status"] = "mimo_v2_multimodal_runtime"
+    logger.info(
+        "MiMo-V2 media runtime auto-enabled from preserved bundle contract: "
+        "vision=%s audio=%s",
+        bool(has_vision_bundle),
+        bool(has_audio_bundle),
+    )
+    return patched
+
+
+def _with_mimo_v2_media_config_overlay(path: Path, call):
+    """Apply the MiMo media overlay inside jang_tools' mlx-vlm skeleton loader."""
+
+    try:
+        from mlx_vlm import utils as _vlm_utils
+    except Exception:
+        return call()
+
+    original_load_config = getattr(_vlm_utils, "load_config", None)
+    if original_load_config is None:
+        return call()
+
+    def _patched_load_config(model_path, *args, **kwargs):
+        cfg = original_load_config(model_path, *args, **kwargs)
+        try:
+            if Path(model_path).expanduser().resolve() == path.expanduser().resolve():
+                return _enable_mimo_v2_media_runtime_overlay(path, cfg)
+        except Exception as exc:
+            logger.debug("MiMo-V2 media config overlay skipped for %s: %s", path, exc)
+        return cfg
+
+    _vlm_utils.load_config = _patched_load_config
+    try:
+        return call()
+    finally:
+        _vlm_utils.load_config = original_load_config
 
 
 def _bind_mimo_v2_preserved_media_weights_from_index(model: Any, path: Path) -> dict[str, int]:

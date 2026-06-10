@@ -1,0 +1,111 @@
+{
+  "status": "open",
+  "scope": "MiMo V2.5 JANGTQ_2 source video/audio E2E after media-runtime routing fix",
+  "model_path": "/Users/eric/.mlxstudio/models/JANGQ-AI/MiMo-V2.5-JANGTQ_2",
+  "served_model_name": "mimo-v25-jangtq2-media-source",
+  "commit_under_test": "b0d5bb5df255a2238862ee18e3e86ce666ccd38e",
+  "proven": {
+    "source_server_loads_as_mllm": true,
+    "media_weights_bound": true,
+    "video_request_reaches_runtime": true,
+    "video_http_200": true,
+    "audio_request_reaches_runtime": true,
+    "audio_http_200": true,
+    "video_frame_reader_used": true,
+    "audio_tokenizer_path_used": true
+  },
+  "not_proven": {
+    "video_semantic_correctness": true,
+    "solid_color_image_semantic_correctness": true,
+    "installed_app_parity": true,
+    "fresh_process_l2_restore": true,
+    "release_clearance": true
+  },
+  "live_source_server": {
+    "command": "VMLINUX_DISABLE_AUTO_BROWSER=1 VMLX_L2_CACHE_DIR=build/mimo-jangtq2-media-live-l2-20260610b .venv/bin/python -m vmlx_engine.server --model /Users/eric/.mlxstudio/models/JANGQ-AI/MiMo-V2.5-JANGTQ_2 --port 8877 --host 127.0.0.1 --mllm --served-model-name mimo-v25-jangtq2-media-source --max-tokens 64 --default-temperature 0 --default-top-p 1",
+    "startup_evidence": {
+      "media_overlay": "MiMo-V2 media runtime auto-enabled from preserved bundle contract: vision=True audio=True",
+      "media_bound": "MiMo-V2 load bound preserved media weights: visual=364 audio_encoder=75 speech_embeddings=20",
+      "media_assigned": "MiMo-V2 load assigned 459 preserved media tensors to runtime modules",
+      "cache_layout": "mixed full KVCache plus RotatingKVCache across 48 layers",
+      "generic_turboquant_kv": "skipped by design for MiMo native asymmetric full/SWA RotatingKVCache metadata",
+      "metal_baseline_active_gb": 76.5,
+      "metal_baseline_max_ws_gb": 107.5
+    }
+  },
+  "video_probe": {
+    "input": "build/media-fixtures/red-1s-64x64.mp4",
+    "fixture_decode_check": {
+      "ffprobe": "64x64 h264 yuv420p, duration 1.0s, 2 frames",
+      "first_frame_rgb_prefix": [254, 0, 0, 254, 0, 0],
+      "classification": "fixture is red"
+    },
+    "request": {
+      "route": "/v1/chat/completions",
+      "content_type": "video_url",
+      "temperature": 0,
+      "top_p": 1,
+      "max_tokens": 48
+    },
+    "server_logs": {
+      "media_diag": "engine_is_mllm=true family=mimo_v2 registry_is_mllm=true type=video_url url_or_path=1",
+      "video_reader": "numpy reader: video_path=.../build/media-fixtures/red-1s-64x64.mp4, total_frames=2, video_fps=2.0"
+    },
+    "response": {
+      "status_code": 200,
+      "assistant_content": "The color that dominates this video is **black**.",
+      "usage_prompt_tokens": 135,
+      "usage_completion_tokens": 12
+    },
+    "classification": "transport/frame-through-vision green; semantic color answer red"
+  },
+  "audio_probe": {
+    "input": "build/media-fixtures/audio-present.wav as input_audio data base64",
+    "fixture_decode_check": {
+      "ffprobe": "pcm_s16le mono 16000 Hz, duration 0.821688s"
+    },
+    "request": {
+      "route": "/v1/chat/completions",
+      "content_type": "input_audio",
+      "temperature": 0,
+      "top_p": 1,
+      "max_tokens": 48
+    },
+    "server_logs": {
+      "media_diag": "engine_is_mllm=true family=mimo_v2 registry_is_mllm=true type=input_audio url_or_path=1",
+      "audio_decode": "Base64 audio decoded to temporary wav"
+    },
+    "response": {
+      "status_code": 200,
+      "assistant_content": "I hear a person saying \"I'm fine.\"",
+      "usage_prompt_tokens": 40,
+      "usage_completion_tokens": 11
+    },
+    "classification": "transport/audio-tokenizer path green; semantic transcript not independently verified"
+  },
+  "image_semantic_boundary": {
+    "red_frame_image": {
+      "input": "/tmp/mimo_red_frame.png extracted from red video",
+      "status_code": 200,
+      "assistant_content": "Black."
+    },
+    "solid_color_images": {
+      "red": "Black.",
+      "green": "Black.",
+      "blue": "Black.",
+      "white": "Black."
+    },
+    "text_logo_images": {
+      "panel/resources/icon.png": "The text visible in the image is **VMLX**.",
+      "assets/logo-wide-light.png": "blank or white canvas",
+      "assets/logo-wide-dark.png": "hallucinated Wikipedia-like logo"
+    },
+    "classification": "media path is active, but visual semantics remain inconsistent; do not claim MiMo JANGTQ_2 visual quality green"
+  },
+  "next_actions": [
+    "Installed app must be rebuilt from b0d5bb5d or later and rerun MiMo JANGTQ_2 image/video/audio UI rows.",
+    "Do not use solid-color video as a green semantic proof for MiMo JANGTQ_2; it currently returns black for red/green/blue/white cards.",
+    "If visual quality must be fixed, compare MiMo source/dequant/reference image embeddings or logits against this JANGTQ_2 artifact; current evidence does not identify a vMLX request-routing bug after the media overlay fix.",
+    "Audio transport is green but transcript semantics need an independently labeled fixture before release claim."
+  ]
+}

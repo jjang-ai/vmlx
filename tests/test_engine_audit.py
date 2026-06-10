@@ -3431,6 +3431,54 @@ class TestToolParserConcurrency:
             "command": 'echo "Tool test successful!"'
         }
 
+    def test_xml_function_empty_required_args_fail_closed_at_server_boundary(self):
+        """Parameterless XML function tags must not emit arguments={} calls."""
+        import vmlx_engine.server as srv
+
+        request = srv.ChatCompletionRequest(
+            model="qwen3-coder-next",
+            messages=[
+                srv.Message(
+                    role="user",
+                    content="List /tmp using exec_command.",
+                )
+            ],
+            tools=[
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "exec_command",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {"cmd": {"type": "string"}},
+                            "required": ["cmd"],
+                        },
+                    },
+                }
+            ],
+            tool_choice="required",
+        )
+        output = (
+            "Quick preamble: Checking what's in `/tmp`...\n"
+            "<tool_call>\n"
+            "<function=exec_command>\n"
+            "</function>\n"
+            "</tool_call>"
+        )
+
+        old_auto = srv._enable_auto_tool_choice
+        old_parser = srv._tool_call_parser
+        try:
+            srv._enable_auto_tool_choice = True
+            srv._tool_call_parser = "xml_function"
+            cleaned, tool_calls = srv._parse_tool_calls_with_parser(output, request)
+        finally:
+            srv._enable_auto_tool_choice = old_auto
+            srv._tool_call_parser = old_parser
+
+        assert tool_calls is None
+        assert cleaned == output
+
     def test_dsv4_fallback_tool_prompt_uses_canonical_tool_calls_wrapper(self):
         """Fallback injection must not teach a non-canonical bare DSML invoke."""
         from vmlx_engine.api.tool_calling import check_and_inject_fallback_tools
@@ -4824,7 +4872,7 @@ class TestMediaDiagnostics:
 
         assert server._loaded_runtime_modalities() == ["text", "vision", "audio"]
 
-    def test_gemma4_unified_jang4m_runtime_modalities_advertise_audio(
+    def test_gemma4_unified_jang4m_runtime_modalities_gate_config_only_audio(
         self, monkeypatch, tmp_path
     ):
         import vmlx_engine.server as server
@@ -4845,6 +4893,41 @@ class TestMediaDiagnostics:
         monkeypatch.setattr(server, "_engine", SimpleNamespace(is_mllm=True))
         monkeypatch.setattr(server, "_model_path", str(tmp_path))
         monkeypatch.setattr(server, "_model_name", "gemma4-unified-jang4m-test")
+        monkeypatch.setattr(server, "_loaded_omni_modalities", lambda: None)
+
+        assert server._loaded_runtime_modalities() == ["text", "vision"]
+
+    def test_gemma4_unified_jang4m_runtime_modalities_advertise_weight_backed_audio(
+        self, monkeypatch, tmp_path
+    ):
+        import vmlx_engine.server as server
+
+        (tmp_path / "config.json").write_text(
+            json.dumps(
+                {
+                    "model_type": "gemma4_unified",
+                    "vision_config": {"model_type": "gemma4_unified_vision"},
+                    "audio_config": {"model_type": "gemma4_unified_audio"},
+                }
+            )
+        )
+        (tmp_path / "jang_config.json").write_text(
+            json.dumps({"weight_format": "jang_4m", "profile": "jang_4m"})
+        )
+        (tmp_path / "model.safetensors.index.json").write_text(
+            json.dumps(
+                {
+                    "weight_map": {
+                        "audio_tower.layers.0.feed_forward1.ffw_layer_1.linear.weight": "a.safetensors",
+                        "embed_audio.embedding_projection.weight": "b.safetensors",
+                    }
+                }
+            )
+        )
+
+        monkeypatch.setattr(server, "_engine", SimpleNamespace(is_mllm=True))
+        monkeypatch.setattr(server, "_model_path", str(tmp_path))
+        monkeypatch.setattr(server, "_model_name", "gemma4-unified-jang4m-audio-test")
         monkeypatch.setattr(server, "_loaded_omni_modalities", lambda: None)
 
         assert server._loaded_runtime_modalities() == ["text", "vision", "audio"]
@@ -10011,7 +10094,7 @@ class TestJangVLMFallbacks:
         assert utils.is_mllm_model(str(model_dir)) is False
         assert utils.is_mllm_model(str(model_dir), force_mllm=True) is False
 
-    def test_mimo_v2_text_runtime_metadata_stays_text_only_with_media_sidecars(
+    def test_mimo_v2_text_runtime_metadata_auto_enables_complete_media_bundle(
         self,
         tmp_path,
         monkeypatch,
@@ -10069,8 +10152,8 @@ class TestJangVLMFallbacks:
         monkeypatch.setattr(server, "_mimo_v2_runtime_module", lambda: module)
         utils._IS_MLLM_CACHE.clear()
 
-        assert utils.is_mllm_model(str(model_dir)) is False
-        assert utils.is_mllm_model(str(model_dir), force_mllm=True) is False
+        assert utils.is_mllm_model(str(model_dir)) is True
+        assert utils.is_mllm_model(str(model_dir), force_mllm=True) is True
 
     def test_gemma4_unified_routes_multimodal_when_source_runtime_available(
         self,
@@ -10274,6 +10357,7 @@ class TestJangVLMFallbacks:
         monkeypatch,
     ):
         from vmlx_engine.utils import jang_loader
+        from vmlx_engine.models import gemma4_unified_register
         import mlx_vlm.utils as vlm_utils
 
         model_dir = tmp_path
@@ -10290,6 +10374,11 @@ class TestJangVLMFallbacks:
         }
 
         monkeypatch.setattr(vlm_utils, "load_config", lambda path: dict(config))
+        monkeypatch.setattr(
+            gemma4_unified_register,
+            "gemma4_unified_runtime_available",
+            lambda: False,
+        )
         monkeypatch.setattr(
             vlm_utils,
             "get_model_and_args",
@@ -12444,7 +12533,7 @@ class TestTurboQuantKVTelemetry:
             "mode": "storage_boundary",
             "bits": 4,
             "group_size": 64,
-            "applies_to": "full_and_sliding_attention_kv",
+            "applies_to": "full_attention_kv_only",
             "metadata_policy": "preserve_rotating_window_metadata",
         }
         assert status["paged"] is True
@@ -12473,9 +12562,7 @@ class TestTurboQuantKVTelemetry:
         assert status["family"] == "step-3.7-flash"
         assert status["schema"] == "mixed_swa_kv_v1"
         assert status["cache_type"] == "mixed_swa_kv"
-        assert status["storage_quantization"]["applies_to"] == (
-            "full_and_sliding_attention_kv"
-        )
+        assert status["storage_quantization"]["applies_to"] == "full_attention_kv_only"
         assert status["storage_quantization"]["metadata_policy"] == (
             "preserve_rotating_window_metadata"
         )
@@ -12504,9 +12591,7 @@ class TestTurboQuantKVTelemetry:
         assert status["schema"] == "mixed_swa_kv_v1"
         assert status["cache_type"] == "mixed_swa_kv"
         assert status["cache_subtype"] == "mimo_v2_asymmetric_swa"
-        assert status["storage_quantization"]["applies_to"] == (
-            "full_and_sliding_attention_kv"
-        )
+        assert status["storage_quantization"]["applies_to"] == "full_attention_kv_only"
         assert status["storage_quantization"]["metadata_policy"] == (
             "preserve_rotating_window_metadata"
         )
