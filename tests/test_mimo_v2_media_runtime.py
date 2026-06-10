@@ -327,6 +327,60 @@ def test_mimo_v2_audio_projection_bridge_splices_audio_token(
     sys.modules.pop("mlx_vlm.models.mimo_v2", None)
 
 
+def test_mimo_v2_model_splices_image_and_audio_in_one_forward(
+    tmp_path,
+    monkeypatch,
+):
+    module = _register_fake_mimo_runtime(monkeypatch, tmp_path)
+    model = module.Model(
+        module.ModelConfig.from_dict(
+            {
+                "model_type": "mimo_v2",
+                "multimodal_status": "media_runtime_enabled",
+                "vision_config": {
+                    "hidden_size": 8,
+                    "out_hidden_size": 16,
+                    "patch_size": 2,
+                    "temporal_patch_size": 1,
+                    "in_channels": 3,
+                    "spatial_merge_size": 2,
+                    "depth": 1,
+                    "intermediate_size": 16,
+                    "num_heads": 2,
+                    "num_key_value_heads": 1,
+                    "qk_channels": 4,
+                    "fullatt_block_indexes": [0],
+                },
+                "audio_config": {
+                    "group_size": 2,
+                    "input_local_dim": 4,
+                    "out_hidden_size": 16,
+                    "projection_layers": 2,
+                },
+                "processor_config": {
+                    "image_token_id": 151655,
+                    "audio_token_id": 151669,
+                },
+            }
+        )
+    )
+
+    output = model(
+        mx.array([[11, 151655, 22, 151669, 33]]),
+        pixel_values=mx.ones((4, 3 * 1 * 2 * 2)),
+        image_grid_thw=mx.array([[1, 2, 2]]),
+        audio_embeds=mx.ones((1, 8)),
+    )
+
+    assert output.logits.shape == (1, 5, 16)
+    assert output.logits.tolist()[0][0] == [0.0] * 16
+    assert output.logits.tolist()[0][2] == [0.0] * 16
+    assert output.logits.tolist()[0][4] == [0.0] * 16
+    assert any(abs(v) > 0 for v in output.logits.tolist()[0][1])
+    assert any(abs(v) > 0 for v in output.logits.tolist()[0][3])
+    sys.modules.pop("mlx_vlm.models.mimo_v2", None)
+
+
 def test_mimo_v2_text_runtime_metadata_keeps_media_modules_unwired(
     tmp_path,
     monkeypatch,

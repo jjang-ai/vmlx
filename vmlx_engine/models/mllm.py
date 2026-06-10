@@ -3100,16 +3100,10 @@ def _register_mimo_v2_mlx_vlm_runtime() -> None:
             cache=None,
             **kwargs,
         ):
-            if pixel_values is not None:
-                inputs_embeds = self.get_input_embeddings(
-                    input_ids=input_ids,
-                    pixel_values=pixel_values,
-                    image_grid_thw=image_grid_thw,
-                ).inputs_embeds
-                input_ids = None
             if any(
                 item is not None
                 for item in (
+                    pixel_values,
                     image_embeds,
                     video_pixel_values,
                     video_embeds,
@@ -3119,6 +3113,8 @@ def _register_mimo_v2_mlx_vlm_runtime() -> None:
             ):
                 inputs_embeds = self.get_input_embeddings(
                     input_ids=input_ids,
+                    pixel_values=pixel_values,
+                    image_grid_thw=image_grid_thw,
                     image_embeds=image_embeds,
                     video_pixel_values=video_pixel_values,
                     video_grid_thw=video_grid_thw,
