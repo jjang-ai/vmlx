@@ -4212,8 +4212,8 @@ class MLLMBatchGenerator:
             request.pixel_values = cached_pixels.pixel_values
             request.attention_mask = cached_pixels.attention_mask
             request.image_grid_thw = cached_pixels.image_grid_thw
-            request.video_pixel_values = None
-            request.video_grid_thw = None
+            request.video_pixel_values = getattr(cached_pixels, "video_pixel_values", None)
+            request.video_grid_thw = getattr(cached_pixels, "video_grid_thw", None)
             request.extra_kwargs = dict(cached_pixels.extra_kwargs)
             self._raise_if_prompt_over_limit(
                 request,
@@ -4424,7 +4424,10 @@ class MLLMBatchGenerator:
         if (
             not _mllm_bypass
             and media_cache_sources
-            and request.pixel_values is not None
+            and (
+                request.pixel_values is not None
+                or request.video_pixel_values is not None
+            )
         ):
             self.vision_cache.set_pixel_cache(
                 images=media_cache_sources,
@@ -4433,6 +4436,8 @@ class MLLMBatchGenerator:
                 input_ids=request.input_ids,
                 attention_mask=request.attention_mask,
                 image_grid_thw=request.image_grid_thw,
+                video_pixel_values=request.video_pixel_values,
+                video_grid_thw=request.video_grid_thw,
                 extra_kwargs=request.extra_kwargs,
                 processing_time=processing_time,
             )

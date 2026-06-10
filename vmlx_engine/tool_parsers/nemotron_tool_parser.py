@@ -69,12 +69,16 @@ class NemotronToolParser(ToolParser):
             content = content.strip()
             if content.startswith("{"):
                 try:
-                    json.loads(content)
+                    arguments = json.loads(content)
+                    if not self._arguments_satisfy_required_schema(
+                        func_name, arguments, request
+                    ):
+                        continue
                     tool_calls.append(
                         {
                             "id": generate_tool_id(),
                             "name": func_name,
-                            "arguments": content,
+                            "arguments": json.dumps(arguments, ensure_ascii=False),
                         }
                     )
                     continue
@@ -92,6 +96,10 @@ class NemotronToolParser(ToolParser):
                     except json.JSONDecodeError:
                         arguments[param_name.strip()] = param_value.strip()
 
+                if not self._arguments_satisfy_required_schema(
+                    func_name, arguments, request
+                ):
+                    continue
                 tool_calls.append(
                     {
                         "id": generate_tool_id(),
@@ -101,6 +109,10 @@ class NemotronToolParser(ToolParser):
                 )
             else:
                 # Raw content without parameter tags, or empty content
+                if not self._arguments_satisfy_required_schema(
+                    func_name, content, request
+                ):
+                    continue
                 tool_calls.append(
                     {
                         "id": generate_tool_id(),

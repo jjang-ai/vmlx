@@ -155,6 +155,10 @@ class Gemma4ToolParser(ToolParser):
         for name, args_str in matches:
             arguments = _parse_gemma4_args(args_str)
             if name:
+                if not self._arguments_satisfy_required_schema(
+                    name, arguments, request
+                ):
+                    continue
                 tool_calls.append({
                     "id": generate_tool_id(),
                     "name": name,
@@ -173,6 +177,10 @@ class Gemma4ToolParser(ToolParser):
                     name = data.get("name", "")
                     arguments = data.get("arguments", {})
                     if name:
+                        if not self._arguments_satisfy_required_schema(
+                            name, arguments, request
+                        ):
+                            continue
                         tool_calls.append({
                             "id": generate_tool_id(),
                             "name": name,

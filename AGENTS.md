@@ -25,17 +25,120 @@ Every agent continuation must do these in order:
 1. Stay in this active Python/Electron worktree unless Eric explicitly names a
    different current-turn path.
 2. Name the release blocker being reduced before editing or launching anything.
-3. Prefer a live proof that closes or classifies a blocker over a source-only
+3. Read `.agents/CODEX_ACTIVE_DIRECTIVES_20260610.md`, `.agents/STATUS.md`,
+   and the latest release checklist/proof artifact before acting. Do not rely
+   on older memory, deprecated `/Users/eric/vmlx` notes, or stale release
+   snapshots.
+4. Transcribe current-turn user instructions and corrections into
+   `.agents/STATUS.md` / `.agents/LOG.md` before doing the next substantive
+   action. This includes stops, release locks or unlocks, model-lane ownership,
+   parser/API priorities, proof boundaries, and "do not assume" corrections.
+5. Prefer a live proof that closes or classifies a blocker over a source-only
    test, stale pointer refresh, upload chore, package/signing step, or broad
    exploration.
-4. After each proof, update `.agents/STATUS.md`, `.agents/LOG.md`, and the
+6. Write every movement down: request, action, command/proof/artifact,
+   proven/not-proven state, blockers, no-claims, and what the other agent
+   should do next.
+7. After each proof, update `.agents/STATUS.md`, `.agents/LOG.md`, and the
    release tracker with the exact artifact path, pass/fail state, and remaining
    blocker boundary.
-5. Regenerate the current release gates only when the source/proof state changed
+8. Regenerate the current release gates only when the source/proof state changed
    enough to make the status meaningful.
-6. Do not sign, notarize, tag, push release notes, or update downloads while any
+9. Do not sign, notarize, tag, push release notes, or update downloads while any
    objective row is open unless Eric explicitly overrides the lock in the
    current turn.
+
+Standing constraint from Eric: do not use Python, local scripts, shell wrappers,
+MCP tools, or any other mechanism to spawn subagents or delegate this lane's
+work to other agents. Use direct repo edits, direct shell commands, direct live
+proofs, and explicit handoff notes only. Python remains acceptable for ordinary
+local verification, artifact inspection, proof scripts, and tests when it is
+not spawning, prompting, supervising, or summarizing subagents.
+
+### No subagent delegation
+
+This lane must be worked directly by the active Codex instance. Do not use
+Python, shell wrappers, MCP tools, orchestration scripts, or hidden helper
+processes to spawn agents, delegate implementation, delegate proof runs, or
+summarize another agent's work as if it were this lane's evidence. Coordination
+with the parallel agent is limited to explicit checked-in handoff notes and
+status/log entries that name what is proven, what is not proven, and what the
+other agent should do next.
+
+Allowed: ordinary Python or shell commands for direct local verification,
+artifact inspection, test execution, proof generation, and source maintenance.
+Not allowed: any command whose purpose is to create, manage, prompt, or monitor
+subagents for this lane's work.
+
+Current parser/API carry-forward from Eric: harshly prioritize auto tool usage,
+content deltas, reasoning deltas, interleaved reasoning/tool streaming, request
+kwargs, Chat/Responses API behavior, gateway passthrough, raw SSE ordering,
+parser selection, and final-object consistency across all model reasoning and
+tool parser families. The Qwen3.6 / Qwen-coder empty-args report is active for
+both 27B and 35B style XML tool-call dialects. Do not assume the report's root
+cause is correct without same-model raw output, but do treat the failure shape
+as release-critical for opencode/Codex harnesses. Missing required tool
+arguments must fail closed; do not synthesize `cmd`, infer arguments from a
+visible preamble, disable reasoning to avoid the bug, or strip raw XML after
+the fact as a fake fix. Required proof is same-model direct server, local
+gateway, and tunnel raw SSE with reasoning enabled, valid content/reasoning
+deltas, argument delta/done events, final object consistency, valid
+`output_index` ordering, required/auto/no-tool modes, tool-result continuation,
+and cache reuse telemetry.
+
+Current explicit parser/runtime work item from Eric: add the Qwen3.6/Qwen-coder
+empty-arguments report to the active fix/proof list for both 27B and 35B style
+XML tool-call dialects, but do not trust the proposed root cause without live
+same-model raw output. The failure shape is: model emits visible text and then
+an XML tool call with `<function=...></function>` but no parameter tags, the
+parser returns `{}`, and clients such as Codex/opencode fail because required
+arguments like `cmd` are missing. Required behavior is fail-closed validation,
+clean raw SSE/content/reasoning/tool-call event shape, and usable harness
+behavior for opencode/Codex-style agent loops. Forbidden fixes include
+synthesizing arguments from a preamble, disabling reasoning, silently dropping
+the tool call, or repairing values after parser failure.
+
+Current cross-family parser/API proof target: test and fix every model
+reasoning/tool parser family that can affect agentic loops, including Qwen,
+Qwen-coder, Gemma4, MiMo/think-XML, MiniMax, DeepSeek/R1-style think parsers,
+XML function-call parsers, and any gateway/tunnel route that rewrites or
+streams the same events. Proof must include auto tool usage, required tool
+usage, no-tool mode, tool-result continuation, content deltas, reasoning
+deltas, function-call argument delta/done events, final response object
+consistency, request kwargs passthrough, parser selection, cache reuse telemetry,
+and raw leak checks. If a family-specific parser cannot honestly support a
+dialect, mark it unsupported or fail closed with evidence instead of pretending
+the dialect works.
+
+Current N2 boundary from Eric: do not work on Nex/N2 JANG_1L unless Eric
+explicitly reopens that lane in the current turn. Treat N2 JANG_1L as
+Eric-owned/off-limits; do not launch, fix, prove, classify, or claim it from
+partial prior runs. Allowed N2 work here is N2 JANGTQ/non-JANG_1L only when it
+does not overlap the JANG_1L lane.
+
+Current checkpoint-release pressure: Eric does want a signed/notarized working
+checkpoint release, but this agent must not enter release/sign/notarize/PyPI/
+download-update steps unless Eric explicitly asks for that action in the
+current turn or the active directive file says the release lock is lifted.
+Until then, reduce model/runtime/API/UI/cache blockers and keep the release
+writeup current.
+
+Current release-focus constraint from Eric: do not drift into broad harness
+rewrites, stale pointer churn, or release-adjacent cleanup when a live runtime,
+API, cache, media, UI, or installed-app blocker can be reduced directly. Work
+one concrete blocker at a time, prove it with the real engine/app surface where
+possible, and list what is proven and not proven after every movement. Release
+preparation is the goal, but signing/notarization/publishing still require an
+explicit current-turn release override.
+
+Current 128GB-user proof target from Eric: do not avoid large supported models
+only because they are memory-heavy. For MiMo, Gemma JANG/MXFP/QAT, Nex/N2
+JANGTQ/non-JANG_1L, Qwen MTP/MXFP, JANG/JANGTQ/MXFP/MXTQ, VL/video/audio, and
+family-native cache paths, prefer real live loading and multi-turn/API/UI/cache
+proofs when RAM headroom allows. Watch memory and cache storage, kill only
+clearly unrelated smaller processes when needed, preserve the N2 JANG_1L
+off-limits boundary unless Eric reopens it, and never substitute metadata-only
+capability claims for live evidence.
 
 If a turn is interrupted, resume by reading the current tracker/status and
 continuing the next blocker; do not restart from old memory, old `/Users/eric/vmlx`

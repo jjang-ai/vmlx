@@ -1,0 +1,852 @@
+{
+  "auto_kv_quantization": "q4",
+  "boundary": {
+    "does_not_prove": [
+      "installed app parity",
+      "fresh-process L2 restore",
+      "Gemma media/audio",
+      "exact code whitespace row",
+      "release clearance"
+    ],
+    "proves": [
+      "Gemma4 mixed-SWA auto q4 storage quantization remains enabled",
+      "RotatingKVCache metadata is reported preserved",
+      "live repeated chat reaches cache reuse telemetry"
+    ]
+  },
+  "cache_after": {
+    "block_disk_cache": {
+      "blocks_on_disk": 1,
+      "disk_evictions": 0,
+      "disk_hits": 0,
+      "disk_misses": 3,
+      "disk_size_bytes": 6905052,
+      "disk_size_gb": 0.006,
+      "disk_writes": 1,
+      "total_accesses": 0,
+      "total_cached_tokens": 20,
+      "total_tokens_on_disk": 20
+    },
+    "cache_totals": {
+      "l2_block_tokens_on_disk": 20,
+      "l2_prompt_tokens_on_disk": 0,
+      "l2_ssm_tokens_on_disk": 0,
+      "l2_tokens_on_disk": 20,
+      "l2_tokens_on_disk_note": "store_sum_across_prompt_block_ssm_l2; tiers_may_overlap",
+      "l2_tokens_on_disk_store_sum": 20,
+      "ram_tokens_cached": 20,
+      "ssm_tokens_on_disk": 0
+    },
+    "kv_cache_quantization": {
+      "bits": 4,
+      "enabled": true,
+      "group_size": 64
+    },
+    "memory": {
+      "active_mb": 9677.9,
+      "cache_mb": 89.3,
+      "peak_mb": 9851.1
+    },
+    "native_cache": {
+      "block_disk_l2": true,
+      "cache_subtype": "mixed_swa_kv",
+      "cache_type": "mixed_swa_kv",
+      "components": [
+        "full_attention_kv",
+        "sliding_window_kv",
+        "rotating_window_metadata"
+      ],
+      "family": "gemma4",
+      "generic_turboquant_kv": {
+        "enabled": false,
+        "reason": "not_active"
+      },
+      "paged": true,
+      "prefix": true,
+      "schema": "mixed_swa_kv_v1",
+      "storage_quantization": {
+        "applies_to": "full_attention_kv_only",
+        "bits": 4,
+        "enabled": true,
+        "group_size": 64,
+        "metadata_policy": "preserve_rotating_window_metadata",
+        "mode": "storage_boundary"
+      }
+    },
+    "scheduler_cache": {
+      "active_requests": 0,
+      "allocated_blocks": 2,
+      "block_size": 64,
+      "cache_hit_rate": 0.6666666666666666,
+      "cache_hits": 2,
+      "cache_misses": 1,
+      "cow_copies": 0,
+      "disk_hits": 0,
+      "disk_misses": 0,
+      "entries_by_type": {
+        "assistant": 1,
+        "system": 0,
+        "user": 0
+      },
+      "evictions": 0,
+      "free_blocks": 998,
+      "hit_rate": 0.5,
+      "hits": 1,
+      "max_blocks": 1000,
+      "misses": 1,
+      "pixel_cache_hits": 0,
+      "pixel_cache_misses": 0,
+      "pixel_cache_size": 0,
+      "pixel_hit_rate": 0.0,
+      "shared_blocks": 1,
+      "tokens_saved": 20,
+      "total_images_processed": 0,
+      "total_time_saved": 0.0,
+      "total_tokens_cached": 20,
+      "utilization": 0.002
+    },
+    "scheduler_stats": {
+      "batch_generator": {
+        "generation_time": 0.7201843379734783,
+        "generation_tokens": 34,
+        "generation_tps": 47.2101352490841,
+        "hybrid_kv_without_ssm_hits": 0,
+        "hybrid_kv_without_ssm_tokens": 0,
+        "last_cache_execution": {
+          "blocks": 0,
+          "cache_detail": "paged+mixed_swa",
+          "cached_tokens": 20,
+          "dequantization_ok": true,
+          "dequantization_seconds": 6.8e-05,
+          "dequantized": true,
+          "disk_hit": false,
+          "reconstructed": true,
+          "reconstruction_ok": true,
+          "reconstruction_seconds": 0.009521,
+          "request_id": "chatcmpl-4d949560",
+          "selection": "paged",
+          "total_worker_cache_seconds": 0.010251
+        },
+        "last_hybrid_kv_without_ssm": null,
+        "last_native_mtp": null,
+        "last_prefill_trace": null,
+        "num_images_processed": 0,
+        "peak_memory": 10.32960193,
+        "prompt_time": 0.23598045799008105,
+        "prompt_tokens": 25,
+        "prompt_tps": 105.9409758457661,
+        "vision_encoding_time": 0
+      },
+      "cache_hit_requests": 1,
+      "cache_hit_tokens": 20,
+      "cache_hit_tokens_by_detail": {
+        "paged+mixed_swa": 20
+      },
+      "cache_reuse_partial_downgrades": 0,
+      "cache_reuse_partial_tokens": 0,
+      "cache_reuse_skip_tokens": 0,
+      "cache_reuse_skips": 0,
+      "engine_path": null,
+      "ewma_ttft_seconds": 0,
+      "hybrid_kv_without_ssm_hits": 0,
+      "hybrid_kv_without_ssm_tokens": 0,
+      "last_cache_execution": {
+        "blocks": 0,
+        "cache_detail": "paged+mixed_swa",
+        "cached_tokens": 20,
+        "dequantization_ok": true,
+        "dequantization_seconds": 6.8e-05,
+        "dequantized": true,
+        "disk_hit": false,
+        "reconstructed": true,
+        "reconstruction_ok": true,
+        "reconstruction_seconds": 0.009521,
+        "request_id": "chatcmpl-4d949560",
+        "selection": "paged",
+        "total_worker_cache_seconds": 0.010251
+      },
+      "last_cache_reuse_partial": null,
+      "last_cache_reuse_skip": null,
+      "last_cache_selection": null,
+      "last_hybrid_kv_without_ssm": null,
+      "num_requests_processed": 2,
+      "num_running": 0,
+      "num_waiting": 0,
+      "single_active_decode": false,
+      "total_completion_tokens": 34,
+      "total_prompt_tokens": 42
+    },
+    "ssm_companion": {
+      "disk_directory": null,
+      "disk_enabled": false,
+      "entries": 0,
+      "max_entries": 8,
+      "nbytes": 0,
+      "nbytes_mb": 0.0
+    },
+    "turboquant_kv_cache": {
+      "enabled": false
+    }
+  },
+  "cache_before": {
+    "block_disk_cache": {
+      "blocks_on_disk": 0,
+      "disk_evictions": 0,
+      "disk_hits": 0,
+      "disk_misses": 0,
+      "disk_size_bytes": 0,
+      "disk_size_gb": 0.0,
+      "disk_writes": 0,
+      "total_accesses": 0,
+      "total_cached_tokens": 0,
+      "total_tokens_on_disk": 0
+    },
+    "cache_totals": {
+      "l2_block_tokens_on_disk": 0,
+      "l2_prompt_tokens_on_disk": 0,
+      "l2_ssm_tokens_on_disk": 0,
+      "l2_tokens_on_disk": 0,
+      "l2_tokens_on_disk_note": "store_sum_across_prompt_block_ssm_l2; tiers_may_overlap",
+      "l2_tokens_on_disk_store_sum": 0,
+      "ram_tokens_cached": 0,
+      "ssm_tokens_on_disk": 0
+    },
+    "kv_cache_quantization": {
+      "bits": 4,
+      "enabled": true,
+      "group_size": 64
+    },
+    "memory": {
+      "active_mb": 9665.9,
+      "cache_mb": 0.0,
+      "peak_mb": 9665.9
+    },
+    "native_cache": {
+      "block_disk_l2": true,
+      "cache_subtype": "mixed_swa_kv",
+      "cache_type": "mixed_swa_kv",
+      "components": [
+        "full_attention_kv",
+        "sliding_window_kv",
+        "rotating_window_metadata"
+      ],
+      "family": "gemma4",
+      "generic_turboquant_kv": {
+        "enabled": false,
+        "reason": "not_active"
+      },
+      "paged": true,
+      "prefix": true,
+      "schema": "mixed_swa_kv_v1",
+      "storage_quantization": {
+        "applies_to": "full_attention_kv_only",
+        "bits": 4,
+        "enabled": true,
+        "group_size": 64,
+        "metadata_policy": "preserve_rotating_window_metadata",
+        "mode": "storage_boundary"
+      }
+    },
+    "scheduler_cache": {
+      "active_requests": 0,
+      "allocated_blocks": 1,
+      "block_size": 64,
+      "cache_hit_rate": 0,
+      "cache_hits": 0,
+      "cache_misses": 0,
+      "cow_copies": 0,
+      "disk_hits": 0,
+      "disk_misses": 0,
+      "entries_by_type": {
+        "assistant": 0,
+        "system": 0,
+        "user": 0
+      },
+      "evictions": 0,
+      "free_blocks": 999,
+      "hit_rate": 0,
+      "hits": 0,
+      "max_blocks": 1000,
+      "misses": 0,
+      "shared_blocks": 0,
+      "tokens_saved": 0,
+      "total_tokens_cached": 0,
+      "utilization": 0.001
+    },
+    "scheduler_stats": {
+      "batch_generator": {},
+      "cache_hit_requests": 0,
+      "cache_hit_tokens": 0,
+      "cache_hit_tokens_by_detail": {},
+      "cache_reuse_partial_downgrades": 0,
+      "cache_reuse_partial_tokens": 0,
+      "cache_reuse_skip_tokens": 0,
+      "cache_reuse_skips": 0,
+      "engine_path": null,
+      "ewma_ttft_seconds": 0,
+      "hybrid_kv_without_ssm_hits": 0,
+      "hybrid_kv_without_ssm_tokens": 0,
+      "last_cache_execution": null,
+      "last_cache_reuse_partial": null,
+      "last_cache_reuse_skip": null,
+      "last_cache_selection": null,
+      "last_hybrid_kv_without_ssm": null,
+      "num_requests_processed": 0,
+      "num_running": 0,
+      "num_waiting": 0,
+      "single_active_decode": false,
+      "total_completion_tokens": 0,
+      "total_prompt_tokens": 0
+    },
+    "turboquant_kv_cache": {
+      "enabled": false
+    }
+  },
+  "checks": {
+    "cache_second_hit": true,
+    "generic_tq_inactive": true,
+    "health_ok": true,
+    "native_mixed_swa": true,
+    "rotating_metadata_preserved": true,
+    "second_http_200": true,
+    "storage_quant_full_attention_only": true,
+    "storage_quant_q4": true
+  },
+  "created_at": "2026-06-10T04:17:54-0700",
+  "first": {
+    "content": "GEMMA12-AUTOQ4-CACHE-OK",
+    "status": 200,
+    "usage": {
+      "completion_tokens": 17,
+      "prompt_tokens": 21,
+      "prompt_tokens_details": null,
+      "total_tokens": 38
+    }
+  },
+  "health_after": {
+    "acceleration": {
+      "host": {
+        "brand": "Apple M5 Max",
+        "reason": null,
+        "supported": true
+      },
+      "kernel_type": "affine_quantized_matmul",
+      "metal_na_active_on_host": true,
+      "metal_na_capable": true,
+      "metal_na_symbols": {
+        "affine_gather_qmm_symbols": 3456,
+        "affine_qmm_symbols": 4212,
+        "available": true,
+        "nax_symbols": 4668,
+        "naxtile_symbols": 4154
+      },
+      "reason": null
+    },
+    "cache": {
+      "block_disk_cache": {
+        "blocks_on_disk": 1,
+        "disk_evictions": 0,
+        "disk_hits": 0,
+        "disk_misses": 3,
+        "disk_size_bytes": 6905052,
+        "disk_size_gb": 0.006,
+        "disk_writes": 1,
+        "total_accesses": 0,
+        "total_cached_tokens": 20,
+        "total_tokens_on_disk": 20
+      },
+      "scheduler_cache": {
+        "active_requests": 0,
+        "allocated_blocks": 2,
+        "block_size": 64,
+        "cache_hit_rate": 0.6666666666666666,
+        "cache_hits": 2,
+        "cache_misses": 1,
+        "cow_copies": 0,
+        "disk_hits": 0,
+        "disk_misses": 0,
+        "entries_by_type": {
+          "assistant": 1,
+          "system": 0,
+          "user": 0
+        },
+        "evictions": 0,
+        "free_blocks": 998,
+        "hit_rate": 0.5,
+        "hits": 1,
+        "max_blocks": 1000,
+        "misses": 1,
+        "pixel_cache_hits": 0,
+        "pixel_cache_misses": 0,
+        "pixel_cache_size": 0,
+        "pixel_hit_rate": 0.0,
+        "shared_blocks": 1,
+        "tokens_saved": 20,
+        "total_images_processed": 0,
+        "total_time_saved": 0.0,
+        "total_tokens_cached": 20,
+        "utilization": 0.002
+      },
+      "ssm_companion": {
+        "disk_directory": null,
+        "disk_enabled": false,
+        "entries": 0,
+        "max_entries": 8,
+        "nbytes": 0,
+        "nbytes_mb": 0.0
+      },
+      "totals": {
+        "l2_block_tokens_on_disk": 20,
+        "l2_prompt_tokens_on_disk": 0,
+        "l2_ssm_tokens_on_disk": 0,
+        "l2_tokens_on_disk": 20,
+        "l2_tokens_on_disk_note": "store_sum_across_prompt_block_ssm_l2; tiers_may_overlap",
+        "l2_tokens_on_disk_store_sum": 20,
+        "ram_tokens_cached": 20,
+        "ssm_tokens_on_disk": 0
+      }
+    },
+    "engine_type": "batched",
+    "kv_cache_quantization": {
+      "bits": 4,
+      "enabled": true,
+      "group_size": 64
+    },
+    "last_request_time": 1781090274.466871,
+    "mcp": null,
+    "memory": {
+      "active_mb": 9678.4,
+      "cache_mb": 88.8,
+      "peak_mb": 9851.1
+    },
+    "model_loaded": true,
+    "model_name": "JANGQ-AI/gemma-4-12B-it-JANG_4M",
+    "model_type": "mllm",
+    "mtp": {
+      "artifact_available": false,
+      "cache_type": "kv",
+      "config_mtp_layer_source": null,
+      "config_num_nextn_predict_layers": null,
+      "effective_depth": null,
+      "effective_depth_source": null,
+      "family": "gemma4",
+      "has_vision_config": true,
+      "has_vision_weights": false,
+      "index_has_mtp_tensors": false,
+      "index_mtp_layer_count": null,
+      "issues": [],
+      "jang_drop_mtp": null,
+      "jang_mtp_layers": null,
+      "mtp_tensor_count": 0,
+      "request_gate": "temperature=0,repetition_penalty=1.0",
+      "request_policy": "disabled",
+      "runtime_active": false,
+      "runtime_available": false,
+      "runtime_bundle_has_mtp": null,
+      "runtime_mtp_mode": null,
+      "runtime_reason": "config does not request MTP",
+      "runtime_scope": null,
+      "runtime_supported": false,
+      "runtime_validation_blocked": false,
+      "status": "not_configured",
+      "vision_tensor_count": 0,
+      "vl_runtime_available": false
+    },
+    "native_cache": {
+      "block_disk_l2": true,
+      "cache_subtype": "mixed_swa_kv",
+      "cache_type": "mixed_swa_kv",
+      "components": [
+        "full_attention_kv",
+        "sliding_window_kv",
+        "rotating_window_metadata"
+      ],
+      "family": "gemma4",
+      "generic_turboquant_kv": {
+        "enabled": false,
+        "reason": "not_active"
+      },
+      "paged": true,
+      "prefix": true,
+      "schema": "mixed_swa_kv_v1",
+      "storage_quantization": {
+        "applies_to": "full_attention_kv_only",
+        "bits": 4,
+        "enabled": true,
+        "group_size": 64,
+        "metadata_policy": "preserve_rotating_window_metadata",
+        "mode": "storage_boundary"
+      }
+    },
+    "quantization": {
+      "backend": "mx.quantize",
+      "codec": "affine_quantized_matmul",
+      "config_bits": 8,
+      "group_size": 32,
+      "passthrough_tensor_count": 349,
+      "profile": "JANG_4M",
+      "sidecar": {
+        "jang_config": true,
+        "jangtq_runtime": false,
+        "prestacked_bundle": false
+      },
+      "target_bits": 8,
+      "weight_format": "jang_affine",
+      "weight_index": {
+        "index_file": "/Users/eric/models/JANGQ-AI/gemma-4-12B-it-JANG_4M/model.safetensors.index.json",
+        "mtp_tensor_count": 0,
+        "routed_layout_counts": {
+          "prestacked_switch": 0,
+          "split_expert": 0
+        },
+        "suffix_counts": {
+          "biases": 328,
+          "scales": 328,
+          "weight": 624
+        },
+        "total_tensors": 1333,
+        "tq_target_counts": {}
+      },
+      "weight_matmul_dispatch": {
+        "metal_na_eligible": true,
+        "primary": "mlx_affine_quantized_matmul",
+        "reason": null,
+        "uses_mlx_quantized_matmul": true
+      }
+    },
+    "quantization_format": {
+      "actual_bits": null,
+      "block_size": 64,
+      "target_bits": null,
+      "type": "jang"
+    },
+    "scheduler": {
+      "batch_generator": {
+        "generation_time": 0.7201843379734783,
+        "generation_tokens": 34,
+        "generation_tps": 47.2101352490841,
+        "hybrid_kv_without_ssm_hits": 0,
+        "hybrid_kv_without_ssm_tokens": 0,
+        "last_cache_execution": {
+          "blocks": 0,
+          "cache_detail": "paged+mixed_swa",
+          "cached_tokens": 20,
+          "dequantization_ok": true,
+          "dequantization_seconds": 6.8e-05,
+          "dequantized": true,
+          "disk_hit": false,
+          "reconstructed": true,
+          "reconstruction_ok": true,
+          "reconstruction_seconds": 0.009521,
+          "request_id": "chatcmpl-4d949560",
+          "selection": "paged",
+          "total_worker_cache_seconds": 0.010251
+        },
+        "last_hybrid_kv_without_ssm": null,
+        "last_native_mtp": null,
+        "last_prefill_trace": null,
+        "num_images_processed": 0,
+        "peak_memory": 10.32960193,
+        "prompt_time": 0.23598045799008105,
+        "prompt_tokens": 25,
+        "prompt_tps": 105.9409758457661,
+        "vision_encoding_time": 0
+      },
+      "cache_hit_requests": 1,
+      "cache_hit_tokens": 20,
+      "cache_hit_tokens_by_detail": {
+        "paged+mixed_swa": 20
+      },
+      "cache_reuse_partial_downgrades": 0,
+      "cache_reuse_partial_tokens": 0,
+      "cache_reuse_skip_tokens": 0,
+      "cache_reuse_skips": 0,
+      "engine_path": null,
+      "ewma_ttft_seconds": 0,
+      "hybrid_kv_without_ssm_hits": 0,
+      "hybrid_kv_without_ssm_tokens": 0,
+      "last_cache_execution": {
+        "blocks": 0,
+        "cache_detail": "paged+mixed_swa",
+        "cached_tokens": 20,
+        "dequantization_ok": true,
+        "dequantization_seconds": 6.8e-05,
+        "dequantized": true,
+        "disk_hit": false,
+        "reconstructed": true,
+        "reconstruction_ok": true,
+        "reconstruction_seconds": 0.009521,
+        "request_id": "chatcmpl-4d949560",
+        "selection": "paged",
+        "total_worker_cache_seconds": 0.010251
+      },
+      "last_cache_reuse_partial": null,
+      "last_cache_reuse_skip": null,
+      "last_cache_selection": null,
+      "last_hybrid_kv_without_ssm": null,
+      "num_running": 0,
+      "num_waiting": 0,
+      "single_active_decode": false
+    },
+    "speculative_decoding": "not_configured",
+    "status": "healthy",
+    "turboquant_kv_cache": {
+      "enabled": false
+    }
+  },
+  "health_before": {
+    "acceleration": {
+      "host": {
+        "brand": "Apple M5 Max",
+        "reason": null,
+        "supported": true
+      },
+      "kernel_type": "affine_quantized_matmul",
+      "metal_na_active_on_host": true,
+      "metal_na_capable": true,
+      "metal_na_symbols": {
+        "affine_gather_qmm_symbols": 3456,
+        "affine_qmm_symbols": 4212,
+        "available": true,
+        "nax_symbols": 4668,
+        "naxtile_symbols": 4154
+      },
+      "reason": null
+    },
+    "cache": {
+      "block_disk_cache": {
+        "blocks_on_disk": 0,
+        "disk_evictions": 0,
+        "disk_hits": 0,
+        "disk_misses": 0,
+        "disk_size_bytes": 0,
+        "disk_size_gb": 0.0,
+        "disk_writes": 0,
+        "total_accesses": 0,
+        "total_cached_tokens": 0,
+        "total_tokens_on_disk": 0
+      },
+      "scheduler_cache": {
+        "active_requests": 0,
+        "allocated_blocks": 1,
+        "block_size": 64,
+        "cache_hit_rate": 0,
+        "cache_hits": 0,
+        "cache_misses": 0,
+        "cow_copies": 0,
+        "disk_hits": 0,
+        "disk_misses": 0,
+        "entries_by_type": {
+          "assistant": 0,
+          "system": 0,
+          "user": 0
+        },
+        "evictions": 0,
+        "free_blocks": 999,
+        "hit_rate": 0,
+        "hits": 0,
+        "max_blocks": 1000,
+        "misses": 0,
+        "shared_blocks": 0,
+        "tokens_saved": 0,
+        "total_tokens_cached": 0,
+        "utilization": 0.001
+      },
+      "totals": {
+        "l2_block_tokens_on_disk": 0,
+        "l2_prompt_tokens_on_disk": 0,
+        "l2_ssm_tokens_on_disk": 0,
+        "l2_tokens_on_disk": 0,
+        "l2_tokens_on_disk_note": "store_sum_across_prompt_block_ssm_l2; tiers_may_overlap",
+        "l2_tokens_on_disk_store_sum": 0,
+        "ram_tokens_cached": 0,
+        "ssm_tokens_on_disk": 0
+      }
+    },
+    "engine_type": "batched",
+    "kv_cache_quantization": {
+      "bits": 4,
+      "enabled": true,
+      "group_size": 64
+    },
+    "last_request_time": null,
+    "mcp": null,
+    "memory": {
+      "active_mb": 9665.9,
+      "cache_mb": 0.0,
+      "peak_mb": 9665.9
+    },
+    "model_loaded": true,
+    "model_name": "JANGQ-AI/gemma-4-12B-it-JANG_4M",
+    "model_type": "mllm",
+    "mtp": {
+      "artifact_available": false,
+      "cache_type": "kv",
+      "config_mtp_layer_source": null,
+      "config_num_nextn_predict_layers": null,
+      "effective_depth": null,
+      "effective_depth_source": null,
+      "family": "gemma4",
+      "has_vision_config": true,
+      "has_vision_weights": false,
+      "index_has_mtp_tensors": false,
+      "index_mtp_layer_count": null,
+      "issues": [],
+      "jang_drop_mtp": null,
+      "jang_mtp_layers": null,
+      "mtp_tensor_count": 0,
+      "request_gate": "temperature=0,repetition_penalty=1.0",
+      "request_policy": "disabled",
+      "runtime_active": false,
+      "runtime_available": false,
+      "runtime_bundle_has_mtp": null,
+      "runtime_mtp_mode": null,
+      "runtime_reason": "config does not request MTP",
+      "runtime_scope": null,
+      "runtime_supported": false,
+      "runtime_validation_blocked": false,
+      "status": "not_configured",
+      "vision_tensor_count": 0,
+      "vl_runtime_available": false
+    },
+    "native_cache": {
+      "block_disk_l2": true,
+      "cache_subtype": "mixed_swa_kv",
+      "cache_type": "mixed_swa_kv",
+      "components": [
+        "full_attention_kv",
+        "sliding_window_kv",
+        "rotating_window_metadata"
+      ],
+      "family": "gemma4",
+      "generic_turboquant_kv": {
+        "enabled": false,
+        "reason": "not_active"
+      },
+      "paged": true,
+      "prefix": true,
+      "schema": "mixed_swa_kv_v1",
+      "storage_quantization": {
+        "applies_to": "full_attention_kv_only",
+        "bits": 4,
+        "enabled": true,
+        "group_size": 64,
+        "metadata_policy": "preserve_rotating_window_metadata",
+        "mode": "storage_boundary"
+      }
+    },
+    "quantization": {
+      "backend": "mx.quantize",
+      "codec": "affine_quantized_matmul",
+      "config_bits": 8,
+      "group_size": 32,
+      "passthrough_tensor_count": 349,
+      "profile": "JANG_4M",
+      "sidecar": {
+        "jang_config": true,
+        "jangtq_runtime": false,
+        "prestacked_bundle": false
+      },
+      "target_bits": 8,
+      "weight_format": "jang_affine",
+      "weight_index": {
+        "index_file": "/Users/eric/models/JANGQ-AI/gemma-4-12B-it-JANG_4M/model.safetensors.index.json",
+        "mtp_tensor_count": 0,
+        "routed_layout_counts": {
+          "prestacked_switch": 0,
+          "split_expert": 0
+        },
+        "suffix_counts": {
+          "biases": 328,
+          "scales": 328,
+          "weight": 624
+        },
+        "total_tensors": 1333,
+        "tq_target_counts": {}
+      },
+      "weight_matmul_dispatch": {
+        "metal_na_eligible": true,
+        "primary": "mlx_affine_quantized_matmul",
+        "reason": null,
+        "uses_mlx_quantized_matmul": true
+      }
+    },
+    "quantization_format": {
+      "actual_bits": null,
+      "block_size": 64,
+      "target_bits": null,
+      "type": "jang"
+    },
+    "scheduler": {
+      "batch_generator": {},
+      "cache_hit_requests": 0,
+      "cache_hit_tokens": 0,
+      "cache_hit_tokens_by_detail": {},
+      "cache_reuse_partial_downgrades": 0,
+      "cache_reuse_partial_tokens": 0,
+      "cache_reuse_skip_tokens": 0,
+      "cache_reuse_skips": 0,
+      "engine_path": null,
+      "ewma_ttft_seconds": 0,
+      "hybrid_kv_without_ssm_hits": 0,
+      "hybrid_kv_without_ssm_tokens": 0,
+      "last_cache_execution": null,
+      "last_cache_reuse_partial": null,
+      "last_cache_reuse_skip": null,
+      "last_cache_selection": null,
+      "last_hybrid_kv_without_ssm": null,
+      "num_running": 0,
+      "num_waiting": 0,
+      "single_active_decode": false
+    },
+    "speculative_decoding": "not_configured",
+    "status": "healthy",
+    "turboquant_kv_cache": {
+      "enabled": false
+    }
+  },
+  "model_path": "/Users/eric/models/JANGQ-AI/gemma-4-12B-it-JANG_4M",
+  "native_cache": {
+    "block_disk_l2": true,
+    "cache_subtype": "mixed_swa_kv",
+    "cache_type": "mixed_swa_kv",
+    "components": [
+      "full_attention_kv",
+      "sliding_window_kv",
+      "rotating_window_metadata"
+    ],
+    "family": "gemma4",
+    "generic_turboquant_kv": {
+      "enabled": false,
+      "reason": "not_active"
+    },
+    "paged": true,
+    "prefix": true,
+    "schema": "mixed_swa_kv_v1",
+    "storage_quantization": {
+      "applies_to": "full_attention_kv_only",
+      "bits": 4,
+      "enabled": true,
+      "group_size": 64,
+      "metadata_policy": "preserve_rotating_window_metadata",
+      "mode": "storage_boundary"
+    }
+  },
+  "port": 8899,
+  "second": {
+    "content": "GEMMA12-AUTOQ4-CACHE-OK",
+    "status": 200,
+    "usage": {
+      "completion_tokens": 17,
+      "prompt_tokens": 21,
+      "prompt_tokens_details": {
+        "cache_detail": "paged+mixed_swa",
+        "cached_tokens": 20
+      },
+      "total_tokens": 38
+    }
+  },
+  "served_model": "gemma4-12b-jang4m-autoq4-proof",
+  "source_commit": "0b7b9e4c68b6e64bdd57c2e98b21b55f77183b9c",
+  "status": "pass"
+}

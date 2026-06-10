@@ -36,6 +36,52 @@ data: {{"type":"response.completed","response":{{"status":"completed"}}}}
 """
 
 
+def _interleaved_reasoning_content_tool_sse() -> str:
+    return """event: response.created
+data: {"type":"response.created","response":{"id":"resp_1","status":"in_progress","model":"same-model","output":[]}}
+
+event: response.output_item.added
+data: {"type":"response.output_item.added","output_index":0,"item":{"id":"msg_1","type":"message","status":"in_progress","role":"assistant","content":[]}}
+
+event: response.output_text.delta
+data: {"type":"response.output_text.delta","item_id":"msg_1","output_index":0,"delta":"visible "}
+
+event: response.output_item.added
+data: {"type":"response.output_item.added","output_index":1,"item":{"id":"rs_1","type":"reasoning","status":"in_progress","summary":[]}}
+
+event: response.reasoning_summary_text.delta
+data: {"type":"response.reasoning_summary_text.delta","item_id":"rs_1","output_index":1,"delta":"checking"}
+
+event: response.output_text.delta
+data: {"type":"response.output_text.delta","item_id":"msg_1","output_index":0,"delta":"content"}
+
+event: response.reasoning_summary_text.done
+data: {"type":"response.reasoning_summary_text.done","item_id":"rs_1","output_index":1,"text":"checking"}
+
+event: response.output_item.done
+data: {"type":"response.output_item.done","output_index":1,"item":{"id":"rs_1","type":"reasoning","status":"completed","summary":[{"type":"summary_text","text":"checking"}]}}
+
+event: response.output_item.done
+data: {"type":"response.output_item.done","output_index":0,"item":{"id":"msg_1","type":"message","status":"completed","role":"assistant","content":[{"type":"output_text","text":"visible content"}]}}
+
+event: response.output_item.added
+data: {"type":"response.output_item.added","output_index":2,"item":{"id":"fc_1","type":"function_call","status":"in_progress","call_id":"call_1","name":"lookup","arguments":""}}
+
+event: response.function_call_arguments.delta
+data: {"type":"response.function_call_arguments.delta","item_id":"fc_1","output_index":2,"delta":"{\\"query\\":\\"alpha\\"}"}
+
+event: response.function_call_arguments.done
+data: {"type":"response.function_call_arguments.done","item_id":"fc_1","output_index":2,"arguments":"{\\"query\\":\\"alpha\\"}"}
+
+event: response.output_item.done
+data: {"type":"response.output_item.done","output_index":2,"item":{"id":"fc_1","type":"function_call","status":"completed","call_id":"call_1","name":"lookup","arguments":"{\\"query\\":\\"alpha\\"}"}}
+
+event: response.completed
+data: {"type":"response.completed","response":{"status":"completed","model":"same-model","output":[{"id":"msg_1","type":"message","status":"completed","role":"assistant","content":[{"type":"output_text","text":"visible content"}]},{"id":"rs_1","type":"reasoning","status":"completed","summary":[{"type":"summary_text","text":"checking"}]},{"id":"fc_1","type":"function_call","status":"completed","call_id":"call_1","name":"lookup","arguments":"{\\"query\\":\\"alpha\\"}"}]}}
+
+"""
+
+
 def _sse_with_message_and_duplicate_function_index() -> str:
     return """event: response.created
 data: {"type":"response.created","response":{"id":"resp_1","status":"in_progress","model":"same-model","output":[]}}
@@ -86,6 +132,27 @@ def test_classifier_flags_function_call_reusing_message_output_index():
     assert row["output_item_indices_valid"] is False
 
 
+def test_classifier_tracks_interleaved_reasoning_content_tool_and_final_output():
+    row = classify_sse_capture(_interleaved_reasoning_content_tool_sse())
+
+    assert row["content_delta_count"] == 2
+    assert row["reconstructed_content"] == "visible content"
+    assert row["reasoning_output_item_count"] == 1
+    assert row["reasoning_done_count"] == 1
+    assert row["reasoning_lifecycle_complete"] is True
+    assert row["final_response_output_types"] == [
+        "message",
+        "reasoning",
+        "function_call",
+    ]
+    assert row["final_response_function_arguments"] == '{"query":"alpha"}'
+    assert row["final_response_message_text"] == "visible content"
+    assert row["final_response_consistent_with_stream"] is True
+    assert row["output_indices_by_type"]["message"] == [0]
+    assert row["output_indices_by_type"]["reasoning"] == [1]
+    assert row["output_indices_by_type"]["function_call"] == [2]
+
+
 def test_classifier_records_raw_json_model_not_found_capture():
     row = classify_sse_capture(
         json.dumps(
@@ -104,6 +171,32 @@ def test_classifier_records_raw_json_model_not_found_capture():
     assert row["error_code"] == "model_not_found"
     assert row["available_models"] == []
     assert row["has_authoritative_arguments"] is False
+
+
+def test_classifier_records_gateway_request_kwargs_from_structured_log():
+    row = classify_server_log(
+        json.dumps(
+            {
+                "containsReasoning": True,
+                "requestKwargs": {
+                    "stream": True,
+                    "max_output_tokens": 512,
+                    "temperature": 0,
+                    "top_p": 1,
+                    "top_k": 0,
+                    "enable_thinking": True,
+                    "tool_choice": "required",
+                    "tool_count": 1,
+                    "first_tool_name": "record_fact",
+                },
+            }
+        )
+    )
+
+    assert row["no_reasoning_disable_workaround"] is True
+    assert row["gateway_expected_request_kwargs_present"] is True
+    assert row["request_kwargs"]["enable_thinking"] is True
+    assert row["request_kwargs"]["tool_choice"] == "required"
 
 
 def test_classifier_extracts_available_models_from_model_not_found_capture():
@@ -416,6 +509,7 @@ def test_raw_sse_parity_consumes_local_responses_streaming_contract(tmp_path):
                 "missing_markers": [],
                 "checks": {
                     "responses_streaming_tool_call_arguments_and_indexes": True,
+                    "responses_previous_response_history": True,
                     "gateway_responses_function_call_arguments_streaming": True,
                     "gateway_responses_reasoning_empty_final_arguments_streaming": True,
                     "gateway_stale_responses_port_rejection": True,
@@ -440,6 +534,48 @@ def test_raw_sse_parity_consumes_local_responses_streaming_contract(tmp_path):
     assert artifact["checks"]["local_empty_xml_arguments_fail_closed"] is True
     assert artifact["checks"]["local_output_index_ordering_guard"] is True
     assert artifact["checks"]["gateway_argument_stream_passthrough_guard"] is True
+    assert artifact["checks"]["responses_previous_response_history_guard"] is True
+
+
+def test_raw_sse_parity_requires_previous_response_history_source_guard(tmp_path):
+    direct = tmp_path / "direct.sse"
+    gateway = tmp_path / "gateway.sse"
+    tunnel = tmp_path / "tunnel.sse"
+    noheavy = tmp_path / "noheavy.json"
+    for path in (direct, gateway, tunnel):
+        path.write_text(_sse())
+    noheavy.write_text(
+        json.dumps(
+            {
+                "status": "pass",
+                "missing_markers": [],
+                "checks": {
+                    "responses_streaming_tool_call_arguments_and_indexes": True,
+                    "responses_previous_response_history": False,
+                    "gateway_responses_function_call_arguments_streaming": True,
+                    "gateway_responses_reasoning_empty_final_arguments_streaming": True,
+                    "gateway_stale_responses_port_rejection": True,
+                },
+            }
+        )
+    )
+
+    artifact = build_artifact(
+        direct_sse=direct,
+        gateway_sse=gateway,
+        tunnel_sse=tunnel,
+        expected_function_name="lookup",
+        expected_arguments='{"query":"alpha"}',
+        noheavy_contract=noheavy,
+        require_reasoning_events=True,
+    )
+
+    assert artifact["local_source_contract"][
+        "responses_previous_response_history_guard"
+    ] is False
+    assert artifact["local_source_contract"]["local_responses_streaming_guards_pass"] is False
+    assert artifact["checks"]["responses_previous_response_history_guard"] is False
+    assert artifact["checks"]["local_responses_streaming_guards_pass"] is False
 
 
 def test_raw_sse_parity_fails_when_same_model_is_required_and_surfaces_differ(

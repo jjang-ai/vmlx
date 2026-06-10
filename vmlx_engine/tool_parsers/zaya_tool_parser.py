@@ -76,10 +76,15 @@ class ZayaToolParser(ToolParser):
                         arguments[param_name.strip()] = json.loads(value)
                     except (json.JSONDecodeError, ValueError):
                         arguments[param_name.strip()] = value
+                name = func_name.strip()
+                if not self._arguments_satisfy_required_schema(
+                    name, arguments, request
+                ):
+                    continue
                 tool_calls.append(
                     {
                         "id": generate_tool_id(),
-                        "name": func_name.strip(),
+                        "name": name,
                         "arguments": json.dumps(arguments, ensure_ascii=False),
                     }
                 )

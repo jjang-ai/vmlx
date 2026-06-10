@@ -2026,19 +2026,10 @@ def _mimo_v2_media_runtime_auto_enabled(
         return False
     caps = cfg.get("capabilities") if isinstance(cfg.get("capabilities"), dict) else {}
     runtime = cfg.get("runtime") if isinstance(cfg.get("runtime"), dict) else {}
-    explicit_modes = {
-        str(caps.get("multimodal_status") or "").lower(),
-        str(runtime.get("multimodal_mode") or "").lower(),
-    }
-    if explicit_modes & {
-        "weights_preserved_text_runtime",
-        "text_runtime",
-        "text_only",
-        "unwired",
-        "preserved_disabled",
-    }:
-        return False
     bundle = Path(bundle_path or "")
+    processor_config = cfg.get("processor_config")
+    if not isinstance(processor_config, dict):
+        processor_config = {}
     has_vision_runtime = all(
         hasattr(module, name)
         for name in (
@@ -2059,13 +2050,24 @@ def _mimo_v2_media_runtime_auto_enabled(
     has_vision_bundle = (
         has_vision_runtime
         and isinstance(cfg.get("vision_config"), dict)
-        and (cfg.get("image_token_id") is not None or cfg.get("video_token_id") is not None)
+        and (
+            cfg.get("image_token_id") is not None
+            or cfg.get("video_token_id") is not None
+            or processor_config.get("image_token_id") is not None
+            or processor_config.get("video_token_id") is not None
+        )
         and (bundle / "preprocessor_config.json").is_file()
         and _mimo_v2_bundle_has_index_prefix(bundle_path, ("visual.",))
     )
     has_audio_bundle = (
         has_audio_runtime
         and isinstance(cfg.get("audio_config"), dict)
+        and (
+            cfg.get("audio_token_id") is not None
+            or cfg.get("audio_token_index") is not None
+            or processor_config.get("audio_token_id") is not None
+            or processor_config.get("audio_token_index") is not None
+        )
         and (bundle / "audio_tokenizer" / "model.safetensors").is_file()
         and _mimo_v2_bundle_has_index_prefix(
             bundle_path,
@@ -2261,11 +2263,9 @@ def _bundle_declares_native_audio(bundle_path: str | None) -> bool:
         # raw `Audio present.` content, but the API path is not stable enough to
         # advertise audio.
         return False
-    if model_type == "gemma4":
+    if model_type in {"gemma4", "gemma4_unified"}:
         return bool(isinstance(cfg.get("audio_config"), dict) and _has_audio_tower_weights())
     if cfg.get("audio_config") is not None:
-        return True
-    if model_type == "gemma4_unified":
         return True
     for obj in (cfg, cfg.get("text_config")):
         if not isinstance(obj, dict):
@@ -4321,6 +4321,8 @@ def _parse_tool_calls_with_parser(
             calls = _filter_to_request_tools(calls)
             if calls:
                 return cleaned, calls
+            if _has_tool_marker_or_partial_suffix(text):
+                return _strip_tool_markup_residue_for_display(text), None
             return text, None
         repaired_cleaned, repaired_calls = _repair_instruction_echo_tool_call(text)
         if repaired_calls:
@@ -4362,7 +4364,7 @@ def _parse_tool_calls_with_parser(
         parser_instance = parser_cls(tokenizer)
     except Exception as e:
         logger.warning(f"Failed to initialize tool parser '{active_parser}': {e}")
-        return parse_tool_calls(output_text)
+        return _generic_parse_filtered(output_text)
 
     # Use the configured parser, fall back to generic if it finds nothing
     try:
@@ -4396,6 +4398,8 @@ def _parse_tool_calls_with_parser(
             # so clients do not receive hallucinated function calls like
             # README.md()/src()/tests() when the request only exposed
             # list_directory().
+            if _has_tool_marker_or_partial_suffix(output_text):
+                return _strip_tool_markup_residue_for_display(output_text), None
             return output_text, None
         else:
             # Specific parser found nothing — try generic parser as fallback
@@ -6831,7 +6835,7 @@ def _native_cache_status(scheduler=None, *, family: str | None = None, cfg=None)
                 "mode": "storage_boundary",
                 "bits": stored_kv_bits if stored_kv_bits > 0 else None,
                 "group_size": stored_kv_group if stored_kv_bits > 0 else None,
-                "applies_to": "full_and_sliding_attention_kv",
+                "applies_to": "full_attention_kv_only",
                 "metadata_policy": "preserve_rotating_window_metadata",
             },
             "prefix": bool(block_aware_cache is not None),
@@ -15405,6 +15409,8 @@ async def stream_responses_api(
     accumulated_reasoning = ""  # Reasoning text for fallback
     content_was_emitted = False
     reasoning_was_streamed = False  # Whether reasoning was sent to client as deltas
+    reasoning_item_id: str | None = None
+    reasoning_output_index = 1
     prompt_tokens = 0
     completion_tokens = 0
     _cached = 0
@@ -15825,13 +15831,28 @@ async def stream_responses_api(
 
                             # Emit reasoning as OpenAI Responses reasoning-summary events.
                             if emit_reasoning:
+                                if reasoning_item_id is None:
+                                    reasoning_item_id = f"rs_{uuid.uuid4().hex[:12]}"
+                                    yield _sse(
+                                        "response.output_item.added",
+                                        {
+                                            "type": "response.output_item.added",
+                                            "output_index": reasoning_output_index,
+                                            "item": {
+                                                "id": reasoning_item_id,
+                                                "type": "reasoning",
+                                                "status": "in_progress",
+                                                "content": [],
+                                            },
+                                        },
+                                    )
                                 reasoning_was_streamed = True
                                 yield _sse(
                                     "response.reasoning_summary_text.delta",
                                     {
                                         "type": "response.reasoning_summary_text.delta",
-                                        "item_id": msg_id,
-                                        "output_index": 0,
+                                        "item_id": reasoning_item_id,
+                                        "output_index": reasoning_output_index,
                                         "summary_index": 0,
                                         "delta": emit_reasoning,
                                     },
@@ -16006,15 +16027,43 @@ async def stream_responses_api(
         return
 
     # Emit reasoning summary done event if reasoning was produced (skip when suppressed)
+    if accumulated_reasoning and not suppress_reasoning and reasoning_item_id is None:
+        reasoning_item_id = f"rs_{uuid.uuid4().hex[:12]}"
+        yield _sse(
+            "response.output_item.added",
+            {
+                "type": "response.output_item.added",
+                "output_index": reasoning_output_index,
+                "item": {
+                    "id": reasoning_item_id,
+                    "type": "reasoning",
+                    "status": "in_progress",
+                    "content": [],
+                },
+            },
+        )
     if accumulated_reasoning and not suppress_reasoning:
         yield _sse(
             "response.reasoning_summary_text.done",
             {
                 "type": "response.reasoning_summary_text.done",
-                "item_id": msg_id,
-                "output_index": 0,
+                "item_id": reasoning_item_id,
+                "output_index": reasoning_output_index,
                 "summary_index": 0,
                 "text": accumulated_reasoning,
+            },
+        )
+        yield _sse(
+            "response.output_item.done",
+            {
+                "type": "response.output_item.done",
+                "output_index": reasoning_output_index,
+                "item": {
+                    "id": reasoning_item_id,
+                    "type": "reasoning",
+                    "status": "completed",
+                    "content": [{"type": "reasoning", "text": accumulated_reasoning}],
+                },
             },
         )
 
@@ -16155,6 +16204,16 @@ async def stream_responses_api(
         )
         all_output_items.append(message_item)
         output_index += 1
+        if reasoning_item_id is not None:
+            all_output_items.append(
+                {
+                    "id": reasoning_item_id,
+                    "type": "reasoning",
+                    "status": "completed",
+                    "content": [{"type": "reasoning", "text": accumulated_reasoning}],
+                }
+            )
+            output_index = max(output_index, reasoning_output_index + 1)
 
         # Emit each tool call as a function_call output item
         for tc in tool_calls:
@@ -16388,6 +16447,15 @@ async def stream_responses_api(
                 ],
             }
         )
+        if reasoning_item_id is not None:
+            all_output_items.append(
+                {
+                    "id": reasoning_item_id,
+                    "type": "reasoning",
+                    "status": "completed",
+                    "content": [{"type": "reasoning", "text": accumulated_reasoning}],
+                }
+            )
 
     # H4: Validate text format at end of stream.
     _text_fmt = getattr(request, "text", None)
@@ -16472,7 +16540,7 @@ async def stream_responses_api(
     _resp_extra: dict = {}
     if _resp_status == "incomplete":
         _resp_extra["incomplete_details"] = {"reason": "max_output_tokens"}
-    if accumulated_reasoning and not suppress_reasoning:
+    if accumulated_reasoning and not suppress_reasoning and reasoning_item_id is None:
         all_output_items.append(
             {
                 "id": f"rs_{uuid.uuid4().hex[:12]}",

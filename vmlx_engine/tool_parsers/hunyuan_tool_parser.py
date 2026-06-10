@@ -102,10 +102,15 @@ class HunyuanToolParser(ToolParser):
                 arguments: dict[str, Any] = {}
                 for key, value in zip(keys, values):
                     arguments[key.strip()] = self._coerce(value.strip())
+                name = name.strip()
+                if not self._arguments_satisfy_required_schema(
+                    name, arguments, request
+                ):
+                    continue
                 tool_calls.append(
                     {
                         "id": generate_tool_id(),
-                        "name": name.strip(),
+                        "name": name,
                         "arguments": json.dumps(arguments, ensure_ascii=False),
                     }
                 )
