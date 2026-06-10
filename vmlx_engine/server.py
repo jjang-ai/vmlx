@@ -3273,6 +3273,29 @@ def _configure_loaded_model_parsers_from_registry(model_key: str | None = None) 
                 registry_key,
             )
 
+
+def _request_reasoning_parser_from_config(model_config: Any) -> Any | None:
+    if _reasoning_parser is not None:
+        return _reasoning_parser
+    if _reasoning_parser_disabled_explicitly:
+        return None
+    parser_name = getattr(model_config, "reasoning_parser", None)
+    if not parser_name or parser_name == "none":
+        return None
+    if getattr(model_config, "supports_thinking", None) is False:
+        return None
+    try:
+        from .reasoning import get_parser
+
+        return get_parser(parser_name)()
+    except Exception as e:
+        logger.debug(
+            "Request reasoning parser fallback skipped for %s: %s",
+            parser_name,
+            e,
+        )
+        return None
+
 # reasoning_effort → token budget mapping (mirrors OpenAI o-series behavior).
 # DSV4-Flash adds a "max" effort tier beyond OpenAI's low/medium/high
 # (research/DSV4-RUNTIME-ARCHITECTURE.md §4) — allow extended budgets so
@@ -14608,13 +14631,14 @@ async def stream_chat_completion(
     _model_config = get_model_config_registry().lookup(
         _model_path or _model_name or request.model
     )
+    _active_reasoning_parser = _request_reasoning_parser_from_config(_model_config)
     think_in_template = _model_config.think_in_template
 
     # Fallback only for unknown configs. Known families may expose thinking
     # tokens in vocab without opening a reasoning rail in the rendered prompt.
     think_in_template = _apply_tokenizer_thinking_vocab_fallback(
         think_in_template,
-        reasoning_parser=_reasoning_parser,
+        reasoning_parser=_active_reasoning_parser,
         tokenizer=engine.tokenizer,
         model_config=_model_config,
     )
@@ -14635,7 +14659,7 @@ async def stream_chat_completion(
         if not _template_always_thinks(engine.tokenizer, _model_name or request.model):
             think_in_template = False
 
-    if _reasoning_parser:
+    if _active_reasoning_parser:
         _prompt_enable = True if _effective_thinking is None else bool(_effective_thinking)
         _tools_present_for_prompt = bool(getattr(request, "tools", None) or kwargs.get("tools"))
         if _engine_prompt_starts_in_reasoning(
@@ -14670,7 +14694,7 @@ async def stream_chat_completion(
 
     # Track if we need to add <think> prefix for thinking models (when no reasoning parser)
     # The template adds <think> to the prompt, so the model output starts inside the think block
-    is_thinking_model = effective_think_in_template and not _reasoning_parser
+    is_thinking_model = effective_think_in_template and not _active_reasoning_parser
     think_prefix_sent = False
 
     # Suppress reasoning output when user explicitly disabled thinking.
@@ -14685,8 +14709,8 @@ async def stream_chat_completion(
         "prompt_suffix", ""
     ).startswith("<|start|>assistant<|channel|>analysis")
     request_parser = None
-    if _reasoning_parser:
-        request_parser = _reasoning_parser.__class__()
+    if _active_reasoning_parser:
+        request_parser = _active_reasoning_parser.__class__()
         request_parser.reset_state(
             think_in_prompt=effective_think_in_template,
             harmony_active=_harmony_prefix_active,
@@ -15684,13 +15708,14 @@ async def stream_responses_api(
     _model_config = get_model_config_registry().lookup(
         _model_path or _model_name or request.model
     )
+    _active_reasoning_parser = _request_reasoning_parser_from_config(_model_config)
     think_in_template = _model_config.think_in_template
 
     # Fallback only for unknown configs. Known families may expose thinking
     # tokens in vocab without opening a reasoning rail in the rendered prompt.
     think_in_template = _apply_tokenizer_thinking_vocab_fallback(
         think_in_template,
-        reasoning_parser=_reasoning_parser,
+        reasoning_parser=_active_reasoning_parser,
         tokenizer=engine.tokenizer,
         model_config=_model_config,
     )
@@ -15706,7 +15731,7 @@ async def stream_responses_api(
         if not _template_always_thinks(engine.tokenizer, _model_name or request.model):
             think_in_template = False
 
-    if _reasoning_parser:
+    if _active_reasoning_parser:
         _prompt_enable = True if _effective_thinking is None else bool(_effective_thinking)
         _tools_present_for_prompt = bool(getattr(request, "tools", None) or kwargs.get("tools"))
         if _engine_prompt_starts_in_reasoning(
@@ -15742,7 +15767,7 @@ async def stream_responses_api(
     effective_think_in_template = think_in_template
 
     # For thinking models without reasoning parser, prepend <think>
-    is_thinking_model = effective_think_in_template and not _reasoning_parser
+    is_thinking_model = effective_think_in_template and not _active_reasoning_parser
     think_prefix_sent = False
 
     # Suppress reasoning output when user explicitly disabled thinking
@@ -15754,8 +15779,8 @@ async def stream_responses_api(
         "prompt_suffix", ""
     ).startswith("<|start|>assistant<|channel|>analysis")
     request_parser = None
-    if _reasoning_parser:
-        request_parser = _reasoning_parser.__class__()
+    if _active_reasoning_parser:
+        request_parser = _active_reasoning_parser.__class__()
         request_parser.reset_state(
             think_in_prompt=effective_think_in_template,
             harmony_active=_harmony_prefix_active,

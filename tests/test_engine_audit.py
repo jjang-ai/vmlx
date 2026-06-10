@@ -9107,6 +9107,41 @@ class TestZayaCCACachePolicy:
         assert server._reasoning_parser is None
         assert server._tool_call_parser is None
 
+    def test_request_reasoning_parser_falls_back_to_loaded_config(
+        self, monkeypatch
+    ):
+        import vmlx_engine.server as server
+        from vmlx_engine.reasoning.gemma4_parser import Gemma4ReasoningParser
+
+        monkeypatch.setattr(server, "_reasoning_parser", None)
+        monkeypatch.setattr(server, "_reasoning_parser_disabled_explicitly", False)
+
+        parser = server._request_reasoning_parser_from_config(
+            SimpleNamespace(
+                reasoning_parser="gemma4",
+                supports_thinking=True,
+            )
+        )
+
+        assert isinstance(parser, Gemma4ReasoningParser)
+
+    def test_request_reasoning_parser_fallback_respects_explicit_none(
+        self, monkeypatch
+    ):
+        import vmlx_engine.server as server
+
+        monkeypatch.setattr(server, "_reasoning_parser", None)
+        monkeypatch.setattr(server, "_reasoning_parser_disabled_explicitly", True)
+
+        parser = server._request_reasoning_parser_from_config(
+            SimpleNamespace(
+                reasoning_parser="gemma4",
+                supports_thinking=True,
+            )
+        )
+
+        assert parser is None
+
     def test_cli_enables_typed_paged_cache_and_forces_tq_off_for_zaya_cca(self):
         source = Path("./vmlx_engine/cli.py").read_text()
 
