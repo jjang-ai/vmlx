@@ -32,11 +32,21 @@ echo "==> Checking pre-package release ledger before public DMG build"
 if [[ "$CHECKPOINT_RELEASE_OVERRIDE" = "1" ]]; then
   echo "WARNING: VMLX_CHECKPOINT_RELEASE_OVERRIDE=1 — building a checkpoint DMG with open rows." >&2
   echo "WARNING: Release notes must list open rows from: $PREPACKAGE_READY_MANIFEST_OUT" >&2
+  set +e
   (
     cd "$ROOT_DIR"
     "$PYTHON_BIN" "tests/cross_matrix/run_release_regression_manifest.py" \
       --out "$PREPACKAGE_READY_MANIFEST_OUT"
   )
+  manifest_rc=$?
+  set -e
+  if [[ ! -f "$PREPACKAGE_READY_MANIFEST_OUT" ]]; then
+    echo "ERROR: checkpoint override did not produce pre-package manifest: $PREPACKAGE_READY_MANIFEST_OUT" >&2
+    exit "${manifest_rc:-1}"
+  fi
+  if [[ "$manifest_rc" -ne 0 ]]; then
+    echo "WARNING: checkpoint pre-package manifest exited $manifest_rc; continuing only because override is explicit." >&2
+  fi
 else
   (
     cd "$ROOT_DIR"

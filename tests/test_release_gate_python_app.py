@@ -437,6 +437,9 @@ def test_release_dmg_checkpoint_override_records_open_manifest_without_require_f
 
     assert "building a checkpoint DMG with open rows" in override_block
     assert "Release notes must list open rows" in override_block
+    assert "manifest_rc=$?" in override_block
+    assert "did not produce pre-package manifest" in override_block
+    assert "continuing only because override is explicit" in override_block
     assert "--out" in override_block
     assert "--require-prepackage-ready" not in override_block
 
