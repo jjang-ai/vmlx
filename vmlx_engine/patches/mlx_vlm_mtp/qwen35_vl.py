@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import Any, Optional
+from typing import Any
 
 import mlx.core as mx
 
@@ -169,7 +169,15 @@ def _register_mtp_classes(qlang: Any) -> None:
             )
             self.mlp = qlang.Qwen3_5MLP(args.hidden_size, args.intermediate_size)
 
-        def __call__(self, x, mask=None, cache=None, position_ids=None):
+        def __call__(
+            self,
+            x,
+            mask=None,
+            cache=None,
+            position_ids=None,
+            position_embeddings=None,
+            **kwargs,
+        ):
             r = self.self_attn(self.input_layernorm(x), mask, cache, position_ids)
             h = x + r
             return h + self.mlp(self.post_attention_layernorm(h))
@@ -241,6 +249,8 @@ def _patch_attention_text_rope(qlang: Any) -> None:
         mask=None,
         cache=None,
         position_ids=None,
+        position_embeddings=None,
+        **kwargs,
     ):
         if position_ids is not None and getattr(position_ids, "ndim", 0) != 2:
             return original_call(self, x, mask, cache, position_ids)
@@ -372,10 +382,12 @@ def _patch_gated_delta_net(qlang: Any) -> None:
     def __call__(
         self,
         inputs: Any,
-        mask: Optional[Any] = None,
-        cache: Optional[Any] = None,
-        gdn_sink: Optional[list] = None,
+        mask: Any | None = None,
+        cache: Any | None = None,
+        gdn_sink: list | None = None,
         n_confirmed: int = 0,
+        target_verify: Any | None = None,
+        **kwargs: Any,
     ):
         batch_size, seq_len, _ = inputs.shape
 
@@ -520,7 +532,7 @@ def _patch_decoder_layer(qlang: Any) -> None:
         mask=None,
         cache=None,
         position_ids=None,
-        gdn_sink: Optional[list] = None,
+        gdn_sink: list | None = None,
         n_confirmed: int = 0,
     ):
         if n_confirmed == 0 and gdn_sink is None:
@@ -556,7 +568,7 @@ def _patch_moe_decoder_layer(qmoe_lang: Any) -> None:
         mask=None,
         cache=None,
         position_ids=None,
-        gdn_sink: Optional[list] = None,
+        gdn_sink: list | None = None,
         n_confirmed: int = 0,
     ):
         if n_confirmed == 0 and gdn_sink is None:
@@ -613,7 +625,18 @@ def _patch_qwen_model(qlang: Any) -> None:
             cache = [None] * len(self.layers)
 
         fa_mask = qlang.create_attention_mask(h, cache[self.fa_idx])
-        ssm_mask = qlang.create_ssm_mask(h, cache[self.ssm_idx])
+
+        if hasattr(qlang, "create_ssm_mask"):
+            create_ssm_mask = qlang.create_ssm_mask
+        elif hasattr(qlang, "_create_qwen3_5_ssm_mask"):
+            create_ssm_mask = qlang._create_qwen3_5_ssm_mask
+        else:
+            raise AttributeError(
+                "mlx_vlm.models.qwen3_5.language has neither "
+                "create_ssm_mask nor _create_qwen3_5_ssm_mask"
+            )
+
+        ssm_mask = create_ssm_mask(h, cache[self.ssm_idx])
 
         for layer, layer_cache in zip(self.layers, cache):
             layer_mask = ssm_mask if layer.is_linear else fa_mask

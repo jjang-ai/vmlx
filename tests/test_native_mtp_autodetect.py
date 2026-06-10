@@ -1074,6 +1074,50 @@ class TestNativeMtpAutodetect:
         assert model(1, gdn_sink=None, n_confirmed=0) == 31
         assert model(1, cache=[None], gdn_sink=[], n_confirmed=0) == 2
 
+    def test_qwen35_vlm_ssm_mask_uses_public_helper_without_private_fallback(self):
+        from vmlx_engine.patches.mlx_vlm_mtp import qwen35_vl
+
+        calls = []
+
+        def create_mask(_hidden, _cache):
+            calls.append("public")
+            return "ssm-mask"
+
+        class ModelLayer:
+            is_linear = True
+
+            def __call__(self, h, *args, **kwargs):
+                return h + 1
+
+        class QwenModel:
+            def __call__(
+                self,
+                inputs,
+                inputs_embeds=None,
+                mask=None,
+                cache=None,
+                position_ids=None,
+            ):
+                return inputs + 30
+
+        model_lang = SimpleNamespace(
+            Qwen3_5Model=QwenModel,
+            create_attention_mask=lambda _h, _c: "fa-mask",
+            create_ssm_mask=create_mask,
+        )
+
+        qwen35_vl._patch_qwen_model(model_lang)
+
+        model = QwenModel()
+        model.embed_tokens = lambda inputs: inputs
+        model.layers = [ModelLayer()]
+        model.fa_idx = 0
+        model.ssm_idx = 0
+
+        out = model(1, cache=[None], gdn_sink=[], n_confirmed=0)
+        assert out == 2
+        assert calls == ["public"]
+
     def test_qwen36_vlm_text_rope_fresh_prefill_uses_scalar_cache_offset(
         self, tmp_path
     ):
@@ -1416,6 +1460,9 @@ class TestNativeMtpAutodetect:
 
     def test_server_mtp_status_marks_loaded_runtime_active(self, monkeypatch, tmp_path):
         from vmlx_engine import server
+
+        monkeypatch.delenv("VMLINUX_NATIVE_MTP_DEPTH", raising=False)
+        monkeypatch.delenv("VMLX_NATIVE_MTP_DEPTH", raising=False)
 
         _write_qwen36_mxfp4_mtp_bundle(tmp_path)
 
