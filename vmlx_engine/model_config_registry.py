@@ -555,10 +555,12 @@ class ModelConfigRegistry:
                 # MiMo-V2.5 uses generic XML function calls. Current live proof
                 # shows advertised thinking can produce hidden-only output with
                 # no visible final answer, so keep thinking disabled even when
-                # stale sidecars claim a reasoning parser.
+                # stale sidecars claim support. Still attach the generic XML
+                # reasoning parser as a cleanup/separation boundary; never use
+                # stale Qwen-family reasoning extraction for MiMo.
                 # Do not let stale sidecars promote it to unrelated Qwen/JSON
                 # tool formats or qwen3-specific reasoning extraction.
-                updates["reasoning_parser"] = None
+                updates["reasoning_parser"] = "think_xml"
                 updates["tool_parser"] = "xml_function"
                 updates["supports_native_tools"] = True
                 updates["supports_thinking"] = False

@@ -7038,6 +7038,53 @@ def test_release_regression_manifest_real_ui_named_tool_probe_accepts_exact_repl
     assert _real_ui_named_tool_probe_semantics_ok(proof)
 
 
+def test_release_regression_manifest_real_ui_named_tool_probe_accepts_visible_final_text_contract():
+    proof = {
+        "chat": {
+            "turns": [
+                {
+                    "role": "user",
+                    "content": (
+                        "Use the run_command tool exactly once. "
+                        "After the tool result, send visible final text exactly: "
+                        "REAL_UI_LIVE_TOOL_TWO second UI turn."
+                    ),
+                },
+                {
+                    "role": "assistant",
+                    "content": "REAL_UI_LIVE_TOOL_TWO second UI turn.",
+                },
+            ]
+        },
+        "persistedToolsByMessage": [
+            [
+                {
+                    "phase": "result",
+                    "toolName": "run_command",
+                    "detail": "$ printf %s REAL_UI_LIVE_TOOL_ONE > real_ui_tool_probe_1.txt",
+                }
+            ],
+            [
+                {
+                    "phase": "result",
+                    "toolName": "run_command",
+                    "detail": (
+                        "$ printf %s REAL_UI_LIVE_TOOL_TWO > "
+                        "real_ui_tool_probe_2.txt && cat real_ui_tool_probe_2.txt\n\n"
+                        "REAL_UI_LIVE_TOOL_TWO"
+                    ),
+                }
+            ],
+        ],
+        "toolProbeFiles": {
+            "real_ui_tool_probe_1.txt": "REAL_UI_LIVE_TOOL_ONE",
+            "real_ui_tool_probe_2.txt": "REAL_UI_LIVE_TOOL_TWO",
+        },
+    }
+
+    assert _real_ui_named_tool_probe_semantics_ok(proof)
+
+
 def test_release_regression_manifest_real_ui_matrix_rejects_forged_tool_reasoning_surfaces():
     proof = {
         "modelName": "ZAYA1-8B-MXFP4",

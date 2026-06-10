@@ -604,6 +604,11 @@ _FALLBACK_TOP_P = 1.0
 # Defaults come from explicit request values, explicit CLI flags, bundle
 # metadata, or generic server fallback.
 _FAMILY_FALLBACK_DEFAULTS: dict[str, tuple[float | None, float | None, float | None]] = {
+    # MiMo-V2.5 bundles currently ship generation_config do_sample=false even
+    # though live JANG_2L chat proof shows greedy decode runs into visible
+    # planning/repetition tails. Keep the family default stochastic unless the
+    # API request or CLI explicitly overrides it.
+    "mimo_v2": (0.7, 0.95, None),
 }
 
 # Ling/Bailing bundles on this host omit top_k metadata, but live multilingual
@@ -874,7 +879,8 @@ def _drop_tool_visible_channel_marker(
 
 
 _RESPONSES_EXACT_REPLY_RE = re.compile(
-    r"reply exactly:\s*[\"'“”`]?([A-Za-z0-9_=-]+)[\"'“”`]?",
+    r"(?:reply exactly|send visible final text exactly|output visible final text exactly):\s*"
+    r"[\"'“”`]?(?P<target>[^\r\n\"'“”`]+?)[\"'“”`]?\s*(?=\r?\n|$)",
     re.IGNORECASE,
 )
 
@@ -884,7 +890,82 @@ def _responses_exact_reply_target(request: Any) -> str | None:
     matches = list(_RESPONSES_EXACT_REPLY_RE.finditer(text))
     if not matches:
         return None
-    return matches[-1].group(1)
+    return matches[-1].group("target").strip()
+
+
+def _responses_exact_reply_target_from_messages(messages: list[dict] | None) -> str | None:
+    if not messages:
+        return None
+    fragments: list[str] = []
+
+    def add_content(value: Any) -> None:
+        if value is None:
+            return
+        if isinstance(value, str):
+            fragments.append(value)
+            return
+        if isinstance(value, list):
+            for item in value:
+                add_content(item)
+            return
+        if isinstance(value, dict):
+            for key in ("text", "content", "input_text", "output_text"):
+                if key in value:
+                    add_content(value.get(key))
+
+    for message in messages:
+        add_content(message)
+    if not fragments:
+        return None
+    matches = list(_RESPONSES_EXACT_REPLY_RE.finditer("\n".join(fragments)))
+    if not matches:
+        return None
+    return matches[-1].group("target").strip()
+
+
+def _responses_request_has_function_call_output(request: Any) -> bool:
+    input_data = getattr(request, "input", None)
+    if not isinstance(input_data, list):
+        return False
+    for item in input_data:
+        if isinstance(item, dict):
+            if item.get("type") == "function_call_output":
+                return True
+            continue
+        if getattr(item, "type", None) == "function_call_output":
+            return True
+    return False
+
+
+def _responses_message_exact_reply_target(message: dict) -> str | None:
+    fragments: list[str] = []
+
+    def add_content(value: Any) -> None:
+        if value is None:
+            return
+        if isinstance(value, str):
+            fragments.append(value)
+            return
+        if isinstance(value, list):
+            for item in value:
+                add_content(item)
+            return
+        if isinstance(value, dict):
+            for key in ("text", "content", "input_text", "output_text"):
+                if key in value:
+                    add_content(value.get(key))
+
+    add_content(message)
+    if not fragments:
+        return None
+    matches = list(_RESPONSES_EXACT_REPLY_RE.finditer("\n".join(fragments)))
+    if not matches:
+        return None
+    return matches[-1].group("target").strip()
+
+
+def _responses_message_is_tool_result(message: dict) -> bool:
+    return message.get("role") == "tool" or message.get("type") == "function_call_output"
 
 
 def _responses_messages_have_tool_result_after_latest_user(messages: list[dict]) -> bool:
@@ -898,6 +979,43 @@ def _responses_messages_have_tool_result_after_latest_user(messages: list[dict])
         if message.get("type") == "function_call_output":
             return True
     return False
+
+
+def _responses_exact_tool_result_finalization_target(
+    request: Any,
+    messages: list[dict] | None,
+    *,
+    tools_present: bool = False,
+) -> str | None:
+    """Return exact-output target when the current turn is post-tool synthesis."""
+    current_request_has_tool_result = _responses_request_has_function_call_output(request)
+    if tools_present and not current_request_has_tool_result:
+        return None
+
+    target_from_request = _responses_exact_reply_target(request)
+    if target_from_request and (
+        _responses_messages_have_tool_result_after_latest_user(messages or [])
+        or current_request_has_tool_result
+    ):
+        return target_from_request
+
+    candidate_target: str | None = None
+    saw_tool_result_after_candidate = False
+    for message in messages or []:
+        if not isinstance(message, dict):
+            continue
+        role = message.get("role")
+        if role == "user":
+            next_target = _responses_message_exact_reply_target(message)
+            candidate_target = next_target
+            saw_tool_result_after_candidate = False
+            continue
+        if candidate_target and _responses_message_is_tool_result(message):
+            saw_tool_result_after_candidate = True
+
+    if candidate_target and saw_tool_result_after_candidate:
+        return candidate_target
+    return None
 
 
 def _responses_is_terminal_tool_result_synthesis(
@@ -943,9 +1061,17 @@ def _prompt_suffix_completes_qwen3_thinking(kwargs: dict[str, Any]) -> bool:
     )
 
 
-def _responses_fast_path_visible_text(output: Any, request: Any) -> str:
+def _responses_fast_path_visible_text(
+    output: Any,
+    request: Any,
+    *,
+    thinking_disabled: bool = False,
+) -> str:
     text = getattr(output, "raw_text", "") or getattr(output, "text", "") or ""
-    if getattr(request, "enable_thinking", None) is False and "</think>" in text:
+    if (
+        (thinking_disabled or getattr(request, "enable_thinking", None) is False)
+        and "</think>" in text
+    ):
         text = text.rsplit("</think>", 1)[1]
     else:
         text = getattr(output, "text", "") or text
@@ -1215,6 +1341,9 @@ def _resolve_temperature(request_value: float | None, model_name: str = "") -> f
         return request_value
     if _default_temperature is not None:
         return _default_temperature
+    fam_temp, _, _ = _family_fallback_for(model_name)
+    if fam_temp is not None:
+        return fam_temp
     bundle_path = _model_path or model_name
     v = _bundle_sampling_default(model_name, "temperature")
     if v is not None:
@@ -1226,9 +1355,6 @@ def _resolve_temperature(request_value: float | None, model_name: str = "") -> f
         return v
     if _generation_config_declares_greedy_sampling(model_name):
         return 0.0
-    fam_temp, _, _ = _family_fallback_for(model_name)
-    if fam_temp is not None:
-        return fam_temp
     return _FALLBACK_TEMPERATURE
 
 
@@ -1238,6 +1364,9 @@ def _resolve_top_p(request_value: float | None, model_name: str = "") -> float:
         return request_value
     if _default_top_p is not None:
         return _default_top_p
+    _, fam_top_p, _ = _family_fallback_for(model_name)
+    if fam_top_p is not None:
+        return fam_top_p
     bundle_path = _model_path or model_name
     v = _bundle_sampling_default(model_name, "top_p")
     if v is not None:
@@ -1249,9 +1378,6 @@ def _resolve_top_p(request_value: float | None, model_name: str = "") -> float:
         return v
     if _generation_config_declares_greedy_sampling(model_name):
         return 1.0
-    _, fam_top_p, _ = _family_fallback_for(model_name)
-    if fam_top_p is not None:
-        return fam_top_p
     return _FALLBACK_TOP_P
 
 
@@ -2037,6 +2163,23 @@ def _mimo_v2_media_runtime_enabled(cfg: dict[str, Any]) -> bool:
     return False
 
 
+def _mimo_v2_text_runtime_media_overlay_opt_in() -> bool:
+    """Whether to promote MiMo text-runtime bundles to the media loader.
+
+    Complete preserved sidecars prove that media weights exist, not that the
+    full MLLM working-set envelope is safe for normal chat. Keep explicit
+    ``weights_preserved_text_runtime`` artifacts text-only unless a proof run or
+    diagnostic launch opts into the media bridge.
+    """
+
+    return os.environ.get("VMLINUX_MIMO_V2_ENABLE_TEXT_RUNTIME_MEDIA_OVERLAY", "").lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
 def _mimo_v2_bundle_has_index_prefix(bundle_path: str | None, prefixes: tuple[str, ...]) -> bool:
     try:
         index = _read_bundle_json(bundle_path, "model.safetensors.index.json")
@@ -2113,14 +2256,18 @@ def _mimo_v2_media_runtime_auto_enabled(
         str(caps.get("multimodal_status") or "").lower(),
         str(runtime.get("multimodal_mode") or "").lower(),
     }
-    if explicit_modes & {
+    text_runtime_modes = {
         "weights_preserved_text_runtime",
         "text_runtime",
         "text_only",
         "unwired",
         "preserved_disabled",
-    } and not _mimo_v2_bundle_can_use_media_runtime_overlay(bundle_path, cfg):
-        return False
+    }
+    if explicit_modes & text_runtime_modes:
+        if not _mimo_v2_text_runtime_media_overlay_opt_in():
+            return False
+        if not _mimo_v2_bundle_can_use_media_runtime_overlay(bundle_path, cfg):
+            return False
     bundle = Path(bundle_path or "")
     processor_config = cfg.get("processor_config")
     if not isinstance(processor_config, dict):
@@ -3366,7 +3513,10 @@ def _request_reasoning_parser_from_config(model_config: Any) -> Any | None:
     parser_name = getattr(model_config, "reasoning_parser", None)
     if not parser_name or parser_name == "none":
         return None
-    if getattr(model_config, "supports_thinking", None) is False:
+    if (
+        getattr(model_config, "supports_thinking", None) is False
+        and str(parser_name) != "think_xml"
+    ):
         return None
     try:
         from .reasoning import get_parser
@@ -15862,15 +16012,29 @@ async def stream_responses_api(
         request.timeout if request.timeout is not None else _default_timeout
     )
 
-    if (
-        _responses_exact_reply_target(request)
-        and _responses_messages_have_tool_result_after_latest_user(messages)
-    ):
+    _exact_reply_target = _responses_exact_tool_result_finalization_target(
+        request,
+        messages,
+        tools_present=bool(getattr(request, "tools", None) or kwargs.get("tools")),
+    )
+    _exact_tool_result_finalization = bool(_exact_reply_target)
+    if _exact_tool_result_finalization:
+        finalization_kwargs = dict(kwargs)
+        finalization_kwargs["enable_thinking"] = False
+        finalization_kwargs.setdefault(
+            "_vmlx_terminal_tool_result_visible_finalization",
+            True,
+        )
+        logger.info(
+            "Responses API streaming exact-reply finalization: target=%r, "
+            "forcing enable_thinking=False for terminal synthesis",
+            _exact_reply_target,
+        )
         try:
             output = await _await_chat_with_disconnect_abort(
                 engine,
                 messages=messages,
-                chat_kwargs=kwargs,
+                chat_kwargs=finalization_kwargs,
                 timeout=_stream_timeout,
                 fastapi_request=fastapi_request,
                 request_id=response_id,
@@ -15942,7 +16106,11 @@ async def stream_responses_api(
             )
             return
 
-        display_text = _responses_fast_path_visible_text(output, request)
+        display_text = _responses_fast_path_visible_text(
+            output,
+            request,
+            thinking_disabled=True,
+        )
         if display_text:
             yield _sse(
                 "response.output_text.delta",

@@ -2876,6 +2876,19 @@ def _load_jang_v2(
                     "  MiMo-V2 text load runtime-quantized %d passthrough decode hotspot modules",
                     hotspot_count,
                 )
+            coverage = _mimo_v2_quantization_coverage(model)
+            logger.info(
+                "  MiMo-V2 text load quantization coverage: "
+                "lm_head=%s embed_tokens=%s qkv=%d/%d switch_proj=%d/%d dense_mlp=%d/%d",
+                coverage["lm_head_quantized"],
+                coverage["embed_tokens_quantized"],
+                coverage["qkv_quantized"],
+                coverage["qkv_total"],
+                coverage["switch_proj_quantized"],
+                coverage["switch_proj_total"],
+                coverage["dense_mlp_quantized"],
+                coverage["dense_mlp_total"],
+            )
         except Exception:
             logger.exception("  MiMo-V2 text load affine post-load repair failed")
 
@@ -4046,6 +4059,26 @@ def _enable_mimo_v2_media_runtime_overlay(path: Path, config: dict) -> dict:
         return config
     if not _mimo_v2_local_media_runtime_available():
         return config
+    caps = config.get("capabilities") if isinstance(config.get("capabilities"), dict) else {}
+    runtime = config.get("runtime") if isinstance(config.get("runtime"), dict) else {}
+    explicit_modes = {
+        str(caps.get("multimodal_status") or "").lower(),
+        str(runtime.get("multimodal_mode") or "").lower(),
+    }
+    text_runtime_modes = {
+        "weights_preserved_text_runtime",
+        "text_runtime",
+        "text_only",
+        "unwired",
+        "preserved_disabled",
+    }
+    if explicit_modes & text_runtime_modes:
+        enabled = os.environ.get(
+            "VMLINUX_MIMO_V2_ENABLE_TEXT_RUNTIME_MEDIA_OVERLAY",
+            "",
+        ).lower() in {"1", "true", "yes", "on"}
+        if not enabled:
+            return config
 
     processor = config.get("processor_config") or {}
     has_vision_bundle = (
@@ -5302,6 +5335,63 @@ def _upgrade_modules_with_uint32_weights(
         except Exception:
             continue
     return upgraded
+
+
+def _mimo_v2_quantization_coverage(model) -> dict[str, int | bool]:
+    """Summarize loaded MiMo quantization coverage for runtime proof logs."""
+
+    import mlx.nn as nn
+
+    try:
+        from mlx_lm.models.switch_layers import QuantizedSwitchLinear
+    except Exception:
+        QuantizedSwitchLinear = ()
+
+    backbone = getattr(model, "model", None)
+    embed_tokens = getattr(backbone, "embed_tokens", None)
+    lm_head = getattr(model, "lm_head", None)
+    layers = getattr(backbone, "layers", None)
+    qkv_total = qkv_quantized = 0
+    switch_total = switch_quantized = 0
+    dense_mlp_total = dense_mlp_quantized = 0
+
+    if isinstance(layers, list):
+        for layer in layers:
+            self_attn = getattr(layer, "self_attn", None)
+            qkv = getattr(self_attn, "qkv_proj", None)
+            if qkv is not None:
+                qkv_total += 1
+                if isinstance(qkv, nn.QuantizedLinear):
+                    qkv_quantized += 1
+            mlp = getattr(layer, "mlp", None)
+            switch_mlp = getattr(mlp, "switch_mlp", None)
+            if switch_mlp is not None:
+                for attr in ("gate_proj", "up_proj", "down_proj"):
+                    proj = getattr(switch_mlp, attr, None)
+                    if proj is None:
+                        continue
+                    switch_total += 1
+                    if QuantizedSwitchLinear and isinstance(proj, QuantizedSwitchLinear):
+                        switch_quantized += 1
+            else:
+                for attr in ("gate_proj", "up_proj", "down_proj"):
+                    proj = getattr(mlp, attr, None)
+                    if proj is None:
+                        continue
+                    dense_mlp_total += 1
+                    if isinstance(proj, nn.QuantizedLinear):
+                        dense_mlp_quantized += 1
+
+    return {
+        "lm_head_quantized": isinstance(lm_head, nn.QuantizedLinear),
+        "embed_tokens_quantized": isinstance(embed_tokens, nn.QuantizedEmbedding),
+        "qkv_quantized": qkv_quantized,
+        "qkv_total": qkv_total,
+        "switch_proj_quantized": switch_quantized,
+        "switch_proj_total": switch_total,
+        "dense_mlp_quantized": dense_mlp_quantized,
+        "dense_mlp_total": dense_mlp_total,
+    }
 
 
 def _pre_fix_bits_from_shard(model, shard_weights, block_size):

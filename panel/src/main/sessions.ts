@@ -438,12 +438,23 @@ function filterAdditionalArgs(raw: string | undefined, blockedFlags: Set<string>
 function readBundleStartupDefaults(modelPath?: string): BundleStartupDefaults {
   if (!modelPath) return {}
   const out: BundleStartupDefaults = {}
+  let modelType: string | undefined
+  try {
+    const cfg = JSON.parse(readFileSync(join(modelPath, 'config.json'), 'utf8'))
+    modelType = typeof cfg?.model_type === 'string' ? cfg.model_type.toLowerCase() : undefined
+  } catch { /* config.json is optional for remote/custom rows */ }
   try {
     const gen = JSON.parse(readFileSync(join(modelPath, 'generation_config.json'), 'utf8'))
-    const generationConfigDisablesSampling = gen.do_sample === false
+    const mimoV2ChatDefault = modelType === 'mimo_v2'
+    const generationConfigDisablesSampling = gen.do_sample === false && !mimoV2ChatDefault
     if (typeof gen.do_sample === 'boolean') out.doSample = gen.do_sample
-    if (typeof gen.temperature === 'number') out.defaultTemperature = generationConfigDisablesSampling ? 0 : Math.round(gen.temperature * 100)
-    if (typeof gen.top_p === 'number') out.defaultTopP = generationConfigDisablesSampling ? 100 : Math.round(gen.top_p * 100)
+    if (mimoV2ChatDefault) {
+      out.defaultTemperature = 70
+      out.defaultTopP = 95
+    } else {
+      if (typeof gen.temperature === 'number') out.defaultTemperature = generationConfigDisablesSampling ? 0 : Math.round(gen.temperature * 100)
+      if (typeof gen.top_p === 'number') out.defaultTopP = generationConfigDisablesSampling ? 100 : Math.round(gen.top_p * 100)
+    }
     if (typeof gen.top_k === 'number') out.defaultTopK = generationConfigDisablesSampling ? 0 : Math.max(0, Math.round(gen.top_k))
     if (typeof gen.min_p === 'number') out.defaultMinP = Math.max(0, Math.round(gen.min_p * 100))
     if (typeof gen.repetition_penalty === 'number') out.defaultRepetitionPenalty = Math.round(gen.repetition_penalty * 100)

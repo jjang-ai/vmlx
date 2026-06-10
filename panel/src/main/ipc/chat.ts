@@ -1310,7 +1310,10 @@ export function registerChatHandlers(
         ?.content || "";
       const suppressAgenticToolPromptForExactOutput =
         overrides?.builtinToolsEnabled === true &&
-        /\breply exactly\s*:/i.test(latestUserText);
+        /\b(?:reply exactly|send visible final text exactly|output visible final text exactly)\s*:/i.test(latestUserText);
+      const exactOutputFollowupInstruction = suppressAgenticToolPromptForExactOutput
+        ? latestUserText
+        : "";
       const suppressGenericAgenticToolPromptForNativeTools =
         overrides?.builtinToolsEnabled === true &&
         shouldSuppressGenericAgenticPromptForNativeTools(
@@ -1717,7 +1720,10 @@ export function registerChatHandlers(
         let latestResponsesResponseId: string | undefined;
         let responsesToolFollowupPreviousResponseId: string | undefined;
         let responsesToolFollowupInput:
-          | Array<{ type: "function_call_output"; call_id: string; output: string }>
+          | Array<
+              | { type: "function_call_output"; call_id: string; output: string }
+              | { type: "message"; role: "user"; content: string }
+            >
           | undefined;
         let suppressExplicitToolChoiceForToolFollowup = false;
 
@@ -3321,9 +3327,18 @@ export function registerChatHandlers(
             responsesToolOutputItems.length > 0
           ) {
             responsesToolFollowupPreviousResponseId = latestResponsesResponseId;
-            responsesToolFollowupInput = responsesToolOutputItems.map((item) => ({
-              ...item,
-            }));
+            responsesToolFollowupInput = [
+              ...(exactOutputFollowupInstruction
+                ? [{
+                    type: "message" as const,
+                    role: "user" as const,
+                    content: exactOutputFollowupInstruction,
+                  }]
+                : []),
+              ...responsesToolOutputItems.map((item) => ({
+                ...item,
+              })),
+            ];
             console.log(
               `[CHAT] Responses tool follow-up using previous_response_id=${latestResponsesResponseId} with ${responsesToolOutputItems.length} function_call_output item(s)`,
             );

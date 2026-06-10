@@ -249,21 +249,36 @@ export async function readGenerationDefaults(
     if (thinkingBudgetSupported !== undefined) {
       defaults.thinkingBudgetSupported = thinkingBudgetSupported;
     }
+    let modelType: string | undefined;
+    try {
+      const modelConfig = JSON.parse(await readFile(join(modelPath, "config.json"), "utf-8"));
+      modelType = typeof modelConfig?.model_type === "string"
+        ? modelConfig.model_type.toLowerCase()
+        : undefined;
+    } catch (_) {
+      // config.json is optional for remote/custom rows.
+    }
 
     const configPath = join(modelPath, "generation_config.json");
     try {
       const raw = await readFile(configPath, "utf-8");
       const config = JSON.parse(raw);
 
-      const generationConfigDisablesSampling = config.do_sample === false;
+      const mimoV2ChatDefault = modelType === "mimo_v2";
+      const generationConfigDisablesSampling = config.do_sample === false && !mimoV2ChatDefault;
       if (typeof config.do_sample === "boolean")
         defaults.doSample = config.do_sample;
-      if (typeof config.temperature === "number")
-        defaults.temperature = generationConfigDisablesSampling
-          ? 0
-          : config.temperature;
-      if (typeof config.top_p === "number")
-        defaults.topP = generationConfigDisablesSampling ? 1 : config.top_p;
+      if (mimoV2ChatDefault) {
+        defaults.temperature = 0.7;
+        defaults.topP = 0.95;
+      } else {
+        if (typeof config.temperature === "number")
+          defaults.temperature = generationConfigDisablesSampling
+            ? 0
+            : config.temperature;
+        if (typeof config.top_p === "number")
+          defaults.topP = generationConfigDisablesSampling ? 1 : config.top_p;
+      }
       if (typeof config.top_k === "number")
         defaults.topK = generationConfigDisablesSampling
           ? 0

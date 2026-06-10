@@ -207,8 +207,9 @@ def classify_model_dir(model_dir: Path) -> dict[str, Any]:
         # MiMo-V2.5 artifacts may carry stale thinking metadata, but current
         # live proof shows the model can emit hidden-only output with no
         # visible final answer when thinking is enabled. Keep the smoke gate
-        # aligned with runtime capability truth: XML tools are supported, but
-        # reasoning/thinking is not release-exposed for MiMo yet.
+        # aligned with runtime capability truth: XML tools and XML cleanup
+        # parsing are supported, but reasoning/thinking is not release-exposed
+        # for MiMo yet.
         supports_thinking = False
 
     supports_tools = True
@@ -226,7 +227,7 @@ def classify_model_dir(model_dir: Path) -> dict[str, Any]:
     if model_type == "mimo_v2":
         capabilities = dict(capabilities)
         reasoning = dict(capabilities.get("reasoning") or {})
-        reasoning.update({"default": False, "parser": None, "supported": False})
+        reasoning.update({"default": False, "parser": "think_xml", "supported": False})
         tools = dict(capabilities.get("tools") or {})
         tools.update({"parser": "xml_function", "supported": True})
         capabilities["reasoning"] = reasoning

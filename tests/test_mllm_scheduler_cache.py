@@ -134,15 +134,15 @@ def test_mimo_v2_generator_detects_inner_language_model_type_for_processors():
     processors = generator._mimo_v2_thinking_off_logits_processors(request)
     logits = mx.zeros((1, 12))
 
-    no_think = processors[0](mx.array([42]), logits)
-    assert math.isinf(float(no_think[0, 1])) and float(no_think[0, 1]) < 0
-    assert math.isinf(float(no_think[0, 2])) and float(no_think[0, 2]) < 0
+    assert len(processors) == 1
 
-    first_token = processors[1](mx.array([42]), logits)
+    first_token = processors[0](mx.array([42]), logits)
+    assert float(first_token[0, 1]) == 0.0
+    assert float(first_token[0, 2]) == 0.0
     assert math.isinf(float(first_token[0, 9])) and float(first_token[0, 9]) < 0
 
     request.output_tokens = [7]
-    later_token = processors[1](mx.array([42, 7]), logits)
+    later_token = processors[0](mx.array([42, 7]), logits)
     assert float(later_token[0, 9]) == 0.0
 
 

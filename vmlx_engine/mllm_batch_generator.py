@@ -6936,12 +6936,11 @@ class MLLMBatchGenerator:
         """Return MiMo V2 thinking-off decode processors for batched MLLM.
 
         Mirrors SimpleEngine's MiMo policy for the continuous-batching/cache
-        route: suppress native thinking delimiters whenever API thinking is
-        off, and suppress the primary EOS marker only before the first
-        generated token. The first-token test must use request output state,
-        not the processor's token vector, because batched processors see prompt
-        tokens too. This avoids the proven first-token ``<|im_end|>`` stop
-        without preventing natural stop later.
+        route: suppress the primary EOS marker only before the first generated
+        token. Do not suppress literal XML thinking delimiters: MiMo can then
+        emit untagged reasoning prose as visible text. The active think_xml
+        parser handles tagged reasoning cleanup while the first-token EOS guard
+        still avoids the proven immediate ``<|im_end|>`` stop.
         """
 
         token_ids = getattr(self, "_mimo_v2_thinking_off_token_ids", None)
@@ -6962,11 +6961,6 @@ class MLLMBatchGenerator:
                 except Exception:
                     return None
 
-            think_ids = {
-                token_id
-                for token_id in (_encode_single("<think>"), _encode_single("</think>"))
-                if token_id is not None
-            }
             eos_ids = {token_id for token_id in (_encode_single("<|im_end|>"),) if token_id is not None}
             eos_id = getattr(tokenizer, "eos_token_id", None)
             if isinstance(eos_id, int):
@@ -6977,22 +6971,12 @@ class MLLMBatchGenerator:
                 except Exception:
                     continue
             token_ids = {
-                "think_ids": think_ids,
                 "eos_ids": eos_ids,
             }
             self._mimo_v2_thinking_off_token_ids = token_ids
-        think_ids = token_ids["think_ids"]
         eos_ids = token_ids["eos_ids"]
 
         processors: list[Callable[[mx.array, mx.array], mx.array]] = []
-        if think_ids:
-
-            def _suppress_thinking_tags(_, logits):
-                indices = mx.array(sorted(think_ids))
-                return logits.at[:, indices].add(-float("inf"))
-
-            processors.append(_suppress_thinking_tags)
-
         if eos_ids:
 
             def _suppress_first_token_eos(tokens, logits, _request=request):

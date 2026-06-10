@@ -123,8 +123,9 @@ registerFamily('qwen2-vl', { cacheType: 'kv', toolParser: 'qwen', enableAutoTool
 registerFamily('qwen2', { cacheType: 'kv', toolParser: 'qwen', enableAutoToolChoice: true, description: 'Qwen 2', priority: 20 })
 registerFamily('qwen-mamba', { cacheType: 'mamba', toolParser: 'qwen', usePagedCache: true, description: 'Qwen Mamba', priority: 5 })
 // MiMo-V2.5 JANG_2L keeps multimodal assets. Its template emits generic XML
-// function calls, not Qwen tool JSON. Keep reasoning hidden until live proof
-// shows requested thinking returns a visible final answer.
+// function calls, not Qwen tool JSON. Use generic XML reasoning parsing for
+// cleanup/separation, but keep thinking disabled until live proof shows
+// requested thinking returns a visible final answer.
 registerFamily('mimo_v2', {
   cacheType: 'kv',
   cacheSubtype: 'mimo_v2_asymmetric_swa',
@@ -137,8 +138,10 @@ registerFamily('mimo_v2', {
     swaAttentionSinkBias: true,
   },
   toolParser: 'xml_function',
+  reasoningParser: 'think_xml',
   supportsThinking: false,
   thinkInTemplate: false,
+  defaultEnableThinking: false,
   enableAutoToolChoice: true,
   isMultimodal: true,
   usePagedCache: true,
@@ -894,9 +897,10 @@ function applyJangCapabilities(
   } else if (next.family === 'minimax') {
     next.reasoningParser = 'minimax_m2'
   } else if (next.family === 'mimo_v2') {
-    next.reasoningParser = undefined
+    next.reasoningParser = 'think_xml'
     next.supportsThinking = false
     next.thinkInTemplate = false
+    next.defaultEnableThinking = false
   } else if (next.family === 'ling') {
     next.reasoningParser = undefined
     next.supportsThinking = false

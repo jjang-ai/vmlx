@@ -6041,10 +6041,10 @@ class TestResponsesStreamingExactToolResult:
         import inspect
         from vmlx_engine.server import stream_responses_api
         source = inspect.getsource(stream_responses_api)
-        assert "_responses_exact_reply_target(request)" in source
-        assert "_responses_messages_have_tool_result_after_latest_user(messages)" in source
+        assert "_responses_exact_tool_result_finalization_target(" in source
         assert "_await_chat_with_disconnect_abort(" in source
-        assert "chat_kwargs=kwargs" in source
+        assert "finalization_kwargs[\"enable_thinking\"] = False" in source
+        assert "chat_kwargs=finalization_kwargs" in source
         assert "response.output_text.delta" in source
 
     def test_exact_reply_finalizer_only_triggers_after_current_turn_tool_result(self):
@@ -6067,6 +6067,160 @@ class TestResponsesStreamingExactToolResult:
                 {"role": "assistant", "content": "A"},
                 {"role": "user", "content": "use tool then reply exactly: B"},
             ]
+        )
+
+    def test_exact_reply_target_accepts_visible_final_text_contract(self):
+        from types import SimpleNamespace
+        from vmlx_engine.server import (
+            _responses_exact_reply_target,
+            _responses_exact_reply_target_from_messages,
+            _responses_exact_tool_result_finalization_target,
+        )
+
+        request = SimpleNamespace(
+            input=[
+                {
+                    "role": "user",
+                    "content": (
+                        "After the tool result, send visible final text exactly: "
+                        "REAL_UI_LIVE_TOOL_TWO second UI turn."
+                    ),
+                }
+            ],
+        )
+
+        assert (
+            _responses_exact_reply_target(request)
+            == "REAL_UI_LIVE_TOOL_TWO second UI turn."
+        )
+
+        request_with_tool_tail = SimpleNamespace(
+            input=[
+                {
+                    "role": "user",
+                    "content": (
+                        "After the tool result, send visible final text exactly: "
+                        "REAL_UI_LIVE_TOOL_TWO second UI turn."
+                    ),
+                },
+                {
+                    "type": "function_call_output",
+                    "call_id": "call_1",
+                    "output": "REAL_UI_LIVE_TOOL_ONE",
+                },
+            ],
+        )
+
+        assert (
+            _responses_exact_reply_target(request_with_tool_tail)
+            == "REAL_UI_LIVE_TOOL_TWO second UI turn."
+        )
+
+        assert (
+            _responses_exact_reply_target_from_messages(
+                [
+                    {
+                        "role": "user",
+                        "content": (
+                            "After the tool result, send visible final text exactly: "
+                            "REAL_UI_LIVE_TOOL_TWO second UI turn."
+                        ),
+                    },
+                    {
+                        "type": "function_call_output",
+                        "call_id": "call_1",
+                        "output": "REAL_UI_LIVE_TOOL_ONE",
+                    },
+                ]
+            )
+            == "REAL_UI_LIVE_TOOL_TWO second UI turn."
+        )
+
+        previous_response_history = [
+            {
+                "role": "user",
+                "content": (
+                    "Use the run_command tool. After the tool result, "
+                    "send visible final text exactly: REAL_UI_LIVE_TOOL_ONE"
+                ),
+            },
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {
+                            "name": "run_command",
+                            "arguments": {"command": "printf REAL_UI_LIVE_TOOL_ONE"},
+                        },
+                    }
+                ],
+            },
+        ]
+        current_tool_followup = SimpleNamespace(
+            input=[
+                {
+                    "type": "function_call_output",
+                    "call_id": "call_1",
+                    "output": "REAL_UI_LIVE_TOOL_ONE",
+                }
+            ],
+        )
+        assert (
+            _responses_exact_tool_result_finalization_target(
+                current_tool_followup,
+                previous_response_history
+                + [
+                    {
+                        "role": "tool",
+                        "tool_call_id": "call_1",
+                        "content": "REAL_UI_LIVE_TOOL_ONE",
+                    }
+                ],
+            )
+            == "REAL_UI_LIVE_TOOL_ONE"
+        )
+
+        unrelated_later_user = previous_response_history + [
+            {
+                "role": "tool",
+                "tool_call_id": "call_1",
+                "content": "REAL_UI_LIVE_TOOL_ONE",
+            },
+            {"role": "assistant", "content": "REAL_UI_LIVE_TOOL_ONE"},
+            {"role": "user", "content": "Start a new task."},
+        ]
+        assert (
+            _responses_exact_tool_result_finalization_target(
+                SimpleNamespace(input="Start a new task."),
+                unrelated_later_user,
+            )
+            is None
+        )
+        assert (
+            _responses_exact_tool_result_finalization_target(
+                request,
+                previous_response_history
+                + [
+                    {
+                        "role": "tool",
+                        "tool_call_id": "call_1",
+                        "content": "REAL_UI_LIVE_TOOL_ONE",
+                    },
+                    {"role": "assistant", "content": "REAL_UI_LIVE_TOOL_ONE"},
+                    {
+                        "role": "user",
+                        "content": (
+                            "Use another tool. After the tool result, "
+                            "send visible final text exactly: REAL_UI_LIVE_TOOL_TWO"
+                        ),
+                    },
+                ],
+                tools_present=True,
+            )
+            is None
         )
 
     def test_exact_reply_fast_path_uses_visible_post_think_text(self):
@@ -9215,6 +9369,33 @@ class TestZayaCCACachePolicy:
 
         assert parser is None
 
+    def test_request_reasoning_parser_allows_mimo_think_xml_cleanup_when_thinking_disabled(
+        self, monkeypatch
+    ):
+        import vmlx_engine.server as server
+        from vmlx_engine.reasoning.think_xml_parser import ThinkXmlReasoningParser
+
+        monkeypatch.setattr(server, "_reasoning_parser", None)
+        monkeypatch.setattr(server, "_reasoning_parser_disabled_explicitly", False)
+
+        parser = server._request_reasoning_parser_from_config(
+            SimpleNamespace(
+                family_name="mimo_v2",
+                reasoning_parser="think_xml",
+                supports_thinking=False,
+            )
+        )
+        blocked = server._request_reasoning_parser_from_config(
+            SimpleNamespace(
+                family_name="zaya1_vl",
+                reasoning_parser="qwen3",
+                supports_thinking=False,
+            )
+        )
+
+        assert isinstance(parser, ThinkXmlReasoningParser)
+        assert blocked is None
+
     def test_cli_enables_typed_paged_cache_and_forces_tq_off_for_zaya_cca(self):
         source = Path("./vmlx_engine/cli.py").read_text()
 
@@ -10379,7 +10560,7 @@ class TestJangVLMFallbacks:
         assert utils.is_mllm_model(str(model_dir)) is False
         assert utils.is_mllm_model(str(model_dir), force_mllm=True) is False
 
-    def test_mimo_v2_text_runtime_metadata_auto_enables_complete_media_bundle(
+    def test_mimo_v2_text_runtime_metadata_stays_text_only_without_media_overlay_opt_in(
         self,
         tmp_path,
         monkeypatch,
@@ -10446,6 +10627,12 @@ class TestJangVLMFallbacks:
             load_mimo_audio_tokenizer_from_bundle=lambda *_args, **_kwargs: None,
         )
         monkeypatch.setattr(server, "_mimo_v2_runtime_module", lambda: module)
+        utils._IS_MLLM_CACHE.clear()
+
+        assert utils.is_mllm_model(str(model_dir)) is False
+        assert utils.is_mllm_model(str(model_dir), force_mllm=True) is False
+
+        monkeypatch.setenv("VMLINUX_MIMO_V2_ENABLE_TEXT_RUNTIME_MEDIA_OVERLAY", "1")
         utils._IS_MLLM_CACHE.clear()
 
         assert utils.is_mllm_model(str(model_dir)) is True

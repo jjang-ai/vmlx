@@ -4390,7 +4390,8 @@ REAL_UI_TOOL_TWO_MALFORMED_TOKEN_RE = re.compile(
     re.IGNORECASE,
 )
 REAL_UI_EXACT_REPLY_RE = re.compile(
-    r"reply exactly:\s*[\"'“”`]?([A-Za-z0-9_=-]+)[\"'“”`]?",
+    r"(?:reply exactly|send visible final text exactly|output visible final text exactly):\s*"
+    r"[\"'“”`]?([^\r\n\"'“”`]+?)[\"'“”`]?\s*(?=\r?\n|$)",
     re.IGNORECASE,
 )
 
