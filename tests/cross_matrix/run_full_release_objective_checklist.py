@@ -87,7 +87,7 @@ GEMMA4_12B_ISSUE191_STARTUP_VISIBLE = Path(
     "build/current-gemma4-12b-issue191-source-startup-visible-proof-20260609.json"
 )
 GEMMA4_12B_JANG4M_MEDIA_SMOKE = Path(
-    "build/current-gemma4-12b-jang4m-media-smoke-after-vlm-prefill-guard-20260607.json"
+    "build/current-gemma4-12b-mxfp4-jang4m-media-smoke-live-20260610.json"
 )
 GEMMA_QAT_NATIVE_MXFP4_INVENTORY = Path(
     "build/current-gemma-qat-native-mxfp4-local-inventory-after-source-smoke-map-20260609.json"

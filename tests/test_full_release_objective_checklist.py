@@ -38,6 +38,12 @@ def test_full_release_objective_checklist_uses_current_gemma4_12b_jang4m_nomedia
     )
 
 
+def test_full_release_objective_checklist_uses_current_gemma4_12b_jang4m_media_proof():
+    assert checklist.GEMMA4_12B_JANG4M_MEDIA_SMOKE == Path(
+        "build/current-gemma4-12b-mxfp4-jang4m-media-smoke-live-20260610.json"
+    )
+
+
 def _write_json(path: Path, data: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(data) + "\n")
@@ -272,7 +278,7 @@ def _write_green_family_smokes(tmp_path: Path) -> None:
     )
     _write_json(
         tmp_path
-        / "build/current-gemma4-12b-jang4m-media-smoke-after-vlm-prefill-guard-20260607.json",
+        / "build/current-gemma4-12b-mxfp4-jang4m-media-smoke-live-20260610.json",
         {
             "status": "pass",
             "checks": {"all_rows_passed": True, "at_least_one_row_ran": True},
