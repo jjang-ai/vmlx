@@ -180,6 +180,12 @@ SOURCE_LIVE_SMOKE_PROOFS = {
     ),
 }
 
+SOURCE_FULLMEDIA_SMOKE_PROOFS = {
+    "gemma4_e2b_qat_jang4m": Path(
+        "build/current-all-local-model-smoke-gemma4-e2b-qat-jang4m-fullmedia-tools-l2-20260610/JANGQ_gemma-4-E2B-it-qat-JANG_4M/result.json"
+    ),
+}
+
 
 def _load_json(path: Path) -> dict[str, Any]:
     try:
@@ -343,7 +349,131 @@ def _source_live_smoke_status(row_key: str, proof_root: Path) -> dict[str, Any]:
     }
 
 
+def _source_fullmedia_smoke_status(row_key: str, proof_root: Path) -> dict[str, Any]:
+    rel = SOURCE_FULLMEDIA_SMOKE_PROOFS.get(row_key)
+    if rel is None:
+        return {"status": "missing", "artifact": None}
+    path = proof_root / rel
+    proof = _load_json(path)
+    requests = _source_smoke_requests(proof)
+    by_label = {
+        str(request.get("label")): request
+        for request in requests
+        if isinstance(request, dict) and request.get("label")
+    }
+    capabilities = proof.get("capabilities")
+    capabilities_body = (
+        capabilities.get("body") if isinstance(capabilities, dict) else None
+    )
+    capabilities_body = capabilities_body if isinstance(capabilities_body, dict) else {}
+    cache_after = proof.get("cache_after")
+    cache_body = cache_after.get("body") if isinstance(cache_after, dict) else None
+    cache_body = cache_body if isinstance(cache_body, dict) else {}
+    l2_restart = proof.get("l2_restart") if isinstance(proof.get("l2_restart"), dict) else {}
+    l2_usage = l2_restart.get("usage") if isinstance(l2_restart.get("usage"), dict) else {}
+    l2_details = l2_usage.get("prompt_tokens_details") if isinstance(l2_usage.get("prompt_tokens_details"), dict) else {}
+    l2_stats = l2_restart.get("cache_stats") if isinstance(l2_restart.get("cache_stats"), dict) else {}
+    l2_block = l2_stats.get("block_disk_cache") if isinstance(l2_stats.get("block_disk_cache"), dict) else {}
+    required_labels = (
+        "text_cache_repeat_1",
+        "text_cache_repeat_2",
+        "text_multiturn_recall",
+        "reasoning_on",
+        "tool_required",
+        "tool_result_continuation",
+        "structured_json_exact",
+        "exact_code_whitespace",
+        "vl_blue_image",
+        "text_no_media_after_image",
+        "vl_blue_image_repeat",
+        "vl_red_image_changed",
+        "vl_blue_video",
+        "text_no_media_after_video",
+        "audio_blue",
+        "text_no_media_after_audio",
+    )
+    missing_labels = [label for label in required_labels if label not in by_label]
+    failed_labels = [
+        label
+        for label, request in by_label.items()
+        if request.get("validation_failures") not in ([], None)
+        or request.get("code") != 200
+    ]
+    tool_required = by_label.get("tool_required") or {}
+    tool_calls = tool_required.get("tool_calls")
+    first_tool = tool_calls[0] if isinstance(tool_calls, list) and tool_calls else {}
+    function = first_tool.get("function") if isinstance(first_tool, dict) else {}
+    function = function if isinstance(function, dict) else {}
+    native_cache = cache_body.get("native_cache")
+    native_cache = native_cache if isinstance(native_cache, dict) else {}
+    block_disk = cache_body.get("block_disk_cache")
+    block_disk = block_disk if isinstance(block_disk, dict) else {}
+    checks = {
+        "artifact_exists": path.exists(),
+        "status_pass": proof.get("status") == "pass",
+        "all_required_labels_present": not missing_labels,
+        "request_validations_clean": not failed_labels,
+        "capability_family_gemma4": capabilities_body.get("family") == "gemma4",
+        "tool_parser_gemma4": capabilities_body.get("tool_parser") == "gemma4",
+        "reasoning_parser_gemma4": capabilities_body.get("reasoning_parser") == "gemma4",
+        "required_tool_args_exact": function.get("name") == "record_fact"
+        and function.get("arguments") == '{"value": "blue-cat"}',
+        "vision_image_blue": _request_passed_with_content(
+            by_label.get("vl_blue_image"), expected_content="Blue"
+        ),
+        "video_blue": _request_passed_with_content(
+            by_label.get("vl_blue_video"), expected_content="Blue"
+        ),
+        "audio_blue": _request_passed_with_content(
+            by_label.get("audio_blue"), expected_content="Blue"
+        ),
+        "post_media_text_recovery": _request_passed_with_content(
+            by_label.get("text_no_media_after_audio"), expected_content="NONE"
+        )
+        and _request_passed_with_content(
+            by_label.get("text_no_media_after_video"), expected_content="NONE"
+        )
+        and _request_passed_with_content(
+            by_label.get("text_no_media_after_image"), expected_content="NONE"
+        ),
+        "mixed_swa_native_cache": native_cache.get("schema") == "mixed_swa_kv_v1"
+        and native_cache.get("generic_turboquant_kv", {}).get("enabled") is False,
+        "block_l2_written": (block_disk.get("disk_writes") or 0) > 0
+        and (block_disk.get("total_tokens_on_disk") or 0) > 0,
+        "fresh_process_l2_restore": l2_restart.get("status") == "completed"
+        and l2_details.get("cached_tokens", 0) > 0
+        and "disk" in str(l2_details.get("cache_detail") or "")
+        and (l2_block.get("disk_hits") or 0) > 0,
+    }
+    status = (
+        "pass"
+        if path.exists()
+        and all(checks.values())
+        else "open"
+        if path.exists()
+        else "missing"
+    )
+    return {
+        "status": status,
+        "artifact": str(rel),
+        "summary_status": proof.get("status"),
+        "missing_labels": missing_labels,
+        "failed_labels": failed_labels,
+        "checks": checks,
+        "request_count": len(requests),
+        "l2_restart": {
+            "status": l2_restart.get("status"),
+            "cached_tokens": l2_details.get("cached_tokens"),
+            "cache_detail": l2_details.get("cache_detail"),
+            "disk_hits": l2_block.get("disk_hits"),
+        },
+    }
+
+
 def _source_smoke_requests(proof: dict[str, Any]) -> list[dict[str, Any]]:
+    direct_requests = proof.get("requests")
+    if isinstance(direct_requests, list):
+        return [req for req in direct_requests if isinstance(req, dict)]
     results = proof.get("results")
     if not isinstance(results, list):
         return []
@@ -429,6 +559,7 @@ def classify_required_rows(
                     )
 
         source_live_smoke = _source_live_smoke_status(key, proof_root)
+        source_fullmedia_smoke = _source_fullmedia_smoke_status(key, proof_root)
         classified[key] = {
             "display": spec["display"],
             "status": proof_status,
@@ -444,6 +575,7 @@ def classify_required_rows(
             "live_proof_required": list(REQUIRED_LIVE_PROOF_SURFACES),
             "live_proof_status": "missing",
             "source_live_smoke": source_live_smoke,
+            "source_fullmedia_smoke": source_fullmedia_smoke,
         }
     return classified
 
