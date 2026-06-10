@@ -2895,11 +2895,19 @@ class TestOpenAILogprobsFormatting:
             json.dumps(payload, sort_keys=True) for _, payload in payloads
         )
 
-        assert visible_deltas == ["**Quick preamble:** Checking what's in `/tmp`...\n"]
+        assert visible_deltas == []
         assert function_items == []
         assert argument_events == []
         assert '"arguments": "{}"' not in serialized_events
         assert "tool_calls_required" in error_codes
+        completed = [
+            payload["response"]
+            for event_type, payload in payloads
+            if event_type == "response.completed"
+        ]
+        assert completed[-1]["status"] == "failed"
+        assert completed[-1]["output_text"] == ""
+        assert completed[-1]["output"] == []
 
     def test_tool_parser_drops_empty_xml_call_and_strips_markup_for_nonstream_paths(
         self, monkeypatch

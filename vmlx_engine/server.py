@@ -15398,6 +15398,9 @@ async def stream_responses_api(
     )
 
     _suppress_tools = getattr(request, "tool_choice", None) == "none"
+    _required_tool_choice_stream = _is_required_tool_choice(
+        getattr(request, "tool_choice", None)
+    )
     _request_has_tools = bool(getattr(request, "tools", None))
     _stream_tools_available = bool(kwargs.get("tools")) or _request_has_tools
     tool_call_active = _stream_tools_available and not _suppress_tools
@@ -15860,17 +15863,18 @@ async def stream_responses_api(
                             # Emit content as standard text delta
                             if emit_content:
                                 content_was_emitted = True
-                                streamed_text += emit_content
-                                yield _sse(
-                                    "response.output_text.delta",
-                                    {
-                                        "type": "response.output_text.delta",
-                                        "item_id": msg_id,
-                                        "output_index": 0,
-                                        "content_index": 0,
-                                        "delta": emit_content,
-                                    },
-                                )
+                                if not _required_tool_choice_stream:
+                                    streamed_text += emit_content
+                                    yield _sse(
+                                        "response.output_text.delta",
+                                        {
+                                            "type": "response.output_text.delta",
+                                            "item_id": msg_id,
+                                            "output_index": 0,
+                                            "content_index": 0,
+                                            "delta": emit_content,
+                                        },
+                                    )
                 else:
                     # Standard path without reasoning parsing
                     content = delta_text
@@ -15911,17 +15915,18 @@ async def stream_responses_api(
 
                         if content:
                             content_was_emitted = True
-                            streamed_text += content
-                            yield _sse(
-                                "response.output_text.delta",
-                                {
-                                    "type": "response.output_text.delta",
-                                    "item_id": msg_id,
-                                    "output_index": 0,
-                                    "content_index": 0,
-                                    "delta": content,
-                                },
-                            )
+                            if not _required_tool_choice_stream:
+                                streamed_text += content
+                                yield _sse(
+                                    "response.output_text.delta",
+                                    {
+                                        "type": "response.output_text.delta",
+                                        "item_id": msg_id,
+                                        "output_index": 0,
+                                        "content_index": 0,
+                                        "delta": content,
+                                    },
+                                )
 
             # Emit per-chunk usage when include_usage is enabled (for real-time metrics)
             if include_usage and (prompt_tokens or completion_tokens):
@@ -16151,6 +16156,99 @@ async def stream_responses_api(
 
     display_text = ""
 
+    if _required_tool_choice_stream and not tool_calls:
+        logger.warning(
+            f"Stream {response_id}: tool_choice='required' but no tool calls produced"
+        )
+        yield _sse(
+            "response.output_text.done",
+            {
+                "type": "response.output_text.done",
+                "item_id": msg_id,
+                "output_index": 0,
+                "content_index": 0,
+                "text": "",
+            },
+        )
+        yield _sse(
+            "response.content_part.done",
+            {
+                "type": "response.content_part.done",
+                "item_id": msg_id,
+                "output_index": 0,
+                "content_index": 0,
+                "part": {"type": "output_text", "text": "", "annotations": []},
+            },
+        )
+        yield _sse(
+            "response.output_item.done",
+            {
+                "type": "response.output_item.done",
+                "output_index": 0,
+                "item": {
+                    "id": msg_id,
+                    "type": "message",
+                    "status": "incomplete",
+                    "role": "assistant",
+                    "content": [],
+                },
+            },
+        )
+        yield _sse(
+            "error",
+            {
+                "type": "error",
+                "message": (
+                    "tool_choice='required' was set but the model did not produce "
+                    "any tool calls. Try rephrasing your prompt or using a model "
+                    "with better tool-calling support."
+                ),
+                "code": "tool_calls_required",
+            },
+        )
+        completed_response = {
+            "id": response_id,
+            "object": "response",
+            "created_at": created_at,
+            "status": "failed",
+            "model": request.model,
+            "output_text": "",
+            "output": [],
+            "error": {
+                "type": "invalid_request_error",
+                "message": (
+                    "tool_choice='required' was set but the model did not produce "
+                    "any tool calls."
+                ),
+                "code": "tool_calls_required",
+            },
+            "usage": {
+                "input_tokens": prompt_tokens,
+                "output_tokens": completion_tokens,
+                "total_tokens": prompt_tokens + completion_tokens,
+                **(
+                    {
+                        "input_tokens_details": (
+                            {"cached_tokens": _cached, "cache_detail": _cache_detail}
+                            if _cache_detail
+                            else {"cached_tokens": _cached}
+                        )
+                    }
+                    if _cached > 0 or _cache_detail
+                    else {}
+                ),
+            },
+        }
+        _responses_store_history(response_id, messages, reasoning_only=False)
+        yield _sse(
+            "response.completed",
+            {
+                "type": "response.completed",
+                "response": completed_response,
+            },
+        )
+        return
+
     if tool_calls:
         # Apply reasoning parser to the cleaned (pre-tool-call) text
         if request_parser and cleaned_text:
@@ -16163,7 +16261,7 @@ async def stream_responses_api(
                 cleaned_text = reasoning_text
 
         # Finalize the text message with whatever content was before the tool call
-        final_text = (cleaned_text or "").strip()
+        final_text = "" if _required_tool_choice_stream else (cleaned_text or "").strip()
         final_text = _finalize_visible_text_for_request(final_text, request)
         yield _sse(
             "response.output_text.done",
@@ -16514,25 +16612,6 @@ async def stream_responses_api(
                     logger.warning(
                         f"Stream {response_id}: JSON validation failed: {_err}"
                     )
-
-    # Enforce tool_choice="required" in Responses API streaming
-    _resp_stream_tc = getattr(request, "tool_choice", None)
-    if _is_required_tool_choice(_resp_stream_tc) and not tool_calls:
-        logger.warning(
-            f"Stream {response_id}: tool_choice='required' but no tool calls produced"
-        )
-        yield _sse(
-            "error",
-            {
-                "type": "error",
-                "message": (
-                    "tool_choice='required' was set but the model did not produce "
-                    "any tool calls. Try rephrasing your prompt or using a model "
-                    "with better tool-calling support."
-                ),
-                "code": "tool_calls_required",
-            },
-        )
 
     # Emit response.completed — use "incomplete" status when max_tokens was hit
     _resp_finish = getattr(last_output, "finish_reason", None) if last_output else None

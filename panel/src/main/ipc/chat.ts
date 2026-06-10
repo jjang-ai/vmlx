@@ -2892,6 +2892,7 @@ export function registerChatHandlers(
                 "[CHAT] Error processing SSE line:",
                 (e as Error).message,
               );
+              throw e;
             }
           }
         };
@@ -3982,7 +3983,7 @@ export function registerChatHandlers(
           partialContent ||
           abortReasoningContent.trim() ||
           collectedToolStatuses.length > 0 ||
-          abortTotalTokens > 0;
+          (wasAborted && abortTotalTokens > 0);
 
         // Save message if we have any content, reasoning, or visible tool activity
         if (hadVisibleActivity) {
