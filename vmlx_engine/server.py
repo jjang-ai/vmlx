@@ -16524,6 +16524,8 @@ async def stream_responses_api(
                 display_text,
                 request,
             )
+        elif display_text and _has_tool_marker_or_partial_suffix(full_text):
+            display_text = _strip_tool_markup_residue_for_display(display_text)
         if display_text:
             display_text = _finalize_visible_text_for_request(display_text, request)
 
