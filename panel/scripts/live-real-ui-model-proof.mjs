@@ -79,6 +79,7 @@ const defaultPromptTwo = builtinToolsEnabled
   : 'Repeat the phrase REAL_UI_LIVE once and mention that this is the second UI turn.'
 const promptOne = promptOneOverride || defaultPromptOne
 const promptTwo = promptTwoOverride || defaultPromptTwo
+const secondTurnEnabled = envBool('VMLINUX_REAL_UI_SECOND_TURN', true)
 const checkServerCacheControls = envBool('VMLINUX_REAL_UI_CHECK_SERVER_CACHE_CONTROLS', false)
 const checkMedia = envBool('VMLINUX_REAL_UI_CHECK_MEDIA', false)
 const checkVideo = envBool('VMLINUX_REAL_UI_CHECK_VIDEO', false)
@@ -644,6 +645,7 @@ function assertResult(result) {
     Array.isArray(result.serverCommand)
     && !result.serverCommand.includes('--disable-prefix-cache')
     && !result.serverCommand.includes('--no-continuous-batching')
+    && result.secondTurnEnabled !== false
   )
   if (!result.server?.models?.data?.length) failures.push('real server /v1/models returned no models')
   if (result.remoteSessionStarted !== true) failures.push('remote session did not start through Electron UI API')
@@ -661,9 +663,11 @@ function assertResult(result) {
   if ((chat.reasoningNumericRunCount || 0) > 0) {
     failures.push('numeric/list-like garbage leaked into reasoning segments')
   }
-  if ((result.eventCounts?.complete || 0) < 2) failures.push('expected two completed UI chat turns')
+  const expectedCompleteTurns = result.secondTurnEnabled === false ? 1 : 2
+  const expectedPersistedMessages = result.secondTurnEnabled === false ? 2 : 4
+  if ((result.eventCounts?.complete || 0) < expectedCompleteTurns) failures.push(`expected ${expectedCompleteTurns} completed UI chat turns`)
   if ((result.eventCounts?.stream || 0) < 1) failures.push('expected streaming events from real model')
-  if ((chat.turns?.length || 0) < 4) failures.push(`expected at least four persisted chat messages, got ${chat.turns?.length || 0}`)
+  if ((chat.turns?.length || 0) < expectedPersistedMessages) failures.push(`expected at least ${expectedPersistedMessages} persisted chat messages, got ${chat.turns?.length || 0}`)
   if (result.sendErrors?.length) failures.push(`renderer send errors: ${result.sendErrors.join('; ')}`)
   if (cacheTelemetryExpected && (result.cache?.cacheHitTokens || 0) <= 0) failures.push('expected real cache-hit token telemetry after repeated UI turns')
   if (cacheTelemetryExpected && !result.provenSurfaces?.includes('cache_hit_telemetry')) {
@@ -1279,7 +1283,8 @@ async function main() {
             }
           };
           const firstSent = await sendMessageWithCapture(1, 'first_send_message', ${JSON.stringify(promptOne)});
-          if (firstSent) {
+          const secondTurnEnabled = ${JSON.stringify(secondTurnEnabled)};
+          if (firstSent && secondTurnEnabled) {
             await sendMessageWithCapture(2, 'second_send_message', ${JSON.stringify(promptTwo)});
           }
           if (checkMedia && !rendererFailureStage) {
@@ -1414,6 +1419,7 @@ async function main() {
             requestedImage: checkMedia,
             requestedVideo: checkVideo,
             requestedAudio: checkAudio,
+            secondTurnEnabled,
             imageExpectedRegex: imageExpectRegex,
             videoExpectedRegex: videoExpectRegex,
             audioExpectedRegex: audioExpectRegex,
@@ -1431,6 +1437,7 @@ async function main() {
             rendererWireApi: wireApi,
             rendererBuiltinToolsEnabled: builtinToolsEnabled,
             rendererEnableThinking: enableThinking,
+            secondTurnEnabled,
             workingDirectory,
             remoteSessionId: remote.session.id,
             remoteSessionStarted: true,
@@ -1502,6 +1509,7 @@ async function main() {
         requestContract: {
           promptOne,
           promptTwo,
+          secondTurnEnabled,
           requestMaxTokens,
           requestMaxPromptTokens,
           maxToolIterations,
@@ -1732,6 +1740,7 @@ async function main() {
       requestContract: {
         promptOne,
         promptTwo,
+        secondTurnEnabled,
         requestMaxTokens,
         requestMaxPromptTokens,
         maxToolIterations,
