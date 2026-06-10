@@ -17,7 +17,7 @@ from typing import Any
 
 
 DEFAULT_OUT = Path(
-    "build/current-full-release-objective-checklist-after-responses-raw-sse-gemma-surface-20260609.json"
+    "build/current-full-release-objective-checklist-after-qwen-mimo-gemma-refresh-20260610.json"
 )
 
 MIMO_AUDIT = Path(
@@ -30,7 +30,7 @@ NOHEAVY_API_CACHE = Path(
     "build/current-noheavy-api-cache-contract-after-responses-reasoning-empty-final-args-gateway-20260609.json"
 )
 RESPONSES_RAW_SSE_PARITY = Path(
-    "build/current-responses-raw-sse-parity-direct-gateway-tunnel-gemma4-e2b-after-parser-20260609.json"
+    "build/current-responses-raw-sse-parity-qwen35-direct-gateway-tunnel-after-public-recapture-20260610.json"
 )
 API_SURFACE_CONTRACT = Path(
     "build/current-api-surface-contract-20260602-v1554-stream-cache-reuse-refresh.json"
