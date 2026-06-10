@@ -10206,6 +10206,8 @@ class TestJangVLMFallbacks:
             json.dumps(
                 {
                     "model_type": "mimo_v2",
+                    "format": "jangtq",
+                    "jang_profile": "JANGTQ_2",
                     "vision_config": {"model_type": "mimo_v2_vision"},
                     "audio_config": {"model_type": "mimo_v2_audio"},
                     "image_token_id": 151655,
@@ -10221,6 +10223,15 @@ class TestJangVLMFallbacks:
                     "runtime": {
                         "multimodal_mode": "weights_preserved_text_runtime",
                     },
+                }
+            )
+        )
+        (model_dir / "jang_config.json").write_text(
+            json.dumps(
+                {
+                    "format": "jangtq",
+                    "family": "mimo_v2",
+                    "profile": "JANGTQ_2",
                 }
             )
         )

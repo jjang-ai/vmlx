@@ -2052,6 +2052,46 @@ def _mimo_v2_bundle_has_index_prefix(bundle_path: str | None, prefixes: tuple[st
     )
 
 
+def _mimo_v2_bundle_can_use_media_runtime_overlay(
+    bundle_path: str | None,
+    cfg: dict[str, Any],
+) -> bool:
+    """Return True for promoted MiMo JANG/JANGTQ bundles eligible for overlay.
+
+    Older local MiMo artifacts can be stamped ``weights_preserved_text_runtime``
+    because media wiring landed after conversion. Only let source override that
+    stamp for known quantized MiMo runtime bundles; generic preserved-media
+    fixtures or incomplete artifacts must remain text-only.
+    """
+    if not isinstance(cfg, dict):
+        return False
+    if str(cfg.get("model_type") or "").lower() != "mimo_v2":
+        return False
+    jang = _read_bundle_json(bundle_path, "jang_config.json")
+    candidates = (
+        cfg.get("format"),
+        cfg.get("weight_format"),
+        cfg.get("jang_profile"),
+        cfg.get("jang_version"),
+        cfg.get("profile"),
+        jang.get("format") if isinstance(jang, dict) else None,
+        jang.get("weight_format") if isinstance(jang, dict) else None,
+        jang.get("profile") if isinstance(jang, dict) else None,
+        jang.get("family") if isinstance(jang, dict) else None,
+        (jang.get("quantization") or {}).get("format")
+        if isinstance(jang.get("quantization"), dict)
+        else None,
+        (jang.get("quantization") or {}).get("weight_format")
+        if isinstance(jang.get("quantization"), dict)
+        else None,
+    )
+    lowered = {str(value or "").lower() for value in candidates if value is not None}
+    return any(
+        "jang" in value or "mxtq" in value
+        for value in lowered
+    )
+
+
 def _mimo_v2_media_runtime_auto_enabled(
     bundle_path: str | None,
     cfg: dict[str, Any],
@@ -2079,7 +2119,7 @@ def _mimo_v2_media_runtime_auto_enabled(
         "text_only",
         "unwired",
         "preserved_disabled",
-    }:
+    } and not _mimo_v2_bundle_can_use_media_runtime_overlay(bundle_path, cfg):
         return False
     bundle = Path(bundle_path or "")
     processor_config = cfg.get("processor_config")
