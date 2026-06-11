@@ -3477,7 +3477,9 @@ class TestToolParserConcurrency:
             srv._tool_call_parser = old_parser
 
         assert tool_calls is None
-        assert cleaned == output
+        assert cleaned == "Quick preamble: Checking what's in `/tmp`..."
+        assert "<tool_call>" not in cleaned
+        assert "<function=exec_command>" not in cleaned
 
     def test_generic_parser_empty_required_args_fail_closed_at_shared_boundary(self):
         """Shared Chat/Responses parser boundary rejects missing required args."""
@@ -6498,6 +6500,16 @@ class TestL2IncrementalDelta:
         assert "range(0, len(tc_args)" in source or "range(0, max(len(tc_args)" in source, (
             "Must iterate over argument string for chunking"
         )
+
+    def test_reasoning_item_advances_function_call_output_index(self):
+        """Reasoning and function_call output items must not share output_index."""
+        import inspect
+        from vmlx_engine.server import stream_responses_api
+
+        source = inspect.getsource(stream_responses_api)
+        assert "reasoning_output_index = 1" in source
+        assert "output_index = max(output_index, reasoning_output_index + 1)" in source
+        assert '"type": "function_call"' in source
 
 
 class TestL3ReasoningEffort:
