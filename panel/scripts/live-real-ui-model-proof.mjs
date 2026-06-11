@@ -1041,6 +1041,7 @@ function l2DiskStorageSeen(cache) {
 function responsesDeltaStreamingSeen(result) {
   if (result?.rendererWireApi !== 'responses') return false
   if ((result.eventCounts?.stream || 0) < 2) return false
+  if (responsesFunctionCallArgumentStreamingSeen(result)) return true
   const traces = Array.isArray(result.streamTrace)
     ? result.streamTrace
     : (Array.isArray(result.streamTraceByMessage) ? result.streamTraceByMessage : [])
@@ -1065,6 +1066,31 @@ function responsesDeltaStreamingSeen(result) {
     }
   }
   return qualifyingTraceIds.size + qualifyingTraceCount >= 2
+}
+
+function responsesFunctionCallArgumentStreamingSeen(result) {
+  const strings = []
+  const collect = (value) => {
+    if (typeof value === 'string') {
+      strings.push(value)
+      return
+    }
+    if (!value || typeof value !== 'object') return
+    if (Array.isArray(value)) {
+      for (const child of value) collect(child)
+      return
+    }
+    for (const child of Object.values(value)) collect(child)
+  }
+  collect(result?.streamTrace)
+  collect(result?.appLogTail)
+  collect(result?.sessionLogs)
+  const joined = strings.join('\n')
+  const deltaSeen = joined.includes('response.function_call_arguments.delta')
+    || joined.includes('Responses function_call_arguments.delta')
+  const doneSeen = joined.includes('response.function_call_arguments.done')
+    || joined.includes('Responses function_call_arguments.done')
+  return deltaSeen && doneSeen
 }
 
 function responsesCacheDetailUsageSeen(result) {

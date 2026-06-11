@@ -16,4 +16,12 @@ describe('live real UI proof harness', () => {
     expect(source).toContain('send visible final text exactly')
     expect(source).toContain('output visible final text exactly')
   })
+
+  it('counts tool-first Responses argument deltas as streaming proof', () => {
+    expect(source).toContain('responsesFunctionCallArgumentStreamingSeen')
+    expect(source).toContain('response.function_call_arguments.delta')
+    expect(source).toContain('response.function_call_arguments.done')
+    expect(source).toContain('Responses function_call_arguments.delta')
+    expect(source).toContain('Responses function_call_arguments.done')
+  })
 })

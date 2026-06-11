@@ -2592,6 +2592,9 @@ export function registerChatHandlers(
                   parsed.output_index,
                 );
                 if (argsBuffer) argsBuffer.value += parsed.delta;
+                console.log(
+                  `[CHAT] Responses function_call_arguments.delta: output_index=${parsed.output_index ?? ""} item_id=${parsed.item_id || ""} delta_len=${parsed.delta.length}`,
+                );
               }
               if (
                 responsesEventType === "response.function_call_arguments.done" &&
@@ -2602,6 +2605,9 @@ export function registerChatHandlers(
                   parsed.output_index,
                 );
                 if (argsBuffer) argsBuffer.value = parsed.arguments;
+                console.log(
+                  `[CHAT] Responses function_call_arguments.done: output_index=${parsed.output_index ?? ""} item_id=${parsed.item_id || ""} arguments_len=${parsed.arguments.length}`,
+                );
               }
               if (
                 responsesEventType === "response.output_item.done" &&
