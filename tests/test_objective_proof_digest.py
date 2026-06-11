@@ -8445,7 +8445,7 @@ def test_objective_proof_digest_keeps_cross_family_live_smoke_open_on_non_mimo_g
     )
     _write_json(
         tmp_path,
-        "build/current-filtered-live-smoke-zaya-text-mxfp4-20260607/summary.json",
+        "build/current-all-local-model-smoke-zaya-text-bundled-after-parser-fix-20260611/summary.json",
         {
             "status": "pass",
             "completed": 1,

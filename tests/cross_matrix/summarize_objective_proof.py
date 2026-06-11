@@ -228,7 +228,7 @@ N2_JANGTQ2_RESPONSES_STREAM_BOUNDARY_REL = (
 GEMMA_QAT_NATIVE_MXFP4_INVENTORY_REL = (
     "build/current-gemma-qat-native-mxfp4-local-inventory-after-31b-sessionlogs-reasoning-proof-20260611.json"
 )
-TOOL_CALL_CONTRACT_REL = "build/current-tool-call-contract-after-cross-model-loop-metrics-20260609.json"
+TOOL_CALL_CONTRACT_REL = "build/current-tool-call-contract-after-zaya-parser-fix-20260611.json"
 PANEL_SETTINGS_CONTRACT_REL = "build/current-panel-settings-contract-proof-20260601-cache-ui-storage-quant.json"
 MAX_OUTPUT_CONTEXT_CONTRACT_REL = "build/current-max-output-context-contract-after-jangtq2-objective-refresh-20260607.json"
 MAX_OUTPUT_CONTEXT_CONTRACT_FALLBACK_REL = "build/current-max-output-context-contract-20260521.json"
@@ -354,7 +354,7 @@ GEMMA4_LOCAL_METADATA_AUDIT_REL = (
     "build/current-local-generation-metadata-audit-20260524-gemma4-visible-budget.json"
 )
 ALL_LOCAL_MODEL_SMOKE_ZAYA_TEXT_REL = (
-    "build/current-filtered-live-smoke-zaya-text-mxfp4-20260607/summary.json"
+    "build/current-all-local-model-smoke-zaya-text-bundled-after-parser-fix-20260611/summary.json"
 )
 ALL_LOCAL_MODEL_SMOKE_ZAYA_TEXT_VL_CURRENT_REL = (
     "build/current-all-local-model-smoke-zaya-text-vl-tools-media-after-reasoning-budget-20260606/summary.json"
@@ -7148,6 +7148,7 @@ def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
         [
             CURRENT_RELEASE_REGRESSION_MANIFEST_REL,
             ALL_LOCAL_MODEL_SMOKE_LIVE_SLICE_CURRENT_REL,
+            ALL_LOCAL_MODEL_SMOKE_ZAYA_TEXT_REL,
             ALL_LOCAL_MODEL_SMOKE_ZAYA_TEXT_VL_CURRENT_REL,
             ALL_LOCAL_MODEL_SMOKE_ZAYA_VL_CURRENT_REL,
             ALL_LOCAL_MODEL_SMOKE_LING_HY3_NEMOTRON_CURRENT_REL,
@@ -7947,6 +7948,7 @@ def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
             "docs/internal/agent-notes/2026-05-26-live-chat-tools-reasoning-chat-settings.png",
             "docs/internal/agent-notes/2026-05-26-live-chat-tools-reasoning-server-cache-settings.png",
             ALL_LOCAL_MODEL_SMOKE_LIVE_SLICE_CURRENT_REL,
+            ALL_LOCAL_MODEL_SMOKE_ZAYA_TEXT_REL,
             ALL_LOCAL_MODEL_SMOKE_ZAYA_TEXT_VL_CURRENT_REL,
             ALL_LOCAL_MODEL_SMOKE_ZAYA_VL_CURRENT_REL,
             ALL_LOCAL_MODEL_SMOKE_ZAYA_VL_JANGTQ4_REL,

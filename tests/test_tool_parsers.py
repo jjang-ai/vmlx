@@ -836,6 +836,57 @@ class TestZayaToolParser:
             "content": "REAL_UI_LIVE_TOOL_ONE",
         }
 
+    def test_string_parameter_trims_only_wrapper_newlines_with_schema(self, parser):
+        text = (
+            "<zyphra_tool_call>\n"
+            "<function=record_fact>\n"
+            "<parameter=value>\nblue-cat\n</parameter>\n"
+            "</function>\n"
+            "</zyphra_tool_call>"
+        )
+        request = {
+            "tools": [{
+                "function": {
+                    "name": "record_fact",
+                    "parameters": {"properties": {"value": {"type": "string"}}},
+                },
+            }],
+        }
+
+        result = parser.extract_tool_calls(text, request=request)
+
+        assert result.tools_called
+        args = json.loads(result.tool_calls[0]["arguments"])
+        assert args == {"value": "blue-cat"}
+
+    def test_string_parameter_preserves_same_line_spaces_and_multiline_payload(
+        self, parser
+    ):
+        request = {
+            "tools": [{
+                "function": {
+                    "name": "write_note",
+                    "parameters": {"properties": {"value": {"type": "string"}}},
+                },
+            }],
+        }
+
+        same_line = parser.extract_tool_calls(
+            "<zyphra_tool_call><function=write_note><parameter=value>  blue-cat  </parameter></function></zyphra_tool_call>",
+            request=request,
+        )
+        multiline = parser.extract_tool_calls(
+            "<zyphra_tool_call><function=write_note><parameter=value>line1\nline2</parameter></function></zyphra_tool_call>",
+            request=request,
+        )
+
+        assert json.loads(same_line.tool_calls[0]["arguments"]) == {
+            "value": "  blue-cat  "
+        }
+        assert json.loads(multiline.tool_calls[0]["arguments"]) == {
+            "value": "line1\nline2"
+        }
+
 
 class TestXLAMToolParser:
     """Test the xLAM tool parser."""
