@@ -2601,6 +2601,64 @@ class TestServerSamplingResolution:
 
         assert server._resolve_max_tokens(None, "bundle-model") == 512
 
+    def test_gemma4_required_tool_reasoning_budget_floor_is_scoped(self):
+        from types import SimpleNamespace
+
+        import vmlx_engine.server as server
+
+        required_tool_request = SimpleNamespace(
+            tool_choice="required",
+            tools=[{"type": "function", "function": {"name": "run_command"}}],
+        )
+
+        assert (
+            server._apply_gemma4_required_tool_thinking_token_floor(
+                128,
+                request=required_tool_request,
+                model_key="gemma-4-E2B-it-qat-JANG_4M",
+                enable_thinking=True,
+            )
+            == 512
+        )
+        assert (
+            server._apply_gemma4_required_tool_thinking_token_floor(
+                768,
+                request=required_tool_request,
+                model_key="gemma-4-E2B-it-qat-JANG_4M",
+                enable_thinking=True,
+            )
+            == 768
+        )
+        assert (
+            server._apply_gemma4_required_tool_thinking_token_floor(
+                128,
+                request=required_tool_request,
+                model_key="gemma-4-E2B-it-qat-JANG_4M",
+                enable_thinking=False,
+            )
+            == 128
+        )
+        assert (
+            server._apply_gemma4_required_tool_thinking_token_floor(
+                128,
+                request=SimpleNamespace(
+                    tool_choice="auto", tools=required_tool_request.tools
+                ),
+                model_key="gemma-4-E2B-it-qat-JANG_4M",
+                enable_thinking=True,
+            )
+            == 128
+        )
+        assert (
+            server._apply_gemma4_required_tool_thinking_token_floor(
+                128,
+                request=required_tool_request,
+                model_key="Qwen3.6-35B-A3B",
+                enable_thinking=True,
+            )
+            == 128
+        )
+
     def test_omitted_server_max_tokens_uses_bundle_max_new_tokens(
         self,
         tmp_path,

@@ -1494,6 +1494,57 @@ def _resolve_max_tokens(request_value: int | None, model_name: str = "") -> int:
     return _FALLBACK_MAX_OUTPUT_TOKENS
 
 
+GEMMA4_REASONING_REQUIRED_TOOL_MIN_TOKENS = 512
+
+
+def _is_gemma4_model_key(model_key: str | None) -> bool:
+    if not model_key:
+        return False
+    try:
+        from .model_config_registry import get_model_config_registry
+
+        cfg = get_model_config_registry().lookup(model_key)
+        family = str(getattr(cfg, "family_name", "") or "").lower()
+        if family in {"gemma4", "gemma4-text"}:
+            return True
+    except Exception:
+        pass
+    lowered = str(model_key).lower()
+    return "gemma-4" in lowered or "gemma4" in lowered
+
+
+def _apply_gemma4_required_tool_thinking_token_floor(
+    max_tokens: int,
+    *,
+    request: Any,
+    model_key: str | None,
+    enable_thinking: bool | None,
+) -> int:
+    """Give Gemma4 reasoning-on required-tool turns room to reach the tool call.
+
+    This does not synthesize a tool call, relax schema validation, or disable
+    reasoning. It only avoids a known failure mode where a tiny output cap ends
+    while Gemma4 is still in its reasoning channel before the required native
+    tool call.
+    """
+    if enable_thinking is not True:
+        return max_tokens
+    if not _is_required_tool_choice(getattr(request, "tool_choice", None)):
+        return max_tokens
+    if not getattr(request, "tools", None):
+        return max_tokens
+    if not _is_gemma4_model_key(model_key):
+        return max_tokens
+    if max_tokens >= GEMMA4_REASONING_REQUIRED_TOOL_MIN_TOKENS:
+        return max_tokens
+    logger.info(
+        "Gemma4 required-tool reasoning output budget raised from %d to %d",
+        max_tokens,
+        GEMMA4_REASONING_REQUIRED_TOOL_MIN_TOKENS,
+    )
+    return GEMMA4_REASONING_REQUIRED_TOOL_MIN_TOKENS
+
+
 @dataclass(frozen=True)
 class _DSV4ThinkingDecision:
     enable_thinking: bool
@@ -11732,6 +11783,12 @@ async def create_chat_completion(
     if _et is not None:
         chat_kwargs["enable_thinking"] = _et
         request.enable_thinking = _et
+    chat_kwargs["max_tokens"] = _apply_gemma4_required_tool_thinking_token_floor(
+        int(chat_kwargs["max_tokens"]),
+        request=request,
+        model_key=_model_path or _model_name or request.model,
+        enable_thinking=_et,
+    )
 
     # Pass reasoning_effort if provided (for GPT-OSS and models that support thinking levels).
     # Map it to template-side thinking_budget only; output length remains owned
@@ -13758,6 +13815,12 @@ async def create_response(
     if _et is not None:
         chat_kwargs["enable_thinking"] = _et
         request.enable_thinking = _et
+    chat_kwargs["max_tokens"] = _apply_gemma4_required_tool_thinking_token_floor(
+        int(chat_kwargs["max_tokens"]),
+        request=request,
+        model_key=_model_path or _model_name or request.model,
+        enable_thinking=_et,
+    )
 
     # Pass reasoning_effort if provided (for GPT-OSS and models that support thinking levels).
     # Map it to template-side thinking_budget only; output length remains owned
@@ -14844,6 +14907,13 @@ async def stream_chat_completion(
         engine=engine,
         auto_detect=True,
     )
+    if "max_tokens" in kwargs:
+        kwargs["max_tokens"] = _apply_gemma4_required_tool_thinking_token_floor(
+            int(kwargs["max_tokens"]),
+            request=request,
+            model_key=_model_path or _model_name or request.model,
+            enable_thinking=_effective_thinking,
+        )
 
     # Check if model's chat template injects <think> in the assistant prefix
     # Use _model_name (actual model path) not request.model (which may be "default")
@@ -15922,6 +15992,13 @@ async def stream_responses_api(
         engine=engine,
         auto_detect=True,
     )
+    if "max_tokens" in kwargs:
+        kwargs["max_tokens"] = _apply_gemma4_required_tool_thinking_token_floor(
+            int(kwargs["max_tokens"]),
+            request=request,
+            model_key=_model_path or _model_name or request.model,
+            enable_thinking=_effective_thinking,
+        )
 
     # Reasoning parser setup (mirrors stream_chat_completion)
     from .model_config_registry import get_model_config_registry

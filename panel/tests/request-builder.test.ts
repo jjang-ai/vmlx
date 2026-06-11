@@ -52,6 +52,7 @@ function buildRequestBody(
         overrides?.enableThinking,
         detectedFamily,
         overrides?.reasoningEffort,
+        overrides?.builtinToolsEnabled,
     )
     const thinkingBudget = typeof overrides?.maxThinkingTokens === 'number' &&
         Number.isFinite(overrides.maxThinkingTokens) &&
@@ -174,6 +175,16 @@ describe('buildRequestBody — Chat Completions API', () => {
         { role: 'system', content: 'You are helpful.' },
         { role: 'user', content: 'Hello' }
     ]
+    const sampleTools = [
+        {
+            type: 'function',
+            function: {
+                name: 'run_command',
+                description: 'Run a command',
+                parameters: { type: 'object', properties: { command: { type: 'string' } } }
+            }
+        }
+    ]
 
     it('omits sampling and token defaults when unset so the engine resolves bundle metadata', () => {
         const body = buildRequestBody('completions', 'gpt-4', messages, undefined, false, false)
@@ -288,6 +299,59 @@ describe('buildRequestBody — Chat Completions API', () => {
             expect(body.max_context_tokens).toBeUndefined()
             expect(body.max_context).toBeUndefined()
         }
+    })
+
+    it('raises undersized Gemma4 reasoning tool budgets for Responses API', () => {
+        const body = buildRequestBody(
+            'responses',
+            'gemma4',
+            messages,
+            { maxTokens: 128, enableThinking: true, builtinToolsEnabled: true },
+            true,
+            true,
+            sampleTools,
+            'gemma4',
+        )
+
+        expect(body.max_output_tokens).toBe(512)
+        expect(body.enable_thinking).toBe(true)
+    })
+
+    it('does not raise Gemma4 budgets without reasoning tools or when already large enough', () => {
+        const noTools = buildRequestBody(
+            'responses',
+            'gemma4',
+            messages,
+            { maxTokens: 128, enableThinking: true },
+            true,
+            true,
+            sampleTools,
+            'gemma4',
+        )
+        const thinkingOff = buildRequestBody(
+            'responses',
+            'gemma4',
+            messages,
+            { maxTokens: 128, enableThinking: false, builtinToolsEnabled: true },
+            true,
+            true,
+            sampleTools,
+            'gemma4',
+        )
+        const alreadyLarge = buildRequestBody(
+            'responses',
+            'gemma4',
+            messages,
+            { maxTokens: 768, enableThinking: true, builtinToolsEnabled: true },
+            true,
+            true,
+            sampleTools,
+            'gemma4',
+        )
+
+        expect(noTools.max_output_tokens).toBe(128)
+        expect(thinkingOff.max_output_tokens).toBe(128)
+        expect(alreadyLarge.max_output_tokens).toBe(768)
     })
 
     it('omits invalid persisted maxTokens values instead of poisoning Chat Completions', () => {

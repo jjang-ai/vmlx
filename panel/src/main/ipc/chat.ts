@@ -1799,6 +1799,7 @@ export function registerChatHandlers(
             overrides?.enableThinking,
             chatDetectedFamily,
             overrides?.reasoningEffort,
+            overrides?.builtinToolsEnabled,
           );
           const resolvedThinkingBudget =
             typeof overrides?.maxThinkingTokens === "number" &&

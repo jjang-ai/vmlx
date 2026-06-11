@@ -38,4 +38,14 @@ describe('DSV4 chat request budget helpers', () => {
     expect(dsv4OutputBudget(128, false, 'deepseek-v4')).toBe(128)
     expect(dsv4FinalizerTokens(false, 'deepseek-v4', 4096)).toBeUndefined()
   })
+
+  it('raises undersized Gemma4 reasoning tool budgets without changing other turns', () => {
+    expect(dsv4OutputBudget(128, true, 'gemma4', undefined, true)).toBe(512)
+    expect(dsv4OutputBudget(128, true, 'gemma4-text', undefined, true)).toBe(512)
+    expect(dsv4OutputBudget(512, true, 'gemma4', undefined, true)).toBe(512)
+    expect(dsv4OutputBudget(768, true, 'gemma4', undefined, true)).toBe(768)
+    expect(dsv4OutputBudget(128, false, 'gemma4', undefined, true)).toBe(128)
+    expect(dsv4OutputBudget(128, true, 'gemma4', undefined, false)).toBe(128)
+    expect(dsv4OutputBudget(128, true, 'qwen3_5_moe', undefined, true)).toBe(128)
+  })
 })
