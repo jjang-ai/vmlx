@@ -644,9 +644,9 @@ def _tool_result_continuation_payload(model: str, max_tokens: int) -> dict[str, 
                 "role": "user",
                 "content": (
                     "The tool has completed. Do not call another tool. "
-                    'Reply with exactly this literal string: "STORED blue-cat." '
-                    "Do not include the quotes. Include the hyphen, the letters "
-                    "cat, including the final period."
+                    "Reply exactly with the characters on the next line, then stop. "
+                    "The final character must be a period.\n"
+                    "blue-cat."
                 ),
             },
         ],
@@ -1413,12 +1413,12 @@ def validate_probe_response(
                     "tool_calls": tool_calls,
                 }
             )
-        if stripped != "STORED blue-cat.":
+        if stripped != "blue-cat.":
             failures.append(
                 {
                     "label": label,
                     "reason": "expected_tool_result_summary_missing",
-                    "expected": "STORED blue-cat.",
+                    "expected": "blue-cat.",
                 }
             )
         raw_markup_needles = (

@@ -1634,7 +1634,7 @@ def test_validate_probe_response_accepts_exact_tool_result_sentence():
     failures = mod.validate_probe_response(
         "tool_result_continuation",
         200,
-        "STORED blue-cat.",
+        "blue-cat.",
         "",
         tool_calls=[],
     )
@@ -1642,14 +1642,14 @@ def test_validate_probe_response_accepts_exact_tool_result_sentence():
     assert failures == []
 
 
-def test_tool_result_continuation_payload_quotes_exact_target_sentence():
+def test_tool_result_continuation_payload_places_exact_target_on_own_line():
     mod = load_module()
 
     payload = mod._tool_result_continuation_payload("model-id", 24)
     final_user_message = payload["messages"][-1]["content"]
 
-    assert '"STORED blue-cat."' in final_user_message
-    assert "including the final period" in final_user_message
+    assert final_user_message.endswith("\nblue-cat.")
+    assert "The final character must be a period." in final_user_message
 
 
 def test_collect_probe_failures_uses_semantic_validation():

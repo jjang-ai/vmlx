@@ -17,7 +17,7 @@ from typing import Any
 
 
 DEFAULT_OUT = Path(
-    "build/current-full-release-objective-checklist-after-qwen35-public-tunnel-stale-recapture-20260611.json"
+    "build/current-full-release-objective-checklist-after-lfm25-live-smoke-refresh-20260611.json"
 )
 
 MIMO_AUDIT = Path(
@@ -111,10 +111,10 @@ STEP37_VLM_RUNTIME_AUDIT = Path(
     "build/current-step37-vlm-runtime-audit-after-source-live-media-proof-20260607.json"
 )
 LFM25_MXFP4_SMOKE = Path(
-    "build/current-all-local-model-smoke-lfm25-mxfp4-tools-nomedia-20260609/JANGQ_LFM2.5-8B-A1B-MXFP4/result.json"
+    "build/current-all-local-model-smoke-lfm25-mxfp4-tools-nomedia-after-tool-result-value-prompt-20260611/JANGQ_LFM2.5-8B-A1B-MXFP4/result.json"
 )
 LFM25_MXFP8_SMOKE = Path(
-    "build/current-all-local-model-smoke-lfm25-mxfp8-tools-nomedia-20260609/JANGQ_LFM2.5-8B-A1B-MXFP8/result.json"
+    "build/current-all-local-model-smoke-lfm25-mxfp8-tools-nomedia-after-tool-result-value-prompt-20260611/JANGQ_LFM2.5-8B-A1B-MXFP8/result.json"
 )
 NEMOTRON_OMNI_SMOKE = Path(
     "build/current-all-local-model-smoke-nemotron-omni-mxfp4-tools-nomedia-after-reasoning-budget-20260606/dealign.ai_Nemotron-Omni-Nano-MXFP4-CRACK/result.json"
