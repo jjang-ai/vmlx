@@ -16750,6 +16750,13 @@ async def stream_responses_api(
         }
         _responses_store_history(response_id, messages, reasoning_only=False)
         yield _sse(
+            "response.failed",
+            {
+                "type": "response.failed",
+                "response": completed_response,
+            },
+        )
+        yield _sse(
             "response.completed",
             {
                 "type": "response.completed",

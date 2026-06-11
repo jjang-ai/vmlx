@@ -3008,6 +3008,13 @@ class TestOpenAILogprobsFormatting:
             for event_type, payload in payloads
             if event_type == "response.completed"
         ]
+        failed = [
+            payload["response"]
+            for event_type, payload in payloads
+            if event_type == "response.failed"
+        ]
+        assert failed[-1]["status"] == "failed"
+        assert failed[-1]["error"]["code"] == "tool_calls_required"
         assert completed[-1]["status"] == "failed"
         assert completed[-1]["output_text"] == ""
         assert completed[-1]["output"] == []
