@@ -7356,6 +7356,192 @@ def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
         ),
         details=mimo_quality_details,
     )
+    n2_jangtq2_noheavy = {
+        "api_cache": n2_api_cache_contract.get("status"),
+        "cache_architecture": n2_cache_architecture_contract.get("status"),
+        "model_family_detection": model_family_contract.get("status"),
+        "n2_family_policy": (
+            (model_family_contract.get("checks") or {}).get(
+                "n2_pro_qwen35_moe_hybrid_vl_policy"
+            )
+            is True
+        ),
+        "turboquant_runtime_contract": (
+            (n2_api_cache_contract.get("checks") or {}).get(
+                "turboquant_kv_runtime_contract"
+            )
+            is True
+        ),
+        "turboquant_disk_roundtrip": (
+            (n2_api_cache_contract.get("checks") or {}).get(
+                "turboquant_disk_roundtrip"
+            )
+            is True
+        ),
+        "hybrid_cache_policy": (
+            (n2_cache_architecture_contract.get("checks") or {}).get(
+                "named_family_registry_cache_parser_contracts"
+            )
+            is True
+        ),
+    }
+    n2_jangtq2_live_ok = (
+        n2_jangtq2_live_proof.get("status") == "pass"
+        and n2_jangtq2_live_proof.get("stable_text") is True
+        and n2_jangtq2_live_proof.get("tool_probe_pass") is True
+        and n2_jangtq2_live_proof.get("responses_probe_pass") is True
+        and n2_jangtq2_live_proof.get("responses_stream_probe_pass") is True
+        and n2_jangtq2_live_proof.get("l2_restart_probe_pass") is True
+    )
+    n2_jangtq2_l2_ok = (
+        n2_jangtq2_l2_proof.get("status") == "pass"
+        and n2_jangtq2_l2_proof.get("l2_restart_probe_pass") is True
+    )
+    n2_jangtq2_ui = (
+        n2_jangtq2_real_ui_prevresp_proof.get("tool_loop")
+        if isinstance(n2_jangtq2_real_ui_prevresp_proof.get("tool_loop"), dict)
+        else {}
+    )
+    n2_jangtq2_runtime_cache = (
+        n2_jangtq2_real_ui_prevresp_proof.get("runtime_cache")
+        if isinstance(n2_jangtq2_real_ui_prevresp_proof.get("runtime_cache"), dict)
+        else {}
+    )
+    n2_jangtq2_ui_cache_after = (
+        n2_jangtq2_runtime_cache.get("cache_after")
+        if isinstance(n2_jangtq2_runtime_cache.get("cache_after"), dict)
+        else {}
+    )
+    n2_jangtq2_ui_ok = (
+        n2_jangtq2_real_ui_prevresp_proof.get("status") == "pass"
+        and n2_jangtq2_ui.get("visible_assistant_turns_complete") is True
+        and (n2_jangtq2_ui.get("event_counts") or {}).get("tool", 0) > 0
+        and (n2_jangtq2_ui_cache_after.get("cache_hit_tokens") or 0) > 0
+        and (n2_jangtq2_ui_cache_after.get("l2_block_tokens_on_disk") or 0) > 0
+        and (n2_jangtq2_ui_cache_after.get("l2_ssm_tokens_on_disk") or 0) > 0
+    )
+    n2_jangtq2_strict_live = (
+        n2_jangtq2_strict_loopback_proof.get("live_result")
+        if isinstance(n2_jangtq2_strict_loopback_proof.get("live_result"), dict)
+        else {}
+    )
+    n2_jangtq2_strict_files = (
+        n2_jangtq2_strict_live.get("tool_probe_files")
+        if isinstance(n2_jangtq2_strict_live.get("tool_probe_files"), dict)
+        else {}
+    )
+    n2_jangtq2_strict_native = (
+        n2_jangtq2_strict_live.get("native_cache")
+        if isinstance(n2_jangtq2_strict_live.get("native_cache"), dict)
+        else {}
+    )
+    n2_jangtq2_strict_ok = (
+        n2_jangtq2_strict_loopback_proof.get("status") == "pass"
+        and n2_jangtq2_strict_files.get("real_ui_tool_probe_1.txt")
+        == "REAL_UI_LIVE_TOOL_ONE"
+        and n2_jangtq2_strict_files.get("real_ui_tool_probe_2.txt")
+        == "REAL_UI_LIVE_TOOL_TWO"
+        and (n2_jangtq2_strict_live.get("event_counts") or {}).get("tool", 0) > 0
+        and n2_jangtq2_strict_native.get("generic_turboquant_kv_enabled") is True
+        and n2_jangtq2_strict_native.get("attention_kv_storage_quantization_bits")
+        == 4
+    )
+    n2_jangtq2_stream_checks = (
+        n2_jangtq2_stream_boundary_proof.get("checks")
+        if isinstance(n2_jangtq2_stream_boundary_proof.get("checks"), dict)
+        else {}
+    )
+    n2_jangtq2_stream_ok = (
+        n2_jangtq2_stream_boundary_proof.get("status") == "pass"
+        and n2_jangtq2_stream_checks.get("direct_first_output_index_clean") is True
+        and n2_jangtq2_stream_checks.get("first_tool_call_present") is True
+        and n2_jangtq2_stream_checks.get("direct_followup_content_delta_streaming")
+        is True
+        and n2_jangtq2_stream_checks.get("gateway_followup_content_delta_streaming")
+        is True
+    )
+    n2_jangtq2_ok = (
+        n2_jangtq2_live_ok
+        and n2_jangtq2_l2_ok
+        and n2_jangtq2_ui_ok
+        and n2_jangtq2_strict_ok
+        and n2_jangtq2_stream_ok
+        and all(value == "pass" or value is True for value in n2_jangtq2_noheavy.values())
+    )
+    _add(
+        requirements,
+        "N2 Pro 397B JANGTQ2 runtime/cache/API/UI quality is release-cleared",
+        _status(n2_jangtq2_ok),
+        [
+            N2_JANGTQ2_CHAT_CACHE_RESPONSES_PROOF_REL,
+            N2_JANGTQ2_CHAT_CACHE_RESPONSES_L2_PROOF_REL,
+            N2_JANGTQ2_REAL_UI_PREVRESP_PROOF_REL,
+            N2_JANGTQ2_STRICT_LOOPBACK_TOOLCHOICE_PROOF_REL,
+            N2_JANGTQ2_RESPONSES_STREAM_BOUNDARY_REL,
+            N2_API_CACHE_CONTRACT_REL,
+            N2_CACHE_ARCHITECTURE_CONTRACT_REL,
+            MODEL_FAMILY_CONTRACT_REL,
+        ],
+        caveat=(
+            None
+            if n2_jangtq2_ok
+            else (
+                "N2 JANGTQ2 remains open until live chat/cache, fresh-process "
+                "L2, real UI previous_response_id tool/cache, strict loopback "
+                "tool_choice=auto, direct/gateway Responses streaming, and "
+                "no-heavy parser/cache policy contracts all pass."
+            )
+        ),
+        details={
+            "live_chat_cache_responses": {
+                "artifact": N2_JANGTQ2_CHAT_CACHE_RESPONSES_PROOF_REL,
+                "status": n2_jangtq2_live_proof.get("status"),
+                "stable_text": n2_jangtq2_live_proof.get("stable_text"),
+                "tool_probe_pass": n2_jangtq2_live_proof.get("tool_probe_pass"),
+                "responses_probe_pass": n2_jangtq2_live_proof.get(
+                    "responses_probe_pass"
+                ),
+                "responses_stream_probe_pass": n2_jangtq2_live_proof.get(
+                    "responses_stream_probe_pass"
+                ),
+                "cache_hit_cache_detail": n2_jangtq2_live_proof.get(
+                    "cache_hit_cache_detail"
+                ),
+                "cache_hit_cached_tokens": n2_jangtq2_live_proof.get(
+                    "cache_hit_cached_tokens"
+                ),
+            },
+            "fresh_process_l2": {
+                "artifact": N2_JANGTQ2_CHAT_CACHE_RESPONSES_L2_PROOF_REL,
+                "status": n2_jangtq2_l2_proof.get("status"),
+                "l2_restart_probe_pass": n2_jangtq2_l2_proof.get(
+                    "l2_restart_probe_pass"
+                ),
+            },
+            "real_ui_prevresp": {
+                "artifact": N2_JANGTQ2_REAL_UI_PREVRESP_PROOF_REL,
+                "status": n2_jangtq2_real_ui_prevresp_proof.get("status"),
+                "tool_loop": n2_jangtq2_ui,
+                "runtime_cache": n2_jangtq2_runtime_cache,
+            },
+            "strict_loopback_toolchoice_auto": {
+                "artifact": N2_JANGTQ2_STRICT_LOOPBACK_TOOLCHOICE_PROOF_REL,
+                "status": n2_jangtq2_strict_loopback_proof.get("status"),
+                "live_result": n2_jangtq2_strict_live,
+            },
+            "responses_stream_boundary": {
+                "artifact": N2_JANGTQ2_RESPONSES_STREAM_BOUNDARY_REL,
+                "status": n2_jangtq2_stream_boundary_proof.get("status"),
+                "checks": n2_jangtq2_stream_checks,
+            },
+            "noheavy_contracts": n2_jangtq2_noheavy,
+            "boundary": (
+                "This clears the N2 JANGTQ2 checkpoint profile only. It does "
+                "not clear N2 JANG_1L, public tunnel parity, media/audio/video, "
+                "packaging, signing, notarization, or full release readiness."
+            ),
+        },
+    )
     _add(
         requirements,
         "N2 Pro 397B JANG1L/JANGTQ runtime/cache/API/UI quality is release-cleared",

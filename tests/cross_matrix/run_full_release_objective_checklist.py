@@ -1000,8 +1000,13 @@ def _objective_requirement(
 
 def _n2_pro_397b_checks(data: dict[str, Any]) -> list[dict[str, Any]]:
     row = _objective_requirement(data, "N2 Pro 397B JANG1L/JANGTQ")
+    jangtq2_row = _objective_requirement(data, "N2 Pro 397B JANGTQ2")
     details = row.get("details") if isinstance(row, dict) else {}
     details = details if isinstance(details, dict) else {}
+    jangtq2_details = (
+        jangtq2_row.get("details") if isinstance(jangtq2_row, dict) else {}
+    )
+    jangtq2_details = jangtq2_details if isinstance(jangtq2_details, dict) else {}
     noheavy = details.get("noheavy_contracts") if isinstance(details.get("noheavy_contracts"), dict) else {}
     live = details.get("jangtq2_live_proof") if isinstance(details.get("jangtq2_live_proof"), dict) else {}
     l2 = details.get("jangtq2_l2_restart_proof") if isinstance(details.get("jangtq2_l2_restart_proof"), dict) else {}
@@ -1050,6 +1055,29 @@ def _n2_pro_397b_checks(data: dict[str, Any]) -> list[dict[str, Any]]:
             isinstance(row, dict) and row.get("status") == "pass",
             str(OBJECTIVE_DIGEST),
             detail,
+        ),
+        _check(
+            "n2_jangtq2_release_clearance",
+            isinstance(jangtq2_row, dict) and jangtq2_row.get("status") == "pass",
+            str(OBJECTIVE_DIGEST),
+            {
+                "status": (
+                    jangtq2_row.get("status")
+                    if isinstance(jangtq2_row, dict)
+                    else "missing"
+                ),
+                "requirement": (
+                    jangtq2_row.get("requirement")
+                    if isinstance(jangtq2_row, dict)
+                    else None
+                ),
+                "evidence": (
+                    jangtq2_row.get("evidence")
+                    if isinstance(jangtq2_row, dict)
+                    else None
+                ),
+                "boundary": jangtq2_details.get("boundary"),
+            },
         ),
         _check(
             "n2_jangtq2_source_runtime_api_cache",

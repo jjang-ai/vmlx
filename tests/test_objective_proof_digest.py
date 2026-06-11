@@ -35,10 +35,25 @@ def test_objective_proof_digest_tracks_n2_pro_397b_release_blocker():
 
     digest = objective.build_digest(Path("."))
     rows = {item["requirement"]: item for item in digest["requirements"]}
+    jangtq2_row = rows[
+        "N2 Pro 397B JANGTQ2 runtime/cache/API/UI quality is release-cleared"
+    ]
     row = rows[
         "N2 Pro 397B JANG1L/JANGTQ runtime/cache/API/UI quality is release-cleared"
     ]
 
+    assert jangtq2_row["status"] == "pass"
+    assert jangtq2_row["details"]["boundary"].startswith(
+        "This clears the N2 JANGTQ2 checkpoint profile only"
+    )
+    assert (
+        "build/current-n2-jangtq2-live-chat-cache-responses-l2-20260610.json"
+        in jangtq2_row["evidence"]
+    )
+    assert (
+        "build/current-n2-jang1l-live-chat-cache-forced-after-gemma-video-20260610.json"
+        not in jangtq2_row["evidence"]
+    )
     assert row["status"] == "open"
     assert "JANG1L" in row["caveat"]
     assert "JANGTQ" in row["caveat"]
@@ -1503,6 +1518,7 @@ def test_objective_proof_digest_keeps_dsv4_long_quality_open(tmp_path):
         "Gemma4 26B CRACK mixed-SWA app-engine speed floor is release-cleared",
         "Cross-family live multi-turn smoke matrix is release-cleared",
         "MiMo V2.5 JANG_2L runtime/tool/long-prompt quality is release-cleared",
+        "N2 Pro 397B JANGTQ2 runtime/cache/API/UI quality is release-cleared",
         "N2 Pro 397B JANG1L/JANGTQ runtime/cache/API/UI quality is release-cleared",
         "MiniMax-M2.7-JANGTQ_K reporter parity/root cause is release-cleared",
         "Real Electron UI cross-family live model matrix is release-cleared",
@@ -10559,6 +10575,7 @@ def test_objective_proof_digest_accepts_dsv4_quality_clearance_artifact(tmp_path
         "Gemma4 26B CRACK mixed-SWA app-engine speed floor is release-cleared",
         "Cross-family live multi-turn smoke matrix is release-cleared",
         "MiMo V2.5 JANG_2L runtime/tool/long-prompt quality is release-cleared",
+        "N2 Pro 397B JANGTQ2 runtime/cache/API/UI quality is release-cleared",
         "N2 Pro 397B JANG1L/JANGTQ runtime/cache/API/UI quality is release-cleared",
         "MiniMax-M2.7-JANGTQ_K reporter parity/root cause is release-cleared",
         "Real Electron UI cross-family live model matrix is release-cleared",

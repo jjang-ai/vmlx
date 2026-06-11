@@ -1043,6 +1043,21 @@ def _write_green_n2_objective_digest(tmp_path: Path) -> None:
             "requirements": [
                 {
                     "requirement": (
+                        "N2 Pro 397B JANGTQ2 runtime/cache/API/UI quality "
+                        "is release-cleared"
+                    ),
+                    "status": "pass",
+                    "evidence": [
+                        "build/current-n2-pro-397b-jangtq2-live-release-proof.json"
+                    ],
+                    "details": {
+                        "boundary": (
+                            "This clears the N2 JANGTQ2 checkpoint profile only."
+                        )
+                    },
+                },
+                {
+                    "requirement": (
                         "N2 Pro 397B JANG1L/JANGTQ runtime/cache/API/UI quality "
                         "is release-cleared"
                     ),
@@ -1134,6 +1149,14 @@ def test_full_release_objective_checklist_separates_n2_jangtq2_from_jang1l():
         "requirements": [
             {
                 "requirement": (
+                    "N2 Pro 397B JANGTQ2 runtime/cache/API/UI quality "
+                    "is release-cleared"
+                ),
+                "status": "pass",
+                "details": {"boundary": "This clears the N2 JANGTQ2 checkpoint profile only."},
+            },
+            {
+                "requirement": (
                     "N2 Pro 397B JANG1L/JANGTQ runtime/cache/API/UI quality "
                     "is release-cleared"
                 ),
@@ -1145,8 +1168,10 @@ def test_full_release_objective_checklist_separates_n2_jangtq2_from_jang1l():
 
     rows = checklist._n2_pro_397b_checks(data)
     failed = {row["name"] for row in rows if not row["ok"]}
+    by_name = {row["name"]: row for row in rows}
 
     assert failed == {"n2_pro_397b_release_clearance"}
+    assert by_name["n2_jangtq2_release_clearance"]["ok"] is True
 
 
 def test_full_release_objective_checklist_keeps_open_rows_visible(tmp_path):
