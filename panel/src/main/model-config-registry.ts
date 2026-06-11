@@ -897,7 +897,7 @@ function applyJangCapabilities(
   } else if (next.family === 'minimax') {
     next.reasoningParser = 'minimax_m2'
   } else if (next.family === 'mimo_v2') {
-    next.reasoningParser = 'think_xml'
+    next.reasoningParser = undefined
     next.supportsThinking = false
     next.thinkInTemplate = false
     next.defaultEnableThinking = false
@@ -943,6 +943,44 @@ function applyJangCapabilities(
     next.usePagedCache = true
   }
   return next
+}
+
+function applyConfigCapabilitiesMediaPolicy(
+  detected: DetectedConfig,
+  parsedConfig: any,
+): DetectedConfig {
+  const caps = parsedConfig?.capabilities
+  if (detected.family !== 'mimo_v2' || !caps || typeof caps !== 'object') {
+    return detected
+  }
+  const runtimeModalities = Array.isArray(caps.modalities)
+    ? caps.modalities.map((item: any) => String(item || '').toLowerCase()).filter(Boolean)
+    : []
+  const unwiredModalities = Array.isArray(caps.unwired_modalities)
+    ? caps.unwired_modalities.map((item: any) => String(item || '').toLowerCase()).filter(Boolean)
+    : []
+  const capsRuntimeHasMedia = runtimeModalities.some((item: string) =>
+    item === 'vision' || item === 'image' || item === 'video' || item === 'audio' || item === 'omni',
+  )
+  const capsRuntimeTextOnly = runtimeModalities.length > 0 && !capsRuntimeHasMedia
+  const capsHasUnwiredMedia = unwiredModalities.some((item: string) =>
+    item === 'vision' || item === 'image' || item === 'video' || item === 'audio' || item === 'omni',
+  )
+  const multimodalStatus = String(caps.multimodal_status || '').toLowerCase()
+  const runtimeMode = String(parsedConfig?.runtime?.multimodal_mode || '').toLowerCase()
+  if (
+    capsRuntimeTextOnly ||
+    capsHasUnwiredMedia ||
+    multimodalStatus === 'weights_preserved_text_runtime' ||
+    runtimeMode === 'weights_preserved_text_runtime'
+  ) {
+    return {
+      ...detected,
+      isMultimodal: false,
+      forceTextOnly: true,
+    }
+  }
+  return detected
 }
 
 function resolveJangMultimodal(jangCfg: any, parsedConfig: any): boolean {
@@ -1082,6 +1120,7 @@ export function detectModelConfigFromDir(modelPath: string): DetectedConfig {
           } else if (configDeclaresMedia(parsed)) {
             detected.isMultimodal = true
           }
+          detected = applyConfigCapabilitiesMediaPolicy(detected, parsed)
           detected = applyConfigMetadataOverrides(detected, parsed)
           return detected
         }

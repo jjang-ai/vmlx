@@ -864,6 +864,48 @@ describe('detectModelConfigFromDir JANG multimodal detection', () => {
     expect(detected.forceTextOnly).toBe(true)
   })
 
+  it('keeps MiMo V2 text-only when config.json capabilities stamp preserved media as unwired', () => {
+    const dir = makeModelDir(
+      {
+        model_type: 'mimo_v2',
+        vision_config: { model_type: 'mimo_v2_vision' },
+        audio_config: { model_type: 'mimo_v2_audio' },
+        image_token_id: 151655,
+        video_token_id: 151656,
+        processor_config: {
+          image_token_id: 151655,
+          video_token_id: 151656,
+          audio_token_id: 151669,
+        },
+        capabilities: {
+          family: 'mimo_v2',
+          modalities: ['text'],
+          preserved_modalities: ['vision', 'audio'],
+          unwired_modalities: ['vision', 'audio'],
+          multimodal_status: 'weights_preserved_text_runtime',
+          tools: {
+            supported: true,
+            parser: 'xml_function',
+          },
+        },
+        runtime: {
+          multimodal_mode: 'weights_preserved_text_runtime',
+        },
+      },
+      {
+        format: 'jangtq',
+        family: 'mimo_v2',
+        profile: 'JANGTQ_2',
+      },
+    )
+
+    const detected = detectModelConfigFromDir(dir)
+    expect(detected.family).toBe('mimo_v2')
+    expect(detected.toolParser).toBe('xml_function')
+    expect(detected.isMultimodal).toBe(false)
+    expect(detected.forceTextOnly).toBe(true)
+  })
+
   it.each([
     ['qwen3_5', 'qwen3_5_text'],
     ['qwen3_vl', 'qwen3_vl'],
