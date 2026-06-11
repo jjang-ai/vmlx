@@ -4417,6 +4417,8 @@ def test_release_regression_manifest_real_ui_live_model_script_exists_and_uses_r
     assert "REAL_UI_LIVE_TOOL_TWO" in source
     assert "VMLINUX_REAL_UI_WORKING_DIRECTORY" in source
     assert "VMLINUX_REAL_UI_ENABLE_THINKING" in source
+    assert "VMLINUX_REAL_UI_TOOL_PARSER" in source
+    assert "VMLINUX_REAL_UI_REASONING_PARSER" in source
     assert "VMLINUX_REAL_UI_CHECK_SERVER_CACHE_CONTROLS" in source
     assert "VMLINUX_REAL_UI_CHECK_MEDIA" in source
     assert "VMLINUX_REAL_UI_IMAGE_DATA_URL" in source
@@ -4454,6 +4456,10 @@ def test_release_regression_manifest_real_ui_live_model_script_exists_and_uses_r
     assert "numeric/list-like garbage leaked into reasoning segments" in source
     assert "--enable-auto-tool-choice" in source
     assert "--tool-call-parser" in source
+    assert "--reasoning-parser" in source
+    assert "detectExternalServerParsers(modelPath)" in source
+    assert "return { toolParser: 'gemma4', reasoningParser: 'gemma4' }" in source
+    assert "'--default-enable-thinking'," not in source
     assert "window.api.sessions.create" in source
     assert "window.api.sessions.start" in source
     assert "window.api.chat.sendMessage" in source

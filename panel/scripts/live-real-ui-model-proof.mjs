@@ -123,6 +123,12 @@ const audioExpectRegex = process.env.VMLINUX_REAL_UI_AUDIO_EXPECT_REGEX
 const cacheExpectRegex = process.env.VMLINUX_REAL_UI_CACHE_EXPECT_REGEX
   || process.env.VMLX_REAL_UI_CACHE_EXPECT_REGEX
   || ''
+const explicitToolParser = process.env.VMLINUX_REAL_UI_TOOL_PARSER
+  || process.env.VMLX_REAL_UI_TOOL_PARSER
+  || ''
+const explicitReasoningParser = process.env.VMLINUX_REAL_UI_REASONING_PARSER
+  || process.env.VMLX_REAL_UI_REASONING_PARSER
+  || ''
 
 if (!modelPath) {
   console.error('Set VMLINUX_REAL_UI_MODEL_PATH or VMLX_REAL_UI_MODEL_PATH')
@@ -485,6 +491,9 @@ async function activateChatForScreenshot(cdp, chatId, sessionId, expectedText) {
 }
 
 function startRealServer(port, outDir) {
+  const detectedParsers = detectExternalServerParsers(modelPath)
+  const toolParser = explicitToolParser || detectedParsers.toolParser || 'auto'
+  const reasoningParser = explicitReasoningParser || detectedParsers.reasoningParser || ''
   const conservativeRuntime = envBool('VMLINUX_REAL_UI_CONSERVATIVE_RUNTIME', false)
   const runtimeArgs = conservativeRuntime
     ? [
@@ -537,14 +546,15 @@ function startRealServer(port, outDir) {
     process.env.VMLINUX_REAL_UI_MAX_TOKENS || '96',
     '--log-level',
     'INFO',
-    '--default-enable-thinking',
-    'false',
   ]
   if (Number.isFinite(requestMaxPromptTokens) && requestMaxPromptTokens > 0) {
     args.push('--max-prompt-tokens', String(Math.floor(requestMaxPromptTokens)))
   }
   if (builtinToolsEnabled) {
-    args.push('--enable-auto-tool-choice', '--tool-call-parser', 'auto')
+    args.push('--enable-auto-tool-choice', '--tool-call-parser', toolParser)
+  }
+  if (reasoningParser) {
+    args.push('--reasoning-parser', reasoningParser)
   }
   if (process.env.VMLINUX_REAL_UI_IS_MLLM === '1' || process.env.VMLX_REAL_UI_IS_MLLM === '1') {
     args.push('--is-mllm')
@@ -565,6 +575,35 @@ function startRealServer(port, outDir) {
   attachChildProcessStreamErrorGuard(proc.stdout, logs)
   attachChildProcessStreamErrorGuard(proc.stderr, logs)
   return { proc, logs, command: [python, ...args] }
+}
+
+function detectExternalServerParsers(modelDir) {
+  const empty = { toolParser: '', reasoningParser: '' }
+  try {
+    const raw = readFileSync(path.join(modelDir, 'config.json'), 'utf8')
+    const cfg = JSON.parse(raw)
+    const modelType = String(cfg?.model_type || '').toLowerCase()
+    const textType = String(cfg?.text_config?.model_type || '').toLowerCase()
+    const familyText = `${modelType} ${textType} ${path.basename(modelDir).toLowerCase()}`
+    if (modelType === 'gemma4' || modelType === 'gemma4_unified' || textType === 'gemma4_text' || textType === 'gemma4_unified_text') {
+      return { toolParser: 'gemma4', reasoningParser: 'gemma4' }
+    }
+    if (modelType === 'mimo_v2' || familyText.includes('mimo-v2')) {
+      return { toolParser: 'xml_function', reasoningParser: 'think_xml' }
+    }
+    if (modelType.includes('qwen3') || familyText.includes('qwen3.6') || familyText.includes('qwen3-coder')) {
+      return { toolParser: 'qwen', reasoningParser: 'qwen3' }
+    }
+    if (modelType.includes('minimax') || familyText.includes('minimax')) {
+      return { toolParser: 'minimax', reasoningParser: 'minimax_m2' }
+    }
+    if (modelType.includes('deepseek') || familyText.includes('deepseek')) {
+      return { toolParser: 'dsml', reasoningParser: 'deepseek_r1' }
+    }
+    return empty
+  } catch {
+    return empty
+  }
 }
 
 function startUiApp(userDataDir, debugPort) {
