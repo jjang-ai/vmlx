@@ -1035,6 +1035,42 @@ class Scheduler:
         # periodically (every 60s) even during continuous load.
         self._last_metal_gc_time = time.monotonic()
         self._metal_gc_interval = 60.0  # seconds
+        self._maybe_warm_mimo_v2_single_decode_graph()
+
+    def _maybe_warm_mimo_v2_single_decode_graph(self) -> None:
+        """Warm MiMo's single-active decode graph before first user traffic."""
+
+        if self._model_type_for_runtime != "mimo_v2":
+            return
+        if int(getattr(self.config, "max_num_seqs", 1) or 1) > 1:
+            return
+        if os.environ.get("VMLINUX_MIMO_V2_DISABLE_DECODE_WARMUP", "").lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }:
+            logger.info("MiMo-V2 single-active decode warmup disabled by env")
+            return
+        try:
+            import mlx.core as mx
+
+            warm_generator = SingleBatchGenerator(
+                model=self.model,
+                max_tokens=1,
+                stop_tokens=self.stop_tokens,
+                sampler=lambda logits: mx.argmax(logits, axis=-1),
+                logits_processors=None,
+                prefill_batch_size=1,
+                completion_batch_size=1,
+                prefill_step_size=self.config.prefill_step_size,
+            )
+            if warm_generator.warm_decode_graph():
+                logger.info(
+                    "MiMo-V2 single-active decode graph warmed during scheduler startup"
+                )
+        except Exception:
+            logger.exception("MiMo-V2 single-active decode graph warmup failed")
 
     @staticmethod
     def _model_has_mixed_attention(model: Any) -> bool:

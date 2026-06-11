@@ -203,6 +203,64 @@ class SingleBatchGenerator:
         self._decode_trace_logits_s = 0.0
         self._decode_trace_sample_s = 0.0
 
+    def _reset_decode_trace_counters(self) -> None:
+        self._decode_trace_count = 0
+        self._decode_trace_model_s = 0.0
+        self._decode_trace_logits_s = 0.0
+        self._decode_trace_sample_s = 0.0
+
+    def warm_decode_graph(self, tokens: Optional[Sequence[int]] = None) -> bool:
+        """Warm the real single-active prefill/decode/logits graph.
+
+        MiMo V2.5 JANG_2L live traces showed the first user request spending
+        tens of seconds materializing the decode logits graph even though model
+        forward and sampler were fast. This method runs the same internal
+        SingleBatch path with an isolated dummy request so startup can pay that
+        one-time compile cost before user traffic.
+        """
+
+        if "mimo_v2" not in _model_type_values(self.model):
+            return False
+        if self._request is not None or self._unprocessed:
+            return False
+        if os.environ.get("VMLINUX_MIMO_V2_DISABLE_DECODE_WARMUP", "").lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }:
+            return False
+
+        prompt_tokens = [int(t) for t in (tokens or (0, 0))]
+        if not prompt_tokens:
+            return False
+        if len(prompt_tokens) == 1:
+            prompt_tokens.append(prompt_tokens[0])
+
+        t0 = time.perf_counter()
+        uids: list[int] = []
+        try:
+            uids = self.insert([prompt_tokens], max_tokens=[1])
+            self.next()
+            elapsed = time.perf_counter() - t0
+            logger.info(
+                "MiMo-V2 SingleBatch decode graph warmup complete in %.2fs",
+                elapsed,
+            )
+            return True
+        except Exception:
+            logger.exception("MiMo-V2 SingleBatch decode graph warmup failed")
+            return False
+        finally:
+            try:
+                if uids:
+                    self.remove(uids)
+            except Exception:
+                pass
+            self._unprocessed.clear()
+            self._request = None
+            self._reset_decode_trace_counters()
+
     def close(self):
         return None
 
