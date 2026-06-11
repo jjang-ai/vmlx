@@ -152,6 +152,7 @@ class MiniMaxToolParser(ToolParser):
                     invoke_match.group(1),
                     invoke_match.group(2),
                     lenient=False,
+                    request=request,
                 )
                 if tool_call:
                     tool_calls.append(tool_call)
@@ -182,6 +183,7 @@ class MiniMaxToolParser(ToolParser):
                     invoke_match.group(1),
                     invoke_match.group(2),
                     lenient=False,
+                    request=request,
                 )
                 if tool_call:
                     tool_calls.append(tool_call)
@@ -198,13 +200,14 @@ class MiniMaxToolParser(ToolParser):
                         invoke_match.group(1),
                         invoke_match.group(2),
                         lenient=True,
+                        request=request,
                     )
                     if tool_call:
                         tool_calls.append(tool_call)
 
             # Strategy 2: No <invoke> found — try fallback formats
             if not invoke_found and block_content:
-                tc = self._parse_block_fallback(block_content)
+                tc = self._parse_block_fallback(block_content, request=request)
                 if tc:
                     tool_calls.append(tc)
 
@@ -215,6 +218,7 @@ class MiniMaxToolParser(ToolParser):
                         invoke_match.group(1),
                         invoke_match.group(2),
                         lenient=True,
+                        request=request,
                     )
                     if tool_call:
                         tool_calls.append(tool_call)
@@ -246,6 +250,7 @@ class MiniMaxToolParser(ToolParser):
         invoke_content: str,
         *,
         lenient: bool,
+        request: dict[str, Any] | None = None,
     ) -> dict[str, Any] | None:
         func_name = _extract_name(raw_func_name)
         params = (
@@ -261,6 +266,10 @@ class MiniMaxToolParser(ToolParser):
                 if clean_value.endswith("</parameter>"):
                     clean_value = clean_value[: -len("</parameter>")]
                 arguments[clean_name] = _convert_param_value(clean_value)
+            if not self._arguments_satisfy_required_schema(
+                func_name, arguments, request
+            ):
+                return None
             return {
                 "id": generate_tool_id(),
                 "name": func_name,
@@ -272,25 +281,40 @@ class MiniMaxToolParser(ToolParser):
             if lenient and "<parameter" in raw_content:
                 return None
             try:
-                json.loads(raw_content)
+                parsed = json.loads(raw_content)
+                if not self._arguments_satisfy_required_schema(
+                    func_name, parsed, request
+                ):
+                    return None
                 return {
                     "id": generate_tool_id(),
                     "name": func_name,
-                    "arguments": raw_content,
+                    "arguments": (
+                        json.dumps(parsed, ensure_ascii=False)
+                        if isinstance(parsed, dict)
+                        else str(parsed)
+                    ),
                 }
             except json.JSONDecodeError:
+                raw_args = json.dumps(
+                    {"raw": raw_content},
+                    ensure_ascii=False,
+                )
+                if not self._arguments_satisfy_required_schema(
+                    func_name, raw_args, request
+                ):
+                    return None
                 return {
                     "id": generate_tool_id(),
                     "name": func_name,
-                    "arguments": json.dumps(
-                        {"raw": raw_content},
-                        ensure_ascii=False,
-                    ),
+                    "arguments": raw_args,
                 }
 
         if lenient:
             return None
 
+        if not self._arguments_satisfy_required_schema(func_name, {}, request):
+            return None
         return {
             "id": generate_tool_id(),
             "name": func_name,
@@ -316,7 +340,7 @@ class MiniMaxToolParser(ToolParser):
         return blocks
 
     def _parse_block_fallback(
-        self, block_content: str
+        self, block_content: str, request: dict[str, Any] | None = None
     ) -> dict[str, Any] | None:
         """
         Parse tool call from non-standard formats inside a <minimax:tool_call> block.
@@ -334,19 +358,30 @@ class MiniMaxToolParser(ToolParser):
             content = xml_match.group(2).strip()
             if content:
                 try:
-                    json.loads(content)
+                    parsed = json.loads(content)
+                    if not self._arguments_satisfy_required_schema(
+                        func_name, parsed, request
+                    ):
+                        return None
                     return {
                         "id": generate_tool_id(),
                         "name": func_name,
-                        "arguments": content,
+                        "arguments": (
+                            json.dumps(parsed, ensure_ascii=False)
+                            if isinstance(parsed, dict)
+                            else str(parsed)
+                        ),
                     }
                 except json.JSONDecodeError:
+                    raw_args = json.dumps({"raw": content}, ensure_ascii=False)
+                    if not self._arguments_satisfy_required_schema(
+                        func_name, raw_args, request
+                    ):
+                        return None
                     return {
                         "id": generate_tool_id(),
                         "name": func_name,
-                        "arguments": json.dumps(
-                            {"raw": content}, ensure_ascii=False
-                        ),
+                        "arguments": raw_args,
                     }
 
         # 2. func_name\n{...}
@@ -355,11 +390,19 @@ class MiniMaxToolParser(ToolParser):
             func_name = func_json_match.group(1)
             args_json = func_json_match.group(2).strip()
             try:
-                json.loads(args_json)
+                parsed = json.loads(args_json)
+                if not self._arguments_satisfy_required_schema(
+                    func_name, parsed, request
+                ):
+                    return None
                 return {
                     "id": generate_tool_id(),
                     "name": func_name,
-                    "arguments": args_json,
+                    "arguments": (
+                        json.dumps(parsed, ensure_ascii=False)
+                        if isinstance(parsed, dict)
+                        else str(parsed)
+                    ),
                 }
             except json.JSONDecodeError:
                 pass
@@ -375,6 +418,10 @@ class MiniMaxToolParser(ToolParser):
                 value = kv.group(2) if kv.group(2) is not None else kv.group(3)
                 arguments[key] = _convert_param_value(value)
             if arguments:
+                if not self._arguments_satisfy_required_schema(
+                    func_name, arguments, request
+                ):
+                    return None
                 return {
                     "id": generate_tool_id(),
                     "name": func_name,
@@ -386,10 +433,15 @@ class MiniMaxToolParser(ToolParser):
             obj = json.loads(block_content)
             if isinstance(obj, dict):
                 if "name" in obj:
+                    name = obj["name"]
                     args = obj.get("arguments", obj.get("parameters", {}))
+                    if not self._arguments_satisfy_required_schema(
+                        name, args, request
+                    ):
+                        return None
                     return {
                         "id": generate_tool_id(),
-                        "name": obj["name"],
+                        "name": name,
                         "arguments": json.dumps(args, ensure_ascii=False)
                         if isinstance(args, dict)
                         else str(args),

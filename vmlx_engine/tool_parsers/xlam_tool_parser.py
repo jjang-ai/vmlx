@@ -101,11 +101,14 @@ class xLAMToolParser(ToolParser):
         tool_calls = []
         for call in tool_calls_data:
             if isinstance(call, dict) and "name" in call:
+                name = call["name"]
                 args = call.get("arguments", call.get("parameters", {}))
+                if not self._arguments_satisfy_required_schema(name, args, request):
+                    continue
                 tool_calls.append(
                     {
                         "id": generate_tool_id(),
-                        "name": call["name"],
+                        "name": name,
                         "arguments": (
                             json.dumps(args, ensure_ascii=False)
                             if isinstance(args, dict)

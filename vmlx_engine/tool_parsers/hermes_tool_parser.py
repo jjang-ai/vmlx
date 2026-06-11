@@ -69,6 +69,10 @@ class HermesToolParser(ToolParser):
                 name = data.get("name", "")
                 arguments = data.get("arguments", {})
                 if name:
+                    if not self._arguments_satisfy_required_schema(
+                        name, arguments, request
+                    ):
+                        continue
                     tool_calls.append(
                         {
                             "id": generate_tool_id(),
@@ -95,6 +99,10 @@ class HermesToolParser(ToolParser):
                     name = data.get("name", "")
                     arguments = data.get("arguments", {})
                     if name:
+                        if not self._arguments_satisfy_required_schema(
+                            name, arguments, request
+                        ):
+                            continue
                         tool_calls.append(
                             {
                                 "id": generate_tool_id(),
@@ -141,6 +149,14 @@ class HermesToolParser(ToolParser):
                         valid_tool = name in tool_names
 
                     if valid_tool and name:
+                        if not self._arguments_satisfy_required_schema(
+                            name, arguments, request
+                        ):
+                            return ExtractedToolCallInformation(
+                                tools_called=False,
+                                tool_calls=[],
+                                content=cleaned_text,
+                            )
                         tool_calls.append(
                             {
                                 "id": generate_tool_id(),

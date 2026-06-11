@@ -13,12 +13,21 @@ import json
 import pytest
 
 from vmlx_engine.tool_parsers.deepseek_tool_parser import DeepSeekToolParser
+from vmlx_engine.tool_parsers.dsml_tool_parser import DSMLToolParser
+from vmlx_engine.tool_parsers.functionary_tool_parser import FunctionaryToolParser
 from vmlx_engine.tool_parsers.gemma3_tool_parser import Gemma3ToolParser
 from vmlx_engine.tool_parsers.gemma4_tool_parser import Gemma4ToolParser
 from vmlx_engine.tool_parsers.glm47_tool_parser import Glm47ToolParser
+from vmlx_engine.tool_parsers.granite_tool_parser import GraniteToolParser
+from vmlx_engine.tool_parsers.hermes_tool_parser import HermesToolParser
 from vmlx_engine.tool_parsers.hunyuan_tool_parser import HunyuanToolParser
 from vmlx_engine.tool_parsers.kimi_tool_parser import KimiToolParser
+from vmlx_engine.tool_parsers.lfm2_tool_parser import Lfm2ToolParser
+from vmlx_engine.tool_parsers.llama_tool_parser import LlamaToolParser
+from vmlx_engine.tool_parsers.minimax_tool_parser import MiniMaxToolParser
+from vmlx_engine.tool_parsers.mistral_tool_parser import MistralToolParser
 from vmlx_engine.tool_parsers.qwen_tool_parser import QwenToolParser
+from vmlx_engine.tool_parsers.xlam_tool_parser import xLAMToolParser
 from vmlx_engine.tool_parsers.zaya_tool_parser import ZayaToolParser
 
 
@@ -46,6 +55,47 @@ RECORD_FACT_REQUEST = {
             QwenToolParser,
             '[Calling tool: record_fact({})]',
             '[Calling tool: record_fact({"value":"blue-cat"})]',
+        ),
+        (
+            MistralToolParser,
+            '[TOOL_CALLS] [{"name":"record_fact","arguments":{}}]',
+            '[TOOL_CALLS] [{"name":"record_fact","arguments":{"value":"blue-cat"}}]',
+        ),
+        (
+            HermesToolParser,
+            '<tool_call>{"name":"record_fact","arguments":{}}</tool_call>',
+            (
+                '<tool_call>{"name":"record_fact","arguments":'
+                '{"value":"blue-cat"}}</tool_call>'
+            ),
+        ),
+        (
+            FunctionaryToolParser,
+            "<function=record_fact>{}</function>",
+            '<function=record_fact>{"value":"blue-cat"}</function>',
+        ),
+        (
+            LlamaToolParser,
+            "<function=record_fact>{}</function>",
+            '<function=record_fact>{"value":"blue-cat"}</function>',
+        ),
+        (
+            GraniteToolParser,
+            '<|tool_call|>[{"name":"record_fact","arguments":{}}]',
+            (
+                '<|tool_call|>[{"name":"record_fact","arguments":'
+                '{"value":"blue-cat"}}]'
+            ),
+        ),
+        (
+            xLAMToolParser,
+            '[{"name":"record_fact","arguments":{}}]',
+            '[{"name":"record_fact","arguments":{"value":"blue-cat"}}]',
+        ),
+        (
+            Lfm2ToolParser,
+            "<|tool_call_start|>[record_fact()]<|tool_call_end|>",
+            "<|tool_call_start|>[record_fact(value='blue-cat')]<|tool_call_end|>",
         ),
         (
             KimiToolParser,
@@ -109,6 +159,31 @@ RECORD_FACT_REQUEST = {
                 "<｜tool▁call▁begin｜>function<｜tool▁sep｜>record_fact\n"
                 '```json\n{"value":"blue-cat"}\n```<｜tool▁call▁end｜>\n'
                 "<｜tool▁calls▁end｜>"
+            ),
+        ),
+        (
+            MiniMaxToolParser,
+            (
+                '<minimax:tool_call><invoke name="record_fact">'
+                "</invoke></minimax:tool_call>"
+            ),
+            (
+                '<minimax:tool_call><invoke name="record_fact">'
+                '<parameter name="value">blue-cat</parameter>'
+                "</invoke></minimax:tool_call>"
+            ),
+        ),
+        (
+            DSMLToolParser,
+            (
+                '<｜DSML｜invoke name="record_fact">'
+                "</｜DSML｜invoke>"
+            ),
+            (
+                '<｜DSML｜invoke name="record_fact">'
+                '<｜DSML｜parameter name="value" string="true">'
+                "blue-cat</｜DSML｜parameter>"
+                "</｜DSML｜invoke>"
             ),
         ),
         (

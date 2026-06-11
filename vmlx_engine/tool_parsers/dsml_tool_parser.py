@@ -673,6 +673,8 @@ class DSMLToolParser(ToolParser):
                 plain_args = self._parse_plain_params(body, schema)
                 if plain_args and self._required_satisfied(plain_args, schema):
                     args.update(plain_args)
+            if schema and not self._required_satisfied(args, schema):
+                continue
             tool_calls.append(
                 self._make_tool_call(
                     name=name,

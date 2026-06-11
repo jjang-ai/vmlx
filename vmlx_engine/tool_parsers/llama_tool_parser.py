@@ -47,12 +47,17 @@ class LlamaToolParser(ToolParser):
 
         matches = self.FUNCTION_PATTERN.findall(model_output)
         for name, args_str in matches:
+            tool_name = name.strip()
             try:
                 arguments = json.loads(args_str)
+                if not self._arguments_satisfy_required_schema(
+                    tool_name, arguments, request
+                ):
+                    continue
                 tool_calls.append(
                     {
                         "id": generate_tool_id(),
-                        "name": name.strip(),
+                        "name": tool_name,
                         "arguments": (
                             json.dumps(arguments, ensure_ascii=False)
                             if isinstance(arguments, dict)
@@ -62,10 +67,14 @@ class LlamaToolParser(ToolParser):
                 )
             except json.JSONDecodeError:
                 # Keep the raw arguments string
+                if not self._arguments_satisfy_required_schema(
+                    tool_name, args_str, request
+                ):
+                    continue
                 tool_calls.append(
                     {
                         "id": generate_tool_id(),
-                        "name": name.strip(),
+                        "name": tool_name,
                         "arguments": args_str,
                     }
                 )

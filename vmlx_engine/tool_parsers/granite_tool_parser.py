@@ -73,6 +73,10 @@ class GraniteToolParser(ToolParser):
                     func_name = call.get("name") or call.get("type")
                     if func_name:
                         args = call.get("arguments", {})
+                        if not self._arguments_satisfy_required_schema(
+                            func_name, args, request
+                        ):
+                            continue
                         tool_calls.append(
                             {
                                 "id": generate_tool_id(),

@@ -68,15 +68,27 @@ class FunctionaryToolParser(ToolParser):
             if func_name.lower() in ["all", "user"]:
                 continue  # Skip non-function recipients
             try:
-                json.loads(args_str)
+                arguments = json.loads(args_str)
+                if not self._arguments_satisfy_required_schema(
+                    func_name, arguments, request
+                ):
+                    continue
                 tool_calls.append(
                     {
                         "id": generate_tool_id(),
                         "name": func_name,
-                        "arguments": args_str,
+                        "arguments": (
+                            json.dumps(arguments, ensure_ascii=False)
+                            if isinstance(arguments, dict)
+                            else str(arguments)
+                        ),
                     }
                 )
             except json.JSONDecodeError:
+                if not self._arguments_satisfy_required_schema(
+                    func_name, args_str, request
+                ):
+                    continue
                 tool_calls.append(
                     {
                         "id": generate_tool_id(),
@@ -92,20 +104,33 @@ class FunctionaryToolParser(ToolParser):
         # Try function pattern
         function_matches = self.FUNCTION_PATTERN.findall(cleaned_text)
         for func_name, args_str in function_matches:
+            name = func_name.strip()
             try:
-                json.loads(args_str)
+                arguments = json.loads(args_str)
+                if not self._arguments_satisfy_required_schema(
+                    name, arguments, request
+                ):
+                    continue
                 tool_calls.append(
                     {
                         "id": generate_tool_id(),
-                        "name": func_name.strip(),
-                        "arguments": args_str,
+                        "name": name,
+                        "arguments": (
+                            json.dumps(arguments, ensure_ascii=False)
+                            if isinstance(arguments, dict)
+                            else str(arguments)
+                        ),
                     }
                 )
             except json.JSONDecodeError:
+                if not self._arguments_satisfy_required_schema(
+                    name, args_str, request
+                ):
+                    continue
                 tool_calls.append(
                     {
                         "id": generate_tool_id(),
-                        "name": func_name.strip(),
+                        "name": name,
                         "arguments": args_str,
                     }
                 )
@@ -120,11 +145,16 @@ class FunctionaryToolParser(ToolParser):
                 if isinstance(parsed, list):
                     for call in parsed:
                         if isinstance(call, dict) and "name" in call:
+                            name = call["name"]
                             args = call.get("arguments", {})
+                            if not self._arguments_satisfy_required_schema(
+                                name, args, request
+                            ):
+                                continue
                             tool_calls.append(
                                 {
                                     "id": generate_tool_id(),
-                                    "name": call["name"],
+                                    "name": name,
                                     "arguments": (
                                         json.dumps(args, ensure_ascii=False)
                                         if isinstance(args, dict)

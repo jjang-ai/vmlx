@@ -98,14 +98,22 @@ class MistralToolParser(ToolParser):
                 if tool_name:
                     # Validate JSON before accepting
                     try:
-                        json.loads(args_str)
+                        arguments = json.loads(args_str)
                     except json.JSONDecodeError:
+                        continue
+                    if not self._arguments_satisfy_required_schema(
+                        tool_name, arguments, request
+                    ):
                         continue
                     tool_calls.append(
                         {
                             "id": generate_mistral_tool_id(),
                             "name": tool_name,
-                            "arguments": args_str,
+                            "arguments": (
+                                json.dumps(arguments, ensure_ascii=False)
+                                if isinstance(arguments, dict)
+                                else str(arguments)
+                            ),
                         }
                     )
                 continue
@@ -116,11 +124,16 @@ class MistralToolParser(ToolParser):
                 if isinstance(parsed, list):
                     for item in parsed:
                         if isinstance(item, dict) and "name" in item:
+                            name = item["name"]
                             args = item.get("arguments", {})
+                            if not self._arguments_satisfy_required_schema(
+                                name, args, request
+                            ):
+                                continue
                             tool_calls.append(
                                 {
                                     "id": generate_mistral_tool_id(),
-                                    "name": item["name"],
+                                    "name": name,
                                     "arguments": (
                                         json.dumps(args, ensure_ascii=False)
                                         if isinstance(args, dict)
@@ -140,11 +153,16 @@ class MistralToolParser(ToolParser):
                     if isinstance(parsed, list):
                         for item in parsed:
                             if isinstance(item, dict) and "name" in item:
+                                name = item["name"]
                                 args = item.get("arguments", {})
+                                if not self._arguments_satisfy_required_schema(
+                                    name, args, request
+                                ):
+                                    continue
                                 tool_calls.append(
                                     {
                                         "id": generate_mistral_tool_id(),
-                                        "name": item["name"],
+                                        "name": name,
                                         "arguments": (
                                             json.dumps(args, ensure_ascii=False)
                                             if isinstance(args, dict)
