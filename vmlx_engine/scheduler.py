@@ -5149,6 +5149,16 @@ class Scheduler:
                 disk_store.shutdown()
                 logger.info("Block disk cache shutdown complete")
 
+        step_executor = getattr(self, "_step_executor", None)
+        if step_executor is not None:
+            self._step_executor = None
+            try:
+                logger.info("Shutting down scheduler step executor...")
+                step_executor.shutdown(wait=True, cancel_futures=True)
+                logger.info("Scheduler step executor shutdown complete")
+            except Exception as exc:
+                logger.warning("Scheduler step executor shutdown failed: %s", exc)
+
     def _finalize_hybrid_paged_cache_on_worker(
         self,
         request: Request,
