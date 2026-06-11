@@ -20,7 +20,7 @@ DEFAULT_ROOTS = (
     Path("/Users/example/.mlxstudio/models"),
 )
 DEFAULT_OUT = Path(
-    "build/current-gemma-qat-native-mxfp4-local-inventory-after-12b-installed-app-ui-proof-20260610.json"
+    "build/current-gemma-qat-native-mxfp4-local-inventory-after-31b-sessionlogs-reasoning-proof-20260611.json"
 )
 
 REQUIRED_QAT_ROWS = {
@@ -238,14 +238,11 @@ INSTALLED_APP_UI_PROOFS = {
     "gemma4_12b_native_mxfp4": Path(
         "docs/internal/agent-notes/current-real-ui-installed-app-gemma4-12b-mxfp4-responses-tools-cachecontrols-bundled-python-reasoning-20260610-proof.json"
     ),
-}
-
-REJECTED_INSTALLED_APP_UI_PROOFS = {
     "gemma4_26b_vl": Path(
-        "docs/internal/agent-notes/current-real-ui-installed-app-gemma4-26b-vl-mxfp4-responses-tools-cachecontrols-bundled-python-reasoning-explicit-20260610-proof.json"
+        "docs/internal/agent-notes/current-real-ui-installed-app-gemma4-26b-vl-mxfp4-responses-tools-cachecontrols-bundled-python-sessionlogs-reasoning-probe-20260611-proof.json"
     ),
     "gemma4_31v_or_31b_vl": Path(
-        "docs/internal/agent-notes/current-real-ui-installed-app-gemma4-31b-mxfp4-responses-tools-cachecontrols-bundled-python-reasoning-explicitbrief-max1024-20260610-proof.json"
+        "docs/internal/agent-notes/current-real-ui-installed-app-gemma4-31b-mxfp4-responses-tools-cachecontrols-bundled-python-sessionlogs-reasoning-probe-20260611-proof.json"
     ),
 }
 
@@ -555,10 +552,7 @@ def _installed_app_ui_proof_status(
 ) -> dict[str, Any]:
     rel = INSTALLED_APP_UI_PROOFS.get(row_key)
     if rel is None:
-        rejected_rel = REJECTED_INSTALLED_APP_UI_PROOFS.get(row_key)
-        if rejected_rel is None:
-            return {"status": "missing", "artifact": None, "reason": "no_proof_registered_for_row"}
-        rel = rejected_rel
+        return {"status": "missing", "artifact": None, "reason": "no_proof_registered_for_row"}
     path = proof_root / rel
     if not path.exists():
         return {"status": "missing", "artifact": str(rel)}
