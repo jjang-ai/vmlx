@@ -275,10 +275,10 @@ def test_panel_suppresses_generic_kv_quantization_controls_for_dsv4():
     settings = Path("panel/src/renderer/src/components/sessions/SessionSettings.tsx").read_text()
     sessions = Path("panel/src/main/sessions.ts").read_text()
 
-    assert "const effectiveStoredCacheQuantization = dsv4Active ? 'auto'" in form
-    assert "disabled={effectivelyNoBatching || prefixOff || dsv4Active}" in form
-    assert "!dsv4Active && config.kvCacheQuantization" in settings
-    assert "detectedFamily !== 'deepseek-v4' && config.kvCacheQuantization" in sessions
+    assert "const effectiveStoredCacheQuantization = dsv4Active || nativeStoredKvQuantization" in form
+    assert "disabled={effectivelyNoBatching || prefixOff || dsv4Active || nativeStoredKvQuantization}" in form
+    assert "!dsv4Active && !nativeStoredKvQuantization && config.kvCacheQuantization" in settings
+    assert "detectedFamily !== 'deepseek-v4' && !nativeStoredKvQuantization && config.kvCacheQuantization" in sessions
     assert "if (family === 'deepseek_v4') return 'deepseek-v4'" in form
     assert "if (family === 'deepseek_v4') return 'deepseek-v4'" in settings
     assert "if (family === 'deepseek_v4') return 'deepseek-v4'" in sessions
@@ -410,8 +410,8 @@ def test_dsv4_cache_ui_has_one_prefix_owner_and_no_stale_duplicate_labels():
     # DeepseekV4Cache state; it is not a second DSV4 prefix toggle.
     assert '!dsv4Active && (\n          <CheckField label="Enable Prefix Cache"' in form
     assert '{!dsv4Active && <CheckField label="Use Paged KV Cache"' in form
-    assert 'disabled={effectivelyNoBatching || prefixOff || dsv4Active}' in form
-    assert "const effectiveStoredCacheQuantization = dsv4Active ? 'auto'" in form
+    assert 'disabled={effectivelyNoBatching || prefixOff || dsv4Active || nativeStoredKvQuantization}' in form
+    assert "const effectiveStoredCacheQuantization = dsv4Active || nativeStoredKvQuantization" in form
 
     for stale_label in (
         "DSV4 Native Cache",

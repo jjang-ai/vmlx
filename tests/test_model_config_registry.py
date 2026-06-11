@@ -1320,7 +1320,7 @@ class TestModelConfigs:
         assert config.reasoning_parser == "qwen3"
 
     def test_qwen36_plain_mlx_4bit_keeps_hybrid_cache_without_jang_or_mxfp(
-        self, registry
+        self, registry, tmp_path
     ):
         """Plain MLX 4-bit Qwen artifacts still use config metadata.
 
@@ -1342,11 +1342,9 @@ class TestModelConfigs:
             "vision_config": {"model_type": "qwen3_5_vit"},
         }
 
-        def _load_config(path):
-            return dict(config_json)
+        (tmp_path / "config.json").write_text(json.dumps(config_json))
 
-        with patch("vmlx_engine.model_config_registry.load_config", _load_config):
-            config = registry.lookup("Qwen3.6-35B-A3B-4bit")
+        config = registry.lookup(str(tmp_path))
 
         assert config.family_name == "qwen3_5"
         assert config.cache_type == "hybrid"
@@ -1768,7 +1766,7 @@ class TestModelConfigs:
         assert config.family_name == "mimo_v2"
         assert config.cache_type == "kv"
         assert config.cache_subtype == "mimo_v2_asymmetric_swa"
-        assert config.reasoning_parser is None
+        assert config.reasoning_parser == "think_xml"
         assert config.tool_parser == "xml_function"
         assert config.supports_thinking is False
         assert config.supports_native_tools is True
@@ -2123,7 +2121,7 @@ class TestModelConfigComprehensiveChecks:
 
         assert config.family_name == "mimo_v2"
         assert config.cache_type == "kv"
-        assert config.reasoning_parser is None
+        assert config.reasoning_parser == "think_xml"
         assert config.supports_thinking is False
         assert config.think_in_template is False
         assert config.tool_parser == "xml_function"
@@ -2171,7 +2169,7 @@ class TestModelConfigComprehensiveChecks:
 
         assert config.family_name == "mimo_v2"
         assert config.cache_type == "kv"
-        assert config.reasoning_parser is None
+        assert config.reasoning_parser == "think_xml"
         assert config.tool_parser == "xml_function"
         assert config.supports_native_tools is True
         assert config.supports_thinking is False

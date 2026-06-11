@@ -2738,7 +2738,7 @@ describe('JIT Toggle', () => {
         expect(countOccurrences(form, 'label="Use Paged KV Cache"')).toBe(1)
         expect(form).toContain('{!dsv4Active && <CheckField label="Use Paged KV Cache"')
         expect(form).toContain('disabled={dsv4CompositeRequiresPaged}')
-        expect(form).toContain('disabled={effectivelyNoBatching || prefixOff || dsv4Active}')
+        expect(form).toContain('disabled={effectivelyNoBatching || prefixOff || dsv4Active || nativeStoredKvQuantization}')
         expect(form).not.toContain('DSV4 Native Cache')
         expect(form).not.toContain('DSV4 Composite Prefix Cache')
         expect(form).not.toContain('DSV4 Pool Quantization')
