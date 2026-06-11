@@ -96,6 +96,33 @@ def test_classify_model_keeps_zaya_text_non_reasoning(tmp_path):
     assert row["supports_thinking"] is False
 
 
+def test_classify_model_keeps_ling_non_reasoning_despite_stale_capability(tmp_path):
+    mod = load_module()
+    model_dir = tmp_path / "Ling-2.6-flash-JANGTQ"
+    model_dir.mkdir()
+    (model_dir / "config.json").write_text(
+        '{"model_type": "bailing_hybrid"}',
+        encoding="utf-8",
+    )
+    (model_dir / "jang_config.json").write_text(
+        json.dumps(
+            {
+                "capabilities": {
+                    "supports_thinking": True,
+                    "reasoning": {"supported": True},
+                    "tools": {"supported": True},
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    row = mod.classify_model_dir(model_dir)
+
+    assert row["supports_thinking"] is False
+    assert row["supports_tools"] is True
+
+
 def test_classify_model_does_not_infer_nemotron_omni_video_from_name_only(tmp_path):
     mod = load_module()
     model_dir = tmp_path / "Nemotron-Omni-Nano-JANGTQ-CRACK"

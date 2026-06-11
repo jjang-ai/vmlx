@@ -189,9 +189,6 @@ def classify_model_dir(model_dir: Path) -> dict[str, Any]:
         or model_type == "mimo_v2"
         or model_type == "zaya1_vl"
     )
-    non_reasoning_family_blob = " ".join((name_lower, model_type.lower()))
-    if "ling" in non_reasoning_family_blob or model_type == "zaya":
-        supports_thinking = False
     reasoning_capabilities = (
         capabilities.get("reasoning")
         if isinstance(capabilities.get("reasoning"), dict)
@@ -201,6 +198,9 @@ def classify_model_dir(model_dir: Path) -> dict[str, Any]:
         supports_thinking = bool(capabilities["supports_thinking"])
     elif isinstance(reasoning_capabilities.get("supported"), bool):
         supports_thinking = bool(reasoning_capabilities["supported"])
+    non_reasoning_family_blob = " ".join((name_lower, model_type.lower()))
+    if "ling" in non_reasoning_family_blob or model_type == "zaya":
+        supports_thinking = False
     if model_type == "zaya1_vl" and not _bundle_template_has_thinking_control(model_dir):
         supports_thinking = False
     if model_type == "mimo_v2":
