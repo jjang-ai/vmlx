@@ -91,6 +91,10 @@ function cacheSubtypeRequiresPaged(cacheSubtype?: string): boolean {
   return cacheSubtype === 'step3p7_full_sliding_kv' || cacheSubtype === 'mixed_swa_kv' || cacheSubtype === 'mimo_v2_asymmetric_swa'
 }
 
+function cacheSubtypeOwnsStoredKvQuantization(cacheSubtype?: string): boolean {
+  return cacheSubtype === 'mimo_v2_asymmetric_swa'
+}
+
 const DSV4_PAGED_CACHE_BLOCK_SIZE = 256
 const GENERIC_DEFAULT_TIMEOUT_SECONDS = 300
 const DSV4_DEFAULT_TIMEOUT_SECONDS = 900
@@ -2849,10 +2853,14 @@ export class SessionManager extends EventEmitter {
     // KV cache quantization for stored prefix cache entries
     // TurboQuant handles live generation cache compression (always active).
     // q8/q4 here is ADDITIONAL compression for stored cache entries.
+    const nativeStoredKvQuantization = cacheSubtypeOwnsStoredKvQuantization(detected.cacheSubtype)
     if (!prefixCacheOff && detectedFamily === 'deepseek-v4' && config.kvCacheQuantization && config.kvCacheQuantization !== 'auto') {
       console.log(`[SESSION] DSV4-Flash detected: ignoring generic kvCacheQuantization=${config.kvCacheQuantization}; native SWA+CSA/HCA cache policy owns compression`)
     }
-    if (!prefixCacheOff && detectedFamily !== 'deepseek-v4' && config.kvCacheQuantization && config.kvCacheQuantization !== 'auto') {
+    if (!prefixCacheOff && nativeStoredKvQuantization && config.kvCacheQuantization && config.kvCacheQuantization !== 'auto') {
+      console.log(`[SESSION] ${detected.cacheSubtype} detected: ignoring generic kvCacheQuantization=${config.kvCacheQuantization}; native mixed full/SWA cache policy owns stored prefix state`)
+    }
+    if (!prefixCacheOff && detectedFamily !== 'deepseek-v4' && !nativeStoredKvQuantization && config.kvCacheQuantization && config.kvCacheQuantization !== 'auto') {
       args.push('--kv-cache-quantization', config.kvCacheQuantization)
       const kvCacheGroupSize = finitePositiveInteger(config.kvCacheGroupSize)
       if (config.kvCacheQuantization !== 'none' && kvCacheGroupSize != null && kvCacheGroupSize !== 64) {

@@ -333,7 +333,10 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
     detectedCacheType === 'rotating_kv'
   const subtypeRequiresPagedCache =
     detectedCacheSubtype === 'step3p7_full_sliding_kv' ||
-    detectedCacheSubtype === 'mixed_swa_kv'
+    detectedCacheSubtype === 'mixed_swa_kv' ||
+    detectedCacheSubtype === 'mimo_v2_asymmetric_swa'
+  const nativeStoredKvQuantization =
+    detectedCacheSubtype === 'mimo_v2_asymmetric_swa'
   const architectureRequiresPagedCache = zayaCcaActive || dsv4CompositeCacheOptIn || isMambaCache || subtypeRequiresPagedCache
   const zayaTypedCacheRequiresPaged = zayaCcaActive && !batchingOff && !prefixOff
   const dsv4CompositeRequiresPaged = dsv4CompositeCacheOptIn && !batchingOff && !prefixOff
@@ -352,7 +355,9 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
     ? DSV4_PAGED_CACHE_BLOCK_SIZE
     : config.pagedCacheBlockSize
   const pagedCacheSectionTitle = t('sessions.config.pagedKVCache')
-  const effectiveStoredCacheQuantization = dsv4Active ? 'auto' : config.kvCacheQuantization
+  const effectiveStoredCacheQuantization = dsv4Active || nativeStoredKvQuantization
+    ? 'auto'
+    : config.kvCacheQuantization
   const effectiveMaxNumSeqs = dsv4Active ? 1 : config.maxNumSeqs
   const effectivePrefillBatchSize = dsv4Active ? 1 : config.prefillBatchSize
   const effectiveCompletionBatchSize = dsv4Active ? 1 : config.completionBatchSize
@@ -1020,7 +1025,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
             Stored Cache Quantization
             <Tooltip text="Controls how completed prompt states are stored in the prefix cache. Auto keeps the engine's production codec choice. None explicitly disables stored-cache quantization. q8/q4 force the generic stored-cache codec and also disable calibrated live TurboQuant so the explicit choice is honored." />
           </span>
-          <select value={effectiveStoredCacheQuantization} onChange={e => onChange('kvCacheQuantization', e.target.value)} className="cfg-input" disabled={effectivelyNoBatching || prefixOff || dsv4Active}>
+          <select value={effectiveStoredCacheQuantization} onChange={e => onChange('kvCacheQuantization', e.target.value)} className="cfg-input" disabled={effectivelyNoBatching || prefixOff || dsv4Active || nativeStoredKvQuantization}>
             <option value="auto">Auto (engine-selected: native/TurboQuant + stored fallback)</option>
             <option value="none">{t('sessions.config.kvQuantNone')}</option>
             <option value="q8">q8 (8-bit, ~2x stored cache savings)</option>
