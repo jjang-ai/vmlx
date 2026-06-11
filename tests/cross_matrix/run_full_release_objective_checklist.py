@@ -936,6 +936,7 @@ def _responses_raw_sse_parity_checks(data: dict[str, Any]) -> list[dict[str, Any
         "responses_previous_response_history_guard",
         "all_present_surfaces_have_valid_output_item_indices",
         "all_present_surfaces_have_required_reasoning",
+        "all_present_surfaces_have_complete_reasoning_lifecycle",
         "no_reasoning_disable_workaround",
     ]
     rows = _simple_artifact_checks("responses_raw_sse_parity", data)
@@ -2036,6 +2037,7 @@ def _qwen35_raw_sse_parity_checks(data: dict[str, Any]) -> list[dict[str, Any]]:
         _check("qwen35_raw_sse_same_model_surfaces", checks.get("all_present_surfaces_same_model") is True and checks.get("all_present_surfaces_match_expected_model") is True, str(QWEN35_RAW_SSE_PARITY), checks.get("all_present_surfaces_same_model")),
         _check("qwen35_raw_sse_authoritative_args", checks.get("all_present_surfaces_have_authoritative_args") is True and checks.get("all_present_surfaces_match_expected_arguments") is True, str(QWEN35_RAW_SSE_PARITY)),
         _check("qwen35_raw_sse_reasoning_events", checks.get("all_present_surfaces_have_required_reasoning") is True and checks.get("no_reasoning_disable_workaround") is True, str(QWEN35_RAW_SSE_PARITY)),
+        _check("qwen35_raw_sse_reasoning_lifecycle", checks.get("all_present_surfaces_have_complete_reasoning_lifecycle") is True, str(QWEN35_RAW_SSE_PARITY)),
         _check("qwen35_raw_sse_valid_output_item_indices", checks.get("all_present_surfaces_have_valid_output_item_indices") is True, str(QWEN35_RAW_SSE_PARITY), detail),
         _check("qwen35_raw_sse_local_source_guards", checks.get("local_responses_streaming_guards_pass") is True and checks.get("local_output_index_ordering_guard") is True and checks.get("local_empty_xml_arguments_fail_closed") is True, str(QWEN35_RAW_SSE_PARITY)),
     ]

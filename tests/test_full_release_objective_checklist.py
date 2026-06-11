@@ -227,6 +227,7 @@ def _write_green_responses_raw_sse_artifact(tmp_path: Path) -> None:
                 "responses_previous_response_history_guard": True,
                 "all_present_surfaces_have_valid_output_item_indices": True,
                 "all_present_surfaces_have_required_reasoning": True,
+                "all_present_surfaces_have_complete_reasoning_lifecycle": True,
                 "no_reasoning_disable_workaround": True,
             },
         },
@@ -845,6 +846,7 @@ def _write_qwen_green_artifacts(tmp_path: Path) -> None:
                 "all_present_surfaces_have_authoritative_args": True,
                 "all_present_surfaces_match_expected_arguments": True,
                 "all_present_surfaces_have_required_reasoning": True,
+                "all_present_surfaces_have_complete_reasoning_lifecycle": True,
                 "no_reasoning_disable_workaround": True,
                 "all_present_surfaces_have_valid_output_item_indices": True,
                 "local_responses_streaming_guards_pass": True,
@@ -1724,6 +1726,7 @@ def test_full_release_objective_checklist_blocks_missing_responses_tunnel_captur
             "responses_previous_response_history_guard": True,
             "all_present_surfaces_have_valid_output_item_indices": True,
             "all_present_surfaces_have_required_reasoning": True,
+            "all_present_surfaces_have_complete_reasoning_lifecycle": True,
             "no_reasoning_disable_workaround": True,
         },
     }
@@ -1763,6 +1766,7 @@ def test_full_release_objective_checklist_blocks_reasoning_disable_workaround():
             "responses_previous_response_history_guard": True,
             "all_present_surfaces_have_valid_output_item_indices": True,
             "all_present_surfaces_have_required_reasoning": False,
+            "all_present_surfaces_have_complete_reasoning_lifecycle": False,
             "no_reasoning_disable_workaround": False,
         },
     }
@@ -1799,6 +1803,7 @@ def test_full_release_objective_checklist_separates_missing_reasoning_events_fro
             "responses_previous_response_history_guard": True,
             "all_present_surfaces_have_valid_output_item_indices": True,
             "all_present_surfaces_have_required_reasoning": False,
+            "all_present_surfaces_have_complete_reasoning_lifecycle": False,
             "no_reasoning_disable_workaround": True,
         },
     }
@@ -1835,6 +1840,7 @@ def test_full_release_objective_checklist_surfaces_tunnel_model_availability():
             "responses_previous_response_history_guard": True,
             "all_present_surfaces_have_valid_output_item_indices": True,
             "all_present_surfaces_have_required_reasoning": False,
+            "all_present_surfaces_have_complete_reasoning_lifecycle": False,
             "no_reasoning_disable_workaround": True,
         },
     }
@@ -1870,6 +1876,7 @@ def test_full_release_objective_checklist_blocks_raw_sse_duplicate_output_index(
             "responses_previous_response_history_guard": True,
             "all_present_surfaces_have_valid_output_item_indices": False,
             "all_present_surfaces_have_required_reasoning": True,
+            "all_present_surfaces_have_complete_reasoning_lifecycle": True,
             "no_reasoning_disable_workaround": True,
         },
     }
@@ -1896,6 +1903,7 @@ def test_full_release_objective_checklist_blocks_qwen35_raw_sse_duplicate_output
             "all_present_surfaces_have_authoritative_args": True,
             "all_present_surfaces_match_expected_arguments": True,
             "all_present_surfaces_have_required_reasoning": True,
+            "all_present_surfaces_have_complete_reasoning_lifecycle": True,
             "no_reasoning_disable_workaround": True,
             "all_present_surfaces_have_valid_output_item_indices": False,
             "local_responses_streaming_guards_pass": True,
@@ -1920,6 +1928,42 @@ def test_full_release_objective_checklist_blocks_qwen35_raw_sse_duplicate_output
         "missing_captures": [],
         "conflicting_output_indices": {"tunnel": [0]},
     }
+
+
+def test_full_release_objective_checklist_blocks_qwen35_missing_reasoning_lifecycle():
+    data = {
+        "exists": True,
+        "status": "fail",
+        "missing_captures": [],
+        "checks": {
+            "all_present_surfaces_same_model": True,
+            "all_present_surfaces_match_expected_model": True,
+            "all_present_surfaces_have_authoritative_args": True,
+            "all_present_surfaces_match_expected_arguments": True,
+            "all_present_surfaces_have_required_reasoning": True,
+            "all_present_surfaces_have_complete_reasoning_lifecycle": False,
+            "no_reasoning_disable_workaround": True,
+            "all_present_surfaces_have_valid_output_item_indices": True,
+            "local_responses_streaming_guards_pass": True,
+            "local_output_index_ordering_guard": True,
+            "local_empty_xml_arguments_fail_closed": True,
+        },
+        "captures": {
+            "tunnel": {
+                "reasoning_events": 8,
+                "reasoning_output_item_count": 0,
+                "reasoning_lifecycle_complete": False,
+            }
+        },
+    }
+
+    rows = checklist._qwen35_raw_sse_parity_checks(data)
+    failed = {row["name"]: row for row in rows if not row["ok"]}
+
+    assert "qwen35_raw_sse_status_pass" in failed
+    assert "qwen35_raw_sse_reasoning_lifecycle" in failed
+    assert "qwen35_raw_sse_reasoning_events" not in failed
+    assert "qwen35_raw_sse_valid_output_item_indices" not in failed
 
 
 def test_full_release_objective_checklist_can_pass_when_all_evidence_is_green(
