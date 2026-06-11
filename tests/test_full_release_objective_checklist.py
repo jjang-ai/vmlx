@@ -656,7 +656,7 @@ def _write_qwen_green_artifacts(tmp_path: Path) -> None:
     }
     _write_json(
         tmp_path
-        / "build/current-qwen35-mxfp8-mtp-responses-long-tool-cache-after-historical-tool-required-20260607/SUMMARY.json",
+        / "build/current-qwen35-mxfp8-mtp-responses-tool-result-auto-no-tool-after-ssm-size-scale-20260610/SUMMARY.json",
         {
             "overall_pass": True,
             "turns": 3,

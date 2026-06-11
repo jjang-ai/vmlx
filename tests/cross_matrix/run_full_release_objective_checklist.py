@@ -78,7 +78,7 @@ QWEN35_STARTUP_MTP = Path(
     "build/current-qwen35-mxfp8-mtp-responses-long-tool-cache-deterministic-20260607/00_startup.json"
 )
 QWEN35_LONG_TOOL_CACHE = Path(
-    "build/current-qwen35-mxfp8-mtp-responses-long-tool-cache-after-historical-tool-required-20260607/SUMMARY.json"
+    "build/current-qwen35-mxfp8-mtp-responses-tool-result-auto-no-tool-after-ssm-size-scale-20260610/SUMMARY.json"
 )
 QWEN35_RESTART_L2_RESTORE = Path(
     "build/current-qwen35-mxfp8-mtp-restart-l2-restore-20260607/summary.json"
