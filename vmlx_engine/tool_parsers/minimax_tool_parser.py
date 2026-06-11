@@ -356,7 +356,8 @@ class MiniMaxToolParser(ToolParser):
         xml_match = self.XML_FUNC_PATTERN.search(block_content)
         if xml_match:
             func_name = xml_match.group(1)
-            content = xml_match.group(2).strip()
+            raw_content = xml_match.group(2)
+            content = raw_content.strip()
             if content:
                 try:
                     parsed = json.loads(content)
@@ -374,7 +375,7 @@ class MiniMaxToolParser(ToolParser):
                         ),
                     }
                 except json.JSONDecodeError:
-                    raw_args = json.dumps({"raw": content}, ensure_ascii=False)
+                    raw_args = json.dumps({"raw": raw_content}, ensure_ascii=False)
                     if not self._arguments_satisfy_required_schema(
                         func_name, raw_args, request
                     ):

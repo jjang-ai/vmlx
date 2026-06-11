@@ -1207,6 +1207,31 @@ class TestMiniMaxToolParser:
         args = json.loads(result.tool_calls[0]["arguments"])
         assert args == {"raw": "  alpha\nbeta  "}
 
+    def test_xml_function_raw_fallback_preserves_spacing(self, parser):
+        """Legacy XML fallback must not trim schema-declared raw payloads."""
+        text = "<minimax:tool_call><legacy_raw>  alpha\nbeta  </legacy_raw></minimax:tool_call>"
+        request = {
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "legacy_raw",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {"raw": {"type": "string"}},
+                            "required": ["raw"],
+                        },
+                    },
+                }
+            ]
+        }
+
+        result = parser.extract_tool_calls(text, request=request)
+
+        assert result.tools_called
+        args = json.loads(result.tool_calls[0]["arguments"])
+        assert args == {"raw": "  alpha\nbeta  "}
+
     def test_empty_invoke(self, parser):
         """Test invoke with no parameters."""
         text = """<minimax:tool_call>

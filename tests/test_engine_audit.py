@@ -4267,8 +4267,17 @@ class TestC5ToolCallsInThinkBlocks:
         from vmlx_engine.server import stream_responses_api
 
         source = inspect.getsource(stream_responses_api)
-        assert "request_parser and accumulated_content" in source, (
-            "Responses API tool parsing must prefer accumulated_content when reasoning parser active"
+        assert "accumulated_content.strip()" in source, (
+            "Responses API streaming must try content-only accumulated text first"
+        )
+        assert "accumulated_reasoning.strip()" in source, (
+            "Responses API streaming must recover tool calls left in reasoning text"
+        )
+        assert "_strip_think_for_tool_parse(full_text)" in source, (
+            "Responses API streaming must retain a stripped-full-text fallback"
+        )
+        assert "_drop_tool_calls_missing_required_args(tool_calls, request)" in source, (
+            "Responses API streaming must fail closed on missing required tool args"
         )
 
 
