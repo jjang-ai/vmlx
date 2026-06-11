@@ -86,6 +86,9 @@ const expectedAssistantOne = process.env.VMLINUX_REAL_UI_EXPECT_ASSISTANT_1
 const expectedAssistantTwo = process.env.VMLINUX_REAL_UI_EXPECT_ASSISTANT_2
   || process.env.VMLX_REAL_UI_EXPECT_ASSISTANT_2
   || ''
+const reasoningProbePrompt = process.env.VMLINUX_REAL_UI_REASONING_PROBE_PROMPT
+  || process.env.VMLX_REAL_UI_REASONING_PROBE_PROMPT
+  || 'Do not use tools. Think briefly, then answer exactly: FOUR'
 const checkServerCacheControls = envBool('VMLINUX_REAL_UI_CHECK_SERVER_CACHE_CONTROLS', false)
 const checkMedia = envBool('VMLINUX_REAL_UI_CHECK_MEDIA', false)
 const checkVideo = envBool('VMLINUX_REAL_UI_CHECK_VIDEO', false)
@@ -97,6 +100,8 @@ const enableThinkingOverride = (
 )
   ? envBool('VMLINUX_REAL_UI_ENABLE_THINKING', false)
   : undefined
+const reasoningProbeEnabled = enableThinkingOverride === true
+  && envBool('VMLINUX_REAL_UI_REASONING_PROBE', true)
 const maxToolIterations = Number(process.env.VMLINUX_REAL_UI_MAX_TOOL_ITERATIONS || process.env.VMLX_REAL_UI_MAX_TOOL_ITERATIONS || '4')
 const toolResultMaxChars = Number(process.env.VMLINUX_REAL_UI_TOOL_RESULT_MAX_CHARS || process.env.VMLX_REAL_UI_TOOL_RESULT_MAX_CHARS || '12345')
 const imageDataUrl = process.env.VMLINUX_REAL_UI_IMAGE_DATA_URL
@@ -1407,6 +1412,31 @@ async function main() {
           if (firstSent && secondTurnEnabled) {
             await sendMessageWithCapture(2, 'second_send_message', ${JSON.stringify(promptTwo)});
           }
+          const reasoningProbeEnabled = ${JSON.stringify(reasoningProbeEnabled)};
+          let reasoningProbeSent = false;
+          if (reasoningProbeEnabled && !rendererFailureStage) {
+            const reasoningProbeOverrides = {
+              ...overrides,
+              builtinToolsEnabled: false,
+              shellEnabled: false,
+              fileToolsEnabled: false,
+              searchToolsEnabled: false,
+              gitEnabled: false,
+              utilityToolsEnabled: false,
+              webSearchEnabled: false,
+              braveSearchEnabled: false,
+              fetchUrlEnabled: false,
+            };
+            await window.api.chat.setOverrides(chat.id, reasoningProbeOverrides);
+            reasoningProbeSent = await sendMessageWithCapture(
+              3,
+              'reasoning_probe_send_message',
+              ${JSON.stringify(reasoningProbePrompt)}
+            );
+            if (${JSON.stringify(checkMedia || checkVideo || checkAudio)}) {
+              await window.api.chat.setOverrides(chat.id, overrides);
+            }
+          }
           if (checkMedia && !rendererFailureStage) {
             await sendMessageWithCapture(3, 'image_send_message', imagePrompt, [
               {
@@ -1460,10 +1490,10 @@ async function main() {
           const cacheAfter = await window.api.cache.stats(endpoint, remote.session.id)
             .catch((error) => ({ error: String(error?.message || error) }));
           const cacheAfterSettled = await waitForCacheEndpointStorage(cacheAfter, remote.session.id);
+          const sessionLogs = await window.api.sessions.getLogs(remote.session.id)
+            .catch((error) => ['[proof] failed to read session logs: ' + String(error?.message || error)]);
           const messages = await window.api.chat.getMessages(chat.id);
           const assistants = messages.filter((m) => m.role === 'assistant');
-          const first = assistants[0]?.content || '';
-          const second = assistants[assistants.length - 1]?.content || '';
           const parsePersistedArray = (value) => {
             if (!value) return [];
             try {
@@ -1482,7 +1512,9 @@ async function main() {
           const persistedReasoningSegments = persistedReasoningByMessage.flat();
           const persistedTools = persistedToolsByMessage.flat();
           const allAssistantText = assistants.map((m) => m.content || '').join('\\n');
-          const visible = first + '\\n' + second;
+          const first = assistants[0]?.content || '';
+          const second = secondTurnEnabled ? (assistants[1]?.content || '') : '';
+          const visible = allAssistantText;
           const streamTraceByMessage = Object.values(events.stream.reduce((acc, event) => {
             const key = event?.messageId || 'unknown';
             const row = acc[key] || {
@@ -1567,6 +1599,9 @@ async function main() {
             rendererFailureStage,
             expectedAssistantOne: ${JSON.stringify(expectedAssistantOne)},
             expectedAssistantTwo: ${JSON.stringify(expectedAssistantTwo)},
+            reasoningProbeEnabled,
+            reasoningProbeSent,
+            reasoningProbePrompt: ${JSON.stringify(reasoningProbePrompt)},
             media: mediaEvidence,
             messageCount: messages.length,
             assistantCount: assistants.length,
@@ -1586,6 +1621,7 @@ async function main() {
             reasoningNumericRunCount: countRegex(reasoningText, numericRunRegex),
             preloadHealthBefore,
             preloadHealthAfter,
+            sessionLogs,
             cacheBefore,
             cacheAfter: cacheAfterSettled,
             eventCounts: {
@@ -1873,6 +1909,8 @@ async function main() {
       requestContract: {
         promptOne,
         promptTwo,
+        reasoningProbePrompt,
+        reasoningProbeEnabled,
         secondTurnEnabled,
         expectedAssistantOne,
         expectedAssistantTwo,
@@ -1936,6 +1974,9 @@ async function main() {
       toolProbeFiles,
       streamTrace: rendererResult.streamTraceByMessage || [],
       appLogTail: appLogs.slice(-80),
+      sessionLogTail: Array.isArray(rendererResult.sessionLogs)
+        ? rendererResult.sessionLogs.slice(-120)
+        : [],
       serverLogTail: server.logs.slice(-120),
     }
     result.visibleAssistantTurnsComplete = visibleAssistantAfterEachUser(result.chat?.turns || [])
