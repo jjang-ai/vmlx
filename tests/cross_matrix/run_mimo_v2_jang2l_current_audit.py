@@ -93,6 +93,9 @@ MLLM_INPUTS_EMBEDS_INTERFACE_ARTIFACT = Path(
 LATEST_DECODE_SPEED_ARTIFACT = Path(
     "build/current-mimo-v25-jangtq2-speed-boundary-after-singlebatch-tokenbuffer-skip-20260609.json"
 )
+DECODE_SPEED_ROOT_CAUSE_ARTIFACT = Path(
+    "build/current-mimo-jang2l-speed-cache-root-cause-20260611/SUMMARY.json"
+)
 JANGTQ2_SOURCE_MEDIA_PROOF_ARTIFACT = Path(
     "build/current-mimo-v25-jangtq2-video-audio-source-proof-20260610.json"
 )
@@ -2479,12 +2482,38 @@ def _cb_native_thinking_off_evidence(data: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _latest_decode_speed_evidence(data: dict[str, Any]) -> dict[str, Any]:
+def _decode_speed_root_cause_evidence(data: dict[str, Any]) -> dict[str, Any]:
+    evidence = data.get("evidence")
+    evidence = evidence if isinstance(evidence, dict) else {}
+    jangtq2 = evidence.get("jangtq2_comparison")
+    jangtq2 = jangtq2 if isinstance(jangtq2, dict) else {}
+    trace = evidence.get("classic_jang2l_trace_after_singlebatch_warmup")
+    trace = trace if isinstance(trace, dict) else {}
+    return {
+        "artifact": data.get("artifact") or str(DECODE_SPEED_ROOT_CAUSE_ARTIFACT),
+        "status": data.get("status"),
+        "classification": data.get("classification"),
+        "jangtq2_server_tps": jangtq2.get("server_tps"),
+        "jangtq2_wall_decode_tps": jangtq2.get("wall_decode_tps"),
+        "classic_jang2l_user_model_ms_token1": trace.get("user_model_ms_token1"),
+        "classic_jang2l_user_logits_ms_token1": trace.get("user_logits_ms_token1"),
+        "classic_jang2l_user_logits_ms_token2": trace.get("user_logits_ms_token2"),
+    }
+
+
+def _latest_decode_speed_evidence(
+    data: dict[str, Any],
+    root_cause: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     speed_boundary = data.get("speed_boundary")
+    root_cause = root_cause if isinstance(root_cause, dict) else None
     if isinstance(speed_boundary, dict):
         server_tps = speed_boundary.get("current_source_server_tps")
         wall_tps = speed_boundary.get("current_source_wall_tps")
         current_artifact = speed_boundary.get("current_source_long_decode_artifact")
+        bottleneck = speed_boundary.get("decode_bottleneck_classification")
+        if not bottleneck and root_cause:
+            bottleneck = root_cause.get("classification")
         speed_pass = (
             isinstance(server_tps, (int, float)) and server_tps >= 40.0
         ) or (
@@ -2498,6 +2527,8 @@ def _latest_decode_speed_evidence(data: dict[str, Any]) -> dict[str, Any]:
             "bundle_decode_tps": server_tps,
             "wall_decode_tps": wall_tps,
             "current_source_long_decode_artifact": current_artifact,
+            "decode_bottleneck_classification": bottleneck,
+            "speed_root_cause_evidence": root_cause,
             "stale_forced_mllm_speed_artifact": speed_boundary.get(
                 "accepted_prior_speed_artifact"
             ),
@@ -2753,6 +2784,7 @@ def build_audit(root: Path, model_path: Path, manifest: Path) -> dict[str, Any]:
     cb_metal_baseline = _artifact(root / CB_METAL_BASELINE_ARTIFACT)
     mllm_inputs_embeds_interface = _artifact(root / MLLM_INPUTS_EMBEDS_INTERFACE_ARTIFACT)
     latest_decode_speed = _artifact(root / LATEST_DECODE_SPEED_ARTIFACT)
+    decode_speed_root_cause = _artifact(root / DECODE_SPEED_ROOT_CAUSE_ARTIFACT)
     jangtq2_source_media_proof = _artifact(root / JANGTQ2_SOURCE_MEDIA_PROOF_ARTIFACT)
     jangtq2_dev_app_video_media_proof = _artifact(
         root / JANGTQ2_DEV_APP_VIDEO_MEDIA_PROOF_ARTIFACT
@@ -2895,7 +2927,13 @@ def build_audit(root: Path, model_path: Path, manifest: Path) -> dict[str, Any]:
     if cb_metal_baseline_evidence.get("memory_pressure_cleared"):
         memory_pressure_blocked = False
     latest_decode_speed_evidence = (
-        _latest_decode_speed_evidence(latest_decode_speed["data"])
+        _latest_decode_speed_evidence(
+            latest_decode_speed["data"],
+            _decode_speed_root_cause_evidence(decode_speed_root_cause["data"])
+            if decode_speed_root_cause.get("exists")
+            and isinstance(decode_speed_root_cause.get("data"), dict)
+            else None,
+        )
         if latest_decode_speed.get("exists")
         and isinstance(latest_decode_speed.get("data"), dict)
         else {"exists": False, "speed_blocked": True}
@@ -3363,6 +3401,7 @@ def build_audit(root: Path, model_path: Path, manifest: Path) -> dict[str, Any]:
             "cb_metal_baseline_live_proof": str(CB_METAL_BASELINE_ARTIFACT),
             "mllm_inputs_embeds_interface": str(MLLM_INPUTS_EMBEDS_INTERFACE_ARTIFACT),
             "latest_decode_speed": str(LATEST_DECODE_SPEED_ARTIFACT),
+            "decode_speed_root_cause": str(DECODE_SPEED_ROOT_CAUSE_ARTIFACT),
             "api_cache_responses_contract": str(NOHEAVY_API_CACHE_CONTRACT_ARTIFACT),
             "jangtq2_source_media_proof": str(JANGTQ2_SOURCE_MEDIA_PROOF_ARTIFACT),
             "jangtq2_dev_app_video_media_proof": str(

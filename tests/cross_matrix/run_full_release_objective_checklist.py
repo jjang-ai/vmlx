@@ -21,7 +21,7 @@ DEFAULT_OUT = Path(
 )
 
 MIMO_AUDIT = Path(
-    "build/current-mimo-v2-jang2l-current-audit-after-media-route-proof-20260610.json"
+    "build/current-mimo-v2-jang2l-current-audit-after-speed-root-cause-classification-20260611.json"
 )
 MIMO_METADATA_TRUTH = Path(
     "build/current-mimo-v2-local-bundle-metadata-contract-20260607.json"
@@ -63,7 +63,7 @@ TOOL_CALL_CONTRACT = Path(
     "build/current-tool-call-contract-after-cross-model-loop-metrics-20260609.json"
 )
 RELEASE_MANIFEST = Path(
-    "build/current-release-regression-manifest-after-step37-bundled-vlm-proof-20260611.json"
+    "build/current-release-regression-manifest-after-mimo-speed-root-cause-classification-20260611.json"
 )
 OBJECTIVE_DIGEST = Path(
     "build/current-objective-proof-after-step37-bundled-vlm-proof-20260611.json"
@@ -714,9 +714,15 @@ def _mimo_checks(
             effective_blockers,
         ),
     ]
+    latest_decode_speed = data.get("latest_decode_speed_evidence")
+    latest_decode_speed = (
+        latest_decode_speed if isinstance(latest_decode_speed, dict) else None
+    )
     for name in required:
         detail = artifact_exactness_detail if name == "artifact_exactness" else None
         ok = component_ok.get(name) is True
+        if name == "decode_speed_target":
+            detail = latest_decode_speed
         if name == "media_runtime_implementation":
             ok = ok or current_source_media_runtime
             detail = {

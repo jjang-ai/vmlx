@@ -12466,6 +12466,39 @@ def test_mimo_v2_current_audit_accepts_packaged_jangtq2_decode_speed(tmp_path):
     )
 
 
+def test_mimo_v2_current_audit_carries_speed_boundary_root_cause():
+    from tests.cross_matrix.run_mimo_v2_jang2l_current_audit import (
+        _latest_decode_speed_evidence,
+    )
+
+    evidence = _latest_decode_speed_evidence(
+        {
+            "status": "open",
+            "speed_boundary": {
+                "current_source_server_tps": 39.2,
+                "current_source_wall_tps": 39.13,
+                "current_source_long_decode_artifact": "build/current-mimo-speed/result.json",
+                "status": "open_because_current_text_runtime_decode_is_below_40",
+            },
+        },
+        {
+            "artifact": "current-mimo-jang2l-speed-cache-root-cause-20260611",
+            "classification": "body_decode_and_cache_paths_are_not_primary_current_speed_bottleneck",
+            "classic_jang2l_user_model_ms_token1": 3.1,
+            "classic_jang2l_user_logits_ms_token1": 2532.17,
+        },
+    )
+
+    assert evidence["speed_blocked"] is True
+    assert evidence["bundle_decode_tps"] == 39.2
+    assert evidence["wall_decode_tps"] == 39.13
+    assert evidence["decode_bottleneck_classification"] == (
+        "body_decode_and_cache_paths_are_not_primary_current_speed_bottleneck"
+    )
+    assert evidence["speed_root_cause_evidence"]["classic_jang2l_user_model_ms_token1"] == 3.1
+    assert evidence["speed_root_cause_evidence"]["classic_jang2l_user_logits_ms_token1"] == 2532.17
+
+
 def test_current_proof_sweep_includes_mimo_root_cause_artifacts():
     from tests.cross_matrix.release_regression_manifest import (
         validate_current_proof_sweep_artifacts,
@@ -12514,7 +12547,7 @@ def test_current_mimo_v2_proof_artifact_constants_use_latest_pointer_set():
     )
 
     assert CURRENT_MIMO_V2_JANG2L_CURRENT_AUDIT_ARTIFACT == (
-        "build/current-mimo-v2-jang2l-current-audit-after-cache-vs-nocache-logprobs-20260609.json"
+        "build/current-mimo-v2-jang2l-current-audit-after-speed-root-cause-classification-20260611.json"
     )
     assert CURRENT_MIMO_V2_JANG2L_NO_SOURCE_EXACTNESS_CLASSIFIER_ARTIFACT == (
         "build/current-mimo-v2-no-source-exactness-classifier-after-artifact-diagnosis-20260609.json"

@@ -888,7 +888,7 @@ CURRENT_MIMO_V2_JANG2L_TOOL_DIALECT_ARTIFACT = (
     "build/current-mimo-v25-jang2l-chat-tool-boundary-20260610.json"
 )
 CURRENT_MIMO_V2_JANG2L_CURRENT_AUDIT_ARTIFACT = (
-    "build/current-mimo-v2-jang2l-current-audit-after-cache-vs-nocache-logprobs-20260609.json"
+    "build/current-mimo-v2-jang2l-current-audit-after-speed-root-cause-classification-20260611.json"
 )
 CURRENT_MIMO_V2_JANG2L_METADATA_TRUTH_ARTIFACT = (
     "build/current-mimo-v2-local-bundle-metadata-contract-20260607.json"

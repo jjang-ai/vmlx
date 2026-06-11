@@ -1208,7 +1208,7 @@ def test_full_release_objective_checklist_keeps_open_rows_visible(tmp_path):
             "blockers": ["mimo_tool_protocol_blocked"],
             "component_ok": {
                 "manifest_integrity": True,
-                "decode_speed_target": True,
+                "decode_speed_target": False,
                 "api_cache_responses_contract": True,
                 "prefix_paged_l2_cache_reproved": True,
                 "long_prompt_coherence": False,
@@ -1222,6 +1222,15 @@ def test_full_release_objective_checklist_keeps_open_rows_visible(tmp_path):
                 "media_model_metadata_text_only_contract": False,
                 "media_runtime_implementation": False,
                 "mimo_media_wired": False,
+            },
+            "latest_decode_speed_evidence": {
+                "speed_blocked": True,
+                "bundle_decode_tps": 39.2,
+                "wall_decode_tps": 39.13,
+                "decode_bottleneck_classification": (
+                    "body_decode_and_cache_paths_are_not_primary_current_speed_bottleneck"
+                ),
+                "speed_root_cause_evidence": {"status": "open"},
             },
             "diagnostics": {
                 "all_local_smoke": {
@@ -1364,6 +1373,16 @@ def test_full_release_objective_checklist_keeps_open_rows_visible(tmp_path):
     assert len(local_release_rows) == 1
     assert "mimo_jangtq2_live_media_l2_missing" not in local_release_rows[0]["detail"]
     assert "mimo_jang2l_live_media_l2_missing" not in local_release_rows[0]["detail"]
+    speed_rows = [
+        row
+        for row in result["groups"]["mimo_v25_jangtq2"]
+        if row["name"] == "mimo_decode_speed_target"
+    ]
+    assert len(speed_rows) == 1
+    assert speed_rows[0]["detail"]["decode_bottleneck_classification"] == (
+        "body_decode_and_cache_paths_are_not_primary_current_speed_bottleneck"
+    )
+    assert speed_rows[0]["detail"]["speed_root_cause_evidence"]["status"] == "open"
     assert "mimo_tool_protocol" in failed_names
     assert "mimo_media_model_metadata_text_only_contract" in failed_names
     assert "mimo_media_runtime_implementation" not in failed_names
