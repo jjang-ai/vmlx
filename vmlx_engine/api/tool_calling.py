@@ -1335,11 +1335,11 @@ def parse_tool_calls(text: str) -> Tuple[str, Optional[List[ToolCall]]]:
         if name.strip().startswith("{"):
             continue
         keys = re.findall(r"<arg_key>\s*(.*?)\s*</arg_key>", body, re.DOTALL)
-        vals = re.findall(r"<arg_value>\s*(.*?)\s*</arg_value>", body, re.DOTALL)
+        vals = re.findall(r"<arg_value>(.*?)</arg_value>", body, re.DOTALL)
         if not keys:
             continue
         arguments = {
-            k.strip(): (vals[i].strip() if i < len(vals) else "")
+            k.strip(): (_coerce_xml_tool_value(vals[i]) if i < len(vals) else "")
             for i, k in enumerate(keys)
             if k.strip()
         }

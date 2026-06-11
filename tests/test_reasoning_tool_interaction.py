@@ -611,6 +611,25 @@ class TestGenericToolCallParsing:
         assert calls is not None
         assert json.loads(calls[0].function.arguments) == {"cmd": raw_cmd}
 
+    def test_generic_parser_preserves_compact_xml_arg_value_spacing_and_entities(self):
+        """Compact <arg_value> tool args must preserve raw string payloads."""
+        from vmlx_engine.api.tool_calling import parse_tool_calls
+
+        raw_cmd = "  cd '/tmp/a b' && printf '<x>&y'\nnext  "
+        text = (
+            "<tool_call>exec_command\n"
+            "<arg_key>cmd</arg_key>"
+            "<arg_value>  cd '/tmp/a b' &amp;&amp; printf '&lt;x&gt;&amp;y'\nnext  </arg_value>"
+            "</tool_call>"
+        )
+
+        cleaned, calls = parse_tool_calls(text)
+
+        assert cleaned == ""
+        assert calls is not None
+        assert calls[0].function.name == "exec_command"
+        assert json.loads(calls[0].function.arguments) == {"cmd": raw_cmd}
+
 
 # ──────────────────────────────────────────────────────────────────────
 # Cross-parser: reasoning + tool call in same output
