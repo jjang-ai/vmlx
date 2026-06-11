@@ -395,6 +395,9 @@ ALL_LOCAL_MODEL_SMOKE_MINIMAX_SMALL_JANGTQ_REL = (
 ALL_LOCAL_MODEL_SMOKE_LIVE_SLICE_CURRENT_REL = (
     "build/current-all-local-model-smoke-live-slice-tools-media-continuation-20260606/summary.json"
 )
+ALL_LOCAL_MODEL_SMOKE_STEP37_SOURCE_CURRENT_REL = (
+    "build/current-all-local-model-smoke-step37-jangk-tool-newline-source-after-parser-fix-20260611/summary.json"
+)
 ALL_LOCAL_MODEL_SMOKE_MIMO_V2_JANG2L_REL = (
     "build/current-all-local-model-smoke-mimo-v25-jang2l-live-refresh-20260608/summary.json"
 )
@@ -476,7 +479,10 @@ ALL_LOCAL_MODEL_SMOKE_ARTIFACTS_BY_FAMILY = {
     "mimo_v2": [ALL_LOCAL_MODEL_SMOKE_MIMO_V2_JANG2L_REL],
     "nemotron": [ALL_LOCAL_MODEL_SMOKE_LING_HY3_NEMOTRON_CURRENT_REL, ALL_LOCAL_MODEL_SMOKE_NEMOTRON_OMNI_JANGTQ_REL],
     "qwen36": [ALL_LOCAL_MODEL_SMOKE_QWEN35_MXFP8_MTP_CURRENT_REL, ALL_LOCAL_MODEL_SMOKE_LIVE_SLICE_CURRENT_REL, ALL_LOCAL_MODEL_SMOKE_QWEN36_MXFP4_CRACK_REL],
-    "step3p7": [ALL_LOCAL_MODEL_SMOKE_LIVE_SLICE_CURRENT_REL],
+    "step3p7": [
+        ALL_LOCAL_MODEL_SMOKE_STEP37_SOURCE_CURRENT_REL,
+        ALL_LOCAL_MODEL_SMOKE_LIVE_SLICE_CURRENT_REL,
+    ],
     "zaya_text": [ALL_LOCAL_MODEL_SMOKE_ZAYA_TEXT_REL],
     "zaya_vl": [
         ALL_LOCAL_MODEL_SMOKE_ZAYA_VL_CURRENT_REL,
@@ -5708,6 +5714,10 @@ def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
         (
             ALL_LOCAL_MODEL_SMOKE_QWEN35_MXFP8_MTP_CURRENT_REL,
             _load(root, ALL_LOCAL_MODEL_SMOKE_QWEN35_MXFP8_MTP_CURRENT_REL),
+        ),
+        (
+            ALL_LOCAL_MODEL_SMOKE_STEP37_SOURCE_CURRENT_REL,
+            _load(root, ALL_LOCAL_MODEL_SMOKE_STEP37_SOURCE_CURRENT_REL),
         ),
         (
             ALL_LOCAL_MODEL_SMOKE_GEMMA4_26B_CRACK_REL,

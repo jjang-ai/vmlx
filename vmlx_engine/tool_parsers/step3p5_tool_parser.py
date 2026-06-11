@@ -70,9 +70,24 @@ class Step3p5ToolParser(ToolParser):
         if not tools:
             return None
         for tool in tools:
-            func = tool.get("function", {})
-            if func.get("name") == func_name:
-                props = func.get("parameters", {}).get("properties", {})
+            if isinstance(tool, dict):
+                nested = tool.get("function")
+                func = nested if isinstance(nested, dict) else tool
+            else:
+                nested = getattr(tool, "function", None)
+                func = nested if nested is not None else tool
+            if isinstance(func, dict):
+                name = func.get("name")
+                parameters = func.get("parameters", {})
+            else:
+                name = getattr(func, "name", None)
+                parameters = getattr(func, "parameters", {})
+            if name == func_name:
+                props = (
+                    parameters.get("properties", {})
+                    if isinstance(parameters, dict)
+                    else {}
+                )
                 return props.get(param_name)
         return None
 
@@ -113,8 +128,37 @@ class Step3p5ToolParser(ToolParser):
                 return json.loads(stripped)
             except json.JSONDecodeError:
                 return unescape(value)
+        elif param_type == "string":
+            if (
+                ("\n" in value or "\r" in value)
+                and "\n" not in stripped
+                and "\r" not in stripped
+            ):
+                return unescape(stripped)
 
         return unescape(value)
+
+    def _coerce_json_arguments(
+        self,
+        func_name: str,
+        arguments: dict[str, Any],
+        request: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        coerced = dict(arguments)
+        for param_name, value in list(coerced.items()):
+            if not isinstance(value, str):
+                continue
+            schema = self._get_param_schema(func_name, str(param_name), request)
+            if not isinstance(schema, dict) or schema.get("type", "string") != "string":
+                continue
+            stripped = value.strip()
+            if (
+                ("\n" in value or "\r" in value)
+                and "\n" not in stripped
+                and "\r" not in stripped
+            ):
+                coerced[param_name] = unescape(stripped)
+        return coerced
 
     def extract_tool_calls(
         self, model_output: str, request: dict[str, Any] | None = None
@@ -142,6 +186,12 @@ class Step3p5ToolParser(ToolParser):
             if content.startswith("{"):
                 try:
                     arguments = json.loads(content)
+                    if isinstance(arguments, dict):
+                        arguments = self._coerce_json_arguments(
+                            func_name,
+                            arguments,
+                            request,
+                        )
                     if not self._arguments_satisfy_required_schema(
                         func_name, arguments, request
                     ):
