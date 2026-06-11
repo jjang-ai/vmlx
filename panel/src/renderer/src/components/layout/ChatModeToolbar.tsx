@@ -61,7 +61,7 @@ export function ChatModeToolbar({ activeChatId, activeSessionId, onSessionChange
           const cfg = s.config ? JSON.parse(s.config) : {}
           if (!s.modelPath.startsWith('remote://')) {
             window.api.models.detectConfig(s.modelPath).then((detected: any) => {
-              if (detected?.supportsThinking === false || !detected?.reasoningParser) {
+              if (!detected?.reasoningParser) {
                 setEffectiveReasoningParser(undefined)
               } else if (cfg.reasoningParser && cfg.reasoningParser !== 'auto') {
                 setEffectiveReasoningParser(canonicalizeReasoningParserForCli(cfg.reasoningParser))

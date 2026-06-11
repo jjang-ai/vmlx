@@ -1036,7 +1036,7 @@ export function registerChatHandlers(
                       ? false
                       : false;
 
-            if (detected.supportsThinking === false || !detected.reasoningParser) {
+            if (!detected.reasoningParser) {
               sessionHasReasoningParser = false;
               isHarmonyModel = false;
             } else if (

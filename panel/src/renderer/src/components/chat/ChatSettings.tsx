@@ -87,7 +87,7 @@ export function ChatSettings({ chatId, session, reasoningParser, onClose, onOver
   const [messageCount, setMessageCount] = useState(0)
   const isRemote = session.type === 'remote'
   const effectiveWireApi = overrides.wireApi ?? (isRemote ? 'completions' : 'responses')
-  const effectiveReasoningParser = detectedSupportsThinking === false ? undefined : (detectedReasoningParser ?? reasoningParser)
+  const effectiveReasoningParser = detectedReasoningParser ?? reasoningParser
   const thinkingSupported = detectedFamily === 'deepseek-v4' || detectedSupportsThinking === true || (detectedSupportsThinking !== false && !!effectiveReasoningParser)
   const displayedEnableThinking = thinkingSupported ? overrides.enableThinking : undefined
   const thinkingDisabledClass = thinkingSupported ? '' : ' opacity-50 cursor-not-allowed'
