@@ -4740,6 +4740,8 @@ def _parse_tool_calls_with_parser(
         bare_cleaned, bare_calls = _repair_required_single_tool_bare_json_args(text)
         if bare_calls:
             return bare_cleaned, bare_calls
+        if _has_tool_marker_or_partial_suffix(text):
+            return _strip_tool_markup_residue_for_display(text), None
         return text, None
 
     # Determine which parser to use.
