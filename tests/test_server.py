@@ -3323,6 +3323,11 @@ class TestOpenAILogprobsFormatting:
             async def stream_chat(self, *, messages, **kwargs):
                 chunks = (
                     (
+                        "I will call the lookup tool.\n",
+                        False,
+                        None,
+                    ),
+                    (
                         "<tool_call>",
                         False,
                         None,
@@ -3404,6 +3409,49 @@ class TestOpenAILogprobsFormatting:
             if event_type == "response.output_item.done"
             and payload.get("item", {}).get("type") == "function_call"
         ]
+        reasoning_added = [
+            payload
+            for event_type, payload in payloads
+            if event_type == "response.output_item.added"
+            and payload.get("item", {}).get("type") == "reasoning"
+        ]
+        reasoning_done = [
+            payload
+            for event_type, payload in payloads
+            if event_type == "response.output_item.done"
+            and payload.get("item", {}).get("type") == "reasoning"
+        ]
+        reasoning_deltas = [
+            payload
+            for event_type, payload in payloads
+            if event_type == "response.reasoning_summary_text.delta"
+        ]
+        reasoning_summary_done = [
+            payload
+            for event_type, payload in payloads
+            if event_type == "response.reasoning_summary_text.done"
+        ]
+        message_item_ids = {
+            payload["item"]["id"]
+            for event_type, payload in payloads
+            if event_type == "response.output_item.added"
+            and payload.get("item", {}).get("type") == "message"
+        }
+        function_indexes = [
+            payload["output_index"]
+            for event_type, payload in payloads
+            if event_type
+            in {
+                "response.output_item.added",
+                "response.output_item.done",
+                "response.function_call_arguments.delta",
+                "response.function_call_arguments.done",
+            }
+            and (
+                payload.get("item", {}).get("type") == "function_call"
+                or event_type.startswith("response.function_call_arguments")
+            )
+        ]
 
         expected_args = {"query": "beta", "limit": 3}
         assert any(
@@ -3411,6 +3459,17 @@ class TestOpenAILogprobsFormatting:
             and payload.get("tool_call_generating") is True
             for event_type, payload in payloads
         )
+        assert len(reasoning_added) == 1
+        assert len(reasoning_done) == 1
+        assert reasoning_deltas
+        assert reasoning_summary_done
+        reasoning_item_id = reasoning_added[0]["item"]["id"]
+        assert reasoning_added[0]["output_index"] == 1
+        assert reasoning_done[0]["output_index"] == 1
+        assert all(payload["item_id"] == reasoning_item_id for payload in reasoning_deltas)
+        assert reasoning_summary_done[-1]["item_id"] == reasoning_item_id
+        assert not any(payload["item_id"] in message_item_ids for payload in reasoning_deltas)
+        assert function_indexes and set(function_indexes) == {2}
         assert json.loads("".join(arg_deltas)) == expected_args
         assert json.loads(arg_done[-1]) == expected_args
         assert function_items[-1]["name"] == "lookup"
