@@ -2134,6 +2134,22 @@ def _bundle_declares_native_video(bundle_path: str | None) -> bool:
         return True
     model_type = str(cfg.get("model_type") or "").lower()
     if model_type in {"gemma4", "gemma4_unified"}:
+        jang = _read_bundle_json(bundle_path, "jang_config.json")
+        explicit_video_values = [
+            cfg.get("has_video"),
+            (cfg.get("modalities") or {}).get("video")
+            if isinstance(cfg.get("modalities"), dict)
+            else None,
+            jang.get("has_video") if isinstance(jang, dict) else None,
+            (jang.get("modalities") or {}).get("video")
+            if isinstance(jang.get("modalities"), dict)
+            else None,
+            ((jang.get("capabilities") or {}).get("modalities") or {}).get("video")
+            if isinstance((jang.get("capabilities") or {}).get("modalities"), dict)
+            else None,
+        ]
+        if any(value is False for value in explicit_video_values):
+            return False
         proc = _read_bundle_json(bundle_path, "processor_config.json")
         return bool(
             cfg.get("video_token_id") is not None
@@ -2159,6 +2175,14 @@ def _bundle_supports_video_frame_fallback(bundle_path: str | None) -> bool:
     if not cfg:
         return False
     model_type = str(cfg.get("model_type") or "").lower()
+    if model_type in {"gemma4", "gemma4_unified"}:
+        proc = _read_bundle_json(bundle_path, "processor_config.json")
+        return bool(
+            cfg.get("video_token_id") is not None
+            and cfg.get("image_token_id") is not None
+            and isinstance(cfg.get("vision_config"), dict)
+            and isinstance(proc.get("video_processor") if proc else None, dict)
+        )
     if model_type != "step3p7":
         return False
     return bool(
