@@ -503,3 +503,69 @@ def test_mimo_xml_function_fallback_keeps_tool_schema_compact_for_tight_memory()
     assert "<function=record_fact>" in system_text
     assert "<parameter=value>" in system_text
     assert '"name": "FUNCTION_NAME"' not in system_text
+
+
+def test_gemma4_run_command_fallback_warns_against_outer_shell_quotes():
+    """Gemma4 fallback must not teach outer-quoted shell command arguments."""
+    mock_tokenizer = MagicMock()
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "run_command",
+                "description": "Execute a shell command.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "command": {
+                            "type": "string",
+                            "description": "Shell command to execute.",
+                        },
+                    },
+                    "required": ["command"],
+                },
+            },
+        },
+    ]
+    messages = [
+        {
+            "role": "user",
+            "content": (
+                "Use the run_command tool exactly once to create a file named "
+                "real_ui_tool_probe_1.txt in the configured working directory. "
+                "Write the text REAL_UI_LIVE_TOOL_ONE into that file."
+            ),
+        },
+    ]
+
+    def mock_apply(modified_messages, **kwargs):
+        system = modified_messages[0]["content"]
+        user = modified_messages[1]["content"]
+        return (
+            "<start_of_turn>system\n"
+            f"{system}<end_of_turn>\n"
+            "<start_of_turn>user\n"
+            f"{user}<end_of_turn>\n"
+            "<start_of_turn>model\n"
+        )
+
+    mock_tokenizer.apply_chat_template.side_effect = mock_apply
+
+    result = check_and_inject_fallback_tools(
+        prompt="<start_of_turn>user\nUse run_command.<end_of_turn>\n<start_of_turn>model\n",
+        messages=messages,
+        template_tools=tools,
+        tokenizer=mock_tokenizer,
+        template_kwargs={
+            "add_generation_prompt": True,
+            "enable_thinking": True,
+            "tool_choice": "required",
+        },
+        tool_parser_id="gemma4",
+    )
+
+    assert "For this request, run_command.command must be exactly:" in result
+    assert "printf %s REAL_UI_LIVE_TOOL_ONE > real_ui_tool_probe_1.txt" in result
+    assert "Do not wrap the entire command in quotes" in result
+    assert "raw shell line, not a shell line wrapped in outer quotes" in result
+    assert "command:<|\"|>'echo \"hello\" > file.txt'<|\"|>" in result

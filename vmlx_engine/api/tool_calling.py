@@ -958,6 +958,12 @@ def check_and_inject_fallback_tools(
                         gemma4_lines.append(
                             f"For this request, run_command.command must be exactly: {exact_command}"
                         )
+                        gemma4_lines.append(
+                            "The command value is the raw shell line. Do not wrap "
+                            "the entire command in quotes; for example, use "
+                            "command:<|\"|>echo \"hello\" > file.txt<|\"|>, not "
+                            "command:<|\"|>'echo \"hello\" > file.txt'<|\"|>."
+                        )
                         for token in re.findall(r"\b[A-Z][A-Z0-9_]{6,}\b", request_text):
                             gemma4_lines.append(
                                 f"Do not use {token} itself as a shell command; "
@@ -1267,6 +1273,7 @@ def check_and_inject_fallback_tools(
             "Your next assistant output must be exactly one native Gemma4 tool "
             f"call for one of: {', '.join(tool_names)}. "
             + "If a thought channel is open, close it with <channel|> before the tool call. "
+            + "For run_command, the command argument must be the raw shell line, not a shell line wrapped in outer quotes. "
             + "Historical tool results do not satisfy this current-turn requirement. "
             "Do not answer in prose before the tool call."
         )
