@@ -950,6 +950,7 @@ export function registerChatHandlers(
       // AND for endpoint resolution (remote sessions need remoteUrl/apiKey/type)
       let timeoutSeconds = 300;
       let sessionHasReasoningParser = false;
+      let sessionSupportsThinking: boolean | undefined;
       let isHarmonyModel = false;
       let chatIsMultimodal = false;
       let chatDetectedFamily: string | undefined;
@@ -1015,6 +1016,7 @@ export function registerChatHandlers(
               thinkingBudgetSupported = undefined;
             }
             chatDetectedFamily = detected.family;
+            sessionSupportsThinking = detected.supportsThinking;
             if (typeof detected.architectureHints?.audioRuntimeAvailable === "boolean") {
               modelAudioRuntimeAvailable = detected.architectureHints.audioRuntimeAvailable;
             }
@@ -1805,11 +1807,13 @@ export function registerChatHandlers(
               ? Math.floor(overrides.maxThinkingTokens)
               : undefined;
           const effectiveEnableThinkingOverride =
-            !isRemote &&
-            !sessionHasReasoningParser &&
-            chatDetectedFamily !== "deepseek-v4"
+            sessionSupportsThinking === false
               ? undefined
-              : overrides?.enableThinking;
+              : !isRemote &&
+                  !sessionHasReasoningParser &&
+                  chatDetectedFamily !== "deepseek-v4"
+                ? undefined
+                : overrides?.enableThinking;
           const applyLocalThinkingBudget = (obj: Record<string, any>) => {
             if (isRemote || resolvedThinkingBudget == null || obj.enable_thinking === false) {
               return;

@@ -37,6 +37,7 @@ function buildRequestBody(
     detectedFamily?: string,
     thinkingBudgetSupported?: boolean,
     suppressPinnedToolChoiceForLoopback = false,
+    sessionSupportsThinking?: boolean,
 ): Record<string, any> {
     const stopSequences = overrides?.stopSequences
         ? overrides.stopSequences.split(',').map(s => s.trim()).filter(Boolean)
@@ -58,11 +59,13 @@ function buildRequestBody(
         ? Math.floor(overrides.maxThinkingTokens)
         : undefined
     const effectiveEnableThinkingOverride =
-        !isRemote &&
-        !sessionHasReasoningParser &&
-        detectedFamily !== 'deepseek-v4'
+        sessionSupportsThinking === false
             ? undefined
-            : overrides?.enableThinking
+            : !isRemote &&
+                !sessionHasReasoningParser &&
+                detectedFamily !== 'deepseek-v4'
+                ? undefined
+                : overrides?.enableThinking
     const applyLocalThinkingBudget = (obj: Record<string, any>) => {
         if (isRemote || thinkingBudget == null || obj.enable_thinking === false) return
         if (thinkingBudgetSupported === false) return
@@ -516,6 +519,12 @@ describe('buildRequestBody — Remote vs Local gating', () => {
     it('remote explicit thinking on forwards enable_thinking without chat_template_kwargs', () => {
         const body = buildRequestBody('completions', 'model', messages, { enableThinking: true }, true, true)
         expect(body.enable_thinking).toBe(true)
+        expect(body.chat_template_kwargs).toBeUndefined()
+    })
+
+    it('suppresses stale remote explicit thinking when detection says thinking is unsupported', () => {
+        const body = buildRequestBody('responses', 'mimo', messages, { enableThinking: true }, true, false, undefined, 'mimo_v2', undefined, false, false)
+        expect(body.enable_thinking).toBeUndefined()
         expect(body.chat_template_kwargs).toBeUndefined()
     })
 })
