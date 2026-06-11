@@ -294,6 +294,43 @@ class TestDSMLToolParser:
         }
         assert out.content is None
 
+    def test_plain_param_string_repair_preserves_spacing_entities_and_newlines(
+        self, parser
+    ):
+        """Malformed plain-param DSML repair must not rewrite string payloads."""
+        text = (
+            f'<{DSML_PREFIX}invoke name="write_file">\n'
+            '    <param name="path">tmp/spaced file.txt</param>\n'
+            "    <param name=\"content\">  printf '&lt;x&gt;&amp;y'\nnext  </param>\n"
+            f'</{DSML_PREFIX}invoke>'
+        )
+        request = {
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "write_file",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "path": {"type": "string"},
+                                "content": {"type": "string"},
+                            },
+                            "required": ["path", "content"],
+                        },
+                    },
+                }
+            ]
+        }
+
+        out = parser.extract_tool_calls(text, request=request)
+
+        assert out.tools_called is True
+        args = json.loads(out.tool_calls[0]["arguments"])
+        assert args["path"] == "tmp/spaced file.txt"
+        assert args["content"] == "  printf '&lt;x&gt;&amp;y'\nnext  "
+        assert out.content is None
+
     def test_repairs_self_closing_dsml_parameter_with_value_in_string_attr(
         self, parser
     ):
