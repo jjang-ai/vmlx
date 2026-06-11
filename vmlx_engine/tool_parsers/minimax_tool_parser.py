@@ -276,12 +276,13 @@ class MiniMaxToolParser(ToolParser):
                 "arguments": json.dumps(arguments, ensure_ascii=False),
             }
 
-        raw_content = invoke_content.strip()
-        if raw_content:
-            if lenient and "<parameter" in raw_content:
+        raw_content = invoke_content
+        stripped_content = invoke_content.strip()
+        if stripped_content:
+            if lenient and "<parameter" in stripped_content:
                 return None
             try:
-                parsed = json.loads(raw_content)
+                parsed = json.loads(stripped_content)
                 if not self._arguments_satisfy_required_schema(
                     func_name, parsed, request
                 ):
