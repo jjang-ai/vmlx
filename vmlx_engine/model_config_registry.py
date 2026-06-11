@@ -247,6 +247,27 @@ def _is_native_mtp_qwen_vl_artifact_ready(model_path: str | None) -> bool:
     )
 
 
+def _has_indexed_weight(model_path: str | None, prefix: str) -> bool:
+    if not model_path or not prefix:
+        return False
+    try:
+        import json
+        from pathlib import Path
+
+        index_path = Path(model_path) / "model.safetensors.index.json"
+        data = json.loads(index_path.read_text())
+        weight_map = data.get("weight_map") if isinstance(data, dict) else None
+        if not isinstance(weight_map, dict):
+            return False
+        return any(str(key).startswith(prefix) for key in weight_map)
+    except Exception:
+        return False
+
+
+def _gemma4_audio_runtime_available(model_path: str | None) -> bool:
+    return _has_indexed_weight(model_path, "audio_tower.")
+
+
 def _with_linear_attention_cache_override(
     config: ModelConfig,
     model_config: dict[str, Any],
@@ -615,7 +636,9 @@ class ModelConfigRegistry:
                 hints = dict(getattr(base, "architecture_hints", None) or {})
                 hints["runtime_scope"] = "source_gemma4_unified_vlm"
                 hints["vl_runtime_available"] = True
-                hints["audio_runtime_available"] = True
+                hints["audio_runtime_available"] = _gemma4_audio_runtime_available(
+                    model_name
+                )
                 hints["default_enable_thinking"] = False
                 updates["is_mllm"] = True
                 updates["architecture_hints"] = hints

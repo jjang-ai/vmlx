@@ -10783,8 +10783,10 @@ class TestJangVLMFallbacks:
     def test_gemma4_unified_registry_advertises_source_runtime_when_available(
         self,
         tmp_path,
+        monkeypatch,
     ):
         from vmlx_engine.model_config_registry import get_model_config_registry
+        from vmlx_engine.models import gemma4_unified_register
 
         model_dir = tmp_path
         (model_dir / "config.json").write_text(json.dumps({
@@ -10808,6 +10810,70 @@ class TestJangVLMFallbacks:
                 "cache_type": "kv",
             },
         }))
+        (model_dir / "model.safetensors.index.json").write_text(json.dumps({
+            "weight_map": {
+                "embed_audio.embedding_projection.weight": "model.safetensors",
+                "language_model.model.embed_tokens.weight": "model.safetensors",
+            }
+        }))
+        monkeypatch.setattr(
+            gemma4_unified_register,
+            "gemma4_unified_runtime_available",
+            lambda: True,
+        )
+
+        registry = get_model_config_registry()
+        registry.clear_cache()
+        cfg = registry.lookup(str(model_dir))
+
+        assert cfg.family_name == "gemma4"
+        assert cfg.is_mllm is True
+        assert cfg.architecture_hints["runtime_scope"] == "source_gemma4_unified_vlm"
+        assert cfg.architecture_hints["vl_runtime_available"] is True
+        assert cfg.architecture_hints["audio_runtime_available"] is False
+        assert cfg.architecture_hints["default_enable_thinking"] is False
+
+    def test_gemma4_unified_registry_advertises_audio_with_audio_tower_weights(
+        self,
+        tmp_path,
+        monkeypatch,
+    ):
+        from vmlx_engine.model_config_registry import get_model_config_registry
+        from vmlx_engine.models import gemma4_unified_register
+
+        model_dir = tmp_path
+        (model_dir / "config.json").write_text(json.dumps({
+            "model_type": "gemma4_unified",
+            "text_config": {"model_type": "gemma4_unified_text"},
+            "vision_config": {"model_type": "gemma4_unified_vision"},
+            "audio_config": {"model_type": "gemma4_unified_audio"},
+        }))
+        (model_dir / "jang_config.json").write_text(json.dumps({
+            "weight_format": "mxfp4",
+            "has_vision": True,
+            "has_audio": True,
+            "capabilities": {
+                "family": "gemma4",
+                "modality": "vision",
+                "tool_parser": "gemma4",
+                "reasoning_parser": "gemma4",
+                "think_in_template": False,
+                "supports_thinking": True,
+                "supports_tools": True,
+                "cache_type": "kv",
+            },
+        }))
+        (model_dir / "model.safetensors.index.json").write_text(json.dumps({
+            "weight_map": {
+                "audio_tower.layers.0.feed_forward1.ffw_layer_1.linear.weight": "model.safetensors",
+                "embed_audio.embedding_projection.weight": "model.safetensors",
+            }
+        }))
+        monkeypatch.setattr(
+            gemma4_unified_register,
+            "gemma4_unified_runtime_available",
+            lambda: True,
+        )
 
         registry = get_model_config_registry()
         registry.clear_cache()
