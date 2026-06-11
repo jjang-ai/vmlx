@@ -200,6 +200,7 @@ class SingleBatchGenerator:
         )
         self._decode_trace_count = 0
         self._decode_trace_model_s = 0.0
+        self._decode_trace_logits_s = 0.0
         self._decode_trace_sample_s = 0.0
 
     def close(self):
@@ -474,8 +475,13 @@ class SingleBatchGenerator:
             if trace:
                 self._sync()
                 model_s = time.perf_counter() - model_t0
-                sample_t0 = time.perf_counter()
+                logits_t0 = time.perf_counter()
             logits = logits[:, -1, :]
+            if trace:
+                self._eval_on_stream(logits)
+                self._sync()
+                logits_s = time.perf_counter() - logits_t0
+                sample_t0 = time.perf_counter()
             req.next_token, req.next_logprobs = self._sample_from_logits(
                 logits,
                 req,
@@ -488,17 +494,21 @@ class SingleBatchGenerator:
                 sample_s = time.perf_counter() - sample_t0
                 self._decode_trace_count += 1
                 self._decode_trace_model_s += model_s
+                self._decode_trace_logits_s += logits_s
                 self._decode_trace_sample_s += sample_s
                 if self._decode_trace_count % self._decode_trace_every == 0:
                     n = self._decode_trace_count
                     logger.info(
                         "VMLINUX_DECODE_TRACE single steps=%d avg_model_ms=%.2f "
-                        "avg_sample_ms=%.2f last_model_ms=%.2f "
+                        "avg_logits_ms=%.2f avg_sample_ms=%.2f "
+                        "last_model_ms=%.2f last_logits_ms=%.2f "
                         "last_sample_ms=%.2f",
                         n,
                         (self._decode_trace_model_s / n) * 1000.0,
+                        (self._decode_trace_logits_s / n) * 1000.0,
                         (self._decode_trace_sample_s / n) * 1000.0,
                         model_s * 1000.0,
+                        logits_s * 1000.0,
                         sample_s * 1000.0,
                     )
 

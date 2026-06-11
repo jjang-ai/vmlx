@@ -3779,6 +3779,8 @@ class MLLMBatchGenerator:
         )
         self._decode_trace_count = 0
         self._decode_trace_model_s = 0.0
+        self._decode_trace_logits_s = 0.0
+        self._decode_trace_processor_s = 0.0
         self._decode_trace_sample_s = 0.0
 
         self.prefill_batch_size = prefill_batch_size
@@ -7546,6 +7548,13 @@ class MLLMBatchGenerator:
             logits = output
 
         logits = logits[:, -1, :]
+        if trace:
+            logits_t0 = time.perf_counter()
+            mx.eval(logits)
+            mx.synchronize()
+            logits_s = time.perf_counter() - logits_t0
+            processor_s = 0.0
+            sample_t0 = time.perf_counter()
 
         # Per-request sampling using each request's sampling parameters.
         # VLM logprobs are rejected at the API layer, so do not materialize a
@@ -7563,7 +7572,18 @@ class MLLMBatchGenerator:
                     pass
             if _batch_shares_sampler_params(batch.requests):
                 shared_sampler = self._make_request_sampler(batch.requests[0])
-                sampled = shared_sampler(logits)
+                if trace:
+                    sampled = shared_sampler(logits)
+                    mx.eval(sampled)
+                    mx.synchronize()
+                    sample_s = time.perf_counter() - sample_t0
+                    # Processor timing is folded into sample unless the sampler
+                    # exposes its own detailed counters; keep the field explicit
+                    # so live logs distinguish logits materialization from the
+                    # remaining processor+sampler work.
+                    processor_s = 0.0
+                else:
+                    sampled = shared_sampler(logits)
             else:
                 tokens = []
                 for i, req in enumerate(batch.requests):
@@ -7574,21 +7594,31 @@ class MLLMBatchGenerator:
             sampled = self.sampler(logits)
 
         if trace:
-            mx.synchronize()
-            sample_s = time.perf_counter() - sample_t0
+            if "sample_s" not in locals():
+                mx.eval(sampled)
+                mx.synchronize()
+                sample_s = time.perf_counter() - sample_t0
             self._decode_trace_count += 1
             self._decode_trace_model_s += model_s
+            self._decode_trace_logits_s += logits_s
+            self._decode_trace_processor_s += processor_s
             self._decode_trace_sample_s += sample_s
             if self._decode_trace_count % self._decode_trace_every == 0:
                 n = self._decode_trace_count
                 logger.info(
                     "VMLINUX_DECODE_TRACE mllm steps=%d avg_model_ms=%.2f "
-                    "avg_sample_ms=%.2f last_model_ms=%.2f last_sample_ms=%.2f "
-                    "batch=%d",
+                    "avg_logits_ms=%.2f avg_processor_ms=%.2f "
+                    "avg_sample_ms=%.2f last_model_ms=%.2f "
+                    "last_logits_ms=%.2f last_processor_ms=%.2f "
+                    "last_sample_ms=%.2f batch=%d",
                     n,
                     (self._decode_trace_model_s / n) * 1000.0,
+                    (self._decode_trace_logits_s / n) * 1000.0,
+                    (self._decode_trace_processor_s / n) * 1000.0,
                     (self._decode_trace_sample_s / n) * 1000.0,
                     model_s * 1000.0,
+                    logits_s * 1000.0,
+                    processor_s * 1000.0,
                     sample_s * 1000.0,
                     int(logits.shape[0]),
                 )
