@@ -1906,12 +1906,10 @@ export function registerChatHandlers(
               }
             }
             // enable_thinking: explicit user override sent to both local and remote.
-            // When undefined (auto), local omits the field so the native
-            // model/template default decides; remote gets sessionHasReasoningParser as hint.
+            // When undefined (auto), omit the field so the model/template/provider
+            // default decides. Parser presence is not a thinking default.
             if (effectiveEnableThinkingOverride !== undefined) {
               obj.enable_thinking = effectiveEnableThinkingOverride;
-            } else if (isRemote) {
-              obj.enable_thinking = sessionHasReasoningParser;
             }
             // chat_template_kwargs: local only (vMLX Engine internal, no remote provider supports this)
             if (!isRemote && obj.enable_thinking !== undefined)
@@ -1996,8 +1994,8 @@ export function registerChatHandlers(
               }
             }
             // enable_thinking: explicit user override sent to both local and remote.
-            // When undefined (auto), local omits the field so the native
-            // model/template default decides; remote gets sessionHasReasoningParser as hint.
+            // When undefined (auto), omit the field so the model/template/provider
+            // default decides. Parser presence is not a thinking default.
             // STRICT ENV: Filter out enable_thinking for strict generic 3rd-party API hosts that throw 400 Bad Request.
             const isStrictApi =
               isRemote &&
@@ -2012,8 +2010,6 @@ export function registerChatHandlers(
             if (!isStrictApi) {
               if (effectiveEnableThinkingOverride !== undefined) {
                 obj.enable_thinking = effectiveEnableThinkingOverride;
-              } else if (isRemote) {
-                obj.enable_thinking = sessionHasReasoningParser;
               }
             }
 

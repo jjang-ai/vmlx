@@ -127,8 +127,6 @@ function buildRequestBody(
         else if (explicitToolChoice && suppressToolChoice) obj.tool_choice = 'auto'
         if (effectiveEnableThinkingOverride !== undefined) {
             obj.enable_thinking = effectiveEnableThinkingOverride
-        } else if (isRemote) {
-            obj.enable_thinking = sessionHasReasoningParser
         }
         if (!isRemote && obj.enable_thinking !== undefined) obj.chat_template_kwargs = { enable_thinking: obj.enable_thinking }
         applyLocalThinkingBudget(obj)
@@ -158,8 +156,6 @@ function buildRequestBody(
         else if (explicitToolChoice && suppressToolChoice) obj.tool_choice = 'auto'
         if (effectiveEnableThinkingOverride !== undefined) {
             obj.enable_thinking = effectiveEnableThinkingOverride
-        } else if (isRemote) {
-            obj.enable_thinking = sessionHasReasoningParser
         }
         if (!isRemote && obj.enable_thinking !== undefined) obj.chat_template_kwargs = { enable_thinking: obj.enable_thinking }
         applyLocalThinkingBudget(obj)
@@ -507,14 +503,20 @@ describe('buildRequestBody — Remote vs Local gating', () => {
         expect(body.chat_template_kwargs).toBeUndefined()
     })
 
-    it('enable_thinking defaults to true when session has reasoning parser', () => {
+    it('omits enable_thinking for remote Auto sessions with a reasoning parser', () => {
         const body = buildRequestBody('completions', 'model', messages, undefined, true, true)
-        expect(body.enable_thinking).toBe(true)
+        expect(body.enable_thinking).toBeUndefined()
     })
 
     it('enable_thinking can be explicitly set via overrides', () => {
         const body = buildRequestBody('completions', 'model', messages, { enableThinking: false }, true, true)
         expect(body.enable_thinking).toBe(false)
+    })
+
+    it('remote explicit thinking on forwards enable_thinking without chat_template_kwargs', () => {
+        const body = buildRequestBody('completions', 'model', messages, { enableThinking: true }, true, true)
+        expect(body.enable_thinking).toBe(true)
+        expect(body.chat_template_kwargs).toBeUndefined()
     })
 })
 
@@ -917,7 +919,7 @@ describe('buildRequestBody — Tool format', () => {
         expect(registry).not.toContain('MUST ALWAYS provide a substantive response')
         expect(chat).toContain('If the user explicitly requested exact final wording or a strict output format, follow that format exactly')
         expect(chat).toContain('suppressAgenticToolPromptForExactOutput')
-        expect(chat).toContain('/\\breply exactly\\s*:/i.test(latestUserText)')
+        expect(chat).toContain('/\\b(?:reply exactly|send visible final text exactly|output visible final text exactly)\\s*:/i.test(latestUserText)')
         expect(chat).toContain('!suppressAgenticToolPromptForExactOutput')
     })
 })
