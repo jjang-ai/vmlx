@@ -26,7 +26,7 @@ from tests.cross_matrix.release_regression_manifest import (
 
 
 DEFAULT_OUT = Path(
-    "build/current-release-regression-manifest-after-step37-bundled-vlm-proof-20260611.json"
+    "build/current-release-regression-manifest-after-installed-app-qwen35-lifecycle-guard-20260611.json"
 )
 PREPACKAGE_ALLOWED_BLOCKERS = {
     "packaged_app_developer_id_signing_blocked",

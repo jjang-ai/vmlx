@@ -4265,7 +4265,8 @@ def test_release_regression_manifest_current_sweep_uses_latest_live_smoke_artifa
     assert "current-regression-suite-after-dsv4-real-ui-valid-preflight-20260611.json" in joined
     assert "current-regression-suite-after-pr-intake-matrix-refresh-20260609.json" not in joined
     assert "current-regression-suite-after-structured-schema-decode-20260609.json" not in joined
-    assert "current-noheavy-api-cache-contract-after-dsv4-real-ui-valid-preflight-20260611.json" in joined
+    assert "current-noheavy-api-cache-contract-after-reasoning-tool-lifecycle-guard-20260611.json" in joined
+    assert "current-noheavy-api-cache-contract-after-dsv4-real-ui-valid-preflight-20260611.json" not in joined
     assert "current-noheavy-api-cache-contract-after-responses-reasoning-empty-final-args-gateway-20260609.json" not in joined
     assert "current-noheavy-api-cache-contract-after-structured-schema-decode-20260609.json" not in joined
     assert "current-regression-suite-gemma4-release-boundary-after-ui-e2e-fixes-dmg-build-20260604.json" not in joined
@@ -12772,7 +12773,7 @@ def test_release_regression_manifest_runner_default_out_tracks_current_release_p
     from tests.cross_matrix import run_release_regression_manifest as runner
 
     assert runner.DEFAULT_OUT == Path(
-        "build/current-release-regression-manifest-after-step37-bundled-vlm-proof-20260611.json"
+        "build/current-release-regression-manifest-after-installed-app-qwen35-lifecycle-guard-20260611.json"
     )
 
 

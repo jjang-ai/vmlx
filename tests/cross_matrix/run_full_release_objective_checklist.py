@@ -17,7 +17,7 @@ from typing import Any
 
 
 DEFAULT_OUT = Path(
-    "build/current-full-release-objective-checklist-after-step37-bundled-vlm-proof-20260611.json"
+    "build/current-full-release-objective-checklist-after-release-manifest-current-proof-refresh-20260611.json"
 )
 
 MIMO_AUDIT = Path(
@@ -48,7 +48,7 @@ MIMO_JANGTQ2_INSTALLED_MEDIA_L2 = Path(
     "docs/internal/agent-notes/current-real-ui-installed-app-mimo-v25-jangtq2-image-overlay-after-rebuild-pass-20260611-proof.json"
 )
 NOHEAVY_API_CACHE = Path(
-    "build/current-noheavy-api-cache-contract-after-dsv4-real-ui-valid-preflight-20260611.json"
+    "build/current-noheavy-api-cache-contract-after-reasoning-tool-lifecycle-guard-20260611.json"
 )
 RESPONSES_RAW_SSE_PARITY = Path(
     "build/current-responses-raw-sse-parity-direct-gateway-tunnel-gemma4-12b-mxfp8-crack-20260610.json"
@@ -63,7 +63,7 @@ TOOL_CALL_CONTRACT = Path(
     "build/current-tool-call-contract-after-cross-model-loop-metrics-20260609.json"
 )
 RELEASE_MANIFEST = Path(
-    "build/current-release-regression-manifest-after-mimo-speed-root-cause-classification-20260611.json"
+    "build/current-release-regression-manifest-after-installed-app-qwen35-lifecycle-guard-20260611.json"
 )
 CURRENT_INSTALLED_APP_RUNTIME_PARITY = Path(
     "build/current-installed-app-runtime-parity-audit-after-clean-jang-app-rebuild-20260611.json"

@@ -8,9 +8,15 @@ from tests.cross_matrix import run_full_release_objective_checklist as checklist
 _build = checklist._build
 
 
+def test_full_release_objective_checklist_default_out_tracks_current_release_manifest_refresh():
+    assert checklist.DEFAULT_OUT == Path(
+        "build/current-full-release-objective-checklist-after-release-manifest-current-proof-refresh-20260611.json"
+    )
+
+
 def test_full_release_objective_checklist_uses_current_noheavy_api_cache_contract():
     assert checklist.NOHEAVY_API_CACHE == Path(
-        "build/current-noheavy-api-cache-contract-after-dsv4-real-ui-valid-preflight-20260611.json"
+        "build/current-noheavy-api-cache-contract-after-reasoning-tool-lifecycle-guard-20260611.json"
     )
 
 
@@ -1590,7 +1596,7 @@ def test_full_release_objective_checklist_tracks_open_n2_pro_objective_row(
                     ),
                     "status": "open",
                     "evidence": [
-                        "build/current-release-regression-manifest-after-pr-intake-matrix-refresh-20260609.json",
+                        "build/current-release-regression-manifest-after-installed-app-qwen35-lifecycle-guard-20260611.json",
                         str(checklist.OBJECTIVE_DIGEST),
                     ],
                     "details": {
