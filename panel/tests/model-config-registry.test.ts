@@ -1449,6 +1449,21 @@ describe('detectModelConfigFromDir backend parity coverage', () => {
 })
 
 describe('detectModelConfigFromDir local high-risk artifact parity', () => {
+  it('keeps current local MiMo V2 JANG_2L text-runtime bundle out of forced MLLM launch', () => {
+    const modelPath = '/Users/example/.mlxstudio/models/JANGQ-AI/MiMo-V2.5-JANG_2L'
+    if (!existsSync(modelPath)) return
+
+    const detected = detectModelConfigFromDir(modelPath)
+    expect(detected.family).toBe('mimo_v2')
+    expect(detected.cacheType).toBe('kv')
+    expect(detected.cacheSubtype).toBe('mimo_v2_asymmetric_swa')
+    expect(detected.toolParser).toBe('xml_function')
+    expect(detected.reasoningParser).toBe('think_xml')
+    expect(detected.forceTextOnly).toBe(true)
+    expect(detected.isMultimodal).toBe(false)
+    expect(detected.supportsThinking).toBe(false)
+  })
+
   it('matches current local high-risk model paths to panel parser cache and modality policy', () => {
     const rows: Array<{
       name: string
