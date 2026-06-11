@@ -323,6 +323,73 @@ async def test_responses_streaming_stores_history_for_previous_response_id():
 
 
 @pytest.mark.asyncio
+async def test_responses_streaming_tool_choice_none_strips_invalid_tool_markup():
+    from vmlx_engine.api.models import ResponsesRequest
+    from vmlx_engine import server
+
+    class FakeEngine:
+        tokenizer = SimpleNamespace(has_thinking=False)
+
+        async def stream_chat(self, messages, **kwargs):
+            yield SimpleNamespace(
+                new_text="Checking `/tmp`...\n",
+                prompt_tokens=8,
+                completion_tokens=4,
+                finish_reason=None,
+                finished=False,
+                cached_tokens=0,
+            )
+            yield SimpleNamespace(
+                new_text=(
+                    "<tool_call>\n"
+                    "<function=exec_command>\n"
+                    "</function>\n"
+                    "</tool_call>"
+                ),
+                prompt_tokens=8,
+                completion_tokens=12,
+                finish_reason="stop",
+                finished=True,
+                cached_tokens=0,
+            )
+
+    server._responses_history.clear()
+    original_parser = server._reasoning_parser
+    original_tool_parser = server._tool_call_parser
+    server._reasoning_parser = None
+    server._tool_call_parser = "qwen"
+    try:
+        request = ResponsesRequest(
+            model="unit-test-model",
+            input="hello",
+            stream=True,
+            tool_choice="none",
+        )
+        messages = [{"role": "user", "content": "hello"}]
+
+        events = [
+            event async for event in server.stream_responses_api(
+                FakeEngine(), messages, request
+            )
+        ]
+    finally:
+        server._reasoning_parser = original_parser
+        server._tool_call_parser = original_tool_parser
+        server._responses_history.clear()
+
+    done = _sse_payloads(events, "response.output_text.done")
+    completed = _sse_payloads(events, "response.completed")
+
+    assert done
+    assert completed
+    assert done[-1]["text"] == "Checking `/tmp`..."
+    assert completed[-1]["response"]["output_text"] == "Checking `/tmp`..."
+    serialized = "\n".join(events)
+    assert "<tool_call" not in serialized
+    assert "<function=exec_command" not in serialized
+
+
+@pytest.mark.asyncio
 async def test_responses_streaming_reasoning_only_stores_placeholder_and_marker():
     from vmlx_engine.api.models import ResponsesRequest
     from vmlx_engine.reasoning.base import DeltaMessage

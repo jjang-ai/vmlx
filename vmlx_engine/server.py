@@ -4900,6 +4900,8 @@ def _clean_suppressed_tool_markup_for_display(
         return output_text
     if tool_calls:
         return _strip_tool_markup_residue_for_display(cleaned_text or "")
+    if _has_tool_marker_or_partial_suffix(output_text):
+        return _strip_tool_markup_residue_for_display(output_text)
     return output_text
 
 
