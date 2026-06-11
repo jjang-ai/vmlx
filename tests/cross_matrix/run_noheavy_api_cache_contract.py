@@ -23,6 +23,7 @@ This helper intentionally does not load models. It runs focused tests that pin:
 - API docs boundary for repair/validation vs hard constrained decoding.
 - Responses SSE function-call argument, output-index, and required-arg fail-closed
   contracts.
+- Qwen/Qwen-coder XML-function parser required-argument fail-closed contracts.
 """
 
 from __future__ import annotations
@@ -46,6 +47,7 @@ SOURCE_HASH_FILES = (
     "vmlx_engine/api/models.py",
     "vmlx_engine/api/tool_calling.py",
     "vmlx_engine/tool_parsers/dsml_tool_parser.py",
+    "vmlx_engine/tool_parsers/qwen_tool_parser.py",
     "vmlx_engine/api/anthropic_adapter.py",
     "vmlx_engine/api/ollama_adapter.py",
     "docs/guides/server.md",
@@ -62,6 +64,7 @@ SOURCE_HASH_FILES = (
     "tests/test_mllm_scheduler_cache.py",
     "tests/test_tq_disk_cache.py",
     "tests/test_dsml_tool_parser.py",
+    "tests/test_tool_parser_required_args_fail_closed.py",
     "tests/test_responses_history.py",
     "tests/test_tool_format.py",
     "panel/src/main/api-gateway.ts",
@@ -118,6 +121,7 @@ REQUIRED_NOHEAVY_API_CACHE_TEST_MARKERS = (
     "test_streaming_responses_preamble_empty_xml_tool_call_never_emits_empty_arguments",
     "test_tool_parser_drops_empty_xml_call_and_strips_markup_for_nonstream_paths",
     "test_streaming_chat_preamble_empty_xml_tool_call_never_emits_empty_arguments",
+    "test_required_arguments_missing_fail_closed_but_valid_calls_survive",
     "test_chat_stream_tracks_cache_detail_alongside_cached_tokens",
     "test_chat_stream_finish_chunks_emit_cache_detail",
     "test_responses_stream_tracks_cache_detail_alongside_cached",
@@ -334,6 +338,16 @@ COMMANDS: dict[str, list[str]] = {
             "or streaming_chat_preamble_empty_xml_tool_call_never_emits_empty_arguments"
         ),
     ],
+    "qwen_xml_required_args_parser_contracts": [
+        sys.executable,
+        "-m",
+        "pytest",
+        "-q",
+        "-vv",
+        "tests/test_tool_parser_required_args_fail_closed.py",
+        "-k",
+        "QwenToolParser or required_arguments_missing",
+    ],
     "structured_guided_decoding_contracts": [
         sys.executable,
         "-m",
@@ -462,6 +476,7 @@ def build_artifact(root: Path) -> dict[str, Any]:
     structured_output_ok = commands["structured_output_repair_contracts"]["returncode"] == 0
     structured_retry_ok = commands["structured_output_retry_contracts"]["returncode"] == 0
     responses_stream_tools_ok = commands["responses_streaming_tool_contracts"]["returncode"] == 0
+    qwen_required_args_ok = commands["qwen_xml_required_args_parser_contracts"]["returncode"] == 0
     structured_guided_ok = commands["structured_guided_decoding_contracts"]["returncode"] == 0
     structured_smoke_ok = commands["structured_smoke_response_format_contracts"]["returncode"] == 0
     panel_gateway_ok = commands["panel_gateway_contracts"]["returncode"] == 0
@@ -603,6 +618,11 @@ def build_artifact(root: Path) -> dict[str, Any]:
             and "test_streaming_responses_required_empty_xml_tool_call_is_rejected"
             not in missing_markers
             and "test_streaming_responses_preamble_empty_xml_tool_call_never_emits_empty_arguments"
+            not in missing_markers
+        ),
+        "qwen_xml_function_required_args_fail_closed": (
+            qwen_required_args_ok
+            and "test_required_arguments_missing_fail_closed_but_valid_calls_survive"
             not in missing_markers
         ),
         "cache_stats_reuse_skip_telemetry": (

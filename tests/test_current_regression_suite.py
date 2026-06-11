@@ -860,6 +860,7 @@ def test_current_regression_suite_hashes_dirty_contract_unit_sources():
         "tests/test_reasoning_modes.py",
         "tests/test_runtime_memory_stress_probe.py",
         "tests/test_server.py",
+        "tests/test_tool_parser_required_args_fail_closed.py",
         "tests/test_tool_format.py",
         "tests/test_tool_parsers.py",
         "vmlx_engine/image_gen.py",
@@ -868,6 +869,7 @@ def test_current_regression_suite_hashes_dirty_contract_unit_sources():
         "vmlx_engine/mlx_memory.py",
         "vmlx_engine/reasoning/__init__.py",
         "vmlx_engine/tool_parsers/__init__.py",
+        "vmlx_engine/tool_parsers/qwen_tool_parser.py",
         "vmlx_engine/tool_parsers/xml_function_tool_parser.py",
         "vmlx_engine/tool_parsers/zaya_tool_parser.py",
     }
@@ -1204,10 +1206,16 @@ def test_noheavy_api_cache_contract_includes_server_responses_tool_streaming_ord
     assert "test_streaming_responses_preamble_empty_xml_tool_call_never_emits_empty_arguments" in markers
     assert "test_tool_parser_drops_empty_xml_call_and_strips_markup_for_nonstream_paths" in markers
     assert "test_streaming_chat_preamble_empty_xml_tool_call_never_emits_empty_arguments" in markers
+    assert "test_required_arguments_missing_fail_closed_but_valid_calls_survive" in markers
     assert "responses_streaming_tool_call_arguments_and_indexes" in (
         manifest.EXPECTED_CURRENT_NOHEAVY_API_CACHE_CHECKS
     )
+    assert "qwen_xml_function_required_args_fail_closed" in (
+        manifest.EXPECTED_CURRENT_NOHEAVY_API_CACHE_CHECKS
+    )
     assert "tests/test_server.py" in gate.SOURCE_HASH_FILES
+    assert "tests/test_tool_parser_required_args_fail_closed.py" in gate.SOURCE_HASH_FILES
+    assert "vmlx_engine/tool_parsers/qwen_tool_parser.py" in gate.SOURCE_HASH_FILES
     command = " ".join(gate.COMMANDS["responses_streaming_tool_contracts"])
     assert "tests/test_server.py" in command
     assert "streaming_responses_tool_call_arguments_survive_buffering" in command
@@ -1217,6 +1225,9 @@ def test_noheavy_api_cache_contract_includes_server_responses_tool_streaming_ord
     assert "streaming_responses_preamble_empty_xml_tool_call_never_emits_empty_arguments" in command
     assert "tool_parser_drops_empty_xml_call_and_strips_markup_for_nonstream_paths" in command
     assert "streaming_chat_preamble_empty_xml_tool_call_never_emits_empty_arguments" in command
+    qwen_command = " ".join(gate.COMMANDS["qwen_xml_required_args_parser_contracts"])
+    assert "tests/test_tool_parser_required_args_fail_closed.py" in qwen_command
+    assert "QwenToolParser or required_arguments_missing" in qwen_command
 
 
 def test_noheavy_api_cache_contract_includes_response_format_docs_boundary():
