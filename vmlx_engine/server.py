@@ -1346,9 +1346,6 @@ def _resolve_temperature(request_value: float | None, model_name: str = "") -> f
         return request_value
     if _default_temperature is not None:
         return _default_temperature
-    fam_temp, _, _ = _family_fallback_for(model_name)
-    if fam_temp is not None:
-        return fam_temp
     bundle_path = _model_path or model_name
     v = _bundle_sampling_default(model_name, "temperature")
     if v is not None:
@@ -1360,6 +1357,9 @@ def _resolve_temperature(request_value: float | None, model_name: str = "") -> f
         return v
     if _generation_config_declares_greedy_sampling(model_name):
         return 0.0
+    fam_temp, _, _ = _family_fallback_for(model_name)
+    if fam_temp is not None:
+        return fam_temp
     return _FALLBACK_TEMPERATURE
 
 
@@ -1369,9 +1369,6 @@ def _resolve_top_p(request_value: float | None, model_name: str = "") -> float:
         return request_value
     if _default_top_p is not None:
         return _default_top_p
-    _, fam_top_p, _ = _family_fallback_for(model_name)
-    if fam_top_p is not None:
-        return fam_top_p
     bundle_path = _model_path or model_name
     v = _bundle_sampling_default(model_name, "top_p")
     if v is not None:
@@ -1383,6 +1380,9 @@ def _resolve_top_p(request_value: float | None, model_name: str = "") -> float:
         return v
     if _generation_config_declares_greedy_sampling(model_name):
         return 1.0
+    _, fam_top_p, _ = _family_fallback_for(model_name)
+    if fam_top_p is not None:
+        return fam_top_p
     return _FALLBACK_TOP_P
 
 

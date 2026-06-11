@@ -2215,7 +2215,7 @@ class TestModelConfigComprehensiveChecks:
         config = registry.lookup(str(tmp_path))
 
         assert config.family_name == "mimo_v2"
-        assert config.reasoning_parser is None
+        assert config.reasoning_parser == "think_xml"
         assert config.tool_parser == "xml_function"
         assert config.supports_native_tools is True
         assert config.supports_thinking is False
