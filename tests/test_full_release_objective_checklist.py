@@ -10,7 +10,7 @@ _build = checklist._build
 
 def test_full_release_objective_checklist_default_out_tracks_current_release_manifest_refresh():
     assert checklist.DEFAULT_OUT == Path(
-        "build/current-full-release-objective-checklist-after-release-manifest-current-proof-refresh-20260611.json"
+        "build/current-full-release-objective-checklist-after-jang-tools-installed-parity-20260611.json"
     )
 
 
@@ -34,7 +34,7 @@ def test_full_release_objective_checklist_uses_current_qwen35_raw_sse_parity_con
 
 def test_full_release_objective_checklist_uses_current_installed_app_runtime_parity():
     assert checklist.CURRENT_INSTALLED_APP_RUNTIME_PARITY == Path(
-        "build/current-installed-app-runtime-parity-audit-after-clean-jang-app-rebuild-20260611.json"
+        "build/current-installed-app-runtime-parity-audit-after-jang-tools-runtime-sync-20260611.json"
     )
 
 
@@ -254,15 +254,21 @@ def test_full_release_objective_checklist_flags_stale_current_installed_app_runt
             "installed_app": "/Applications/vMLX.app",
             "missing_or_stale": [
                 "installed_bundled_engine_hash_parity",
+                "installed_bundled_jang_tools_hash_parity",
                 "installed_packaged_engine_source_hash_parity",
             ],
             "checks": {
                 "installed_bundled_engine_hash_parity": False,
+                "installed_bundled_jang_tools_hash_parity": False,
                 "installed_packaged_engine_source_hash_parity": False,
             },
             "bundled_engine_hash_parity": {
                 "ok": False,
                 "mismatched": ["server.py", "api/tool_calling.py"],
+            },
+            "bundled_jang_tools_hash_parity": {
+                "ok": False,
+                "mismatched": ["capabilities.py"],
             },
             "packaged_engine_source_hash_parity": {
                 "ok": False,
@@ -278,11 +284,15 @@ def test_full_release_objective_checklist_flags_stale_current_installed_app_runt
 
     assert "installed_app_current_runtime_parity_status_pass" in failed
     assert "installed_app_current_bundled_engine_hash_parity" in failed
+    assert "installed_app_current_bundled_jang_tools_hash_parity" in failed
     assert "installed_app_current_packaged_engine_source_hash_parity" in failed
     assert "installed_app_current_no_missing_or_stale_runtime_rows" in failed
     assert failed["installed_app_current_bundled_engine_hash_parity"]["detail"][
         "mismatched"
     ] == ["server.py", "api/tool_calling.py"]
+    assert failed["installed_app_current_bundled_jang_tools_hash_parity"]["detail"][
+        "mismatched"
+    ] == ["capabilities.py"]
 
 
 def _write_green_installed_app_runtime_parity(tmp_path: Path) -> None:
@@ -294,9 +304,14 @@ def _write_green_installed_app_runtime_parity(tmp_path: Path) -> None:
             "missing_or_stale": [],
             "checks": {
                 "installed_bundled_engine_hash_parity": True,
+                "installed_bundled_jang_tools_hash_parity": True,
                 "installed_packaged_engine_source_hash_parity": True,
             },
             "bundled_engine_hash_parity": {
+                "ok": True,
+                "mismatched": [],
+            },
+            "bundled_jang_tools_hash_parity": {
                 "ok": True,
                 "mismatched": [],
             },

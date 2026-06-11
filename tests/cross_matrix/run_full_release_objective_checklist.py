@@ -17,7 +17,7 @@ from typing import Any
 
 
 DEFAULT_OUT = Path(
-    "build/current-full-release-objective-checklist-after-release-manifest-current-proof-refresh-20260611.json"
+    "build/current-full-release-objective-checklist-after-jang-tools-installed-parity-20260611.json"
 )
 
 MIMO_AUDIT = Path(
@@ -66,7 +66,7 @@ RELEASE_MANIFEST = Path(
     "build/current-release-regression-manifest-after-installed-app-qwen35-lifecycle-guard-20260611.json"
 )
 CURRENT_INSTALLED_APP_RUNTIME_PARITY = Path(
-    "build/current-installed-app-runtime-parity-audit-after-clean-jang-app-rebuild-20260611.json"
+    "build/current-installed-app-runtime-parity-audit-after-jang-tools-runtime-sync-20260611.json"
 )
 OBJECTIVE_DIGEST = Path(
     "build/current-objective-proof-after-step37-bundled-vlm-proof-20260611.json"
@@ -188,6 +188,9 @@ def _installed_app_runtime_parity_checks(data: dict[str, Any]) -> list[dict[str,
     bundled_hash = data.get("bundled_engine_hash_parity")
     if not isinstance(bundled_hash, dict):
         bundled_hash = {}
+    bundled_jang_hash = data.get("bundled_jang_tools_hash_parity")
+    if not isinstance(bundled_jang_hash, dict):
+        bundled_jang_hash = {}
     packaged_hash = data.get("packaged_engine_source_hash_parity")
     if not isinstance(packaged_hash, dict):
         packaged_hash = {}
@@ -214,6 +217,17 @@ def _installed_app_runtime_parity_checks(data: dict[str, Any]) -> list[dict[str,
             {
                 "check": checks.get("installed_bundled_engine_hash_parity"),
                 "mismatched": bundled_hash.get("mismatched"),
+            },
+        ),
+        _check(
+            "installed_app_current_bundled_jang_tools_hash_parity",
+            checks.get("installed_bundled_jang_tools_hash_parity") is True
+            and bundled_jang_hash.get("ok") is True
+            and not bundled_jang_hash.get("mismatched"),
+            str(CURRENT_INSTALLED_APP_RUNTIME_PARITY),
+            {
+                "check": checks.get("installed_bundled_jang_tools_hash_parity"),
+                "mismatched": bundled_jang_hash.get("mismatched"),
             },
         ),
         _check(

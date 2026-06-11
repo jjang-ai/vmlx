@@ -116,6 +116,33 @@ CRITICAL_ENGINE_HASH_FILES = (
     "metal/codebook_matvec.metal",
     "metal/codebook_moe.metal",
 )
+CRITICAL_JANG_TOOLS_HASH_FILES = (
+    "capabilities.py",
+    "convert.py",
+    "convert_hy3_jangtq.py",
+    "loader.py",
+    "load_jangtq.py",
+    "load_jangtq_vlm.py",
+    "load_jangtq_kimi_vlm.py",
+    "nemotron_omni_chat.py",
+    "dsv4/mlx_model.py",
+    "dsv4/pool_quant_cache.py",
+    "hy3/__init__.py",
+    "hy3/model.py",
+    "hy3/runtime.py",
+    "kimi_prune/generate_vl.py",
+    "kimi_prune/runtime_patch.py",
+    "mimo_v2/mlx_model.py",
+    "step37/__init__.py",
+    "step37/nvfp4_codec.py",
+    "step37/step3p7_mlx.py",
+    "topk_override.py",
+    "turboquant/fused_gate_up_kernel.py",
+    "turboquant/gather_tq_kernel.py",
+    "turboquant/hadamard_kernel.py",
+    "turboquant/mpp_nax_kernel.py",
+    "turboquant/tq_kernel.py",
+)
 DISCONNECT_ERROR_RE = re.compile(
     r"\b(?:EPIPE|ECONNRESET|ERR_STREAM_DESTROYED|write EPIPE)\b",
     re.IGNORECASE,
@@ -268,6 +295,67 @@ def _check_bundled_engine_hash_parity(
         "ok": ok,
         "source_engine": str(source_engine),
         "bundled_engine": str(bundled_engine),
+        "missing_source": missing_source,
+        "missing_bundled": missing_bundled,
+        "mismatched": mismatched,
+        "files": files,
+    }
+
+
+def _default_jang_tools_source() -> Path:
+    configured = (
+        os.environ.get("VMLX_JANG_TOOLS_SOURCE")
+        or os.environ.get("VMLINUX_JANG_TOOLS_SOURCE")
+    )
+    if configured:
+        return Path(configured)
+    return Path.home() / "jang/jang-tools"
+
+
+def _check_bundled_jang_tools_hash_parity(
+    root: Path,
+    python_path: Path,
+    *,
+    relpaths: tuple[str, ...] = CRITICAL_JANG_TOOLS_HASH_FILES,
+    source_jang_tools: Path | None = None,
+) -> dict[str, Any]:
+    source_root = source_jang_tools or _default_jang_tools_source()
+    source_jang = source_root / "jang_tools"
+    bundled_jang = (
+        _python_root_from_executable(python_path)
+        / "lib/python3.12/site-packages/jang_tools"
+    )
+    files: dict[str, dict[str, Any]] = {}
+    missing_source: list[str] = []
+    missing_bundled: list[str] = []
+    mismatched: list[str] = []
+    for relpath in relpaths:
+        source_path = source_jang / relpath
+        bundled_path = bundled_jang / relpath
+        source_hash = ""
+        bundled_hash = ""
+        if not source_path.exists():
+            missing_source.append(relpath)
+        else:
+            source_hash = _sha256(source_path)
+        if not bundled_path.exists():
+            missing_bundled.append(relpath)
+        else:
+            bundled_hash = _sha256(bundled_path)
+        if source_hash and bundled_hash and source_hash != bundled_hash:
+            mismatched.append(relpath)
+        files[relpath] = {
+            "source": str(source_path),
+            "bundled": str(bundled_path),
+            "source_sha256": source_hash,
+            "bundled_sha256": bundled_hash,
+            "match": bool(source_hash and bundled_hash and source_hash == bundled_hash),
+        }
+    ok = not missing_source and not missing_bundled and not mismatched
+    return {
+        "ok": ok,
+        "source_jang_tools": str(source_jang),
+        "bundled_jang_tools": str(bundled_jang),
         "missing_source": missing_source,
         "missing_bundled": missing_bundled,
         "mismatched": mismatched,
@@ -702,6 +790,10 @@ def build_audit(
         diagnostic_reports
     )
     bundled_engine_hash_parity = _check_bundled_engine_hash_parity(root, python_path)
+    bundled_jang_tools_hash_parity = _check_bundled_jang_tools_hash_parity(
+        root,
+        python_path,
+    )
     packaged_engine_source_hash_parity = _check_packaged_engine_source_hash_parity(
         root,
         app_path,
@@ -797,6 +889,9 @@ def build_audit(
             and help_result["returncode"] == 0
         ),
         "installed_bundled_engine_hash_parity": bundled_engine_hash_parity["ok"],
+        "installed_bundled_jang_tools_hash_parity": (
+            bundled_jang_tools_hash_parity["ok"]
+        ),
         "installed_packaged_engine_source_hash_parity": (
             packaged_engine_source_hash_parity["ok"]
         ),
@@ -1186,6 +1281,7 @@ def build_audit(
         "vmlx_diagnostic_disconnect_errors": diagnostic_disconnect_errors,
         "vmlx_bundled_python_launch_crash_reports": bundled_python_launch_crashes,
         "bundled_engine_hash_parity": bundled_engine_hash_parity,
+        "bundled_jang_tools_hash_parity": bundled_jang_tools_hash_parity,
         "packaged_engine_source_hash_parity": packaged_engine_source_hash_parity,
         "vmlx_bundled_python_launch_crash_repro": {
             "versioned_python_runs": versioned_python_result["returncode"] == 0,
