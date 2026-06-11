@@ -852,6 +852,82 @@ def _write_green_n2_objective_digest(tmp_path: Path) -> None:
     assert checklist.OBJECTIVE_DIGEST == Path(
         "build/current-objective-proof-after-step37-bundled-vlm-proof-20260611.json"
     )
+    n2_details = {
+        "local_artifact_probe": {
+            "artifact_present": True,
+        },
+        "required_next_evidence": [],
+        "noheavy_contracts": {
+            "api_cache": "pass",
+            "cache_architecture": "pass",
+            "model_family_detection": "pass",
+            "n2_family_policy": True,
+            "n2_jangtq2_live_runtime_api_cache": True,
+            "n2_jangtq2_direct_gateway_stream_boundary": True,
+            "turboquant_runtime_contract": True,
+            "turboquant_disk_roundtrip": True,
+            "hybrid_cache_policy": True,
+        },
+        "jangtq2_live_proof": {
+            "status": "pass",
+            "stable_text": True,
+            "tool_probe_pass": True,
+            "responses_probe_pass": True,
+            "responses_stream_probe_pass": True,
+            "cache_hit_cached_tokens": 8,
+            "cache_hit_cache_detail": "paged+ssm",
+            "block_disk_writes": 3,
+            "block_disk_hits": 9,
+            "ssm_disk_stores": 6,
+        },
+        "jangtq2_l2_restart_proof": {
+            "status": "pass",
+            "l2_restart_probe_pass": True,
+            "restart_cached_tokens": 8,
+            "restart_cache_detail": "paged+ssm+disk",
+            "block_disk_hits": 1,
+            "ssm_disk_hits": 1,
+        },
+        "jangtq2_real_ui_prevresp_proof": {
+            "status": "pass",
+            "tool_loop": {
+                "visible_assistant_turns_complete": True,
+                "event_counts": {"tool": 106},
+            },
+            "runtime_cache": {
+                "cache_after": {
+                    "cache_hit_tokens": 17083,
+                    "l2_block_tokens_on_disk": 3579,
+                    "l2_ssm_tokens_on_disk": 17083,
+                }
+            },
+        },
+        "jangtq2_strict_loopback_toolchoice_auto": {
+            "status": "pass",
+            "live_result": {
+                "tool_probe_files": {
+                    "real_ui_tool_probe_1.txt": "REAL_UI_LIVE_TOOL_ONE",
+                    "real_ui_tool_probe_2.txt": "REAL_UI_LIVE_TOOL_TWO",
+                },
+                "event_counts": {"tool": 106},
+                "native_cache": {
+                    "generic_turboquant_kv_enabled": True,
+                    "attention_kv_storage_quantization_bits": 4,
+                },
+            },
+        },
+        "jangtq2_responses_stream_boundary": {
+            "status": "pass",
+            "checks": {
+                "direct_first_output_index_clean": True,
+                "first_tool_call_present": True,
+                "direct_followup_content_delta_streaming": True,
+                "gateway_followup_content_delta_streaming": True,
+            },
+            "direct_first_arguments": [{"query": "alpha"}],
+            "gateway_first_arguments": [{"query": "alpha"}],
+        },
+    }
     _write_json(
         tmp_path / checklist.OBJECTIVE_DIGEST,
         {
@@ -865,16 +941,103 @@ def _write_green_n2_objective_digest(tmp_path: Path) -> None:
                     "evidence": [
                         "build/current-n2-pro-397b-jang1l-jangtq-live-release-proof.json"
                     ],
-                    "details": {
-                        "local_artifact_probe": {
-                            "artifact_present": True,
-                        },
-                        "required_next_evidence": [],
-                    },
+                    "details": n2_details,
                 }
             ]
         },
     )
+
+
+def test_full_release_objective_checklist_separates_n2_jangtq2_from_jang1l():
+    details = {
+        "noheavy_contracts": {
+            "api_cache": "pass",
+            "cache_architecture": "pass",
+            "model_family_detection": "pass",
+            "n2_family_policy": True,
+            "n2_jangtq2_live_runtime_api_cache": True,
+            "n2_jangtq2_direct_gateway_stream_boundary": True,
+            "turboquant_runtime_contract": True,
+            "turboquant_disk_roundtrip": True,
+            "hybrid_cache_policy": True,
+        },
+        "jangtq2_live_proof": {
+            "status": "pass",
+            "stable_text": True,
+            "tool_probe_pass": True,
+            "responses_probe_pass": True,
+            "responses_stream_probe_pass": True,
+            "cache_hit_cached_tokens": 8,
+            "cache_hit_cache_detail": "paged+ssm",
+            "block_disk_writes": 3,
+            "block_disk_hits": 9,
+            "ssm_disk_stores": 6,
+        },
+        "jangtq2_l2_restart_proof": {
+            "status": "pass",
+            "l2_restart_probe_pass": True,
+            "restart_cached_tokens": 8,
+            "restart_cache_detail": "paged+ssm+disk",
+            "block_disk_hits": 1,
+            "ssm_disk_hits": 1,
+        },
+        "jangtq2_real_ui_prevresp_proof": {
+            "status": "pass",
+            "tool_loop": {
+                "visible_assistant_turns_complete": True,
+                "event_counts": {"tool": 106},
+            },
+            "runtime_cache": {
+                "cache_after": {
+                    "cache_hit_tokens": 17083,
+                    "l2_block_tokens_on_disk": 3579,
+                    "l2_ssm_tokens_on_disk": 17083,
+                }
+            },
+        },
+        "jangtq2_strict_loopback_toolchoice_auto": {
+            "status": "pass",
+            "live_result": {
+                "tool_probe_files": {
+                    "real_ui_tool_probe_1.txt": "REAL_UI_LIVE_TOOL_ONE",
+                    "real_ui_tool_probe_2.txt": "REAL_UI_LIVE_TOOL_TWO",
+                },
+                "event_counts": {"tool": 106},
+                "native_cache": {
+                    "generic_turboquant_kv_enabled": True,
+                    "attention_kv_storage_quantization_bits": 4,
+                },
+            },
+        },
+        "jangtq2_responses_stream_boundary": {
+            "status": "pass",
+            "checks": {
+                "direct_first_output_index_clean": True,
+                "first_tool_call_present": True,
+                "direct_followup_content_delta_streaming": True,
+                "gateway_followup_content_delta_streaming": True,
+            },
+            "direct_first_arguments": [{"query": "alpha"}],
+            "gateway_first_arguments": [{"query": "alpha"}],
+        },
+    }
+    data = {
+        "requirements": [
+            {
+                "requirement": (
+                    "N2 Pro 397B JANG1L/JANGTQ runtime/cache/API/UI quality "
+                    "is release-cleared"
+                ),
+                "status": "open",
+                "details": details,
+            }
+        ]
+    }
+
+    rows = checklist._n2_pro_397b_checks(data)
+    failed = {row["name"] for row in rows if not row["ok"]}
+
+    assert failed == {"n2_pro_397b_release_clearance"}
 
 
 def test_full_release_objective_checklist_keeps_open_rows_visible(tmp_path):

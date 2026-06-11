@@ -759,6 +759,34 @@ def _n2_pro_397b_checks(data: dict[str, Any]) -> list[dict[str, Any]]:
     row = _objective_requirement(data, "N2 Pro 397B JANG1L/JANGTQ")
     details = row.get("details") if isinstance(row, dict) else {}
     details = details if isinstance(details, dict) else {}
+    noheavy = details.get("noheavy_contracts") if isinstance(details.get("noheavy_contracts"), dict) else {}
+    live = details.get("jangtq2_live_proof") if isinstance(details.get("jangtq2_live_proof"), dict) else {}
+    l2 = details.get("jangtq2_l2_restart_proof") if isinstance(details.get("jangtq2_l2_restart_proof"), dict) else {}
+    ui = (
+        details.get("jangtq2_real_ui_prevresp_proof")
+        if isinstance(details.get("jangtq2_real_ui_prevresp_proof"), dict)
+        else {}
+    )
+    ui_tool_loop = ui.get("tool_loop") if isinstance(ui.get("tool_loop"), dict) else {}
+    ui_runtime_cache = (
+        ui.get("runtime_cache") if isinstance(ui.get("runtime_cache"), dict) else {}
+    )
+    strict_loop = (
+        details.get("jangtq2_strict_loopback_toolchoice_auto")
+        if isinstance(details.get("jangtq2_strict_loopback_toolchoice_auto"), dict)
+        else {}
+    )
+    strict_live = (
+        strict_loop.get("live_result")
+        if isinstance(strict_loop.get("live_result"), dict)
+        else {}
+    )
+    stream = (
+        details.get("jangtq2_responses_stream_boundary")
+        if isinstance(details.get("jangtq2_responses_stream_boundary"), dict)
+        else {}
+    )
+    stream_checks = stream.get("checks") if isinstance(stream.get("checks"), dict) else {}
     detail = {
         "status": row.get("status") if isinstance(row, dict) else "missing",
         "requirement": row.get("requirement") if isinstance(row, dict) else None,
@@ -779,6 +807,97 @@ def _n2_pro_397b_checks(data: dict[str, Any]) -> list[dict[str, Any]]:
             isinstance(row, dict) and row.get("status") == "pass",
             str(OBJECTIVE_DIGEST),
             detail,
+        ),
+        _check(
+            "n2_jangtq2_source_runtime_api_cache",
+            live.get("status") == "pass"
+            and live.get("stable_text") is True
+            and live.get("tool_probe_pass") is True
+            and live.get("responses_probe_pass") is True
+            and live.get("responses_stream_probe_pass") is True
+            and _positive_number(live.get("cache_hit_cached_tokens"))
+            and live.get("cache_hit_cache_detail") == "paged+ssm"
+            and _positive_number(live.get("block_disk_writes"))
+            and _positive_number(live.get("block_disk_hits"))
+            and _positive_number(live.get("ssm_disk_stores")),
+            str(OBJECTIVE_DIGEST),
+            live,
+        ),
+        _check(
+            "n2_jangtq2_fresh_process_l2_restart",
+            l2.get("status") == "pass"
+            and l2.get("l2_restart_probe_pass") is True
+            and _positive_number(l2.get("restart_cached_tokens"))
+            and l2.get("restart_cache_detail") == "paged+ssm+disk"
+            and _positive_number(l2.get("block_disk_hits"))
+            and _positive_number(l2.get("ssm_disk_hits")),
+            str(OBJECTIVE_DIGEST),
+            l2,
+        ),
+        _check(
+            "n2_jangtq2_real_ui_prevresp_tool_cache",
+            ui.get("status") == "pass"
+            and ui_tool_loop.get("visible_assistant_turns_complete") is True
+            and _positive_number(_get(ui_tool_loop, "event_counts", "tool"))
+            and _positive_number(_get(ui_runtime_cache, "cache_after", "cache_hit_tokens"))
+            and _positive_number(
+                _get(ui_runtime_cache, "cache_after", "l2_block_tokens_on_disk")
+            )
+            and _positive_number(
+                _get(ui_runtime_cache, "cache_after", "l2_ssm_tokens_on_disk")
+            ),
+            str(OBJECTIVE_DIGEST),
+            {
+                "artifact": ui.get("artifact"),
+                "status": ui.get("status"),
+                "tool_loop": ui_tool_loop,
+                "runtime_cache": ui_runtime_cache,
+            },
+        ),
+        _check(
+            "n2_jangtq2_strict_loopback_toolchoice_auto",
+            strict_loop.get("status") == "pass"
+            and _get(strict_live, "tool_probe_files", "real_ui_tool_probe_1.txt")
+            == "REAL_UI_LIVE_TOOL_ONE"
+            and _get(strict_live, "tool_probe_files", "real_ui_tool_probe_2.txt")
+            == "REAL_UI_LIVE_TOOL_TWO"
+            and _positive_number(_get(strict_live, "event_counts", "tool"))
+            and _get(strict_live, "native_cache", "generic_turboquant_kv_enabled")
+            is True
+            and _get(
+                strict_live,
+                "native_cache",
+                "attention_kv_storage_quantization_bits",
+            )
+            == 4,
+            str(OBJECTIVE_DIGEST),
+            strict_loop,
+        ),
+        _check(
+            "n2_jangtq2_direct_gateway_responses_stream_boundary",
+            stream.get("status") == "pass"
+            and stream_checks.get("direct_first_output_index_clean") is True
+            and stream_checks.get("first_tool_call_present") is True
+            and stream_checks.get("direct_followup_content_delta_streaming") is True
+            and stream_checks.get("gateway_followup_content_delta_streaming") is True
+            and bool(stream.get("direct_first_arguments"))
+            and bool(stream.get("gateway_first_arguments")),
+            str(OBJECTIVE_DIGEST),
+            stream,
+        ),
+        _check(
+            "n2_jangtq2_noheavy_policy_cache_contracts",
+            noheavy.get("api_cache") == "pass"
+            and noheavy.get("cache_architecture") == "pass"
+            and noheavy.get("model_family_detection") == "pass"
+            and noheavy.get("n2_family_policy") is True
+            and noheavy.get("n2_jangtq2_live_runtime_api_cache") is True
+            and noheavy.get("n2_jangtq2_direct_gateway_stream_boundary") is True
+            and noheavy.get("turboquant_runtime_contract") is True
+            and noheavy.get("turboquant_disk_roundtrip") is True
+            and noheavy.get("hybrid_cache_policy") is True,
+            str(OBJECTIVE_DIGEST),
+            noheavy,
         ),
     ]
 
