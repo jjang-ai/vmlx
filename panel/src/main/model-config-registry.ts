@@ -495,6 +495,22 @@ function configDeclaresMedia(config: any): boolean {
   return false
 }
 
+function modelHasIndexedWeight(modelPath: string, predicate: (key: string) => boolean): boolean {
+  try {
+    const raw = readFileSync(join(modelPath, 'model.safetensors.index.json'), 'utf-8')
+    const index = JSON.parse(raw)
+    const weightMap = index?.weight_map
+    if (!weightMap || typeof weightMap !== 'object') return false
+    return Object.keys(weightMap).some(predicate)
+  } catch {
+    return false
+  }
+}
+
+function gemmaAudioRuntimeAvailable(modelPath: string): boolean {
+  return modelHasIndexedWeight(modelPath, key => key.startsWith('audio_tower.'))
+}
+
 function isMxtqJangConfig(jangCfg: any): boolean {
   if (!jangCfg || typeof jangCfg !== 'object') return false
   const quant = jangCfg.quantization && typeof jangCfg.quantization === 'object'
@@ -816,6 +832,30 @@ function applyConfigMetadataOverrides(
   return next
 }
 
+function applyIndexedWeightCapabilityHints(
+  detected: DetectedConfig,
+  parsedConfig: any,
+  modelPath: string,
+): DetectedConfig {
+  if (detected.family !== 'gemma4' && detected.family !== 'gemma4-text') {
+    return detected
+  }
+  if (!parsedConfig || typeof parsedConfig !== 'object') return detected
+  const declaresAudio =
+    parsedConfig.audio_config != null ||
+    parsedConfig.audio_token_id != null ||
+    parsedConfig.audio_token_index != null
+  if (!declaresAudio) return detected
+
+  return {
+    ...detected,
+    architectureHints: {
+      ...(detected.architectureHints ?? {}),
+      audioRuntimeAvailable: gemmaAudioRuntimeAvailable(modelPath),
+    },
+  }
+}
+
 function isStep37TextBridge(parsedConfig: any): boolean {
   const modelType = String(parsedConfig?.model_type ?? '').toLowerCase()
   const modelFile = String(parsedConfig?.model_file ?? '').split('/').pop()?.toLowerCase()
@@ -1122,6 +1162,7 @@ export function detectModelConfigFromDir(modelPath: string): DetectedConfig {
           }
           detected = applyConfigCapabilitiesMediaPolicy(detected, parsed)
           detected = applyConfigMetadataOverrides(detected, parsed)
+          detected = applyIndexedWeightCapabilityHints(detected, parsed, modelPath)
           return detected
         }
       }
@@ -1133,7 +1174,8 @@ export function detectModelConfigFromDir(modelPath: string): DetectedConfig {
       if (configDeclaresMedia(parsed)) {
         fallback.isMultimodal = true
       }
-      return fallback
+      const withHints = applyIndexedWeightCapabilityHints(fallback, parsed, modelPath)
+      return withHints
     }
   } catch (_) {
     console.log(`[MODEL-CONFIG] Error reading or parsing config.json at ${modelPath}`)

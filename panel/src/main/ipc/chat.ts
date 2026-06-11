@@ -961,6 +961,7 @@ export function registerChatHandlers(
       let sessionVideoMaxFrames: number | undefined;
       let chatSession: import("../database").Session | undefined;
       let capabilityModelPath = chat.modelPath;
+      let modelAudioRuntimeAvailable: boolean | undefined;
       if (chat.modelPath) {
         chatSession = sessionManager.getSessionByModelPath(
           chat.modelPath.replace(/\/+$/, ""),
@@ -1014,6 +1015,9 @@ export function registerChatHandlers(
               thinkingBudgetSupported = undefined;
             }
             chatDetectedFamily = detected.family;
+            if (typeof detected.architectureHints?.audioRuntimeAvailable === "boolean") {
+              modelAudioRuntimeAvailable = detected.architectureHints.audioRuntimeAvailable;
+            }
             timeoutSeconds = effectiveDsv4RequestTimeoutSeconds(
               timeoutSeconds,
               chatDetectedFamily,
@@ -1210,7 +1214,27 @@ export function registerChatHandlers(
       // Add user message AFTER health check passes — this prevents orphaned
       // user messages when the server isn't ready yet.
       // When attachments are present, store content as JSON array of content parts.
-      const hasAttachments = attachments && attachments.length > 0;
+      if (
+        modelAudioRuntimeAvailable === undefined &&
+        capabilityModelPath &&
+        !capabilityModelPath.startsWith("remote://")
+      ) {
+        try {
+          const detected = detectModelConfigFromDir(capabilityModelPath);
+          if (!chatDetectedFamily) chatDetectedFamily = detected.family;
+          if (typeof detected.architectureHints?.audioRuntimeAvailable === "boolean") {
+            modelAudioRuntimeAvailable = detected.architectureHints.audioRuntimeAvailable;
+          }
+        } catch (_) {}
+      }
+      const modelDisallowsAudioAttachments =
+        !isRemote &&
+        modelAudioRuntimeAvailable === false &&
+        (chatDetectedFamily === "gemma4" || chatDetectedFamily === "gemma4-text");
+      const effectiveAttachments = modelDisallowsAudioAttachments
+        ? (attachments || []).filter((a) => inferKind(a) !== "audio")
+        : attachments;
+      const hasAttachments = effectiveAttachments && effectiveAttachments.length > 0;
       // mlxstudio#69: explicit media attachments override chatIsMultimodal
       // detection. The user clicked "attach image" — that intent must be
       // honored even when (a) the session lookup failed, (b) the session
@@ -1220,7 +1244,7 @@ export function registerChatHandlers(
       // handle media, which is far better than silently dropping it. Text-file
       // attachments are plain text context and do not need multimodal routing.
       const hasMediaAttachments =
-        hasAttachments && attachments!.some((a) => inferKind(a) !== "text");
+        hasAttachments && effectiveAttachments!.some((a) => inferKind(a) !== "text");
       const modelForceTextOnly = (() => {
         try {
           return !!capabilityModelPath &&
@@ -1230,20 +1254,25 @@ export function registerChatHandlers(
         }
       })();
       if (hasMediaAttachments && modelForceTextOnly) {
-        const imgs = attachments!.filter((a) => inferKind(a) === "image").length;
-        const vids = attachments!.filter((a) => inferKind(a) === "video").length;
-        const auds = attachments!.filter((a) => inferKind(a) === "audio").length;
+        const imgs = effectiveAttachments!.filter((a) => inferKind(a) === "image").length;
+        const vids = effectiveAttachments!.filter((a) => inferKind(a) === "video").length;
+        const auds = effectiveAttachments!.filter((a) => inferKind(a) === "audio").length;
         console.log(
           `[CHAT] Keeping multimodal=false for ${chatId} — model is forceTextOnly and user attached ${imgs} image(s), ${vids} video(s), ${auds} audio file(s)`,
         );
       } else if (hasMediaAttachments && !chatIsMultimodal) {
-        const imgs = attachments!.filter((a) => inferKind(a) === "image").length;
-        const vids = attachments!.filter((a) => inferKind(a) === "video").length;
-        const auds = attachments!.filter((a) => inferKind(a) === "audio").length;
+        const imgs = effectiveAttachments!.filter((a) => inferKind(a) === "image").length;
+        const vids = effectiveAttachments!.filter((a) => inferKind(a) === "video").length;
+        const auds = effectiveAttachments!.filter((a) => inferKind(a) === "audio").length;
         console.log(
           `[CHAT] Forcing multimodal=true for ${chatId} — user attached ${imgs} image(s), ${vids} video(s), ${auds} audio file(s)`,
         );
         chatIsMultimodal = true;
+      }
+      if (modelDisallowsAudioAttachments && (attachments || []).some((a) => inferKind(a) === "audio")) {
+        console.log(
+          `[CHAT] Omitting audio attachment(s) for ${chatId} — ${chatDetectedFamily} bundle lacks weight-backed audio runtime`,
+        );
       }
       if (hasAttachments || chatIsMultimodal) {
         pushChatSessionLog(
@@ -1254,8 +1283,12 @@ export function registerChatHandlers(
             capabilityModelPath,
             detectedFamily: chatDetectedFamily,
             modelForceTextOnly,
+            modelAudioRuntimeAvailable,
             chatIsMultimodal,
-            attachments: summarizeAttachmentsForLog(attachments),
+            attachments: summarizeAttachmentsForLog(effectiveAttachments),
+            originalAttachments: modelDisallowsAudioAttachments
+              ? summarizeAttachmentsForLog(attachments)
+              : undefined,
           })}`,
         );
       }
@@ -1272,7 +1305,7 @@ export function registerChatHandlers(
       const userContentForDb = hasAttachments
         ? JSON.stringify([
             ...(content.trim() ? [{ type: "text", text: content }] : []),
-            ...attachments.map((a) => {
+            ...effectiveAttachments!.map((a) => {
               const kind = inferKind(a);
               if (kind === "audio") {
                 return {
@@ -1393,6 +1426,10 @@ export function registerChatHandlers(
       const wireApi =
         overrides?.wireApi || (isRemote ? "completions" : "responses");
       const useResponsesApi = wireApi === "responses";
+      const filterUnsupportedMediaParts = (parts: any[]): any[] => {
+        if (!modelDisallowsAudioAttachments) return parts;
+        return parts.filter((part: any) => part?.type !== "input_audio");
+      };
 
       // Add conversation messages (skip any existing system messages to avoid duplicates)
       // Messages with JSON content arrays (multimodal) are parsed back to content parts for the API
@@ -1456,15 +1493,15 @@ export function registerChatHandlers(
             const parsed = JSON.parse(msgContent);
             if (Array.isArray(parsed) && parsed.length > 0 && parsed[0].type) {
               if (chatIsMultimodal || (isRemote && !modelForceTextOnly)) {
-                msgContent = parsed;
+                msgContent = filterUnsupportedMediaParts(parsed);
               } else {
                 // Multimodal is disabled for this model.
-                // Strip images entirely to prevent standard text-only engines from throwing 400 Bad Request
+                // Strip media entirely to prevent standard text-only engines from throwing 400 Bad Request
                 msgContent =
                   parsed
                     .filter((p: any) => p.type === "text")
                     .map((p: any) => p.text)
-                    .join("\n") || "[Image omitted]";
+                    .join("\n") || "[Media omitted]";
               }
             }
           } catch {

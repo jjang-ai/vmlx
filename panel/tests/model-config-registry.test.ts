@@ -771,6 +771,55 @@ describe('detectModelConfigFromDir JANG multimodal detection', () => {
     expect(detected.isMultimodal).toBe(true)
   })
 
+  it('marks Gemma 4 audio unavailable when config declares audio but indexed audio tower weights are absent', () => {
+    const dir = makeModelDir(
+      {
+        model_type: 'gemma4_unified',
+        text_config: { model_type: 'gemma4_unified_text' },
+        vision_config: { model_type: 'gemma4_unified_vision' },
+        audio_config: { model_type: 'gemma4_unified_audio' },
+        audio_token_id: 258881,
+      },
+      { weight_format: 'jang_4m', profile: 'jang_4m' },
+    )
+    writeFileSync(join(dir, 'model.safetensors.index.json'), JSON.stringify({
+      weight_map: {
+        'embed_audio.embedding_projection.weight': 'model.safetensors',
+        'language_model.model.embed_tokens.weight': 'model.safetensors',
+      },
+    }))
+
+    const detected = detectModelConfigFromDir(dir)
+
+    expect(detected.family).toBe('gemma4')
+    expect(detected.isMultimodal).toBe(true)
+    expect(detected.architectureHints?.audioRuntimeAvailable).toBe(false)
+  })
+
+  it('marks Gemma 4 audio available only when indexed audio tower weights exist', () => {
+    const dir = makeModelDir(
+      {
+        model_type: 'gemma4_unified',
+        text_config: { model_type: 'gemma4_unified_text' },
+        vision_config: { model_type: 'gemma4_unified_vision' },
+        audio_config: { model_type: 'gemma4_unified_audio' },
+      },
+      { weight_format: 'jang_4m', profile: 'jang_4m' },
+    )
+    writeFileSync(join(dir, 'model.safetensors.index.json'), JSON.stringify({
+      weight_map: {
+        'audio_tower.layers.0.feed_forward1.ffw_layer_1.linear.weight': 'model.safetensors',
+        'embed_audio.embedding_projection.weight': 'model.safetensors',
+      },
+    }))
+
+    const detected = detectModelConfigFromDir(dir)
+
+    expect(detected.family).toBe('gemma4')
+    expect(detected.isMultimodal).toBe(true)
+    expect(detected.architectureHints?.audioRuntimeAvailable).toBe(true)
+  })
+
   it('keeps JANG VLM enabled from capabilities.modality=vision when architecture.has_vision is absent', () => {
     const dir = makeModelDir(
       { model_type: 'qwen3_5', vision_config: { hidden_size: 1024 } },
