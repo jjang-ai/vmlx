@@ -2132,6 +2132,8 @@ def _bundle_declares_native_video(bundle_path: str | None) -> bool:
         return True
     if Path(str(bundle_path or "")).joinpath("video_preprocessor_config.json").is_file():
         return True
+    if _qwen_jang_vl_policy_text_only(bundle_path):
+        return False
     model_type = str(cfg.get("model_type") or "").lower()
     if model_type in {"gemma4", "gemma4_unified"}:
         jang = _read_bundle_json(bundle_path, "jang_config.json")
@@ -2174,6 +2176,8 @@ def _bundle_supports_video_frame_fallback(bundle_path: str | None) -> bool:
     cfg = _read_bundle_json(bundle_path, "config.json")
     if not cfg:
         return False
+    if _qwen_jang_vl_policy_text_only(bundle_path):
+        return False
     model_type = str(cfg.get("model_type") or "").lower()
     if model_type in {"gemma4", "gemma4_unified"}:
         proc = _read_bundle_json(bundle_path, "processor_config.json")
@@ -2188,6 +2192,53 @@ def _bundle_supports_video_frame_fallback(bundle_path: str | None) -> bool:
     return bool(
         cfg.get("image_token_id") is not None
         and isinstance(cfg.get("vision_config"), dict)
+    )
+
+
+def _qwen_jang_vl_policy_text_only(bundle_path: str | None) -> bool:
+    """Return true for Qwen/N2 JANG media-shaped bundles that must stay text-only."""
+    cfg = _read_bundle_json(bundle_path, "config.json")
+    if not isinstance(cfg, dict):
+        return False
+    model_types = {
+        str(cfg.get("model_type") or "").lower(),
+        str((cfg.get("text_config") or {}).get("model_type") or "").lower()
+        if isinstance(cfg.get("text_config"), dict)
+        else "",
+    }
+    if not (model_types & {"qwen3_5", "qwen3_5_text", "qwen3_5_moe", "qwen3_5_moe_text"}):
+        return False
+    if not isinstance(cfg.get("vision_config"), dict):
+        return False
+    jang = _read_bundle_json(bundle_path, "jang_config.json")
+    if not isinstance(jang, dict):
+        return False
+    candidates = (
+        jang.get("format"),
+        jang.get("weight_format"),
+        jang.get("profile"),
+        (jang.get("quantization") or {}).get("format")
+        if isinstance(jang.get("quantization"), dict)
+        else None,
+        (jang.get("architecture") or {}).get("format")
+        if isinstance(jang.get("architecture"), dict)
+        else None,
+    )
+    lowered = {str(value or "").lower() for value in candidates if value is not None}
+    if not any("jang" in value or "mxtq" in value for value in lowered):
+        return False
+    try:
+        from .native_mtp import inspect_native_mtp_bundle
+
+        mtp = inspect_native_mtp_bundle(str(bundle_path))
+    except Exception:
+        mtp = {}
+    return not bool(
+        mtp.get("artifact_available")
+        and mtp.get("has_vision_config")
+        and mtp.get("has_vision_weights")
+        and mtp.get("runtime_bundle_has_mtp")
+        and mtp.get("runtime_scope") == "text+vl"
     )
 
 
@@ -2623,6 +2674,8 @@ def _loaded_mllm_modalities() -> list[str] | None:
         if gate.get("applicable") and not gate.get("safe"):
             return ["text"]
         return mimo_modalities
+    if _qwen_jang_vl_policy_text_only(_model_path or _model_name):
+        return ["text"]
     modalities = ["text", "vision"]
     if _bundle_declares_native_audio(_model_path or _model_name):
         modalities.append("audio")
@@ -8704,6 +8757,7 @@ async def model_capabilities(model_id: str) -> dict:
         and engine_is_mllm
         and family != "mimo_v2"
         and mimo_runtime_modalities is None
+        and not _qwen_jang_vl_policy_text_only(_model_path or model_key)
     ):
         modalities = ["text", "vision"]
     supports_thinking_explicit = getattr(cfg, "supports_thinking", None) if cfg is not None else None

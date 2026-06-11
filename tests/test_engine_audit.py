@@ -4976,6 +4976,91 @@ class TestMediaDiagnostics:
 
         assert server._loaded_runtime_modalities() == ["text", "vision", "video"]
 
+    @pytest.mark.asyncio
+    async def test_n2_qwen_jang_vl_metadata_stays_text_only_until_native_mtp_vl_ready(
+        self, monkeypatch, tmp_path
+    ):
+        import vmlx_engine.server as server
+
+        (tmp_path / "config.json").write_text(
+            json.dumps(
+                {
+                    "model_type": "qwen3_5_moe",
+                    "architectures": ["Qwen3_5MoeForConditionalGeneration"],
+                    "text_config": {
+                        "model_type": "qwen3_5_moe_text",
+                        "layer_types": [
+                            "linear_attention",
+                            "linear_attention",
+                            "full_attention",
+                        ],
+                        "mtp_num_hidden_layers": 1,
+                    },
+                    "vision_config": {"model_type": "qwen3_5_moe"},
+                    "video_token_id": 248057,
+                }
+            )
+        )
+        (tmp_path / "jang_config.json").write_text(
+            json.dumps(
+                {
+                    "format": "jang",
+                    "architecture": {
+                        "type": "hybrid_moe_ssm",
+                        "has_vision": True,
+                        "has_ssm": True,
+                        "has_moe": True,
+                    },
+                    "runtime": {
+                        "bundle_has_mtp": False,
+                        "mtp_layers": 1,
+                        "mtp_mode": "metadata_only_missing_weights",
+                    },
+                    "capabilities": {
+                        "family": "qwen3_5_moe",
+                        "modality": "vision",
+                        "cache_type": "hybrid",
+                        "tool_parser": "qwen",
+                        "reasoning_parser": "qwen3",
+                    },
+                }
+            )
+        )
+        (tmp_path / "model.safetensors.index.json").write_text(
+            json.dumps(
+                {
+                    "weight_map": {
+                        "language_model.model.embed_tokens.weight": "model.safetensors"
+                    }
+                }
+            )
+        )
+
+        class _Scheduler:
+            config = SimpleNamespace(enable_prefix_cache=False)
+            block_aware_cache = None
+            paged_cache_manager = None
+            memory_aware_cache = None
+            prefix_cache = None
+
+        monkeypatch.setattr(server, "_engine", SimpleNamespace(is_mllm=True))
+        monkeypatch.setattr(server, "_get_scheduler", lambda: _Scheduler())
+        monkeypatch.setattr(server, "_model_path", str(tmp_path))
+        monkeypatch.setattr(server, "_model_name", "n2-qwen-jang-vl-policy-test")
+        monkeypatch.setattr(server, "_loaded_omni_modalities", lambda: None)
+
+        assert server._qwen_jang_vl_policy_text_only(str(tmp_path)) is True
+        assert server._bundle_declares_native_video(str(tmp_path)) is False
+        assert server._bundle_supports_video_frame_fallback(str(tmp_path)) is False
+        assert server._loaded_runtime_modalities() == ["text"]
+
+        caps = await server.model_capabilities("n2-qwen-jang-vl-policy-test")
+
+        assert caps["family"] == "qwen3_5_moe"
+        assert caps["modalities"] == ["text"]
+        assert caps["tool_parser"] == "qwen"
+        assert caps["reasoning_parser"] == "qwen3"
+
     def test_gemma4_runtime_modalities_do_not_infer_video_from_token_only_config(
         self, monkeypatch, tmp_path
     ):
