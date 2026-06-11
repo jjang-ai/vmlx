@@ -141,7 +141,7 @@ def test_decode_speed_gate_tracks_mimo_v25_jang2l_release_floor():
     assert row.path == "/Users/example/.mlxstudio/models/JANGQ-AI/MiMo-V2.5-JANGTQ_2"
     assert row.is_mllm is True
     assert row.tool_parser == "xml_function"
-    assert row.reasoning_parser is None
+    assert row.reasoning_parser == "think_xml"
     assert row.max_tokens == 96
     assert row.expected_min_tps == 40.0
     assert row.expected_min_pp == 400.0
@@ -586,7 +586,7 @@ def test_current_regression_suite_refreshes_release_boundary_artifacts():
     assert "--app" in staged_cmd
     assert (
         staged_cmd[staged_cmd.index("--app") + 1]
-        == "panel/release/sequoia-app/mac-arm64/vMLX.app"
+        == "panel/release/tahoe-app/mac-arm64/vMLX.app"
     )
     assert "--user-data" not in staged_cmd
     assert "--diagnostic-reports" not in staged_cmd
@@ -1886,7 +1886,7 @@ def test_current_regression_suite_refreshes_current_objective_digest_artifact(
 
     assert artifact["status"] == "pass"
     assert suite.CURRENT_OBJECTIVE_DIGEST_ARTIFACT == (
-        "build/current-objective-proof-after-mimo-n2-dev-app-proof-refresh-20260610.json"
+        "build/current-objective-proof-after-dsv4-real-ui-valid-preflight-20260611.json"
     )
     assert any(
         name == "objective_digest"

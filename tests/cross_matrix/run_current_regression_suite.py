@@ -30,7 +30,6 @@ STEP_TIMEOUT_RETURNCODE = 124
 
 EXPECTED_OPEN_REQUIREMENTS = [
     "Cross-family live multi-turn smoke matrix is release-cleared",
-    "Gemma QAT/native MXFP4 E2B/E4B/12B/26B/31B runtime/media/cache/API/UI quality is release-cleared",
     "MiMo V2.5 JANG_2L runtime/tool/long-prompt quality is release-cleared",
     "N2 Pro 397B JANG1L/JANGTQ runtime/cache/API/UI quality is release-cleared",
     "MiniMax-M2.7-JANGTQ_K reporter parity/root cause is release-cleared",
@@ -727,7 +726,7 @@ CURRENT_SUITE_COMMANDS: dict[str, list[str]] = {
         sys.executable,
         "tests/cross_matrix/run_public_app_issue_audit.py",
         "--out",
-        "build/current-public-app-issue-audit-after-checkpoint-packaged-integrity-20260609.json",
+        "build/current-public-app-issue-audit-after-issue165-dsv4-cache-tool-loop-20260611.json",
     ],
     "gemma_qat_native_mxfp4_inventory_gate": [
         sys.executable,

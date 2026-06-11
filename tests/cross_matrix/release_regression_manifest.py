@@ -1193,7 +1193,6 @@ def _live_smoke_cache_validation_failures(request: dict[str, Any]) -> list[str]:
 
 EXPECTED_CURRENT_OPEN_REQUIREMENTS = [
     "Cross-family live multi-turn smoke matrix is release-cleared",
-    "Gemma QAT/native MXFP4 E2B/E4B/12B/26B/31B runtime/media/cache/API/UI quality is release-cleared",
     "MiMo V2.5 JANG_2L runtime/tool/long-prompt quality is release-cleared",
     "N2 Pro 397B JANG1L/JANGTQ runtime/cache/API/UI quality is release-cleared",
     "MiniMax-M2.7-JANGTQ_K reporter parity/root cause is release-cleared",
@@ -5455,6 +5454,12 @@ def _validate_current_public_app_issue_audit(root: Path) -> dict[str, Any]:
             and issue_clearance
             == "source_and_live_gemma26_memory_runtime_guarded_release_package_pending"
         )
+        issue116_known_open = (
+            number == "116"
+            and status == "open"
+            and issue_slice == "open"
+            and issue_clearance == "mapped_to_thinking_off_ui_api_request_guard"
+        )
         issue117_known_pass = (
             number == "117"
             and status == "pass"
@@ -5466,6 +5471,7 @@ def _validate_current_public_app_issue_audit(root: Path) -> dict[str, Any]:
             issue_slice != "pass"
             and not issue117_known_open
             and not issue115_known_open
+            and not issue116_known_open
             and not issue119_known_open
         ):
             result["failures"].append(f"unexpected_issue_slice:{number}")
@@ -5519,6 +5525,14 @@ def _validate_current_public_app_issue_audit(root: Path) -> dict[str, Any]:
             }
             if not all(value is True for value in required_open_checks.values()):
                 result["failures"].append(f"failed_issue_checks:{number}")
+        elif issue116_known_open:
+            required_open_checks = {
+                key: value
+                for key, value in checks.items()
+                if key != "reasoning_template_contract_passes"
+            }
+            if not all(value is True for value in required_open_checks.values()):
+                result["failures"].append(f"failed_issue_checks:{number}")
         elif issue119_known_open:
             required_open_checks = {
                 key: value
@@ -5545,6 +5559,8 @@ def _validate_current_public_app_issue_audit(root: Path) -> dict[str, Any]:
                 "gemma26_memory_stress_native_cache_health",
                 "gemma26_memory_stress_mixed_swa_cache_hits",
             }:
+                continue
+            if issue116_known_open and check == "reasoning_template_contract_passes":
                 continue
             if checks.get(check) is not True:
                 result["failures"].append(f"missing_issue_check:{number}:{check}")

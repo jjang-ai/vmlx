@@ -17,7 +17,7 @@ from typing import Any
 
 
 DEFAULT_OUT = Path(
-    "build/current-full-release-objective-checklist-after-mimo-media-route-proof-20260610.json"
+    "build/current-full-release-objective-checklist-after-qwen35-auto-tool-cache-proof-20260611.json"
 )
 
 MIMO_AUDIT = Path(

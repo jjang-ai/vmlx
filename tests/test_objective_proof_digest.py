@@ -56,7 +56,7 @@ def test_objective_proof_digest_tracks_n2_pro_397b_release_blocker():
     assert row["details"]["local_artifact_probe"]["no_load"] is True
     assert row["details"]["local_artifact_probe"]["indexed_payload_gib"] == 110.57
     assert row["details"]["local_artifact_probe"]["required_available_gib"] == 118.57
-    assert row["details"]["noheavy_contracts"]["n2_family_policy"] is False
+    assert row["details"]["noheavy_contracts"]["n2_family_policy"] is True
     assert (
         row["details"]["noheavy_contracts"]["n2_jangtq2_live_runtime_api_cache"]
         is True
@@ -179,11 +179,13 @@ def test_objective_proof_digest_tracks_gemma_qat_native_mxfp4_release_blocker():
         "Gemma QAT/native MXFP4 E2B/E4B/12B/26B/31B runtime/media/cache/API/UI quality is release-cleared"
     ]
 
-    assert row["status"] == "open"
+    assert row["status"] == "pass"
+    assert row.get("caveat") is None
     assert row["details"]["missing_required_rows"] == []
+    assert row["details"]["open_required_rows"] == []
     assert row["details"]["source_live_smoke_open_rows"] == []
     assert row["details"]["checks"]["all_required_source_live_smokes_present"] is True
-    assert row["details"]["checks"]["all_required_live_proofs_present"] is False
+    assert row["details"]["checks"]["all_required_live_proofs_present"] is True
     assert row["details"]["source_live_smoke_artifacts"] == {
         "gemma4_31b_qat_jang4m": "build/current-all-local-model-smoke-gemma4-31b-qat-jang4m-tools-nomedia-l2-20260609/JANGQ_gemma-4-31B-it-qat-JANG_4M/result.json",
         "gemma4_26b_qat_jang4m": "build/current-all-local-model-smoke-gemma4-26b-qat-jang4m-tools-nomedia-l2-20260609/JANGQ_gemma-4-26B-A4B-it-qat-JANG_4M/result.json",
@@ -219,8 +221,9 @@ def test_objective_proof_digest_tracks_gemma_qat_native_mxfp4_release_blocker():
     ] is True
     for key in sorted(row["details"]["qat_jang4m_rows"]):
         qrow = row["details"]["qat_jang4m_rows"][key]
-        assert qrow["status"] == "open"
+        assert qrow["status"] == "pass"
         assert qrow["variant"] == "qat_jang4m"
+        assert qrow["live_proof_status"] == "pass"
         assert "autodetect_model_family_and_qat_jang4m_variant" in qrow[
             "live_proof_required"
         ]
@@ -405,6 +408,31 @@ def test_objective_digest_prefers_current_issue179_open_artifact_over_stale_mani
 
 
 def _write_passing_base_artifacts(tmp_path: Path) -> None:
+    _write_json(
+        tmp_path,
+        "build/current-gemma-qat-native-mxfp4-local-inventory-after-31b-sessionlogs-reasoning-proof-20260611.json",
+        {
+            "status": "pass",
+            "missing_required_rows": [],
+            "open_required_rows": [],
+            "source_live_smoke_open_rows": [],
+            "required_rows": {},
+            "checks": {
+                "all_required_source_live_smokes_present": True,
+                "all_required_live_proofs_present": True,
+            },
+        },
+    )
+    _write_json(
+        tmp_path,
+        "build/current-objective-proof-after-dsv4-real-ui-valid-preflight-20260611.json",
+        {"status": "fixture"},
+    )
+    _write_json(
+        tmp_path,
+        "build/current-release-regression-manifest-after-dsv4-real-ui-valid-preflight-20260611.json",
+        {"status": "fixture"},
+    )
     _write_json(
         tmp_path,
         "build/current-production-family-live-ling-bundled-current-20260606.json",
@@ -1431,7 +1459,6 @@ def test_objective_proof_digest_keeps_dsv4_long_quality_open(tmp_path):
     assert open_requirements == [
         "Gemma4 26B CRACK mixed-SWA app-engine speed floor is release-cleared",
         "Cross-family live multi-turn smoke matrix is release-cleared",
-        "Gemma QAT/native MXFP4 E2B/E4B/12B/26B/31B runtime/media/cache/API/UI quality is release-cleared",
         "MiMo V2.5 JANG_2L runtime/tool/long-prompt quality is release-cleared",
         "N2 Pro 397B JANG1L/JANGTQ runtime/cache/API/UI quality is release-cleared",
         "MiniMax-M2.7-JANGTQ_K reporter parity/root cause is release-cleared",
@@ -10471,7 +10498,6 @@ def test_objective_proof_digest_accepts_dsv4_quality_clearance_artifact(tmp_path
     assert open_requirements == [
         "Gemma4 26B CRACK mixed-SWA app-engine speed floor is release-cleared",
         "Cross-family live multi-turn smoke matrix is release-cleared",
-        "Gemma QAT/native MXFP4 E2B/E4B/12B/26B/31B runtime/media/cache/API/UI quality is release-cleared",
         "MiMo V2.5 JANG_2L runtime/tool/long-prompt quality is release-cleared",
         "N2 Pro 397B JANG1L/JANGTQ runtime/cache/API/UI quality is release-cleared",
         "MiniMax-M2.7-JANGTQ_K reporter parity/root cause is release-cleared",

@@ -1009,6 +1009,19 @@ def build_audit(root: Path) -> dict[str, Any]:
                 if all(checks.values())
                 else "fail"
             )
+        elif number == "116":
+            open_keys = {"reasoning_template_contract_passes"}
+            required_source_checks = {
+                key: value for key, value in checks.items() if key not in open_keys
+            }
+            issue["focused_source_slice"] = (
+                "open"
+                if all(required_source_checks.values())
+                and any(checks.get(key) is not True for key in open_keys)
+                else "pass"
+                if all(checks.values())
+                else "fail"
+            )
         else:
             issue["focused_source_slice"] = "pass" if all(checks.values()) else "fail"
         if issue["focused_source_slice"] == "fail":

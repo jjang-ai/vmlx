@@ -226,7 +226,7 @@ N2_JANGTQ2_RESPONSES_STREAM_BOUNDARY_REL = (
     "build/current-n2-jangtq2-responses-stream-boundary-20260610.json"
 )
 GEMMA_QAT_NATIVE_MXFP4_INVENTORY_REL = (
-    "build/current-gemma-qat-native-mxfp4-local-inventory-after-audio-runtime-gate-20260610.json"
+    "build/current-gemma-qat-native-mxfp4-local-inventory-after-31b-sessionlogs-reasoning-proof-20260611.json"
 )
 TOOL_CALL_CONTRACT_REL = "build/current-tool-call-contract-after-cross-model-loop-metrics-20260609.json"
 PANEL_SETTINGS_CONTRACT_REL = "build/current-panel-settings-contract-proof-20260601-cache-ui-storage-quant.json"

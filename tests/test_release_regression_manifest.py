@@ -4792,7 +4792,8 @@ def test_release_regression_manifest_real_ui_script_rejects_visible_tool_probe_c
     assert "REAL_UI_LIVE_TOOL_ONE" in semantics_block
     assert "RE:AL_UI_LIVE_TOOL_TWO" in semantics_block
     assert "strictExactReplyOk" in semantics_block
-    assert "reply exactly:" in semantics_block
+    assert "exactReplyRe" in semantics_block
+    assert "reply exactly" in semantics_block
     assert "&& visibleToolSemanticsOk" in semantics_block
     assert "&& strictExactReplyOk" in semantics_block
 
