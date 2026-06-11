@@ -6511,6 +6511,20 @@ class TestL2IncrementalDelta:
         assert "output_index = max(output_index, reasoning_output_index + 1)" in source
         assert '"type": "function_call"' in source
 
+    def test_responses_streaming_required_tool_retry_preserves_thinking(self):
+        """Streaming required-tool misses should retry before fail-closed error."""
+        import inspect
+        from vmlx_engine.server import stream_responses_api
+
+        source = inspect.getsource(stream_responses_api)
+        retry_idx = source.find("Responses API streaming required tool retry")
+        error_idx = source.find("tool_calls_required")
+        assert retry_idx >= 0, "streaming Responses must retry required-tool misses"
+        assert error_idx >= 0, "streaming Responses must still fail closed"
+        assert retry_idx < error_idx, "retry must happen before emitting required-tool error"
+        assert '"enable_thinking" not in required_retry_kwargs' in source
+        assert 'required_retry_kwargs["enable_thinking"] = False' not in source
+
 
 class TestL3ReasoningEffort:
     """reasoning_effort maps to thinking_budget without rewriting output length."""

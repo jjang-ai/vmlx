@@ -176,6 +176,17 @@ def check_and_inject_fallback_tools(
         and "<tools>" in prompt
         and "<function=example_function_name>" in prompt
     )
+    is_gemma4_native_tool_prompt = (
+        parser_id == "gemma4"
+        or (
+            "<|tool_call>call:" in prompt
+            and "<tool_call|>" in prompt
+        )
+        or (
+            "<|tool>" in prompt
+            and "<tool|>" in prompt
+        )
+    )
     is_zaya_native_tool_prompt = (
         parser_id in {"zaya_xml", "zaya", "zyphra"}
         or (
@@ -225,6 +236,12 @@ def check_and_inject_fallback_tools(
         is_qwen_native_tool_prompt
         and all(f"<function={name}>" in instruction_prompt for name in tool_names)
     )
+    _gemma4_has_concrete_tool_examples = (
+        is_gemma4_native_tool_prompt
+        and "<|tool_call>call:" in instruction_prompt
+        and "<tool_call|>" in instruction_prompt
+        and all(f"<|tool_call>call:{name}{{" in instruction_prompt for name in tool_names)
+    )
     _zaya_has_concrete_tool_examples = (
         is_zaya_native_tool_prompt
         and all(f"<function={name}>" in instruction_prompt for name in tool_names)
@@ -254,6 +271,17 @@ def check_and_inject_fallback_tools(
     if all(name in prompt for name in tool_names) and (
         (not is_dsv4_prompt or _dsv4_has_concrete_dsml_examples)
         and (not is_qwen_native_tool_prompt or _qwen_has_concrete_tool_examples)
+        and (
+            not is_gemma4_native_tool_prompt
+            or (
+                _gemma4_has_concrete_tool_examples
+                and (
+                    not tool_choice_required
+                    or "tool_choice=required" in instruction_prompt
+                    or "must emit exactly one" in instruction_prompt
+                )
+            )
+        )
         and (not is_zaya_native_tool_prompt or _zaya_has_concrete_tool_examples)
         and (not is_lfm2_native_tool_prompt or _lfm2_has_concrete_tool_examples)
         and (not is_minimax_native_tool_prompt or _minimax_has_concrete_tool_examples)
@@ -637,6 +665,33 @@ def check_and_inject_fallback_tools(
             + "]<|tool_call_end|>"
         )
 
+    def _render_gemma4_examples(tools: list[dict]) -> str:
+        xml_examples = _render_xml_examples(
+            tools,
+            "<tool_call>",
+            "</tool_call>",
+        )
+        blocks: list[str] = []
+        for name, params_block in re.findall(
+            r"<tool_call>\s*<function=([^>]+)>(.*?)</function>\s*</tool_call>",
+            xml_examples,
+            flags=re.DOTALL,
+        ):
+            arg_parts: list[str] = []
+            for param, value in re.findall(
+                r"<parameter=([^>]+)>\s*([\s\S]*?)\s*</parameter>",
+                params_block,
+            ):
+                arg_parts.append(
+                    f"{param.strip()}:<|\"|>{value.strip()}<|\"|>"
+                )
+            blocks.append(
+                f"<|tool_call>call:{name.strip()}{{"
+                + ",".join(arg_parts)
+                + "}<tool_call|>"
+            )
+        return "\n\n".join(blocks)
+
     # DSV4's native parser is DSML, not generic <tool_call> JSON. Its shipped
     # templates currently do not render tool schemas, so this fallback is the
     # only place the model sees tool instructions on OpenAI/Responses tool
@@ -843,6 +898,83 @@ def check_and_inject_fallback_tools(
                 else ""
             )
         )
+    elif is_gemma4_native_tool_prompt:
+        gemma4_prompt_tools = _requested_tools(template_tools)
+        gemma4_lines = [
+            "You have access to Gemma4 native tools. When the user asks you to use one, "
+            "call it instead of fabricating a result.",
+            "",
+        ]
+        if tool_choice_required:
+            gemma4_lines.extend(
+                [
+                    "The current API request set tool_choice=required.",
+                    "Your next assistant output must be exactly one native Gemma4 tool call and no visible text before it.",
+                    "If the template has opened a thought channel, close it with <channel|> immediately before the tool call.",
+                    "Do not spend the whole response budget reasoning; emit the required tool call now.",
+                    "Do not answer from prior context, summarize first, or invent a tool result.",
+                    "Historical tool results in the conversation do not satisfy this current-turn requirement.",
+                    "",
+                ]
+            )
+        for tool in gemma4_prompt_tools:
+            func = _tool_func(tool)
+            name = func.get("name", "") or "unknown_tool"
+            gemma4_lines.append(f"Tool: {name}")
+            desc = func.get("description", "")
+            if desc:
+                gemma4_lines.append(f"  description: {desc}")
+            params = func.get("parameters", {}) or {}
+            props = params.get("properties", {}) if isinstance(params, dict) else {}
+            required = set(params.get("required", []) if isinstance(params, dict) else [])
+            if props:
+                gemma4_lines.append("  parameters:")
+                for p_name, p_schema in props.items():
+                    p_type = (
+                        p_schema.get("type", "string")
+                        if isinstance(p_schema, dict)
+                        else "string"
+                    )
+                    req = "required" if p_name in required else "optional"
+                    p_desc = (
+                        p_schema.get("description", "")
+                        if isinstance(p_schema, dict)
+                        else ""
+                    )
+                    suffix = f": {p_desc}" if p_desc else ""
+                    gemma4_lines.append(f"    - {p_name} ({p_type}, {req}){suffix}")
+                if name.strip().lower() == "run_command" and "command" in props:
+                    command_block = _render_xml_examples(
+                        [tool],
+                        "<tool_call>",
+                        "</tool_call>",
+                    )
+                    match = re.search(
+                        r"<parameter=command>\s*([\s\S]*?)\s*</parameter>",
+                        command_block,
+                    )
+                    if match:
+                        exact_command = match.group(1).strip()
+                        gemma4_lines.append(
+                            f"For this request, run_command.command must be exactly: {exact_command}"
+                        )
+                        for token in re.findall(r"\b[A-Z][A-Z0-9_]{6,}\b", request_text):
+                            gemma4_lines.append(
+                                f"Do not use {token} itself as a shell command; "
+                                "it is file content or answer text."
+                            )
+            gemma4_lines.append("")
+        tool_prompt = (
+            "\n".join(gemma4_lines).rstrip()
+            + "\n\nWhen a tool call is needed, emit ONLY this native Gemma4 shape. "
+            "Do not emit XML function tags, JSON result data, markdown, prose, or a fake result.\n"
+            + (
+                "Because tool_choice=required, the first assistant output for this turn must be one native Gemma4 tool call and nothing else.\n"
+                if tool_choice_required
+                else ""
+            )
+            + _render_gemma4_examples(gemma4_prompt_tools)
+        )
     elif is_xml_function_native_tool_prompt:
         xml_function_prompt_tools = _requested_tools(template_tools)
         xml_function_lines = [
@@ -1026,6 +1158,12 @@ def check_and_inject_fallback_tools(
             return "<｜DSML｜invoke" in rendered
         if is_qwen_native_tool_prompt:
             return "<tool_call>" in rendered
+        if is_gemma4_native_tool_prompt:
+            return (
+                "<|tool_call>call:" in rendered
+                and "<tool_call|>" in rendered
+                and all(f"<|tool_call>call:{name}{{" in rendered for name in tool_names)
+            )
         if is_xml_function_native_tool_prompt:
             return (
                 "<tool_call>" in rendered
@@ -1122,6 +1260,19 @@ def check_and_inject_fallback_tools(
         for msg in reversed(messages_copy):
             if msg.get("role") == "user":
                 _append_tool_prompt_to_message(msg, qwen_required_reminder)
+                break
+    if is_gemma4_native_tool_prompt and tool_choice_required:
+        gemma4_required_reminder = (
+            "Current turn API contract: tool_choice=required. "
+            "Your next assistant output must be exactly one native Gemma4 tool "
+            f"call for one of: {', '.join(tool_names)}. "
+            + "If a thought channel is open, close it with <channel|> before the tool call. "
+            + "Historical tool results do not satisfy this current-turn requirement. "
+            "Do not answer in prose before the tool call."
+        )
+        for msg in reversed(messages_copy):
+            if msg.get("role") == "user":
+                _append_tool_prompt_to_message(msg, gemma4_required_reminder)
                 break
     if is_xml_function_native_tool_prompt and tool_choice_required:
         xml_required_reminder = (

@@ -16666,6 +16666,91 @@ async def stream_responses_api(
     display_text = ""
 
     if _required_tool_choice_stream and not tool_calls:
+        required_retry_messages = list(messages or [])
+        required_retry_invalid_text = (
+            full_text
+            or accumulated_content
+            or accumulated_reasoning
+            or ""
+        )
+        if required_retry_invalid_text:
+            required_retry_messages.append(
+                {"role": "assistant", "content": required_retry_invalid_text}
+            )
+        required_retry_messages.append(
+            {
+                "role": "user",
+                "content": (
+                    "The previous assistant output violated tool_choice=required "
+                    "because it did not emit a valid tool call. Retry this turn "
+                    "now. Your entire next assistant output must be exactly one "
+                    "native tool call using the available schema, with all "
+                    "required arguments present and non-empty. Do not include "
+                    "review prose, markdown, analysis, or a tool result."
+                ),
+            }
+        )
+        required_retry_kwargs = dict(kwargs)
+        if "enable_thinking" not in required_retry_kwargs and request.enable_thinking is not None:
+            required_retry_kwargs["enable_thinking"] = request.enable_thinking
+        logger.info(
+            "Responses API streaming required tool retry: preserving enable_thinking=%r",
+            required_retry_kwargs.get("enable_thinking"),
+        )
+        try:
+            required_retry_output = await _await_chat_with_disconnect_abort(
+                engine,
+                messages=required_retry_messages,
+                chat_kwargs=required_retry_kwargs,
+                timeout=_stream_timeout,
+                fastapi_request=fastapi_request,
+                request_id=f"{response_id}-required-tool-retry",
+                endpoint="Responses API streaming required tool retry",
+            )
+        except Exception:
+            required_retry_output = None
+            logger.warning(
+                "Responses API streaming required tool retry failed before producing output",
+                exc_info=True,
+            )
+        if required_retry_output is not None:
+            retry_full_text = (
+                getattr(required_retry_output, "raw_text", None)
+                or getattr(required_retry_output, "text", None)
+                or ""
+            )
+            retry_parse_candidates = [
+                _strip_think_for_tool_parse(retry_full_text),
+                retry_full_text,
+            ]
+            for retry_parse_text in retry_parse_candidates:
+                if not retry_parse_text:
+                    continue
+                retry_cleaned, retry_calls = _parse_tool_calls_with_parser(
+                    retry_parse_text,
+                    request,
+                )
+                retry_calls = _drop_tool_calls_missing_required_args(
+                    retry_calls,
+                    request,
+                )
+                if retry_calls:
+                    logger.info(
+                        "Responses API streaming required tool retry produced tool calls"
+                    )
+                    full_text = retry_full_text
+                    cleaned_text = retry_cleaned
+                    tool_calls = retry_calls
+                    prompt_tokens = max(
+                        prompt_tokens,
+                        int(getattr(required_retry_output, "prompt_tokens", 0) or 0),
+                    )
+                    completion_tokens += int(
+                        getattr(required_retry_output, "completion_tokens", 0) or 0
+                    )
+                    break
+
+    if _required_tool_choice_stream and not tool_calls:
         logger.warning(
             f"Stream {response_id}: tool_choice='required' but no tool calls produced"
         )
