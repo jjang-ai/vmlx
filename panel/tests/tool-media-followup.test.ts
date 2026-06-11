@@ -23,7 +23,7 @@ describe('tool media follow-up routing', () => {
     expect(chat).toContain('pendingVideoDataUrls')
     expect(chat).toContain('result.imageDataUrl')
     expect(chat).toContain('result.videoDataUrl')
-    expect(chat).toContain('chatIsMultimodal || isRemote')
+    expect(chat).toContain('chatIsMultimodal || (isRemote && !modelForceTextOnly)')
     expect(chat).toContain('Skipping tool media bytes for text-only local session')
     expect(chat).toContain('buildToolMediaFollowupContent')
     expect(helper).toContain("type: 'image_url'")
