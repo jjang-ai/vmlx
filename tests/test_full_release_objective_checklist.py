@@ -28,7 +28,7 @@ def test_full_release_objective_checklist_uses_current_qwen35_raw_sse_parity_con
 
 def test_full_release_objective_checklist_uses_current_installed_app_runtime_parity():
     assert checklist.CURRENT_INSTALLED_APP_RUNTIME_PARITY == Path(
-        "build/current-installed-app-runtime-parity-audit-after-bundled-refresh-20260611.json"
+        "build/current-installed-app-runtime-parity-audit-after-clean-jang-app-rebuild-20260611.json"
     )
 
 

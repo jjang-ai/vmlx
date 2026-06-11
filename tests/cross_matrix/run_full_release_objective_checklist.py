@@ -66,7 +66,7 @@ RELEASE_MANIFEST = Path(
     "build/current-release-regression-manifest-after-mimo-speed-root-cause-classification-20260611.json"
 )
 CURRENT_INSTALLED_APP_RUNTIME_PARITY = Path(
-    "build/current-installed-app-runtime-parity-audit-after-bundled-refresh-20260611.json"
+    "build/current-installed-app-runtime-parity-audit-after-clean-jang-app-rebuild-20260611.json"
 )
 OBJECTIVE_DIGEST = Path(
     "build/current-objective-proof-after-step37-bundled-vlm-proof-20260611.json"
