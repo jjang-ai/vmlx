@@ -61,6 +61,35 @@ class DeepSeekToolParser(ToolParser):
         re.DOTALL,
     )
 
+    def _build_tool_call(
+        self,
+        func_name: str,
+        func_args: str,
+        request: dict[str, Any] | None,
+    ) -> dict[str, Any] | None:
+        name = func_name.strip()
+        arguments: Any
+        try:
+            arguments = json.loads(func_args)
+        except json.JSONDecodeError:
+            arguments = func_args
+
+        if not self._arguments_satisfy_required_schema(name, arguments, request):
+            return None
+
+        if isinstance(arguments, dict):
+            serialized_arguments = json.dumps(arguments, ensure_ascii=False)
+        elif isinstance(arguments, str):
+            serialized_arguments = arguments
+        else:
+            serialized_arguments = json.dumps(arguments, ensure_ascii=False)
+
+        return {
+            "id": generate_tool_id(),
+            "name": name,
+            "arguments": serialized_arguments,
+        }
+
     def extract_tool_calls(
         self, model_output: str, request: dict[str, Any] | None = None
     ) -> ExtractedToolCallInformation:
@@ -97,38 +126,18 @@ class DeepSeekToolParser(ToolParser):
         matches = self.TOOL_CALL_PATTERN.findall(model_output)
         for match in matches:
             tool_type, func_name, func_args = match
-            try:
-                # Validate JSON
-                json.loads(func_args)
-                tool_calls.append(
-                    {
-                        "id": generate_tool_id(),
-                        "name": func_name.strip(),
-                        "arguments": func_args.strip(),
-                    }
-                )
-            except json.JSONDecodeError:
-                # Keep raw arguments
-                tool_calls.append(
-                    {
-                        "id": generate_tool_id(),
-                        "name": func_name.strip(),
-                        "arguments": func_args.strip(),
-                    }
-                )
+            tool_call = self._build_tool_call(func_name, func_args, request)
+            if tool_call is not None:
+                tool_calls.append(tool_call)
 
         # Try simple pattern if no matches
-        if not tool_calls:
+        if not matches:
             simple_matches = self.TOOL_CALL_SIMPLE_PATTERN.findall(model_output)
             for match in simple_matches:
                 func_name, func_args = match
-                tool_calls.append(
-                    {
-                        "id": generate_tool_id(),
-                        "name": func_name.strip(),
-                        "arguments": func_args.strip(),
-                    }
-                )
+                tool_call = self._build_tool_call(func_name, func_args, request)
+                if tool_call is not None:
+                    tool_calls.append(tool_call)
 
         if tool_calls:
             return ExtractedToolCallInformation(

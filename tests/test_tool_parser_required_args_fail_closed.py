@@ -12,6 +12,7 @@ import json
 
 import pytest
 
+from vmlx_engine.tool_parsers.deepseek_tool_parser import DeepSeekToolParser
 from vmlx_engine.tool_parsers.gemma3_tool_parser import Gemma3ToolParser
 from vmlx_engine.tool_parsers.gemma4_tool_parser import Gemma4ToolParser
 from vmlx_engine.tool_parsers.glm47_tool_parser import Glm47ToolParser
@@ -94,6 +95,21 @@ RECORD_FACT_REQUEST = {
             Gemma3ToolParser,
             "```tool_code\nrecord_fact()\n```",
             '```tool_code\nrecord_fact(value="blue-cat")\n```',
+        ),
+        (
+            DeepSeekToolParser,
+            (
+                "<｜tool▁calls▁begin｜>\n"
+                "<｜tool▁call▁begin｜>function<｜tool▁sep｜>record_fact\n"
+                "```json\n{}\n```<｜tool▁call▁end｜>\n"
+                "<｜tool▁calls▁end｜>"
+            ),
+            (
+                "<｜tool▁calls▁begin｜>\n"
+                "<｜tool▁call▁begin｜>function<｜tool▁sep｜>record_fact\n"
+                '```json\n{"value":"blue-cat"}\n```<｜tool▁call▁end｜>\n'
+                "<｜tool▁calls▁end｜>"
+            ),
         ),
         (
             Glm47ToolParser,

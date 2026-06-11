@@ -526,6 +526,65 @@ class TestDeepSeekToolParser:
         assert result.tools_called
         assert result.content == "Let me help you with that."
 
+    def test_special_string_arguments_preserved_after_json_normalization(self, parser):
+        """Valid JSON may be normalized, but string payload bytes must survive."""
+        text = """<｜tool▁calls▁begin｜>
+<｜tool▁call▁begin｜>function<｜tool▁sep｜>exec_command
+```json
+{"cmd":"  printf '<日本語>' && pwd\\n  "}
+```<｜tool▁call▁end｜>
+<｜tool▁calls▁end｜>"""
+        result = parser.extract_tool_calls(text)
+
+        assert result.tools_called
+        assert json.loads(result.tool_calls[0]["arguments"]) == {
+            "cmd": "  printf '<日本語>' && pwd\n  "
+        }
+
+    def test_missing_required_arguments_fail_closed(self, parser):
+        request = {
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "exec_command",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {"cmd": {"type": "string"}},
+                            "required": ["cmd"],
+                        },
+                    },
+                }
+            ]
+        }
+        text = """<｜tool▁calls▁begin｜>
+<｜tool▁call▁begin｜>function<｜tool▁sep｜>exec_command
+```json
+{}
+```<｜tool▁call▁end｜>
+<｜tool▁calls▁end｜>"""
+
+        result = parser.extract_tool_calls(text, request=request)
+
+        assert result.tools_called is False
+        assert result.tool_calls == []
+
+    def test_raw_invalid_arguments_preserve_outer_whitespace_without_schema(self, parser):
+        raw = "  raw value with <angle> & spaces  "
+        text = (
+            "<｜tool▁calls▁begin｜>\n"
+            "<｜tool▁call▁begin｜>function<｜tool▁sep｜>legacy_raw\n"
+            "```json\n"
+            f"{raw}\n"
+            "```<｜tool▁call▁end｜>\n"
+            "<｜tool▁calls▁end｜>"
+        )
+
+        result = parser.extract_tool_calls(text)
+
+        assert result.tools_called
+        assert result.tool_calls[0]["arguments"] == raw
+
     def test_no_tool_call(self, parser):
         """Test text without tool calls."""
         text = "Here is my response without any tool calls."
