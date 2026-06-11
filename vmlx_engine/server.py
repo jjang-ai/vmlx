@@ -13715,9 +13715,15 @@ async def create_response(
             cleaned.append(msg)
         messages = cleaned
 
+    _responses_request_max_tokens = (
+        request.max_output_tokens
+        if request.max_output_tokens is not None
+        else request.max_tokens
+    )
+
     # Build kwargs
     chat_kwargs = {
-        "max_tokens": _resolve_max_tokens(request.max_output_tokens, request.model),
+        "max_tokens": _resolve_max_tokens(_responses_request_max_tokens, request.model),
         "temperature": _resolve_temperature(request.temperature, request.model),
         "top_p": _resolve_top_p(request.top_p, request.model),
         "max_prompt_tokens": _responses_max_prompt_tokens,
@@ -14050,7 +14056,7 @@ async def create_response(
                 messages=messages,  # already preserved-multimodal above
                 temperature=request.temperature,
                 top_p=request.top_p,
-                max_tokens=request.max_output_tokens,
+                max_tokens=_responses_request_max_tokens,
                 stream=False,
                 enable_thinking=request.enable_thinking,
                 reasoning_effort=request.reasoning_effort,

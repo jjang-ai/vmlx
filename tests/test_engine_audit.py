@@ -3179,7 +3179,7 @@ class TestAPIModels:
             )
         with pytest.raises(ValidationError, match="max_tokens must be at least 1"):
             CompletionRequest(model="test", prompt="hi", max_tokens=-1)
-        with pytest.raises(ValidationError, match="max_output_tokens must be at least 1"):
+        with pytest.raises(ValidationError, match="max_output_tokens/max_tokens must be at least 1"):
             ResponsesRequest(model="test", input="hi", max_output_tokens=0)
         with pytest.raises(ValidationError, match="max_thinking_tokens must be at least 1"):
             ChatCompletionRequest(
