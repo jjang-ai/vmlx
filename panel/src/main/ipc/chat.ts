@@ -61,7 +61,45 @@ function shouldForwardReasoningEffort(
   if (typeof reasoningEffort !== "string" || !reasoningEffort) return false;
   if (enableThinking === false) return false;
   if (detectedFamily === "hy3" && enableThinking !== true) return false;
-  return sessionHasReasoningParser || detectedFamily === "deepseek-v4";
+  return sessionHasReasoningParser || familyAcceptsExplicitReasoningControls(detectedFamily);
+}
+
+const EXPLICIT_REASONING_CONTROL_FAMILIES = new Set([
+  "deepseek-v4",
+  "qwen3.5",
+  "qwen3.5-moe",
+  "qwen3-next",
+  "qwen3-vl",
+  "qwen3-moe",
+  "qwen3",
+  "gemma4",
+  "gemma4-text",
+  "zaya",
+  "laguna",
+  "step-vl",
+  "step-3.7-flash",
+  "step-3.5-flash",
+  "step",
+  "mistral4",
+  "gpt-oss",
+  "glm47-flash",
+  "glm5",
+  "glm47",
+  "deepseek-r1",
+  "deepseek-v3",
+  "deepseek-v2",
+  "deepseek",
+  "nemotron",
+  "nemotron-h",
+  "lfm2",
+  "kimi-k25",
+  "kimi-k2",
+  "minimax",
+]);
+
+function familyAcceptsExplicitReasoningControls(detectedFamily?: string): boolean {
+  if (!detectedFamily) return false;
+  return EXPLICIT_REASONING_CONTROL_FAMILIES.has(detectedFamily);
 }
 
 function shouldSuppressGenericAgenticPromptForNativeTools(
@@ -1811,7 +1849,7 @@ export function registerChatHandlers(
               ? undefined
               : !isRemote &&
                   !sessionHasReasoningParser &&
-                  chatDetectedFamily !== "deepseek-v4"
+                  !familyAcceptsExplicitReasoningControls(chatDetectedFamily)
                 ? undefined
                 : overrides?.enableThinking;
           const applyLocalThinkingBudget = (obj: Record<string, any>) => {
@@ -1821,7 +1859,10 @@ export function registerChatHandlers(
             if (thinkingBudgetSupported === false) {
               return;
             }
-            if (!sessionHasReasoningParser && chatDetectedFamily !== "deepseek-v4") {
+            if (
+              !sessionHasReasoningParser &&
+              !familyAcceptsExplicitReasoningControls(chatDetectedFamily)
+            ) {
               return;
             }
             obj.max_thinking_tokens = resolvedThinkingBudget;

@@ -121,13 +121,16 @@ describe('chat settings cross-family compatibility warnings', () => {
     expect(source).not.toContain('next.maxTokens = Math.max')
   })
 
-  it('main IPC refuses stale local Thinking On when fresh detection has no reasoning parser', () => {
+  it('main IPC refuses stale local Thinking On when fresh detection has no reasoning-capable parser or family', () => {
     const source = readFileSync('src/main/ipc/chat.ts', 'utf8')
 
     expect(source).toContain('if (!detected.reasoningParser) {')
     expect(source).toContain('sessionHasReasoningParser = false;')
     expect(source).toContain('const effectiveEnableThinkingOverride =')
     expect(source).toContain('!sessionHasReasoningParser')
-    expect(source).toContain('chatDetectedFamily !== "deepseek-v4"')
+    expect(source).toContain('!familyAcceptsExplicitReasoningControls(chatDetectedFamily)')
+    expect(source).toContain('return sessionHasReasoningParser || familyAcceptsExplicitReasoningControls(detectedFamily);')
+    expect(source).toContain('"qwen3.5-moe"')
+    expect(source).toContain('"gemma4"')
   })
 })

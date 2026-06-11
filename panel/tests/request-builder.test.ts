@@ -26,6 +26,42 @@ interface ChatOverrides {
     reasoningEffort?: string
 }
 
+function familyAcceptsExplicitReasoningControls(detectedFamily?: string): boolean {
+    if (!detectedFamily) return false
+    return new Set([
+        'deepseek-v4',
+        'qwen3.5',
+        'qwen3.5-moe',
+        'qwen3-next',
+        'qwen3-vl',
+        'qwen3-moe',
+        'qwen3',
+        'gemma4',
+        'gemma4-text',
+        'zaya',
+        'laguna',
+        'step-vl',
+        'step-3.7-flash',
+        'step-3.5-flash',
+        'step',
+        'mistral4',
+        'gpt-oss',
+        'glm47-flash',
+        'glm5',
+        'glm47',
+        'deepseek-r1',
+        'deepseek-v3',
+        'deepseek-v2',
+        'deepseek',
+        'nemotron',
+        'nemotron-h',
+        'lfm2',
+        'kimi-k25',
+        'kimi-k2',
+        'minimax',
+    ]).has(detectedFamily)
+}
+
 function buildRequestBody(
     wireApi: 'completions' | 'responses',
     modelName: string,
@@ -46,7 +82,7 @@ function buildRequestBody(
         !!overrides?.reasoningEffort &&
         overrides.enableThinking !== false &&
         (detectedFamily !== 'hy3' || overrides.enableThinking === true) &&
-        (sessionHasReasoningParser || detectedFamily === 'deepseek-v4')
+        (sessionHasReasoningParser || familyAcceptsExplicitReasoningControls(detectedFamily))
     const outputBudget = dsv4OutputBudget(
         overrides?.maxTokens,
         overrides?.enableThinking,
@@ -64,13 +100,13 @@ function buildRequestBody(
             ? undefined
             : !isRemote &&
                 !sessionHasReasoningParser &&
-                detectedFamily !== 'deepseek-v4'
+                !familyAcceptsExplicitReasoningControls(detectedFamily)
                 ? undefined
                 : overrides?.enableThinking
     const applyLocalThinkingBudget = (obj: Record<string, any>) => {
         if (isRemote || thinkingBudget == null || obj.enable_thinking === false) return
         if (thinkingBudgetSupported === false) return
-        if (!sessionHasReasoningParser && detectedFamily !== 'deepseek-v4') return
+        if (!sessionHasReasoningParser && !familyAcceptsExplicitReasoningControls(detectedFamily)) return
         obj.max_thinking_tokens = thinkingBudget
         obj.chat_template_kwargs = {
             ...(obj.chat_template_kwargs || {}),
@@ -518,6 +554,42 @@ describe('buildRequestBody — Chat Completions API', () => {
         expect(body.reasoning_effort).toBeUndefined()
     })
 
+    it('forwards Qwen-family reasoning controls from detected family when parser state is stale', () => {
+        const body = buildRequestBody(
+            'completions',
+            'qwen35',
+            messages,
+            { enableThinking: true, reasoningEffort: 'high', maxThinkingTokens: 2048 },
+            false,
+            false,
+            undefined,
+            'qwen3.5-moe',
+        )
+
+        expect(body.enable_thinking).toBe(true)
+        expect(body.reasoning_effort).toBe('high')
+        expect(body.max_thinking_tokens).toBe(2048)
+        expect(body.chat_template_kwargs).toEqual({ enable_thinking: true, thinking_budget: 2048 })
+    })
+
+    it('forwards Gemma-family reasoning controls from detected family when parser state is stale', () => {
+        const body = buildRequestBody(
+            'completions',
+            'gemma4',
+            messages,
+            { enableThinking: true, reasoningEffort: 'high', maxThinkingTokens: 2048 },
+            false,
+            false,
+            undefined,
+            'gemma4',
+        )
+
+        expect(body.enable_thinking).toBe(true)
+        expect(body.reasoning_effort).toBe('high')
+        expect(body.max_thinking_tokens).toBe(2048)
+        expect(body.chat_template_kwargs).toEqual({ enable_thinking: true, thinking_budget: 2048 })
+    })
+
     it('preserves explicit DSV4 standard thinking max_tokens', () => {
         const body = buildRequestBody('completions', 'dsv4', messages, { maxTokens: 128 }, false, true, undefined, 'deepseek-v4')
         expect(body.max_tokens).toBe(128)
@@ -793,6 +865,42 @@ describe('buildRequestBody — Responses API', () => {
         expect(body.reasoning_effort).toBeUndefined()
         expect(body.chat_template_kwargs.reasoning_effort).toBeUndefined()
         expect(body.chat_template_kwargs.thinking_budget).toBeUndefined()
+    })
+
+    it('forwards Qwen-family Responses reasoning controls from detected family when parser state is stale', () => {
+        const body = buildRequestBody(
+            'responses',
+            'qwen35',
+            messages,
+            { enableThinking: true, reasoningEffort: 'high', maxThinkingTokens: 2048 },
+            false,
+            false,
+            undefined,
+            'qwen3.5',
+        )
+
+        expect(body.enable_thinking).toBe(true)
+        expect(body.reasoning_effort).toBe('high')
+        expect(body.max_thinking_tokens).toBe(2048)
+        expect(body.chat_template_kwargs).toEqual({ enable_thinking: true, thinking_budget: 2048 })
+    })
+
+    it('forwards Gemma-family Responses reasoning controls from detected family when parser state is stale', () => {
+        const body = buildRequestBody(
+            'responses',
+            'gemma4',
+            messages,
+            { enableThinking: true, reasoningEffort: 'high', maxThinkingTokens: 2048 },
+            false,
+            false,
+            undefined,
+            'gemma4-text',
+        )
+
+        expect(body.enable_thinking).toBe(true)
+        expect(body.reasoning_effort).toBe('high')
+        expect(body.max_thinking_tokens).toBe(2048)
+        expect(body.chat_template_kwargs).toEqual({ enable_thinking: true, thinking_budget: 2048 })
     })
 })
 
