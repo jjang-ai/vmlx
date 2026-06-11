@@ -19,7 +19,7 @@ from typing import Any
 
 
 DEFAULT_OUT = Path(
-    "build/current-public-app-issue-audit-after-checkpoint-packaged-integrity-20260609.json"
+    "build/current-public-app-issue-audit-after-gemma26-memory-stress-20260611.json"
 )
 INSTALLED_APP_ASAR = Path("/Applications/vMLX.app/Contents/Resources/app.asar")
 INSTALLED_APP = Path("/Applications/vMLX.app")
@@ -57,7 +57,9 @@ GEMMA4_INSTALLED_SPEED_ARTIFACTS = (
 GEMMA4_CURRENT_INSTALLED_SPEED_ARTIFACT = Path(
     "build/current-runtime-memory-stress-gemma4-26b-jang4m-chat-thinkingoff-speed-floor-issue115-installed-app-20260601.json"
 )
-GEMMA4_CURRENT_MEMORY_STRESS_ARTIFACT = GEMMA4_CURRENT_INSTALLED_SPEED_ARTIFACT
+GEMMA4_CURRENT_MEMORY_STRESS_ARTIFACT = Path(
+    "build/current-runtime-memory-stress-gemma4-26b-jang4m-chat-thinkingoff-speed-floor-cachehit-256-bundled-triple-20260611.json"
+)
 QWEN35_INSTALLED_SPEED_ARTIFACT = Path(
     "build/current-decode-speed-live-qwen35-4bit-issue115-installed-app-after-decode-position-20260601.json"
 )
