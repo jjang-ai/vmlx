@@ -511,6 +511,53 @@ function gemmaAudioRuntimeAvailable(modelPath: string): boolean {
   return modelHasIndexedWeight(modelPath, key => key.startsWith('audio_tower.'))
 }
 
+function mimoV2MediaRuntimeOverlayRequested(): boolean {
+  return ['1', 'true', 'yes', 'on'].includes(
+    String(process.env.VMLINUX_MIMO_V2_ENABLE_TEXT_RUNTIME_MEDIA_OVERLAY ?? '').toLowerCase(),
+  )
+}
+
+function configHasAnyToken(config: any, keys: string[]): boolean {
+  if (!config || typeof config !== 'object') return false
+  const containers = [
+    config,
+    config.processor_config,
+    config.vision_config,
+    config.audio_config,
+  ].filter((item): item is Record<string, unknown> => !!item && typeof item === 'object')
+  return containers.some(container => keys.some(key => container[key] != null))
+}
+
+function mimoV2MediaRuntimeOverlayAvailable(parsedConfig: any, modelPath: string): {
+  vision: boolean
+  audio: boolean
+} {
+  if (String(parsedConfig?.model_type || '').toLowerCase() !== 'mimo_v2') {
+    return { vision: false, audio: false }
+  }
+  const vision =
+    !!parsedConfig?.vision_config &&
+    existsSync(join(modelPath, 'preprocessor_config.json')) &&
+    modelHasIndexedWeight(modelPath, key => key.startsWith('visual.')) &&
+    configHasAnyToken(parsedConfig, [
+      'image_token_id',
+      'image_token_index',
+      'video_token_id',
+      'video_token_index',
+    ])
+  const audio =
+    !!parsedConfig?.audio_config &&
+    existsSync(join(modelPath, 'audio_tokenizer', 'model.safetensors')) &&
+    modelHasIndexedWeight(modelPath, key => key.startsWith('audio_encoder.')) &&
+    modelHasIndexedWeight(modelPath, key => key.startsWith('speech_embeddings.')) &&
+    configHasAnyToken(parsedConfig, [
+      'audio_token_id',
+      'audio_token_index',
+      'audio_start_token_id',
+    ])
+  return { vision, audio }
+}
+
 function isMxtqJangConfig(jangCfg: any): boolean {
   if (!jangCfg || typeof jangCfg !== 'object') return false
   const quant = jangCfg.quantization && typeof jangCfg.quantization === 'object'
@@ -988,10 +1035,27 @@ function applyJangCapabilities(
 function applyConfigCapabilitiesMediaPolicy(
   detected: DetectedConfig,
   parsedConfig: any,
+  modelPath: string,
 ): DetectedConfig {
   const caps = parsedConfig?.capabilities
   if (detected.family !== 'mimo_v2' || !caps || typeof caps !== 'object') {
     return detected
+  }
+  const overlay = mimoV2MediaRuntimeOverlayRequested()
+    ? mimoV2MediaRuntimeOverlayAvailable(parsedConfig, modelPath)
+    : { vision: false, audio: false }
+  if (overlay.vision || overlay.audio) {
+    return {
+      ...detected,
+      isMultimodal: true,
+      forceTextOnly: undefined,
+      architectureHints: {
+        ...(detected.architectureHints ?? {}),
+        vlRuntimeAvailable: overlay.vision,
+        audioRuntimeAvailable: overlay.audio,
+        runtimeScope: 'mimo_v2_text_runtime_media_overlay',
+      },
+    }
   }
   const runtimeModalities = Array.isArray(caps.modalities)
     ? caps.modalities.map((item: any) => String(item || '').toLowerCase()).filter(Boolean)
@@ -1160,7 +1224,7 @@ export function detectModelConfigFromDir(modelPath: string): DetectedConfig {
           } else if (configDeclaresMedia(parsed)) {
             detected.isMultimodal = true
           }
-          detected = applyConfigCapabilitiesMediaPolicy(detected, parsed)
+          detected = applyConfigCapabilitiesMediaPolicy(detected, parsed, modelPath)
           detected = applyConfigMetadataOverrides(detected, parsed)
           detected = applyIndexedWeightCapabilityHints(detected, parsed, modelPath)
           return detected

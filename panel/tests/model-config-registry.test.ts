@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest'
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'fs'
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { detectModelConfigFromDir } from '../src/main/model-config-registry'
@@ -955,6 +955,68 @@ describe('detectModelConfigFromDir JANG multimodal detection', () => {
     expect(detected.toolParser).toBe('xml_function')
     expect(detected.isMultimodal).toBe(false)
     expect(detected.forceTextOnly).toBe(true)
+  })
+
+  it('allows explicit MiMo V2 media overlay when preserved local weights are complete', () => {
+    const previous = process.env.VMLINUX_MIMO_V2_ENABLE_TEXT_RUNTIME_MEDIA_OVERLAY
+    process.env.VMLINUX_MIMO_V2_ENABLE_TEXT_RUNTIME_MEDIA_OVERLAY = '1'
+    try {
+      const dir = makeModelDir(
+        {
+          model_type: 'mimo_v2',
+          vision_config: { model_type: 'mimo_v2_vision' },
+          audio_config: { model_type: 'mimo_v2_audio' },
+          image_token_id: 151655,
+          video_token_id: 151656,
+          processor_config: {
+            image_token_id: 151655,
+            video_token_id: 151656,
+            audio_token_id: 151669,
+          },
+          capabilities: {
+            family: 'mimo_v2',
+            modalities: ['text'],
+            preserved_modalities: ['vision', 'audio'],
+            unwired_modalities: ['vision', 'audio'],
+            multimodal_status: 'weights_preserved_text_runtime',
+          },
+          runtime: {
+            multimodal_mode: 'weights_preserved_text_runtime',
+          },
+        },
+        {
+          format: 'jangtq',
+          family: 'mimo_v2',
+          profile: 'JANGTQ_2',
+        },
+      )
+      writeFileSync(join(dir, 'preprocessor_config.json'), JSON.stringify({ image_processor_type: 'MiMoV2ImageProcessor' }))
+      mkdirSync(join(dir, 'audio_tokenizer'))
+      writeFileSync(join(dir, 'audio_tokenizer', 'model.safetensors'), '')
+      writeFileSync(join(dir, 'model.safetensors.index.json'), JSON.stringify({
+        weight_map: {
+          'visual.patch_embed.proj.weight': 'model-00001-of-00002.safetensors',
+          'audio_encoder.layers.0.self_attn.q_proj.weight': 'model-00002-of-00002.safetensors',
+          'speech_embeddings.weight': 'model-00002-of-00002.safetensors',
+        },
+      }))
+
+      const detected = detectModelConfigFromDir(dir)
+      expect(detected.family).toBe('mimo_v2')
+      expect(detected.isMultimodal).toBe(true)
+      expect(detected.forceTextOnly).toBeUndefined()
+      expect(detected.architectureHints).toMatchObject({
+        runtimeScope: 'mimo_v2_text_runtime_media_overlay',
+        vlRuntimeAvailable: true,
+        audioRuntimeAvailable: true,
+      })
+    } finally {
+      if (previous === undefined) {
+        delete process.env.VMLINUX_MIMO_V2_ENABLE_TEXT_RUNTIME_MEDIA_OVERLAY
+      } else {
+        process.env.VMLINUX_MIMO_V2_ENABLE_TEXT_RUNTIME_MEDIA_OVERLAY = previous
+      }
+    }
   })
 
   it.each([
