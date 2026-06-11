@@ -69,7 +69,7 @@ OBJECTIVE_DIGEST = Path(
     "build/current-objective-proof-after-step37-bundled-vlm-proof-20260611.json"
 )
 ISSUE179_AUDIT = Path(
-    "build/current-issue179-minimax-k-root-cause-audit-after-fullk-local-cancel-proof-20260611.json"
+    "build/current-issue179-minimax-k-root-cause-audit-after-manifest-pointer-refresh-20260611.json"
 )
 QWEN27_RESPONSES_CANCEL = Path(
     "build/current-qwen27-mxfp4-mtp-responses-cancel-mtp-deterministic-20260609.json"

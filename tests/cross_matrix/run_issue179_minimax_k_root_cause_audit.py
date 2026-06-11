@@ -20,7 +20,7 @@ from typing import Any
 
 
 DEFAULT_OUT = Path(
-    "build/current-issue179-minimax-k-root-cause-audit-after-fullk-local-cancel-proof-20260611.json"
+    "build/current-issue179-minimax-k-root-cause-audit-after-manifest-pointer-refresh-20260611.json"
 )
 REPORTER_LOG = Path("build/issue-179/vmlx-logs-490f58c0-2026-05-27.log")
 REPORTER_SCREENSHOT = Path("build/issue-179/minimax-garbage-screenshot.png")
@@ -86,7 +86,7 @@ CURRENT_SOURCE_MINIMAX_SMALL_SMOKE = Path(
     "build/current-all-local-model-smoke-minimax-small-jangtq-cache-language-after-bare-invoke-tool-20260609/summary.json"
 )
 LOCAL_MODEL_MANIFEST = Path(
-    "build/current-issue179-minimax-k-local-model-manifest-20260527.json"
+    "build/current-issue179-minimax-k-model-manifest-20260606-local-refresh.json"
 )
 LOCAL_MODEL_PATH_CANDIDATES = (
     Path("/Users/example/models/dealign.ai/MiniMax-M2.7-JANGTQ_K-CRACK"),

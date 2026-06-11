@@ -193,8 +193,12 @@ DSV4_BATCH_GENERATOR_LOGIT_TRACE_REL = (
 DSV4_BATCH_GENERATOR_WARMUP_ABLATION_REL = (
     "build/current-dsv4-jang-batch-generator-warmup-ablation-20260524.json"
 )
-API_CACHE_CONTRACT_REL = "build/current-noheavy-api-cache-contract-after-zaya-vl-prompt-fix-20260611.json"
-CACHE_ARCHITECTURE_CONTRACT_REL = "build/current-cache-architecture-contract-after-zaya-vl-prompt-fix-20260611.json"
+API_CACHE_CONTRACT_REL = (
+    "build/current-noheavy-api-cache-contract-after-dsv4-real-ui-valid-preflight-20260611.json"
+)
+CACHE_ARCHITECTURE_CONTRACT_REL = (
+    "build/current-cache-architecture-contract-after-noheavy-contract-refresh-20260608.json"
+)
 N2_PRO_JANG1L_LOCAL_MEMORY_PREFLIGHT_REL = (
     "build/current-n2-pro-jang1l-local-memory-preflight-20260609.json"
 )
@@ -231,7 +235,7 @@ N2_JANGTQ2_RESPONSES_STREAM_BOUNDARY_REL = (
 GEMMA_QAT_NATIVE_MXFP4_INVENTORY_REL = (
     "build/current-gemma-qat-native-mxfp4-local-inventory-after-31b-sessionlogs-reasoning-proof-20260611.json"
 )
-TOOL_CALL_CONTRACT_REL = "build/current-tool-call-contract-after-zaya-vl-prompt-fix-20260611.json"
+TOOL_CALL_CONTRACT_REL = str(TOOL_CALL_CONTRACT_DEFAULT_OUT)
 PANEL_SETTINGS_CONTRACT_REL = "build/current-panel-settings-contract-proof-20260601-cache-ui-storage-quant.json"
 MAX_OUTPUT_CONTEXT_CONTRACT_REL = "build/current-max-output-context-contract-after-zaya-vl-prompt-fix-20260611.json"
 MAX_OUTPUT_CONTEXT_CONTRACT_FALLBACK_REL = "build/current-max-output-context-contract-20260521.json"

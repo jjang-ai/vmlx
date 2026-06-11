@@ -17,7 +17,7 @@ from typing import Any
 
 DEFAULT_MODEL_PATH = Path("/Users/example/models/JANGQ/MiniMax-M2.7-JANGTQ_K")
 DEFAULT_OUT = Path(
-    "build/current-issue179-minimax-k-local-model-manifest-20260527.json"
+    "build/current-issue179-minimax-k-model-manifest-20260606-local-refresh.json"
 )
 
 IMPORTANT_FILES = (

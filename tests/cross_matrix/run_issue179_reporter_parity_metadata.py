@@ -21,7 +21,7 @@ DEFAULT_INSTALLED_SERVER = Path(
     "python3.12/site-packages/vmlx_engine/server.py"
 )
 DEFAULT_MODEL_MANIFEST = Path(
-    "build/current-issue179-minimax-k-local-model-manifest-20260527.json"
+    "build/current-issue179-minimax-k-model-manifest-20260606-local-refresh.json"
 )
 DEFAULT_OUT = Path("build/issue-179/reporter-parity-metadata-20260527.json")
 
