@@ -4148,7 +4148,8 @@ def test_release_regression_manifest_current_sweep_uses_latest_live_smoke_artifa
     assert "current-regression-suite-20260528-installed-aggregate-stale.json" not in joined
     assert "current-regression-suite-20260528-epipe-aggregate-guard.json" not in joined
     assert "current-regression-suite-20260528-dsv4-continue-refresh.json" not in joined
-    assert "current-regression-suite-after-pr-intake-matrix-refresh-20260609.json" in joined
+    assert "current-regression-suite-after-dsv4-real-ui-valid-preflight-20260611.json" in joined
+    assert "current-regression-suite-after-pr-intake-matrix-refresh-20260609.json" not in joined
     assert "current-regression-suite-after-structured-schema-decode-20260609.json" not in joined
     assert "current-noheavy-api-cache-contract-after-responses-reasoning-empty-final-args-gateway-20260609.json" in joined
     assert "current-noheavy-api-cache-contract-after-structured-schema-decode-20260609.json" not in joined
@@ -4241,7 +4242,8 @@ def test_release_regression_manifest_current_sweep_uses_latest_live_smoke_artifa
     assert "current-regression-suite-20260528-dsv4-preflight-refresh.json" not in joined
     assert "current-regression-suite-20260528-admin-sleep-sourcehash.json" not in joined
     assert "current-regression-suite-20260528-issue179-econnreset-boundary.json" not in joined
-    assert "current-real-ui-dsv4-memory-preflight-after-lfm-step-manifest-fix-20260604.json" in joined
+    assert "current-real-ui-dsv4-memory-preflight-dsv4-jang-valid-floor-20260611.json" in joined
+    assert "current-real-ui-dsv4-memory-preflight-after-lfm-step-manifest-fix-20260604.json" not in joined
     assert "current-real-ui-dsv4-memory-preflight-20260603-second-local-check.json" not in joined
     assert "current-real-ui-dsv4-memory-preflight-20260602-developer-id-local-recheck.json" not in joined
     assert "current-real-ui-dsv4-memory-preflight-20260601-local-recheck.json" not in joined
@@ -12563,7 +12565,7 @@ def test_release_regression_manifest_runner_default_out_tracks_current_release_p
     from tests.cross_matrix import run_release_regression_manifest as runner
 
     assert runner.DEFAULT_OUT == Path(
-        "build/current-release-regression-manifest-after-pr-intake-matrix-refresh-20260609.json"
+        "build/current-release-regression-manifest-after-dsv4-real-ui-valid-preflight-20260611.json"
     )
 
 
@@ -15409,7 +15411,7 @@ def test_release_regression_manifest_tracks_packaged_integrity_with_runner_artif
     assert "bundled Python hash parity" in joined
     assert "objective proof digest" in joined
     assert (
-        "current-objective-proof-after-n2-jangtq2-devapp-prevresp-consumed-20260610.json"
+        "current-objective-proof-after-dsv4-real-ui-valid-preflight-20260611.json"
         in joined
     )
     assert "objective-gate-enforced" in joined
@@ -15480,7 +15482,7 @@ def test_release_regression_manifest_tracks_current_updater_and_i18n_rechecks():
     ling = rows["ling-bailing-multilingual-quality-live"]
     ling_joined = " ".join(ling["commands"] + ling["artifacts"] + ling["proves"])
     assert (
-        "current-objective-proof-after-n2-jangtq2-devapp-prevresp-consumed-20260610.json"
+        "current-objective-proof-after-dsv4-real-ui-valid-preflight-20260611.json"
         in ling_joined
     )
 

@@ -1310,7 +1310,7 @@ def test_current_regression_suite_default_out_tracks_pr_intake_artifact():
     from tests.cross_matrix import run_current_regression_suite as suite
 
     assert suite.DEFAULT_OUT == Path(
-        "build/current-regression-suite-after-pr-intake-matrix-refresh-20260609.json"
+        "build/current-regression-suite-after-dsv4-real-ui-valid-preflight-20260611.json"
     )
 
 
@@ -1448,13 +1448,13 @@ def test_current_regression_suite_refreshes_release_regression_manifest(monkeypa
     assert any(
         name == "real_ui_dsv4_memory_preflight"
         and "tests/cross_matrix/run_real_ui_dsv4_memory_preflight.py" in " ".join(cmd)
-        and "build/current-real-ui-dsv4-memory-preflight-after-lfm-step-manifest-fix-20260604.json"
+        and "build/current-real-ui-dsv4-memory-preflight-dsv4-jang-valid-floor-20260611.json"
         in cmd
         for name, cmd in seen_steps
     )
     assert any(
         name == "release_regression_manifest"
-        and "build/current-release-regression-manifest-after-pr-intake-matrix-refresh-20260609.json"
+        and "build/current-release-regression-manifest-after-dsv4-real-ui-valid-preflight-20260611.json"
         in cmd
         for name, cmd in seen_steps
     )

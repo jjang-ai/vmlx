@@ -62,10 +62,10 @@ from tests.cross_matrix.release_regression_manifest import (
 
 
 DEFAULT_OUT = Path(
-    "build/current-objective-proof-after-n2-jangtq2-devapp-prevresp-consumed-20260610.json"
+    "build/current-objective-proof-after-dsv4-real-ui-valid-preflight-20260611.json"
 )
 CURRENT_RELEASE_REGRESSION_MANIFEST_REL = (
-    "build/current-release-regression-manifest-after-pr-intake-matrix-refresh-20260609.json"
+    "build/current-release-regression-manifest-after-dsv4-real-ui-valid-preflight-20260611.json"
 )
 DSV4_QUALITY_CLEARANCE_REL = "build/current-dsv4-long-output-quality-clearance-20260521.json"
 DSV4_CURRENT_IDENTIFIER_CANARY_REL = (

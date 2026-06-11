@@ -51,10 +51,10 @@ TOOL_CALL_CONTRACT = Path(
     "build/current-tool-call-contract-after-cross-model-loop-metrics-20260609.json"
 )
 RELEASE_MANIFEST = Path(
-    "build/current-release-regression-manifest-after-pr-intake-matrix-refresh-20260609.json"
+    "build/current-release-regression-manifest-after-dsv4-real-ui-valid-preflight-20260611.json"
 )
 OBJECTIVE_DIGEST = Path(
-    "build/current-objective-proof-after-n2-jangtq2-devapp-prevresp-consumed-20260610.json"
+    "build/current-objective-proof-after-dsv4-real-ui-valid-preflight-20260611.json"
 )
 ISSUE179_AUDIT = Path(
     "build/current-issue179-minimax-k-root-cause-audit-after-parser-settings-parity-20260608.json"

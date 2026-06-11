@@ -23,7 +23,7 @@ from typing import Any
 
 
 DEFAULT_OUT = Path(
-    "build/current-regression-suite-after-pr-intake-matrix-refresh-20260609.json"
+    "build/current-regression-suite-after-dsv4-real-ui-valid-preflight-20260611.json"
 )
 DEFAULT_STEP_TIMEOUT_SEC = 900.0
 STEP_TIMEOUT_RETURNCODE = 124
@@ -43,7 +43,7 @@ DEFERRED_RELEASE_OPEN_REQUIREMENTS = {
 }
 
 CURRENT_OBJECTIVE_DIGEST_ARTIFACT = (
-    "build/current-objective-proof-after-n2-jangtq2-devapp-prevresp-consumed-20260610.json"
+    "build/current-objective-proof-after-dsv4-real-ui-valid-preflight-20260611.json"
 )
 
 CURRENT_SUITE_SOURCE_HASH_FILES = (
@@ -613,7 +613,7 @@ CURRENT_SUITE_COMMANDS: dict[str, list[str]] = {
         sys.executable,
         "tests/cross_matrix/run_real_ui_dsv4_memory_preflight.py",
         "--out",
-        "build/current-real-ui-dsv4-memory-preflight-after-lfm-step-manifest-fix-20260604.json",
+        "build/current-real-ui-dsv4-memory-preflight-dsv4-jang-valid-floor-20260611.json",
     ],
     "release_surface_contracts": [
         sys.executable,
@@ -812,7 +812,7 @@ CURRENT_SUITE_COMMANDS: dict[str, list[str]] = {
         "--require-current-proof-sweep",
         "--require-release-ready",
         "--out",
-        "build/current-release-regression-manifest-after-pr-intake-matrix-refresh-20260609.json",
+        "build/current-release-regression-manifest-after-dsv4-real-ui-valid-preflight-20260611.json",
     ],
     "full_release_objective_checklist": [
         sys.executable,

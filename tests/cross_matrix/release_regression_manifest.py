@@ -24,7 +24,7 @@ from tests.cross_matrix.run_current_regression_suite import (
 )
 
 CURRENT_RELEASE_REGRESSION_MANIFEST_ARTIFACT = (
-    "build/current-release-regression-manifest-after-pr-intake-matrix-refresh-20260609.json"
+    "build/current-release-regression-manifest-after-dsv4-real-ui-valid-preflight-20260611.json"
 )
 
 EXPECTED_CURRENT_MODEL_ARTIFACT_CHECKS = (
@@ -402,7 +402,7 @@ CURRENT_POST_BUDGET_EDGE_ARTIFACTS = {
 }
 
 CURRENT_REGRESSION_SUITE_ARTIFACT = (
-    "build/current-regression-suite-after-pr-intake-matrix-refresh-20260609.json"
+    "build/current-regression-suite-after-dsv4-real-ui-valid-preflight-20260611.json"
 )
 CURRENT_ISSUE175_179_RELEASE_BOUNDARY_AUDIT_ARTIFACT = (
     "build/current-issue175-179-release-boundary-audit-after-issue179-memory-preflight-20260607.json"
@@ -441,7 +441,7 @@ CURRENT_REAL_UI_LIVE_MODEL_PROOF_ARTIFACTS = {
     "chat_screenshot": "docs/internal/agent-notes/current-real-ui-live-model-zaya-text-20260526-chat.png",
 }
 CURRENT_REAL_UI_DSV4_MEMORY_PREFLIGHT_ARTIFACT = (
-    "build/current-real-ui-dsv4-memory-preflight-after-lfm-step-manifest-fix-20260604.json"
+    "build/current-real-ui-dsv4-memory-preflight-dsv4-jang-valid-floor-20260611.json"
 )
 CURRENT_STEP37_VLM_RUNTIME_AUDIT_ARTIFACT = (
     "build/current-step37-vlm-runtime-audit-after-source-live-media-proof-20260607.json"
@@ -1719,7 +1719,7 @@ _ROWS: list[dict[str, Any]] = [
             ".venv/bin/python tests/cross_matrix/run_packaged_integrity_contract.py --jang-tools-source /Users/example/jang/.worktrees/vmlx-release-clean-b5f66a7/jang-tools --out build/current-packaged-integrity-contract-20260522-recheck-bundled-release-gate.json",
         ],
         "artifacts": [
-            "build/current-objective-proof-after-n2-jangtq2-devapp-prevresp-consumed-20260610.json",
+            "build/current-objective-proof-after-dsv4-real-ui-valid-preflight-20260611.json",
             "build/current-packaged-integrity-contract-after-checkpoint-app-parity-20260609.json",
             "build/current-packaged-integrity-contract-20260601-dsv4-preflight-refresh.json",
             "build/current-packaged-integrity-contract-20260601-qwen3vl-minicpm-mpp-staged-refresh.json",
@@ -1888,12 +1888,12 @@ _ROWS: list[dict[str, Any]] = [
             "The clearance boundary is based on live artifacts, not a hidden sampler/repetition/default override",
         ],
         "commands": [
-            ".venv/bin/python tests/cross_matrix/summarize_objective_proof.py --out build/current-objective-proof-after-n2-jangtq2-devapp-prevresp-consumed-20260610.json",
+            ".venv/bin/python tests/cross_matrix/summarize_objective_proof.py --out build/current-objective-proof-after-dsv4-real-ui-valid-preflight-20260611.json",
             ".venv/bin/python tests/cross_matrix/run_production_family_audit.py --rows ling_flash_tq --live --py /Applications/vMLX.app/Contents/Resources/bundled-python/python/bin/python3.12 --out build/current-production-family-live-ling-bundled-current-20260606.json",
         ],
         "artifacts": [
             "build/current-production-family-live-ling-bundled-current-20260606.json",
-            "build/current-objective-proof-after-n2-jangtq2-devapp-prevresp-consumed-20260610.json",
+            "build/current-objective-proof-after-dsv4-real-ui-valid-preflight-20260611.json",
             "build/current-ling-jangtq-strict-russian-nocache-bundled-4850c9c2-20260524.json",
             "build/current-ling-mxfp4-crack-strict-russian-nocache-bundled-4850c9c2-20260524.json",
             "build/current-ling-jangtq-russian-prompt-variant-probe-20260524.json",
@@ -3572,11 +3572,12 @@ def _validate_current_real_ui_dsv4_memory_preflight(root: Path) -> dict[str, Any
     if payload.get("launch_allowed") is not False:
         failures.append("launch_allowed_not_false")
     allowed_model_suffixes = (
+        "DeepSeek-V4-Flash-JANG",
         "DeepSeek-V4-Flash-JANGTQ-K",
         "DeepSeek-V4-Flash-JANGTQ-K-HeadBF16-Probe-20260520",
     )
     if not any(model_path.endswith(suffix) for suffix in allowed_model_suffixes):
-        failures.append("model_path_not_dsv4_jangtq_k")
+        failures.append("model_path_not_dsv4")
     if model_size_gb is None or model_size_gb < 70:
         failures.append("model_size_gb_not_recorded")
     if required_gb is None or required_gb < 120:
