@@ -8764,6 +8764,16 @@ class TestStartupCompatibilityGuards:
         assert "pct = (active / max_ws) * 100.0" in block
         assert "if pct < threshold_pct:\n                    return" in block
 
+    def test_scheduler_step_executor_shutdown_does_not_join_worker(self):
+        """Shutdown must not join the llm-worker during Python finalization."""
+        source = Path("./vmlx_engine/scheduler.py").read_text()
+        start = source.index("def shutdown(self) -> None:")
+        end = source.index("def _finalize_hybrid_paged_cache_on_worker", start)
+        block = source[start:end]
+
+        assert "step_executor.shutdown(wait=False, cancel_futures=True)" in block
+        assert "step_executor.shutdown(wait=True" not in block
+
     def test_xml_function_tool_fallback_accepts_native_mimo_schema(self):
         """MiMo/xml_function prompts should not duplicate a native tool schema."""
         source = Path("./vmlx_engine/api/tool_calling.py").read_text()

@@ -497,6 +497,8 @@ def test_mimo_xml_function_fallback_keeps_tool_schema_compact_for_tight_memory()
     system_text = result.split("<|im_start|>system\n", 1)[1].split("<|im_end|>", 1)[0]
     assert len(system_text) <= 420
     assert "MiMo XML function tools" in system_text
+    assert "tool_choice=required" in system_text
+    assert "emit exactly one <tool_call>" in system_text
     assert "<tool_call>" in system_text
     assert "<function=record_fact>" in system_text
     assert "<parameter=value>" in system_text

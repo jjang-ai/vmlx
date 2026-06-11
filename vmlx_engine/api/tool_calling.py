@@ -257,7 +257,17 @@ def check_and_inject_fallback_tools(
         and (not is_zaya_native_tool_prompt or _zaya_has_concrete_tool_examples)
         and (not is_lfm2_native_tool_prompt or _lfm2_has_concrete_tool_examples)
         and (not is_minimax_native_tool_prompt or _minimax_has_concrete_tool_examples)
-        and (not is_xml_function_native_tool_prompt or _xml_function_has_native_tool_schema)
+        and (
+            not is_xml_function_native_tool_prompt
+            or (
+                _xml_function_has_native_tool_schema
+                and (
+                    not tool_choice_required
+                    or "tool_choice=required" in instruction_prompt
+                    or "must emit exactly one" in instruction_prompt
+                )
+            )
+        )
         and (not is_step3p5_native_tool_prompt or _step3p5_has_concrete_tool_examples)
     ):
         return prompt
@@ -849,7 +859,14 @@ def check_and_inject_fallback_tools(
                 xml_function_lines.append(f"{name} fields: none")
         tool_prompt = (
             "\n".join(xml_function_lines).rstrip()
-            + "\nUse native XML function shape only when a tool is requested/required. "
+            + "\n"
+            + (
+                "tool_choice=required: emit exactly one <tool_call> before prose. "
+                "Prior tool results do not satisfy this turn.\n"
+                if tool_choice_required
+                else ""
+            )
+            + "Use native XML function shape only when a tool is requested/required. "
             "No prose, JSON, markdown, fake results, or other XML. "
             "Copy user field values exactly.\n"
             + _render_xml_examples(
@@ -1105,6 +1122,17 @@ def check_and_inject_fallback_tools(
         for msg in reversed(messages_copy):
             if msg.get("role") == "user":
                 _append_tool_prompt_to_message(msg, qwen_required_reminder)
+                break
+    if is_xml_function_native_tool_prompt and tool_choice_required:
+        xml_required_reminder = (
+            "Current turn API contract: tool_choice=required. "
+            "Your next assistant output must be exactly one native <tool_call> "
+            f"for one of: {', '.join(tool_names)}. "
+            "Do not answer in prose before the tool call."
+        )
+        for msg in reversed(messages_copy):
+            if msg.get("role") == "user":
+                _append_tool_prompt_to_message(msg, xml_required_reminder)
                 break
 
     # Re-apply template with modified messages

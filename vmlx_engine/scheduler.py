@@ -5154,7 +5154,7 @@ class Scheduler:
             self._step_executor = None
             try:
                 logger.info("Shutting down scheduler step executor...")
-                step_executor.shutdown(wait=True, cancel_futures=True)
+                step_executor.shutdown(wait=False, cancel_futures=True)
                 logger.info("Scheduler step executor shutdown complete")
             except Exception as exc:
                 logger.warning("Scheduler step executor shutdown failed: %s", exc)
