@@ -8687,7 +8687,7 @@ def test_objective_proof_digest_keeps_cross_family_live_smoke_open_when_only_mim
             "minimax",
             "qwen36",
         ),
-        "build/current-all-local-model-smoke-step37-jangk-tool-newline-source-after-parser-fix-20260611/summary.json": (
+        "build/current-all-local-model-smoke-step37-jangk-tool-newline-bundled-after-parser-fix-20260611/summary.json": (
             "step3p7",
         ),
         "build/current-all-local-model-smoke-ling-hy3-nemotron-tools-media-20260606/summary.json": (
