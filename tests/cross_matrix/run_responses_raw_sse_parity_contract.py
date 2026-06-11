@@ -16,7 +16,7 @@ from typing import Any
 
 DEFAULT_OUT = Path("build/current-responses-raw-sse-parity-20260609.json")
 DEFAULT_NOHEAVY_CONTRACT = Path(
-    "build/current-noheavy-api-cache-contract-after-responses-reasoning-empty-final-args-gateway-20260609.json"
+    "build/current-noheavy-api-cache-contract-after-dsv4-real-ui-valid-preflight-20260611.json"
 )
 
 

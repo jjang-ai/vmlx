@@ -38,7 +38,7 @@ from pathlib import Path
 from typing import Any
 
 
-DEFAULT_OUT = Path("build/current-noheavy-api-cache-contract-after-responses-reasoning-empty-final-args-gateway-20260609.json")
+DEFAULT_OUT = Path("build/current-noheavy-api-cache-contract-after-dsv4-real-ui-valid-preflight-20260611.json")
 SOURCE_HASH_FILES = (
     "vmlx_engine/server.py",
     "vmlx_engine/api/models.py",

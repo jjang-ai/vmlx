@@ -36,7 +36,7 @@ MIMO_JANGTQ2_RESPONSES_TOOLS_CACHE_UI = Path(
     "build/current-real-ui-dev-app-mimo-v25-jangtq2-responses-tools-cache-20260610.json"
 )
 NOHEAVY_API_CACHE = Path(
-    "build/current-noheavy-api-cache-contract-after-responses-reasoning-empty-final-args-gateway-20260609.json"
+    "build/current-noheavy-api-cache-contract-after-dsv4-real-ui-valid-preflight-20260611.json"
 )
 RESPONSES_RAW_SSE_PARITY = Path(
     "build/current-responses-raw-sse-parity-direct-gateway-tunnel-gemma4-12b-mxfp8-crack-20260610.json"

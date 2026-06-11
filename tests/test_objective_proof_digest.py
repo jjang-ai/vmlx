@@ -26,7 +26,7 @@ def test_objective_proof_digest_uses_current_noheavy_api_cache_contract():
     from tests.cross_matrix import summarize_objective_proof as objective
 
     assert objective.API_CACHE_CONTRACT_REL == (
-        "build/current-noheavy-api-cache-contract-after-responses-reasoning-empty-final-args-gateway-20260609.json"
+        "build/current-noheavy-api-cache-contract-after-dsv4-real-ui-valid-preflight-20260611.json"
     )
 
 

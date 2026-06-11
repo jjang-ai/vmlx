@@ -103,7 +103,7 @@ JANGTQ2_VIDEO_CACHE_PROOF_ARTIFACT = Path(
     "build/current-mimo-v25-jangtq2-video-cache-proof-after-video-tensor-cache-fix-20260610.json"
 )
 NOHEAVY_API_CACHE_CONTRACT_ARTIFACT = Path(
-    "build/current-noheavy-api-cache-contract-after-responses-reasoning-empty-final-args-gateway-20260609.json"
+    "build/current-noheavy-api-cache-contract-after-dsv4-real-ui-valid-preflight-20260611.json"
 )
 CLEANUP_LOG = Path("build/current-mimo-stale-local-cleanup-20260606.txt")
 

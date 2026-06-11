@@ -381,7 +381,7 @@ REQUIRED_RELEASE_DOMAINS = {
 }
 
 CURRENT_POST_BUDGET_EDGE_ARTIFACTS = {
-    "noheavy-api-cache-endpoint-runtime": "build/current-noheavy-api-cache-contract-after-responses-reasoning-empty-final-args-gateway-20260609.json",
+    "noheavy-api-cache-endpoint-runtime": "build/current-noheavy-api-cache-contract-after-dsv4-real-ui-valid-preflight-20260611.json",
     "chat-settings-max-output-context-ui": "build/current-max-output-context-contract-after-jangtq2-objective-refresh-20260607.json",
     "panel-session-cache-settings-family-gating": "build/current-panel-settings-contract-proof-20260601-cache-ui-storage-quant.json",
     "generation-defaults-no-hidden-forcing": "build/current-generation-defaults-contract-after-pr-intake-matrix-refresh-20260609.json",
@@ -1224,10 +1224,10 @@ _ROWS: list[dict[str, Any]] = [
             "Structured JSON schema repair decodes valid nested object strings without semantic value rewriting",
         ],
         "commands": [
-            ".venv/bin/python tests/cross_matrix/run_noheavy_api_cache_contract.py --out build/current-noheavy-api-cache-contract-after-responses-reasoning-empty-final-args-gateway-20260609.json",
+            ".venv/bin/python tests/cross_matrix/run_noheavy_api_cache_contract.py --out build/current-noheavy-api-cache-contract-after-dsv4-real-ui-valid-preflight-20260611.json",
         ],
         "artifacts": [
-            "build/current-noheavy-api-cache-contract-after-responses-reasoning-empty-final-args-gateway-20260609.json",
+            "build/current-noheavy-api-cache-contract-after-dsv4-real-ui-valid-preflight-20260611.json",
             "build/current-api-cache-contract-api-surface-check-20260602-cache-detail-zero-cached.json",
         ],
     },
