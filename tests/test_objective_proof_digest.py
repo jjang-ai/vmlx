@@ -18,7 +18,7 @@ def test_objective_proof_digest_default_out_tracks_current_release_proof_artifac
     from tests.cross_matrix import summarize_objective_proof as objective
 
     assert objective.DEFAULT_OUT == Path(
-        "build/current-objective-proof-after-n2-jangtq2-devapp-prevresp-consumed-20260610.json"
+        "build/current-objective-proof-after-dsv4-real-ui-valid-preflight-20260611.json"
     )
 
 
@@ -56,9 +56,19 @@ def test_objective_proof_digest_tracks_n2_pro_397b_release_blocker():
     assert row["details"]["local_artifact_probe"]["no_load"] is True
     assert row["details"]["local_artifact_probe"]["indexed_payload_gib"] == 110.57
     assert row["details"]["local_artifact_probe"]["required_available_gib"] == 118.57
-    assert row["details"]["noheavy_contracts"]["n2_family_policy"] is True
+    assert row["details"]["noheavy_contracts"]["n2_family_policy"] is False
     assert (
-        "build/current-n2-jangtq2-chat-cache-responses-proof-after-responses-parser-20260609.json"
+        row["details"]["noheavy_contracts"]["n2_jangtq2_live_runtime_api_cache"]
+        is True
+    )
+    assert (
+        row["details"]["noheavy_contracts"][
+            "n2_jangtq2_direct_gateway_stream_boundary"
+        ]
+        is True
+    )
+    assert (
+        "build/current-n2-jangtq2-live-chat-cache-responses-l2-20260610.json"
         in row["evidence"]
     )
     assert (
@@ -94,7 +104,7 @@ def test_objective_proof_digest_tracks_n2_pro_397b_release_blocker():
     ] > 0
     assert row["details"]["jang1l_real_ui_bounded"]["status"] == "fail"
     assert (
-        "build/current-n2-jangtq2-chat-cache-responses-l2-proof-20260609.json"
+        "build/current-n2-jangtq2-live-chat-cache-responses-l2-20260610.json"
         in row["evidence"]
     )
     assert (
@@ -144,6 +154,17 @@ def test_objective_proof_digest_tracks_n2_pro_397b_release_blocker():
     assert row["details"]["jangtq2_real_ui_prevresp_proof"]["runtime_cache"][
         "cache_after"
     ]["l2_tokens_on_disk"] > 0
+    assert (
+        "build/current-n2-jangtq2-responses-stream-boundary-20260610.json"
+        in row["evidence"]
+    )
+    stream_boundary = row["details"]["jangtq2_responses_stream_boundary"]
+    assert stream_boundary["status"] == "pass"
+    assert stream_boundary["checks"]["direct_first_output_index_clean"] is True
+    assert stream_boundary["checks"]["direct_followup_content_delta_streaming"] is True
+    assert stream_boundary["checks"]["gateway_followup_content_delta_streaming"] is True
+    assert stream_boundary["direct_first_arguments"] == [{"query": "alpha"}]
+    assert stream_boundary["gateway_first_arguments"] == [{"query": "alpha"}]
     assert "JANG_1L runtime/cache/API/UI live proof" in row["details"][
         "required_next_evidence"
     ]

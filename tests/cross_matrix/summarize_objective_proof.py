@@ -214,13 +214,16 @@ N2_CACHE_ARCHITECTURE_CONTRACT_REL = (
     "build/current-cache-architecture-contract-after-mimo-n2-runtime-refresh-20260609.json"
 )
 N2_JANGTQ2_CHAT_CACHE_RESPONSES_PROOF_REL = (
-    "build/current-n2-jangtq2-chat-cache-responses-proof-after-responses-parser-20260609.json"
+    "build/current-n2-jangtq2-live-chat-cache-responses-l2-20260610.json"
 )
 N2_JANGTQ2_CHAT_CACHE_RESPONSES_L2_PROOF_REL = (
-    "build/current-n2-jangtq2-chat-cache-responses-l2-proof-20260609.json"
+    "build/current-n2-jangtq2-live-chat-cache-responses-l2-20260610.json"
 )
 N2_JANGTQ2_REAL_UI_PREVRESP_PROOF_REL = (
     "build/current-real-ui-live-model-n2-jangtq2-dev-app-prevresp-proof-20260610.json"
+)
+N2_JANGTQ2_RESPONSES_STREAM_BOUNDARY_REL = (
+    "build/current-n2-jangtq2-responses-stream-boundary-20260610.json"
 )
 GEMMA_QAT_NATIVE_MXFP4_INVENTORY_REL = (
     "build/current-gemma-qat-native-mxfp4-local-inventory-after-audio-runtime-gate-20260610.json"
@@ -5565,6 +5568,9 @@ def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
     n2_jangtq2_real_ui_prevresp_proof = _load(
         root, N2_JANGTQ2_REAL_UI_PREVRESP_PROOF_REL
     )
+    n2_jangtq2_stream_boundary_proof = _load(
+        root, N2_JANGTQ2_RESPONSES_STREAM_BOUNDARY_REL
+    )
     n2_jang1l_chat_cache_proof = _load(root, N2_PRO_JANG1L_CHAT_CACHE_PROOF_REL)
     n2_jang1l_real_ui_one_turn_proof = _load(
         root, N2_PRO_JANG1L_REAL_UI_ONE_TURN_PROOF_REL
@@ -7283,6 +7289,7 @@ def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
             N2_JANGTQ2_CHAT_CACHE_RESPONSES_PROOF_REL,
             N2_JANGTQ2_CHAT_CACHE_RESPONSES_L2_PROOF_REL,
             N2_JANGTQ2_REAL_UI_PREVRESP_PROOF_REL,
+            N2_JANGTQ2_RESPONSES_STREAM_BOUNDARY_REL,
             N2_API_CACHE_CONTRACT_REL,
             N2_CACHE_ARCHITECTURE_CONTRACT_REL,
             MODEL_FAMILY_CONTRACT_REL,
@@ -7459,6 +7466,29 @@ def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
                     )
                     is True
                 ),
+                "n2_jangtq2_live_runtime_api_cache": (
+                    n2_jangtq2_live_proof.get("status") == "pass"
+                    and n2_jangtq2_live_proof.get("stable_text") is True
+                    and n2_jangtq2_live_proof.get("tool_probe_pass") is True
+                    and n2_jangtq2_live_proof.get("responses_probe_pass") is True
+                    and n2_jangtq2_live_proof.get("responses_stream_probe_pass") is True
+                    and n2_jangtq2_live_proof.get("l2_restart_probe_pass") is True
+                ),
+                "n2_jangtq2_direct_gateway_stream_boundary": (
+                    n2_jangtq2_stream_boundary_proof.get("status") == "pass"
+                    and (
+                        n2_jangtq2_stream_boundary_proof.get("checks") or {}
+                    ).get("direct_first_output_index_clean")
+                    is True
+                    and (
+                        n2_jangtq2_stream_boundary_proof.get("checks") or {}
+                    ).get("direct_followup_content_delta_streaming")
+                    is True
+                    and (
+                        n2_jangtq2_stream_boundary_proof.get("checks") or {}
+                    ).get("gateway_followup_content_delta_streaming")
+                    is True
+                ),
                 "turboquant_runtime_contract": (
                     (n2_api_cache_contract.get("checks") or {}).get(
                         "turboquant_kv_runtime_contract"
@@ -7632,6 +7662,47 @@ def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
                     "This supports the checkpoint candidate profile but does "
                     "not clear stricter long-delta prompts, audio, public "
                     "tunnel parity, N2 JANG_1L, or full release support."
+                ),
+            },
+            "jangtq2_responses_stream_boundary": {
+                "artifact": N2_JANGTQ2_RESPONSES_STREAM_BOUNDARY_REL,
+                "status": n2_jangtq2_stream_boundary_proof.get("status"),
+                "model": n2_jangtq2_stream_boundary_proof.get("model"),
+                "served_model_name": n2_jangtq2_stream_boundary_proof.get(
+                    "served_model_name"
+                ),
+                "checks": n2_jangtq2_stream_boundary_proof.get("checks"),
+                "direct_first_arguments": (
+                    (
+                        (
+                            n2_jangtq2_stream_boundary_proof.get("captures")
+                            if isinstance(
+                                n2_jangtq2_stream_boundary_proof.get("captures"), dict
+                            )
+                            else {}
+                        ).get("direct_first")
+                        or {}
+                    ).get("function_call_arguments")
+                    or []
+                ),
+                "gateway_first_arguments": (
+                    (
+                        (
+                            n2_jangtq2_stream_boundary_proof.get("captures")
+                            if isinstance(
+                                n2_jangtq2_stream_boundary_proof.get("captures"), dict
+                            )
+                            else {}
+                        ).get("gateway_first")
+                        or {}
+                    ).get("function_call_arguments")
+                    or []
+                ),
+                "boundary": (
+                    "Direct server and panel gateway raw SSE proof for N2 "
+                    "JANGTQ2 Responses required tool plus tool-result "
+                    "continuation. This does not clear public tunnel parity, "
+                    "audio, N2 JANG_1L, or full release support."
                 ),
             },
             "required_next_evidence": [
