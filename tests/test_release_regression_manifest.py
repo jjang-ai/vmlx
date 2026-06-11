@@ -15289,7 +15289,7 @@ def test_release_regression_manifest_tracks_tool_calls_with_runner_artifact():
     joined = " ".join(row["commands"] + row["artifacts"] + row["proves"])
 
     assert "run_tool_call_contract.py" in joined
-    assert "current-tool-call-contract-after-cross-model-loop-metrics-20260609.json" in joined
+    assert "current-tool-call-contract-after-dsv4-live-cache-tool-loop-20260611.json" in joined
     assert "Tool parser residue" in joined
     assert "DSV4" in joined
     assert "maxToolIterations" in joined

@@ -387,7 +387,7 @@ CURRENT_POST_BUDGET_EDGE_ARTIFACTS = {
     "generation-defaults-no-hidden-forcing": "build/current-generation-defaults-contract-after-pr-intake-matrix-refresh-20260609.json",
     "parser-registry-tool-reasoning-parity": "build/current-parser-registry-contract-after-jangtq2-objective-refresh-20260607.json",
     "reasoning-template-no-think-tag-leak": "build/current-reasoning-template-contract-20260526-settings-audit.json",
-    "tool-call-loop-parser-cleanup": "build/current-tool-call-contract-after-cross-model-loop-metrics-20260609.json",
+    "tool-call-loop-parser-cleanup": "build/current-tool-call-contract-after-dsv4-live-cache-tool-loop-20260611.json",
     "panel-tool-security-loop-boundary": "build/current-panel-tool-security-contract-20260528-tool-loop-security-matrix.json",
     "api-chat-responses-anthropic-ollama-parity": "build/current-api-surface-contract-20260602-v1554-stream-cache-reuse-refresh.json",
     "cache-architecture-family-classification": "build/current-cache-architecture-contract-after-noheavy-contract-refresh-20260608.json",
@@ -429,7 +429,7 @@ CURRENT_ISSUE181_183_RUNTIME_AUDIT_ARTIFACT = (
     "build/current-issue181-183-runtime-audit-20260602-v1554-installed-tahoe-refresh.json"
 )
 CURRENT_PUBLIC_APP_ISSUE_AUDIT_ARTIFACT = (
-    "build/current-public-app-issue-audit-after-gemma26-memory-stress-20260611.json"
+    "build/current-public-app-issue-audit-after-issue165-dsv4-cache-tool-loop-20260611.json"
 )
 CURRENT_DEV_UI_PROOF_ARTIFACTS = {
     "proof": "docs/internal/agent-notes/2026-05-31-live-chat-tools-reasoning-proof.json",
@@ -1412,10 +1412,10 @@ _ROWS: list[dict[str, Any]] = [
             "maxToolIterations caps tool loops",
         ],
         "commands": [
-            ".venv/bin/python tests/cross_matrix/run_tool_call_contract.py --out build/current-tool-call-contract-after-cross-model-loop-metrics-20260609.json",
+            ".venv/bin/python tests/cross_matrix/run_tool_call_contract.py --out build/current-tool-call-contract-after-dsv4-live-cache-tool-loop-20260611.json",
         ],
         "artifacts": [
-            "build/current-tool-call-contract-after-cross-model-loop-metrics-20260609.json",
+            "build/current-tool-call-contract-after-dsv4-live-cache-tool-loop-20260611.json",
             "build/current-tool-call-contract-20260523-post-budget-edge.json",
             "build/current-tool-call-contract-20260521.json",
             "build/current-tool-call-contract-20260522-dsv4-live-write-file-repair.json",

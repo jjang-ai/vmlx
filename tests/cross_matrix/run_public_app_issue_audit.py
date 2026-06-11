@@ -19,7 +19,7 @@ from typing import Any
 
 
 DEFAULT_OUT = Path(
-    "build/current-public-app-issue-audit-after-gemma26-memory-stress-20260611.json"
+    "build/current-public-app-issue-audit-after-issue165-dsv4-cache-tool-loop-20260611.json"
 )
 INSTALLED_APP_ASAR = Path("/Applications/vMLX.app/Contents/Resources/app.asar")
 INSTALLED_APP = Path("/Applications/vMLX.app")
@@ -29,7 +29,7 @@ INSTALLED_APP_PYTHON = Path(
 STAGED_SEQUOIA_APP = Path("panel/release/sequoia-app/mac-arm64/vMLX.app")
 STAGED_TAHOE_APP = Path("panel/release/tahoe-app/mac-arm64/vMLX.app")
 TOOL_CALL_CONTRACT = Path(
-    "build/current-tool-call-contract-after-cross-model-loop-metrics-20260609.json"
+    "build/current-tool-call-contract-after-dsv4-live-cache-tool-loop-20260611.json"
 )
 INSTALLED_APP_RUNTIME_PARITY = Path(
     "build/current-installed-app-runtime-parity-audit-sequoia-checkpoint-dmg-20260609.json"
