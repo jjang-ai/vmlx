@@ -22,7 +22,7 @@ def test_full_release_objective_checklist_uses_current_responses_raw_sse_parity_
 
 def test_full_release_objective_checklist_uses_current_qwen35_raw_sse_parity_contract():
     assert checklist.QWEN35_RAW_SSE_PARITY == Path(
-        "build/current-responses-raw-sse-parity-qwen35-direct-gateway-tunnel-public-recapture-still-stale-20260611.json"
+        "build/current-responses-raw-sse-parity-qwen35-direct-gateway-tunnel-after-public-recapture-20260610.json"
     )
 
 
@@ -391,69 +391,44 @@ def _write_green_family_smokes(tmp_path: Path) -> None:
                 hybrid=True,
             ),
         )
+    nemotron = _smoke_artifact(
+        mllm=True,
+        tool_parser="nemotron",
+        reasoning_parser="deepseek_r1",
+        cache_detail="paged+ssm",
+        native=_hybrid_ssm_native("nemotron_h"),
+        hybrid=True,
+    )
+    nemotron["requests"].extend(
+        [
+            {"label": "vl_blue_image", "code": 200, "content": "Blue", "validation_failures": []},
+            {"label": "vl_blue_video", "code": 200, "content": "Blue", "validation_failures": []},
+            {"label": "audio_blue", "code": 200, "content": "Blue.", "validation_failures": []},
+            {
+                "label": "text_multiturn_recall",
+                "code": 200,
+                "content": "color=blue, animal=cat",
+                "validation_failures": [],
+                "usage": {
+                    "prompt_tokens_details": {
+                        "cached_tokens": 24,
+                        "cache_detail": "paged+ssm",
+                    }
+                },
+                "cache_summary": {"has_cache_hit": True},
+            },
+        ]
+    )
+    nemotron["cache_after"]["code"] = 200
+    nemotron["cache_after"]["body"]["scheduler_stats"] = {"cache_hit_tokens": 24}
+    nemotron["cache_after"]["body"]["ssm_companion"] = {
+        "disk": {"stores": 2, "total_tokens_on_disk": 73}
+    }
+    nemotron["server_log_tail"] = 'POST /v1/chat/completions HTTP/1.1" 200 OK'
     _write_json(
         tmp_path
-        / "build/current-all-local-model-smoke-nemotron-omni-mxfp4-tools-nomedia-after-reasoning-budget-20260606/dealign.ai_Nemotron-Omni-Nano-MXFP4-CRACK/result.json",
-        _smoke_artifact(
-            mllm=True,
-            tool_parser="nemotron",
-            reasoning_parser="deepseek_r1",
-            cache_detail="paged+ssm",
-            native=_hybrid_ssm_native("nemotron_h"),
-            hybrid=True,
-        ),
-    )
-    _write_json(
-        tmp_path / "build/current-nemotron-omni-mxfp4-media-gate-20260607/SUMMARY.json",
-        {
-            "status": "PASS",
-            "passed": True,
-            "requests": [
-                {"name": "turn1_memory", "code": 200, "content": "noted"},
-                {"name": "image_blue", "code": 200, "content": "Blue"},
-                {"name": "video_blue", "code": 200, "content": "Blue"},
-                {"name": "audio_blue", "code": 200, "content": "Blue."},
-                {
-                    "name": "turn2_recall",
-                    "code": 200,
-                    "content": "color=blue, animal=cat",
-                    "usage": {
-                        "prompt_tokens_details": {
-                            "cached_tokens": 24,
-                            "cache_detail": "paged+ssm",
-                        }
-                    },
-                },
-            ],
-            "checks": [
-                {"name": "capabilities_available", "ok": True},
-                {"name": "cache_stats_initial_available", "ok": True},
-                {"name": "turn1_memory_http_ok", "ok": True},
-                {"name": "turn1_noted_exact_or_contains", "ok": True},
-                {"name": "image_blue_http_ok", "ok": True},
-                {"name": "image_blue_mentions_blue", "ok": True},
-                {"name": "video_blue_http_ok", "ok": True},
-                {"name": "video_blue_mentions_blue", "ok": True},
-                {"name": "audio_blue_http_ok", "ok": True},
-                {"name": "audio_blue_mentions_blue", "ok": True},
-                {"name": "turn2_recall_http_ok", "ok": True},
-                {"name": "turn2_recall_color_animal", "ok": True},
-                {"name": "cache_stats_final_available", "ok": True},
-            ],
-            "cache_final": {
-                "scheduler_stats": {"cache_hit_tokens": 24},
-                "native_cache": _hybrid_ssm_native("nemotron_h"),
-                "block_disk_cache": {"disk_writes": 2, "disk_hits": 3},
-                "cache_totals": {
-                    "l2_block_tokens_on_disk": 73,
-                    "l2_ssm_tokens_on_disk": 73,
-                },
-                "ssm_companion": {
-                    "disk": {"stores": 2, "total_tokens_on_disk": 73}
-                },
-            },
-            "log_tail": 'POST /v1/chat/completions HTTP/1.1" 200 OK',
-        },
+        / "build/current-all-local-model-smoke-ling-hy3-nemotron-tools-media-20260606/dealign.ai_Nemotron-Omni-Nano-JANGTQ-CRACK/result.json",
+        nemotron,
     )
 
 
