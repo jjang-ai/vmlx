@@ -1035,10 +1035,10 @@ function applyJangCapabilities(
 function applyConfigCapabilitiesMediaPolicy(
   detected: DetectedConfig,
   parsedConfig: any,
+  jangCfg: any | undefined,
   modelPath: string,
 ): DetectedConfig {
-  const caps = parsedConfig?.capabilities
-  if (detected.family !== 'mimo_v2' || !caps || typeof caps !== 'object') {
+  if (detected.family !== 'mimo_v2') {
     return detected
   }
   const overlay = mimoV2MediaRuntimeOverlayRequested()
@@ -1057,6 +1057,13 @@ function applyConfigCapabilitiesMediaPolicy(
       },
     }
   }
+  const configCaps = parsedConfig?.capabilities && typeof parsedConfig.capabilities === 'object'
+    ? parsedConfig.capabilities
+    : undefined
+  const jangCaps = jangCfg?.capabilities && typeof jangCfg.capabilities === 'object'
+    ? jangCfg.capabilities
+    : undefined
+  const caps = configCaps ?? jangCaps ?? {}
   const runtimeModalities = Array.isArray(caps.modalities)
     ? caps.modalities.map((item: any) => String(item || '').toLowerCase()).filter(Boolean)
     : []
@@ -1071,12 +1078,30 @@ function applyConfigCapabilitiesMediaPolicy(
     item === 'vision' || item === 'image' || item === 'video' || item === 'audio' || item === 'omni',
   )
   const multimodalStatus = String(caps.multimodal_status || '').toLowerCase()
-  const runtimeMode = String(parsedConfig?.runtime?.multimodal_mode || '').toLowerCase()
+  const runtimeMode = String(
+    parsedConfig?.runtime?.multimodal_mode ??
+    jangCfg?.runtime?.multimodal_mode ??
+    '',
+  ).toLowerCase()
+  const explicitMediaRuntime = new Set([
+    'mimo_v2_multimodal_runtime',
+    'multimodal_runtime',
+    'media_enabled',
+    'vl_audio_video_runtime',
+  ])
+  if (explicitMediaRuntime.has(multimodalStatus) || explicitMediaRuntime.has(runtimeMode)) {
+    return {
+      ...detected,
+      isMultimodal: true,
+      forceTextOnly: undefined,
+    }
+  }
   if (
     capsRuntimeTextOnly ||
     capsHasUnwiredMedia ||
     multimodalStatus === 'weights_preserved_text_runtime' ||
-    runtimeMode === 'weights_preserved_text_runtime'
+    runtimeMode === 'weights_preserved_text_runtime' ||
+    (jangCfg && !jangCaps && configDeclaresMedia(parsedConfig))
   ) {
     return {
       ...detected,
@@ -1191,9 +1216,11 @@ export function detectModelConfigFromDir(modelPath: string): DetectedConfig {
             }
             // JANG model detection: read jang_config.json for VLM
             const jangConfigPath = join(modelPath, 'jang_config.json')
+            let jangCfgForMediaPolicy: any | undefined
             if (existsSync(jangConfigPath)) {
             try {
               const jangCfg = JSON.parse(readFileSync(jangConfigPath, 'utf-8'))
+              jangCfgForMediaPolicy = jangCfg
               detected = applyJangCapabilities(detected, jangCfg)
               const nativeMtp = detectNativeMtpCapability(parsed, jangCfg, modelPath)
               if (nativeMtp) {
@@ -1224,7 +1251,7 @@ export function detectModelConfigFromDir(modelPath: string): DetectedConfig {
           } else if (configDeclaresMedia(parsed)) {
             detected.isMultimodal = true
           }
-          detected = applyConfigCapabilitiesMediaPolicy(detected, parsed, modelPath)
+          detected = applyConfigCapabilitiesMediaPolicy(detected, parsed, jangCfgForMediaPolicy, modelPath)
           detected = applyConfigMetadataOverrides(detected, parsed)
           detected = applyIndexedWeightCapabilityHints(detected, parsed, modelPath)
           return detected
