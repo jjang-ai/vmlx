@@ -363,10 +363,10 @@ ALL_LOCAL_MODEL_SMOKE_ZAYA_VL_REL = (
     "build/current-all-local-model-smoke-zaya-vl-bundled-20260524/summary.json"
 )
 ALL_LOCAL_MODEL_SMOKE_ZAYA_VL_JANGTQ4_REL = (
-    "build/current-all-local-model-smoke-zaya-vl-mxfp4-bundled-after-source-tool-pass-20260607/summary.json"
+    "build/current-all-local-model-smoke-zaya-vl-jangtq4-bundled-after-zaya-parser-fix-20260611/summary.json"
 )
 ALL_LOCAL_MODEL_SMOKE_ZAYA_VL_CURRENT_REL = (
-    "build/current-all-local-model-smoke-zaya-vl-mxfp4-bundled-after-source-tool-pass-20260607/summary.json"
+    "build/current-all-local-model-smoke-zaya-vl-jangtq4-bundled-after-zaya-parser-fix-20260611/summary.json"
 )
 ALL_LOCAL_MODEL_SMOKE_NEMOTRON_OMNI_JANGTQ_REL = (
     "build/current-all-local-model-smoke-nemotron-omni-jangtq-video-bundled-20260526-rerun/summary.json"

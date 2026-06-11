@@ -7810,13 +7810,15 @@ def test_objective_proof_digest_keeps_cross_family_live_smoke_open_on_non_mimo_g
     )
     _write_json(
         tmp_path,
-        "build/current-all-local-model-smoke-zaya-vl-mxfp4-bundled-after-source-tool-pass-20260607/summary.json",
+        "build/current-all-local-model-smoke-zaya-vl-jangtq4-bundled-after-zaya-parser-fix-20260611/summary.json",
         {
+            "status": "fail",
             "completed": 1,
+            "failed": 1,
             "row_count": 1,
             "results": [
                 {
-                    "status": "pass",
+                    "status": "probe_failed",
                     "row": {
                         "name": "ZAYA1-VL-8B-JANGTQ4",
                         "model_type": "zaya1_vl",
@@ -7858,6 +7860,12 @@ def test_objective_proof_digest_keeps_cross_family_live_smoke_open_on_non_mimo_g
                             "label": "text_no_media_after_image",
                             "validation_failures": [],
                             "content": "No.",
+                        },
+                    ],
+                    "failures": [
+                        {
+                            "label": "text_no_media_after_image",
+                            "reason": "expected_no_media_missing",
                         },
                     ],
                 }
@@ -8549,7 +8557,6 @@ def test_objective_proof_digest_keeps_cross_family_live_smoke_open_on_non_mimo_g
         "gemma4",
         "minimax",
         "zaya_text",
-        "zaya_vl",
     ]
     assert row["details"]["missing_required_family_keys"] == [
         "hy3",
@@ -8559,6 +8566,7 @@ def test_objective_proof_digest_keeps_cross_family_live_smoke_open_on_non_mimo_g
         "nemotron",
         "qwen36",
         "step3p7",
+        "zaya_vl",
     ]
     assert row["details"]["non_mimo_status"] == "open"
     assert row["details"]["non_mimo_missing_required_family_keys"] == [
@@ -8568,9 +8576,16 @@ def test_objective_proof_digest_keeps_cross_family_live_smoke_open_on_non_mimo_g
         "nemotron",
         "qwen36",
         "step3p7",
+        "zaya_vl",
     ]
-    assert row["details"]["non_mimo_not_pass_artifacts"] == []
-    assert row["details"]["not_pass_required_family_artifacts"] == {}
+    assert row["details"]["non_mimo_not_pass_artifacts"] == [
+        "build/current-all-local-model-smoke-zaya-vl-jangtq4-bundled-after-zaya-parser-fix-20260611/summary.json"
+    ]
+    assert row["details"]["not_pass_required_family_artifacts"] == {
+        "zaya_vl": [
+            "build/current-all-local-model-smoke-zaya-vl-jangtq4-bundled-after-zaya-parser-fix-20260611/summary.json"
+        ]
+    }
 
 
 def test_objective_proof_digest_keeps_cross_family_live_smoke_open_when_only_mimo_is_red(
