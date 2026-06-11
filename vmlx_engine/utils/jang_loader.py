@@ -544,11 +544,12 @@ def _warmup_jangtq_vlm_language_prefill(model: Any, *, log_prefix: str = "  ") -
     cache = make_prompt_cache(lm)
     tiny_ids = mx.zeros((1, 16), dtype=mx.int32)
     calls = (
-        lambda: lm(inputs=tiny_ids, cache=cache),
+        lambda: lm(input_ids=tiny_ids, cache=cache),
         lambda: lm(tiny_ids, cache=cache),
+        lambda: lm(inputs=tiny_ids, cache=cache),
         lambda: lm(tiny_ids),
     )
-    last_type_error = None
+    last_signature_error = None
     for call in calls:
         try:
             out = call()
@@ -559,12 +560,162 @@ def _warmup_jangtq_vlm_language_prefill(model: Any, *, log_prefix: str = "  ") -
             mx.synchronize()
             logger.info("%sJANGTQ VLM full-model 16-token prefill warmup complete", log_prefix)
             return
-        except TypeError as exc:
-            last_type_error = exc
+        except (TypeError, ValueError) as exc:
+            message = str(exc)
+            if not (
+                isinstance(exc, TypeError)
+                or "Specify input_ids or inputs_embeds" in message
+            ):
+                raise
+            last_signature_error = exc
             continue
-    if last_type_error is not None:
-        raise last_type_error
+    if last_signature_error is not None:
+        raise last_signature_error
     raise RuntimeError("no JANGTQ VLM warmup call variant executed")
+
+
+def _object_has_mimo_v2_model_type(obj: Any) -> bool:
+    """Return true when a model/config-like object advertises MiMo V2."""
+    seen: set[int] = set()
+    queue = [obj]
+    while queue:
+        current = queue.pop(0)
+        if current is None:
+            continue
+        obj_id = id(current)
+        if obj_id in seen:
+            continue
+        seen.add(obj_id)
+        for key in ("model_type", "model_family", "family"):
+            value = getattr(current, key, None)
+            if isinstance(current, dict):
+                value = current.get(key, value)
+            if str(value or "").lower() == "mimo_v2":
+                return True
+        for key in ("config", "args", "text_config", "model", "language_model"):
+            try:
+                child = current.get(key) if isinstance(current, dict) else getattr(current, key, None)
+            except Exception:
+                child = None
+            if child is not None:
+                queue.append(child)
+    return False
+
+
+def _run_mimo_jangtq_input_ids_prefill_warmup(
+    kimi_module: Any,
+    model: Any,
+    *,
+    verbose: bool = True,
+    log_prefix: str = "  ",
+) -> bool:
+    """Warm MiMo JANGTQ full-model prefill with the signature MiMo expects."""
+    from mlx_lm.models.cache import make_prompt_cache
+
+    lm = getattr(model, "language_model", None) or model
+    warmup_tokens_fn = getattr(kimi_module, "_warmup_prefill_tokens", None)
+    materialize = getattr(kimi_module, "_materialize", None)
+    if not callable(materialize):
+        materialize = mx.eval
+    try:
+        warmup_n = int(warmup_tokens_fn(model, lm)) if callable(warmup_tokens_fn) else 16
+    except Exception:
+        warmup_n = 16
+    warmup_n = max(1, min(warmup_n, 512))
+
+    cache_for_warm = make_prompt_cache(lm)
+    tiny_ids = mx.zeros((1, warmup_n), dtype=mx.int32)
+    call_variants = (
+        lambda: lm(input_ids=tiny_ids, cache=cache_for_warm),
+        lambda: lm(tiny_ids, cache=cache_for_warm),
+        lambda: lm(inputs=tiny_ids, cache=cache_for_warm),
+        lambda: lm(tiny_ids),
+    )
+    last_signature_error: Exception | None = None
+    for call in call_variants:
+        try:
+            out = call()
+            materialize(out.logits if hasattr(out, "logits") else out)
+            mx.synchronize()
+            logger.info(
+                "%svMLX MiMo JANGTQ full-model %s-token input_ids prefill warmup complete",
+                log_prefix,
+                warmup_n,
+            )
+            if verbose:
+                print(
+                    f"{log_prefix}[warmup] vMLX MiMo full-model "
+                    f"{warmup_n}-token input_ids prefill ok",
+                    flush=True,
+                )
+            return True
+        except (TypeError, ValueError) as exc:
+            message = str(exc)
+            if not (
+                isinstance(exc, TypeError)
+                or "Specify input_ids or inputs_embeds" in message
+            ):
+                raise
+            last_signature_error = exc
+            continue
+
+    if verbose and last_signature_error is not None:
+        print(
+            f"{log_prefix}[warmup] vMLX MiMo input_ids prefill skipped: "
+            f"{last_signature_error!r}",
+            flush=True,
+        )
+    return False
+
+
+def _patch_jangtq_kimi_mimo_input_ids_warmup(*, log_prefix: str = "  ") -> bool:
+    """Install a vMLX patch over jang_tools' MiMo full-model warmup handoff."""
+    try:
+        import jang_tools.load_jangtq_kimi_vlm as kimi_module
+    except Exception as exc:
+        logger.debug("%sJANGTQ MiMo warmup patch unavailable: %s", log_prefix, exc)
+        return False
+
+    original = getattr(kimi_module, "_warmup_jit_per_layer", None)
+    if not callable(original):
+        return False
+    if getattr(original, "_vmlx_mimo_input_ids_warmup_patch", False):
+        return True
+
+    def _vmlx_warmup_jit_per_layer(model: Any, *args: Any, **kwargs: Any) -> Any:
+        if not _object_has_mimo_v2_model_type(model):
+            return original(model, *args, **kwargs)
+        verbose = True
+        if args:
+            verbose = bool(args[0])
+        if "verbose" in kwargs:
+            verbose = bool(kwargs["verbose"])
+        if args:
+            original_args = (False, *args[1:])
+            original_kwargs = dict(kwargs)
+        else:
+            original_args = ()
+            original_kwargs = {**kwargs, "verbose": False}
+        result = original(model, *original_args, **original_kwargs)
+        try:
+            _run_mimo_jangtq_input_ids_prefill_warmup(
+                kimi_module,
+                model,
+                verbose=verbose,
+                log_prefix=log_prefix,
+            )
+        except Exception as exc:
+            logger.warning(
+                "%svMLX MiMo JANGTQ input_ids warmup skipped: %s",
+                log_prefix,
+                exc,
+            )
+        return result
+
+    _vmlx_warmup_jit_per_layer._vmlx_mimo_input_ids_warmup_patch = True
+    _vmlx_warmup_jit_per_layer._vmlx_original = original
+    kimi_module._warmup_jit_per_layer = _vmlx_warmup_jit_per_layer
+    return True
 
 
 def _supported_routed_group_size(
@@ -2171,6 +2322,7 @@ def _load_jang_v2(
                 )
             # Step 2: load. If THIS fails, the model is broken — propagate
             # rather than silently waste 80 s in the fallback path.
+            _patch_jangtq_kimi_mimo_input_ids_warmup(log_prefix="  JANGTQ fast path: ")
             model, tokenizer = _load_jangtq(path, skip_params_eval=skip_eval)
 
             if not hasattr(model, "config"):
@@ -3255,6 +3407,7 @@ def _load_jang_v2_vlm(
             "MXTQ/JANGTQ VLM detected — using native TurboQuant fast path "
             "(jang_tools.load_jangtq_vlm, P3/P15/P17/P18 Metal kernels)"
         )
+        _patch_jangtq_kimi_mimo_input_ids_warmup(log_prefix="  JANGTQ VLM fast path: ")
         if filter_expert_keys:
             logger.warning(
                 "  filter_expert_keys=True ignored on JANGTQ VLM fast path "

@@ -319,6 +319,104 @@ class TestJangDetection:
         vlm_return_idx = source.index("return _vlm_model, _vlm_processor", vlm_idx)
         assert "_prepare_jangtq_vlm_first_forward(" in source[vlm_idx:vlm_return_idx]
 
+    def test_jangtq_vlm_language_prefill_uses_mimo_input_ids_keyword(self, monkeypatch):
+        import mlx_lm.models.cache as cache_mod
+        from vmlx_engine.utils import jang_loader
+
+        calls = []
+
+        class FakeLM:
+            def __call__(self, *args, **kwargs):
+                calls.append({"args": args, "kwargs": kwargs})
+                if "input_ids" in kwargs:
+                    return kwargs["input_ids"]
+                if "inputs" in kwargs:
+                    raise ValueError("Specify input_ids or inputs_embeds")
+                raise TypeError("unexpected call")
+
+        monkeypatch.setattr(cache_mod, "make_prompt_cache", lambda _lm: ["cache"])
+
+        jang_loader._warmup_jangtq_vlm_language_prefill(FakeLM())
+
+        assert calls
+        assert "input_ids" in calls[0]["kwargs"]
+        assert calls[0]["kwargs"]["cache"] == ["cache"]
+
+    def test_mimo_jangtq_input_ids_warmup_uses_input_ids_before_inputs(self, monkeypatch):
+        import mlx_lm.models.cache as cache_mod
+        import types
+        from vmlx_engine.utils import jang_loader
+
+        calls = []
+        kimi_module = types.SimpleNamespace(
+            _warmup_prefill_tokens=lambda _model, _lm: 24,
+            _materialize=lambda out: calls.append({"materialized": out.shape}),
+        )
+
+        class FakeLM:
+            model_type = "mimo_v2"
+
+            def __call__(self, *args, **kwargs):
+                calls.append({"args": args, "kwargs": kwargs})
+                if "input_ids" in kwargs:
+                    return kwargs["input_ids"]
+                if "inputs" in kwargs:
+                    raise ValueError("Specify input_ids or inputs_embeds")
+                raise TypeError("unexpected call")
+
+        monkeypatch.setattr(cache_mod, "make_prompt_cache", lambda _lm: ["cache"])
+
+        assert jang_loader._run_mimo_jangtq_input_ids_prefill_warmup(
+            kimi_module,
+            FakeLM(),
+            verbose=False,
+        ) is True
+
+        assert "input_ids" in calls[0]["kwargs"]
+        assert calls[0]["kwargs"]["input_ids"].shape == (1, 24)
+        assert calls[0]["kwargs"]["cache"] == ["cache"]
+
+    def test_patch_jangtq_kimi_mimo_warmup_wraps_upstream(self, monkeypatch):
+        import sys
+        import types
+        from vmlx_engine.utils import jang_loader
+
+        calls = []
+        pkg = types.ModuleType("jang_tools")
+        fake = types.ModuleType("jang_tools.load_jangtq_kimi_vlm")
+
+        def original(model, verbose=True):
+            calls.append(("original", verbose, model.args.model_type))
+
+        fake._warmup_jit_per_layer = original
+        monkeypatch.setitem(sys.modules, "jang_tools", pkg)
+        monkeypatch.setitem(sys.modules, "jang_tools.load_jangtq_kimi_vlm", fake)
+        monkeypatch.setattr(
+            jang_loader,
+            "_run_mimo_jangtq_input_ids_prefill_warmup",
+            lambda module, model, **kwargs: calls.append(
+                ("vmlx", module.__name__, model.args.model_type, kwargs["verbose"])
+            ),
+        )
+
+        assert jang_loader._patch_jangtq_kimi_mimo_input_ids_warmup() is True
+
+        model = types.SimpleNamespace(args=types.SimpleNamespace(model_type="mimo_v2"))
+        fake._warmup_jit_per_layer(model, verbose=False)
+
+        assert calls == [
+            ("original", False, "mimo_v2"),
+            ("vmlx", "jang_tools.load_jangtq_kimi_vlm", "mimo_v2", False),
+        ]
+
+    def test_jangtq_text_fast_path_installs_mimo_warmup_patch_before_load(self):
+        source = Path("vmlx_engine/utils/jang_loader.py").read_text()
+
+        text_idx = source.index("model, tokenizer = _load_jangtq")
+        patch_idx = source.rindex("_patch_jangtq_kimi_mimo_input_ids_warmup", 0, text_idx)
+
+        assert patch_idx < text_idx
+
     def test_detects_jang_affine_weight_format(self, tmp_path):
         from vmlx_engine.utils.jang_loader import is_jang_model
 
