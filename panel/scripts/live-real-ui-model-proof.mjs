@@ -1232,7 +1232,7 @@ function namedToolProbeSemanticsOk(result) {
   })()
   const strictExactReplyOk = (() => {
     const turns = Array.isArray(result.chat?.turns) ? result.chat.turns : []
-    const exactReplyRe = /(?:reply exactly|send visible final text exactly|output visible final text exactly):\s*["'“”`]?([^\r\n"'“”`]+?)["'“”`]?\s*(?=\r?\n|$)/i
+    const exactReplyRe = /(?:reply exactly|send visible final text exactly|output visible final text exactly|reply with exactly this (?:text|json) and nothing else):\s*["'“”`]?([^\r\n"'“”`]+?)["'“”`]?\s*(?=\r?\n|$)/i
     for (let i = 0; i < turns.length; i += 1) {
       const turn = turns[i]
       if (!turn || turn.role !== 'user') continue
