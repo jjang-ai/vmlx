@@ -958,10 +958,11 @@ class BatchedEngine(BaseEngine):
 
         if self._engine:
             await self._engine.stop()
-            # close() handles scheduler.shutdown() + deep_reset() + collector cleanup.
-            # stop() already called scheduler.shutdown(), but close() is idempotent
-            # and handles additional cleanup (model ownership, deep_reset).
-            self._engine.engine.close()
+            # stop() already stopped the engine loop and flushed disk caches.
+            # Release ownership and collectors, but avoid a second aggressive
+            # cache rebuild during app shutdown; large MiMo caches can hit
+            # Python 3.13 finalization/GIL guards if rebuilt this late.
+            self._engine.engine.close(deep_reset=False)
             self._engine = None
 
         self._model = None

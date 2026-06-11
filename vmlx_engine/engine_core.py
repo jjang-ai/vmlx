@@ -669,12 +669,19 @@ class EngineCore:
             self._owns_model = False
             logger.debug(f"Engine {self._engine_id} released model ownership")
 
-    def close(self) -> None:
+    def close(self, *, deep_reset: bool = True) -> None:
         """
         Explicitly close the engine and release resources.
 
         This should be called when done using the engine, especially
         if you plan to create another engine with the same model.
+
+        Args:
+            deep_reset: Clear scheduler/model cache internals after flushing disk
+                caches. Application shutdown paths should pass False after
+                stop() has already drained the engine loop; rebuilding large
+                cache structures during interpreter finalization can trip
+                Python 3.13's GIL finalization guard on memory-heavy models.
         """
         if self._closed:
             return
@@ -692,8 +699,12 @@ class EngineCore:
         # Flush disk caches before clearing in-memory state
         self.scheduler.shutdown()
 
-        # Reset scheduler to clear BatchGenerator and all caches
-        self.scheduler.deep_reset()
+        # Reset scheduler to clear BatchGenerator and all caches when the
+        # engine may be reused in-process. Normal app/server shutdown already
+        # stopped the engine loop and flushed disk caches; skip the aggressive
+        # rebuild there to avoid late-finalization crashes on large MiMo loads.
+        if deep_reset:
+            self.scheduler.deep_reset()
 
         # Clear output collectors
         for collector in self._output_collectors.values():
