@@ -819,7 +819,11 @@ function assertResult(result) {
   if (result.requestedServerCacheControls === true && !result.provenSurfaces?.includes('server_cache_controls')) {
     failures.push('requested real server cache controls but proof did not record server_cache_controls surface')
   }
-  if (result.requestedMedia === true && !result.provenSurfaces?.includes('vl_image')) {
+  if (
+    result.requestedMedia === true
+    && !result.provenSurfaces?.includes('vl_image')
+    && !result.provenSurfaces?.includes('media_force_text_only_gated')
+  ) {
     failures.push('requested real image media but proof did not record vl_image surface')
   }
   if (result.requestedVideo === true && !result.provenSurfaces?.includes('video_where_supported')) {
@@ -903,7 +907,11 @@ function deriveProvenSurfaces(result) {
   ) {
     surfaces.add('tool_l2_cache_integrated')
   }
-  if (result.media?.imageVerified === true) {
+  const mediaGated = mediaForceTextOnlyGated(result)
+  if (mediaGated) {
+    surfaces.add('media_force_text_only_gated')
+  }
+  if (result.media?.imageVerified === true && !mediaGated) {
     surfaces.add('vl_image')
   }
   if (result.media?.videoVerified === true) {
@@ -913,6 +921,26 @@ function deriveProvenSurfaces(result) {
     surfaces.add('audio_where_supported')
   }
   return [...surfaces].sort()
+}
+
+function mediaForceTextOnlyGated(result) {
+  const lines = [
+    ...(result.sessionLogTail || []),
+    ...(result.appLogTail || []),
+  ].map((line) => String(line))
+  const attachmentRoute = lines.find((line) =>
+    line.includes('[CHAT_DIAG] attachment_route=') &&
+    line.includes('"modelForceTextOnly":true') &&
+    line.includes('"chatIsMultimodal":false')
+  )
+  if (!attachmentRoute) return false
+  const mediaRequest = lines.find((line) =>
+    line.includes('[CHAT_DIAG] request_shape=') &&
+    line.includes('"chatIsMultimodal":false') &&
+    line.includes('"route":"/v1/chat/completions"') &&
+    line.includes('"chars":95')
+  )
+  return !!mediaRequest && !mediaRequest.includes('image_url') && !mediaRequest.includes('video_url') && !mediaRequest.includes('input_audio')
 }
 
 function extractLiveSpeedSamples(result) {
@@ -1364,6 +1392,7 @@ async function main() {
           const remote = await window.api.sessions.createRemote({
             remoteUrl: baseUrl,
             remoteModel: servedModel,
+            capabilityModelPath: ${JSON.stringify(modelPath)},
           });
           if (!remote.success) throw new Error(remote.error || 'remote session create failed');
           await window.api.sessions.start(remote.session.id);

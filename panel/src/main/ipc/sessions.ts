@@ -162,7 +162,7 @@ export function registerSessionHandlers(getWindow: () => BrowserWindow | null): 
       }
     })
 
-    ipcMain.handle('sessions:createRemote', async (_, params: { remoteUrl: string; remoteApiKey?: string; remoteModel: string; remoteOrganization?: string }) => {
+    ipcMain.handle('sessions:createRemote', async (_, params: { remoteUrl: string; remoteApiKey?: string; remoteModel: string; remoteOrganization?: string; capabilityModelPath?: string }) => {
       try {
         const session = await sessionManager.createRemoteSession(params)
         return { success: true, session }

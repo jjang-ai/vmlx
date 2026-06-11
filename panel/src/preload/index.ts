@@ -349,7 +349,7 @@ const api = {
     list: () => ipcRenderer.invoke('sessions:list'),
     get: (id: string) => ipcRenderer.invoke('sessions:get', id),
     create: (modelPath: string, config: any) => ipcRenderer.invoke('sessions:create', modelPath, config),
-    createRemote: (params: { remoteUrl: string; remoteApiKey?: string; remoteModel: string; remoteOrganization?: string }) =>
+    createRemote: (params: { remoteUrl: string; remoteApiKey?: string; remoteModel: string; remoteOrganization?: string; capabilityModelPath?: string }) =>
       ipcRenderer.invoke('sessions:createRemote', params),
     start: (sessionId: string) => ipcRenderer.invoke('sessions:start', sessionId),
     stop: (sessionId: string) => ipcRenderer.invoke('sessions:stop', sessionId),

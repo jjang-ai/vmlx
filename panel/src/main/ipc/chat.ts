@@ -960,6 +960,7 @@ export function registerChatHandlers(
       let sessionVideoFps: number | undefined;
       let sessionVideoMaxFrames: number | undefined;
       let chatSession: import("../database").Session | undefined;
+      let capabilityModelPath = chat.modelPath;
       if (chat.modelPath) {
         chatSession = sessionManager.getSessionByModelPath(
           chat.modelPath.replace(/\/+$/, ""),
@@ -994,6 +995,9 @@ export function registerChatHandlers(
           sessionManager.touchSession(chatSession.id);
           try {
             const sessionConfig = JSON.parse(chatSession.config);
+            if (typeof sessionConfig.capabilityModelPath === "string") {
+              capabilityModelPath = sessionConfig.capabilityModelPath;
+            }
             if (sessionConfig.timeout === 0) {
               // "No limit" — match the 86400s (24h) that sessions.ts sends via --timeout
               timeoutSeconds = 86400;
@@ -1001,9 +1005,10 @@ export function registerChatHandlers(
               timeoutSeconds = sessionConfig.timeout;
             }
             // Check if model has a reasoning parser (for enable_thinking default)
-            const detected = detectModelConfigFromDir(chat.modelPath);
+            const detectionPath = capabilityModelPath || chat.modelPath;
+            const detected = detectModelConfigFromDir(detectionPath);
             try {
-              const generationDefaults = await readGenerationDefaults(chat.modelPath);
+              const generationDefaults = await readGenerationDefaults(detectionPath);
               thinkingBudgetSupported = generationDefaults?.thinkingBudgetSupported;
             } catch {
               thinkingBudgetSupported = undefined;
@@ -1092,6 +1097,20 @@ export function registerChatHandlers(
       // Detect remote session and compute base URL + auth headers
       const resolvedSession = resolved.session;
       const isRemote = resolvedSession?.type === "remote";
+      let resolvedSessionConfig: Record<string, any> = {};
+      if (resolvedSession?.config) {
+        try {
+          resolvedSessionConfig = JSON.parse(resolvedSession.config);
+        } catch (_) {
+          resolvedSessionConfig = {};
+        }
+        if (
+          typeof resolvedSessionConfig.capabilityModelPath === "string" &&
+          !resolvedSessionConfig.capabilityModelPath.startsWith("remote://")
+        ) {
+          capabilityModelPath = resolvedSessionConfig.capabilityModelPath;
+        }
+      }
       const rawBaseUrl =
         isRemote && resolvedSession?.remoteUrl
           ? resolvedSession.remoteUrl.replace(/\/+$/, "")
@@ -1204,8 +1223,8 @@ export function registerChatHandlers(
         hasAttachments && attachments!.some((a) => inferKind(a) !== "text");
       const modelForceTextOnly = (() => {
         try {
-          return !!chat.modelPath &&
-            detectModelConfigFromDir(chat.modelPath).forceTextOnly === true;
+          return !!capabilityModelPath &&
+            detectModelConfigFromDir(capabilityModelPath).forceTextOnly === true;
         } catch (_) {
           return false;
         }
@@ -1232,6 +1251,7 @@ export function registerChatHandlers(
           `[CHAT_DIAG] attachment_route=${JSON.stringify({
             chatId: chatId.slice(0, 8),
             modelPath: chat.modelPath,
+            capabilityModelPath,
             detectedFamily: chatDetectedFamily,
             modelForceTextOnly,
             chatIsMultimodal,
@@ -1435,7 +1455,7 @@ export function registerChatHandlers(
           try {
             const parsed = JSON.parse(msgContent);
             if (Array.isArray(parsed) && parsed.length > 0 && parsed[0].type) {
-              if (chatIsMultimodal || isRemote) {
+              if (chatIsMultimodal || (isRemote && !modelForceTextOnly)) {
                 msgContent = parsed;
               } else {
                 // Multimodal is disabled for this model.
@@ -3227,7 +3247,7 @@ export function registerChatHandlers(
                   // reject image_url/video_url content when the loaded runtime
                   // is not multimodal. Remote endpoints may be multimodal even
                   // when the local session registry cannot infer it.
-                  if ((result.imageDataUrl || result.videoDataUrl) && !(chatIsMultimodal || isRemote)) {
+                  if ((result.imageDataUrl || result.videoDataUrl) && !(chatIsMultimodal || (isRemote && !modelForceTextOnly))) {
                     resultText += "\n\n[Media bytes were not sent because this local session is text-only. Use a VL-compatible model/session to inspect the file visually.]";
                     console.log(
                       `[CHAT] Skipping tool media bytes for text-only local session (${tc.function.name})`,

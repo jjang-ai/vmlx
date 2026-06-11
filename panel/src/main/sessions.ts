@@ -1093,17 +1093,31 @@ export class SessionManager extends EventEmitter {
     remoteApiKey?: string
     remoteModel: string
     remoteOrganization?: string
+    capabilityModelPath?: string
   }): Promise<Session> {
     const url = new URL(params.remoteUrl)
     const modelPath = `remote://${params.remoteModel}@${url.host}`
+    const capabilityModelPath =
+      params.capabilityModelPath &&
+      !params.capabilityModelPath.startsWith('remote://') &&
+      existsSync(params.capabilityModelPath) &&
+      existsSync(join(params.capabilityModelPath, 'config.json'))
+        ? params.capabilityModelPath
+        : undefined
 
     const existing = db.getSessionByModelPath(modelPath)
     if (existing) {
+      let existingConfig: Record<string, any> = {}
+      try { existingConfig = JSON.parse(existing.config || '{}') } catch (_) {}
       db.updateSession(existing.id, {
         remoteUrl: params.remoteUrl,
         remoteApiKey: params.remoteApiKey,
         remoteModel: params.remoteModel,
-        remoteOrganization: params.remoteOrganization
+        remoteOrganization: params.remoteOrganization,
+        config: JSON.stringify({
+          ...existingConfig,
+          ...(capabilityModelPath ? { capabilityModelPath } : {}),
+        }),
       })
       return db.getSession(existing.id)!
     }
@@ -1123,7 +1137,10 @@ export class SessionManager extends EventEmitter {
       host,
       port,
       status: 'stopped',
-      config: JSON.stringify({ timeout: 300 }),
+      config: JSON.stringify({
+        timeout: 300,
+        ...(capabilityModelPath ? { capabilityModelPath } : {}),
+      }),
       createdAt: now,
       updatedAt: now,
       type: 'remote',
