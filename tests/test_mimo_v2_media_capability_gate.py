@@ -199,6 +199,30 @@ def test_mimo_v2_runtime_modalities_use_processor_audio_token_id(
     ]
 
 
+def test_mimo_v2_runtime_modalities_use_processor_image_video_token_ids(
+    tmp_path,
+    monkeypatch,
+):
+    from vmlx_engine import server
+
+    _write_mimo_bundle(tmp_path, audio_token=False, media_runtime=True)
+    cfg = json.loads((tmp_path / "config.json").read_text(encoding="utf-8"))
+    cfg.pop("image_token_id")
+    cfg.pop("video_token_id")
+    cfg["processor_config"] = {
+        "image_token_id": 151655,
+        "video_token_id": 151656,
+    }
+    (tmp_path / "config.json").write_text(json.dumps(cfg), encoding="utf-8")
+    _install_fake_mimo_runtime(monkeypatch)
+
+    assert server._mimo_v2_runtime_modalities(str(tmp_path)) == [
+        "text",
+        "vision",
+        "video",
+    ]
+
+
 def test_mimo_v2_local_runtime_registration_exports_capability_classes():
     from vmlx_engine.models.mllm import _register_mimo_v2_mlx_vlm_runtime
 

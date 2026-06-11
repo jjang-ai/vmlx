@@ -2400,9 +2400,22 @@ def _mimo_v2_runtime_modalities(bundle_path: str | None) -> list[str] | None:
         and hasattr(module, "MiMoVisionBlock")
         and isinstance(cfg.get("vision_config"), dict)
     )
-    if has_vision_runtime and cfg.get("image_token_id") is not None:
+    processor_config = cfg.get("processor_config")
+    if not isinstance(processor_config, dict):
+        processor_config = {}
+    if has_vision_runtime and (
+        cfg.get("image_token_id") is not None
+        or cfg.get("image_token_index") is not None
+        or processor_config.get("image_token_id") is not None
+        or processor_config.get("image_token_index") is not None
+    ):
         modalities.append("vision")
-    if has_vision_runtime and cfg.get("video_token_id") is not None:
+    if has_vision_runtime and (
+        cfg.get("video_token_id") is not None
+        or cfg.get("video_token_index") is not None
+        or processor_config.get("video_token_id") is not None
+        or processor_config.get("video_token_index") is not None
+    ):
         modalities.append("video")
 
     has_audio_runtime = bool(
@@ -2417,9 +2430,6 @@ def _mimo_v2_runtime_modalities(bundle_path: str | None) -> list[str] | None:
     # still needs an audio token ID to splice those embeddings into the text
     # stream. Do not advertise API-level audio until the bundle/runtime exposes
     # that token path.
-    processor_config = cfg.get("processor_config")
-    if not isinstance(processor_config, dict):
-        processor_config = {}
     if has_audio_runtime and (
         cfg.get("audio_token_id") is not None
         or cfg.get("audio_token_index") is not None
