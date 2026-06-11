@@ -476,7 +476,7 @@ def _step_is_ok(name: str, step: dict[str, Any], root: Path) -> bool:
     if name == "full_release_objective_checklist":
         if step["returncode"] == 0:
             return True
-        path = root / "build/current-full-release-objective-checklist-after-qwen35-auto-tool-cache-proof-20260611.json"
+        path = root / "build/current-full-release-objective-checklist-after-qwen35-public-tunnel-stale-recapture-20260611.json"
         try:
             artifact = json.loads(path.read_text(encoding="utf-8"))
         except Exception:
@@ -817,7 +817,7 @@ CURRENT_SUITE_COMMANDS: dict[str, list[str]] = {
         sys.executable,
         "tests/cross_matrix/run_full_release_objective_checklist.py",
         "--out",
-        "build/current-full-release-objective-checklist-after-qwen35-auto-tool-cache-proof-20260611.json",
+        "build/current-full-release-objective-checklist-after-qwen35-public-tunnel-stale-recapture-20260611.json",
     ],
 }
 
