@@ -214,7 +214,11 @@ def test_noheavy_api_cache_contract_pins_named_server_rows():
     assert "test_dsv4_encoder_preserves_code_identifiers_on_direct_chat_rail" in required
 
     for command in gate.COMMANDS.values():
-        assert "-vv" in command
+        if command[:3] == ["npm", "--prefix", "panel"]:
+            assert "--reporter" in command
+            assert "verbose" in command
+        else:
+            assert "-vv" in command
 
 
 def test_noheavy_api_cache_contract_cache_stats_telemetry_is_first_class_check(monkeypatch):
