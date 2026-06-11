@@ -33,6 +33,11 @@ def _coerce_xml_tool_value(value: str) -> Any:
     try:
         return json.loads(stripped)
     except (json.JSONDecodeError, ValueError):
+        # Pretty XML wrappers often put scalar values on their own line:
+        # ``<parameter=x>\nvalue\n</parameter>``. Drop only those wrapper
+        # newlines; preserve same-line spacing and true multiline payloads.
+        if ("\n" in value or "\r" in value) and "\n" not in stripped and "\r" not in stripped:
+            return unescape(stripped)
         return unescape(value)
 
 

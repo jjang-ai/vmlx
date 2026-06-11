@@ -3016,6 +3016,29 @@ class TestFallbackToolPromptFormat:
         assert calls[0].function.name == "list_directory"
         assert '"path": "."' in calls[0].function.arguments
 
+    def test_generic_parser_trims_pretty_wrapper_newlines_only(self):
+        from vmlx_engine.api.tool_calling import parse_tool_calls
+
+        text = (
+            "<tool_call>\n"
+            "<function=record_fact>\n"
+            "<parameter=value>\nblue-cat\n</parameter>\n"
+            "<parameter=cmd>  printf '&lt;日本語&gt;' &amp;&amp; pwd  </parameter>\n"
+            "<parameter=content>line one\nline two</parameter>\n"
+            "</function>\n"
+            "</tool_call>"
+        )
+
+        cleaned, calls = parse_tool_calls(text)
+
+        assert cleaned == ""
+        assert calls
+        assert calls[0].function.name == "record_fact"
+        args = json.loads(calls[0].function.arguments)
+        assert args["value"] == "blue-cat"
+        assert args["cmd"] == "  printf '<日本語>' && pwd  "
+        assert args["content"] == "line one\nline two"
+
     def test_generic_parser_handles_dsv4_use_json_tool_call(self):
         """Live DSV4 JANGTQ2 can emit a compact <use_tool JSON> call.
 

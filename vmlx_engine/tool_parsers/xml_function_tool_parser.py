@@ -75,6 +75,12 @@ class XMLFunctionToolParser(ToolParser):
         try:
             return json.loads(stripped)
         except (json.JSONDecodeError, ValueError):
+            # Pretty-printed XML wrappers often emit
+            # ``<parameter=x>\nscalar\n</parameter>``. Treat only those outer
+            # wrapper newlines as markup, while preserving same-line spacing
+            # and true multiline payloads.
+            if ("\n" in value or "\r" in value) and "\n" not in stripped and "\r" not in stripped:
+                return unescape(stripped)
             return unescape(value)
 
     @staticmethod
