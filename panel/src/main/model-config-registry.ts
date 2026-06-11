@@ -511,6 +511,31 @@ function gemmaAudioRuntimeAvailable(modelPath: string): boolean {
   return modelHasIndexedWeight(modelPath, key => key.startsWith('audio_tower.'))
 }
 
+function configDeclaresAudio(config: any): boolean {
+  if (!config || typeof config !== 'object') return false
+  const containers = [
+    config,
+    config.text_config,
+    config.processor_config,
+    config.audio_config,
+  ].filter((item): item is Record<string, unknown> => !!item && typeof item === 'object')
+  if (containers.some(container => container.audio_config != null)) return true
+  return containers.some(container =>
+    [
+      'audio_token_id',
+      'audio_token_index',
+      'audio_start_token_id',
+      'audio_end_token_id',
+    ].some(key => container[key] != null),
+  )
+}
+
+function modelHasLikelyAudioWeights(modelPath: string): boolean {
+  return modelHasIndexedWeight(modelPath, key =>
+    /(^|\.)(audio_tower|audio_encoder|speech_embeddings|audio_model|whisper|audio_projector|embed_audio)(\.|$)/.test(key),
+  )
+}
+
 function mimoV2MediaRuntimeOverlayRequested(): boolean {
   return ['1', 'true', 'yes', 'on'].includes(
     String(process.env.VMLINUX_MIMO_V2_ENABLE_TEXT_RUNTIME_MEDIA_OVERLAY ?? '').toLowerCase(),
@@ -884,10 +909,19 @@ function applyIndexedWeightCapabilityHints(
   parsedConfig: any,
   modelPath: string,
 ): DetectedConfig {
+  if (!parsedConfig || typeof parsedConfig !== 'object') return detected
   if (detected.family !== 'gemma4' && detected.family !== 'gemma4-text') {
+    if (detected.isMultimodal && !configDeclaresAudio(parsedConfig) && !modelHasLikelyAudioWeights(modelPath)) {
+      return {
+        ...detected,
+        architectureHints: {
+          ...(detected.architectureHints ?? {}),
+          audioRuntimeAvailable: false,
+        },
+      }
+    }
     return detected
   }
-  if (!parsedConfig || typeof parsedConfig !== 'object') return detected
   const declaresAudio =
     parsedConfig.audio_config != null ||
     parsedConfig.audio_token_id != null ||

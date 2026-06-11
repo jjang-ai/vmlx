@@ -1216,6 +1216,42 @@ describe('detectModelConfigFromDir JANG multimodal detection', () => {
     expect(detected.isMultimodal).toBe(true)
   })
 
+  it('marks Qwen/N2 JANGTQ vision-video bundles audio-unavailable without weight-backed audio', () => {
+    const dir = makeModelDir(
+      {
+        model_type: 'qwen3_5_moe',
+        text_config: {
+          model_type: 'qwen3_5_moe_text',
+          layer_types: ['linear_attention', 'full_attention'],
+        },
+        vision_config: { hidden_size: 1024 },
+        image_token_id: 248056,
+        video_token_id: 248057,
+      },
+      {
+        format: 'jangtq',
+        weight_format: 'mxtq',
+        capabilities: {
+          family: 'qwen3_5_moe',
+          modality: 'vision',
+          cache_type: 'hybrid',
+        },
+      },
+    )
+    writeFileSync(join(dir, 'model.safetensors.index.json'), JSON.stringify({
+      weight_map: {
+        'language_model.model.embed_tokens.weight': 'model.safetensors',
+        'vision_tower.blocks.0.attn.qkv.weight': 'model.safetensors',
+      },
+    }))
+
+    const detected = detectModelConfigFromDir(dir)
+
+    expect(detected.family).toBe('qwen3.5-moe')
+    expect(detected.isMultimodal).toBe(true)
+    expect(detected.architectureHints?.audioRuntimeAvailable).toBe(false)
+  })
+
   it('documents Qwen 3.6 release rows intentionally use qwen3.5 family aliases', () => {
     const dense = makeModelDir({
       model_type: 'qwen3_5',

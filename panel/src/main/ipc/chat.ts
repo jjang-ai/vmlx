@@ -1231,8 +1231,7 @@ export function registerChatHandlers(
       }
       const modelDisallowsAudioAttachments =
         !isRemote &&
-        modelAudioRuntimeAvailable === false &&
-        (chatDetectedFamily === "gemma4" || chatDetectedFamily === "gemma4-text");
+        modelAudioRuntimeAvailable === false;
       const effectiveAttachments = modelDisallowsAudioAttachments
         ? (attachments || []).filter((a) => inferKind(a) !== "audio")
         : attachments;
