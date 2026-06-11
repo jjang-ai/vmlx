@@ -38,7 +38,14 @@ from vmlx_engine.tool_parsers import (
     DeepSeekToolParser,
     ToolParserManager,
 )
+from vmlx_engine.tool_parsers.glm47_tool_parser import Glm47ToolParser
+from vmlx_engine.tool_parsers.hunyuan_tool_parser import HunyuanToolParser
+from vmlx_engine.tool_parsers.minimax_tool_parser import MiniMaxToolParser
+from vmlx_engine.tool_parsers.nemotron_tool_parser import NemotronToolParser
+from vmlx_engine.tool_parsers.auto_tool_parser import AutoToolParser
+from vmlx_engine.tool_parsers.step3p5_tool_parser import Step3p5ToolParser
 from vmlx_engine.tool_parsers.xml_function_tool_parser import XMLFunctionToolParser
+from vmlx_engine.tool_parsers.zaya_tool_parser import ZayaToolParser
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -883,3 +890,100 @@ class TestXMLFunctionToolParserEdgeCases:
 
         assert result.tools_called is False
         assert result.tool_calls == []
+
+    def test_value_wrapper_preserves_inner_spacing_and_entities(self):
+        parser = XMLFunctionToolParser(tokenizer=None)
+        text = (
+            "<tool_call><function=exec_command>"
+            "<parameter=cmd><value>  printf '&lt;wrapped&gt;'  </value></parameter>"
+            "</function></tool_call>"
+        )
+
+        result = parser.extract_tool_calls(text)
+
+        assert result.tools_called is True
+        args = json.loads(result.tool_calls[0]["arguments"])
+        assert args["cmd"] == "  printf '<wrapped>'  "
+
+
+class TestXMLFamilyToolArgumentPreservation:
+    """XML-style family parsers must not trim user string payloads."""
+
+    @pytest.mark.parametrize(
+        ("parser_cls", "text", "expected"),
+        [
+            (
+                NemotronToolParser,
+                (
+                    "<tool_call><function=exec_command>"
+                    "<parameter=cmd>  printf '&lt;nemo&gt;' &amp;&amp; pwd  </parameter>"
+                    "</function></tool_call>"
+                ),
+                "  printf '<nemo>' && pwd  ",
+            ),
+            (
+                ZayaToolParser,
+                (
+                    "<zyphra_tool_call><function=exec_command>"
+                    "<parameter=cmd><value>  printf '&lt;zaya&gt;' &amp;&amp; pwd  </value></parameter>"
+                    "</function></zyphra_tool_call>"
+                ),
+                "  printf '<zaya>' && pwd  ",
+            ),
+            (
+                Glm47ToolParser,
+                (
+                    "<tool_call>exec_command\n"
+                    "<arg_key>cmd</arg_key><arg_value>  printf '&lt;glm&gt;' &amp;&amp; pwd  </arg_value>"
+                    "</tool_call>"
+                ),
+                "  printf '<glm>' && pwd  ",
+            ),
+            (
+                HunyuanToolParser,
+                (
+                    "<tool_calls><tool_call>exec_command<tool_sep>"
+                    "<arg_key>cmd</arg_key><arg_value>  printf '&lt;hy&gt;' &amp;&amp; pwd  </arg_value>"
+                    "</tool_call></tool_calls>"
+                ),
+                "  printf '<hy>' && pwd  ",
+            ),
+            (
+                MiniMaxToolParser,
+                (
+                    "<minimax:tool_call><invoke name=\"exec_command\">"
+                    "<parameter name=\"cmd\">  printf '&lt;mini&gt;' &amp;&amp; pwd  </parameter>"
+                    "</invoke></minimax:tool_call>"
+                ),
+                "  printf '<mini>' && pwd  ",
+            ),
+            (
+                Step3p5ToolParser,
+                (
+                    "<tool_call><function=exec_command>"
+                    "<parameter=cmd>  printf '&lt;step&gt;' &amp;&amp; pwd  </parameter>"
+                    "</function></tool_call>"
+                ),
+                "  printf '<step>' && pwd  ",
+            ),
+            (
+                AutoToolParser,
+                (
+                    "<tool_call><function=exec_command>"
+                    "<parameter=cmd>  printf '&lt;auto&gt;' &amp;&amp; pwd  </parameter>"
+                    "</function></tool_call>"
+                ),
+                "  printf '<auto>' && pwd  ",
+            ),
+        ],
+    )
+    def test_xml_family_preserves_plain_string_spacing_and_entities(
+        self, parser_cls, text, expected
+    ):
+        parser = parser_cls(tokenizer=None)
+
+        result = parser.extract_tool_calls(text)
+
+        assert result.tools_called is True
+        args = json.loads(result.tool_calls[0]["arguments"])
+        assert args["cmd"] == expected

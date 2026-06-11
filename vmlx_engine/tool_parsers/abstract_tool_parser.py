@@ -13,6 +13,7 @@ from abc import ABC, abstractmethod
 from collections.abc import Sequence
 from dataclasses import dataclass
 from functools import cached_property
+from html import unescape
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -250,7 +251,7 @@ class ToolParser(ABC):
         param_name, param_value = match.groups()
         if param_name not in properties:
             return arguments
-        return json.dumps({param_name: param_value.strip()}, ensure_ascii=False)
+        return json.dumps({param_name: unescape(param_value)}, ensure_ascii=False)
 
 
 class ToolParserManager:

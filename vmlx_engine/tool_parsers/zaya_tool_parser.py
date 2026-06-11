@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 import re
 from collections.abc import Sequence
+from html import unescape
 from typing import Any
 
 from .abstract_tool_parser import (
@@ -41,22 +42,21 @@ class ZayaToolParser(ToolParser):
         re.DOTALL,
     )
     PARAM_PATTERN = re.compile(
-        r"<parameter=([^>]+)>\s*([\s\S]*?)(?=(?:</parameter>)?\s*<parameter=|</function>|$)",
+        r"<parameter=([^>]+)>([\s\S]*?)(?=(?:</parameter>)?\s*<parameter=|</function>|$)",
         re.DOTALL,
     )
     VALUE_WRAPPER_PATTERN = re.compile(
-        r"^<value>\s*(.*?)\s*</value>$",
+        r"^<value>(.*?)</value>$",
         re.DOTALL,
     )
 
     @classmethod
     def _clean_parameter_value(cls, value: str) -> str:
-        value = value.strip()
-        value = re.sub(r"\s*</parameter>\s*$", "", value, flags=re.DOTALL).strip()
-        wrapped = cls.VALUE_WRAPPER_PATTERN.match(value)
+        value = re.sub(r"</parameter>\s*$", "", value, flags=re.DOTALL)
+        wrapped = cls.VALUE_WRAPPER_PATTERN.match(value.strip())
         if wrapped:
-            value = wrapped.group(1).strip()
-        return value
+            value = wrapped.group(1)
+        return unescape(value)
 
     def extract_tool_calls(
         self, model_output: str, request: dict[str, Any] | None = None

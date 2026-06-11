@@ -8,6 +8,7 @@ Automatically detects and parses tool calls from various model formats.
 import json
 import re
 from collections.abc import Sequence
+from html import unescape
 from typing import Any
 
 from .abstract_tool_parser import (
@@ -46,7 +47,7 @@ class AutoToolParser(ToolParser):
         r"<tool_call>\s*<function=([^>]+)>(.*?)</function>\s*</tool_call>", re.DOTALL
     )
     NEMOTRON_PARAM_PATTERN = re.compile(
-        r"<parameter=([^>]+)>\s*(.*?)\s*</parameter>", re.DOTALL
+        r"<parameter=([^>]+)>(.*?)</parameter>", re.DOTALL
     )
 
     def extract_tool_calls(
@@ -146,7 +147,7 @@ class AutoToolParser(ToolParser):
                 try:
                     arguments[p_name.strip()] = json.loads(v)
                 except (json.JSONDecodeError, ValueError):
-                    arguments[p_name.strip()] = v
+                    arguments[p_name.strip()] = unescape(p_value)
             tool_calls.append(
                 {
                     "id": generate_tool_id(),

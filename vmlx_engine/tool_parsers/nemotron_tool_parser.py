@@ -11,6 +11,7 @@ Supports Nemotron-3-Nano-30B-A3B and similar models.
 import json
 import re
 from collections.abc import Sequence
+from html import unescape
 from typing import Any
 
 from .abstract_tool_parser import (
@@ -43,9 +44,17 @@ class NemotronToolParser(ToolParser):
 
     # Pattern to extract parameters
     PARAM_PATTERN = re.compile(
-        r"<parameter=([^>]+)>\s*(.*?)\s*</parameter>",
+        r"<parameter=([^>]+)>(.*?)</parameter>",
         re.DOTALL,
     )
+
+    @staticmethod
+    def _coerce_parameter_value(value: str) -> Any:
+        stripped = value.strip()
+        try:
+            return json.loads(stripped)
+        except (json.JSONDecodeError, ValueError):
+            return unescape(value)
 
     def extract_tool_calls(
         self, model_output: str, request: dict[str, Any] | None = None
@@ -90,11 +99,9 @@ class NemotronToolParser(ToolParser):
             if params:
                 arguments = {}
                 for param_name, param_value in params:
-                    # Try to parse value as JSON (for nested objects)
-                    try:
-                        arguments[param_name.strip()] = json.loads(param_value.strip())
-                    except json.JSONDecodeError:
-                        arguments[param_name.strip()] = param_value.strip()
+                    arguments[param_name.strip()] = self._coerce_parameter_value(
+                        param_value
+                    )
 
                 if not self._arguments_satisfy_required_schema(
                     func_name, arguments, request

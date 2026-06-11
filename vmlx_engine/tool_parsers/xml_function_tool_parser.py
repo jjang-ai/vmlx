@@ -61,7 +61,7 @@ class XMLFunctionToolParser(ToolParser):
         re.DOTALL,
     )
     VALUE_WRAPPER_PATTERN = re.compile(
-        r"^<value>\s*(.*?)\s*</value>$",
+        r"^<value>(.*?)</value>$",
         re.DOTALL,
     )
 

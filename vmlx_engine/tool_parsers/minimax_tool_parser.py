@@ -16,6 +16,7 @@ Supports MiniMax-M2.5 and MiniMax-M2 models.
 import json
 import re
 from collections.abc import Sequence
+from html import unescape
 from typing import Any
 
 from .abstract_tool_parser import (
@@ -45,15 +46,15 @@ def _convert_param_value(value: str) -> Any:
     Tries JSON parsing first (handles arrays, objects, numbers, booleans, null),
     falls back to raw string.
     """
-    value = value.strip()
-    if not value:
+    stripped = value.strip()
+    if not stripped:
         return value
 
     # Try JSON parsing (handles null, true, false, numbers, objects, arrays)
     try:
-        return json.loads(value)
+        return json.loads(stripped)
     except (json.JSONDecodeError, ValueError):
-        return value
+        return unescape(value)
 
 
 @ToolParserManager.register_module(["minimax", "minimax_m2"])
@@ -256,9 +257,9 @@ class MiniMaxToolParser(ToolParser):
             arguments: dict[str, Any] = {}
             for param_name, param_value in params:
                 clean_name = _extract_name(param_name)
-                clean_value = param_value.strip()
+                clean_value = param_value
                 if clean_value.endswith("</parameter>"):
-                    clean_value = clean_value[: -len("</parameter>")].strip()
+                    clean_value = clean_value[: -len("</parameter>")]
                 arguments[clean_name] = _convert_param_value(clean_value)
             return {
                 "id": generate_tool_id(),

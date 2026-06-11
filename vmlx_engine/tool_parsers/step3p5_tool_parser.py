@@ -13,6 +13,7 @@ on the tool schema provided in the request.
 import json
 import re
 from collections.abc import Sequence
+from html import unescape
 from typing import Any
 
 from .abstract_tool_parser import (
@@ -55,7 +56,7 @@ class Step3p5ToolParser(ToolParser):
 
     # Pattern to extract <parameter=name>value</parameter>
     PARAM_PATTERN = re.compile(
-        r"<parameter=([^>]+)>\s*(.*?)\s*</parameter>",
+        r"<parameter=([^>]+)>(.*?)</parameter>",
         re.DOTALL,
     )
 
@@ -84,35 +85,36 @@ class Step3p5ToolParser(ToolParser):
         Matches vLLM step3p5 parser behavior: converts string values to
         int, float, or bool when the schema specifies those types.
         """
+        stripped = value.strip()
         if not schema:
-            return value
+            return unescape(value)
 
         param_type = schema.get("type", "string")
 
         if param_type == "integer":
             try:
-                return int(value)
+                return int(stripped)
             except (ValueError, TypeError):
-                return value
+                return unescape(value)
         elif param_type == "number":
             try:
-                return float(value)
+                return float(stripped)
             except (ValueError, TypeError):
-                return value
+                return unescape(value)
         elif param_type == "boolean":
-            lower = value.lower().strip()
+            lower = stripped.lower()
             if lower in ("true", "1", "yes"):
                 return True
             elif lower in ("false", "0", "no"):
                 return False
-            return value
+            return unescape(value)
         elif param_type == "array" or param_type == "object":
             try:
-                return json.loads(value)
+                return json.loads(stripped)
             except json.JSONDecodeError:
-                return value
+                return unescape(value)
 
-        return value
+        return unescape(value)
 
     def extract_tool_calls(
         self, model_output: str, request: dict[str, Any] | None = None
@@ -161,7 +163,6 @@ class Step3p5ToolParser(ToolParser):
                 arguments = {}
                 for param_name, param_value in params:
                     param_name = param_name.strip()
-                    param_value = param_value.strip()
 
                     # Type coercion based on schema
                     schema = self._get_param_schema(func_name, param_name, request)

@@ -35,6 +35,7 @@ from __future__ import annotations
 import json
 import re
 from collections.abc import Sequence
+from html import unescape
 from typing import Any
 
 from .abstract_tool_parser import (
@@ -64,7 +65,7 @@ class HunyuanToolParser(ToolParser):
         re.DOTALL,
     )
     ARG_VALUE_PATTERN = re.compile(
-        r"<arg_value>\s*(.*?)\s*</arg_value>",
+        r"<arg_value>(.*?)</arg_value>",
         re.DOTALL,
     )
     TOOL_SEP = "<tool_sep>"
@@ -72,12 +73,13 @@ class HunyuanToolParser(ToolParser):
     @staticmethod
     def _coerce(value: str) -> Any:
         """Match the contract's value coercion: try JSON, fall back to string."""
-        if not value:
+        stripped = value.strip()
+        if not stripped:
             return value
         try:
-            return json.loads(value)
+            return json.loads(stripped)
         except (json.JSONDecodeError, ValueError):
-            return value
+            return unescape(value)
 
     def extract_tool_calls(
         self,
@@ -101,7 +103,7 @@ class HunyuanToolParser(ToolParser):
                 values = self.ARG_VALUE_PATTERN.findall(args_blob)
                 arguments: dict[str, Any] = {}
                 for key, value in zip(keys, values):
-                    arguments[key.strip()] = self._coerce(value.strip())
+                    arguments[key.strip()] = self._coerce(value)
                 name = name.strip()
                 if not self._arguments_satisfy_required_schema(
                     name, arguments, request
