@@ -1535,18 +1535,19 @@ def _register_mimo_v2_mlx_vlm_runtime() -> None:
                 reverse_window_index_1d_col = mx.argsort(window_index_1d_col)
                 col_emb = self.apply_index(emb, window_index_1d_col)
                 col_based_embeddings = (mx.cos(col_emb), mx.sin(col_emb))
+                # Match the bundled MiMo-V2 PyTorch reference: attention
+                # segments are per temporal frame, not one segment per media
+                # item. This is neutral for still images (grid_t=1) but avoids
+                # cross-frame leakage for video grids.
+                frame_lengths = [
+                    int(grid_h) * int(grid_w)
+                    for grid_t, grid_h, grid_w in grid_rows
+                    for _ in range(int(grid_t))
+                ]
                 cu_seqlens = mx.concatenate(
                     [
                         mx.array([0], dtype=mx.int32),
-                        mx.cumsum(
-                            mx.array(
-                                [
-                                    int(grid_t) * int(grid_h) * int(grid_w)
-                                    for grid_t, grid_h, grid_w in grid_rows
-                                ],
-                                dtype=mx.int32,
-                            )
-                        ),
+                        mx.cumsum(mx.array(frame_lengths, dtype=mx.int32)),
                     ],
                     axis=0,
                 )
