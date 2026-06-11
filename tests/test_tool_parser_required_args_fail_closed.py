@@ -59,6 +59,15 @@ RECORD_FACT_REQUEST = {
             '[Calling tool: record_fact({"value":"blue-cat"})]',
         ),
         (
+            QwenToolParser,
+            "<tool_call><function=record_fact></function></tool_call>",
+            (
+                "<tool_call><function=record_fact>"
+                "<parameter=value>blue-cat</parameter>"
+                "</function></tool_call>"
+            ),
+        ),
+        (
             MistralToolParser,
             '[TOOL_CALLS] [{"name":"record_fact","arguments":{}}]',
             '[TOOL_CALLS] [{"name":"record_fact","arguments":{"value":"blue-cat"}}]',

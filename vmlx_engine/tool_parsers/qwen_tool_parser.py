@@ -10,6 +10,7 @@ Handles Qwen's tool calling formats:
 import json
 import re
 from collections.abc import Sequence
+from html import unescape
 from typing import Any
 
 from .abstract_tool_parser import (
@@ -38,8 +39,29 @@ class QwenToolParser(ToolParser):
     # Pattern for XML-style: <tool_call>{"json"}</tool_call>
     XML_PATTERN = re.compile(r"<tool_call>\s*(\{.*?\})\s*</tool_call>", re.DOTALL)
 
+    # Qwen-coder-next / Qwen XML-function dialect:
+    # <tool_call><function=name><parameter=arg>value</parameter></function></tool_call>
+    FUNCTION_XML_PATTERN = re.compile(
+        r"(?:<tool_call>\s*)?<function=([^>]+)>(.*?)</function>\s*(?:</tool_call>)?",
+        re.DOTALL,
+    )
+    PARAM_XML_PATTERN = re.compile(
+        r"<parameter=([^>]+)>(.*?)</parameter>",
+        re.DOTALL,
+    )
+
     # Pattern for bracket-style: [Calling tool: func_name({...})]
     BRACKET_PATTERN = re.compile(r"\[Calling tool:\s*(\w+)\((\{.*?\})\)\]", re.DOTALL)
+
+    @staticmethod
+    def _coerce_xml_parameter_value(value: str) -> Any:
+        stripped = value.strip()
+        try:
+            return json.loads(stripped)
+        except (json.JSONDecodeError, ValueError):
+            if ("\n" in value or "\r" in value) and "\n" not in stripped and "\r" not in stripped:
+                return unescape(stripped)
+            return unescape(value)
 
     @staticmethod
     def _strip_think_tags_preserve_outer(text: str) -> str:
@@ -153,6 +175,43 @@ class QwenToolParser(ToolParser):
         if xml_matches:
             cleaned_text = self.XML_PATTERN.sub("", cleaned_text).strip()
 
+        function_xml_matches = self.FUNCTION_XML_PATTERN.findall(cleaned_text)
+        for name, body in function_xml_matches:
+            name = name.strip()
+            if not name:
+                continue
+            params = self.PARAM_XML_PATTERN.findall(body)
+            if params:
+                arguments = {
+                    param_name.strip(): self._coerce_xml_parameter_value(param_value)
+                    for param_name, param_value in params
+                    if param_name.strip()
+                }
+            else:
+                raw_body = body.strip()
+                if raw_body.startswith("{"):
+                    try:
+                        parsed = json.loads(raw_body)
+                    except json.JSONDecodeError:
+                        parsed = {}
+                    arguments = parsed if isinstance(parsed, dict) else {}
+                else:
+                    arguments = {}
+            if not self._arguments_satisfy_required_schema(
+                name, arguments, request
+            ):
+                continue
+            tool_calls.append(
+                {
+                    "id": generate_tool_id(),
+                    "name": name,
+                    "arguments": json.dumps(arguments, ensure_ascii=False),
+                }
+            )
+
+        if function_xml_matches:
+            cleaned_text = self.FUNCTION_XML_PATTERN.sub("", cleaned_text).strip()
+
         if tool_calls:
             return ExtractedToolCallInformation(
                 tools_called=True,
@@ -189,7 +248,9 @@ class QwenToolParser(ToolParser):
         """
         # Check for tool call markers
         has_tool_marker = (
-            "<tool_call>" in current_text or "[Calling tool:" in current_text
+            "<tool_call>" in current_text
+            or "<function=" in current_text
+            or "[Calling tool:" in current_text
         )
 
         if not has_tool_marker:
@@ -197,7 +258,7 @@ class QwenToolParser(ToolParser):
 
         # If we're in a tool call, accumulate and parse at the end
         # For simplicity, return None during accumulation
-        if "</tool_call>" in delta_text or ")]" in delta_text:
+        if "</tool_call>" in delta_text or "</function>" in delta_text or ")]" in delta_text:
             # Tool call complete, parse the whole thing
             result = self.extract_tool_calls(current_text, request=request)
             if result.tools_called:
