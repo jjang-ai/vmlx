@@ -937,7 +937,7 @@ function applyJangCapabilities(
   } else if (next.family === 'minimax') {
     next.reasoningParser = 'minimax_m2'
   } else if (next.family === 'mimo_v2') {
-    next.reasoningParser = undefined
+    next.reasoningParser = 'think_xml'
     next.supportsThinking = false
     next.thinkInTemplate = false
     next.defaultEnableThinking = false
