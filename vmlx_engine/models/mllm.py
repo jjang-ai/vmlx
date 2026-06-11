@@ -1109,11 +1109,32 @@ def _register_mimo_v2_mlx_vlm_runtime() -> None:
 
             # Fail loudly if the artifact names a module that the MiMo runtime
             # does not expose. This distinguishes runtime incompatibility from
-            # corruption instead of silently dropping expert weights.
-            _mimo_v2_get_module(model, base)
+            # corruption instead of silently dropping expert weights. Use the
+            # existing module's declared input width as source of truth instead
+            # of deriving blindly from packed columns; that matches the current
+            # jang_tools JANGTQ hydrator contract and keeps future bit layouts
+            # from silently widening inputs.
+            existing = _mimo_v2_get_module(model, base)
 
             num_experts, out_features, packed_cols = packed.shape
-            in_features = packed_cols * (32 // bits)
+            derived_in_features = int(packed_cols) * (32 // bits)
+            expected_in_features = (
+                getattr(existing, "in_features", None)
+                or getattr(existing, "input_dims", None)
+            )
+            if not isinstance(expected_in_features, int) or expected_in_features <= 0:
+                expected_in_features = None
+            if (
+                expected_in_features is not None
+                and expected_in_features != derived_in_features
+                and bits in (2, 4, 8)
+            ):
+                raise RuntimeError(
+                    f"MiMo-V2 prestacked JANGTQ group {base} input width mismatch: "
+                    f"expected={expected_in_features}, derived={derived_in_features}, "
+                    f"bits={bits}, packed_cols={packed_cols}"
+                )
+            in_features = expected_in_features or derived_in_features
             tq_module = TurboQuantSwitchLinear(
                 in_features=in_features,
                 out_features=out_features,
