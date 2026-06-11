@@ -124,6 +124,7 @@ function buildRequestBody(
         const explicitToolChoice = inferExplicitToolChoice(true)
         const suppressToolChoice = suppressPinnedToolChoiceForLoopback && detectedFamily !== 'gemma4'
         if (explicitToolChoice && !suppressToolChoice) obj.tool_choice = explicitToolChoice
+        else if (explicitToolChoice && suppressToolChoice) obj.tool_choice = 'auto'
         if (effectiveEnableThinkingOverride !== undefined) {
             obj.enable_thinking = effectiveEnableThinkingOverride
         } else if (isRemote) {
@@ -154,6 +155,7 @@ function buildRequestBody(
         const explicitToolChoice = inferExplicitToolChoice(false)
         const suppressToolChoice = suppressPinnedToolChoiceForLoopback && detectedFamily !== 'gemma4'
         if (explicitToolChoice && !suppressToolChoice) obj.tool_choice = explicitToolChoice
+        else if (explicitToolChoice && suppressToolChoice) obj.tool_choice = 'auto'
         if (effectiveEnableThinkingOverride !== undefined) {
             obj.enable_thinking = effectiveEnableThinkingOverride
         } else if (isRemote) {
@@ -814,7 +816,7 @@ describe('buildRequestBody — Tool format', () => {
         })
     })
 
-    it('does not pin tool_choice for non-Gemma loopback remote vMLX sessions', () => {
+    it('downgrades explicit tool_choice to auto for non-Gemma loopback remote vMLX sessions', () => {
         const body = buildRequestBody(
             'responses',
             'model',
@@ -832,7 +834,28 @@ describe('buildRequestBody — Tool format', () => {
         )
 
         expect(body.tools?.[0]?.name).toBe('read_file')
-        expect(body.tool_choice).toBeUndefined()
+        expect(body.tool_choice).toBe('auto')
+    })
+
+    it('downgrades Chat explicit tool_choice to auto for non-Gemma loopback remote vMLX sessions', () => {
+        const body = buildRequestBody(
+            'completions',
+            'model',
+            [
+                { role: 'system', content: 'You are helpful.' },
+                { role: 'user', content: 'Use the run_command tool exactly once.' },
+            ],
+            { builtinToolsEnabled: true },
+            true,
+            false,
+            sampleTools,
+            'qwen3',
+            undefined,
+            true,
+        )
+
+        expect(body.tools?.[0]?.function?.name).toBe('read_file')
+        expect(body.tool_choice).toBe('auto')
     })
 
     it('pins tool_choice for Gemma4 loopback remote vMLX sessions', () => {

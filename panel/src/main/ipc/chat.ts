@@ -233,6 +233,12 @@ function summarizeRequestForLog(bodyJson: string, useResponsesApi: boolean): Rec
       thinking_budget: body.chat_template_kwargs?.thinking_budget,
       previous_response_id: body.previous_response_id ? "<present>" : undefined,
       has_tools: Array.isArray(body.tools) && body.tools.length > 0,
+      tool_choice:
+        typeof body.tool_choice === "string"
+          ? body.tool_choice
+          : body.tool_choice
+            ? "<present>"
+            : undefined,
       messages: Array.isArray(items)
         ? items.slice(-8).map((m: any) => ({
             role: m.role || m.type || "item",
@@ -1827,12 +1833,19 @@ export function registerChatHandlers(
                 filteredTools,
                 true,
               );
+              const suppressExplicitToolChoice =
+                explicitToolChoice && suppressPinnedToolChoiceForLoopback;
               if (
                 explicitToolChoice &&
                 !isResponsesToolFollowup &&
-                !suppressPinnedToolChoiceForLoopback
+                !suppressExplicitToolChoice
               ) {
                 obj.tool_choice = explicitToolChoice;
+              } else if (
+                suppressExplicitToolChoice &&
+                !isResponsesToolFollowup
+              ) {
+                obj.tool_choice = "auto";
               }
             }
             // enable_thinking: explicit user override sent to both local and remote.
@@ -1910,12 +1923,19 @@ export function registerChatHandlers(
                 obj.tools,
                 false,
               );
+              const suppressExplicitToolChoice =
+                explicitToolChoice && suppressPinnedToolChoiceForLoopback;
               if (
                 explicitToolChoice &&
                 !suppressExplicitToolChoiceForToolFollowup &&
-                !suppressPinnedToolChoiceForLoopback
+                !suppressExplicitToolChoice
               ) {
                 obj.tool_choice = explicitToolChoice;
+              } else if (
+                suppressExplicitToolChoice &&
+                !suppressExplicitToolChoiceForToolFollowup
+              ) {
+                obj.tool_choice = "auto";
               }
             }
             // enable_thinking: explicit user override sent to both local and remote.
