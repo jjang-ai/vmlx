@@ -335,6 +335,36 @@ class TestQwenToolParser:
         args = json.loads(result.tool_calls[0]["arguments"])
         assert args == {"command": 'echo "Tool test successful!"'}
 
+    def test_plain_tool_name_then_argument_preserves_spacing_and_newlines(
+        self, parser
+    ):
+        """Schema-gated Qwen plain-line fallback must not rewrite strings."""
+        request = {
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "bash",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {"command": {"type": "string"}},
+                            "required": ["command"],
+                        },
+                    },
+                }
+            ]
+        }
+
+        result = parser.extract_tool_calls(
+            "  bash  \n  printf '<日本語>' && pwd  \nnext  ",
+            request=request,
+        )
+
+        assert result.tools_called
+        assert result.content is None
+        args = json.loads(result.tool_calls[0]["arguments"])
+        assert args == {"command": "  printf '<日本語>' && pwd  \nnext  "}
+
     def test_bracket_format(self, parser):
         """Test parsing Qwen bracket format (Qwen3 style)."""
         text = '[Calling tool: add({"a": 5, "b": 3})]'

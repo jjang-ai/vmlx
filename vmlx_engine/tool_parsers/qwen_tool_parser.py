@@ -14,8 +14,11 @@ from typing import Any
 
 from .abstract_tool_parser import (
     ExtractedToolCallInformation,
+    IMPLICIT_THINK_PATTERN,
     ToolParser,
     ToolParserManager,
+    THINK_TAG_PATTERN,
+    UNCLOSED_THINK_PATTERN,
     generate_tool_id,
 )
 
@@ -38,15 +41,27 @@ class QwenToolParser(ToolParser):
     # Pattern for bracket-style: [Calling tool: func_name({...})]
     BRACKET_PATTERN = re.compile(r"\[Calling tool:\s*(\w+)\((\{.*?\})\)\]", re.DOTALL)
 
+    @staticmethod
+    def _strip_think_tags_preserve_outer(text: str) -> str:
+        result = THINK_TAG_PATTERN.sub("", text)
+        if result == text and ("</think>" in text or "[/THINK]" in text):
+            result = IMPLICIT_THINK_PATTERN.sub("", text)
+        if "<think>" in result or "[THINK]" in result:
+            result = UNCLOSED_THINK_PATTERN.sub("", result)
+        return result
+
     @classmethod
     def _plain_tool_line_call(
         cls, text: str, request: dict[str, Any] | None
     ) -> dict[str, Any] | None:
-        lines = [line.strip() for line in text.strip().splitlines()]
-        lines = [line for line in lines if line]
-        if len(lines) < 2:
+        raw_lines = text.splitlines(keepends=True)
+        tool_line_index = next(
+            (i for i, line in enumerate(raw_lines) if line.strip()),
+            None,
+        )
+        if tool_line_index is None or tool_line_index + 1 >= len(raw_lines):
             return None
-        tool_name = lines[0]
+        tool_name = raw_lines[tool_line_index].strip()
         schema = cls._function_schema_for_tool(request, tool_name)
         if not isinstance(schema, dict):
             return None
@@ -64,8 +79,8 @@ class QwenToolParser(ToolParser):
         param_type = param_schema.get("type")
         if param_type not in (None, "string"):
             return None
-        value = "\n".join(lines[1:]).strip()
-        if not value:
+        value = "".join(raw_lines[tool_line_index + 1 :])
+        if not value.strip():
             return None
         return {
             "id": generate_tool_id(),
@@ -144,7 +159,10 @@ class QwenToolParser(ToolParser):
                 tool_calls=tool_calls,
                 content=cleaned_text if cleaned_text else None,
             )
-        plain_call = self._plain_tool_line_call(cleaned_text, request)
+        plain_call = self._plain_tool_line_call(
+            self._strip_think_tags_preserve_outer(model_output),
+            request,
+        )
         if plain_call is not None:
             return ExtractedToolCallInformation(
                 tools_called=True,

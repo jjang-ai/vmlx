@@ -54,6 +54,12 @@ class NemotronToolParser(ToolParser):
         try:
             return json.loads(stripped)
         except (json.JSONDecodeError, ValueError):
+            # Pretty-printed template XML often wraps scalar values as
+            # ``<parameter=x>\n.\n</parameter>``. Keep exact same-line string
+            # payloads intact, but do not treat those wrapper newlines as part
+            # of a one-line scalar argument.
+            if ("\n" in value or "\r" in value) and "\n" not in stripped and "\r" not in stripped:
+                return unescape(stripped)
             return unescape(value)
 
     def extract_tool_calls(
