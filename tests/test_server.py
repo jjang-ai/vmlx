@@ -2599,6 +2599,109 @@ class TestOpenAILogprobsFormatting:
         assert json.loads(function_items[-1]["arguments"]) == expected_args
 
     @pytest.mark.asyncio
+    async def test_streaming_responses_xml_tool_call_preserves_special_arguments(
+        self, monkeypatch
+    ):
+        """Responses SSE must preserve XML-function string argument text."""
+        import json
+        from types import SimpleNamespace
+
+        import vmlx_engine.server as server
+        from vmlx_engine.api.models import ResponsesRequest
+        from vmlx_engine.engine.base import GenerationOutput
+
+        class _Engine:
+            tokenizer = SimpleNamespace(has_thinking=False)
+
+            async def stream_chat(self, *, messages, **kwargs):
+                chunks = (
+                    (
+                        "Checking.\n<tool_call><function=exec_command>",
+                        False,
+                        None,
+                    ),
+                    (
+                        "<parameter=cmd>  printf '&lt;日本語&gt;' &amp;&amp; pwd  </parameter>",
+                        False,
+                        None,
+                    ),
+                    ("</function></tool_call>", True, "stop"),
+                )
+                text = ""
+                for idx, (delta, finished, reason) in enumerate(chunks, start=1):
+                    text += delta
+                    yield GenerationOutput(
+                        text=text,
+                        new_text=delta,
+                        tokens=[],
+                        prompt_tokens=5,
+                        completion_tokens=idx,
+                        finished=finished,
+                        finish_reason=reason,
+                    )
+
+        monkeypatch.setattr(server, "_default_timeout", 5.0)
+        monkeypatch.setattr(server, "_model_name", "unit-tool-model")
+        monkeypatch.setattr(server, "_model_path", None)
+        monkeypatch.setattr(server, "_reasoning_parser", None)
+        monkeypatch.setattr(server, "_tool_call_parser", "xml_function")
+
+        request = ResponsesRequest(
+            model="unit-tool-model",
+            input="run command",
+            stream=True,
+            tools=[
+                {
+                    "type": "function",
+                    "name": "exec_command",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"cmd": {"type": "string"}},
+                        "required": ["cmd"],
+                    },
+                }
+            ],
+        )
+
+        payloads: list[tuple[str, dict]] = []
+        async for event in server.stream_responses_api(
+            _Engine(),
+            [{"role": "user", "content": "run command"}],
+            request,
+            fastapi_request=None,
+        ):
+            if not event.startswith("event: "):
+                continue
+            event_type = event.splitlines()[0].removeprefix("event: ")
+            data_line = next(
+                line for line in event.splitlines() if line.startswith("data: ")
+            )
+            payloads.append((event_type, json.loads(data_line.removeprefix("data: "))))
+
+        expected_args = {"cmd": "  printf '<日本語>' && pwd  "}
+        arg_deltas = [
+            payload["delta"]
+            for event_type, payload in payloads
+            if event_type == "response.function_call_arguments.delta"
+        ]
+        arg_done = [
+            payload["arguments"]
+            for event_type, payload in payloads
+            if event_type == "response.function_call_arguments.done"
+        ]
+        function_items = [
+            payload["item"]
+            for event_type, payload in payloads
+            if event_type == "response.output_item.done"
+            and payload.get("item", {}).get("type") == "function_call"
+        ]
+
+        assert json.loads("".join(arg_deltas)) == expected_args
+        assert json.loads(arg_done[-1]) == expected_args
+        assert function_items[-1]["name"] == "exec_command"
+        assert json.loads(function_items[-1]["arguments"]) == expected_args
+
+    @pytest.mark.asyncio
     async def test_streaming_responses_tool_call_uses_next_output_index_without_text(
         self, monkeypatch
     ):
