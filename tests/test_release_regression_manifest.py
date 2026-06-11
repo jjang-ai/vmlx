@@ -12567,7 +12567,7 @@ def test_release_regression_manifest_runner_default_out_tracks_current_release_p
     from tests.cross_matrix import run_release_regression_manifest as runner
 
     assert runner.DEFAULT_OUT == Path(
-        "build/current-release-regression-manifest-after-dsv4-real-ui-valid-preflight-20260611.json"
+        "build/current-release-regression-manifest-after-n2-strict-loopback-consumed-20260611.json"
     )
 
 
@@ -15415,7 +15415,7 @@ def test_release_regression_manifest_tracks_packaged_integrity_with_runner_artif
     assert "bundled Python hash parity" in joined
     assert "objective proof digest" in joined
     assert (
-        "current-objective-proof-after-dsv4-real-ui-valid-preflight-20260611.json"
+        "current-objective-proof-after-n2-strict-loopback-consumed-20260611.json"
         in joined
     )
     assert "objective-gate-enforced" in joined
@@ -15486,7 +15486,7 @@ def test_release_regression_manifest_tracks_current_updater_and_i18n_rechecks():
     ling = rows["ling-bailing-multilingual-quality-live"]
     ling_joined = " ".join(ling["commands"] + ling["artifacts"] + ling["proves"])
     assert (
-        "current-objective-proof-after-dsv4-real-ui-valid-preflight-20260611.json"
+        "current-objective-proof-after-n2-strict-loopback-consumed-20260611.json"
         in ling_joined
     )
 

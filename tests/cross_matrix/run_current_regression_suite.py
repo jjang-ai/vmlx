@@ -42,7 +42,7 @@ DEFERRED_RELEASE_OPEN_REQUIREMENTS = {
 }
 
 CURRENT_OBJECTIVE_DIGEST_ARTIFACT = (
-    "build/current-objective-proof-after-dsv4-real-ui-valid-preflight-20260611.json"
+    "build/current-objective-proof-after-n2-strict-loopback-consumed-20260611.json"
 )
 
 CURRENT_SUITE_SOURCE_HASH_FILES = (
@@ -811,7 +811,7 @@ CURRENT_SUITE_COMMANDS: dict[str, list[str]] = {
         "--require-current-proof-sweep",
         "--require-release-ready",
         "--out",
-        "build/current-release-regression-manifest-after-dsv4-real-ui-valid-preflight-20260611.json",
+        "build/current-release-regression-manifest-after-n2-strict-loopback-consumed-20260611.json",
     ],
     "full_release_objective_checklist": [
         sys.executable,

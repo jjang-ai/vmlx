@@ -158,7 +158,7 @@ def test_release_gate_objective_digest_default_tracks_current_release_matrix():
         "--out",
         str(
             Path.cwd()
-            / "build/current-objective-proof-after-dsv4-real-ui-valid-preflight-20260611.json"
+            / "build/current-objective-proof-after-n2-strict-loopback-consumed-20260611.json"
         ),
     ]
 

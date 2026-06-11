@@ -1454,7 +1454,7 @@ def test_current_regression_suite_refreshes_release_regression_manifest(monkeypa
     )
     assert any(
         name == "release_regression_manifest"
-        and "build/current-release-regression-manifest-after-dsv4-real-ui-valid-preflight-20260611.json"
+        and "build/current-release-regression-manifest-after-n2-strict-loopback-consumed-20260611.json"
         in cmd
         for name, cmd in seen_steps
     )
@@ -1886,7 +1886,7 @@ def test_current_regression_suite_refreshes_current_objective_digest_artifact(
 
     assert artifact["status"] == "pass"
     assert suite.CURRENT_OBJECTIVE_DIGEST_ARTIFACT == (
-        "build/current-objective-proof-after-dsv4-real-ui-valid-preflight-20260611.json"
+        "build/current-objective-proof-after-n2-strict-loopback-consumed-20260611.json"
     )
     assert any(
         name == "objective_digest"

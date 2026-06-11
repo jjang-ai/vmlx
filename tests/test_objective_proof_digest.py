@@ -18,7 +18,7 @@ def test_objective_proof_digest_default_out_tracks_current_release_proof_artifac
     from tests.cross_matrix import summarize_objective_proof as objective
 
     assert objective.DEFAULT_OUT == Path(
-        "build/current-objective-proof-after-dsv4-real-ui-valid-preflight-20260611.json"
+        "build/current-objective-proof-after-n2-strict-loopback-consumed-20260611.json"
     )
 
 
@@ -111,6 +111,10 @@ def test_objective_proof_digest_tracks_n2_pro_397b_release_blocker():
         "build/current-real-ui-live-model-n2-jangtq2-dev-app-prevresp-proof-20260610.json"
         in row["evidence"]
     )
+    assert (
+        "build/current-n2-jangtq2-loopback-toolchoice-auto-longdelta-pass-20260611.json"
+        in row["evidence"]
+    )
     assert row["details"]["jangtq2_live_proof"]["status"] == "pass"
     assert row["details"]["jangtq2_live_proof"]["stable_text"] is True
     assert row["details"]["jangtq2_live_proof"]["tool_probe_pass"] is True
@@ -154,6 +158,21 @@ def test_objective_proof_digest_tracks_n2_pro_397b_release_blocker():
     assert row["details"]["jangtq2_real_ui_prevresp_proof"]["runtime_cache"][
         "cache_after"
     ]["l2_tokens_on_disk"] > 0
+    strict_loopback = row["details"]["jangtq2_strict_loopback_toolchoice_auto"]
+    assert strict_loopback["status"] == "pass"
+    assert strict_loopback["live_result"]["tool_probe_files"] == {
+        "real_ui_tool_probe_1.txt": "REAL_UI_LIVE_TOOL_ONE",
+        "real_ui_tool_probe_2.txt": "REAL_UI_LIVE_TOOL_TWO",
+    }
+    assert strict_loopback["live_result"]["event_counts"]["tool"] > 0
+    assert strict_loopback["live_result"]["cache"]["cache_detail"] == "paged+ssm"
+    assert strict_loopback["live_result"]["cache"]["ssm_l2_tokens_on_disk"] > 0
+    assert strict_loopback["live_result"]["native_cache"]["schema"] == (
+        "hybrid_ssm_v1"
+    )
+    assert strict_loopback["live_result"]["native_cache"][
+        "generic_turboquant_kv_enabled"
+    ] is True
     assert (
         "build/current-n2-jangtq2-responses-stream-boundary-20260610.json"
         in row["evidence"]
@@ -425,12 +444,12 @@ def _write_passing_base_artifacts(tmp_path: Path) -> None:
     )
     _write_json(
         tmp_path,
-        "build/current-objective-proof-after-dsv4-real-ui-valid-preflight-20260611.json",
+        "build/current-objective-proof-after-n2-strict-loopback-consumed-20260611.json",
         {"status": "fixture"},
     )
     _write_json(
         tmp_path,
-        "build/current-release-regression-manifest-after-dsv4-real-ui-valid-preflight-20260611.json",
+        "build/current-release-regression-manifest-after-n2-strict-loopback-consumed-20260611.json",
         {"status": "fixture"},
     )
     _write_json(

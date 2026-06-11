@@ -62,10 +62,10 @@ from tests.cross_matrix.release_regression_manifest import (
 
 
 DEFAULT_OUT = Path(
-    "build/current-objective-proof-after-dsv4-real-ui-valid-preflight-20260611.json"
+    "build/current-objective-proof-after-n2-strict-loopback-consumed-20260611.json"
 )
 CURRENT_RELEASE_REGRESSION_MANIFEST_REL = (
-    "build/current-release-regression-manifest-after-dsv4-real-ui-valid-preflight-20260611.json"
+    "build/current-release-regression-manifest-after-n2-strict-loopback-consumed-20260611.json"
 )
 DSV4_QUALITY_CLEARANCE_REL = "build/current-dsv4-long-output-quality-clearance-20260521.json"
 DSV4_CURRENT_IDENTIFIER_CANARY_REL = (
@@ -221,6 +221,9 @@ N2_JANGTQ2_CHAT_CACHE_RESPONSES_L2_PROOF_REL = (
 )
 N2_JANGTQ2_REAL_UI_PREVRESP_PROOF_REL = (
     "build/current-real-ui-live-model-n2-jangtq2-dev-app-prevresp-proof-20260610.json"
+)
+N2_JANGTQ2_STRICT_LOOPBACK_TOOLCHOICE_PROOF_REL = (
+    "build/current-n2-jangtq2-loopback-toolchoice-auto-longdelta-pass-20260611.json"
 )
 N2_JANGTQ2_RESPONSES_STREAM_BOUNDARY_REL = (
     "build/current-n2-jangtq2-responses-stream-boundary-20260610.json"
@@ -5633,6 +5636,9 @@ def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
     n2_jangtq2_real_ui_prevresp_proof = _load(
         root, N2_JANGTQ2_REAL_UI_PREVRESP_PROOF_REL
     )
+    n2_jangtq2_strict_loopback_proof = _load(
+        root, N2_JANGTQ2_STRICT_LOOPBACK_TOOLCHOICE_PROOF_REL
+    )
     n2_jangtq2_stream_boundary_proof = _load(
         root, N2_JANGTQ2_RESPONSES_STREAM_BOUNDARY_REL
     )
@@ -7360,6 +7366,7 @@ def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
             N2_JANGTQ2_CHAT_CACHE_RESPONSES_PROOF_REL,
             N2_JANGTQ2_CHAT_CACHE_RESPONSES_L2_PROOF_REL,
             N2_JANGTQ2_REAL_UI_PREVRESP_PROOF_REL,
+            N2_JANGTQ2_STRICT_LOOPBACK_TOOLCHOICE_PROOF_REL,
             N2_JANGTQ2_RESPONSES_STREAM_BOUNDARY_REL,
             N2_API_CACHE_CONTRACT_REL,
             N2_CACHE_ARCHITECTURE_CONTRACT_REL,
@@ -7730,9 +7737,32 @@ def build_digest(root: Path | str = Path(".")) -> dict[str, Any]:
                 "boundary": (
                     "Current Electron dev-app N2 JANGTQ2 default Responses "
                     "tool/cache proof with previous_response_id continuation. "
-                    "This supports the checkpoint candidate profile but does "
-                    "not clear stricter long-delta prompts, audio, public "
-                    "tunnel parity, N2 JANG_1L, or full release support."
+                    "This supports the checkpoint candidate profile. Stricter "
+                    "long-delta loopback tool pressure is tracked by the "
+                    "separate tool_choice=auto proof below; this default proof "
+                    "does not clear audio, public tunnel parity, N2 JANG_1L, or "
+                    "full release support."
+                ),
+            },
+            "jangtq2_strict_loopback_toolchoice_auto": {
+                "artifact": N2_JANGTQ2_STRICT_LOOPBACK_TOOLCHOICE_PROOF_REL,
+                "status": n2_jangtq2_strict_loopback_proof.get("status"),
+                "source_fix": n2_jangtq2_strict_loopback_proof.get("source_fix"),
+                "verification": n2_jangtq2_strict_loopback_proof.get(
+                    "verification"
+                ),
+                "live_result": n2_jangtq2_strict_loopback_proof.get("live_result"),
+                "no_claims": n2_jangtq2_strict_loopback_proof.get("no_claims"),
+                "boundary": (
+                    "Current Electron dev-app N2 JANGTQ2 strict long-delta "
+                    "Responses loopback proof. The specific required "
+                    "tool_choice is suppressed for local non-Gemma loopback "
+                    "sessions and replaced with tool_choice=auto, preserving "
+                    "tool pressure without triggering the required-tool error "
+                    "path. This clears the strict N2 JANGTQ2 loopback tool-loop "
+                    "red follow-up only; it does not clear public tunnel parity, "
+                    "media/audio, N2 JANG_1L, packaging, signing, notarization, "
+                    "or full release readiness."
                 ),
             },
             "jangtq2_responses_stream_boundary": {

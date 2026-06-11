@@ -24,7 +24,7 @@ from tests.cross_matrix.run_current_regression_suite import (
 )
 
 CURRENT_RELEASE_REGRESSION_MANIFEST_ARTIFACT = (
-    "build/current-release-regression-manifest-after-dsv4-real-ui-valid-preflight-20260611.json"
+    "build/current-release-regression-manifest-after-n2-strict-loopback-consumed-20260611.json"
 )
 
 EXPECTED_CURRENT_MODEL_ARTIFACT_CHECKS = (
@@ -1718,7 +1718,7 @@ _ROWS: list[dict[str, Any]] = [
             ".venv/bin/python tests/cross_matrix/run_packaged_integrity_contract.py --jang-tools-source /Users/example/jang/.worktrees/vmlx-release-clean-b5f66a7/jang-tools --out build/current-packaged-integrity-contract-20260522-recheck-bundled-release-gate.json",
         ],
         "artifacts": [
-            "build/current-objective-proof-after-dsv4-real-ui-valid-preflight-20260611.json",
+            "build/current-objective-proof-after-n2-strict-loopback-consumed-20260611.json",
             "build/current-packaged-integrity-contract-after-checkpoint-app-parity-20260609.json",
             "build/current-packaged-integrity-contract-20260601-dsv4-preflight-refresh.json",
             "build/current-packaged-integrity-contract-20260601-qwen3vl-minicpm-mpp-staged-refresh.json",
@@ -1887,12 +1887,12 @@ _ROWS: list[dict[str, Any]] = [
             "The clearance boundary is based on live artifacts, not a hidden sampler/repetition/default override",
         ],
         "commands": [
-            ".venv/bin/python tests/cross_matrix/summarize_objective_proof.py --out build/current-objective-proof-after-dsv4-real-ui-valid-preflight-20260611.json",
+            ".venv/bin/python tests/cross_matrix/summarize_objective_proof.py --out build/current-objective-proof-after-n2-strict-loopback-consumed-20260611.json",
             ".venv/bin/python tests/cross_matrix/run_production_family_audit.py --rows ling_flash_tq --live --py /Applications/vMLX.app/Contents/Resources/bundled-python/python/bin/python3.12 --out build/current-production-family-live-ling-bundled-current-20260606.json",
         ],
         "artifacts": [
             "build/current-production-family-live-ling-bundled-current-20260606.json",
-            "build/current-objective-proof-after-dsv4-real-ui-valid-preflight-20260611.json",
+            "build/current-objective-proof-after-n2-strict-loopback-consumed-20260611.json",
             "build/current-ling-jangtq-strict-russian-nocache-bundled-4850c9c2-20260524.json",
             "build/current-ling-mxfp4-crack-strict-russian-nocache-bundled-4850c9c2-20260524.json",
             "build/current-ling-jangtq-russian-prompt-variant-probe-20260524.json",
