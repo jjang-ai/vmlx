@@ -77,9 +77,9 @@ def test_issue179_audit_keeps_reporter_cancel_404_boundary_open():
     assert audit["local_reporter_prompt_reproduction"]["exists"] is True
     assert audit["local_reporter_prompt_reproduction"]["clean"] is True
     assert audit["local_reporter_prompt_reproduction"]["observed_stream_text"] is True
-    assert (
-        audit["local_reporter_prompt_reproduction"]["selected_fallback_path"]
-        == "build/current-issue179-minimax-k-responses-cancel-probe-after-mimo-dsv4-ledger-20260607.json"
+    assert audit["local_reporter_prompt_reproduction"]["selected_fallback_path"] is None
+    assert audit["local_reporter_prompt_reproduction"]["path"] == (
+        "build/current-issue179-minimax-k-responses-cancel-probe-fullk-local-skip-preflight-20260611.json"
     )
     assert "#179 remains open" in audit["release_boundary"]
 

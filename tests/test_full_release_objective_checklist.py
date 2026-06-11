@@ -773,7 +773,7 @@ def _write_qwen_green_artifacts(tmp_path: Path) -> None:
 def _write_issue179_green_artifact(tmp_path: Path) -> None:
     _write_json(
         tmp_path
-        / "build/current-issue179-minimax-k-root-cause-audit-after-parser-settings-parity-20260608.json",
+        / "build/current-issue179-minimax-k-root-cause-audit-after-fullk-local-cancel-proof-20260611.json",
         {
             "status": "pass",
             "proven": {

@@ -20,7 +20,7 @@ from typing import Any
 
 
 DEFAULT_OUT = Path(
-    "build/current-issue179-minimax-k-root-cause-audit-after-parser-settings-parity-20260608.json"
+    "build/current-issue179-minimax-k-root-cause-audit-after-fullk-local-cancel-proof-20260611.json"
 )
 REPORTER_LOG = Path("build/issue-179/vmlx-logs-490f58c0-2026-05-27.log")
 REPORTER_SCREENSHOT = Path("build/issue-179/minimax-garbage-screenshot.png")
@@ -70,13 +70,13 @@ LOCAL_REAL_UI_PROOFS = (
     ),
 )
 LOCAL_RESPONSES_CANCEL_PROOF = Path(
-    "build/current-issue179-minimax-k-responses-cancel-probe-current-source-parser-settings-parity-20260608.json"
+    "build/current-issue179-minimax-k-responses-cancel-probe-fullk-local-skip-preflight-20260611.json"
 )
 LOCAL_LIVE_PROBE_MEMORY_PREFLIGHT = Path(
     "build/current-issue179-minimax-k-responses-cancel-probe-memory-preflight-20260602-local-ready-check.json"
 )
 LOCAL_REPORTER_PROMPT_REPRODUCTION_PROOF = Path(
-    "build/current-issue179-minimax-k-responses-cancel-probe-current-source-parser-settings-parity-20260608.json"
+    "build/current-issue179-minimax-k-responses-cancel-probe-fullk-local-skip-preflight-20260611.json"
 )
 LOCAL_REPORTER_PROMPT_REPRODUCTION_FALLBACKS = (
     Path("build/current-issue179-minimax-k-responses-cancel-probe-after-mimo-dsv4-ledger-20260607.json"),

@@ -64,10 +64,10 @@ QWEN35_INSTALLED_SPEED_ARTIFACT = Path(
     "build/current-decode-speed-live-qwen35-4bit-issue115-installed-app-after-decode-position-20260601.json"
 )
 ISSUE179_ROOT_CAUSE_AUDIT = Path(
-    "build/current-issue179-minimax-k-root-cause-audit-after-parser-settings-parity-20260608.json"
+    "build/current-issue179-minimax-k-root-cause-audit-after-fullk-local-cancel-proof-20260611.json"
 )
 ISSUE179_RESPONSES_CANCEL_PROOF = Path(
-    "build/current-issue179-minimax-k-responses-cancel-probe-20260606-live-refresh.json"
+    "build/current-issue179-minimax-k-responses-cancel-probe-fullk-local-skip-preflight-20260611.json"
 )
 ISSUE179_RESPONSES_CANCEL_PREFLIGHT = Path(
     "build/current-issue179-minimax-k-responses-cancel-probe-memory-preflight-20260602-local-ready-check.json"

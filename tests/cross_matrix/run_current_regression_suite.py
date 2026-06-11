@@ -476,7 +476,7 @@ def _step_is_ok(name: str, step: dict[str, Any], root: Path) -> bool:
     if name == "full_release_objective_checklist":
         if step["returncode"] == 0:
             return True
-        path = root / "build/current-full-release-objective-checklist-after-lfm25-live-smoke-refresh-20260611.json"
+        path = root / "build/current-full-release-objective-checklist-after-issue179-fullk-local-proof-20260611.json"
         try:
             artifact = json.loads(path.read_text(encoding="utf-8"))
         except Exception:
@@ -701,7 +701,7 @@ CURRENT_SUITE_COMMANDS: dict[str, list[str]] = {
         sys.executable,
         "tests/cross_matrix/run_issue179_minimax_k_root_cause_audit.py",
         "--out",
-        "build/current-issue179-minimax-k-root-cause-audit-after-parser-settings-parity-20260608.json",
+        "build/current-issue179-minimax-k-root-cause-audit-after-fullk-local-cancel-proof-20260611.json",
     ],
     "issue179_cancel_probe_memory_preflight": [
         sys.executable,
@@ -817,7 +817,7 @@ CURRENT_SUITE_COMMANDS: dict[str, list[str]] = {
         sys.executable,
         "tests/cross_matrix/run_full_release_objective_checklist.py",
         "--out",
-        "build/current-full-release-objective-checklist-after-lfm25-live-smoke-refresh-20260611.json",
+        "build/current-full-release-objective-checklist-after-issue179-fullk-local-proof-20260611.json",
     ],
 }
 

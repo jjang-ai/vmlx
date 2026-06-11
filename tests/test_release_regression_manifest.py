@@ -2101,7 +2101,7 @@ def _write_expected_issue179_minimax_k_root_cause_audit(root: Path) -> None:
                 },
                 "not_proven": [],
                 "local_reporter_prompt_reproduction": {
-                    "path": "build/current-issue179-minimax-k-responses-cancel-probe-current-source-parser-settings-parity-20260608.json",
+                    "path": "build/current-issue179-minimax-k-responses-cancel-probe-fullk-local-skip-preflight-20260611.json",
                     "exists": True,
                     "status": "pass",
                     "request_matches_reporter": True,
@@ -2120,7 +2120,7 @@ def _write_expected_issue179_minimax_k_root_cause_audit(root: Path) -> None:
                     "clean": True,
                 },
                 "local_responses_cancel_probe": {
-                    "path": "build/current-issue179-minimax-k-responses-cancel-probe-current-source-parser-settings-parity-20260608.json",
+                    "path": "build/current-issue179-minimax-k-responses-cancel-probe-fullk-local-skip-preflight-20260611.json",
                     "exists": True,
                     "status": "pass",
                     "response_id_seen": True,
