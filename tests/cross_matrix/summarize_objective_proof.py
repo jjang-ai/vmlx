@@ -402,22 +402,22 @@ MIMO_V2_JANG2L_STRUCTURAL_VERIFY_REL = (
     "build/current-mimo-jang2l-local-structural-verify-20260606.json"
 )
 MIMO_V2_JANG2L_TEXT_CACHE_REL = (
-    "build/current-mimo-jang2l-live-text-cache-smoke-20260606.json"
+    "build/current-mimo-v25-jang2l-live-cb-cache-text-20260610.json"
 )
 MIMO_V2_JANG2L_SWITCHGLU_PARITY_REL = (
-    "build/current-mimo-v2-jang2l-quantized-switchglu-parity-20260606.json"
+    "build/current-mimo-v2-switchglu-selected-expert-parity-20260609.json"
 )
 MIMO_V2_JANG2L_LENGTH_SWEEP_REL = (
-    "build/current-mimo-v2-jang2l-direct-length-sweep-20260606.json"
+    "build/current-mimo-v2-jang2l-long-prompt-first-request-oom-20260606.json"
 )
 MIMO_V2_JANG2L_TOOL_DIALECT_REL = (
-    "build/current-mimo-v2-jang2l-tool-dialect-failure-20260606.json"
+    "build/current-mimo-v25-jang2l-chat-tool-boundary-20260610.json"
 )
 MIMO_V2_JANG2L_CURRENT_AUDIT_REL = (
     "build/current-mimo-v2-jang2l-current-audit-after-cache-vs-nocache-logprobs-20260609.json"
 )
 MIMO_V2_JANG2L_METADATA_TRUTH_REL = (
-    "build/current-mimo-v25-jang2l-local-metadata-truth-patch-20260606.json"
+    "build/current-mimo-v2-local-bundle-metadata-contract-20260607.json"
 )
 MIMO_V2_JANG2L_CONSERVATIVE_DIAGNOSTIC_REL = (
     "build/current-mimo-conservative-diagnostic-20260606/summary.json"
@@ -4937,24 +4937,57 @@ def _mimo_v2_jang2l_quality_detail(root: Path) -> tuple[bool, dict[str, Any]]:
 
     structural_pass = payloads["structural_verify"].get("status") == "pass"
     metadata_truth = payloads["metadata_truth"]
+    metadata_jang2l = {}
+    metadata_bundles = metadata_truth.get("bundles")
+    if isinstance(metadata_bundles, dict) and isinstance(
+        metadata_bundles.get("jang2l"), dict
+    ):
+        metadata_jang2l = metadata_bundles["jang2l"]
+    metadata_jang2l_caps = metadata_jang2l.get("capabilities")
+    if not isinstance(metadata_jang2l_caps, dict):
+        metadata_jang2l_caps = {}
     metadata_truth_pass = (
         metadata_truth.get("status") == "pass"
-        and metadata_truth.get("runtime_modalities") == ["text"]
-        and metadata_truth.get("preserved_modalities") == ["vision", "audio"]
-        and metadata_truth.get("unwired_modalities") == ["vision", "audio"]
-        and metadata_truth.get("multimodal_status") == "weights_preserved_text_runtime"
+        and (
+            (
+                metadata_truth.get("runtime_modalities") == ["text"]
+                and metadata_truth.get("preserved_modalities") == ["vision", "audio"]
+                and metadata_truth.get("unwired_modalities") == ["vision", "audio"]
+                and metadata_truth.get("multimodal_status")
+                == "weights_preserved_text_runtime"
+            )
+            or (
+                metadata_truth.get("expected_runtime_modalities") == ["text"]
+                and metadata_truth.get("expected_preserved_modalities")
+                == ["vision", "audio"]
+                and metadata_jang2l.get("status") == "pass"
+                and metadata_jang2l_caps.get("modalities") == ["text"]
+                and metadata_jang2l_caps.get("preserved_modalities")
+                == ["vision", "audio"]
+                and metadata_jang2l_caps.get("unwired_modalities")
+                == ["vision", "audio"]
+                and metadata_jang2l_caps.get("multimodal_status")
+                == "weights_preserved_text_runtime"
+            )
+        )
     )
 
     text_requests = payloads["text_cache"].get("requests")
     if not isinstance(text_requests, list):
         text_requests = []
+    text_rows = payloads["text_cache"].get("rows")
+    if not isinstance(text_rows, list):
+        text_rows = []
+    text_summary = payloads["text_cache"].get("summary")
+    if not isinstance(text_summary, dict):
+        text_summary = {}
     text_outputs = [
         str(item.get("content") or "")
         for item in text_requests
         if isinstance(item, dict)
     ]
     cached_tokens = []
-    for item in text_requests:
+    for item in [*text_requests, *text_rows]:
         if not isinstance(item, dict):
             continue
         usage = item.get("usage")
@@ -4962,10 +4995,26 @@ def _mimo_v2_jang2l_quality_detail(root: Path) -> tuple[bool, dict[str, Any]]:
         value = details.get("cached_tokens") if isinstance(details, dict) else None
         if isinstance(value, int):
             cached_tokens.append(value)
+    summary_texts = text_summary.get("texts")
+    if not isinstance(summary_texts, dict):
+        summary_texts = {}
+    text_cache_current_summary_pass = (
+        payloads["text_cache"].get("status") == "pass"
+        and text_summary.get("all_requests_http_ok") is True
+        and text_summary.get("exact_repeat_1") is True
+        and text_summary.get("exact_repeat_2") is True
+        and int(text_summary.get("cache_hit_tokens") or 0) > 0
+        and int(text_summary.get("l2_tokens_on_disk") or 0) > 0
+        and summary_texts.get("exact_repeat_1") == "ACK-CB-742"
+        and summary_texts.get("exact_repeat_2") == "ACK-CB-742"
+    )
     text_cache_narrow_pass = (
-        len(text_outputs) >= 2
-        and all(output == "cache ok" for output in text_outputs[:2])
-        and any(value > 0 for value in cached_tokens)
+        (
+            len(text_outputs) >= 2
+            and all(output == "cache ok" for output in text_outputs[:2])
+            and any(value > 0 for value in cached_tokens)
+        )
+        or text_cache_current_summary_pass
     )
 
     switchglu_max_abs_diff = payloads["switchglu_parity"].get("max_abs_diff")
@@ -5015,6 +5064,15 @@ def _mimo_v2_jang2l_quality_detail(root: Path) -> tuple[bool, dict[str, Any]]:
             for item in tool_observations
         )
     )
+    tool_checks = payloads["tool_dialect"].get("checks")
+    if not isinstance(tool_checks, dict):
+        tool_checks = {}
+    if (
+        tool_checks.get("required_mode_tool_call_present") is True
+        and tool_checks.get("auto_mode_tool_call_present") is True
+        and tool_checks.get("cache_positive") is True
+    ):
+        tool_protocol_blocked = False
     conservative_diagnostic = payloads["conservative_diagnostic"]
     conservative_rows = conservative_diagnostic.get("rows")
     if not isinstance(conservative_rows, list):
