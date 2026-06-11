@@ -462,16 +462,6 @@ def inspect_native_mtp_bundle(bundle_path: str | Path | None) -> dict[str, Any]:
         )
     if config_layers in (None, 0) and drop_mtp is not True and has_mtp_tensors:
         issues.append("bundle indexes mtp.* tensors but config disables MTP runtime")
-    if (
-        drop_mtp is True
-        and config_layers not in (None, 0)
-        and not runtime_declares_dropped_mtp
-        and not mtp_sidecar_declares_dropped
-    ):
-        issues.append(
-            "jang_config.drop_mtp=true but config declares "
-            f"{config_layers} MTP layer(s)"
-        )
     if drop_mtp is True and has_mtp_tensors:
         issues.append("jang_config.drop_mtp=true but bundle still indexes mtp.* tensors")
     if (

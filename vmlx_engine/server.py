@@ -6436,16 +6436,6 @@ def _model_mtp_status(bundle_path: str | None) -> dict:
             "bundle indexes mtp.* tensors but config disables MTP runtime"
         )
     if (
-        drop_mtp is True
-        and config_layers not in (None, 0)
-        and not mtp_sidecar_declares_dropped
-        and not runtime_declares_dropped_mtp
-    ):
-        issues.append(
-            "jang_config.drop_mtp=true but config.num_nextn_predict_layers="
-            f"{config_layers}"
-        )
-    if (
         config_layers is not None
         and config_layers > 0
         and indexed_mtp_layer_count is not None

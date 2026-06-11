@@ -14275,6 +14275,33 @@ class TestTurboQuantKVTelemetry:
         for key, value in expected.items():
             assert status[key] == value
 
+    def test_mtp_status_treats_dropped_jangtq_without_weights_as_dropped(
+        self, tmp_path
+    ):
+        """N2/JANGTQ2 can drop MTP weights while base config still declares MTP."""
+        from vmlx_engine.server import _model_mtp_status
+
+        (tmp_path / "config.json").write_text(
+            '{"model_type":"qwen3_5_moe","text_config":{"mtp_num_hidden_layers":1}}'
+        )
+        (tmp_path / "jang_config.json").write_text(
+            '{"weight_format":"mxtq","drop_mtp":true}'
+        )
+        (tmp_path / "model.safetensors.index.json").write_text(
+            '{"weight_map":{"language_model.model.embed_tokens.weight":"model.safetensors"}}'
+        )
+
+        status = _model_mtp_status(str(tmp_path))
+
+        assert status["config_num_nextn_predict_layers"] == 1
+        assert status["jang_drop_mtp"] is True
+        assert status["index_has_mtp_tensors"] is False
+        assert status["artifact_available"] is False
+        assert status["runtime_available"] is False
+        assert status["runtime_reason"] == "jang_config.drop_mtp=true"
+        assert status["status"] == "dropped"
+        assert status["issues"] == []
+
     def test_mtp_status_flags_missing_weights_when_config_expects_mtp(self, tmp_path):
         from vmlx_engine.server import _model_mtp_status
 
