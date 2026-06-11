@@ -96,12 +96,11 @@ def _bundle_declares_mxtq_jangtq(model_path: str | None) -> bool:
 
     if not model_path:
         return False
-    model_text = str(model_path).lower()
-    if "mxtq" in model_text or "jangtq" in model_text:
-        return True
+    from pathlib import Path
+
+    model_text = Path(str(model_path).rstrip("/")).name.lower()
     try:
         import json
-        from pathlib import Path
 
         root = Path(model_path).expanduser()
         configs = []
@@ -114,18 +113,42 @@ def _bundle_declares_mxtq_jangtq(model_path: str | None) -> bool:
     except Exception:
         configs = []
 
-    def _declares_mxtq(value) -> bool:
+    def _walk_dicts(value):
         if isinstance(value, dict):
-            for key, item in value.items():
-                if key == "mxtq_bits":
-                    return True
-                if _declares_mxtq(item):
-                    return True
-            return False
-        text = str(value or "").lower()
-        return "mxtq" in text or "jangtq" in text
+            yield value
+            for item in value.values():
+                yield from _walk_dicts(item)
+        elif isinstance(value, list):
+            for item in value:
+                yield from _walk_dicts(item)
 
-    return any(_declares_mxtq(config) for config in configs)
+    explicit_tq = False
+    explicit_affine_jang = False
+    bare_mxtq_bits = False
+    for config in configs:
+        for item in _walk_dicts(config):
+            for key, raw_value in item.items():
+                key_text = str(key or "").lower()
+                value_text = str(raw_value or "").lower()
+                if key_text == "mxtq_bits":
+                    bare_mxtq_bits = True
+                    continue
+                if key_text in {"format", "weight_format", "method"}:
+                    if "mxtq" in value_text or "jangtq" in value_text:
+                        explicit_tq = True
+                    elif value_text == "jang":
+                        explicit_affine_jang = True
+                elif key_text == "profile":
+                    if "mxtq" in value_text or "jangtq" in value_text:
+                        explicit_tq = True
+
+    if explicit_tq:
+        return True
+    if explicit_affine_jang:
+        return False
+    if bare_mxtq_bits:
+        return True
+    return "mxtq" in model_text or "jangtq" in model_text
 
 
 def _speculative_incompatibility_reason(args) -> str | None:

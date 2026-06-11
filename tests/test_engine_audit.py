@@ -10314,6 +10314,41 @@ class TestJangTqMppNaxCliPolicy:
             for call in logger.info.call_args_list
         )
 
+    def test_jangtq_mpp_nax_cli_policy_keeps_affine_jang_mxtq_bits_auto(
+        self, monkeypatch, tmp_path
+    ):
+        from vmlx_engine.cli import _apply_jangtq_mpp_nax_policy
+
+        monkeypatch.delenv("JANGTQ_MPP_NAX", raising=False)
+        (tmp_path / "config.json").write_text(
+            json.dumps(
+                {
+                    "model_type": "mimo_v2",
+                    "mxtq_bits": {"gate_proj": 3, "up_proj": 2, "down_proj": 2},
+                }
+            )
+        )
+        (tmp_path / "jang_config.json").write_text(
+            json.dumps(
+                {
+                    "format": "jang",
+                    "profile": "JANG_2L_322_D3E16",
+                    "mxtq_bits": {"gate_proj": 3, "up_proj": 2, "down_proj": 2},
+                }
+            )
+        )
+        args = SimpleNamespace(model=str(tmp_path))
+        logger = MagicMock()
+
+        mode = _apply_jangtq_mpp_nax_policy(args, logger)
+
+        assert mode == "auto"
+        assert os.environ["JANGTQ_MPP_NAX"] == "auto"
+        assert not any(
+            "MXTQ/JANGTQ bundle detected" in str(call)
+            for call in logger.info.call_args_list
+        )
+
     def test_jangtq_mpp_nax_cli_policy_disables_auto_for_jangtq_repo_id(
         self, monkeypatch
     ):
