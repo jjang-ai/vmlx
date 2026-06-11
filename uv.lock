@@ -7788,7 +7788,7 @@ sdist = { url = "https://files.pythonhosted.org/packages/e2/bf/46631fd8e2e9d81c5
 
 [[package]]
 name = "vmlx"
-version = "1.5.56"
+version = "1.5.57"
 source = { editable = "." }
 dependencies = [
     { name = "einops" },
