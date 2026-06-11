@@ -13,6 +13,7 @@ import json
 import pytest
 
 from vmlx_engine.tool_parsers.deepseek_tool_parser import DeepSeekToolParser
+from vmlx_engine.tool_parsers.auto_tool_parser import AutoToolParser
 from vmlx_engine.tool_parsers.dsml_tool_parser import DSMLToolParser
 from vmlx_engine.tool_parsers.functionary_tool_parser import FunctionaryToolParser
 from vmlx_engine.tool_parsers.gemma3_tool_parser import Gemma3ToolParser
@@ -27,6 +28,7 @@ from vmlx_engine.tool_parsers.llama_tool_parser import LlamaToolParser
 from vmlx_engine.tool_parsers.minimax_tool_parser import MiniMaxToolParser
 from vmlx_engine.tool_parsers.mistral_tool_parser import MistralToolParser
 from vmlx_engine.tool_parsers.qwen_tool_parser import QwenToolParser
+from vmlx_engine.tool_parsers.step3p5_tool_parser import Step3p5ToolParser
 from vmlx_engine.tool_parsers.xlam_tool_parser import xLAMToolParser
 from vmlx_engine.tool_parsers.zaya_tool_parser import ZayaToolParser
 
@@ -193,6 +195,24 @@ RECORD_FACT_REQUEST = {
                 "<tool_call>record_fact\n"
                 "<arg_key>value</arg_key><arg_value>blue-cat</arg_value>"
                 "</tool_call>"
+            ),
+        ),
+        (
+            Step3p5ToolParser,
+            "<tool_call><function=record_fact></function></tool_call>",
+            (
+                "<tool_call><function=record_fact>"
+                "<parameter=value>blue-cat</parameter>"
+                "</function></tool_call>"
+            ),
+        ),
+        (
+            AutoToolParser,
+            "<tool_call><function=record_fact></function></tool_call>",
+            (
+                "<tool_call><function=record_fact>"
+                "<parameter=value>blue-cat</parameter>"
+                "</function></tool_call>"
             ),
         ),
     ],

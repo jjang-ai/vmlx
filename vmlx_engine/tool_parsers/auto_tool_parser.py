@@ -50,6 +50,34 @@ class AutoToolParser(ToolParser):
         r"<parameter=([^>]+)>(.*?)</parameter>", re.DOTALL
     )
 
+    def _append_tool_call_if_schema_valid(
+        self,
+        tool_calls: list[dict[str, Any]],
+        name: str,
+        arguments: Any,
+        request: dict[str, Any] | None,
+        *,
+        serialized_arguments: str | None = None,
+    ) -> None:
+        name = name.strip()
+        if not name or not self._arguments_satisfy_required_schema(
+            name, arguments, request
+        ):
+            return
+        if serialized_arguments is None:
+            serialized_arguments = (
+                json.dumps(arguments, ensure_ascii=False)
+                if isinstance(arguments, dict)
+                else str(arguments)
+            )
+        tool_calls.append(
+            {
+                "id": generate_tool_id(),
+                "name": name,
+                "arguments": serialized_arguments,
+            }
+        )
+
     def extract_tool_calls(
         self, model_output: str, request: dict[str, Any] | None = None
     ) -> ExtractedToolCallInformation:
@@ -76,8 +104,12 @@ class AutoToolParser(ToolParser):
                     name = raw[:end_name].strip()
                     args = raw[end_name:]
                     if name:
-                        tool_calls.append(
-                            {"id": generate_tool_id(), "name": name, "arguments": args}
+                        self._append_tool_call_if_schema_valid(
+                            tool_calls,
+                            name,
+                            args,
+                            request,
+                            serialized_arguments=args,
                         )
                     continue
 
@@ -88,16 +120,8 @@ class AutoToolParser(ToolParser):
                         for item in parsed:
                             if isinstance(item, dict) and "name" in item:
                                 args = item.get("arguments", {})
-                                tool_calls.append(
-                                    {
-                                        "id": generate_tool_id(),
-                                        "name": item["name"],
-                                        "arguments": (
-                                            json.dumps(args, ensure_ascii=False)
-                                            if isinstance(args, dict)
-                                            else str(args)
-                                        ),
-                                    }
+                                self._append_tool_call_if_schema_valid(
+                                    tool_calls, item["name"], args, request
                                 )
                 except json.JSONDecodeError:
                     pass
@@ -114,24 +138,16 @@ class AutoToolParser(ToolParser):
         for name, args_str in bracket_matches:
             try:
                 arguments = json.loads(args_str)
-                tool_calls.append(
-                    {
-                        "id": generate_tool_id(),
-                        "name": name.strip(),
-                        "arguments": (
-                            json.dumps(arguments, ensure_ascii=False)
-                            if isinstance(arguments, dict)
-                            else str(arguments)
-                        ),
-                    }
+                self._append_tool_call_if_schema_valid(
+                    tool_calls, name, arguments, request
                 )
             except json.JSONDecodeError:
-                tool_calls.append(
-                    {
-                        "id": generate_tool_id(),
-                        "name": name.strip(),
-                        "arguments": args_str,
-                    }
+                self._append_tool_call_if_schema_valid(
+                    tool_calls,
+                    name,
+                    args_str,
+                    request,
+                    serialized_arguments=args_str,
                 )
 
         if bracket_matches:
@@ -148,12 +164,8 @@ class AutoToolParser(ToolParser):
                     arguments[p_name.strip()] = json.loads(v)
                 except (json.JSONDecodeError, ValueError):
                     arguments[p_name.strip()] = unescape(p_value)
-            tool_calls.append(
-                {
-                    "id": generate_tool_id(),
-                    "name": name.strip(),
-                    "arguments": json.dumps(arguments, ensure_ascii=False),
-                }
+            self._append_tool_call_if_schema_valid(
+                tool_calls, name, arguments, request
             )
 
         if nemotron_matches:
@@ -179,14 +191,15 @@ class AutoToolParser(ToolParser):
                 name = data.get("name", "")
                 arguments = data.get("arguments", {})
                 if name:
-                    tool_calls.append(
-                        {
-                            "id": generate_tool_id(),
-                            "name": name,
-                            "arguments": self._serialize_tool_arguments(
-                                name, arguments, request
-                            ),
-                        }
+                    serialized = self._serialize_tool_arguments(
+                        name, arguments, request
+                    )
+                    self._append_tool_call_if_schema_valid(
+                        tool_calls,
+                        name,
+                        serialized,
+                        request,
+                        serialized_arguments=serialized,
                     )
             except json.JSONDecodeError:
                 continue
@@ -199,24 +212,16 @@ class AutoToolParser(ToolParser):
         for name, args_str in llama_matches:
             try:
                 arguments = json.loads(args_str)
-                tool_calls.append(
-                    {
-                        "id": generate_tool_id(),
-                        "name": name.strip(),
-                        "arguments": (
-                            json.dumps(arguments, ensure_ascii=False)
-                            if isinstance(arguments, dict)
-                            else str(arguments)
-                        ),
-                    }
+                self._append_tool_call_if_schema_valid(
+                    tool_calls, name, arguments, request
                 )
             except json.JSONDecodeError:
-                tool_calls.append(
-                    {
-                        "id": generate_tool_id(),
-                        "name": name.strip(),
-                        "arguments": args_str,
-                    }
+                self._append_tool_call_if_schema_valid(
+                    tool_calls,
+                    name,
+                    args_str,
+                    request,
+                    serialized_arguments=args_str,
                 )
 
         if llama_matches:
@@ -224,7 +229,7 @@ class AutoToolParser(ToolParser):
 
         # 6. Fallback: Try raw JSON
         if not tool_calls:
-            raw_calls = self._parse_raw_json_tool_calls(cleaned_text)
+            raw_calls = self._parse_raw_json_tool_calls(cleaned_text, request)
             if raw_calls:
                 tool_calls.extend(raw_calls)
                 cleaned_text = ""
@@ -240,7 +245,9 @@ class AutoToolParser(ToolParser):
                 tools_called=False, tool_calls=[], content=model_output
             )
 
-    def _parse_raw_json_tool_calls(self, text: str) -> list[dict[str, Any]]:
+    def _parse_raw_json_tool_calls(
+        self, text: str, request: dict[str, Any] | None = None
+    ) -> list[dict[str, Any]]:
         """
         Parse raw JSON tool calls from text.
 
@@ -265,16 +272,8 @@ class AutoToolParser(ToolParser):
                             func_name = item.get("name") or item.get("type")
                             if func_name:
                                 args = item.get("arguments", {})
-                                tool_calls.append(
-                                    {
-                                        "id": generate_tool_id(),
-                                        "name": func_name,
-                                        "arguments": (
-                                            json.dumps(args, ensure_ascii=False)
-                                            if isinstance(args, dict)
-                                            else str(args)
-                                        ),
-                                    }
+                                self._append_tool_call_if_schema_valid(
+                                    tool_calls, func_name, args, request
                                 )
                     return tool_calls
             except json.JSONDecodeError:
@@ -318,16 +317,8 @@ class AutoToolParser(ToolParser):
                             func_name = obj.get("name") or obj.get("type")
                             if func_name:
                                 args = obj.get("arguments", {})
-                                tool_calls.append(
-                                    {
-                                        "id": generate_tool_id(),
-                                        "name": func_name,
-                                        "arguments": (
-                                            json.dumps(args, ensure_ascii=False)
-                                            if isinstance(args, dict)
-                                            else str(args)
-                                        ),
-                                    }
+                                self._append_tool_call_if_schema_valid(
+                                    tool_calls, func_name, args, request
                                 )
                     except json.JSONDecodeError:
                         pass
