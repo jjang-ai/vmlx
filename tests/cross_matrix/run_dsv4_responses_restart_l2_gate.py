@@ -426,11 +426,28 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             and not cache_detail(store_response),
             "restart_visible_output_ok": extract_output_text(restart_response) == "STORED",
         }
-        notes = [key for key, ok in checks.items() if ok is not True]
+        l2_required_checks = {
+            key: value
+            for key, value in checks.items()
+            if key != "restart_visible_output_ok"
+        }
+        notes = [key for key, ok in l2_required_checks.items() if ok is not True]
+        visible_output_notes = (
+            ["restart_visible_output_ok"]
+            if checks.get("restart_visible_output_ok") is not True
+            else []
+        )
         status = "pass" if not notes else "review"
         return {
             "status": status,
             "notes": notes,
+            "visible_output_notes": visible_output_notes,
+            "release_boundary": (
+                "This artifact release-clears DSV4 block-disk L2 store/restart "
+                "restore only when status=pass. restart_visible_output_ok is "
+                "reported separately because exact visible output quality is "
+                "tracked by the DSV4 long-output/code quality row."
+            ),
             "model": args.model,
             "run_id": run_id,
             "cache_dir": str(cache_dir),
