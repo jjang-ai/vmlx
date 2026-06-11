@@ -26,6 +26,12 @@ def test_full_release_objective_checklist_uses_current_qwen35_raw_sse_parity_con
     )
 
 
+def test_full_release_objective_checklist_uses_current_installed_app_runtime_parity():
+    assert checklist.CURRENT_INSTALLED_APP_RUNTIME_PARITY == Path(
+        "build/current-installed-app-runtime-parity-audit-after-bundled-refresh-20260611.json"
+    )
+
+
 def test_full_release_objective_checklist_uses_current_gemma4_12b_issue191_startup_proof():
     assert checklist.GEMMA4_12B_ISSUE191_STARTUP_VISIBLE == Path(
         "build/current-gemma4-12b-issue191-source-startup-visible-proof-20260609.json"
@@ -229,6 +235,68 @@ def _write_green_responses_raw_sse_artifact(tmp_path: Path) -> None:
                 "all_present_surfaces_have_required_reasoning": True,
                 "all_present_surfaces_have_complete_reasoning_lifecycle": True,
                 "no_reasoning_disable_workaround": True,
+            },
+        },
+    )
+
+
+def test_full_release_objective_checklist_flags_stale_current_installed_app_runtime_parity(tmp_path: Path):
+    _write_json(
+        tmp_path / checklist.CURRENT_INSTALLED_APP_RUNTIME_PARITY,
+        {
+            "status": "open",
+            "installed_app": "/Applications/vMLX.app",
+            "missing_or_stale": [
+                "installed_bundled_engine_hash_parity",
+                "installed_packaged_engine_source_hash_parity",
+            ],
+            "checks": {
+                "installed_bundled_engine_hash_parity": False,
+                "installed_packaged_engine_source_hash_parity": False,
+            },
+            "bundled_engine_hash_parity": {
+                "ok": False,
+                "mismatched": ["server.py", "api/tool_calling.py"],
+            },
+            "packaged_engine_source_hash_parity": {
+                "ok": False,
+                "mismatched": ["server.py", "api/tool_calling.py"],
+            },
+        },
+    )
+
+    rows = checklist._installed_app_runtime_parity_checks(
+        checklist._load_json(tmp_path / checklist.CURRENT_INSTALLED_APP_RUNTIME_PARITY)
+    )
+    failed = {row["name"]: row for row in rows if not row["ok"]}
+
+    assert "installed_app_current_runtime_parity_status_pass" in failed
+    assert "installed_app_current_bundled_engine_hash_parity" in failed
+    assert "installed_app_current_packaged_engine_source_hash_parity" in failed
+    assert "installed_app_current_no_missing_or_stale_runtime_rows" in failed
+    assert failed["installed_app_current_bundled_engine_hash_parity"]["detail"][
+        "mismatched"
+    ] == ["server.py", "api/tool_calling.py"]
+
+
+def _write_green_installed_app_runtime_parity(tmp_path: Path) -> None:
+    _write_json(
+        tmp_path / checklist.CURRENT_INSTALLED_APP_RUNTIME_PARITY,
+        {
+            "status": "pass",
+            "installed_app": "/Applications/vMLX.app",
+            "missing_or_stale": [],
+            "checks": {
+                "installed_bundled_engine_hash_parity": True,
+                "installed_packaged_engine_source_hash_parity": True,
+            },
+            "bundled_engine_hash_parity": {
+                "ok": True,
+                "mismatched": [],
+            },
+            "packaged_engine_source_hash_parity": {
+                "ok": True,
+                "mismatched": [],
             },
         },
     )
@@ -1227,6 +1295,7 @@ def test_full_release_objective_checklist_keeps_open_rows_visible(tmp_path):
         },
     )
     _write_green_panel_settings_artifact(tmp_path)
+    _write_green_installed_app_runtime_parity(tmp_path)
     _write_json(
         tmp_path / checklist.MIMO_AUDIT,
         {
@@ -2048,6 +2117,7 @@ def test_full_release_objective_checklist_can_pass_when_all_evidence_is_green(
         },
     )
     _write_green_panel_settings_artifact(tmp_path)
+    _write_green_installed_app_runtime_parity(tmp_path)
     _write_json(
         tmp_path / checklist.MIMO_AUDIT,
         {

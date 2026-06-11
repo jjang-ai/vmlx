@@ -65,6 +65,9 @@ TOOL_CALL_CONTRACT = Path(
 RELEASE_MANIFEST = Path(
     "build/current-release-regression-manifest-after-mimo-speed-root-cause-classification-20260611.json"
 )
+CURRENT_INSTALLED_APP_RUNTIME_PARITY = Path(
+    "build/current-installed-app-runtime-parity-audit-after-bundled-refresh-20260611.json"
+)
 OBJECTIVE_DIGEST = Path(
     "build/current-objective-proof-after-step37-bundled-vlm-proof-20260611.json"
 )
@@ -178,6 +181,59 @@ def _check(name: str, ok: bool, evidence: str, detail: Any = None) -> dict[str, 
     if detail is not None:
         row["detail"] = detail
     return row
+
+
+def _installed_app_runtime_parity_checks(data: dict[str, Any]) -> list[dict[str, Any]]:
+    checks = data.get("checks") if isinstance(data.get("checks"), dict) else {}
+    bundled_hash = data.get("bundled_engine_hash_parity")
+    if not isinstance(bundled_hash, dict):
+        bundled_hash = {}
+    packaged_hash = data.get("packaged_engine_source_hash_parity")
+    if not isinstance(packaged_hash, dict):
+        packaged_hash = {}
+    missing_or_stale = data.get("missing_or_stale")
+    if not isinstance(missing_or_stale, list):
+        missing_or_stale = []
+    return [
+        _check(
+            "installed_app_current_runtime_parity_status_pass",
+            data.get("status") == "pass",
+            str(CURRENT_INSTALLED_APP_RUNTIME_PARITY),
+            {
+                "status": data.get("status"),
+                "missing_or_stale": missing_or_stale,
+                "installed_app": data.get("installed_app"),
+            },
+        ),
+        _check(
+            "installed_app_current_bundled_engine_hash_parity",
+            checks.get("installed_bundled_engine_hash_parity") is True
+            and bundled_hash.get("ok") is True
+            and not bundled_hash.get("mismatched"),
+            str(CURRENT_INSTALLED_APP_RUNTIME_PARITY),
+            {
+                "check": checks.get("installed_bundled_engine_hash_parity"),
+                "mismatched": bundled_hash.get("mismatched"),
+            },
+        ),
+        _check(
+            "installed_app_current_packaged_engine_source_hash_parity",
+            checks.get("installed_packaged_engine_source_hash_parity") is True
+            and packaged_hash.get("ok") is True
+            and not packaged_hash.get("mismatched"),
+            str(CURRENT_INSTALLED_APP_RUNTIME_PARITY),
+            {
+                "check": checks.get("installed_packaged_engine_source_hash_parity"),
+                "mismatched": packaged_hash.get("mismatched"),
+            },
+        ),
+        _check(
+            "installed_app_current_no_missing_or_stale_runtime_rows",
+            data.get("status") == "pass" and not missing_or_stale,
+            str(CURRENT_INSTALLED_APP_RUNTIME_PARITY),
+            missing_or_stale,
+        ),
+    ]
 
 
 def _get(data: dict[str, Any], *keys: str, default: Any = None) -> Any:
@@ -2409,6 +2465,9 @@ def _build(root: Path) -> dict[str, Any]:
     api_surface = _load_json(root / API_SURFACE_CONTRACT)
     panel_settings = _load_json(root / PANEL_SETTINGS_CONTRACT)
     tool_call = _load_json(root / TOOL_CALL_CONTRACT)
+    installed_app_runtime_parity = _load_json(
+        root / CURRENT_INSTALLED_APP_RUNTIME_PARITY
+    )
     objective_digest = _load_json(root / OBJECTIVE_DIGEST)
     issue179 = _load_json(root / ISSUE179_AUDIT)
     qwen27 = _load_json(root / QWEN27_RESPONSES_CANCEL)
@@ -2443,6 +2502,9 @@ def _build(root: Path) -> dict[str, Any]:
         "api_surface_endpoints_contract": _api_surface_contract_checks(api_surface),
         "ui_settings_parser_cache_contract": _panel_settings_contract_checks(panel_settings),
         "tool_json_xml_code_contract": _tool_call_contract_checks(tool_call),
+        "installed_app_runtime_parity": _installed_app_runtime_parity_checks(
+            installed_app_runtime_parity
+        ),
         "n2_pro_397b": _n2_pro_397b_checks(objective_digest),
         "mimo_v25_jangtq2": _mimo_checks(
             mimo,
