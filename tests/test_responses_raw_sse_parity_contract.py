@@ -15,23 +15,85 @@ def _sse(
     return f"""event: response.created
 data: {{"type":"response.created","response":{{"id":"resp_1","status":"in_progress","model":{json.dumps(model)},"output":[]}}}}
 
-event: response.reasoning_summary_text.delta
-data: {{"type":"response.reasoning_summary_text.delta","delta":"checking"}}
-
 event: response.output_item.added
-data: {{"type":"response.output_item.added","output_index":1,"item":{{"id":"fc_1","type":"function_call","status":"in_progress","call_id":"call_1","name":"lookup","arguments":""}}}}
+data: {{"type":"response.output_item.added","output_index":1,"item":{{"id":"rs_1","type":"reasoning","status":"in_progress","content":[]}}}}
 
-event: response.function_call_arguments.delta
-data: {{"type":"response.function_call_arguments.delta","item_id":"fc_1","output_index":1,"delta":{json.dumps(arguments)}}}
+event: response.reasoning_summary_text.delta
+data: {{"type":"response.reasoning_summary_text.delta","item_id":"rs_1","output_index":1,"delta":"checking"}}
 
-event: response.function_call_arguments.done
-data: {{"type":"response.function_call_arguments.done","item_id":"fc_1","output_index":1,"arguments":{json.dumps(arguments)}}}
+event: response.reasoning_summary_text.done
+data: {{"type":"response.reasoning_summary_text.done","item_id":"rs_1","output_index":1,"text":"checking"}}
 
 event: response.output_item.done
-data: {{"type":"response.output_item.done","output_index":1,"item":{{"id":"fc_1","type":"function_call","status":"completed","call_id":"call_1","name":"lookup","arguments":{json.dumps(final_arguments)}}}}}
+data: {{"type":"response.output_item.done","output_index":1,"item":{{"id":"rs_1","type":"reasoning","status":"completed","content":[{{"type":"reasoning","text":"checking"}}]}}}}
+
+event: response.output_item.added
+data: {{"type":"response.output_item.added","output_index":2,"item":{{"id":"fc_1","type":"function_call","status":"in_progress","call_id":"call_1","name":"lookup","arguments":""}}}}
+
+event: response.function_call_arguments.delta
+data: {{"type":"response.function_call_arguments.delta","item_id":"fc_1","output_index":2,"delta":{json.dumps(arguments)}}}
+
+event: response.function_call_arguments.done
+data: {{"type":"response.function_call_arguments.done","item_id":"fc_1","output_index":2,"arguments":{json.dumps(arguments)}}}
+
+event: response.output_item.done
+data: {{"type":"response.output_item.done","output_index":2,"item":{{"id":"fc_1","type":"function_call","status":"completed","call_id":"call_1","name":"lookup","arguments":{json.dumps(final_arguments)}}}}}
 
 event: response.completed
 data: {{"type":"response.completed","response":{{"status":"completed"}}}}
+
+"""
+
+
+def _sse_without_reasoning() -> str:
+    return _sse().replace(
+        """event: response.output_item.added
+data: {"type":"response.output_item.added","output_index":1,"item":{"id":"rs_1","type":"reasoning","status":"in_progress","content":[]}}
+
+event: response.reasoning_summary_text.delta
+data: {"type":"response.reasoning_summary_text.delta","item_id":"rs_1","output_index":1,"delta":"checking"}
+
+event: response.reasoning_summary_text.done
+data: {"type":"response.reasoning_summary_text.done","item_id":"rs_1","output_index":1,"text":"checking"}
+
+event: response.output_item.done
+data: {"type":"response.output_item.done","output_index":1,"item":{"id":"rs_1","type":"reasoning","status":"completed","content":[{"type":"reasoning","text":"checking"}]}}
+
+""",
+        "",
+    )
+
+
+def _sse_with_reasoning_events_but_no_reasoning_item() -> str:
+    return """event: response.created
+data: {"type":"response.created","response":{"id":"resp_1","status":"in_progress","model":"same-model","output":[]}}
+
+event: response.output_item.added
+data: {"type":"response.output_item.added","output_index":0,"item":{"id":"msg_1","type":"message","status":"in_progress","role":"assistant","content":[]}}
+
+event: response.reasoning_summary_text.delta
+data: {"type":"response.reasoning_summary_text.delta","item_id":"msg_1","output_index":0,"delta":"checking"}
+
+event: response.reasoning_summary_text.done
+data: {"type":"response.reasoning_summary_text.done","item_id":"msg_1","output_index":0,"text":"checking"}
+
+event: response.output_item.done
+data: {"type":"response.output_item.done","output_index":0,"item":{"id":"msg_1","type":"message","status":"completed","role":"assistant","content":[]}}
+
+event: response.output_item.added
+data: {"type":"response.output_item.added","output_index":1,"item":{"id":"fc_1","type":"function_call","status":"in_progress","call_id":"call_1","name":"lookup","arguments":""}}
+
+event: response.function_call_arguments.delta
+data: {"type":"response.function_call_arguments.delta","item_id":"fc_1","output_index":1,"delta":"{\\"query\\":\\"alpha\\"}"}
+
+event: response.function_call_arguments.done
+data: {"type":"response.function_call_arguments.done","item_id":"fc_1","output_index":1,"arguments":"{\\"query\\":\\"alpha\\"}"}
+
+event: response.output_item.done
+data: {"type":"response.output_item.done","output_index":1,"item":{"id":"fc_1","type":"function_call","status":"completed","call_id":"call_1","name":"lookup","arguments":"{\\"query\\":\\"alpha\\"}"}}
+
+event: response.completed
+data: {"type":"response.completed","response":{"status":"completed","model":"same-model","output":[{"id":"msg_1","type":"message","status":"completed","role":"assistant","content":[]},{"id":"fc_1","type":"function_call","status":"completed","call_id":"call_1","name":"lookup","arguments":"{\\"query\\":\\"alpha\\"}"},{"id":"rs_1","type":"reasoning","status":"completed","content":[{"type":"reasoning","text":"checking"}]}]}}
 
 """
 
@@ -113,7 +175,7 @@ data: {"type":"response.output_item.done","output_index":0,"item":{"id":"fc_1","
 def test_classifier_uses_done_arguments_when_final_item_arguments_are_empty():
     row = classify_sse_capture(_sse())
 
-    assert row["reasoning_events"] == 1
+    assert row["reasoning_events"] == 2
     assert row["done_arguments"] == '{"query":"alpha"}'
     assert row["final_item_arguments"] == ""
     assert row["authoritative_arguments"] == '{"query":"alpha"}'
@@ -151,6 +213,14 @@ def test_classifier_tracks_interleaved_reasoning_content_tool_and_final_output()
     assert row["output_indices_by_type"]["message"] == [0]
     assert row["output_indices_by_type"]["reasoning"] == [1]
     assert row["output_indices_by_type"]["function_call"] == [2]
+
+
+def test_classifier_rejects_reasoning_events_without_reasoning_output_item():
+    row = classify_sse_capture(_sse_with_reasoning_events_but_no_reasoning_item())
+
+    assert row["reasoning_events"] == 2
+    assert row["reasoning_output_item_count"] == 0
+    assert row["reasoning_lifecycle_complete"] is False
 
 
 def test_classifier_records_raw_json_model_not_found_capture():
@@ -345,13 +415,7 @@ def test_raw_sse_parity_can_require_reasoning_events(tmp_path):
     direct = tmp_path / "direct.sse"
     gateway = tmp_path / "gateway.sse"
     tunnel = tmp_path / "tunnel.sse"
-    no_reasoning = _sse().replace(
-        """event: response.reasoning_summary_text.delta
-data: {"type":"response.reasoning_summary_text.delta","delta":"checking"}
-
-""",
-        "",
-    )
+    no_reasoning = _sse_without_reasoning()
     for path in (direct, gateway, tunnel):
         path.write_text(no_reasoning)
 
@@ -377,13 +441,7 @@ def test_raw_sse_parity_distinguishes_enabled_reasoning_from_missing_events(tmp_
     direct_log = tmp_path / "direct.log"
     gateway_log = tmp_path / "gateway.log"
     tunnel_log = tmp_path / "tunnel.log"
-    no_reasoning = _sse().replace(
-        """event: response.reasoning_summary_text.delta
-data: {"type":"response.reasoning_summary_text.delta","delta":"checking"}
-
-""",
-        "",
-    )
+    no_reasoning = _sse_without_reasoning()
     for path in (direct, gateway, tunnel):
         path.write_text(no_reasoning)
     for path in (direct_log, gateway_log, tunnel_log):

@@ -84,7 +84,7 @@ QWEN35_RESTART_L2_RESTORE = Path(
     "build/current-qwen35-mxfp8-mtp-restart-l2-restore-20260607/summary.json"
 )
 QWEN35_RAW_SSE_PARITY = Path(
-    "build/current-responses-raw-sse-parity-qwen35-direct-gateway-tunnel-after-public-recapture-20260610.json"
+    "build/current-responses-raw-sse-parity-qwen35-direct-gateway-tunnel-after-missing-required-args-failclosed-strict-recheck-20260611.json"
 )
 QWEN35_INSTALLED_VIDEO = Path(
     "docs/internal/agent-notes/current-real-ui-installed-app-qwen36-35b-mxfp8-mtp-responses-tools-video-reasoning-cachecontrols-max512-20260607-proof.json"

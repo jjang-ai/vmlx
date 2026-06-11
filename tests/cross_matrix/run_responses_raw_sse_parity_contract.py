@@ -171,8 +171,9 @@ def classify_sse_capture(sse_text: str) -> dict[str, Any]:
             final_response_consistent_with_stream = False
     reasoning_lifecycle_complete = (
         True
-        if not reasoning_items_by_id
-        else reasoning_done_count > 0
+        if reasoning_events == 0
+        else bool(reasoning_items_by_id)
+        and reasoning_done_count > 0
         and any(
             str(item.get("status") or "") == "completed"
             for item in reasoning_items_by_id.values()
@@ -421,6 +422,7 @@ def build_artifact(
             True
             if not require_reasoning_events
             else int(classified.get("reasoning_events") or 0) > 0
+            and bool(classified.get("reasoning_lifecycle_complete"))
         )
         captures[name] = {
             "present": True,

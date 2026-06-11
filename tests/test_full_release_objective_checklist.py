@@ -22,7 +22,7 @@ def test_full_release_objective_checklist_uses_current_responses_raw_sse_parity_
 
 def test_full_release_objective_checklist_uses_current_qwen35_raw_sse_parity_contract():
     assert checklist.QWEN35_RAW_SSE_PARITY == Path(
-        "build/current-responses-raw-sse-parity-qwen35-direct-gateway-tunnel-after-public-recapture-20260610.json"
+        "build/current-responses-raw-sse-parity-qwen35-direct-gateway-tunnel-after-missing-required-args-failclosed-strict-recheck-20260611.json"
     )
 
 
