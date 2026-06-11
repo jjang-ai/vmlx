@@ -32,9 +32,12 @@ from tests.cross_matrix.release_regression_manifest import (
     CURRENT_MIMO_V2_JANG2L_CURRENT_AUDIT_ARTIFACT,
     CURRENT_MIMO_V2_JANG2L_METADATA_TRUTH_ARTIFACT,
     CURRENT_MIMO_V2_JANG2L_RESPONSES_TOOLS_RERUN_ARTIFACT,
+    CURRENT_MIMO_V2_JANG2L_INSTALLED_RESPONSES_TOOLS_CACHE_ARTIFACT,
     CURRENT_MIMO_V2_JANG2L_RESTART_L2_ARTIFACT,
     CURRENT_MIMO_V2_JANG2L_SOURCE_VS_QUANT_ARTIFACT,
     CURRENT_MIMO_V2_JANG2L_NO_SOURCE_EXACTNESS_CLASSIFIER_ARTIFACT,
+    CURRENT_MIMO_V2_JANGTQ2_INSTALLED_MEDIA_L2_ARTIFACT,
+    CURRENT_MIMO_V2_JANGTQ2_INSTALLED_RESPONSES_TOOLS_CACHE_ARTIFACT,
     CURRENT_OBJECTIVE_DIGEST_ARTIFACT,
     CURRENT_REAL_UI_DSV4_MEMORY_PREFLIGHT_ARTIFACT,
     CURRENT_REAL_UI_LIVE_MODEL_PROOF_ARTIFACTS,
@@ -3626,6 +3629,106 @@ def _write_passing_mimo_v2_root_cause_artifacts(root: Path) -> None:
                     },
                 },
                 "red": {"long_tool_loop": True},
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    def _installed_mimo_cache_proof(model_name: str, final_text: str) -> dict:
+        return {
+            "status": "pass",
+            "uiLaunchMode": "installed-app",
+            "rendererWireApi": "responses",
+            "modelName": model_name,
+            "requestContract": {
+                "builtinToolsEnabled": True,
+                "wireApi": "responses",
+            },
+            "chat": {"finalVisibleText": final_text},
+            "server": {
+                "health": {
+                    "native_cache": {
+                        "schema": "mixed_swa_kv_v1",
+                        "cache_subtype": "mimo_v2_asymmetric_swa",
+                        "generic_turboquant_kv": {"enabled": False},
+                    },
+                    "cache": {
+                        "block_disk_cache": {
+                            "disk_writes": 60,
+                            "disk_hits": 321,
+                        },
+                        "scheduler_cache": {
+                            "cache_hits": 324,
+                            "tokens_saved": 10463,
+                        },
+                        "totals": {"l2_tokens_on_disk": 3732},
+                    },
+                }
+            },
+        }
+
+    jangtq2_tools_path = (
+        root / CURRENT_MIMO_V2_JANGTQ2_INSTALLED_RESPONSES_TOOLS_CACHE_ARTIFACT
+    )
+    jangtq2_tools_path.parent.mkdir(parents=True, exist_ok=True)
+    jangtq2_tools_path.write_text(
+        json.dumps(
+            _installed_mimo_cache_proof(
+                "MiMo-V2.5-JANGTQ_2",
+                "MIMO_JANGTQ2_DETERMINISTIC_TWO second UI turn.",
+            )
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    jang2l_tools_path = (
+        root / CURRENT_MIMO_V2_JANG2L_INSTALLED_RESPONSES_TOOLS_CACHE_ARTIFACT
+    )
+    jang2l_tools_path.parent.mkdir(parents=True, exist_ok=True)
+    jang2l_tools_path.write_text(
+        json.dumps(
+            _installed_mimo_cache_proof(
+                "MiMo-V2.5-JANG_2L",
+                "MIMO_DETERMINISTIC_TWO second UI turn.",
+            )
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    media_l2_path = root / CURRENT_MIMO_V2_JANGTQ2_INSTALLED_MEDIA_L2_ARTIFACT
+    media_l2_path.parent.mkdir(parents=True, exist_ok=True)
+    media_l2_path.write_text(
+        json.dumps(
+            {
+                "status": "pass",
+                "uiLaunchMode": "installed-app",
+                "rendererWireApi": "responses",
+                "modelName": "MiMo-V2.5-JANGTQ_2",
+                "requestedMedia": True,
+                "requestContract": {"checkMedia": True},
+                "chat": {
+                    "turns": [
+                        {
+                            "role": "user",
+                            "content": '[{"type":"image_url","image_url":{"url":"data:image/png;base64,..."}}]',
+                        },
+                        {"role": "assistant", "content": "Blue."},
+                    ]
+                },
+                "server": {
+                    "health": {
+                        "model_type": "mllm",
+                        "native_cache": {
+                            "schema": "mixed_swa_kv_v1",
+                            "cache_subtype": "mimo_v2_asymmetric_swa",
+                        },
+                        "cache": {
+                            "block_disk_cache": {"disk_writes": 2},
+                            "totals": {"l2_tokens_on_disk": 61},
+                        },
+                    }
+                },
             }
         )
         + "\n",
@@ -11813,6 +11916,10 @@ def test_release_regression_manifest_requires_mimo_v2_root_cause_artifacts(
     assert result["tool_protocol_blocked"] is False
     assert result["remote_evidence_only"] is False
     assert result["remote_artifacts"] == []
+    assert result["mimo_jangtq2_installed_responses_tools_cache_passed"] is True
+    assert result["mimo_jang2l_installed_responses_tools_cache_passed"] is True
+    assert result["mimo_jangtq2_installed_media_l2_passed"] is True
+    assert result["mimo_jangtq2_installed_media_semantics_blocked"] is False
     assert result["local_release_clearance"] is True
 
 
@@ -11857,6 +11964,11 @@ def test_mimo_v2_root_cause_exposes_decode_speed_and_media_blockers(tmp_path):
         ),
     }
     current_audit_path.write_text(json.dumps(current_audit) + "\n", encoding="utf-8")
+    media_l2_path = tmp_path / CURRENT_MIMO_V2_JANGTQ2_INSTALLED_MEDIA_L2_ARTIFACT
+    media_l2 = json.loads(media_l2_path.read_text(encoding="utf-8"))
+    media_l2["status"] = "fail"
+    media_l2["failureStage"] = "release_assertions"
+    media_l2_path.write_text(json.dumps(media_l2) + "\n", encoding="utf-8")
 
     result = _validate_current_mimo_v2_jang2l_root_cause(tmp_path)
 
@@ -11864,6 +11976,10 @@ def test_mimo_v2_root_cause_exposes_decode_speed_and_media_blockers(tmp_path):
     assert result["decode_speed_target_blocked"] is True
     assert result["media_unwired"] is True
     assert result["mimo_jangtq2_live_media_l2_passed"] is True
+    assert result["mimo_jangtq2_installed_responses_tools_cache_passed"] is True
+    assert result["mimo_jang2l_installed_responses_tools_cache_passed"] is True
+    assert result["mimo_jangtq2_installed_media_l2_passed"] is True
+    assert result["mimo_jangtq2_installed_media_semantics_blocked"] is True
     assert result["mimo_jang2l_live_media_l2_blocked"] is True
     assert result["mimo_jang2l_l2_restart_cache_hit_passed"] is True
     assert result["mimo_jang2l_l2_restart_visible_output_blocked"] is False
@@ -11876,6 +11992,7 @@ def test_mimo_v2_root_cause_exposes_decode_speed_and_media_blockers(tmp_path):
     )
     assert "mimo_decode_speed_below_release_target" in result["failures"]
     assert "mimo_media_unwired" in result["failures"]
+    assert "mimo_jangtq2_installed_media_semantics_blocked" in result["failures"]
     assert "mimo_jang2l_live_media_l2_missing" in result["failures"]
     assert "mimo_jang2l_l2_restart_visible_output_blocked" not in result["failures"]
 
@@ -12385,6 +12502,9 @@ def test_release_regression_manifest_rejects_missing_mimo_v2_root_cause_artifact
         CURRENT_MIMO_V2_JANG2L_NO_SOURCE_EXACTNESS_CLASSIFIER_ARTIFACT,
         CURRENT_MIMO_V2_JANG2L_RESTART_L2_ARTIFACT,
         CURRENT_MIMO_V2_JANG2L_RESPONSES_TOOLS_RERUN_ARTIFACT,
+        CURRENT_MIMO_V2_JANGTQ2_INSTALLED_RESPONSES_TOOLS_CACHE_ARTIFACT,
+        CURRENT_MIMO_V2_JANG2L_INSTALLED_RESPONSES_TOOLS_CACHE_ARTIFACT,
+        CURRENT_MIMO_V2_JANGTQ2_INSTALLED_MEDIA_L2_ARTIFACT,
     ]
 
 

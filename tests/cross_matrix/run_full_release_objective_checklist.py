@@ -35,6 +35,15 @@ MIMO_JANGTQ2_VIDEO_AUDIO_SOURCE = Path(
 MIMO_JANGTQ2_RESPONSES_TOOLS_CACHE_UI = Path(
     "build/current-real-ui-dev-app-mimo-v25-jangtq2-responses-tools-cache-20260610.json"
 )
+MIMO_JANGTQ2_INSTALLED_RESPONSES_TOOLS_CACHE = Path(
+    "docs/internal/agent-notes/current-real-ui-installed-app-mimo-v25-jangtq2-responses-tools-cache-deterministic-printf-bundled-python-20260611-proof.json"
+)
+MIMO_JANG2L_INSTALLED_RESPONSES_TOOLS_CACHE = Path(
+    "docs/internal/agent-notes/current-real-ui-installed-app-mimo-v25-jang2l-responses-tools-cache-deterministic-printf-bundled-python-20260611-proof.json"
+)
+MIMO_JANGTQ2_INSTALLED_MEDIA_L2 = Path(
+    "docs/internal/agent-notes/current-real-ui-installed-app-mimo-v25-jangtq2-image-overlay-after-rebuild-pass-20260611-proof.json"
+)
 NOHEAVY_API_CACHE = Path(
     "build/current-noheavy-api-cache-contract-after-dsv4-real-ui-valid-preflight-20260611.json"
 )
@@ -304,10 +313,124 @@ def _mimo_classifier_checks(
     ]
 
 
+def _mimo_health_cache(proof: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any], dict[str, Any]]:
+    server = proof.get("server")
+    server = server if isinstance(server, dict) else {}
+    health = server.get("health")
+    health = health if isinstance(health, dict) else {}
+    cache = health.get("cache")
+    cache = cache if isinstance(cache, dict) else {}
+    block_disk = cache.get("block_disk_cache")
+    block_disk = block_disk if isinstance(block_disk, dict) else {}
+    scheduler_cache = cache.get("scheduler_cache")
+    scheduler_cache = scheduler_cache if isinstance(scheduler_cache, dict) else {}
+    totals = cache.get("totals")
+    totals = totals if isinstance(totals, dict) else {}
+    native = health.get("native_cache")
+    native = native if isinstance(native, dict) else {}
+    return block_disk, scheduler_cache, totals, native
+
+
+def _mimo_installed_cache_detail(proof: dict[str, Any]) -> dict[str, Any]:
+    block_disk, scheduler_cache, totals, native = _mimo_health_cache(proof)
+    return {
+        "status": proof.get("status"),
+        "failureStage": proof.get("failureStage"),
+        "uiLaunchMode": proof.get("uiLaunchMode"),
+        "rendererWireApi": proof.get("rendererWireApi"),
+        "modelName": proof.get("modelName"),
+        "requestedMedia": proof.get("requestedMedia"),
+        "block_disk": {
+            "disk_writes": block_disk.get("disk_writes"),
+            "disk_hits": block_disk.get("disk_hits"),
+            "total_tokens_on_disk": block_disk.get("total_tokens_on_disk"),
+        },
+        "scheduler_cache": {
+            "cache_hits": scheduler_cache.get("cache_hits"),
+            "tokens_saved": scheduler_cache.get("tokens_saved"),
+        },
+        "totals": {"l2_tokens_on_disk": totals.get("l2_tokens_on_disk")},
+        "native_cache": {
+            "schema": native.get("schema"),
+            "cache_subtype": native.get("cache_subtype"),
+            "generic_turboquant_kv": native.get("generic_turboquant_kv"),
+        },
+    }
+
+
+def _installed_mimo_tools_cache_green(
+    proof: dict[str, Any],
+    *,
+    expected_model: str,
+    expected_final_text: str,
+) -> bool:
+    request_contract = proof.get("requestContract")
+    request_contract = request_contract if isinstance(request_contract, dict) else {}
+    chat = proof.get("chat")
+    chat = chat if isinstance(chat, dict) else {}
+    block_disk, scheduler_cache, totals, native = _mimo_health_cache(proof)
+    generic_tq = native.get("generic_turboquant_kv")
+    generic_tq = generic_tq if isinstance(generic_tq, dict) else {}
+    return (
+        proof.get("exists") is True
+        and proof.get("status") == "pass"
+        and proof.get("uiLaunchMode") == "installed-app"
+        and proof.get("rendererWireApi") == "responses"
+        and proof.get("modelName") == expected_model
+        and request_contract.get("builtinToolsEnabled") is True
+        and request_contract.get("wireApi") == "responses"
+        and chat.get("finalVisibleText") == expected_final_text
+        and _positive_number(block_disk.get("disk_writes"))
+        and _positive_number(block_disk.get("disk_hits"))
+        and _positive_number(totals.get("l2_tokens_on_disk"))
+        and _positive_number(scheduler_cache.get("cache_hits"))
+        and _positive_number(scheduler_cache.get("tokens_saved"))
+        and native.get("schema") == "mixed_swa_kv_v1"
+        and native.get("cache_subtype") == "mimo_v2_asymmetric_swa"
+        and generic_tq.get("enabled") is False
+    )
+
+
+def _installed_mimo_media_l2_green(proof: dict[str, Any]) -> bool:
+    request_contract = proof.get("requestContract")
+    request_contract = request_contract if isinstance(request_contract, dict) else {}
+    chat = proof.get("chat")
+    chat = chat if isinstance(chat, dict) else {}
+    turns = chat.get("turns")
+    turns = turns if isinstance(turns, list) else []
+    server = proof.get("server")
+    server = server if isinstance(server, dict) else {}
+    health = server.get("health")
+    health = health if isinstance(health, dict) else {}
+    block_disk, _scheduler_cache, totals, native = _mimo_health_cache(proof)
+    return (
+        proof.get("exists") is True
+        and proof.get("uiLaunchMode") == "installed-app"
+        and proof.get("rendererWireApi") == "responses"
+        and proof.get("modelName") == "MiMo-V2.5-JANGTQ_2"
+        and proof.get("requestedMedia") is True
+        and request_contract.get("checkMedia") is True
+        and health.get("model_type") == "mllm"
+        and any(
+            isinstance(turn, dict)
+            and turn.get("role") == "user"
+            and "image_url" in str(turn.get("content") or "")
+            for turn in turns
+        )
+        and _positive_number(block_disk.get("disk_writes"))
+        and _positive_number(totals.get("l2_tokens_on_disk"))
+        and native.get("schema") == "mixed_swa_kv_v1"
+        and native.get("cache_subtype") == "mimo_v2_asymmetric_swa"
+    )
+
+
 def _mimo_media_current_checks(
     media_runtime: dict[str, Any],
     video_audio: dict[str, Any],
     responses_tools_cache_ui: dict[str, Any],
+    installed_jangtq2_tools_cache: dict[str, Any],
+    installed_jang2l_tools_cache: dict[str, Any],
+    installed_jangtq2_media_l2: dict[str, Any],
 ) -> list[dict[str, Any]]:
     runtime_proven = media_runtime.get("proven")
     runtime_proven = runtime_proven if isinstance(runtime_proven, dict) else {}
@@ -323,6 +446,24 @@ def _mimo_media_current_checks(
     ui_cache = ui_cache if isinstance(ui_cache, dict) else {}
     ui_runtime = responses_tools_cache_ui.get("runtime")
     ui_runtime = ui_runtime if isinstance(ui_runtime, dict) else {}
+    installed_jangtq2_tools_green = _installed_mimo_tools_cache_green(
+        installed_jangtq2_tools_cache,
+        expected_model="MiMo-V2.5-JANGTQ_2",
+        expected_final_text="MIMO_JANGTQ2_DETERMINISTIC_TWO second UI turn.",
+    )
+    installed_jang2l_tools_green = _installed_mimo_tools_cache_green(
+        installed_jang2l_tools_cache,
+        expected_model="MiMo-V2.5-JANG_2L",
+        expected_final_text="MIMO_DETERMINISTIC_TWO second UI turn.",
+    )
+    installed_jangtq2_media_l2_green = _installed_mimo_media_l2_green(
+        installed_jangtq2_media_l2
+    )
+    installed_jangtq2_media_semantics_blocked = (
+        installed_jangtq2_media_l2_green
+        and installed_jangtq2_media_l2.get("status") == "fail"
+        and installed_jangtq2_media_l2.get("failureStage") == "release_assertions"
+    )
     source_media_runtime_green = (
         media_runtime.get("exists") is True
         and runtime_proven.get("api_routes_mllm") is True
@@ -384,6 +525,42 @@ def _mimo_media_current_checks(
             },
         ),
         _check(
+            "mimo_jangtq2_installed_responses_tools_cache",
+            installed_jangtq2_tools_green,
+            str(MIMO_JANGTQ2_INSTALLED_RESPONSES_TOOLS_CACHE),
+            _mimo_installed_cache_detail(installed_jangtq2_tools_cache),
+        ),
+        _check(
+            "mimo_jang2l_installed_responses_tools_cache",
+            installed_jang2l_tools_green,
+            str(MIMO_JANG2L_INSTALLED_RESPONSES_TOOLS_CACHE),
+            _mimo_installed_cache_detail(installed_jang2l_tools_cache),
+        ),
+        _check(
+            "mimo_jangtq2_installed_media_l2",
+            installed_jangtq2_media_l2_green,
+            str(MIMO_JANGTQ2_INSTALLED_MEDIA_L2),
+            _mimo_installed_cache_detail(installed_jangtq2_media_l2),
+        ),
+        _check(
+            "mimo_jangtq2_installed_media_semantics_accounted",
+            installed_jangtq2_media_l2_green
+            and (
+                installed_jangtq2_media_l2.get("status") == "pass"
+                or installed_jangtq2_media_semantics_blocked
+            ),
+            str(MIMO_JANGTQ2_INSTALLED_MEDIA_L2),
+            {
+                "status": installed_jangtq2_media_l2.get("status"),
+                "failureStage": installed_jangtq2_media_l2.get("failureStage"),
+                "semantic_blocker_present": installed_jangtq2_media_semantics_blocked,
+                "release_boundary": (
+                    "installed app media transport/L2 can be proven separately "
+                    "from semantic image correctness"
+                ),
+            },
+        ),
+        _check(
             "mimo_jangtq2_media_semantics_release_quality",
             video_audio_not_proven.get("video_semantic_correctness") is not True
             and video_audio_not_proven.get("solid_color_image_semantic_correctness")
@@ -404,6 +581,9 @@ def _mimo_checks(
     media_runtime: dict[str, Any],
     video_audio: dict[str, Any],
     responses_tools_cache_ui: dict[str, Any],
+    installed_jangtq2_tools_cache: dict[str, Any],
+    installed_jang2l_tools_cache: dict[str, Any],
+    installed_jangtq2_media_l2: dict[str, Any],
 ) -> list[dict[str, Any]]:
     component_ok = data.get("component_ok")
     component_ok = component_ok if isinstance(component_ok, dict) else {}
@@ -420,7 +600,12 @@ def _mimo_checks(
         classifier_unresolved if isinstance(classifier_unresolved, dict) else {}
     )
     media_runtime_rows = _mimo_media_current_checks(
-        media_runtime, video_audio, responses_tools_cache_ui
+        media_runtime,
+        video_audio,
+        responses_tools_cache_ui,
+        installed_jangtq2_tools_cache,
+        installed_jang2l_tools_cache,
+        installed_jangtq2_media_l2,
     )
     media_current_by_name = {row["name"]: row for row in media_runtime_rows}
     current_source_media_runtime = media_current_by_name[
@@ -429,8 +614,18 @@ def _mimo_checks(
     current_source_video_audio_routes = media_current_by_name[
         "mimo_jangtq2_current_source_video_audio_routes"
     ]["ok"]
+    current_installed_jangtq2_media_l2 = media_current_by_name[
+        "mimo_jangtq2_installed_media_l2"
+    ]["ok"]
+    effective_blockers = list(blockers)
+    if current_installed_jangtq2_media_l2:
+        effective_blockers = [
+            blocker
+            for blocker in effective_blockers
+            if blocker != "mimo_jangtq2_live_media_l2_missing"
+        ]
     artifact_exactness_detail = {
-        "blockers": blockers,
+        "blockers": effective_blockers,
         "jangtq2_boundary": all_local_smoke.get("artifact_exactness_boundary"),
         "jang2l_boundary": jang2l_smoke.get("artifact_exactness_boundary"),
         "prompt_shape_first_token": diagnostics.get("prompt_shape_first_token"),
@@ -475,7 +670,7 @@ def _mimo_checks(
             "mimo_local_release_clearance",
             data.get("local_release_clearance") is True,
             str(MIMO_AUDIT),
-            blockers,
+            effective_blockers,
         ),
     ]
     for name in required:
@@ -2122,6 +2317,15 @@ def _build(root: Path) -> dict[str, Any]:
     mimo_responses_tools_cache_ui = _load_json(
         root / MIMO_JANGTQ2_RESPONSES_TOOLS_CACHE_UI
     )
+    mimo_jangtq2_installed_tools_cache = _load_json(
+        root / MIMO_JANGTQ2_INSTALLED_RESPONSES_TOOLS_CACHE
+    )
+    mimo_jang2l_installed_tools_cache = _load_json(
+        root / MIMO_JANG2L_INSTALLED_RESPONSES_TOOLS_CACHE
+    )
+    mimo_jangtq2_installed_media_l2 = _load_json(
+        root / MIMO_JANGTQ2_INSTALLED_MEDIA_L2
+    )
     noheavy = _load_json(root / NOHEAVY_API_CACHE)
     responses_raw_sse = _load_json(root / RESPONSES_RAW_SSE_PARITY)
     api_surface = _load_json(root / API_SURFACE_CONTRACT)
@@ -2168,6 +2372,9 @@ def _build(root: Path) -> dict[str, Any]:
             mimo_media_runtime,
             mimo_video_audio,
             mimo_responses_tools_cache_ui,
+            mimo_jangtq2_installed_tools_cache,
+            mimo_jang2l_installed_tools_cache,
+            mimo_jangtq2_installed_media_l2,
         ),
         "qwen36_mtp": _qwen27_cancel_checks(qwen27)
         + _qwen27_api_parity_checks(qwen27_api)

@@ -905,6 +905,15 @@ CURRENT_MIMO_V2_JANG2L_RESTART_L2_ARTIFACT = (
 CURRENT_MIMO_V2_JANG2L_RESPONSES_TOOLS_RERUN_ARTIFACT = (
     "build/current-real-ui-live-model-mimo-v25-jang2l-responses-tools-rerun-20260610.json"
 )
+CURRENT_MIMO_V2_JANGTQ2_INSTALLED_RESPONSES_TOOLS_CACHE_ARTIFACT = (
+    "docs/internal/agent-notes/current-real-ui-installed-app-mimo-v25-jangtq2-responses-tools-cache-deterministic-printf-bundled-python-20260611-proof.json"
+)
+CURRENT_MIMO_V2_JANG2L_INSTALLED_RESPONSES_TOOLS_CACHE_ARTIFACT = (
+    "docs/internal/agent-notes/current-real-ui-installed-app-mimo-v25-jang2l-responses-tools-cache-deterministic-printf-bundled-python-20260611-proof.json"
+)
+CURRENT_MIMO_V2_JANGTQ2_INSTALLED_MEDIA_L2_ARTIFACT = (
+    "docs/internal/agent-notes/current-real-ui-installed-app-mimo-v25-jangtq2-image-overlay-after-rebuild-pass-20260611-proof.json"
+)
 CURRENT_DIAGNOSTIC_LIVE_SMOKE_ARTIFACTS = {
     # Retired 2026-06-07: old expected-failure diagnostic rows pointed at
     # missing 202605 artifacts or at probes that now pass. Current release
@@ -5806,6 +5815,15 @@ def _validate_current_mimo_v2_jang2l_root_cause(root: Path) -> dict[str, Any]:
     responses_tools_artifact = (
         CURRENT_MIMO_V2_JANG2L_RESPONSES_TOOLS_RERUN_ARTIFACT
     )
+    installed_jangtq2_tools_artifact = (
+        CURRENT_MIMO_V2_JANGTQ2_INSTALLED_RESPONSES_TOOLS_CACHE_ARTIFACT
+    )
+    installed_jang2l_tools_artifact = (
+        CURRENT_MIMO_V2_JANG2L_INSTALLED_RESPONSES_TOOLS_CACHE_ARTIFACT
+    )
+    installed_jangtq2_media_l2_artifact = (
+        CURRENT_MIMO_V2_JANGTQ2_INSTALLED_MEDIA_L2_ARTIFACT
+    )
     result: dict[str, Any] = {
         "status": "missing",
         "artifacts": {
@@ -5820,6 +5838,9 @@ def _validate_current_mimo_v2_jang2l_root_cause(root: Path) -> dict[str, Any]:
             "no_source_exactness_classifier": no_source_classifier_artifact,
             "jang2l_restart_l2": restart_l2_artifact,
             "jang2l_responses_tools_rerun": responses_tools_artifact,
+            "jangtq2_installed_responses_tools_cache": installed_jangtq2_tools_artifact,
+            "jang2l_installed_responses_tools_cache": installed_jang2l_tools_artifact,
+            "jangtq2_installed_media_l2": installed_jangtq2_media_l2_artifact,
         },
         "missing": [],
         "failures": [],
@@ -5857,6 +5878,10 @@ def _validate_current_mimo_v2_jang2l_root_cause(root: Path) -> dict[str, Any]:
         "cb_working_set_pressure_blocked": False,
         "media_unwired": False,
         "mimo_jangtq2_live_media_l2_passed": False,
+        "mimo_jangtq2_installed_responses_tools_cache_passed": False,
+        "mimo_jang2l_installed_responses_tools_cache_passed": False,
+        "mimo_jangtq2_installed_media_l2_passed": False,
+        "mimo_jangtq2_installed_media_semantics_blocked": False,
         "mimo_jang2l_live_media_l2_blocked": False,
         "mimo_jang2l_l2_restart_cache_hit_passed": False,
         "mimo_jang2l_l2_restart_visible_output_blocked": False,
@@ -5886,6 +5911,9 @@ def _validate_current_mimo_v2_jang2l_root_cause(root: Path) -> dict[str, Any]:
     no_source_classifier_path = root / no_source_classifier_artifact
     restart_l2_path = root / restart_l2_artifact
     responses_tools_path = root / responses_tools_artifact
+    installed_jangtq2_tools_path = root / installed_jangtq2_tools_artifact
+    installed_jang2l_tools_path = root / installed_jang2l_tools_artifact
+    installed_jangtq2_media_l2_path = root / installed_jangtq2_media_l2_artifact
     for path, artifact in (
         (structural_path, structural_artifact),
         (text_cache_path, text_cache_artifact),
@@ -5898,6 +5926,9 @@ def _validate_current_mimo_v2_jang2l_root_cause(root: Path) -> dict[str, Any]:
         (no_source_classifier_path, no_source_classifier_artifact),
         (restart_l2_path, restart_l2_artifact),
         (responses_tools_path, responses_tools_artifact),
+        (installed_jangtq2_tools_path, installed_jangtq2_tools_artifact),
+        (installed_jang2l_tools_path, installed_jang2l_tools_artifact),
+        (installed_jangtq2_media_l2_path, installed_jangtq2_media_l2_artifact),
     ):
         if not path.exists():
             result["missing"].append(artifact)
@@ -5919,6 +5950,15 @@ def _validate_current_mimo_v2_jang2l_root_cause(root: Path) -> dict[str, Any]:
         restart_l2_payload = json.loads(restart_l2_path.read_text(encoding="utf-8"))
         responses_tools_payload = json.loads(
             responses_tools_path.read_text(encoding="utf-8")
+        )
+        installed_jangtq2_tools_payload = json.loads(
+            installed_jangtq2_tools_path.read_text(encoding="utf-8")
+        )
+        installed_jang2l_tools_payload = json.loads(
+            installed_jang2l_tools_path.read_text(encoding="utf-8")
+        )
+        installed_jangtq2_media_l2_payload = json.loads(
+            installed_jangtq2_media_l2_path.read_text(encoding="utf-8")
         )
     except Exception as exc:  # noqa: BLE001 - report validation failure
         result["status"] = f"load_error:{type(exc).__name__}"
@@ -6366,6 +6406,121 @@ def _validate_current_mimo_v2_jang2l_root_cause(root: Path) -> dict[str, Any]:
     )
     if result["mimo_jang2l_responses_tool_semantics_blocked"]:
         result["failures"].append("mimo_jang2l_responses_tool_semantics_blocked")
+
+    def _positive_metric(value: Any) -> bool:
+        return isinstance(value, (int, float)) and value > 0
+
+    def _installed_mimo_tools_cache_passed(
+        proof: dict[str, Any],
+        *,
+        expected_model: str,
+        expected_final_text: str,
+    ) -> bool:
+        request_contract = proof.get("requestContract")
+        request_contract = request_contract if isinstance(request_contract, dict) else {}
+        chat = proof.get("chat")
+        chat = chat if isinstance(chat, dict) else {}
+        server = proof.get("server")
+        server = server if isinstance(server, dict) else {}
+        health = server.get("health")
+        health = health if isinstance(health, dict) else {}
+        cache = health.get("cache")
+        cache = cache if isinstance(cache, dict) else {}
+        block_disk = cache.get("block_disk_cache")
+        block_disk = block_disk if isinstance(block_disk, dict) else {}
+        scheduler_cache = cache.get("scheduler_cache")
+        scheduler_cache = scheduler_cache if isinstance(scheduler_cache, dict) else {}
+        totals = cache.get("totals")
+        totals = totals if isinstance(totals, dict) else {}
+        native = health.get("native_cache")
+        native = native if isinstance(native, dict) else {}
+        generic_tq = native.get("generic_turboquant_kv")
+        generic_tq = generic_tq if isinstance(generic_tq, dict) else {}
+        return (
+            proof.get("status") == "pass"
+            and proof.get("uiLaunchMode") == "installed-app"
+            and proof.get("rendererWireApi") == "responses"
+            and proof.get("modelName") == expected_model
+            and request_contract.get("builtinToolsEnabled") is True
+            and request_contract.get("wireApi") == "responses"
+            and chat.get("finalVisibleText") == expected_final_text
+            and _positive_metric(block_disk.get("disk_writes"))
+            and _positive_metric(block_disk.get("disk_hits"))
+            and _positive_metric(totals.get("l2_tokens_on_disk"))
+            and _positive_metric(scheduler_cache.get("cache_hits"))
+            and _positive_metric(scheduler_cache.get("tokens_saved"))
+            and native.get("schema") == "mixed_swa_kv_v1"
+            and native.get("cache_subtype") == "mimo_v2_asymmetric_swa"
+            and generic_tq.get("enabled") is False
+        )
+
+    result["mimo_jangtq2_installed_responses_tools_cache_passed"] = (
+        _installed_mimo_tools_cache_passed(
+            installed_jangtq2_tools_payload,
+            expected_model="MiMo-V2.5-JANGTQ_2",
+            expected_final_text="MIMO_JANGTQ2_DETERMINISTIC_TWO second UI turn.",
+        )
+    )
+    result["mimo_jang2l_installed_responses_tools_cache_passed"] = (
+        _installed_mimo_tools_cache_passed(
+            installed_jang2l_tools_payload,
+            expected_model="MiMo-V2.5-JANG_2L",
+            expected_final_text="MIMO_DETERMINISTIC_TWO second UI turn.",
+        )
+    )
+
+    media_contract = installed_jangtq2_media_l2_payload.get("requestContract")
+    media_contract = media_contract if isinstance(media_contract, dict) else {}
+    media_chat = installed_jangtq2_media_l2_payload.get("chat")
+    media_chat = media_chat if isinstance(media_chat, dict) else {}
+    media_turns = media_chat.get("turns")
+    media_turns = media_turns if isinstance(media_turns, list) else []
+    media_server = installed_jangtq2_media_l2_payload.get("server")
+    media_server = media_server if isinstance(media_server, dict) else {}
+    media_health = media_server.get("health")
+    media_health = media_health if isinstance(media_health, dict) else {}
+    media_cache = media_health.get("cache")
+    media_cache = media_cache if isinstance(media_cache, dict) else {}
+    media_block_disk = media_cache.get("block_disk_cache")
+    media_block_disk = media_block_disk if isinstance(media_block_disk, dict) else {}
+    media_totals = media_cache.get("totals")
+    media_totals = media_totals if isinstance(media_totals, dict) else {}
+    media_native = media_health.get("native_cache")
+    media_native = media_native if isinstance(media_native, dict) else {}
+    result["mimo_jangtq2_installed_media_l2_passed"] = (
+        installed_jangtq2_media_l2_payload.get("uiLaunchMode") == "installed-app"
+        and installed_jangtq2_media_l2_payload.get("modelName")
+        == "MiMo-V2.5-JANGTQ_2"
+        and installed_jangtq2_media_l2_payload.get("rendererWireApi") == "responses"
+        and installed_jangtq2_media_l2_payload.get("requestedMedia") is True
+        and media_contract.get("checkMedia") is True
+        and media_health.get("model_type") == "mllm"
+        and any(
+            isinstance(turn, dict)
+            and turn.get("role") == "user"
+            and "image_url" in str(turn.get("content") or "")
+            for turn in media_turns
+        )
+        and _positive_metric(media_block_disk.get("disk_writes"))
+        and _positive_metric(media_totals.get("l2_tokens_on_disk"))
+        and media_native.get("schema") == "mixed_swa_kv_v1"
+        and media_native.get("cache_subtype") == "mimo_v2_asymmetric_swa"
+    )
+    result["mimo_jangtq2_installed_media_semantics_blocked"] = (
+        result["mimo_jangtq2_installed_media_l2_passed"] is True
+        and installed_jangtq2_media_l2_payload.get("status") == "fail"
+        and installed_jangtq2_media_l2_payload.get("failureStage")
+        == "release_assertions"
+    )
+    if result["mimo_jangtq2_installed_media_l2_passed"]:
+        result["mimo_jangtq2_live_media_l2_passed"] = True
+        result["current_audit_blockers"] = [
+            blocker
+            for blocker in result["current_audit_blockers"]
+            if blocker != "mimo_jangtq2_live_media_l2_missing"
+        ]
+    if result["mimo_jangtq2_installed_media_semantics_blocked"]:
+        result["failures"].append("mimo_jangtq2_installed_media_semantics_blocked")
     if audit_source_vs_quant_open:
         result["source_vs_quant_first_divergence_passed"] = False
         if (
@@ -6391,6 +6546,7 @@ def _validate_current_mimo_v2_jang2l_root_cause(root: Path) -> dict[str, Any]:
         or result["decode_speed_target_blocked"]
         or result["cb_working_set_pressure_blocked"]
         or result["media_unwired"]
+        or result["mimo_jangtq2_installed_media_semantics_blocked"]
         or result["mimo_jang2l_live_media_l2_blocked"]
         or result["mimo_jang2l_l2_restart_visible_output_blocked"]
         or not result["source_vs_quant_requirement_satisfied"]
@@ -6429,6 +6585,8 @@ def _validate_current_mimo_v2_jang2l_root_cause(root: Path) -> dict[str, Any]:
             active_boundary_reasons.append("working-set pressure")
         if result["media_unwired"]:
             active_boundary_reasons.append("media wiring")
+        if result["mimo_jangtq2_installed_media_semantics_blocked"]:
+            active_boundary_reasons.append("JANGTQ2 installed-app media semantics")
         if result["mimo_jang2l_live_media_l2_blocked"]:
             active_boundary_reasons.append("JANG_2L live media/L2 proof")
         if result["mimo_jang2l_l2_restart_visible_output_blocked"]:

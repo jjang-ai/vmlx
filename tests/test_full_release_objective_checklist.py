@@ -55,6 +55,93 @@ def _write_json(path: Path, data: dict) -> None:
     path.write_text(json.dumps(data) + "\n")
 
 
+def _write_mimo_installed_app_proofs(tmp_path: Path, *, media_status: str = "fail") -> None:
+    def cache_proof(model_name: str, final_text: str) -> dict:
+        return {
+            "status": "pass",
+            "uiLaunchMode": "installed-app",
+            "rendererWireApi": "responses",
+            "modelName": model_name,
+            "requestContract": {
+                "builtinToolsEnabled": True,
+                "wireApi": "responses",
+            },
+            "chat": {"finalVisibleText": final_text},
+            "server": {
+                "health": {
+                    "native_cache": {
+                        "schema": "mixed_swa_kv_v1",
+                        "cache_subtype": "mimo_v2_asymmetric_swa",
+                        "generic_turboquant_kv": {"enabled": False},
+                    },
+                    "cache": {
+                        "block_disk_cache": {
+                            "disk_writes": 60,
+                            "disk_hits": 321,
+                            "total_tokens_on_disk": 3732,
+                        },
+                        "scheduler_cache": {
+                            "cache_hits": 324,
+                            "tokens_saved": 10463,
+                        },
+                        "totals": {"l2_tokens_on_disk": 3732},
+                    },
+                }
+            },
+        }
+
+    _write_json(
+        tmp_path / checklist.MIMO_JANGTQ2_INSTALLED_RESPONSES_TOOLS_CACHE,
+        cache_proof(
+            "MiMo-V2.5-JANGTQ_2",
+            "MIMO_JANGTQ2_DETERMINISTIC_TWO second UI turn.",
+        ),
+    )
+    _write_json(
+        tmp_path / checklist.MIMO_JANG2L_INSTALLED_RESPONSES_TOOLS_CACHE,
+        cache_proof(
+            "MiMo-V2.5-JANG_2L",
+            "MIMO_DETERMINISTIC_TWO second UI turn.",
+        ),
+    )
+    media_proof = {
+        "status": media_status,
+        "uiLaunchMode": "installed-app",
+        "rendererWireApi": "responses",
+        "modelName": "MiMo-V2.5-JANGTQ_2",
+        "requestedMedia": True,
+        "requestContract": {"checkMedia": True},
+        "chat": {
+            "turns": [
+                {
+                    "role": "user",
+                    "content": '[{"type":"image_url","image_url":{"url":"data:image/png;base64,..."}}]',
+                },
+                {"role": "assistant", "content": "Blue."},
+            ]
+        },
+        "server": {
+            "health": {
+                "model_type": "mllm",
+                "native_cache": {
+                    "schema": "mixed_swa_kv_v1",
+                    "cache_subtype": "mimo_v2_asymmetric_swa",
+                },
+                "cache": {
+                    "block_disk_cache": {
+                        "disk_writes": 2,
+                        "total_tokens_on_disk": 61,
+                    },
+                    "totals": {"l2_tokens_on_disk": 61},
+                },
+            }
+        },
+    }
+    if media_status == "fail":
+        media_proof["failureStage"] = "release_assertions"
+    _write_json(tmp_path / checklist.MIMO_JANGTQ2_INSTALLED_MEDIA_L2, media_proof)
+
+
 def _write_green_api_surface_artifact(tmp_path: Path) -> None:
     _write_json(
         tmp_path / checklist.API_SURFACE_CONTRACT,
@@ -1217,6 +1304,7 @@ def test_full_release_objective_checklist_keeps_open_rows_visible(tmp_path):
             "runtime": {"quantizationProfile": "JANGTQ_2"},
         },
     )
+    _write_mimo_installed_app_proofs(tmp_path, media_status="fail")
     _write_json(
         tmp_path / checklist.GEMMA4_12B_ISSUE191_STARTUP_VISIBLE,
         {
@@ -1247,6 +1335,13 @@ def test_full_release_objective_checklist_keeps_open_rows_visible(tmp_path):
     failed_names = {row["name"] for row in result["failed"]}
     assert "release_ready" in failed_names
     assert "real_ui_live_model_matrix" in failed_names
+    local_release_rows = [
+        row
+        for row in result["groups"]["mimo_v25_jangtq2"]
+        if row["name"] == "mimo_local_release_clearance"
+    ]
+    assert len(local_release_rows) == 1
+    assert "mimo_jangtq2_live_media_l2_missing" not in local_release_rows[0]["detail"]
     assert "mimo_tool_protocol" in failed_names
     assert "mimo_media_model_metadata_text_only_contract" in failed_names
     assert "mimo_media_runtime_implementation" not in failed_names
@@ -1303,11 +1398,20 @@ def test_full_release_objective_checklist_keeps_open_rows_visible(tmp_path):
     mimo_media_rows = {
         row["name"]: row
         for row in result["groups"]["mimo_v25_jangtq2"]
-        if row["name"].startswith("mimo_jangtq2_")
+        if row["name"].startswith(("mimo_jangtq2_", "mimo_jang2l_"))
     }
     assert mimo_media_rows["mimo_jangtq2_current_source_media_runtime"]["ok"] is True
     assert mimo_media_rows["mimo_jangtq2_current_source_video_audio_routes"]["ok"] is True
     assert mimo_media_rows["mimo_jangtq2_dev_app_responses_tools_cache"]["ok"] is True
+    assert mimo_media_rows["mimo_jangtq2_installed_responses_tools_cache"]["ok"] is True
+    assert mimo_media_rows["mimo_jang2l_installed_responses_tools_cache"]["ok"] is True
+    assert mimo_media_rows["mimo_jangtq2_installed_media_l2"]["ok"] is True
+    assert (
+        mimo_media_rows["mimo_jangtq2_installed_media_semantics_accounted"][
+            "detail"
+        ]["semantic_blocker_present"]
+        is True
+    )
     assert mimo_media_rows["mimo_jangtq2_media_semantics_release_quality"]["ok"] is False
     gemma_startup_rows = [
         row
@@ -1907,6 +2011,7 @@ def test_full_release_objective_checklist_can_pass_when_all_evidence_is_green(
             "runtime": {"quantizationProfile": "JANGTQ_2"},
         },
     )
+    _write_mimo_installed_app_proofs(tmp_path, media_status="pass")
     _write_issue179_green_artifact(tmp_path)
     _write_green_responses_raw_sse_artifact(tmp_path)
     _write_dsv4_green_artifact(tmp_path)
