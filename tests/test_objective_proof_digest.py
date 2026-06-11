@@ -1220,6 +1220,30 @@ def _write_passing_base_artifacts(tmp_path: Path) -> None:
         "build/current-decode-speed-live-qwen27-jang4m-installed-app-deterministic-pp-20260606.json",
         speed_base,
     )
+    _write_json(
+        tmp_path,
+        "build/current-decode-speed-live-qwen27-jang4m-staged-tahoe-pp-repeat-20260611.json",
+        speed_base,
+    )
+    sequoia_review = json.loads(json.dumps(speed_base))
+    sequoia_review["results"][0]["status"] = "review"
+    sequoia_review["results"][0]["notes"] = [
+        "PP below expected 600.00: 220.10, 258.61, 236.70"
+    ]
+    sequoia_review["results"][0]["runtime_wheels"] = {
+        "mlx": ["cp312-cp312-macosx_14_0_arm64"],
+        "mlx-metal": ["py3-none-macosx_14_0_arm64"],
+    }
+    sequoia_review["results"][0]["pp_rows"] = [
+        {"target_tokens": 1024, "pp_wall_tok_s": 220.10, "loopish": False},
+        {"target_tokens": 4096, "pp_wall_tok_s": 258.61, "loopish": False},
+        {"target_tokens": 16384, "pp_wall_tok_s": 236.70, "loopish": False},
+    ]
+    _write_json(
+        tmp_path,
+        "build/current-decode-speed-live-qwen27-jang4m-staged-sequoia-pp-diagnostic-20260611.json",
+        sequoia_review,
+    )
     mtp_speed_base = {
         "created_at": 1779498428.0,
         "results": [
@@ -9467,7 +9491,7 @@ def test_objective_proof_digest_accepts_qwen_jang_speed_when_source_and_packaged
     assert row["details"]["packaged"]["status"] == "pass"
     assert row["details"]["source"]["min_pp_wall_tok_s"] >= 600
     assert row["details"]["packaged"]["min_pp_wall_tok_s"] >= 600
-    assert "installed-app-deterministic-pp" in QWEN_JANG_PACKAGED_SPEED_REL
+    assert "staged-tahoe-pp-repeat" in QWEN_JANG_PACKAGED_SPEED_REL
 
 
 def test_objective_proof_digest_keeps_qwen_prefill_review_as_historical_diagnostic(tmp_path):

@@ -15371,6 +15371,8 @@ def test_release_regression_manifest_tracks_qwen_jang_live_speed_review():
     assert "current-decode-speed-live-qwen27-jang4m-source-20260606.json" in joined
     assert "current-decode-speed-live-qwen27-jang4m-packaged-keepalloc-20260522.json" in joined
     assert "current-decode-speed-live-qwen27-jang4m-installed-app-deterministic-pp-20260606.json" in joined
+    assert "current-decode-speed-live-qwen27-jang4m-staged-tahoe-pp-repeat-20260611.json" in joined
+    assert "current-decode-speed-live-qwen27-jang4m-staged-sequoia-pp-diagnostic-20260611.json" in joined
     assert "current-decode-speed-live-qwen27-jang4m-text-baseline-20260523.json" in joined
     assert "current-decode-speed-live-qwen27-jang4m-mtp-source-bypass-fix-20260523.json" in joined
     assert "current-decode-speed-live-qwen27-jang4m-mtp-prefill-trace3-20260523.json" in joined
