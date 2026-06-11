@@ -760,15 +760,18 @@ def serve_command(args):
         elif (
             _mc.family_name == "mimo_v2"
             or getattr(_mc, "cache_subtype", None) == "mimo_v2_asymmetric_swa"
-        ) and not getattr(args, "kv_cache_quantization_explicit", False):
+        ) and os.environ.get(
+            "VMLINUX_MIMO_ALLOW_GENERIC_KV_CACHE_QUANTIZATION", ""
+        ).lower() not in {"1", "true", "yes", "on"}:
             _old_kvq = args.kv_cache_quantization
             args.kv_cache_quantization = "none"
             logger.info(
                 "MiMo-V2 asymmetric mixed-SWA cache detected — disabling auto "
-                "stored-prefix q4/q8 quantization (was: %s). Prefix/paged/L2 "
+                "or explicit generic stored-prefix q4/q8 quantization "
+                "(was: %s). Prefix/paged/L2 "
                 "cache stays enabled with native KV/RotatingKVCache state; "
-                "explicit --kv-cache-quantization q4/q8 remains available for "
-                "diagnostics but is not release-cleared for MiMo exactness.",
+                "set VMLINUX_MIMO_ALLOW_GENERIC_KV_CACHE_QUANTIZATION=1 only "
+                "for diagnostics; it is not release-cleared for MiMo exactness.",
                 _old_kvq,
             )
         elif (
