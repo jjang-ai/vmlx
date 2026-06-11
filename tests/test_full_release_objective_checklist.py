@@ -142,6 +142,26 @@ def _write_mimo_installed_app_proofs(tmp_path: Path, *, media_status: str = "fai
     _write_json(tmp_path / checklist.MIMO_JANGTQ2_INSTALLED_MEDIA_L2, media_proof)
 
 
+def _write_mimo_metadata_truth(tmp_path: Path) -> None:
+    _write_json(
+        tmp_path / checklist.MIMO_METADATA_TRUTH,
+        {
+            "status": "pass",
+            "bundles": {
+                "jang2l": {
+                    "status": "pass",
+                    "capabilities": {
+                        "modalities": ["text"],
+                        "multimodal_status": "weights_preserved_text_runtime",
+                        "preserved_modalities": ["vision", "audio"],
+                        "unwired_modalities": ["vision", "audio"],
+                    },
+                }
+            },
+        },
+    )
+
+
 def _write_green_api_surface_artifact(tmp_path: Path) -> None:
     _write_json(
         tmp_path / checklist.API_SURFACE_CONTRACT,
@@ -1230,6 +1250,7 @@ def test_full_release_objective_checklist_keeps_open_rows_visible(tmp_path):
             },
         },
     )
+    _write_mimo_metadata_truth(tmp_path)
     _write_json(
         tmp_path / checklist.MIMO_NO_SOURCE_EXACTNESS_CLASSIFIER,
         {
@@ -1342,6 +1363,7 @@ def test_full_release_objective_checklist_keeps_open_rows_visible(tmp_path):
     ]
     assert len(local_release_rows) == 1
     assert "mimo_jangtq2_live_media_l2_missing" not in local_release_rows[0]["detail"]
+    assert "mimo_jang2l_live_media_l2_missing" not in local_release_rows[0]["detail"]
     assert "mimo_tool_protocol" in failed_names
     assert "mimo_media_model_metadata_text_only_contract" in failed_names
     assert "mimo_media_runtime_implementation" not in failed_names
@@ -1412,6 +1434,13 @@ def test_full_release_objective_checklist_keeps_open_rows_visible(tmp_path):
         ]["semantic_blocker_present"]
         is True
     )
+    not_applicable_rows = [
+        row
+        for row in result["groups"]["mimo_v25_jangtq2"]
+        if row["name"] == "mimo_jang2l_media_l2_not_applicable"
+    ]
+    assert len(not_applicable_rows) == 1
+    assert not_applicable_rows[0]["ok"] is True
     assert mimo_media_rows["mimo_jangtq2_media_semantics_release_quality"]["ok"] is False
     gemma_startup_rows = [
         row
@@ -1955,6 +1984,7 @@ def test_full_release_objective_checklist_can_pass_when_all_evidence_is_green(
             },
         },
     )
+    _write_mimo_metadata_truth(tmp_path)
     _write_json(
         tmp_path / checklist.MIMO_NO_SOURCE_EXACTNESS_CLASSIFIER,
         {

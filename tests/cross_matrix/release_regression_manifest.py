@@ -5882,6 +5882,7 @@ def _validate_current_mimo_v2_jang2l_root_cause(root: Path) -> dict[str, Any]:
         "mimo_jang2l_installed_responses_tools_cache_passed": False,
         "mimo_jangtq2_installed_media_l2_passed": False,
         "mimo_jangtq2_installed_media_semantics_blocked": False,
+        "mimo_jang2l_media_l2_not_applicable": False,
         "mimo_jang2l_live_media_l2_blocked": False,
         "mimo_jang2l_l2_restart_cache_hit_passed": False,
         "mimo_jang2l_l2_restart_visible_output_blocked": False,
@@ -5974,6 +5975,19 @@ def _validate_current_mimo_v2_jang2l_root_cause(root: Path) -> dict[str, Any]:
     metadata_jang2l_caps = metadata_jang2l.get("capabilities")
     if not isinstance(metadata_jang2l_caps, dict):
         metadata_jang2l_caps = {}
+    jang2l_text_runtime_preserved_media = (
+        metadata_jang2l.get("status") == "pass"
+        and metadata_jang2l_caps.get("modalities") == ["text"]
+        and metadata_jang2l_caps.get("multimodal_status")
+        == "weights_preserved_text_runtime"
+        and set(metadata_jang2l_caps.get("preserved_modalities") or [])
+        >= {"vision", "audio"}
+        and set(metadata_jang2l_caps.get("unwired_modalities") or [])
+        >= {"vision", "audio"}
+    )
+    result["mimo_jang2l_media_l2_not_applicable"] = (
+        jang2l_text_runtime_preserved_media
+    )
     result["metadata_truth_passed"] = (
         metadata_truth_payload.get("status") == "pass"
         and (
@@ -6346,9 +6360,17 @@ def _validate_current_mimo_v2_jang2l_root_cause(root: Path) -> dict[str, Any]:
     result["mimo_jangtq2_live_media_l2_passed"] = bool(
         audit_jangtq2_live_media_l2_passed
     )
-    if audit_jang2l_live_media_l2_open:
+    if audit_jang2l_live_media_l2_open and not result[
+        "mimo_jang2l_media_l2_not_applicable"
+    ]:
         result["mimo_jang2l_live_media_l2_blocked"] = True
         result["failures"].append("mimo_jang2l_live_media_l2_missing")
+    if result["mimo_jang2l_media_l2_not_applicable"]:
+        result["current_audit_blockers"] = [
+            blocker
+            for blocker in result["current_audit_blockers"]
+            if blocker != "mimo_jang2l_live_media_l2_missing"
+        ]
     result["mimo_jang2l_l2_restart_cache_hit_passed"] = bool(
         audit_jang2l_l2_cache_hit_passed
     )
@@ -6589,6 +6611,8 @@ def _validate_current_mimo_v2_jang2l_root_cause(root: Path) -> dict[str, Any]:
             active_boundary_reasons.append("JANGTQ2 installed-app media semantics")
         if result["mimo_jang2l_live_media_l2_blocked"]:
             active_boundary_reasons.append("JANG_2L live media/L2 proof")
+        if result["mimo_jang2l_media_l2_not_applicable"]:
+            active_boundary_reasons.append("JANG_2L text-runtime media boundary")
         if result["mimo_jang2l_l2_restart_visible_output_blocked"]:
             active_boundary_reasons.append("JANG_2L L2 restart visible output")
         if result["mimo_jang2l_responses_tool_semantics_blocked"]:

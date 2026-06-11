@@ -23,6 +23,9 @@ DEFAULT_OUT = Path(
 MIMO_AUDIT = Path(
     "build/current-mimo-v2-jang2l-current-audit-after-media-route-proof-20260610.json"
 )
+MIMO_METADATA_TRUTH = Path(
+    "build/current-mimo-v2-local-bundle-metadata-contract-20260607.json"
+)
 MIMO_NO_SOURCE_EXACTNESS_CLASSIFIER = Path(
     "build/current-mimo-v2-no-source-exactness-classifier-after-devapp-jangtq2-exactness-20260610.json"
 )
@@ -424,6 +427,24 @@ def _installed_mimo_media_l2_green(proof: dict[str, Any]) -> bool:
     )
 
 
+def _mimo_jang2l_media_l2_not_applicable(metadata: dict[str, Any]) -> bool:
+    bundles = metadata.get("bundles")
+    bundles = bundles if isinstance(bundles, dict) else {}
+    jang2l = bundles.get("jang2l")
+    jang2l = jang2l if isinstance(jang2l, dict) else {}
+    caps = jang2l.get("capabilities")
+    caps = caps if isinstance(caps, dict) else {}
+    return (
+        metadata.get("exists") is True
+        and metadata.get("status") == "pass"
+        and jang2l.get("status") == "pass"
+        and caps.get("modalities") == ["text"]
+        and caps.get("multimodal_status") == "weights_preserved_text_runtime"
+        and set(caps.get("preserved_modalities") or []) >= {"vision", "audio"}
+        and set(caps.get("unwired_modalities") or []) >= {"vision", "audio"}
+    )
+
+
 def _mimo_media_current_checks(
     media_runtime: dict[str, Any],
     video_audio: dict[str, Any],
@@ -577,6 +598,7 @@ def _mimo_media_current_checks(
 
 def _mimo_checks(
     data: dict[str, Any],
+    metadata: dict[str, Any],
     classifier: dict[str, Any],
     media_runtime: dict[str, Any],
     video_audio: dict[str, Any],
@@ -617,12 +639,19 @@ def _mimo_checks(
     current_installed_jangtq2_media_l2 = media_current_by_name[
         "mimo_jangtq2_installed_media_l2"
     ]["ok"]
+    jang2l_media_l2_not_applicable = _mimo_jang2l_media_l2_not_applicable(metadata)
     effective_blockers = list(blockers)
     if current_installed_jangtq2_media_l2:
         effective_blockers = [
             blocker
             for blocker in effective_blockers
             if blocker != "mimo_jangtq2_live_media_l2_missing"
+        ]
+    if jang2l_media_l2_not_applicable:
+        effective_blockers = [
+            blocker
+            for blocker in effective_blockers
+            if blocker != "mimo_jang2l_live_media_l2_missing"
         ]
     artifact_exactness_detail = {
         "blockers": effective_blockers,
@@ -665,6 +694,18 @@ def _mimo_checks(
             data.get("exists") is True,
             str(MIMO_AUDIT),
             data.get("status"),
+        ),
+        _check(
+            "mimo_jang2l_media_l2_not_applicable",
+            jang2l_media_l2_not_applicable,
+            str(MIMO_METADATA_TRUTH),
+            {
+                "status": metadata.get("status"),
+                "release_boundary": (
+                    "JANG_2L media/L2 live proof is not applicable when the "
+                    "bundle is text-runtime with preserved/unwired media weights"
+                ),
+            },
         ),
         _check(
             "mimo_local_release_clearance",
@@ -2311,6 +2352,7 @@ def _dsv4_exactness_preflight_checks(data: dict[str, Any]) -> list[dict[str, Any
 def _build(root: Path) -> dict[str, Any]:
     release_manifest = _load_json(root / RELEASE_MANIFEST)
     mimo = _load_json(root / MIMO_AUDIT)
+    mimo_metadata = _load_json(root / MIMO_METADATA_TRUTH)
     mimo_classifier = _load_json(root / MIMO_NO_SOURCE_EXACTNESS_CLASSIFIER)
     mimo_media_runtime = _load_json(root / MIMO_JANGTQ2_MEDIA_RUNTIME_SOURCE)
     mimo_video_audio = _load_json(root / MIMO_JANGTQ2_VIDEO_AUDIO_SOURCE)
@@ -2368,6 +2410,7 @@ def _build(root: Path) -> dict[str, Any]:
         "n2_pro_397b": _n2_pro_397b_checks(objective_digest),
         "mimo_v25_jangtq2": _mimo_checks(
             mimo,
+            mimo_metadata,
             mimo_classifier,
             mimo_media_runtime,
             mimo_video_audio,

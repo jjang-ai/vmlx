@@ -3564,6 +3564,17 @@ def _write_passing_mimo_v2_root_cause_artifacts(root: Path) -> None:
                 "preserved_modalities": ["vision", "audio"],
                 "unwired_modalities": ["vision", "audio"],
                 "multimodal_status": "weights_preserved_text_runtime",
+                "bundles": {
+                    "jang2l": {
+                        "status": "pass",
+                        "capabilities": {
+                            "modalities": ["text"],
+                            "multimodal_status": "weights_preserved_text_runtime",
+                            "preserved_modalities": ["vision", "audio"],
+                            "unwired_modalities": ["vision", "audio"],
+                        },
+                    }
+                },
             }
         )
         + "\n",
@@ -11980,7 +11991,8 @@ def test_mimo_v2_root_cause_exposes_decode_speed_and_media_blockers(tmp_path):
     assert result["mimo_jang2l_installed_responses_tools_cache_passed"] is True
     assert result["mimo_jangtq2_installed_media_l2_passed"] is True
     assert result["mimo_jangtq2_installed_media_semantics_blocked"] is True
-    assert result["mimo_jang2l_live_media_l2_blocked"] is True
+    assert result["mimo_jang2l_media_l2_not_applicable"] is True
+    assert result["mimo_jang2l_live_media_l2_blocked"] is False
     assert result["mimo_jang2l_l2_restart_cache_hit_passed"] is True
     assert result["mimo_jang2l_l2_restart_visible_output_blocked"] is False
     assert result["latest_decode_speed_evidence"]["bundle_decode_tps"] == 1.79
@@ -11993,8 +12005,48 @@ def test_mimo_v2_root_cause_exposes_decode_speed_and_media_blockers(tmp_path):
     assert "mimo_decode_speed_below_release_target" in result["failures"]
     assert "mimo_media_unwired" in result["failures"]
     assert "mimo_jangtq2_installed_media_semantics_blocked" in result["failures"]
-    assert "mimo_jang2l_live_media_l2_missing" in result["failures"]
+    assert "mimo_jang2l_live_media_l2_missing" not in result["failures"]
     assert "mimo_jang2l_l2_restart_visible_output_blocked" not in result["failures"]
+
+
+def test_mimo_v2_root_cause_requires_jang2l_media_l2_when_runtime_media_capable(
+    tmp_path,
+):
+    from tests.cross_matrix.release_regression_manifest import (
+        CURRENT_MIMO_V2_JANG2L_CURRENT_AUDIT_ARTIFACT,
+        CURRENT_MIMO_V2_JANG2L_METADATA_TRUTH_ARTIFACT,
+        _validate_current_mimo_v2_jang2l_root_cause,
+    )
+
+    _write_passing_mimo_v2_root_cause_artifacts(tmp_path)
+    metadata_path = tmp_path / CURRENT_MIMO_V2_JANG2L_METADATA_TRUTH_ARTIFACT
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    metadata["bundles"] = {
+        "jang2l": {
+            "status": "pass",
+            "capabilities": {
+                "modalities": ["text", "image", "video", "audio"],
+                "multimodal_status": "mimo_v2_multimodal_runtime",
+                "preserved_modalities": [],
+                "unwired_modalities": [],
+            },
+        }
+    }
+    metadata["expected_runtime_modalities"] = None
+    metadata_path.write_text(json.dumps(metadata) + "\n", encoding="utf-8")
+    current_audit_path = tmp_path / CURRENT_MIMO_V2_JANG2L_CURRENT_AUDIT_ARTIFACT
+    current_audit = json.loads(current_audit_path.read_text(encoding="utf-8"))
+    current_audit["status"] = "open"
+    current_audit["local_release_clearance"] = False
+    current_audit["component_ok"]["mimo_jang2l_live_media_l2"] = False
+    current_audit_path.write_text(json.dumps(current_audit) + "\n", encoding="utf-8")
+
+    result = _validate_current_mimo_v2_jang2l_root_cause(tmp_path)
+
+    assert result["status"] == "open"
+    assert result["mimo_jang2l_media_l2_not_applicable"] is False
+    assert result["mimo_jang2l_live_media_l2_blocked"] is True
+    assert "mimo_jang2l_live_media_l2_missing" in result["failures"]
 
 
 def test_mimo_v2_root_cause_consumes_current_jang2l_l2_and_responses_tool_proofs(
