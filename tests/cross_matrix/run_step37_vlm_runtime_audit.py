@@ -15,9 +15,9 @@ from typing import Any
 DEFAULT_MODEL_PATH = Path(
     "/Users/example/.mlxstudio/models/JANGQ-AI/Step-3.7-Flash-JANG_2L"
 )
-DEFAULT_OUT = Path("build/current-step37-vlm-runtime-audit-after-source-live-media-proof-20260607.json")
+DEFAULT_OUT = Path("build/current-step37-vlm-runtime-audit-after-bundled-vlm-proof-20260611.json")
 DEFAULT_LIVE_MEDIA_PROOF = Path(
-    "build/current-all-local-model-smoke-step37-jang2l-source-tools-media-after-vlm-routing-20260607/summary.json"
+    "build/current-all-local-model-smoke-step37-jangk-tool-newline-bundled-after-parser-fix-20260611/summary.json"
 )
 JANG_RUNTIME_NOTE = Path(
     "/Users/example/jang/docs/runtime/2026-05-29-step37-lfm25-source-and-quant-status.md"

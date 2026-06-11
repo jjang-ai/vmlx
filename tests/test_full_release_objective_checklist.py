@@ -326,13 +326,16 @@ def _write_green_family_smokes(tmp_path: Path) -> None:
     )
     _write_json(
         tmp_path
-        / "build/current-all-local-model-smoke-step37-jang2l-crack-tools-nomedia-textonly-harness-20260606/other_Step-3.7-Flash-JANG_2L-CRACK/result.json",
+        / "build/current-all-local-model-smoke-step37-jangk-tool-newline-bundled-after-parser-fix-20260611/JANGQ_Step-3.7-Flash-JANG_K/result.json",
         _smoke_artifact(
-            mllm=False,
+            mllm=True,
             tool_parser="step3p5",
             reasoning_parser="qwen3",
-            cache_detail="paged",
-            native=_mixed_swa_native("step3p7", "step3p7_full_sliding_kv"),
+            cache_detail="paged+mixed_swa",
+            native={
+                **_mixed_swa_native("step3p7", "step3p7_full_sliding_kv"),
+                "storage_quantization": {"enabled": False},
+            },
         ),
     )
     step_progress = {
@@ -872,7 +875,7 @@ def _write_dsv4_green_artifact(tmp_path: Path) -> None:
 
 def _write_green_n2_objective_digest(tmp_path: Path) -> None:
     assert checklist.OBJECTIVE_DIGEST == Path(
-        "build/current-objective-proof-after-n2-strict-loopback-consumed-20260611.json"
+        "build/current-objective-proof-after-step37-bundled-vlm-proof-20260611.json"
     )
     _write_json(
         tmp_path / checklist.OBJECTIVE_DIGEST,

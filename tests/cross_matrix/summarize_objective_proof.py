@@ -62,10 +62,10 @@ from tests.cross_matrix.release_regression_manifest import (
 
 
 DEFAULT_OUT = Path(
-    "build/current-objective-proof-after-n2-strict-loopback-consumed-20260611.json"
+    "build/current-objective-proof-after-step37-bundled-vlm-proof-20260611.json"
 )
 CURRENT_RELEASE_REGRESSION_MANIFEST_REL = (
-    "build/current-release-regression-manifest-after-n2-strict-loopback-consumed-20260611.json"
+    "build/current-release-regression-manifest-after-step37-bundled-vlm-proof-20260611.json"
 )
 DSV4_QUALITY_CLEARANCE_REL = "build/current-dsv4-long-output-quality-clearance-20260521.json"
 DSV4_CURRENT_IDENTIFIER_CANARY_REL = (

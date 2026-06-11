@@ -771,7 +771,7 @@ def check_objective_proof_digest(
     """Refresh and enforce the objective proof digest before release checks pass."""
     digest_path = digest_path or (
         ROOT
-        / "build/current-objective-proof-after-n2-strict-loopback-consumed-20260611.json"
+        / "build/current-objective-proof-after-step37-bundled-vlm-proof-20260611.json"
     )
     proc = gate.run(
         "objective proof digest refresh",

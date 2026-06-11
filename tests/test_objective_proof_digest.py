@@ -18,7 +18,7 @@ def test_objective_proof_digest_default_out_tracks_current_release_proof_artifac
     from tests.cross_matrix import summarize_objective_proof as objective
 
     assert objective.DEFAULT_OUT == Path(
-        "build/current-objective-proof-after-n2-strict-loopback-consumed-20260611.json"
+        "build/current-objective-proof-after-step37-bundled-vlm-proof-20260611.json"
     )
 
 
@@ -444,12 +444,12 @@ def _write_passing_base_artifacts(tmp_path: Path) -> None:
     )
     _write_json(
         tmp_path,
-        "build/current-objective-proof-after-n2-strict-loopback-consumed-20260611.json",
+        "build/current-objective-proof-after-step37-bundled-vlm-proof-20260611.json",
         {"status": "fixture"},
     )
     _write_json(
         tmp_path,
-        "build/current-release-regression-manifest-after-n2-strict-loopback-consumed-20260611.json",
+        "build/current-release-regression-manifest-after-step37-bundled-vlm-proof-20260611.json",
         {"status": "fixture"},
     )
     _write_json(

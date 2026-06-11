@@ -17,7 +17,7 @@ from typing import Any
 
 
 DEFAULT_OUT = Path(
-    "build/current-full-release-objective-checklist-after-issue179-fullk-local-proof-20260611.json"
+    "build/current-full-release-objective-checklist-after-step37-bundled-vlm-proof-20260611.json"
 )
 
 MIMO_AUDIT = Path(
@@ -51,10 +51,10 @@ TOOL_CALL_CONTRACT = Path(
     "build/current-tool-call-contract-after-cross-model-loop-metrics-20260609.json"
 )
 RELEASE_MANIFEST = Path(
-    "build/current-release-regression-manifest-after-n2-strict-loopback-consumed-20260611.json"
+    "build/current-release-regression-manifest-after-step37-bundled-vlm-proof-20260611.json"
 )
 OBJECTIVE_DIGEST = Path(
-    "build/current-objective-proof-after-n2-strict-loopback-consumed-20260611.json"
+    "build/current-objective-proof-after-step37-bundled-vlm-proof-20260611.json"
 )
 ISSUE179_AUDIT = Path(
     "build/current-issue179-minimax-k-root-cause-audit-after-fullk-local-cancel-proof-20260611.json"
@@ -105,10 +105,10 @@ GEMMA_QAT_NATIVE_MXFP4_INVENTORY = Path(
     "build/current-gemma-qat-native-mxfp4-local-inventory-after-31b-sessionlogs-reasoning-proof-20260611.json"
 )
 STEP37_TEXTONLY_SMOKE = Path(
-    "build/current-all-local-model-smoke-step37-jang2l-crack-tools-nomedia-textonly-harness-20260606/other_Step-3.7-Flash-JANG_2L-CRACK/result.json"
+    "build/current-all-local-model-smoke-step37-jangk-tool-newline-bundled-after-parser-fix-20260611/JANGQ_Step-3.7-Flash-JANG_K/result.json"
 )
 STEP37_VLM_RUNTIME_AUDIT = Path(
-    "build/current-step37-vlm-runtime-audit-after-source-live-media-proof-20260607.json"
+    "build/current-step37-vlm-runtime-audit-after-bundled-vlm-proof-20260611.json"
 )
 LFM25_MXFP4_SMOKE = Path(
     "build/current-all-local-model-smoke-lfm25-mxfp4-tools-nomedia-after-tool-result-value-prompt-20260611/JANGQ_LFM2.5-8B-A1B-MXFP4/result.json"
@@ -841,9 +841,16 @@ def _native_mixed_swa_cache_ok(
     *,
     family: str,
     subtype: str | None = None,
+    require_storage_quantization: bool = True,
 ) -> bool:
     native = native if isinstance(native, dict) else {}
     subtype_ok = True if subtype is None else native.get("cache_subtype") == subtype
+    storage_ok = (
+        _get(native, "storage_quantization", "enabled") is True
+        and _get(native, "storage_quantization", "bits") == 4
+    )
+    if not require_storage_quantization:
+        storage_ok = _get(native, "storage_quantization", "enabled") is False
     return (
         native.get("family") == family
         and native.get("schema") == "mixed_swa_kv_v1"
@@ -853,8 +860,7 @@ def _native_mixed_swa_cache_ok(
         and native.get("paged") is True
         and native.get("block_disk_l2") is True
         and _get(native, "generic_turboquant_kv", "enabled") is False
-        and _get(native, "storage_quantization", "enabled") is True
-        and _get(native, "storage_quantization", "bits") == 4
+        and storage_ok
     )
 
 
@@ -871,6 +877,7 @@ def _smoke_mixed_swa_checks(
     subtype: str | None = None,
     cache_proof: dict[str, Any] | None = None,
     cache_path: Path | None = None,
+    require_storage_quantization: bool = True,
 ) -> list[dict[str, Any]]:
     row = data.get("row") if isinstance(data.get("row"), dict) else {}
     capabilities = _get(data, "capabilities", "body", default={})
@@ -899,7 +906,17 @@ def _smoke_mixed_swa_checks(
         _check(f"{name}_reasoning_parser", capabilities.get("reasoning_parser") == reasoning_parser, str(path), capabilities.get("reasoning_parser")),
         _check(f"{name}_tool_call_record_fact", _has_record_fact_tool_call(data), str(path)),
         _check(f"{name}_cache_reuse_detail", cache_reuse_ok, str(cache_evidence), cache_detail),
-        _check(f"{name}_native_mixed_swa_cache", _native_mixed_swa_cache_ok(native, family=family, subtype=subtype), str(cache_evidence), native),
+        _check(
+            f"{name}_native_mixed_swa_cache",
+            _native_mixed_swa_cache_ok(
+                native,
+                family=family,
+                subtype=subtype,
+                require_storage_quantization=require_storage_quantization,
+            ),
+            str(cache_evidence),
+            native,
+        ),
         _check(f"{name}_block_l2_written", _positive_number(_get(block_disk, "disk_writes")) and _positive_number(_get(totals, "l2_block_tokens_on_disk")), str(cache_evidence), block_disk),
     ]
 
@@ -2061,8 +2078,9 @@ def _build(root: Path) -> dict[str, Any]:
             subtype="step3p7_full_sliding_kv",
             tool_parser="step3p5",
             reasoning_parser="qwen3",
-            expected_mllm=False,
-            cache_detail="paged",
+            expected_mllm=True,
+            cache_detail="paged+mixed_swa",
+            require_storage_quantization=False,
         )
         + _step37_vlm_runtime_checks(step37_vlm),
         "lfm25": _smoke_hybrid_ssm_checks(
