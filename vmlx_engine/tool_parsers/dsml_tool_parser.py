@@ -428,8 +428,8 @@ class DSMLToolParser(ToolParser):
         for pm in self._HTMLISH_PARAM_RE.finditer(body):
             p_name, raw = pm.group(1), pm.group(2)
             if p_name in props:
-                value = re.sub(r"<br\s*/?>", "", raw, flags=re.IGNORECASE).strip()
-                if value:
+                value = self._coerce_plain_param_value(raw, props.get(p_name))
+                if self._plain_param_value_present(value):
                     args[p_name] = value
         if not args and len(props) == 1 and ">.<" in text:
             args[next(iter(props))] = "."

@@ -8,6 +8,7 @@ Covers gaps identified in the comprehensive test audit:
 - max_tokens fallback chain
 """
 
+import json
 from pathlib import Path
 
 import pytest
@@ -2960,6 +2961,42 @@ class TestFallbackToolPromptFormat:
         assert result.tools_called
         assert result.tool_calls[0]["name"] == "list_directory"
         assert '"path": "."' in result.tool_calls[0]["arguments"]
+        assert result.content is None
+
+    def test_dsml_parser_htmlish_repair_preserves_string_spacing(self):
+        from vmlx_engine.tool_parsers.dsml_tool_parser import DSMLToolParser
+
+        text = (
+            '<invoke_write_file><br />\n'
+            '<param name="path">tmp/spaced file.txt</param>\n'
+            "<param name=\"content\">  printf '&lt;x&gt;&amp;y'\nnext  </param>\n"
+            '</inv'
+        )
+        req = {
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "write_file",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "path": {"type": "string"},
+                                "content": {"type": "string"},
+                            },
+                            "required": ["path", "content"],
+                        },
+                    },
+                }
+            ]
+        }
+
+        result = DSMLToolParser(None).extract_tool_calls(text, request=req)
+
+        assert result.tools_called
+        args = json.loads(result.tool_calls[0]["arguments"])
+        assert args["path"] == "tmp/spaced file.txt"
+        assert args["content"] == "  printf '&lt;x&gt;&amp;y'\nnext  "
         assert result.content is None
 
     def test_generic_parser_handles_laguna_arg_key_value_tool_call(self):
