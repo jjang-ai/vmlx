@@ -1199,6 +1199,7 @@ def test_noheavy_api_cache_contract_includes_server_responses_tool_streaming_ord
 
     markers = gate.REQUIRED_NOHEAVY_API_CACHE_TEST_MARKERS
 
+    assert "test_responses_streaming_tool_choice_none_strips_invalid_tool_markup" in markers
     assert "test_streaming_responses_tool_call_arguments_survive_buffering" in markers
     assert "test_streaming_responses_reasoning_tool_call_keeps_arguments" in markers
     assert "test_streaming_responses_tool_call_uses_next_output_index_without_text" in markers
@@ -1210,12 +1211,19 @@ def test_noheavy_api_cache_contract_includes_server_responses_tool_streaming_ord
     assert "responses_streaming_tool_call_arguments_and_indexes" in (
         manifest.EXPECTED_CURRENT_NOHEAVY_API_CACHE_CHECKS
     )
+    assert "responses_no_tool_invalid_markup_cleanup" in (
+        manifest.EXPECTED_CURRENT_NOHEAVY_API_CACHE_CHECKS
+    )
     assert "qwen_xml_function_required_args_fail_closed" in (
         manifest.EXPECTED_CURRENT_NOHEAVY_API_CACHE_CHECKS
     )
     assert "tests/test_server.py" in gate.SOURCE_HASH_FILES
+    assert "tests/test_responses_history.py" in gate.SOURCE_HASH_FILES
     assert "tests/test_tool_parser_required_args_fail_closed.py" in gate.SOURCE_HASH_FILES
     assert "vmlx_engine/tool_parsers/qwen_tool_parser.py" in gate.SOURCE_HASH_FILES
+    history_command = " ".join(gate.COMMANDS["responses_history_contracts"])
+    assert "tests/test_responses_history.py" in history_command
+    assert "responses_streaming_tool_choice_none_strips_invalid_tool_markup" in history_command
     command = " ".join(gate.COMMANDS["responses_streaming_tool_contracts"])
     assert "tests/test_server.py" in command
     assert "streaming_responses_tool_call_arguments_survive_buffering" in command

@@ -130,6 +130,7 @@ REQUIRED_NOHEAVY_API_CACHE_TEST_MARKERS = (
     "test_chat_stream_usage_preserves_cache_detail_without_cached_tokens",
     "test_responses_stream_usage_preserves_cache_detail_without_cached_tokens",
     "test_responses_streaming_stores_history_for_previous_response_id",
+    "test_responses_streaming_tool_choice_none_strips_invalid_tool_markup",
     "test_responses_streaming_reasoning_only_stores_placeholder_and_marker",
     "test_chained_response_helper_emits_warning_for_reasoning_only_predecessor",
     "test_cache_stats_endpoint_projects_cache_reuse_skip_telemetry",
@@ -278,6 +279,7 @@ COMMANDS: dict[str, list[str]] = {
         "-k",
         (
             "responses_streaming_stores_history_for_previous_response_id "
+            "or responses_streaming_tool_choice_none_strips_invalid_tool_markup "
             "or responses_streaming_reasoning_only_stores_placeholder_and_marker "
             "or chained_response_helper_emits_warning_for_reasoning_only_predecessor"
         ),
@@ -605,6 +607,11 @@ def build_artifact(root: Path) -> dict[str, Any]:
             and "test_responses_streaming_reasoning_only_stores_placeholder_and_marker"
             not in missing_markers
             and "test_chained_response_helper_emits_warning_for_reasoning_only_predecessor"
+            not in missing_markers
+        ),
+        "responses_no_tool_invalid_markup_cleanup": (
+            responses_history_ok
+            and "test_responses_streaming_tool_choice_none_strips_invalid_tool_markup"
             not in missing_markers
         ),
         "responses_streaming_tool_call_arguments_and_indexes": (

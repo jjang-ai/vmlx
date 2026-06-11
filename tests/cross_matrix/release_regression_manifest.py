@@ -215,6 +215,7 @@ EXPECTED_CURRENT_NOHEAVY_API_CACHE_CHECKS = (
     "structured_live_smoke_response_format_adoption",
     "response_format_docs_repair_validation_boundary",
     "responses_previous_response_history",
+    "responses_no_tool_invalid_markup_cleanup",
     "responses_streaming_tool_call_arguments_and_indexes",
     "qwen_xml_function_required_args_fail_closed",
     "cache_reuse_endpoints",
