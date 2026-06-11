@@ -24,6 +24,7 @@ This helper intentionally does not load models. It runs focused tests that pin:
 - Responses SSE function-call argument, output-index, and required-arg fail-closed
   contracts.
 - Qwen/Qwen-coder XML-function parser required-argument fail-closed contracts.
+- Panel Qwen/Gemma reasoning request-body controls for Responses and Chat.
 """
 
 from __future__ import annotations
@@ -71,6 +72,7 @@ SOURCE_HASH_FILES = (
     "panel/src/main/ipc/chat.ts",
     "panel/src/renderer/src/components/chat/ToolCallStatus.tsx",
     "panel/tests/api-gateway-single-model.behavior.test.ts",
+    "panel/tests/request-builder.test.ts",
     "panel/tests/tool-status-responsiveness.test.ts",
     "tests/cross_matrix/run_noheavy_api_cache_contract.py",
 )
@@ -161,6 +163,10 @@ REQUIRED_NOHEAVY_API_CACHE_TEST_MARKERS = (
     "passes Responses argument SSE with reasoning and empty final item arguments",
     "returns backend-unavailable for stale Responses session ports",
     "recovers Responses function-call arguments from argument delta and done events",
+    "forwards Qwen-family reasoning controls from detected family when parser state is stale",
+    "forwards Gemma-family reasoning controls from detected family when parser state is stale",
+    "forwards Qwen-family Responses reasoning controls from detected family when parser state is stale",
+    "forwards Gemma-family Responses reasoning controls from detected family when parser state is stale",
 )
 
 COMMANDS: dict[str, list[str]] = {
@@ -414,6 +420,25 @@ COMMANDS: dict[str, list[str]] = {
         "--testNamePattern",
         "recovers Responses function-call arguments from argument delta and done events",
     ],
+    "panel_request_builder_contracts": [
+        "npm",
+        "--prefix",
+        "panel",
+        "exec",
+        "vitest",
+        "run",
+        "tests/request-builder.test.ts",
+        "--",
+        "--reporter",
+        "verbose",
+        "--testNamePattern",
+        (
+            "forwards Qwen-family reasoning controls from detected family when parser state is stale|"
+            "forwards Gemma-family reasoning controls from detected family when parser state is stale|"
+            "forwards Qwen-family Responses reasoning controls from detected family when parser state is stale|"
+            "forwards Gemma-family Responses reasoning controls from detected family when parser state is stale"
+        ),
+    ],
 }
 
 
@@ -483,6 +508,7 @@ def build_artifact(root: Path) -> dict[str, Any]:
     structured_smoke_ok = commands["structured_smoke_response_format_contracts"]["returncode"] == 0
     panel_gateway_ok = commands["panel_gateway_contracts"]["returncode"] == 0
     panel_tool_status_ok = commands["panel_tool_status_contracts"]["returncode"] == 0
+    panel_request_builder_ok = commands["panel_request_builder_contracts"]["returncode"] == 0
     checks = {
         "openai_chat_sampling_kwargs": (
             api_ok and "test_chat_and_responses_log_and_forward_supported_sampling_kwargs" not in missing_markers
@@ -672,6 +698,17 @@ def build_artifact(root: Path) -> dict[str, Any]:
         "panel_tool_status_responses_argument_recovery": (
             panel_tool_status_ok
             and "recovers Responses function-call arguments from argument delta and done events"
+            not in missing_markers
+        ),
+        "panel_qwen_gemma_reasoning_request_controls": (
+            panel_request_builder_ok
+            and "forwards Qwen-family reasoning controls from detected family when parser state is stale"
+            not in missing_markers
+            and "forwards Gemma-family reasoning controls from detected family when parser state is stale"
+            not in missing_markers
+            and "forwards Qwen-family Responses reasoning controls from detected family when parser state is stale"
+            not in missing_markers
+            and "forwards Gemma-family Responses reasoning controls from detected family when parser state is stale"
             not in missing_markers
         ),
         "dsv4_native_cache_status": (

@@ -1193,6 +1193,44 @@ def test_noheavy_api_cache_contract_includes_panel_tool_status_responses_argumen
     assert "recovers Responses function-call arguments from argument delta and done events" in command
 
 
+def test_noheavy_api_cache_contract_includes_qwen_gemma_panel_reasoning_request_controls():
+    from tests.cross_matrix import run_noheavy_api_cache_contract as gate
+    from tests.cross_matrix import release_regression_manifest as manifest
+
+    markers = gate.REQUIRED_NOHEAVY_API_CACHE_TEST_MARKERS
+
+    assert (
+        "forwards Qwen-family reasoning controls from detected family when parser state is stale"
+        in markers
+    )
+    assert (
+        "forwards Gemma-family reasoning controls from detected family when parser state is stale"
+        in markers
+    )
+    assert (
+        "forwards Qwen-family Responses reasoning controls from detected family when parser state is stale"
+        in markers
+    )
+    assert (
+        "forwards Gemma-family Responses reasoning controls from detected family when parser state is stale"
+        in markers
+    )
+    assert "panel_qwen_gemma_reasoning_request_controls" in (
+        manifest.EXPECTED_CURRENT_NOHEAVY_API_CACHE_CHECKS
+    )
+    assert "panel/tests/request-builder.test.ts" in gate.SOURCE_HASH_FILES
+    command = " ".join(gate.COMMANDS["panel_request_builder_contracts"])
+    assert "tests/request-builder.test.ts" in command
+    assert (
+        "forwards Qwen-family reasoning controls from detected family when parser state is stale"
+        in command
+    )
+    assert (
+        "forwards Gemma-family Responses reasoning controls from detected family when parser state is stale"
+        in command
+    )
+
+
 def test_noheavy_api_cache_contract_includes_server_responses_tool_streaming_order():
     from tests.cross_matrix import run_noheavy_api_cache_contract as gate
     from tests.cross_matrix import release_regression_manifest as manifest

@@ -226,6 +226,7 @@ EXPECTED_CURRENT_NOHEAVY_API_CACHE_CHECKS = (
     "gateway_responses_reasoning_empty_final_arguments_streaming",
     "gateway_stale_responses_port_rejection",
     "panel_tool_status_responses_argument_recovery",
+    "panel_qwen_gemma_reasoning_request_controls",
     "dsv4_native_cache_status",
     "dsv4_dsml_parser_residue_rejection",
     "dsv4_dsml_valid_tool_call_preserved",
