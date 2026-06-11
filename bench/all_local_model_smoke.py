@@ -847,9 +847,9 @@ def _tool_prompt_style(row: dict[str, Any]) -> str:
 def _cache_probe_prompt(row: dict[str, Any]) -> str:
     if _is_zaya_row(row):
         return (
-            "ZAYA typed CCA cache probe. Read the stable sequence: "
-            "blue green blue amber violet. Which color word repeats? "
-            "Answer exactly one lowercase word."
+            "ZAYA typed CCA cache probe. Stable sequence: "
+            "blue green blue amber violet. Reply with exactly the single "
+            "lowercase word blue. Do not add any other words."
         )
     base = (
         "Cache probe fixed prefix. Read these stable words: alpha beta gamma delta "
@@ -887,8 +887,8 @@ def _no_media_payload(
         return _text_payload(
             model,
             (
-                f"If a {media_kind} file is attached to this current message, "
-                "answer ATTACHED. Otherwise answer NONE."
+                f"No {media_kind} is attached. What should you output? NONE. "
+                "Output only NONE."
             ),
             max_tokens,
             thinking=False,
@@ -1554,15 +1554,10 @@ def validate_probe_response(
             "no" in words
             or "none" in words
             or "zero" in words
-            or "text_only" in compact_lower
-            or "textonly" in compact_lower
-            or "text-only" in lower
             or "not included" in lower
             or "not provided" in lower
             or "not attached" in lower
             or "without" in words
-            or "do not" in lower
-            or "don't" in lower
         )
         says_affirmative_media = (
             lower in {media_kind, f"{media_kind}."}

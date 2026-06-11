@@ -3986,11 +3986,11 @@ def test_release_regression_manifest_tracks_multifamily_live_workflow_gate():
         in joined
     )
     assert (
-        "current-all-local-model-smoke-zaya-vl-mxfp4-bundled-after-source-tool-pass-20260607/summary.json"
+        "current-all-local-model-smoke-zaya-vl-jangtq4-bundled-after-smoke-prompt-fix2-20260611/summary.json"
         in joined
     )
     assert (
-        "current-all-local-model-smoke-zaya-vl-mxfp4-bundled-after-source-tool-pass-20260607/summary.json"
+        "current-all-local-model-smoke-zaya-vl-jangtq4-bundled-after-smoke-prompt-fix2-20260611/summary.json"
         in joined
     )
     assert "ZAYA text MXFP4 tool probe remains diagnostic" in joined
@@ -4081,7 +4081,7 @@ def test_release_regression_manifest_tracks_multifamily_live_workflow_gate():
         in joined
     )
     assert (
-        "current-all-local-model-smoke-zaya-vl-mxfp4-bundled-after-source-tool-pass-20260607/summary.json"
+        "current-all-local-model-smoke-zaya-vl-jangtq4-bundled-after-smoke-prompt-fix2-20260611/summary.json"
         in joined
     )
     assert "ZAYA text MXFP4 bundled tool probe remains a diagnostic failure" in joined

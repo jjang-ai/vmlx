@@ -710,7 +710,9 @@ def test_zaya_repeat_cache_probe_uses_family_native_color_contract():
     assert repeat["expected_content"] == "blue"
     assert len(messages) == 1
     assert messages[0]["role"] == "user"
-    assert "Which color word repeats" in messages[0]["content"]
+    assert "Stable sequence" in messages[0]["content"]
+    assert "Reply with exactly the single lowercase word blue" in messages[0]["content"]
+    assert "Do not add any other words." in messages[0]["content"]
     assert "Output exactly ACK" not in messages[0]["content"]
 
 
@@ -852,7 +854,10 @@ def test_zaya_vl_no_media_probe_uses_attached_none_contract():
 
     assert len(image_messages) == 1
     assert image_messages[0]["role"] == "user"
-    assert "answer ATTACHED. Otherwise answer NONE" in image_messages[0]["content"]
+    assert "No image is attached" in image_messages[0]["content"]
+    assert "What should you output? NONE" in image_messages[0]["content"]
+    assert "Output only NONE." in image_messages[0]["content"]
+    assert "answer ATTACHED" not in image_messages[0]["content"]
     assert "answer exactly IMAGE" not in image_messages[0]["content"]
     assert "zero image attachments" not in image_messages[0]["content"]
 
@@ -1525,6 +1530,17 @@ def test_validate_probe_response_checks_media_color_and_no_media_carryover():
         )
         == []
     )
+    failures = mod.validate_probe_response(
+        "text_no_media_after_image",
+        200,
+        "I'm unable to provide a response as the text-only request is not clear enough.",
+        "",
+    )
+    assert {
+        "label": "text_no_media_after_image",
+        "reason": "expected_no_media_missing",
+        "expected": "no-or-none",
+    } in failures
 
     failures = mod.validate_probe_response("vl_blue_video", 200, "red", "")
     assert failures == [

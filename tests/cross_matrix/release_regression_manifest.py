@@ -860,7 +860,7 @@ CURRENT_COVERED_LIVE_SMOKE_ARTIFACTS = {
     "hy3_preview_jangtq2": "build/current-filtered-live-smoke-hy3-preview-jangtq2-20260607/summary.json",
     "minimax_m27_tq_k": "build/current-all-local-model-smoke-minimaxk-bundled-after-required-tool-256-20260607/summary.json",
     "nemotron_omni_tq2_system_nomedia": "build/current-filtered-live-smoke-nemotron-omni-jangtq-20260607/summary.json",
-    "zaya_vl_jangtq4": "build/current-all-local-model-smoke-zaya-vl-mxfp4-bundled-after-source-tool-pass-20260607/summary.json",
+    "zaya_vl_jangtq4": "build/current-all-local-model-smoke-zaya-vl-jangtq4-bundled-after-smoke-prompt-fix2-20260611/summary.json",
     "dsv4_jang_local": "build/current-filtered-live-smoke-dsv4-jangtq-k-20260607/summary.json",
 }
 CURRENT_COVERED_LIVE_TOOL_SMOKE_ARTIFACTS = {
@@ -870,7 +870,7 @@ CURRENT_COVERED_LIVE_TOOL_SMOKE_ARTIFACTS = {
     "qwen36_moe_crack": "build/current-all-local-model-smoke-qwen36-27b-jang4m-mtp-bundled-tools-media-20260607/summary.json",
     "hy3_preview_jangtq2": "build/current-filtered-live-smoke-hy3-preview-jangtq2-20260607/summary.json",
     "minimax_m27_tq_k": "build/current-all-local-model-smoke-minimaxk-bundled-after-required-tool-256-20260607/summary.json",
-    "zaya_vl_jangtq4": "build/current-all-local-model-smoke-zaya-vl-mxfp4-bundled-after-source-tool-pass-20260607/summary.json",
+    "zaya_vl_jangtq4": "build/current-all-local-model-smoke-zaya-vl-jangtq4-bundled-after-smoke-prompt-fix2-20260611/summary.json",
 }
 CURRENT_MIMO_V2_JANG2L_STRUCTURAL_VERIFY_ARTIFACT = (
     "build/current-mimo-jang2l-local-structural-verify-20260606.json"
@@ -972,7 +972,7 @@ CURRENT_COVERED_LIVE_SMOKE_ROW_EXPECTATIONS: dict[str, dict[str, Any]] = {
         "cache_family": "hybrid_ssm",
     },
     "zaya_vl_jangtq4": {
-        "name": "ZAYA1-VL-8B-MXFP4",
+        "name": "ZAYA1-VL-8B-JANGTQ4",
         "model_type": "zaya1_vl",
         "is_mllm": True,
         "supports_video": False,
@@ -2014,7 +2014,7 @@ _ROWS: list[dict[str, Any]] = [
             "build/current-filtered-live-smoke-zaya-text-mxfp4-20260607/summary.json",
             "build/current-all-local-model-smoke-zaya-vl-bundled-20260524/summary.json",
             "build/current-all-local-model-smoke-zaya-vl-jangtq4-bundled-20260524/summary.json",
-            "build/current-all-local-model-smoke-zaya-vl-mxfp4-bundled-after-source-tool-pass-20260607/summary.json",
+            "build/current-all-local-model-smoke-zaya-vl-jangtq4-bundled-after-smoke-prompt-fix2-20260611/summary.json",
             "build/current-all-local-model-smoke-nemotron-omni-jangtq-bundled-20260524/summary.json",
             "build/current-all-local-model-smoke-nemotron-omni-jangtq-explicit-nomedia-bundled-20260524/summary.json",
             "build/current-all-local-model-smoke-nemotron-omni-jangtq-system-nomedia-bundled-20260524/summary.json",

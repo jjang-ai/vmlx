@@ -7810,7 +7810,7 @@ def test_objective_proof_digest_keeps_cross_family_live_smoke_open_on_non_mimo_g
     )
     _write_json(
         tmp_path,
-        "build/current-all-local-model-smoke-zaya-vl-jangtq4-bundled-after-zaya-parser-fix-20260611/summary.json",
+        "build/current-all-local-model-smoke-zaya-vl-jangtq4-bundled-after-smoke-prompt-fix2-20260611/summary.json",
         {
             "status": "fail",
             "completed": 1,
@@ -8579,11 +8579,11 @@ def test_objective_proof_digest_keeps_cross_family_live_smoke_open_on_non_mimo_g
         "zaya_vl",
     ]
     assert row["details"]["non_mimo_not_pass_artifacts"] == [
-        "build/current-all-local-model-smoke-zaya-vl-jangtq4-bundled-after-zaya-parser-fix-20260611/summary.json"
+        "build/current-all-local-model-smoke-zaya-vl-jangtq4-bundled-after-smoke-prompt-fix2-20260611/summary.json"
     ]
     assert row["details"]["not_pass_required_family_artifacts"] == {
         "zaya_vl": [
-            "build/current-all-local-model-smoke-zaya-vl-jangtq4-bundled-after-zaya-parser-fix-20260611/summary.json"
+            "build/current-all-local-model-smoke-zaya-vl-jangtq4-bundled-after-smoke-prompt-fix2-20260611/summary.json"
         ]
     }
 
