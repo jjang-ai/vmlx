@@ -65,3 +65,22 @@ def test_load_model_with_fallback_passes_skip_eval_for_n2_jang1l(tmp_path, monke
     tokenizer.load_model_with_fallback(str(model))
 
     assert calls == [(str(model), {"skip_eval": True})]
+
+
+def test_n2_wired_limit_plan_reports_tight_metal_cap():
+    from vmlx_engine.utils.jang_loader import _wired_limit_plan_for_model
+
+    gib = 1024**3
+    plan = _wired_limit_plan_for_model(
+        total_bytes=int(106.725 * gib),
+        max_working_set_bytes=int(107.10 * gib),
+    )
+
+    assert plan["target_bytes"] == int(107.10 * gib)
+    assert plan["capped_by_working_set"] is True
+    assert plan["headroom_bytes"] < int(0.5 * gib)
+    assert plan["tight_headroom"] is True
+    assert "106.72 GiB" in plan["message"]
+    assert "107.10 GiB" in plan["message"]
+    assert "headroom=0.38 GiB" in plan["message"]
+    assert "capped_by_metal_ws=true" in plan["message"]

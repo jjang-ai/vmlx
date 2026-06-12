@@ -12441,19 +12441,27 @@ async def create_chat_completion(
     if response_content:
         response_content = _finalize_visible_text_for_request(response_content, request)
     response_content = _drop_tool_visible_channel_marker(response_content, tool_calls)
+    blank_generation_warnings = _blank_visible_generation_warning(
+        response_content,
+        reasoning_text,
+        tool_calls,
+        output,
+        endpoint="Chat Completions",
+    )
+    if blank_generation_warnings:
+        _log_blank_visible_generation_diagnostics(
+            output,
+            engine.tokenizer,
+            endpoint="Chat Completions",
+            response_id=response_id,
+        )
     response_warnings = _merge_responses_warnings(
         _chat_completion_warnings_for_reasoning_only(
             response_content,
             reasoning_text,
             tool_calls,
         ),
-        _blank_visible_generation_warning(
-            response_content,
-            reasoning_text,
-            tool_calls,
-            output,
-            endpoint="Chat Completions",
-        ),
+        blank_generation_warnings,
         structured_output_warnings,
     )
 
@@ -12750,6 +12758,70 @@ def _blank_visible_generation_warning(
         "health failure; vMLX preserved usage/cache telemetry and did not "
         "synthesize content."
     ]
+
+
+def _blank_visible_generation_diagnostics(
+    output: Any,
+    tokenizer: Any,
+    *,
+    max_tokens: int = 32,
+    max_chars: int = 500,
+) -> dict[str, Any]:
+    token_ids = list(getattr(output, "tokens", []) or [])
+    head_ids = token_ids[: max(0, max_tokens)]
+
+    def _decode(skip_special_tokens: bool) -> str | None:
+        if not head_ids or tokenizer is None:
+            return None
+        decode = getattr(tokenizer, "decode", None)
+        if not callable(decode):
+            return None
+        try:
+            text = decode(head_ids, skip_special_tokens=skip_special_tokens)
+        except TypeError:
+            try:
+                text = decode(head_ids)
+            except Exception as exc:
+                return f"<decode_error:{type(exc).__name__}:{exc}>"
+        except Exception as exc:
+            return f"<decode_error:{type(exc).__name__}:{exc}>"
+        return str(text)[:max_chars]
+
+    return {
+        "completion_tokens": int(getattr(output, "completion_tokens", 0) or 0),
+        "finish_reason": getattr(output, "finish_reason", None),
+        "token_ids_head": head_ids,
+        "token_ids_count": len(token_ids),
+        "raw_text_head": (getattr(output, "raw_text", "") or "")[:max_chars],
+        "text_head": (getattr(output, "text", "") or "")[:max_chars],
+        "decode_keep_specials_head": _decode(False),
+        "decode_skip_specials_head": _decode(True),
+    }
+
+
+def _log_blank_visible_generation_diagnostics(
+    output: Any,
+    tokenizer: Any,
+    *,
+    endpoint: str,
+    response_id: str,
+) -> None:
+    try:
+        diag = _blank_visible_generation_diagnostics(output, tokenizer)
+        logger.warning(
+            "Blank visible generation diagnostic endpoint=%s response_id=%s %s",
+            endpoint,
+            response_id,
+            json.dumps(diag, ensure_ascii=False, sort_keys=True),
+        )
+    except Exception as exc:
+        logger.warning(
+            "Blank visible generation diagnostic failed endpoint=%s "
+            "response_id=%s error=%r",
+            endpoint,
+            response_id,
+            exc,
+        )
 
 
 def _merge_responses_warnings(*warning_lists: list[str] | None) -> list[str] | None:
@@ -14709,6 +14781,20 @@ async def create_response(
     # shells do not count as visible output. Tracked so chained turns surface
     # a warning.
     _reasoning_only = _responses_output_is_reasoning_only(output_items)
+    _blank_generation_warnings = _blank_visible_generation_warning(
+        final_text,
+        reasoning_text,
+        tool_calls,
+        output,
+        endpoint="Responses API",
+    )
+    if _blank_generation_warnings:
+        _log_blank_visible_generation_diagnostics(
+            output,
+            engine.tokenizer,
+            endpoint="Responses API",
+            response_id=response_id,
+        )
 
     response_obj = ResponsesObject(
         id=response_id,
@@ -14719,13 +14805,7 @@ async def create_response(
         warnings=_merge_responses_warnings(
             _chain_warnings_for_previous_response_id(request.previous_response_id),
             _current_response_warnings_for_reasoning_only(_reasoning_only),
-            _blank_visible_generation_warning(
-                final_text,
-                reasoning_text,
-                tool_calls,
-                output,
-                endpoint="Responses API",
-            ),
+            _blank_generation_warnings,
             structured_output_warnings,
         ),
     )
@@ -15871,15 +15951,23 @@ async def stream_chat_completion(
             reasoning=accumulated_reasoning,
             tool_calls=None,
         )
+    _stream_blank_generation_warnings = _blank_visible_generation_warning(
+        streamed_content,
+        accumulated_reasoning,
+        [{"emitted": True}] if tool_calls_emitted else None,
+        last_output,
+        endpoint="Chat Completions stream",
+    )
+    if _stream_blank_generation_warnings:
+        _log_blank_visible_generation_diagnostics(
+            last_output,
+            engine.tokenizer,
+            endpoint="Chat Completions stream",
+            response_id=response_id,
+        )
     _stream_chat_warnings = _merge_responses_warnings(
         _stream_chat_warnings,
-        _blank_visible_generation_warning(
-            streamed_content,
-            accumulated_reasoning,
-            [{"emitted": True}] if tool_calls_emitted else None,
-            last_output,
-            endpoint="Chat Completions stream",
-        ),
+        _stream_blank_generation_warnings,
     )
     if _stream_chat_warnings:
         warning_chunk = ChatCompletionChunk(
@@ -17457,16 +17545,24 @@ async def stream_responses_api(
     _stream_chain_warnings = _chain_warnings_for_previous_response_id(
         getattr(request, "previous_response_id", None)
     )
+    _stream_blank_generation_warnings = _blank_visible_generation_warning(
+        display_text,
+        accumulated_reasoning,
+        [item for item in all_output_items if item.get("type") == "function_call"],
+        last_output,
+        endpoint="Responses API stream",
+    )
+    if _stream_blank_generation_warnings:
+        _log_blank_visible_generation_diagnostics(
+            last_output,
+            engine.tokenizer,
+            endpoint="Responses API stream",
+            response_id=response_id,
+        )
     _stream_warnings = _merge_responses_warnings(
         _stream_chain_warnings,
         _current_response_warnings_for_reasoning_only(_stream_reasoning_only),
-        _blank_visible_generation_warning(
-            display_text,
-            accumulated_reasoning,
-            [item for item in all_output_items if item.get("type") == "function_call"],
-            last_output,
-            endpoint="Responses API stream",
-        ),
+        _stream_blank_generation_warnings,
     )
 
     completed_response = {

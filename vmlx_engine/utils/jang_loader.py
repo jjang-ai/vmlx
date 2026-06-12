@@ -1222,6 +1222,43 @@ def _sanitize_qwen3_next_conv1d_layout(weights: dict) -> dict:
     return _sanitize_grouped_conv1d_layout(weights)
 
 
+def _bytes_gib(value: int) -> float:
+    return float(value) / float(1024**3)
+
+
+def _wired_limit_plan_for_model(
+    total_bytes: int,
+    max_working_set_bytes: int | None = None,
+) -> dict[str, Any]:
+    # Headroom = max(16 GiB, 30% of model size). The previous 8 GiB was tight
+    # on big MoE bundles; this requested headroom is still capped by MLX/Metal.
+    requested_headroom = max(16 * 1024**3, int(total_bytes * 0.30))
+    requested_target = total_bytes + requested_headroom
+    capped_by_ws = bool(max_working_set_bytes and requested_target > max_working_set_bytes)
+    target = int(max_working_set_bytes) if capped_by_ws else requested_target
+    actual_headroom = max(0, target - total_bytes)
+    tight_headroom = actual_headroom < 4 * 1024**3
+    message = (
+        "Wired limit target="
+        f"{_bytes_gib(target):.2f} GiB "
+        f"(model={_bytes_gib(total_bytes):.2f} GiB, "
+        f"requested_headroom={_bytes_gib(requested_headroom):.2f} GiB, "
+        f"headroom={_bytes_gib(actual_headroom):.2f} GiB, "
+        f"capped_by_metal_ws={str(capped_by_ws).lower()})"
+    )
+    return {
+        "target_bytes": target,
+        "total_bytes": total_bytes,
+        "requested_target_bytes": requested_target,
+        "requested_headroom_bytes": requested_headroom,
+        "headroom_bytes": actual_headroom,
+        "max_working_set_bytes": int(max_working_set_bytes or 0),
+        "capped_by_working_set": capped_by_ws,
+        "tight_headroom": tight_headroom,
+        "message": message,
+    }
+
+
 def _set_wired_limit_for_model(weight_files):
     """Raise MLX wired memory limit to fit model + headroom.
 
@@ -1238,29 +1275,26 @@ def _set_wired_limit_for_model(weight_files):
     """
     try:
         total_bytes = sum(sf.stat().st_size for sf in weight_files)
-        # Headroom = max(16 GB, 30% of model size). The previous 8 GB
-        # was tight on big MoE bundles (MiniMax 38 GB JANGTQ2, etc.):
-        # routed-expert dequant + KV cache + Metal scratch could spike
-        # past 8 GB on first inference and the kernel SIGKILLed the
-        # process. 30%-of-model is plenty for dense models too and stays
-        # under max_recommended_working_set on M-series with ≥96 GB.
-        headroom = max(16 * 1024 * 1024 * 1024, int(total_bytes * 0.30))
-        target = total_bytes + headroom
-        # Cap at OS max working set (sysctl iogpu.wired_limit_mb)
+        max_ws = 0
         try:
             _, max_ws = get_effective_metal_working_set_bytes(mx)
-            if max_ws and target > max_ws:
-                target = max_ws
         except Exception:
             pass
+        plan = _wired_limit_plan_for_model(total_bytes, max_ws)
+        target = int(plan["target_bytes"])
         if hasattr(mx, "set_wired_limit"):
             mx.set_wired_limit(target)
         else:
             mx.metal.set_wired_limit(target)
-        logger.info(
-            f"  Wired limit set to {target / 1e9:.0f} GB "
-            f"(model {total_bytes / 1e9:.0f} GB)"
-        )
+        if plan["tight_headroom"]:
+            logger.warning(
+                "  %s — tight Metal headroom; large prompt/cache/scratch "
+                "spikes may OOM unless the OS wired limit is raised or the "
+                "artifact/runtime materialization footprint is reduced.",
+                plan["message"],
+            )
+        else:
+            logger.info("  %s", plan["message"])
     except Exception as e:
         logger.warning(f"  Could not set wired limit: {e}")
 

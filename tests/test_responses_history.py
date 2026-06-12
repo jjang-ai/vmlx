@@ -603,6 +603,26 @@ def test_blank_visible_generation_warning_for_nonzero_generated_tokens():
     ) is None
 
 
+def test_blank_visible_generation_diagnostics_decode_token_ids():
+    from vmlx_engine.engine.base import GenerationOutput
+    from vmlx_engine.server import _blank_visible_generation_diagnostics
+
+    class FakeTokenizer:
+        def decode(self, ids, skip_special_tokens=False):
+            if skip_special_tokens:
+                return "visible"
+            return "<|control|>visible"
+
+    output = GenerationOutput(text="", tokens=[1, 2, 3], completion_tokens=3)
+
+    diag = _blank_visible_generation_diagnostics(output, FakeTokenizer())
+
+    assert diag["completion_tokens"] == 3
+    assert diag["token_ids_head"] == [1, 2, 3]
+    assert diag["decode_keep_specials_head"] == "<|control|>visible"
+    assert diag["decode_skip_specials_head"] == "visible"
+
+
 def test_empty_output_does_NOT_emit_placeholder():
     """An empty output_items list means the model truly produced nothing.
     Do not invent an assistant turn — that's different from reasoning-only."""
