@@ -556,6 +556,53 @@ def test_chat_completion_warning_for_reasoning_only_message():
     ) is None
 
 
+def test_blank_visible_generation_warning_for_nonzero_generated_tokens():
+    from vmlx_engine.engine.base import GenerationOutput
+    from vmlx_engine.server import _blank_visible_generation_warning
+
+    output = GenerationOutput(
+        text="",
+        raw_text="",
+        prompt_tokens=10,
+        completion_tokens=64,
+        finish_reason="length",
+    )
+
+    warnings = _blank_visible_generation_warning(
+        content=None,
+        reasoning=None,
+        tool_calls=None,
+        output=output,
+        endpoint="Responses API",
+    )
+
+    assert warnings is not None
+    assert any("generated 64 completion tokens" in w for w in warnings)
+    assert any("finish_reason=length" in w for w in warnings)
+    assert any("did not synthesize content" in w for w in warnings)
+    assert _blank_visible_generation_warning(
+        content="visible answer",
+        reasoning=None,
+        tool_calls=None,
+        output=output,
+        endpoint="Responses API",
+    ) is None
+    assert _blank_visible_generation_warning(
+        content=None,
+        reasoning="internal analysis",
+        tool_calls=None,
+        output=output,
+        endpoint="Responses API",
+    ) is None
+    assert _blank_visible_generation_warning(
+        content=None,
+        reasoning=None,
+        tool_calls=[{"id": "call_1"}],
+        output=output,
+        endpoint="Responses API",
+    ) is None
+
+
 def test_empty_output_does_NOT_emit_placeholder():
     """An empty output_items list means the model truly produced nothing.
     Do not invent an assistant turn — that's different from reasoning-only."""

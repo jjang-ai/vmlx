@@ -12447,6 +12447,13 @@ async def create_chat_completion(
             reasoning_text,
             tool_calls,
         ),
+        _blank_visible_generation_warning(
+            response_content,
+            reasoning_text,
+            tool_calls,
+            output,
+            endpoint="Chat Completions",
+        ),
         structured_output_warnings,
     )
 
@@ -12716,6 +12723,33 @@ def _chat_completion_warnings_for_reasoning_only(
     return _current_response_warnings_for_reasoning_only(
         has_reasoning and not has_visible_content and not has_tool_calls
     )
+
+
+def _blank_visible_generation_warning(
+    content: str | None,
+    reasoning: str | None,
+    tool_calls: list | None,
+    output: Any,
+    *,
+    endpoint: str,
+) -> list[str] | None:
+    has_visible_content = bool((content or "").strip())
+    has_reasoning = bool((reasoning or "").strip())
+    has_tool_calls = bool(tool_calls)
+    if has_visible_content or has_reasoning or has_tool_calls:
+        return None
+    completion_tokens = int(getattr(output, "completion_tokens", 0) or 0)
+    if completion_tokens <= 0:
+        return None
+    finish_reason = getattr(output, "finish_reason", None) or "unknown"
+    endpoint_name = endpoint.strip() or "response"
+    return [
+        f"{endpoint_name} generated {completion_tokens} completion tokens but "
+        "produced no visible message, reasoning, or tool calls "
+        f"(finish_reason={finish_reason}). This is a runtime/model decode "
+        "health failure; vMLX preserved usage/cache telemetry and did not "
+        "synthesize content."
+    ]
 
 
 def _merge_responses_warnings(*warning_lists: list[str] | None) -> list[str] | None:
@@ -14685,6 +14719,13 @@ async def create_response(
         warnings=_merge_responses_warnings(
             _chain_warnings_for_previous_response_id(request.previous_response_id),
             _current_response_warnings_for_reasoning_only(_reasoning_only),
+            _blank_visible_generation_warning(
+                final_text,
+                reasoning_text,
+                tool_calls,
+                output,
+                endpoint="Responses API",
+            ),
             structured_output_warnings,
         ),
     )
@@ -15830,6 +15871,16 @@ async def stream_chat_completion(
             reasoning=accumulated_reasoning,
             tool_calls=None,
         )
+    _stream_chat_warnings = _merge_responses_warnings(
+        _stream_chat_warnings,
+        _blank_visible_generation_warning(
+            streamed_content,
+            accumulated_reasoning,
+            [{"emitted": True}] if tool_calls_emitted else None,
+            last_output,
+            endpoint="Chat Completions stream",
+        ),
+    )
     if _stream_chat_warnings:
         warning_chunk = ChatCompletionChunk(
             id=response_id,
@@ -17409,6 +17460,13 @@ async def stream_responses_api(
     _stream_warnings = _merge_responses_warnings(
         _stream_chain_warnings,
         _current_response_warnings_for_reasoning_only(_stream_reasoning_only),
+        _blank_visible_generation_warning(
+            display_text,
+            accumulated_reasoning,
+            [item for item in all_output_items if item.get("type") == "function_call"],
+            last_output,
+            endpoint="Responses API stream",
+        ),
     )
 
     completed_response = {
