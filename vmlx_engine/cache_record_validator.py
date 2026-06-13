@@ -295,7 +295,7 @@ def validate_cache_record(
             is a tuple whose first element is a tag string (``"kv"``,
             ``"quantized_kv"``, ``"rotating_kv"``, ``"cumulative"``,
             ``"deepseek_v4"``, ``"deepseek_v4_pending"``, ``"cache_list"``,
-            ``"zaya_cca"``, ``"no_state"``, ``"skip"``).
+            ``"zaya_cca"``, ``"minimax_m3"``, ``"no_state"``, ``"skip"``).
         expected_num_layers: If not None, ``len(cache_data)`` must match.
         source: Tag for logging (e.g. ``"L2-disk"``, ``"reconstruct"``).
 
@@ -336,6 +336,24 @@ def validate_cache_record(
             if len(entry) < 3:
                 return False, f"layer {i} 'kv': len={len(entry)} < 3", total_bytes
             for sub_label, t in (("keys", entry[1]), ("values", entry[2])):
+                ok, nb, reason = _validate_tensor(t, label=sub_label, layer_idx=i)
+                if not ok:
+                    return False, reason, total_bytes
+                total_bytes += nb
+
+        elif tag == "minimax_m3":
+            # ("minimax_m3", keys, values, idx_keys) — MSA sparse layer.
+            # keys/values are required; idx_keys may be None (handled by
+            # _validate_tensor) but is normally present.
+            if len(entry) < 4:
+                return False, (
+                    f"layer {i} 'minimax_m3': len={len(entry)} < 4"
+                ), total_bytes
+            for sub_label, t in (
+                ("keys", entry[1]),
+                ("values", entry[2]),
+                ("idx_keys", entry[3]),
+            ):
                 ok, nb, reason = _validate_tensor(t, label=sub_label, layer_idx=i)
                 if not ok:
                     return False, reason, total_bytes

@@ -720,6 +720,18 @@ def _is_dsv4_cache_class(class_name: str) -> bool:
     return (class_name or "") in {"DeepseekV4Cache", "PoolQuantizedV4Cache"}
 
 
+def _is_minimax_m3_cache_class(class_name: str) -> bool:
+    """MiniMax-M3 MSA sparse layer cache (KVCache + append-only idx_keys).
+
+    Unlike DSV4/ZAYA composite caches, M3's state is FULLY positional: keys,
+    values, and idx_keys all grow append-only in lockstep on the sequence axis,
+    so every block carries a complete, independently-sliceable payload. It is
+    serialized as the 4-tuple ("minimax_m3", keys_slice, values_slice,
+    idx_keys_slice) and reconstructed via restore_minimax_m3_sparse().
+    """
+    return (class_name or "") == "MiniMaxM3SparseCache"
+
+
 def _cache_data_has_dsv4(cache_data) -> bool:
     """Return True when extracted cache states include DSV4 composite layers."""
     try:
@@ -953,6 +965,22 @@ def _numpy_block_slice(
                 zsrc.get("cca_meta", ""),
                 zsrc.get("cache_meta", {}),
             ))
+            continue
+
+        m3src = np_sources.get(idx) if isinstance(np_sources, dict) else None
+        if isinstance(m3src, dict) and m3src.get("type") == "minimax_m3":
+            np_k, np_v, np_idx, orig_dtype = m3src["kv"]
+            seq_len = np_k.shape[2]
+            actual_end = min(end_idx, seq_len)
+            if start_idx >= actual_end:
+                block_slices.append(("skip",))
+                continue
+            ks = np_k[:, :, start_idx:actual_end, :]
+            vs = np_v[:, :, start_idx:actual_end, :]
+            idxs = (
+                np_idx[:, :, start_idx:actual_end, :] if np_idx is not None else None
+            )
+            block_slices.append(("minimax_m3", ks, vs, idxs))
             continue
 
         # CacheList (MoE): not yet supported in numpy path
@@ -1802,6 +1830,35 @@ class BlockAwarePrefixCache:
                     except Exception as _npe:
                         logger.debug(f"np_sources skip ZAYA layer {idx}: {_npe}")
                     continue
+                if _is_minimax_m3_cache_class(cls):
+                    # MSA sparse layer: state = (keys, values, idx_keys), all
+                    # append-only on the seq axis (dim 2). Capture all three as
+                    # numpy so _numpy_block_slice can carve per-block slices with
+                    # zero Metal ops, exactly like the plain-KV positional path.
+                    try:
+                        m3_state = layer_state.get("state")
+                        if not (isinstance(m3_state, (tuple, list)) and len(m3_state) == 3):
+                            continue
+                        m3_k, m3_v, m3_idx = m3_state
+                        if not hasattr(m3_k, "shape"):
+                            continue
+                        orig_dt = m3_k.dtype
+                        if "bfloat16" in str(orig_dt):
+                            # fp32 round-trip (NOT fp16 — see the Gemma 4 note above)
+                            m3_k = m3_k.astype(mx.float32)
+                            m3_v = m3_v.astype(mx.float32)
+                            if m3_idx is not None:
+                                m3_idx = m3_idx.astype(mx.float32)
+                        np_idx = None
+                        if m3_idx is not None:
+                            np_idx = np.array(m3_idx)
+                        np_sources[idx] = {
+                            "type": "minimax_m3",
+                            "kv": (np.array(m3_k), np.array(m3_v), np_idx, orig_dt),
+                        }
+                    except Exception as _npe:
+                        logger.debug(f"np_sources skip M3 layer {idx}: {_npe}")
+                    continue
                 state = layer_state.get("state")
                 if state is None:
                     continue
@@ -2393,6 +2450,59 @@ class BlockAwarePrefixCache:
                         "cca_class_name": state_sub.get("class_name", "ArraysCache"),
                     },
                 ))
+                continue
+
+            if _is_minimax_m3_cache_class(class_name):
+                # MSA sparse layer: positional (keys, values, idx_keys), all on
+                # the seq axis (dim 2). Slice all three to this block's range.
+                # Prefer numpy sources (zero Metal ops); fall back to MLX slices.
+                m3src = (
+                    np_sources.get(layer_idx)
+                    if isinstance(np_sources, dict)
+                    else None
+                )
+                try:
+                    if isinstance(m3src, dict) and m3src.get("type") == "minimax_m3":
+                        np_k, np_v, np_idx, orig_dtype = m3src["kv"]
+                        seq_len = np_k.shape[2]
+                        actual_end = min(end_idx, seq_len)
+                        if start_idx >= actual_end:
+                            block_slices.append(("skip",))
+                            continue
+                        ks = mx.array(np_k[:, :, start_idx:actual_end, :])
+                        vs = mx.array(np_v[:, :, start_idx:actual_end, :])
+                        idxs = (
+                            mx.array(np_idx[:, :, start_idx:actual_end, :])
+                            if np_idx is not None
+                            else None
+                        )
+                        if ks.dtype != orig_dtype:
+                            ks = ks.astype(orig_dtype)
+                            vs = vs.astype(orig_dtype)
+                            if idxs is not None:
+                                idxs = idxs.astype(orig_dtype)
+                    else:
+                        m3_state = layer_state["state"]
+                        keys, values, idx_keys = m3_state
+                        seq_len = keys.shape[2]
+                        actual_end = min(end_idx, seq_len)
+                        if start_idx >= actual_end:
+                            block_slices.append(("skip",))
+                            continue
+                        ks = keys[:, :, start_idx:actual_end, :]
+                        vs = values[:, :, start_idx:actual_end, :]
+                        idxs = (
+                            idx_keys[:, :, start_idx:actual_end, :]
+                            if idx_keys is not None
+                            else None
+                        )
+                    block_slices.append(("minimax_m3", ks, vs, idxs))
+                except Exception as e:
+                    logger.warning(
+                        f"Layer {layer_idx} (MiniMaxM3SparseCache): "
+                        f"failed to slice MSA cache: {e}"
+                    )
+                    block_slices.append(("skip",))
                 continue
 
             # CacheList (MoE models): extract slices from each sub-cache
@@ -3014,6 +3124,10 @@ class BlockAwarePrefixCache:
 
                 cache_list_entries = []  # sub-slice lists from CacheList blocks
                 zaya_cca_entries = []
+                m3_slices_keys = []      # MiniMax-M3 MSA sparse layer
+                m3_slices_values = []
+                m3_slices_idx = []
+                m3_has_idx = False
 
                 for entry in layer_entries:
                     if not isinstance(entry, (tuple, list)):
@@ -3049,6 +3163,13 @@ class BlockAwarePrefixCache:
                         zaya_cca_entries.append(entry)
                     elif tag == "cache_list":
                         cache_list_entries.append(entry[1])  # list of sub-slices
+                    elif tag == "minimax_m3":
+                        m3_slices_keys.append(entry[1])
+                        m3_slices_values.append(entry[2])
+                        m3_idx_slice = entry[3] if len(entry) > 3 else None
+                        m3_slices_idx.append(m3_idx_slice)
+                        if m3_idx_slice is not None:
+                            m3_has_idx = True
                     # "skip" entries are ignored
 
                 if zaya_cca_entries:
@@ -3305,6 +3426,64 @@ class BlockAwarePrefixCache:
                     cache.keys = concat_keys
                     cache.values = concat_values
                     cache.offset = concat_keys.shape[seq_axis]
+                    reconstructed_caches.append(cache)
+                    reconstructed_indices.add(layer_idx)
+                    kv_count += 1
+
+                elif m3_slices_keys:
+                    # MiniMax-M3 MSA sparse layer: concatenate keys, values, and
+                    # idx_keys across blocks (all 4D, seq axis = 2) and rebuild a
+                    # MiniMaxM3SparseCache. idx_keys MUST be restored or the
+                    # Lightning-indexer block selection diverges on the next step.
+                    concat_keys = mx.concatenate(m3_slices_keys, axis=2)
+                    concat_values = mx.concatenate(m3_slices_values, axis=2)
+                    concat_idx = None
+                    if m3_has_idx and all(s is not None for s in m3_slices_idx):
+                        concat_idx = mx.concatenate(m3_slices_idx, axis=2)
+                    if concat_idx is not None:
+                        mx.eval(concat_keys, concat_values, concat_idx)
+                    else:
+                        mx.eval(concat_keys, concat_values)
+                    # Force independent buffers for the single-block case to avoid
+                    # aliasing the live cache (see the KVCache note above).
+                    if len(m3_slices_keys) == 1:
+                        concat_keys = concat_keys * 1
+                        concat_values = concat_values * 1
+                        if concat_idx is not None:
+                            concat_idx = concat_idx * 1
+                        if concat_idx is not None:
+                            mx.eval(concat_keys, concat_values, concat_idx)
+                        else:
+                            mx.eval(concat_keys, concat_values)
+
+                    # Validate the real KV head count (idx_keys is not a KV head).
+                    allowed_kv = self._get_allowed_n_kv_heads()
+                    if allowed_kv and concat_keys.shape[1] not in allowed_kv:
+                        logger.warning(
+                            f"M3 head count mismatch in layer {layer_idx}: "
+                            f"got {concat_keys.shape[1]}, expected one of "
+                            f"{sorted(allowed_kv)} — forcing cache miss"
+                        )
+                        return None
+
+                    try:
+                        from vmlx_engine.models.minimax_m3.cache import (
+                            restore_minimax_m3_sparse,
+                        )
+                    except Exception:
+                        try:
+                            from mlx_lm.models.minimax_m3_vl import (  # vendored namespace
+                                restore_minimax_m3_sparse,
+                            )
+                        except Exception as e:
+                            logger.warning(
+                                f"Cannot reconstruct M3 sparse layer {layer_idx}: "
+                                f"import failed ({e})"
+                            )
+                            return None
+                    cache = restore_minimax_m3_sparse(
+                        concat_keys, concat_values, concat_idx
+                    )
                     reconstructed_caches.append(cache)
                     reconstructed_indices.add(layer_idx)
                     kv_count += 1
