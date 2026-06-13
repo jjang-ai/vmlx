@@ -34,6 +34,10 @@ Supported cache_data tuple types (from prefix_cache.py):
   full CSA/HCA pool state in every block
 - ("zaya_cca", kv_entry, cca_state, cca_meta, cache_meta) — ZAYA CCA
   typed cache: standard KV pages plus terminal conv_state/prev_hs
+- ("minimax_m3", keys_slice, values_slice, idx_keys_slice) — MiniMax-M3 MSA
+  sparse layer: standard GQA KV plus the append-only Lightning-indexer key
+  cache. All three are positional (seq axis), so every block is a complete,
+  independently-sliceable payload (unlike the DSV4/ZAYA terminal-only state).
 - ("skip",) — placeholder for cumulative layers in non-last blocks
 """
 
@@ -842,6 +846,15 @@ def _serialize_block(
             if layer_meta:
                 meta[str(i)] = {"quant_meta": layer_meta}
 
+        elif tag == "minimax_m3":
+            _, keys, values, idx_keys = layer_data
+            tensors[f"layer_{i}_keys"] = keys
+            tensors[f"layer_{i}_values"] = values
+            if idx_keys is not None:
+                tensors[f"layer_{i}_idx_keys"] = idx_keys
+            if hasattr(keys, "dtype"):
+                meta.setdefault("__orig_dtypes__", {})[str(i)] = str(keys.dtype)
+
         elif tag == "rotating_kv":
             _, keys, values, max_size, keep, *window_state = layer_data
             tensors[f"layer_{i}_keys"] = keys
@@ -1078,6 +1091,23 @@ def _deserialize_block(
                         keys = keys.astype(target)
                         values = values.astype(target)
                 cache_data.append(("kv", keys, values))
+            else:
+                cache_data.append(("skip",))
+
+        elif layer_type == "minimax_m3":
+            keys = data.get(f"layer_{i}_keys")
+            values = data.get(f"layer_{i}_values")
+            idx_keys = data.get(f"layer_{i}_idx_keys")
+            if keys is not None and values is not None:
+                orig_dt = orig_dtypes.get(str(i))
+                if HAS_MLX and orig_dt and orig_dt != str(keys.dtype):
+                    target = getattr(mx, orig_dt.replace("mlx.core.", ""), None)
+                    if target is not None:
+                        keys = keys.astype(target)
+                        values = values.astype(target)
+                        if idx_keys is not None:
+                            idx_keys = idx_keys.astype(target)
+                cache_data.append(("minimax_m3", keys, values, idx_keys))
             else:
                 cache_data.append(("skip",))
 

@@ -129,6 +129,13 @@ def estimate_kv_cache_memory(cache: list[Any]) -> int:
                 if not callable(values_attr) and hasattr(values_attr, "nbytes"):
                     total_bytes += values_attr.nbytes
 
+            # MiniMaxM3SparseCache carries an extra append-only idx_keys buffer
+            # ([B, 1, S, index_dim]) beyond the inherited KV. Count it or M3
+            # cache budgets under-report the resident MSA footprint.
+            idx_keys_attr = getattr(layer_cache, "idx_keys", None)
+            if idx_keys_attr is not None and hasattr(idx_keys_attr, "nbytes"):
+                total_bytes += idx_keys_attr.nbytes
+
         # MambaCache/ArraysCache: .cache attribute is a list of arrays
         elif hasattr(layer_cache, "cache") and isinstance(
             getattr(layer_cache, "cache", None), list
