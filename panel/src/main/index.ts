@@ -30,6 +30,14 @@ import { startMemoryEnforcer, stopMemoryEnforcer } from './memory-enforcer'
 import { registerModelSettingsHandlers } from './db/model-settings'
 import { registerImageHandlers } from './ipc/image'
 
+// Dev-only: expose Chrome DevTools Protocol for live UI automation when
+// VMLX_REMOTE_DEBUG_PORT is set. No-op in normal/production launches.
+// Must run before app is ready.
+if (process.env.VMLX_REMOTE_DEBUG_PORT) {
+  app.commandLine.appendSwitch('remote-debugging-port', process.env.VMLX_REMOTE_DEBUG_PORT)
+  app.commandLine.appendSwitch('remote-allow-origins', '*')
+}
+
 let mainWindow: BrowserWindow | null = null
 let downloadWindow: BrowserWindow | null = null
 let handlersRegistered = false

@@ -215,15 +215,29 @@ class BatchedEngine(BaseEngine):
             call_kwargs["tools"] = convert_tools_for_template(tools)
         executor = getattr(self._mllm_scheduler, "_step_executor", None)
         loop = asyncio.get_running_loop()
-        result = await loop.run_in_executor(
-            executor,
-            lambda: self._mllm_instance.chat(
+
+        def _run_simple_mllm_chat():
+            # The mlx-vlm generate path (Gemma4 vision encoder + wired_limit's
+            # bare mx.synchronize()) runs implicit ops on the *default* GPU
+            # stream of the current thread. On a ThreadPoolExecutor worker that
+            # default stream may be unset, raising "There is no Stream(gpu, 0)
+            # in current thread". Pin the worker thread's default stream to the
+            # device default before generating so the synchronize/vision ops
+            # resolve. (Belt-and-suspenders with mllm.chat's _MaybeVLMStream.)
+            try:
+                import mlx.core as mx
+
+                mx.set_default_stream(mx.default_stream(mx.default_device()))
+            except Exception:
+                pass
+            return self._mllm_instance.chat(
                 messages,
                 max_tokens=max_tokens,
                 temperature=temperature,
                 **call_kwargs,
-            ),
-        )
+            )
+
+        result = await loop.run_in_executor(executor, _run_simple_mllm_chat)
         text = clean_output_text(getattr(result, "text", "") or "")
         return GenerationOutput(
             text=text,

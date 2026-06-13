@@ -6149,19 +6149,27 @@ class MLXMultimodalLM:
             resize_shape=kwargs.get("resize_shape"),
         )
 
-        result = generate(
-            self.model,
-            self.processor,
-            formatted_prompt,
-            all_images if all_images else None,
-            audio=all_audio if all_audio else None,
-            max_tokens=max_tokens,
-            temperature=temperature,
-            verbose=False,
-            prompt_cache=prompt_cache,
-            skip_prompt_processing=skip_prompt_processing,
-            **kwargs,
-        )
+        # Pin mlx-vlm generation to a dedicated MLX stream. Without this, when
+        # chat() runs inside a ThreadPoolExecutor worker (the simple media-turn
+        # path in BatchedEngine._simple_mllm_chat_output), the Gemma4 vision
+        # encoder / wired_limit execute on a thread with no current GPU stream
+        # and raise "RuntimeError: There is no Stream(gpu, 0) in current thread".
+        # See _vlm_stream() / _MaybeVLMStream — the simple path must pin the
+        # stream just like the batched VLM scheduler does.
+        with _MaybeVLMStream():
+            result = generate(
+                self.model,
+                self.processor,
+                formatted_prompt,
+                all_images if all_images else None,
+                audio=all_audio if all_audio else None,
+                max_tokens=max_tokens,
+                temperature=temperature,
+                verbose=False,
+                prompt_cache=prompt_cache,
+                skip_prompt_processing=skip_prompt_processing,
+                **kwargs,
+            )
 
         # Store KV cache for future reuse (on cache miss)
         # IMPORTANT: We need to store only the prompt portion, not generated tokens
