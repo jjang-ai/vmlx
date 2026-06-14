@@ -27,16 +27,17 @@ import mlx.core as mx
 import mlx.nn as nn
 
 from mlx_lm.models.base import BaseModelArgs, create_attention_mask, scaled_dot_product_attention
-from mlx_lm.models.switch_layers import SwitchGLU
 from mlx_lm.models.gpt_oss import SwiGLU, swiglu
 from mlx_lm.models.deepseek_v3 import group_expert_select
 
 try:
     from .cache import MiniMaxM3SparseCache, make_minimax_m3_cache
+    from .m3_affine2_switch import MiniMaxM3Affine2SwitchGLU
 except Exception:  # pragma: no cover - standalone / mlx_lm-namespace import
     import os as _os, sys as _sys
     _sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
     from cache import MiniMaxM3SparseCache, make_minimax_m3_cache  # type: ignore
+    from m3_affine2_switch import MiniMaxM3Affine2SwitchGLU  # type: ignore
 
 
 @dataclass
@@ -232,8 +233,13 @@ class SparseMoeBlock(nn.Module):
         self.norm_topk_prob = args.norm_topk_prob
         self.gate = nn.Linear(args.hidden_size, args.num_local_experts, bias=False)
         self.e_score_correction_bias = mx.zeros((args.num_local_experts,))
-        self.switch_mlp = SwitchGLU(args.hidden_size, args.intermediate_size,
-                                    args.num_local_experts, activation=SwiGLU(), bias=False)
+        self.switch_mlp = MiniMaxM3Affine2SwitchGLU(
+            args.hidden_size,
+            args.intermediate_size,
+            args.num_local_experts,
+            activation=SwiGLU(),
+            bias=False,
+        )
         self.shared_experts = SwiGLUOAIMLP(args.hidden_size, args.shared_intermediate_size,
                                            args.swiglu_alpha, args.swiglu_limit)
 
