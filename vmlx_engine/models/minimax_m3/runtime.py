@@ -115,17 +115,18 @@ def generate(model, tok, eos_ids, prompt, max_tokens=200, temp=0.0, top_p=1.0,
     out, text = [], ""
     detok = []
     t1 = time.time()
-    for step in range(max_tokens):
+    pending_logits = False
+    for _ in range(max_tokens):
         prev_ids = ids + out if rep_penalty and rep_penalty != 1.0 else None
         nxt = _sample(logits[0, -1], temp, top_p, prev_ids, rep_penalty)
         if nxt in eos_ids:
             break
         out.append(nxt)
-        if step + 1 < max_tokens:
-            logits = model(mx.array([[nxt]]), cache=cache)
-            # Decode is strictly token-dependent, but streaming/detok can overlap
-            # the next GPU command once the sampled token is known.
-            mx.async_eval(logits)
+        logits = model(mx.array([[nxt]]), cache=cache)
+        # Decode is strictly token-dependent, but streaming/detok can overlap
+        # the next GPU command once the sampled token is known.
+        mx.async_eval(logits)
+        pending_logits = True
         if stream:
             detok.append(nxt)
             piece = tok.decode(detok)
@@ -133,6 +134,8 @@ def generate(model, tok, eos_ids, prompt, max_tokens=200, temp=0.0, top_p=1.0,
                 print(piece, end="", flush=True)
                 text += piece
                 detok = []
+    if pending_logits:
+        mx.eval(logits)
     decode_dt = time.time() - t1
     if not stream:
         text = tok.decode(out)
