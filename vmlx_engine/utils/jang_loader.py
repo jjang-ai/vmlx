@@ -4499,6 +4499,56 @@ def _load_safetensors_tensor_for_mlx(path: Path, key: str) -> Any:
 # ─── Public API ──────────────────────────────────────────────────────
 
 
+def _ensure_gemma4_jang_audio_multimodal_flag(path: Path) -> None:
+    """One-time, idempotent in-place patch for Gemma-4 JANG audio bundles.
+
+    JANG_4M (affine-quant) gemma4 bundles shipped WITHOUT
+    ``quantization.multimodal`` in config.json, so the underlying MLX quantizer
+    affine-quantizes the audio (and vision) embedders at load time -> degenerate
+    audio output (the model "thinks" garbage on audio input). mxfp4/mxfp8 ship
+    ``quantization.multimodal = "fp16_passthrough_embedders_early_fusion"`` which
+    keeps the early-fusion embedders in fp16. Detect a gemma4 bundle that HAS
+    audio and is MISSING the flag, and add it to config.json in place.
+
+    Idempotent: returns early if the flag is already present (so mxfp4/mxfp8 are
+    never rewritten). Gated on ``audio_config`` so vision-only gemma4 (26B/31B)
+    and non-quantized bundles are never touched. Best-effort: any failure is
+    logged and skipped (never blocks load).
+    """
+    try:
+        cfg_path = path / "config.json"
+        if not cfg_path.exists():
+            return
+        cfg = json.loads(cfg_path.read_text())
+        mt = str(cfg.get("model_type", "")).lower()
+        tc = cfg.get("text_config")
+        tmt = str(tc.get("model_type", "")).lower() if isinstance(tc, dict) else ""
+        if not (mt.startswith("gemma4") or tmt.startswith("gemma4")):
+            return
+        # Gate on audio: leave vision-only gemma4 (26B/31B) and text bundles alone.
+        if "audio_config" not in cfg:
+            return
+        quant = cfg.get("quantization")
+        if not isinstance(quant, dict):
+            return  # non-quantized (fp16) bundle: embedders already fp16.
+        if quant.get("multimodal"):
+            return  # already correct (mxfp4/mxfp8, or already patched) -> one-time.
+        quant["multimodal"] = "fp16_passthrough_embedders_early_fusion"
+        cfg["quantization"] = quant
+        cfg_path.write_text(json.dumps(cfg, indent=2))
+        logger.info(
+            "  Gemma-4 JANG audio fix: added quantization.multimodal="
+            "'fp16_passthrough_embedders_early_fusion' to %s (keeps audio/vision "
+            "embedders fp16; one-time idempotent in-place patch).",
+            cfg_path,
+        )
+    except Exception as exc:  # never block model load on this best-effort patch
+        logger.warning(
+            "Gemma-4 JANG audio multimodal-flag patch skipped (%s): %s",
+            path, exc,
+        )
+
+
 def load_jang_vlm_model(
     model_path: str | Path, skip_eval: bool = False, filter_expert_keys: bool = False
 ):
@@ -4516,6 +4566,8 @@ def load_jang_vlm_model(
         Tuple of (model, processor) compatible with mlx-vlm.generate()
     """
     path = Path(model_path)
+    # One-time JANG audio fix: ensure gemma4 audio bundles keep embedders fp16.
+    _ensure_gemma4_jang_audio_multimodal_flag(path)
     config_path = _find_config_path(path)
     if not config_path:
         raise FileNotFoundError(f"No JANG config found in {path}")

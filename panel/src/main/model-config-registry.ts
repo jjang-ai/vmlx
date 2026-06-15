@@ -225,6 +225,9 @@ registerFamily('functionary', { cacheType: 'kv', toolParser: 'functionary', enab
 // MiniMax uses its own parser name so panel-emitted CLI args match the engine
 // registry and diagnostics instead of relying on a generic qwen3 alias.
 registerFamily('minimax', { cacheType: 'kv', toolParser: 'minimax', reasoningParser: 'minimax_m2', enableAutoToolChoice: true, description: 'MiniMax', priority: 20 })
+// MiniMax-M3 (sparse MSA + Lightning-Indexer). PAGED block_disk_store typed 'minimax_m3' lane
+// preserves the MSA idx_keys (standalone disk_cache drops them) -> usePagedCache:true.
+registerFamily('minimax_m3', { cacheType: 'kv', toolParser: 'minimax_m3', reasoningParser: 'minimax_m3', enableAutoToolChoice: true, isMultimodal: true, usePagedCache: true, description: 'MiniMax-M3 (sparse MSA + Lightning-Indexer, VL)', priority: 5 })
 
 // Ling / Bailing hybrid: MLA softmax layers plus linear-attention/SSM-style
 // companion state. Eric directive 2026-05-11: treat Ling chat output as plain
@@ -391,6 +394,8 @@ const MODEL_TYPE_TO_FAMILY: Record<string, string> = {
   'minimax': 'minimax',
   'minimax_m2': 'minimax',
   'minimax_m2_5': 'minimax',
+  'minimax_m3': 'minimax_m3',
+  'minimax_m3_vl': 'minimax_m3',
   // ── Jamba / Mamba / SSM ──
   'jamba': 'jamba',
   'mamba': 'mamba',
@@ -988,6 +993,13 @@ function applyJangCapabilities(
     item === 'vision' || item === 'image' || item === 'video' || item === 'audio' || item === 'omni',
   )
 
+  if (next.family === 'minimax_m3') {
+    // MiniMax-M3 (config model_type=minimax_m3_vl) registers multimodal, but the VL vision
+    // forward (mlx_vlm.models.minimax_m3_vl) is unpublished; force text-only so the panel
+    // emits --text-only and M3 loads via register_minimax_m3_runtime.
+    next.isMultimodal = false
+    next.forceTextOnly = true
+  }
   if (next.family === 'mimo_v2') {
     next.toolParser = 'xml_function'
     next.enableAutoToolChoice = caps.supports_tools !== false

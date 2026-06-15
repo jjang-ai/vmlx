@@ -353,7 +353,92 @@ class ModelConfigRegistry:
         self._configs: List[ModelConfig] = []
         self._match_cache: Dict[str, ModelConfig] = {}
         self._rlock = threading.RLock()
+        # Manual MODEL-FAMILY override (set via --model-family). When non-None
+        # and not "auto", lookup() forces this family and bypasses autodetect.
+        # Process-wide because one engine process serves exactly one model.
+        self._family_override: Optional[str] = None
         self._initialized = True
+
+    def set_family_override(self, family: Optional[str]) -> None:
+        """Force a model family, bypassing autodetect, for ALL subsequent lookups.
+
+        Pass None or "auto" to clear the override and restore autodetection.
+        The override is applied in lookup() before the Tier-1 jang stamp, so a
+        manual family genuinely wins over the converter stamp / config.json.
+        """
+        with self._rlock:
+            norm = (family or "").strip()
+            new_override = None if norm == "" or norm.lower() == "auto" else norm
+            if new_override != self._family_override:
+                # Override changed → invalidate cached resolutions so the new
+                # forced family (or restored autodetect) takes effect.
+                self._match_cache.clear()
+            self._family_override = new_override
+
+    def get_family_override(self) -> Optional[str]:
+        """Return the active manual family override, or None if autodetecting."""
+        with self._rlock:
+            return self._family_override
+
+    def _build_override_config(
+        self,
+        family: str,
+        resolved_path: str,
+    ) -> ModelConfig:
+        """Build the forced ModelConfig for a manual family override.
+
+        Starts from the registered config whose family_name (or model_types)
+        matches `family`, then layers config.json metadata overrides so VLM
+        wrapper media routing / hybrid-cache promotion stay correct. If the
+        family is unknown to the registry, a minimal kv ModelConfig is built
+        from the name so the override is still honored (caller already logged a
+        warning about the unknown family).
+        """
+        # Ensure the family registry is populated before resolving the forced
+        # family. lookup() can reach Tier-0 (override) before the lazy
+        # get_model_config_registry() load runs; without this the override would
+        # silently degrade to a parser-less kv fallback. register() uses the same
+        # reentrant lock, so this is safe from inside lookup().
+        if not self._configs:
+            try:
+                from .model_configs import register_all
+                register_all(self)
+            except Exception:
+                pass
+        base = None
+        for c in self._configs:
+            if c.family_name == family:
+                base = c
+                break
+        if base is None:
+            family_l = family.lower()
+            for c in self._configs:
+                if family_l in {str(mt).lower() for mt in c.model_types}:
+                    base = c
+                    break
+        if base is None:
+            return ModelConfig(
+                family_name=family,
+                model_types=[family],
+                cache_type="kv",
+                priority=0,
+            )
+        # Layer config.json metadata (media routing, qwen3_5 hybrid promotion)
+        # on top of the forced family so a VLM wrapper keeps image routing.
+        try:
+            model_config: dict[str, Any] = {}
+            from pathlib import Path as _P
+            import json as _json
+            cfg_path = _P(resolved_path) / "config.json"
+            if cfg_path.is_file():
+                loaded = _json.loads(cfg_path.read_text())
+                if isinstance(loaded, dict):
+                    model_config = loaded
+            if model_config:
+                return _with_config_metadata_overrides(base, model_config)
+        except Exception:
+            pass
+        return base
 
     def register(self, config: ModelConfig) -> None:
         """Register a model configuration."""
@@ -712,6 +797,31 @@ class ModelConfigRegistry:
                 resolved_path = resolve_to_local_path(model_name)
             except Exception:
                 resolved_path = model_name
+
+            # Tier 0 — MANUAL FAMILY OVERRIDE (--model-family). When the user
+            # forces a family, autodetect (jang stamp + config.json) is bypassed
+            # entirely and the forced family's parser/cache contract is used.
+            if self._family_override is not None:
+                _forced = self._build_override_config(
+                    self._family_override, resolved_path
+                )
+                logger.warning(
+                    "Model config: MANUAL FAMILY OVERRIDE in effect "
+                    "(--model-family=%s) — autodetect BYPASSED. Forced "
+                    "family=%s reasoning_parser=%s tool_parser=%s "
+                    "cache_type=%s cache_subtype=%s is_mllm=%s. The chosen "
+                    "family's cache/parser contract is now authoritative; "
+                    "verify it matches the weights.",
+                    self._family_override,
+                    _forced.family_name,
+                    _forced.reasoning_parser,
+                    _forced.tool_parser,
+                    _forced.cache_type,
+                    _forced.cache_subtype,
+                    _forced.is_mllm,
+                )
+                self._match_cache[model_name] = _forced
+                return _forced
 
             # Tier 1 — JANG-stamped capabilities (authoritative, never second-guess)
             _stamped = self._try_jang_stamp(resolved_path)

@@ -58,6 +58,9 @@ export interface SessionConfig {
   enableAutoToolChoice?: boolean
   toolCallParser: string
   reasoningParser: string
+  // Manual model-family override. undefined = autodetect (default). When set
+  // to a registry family name, sessions.ts emits --model-family to the engine.
+  modelFamily?: string
   isMultimodal?: boolean
   servedModelName: string
   speculativeModel: string
@@ -189,6 +192,24 @@ export const DEFAULT_CONFIG: SessionConfig = {
 
 export const DSV4_PAGED_CACHE_BLOCK_SIZE = 256
 
+// Engine family_name values (vmlx_engine/model_configs.py) offered by the
+// manual Model-Family override. These are passed verbatim to --model-family,
+// so they MUST be the engine's underscore-form names (not the panel registry's
+// dotted/hyphenated display names). 'auto' keeps autodetection.
+export const MODEL_FAMILY_OVERRIDE_NAMES: string[] = [
+  'qwen3_5', 'qwen3_5_moe', 'qwen3', 'qwen3_moe', 'qwen3_vl', 'qwen3_next',
+  'qwen2', 'qwen2_vl', 'qwen_mamba',
+  'llama', 'llama4', 'mistral', 'mistral4', 'mistral3', 'ministral3',
+  'devstral', 'codestral', 'pixtral',
+  'deepseek', 'deepseek_v4', 'deepseek_vl',
+  'glm5', 'glm4_moe', 'glm_z1', 'gpt_oss',
+  'gemma', 'gemma3', 'gemma3_text', 'gemma4', 'gemma4_text', 'medgemma',
+  'phi4', 'phi4_reasoning', 'phi4_multimodal', 'phi3',
+  'nemotron', 'nemotron_h', 'cohere', 'granite', 'granitemoehybrid', 'lfm2',
+  'minimax', 'kimi', 'kimi_k25', 'ling', 'zaya', 'zaya1_vl', 'mimo_v2',
+  'hy_v3', 'step', 'step_vl', 'step3p7', 'hermes', 'mamba', 'jamba',
+]
+
 function normalizeDetectedFamilyName(family?: string): string | undefined {
   if (!family) return undefined
   if (family === 'deepseek_v4') return 'deepseek-v4'
@@ -254,6 +275,8 @@ interface SessionConfigFormProps {
   detectedCacheSubtype?: string
   /** Detected model family for feature gating where cache type alone is ambiguous */
   detectedFamily?: string
+  detectedToolParser?: string
+  detectedReasoningParser?: string
   /** True for JANGTQ/MXTQ models whose live TurboQuant KV cache cannot be mx.compile traced */
   detectedIsTurboQuant?: boolean
   /** True for VLM/MLLM models detected from config/capabilities */
@@ -278,7 +301,7 @@ interface SessionConfigFormProps {
   sessionId?: string
 }
 
-export function SessionConfigForm({ config, onChange, onReset, detectedCacheType, detectedCacheSubtype, detectedFamily, detectedIsTurboQuant, detectedIsMultimodal, detectedForceTextOnly, detectedMaxContext, detectedNativeMtp, modelType, imageMode, sessionId }: SessionConfigFormProps) {
+export function SessionConfigForm({ config, onChange, onReset, detectedCacheType, detectedCacheSubtype, detectedFamily, detectedToolParser, detectedReasoningParser, detectedIsTurboQuant, detectedIsMultimodal, detectedForceTextOnly, detectedMaxContext, detectedNativeMtp, modelType, imageMode, sessionId }: SessionConfigFormProps) {
   const { t } = useTranslation()
   const isImage = modelType === 'image'
   const isImageEdit = isImage && (imageMode === 'edit' || config.imageMode === 'edit')
@@ -1323,6 +1346,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
           value={canonicalizeToolParserId(config.toolCallParser) ?? 'auto'}
           onChange={v => onChange('toolCallParser', v)}
           options={TOOL_PARSER_OPTIONS}
+          detectedValue={detectedToolParser}
         />
         <ParserField
           label="Reasoning Parser"
@@ -1330,6 +1354,17 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
           value={config.reasoningParser}
           onChange={v => onChange('reasoningParser', v)}
           options={REASONING_PARSER_OPTIONS}
+          detectedValue={detectedReasoningParser}
+        />
+        <SelectField
+          label="Model Family (override)"
+          tooltip="Force the model family instead of letting the engine autodetect it from jang_config.json / config.json. Use this for renamed fine-tunes, GGUF, or custom merges where detection picks the wrong family. The chosen family's cache + tool/reasoning parser contract is applied. Leave on Auto unless detection is wrong — forcing a family whose cache contract mismatches the weights (e.g. forcing a plain-KV family onto a hybrid/SSM or MLA model) can produce garbled output."
+          value={config.modelFamily ?? 'auto'}
+          onChange={v => onChange('modelFamily', v === 'auto' ? undefined : v)}
+          options={[
+            { value: 'auto', label: `Auto (detected: ${detectedFamily ?? 'unknown'})` },
+            ...MODEL_FAMILY_OVERRIDE_NAMES.map(name => ({ value: name, label: name })),
+          ]}
         />
         <Field label="Custom Chat Template" tooltip="Override the model's built-in Jinja2 chat template. Useful when the default template is incompatible with your client (e.g., JetBrains AI Chat). Leave empty to use the model's built-in template. The template receives 'messages' and 'add_generation_prompt' variables.">
           <textarea
@@ -1796,6 +1831,12 @@ const TOOL_PARSER_OPTIONS: ParserOption[] = [
       'Gemma 4 31B (text+vision, dense)',
     ]
   },
+  {
+    value: 'minimax_m3', label: 'MiniMax M3 — MiniMax-M3 (sparse MSA + Lightning-Indexer)', format: 'native tool_call (MiniMax M3 parser)', models: [
+      'MiniMax-M3 (REAP22 / JANG_2L)',
+      'Auto-detected for minimax_m3 / minimax_m3_vl bundles.',
+    ]
+  },
 ]
 
 const REASONING_PARSER_OPTIONS: ParserOption[] = [
@@ -1812,6 +1853,12 @@ const REASONING_PARSER_OPTIONS: ParserOption[] = [
     value: 'minimax_m2', label: 'MiniMax M2 — MiniMax M2 / M2.5', format: '<think>...reasoning...</think>content  (MiniMax M2 parser)', models: [
       'MiniMax-M2 (46B)', 'MiniMax-M2.5 (172B MoE)', 'MiniMax Prism Pro (80B)',
       'Use this when a stale bundle sidecar still says qwen3; Auto normalizes MiniMax to minimax_m2.',
+    ]
+  },
+  {
+    value: 'minimax_m3', label: 'MiniMax M3 — MiniMax-M3 (sparse MSA)', format: '<think>...reasoning...</think>content  (MiniMax M3 parser)', models: [
+      'MiniMax-M3 (REAP22 / JANG_2L)',
+      'Auto-detected for minimax_m3 / minimax_m3_vl bundles.',
     ]
   },
   {
@@ -1851,8 +1898,8 @@ const REASONING_PARSER_OPTIONS: ParserOption[] = [
   },
 ]
 
-function ParserField({ label, tooltip, value, onChange, options }: {
-  label: string; tooltip: string; value: string; onChange: (v: string) => void; options: ParserOption[]
+function ParserField({ label, tooltip, value, onChange, options, detectedValue }: {
+  label: string; tooltip: string; value: string; onChange: (v: string) => void; options: ParserOption[]; detectedValue?: string
 }) {
   const { t } = useTranslation()
   const [showHelp, setShowHelp] = useState(false)
@@ -1876,7 +1923,7 @@ function ParserField({ label, tooltip, value, onChange, options }: {
       </span>
       <select value={value} onChange={e => onChange(e.target.value)} className="cfg-input">
         {options.map(o => (
-          <option key={o.value} value={o.value}>{o.label}</option>
+          <option key={o.value} value={o.value}>{o.value === 'auto' && detectedValue ? `Auto (detected: ${detectedValue})` : o.label}</option>
         ))}
       </select>
       {helpVisible && (

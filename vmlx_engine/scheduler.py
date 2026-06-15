@@ -358,6 +358,7 @@ class Scheduler:
             or self._model_uses_zaya_cache(model)
         )
         self._is_hybrid = self._is_hybrid_model(model)
+        self._uses_m3_msa_cache = self._model_uses_m3_msa_cache(model)
         # Do not silently widen repetition-penalty history for families whose
         # chat templates contain EOS/turn-boundary sentinels in the prompt.
         # A 512-token lookback penalizes legitimate stop tokens on MiniMax/Ling
@@ -431,6 +432,19 @@ class Scheduler:
                     f"{self.config.kv_cache_quantization} when applicable."
                 )
 
+        if (
+            self._uses_m3_msa_cache
+            and self.config.kv_cache_quantization != "none"
+        ):
+            logger.info(
+                "MiniMax-M3 MSA cache (MiniMaxM3SparseCache, Lightning-Indexer "
+                "idx_keys) detected — disabling generic KV cache quantization "
+                "(was: %s). The append-only MSA dual-cache is structurally "
+                "incompatible with q4/q8 quantized KV (SDPA mask dtype must "
+                "promote to bfloat16).",
+                self.config.kv_cache_quantization,
+            )
+            self.config.kv_cache_quantization = "none"
         if (
             self._uses_zaya_cache
             and self.config.kv_cache_quantization != "none"
@@ -1166,6 +1180,22 @@ class Scheduler:
             return False
 
     @staticmethod
+    def _model_uses_m3_msa_cache(model: Any) -> bool:
+        """Return True when model.make_cache() contains MiniMaxM3SparseCache (MSA).
+
+        MiniMax-M3's append-only MSA dual-cache (keys/values + Lightning-Indexer
+        idx_keys) is structurally incompatible with generic q4/q8 KV quantization:
+        the quantized KV path yields an SDPA mask whose dtype does not promote to
+        the bfloat16 output ("Mask type must promote to output type bfloat16").
+        """
+        if not hasattr(model, "make_cache"):
+            return False
+        try:
+            return any(type(c).__name__ == "MiniMaxM3SparseCache" for c in (model.make_cache() or []))
+        except Exception:
+            return False
+
+    @staticmethod
     def _turboquant_cache_supports_batch_api(model: Any) -> bool:
         """Return True when every TurboQuant cache declares real batch support."""
         if not hasattr(model, "make_cache"):
@@ -1245,8 +1275,13 @@ class Scheduler:
             # Match any class name ending with "KVCache" (e.g., KVCache,
             # RotatingKVCache, QuantizedKVCache, ChunkedKVCache) so future
             # KV cache variants are handled automatically without hardcoding.
+            # MiniMax-M3's MiniMaxM3SparseCache is a KVCache subclass: append-only,
+            # position-truncatable (its trim() slices keys/values/idx_keys by offset).
+            # It is NOT SSM/cumulative, so treat it as KV — otherwise M3 is mis-routed
+            # through the SSM-companion hybrid path (wrong + per-request re-derive overhead).
             kv_types = {
-                t for t in cache_types if t == "KVCache" or t.endswith("KVCache")
+                t for t in cache_types
+                if t == "KVCache" or t.endswith("KVCache") or t == "MiniMaxM3SparseCache"
             }
             if any(Scheduler._is_dsv4_cache_class_name(t) for t in cache_types):
                 return False

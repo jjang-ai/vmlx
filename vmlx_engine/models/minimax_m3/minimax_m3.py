@@ -30,6 +30,8 @@ from mlx_lm.models.base import BaseModelArgs, create_attention_mask, scaled_dot_
 from mlx_lm.models.gpt_oss import SwiGLU, swiglu
 from mlx_lm.models.deepseek_v3 import group_expert_select
 
+EAGLE3_AUX_LAYERS = (2, 30, 57)
+
 try:
     from .cache import MiniMaxM3SparseCache, make_minimax_m3_cache
     from .m3_affine2_switch import MiniMaxM3Affine2SwitchGLU
@@ -201,14 +203,29 @@ class Attention(nn.Module):
         k = self.k_norm(self.k_proj(x).reshape(B, L, self.n_kv, self.hd)).transpose(0, 2, 1, 3)
         v = self.v_proj(x).reshape(B, L, self.n_kv, self.hd).transpose(0, 2, 1, 3)
         q, k = self.rope(q, offset=off), self.rope(k, offset=off)
+        # Append K/V to the cache FIRST (matches upstream MiniMax-M3 ordering) so
+        # the Lightning Indexer sees the COMPLETED post-append sequence length. If
+        # the indexer ran first (on the pre-append offset) its block_bias Sk would
+        # be one key short of SDPA's K once context passes the 2048 sparse
+        # threshold -> broadcast crash + idx/KV desync across decode and
+        # prefix-cache restore. `off` (captured pre-append) is still the correct
+        # RoPE position for the new token(s).
+        if cache is not None:
+            k, v = cache.update_and_fetch(k, v)
         # MSA selection (additive block mask), computed from the SAME hidden x
         attn_mask = mask
         if self.indexer is not None:
             block_bias = self.indexer(x, cache, off)
             if block_bias is not None:
-                attn_mask = block_bias      # already causal + block-restricted
-        if cache is not None:
-            k, v = cache.update_and_fetch(k, v)
+                # block_bias is built as float32 (0.0 / -inf). SDPA requires the
+                # mask dtype to promote to the bf16 compute/output dtype, else it
+                # raises "[scaled_dot_product_attention] Mask type must promote to
+                # output type bfloat16" once the indexer fires past the
+                # index_topk_blocks*index_block_size (=2048) token threshold.
+                # 0.0 and -inf are exactly representable in bf16, so the cast is
+                # lossless. (Root-cause fix for the M3 >2048-token SDPA crash;
+                # gated by context length, NOT cache mode.)
+                attn_mask = block_bias.astype(q.dtype)  # already causal + block-restricted
         o = scaled_dot_product_attention(q, k, v, cache=cache, scale=self.scale, mask=attn_mask)
         return self.o_proj(o.transpose(0, 2, 1, 3).reshape(B, L, -1))
 
@@ -274,16 +291,29 @@ class MiniMaxM3Model(nn.Module):
         self.layers = [DecoderLayer(args, i) for i in range(args.num_hidden_layers)]
         self.norm = GemmaRMSNorm(args.hidden_size, args.rms_norm_eps)
 
-    def __call__(self, inputs, cache=None, input_embeddings=None):
+    def __call__(
+        self,
+        inputs,
+        cache=None,
+        input_embeddings=None,
+        *,
+        return_aux: bool = False,
+        aux_layers: tuple[int, ...] = EAGLE3_AUX_LAYERS,
+    ):
         h = input_embeddings if input_embeddings is not None else self.embed_tokens(inputs)
         if cache is None:
             cache = [None] * len(self.layers)
         # full-attention layers (0-2) use the standard causal mask; sparse layers
         # build their own block mask, but still need a causal fallback at short ctx.
         mask = create_attention_mask(h, cache[0])
-        for layer, c in zip(self.layers, cache):
+        aux = [] if return_aux else None
+        aux_set = set(aux_layers) if return_aux else set()
+        for li, (layer, c) in enumerate(zip(self.layers, cache)):
             h = layer(h, mask, c)
-        return self.norm(h)
+            if return_aux and li in aux_set:
+                aux.append(h)
+        out = self.norm(h)
+        return (out, aux) if return_aux else out
 
 
 class Model(nn.Module):
@@ -295,10 +325,31 @@ class Model(nn.Module):
         if not args.tie_word_embeddings:
             self.lm_head = nn.Linear(args.hidden_size, args.vocab_size, bias=False)
 
-    def __call__(self, inputs, cache=None, input_embeddings=None):
-        out = self.model(inputs, cache, input_embeddings)
-        return (self.model.embed_tokens.as_linear(out) if self.args.tie_word_embeddings
-                else self.lm_head(out))
+    def __call__(
+        self,
+        inputs,
+        cache=None,
+        input_embeddings=None,
+        *,
+        return_aux: bool = False,
+        aux_layers: tuple[int, ...] = EAGLE3_AUX_LAYERS,
+    ):
+        out = self.model(
+            inputs,
+            cache,
+            input_embeddings,
+            return_aux=return_aux,
+            aux_layers=aux_layers,
+        )
+        aux = None
+        if return_aux:
+            out, aux = out
+        logits = (
+            self.model.embed_tokens.as_linear(out)
+            if self.args.tie_word_embeddings
+            else self.lm_head(out)
+        )
+        return (logits, aux) if return_aux else logits
 
     def make_cache(self):
         return make_minimax_m3_cache(self.args)
