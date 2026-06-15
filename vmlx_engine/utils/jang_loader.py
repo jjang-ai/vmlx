@@ -2446,6 +2446,35 @@ def _load_jang_v2(
     except Exception as _lmoe_e:
         logger.debug(f"LatentMoE patch skipped: {_lmoe_e}")
 
+    # MiniMax-M3 (VL-wrapped JANG text runtime): the per-module quantization
+    # config keys carry the language_model.* prefix and the .block_sparse_moe.
+    # infix, but the instantiated module paths are post-sanitize (model.X,
+    # .mlp.switch_mlp.*). mlx_lm load_model quantize matches per-module config
+    # via `p in config['quantization']`; unmatched switch_mlp (2-bit) experts
+    # fall back to the global bits (4) -> [gather_qmm] shape mismatch -> empty
+    # output. Rewrite the quant-config keys to the post-sanitize module paths
+    # so the correct per-module bits/group_size (switch_mlp=2/128) are applied
+    # at skeleton-quantize time.
+    _m3_qm = config.get('quantization')
+    if isinstance(_m3_qm, dict) and str(config.get('model_type', '')).startswith('minimax_m3'):
+        _qm_scalars = {'bits', 'group_size', 'mode'}
+        _qm_new = {}
+        _qm_remapped = 0
+        for _qk, _qv in _m3_qm.items():
+            if _qk in _qm_scalars:
+                _qm_new[_qk] = _qv
+            else:
+                _nk = _strip_lm_prefix_quant_key(_qk)
+                _qm_new[_nk] = _qv
+                if _nk != _qk:
+                    _qm_remapped += 1
+        config['quantization'] = _qm_new
+        logger.info(
+            '  MiniMax-M3 quant-config key rewrite: %d per-module entries aligned '
+            'to post-sanitize module paths (2-bit switch_mlp experts).',
+            _qm_remapped,
+        )
+
     model, config = _load_model_skeleton(
         path, lazy=True, strict=False, model_config=config
     )
@@ -2453,6 +2482,7 @@ def _load_jang_v2(
         model,
         config["quantization"]["bits"],
         config["quantization"]["group_size"],
+        quant_cfg=config.get("quantization"),
     )
 
     # Mistral-Small-4-119B (and any future model_type-promoted text load):
@@ -4758,6 +4788,35 @@ def _load_jang_v1(path: Path, jang_cfg: dict, config_path: Path):
     except Exception as _lmoe_e:
         logger.debug(f"LatentMoE patch skipped: {_lmoe_e}")
 
+    # MiniMax-M3 (VL-wrapped JANG text runtime): the per-module quantization
+    # config keys carry the language_model.* prefix and the .block_sparse_moe.
+    # infix, but the instantiated module paths are post-sanitize (model.X,
+    # .mlp.switch_mlp.*). mlx_lm load_model quantize matches per-module config
+    # via `p in config['quantization']`; unmatched switch_mlp (2-bit) experts
+    # fall back to the global bits (4) -> [gather_qmm] shape mismatch -> empty
+    # output. Rewrite the quant-config keys to the post-sanitize module paths
+    # so the correct per-module bits/group_size (switch_mlp=2/128) are applied
+    # at skeleton-quantize time.
+    _m3_qm = config.get('quantization')
+    if isinstance(_m3_qm, dict) and str(config.get('model_type', '')).startswith('minimax_m3'):
+        _qm_scalars = {'bits', 'group_size', 'mode'}
+        _qm_new = {}
+        _qm_remapped = 0
+        for _qk, _qv in _m3_qm.items():
+            if _qk in _qm_scalars:
+                _qm_new[_qk] = _qv
+            else:
+                _nk = _strip_lm_prefix_quant_key(_qk)
+                _qm_new[_nk] = _qv
+                if _nk != _qk:
+                    _qm_remapped += 1
+        config['quantization'] = _qm_new
+        logger.info(
+            '  MiniMax-M3 quant-config key rewrite: %d per-module entries aligned '
+            'to post-sanitize module paths (2-bit switch_mlp experts).',
+            _qm_remapped,
+        )
+
     model, config = _load_model_skeleton(
         path, lazy=True, strict=False, model_config=config
     )
@@ -5431,22 +5490,83 @@ def _stack_per_expert_weights(weights, config):
         )
 
 
-def _upgrade_switch_to_quantized(model, bits, group_size):
+def _strip_lm_prefix_quant_key(k: str) -> str:
+    """Normalize a per-module quantization-config key to the post-sanitize
+    module path (model.X / lm_head.X) used by VL-wrapped JANG text runtimes
+    (e.g. minimax_m3_vl, qwen3.5/3.6 VL). Mirrors the weight LM-strip."""
+    if k.startswith("language_model.model."):
+        return "model." + k[len("language_model.model."):]
+    if k.startswith("language_model.lm_head"):
+        return "lm_head" + k[len("language_model.lm_head"):]
+    if k.startswith("language_model.model."):
+        k = "model." + k[len("language_model.model."):]
+    elif k.startswith("language_model.lm_head"):
+        k = "lm_head" + k[len("language_model.lm_head"):]
+    elif k.startswith("language_model."):
+        k = k[len("language_model."):]
+    # MiniMax-M3 Model.sanitize remaps ".block_sparse_moe." -> ".mlp." so the
+    # instantiated module paths use ".mlp.switch_mlp.*". Mirror that here so the
+    # per-module quant config keys match the live SwitchLinear module names.
+    if ".block_sparse_moe." in k:
+        k = k.replace(".block_sparse_moe.", ".mlp.")
+    return k
+
+
+def _upgrade_switch_to_quantized(model, bits, group_size, quant_cfg=None):
     try:
         from mlx_lm.models.switch_layers import QuantizedSwitchLinear, SwitchLinear
     except ImportError:
         return
 
+    # Per-module bits/group_size: M3 (and other mixed-precision MoE JANG bundles)
+    # quantize routed switch_mlp experts at a DIFFERENT width than the rest
+    # (e.g. M3 switch_mlp = 2-bit/group128 while shared/dense = 6/8-bit). The
+    # caller passes the GLOBAL bits/group_size; without per-module lookup every
+    # SwitchLinear is rebuilt at the global width -> the 2-bit packed expert
+    # weight is interpreted as 4/8-bit -> [gather_qmm] shape mismatch -> garbage.
+    # The model's module paths are post-sanitize (model.X); the quant-config
+    # keys may carry the language_model.* prefix, so normalize before matching.
+    _norm_cfg = {}
+    if isinstance(quant_cfg, dict):
+        for _k, _v in quant_cfg.items():
+            if isinstance(_v, dict) and "bits" in _v:
+                _norm_cfg[_strip_lm_prefix_quant_key(_k)] = _v
+
+    # Handle BOTH plain SwitchLinear and an already-quantized QuantizedSwitchLinear:
+    # mlx_lm's skeleton nn.quantize converts SwitchLinear to QuantizedSwitchLinear but
+    # does NOT honor the per-module bits dict for it (it gets the global width). For
+    # mixed-precision MoE (M3: switch_mlp=2-bit/group128 while the model default is
+    # wider) we must REBUILD at the correct per-module width. The model is lazy here
+    # (no weights bound yet), so rebuilding the module is safe.
     for name, module in model.named_modules():
-        if not isinstance(module, SwitchLinear):
+        if not isinstance(module, (SwitchLinear, QuantizedSwitchLinear)):
             continue
+        _mc = _norm_cfg.get(name)
+        if _mc is None:
+            # No per-module override: leave an already-quantized module as-is;
+            # only upgrade a still-plain SwitchLinear to the global width.
+            if isinstance(module, QuantizedSwitchLinear):
+                continue
+            _bits, _gs = bits, group_size
+        else:
+            _bits = int(_mc.get("bits", bits))
+            _gs = int(_mc.get("group_size", group_size))
+            _cur_bits = getattr(module, "bits", None)
+            _cur_gs = getattr(module, "group_size", None)
+            if isinstance(module, QuantizedSwitchLinear) and _cur_bits == _bits and _cur_gs == _gs:
+                continue  # already correct
+            logger.info(
+                "  SwitchLinear per-module quant: %s -> bits=%d group_size=%d "
+                "(was bits=%s group_size=%s)",
+                name, _bits, _gs, _cur_bits, _cur_gs,
+            )
         ql = QuantizedSwitchLinear(
             module.input_dims,
             module.output_dims,
             module.num_experts,
             bias=hasattr(module, "bias"),
-            group_size=group_size,
-            bits=bits,
+            group_size=_gs,
+            bits=_bits,
         )
         parts = name.rsplit(".", 1)
         if len(parts) == 2:

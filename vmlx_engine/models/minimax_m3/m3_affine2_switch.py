@@ -14,11 +14,17 @@ _DISABLE_ENV_NAMES = ('VMLINUX_M3_AFFINE2_SWITCH', 'VMLX_M3_AFFINE2_SWITCH')
 
 
 def _disabled() -> bool:
+    # The affine-2 decode fast path currently produces INCORRECT math for the
+    # MiniMax-M3 2-bit/group128 routed experts (degenerate repetition like
+    # 'dudas dudas...'), while the standard SwitchGLU path is correct. Until the
+    # kernel is fixed, the fast path is DISABLED BY DEFAULT (correctness over the
+    # ~22-25 tok/s speedup). Set VMLX_M3_AFFINE2_SWITCH=1 (or true/on/yes) to
+    # opt back in for kernel-correctness testing.
     for name in _DISABLE_ENV_NAMES:
         value = os.environ.get(name)
         if value is not None:
-            return value.lower() in {'0', 'false', 'off', 'no'}
-    return False
+            return value.lower() not in {'1', 'true', 'on', 'yes'}
+    return True
 
 
 def _is_affine2_projection(proj: Any) -> bool:

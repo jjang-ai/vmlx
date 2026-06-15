@@ -590,6 +590,7 @@ _inference_endpoints: list[str] = [
 _wake_timeout: int = 300
 _model_load_error: str | None = None  # Surfaced via /health when model fails to load
 _smelt_enabled: bool = False  # --smelt: partial expert loading for MoE
+_force_text_only: bool = False  # --text-only: force a detected-VL model to load text-only
 _smelt_experts: int = 50  # --smelt-experts: percentage of experts per layer
 _flash_moe_enabled: bool = False  # --flash-moe: SSD expert streaming
 _flash_moe_loader = None  # FlashMoEExpertLoader instance (set after model load)

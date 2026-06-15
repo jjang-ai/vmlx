@@ -407,7 +407,7 @@ def _is_mllm_cache_key(model_name: str, local_path: str) -> tuple:
         return (model_name, local_path, 0.0, 0.0)
 
 
-def is_mllm_model(model_name: str, force_mllm: bool = False) -> bool:
+def is_mllm_model(model_name: str, force_mllm: bool = False, force_text_only: bool = False) -> bool:
     """
     Check if model is a multimodal language model.
 
@@ -430,6 +430,20 @@ def is_mllm_model(model_name: str, force_mllm: bool = False) -> bool:
     # parser-detection debugging is possible. Tiers are checked in order; the
     # first one to return wins.
     _logger = logging.getLogger("vmlx_engine")
+
+    # --text-only / force_text_only: highest-precedence override. Honor BOTH the
+    # explicit param AND a server-global sentinel (set by `cli serve` for --text-only)
+    # so argless callers (e.g. server-side VL routing in server.py) also force text-only.
+    _force_to = bool(force_text_only)
+    if not _force_to:
+        try:
+            from .. import server as _server_module
+            _force_to = bool(getattr(_server_module, "_force_text_only", False))
+        except Exception:
+            _force_to = False
+    if _force_to:
+        _logger.info("is_mllm_model(%s): tier=force_text_only result=False", model_name)
+        return False
 
     # Smelt mutual exclusion: when smelt is active, the vision tower is NOT
     # wired through the partial-expert loader. Allowing a VLM to load under
