@@ -176,3 +176,6 @@ HANDOFF-*.md
 TEST-MATRIX-*.md
 BENCHMARK-*.md
 panel/build_dmg.sh
+
+# symlink form (trailing-slash pattern misses symlinks)
+panel/node_modules
