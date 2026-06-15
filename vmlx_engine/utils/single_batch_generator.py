@@ -125,6 +125,11 @@ class _Request:
     next_logprobs: Any = None
     next_token_materialized: bool = False
     next_logprobs_materialized: bool = False
+    # MiniMax-M3 VL (additive, only ever set when VMLX_M3_VL routes an image
+    # request here). Carried so the FIRST prefill forward can splice vision
+    # embeddings; cleared after that forward so decode never re-passes them.
+    pixel_values: Any = None
+    image_grid_thw: Any = None
 
 
 @dataclass
@@ -400,9 +405,14 @@ class SingleBatchGenerator:
             list[list[Callable[[mx.array, mx.array], mx.array]]]
         ] = None,
         state_machines: Optional[list[SequenceStateMachine]] = None,
+        pixel_values: Optional[list[Any]] = None,
+        image_grid_thw: Optional[list[Any]] = None,
     ):
         max_tokens = max_tokens or [self.max_tokens] * len(prompts)
         caches = caches or [None] * len(prompts)
+        # M3 VL (additive): per-prompt vision tensors, default None == text path.
+        pixel_values = pixel_values or [None] * len(prompts)
+        image_grid_thw = image_grid_thw or [None] * len(prompts)
         all_tokens = all_tokens or [[] for _ in prompts]
         samplers = samplers or [None] * len(prompts)
         logits_processors = logits_processors or [self.logits_processors] * len(prompts)
@@ -416,7 +426,7 @@ class SingleBatchGenerator:
             )
 
         uids: list[int] = []
-        for prompt, max_tok, cache, context, sampler, processors, sm in zip(
+        for prompt, max_tok, cache, context, sampler, processors, sm, pv, grid in zip(
             prompts,
             max_tokens,
             caches,
@@ -424,6 +434,8 @@ class SingleBatchGenerator:
             samplers,
             logits_processors,
             state_machines,
+            pixel_values,
+            image_grid_thw,
         ):
             prompt_tokens = list(prompt)
             if not prompt_tokens:
@@ -443,6 +455,8 @@ class SingleBatchGenerator:
                 state_machine=state_machine,
                 matcher_state=matcher_state,
                 token_context=TokenBuffer(list(context or [])),
+                pixel_values=pv,
+                image_grid_thw=grid,
             )
             self._unprocessed.append(req)
             uids.append(uid)
@@ -453,6 +467,23 @@ class SingleBatchGenerator:
 
     def _model_call(self, tokens: list[int], req: _Request):
         arr = mx.array([tokens], dtype=mx.int32)
+        # M3 VL: vision tensors are present ONLY on the first prefill forward
+        # (set by _start_request when req.pixel_values is not None). After this
+        # single forward they are cleared so decode never re-passes them, leaving
+        # the 23.4 tok/s decode hot path byte-for-byte unchanged.
+        pv = req.pixel_values
+        if pv is not None:
+            grid = req.image_grid_thw
+            req.pixel_values = None
+            req.image_grid_thw = None
+            # The vision tensors were created on a different thread (the server
+            # event loop, during preprocessing). Rehome them onto THIS generator
+            # stream so their lazy graph doesn't resolve a stale Stream(gpu,0)
+            # when the scheduler worker thread evals (the P0 VL stream bug).
+            pv = self._rehome_on_stream(pv)
+            if grid is not None:
+                grid = self._rehome_on_stream(grid)
+            return self.model(arr, cache=req.cache, pixel_values=pv, image_grid_thw=grid)
         return self.model(arr, cache=req.cache)
 
     def _prefill(self, tokens: list[int], req: _Request) -> None:
@@ -520,6 +551,25 @@ class SingleBatchGenerator:
             logprobs = evaluated[1]
         return sampled, logprobs
 
+    def _needs_affine2_sync(self, cache=None) -> bool:
+        """MiniMax-M3 + affine-2 fast path requires FULL sync each decode step.
+
+        The default one-token lookahead leaves the forward (incl. the custom
+        affine-2 SwitchGLU Metal kernel) lazy across the iteration boundary; that
+        async overlap rarely corrupts long/thinking generations. Forcing mx.eval
+        of the forward each step removes the overlap — matching the proven
+        synchronous runtime path. Detect via the M3 MSA cache type (robust to
+        model wrappers). Gated to M3+affine-2 only.
+        """
+        try:
+            # affine-2 is M3-specific (only M3 reads this flag), so "enabled"
+            # uniquely means M3+affine-2. Avoids cache/model-wrapper detection
+            # failures (paged-cache wraps the raw MSA cache).
+            from vmlx_engine.models.minimax_m3.m3_affine2_switch import _disabled
+            return not _disabled()
+        except Exception:
+            return False
+
     def _compute_next_from_input_array(
         self,
         req: _Request,
@@ -547,6 +597,27 @@ class SingleBatchGenerator:
             )
             req.next_token_materialized = True
             req.next_logprobs_materialized = req.next_logprobs is not None
+            # M3+affine-2: materialize the forward + cache state NOW (no lookahead
+            # overlap) to avoid the async-overlap corruption of the custom Metal
+            # kernel. Eval the cache too (not just the token) since paged/block-disk
+            # snapshots read it.
+            if self._needs_affine2_sync(req.cache):
+                _arrs = [req.next_token]
+                if req.next_logprobs is not None:
+                    _arrs.append(req.next_logprobs)
+                try:
+                    for _c in (req.cache or []):
+                        _st = getattr(_c, "state", None)
+                        if isinstance(_st, (list, tuple)):
+                            _arrs.extend(x for x in _st if x is not None)
+                        elif _st is not None:
+                            _arrs.append(_st)
+                except Exception:
+                    pass
+                _ev = self._eval_on_stream(*_arrs)
+                req.next_token = _ev[0]
+                if req.next_logprobs is not None:
+                    req.next_logprobs = _ev[1]
             if trace:
                 self._sync()
                 sample_s = time.perf_counter() - sample_t0
@@ -652,10 +723,52 @@ class SingleBatchGenerator:
             self._request = None
         return response
 
+    def _prefill_vl_and_sample(self, req: _Request) -> None:
+        """M3 VL prefill: ONE forward over the ENTIRE prompt with pixel_values.
+
+        Image-token positions are spliced with vision embeddings inside the
+        model's _embed_with_images, which requires every image-token position to
+        be present in a single forward. We therefore bypass prefill_step_size
+        chunking and run the whole prompt at once, then sample the next token
+        from the final-position logits. _model_call clears req.pixel_values after
+        this forward so decode never re-passes them.
+        """
+        tokens = list(req.prompt_tokens)
+        with self._stream_context():
+            logits = self._model_call(tokens, req)  # forwards+clears pixel_values
+            # Materialize the full vision+text forward on THIS stream before the
+            # sample step touches it (prevents stale-stream resolution on the
+            # worker thread). Mirrors the decode path's on-stream eval.
+            (logits,) = self._eval_on_stream(logits)
+            logits = logits[:, -1, :]
+            input_tokens = mx.array([tokens[-1]], dtype=mx.int32)
+            req.next_token, req.next_logprobs = self._sample_from_logits(
+                logits,
+                req,
+                input_tokens,
+            )
+            req.next_token_materialized = True
+            req.next_logprobs_materialized = req.next_logprobs is not None
+            req.context_tokens.extend(tokens)
+            if req.logits_processors:
+                req.token_context.update_and_fetch(mx.array(tokens, dtype=mx.int32))
+        self._sync()
+
     def _start_request(self, req: _Request) -> Response:
         self._refresh_thread_stream()
         if req.cache is None:
             req.cache = self._make_new_cache()
+        # M3 VL: when vision tensors are attached, prefill the full prompt in one
+        # forward (image-token positions must co-occur for the vision splice).
+        if req.pixel_values is not None:
+            req.prompt_processed = True
+            self._prefill_vl_and_sample(req)
+            prompt_cache_snapshot = self._clone_prompt_cache_snapshot(req.cache)
+            req.prompt_cache_snapshot = prompt_cache_snapshot
+            return self._yield_current_and_schedule_next(
+                req,
+                prompt_cache_snapshot=prompt_cache_snapshot,
+            )
         if len(req.prompt_tokens) > 1:
             self._prefill(req.prompt_tokens[:-1], req)
         last_token = int(req.prompt_tokens[-1])

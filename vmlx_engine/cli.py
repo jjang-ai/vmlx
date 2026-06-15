@@ -822,6 +822,19 @@ def serve_command(args):
             or getattr(_mc, "cache_subtype", None) == "zaya_cca"
         ):
             _apply_zaya_cca_cache_policy(args, logger)
+        elif _mc.family_name == "minimax_m3":
+            # MiniMax-M3 MSA dual-cache (keys/values/idx_keys, append-only positional)
+            # is STRUCTURALLY paged: the Phase-2 SSD-serialization of that 3-tuple is not
+            # wired yet, so M3 must run with paged cache or its decode KV state has no home
+            # and output degrades. The Phase-1 paged-off default + the v3 saved-session
+            # migration can leave use_paged_cache False for a saved/migrated M3 session;
+            # force it on (mirroring the ZAYA/CCA rescue) so M3 never silently loses cache.
+            if not getattr(args, "use_paged_cache", False):
+                args.use_paged_cache = True
+                logger.info(
+                    "MiniMax-M3 MSA cache requires paged - forcing use_paged_cache=True "
+                    "(Phase-1 paged-off / saved-session rescue)"
+                )
         elif (
             _mc.family_name == "mimo_v2"
             or getattr(_mc, "cache_subtype", None) == "mimo_v2_asymmetric_swa"

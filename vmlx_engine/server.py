@@ -1993,6 +1993,28 @@ def _messages_multimodal_summary(messages) -> dict:
     return summary
 
 
+def _m3_vl_image_ok(engine) -> bool:
+    """True iff VMLX_M3_VL is set and the loaded engine model is MiniMax-M3 VL.
+
+    Additive + gated: lets image requests through the text-routed (is_mllm=False)
+    M3 path instead of being rejected. When VMLX_M3_VL is unset this always
+    returns False, so the existing reject behavior is byte-for-byte unchanged.
+    """
+    try:
+        from .models.minimax_m3.m3_vl_preprocess import (
+            is_m3_vl_model,
+            m3_vl_enabled,
+        )
+    except Exception:
+        return False
+    if not m3_vl_enabled():
+        return False
+    model = getattr(engine, "_model", None)
+    if model is None:
+        return False
+    return is_m3_vl_model(model)
+
+
 def _messages_have_multimodal(messages) -> bool:
     for msg in messages or []:
         if hasattr(msg, "model_dump"):
@@ -5332,6 +5354,39 @@ def _registry_model_key(requested_model: str | None = None) -> str:
     return fallback
 
 
+def _normalize_minimax_m3_thinking_mode(ct_kwargs: dict, request, model_key: str) -> None:
+    """Map the public thinking toggle onto MiniMax-M3's template vocabulary.
+
+    M3's chat_template.jinja branches ONLY on ``thinking_mode`` ∈
+    {``enabled``, ``disabled``, ``adaptive``} and defaults to adaptive when the
+    kwarg is UNDEFINED. It ignores ``enable_thinking`` entirely. Panels/clients
+    may instead send DSV4-vocab (``instruct``/``reasoning``/``max``) or a null
+    ``thinking_mode``; M3 treats those as defined-but-unmatched, emits NO
+    "Current thinking mode" line, and ``auto`` then refuses or loops on ``None``.
+    Normalize to the M3 vocabulary from the resolved toggle (auto→adaptive) and
+    drop ``enable_thinking`` (the template ignores it). Scoped to M3 only.
+    """
+    try:
+        from .model_config_registry import get_model_config_registry
+        _mc = get_model_config_registry().lookup(_registry_model_key(model_key))
+        _fam = str(getattr(_mc, "family_name", "") or "")
+        _mt = str(getattr(_mc, "model_type", "") or "")
+    except Exception:
+        _fam = _mt = ""
+    if _fam not in ("minimax_m3", "minimax_m3_vl") and not _mt.startswith("minimax_m3"):
+        return
+    _rt = getattr(request, "enable_thinking", None)
+    if _rt is None and isinstance(ct_kwargs.get("enable_thinking"), bool):
+        _rt = ct_kwargs["enable_thinking"]
+    # off → disabled (template closes </mm:think>, no thinking — verified live).
+    # on/auto → adaptive: the model emits its own <mm:think>...</mm:think>, which
+    # the reasoning parser catches WITHOUT prompt-priming. The template's "enabled"
+    # mode prompt-opens <mm:think> (needs the streaming parser primed), so we avoid
+    # it here; the enabled→think_in_prompt seeding elsewhere is kept for future use.
+    ct_kwargs["thinking_mode"] = "disabled" if _rt is False else "adaptive"
+    ct_kwargs.pop("enable_thinking", None)
+
+
 def _get_raw_model_from_engine():
     """Extract the raw MLX nn.Module from the current engine.
 
@@ -7303,6 +7358,72 @@ def _native_cache_status(scheduler=None, *, family: str | None = None, cfg=None)
         status.update(layout)
         return status
 
+    family_probe_parts = [family_name, scheduler_family]
+    if cfg is not None:
+        if isinstance(cfg, dict):
+            family_probe_parts.append(cfg.get("model_type"))
+            text_cfg = cfg.get("text_config")
+            if isinstance(text_cfg, dict):
+                family_probe_parts.append(text_cfg.get("model_type"))
+        else:
+            family_probe_parts.append(getattr(cfg, "model_type", None))
+            text_cfg = getattr(cfg, "text_config", None)
+            if isinstance(text_cfg, dict):
+                family_probe_parts.append(text_cfg.get("model_type"))
+            else:
+                family_probe_parts.append(getattr(text_cfg, "model_type", None))
+    family_probe = " ".join(str(part).lower() for part in family_probe_parts if part)
+    if "minimax_m3" in family_probe or "minimax-m3" in family_probe:
+        layout: dict[str, Any] = {}
+        try:
+            model = getattr(scheduler, "model", None)
+            cache_layers = model.make_cache() if model is not None else None
+            if cache_layers:
+                class_names = [type(layer_cache).__name__ for layer_cache in cache_layers]
+                sparse_layers = [
+                    idx
+                    for idx, class_name in enumerate(class_names)
+                    if class_name == "MiniMaxM3SparseCache"
+                ]
+                layout = {
+                    "layers": len(cache_layers),
+                    "sparse_msa_layers": sparse_layers,
+                    "dense_kv_layers": [
+                        idx for idx in range(len(cache_layers)) if idx not in sparse_layers
+                    ],
+                }
+        except Exception:
+            layout = {}
+        status = {
+            "family": family_name or scheduler_family or "minimax_m3",
+            "schema": "minimax_m3_msa_v1",
+            "cache_type": "native_msa_sparse_kv",
+            "components": [
+                "attention_kv",
+                "msa_idx_keys",
+                "absolute_block_index",
+            ],
+            "generic_turboquant_kv": {
+                "enabled": False,
+                "reason": "native_minimax_m3_msa_idx_keys",
+            },
+            "storage_quantization": {
+                "enabled": False,
+                "reason": "generic_kv_quantization_forced_off_for_msa_idx_keys",
+            },
+            "cache_store_policy": {
+                "prompt_boundary_snapshot": "required",
+                "generic_kv_quantization": "forced_off",
+                "disk_tuple_tag": "minimax_m3",
+                "paged_required_for_ssd_l2": True,
+            },
+            "prefix": bool(block_aware_cache is not None),
+            "paged": bool(block_aware_cache is not None and paged_cache_manager is not None),
+            "block_disk_l2": bool(block_disk_store is not None),
+        }
+        status.update(layout)
+        return status
+
     if (
         family_name == "zaya"
         or cache_subtype == "zaya_cca"
@@ -9024,12 +9145,21 @@ async def create_anthropic_message(
 
     engine = get_engine()
     _msg_requested_modalities = _messages_requested_modalities(chat_req.messages)
+    if _msg_requested_modalities and _m3_vl_image_ok(engine):
+        _msg_requested_modalities = {
+            m for m in _msg_requested_modalities
+            if str(m).lower() not in ("image", "vision")
+        }
     if _msg_requested_modalities:
         _reject_unsupported_multimodal(
             "/v1/messages",
             _msg_requested_modalities,
         )
-    if _messages_have_multimodal(chat_req.messages) and not engine.is_mllm:
+    if (
+        _messages_have_multimodal(chat_req.messages)
+        and not engine.is_mllm
+        and not _m3_vl_image_ok(engine)
+    ):
         _reject_unsupported_multimodal("/v1/messages")
 
     # Build generation kwargs from the converted chat request (shared by streaming + non-streaming)
@@ -9150,6 +9280,8 @@ async def create_anthropic_message(
         _msg_kwargs["tools"] = convert_tools_for_template(chat_req.tools)
         _msg_kwargs["_vmlx_tools_present"] = True
 
+    _normalize_minimax_m3_thinking_mode(
+        _ct_kwargs, chat_req, _model_path or _model_name or chat_req.model)
     # Forward extra chat_template_kwargs to engine (exclude enable_thinking, already handled)
     if _ct_kwargs:
         extra_ct = {k: v for k, v in _ct_kwargs.items() if k != "enable_thinking"}
@@ -9824,12 +9956,21 @@ async def ollama_chat(fastapi_request: Request):
 
     engine = get_engine()
     _ollama_requested_modalities = _messages_requested_modalities(chat_req.messages)
+    if _ollama_requested_modalities and _m3_vl_image_ok(engine):
+        _ollama_requested_modalities = {
+            m for m in _ollama_requested_modalities
+            if str(m).lower() not in ("image", "vision")
+        }
     if _ollama_requested_modalities:
         _reject_unsupported_multimodal(
             "/api/chat",
             _ollama_requested_modalities,
         )
-    if _messages_have_multimodal(chat_req.messages) and not engine.is_mllm:
+    if (
+        _messages_have_multimodal(chat_req.messages)
+        and not engine.is_mllm
+        and not _m3_vl_image_ok(engine)
+    ):
         _reject_unsupported_multimodal("/api/chat")
     chat_kwargs = {
         "max_tokens": _resolve_max_tokens(chat_req.max_tokens, chat_req.model),
@@ -11750,6 +11891,12 @@ async def create_chat_completion(
 
     engine = get_engine()
     _chat_requested_modalities = _messages_requested_modalities(request.messages)
+    if _chat_requested_modalities and _m3_vl_image_ok(engine):
+        # M3 VL (gated): image/vision are served by the text-routed M3 path.
+        _chat_requested_modalities = {
+            m for m in _chat_requested_modalities
+            if str(m).lower() not in ("image", "vision")
+        }
     if _chat_requested_modalities:
         _reject_unsupported_multimodal(
             "/v1/chat/completions",
@@ -11784,7 +11931,9 @@ async def create_chat_completion(
         )
 
     has_media = bool(images or videos)
-    if has_media and not engine.is_mllm:
+    if has_media and not engine.is_mllm and not (
+        bool(images) and not videos and _m3_vl_image_ok(engine)
+    ):
         _reject_unsupported_multimodal("/v1/chat/completions")
 
     # Handle response_format - inject system prompt if needed
@@ -11995,6 +12144,8 @@ async def create_chat_completion(
         else:
             _ct_kwargs.pop("reasoning_effort", None)
 
+    _normalize_minimax_m3_thinking_mode(
+        _ct_kwargs, request, _model_path or _model_name or request.model)
     # Forward extra chat_template_kwargs to engine (exclude enable_thinking, already handled)
     if _ct_kwargs:
         extra_ct = {k: v for k, v in _ct_kwargs.items() if k != "enable_thinking"}
@@ -12225,6 +12376,14 @@ async def create_chat_completion(
                 enable_thinking=_eff_thinking_ns,
                 engine=engine,
             ):
+                _think_in_prompt_ns = True
+            # MiniMax-M3 thinking_mode="enabled" prompt-opens <mm:think> in the
+            # generation prompt, so assistant output starts INSIDE reasoning with
+            # no opening tag in the OUTPUT. Seed the parser's implicit-reasoning
+            # mode so the reasoning isn't misclassified as visible content.
+            if (chat_kwargs.get("chat_template_kwargs") or _ct_kwargs or {}).get(
+                "thinking_mode"
+            ) == "enabled":
                 _think_in_prompt_ns = True
         except Exception as _tpe:
             logger.debug(f"think_in_prompt derivation failed non-stream: {_tpe}")
@@ -14123,6 +14282,8 @@ async def create_response(
             f"messages={len(messages) if messages else 0}"
         )
 
+    _normalize_minimax_m3_thinking_mode(
+        _ct_kwargs, request, _model_path or _model_name or request.model)
     # Forward extra chat_template_kwargs to engine (exclude enable_thinking, already handled)
     if _ct_kwargs:
         extra_ct = {k: v for k, v in _ct_kwargs.items() if k != "enable_thinking"}
@@ -14465,6 +14626,14 @@ async def create_response(
                 enable_thinking=_eff_thinking_ns,
                 engine=engine,
             ):
+                _think_in_prompt_ns = True
+            # MiniMax-M3 thinking_mode="enabled" prompt-opens <mm:think> in the
+            # generation prompt, so assistant output starts INSIDE reasoning with
+            # no opening tag in the OUTPUT. Seed the parser's implicit-reasoning
+            # mode so the reasoning isn't misclassified as visible content.
+            if (chat_kwargs.get("chat_template_kwargs") or _ct_kwargs or {}).get(
+                "thinking_mode"
+            ) == "enabled":
                 _think_in_prompt_ns = True
         except Exception as _tpe:
             logger.debug(f"think_in_prompt derivation failed non-stream: {_tpe}")

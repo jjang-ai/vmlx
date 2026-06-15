@@ -80,6 +80,11 @@ export interface DetectedConfig {
   enableAutoToolChoice: boolean
   isMultimodal: boolean
   forceTextOnly?: boolean
+  // MiniMax-M3 VL routing: M3 vision is handled in-engine by SingleBatchGenerator
+  // gated behind env VMLX_M3_VL=1 (NOT via mlx_vlm --is-mllm). When set, the panel
+  // emits NEITHER --is-mllm NOR --text-only and threads VMLX_M3_VL=1 into the engine
+  // child env so images are preprocessed on the text-routed path.
+  m3VlRoute?: boolean
   isTurboQuant?: boolean
   nativeMtp?: {
     supported: boolean
@@ -464,7 +469,11 @@ const MODEL_TYPE_TO_FAMILY: Record<string, string> = {
 const DEFAULT_CONFIG: DetectedConfig = {
   family: 'unknown',
   cacheType: 'kv',
-  usePagedCache: true,
+  // Phase-1 cache policy (2026-06-13): paged RAM block cache OFF by default for ALL families;
+  // SSD prefix cache (disk_cache L2 + memory-aware L1) is the default. Path-dependent families
+  // (hybrid/mamba/zaya/nemotron-h/ling/lfm2/step-3.7/qwen3-next/...) opt INTO paged explicitly
+  // via registerFamily usePagedCache:true (Phase-2 ports their typed lanes to non-paged SSD).
+  usePagedCache: false,
   enableAutoToolChoice: false,
   isMultimodal: false,
   description: 'Unknown model'
@@ -904,7 +913,10 @@ function applyConfigMetadataOverrides(
     configDeclaresMixedSwaAttention(parsedConfig)
   ) {
     next.cacheType = 'rotating_kv'
-    next.usePagedCache = true
+    // Phase-1 cache policy (2026-06-13): Gemma SWA (mixed full+sliding) is proven correct
+    // paged-OFF with memory-aware prefix + disk_cache L2 (SSD) + TurboQuantKVCache (cache HIT,
+    // no drift). Default to paged-off/SSD-prefix; rotating_kv cacheType still drives the UI label.
+    next.usePagedCache = false
   }
   return next
 }
@@ -960,7 +972,7 @@ function configToDetected(family: string, config: Omit<ModelConfig, 'pattern' | 
     cacheType: config.cacheType,
     cacheSubtype: config.cacheSubtype,
     architectureHints: config.architectureHints,
-    usePagedCache: config.usePagedCache ?? true,
+    usePagedCache: config.usePagedCache ?? false,
     enableAutoToolChoice: config.enableAutoToolChoice ?? false,
     isMultimodal: config.isMultimodal ?? false,
     description: config.description
@@ -1012,6 +1024,19 @@ function applyJangCapabilities(
     if (next.toolParser && caps.supports_tools !== false) {
       next.enableAutoToolChoice = true
     }
+  }
+
+  // MiniMax-M3 (config.json model_type=minimax_m3_vl) is registered multimodal. The
+  // mlx_vlm VL wrapper (mlx_vlm.models.minimax_m3_vl) is still unpublished, so loading
+  // it as a VLM (--is-mllm) would crash at startup (ModuleNotFoundError). BUT the engine
+  // now wires M3 vision end-to-end through the TEXT runtime: with env VMLX_M3_VL=1,
+  // is_mllm_model() returns False and M3 runs text-routed through SingleBatchGenerator,
+  // which preprocesses pixel_values when the server is NOT --text-only. So for M3 we emit
+  // NEITHER --is-mllm NOR --text-only and set VMLX_M3_VL=1 in the engine child env. The
+  // m3VlRoute flag drives that wiring in sessions.ts buildArgs + spawnEnv. isMultimodal
+  // stays true so detection still knows it's a VL bundle.
+  if (next.family === 'minimax_m3') {
+    next.m3VlRoute = true
   }
   if (next.family === 'zaya') {
     next.reasoningParser = 'qwen3'
@@ -1230,8 +1255,26 @@ export function detectModelConfigFromDir(modelPath: string): DetectedConfig {
         // Some models nest it in text_config (VL models)
         (typeof parsed.text_config?.max_position_embeddings === 'number' ? parsed.text_config.max_position_embeddings : undefined)
 
-      if (modelType && MODEL_TYPE_TO_FAMILY[modelType]) {
-        let familyName = MODEL_TYPE_TO_FAMILY[modelType]
+      let familyName: string | undefined = modelType ? MODEL_TYPE_TO_FAMILY[modelType] : undefined
+      // JANG Tier-1 fallback: when config.json model_type is not a recognized
+      // panel family, the JANG capabilities stamp carries the engine's resolved
+      // family (same oracle the engine uses). Engine family names overlap the
+      // model_type map keys (e.g. deepseek_v4, nemotron_h, step3p7), so map it the
+      // same way; otherwise accept it directly if it is a registered panel family.
+      if (!familyName) {
+        const jangCapPath = join(modelPath, 'jang_config.json')
+        if (existsSync(jangCapPath)) {
+          try {
+            const capFamily = String(
+              JSON.parse(readFileSync(jangCapPath, 'utf-8'))?.capabilities?.family ?? '',
+            ).toLowerCase()
+            if (capFamily) {
+              familyName = MODEL_TYPE_TO_FAMILY[capFamily] ?? (CONFIG_BY_FAMILY.has(capFamily) ? capFamily : undefined)
+            }
+          } catch {}
+        }
+      }
+      if (familyName) {
 
         // Name-based disambiguation for models sharing model_type:
         // GLM-Z1 uses model_type "glm4" but needs deepseek_r1 reasoning (not plain glm4)

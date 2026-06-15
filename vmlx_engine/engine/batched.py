@@ -35,6 +35,15 @@ from ..utils.chat_template_kwargs import (
 )
 from ..utils.multi_eos import collect_multi_eos_ids
 from .base import BaseEngine, GenerationOutput
+import threading as _threading
+
+# P0 VL stream bug: mlx_vlm.generate.generation_stream is a module global
+# created on the import thread; its wired_limit synchronizes it on exit. The
+# simple MLLM media fallback runs on the single mllm-worker executor, a
+# different thread, where MLX streams are not visible -> 'There is no
+# Stream(gpu, 0) in current thread'. We rebind generation_stream once on that
+# worker thread (see _simple_mllm_chat_output).
+_SIMPLE_MLLM_STREAM_TLS = _threading.local()
 
 logger = logging.getLogger(__name__)
 
@@ -100,6 +109,24 @@ class MLLMModelWrapper:
                 hasattr(model, "model_type")
                 and _mt in ("gemma3", "gemma3n")
             )
+
+        # A model loaded text-only (e.g. mlx_lm gemma4_text via --text-only)
+        # does NOT accept pixel_values even when the registry family hint says
+        # VL, so injecting pixel_values=None raises TypeError at first decode.
+        # Introspect the real model __call__ and only inject when it actually
+        # accepts the kwarg (explicit param or **kwargs).
+        if self._inject_pixel_values:
+            try:
+                import inspect as _inspect
+                _params = _inspect.signature(self._model.__call__).parameters
+                _accepts = ("pixel_values" in _params) or any(
+                    p.kind == _inspect.Parameter.VAR_KEYWORD
+                    for p in _params.values()
+                )
+                if not _accepts:
+                    self._inject_pixel_values = False
+            except (ValueError, TypeError):
+                pass
 
     def __call__(self, *args, **kwargs):
         """Call the model and extract logits from LanguageModelOutput."""
@@ -179,6 +206,45 @@ class BatchedEngine(BaseEngine):
         except Exception:
             return None
 
+    def _m3_vl_active(self, images: list | None) -> bool:
+        """True iff VMLX_M3_VL is set, this is an M3 VL model, and images exist.
+
+        Additive + gated: when this returns False the engine behaves exactly as
+        before (text-only M3 stays on the 23.4 tok/s decode path untouched).
+        """
+        if not images:
+            return False
+        try:
+            from ..models.minimax_m3.m3_vl_preprocess import (
+                is_m3_vl_model,
+                m3_vl_enabled,
+            )
+        except Exception:
+            return False
+        if not m3_vl_enabled():
+            return False
+        return is_m3_vl_model(self._model)
+
+    def _m3_vl_preprocess(
+        self,
+        messages: list[dict],
+        images: list,
+        *,
+        enable_thinking: bool | None = None,
+    ):
+        """Run MiniMax processor -> (input_ids, pixel_values, image_grid_thw)."""
+        from ..models.minimax_m3.m3_vl_preprocess import preprocess_m3_vl_messages
+
+        model_path = (
+            getattr(self._scheduler_config, "model_path", None) or self._model_name
+        )
+        return preprocess_m3_vl_messages(
+            model_path,
+            messages,
+            extra_images=images,
+            enable_thinking=enable_thinking,
+        )
+
     def _use_simple_mllm_media_fallback(
         self,
         *,
@@ -215,15 +281,28 @@ class BatchedEngine(BaseEngine):
             call_kwargs["tools"] = convert_tools_for_template(tools)
         executor = getattr(self._mllm_scheduler, "_step_executor", None)
         loop = asyncio.get_running_loop()
-        result = await loop.run_in_executor(
-            executor,
-            lambda: self._mllm_instance.chat(
+
+        def _run_simple_mllm_chat():
+            # Rebind mlx_vlm's module-global generation_stream to a stream
+            # created on THIS mllm-worker thread so wired_limit's
+            # mx.synchronize(generation_stream) resolves (P0 VL stream bug).
+            # Executor is single-threaded (max_workers=1), so bind once.
+            try:
+                import mlx.core as _mx
+                import mlx_vlm.generate as _mvg
+                if not getattr(_SIMPLE_MLLM_STREAM_TLS, "bound", False):
+                    _mvg.generation_stream = _mx.new_stream(_mx.default_device())
+                    _SIMPLE_MLLM_STREAM_TLS.bound = True
+            except Exception:
+                pass
+            return self._mllm_instance.chat(
                 messages,
                 max_tokens=max_tokens,
                 temperature=temperature,
                 **call_kwargs,
-            ),
-        )
+            )
+
+        result = await loop.run_in_executor(executor, _run_simple_mllm_chat)
         text = clean_output_text(getattr(result, "text", "") or "")
         return GenerationOutput(
             text=text,
@@ -743,7 +822,7 @@ class BatchedEngine(BaseEngine):
             vision_cache_size=16,
             # Propagate cache settings from user's SchedulerConfig
             enable_prefix_cache=getattr(self._scheduler_config, "enable_prefix_cache", True),
-            use_paged_cache=getattr(self._scheduler_config, "use_paged_cache", True),
+            use_paged_cache=getattr(self._scheduler_config, "use_paged_cache", False),  # paged OFF by default (Eric policy)
             paged_cache_block_size=getattr(self._scheduler_config, "paged_cache_block_size", 64),
             max_cache_blocks=getattr(self._scheduler_config, "max_cache_blocks", 1000),
             kv_cache_quantization=getattr(self._scheduler_config, "kv_cache_quantization", "none"),
@@ -1603,6 +1682,10 @@ class BatchedEngine(BaseEngine):
         gen_prompt_len = kwargs.pop("gen_prompt_len", 0)
         segment_boundaries = kwargs.pop("segment_boundaries", None)
         encode_add_special_tokens = kwargs.pop("encode_add_special_tokens", None)
+        # M3 VL (additive): tensors stashed by chat(). Default None == text path.
+        _m3vl_ids = kwargs.pop("_m3vl_prompt_token_ids", None)
+        _m3vl_pv = kwargs.pop("_m3vl_pixel_values", None)
+        _m3vl_grid = kwargs.pop("_m3vl_image_grid_thw", None)
 
         sampling_params = SamplingParams(
             max_tokens=max_tokens,
@@ -1616,6 +1699,12 @@ class BatchedEngine(BaseEngine):
             top_logprobs=int(kwargs.get("top_logprobs", 0) or 0),
         )
 
+        _m3vl_extra = {}
+        if _m3vl_pv is not None:
+            _m3vl_extra["pixel_values"] = _m3vl_pv
+            _m3vl_extra["image_grid_thw"] = _m3vl_grid
+            _m3vl_extra["prompt_token_ids"] = _m3vl_ids
+
         output = await self._engine.generate(
             prompt=prompt,
             sampling_params=sampling_params,
@@ -1626,6 +1715,7 @@ class BatchedEngine(BaseEngine):
             bypass_prefix_cache=bypass_prefix_cache,
             encode_add_special_tokens=encode_add_special_tokens,
             max_prompt_tokens=max_prompt_tokens,
+            **_m3vl_extra,
         )
 
         raw = output.output_text
@@ -1731,6 +1821,10 @@ class BatchedEngine(BaseEngine):
         gen_prompt_len = kwargs.pop("gen_prompt_len", 0)
         segment_boundaries = kwargs.pop("segment_boundaries", None)
         encode_add_special_tokens = kwargs.pop("encode_add_special_tokens", None)
+        # M3 VL (additive): tensors stashed by stream_chat(). None == text path.
+        _m3vl_ids = kwargs.pop("_m3vl_prompt_token_ids", None)
+        _m3vl_pv = kwargs.pop("_m3vl_pixel_values", None)
+        _m3vl_grid = kwargs.pop("_m3vl_image_grid_thw", None)
 
         sampling_params = SamplingParams(
             max_tokens=max_tokens,
@@ -1744,6 +1838,12 @@ class BatchedEngine(BaseEngine):
             top_logprobs=int(kwargs.get("top_logprobs", 0) or 0),
         )
 
+        _m3vl_extra = {}
+        if _m3vl_pv is not None:
+            _m3vl_extra["pixel_values"] = _m3vl_pv
+            _m3vl_extra["image_grid_thw"] = _m3vl_grid
+            _m3vl_extra["prompt_token_ids"] = _m3vl_ids
+
         request_id = await self._engine.add_request(
             prompt=prompt,
             sampling_params=sampling_params,
@@ -1754,6 +1854,7 @@ class BatchedEngine(BaseEngine):
             bypass_prefix_cache=bypass_prefix_cache,
             encode_add_special_tokens=encode_add_special_tokens,
             max_prompt_tokens=max_prompt_tokens,
+            **_m3vl_extra,
         )
 
         async for output in self._engine.stream_outputs(request_id):
@@ -1903,6 +2004,19 @@ class BatchedEngine(BaseEngine):
         if segment_boundaries:
             kwargs["segment_boundaries"] = segment_boundaries
 
+        # M3 VL (additive, gated): preprocess images into input_ids (with image
+        # tokens) + pixel_values + image_grid_thw and stash them for the text
+        # engine path. When inactive this is a no-op and the request is unchanged.
+        if self._m3_vl_active(all_images):
+            _m3 = self._m3_vl_preprocess(
+                messages, all_images, enable_thinking=thinking_enabled
+            )
+            if _m3 is not None:
+                _ids, _pv, _grid = _m3
+                kwargs["_m3vl_prompt_token_ids"] = _ids
+                kwargs["_m3vl_pixel_values"] = _pv
+                kwargs["_m3vl_image_grid_thw"] = _grid
+
         return await self.generate(
             prompt=prompt,
             max_tokens=max_tokens,
@@ -2046,6 +2160,17 @@ class BatchedEngine(BaseEngine):
             kwargs["_vmlx_template_tools"] = template_tools
         if segment_boundaries:
             kwargs["segment_boundaries"] = segment_boundaries
+
+        # M3 VL (additive, gated): preprocess images for the text engine path.
+        if self._m3_vl_active(all_images):
+            _m3 = self._m3_vl_preprocess(
+                messages, all_images, enable_thinking=thinking_enabled
+            )
+            if _m3 is not None:
+                _ids, _pv, _grid = _m3
+                kwargs["_m3vl_prompt_token_ids"] = _ids
+                kwargs["_m3vl_pixel_values"] = _pv
+                kwargs["_m3vl_image_grid_thw"] = _grid
 
         async for output in self.stream_generate(
             prompt=prompt,

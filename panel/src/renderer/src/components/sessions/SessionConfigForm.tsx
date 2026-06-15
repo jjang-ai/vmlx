@@ -329,6 +329,12 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
 
   const normalizedDetectedFamily = normalizeDetectedFamilyName(detectedFamily)
   const dsv4Active = normalizedDetectedFamily === 'deepseek-v4'
+  // MiniMax-M3 (minimax_m3 / minimax_m3_vl bundles resolve to the minimax_m3 family).
+  // M3's MSA dual-cache structurally requires paged KV cache (the engine force-enables
+  // paged for M3 regardless of the flag), and its MSA idx_keys cannot be generic
+  // TurboQuant/stored-KV quantized (the engine skips TQ for M3). Gate the UI so users
+  // cannot set values that would contradict M3's required cache config.
+  const m3Active = normalizedDetectedFamily === 'minimax_m3'
   const effectiveSmeltActive = !!config.smelt && !dsv4Active
   const effectiveFlashMoeActive = !!config.flashMoe && !dsv4Active
   const effectiveDistributedActive = !!config.distributedEnabled && !dsv4Active
@@ -360,7 +366,10 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
     detectedCacheSubtype === 'mimo_v2_asymmetric_swa'
   const nativeStoredKvQuantization =
     detectedCacheSubtype === 'mimo_v2_asymmetric_swa'
-  const architectureRequiresPagedCache = zayaCcaActive || dsv4CompositeCacheOptIn || isMambaCache || subtypeRequiresPagedCache
+  // M3's MSA dual-cache is position-truncatable but is only correct through the paged
+  // transport, so it joins the native-paged families that force paged ON when prefix
+  // cache is enabled. The engine force-enables paged for M3 regardless of the flag.
+  const architectureRequiresPagedCache = zayaCcaActive || dsv4CompositeCacheOptIn || isMambaCache || subtypeRequiresPagedCache || m3Active
   const zayaTypedCacheRequiresPaged = zayaCcaActive && !batchingOff && !prefixOff
   const dsv4CompositeRequiresPaged = dsv4CompositeCacheOptIn && !batchingOff && !prefixOff
   const nativeCacheRequiresPaged = (isMambaCache || subtypeRequiresPagedCache) && !batchingOff && !prefixOff
@@ -378,7 +387,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
     ? DSV4_PAGED_CACHE_BLOCK_SIZE
     : config.pagedCacheBlockSize
   const pagedCacheSectionTitle = t('sessions.config.pagedKVCache')
-  const effectiveStoredCacheQuantization = dsv4Active || nativeStoredKvQuantization
+  const effectiveStoredCacheQuantization = dsv4Active || nativeStoredKvQuantization || m3Active
     ? 'auto'
     : config.kvCacheQuantization
   const effectiveMaxNumSeqs = dsv4Active ? 1 : config.maxNumSeqs
@@ -938,6 +947,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
         {!batchingOff && prefixOff && cachePolicy.architectureRequiresPagedCache && <IncompatWarning text="This model uses native/paged cache when Prefix Cache is enabled. Enable Prefix Cache above to activate the architecture-specific cache stack." />}
         {zayaTypedCacheRequiresPaged && <InfoNote text="ZAYA typed CCA cache requires paged cache while prefix cache is enabled. Turn off Prefix Cache to disable this cache stack for ZAYA." />}
         {nativeCacheRequiresPaged && !zayaTypedCacheRequiresPaged && !dsv4CompositeRequiresPaged && <InfoNote text="Hybrid/Mamba cache models require paged cache while prefix cache is enabled so KV blocks and path-dependent state stay in the same cache contract." />}
+        {m3Active && !batchingOff && !prefixOff && <InfoNote text="MiniMax-M3's MSA cache requires paged KV cache — it is always enabled for M3. Max Cache Blocks and Block Disk Cache (L2) below still apply." />}
         {dsv4CompositeRequiresPaged && <InfoNote text="DSV4 uses native SWA+CSA/HCA composite cache snapshots, so paged cache stays on and block size is fixed to 256 tokens for diagnostic decode-cache testing." />}
         {!dsv4Active && <CheckField label="Use Paged KV Cache" tooltip="Manages the KV cache in fixed-size pages instead of contiguous memory. Greatly reduces memory fragmentation and allows serving larger batches or larger contexts on limited GPU RAM. Extremely recommended for long conversations." checked={effectiveUsePagedCache} onChange={v => applyCacheControlUpdates(cacheControlUpdatesForPagedToggle(v, cacheControlState))} disabled={!dsv4Active && cachePolicy.pagedCacheDisabled} />}
         {effectiveUsePagedCache && (
@@ -1021,6 +1031,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
         {!batchingOff && prefixOff && <IncompatWarning text="KV cache quantization requires prefix cache. Enable 'Prefix Cache' above to use KV cache quantization." />}
         {!effectivelyNoBatching && !prefixOff && isMambaCache && <PerformanceHint text="Hybrid stateful cache detected — the engine keeps SSM/GLA state native and only uses cache codecs proven for that architecture. Generic TurboQuant KV is disabled unless a tested override exists." />}
         {!effectivelyNoBatching && dsv4Active && <PerformanceHint text="DeepSeek-V4 keeps generic KV q4/q8 disabled. Its prefix reuse uses native SWA+CSA/HCA snapshots through the DSV4 Native Composite Prefix Cache switch, not the generic stored-KV codec." />}
+        {!effectivelyNoBatching && m3Active && <PerformanceHint text="MiniMax-M3 uses its native MSA cache; generic TurboQuant / stored KV quantization is not applicable (M3's MSA idx_keys cannot be TQ-quantized) and is disabled." />}
         {dsv4Active && (
           <CheckField
             label="DSV4 CSA/HCA Pool Codec"
@@ -1048,7 +1059,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
             Stored Cache Quantization
             <Tooltip text="Controls how completed prompt states are stored in the prefix cache. Auto keeps the engine's production codec choice. None explicitly disables stored-cache quantization. q8/q4 force the generic stored-cache codec and also disable calibrated live TurboQuant so the explicit choice is honored." />
           </span>
-          <select value={effectiveStoredCacheQuantization} onChange={e => onChange('kvCacheQuantization', e.target.value)} className="cfg-input" disabled={effectivelyNoBatching || prefixOff || dsv4Active || nativeStoredKvQuantization}>
+          <select value={effectiveStoredCacheQuantization} onChange={e => onChange('kvCacheQuantization', e.target.value)} className="cfg-input" disabled={effectivelyNoBatching || prefixOff || dsv4Active || nativeStoredKvQuantization || m3Active}>
             <option value="auto">Auto (engine-selected: native/TurboQuant + stored fallback)</option>
             <option value="none">{t('sessions.config.kvQuantNone')}</option>
             <option value="q8">q8 (8-bit, ~2x stored cache savings)</option>

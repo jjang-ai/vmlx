@@ -5725,10 +5725,34 @@ class Scheduler:
             # Insert into BatchGenerator with optional cache.
             # Wrapped in try/except to prevent lost requests — if insert fails
             # completely, put the request back in the waiting queue.
+            # M3 VL (additive, gated): when the engine attached preprocessed
+            # vision tensors to this request, the SingleBatchGenerator must see
+            # the FULL prompt (every image-token position present in one forward
+            # for the vision splice) with no partial/prefix cache, plus the
+            # pixel_values/image_grid_thw. Only triggers when VMLX_M3_VL routed
+            # an image request here; text requests are byte-for-byte unchanged.
+            _m3vl_pv = getattr(request, "pixel_values", None)
+            _m3vl_grid = getattr(request, "image_grid_thw", None)
+            _m3vl_active = (
+                _m3vl_pv is not None
+                and self.batch_generator.__class__.__name__ == "SingleBatchGenerator"
+            )
+            if _m3vl_active:
+                tokens_to_process = list(request.prompt_token_ids)
+                cache_to_use = None
+
             try:
                 try:
                     insert_kwargs = {}
-                    if (
+                    if _m3vl_active:
+                        insert_kwargs["pixel_values"] = [_m3vl_pv]
+                        insert_kwargs["image_grid_thw"] = [_m3vl_grid]
+                        request_processors = self._request_logits_processors(
+                            request, list(tokens_to_process)
+                        )
+                        if request_processors is not None:
+                            insert_kwargs["logits_processors"] = [request_processors]
+                    elif (
                         self.batch_generator.__class__.__name__
                         == "DSV4BatchGenerator"
                     ):

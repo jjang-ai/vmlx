@@ -477,6 +477,33 @@ def is_mllm_model(model_name: str, force_mllm: bool = False, force_text_only: bo
     # file-based checks (jang_config.json, config.json) actually find the files.
     local_path = resolve_to_local_path(model_name)
 
+    # MiniMax-M3 VL (additive, gated): when VMLX_M3_VL is set, route M3 through
+    # the text path (is_mllm=False) so it runs on the SingleBatchGenerator VL
+    # path (model handles pixel_values internally) instead of the mlx_vlm MLLM
+    # generator, which is the WRONG runtime for M3. When VMLX_M3_VL is unset this
+    # branch is skipped and detection is unchanged.
+    try:
+        import os as _os_m3vl
+        if _os_m3vl.environ.get("VMLX_M3_VL", "").strip().lower() in {
+            "1", "true", "on", "yes",
+        }:
+            import json as _json_m3vl
+            from pathlib import Path as _Path_m3vl
+            _cfg_p = _Path_m3vl(local_path) / "config.json"
+            if _cfg_p.exists():
+                _cfg = _json_m3vl.loads(_cfg_p.read_text())
+                _top = str(_cfg.get("model_type") or "")
+                _txt = str((_cfg.get("text_config") or {}).get("model_type") or "")
+                if "minimax_m3" in _top or "minimax_m3" in _txt:
+                    _logger.info(
+                        "is_mllm_model(%s): tier=m3_vl_text_route result=False "
+                        "(VMLX_M3_VL: image handled by SingleBatchGenerator path)",
+                        model_name,
+                    )
+                    return False
+    except Exception:
+        pass
+
     def _mimo_v2_media_runtime_auto_wired_path(path: str, cfg: dict) -> bool:
         """True when current source and bundle sidecars prove MiMo media wiring."""
         try:

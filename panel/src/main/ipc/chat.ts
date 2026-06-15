@@ -1286,8 +1286,15 @@ export function registerChatHandlers(
         hasAttachments && effectiveAttachments!.some((a) => inferKind(a) !== "text");
       const modelForceTextOnly = (() => {
         try {
-          return !!capabilityModelPath &&
-            detectModelConfigFromDir(capabilityModelPath).forceTextOnly === true;
+          if (!capabilityModelPath) return false;
+          const det = detectModelConfigFromDir(capabilityModelPath);
+          // MiniMax-M3 VL route: M3 is stamped forceTextOnly=true to suppress the
+          // unpublished mlx_vlm.minimax_m3_vl --is-mllm path, but its vision forward
+          // runs in-engine via SingleBatchGenerator behind VMLX_M3_VL=1. m3VlRoute
+          // marks that exemption — images MUST be kept for M3. Mirrors the
+          // m3VlRoute carve-out in sessions.ts buildArgs (--text-only branch).
+          if (det.m3VlRoute === true) return false;
+          return det.forceTextOnly === true;
         } catch (_) {
           return false;
         }

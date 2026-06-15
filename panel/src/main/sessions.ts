@@ -546,7 +546,7 @@ function applyBundleStartupDefaults(config: Partial<ServerConfig>, modelPath?: s
   return changed
 }
 
-const CACHE_STACK_STARTUP_DEFAULTS_VERSION = 2
+const CACHE_STACK_STARTUP_DEFAULTS_VERSION = 3
 
 function markCacheStackStartupDefaultsCurrent(config: Partial<ServerConfig>): boolean {
   if (config.cacheStackStartupDefaultsVersion === CACHE_STACK_STARTUP_DEFAULTS_VERSION) return false
@@ -586,6 +586,20 @@ function applyCacheStackStartupDefaultMigration(config: Partial<ServerConfig>, m
     Number(config.prefillBatchSize) === 512 &&
     Number(config.completionBatchSize) === 512 &&
     config.usePagedCache === false
+  // v2 migration pushed GENERIC (non-path-dependent) sessions to paged-ON
+  // (usePagedCache=true, blockDisk, kvq=auto, 512/512, maxSeqs=1). Phase-1 makes
+  // paged RAM cache OFF + SSD prefix the default, so re-migrate that exact v2
+  // generic fingerprint to paged-off. Zaya/path-dependent are excluded (kept paged).
+  const staleV2GenericPagedOn =
+    !zayaCacheMigrationTarget &&
+    config.continuousBatching === true &&
+    config.enablePrefixCache === true &&
+    Number(config.maxNumSeqs) === 1 &&
+    Number(config.prefillBatchSize) === 512 &&
+    Number(config.completionBatchSize) === 512 &&
+    config.usePagedCache === true &&
+    config.enableBlockDiskCache === true &&
+    config.kvCacheQuantization === 'auto'
   const staleExplicitNoneCacheCodecDefaults =
     zayaCacheMigrationTarget &&
     config.continuousBatching === true &&
@@ -601,7 +615,8 @@ function applyCacheStackStartupDefaultMigration(config: Partial<ServerConfig>, m
     !staleContinuousDefaults &&
     !staleNoPrefixBatchDefaults &&
     !stalePartialPagedCacheDefaults &&
-    !staleExplicitNoneCacheCodecDefaults
+    !staleExplicitNoneCacheCodecDefaults &&
+    !staleV2GenericPagedOn
   ) return false
 
   config.continuousBatching = true
@@ -610,12 +625,23 @@ function applyCacheStackStartupDefaultMigration(config: Partial<ServerConfig>, m
   config.prefillBatchSize = 512
   config.prefillStepSize = 2048
   config.completionBatchSize = 512
-  config.usePagedCache = true
-  config.maxCacheBlocks = 1000
   config.kvCacheQuantization = 'auto'
-  config.enableBlockDiskCache = true
-  config.blockDiskCacheMaxGb = 10
   config.cacheMemoryPercent = 15
+  if (zayaCacheMigrationTarget) {
+    // Path-dependent (ZAYA CCA): recurrent state is not position-sliceable, so the
+    // SSD-only non-paged lane is not yet wired (Phase-2). Keep paged RAM + block-disk.
+    config.usePagedCache = true
+    config.maxCacheBlocks = 1000
+    config.enableBlockDiskCache = true
+    config.blockDiskCacheMaxGb = 10
+  } else {
+    // Generic / Gemma-SWA / MoE: paged RAM block pool OFF by default; SSD disk_cache
+    // (prompt-cache L2) is the prefix cache. Proven paged-off + SSD-prefix + TQ-KV.
+    config.usePagedCache = false
+    config.enableDiskCache = true
+    config.enableBlockDiskCache = false
+    config.diskCacheMaxGb = config.diskCacheMaxGb ?? 10
+  }
   markCacheStackStartupDefaultsCurrent(config)
   return true
 }
@@ -1341,12 +1367,16 @@ export class SessionManager extends EventEmitter {
           // Smelt is handled later at launch time because its partial expert
           // support uses text-only loading.
           if (freshConfig.forceTextOnly === true) {
+            // affine-JANG Qwen hybrid etc.: runtime forces text-only regardless of save.
             config.isMultimodal = false
-          } else if (freshConfig.isMultimodal === true) {
-            config.isMultimodal = true
           } else if (config.isMultimodal === undefined) {
+            // Auto (no explicit user choice): take fresh detection.
             config.isMultimodal = freshConfig.isMultimodal
           }
+          // Explicit user choice is RESPECTED: isMultimodal===true (Force On) or
+          // ===false (Force Off) must survive — do NOT let detected VL clobber a
+          // deliberate Force Off. buildArgs emits --text-only for a detected-VL model
+          // the user forced off so the engine honors it (is_mllm_model force_text_only).
           if (
             freshConfig.usePagedCache === true &&
             (cacheTypeRequiresPaged(freshConfig.cacheType) || cacheSubtypeRequiresPaged(freshConfig.cacheSubtype)) &&
@@ -1443,6 +1473,11 @@ export class SessionManager extends EventEmitter {
       if (hfToken) {
         spawnEnv.HF_TOKEN = hfToken
       }
+    }
+    // MiniMax-M3 VL route: the engine wires M3 vision through the text runtime only when
+    // VMLX_M3_VL is truthy. Scope strictly to M3 so no other family's env changes.
+    if (freshDetectedFamily === 'minimax_m3') {
+      spawnEnv.VMLX_M3_VL = '1'
     }
     delete spawnEnv.JANGTQ_TOPK_OVERRIDE
     // Acceleration policy is internal and defaults to auto in the engine.
@@ -1933,7 +1968,12 @@ export class SessionManager extends EventEmitter {
           cacheMemoryMb: 0,
           cacheMemoryPercent: 15,
           noMemoryAwareCache: false,
-          usePagedCache: detectedFamily === 'deepseek-v4' ? dsv4DefaultCacheOptIn : detected.usePagedCache ?? true,
+          // Phase-1 cache policy (2026-06-13): paged RAM block cache OFF by default; SSD prefix
+          // cache (disk_cache L2 + memory-aware L1) is the default. Path-dependent families
+          // (hybrid/mamba/rotating-qwen/zaya/step3p7/dsv4) still set detected.usePagedCache=true
+          // explicitly in the capability detector and stay paged until Phase-2 SSD typed-lane work.
+          usePagedCache: detectedFamily === 'deepseek-v4' ? dsv4DefaultCacheOptIn : detected.usePagedCache ?? false,
+          enableDiskCache: detectedFamily === 'deepseek-v4' ? false : true,
           pagedCacheBlockSize: detectedFamily === 'deepseek-v4' ? DSV4_PAGED_CACHE_BLOCK_SIZE : 64,
           maxCacheBlocks: 1000,
           enableBlockDiskCache: detectedFamily === 'deepseek-v4' ? dsv4DefaultCacheOptIn : true,
@@ -2705,12 +2745,25 @@ export class SessionManager extends EventEmitter {
     // avoids the edge case where a saved session has isMultimodal=true from
     // before smelt was turned on.
     const effectiveSmelt = !!(config as any).smelt && !dsv4Active
-    const isVLM = dsv4Active || effectiveSmelt || detected.forceTextOnly ? false
+    // User explicitly toggled multimodal OFF (Force Off) — must beat detected VL.
+    const userForceTextOnly = config.isMultimodal === false
+    // MiniMax-M3 VL route: vision is handled in-engine via SingleBatchGenerator behind
+    // VMLX_M3_VL=1, so M3 must emit NEITHER --is-mllm NOR --text-only. Forcing isVLM=false
+    // suppresses --is-mllm (the unpublished mlx_vlm.minimax_m3_vl path that crashes), and
+    // excluding m3VlRoute from the --text-only branch keeps images flowing to the engine.
+    const m3VlRoute = !!detected.m3VlRoute
+    const isVLM = dsv4Active || effectiveSmelt || detected.forceTextOnly || userForceTextOnly || m3VlRoute ? false
       : detected.isMultimodal ? true
         : config.isMultimodal === true ? true
-          : config.isMultimodal === false ? false
-            : false
-    if (isVLM) args.push('--is-mllm')
+          : false
+    if (isVLM) {
+      args.push('--is-mllm')
+    } else if (!dsv4Active && !effectiveSmelt && !m3VlRoute && detected.isMultimodal && (userForceTextOnly || detected.forceTextOnly)) {
+      // Model autodetects as VL but must run TEXT-ONLY (user Force-Off, or a family
+      // whose VL runtime path isn't wired). Omitting --is-mllm is NOT enough — the
+      // engine re-autodetects VL from config.json. --text-only forces is_mllm_model->False.
+      args.push('--text-only')
+    }
 
     const cacheStackActive = dsv4Active ? true : config.continuousBatching !== false
     if (cacheStackActive) {
@@ -2753,6 +2806,14 @@ export class SessionManager extends EventEmitter {
     }
     if (effectiveReasoningParser) {
       args.push('--reasoning-parser', effectiveReasoningParser)
+    }
+    // Manual MODEL-FAMILY override: when the user forces a family in the UI,
+    // pass it through so the engine bypasses autodetect for the whole process.
+    // 'auto'/undefined = keep autodetection (no flag emitted).
+    const userModelFamily = (config as any).modelFamily as string | undefined
+    if (userModelFamily && userModelFamily !== 'auto') {
+      args.push('--model-family', userModelFamily)
+      console.log(`[SESSION] Manual model-family override: ${userModelFamily} (autodetect bypassed)`)
     }
     // Thinking defaults are resolved by vmlx_engine.server from the registry
     // and explicit per-request UI/API controls. Do not turn detected

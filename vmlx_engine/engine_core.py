@@ -326,6 +326,9 @@ class EngineCore:
         bypass_prefix_cache: bool = False,
         encode_add_special_tokens: Optional[bool] = None,
         max_prompt_tokens: Optional[int] = None,
+        pixel_values: Optional[Any] = None,
+        image_grid_thw: Optional[Any] = None,
+        prompt_token_ids: Optional[List[int]] = None,
     ) -> str:
         """
         Add a request for processing.
@@ -359,6 +362,19 @@ class EngineCore:
             images=images,
             videos=videos,
         )
+
+        # M3 VL (additive): the engine preprocessed images into pixel_values +
+        # image_grid_thw and an input_ids list that ALREADY contains the expanded
+        # image tokens. Set prompt_token_ids directly so the scheduler skips
+        # re-tokenizing the templated string (which would not expand the image
+        # placeholder), and carry the vision tensors for the prefill forward.
+        if prompt_token_ids is not None:
+            request.prompt_token_ids = list(prompt_token_ids)
+            request.num_prompt_tokens = len(request.prompt_token_ids)
+        if pixel_values is not None:
+            request.pixel_values = pixel_values
+        if image_grid_thw is not None:
+            request.image_grid_thw = image_grid_thw
 
         # Attach gen_prompt_len for prefix cache key stripping.
         # The scheduler reads this via getattr(request, '_gen_prompt_len', 0)
