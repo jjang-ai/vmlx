@@ -675,6 +675,12 @@ def serve_command(args):
     # Configure tool calling
     _user_disabled_tool_parser = getattr(args, "tool_call_parser", None) == "none"
     server._tool_call_parser_disabled_explicitly = _user_disabled_tool_parser
+    server._tool_call_parser_explicit_name = (
+        args.tool_call_parser
+        if args.enable_auto_tool_choice
+        and args.tool_call_parser not in (None, "auto", "none")
+        else None
+    )
     if args.enable_auto_tool_choice and args.tool_call_parser and args.tool_call_parser != "none":
         server._enable_auto_tool_choice = True
         # "auto" → resolved below by model_config_registry auto-apply (lines 86-108)
