@@ -12248,6 +12248,8 @@ async def create_chat_completion(
     if all_tools:
         chat_kwargs["tools"] = convert_tools_for_template(all_tools)
         chat_kwargs["_vmlx_tools_present"] = True
+        if _tool_call_parser:
+            chat_kwargs["_tool_parser_id"] = _tool_call_parser
 
     # Inject Harmony analysis prefix for GPT-OSS models when thinking is enabled.
     # The suffix replaces the template's generation prompt (<|start|>assistant<|message|>)

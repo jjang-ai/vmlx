@@ -220,6 +220,107 @@ def test_fallback_triggered_when_one_tool_missing(mock_tools, mock_messages):
     assert "list_directory" in result
 
 
+def test_minimax_m3_fallback_uses_native_concrete_invoke_examples(mock_messages):
+    """MiniMax-M3 fallback must teach the native tag format with real tool names."""
+    mock_tokenizer = MagicMock()
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "terminal",
+                "description": "Run a command.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"command": {"type": "string"}},
+                    "required": ["command"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "write_file",
+                "description": "Write a file.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string"},
+                        "content": {"type": "string"},
+                    },
+                    "required": ["path", "content"],
+                },
+            },
+        },
+    ]
+
+    def mock_apply(messages, **kwargs):
+        return messages[0]["content"] if messages[0]["role"] == "system" else ""
+
+    mock_tokenizer.apply_chat_template.side_effect = mock_apply
+
+    result = check_and_inject_fallback_tools(
+        prompt="<system>No tools here.</system><user>Run a command.</user>",
+        messages=mock_messages,
+        template_tools=tools,
+        tokenizer=mock_tokenizer,
+        template_kwargs={"tools": tools, "tool_choice": "required"},
+        tool_parser_id="minimax_m3",
+    )
+
+    assert "MiniMax-M3 native tools" in result
+    assert "tool_choice=required" in result
+    assert "<tool_call>" in result
+    assert '<invoke name="terminal">' in result
+    assert "<command>VALUE_HERE</command>" in result
+    assert '<invoke name="write_file">' in result
+    assert "<path>VALUE_HERE</path>" in result
+    assert "<content>VALUE_HERE</content>" in result
+    assert "FUNCTION_NAME" not in result
+    assert "Do not emit JSON" in result
+
+
+def test_minimax_m3_generic_template_examples_get_concrete_fallback(mock_messages):
+    """A generic MiniMax-M3 tool example is not enough for native tool parsing."""
+    mock_tokenizer = MagicMock()
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "search",
+                "description": "Search.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"query": {"type": "string"}},
+                    "required": ["query"],
+                },
+            },
+        }
+    ]
+    prompt = (
+        "<system><tool_call><invoke name=\"$TOOL_NAME\">"
+        "<query>$VALUE</query></invoke></tool_call> search</system>"
+    )
+
+    def mock_apply(messages, **kwargs):
+        return messages[0]["content"] if messages[0]["role"] == "system" else ""
+
+    mock_tokenizer.apply_chat_template.side_effect = mock_apply
+
+    result = check_and_inject_fallback_tools(
+        prompt=prompt,
+        messages=mock_messages,
+        template_tools=tools,
+        tokenizer=mock_tokenizer,
+        template_kwargs={"tools": tools},
+        tool_parser_id="minimax_m3",
+    )
+
+    assert result != prompt
+    assert '<invoke name="search">' in result
+    assert "<query>VALUE_HERE</query>" in result
+    assert "$TOOL_NAME" not in result
+
+
 def test_fallback_with_empty_name_tools(mock_messages):
     """Tools with empty function names should not cause errors."""
     mock_tokenizer = MagicMock()

@@ -206,6 +206,11 @@ def check_and_inject_fallback_tools(
         return prompt
     is_lfm2_native_tool_prompt = parser_id in {"lfm2", "liquid"}
     is_minimax_native_tool_prompt = parser_id in {"minimax", "minimax_m2"}
+    is_minimax_m3_native_tool_prompt = parser_id in {
+        "minimax_m3",
+        "minimax-m3",
+        "minimax_m3_vl",
+    }
     is_xml_function_native_tool_prompt = parser_id in {
         "xml_function",
         "mimo_xml_function",
@@ -257,6 +262,11 @@ def check_and_inject_fallback_tools(
         and "<minimax:tool_call>" in instruction_prompt
         and all(f'<invoke name="{name}">' in instruction_prompt for name in tool_names)
     )
+    _minimax_m3_has_concrete_tool_examples = (
+        is_minimax_m3_native_tool_prompt
+        and "<tool_call>" in instruction_prompt
+        and all(f'<invoke name="{name}">' in instruction_prompt for name in tool_names)
+    )
     _xml_function_has_native_tool_schema = (
         is_xml_function_native_tool_prompt
         and "<tool_call>" in instruction_prompt
@@ -285,6 +295,10 @@ def check_and_inject_fallback_tools(
         and (not is_zaya_native_tool_prompt or _zaya_has_concrete_tool_examples)
         and (not is_lfm2_native_tool_prompt or _lfm2_has_concrete_tool_examples)
         and (not is_minimax_native_tool_prompt or _minimax_has_concrete_tool_examples)
+        and (
+            not is_minimax_m3_native_tool_prompt
+            or _minimax_m3_has_concrete_tool_examples
+        )
         and (
             not is_xml_function_native_tool_prompt
             or (
@@ -613,6 +627,25 @@ def check_and_inject_fallback_tools(
                     f'<parameter name="{param.strip()}">{value.strip()}</parameter>'
                 )
             lines.extend(["</invoke>", "</minimax:tool_call>"])
+            blocks.append("\n".join(lines))
+        return "\n\n".join(blocks)
+
+    def _render_minimax_m3_examples(tools: list[dict]) -> str:
+        marker = "]<]minimax[>["
+        blocks: list[str] = []
+        for tool in tools:
+            name, props = _tool_props(tool)
+            if not name:
+                continue
+            lines = [
+                f"{marker}<tool_call>",
+                f'{marker}<invoke name="{name.strip()}">',
+            ]
+            for prop in props:
+                prop = prop.strip()
+                if prop:
+                    lines.append(f"{marker}<{prop}>VALUE_HERE</{prop}>")
+            lines.extend([f"{marker}</invoke>", f"{marker}</tool_call>"])
             blocks.append("\n".join(lines))
         return "\n\n".join(blocks)
 
@@ -1118,6 +1151,43 @@ def check_and_inject_fallback_tools(
             "If the user says the value argument must be the literal string blue-cat, put only blue-cat in value.\n"
             + _render_minimax_examples(minimax_prompt_tools)
         )
+    elif is_minimax_m3_native_tool_prompt:
+        minimax_prompt_tools = _requested_tools(template_tools)
+        minimax_lines = [
+            "You have access to MiniMax-M3 native tools. When the user asks for one, "
+            "call it instead of explaining what you would do.",
+            "If the user asks to read files, write files, run commands, search, "
+            "inspect services, or verify config, use the matching provided tool; "
+            "do not claim that tool-visible paths or hosts are inaccessible.",
+            "",
+        ]
+        if tool_choice_required:
+            minimax_lines.extend(
+                [
+                    "The current API request set tool_choice=required.",
+                    "Your next assistant output must be exactly one MiniMax-M3 tool call and no visible text.",
+                    "Do not emit only a partial tag; include the invoke name, every required parameter, and close the invoke/tool_call tags.",
+                    "",
+                ]
+            )
+        for tool in minimax_prompt_tools:
+            func = _tool_func(tool)
+            name = func.get("name", "") or "unknown_tool"
+            params = func.get("parameters", {}) or {}
+            props = params.get("properties", {}) if isinstance(params, dict) else {}
+            if props:
+                minimax_lines.append(f"{name} fields: {', '.join(str(p) for p in props)}")
+            else:
+                minimax_lines.append(f"{name} fields: none")
+        tool_prompt = (
+            "\n".join(minimax_lines).rstrip()
+            + "\n\nWhen a tool call is needed, emit ONLY this exact MiniMax-M3 XML shape. "
+            "Do not emit JSON, markdown, prose, duplicate <tool_call> tags, generic tool XML, or a fake result. "
+            "Use the exact invoke name from the tool schema and encode arguments as parameter tags. "
+            "Every required field must be present and non-empty. "
+            "Fill fields from the user's request exactly.\n"
+            + _render_minimax_m3_examples(minimax_prompt_tools)
+        )
     else:
         tool_prompt = (
             "You are an expert assistant with access to tools.\n\n"
@@ -1153,6 +1223,14 @@ def check_and_inject_fallback_tools(
         if is_minimax_native_tool_prompt:
             return (
                 "<minimax:tool_call>" in rendered
+                and all(
+                    f'<invoke name="{name}">' in rendered
+                    for name in tool_names
+                )
+            )
+        if is_minimax_m3_native_tool_prompt:
+            return (
+                "<tool_call>" in rendered
                 and all(
                     f'<invoke name="{name}">' in rendered
                     for name in tool_names

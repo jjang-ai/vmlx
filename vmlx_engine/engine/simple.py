@@ -698,6 +698,7 @@ class SimpleEngine(BaseEngine):
         # Pop vmlx-engine-specific kwargs early to prevent leaking to mlx-lm calls
         extra_ct_kwargs = kwargs.pop("chat_template_kwargs", None)
         reasoning_effort = kwargs.pop("reasoning_effort", None)
+        tool_parser_id = kwargs.pop("_tool_parser_id", None)
         kwargs.pop("request_id", None)
         thinking_enabled = kwargs.pop("enable_thinking", True)
         prompt_suffix = kwargs.pop("prompt_suffix", None)
@@ -829,7 +830,7 @@ class SimpleEngine(BaseEngine):
                         template_tools,
                         tokenizer,
                         tpl_kwargs,
-                        tool_parser_id=self._model_tool_parser_name(),
+                        tool_parser_id=tool_parser_id or self._model_tool_parser_name(),
                     )
 
                     if thinking_enabled is False:
@@ -933,6 +934,7 @@ class SimpleEngine(BaseEngine):
 
         # Pop vmlx-engine-specific kwargs early to prevent leaking to mlx-lm calls
         reasoning_effort = kwargs.pop("reasoning_effort", None)
+        tool_parser_id = kwargs.pop("_tool_parser_id", None)
         thinking_enabled = kwargs.pop("enable_thinking", True)
         extra_ct_kwargs = kwargs.pop("chat_template_kwargs", None)
         prompt_suffix = kwargs.pop("prompt_suffix", None)
@@ -1133,7 +1135,7 @@ class SimpleEngine(BaseEngine):
                 template_tools,
                 tokenizer,
                 template_kwargs,
-                tool_parser_id=self._model_tool_parser_name(),
+                tool_parser_id=tool_parser_id or self._model_tool_parser_name(),
             )
 
             if thinking_enabled is False:
