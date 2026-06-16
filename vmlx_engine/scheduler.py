@@ -2845,6 +2845,105 @@ class Scheduler:
 
         return _wrapped
 
+    def _minimax_m3_think_close_tokens(self):
+        """Return (OPEN, CLOSE) reasoning token ids for the active M3 parser, else None.
+
+        Gated on the MiniMax-M3 reasoning parser so the thinking-budget backstop only
+        applies to M3. Uses the parser's own reasoning_tag_token_seqs (no hard-coded ids).
+        """
+        try:
+            from . import server as _server  # lazy: dodge circular import
+            parser = getattr(_server, "_reasoning_parser", None)
+            if parser is None or type(parser).__name__ != "MiniMaxM3ReasoningParser":
+                return None
+            tags = parser.reasoning_tag_token_seqs(self._actual_tokenizer or self.tokenizer)
+            end = tags.get("end") or ()
+            start = tags.get("start") or ()
+
+            def _last_id(seqs):
+                # reasoning_tag_token_seqs returns nested lists, e.g. [[200060]].
+                if not seqs:
+                    return None
+                last = seqs[-1]
+                if isinstance(last, (list, tuple)):
+                    return int(last[-1]) if last else None
+                return int(last)
+
+            close_id = _last_id(end)
+            if close_id is None:
+                return None
+            open_id = _last_id(start)
+            logger.debug(
+                "MiniMax-M3 thinking-budget backstop armed: OPEN=%s CLOSE=%s budget=%s",
+                open_id, close_id, os.environ.get("VMLX_M3_THINK_BUDGET", "1024"),
+            )
+            return (open_id, close_id)
+        except Exception:
+            return None
+
+    def _m3_thinking_budget_processor(self, prompt_tokens):
+        """Force-close a runaway <mm:think> trace after a token budget.
+
+        M3's reasoning parser is post-hoc text-splitting with NO termination control;
+        only EOS (200020) stops generation, and </mm:think> (200060) is not a stop. On
+        uncertain queries the model ruminates without ever emitting </mm:think>, looping
+        to max_tokens (verified independent of cache path, indexer, and sampling). This
+        forces the close token once the in-thinking trace exceeds VMLX_M3_THINK_BUDGET
+        tokens, pushing the model into its answer. Hard termination guarantee.
+        """
+        toks = self._minimax_m3_think_close_tokens()
+        if toks is None:
+            return None
+        OPEN, CLOSE = toks
+        try:
+            budget = int(os.environ.get("VMLX_M3_THINK_BUDGET", "1024"))
+        except Exception:
+            budget = 2048
+        if budget <= 0:
+            return None
+        tail = [int(t) for t in (prompt_tokens[-6:] if prompt_tokens else [])]
+        has_open = OPEN is not None and OPEN in tail
+        has_close = CLOSE in tail
+        if has_close and not has_open:
+            return None  # disabled mode: thinking pre-closed in the prompt -> no backstop
+        import mlx.core as mx
+        st = {"opened": bool(has_open), "closed": False, "scanned": 0}
+
+        def _proc(tokens, logits):
+            if st["closed"]:
+                return logits
+            try:
+                n = len(tokens)
+                if n > st["scanned"]:
+                    new_t = tokens[st["scanned"]:]
+                    arr = new_t.tolist() if hasattr(new_t, "tolist") else list(new_t)
+                    for t in arr:
+                        ti = int(t)
+                        if OPEN is not None and ti == OPEN:
+                            st["opened"] = True
+                        elif ti == CLOSE:
+                            st["closed"] = True
+                    st["scanned"] = n
+            except Exception:
+                return logits
+            if st["closed"] or not st["opened"]:
+                return logits
+            if n >= budget:
+                if not st.get("logged_fire"):
+                    logger.info("MiniMax-M3 thinking-budget backstop FIRED at %d tokens — forcing </mm:think>", n)
+                    st["logged_fire"] = True
+                vocab = logits.shape[-1]
+                onehot = (mx.arange(vocab) == CLOSE)
+                forced = mx.where(
+                    onehot,
+                    mx.array(0.0, dtype=logits.dtype),
+                    mx.array(-1e9, dtype=logits.dtype),
+                )
+                return mx.broadcast_to(forced, logits.shape)
+            return logits
+
+        return _proc
+
     def _request_logits_processors(
         self,
         request: Request,
@@ -2852,22 +2951,31 @@ class Scheduler:
     ) -> Optional[List[Callable[[Any, Any], Any]]]:
         """Build BatchGenerator processors with generate_step-compatible context."""
 
-        rep = request.sampling_params.repetition_penalty
-        if not rep or rep == 1.0:
-            return None
-
-        from mlx_lm.sample_utils import make_logits_processors
-
-        rep_context_size = 512 if self._long_repetition_context else 20
-        processors = make_logits_processors(
-            repetition_penalty=rep,
-            repetition_context_size=rep_context_size,
-        )
         skip_prefix_tokens = max(len(tokens_to_process) - 1, 0)
-        return [
-            self._wrap_generated_only_logits_processor(p, skip_prefix_tokens)
-            for p in processors
-        ]
+        processors: List[Callable[[Any, Any], Any]] = []
+
+        rep = request.sampling_params.repetition_penalty
+        if rep and rep != 1.0:
+            from mlx_lm.sample_utils import make_logits_processors
+
+            rep_context_size = 512 if self._long_repetition_context else 20
+            rep_procs = make_logits_processors(
+                repetition_penalty=rep,
+                repetition_context_size=rep_context_size,
+            )
+            processors.extend(
+                self._wrap_generated_only_logits_processor(p, skip_prefix_tokens)
+                for p in rep_procs
+            )
+
+        # M3 thinking-budget backstop (hard guarantee against runaway <mm:think> loops).
+        tb = self._m3_thinking_budget_processor(tokens_to_process)
+        if tb is not None:
+            processors.append(
+                self._wrap_generated_only_logits_processor(tb, skip_prefix_tokens)
+            )
+
+        return processors or None
 
     def _ensure_batch_generator(self, sampling_params: SamplingParams) -> bool:
         """Ensure BatchGenerator exists with compatible settings."""

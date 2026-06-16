@@ -5383,6 +5383,16 @@ def _normalize_minimax_m3_thinking_mode(ct_kwargs: dict, request, model_key: str
     # the reasoning parser catches WITHOUT prompt-priming. The template's "enabled"
     # mode prompt-opens <mm:think> (needs the streaming parser primed), so we avoid
     # it here; the enabled→think_in_prompt seeding elsewhere is kept for future use.
+    # Explicit thinking ON -> "enabled": the template prompt-opens <mm:think> and
+    # instructs the trained bounded "think step by step then answer" structure.
+    # Auto/None -> "adaptive" (model decides). OFF -> "disabled". The old ON->adaptive
+    # mapping put the model in its least-reliable "decide for yourself" mode where it
+    # ruminates and never closes </mm:think> on uncertain queries (runaway reasoning).
+    # The hard thinking-token-budget backstop in the scheduler guarantees termination
+    # regardless of mode. (M3_THINK_MODE env override honored for diagnostics.)
+    # off -> disabled (template closes </mm:think>, no thinking). on/auto -> adaptive: the
+    # model emits its own <mm:think>...</mm:think> which the reasoning parser splits natively
+    # (no priming). Runaway reasoning is bounded by the scheduler thinking-budget backstop.
     ct_kwargs["thinking_mode"] = "disabled" if _rt is False else "adaptive"
     ct_kwargs.pop("enable_thinking", None)
 

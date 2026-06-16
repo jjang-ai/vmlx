@@ -190,7 +190,10 @@ def preprocess_m3_vl_messages(
 
     tmpl_kwargs = {}
     if enable_thinking is not None:
-        tmpl_kwargs["enable_thinking"] = enable_thinking
+        # The MiniMax-M3 chat template branches on thinking_mode (enabled/disabled/adaptive),
+        # NOT enable_thinking. Mirror server._normalize_minimax_m3_thinking_mode: off->disabled,
+        # on/auto->adaptive (model emits its own <mm:think>...; scheduler backstop bounds runaways).
+        tmpl_kwargs["thinking_mode"] = "disabled" if enable_thinking is False else "adaptive"
     try:
         txt = tok.apply_chat_template(
             norm_msgs,
