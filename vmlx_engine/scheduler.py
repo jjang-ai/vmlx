@@ -2881,7 +2881,7 @@ class Scheduler:
         except Exception:
             return None
 
-    def _m3_thinking_budget_processor(self, prompt_tokens):
+    def _m3_thinking_budget_processor(self, prompt_tokens, max_out_tokens=None):
         """Force-close a runaway <mm:think> trace after a token budget.
 
         M3's reasoning parser is post-hoc text-splitting with NO termination control;
@@ -2898,7 +2898,13 @@ class Scheduler:
         try:
             budget = int(os.environ.get("VMLX_M3_THINK_BUDGET", "1024"))
         except Exception:
-            budget = 2048
+            budget = 1024
+        # Scale the reasoning budget to the OUTPUT limit so the backstop always fires
+        # BEFORE max_tokens, leaving room for the answer. Without this, a short
+        # max_tokens (< budget) means the loop runs to max_tokens unprotected. Cap
+        # reasoning at ~half the output budget (floor 96) so the answer always has space.
+        if max_out_tokens and max_out_tokens > 0:
+            budget = min(budget, max(96, int(max_out_tokens) // 2))
         if budget <= 0:
             return None
         tail = [int(t) for t in (prompt_tokens[-6:] if prompt_tokens else [])]
@@ -2969,7 +2975,9 @@ class Scheduler:
             )
 
         # M3 thinking-budget backstop (hard guarantee against runaway <mm:think> loops).
-        tb = self._m3_thinking_budget_processor(tokens_to_process)
+        _maxtok = (getattr(request, "max_tokens", None)
+                   or getattr(getattr(request, "sampling_params", None), "max_tokens", None))
+        tb = self._m3_thinking_budget_processor(tokens_to_process, _maxtok)
         if tb is not None:
             processors.append(
                 self._wrap_generated_only_logits_processor(tb, skip_prefix_tokens)
