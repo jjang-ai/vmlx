@@ -30,6 +30,8 @@ case "$PREPACKAGE_READY_MANIFEST_OUT" in
   *) PREPACKAGE_READY_MANIFEST_OUT="$ROOT_DIR/$PREPACKAGE_READY_MANIFEST_OUT" ;;
 esac
 RELEASE_CODESIGN_IDENTITY="${VMLX_RELEASE_CODESIGN_IDENTITY:-${VMLINUX_RELEASE_CODESIGN_IDENTITY:-${CSC_NAME:-Developer ID Application: ShieldStack LLC (55KGF2S5AY)}}}"
+ELECTRON_BUILDER_CSC_NAME="${VMLINUX_ELECTRON_BUILDER_CSC_NAME:-${VMLX_ELECTRON_BUILDER_CSC_NAME:-${CSC_NAME:-$RELEASE_CODESIGN_IDENTITY}}}"
+ELECTRON_BUILDER_CSC_NAME="${ELECTRON_BUILDER_CSC_NAME#Developer ID Application: }"
 CHECKPOINT_RELEASE_OVERRIDE="${VMLX_CHECKPOINT_RELEASE_OVERRIDE:-${VMLINUX_CHECKPOINT_RELEASE_OVERRIDE:-0}}"
 
 echo "==> Checking pre-package release ledger before public DMG build"
@@ -143,11 +145,12 @@ build_one() {
   ./scripts/verify-bundled-python.sh
   npx electron-vite build
   rm -rf "$staged_output"
-  npx electron-builder --mac --dir \
+  CSC_IDENTITY_AUTO_DISCOVERY=false npx electron-builder --mac --dir \
+    --config.mac.identity=null \
     --config.directories.output="$staged_output"
   app_path="$(find_staged_app "$staged_output")"
   finalize_release_app_signature "$app_path" "$RELEASE_CODESIGN_IDENTITY"
-  npx electron-builder --mac dmg \
+  CSC_NAME="$ELECTRON_BUILDER_CSC_NAME" npx electron-builder --mac dmg \
     --prepackaged "$app_path" \
     --config.directories.output="$DIST_DIR" \
     --config.mac.artifactName="vMLX-\${version}-${flavor}-\${arch}.\${ext}"
