@@ -132,15 +132,16 @@ function applyFamilyStartupDefaults(config: Partial<ServerConfig>, modelPath?: s
   if (!modelPath) return false
   try {
     const detected = detectModelConfigFromDir(modelPath)
+    const detectedFamily = normalizeDetectedFamilyName(detected.family)
     let changed = false
     if (
-      normalizeDetectedFamilyName(detected.family) === 'deepseek-v4' &&
+      detectedFamily === 'deepseek-v4' &&
       (config.timeout == null || config.timeout === GENERIC_DEFAULT_TIMEOUT_SECONDS)
     ) {
       config.timeout = DSV4_DEFAULT_TIMEOUT_SECONDS
       changed = true
     }
-    if (normalizeDetectedFamilyName(detected.family) === 'deepseek-v4') {
+    if (detectedFamily === 'deepseek-v4') {
       const dsv4PrefixOptIn = config.dsv4PrefixCache !== false
       const desiredPrefix = dsv4PrefixOptIn
       const desiredPaged = dsv4PrefixOptIn
@@ -171,6 +172,27 @@ function applyFamilyStartupDefaults(config: Partial<ServerConfig>, modelPath?: s
       }
       if (!dsv4PrefixOptIn && config.dsv4PoolQuant === true) {
         config.dsv4PoolQuant = false
+        changed = true
+      }
+    } else if (detectedFamily === 'minimax_m3') {
+      if (config.enablePrefixCache !== true) {
+        config.enablePrefixCache = true
+        changed = true
+      }
+      if (config.usePagedCache !== false) {
+        config.usePagedCache = false
+        changed = true
+      }
+      if (config.enableDiskCache !== true) {
+        config.enableDiskCache = true
+        changed = true
+      }
+      if (config.enableBlockDiskCache !== false) {
+        config.enableBlockDiskCache = false
+        changed = true
+      }
+      if (config.enableJit !== false) {
+        config.enableJit = false
         changed = true
       }
     }
@@ -546,7 +568,7 @@ function applyBundleStartupDefaults(config: Partial<ServerConfig>, modelPath?: s
   return changed
 }
 
-const CACHE_STACK_STARTUP_DEFAULTS_VERSION = 3
+const CACHE_STACK_STARTUP_DEFAULTS_VERSION = 5
 
 function markCacheStackStartupDefaultsCurrent(config: Partial<ServerConfig>): boolean {
   if (config.cacheStackStartupDefaultsVersion === CACHE_STACK_STARTUP_DEFAULTS_VERSION) return false
@@ -565,6 +587,17 @@ function applyCacheStackStartupDefaultMigration(config: Partial<ServerConfig>, m
   }
 
   const zayaCacheMigrationTarget = isZayaCacheStackMigrationTarget(modelPath || config.modelPath)
+  const isM3MigrateTarget = /minimax.?m3/i.test((modelPath || config.modelPath || "").toLowerCase())
+  const staleM3PagedOn =
+    isM3MigrateTarget &&
+    config.usePagedCache === true &&
+    config.continuousBatching === true
+  const staleM3BlockDiskOn =
+    isM3MigrateTarget &&
+    config.continuousBatching === true &&
+    config.enablePrefixCache === true &&
+    config.usePagedCache === false &&
+    config.enableBlockDiskCache === true
   const staleContinuousDefaults =
     config.continuousBatching === true &&
     config.enablePrefixCache === true &&
@@ -616,7 +649,9 @@ function applyCacheStackStartupDefaultMigration(config: Partial<ServerConfig>, m
     !staleNoPrefixBatchDefaults &&
     !stalePartialPagedCacheDefaults &&
     !staleExplicitNoneCacheCodecDefaults &&
-    !staleV2GenericPagedOn
+    !staleV2GenericPagedOn &&
+    !staleM3PagedOn &&
+    !staleM3BlockDiskOn
   ) return false
 
   config.continuousBatching = true
@@ -1359,6 +1394,23 @@ export class SessionManager extends EventEmitter {
                 ? '[INFO] DSV4-Flash detected; native SWA+CSA/HCA composite prefix/paged/L2 cache is active by default with 256-token blocks'
                 : '[INFO] DSV4-Flash detected; native composite prefix/paged/L2 cache explicitly disabled for this session')
             }
+          } else if (freshFamily === 'minimax_m3') {
+            const m3Changed =
+              config.enablePrefixCache !== true ||
+              config.usePagedCache !== false ||
+              config.enableDiskCache !== true ||
+              config.enableBlockDiskCache !== false ||
+              config.kvCacheQuantization !== 'auto' ||
+              config.enableJit === true
+            config.enablePrefixCache = true
+            config.usePagedCache = false
+            config.enableDiskCache = true
+            config.enableBlockDiskCache = false
+            config.kvCacheQuantization = 'auto'
+            config.enableJit = false
+            if (m3Changed) {
+              this.pushLog(sessionId, '[INFO] MiniMax-M3 detected; using paged-off SSD prefix cache with native MSA idx_keys, generic KV quantization off, and JIT off')
+            }
           }
           // Refresh multimodal detection from disk. A detected VLM must win
           // over stale saved `isMultimodal=false` from older sessions, while a
@@ -1976,7 +2028,7 @@ export class SessionManager extends EventEmitter {
           enableDiskCache: detectedFamily === 'deepseek-v4' ? false : true,
           pagedCacheBlockSize: detectedFamily === 'deepseek-v4' ? DSV4_PAGED_CACHE_BLOCK_SIZE : 64,
           maxCacheBlocks: 1000,
-          enableBlockDiskCache: detectedFamily === 'deepseek-v4' ? dsv4DefaultCacheOptIn : true,
+          enableBlockDiskCache: detectedFamily === 'deepseek-v4' ? dsv4DefaultCacheOptIn : detected.usePagedCache === true,
           blockDiskCacheMaxGb: 10,
           kvCacheQuantization: 'auto',
           cacheStackStartupDefaultsVersion: CACHE_STACK_STARTUP_DEFAULTS_VERSION,
@@ -2710,6 +2762,7 @@ export class SessionManager extends EventEmitter {
     // single-batch even though the generic session profile defaults higher.
     const detectedFamily = normalizeDetectedFamilyName(detected.family)
     const dsv4Active = detectedFamily === 'deepseek-v4'
+    const m3Active = detectedFamily === 'minimax_m3'
     const dsv4PrefixCacheOptIn = dsv4Active && config.dsv4PrefixCache !== false
     const omniBackendActive = detectedFamily === 'nemotron-h' && detected.isMultimodal === true
 
@@ -2852,10 +2905,14 @@ export class SessionManager extends EventEmitter {
         : config.enablePrefixCache !== false,
       usePagedCache: dsv4Active
         ? dsv4PrefixCacheOptIn
+        : m3Active
+        ? false
         : config.usePagedCache ?? detected.usePagedCache ?? false,
       enableDiskCache: !!config.enableDiskCache,
       enableBlockDiskCache: dsv4Active
         ? dsv4PrefixCacheOptIn && !!config.enableBlockDiskCache
+        : m3Active
+        ? false
         : !!config.enableBlockDiskCache,
       architectureRequiresPagedCache,
     })
@@ -2918,10 +2975,13 @@ export class SessionManager extends EventEmitter {
     if (!prefixCacheOff && detectedFamily === 'deepseek-v4' && config.kvCacheQuantization && config.kvCacheQuantization !== 'auto') {
       console.log(`[SESSION] DSV4-Flash detected: ignoring generic kvCacheQuantization=${config.kvCacheQuantization}; native SWA+CSA/HCA cache policy owns compression`)
     }
+    if (!prefixCacheOff && detectedFamily === 'minimax_m3' && config.kvCacheQuantization && config.kvCacheQuantization !== 'auto') {
+      console.log(`[SESSION] MiniMax-M3 detected: ignoring generic kvCacheQuantization=${config.kvCacheQuantization}; native MSA cache stores keys/values/idx_keys without generic KV codecs`)
+    }
     if (!prefixCacheOff && nativeStoredKvQuantization && config.kvCacheQuantization && config.kvCacheQuantization !== 'auto') {
       console.log(`[SESSION] ${detected.cacheSubtype} detected: ignoring generic kvCacheQuantization=${config.kvCacheQuantization}; native mixed full/SWA cache policy owns stored prefix state`)
     }
-    if (!prefixCacheOff && detectedFamily !== 'deepseek-v4' && !nativeStoredKvQuantization && config.kvCacheQuantization && config.kvCacheQuantization !== 'auto') {
+    if (!prefixCacheOff && detectedFamily !== 'deepseek-v4' && detectedFamily !== 'minimax_m3' && !nativeStoredKvQuantization && config.kvCacheQuantization && config.kvCacheQuantization !== 'auto') {
       args.push('--kv-cache-quantization', config.kvCacheQuantization)
       const kvCacheGroupSize = finitePositiveInteger(config.kvCacheGroupSize)
       if (config.kvCacheQuantization !== 'none' && kvCacheGroupSize != null && kvCacheGroupSize !== 64) {
@@ -2982,7 +3042,7 @@ export class SessionManager extends EventEmitter {
     const turboQuantActive = !!(detected as any).isTurboQuant
     const effectiveDistributed = requestedDistributed && !dsv4Active
     const effectiveFlashMoe = requestedFlashMoe && !effectiveDistributed && !dsv4Active
-    const effectiveEnableJit = !!config.enableJit && !isVLM && !effectiveFlashMoe && !effectiveDistributed && !dsv4Active && !zayaCcaActive && !turboQuantActive && !hybridCacheActive
+    const effectiveEnableJit = !!config.enableJit && !isVLM && !effectiveFlashMoe && !effectiveDistributed && !dsv4Active && !m3Active && !zayaCcaActive && !turboQuantActive && !hybridCacheActive
     if (dsv4Active && ((config as any).smelt || requestedFlashMoe || requestedDistributed || config.speculativeModel)) {
       console.warn('[SESSION] DSV4-Flash detected: ignoring stale Smelt/Flash MoE/distributed/speculative flags; native DSV4 cache and expert hydration own this runtime')
     }
@@ -2992,6 +3052,8 @@ export class SessionManager extends EventEmitter {
     if (config.enableJit && !effectiveEnableJit) {
       const reason = dsv4Active
         ? 'DeepSeek-V4 uses native SWA+CSA/HCA composite cache'
+        : m3Active
+        ? 'MiniMax-M3 uses native MSA idx_keys and must stay on the uncompiled scheduler path'
         : zayaCcaActive
         ? 'ZAYA typed CCA cache is path-dependent and benchmarks faster on the uncompiled scheduler path'
         : isVLM

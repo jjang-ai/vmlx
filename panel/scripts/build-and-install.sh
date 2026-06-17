@@ -145,6 +145,18 @@ if [ -d "bundled-python/python/lib/python3.12/site-packages" ]; then
   fi
 fi
 
+if [ -x "./scripts/verify-bundled-python.sh" ]; then
+  echo ""
+  echo "  Bundled Python source parity..."
+  if ./scripts/verify-bundled-python.sh >/tmp/vmlx-verify-bundled-python.log 2>&1; then
+    echo "  [PASS] Bundled Python matches source for critical runtime files"
+  else
+    cat /tmp/vmlx-verify-bundled-python.log
+    echo "  [FAIL] Bundled Python is stale. Re-run: bash scripts/bundle-python.sh"
+    exit 1
+  fi
+fi
+
 # Check critical API field parity
 echo ""
 echo "  API field parity..."

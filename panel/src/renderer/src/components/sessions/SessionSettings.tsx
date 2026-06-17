@@ -386,6 +386,7 @@ function buildCommandPreview(
   const requestedFlashMoe = !!(config as any).flashMoe
   const detectedFamily = normalizeDetectedFamilyName(detected?.family)
   const dsv4Active = detectedFamily === 'deepseek-v4'
+  const m3Active = detectedFamily === 'minimax_m3'
   const dsv4PrefixCacheOptIn = dsv4Active && config.dsv4PrefixCache !== false
   const omniBackendActive = detectedFamily === 'nemotron-h' && detected?.isMultimodal === true
   const effectiveSmelt = !!(config as any).smelt && !dsv4Active
@@ -400,7 +401,7 @@ function buildCommandPreview(
   const subtypePagedCacheActive = cacheSubtypeRequiresPaged(detected?.cacheSubtype)
   const effectiveDistributed = requestedDistributed && !dsv4Active
   const effectiveFlashMoe = requestedFlashMoe && !effectiveDistributed && !dsv4Active
-  const effectiveEnableJit = !!config.enableJit && !isVLM && !effectiveFlashMoe && !effectiveDistributed && !dsv4Active && !zayaCcaActive && !turboQuantActive && !hybridCacheActive
+  const effectiveEnableJit = !!config.enableJit && !isVLM && !effectiveFlashMoe && !effectiveDistributed && !dsv4Active && !m3Active && !zayaCcaActive && !turboQuantActive && !hybridCacheActive
 
   // Server settings
   parts.push('--host', config.host)
@@ -458,10 +459,14 @@ function buildCommandPreview(
       : config.enablePrefixCache !== false,
     usePagedCache: dsv4Active
       ? dsv4PrefixCacheOptIn
+      : m3Active
+      ? false
       : config.usePagedCache ?? detected?.usePagedCache ?? false,
     enableDiskCache: !!config.enableDiskCache,
     enableBlockDiskCache: dsv4Active
       ? dsv4PrefixCacheOptIn && !!config.enableBlockDiskCache
+      : m3Active
+      ? false
       : !!config.enableBlockDiskCache,
     architectureRequiresPagedCache,
   })
@@ -501,7 +506,7 @@ function buildCommandPreview(
 
   // KV cache quantization — requires prefix cache ON. Some native mixed-cache
   // families own stored prefix state and must not receive the generic codec.
-  if (!prefixCacheOff && !dsv4Active && !nativeStoredKvQuantization && config.kvCacheQuantization && config.kvCacheQuantization !== 'auto') {
+  if (!prefixCacheOff && !dsv4Active && !m3Active && !nativeStoredKvQuantization && config.kvCacheQuantization && config.kvCacheQuantization !== 'auto') {
     parts.push('--kv-cache-quantization', config.kvCacheQuantization)
     const kvCacheGroupSize = finitePositiveInteger(config.kvCacheGroupSize)
     if (config.kvCacheQuantization !== 'none' && kvCacheGroupSize != null && kvCacheGroupSize !== 64) {
@@ -813,6 +818,7 @@ export function SessionSettings({ sessionId, onBack }: SessionSettingsProps) {
             base.pagedCacheBlockSize = DSV4_PAGED_CACHE_BLOCK_SIZE
           } else {
             base.usePagedCache = detected.usePagedCache
+            base.enableBlockDiskCache = detected.usePagedCache === true && base.enableBlockDiskCache
           }
           // VLM models: set isMultimodal flag unless this model has a
           // runtime forceTextOnly policy (affine-JANG Qwen hybrid).

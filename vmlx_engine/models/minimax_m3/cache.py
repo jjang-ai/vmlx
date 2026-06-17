@@ -117,6 +117,55 @@ def restore_minimax_m3_sparse(keys, values, idx) -> MiniMaxM3SparseCache:
     return c
 
 
+def clone_minimax_m3_sparse(
+    cache: Any,
+    length: int | None = None,
+    *,
+    copy_fn=None,
+    require_idx_keys: bool = True,
+) -> MiniMaxM3SparseCache | None:
+    """Clone/slice a MiniMax-M3 sparse cache without dropping idx_keys.
+
+    Generic KV cache helpers see MiniMaxM3SparseCache as a KVCache subclass and
+    usually copy only ``(keys, values)``. That corrupts M3 reuse because sparse
+    block selection is recomputed from ``idx_keys`` every step. This helper is
+    the single safe way for prefix/disk/snapshot paths to rebuild the cache.
+    """
+    new_cache = MiniMaxM3SparseCache()
+    keys = getattr(cache, "keys", None)
+    values = getattr(cache, "values", None)
+    if keys is None or values is None:
+        return new_cache
+
+    idx_keys = getattr(cache, "idx_keys", None)
+    if idx_keys is None and require_idx_keys:
+        return None
+
+    try:
+        candidates = [int(getattr(cache, "offset", 0) or keys.shape[-2])]
+        candidates.extend([int(keys.shape[-2]), int(values.shape[-2])])
+        if idx_keys is not None:
+            candidates.append(int(idx_keys.shape[-2]))
+        if length is not None:
+            candidates.append(int(length))
+        target = min(candidates)
+    except Exception:
+        return None
+    if target < 0:
+        return None
+
+    def _slice(value):
+        if value is None:
+            return None
+        sliced = value[..., :target, :]
+        return copy_fn(sliced) if copy_fn is not None else sliced
+
+    new_cache.state = (_slice(keys), _slice(values), _slice(idx_keys))
+    new_cache.offset = target
+    new_cache._idx_offset = 0 if new_cache.idx_keys is None else target
+    return new_cache
+
+
 def truncate_minimax_m3_cache(cache: list, length: int) -> None:
     """Roll a MiniMax-M3 cache list back to an absolute token length.
 

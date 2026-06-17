@@ -69,6 +69,23 @@ def _metadata_runtime_fingerprint(metadata: Optional[Dict[str, Any]]) -> Optiona
     )
 
 
+def _metadata_cache_classes(metadata: Optional[Dict[str, Any]]) -> List[str]:
+    """Return cache class names from flattened mlx-lm prompt-cache metadata."""
+    if not isinstance(metadata, dict):
+        return []
+    classes: List[Tuple[int, str]] = []
+    for key, value in metadata.items():
+        if not isinstance(key, str) or not key.startswith("2."):
+            continue
+        try:
+            idx = int(key.split(".", 1)[1])
+        except (IndexError, ValueError):
+            continue
+        if isinstance(value, str) and value:
+            classes.append((idx, value))
+    return [name for _, name in sorted(classes)]
+
+
 class _ConnectionPool:
     """Simple SQLite connection pool (thread-safe).
 
@@ -139,14 +156,18 @@ class DiskCacheManager:
         cache_dir: str,
         max_size_gb: float = 10.0,
         expected_num_layers: Optional[int] = None,
+        required_cache_class: Optional[str] = None,
     ):
         self.cache_dir = Path(cache_dir)
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         self.max_size_bytes = int(max_size_gb * 1024 * 1024 * 1024) if max_size_gb > 0 else 0
 
-        # Codex 2026-05-06 follow-up: expected layer count from model config.
-        # Used by safetensors header validator to reject wrong-model L2 files.
+        # Expected layer count from model config. Used by the safetensors
+        # header validator to reject wrong-model L2 files.
         self._expected_num_layers: Optional[int] = expected_num_layers
+        # Families with first-class cache subclasses (MiniMax-M3 MSA, DSV4, etc.)
+        # must not accept stale legacy KV-only files from the same prompt hash.
+        self._required_cache_class: Optional[str] = required_cache_class
 
         # SQLite index for fast token hash → file lookup
         self._db_path = str(self.cache_dir / "cache_index.db")
@@ -306,10 +327,10 @@ class DiskCacheManager:
                 return None
 
             try:
-                # Codex 2026-05-06 follow-up: validate safetensors HEADER
-                # BEFORE mx.load. Skips files whose declared shapes describe
-                # multi-hundred-GB tensors (corrupt entry from older schema
-                # or interrupted write would otherwise blow up Metal here).
+                # Validate safetensors HEADER metadata BEFORE mx.load. Skips
+                # files whose declared shapes describe multi-hundred-GB tensors
+                # (corrupt entry from older schema or interrupted write would
+                # otherwise blow up Metal here).
                 try:
                     from .cache_record_validator import (
                         reject_safetensors_or_warn,
@@ -339,6 +360,28 @@ class DiskCacheManager:
                 raw_arrays, file_metadata = mx.load(
                     str(file_path), return_metadata=True
                 )
+                cache_classes = _metadata_cache_classes(file_metadata)
+                required_class = getattr(self, "_required_cache_class", None)
+                if required_class and required_class not in cache_classes:
+                    try:
+                        file_path.unlink(missing_ok=True)
+                    except OSError:
+                        pass
+                    conn.execute(
+                        "DELETE FROM cache_entries WHERE token_hash = ?",
+                        (token_hash,),
+                    )
+                    conn.commit()
+                    with self._stats_lock:
+                        self.misses += 1
+                    logger.warning(
+                        "Disk prompt cache class mismatch; treating as miss "
+                        "(required=%s, stored=%s, file=%s)",
+                        required_class,
+                        ",".join(cache_classes[:8]) or "missing",
+                        file_name,
+                    )
+                    return None
                 stored_runtime = _metadata_runtime_fingerprint(file_metadata)
                 current_runtime = _runtime_cache_fingerprint()
                 if stored_runtime != current_runtime:
@@ -406,6 +449,34 @@ class DiskCacheManager:
                                     kv.keys, kv.values = state[0], state[1]
                                     kv.offset = int(meta_state[0]) if meta_state else 0
                                 cache.append(kv)
+                            elif c == "MiniMaxM3SparseCache":
+                                if not isinstance(state, (tuple, list)) or len(state) != 3:
+                                    logger.warning(
+                                        "Disk cache MiniMax-M3 entry missing "
+                                        "keys/values/idx_keys; treating as miss"
+                                    )
+                                    with self._stats_lock:
+                                        self.misses += 1
+                                    return None
+                                if state[2] is None:
+                                    logger.warning(
+                                        "Disk cache MiniMax-M3 entry missing "
+                                        "idx_keys; treating as miss"
+                                    )
+                                    with self._stats_lock:
+                                        self.misses += 1
+                                    return None
+                                from .models.minimax_m3.cache import (
+                                    restore_minimax_m3_sparse,
+                                )
+
+                                cache.append(
+                                    restore_minimax_m3_sparse(
+                                        state[0],
+                                        state[1],
+                                        state[2],
+                                    )
+                                )
                             else:
                                 import mlx_lm.models.cache as _cache_mod
                                 cls = getattr(_cache_mod, c, _KVC)
@@ -414,10 +485,26 @@ class DiskCacheManager:
                                 except Exception:
                                     kv = _KVC()
                                     cache.append(kv)
-                        logger.info(
-                            f"Disk cache loaded with TQ→KVCache remap: "
-                            f"{len(cache)} layers"
-                        )
+                        restored_classes = [type(c).__name__ for c in cache]
+                        if "MiniMaxM3SparseCache" in restored_classes:
+                            logger.info(
+                                "Disk cache loaded with MiniMax-M3 sparse "
+                                "restore: %d layers (%d MSA sparse)",
+                                len(cache),
+                                restored_classes.count("MiniMaxM3SparseCache"),
+                            )
+                        elif "TurboQuantKVCache" in classes:
+                            logger.info(
+                                "Disk cache loaded with TQ→KVCache remap: "
+                                "%d layers",
+                                len(cache),
+                            )
+                        else:
+                            logger.info(
+                                "Disk cache loaded with custom cache restore: "
+                                "%d layers",
+                                len(cache),
+                            )
 
                 # ─── Step 4: Update access metadata + stats ───
                 now = time.time()
@@ -436,7 +523,13 @@ class DiskCacheManager:
 
                 try:
                     size_mb = file_path.stat().st_size / 1024 / 1024
-                    fmt = "TQ-native" if is_tq_hit else "standard"
+                    restored_classes = {type(c).__name__ for c in cache}
+                    if is_tq_hit:
+                        fmt = "TQ-native"
+                    elif "MiniMaxM3SparseCache" in restored_classes:
+                        fmt = "m3-sparse"
+                    else:
+                        fmt = "standard"
                     logger.info(
                         f"Disk cache hit ({fmt}): {len(tokens)} tokens, "
                         f"file={file_name} ({size_mb:.1f}MB)"
@@ -465,6 +558,82 @@ class DiskCacheManager:
                 return None
         finally:
             self._pool.put(conn)
+
+    def fetch_longest_prefix(
+        self,
+        tokens: List[int],
+        *,
+        min_tokens: int = 2,
+    ) -> Tuple[Optional[List[Any]], List[int]]:
+        """Fetch the longest stored prompt prefix for ``tokens``.
+
+        ``fetch()`` is an exact SHA-256 lookup. That is correct for repeated
+        prompts, but chat reuse after an engine restart needs SSD L2 to behave
+        like a prefix cache: if a previous turn stored prompt key ``P`` and the
+        current prompt ``F`` starts with ``P``, restore ``P`` and let the
+        scheduler replay the uncached tail.
+
+        The SQLite index stores prompt lengths, so this avoids an O(prompt_len)
+        blind scan. We only test hashes for lengths that are actually present
+        on disk, then delegate the winner to ``fetch()`` so validation,
+        runtime-fingerprint checks, cache-type propagation, and hit stats stay
+        in one place.
+        """
+        full_tokens = list(tokens or [])
+        if not full_tokens:
+            with self._stats_lock:
+                self.misses += 1
+            return None, []
+
+        min_tokens = max(1, int(min_tokens or 1))
+        conn = self._pool.get()
+        try:
+            rows = conn.execute(
+                "SELECT token_hash, num_tokens FROM cache_entries "
+                "WHERE num_tokens <= ? AND num_tokens >= ? "
+                "ORDER BY num_tokens DESC",
+                (len(full_tokens), min_tokens),
+            ).fetchall()
+        finally:
+            self._pool.put(conn)
+
+        if not rows:
+            with self._stats_lock:
+                self.misses += 1
+            return None, []
+
+        prefix_hash_by_len: Dict[int, str] = {}
+        attempted_load = False
+        for stored_hash, num_tokens in rows:
+            try:
+                n = int(num_tokens)
+            except (TypeError, ValueError):
+                continue
+            if n <= 0 or n > len(full_tokens):
+                continue
+            prefix_hash = prefix_hash_by_len.get(n)
+            if prefix_hash is None:
+                prefix_hash = _hash_tokens(full_tokens[:n])
+                prefix_hash_by_len[n] = prefix_hash
+            if stored_hash != prefix_hash:
+                continue
+
+            attempted_load = True
+            matched_tokens = full_tokens[:n]
+            cache = self.fetch(matched_tokens)
+            if cache is not None:
+                if n < len(full_tokens):
+                    logger.info(
+                        "Disk cache prefix hit: matched %d/%d prompt tokens",
+                        n,
+                        len(full_tokens),
+                    )
+                return cache, matched_tokens
+
+        if not attempted_load:
+            with self._stats_lock:
+                self.misses += 1
+        return None, []
 
     def store(
         self,

@@ -5378,22 +5378,16 @@ def _normalize_minimax_m3_thinking_mode(ct_kwargs: dict, request, model_key: str
     _rt = getattr(request, "enable_thinking", None)
     if _rt is None and isinstance(ct_kwargs.get("enable_thinking"), bool):
         _rt = ct_kwargs["enable_thinking"]
-    # off → disabled (template closes </mm:think>, no thinking — verified live).
-    # on/auto → adaptive: the model emits its own <mm:think>...</mm:think>, which
-    # the reasoning parser catches WITHOUT prompt-priming. The template's "enabled"
-    # mode prompt-opens <mm:think> (needs the streaming parser primed), so we avoid
-    # it here; the enabled→think_in_prompt seeding elsewhere is kept for future use.
-    # Explicit thinking ON -> "enabled": the template prompt-opens <mm:think> and
-    # instructs the trained bounded "think step by step then answer" structure.
-    # Auto/None -> "adaptive" (model decides). OFF -> "disabled". The old ON->adaptive
-    # mapping put the model in its least-reliable "decide for yourself" mode where it
-    # ruminates and never closes </mm:think> on uncertain queries (runaway reasoning).
-    # The hard thinking-token-budget backstop in the scheduler guarantees termination
-    # regardless of mode. (M3_THINK_MODE env override honored for diagnostics.)
-    # off -> disabled (template closes </mm:think>, no thinking). on/auto -> adaptive: the
-    # model emits its own <mm:think>...</mm:think> which the reasoning parser splits natively
-    # (no priming). Runaway reasoning is bounded by the scheduler thinking-budget backstop.
-    ct_kwargs["thinking_mode"] = "disabled" if _rt is False else "adaptive"
+    # off -> disabled; on -> enabled; omitted/auto -> adaptive.
+    # M3's template ignores enable_thinking and keys only off thinking_mode.
+    # Mapping explicit "on" to adaptive makes the model decide per turn, which
+    # breaks the UI contract ("reasoning on" must force thinking every turn).
+    if _rt is False:
+        ct_kwargs["thinking_mode"] = "disabled"
+    elif _rt is True:
+        ct_kwargs["thinking_mode"] = "enabled"
+    else:
+        ct_kwargs["thinking_mode"] = "adaptive"
     ct_kwargs.pop("enable_thinking", None)
 
 
@@ -7284,6 +7278,7 @@ def _native_cache_status(scheduler=None, *, family: str | None = None, cfg=None)
         if paged_cache_manager is not None
         else None
     )
+    disk_cache = getattr(scheduler, "disk_cache", None)
 
     if getattr(scheduler, "_uses_dsv4_cache", False) or family_name == "deepseek_v4":
         pool_quant_enabled = str(os.environ.get("DSV4_POOL_QUANT", "0")).lower() in (
@@ -7425,10 +7420,12 @@ def _native_cache_status(scheduler=None, *, family: str | None = None, cfg=None)
                 "prompt_boundary_snapshot": "required",
                 "generic_kv_quantization": "forced_off",
                 "disk_tuple_tag": "minimax_m3",
-                "paged_required_for_ssd_l2": True,
+                "paged_required_for_ssd_l2": False,
+                "prompt_disk_l2": "m3_sparse_cache_tuple",
             },
             "prefix": bool(block_aware_cache is not None),
             "paged": bool(block_aware_cache is not None and paged_cache_manager is not None),
+            "prompt_disk_l2": bool(disk_cache is not None),
             "block_disk_l2": bool(block_disk_store is not None),
         }
         status.update(layout)
@@ -15316,6 +15313,15 @@ async def stream_chat_completion(
         _model_path or _model_name or request.model
     )
     _active_reasoning_parser = _request_reasoning_parser_from_config(_model_config)
+    _is_minimax_m3 = getattr(_model_config, "family_name", None) in (
+        "minimax_m3",
+        "minimax_m3_vl",
+    )
+    _m3_thinking_mode = (
+        (kwargs.get("chat_template_kwargs") or _ct_kwargs or {}).get("thinking_mode")
+        if _is_minimax_m3
+        else None
+    )
     think_in_template = _model_config.think_in_template
 
     # Fallback only for unknown configs. Known families may expose thinking
@@ -15368,6 +15374,19 @@ async def stream_chat_completion(
         model_key=_model_path or _model_name or request.model,
         enable_thinking=_effective_thinking,
         engine=engine,
+    ):
+        think_in_template = True
+
+    # MiniMax-M3's enabled mode prompt-opens <mm:think> in the rendered
+    # generation prompt, so streamed output starts inside reasoning without
+    # emitting an opening tag. Seed the streaming parser the same way the
+    # non-streaming parser is seeded, otherwise internal reasoning is emitted
+    # as visible content on /v1/chat/completions stream=true.
+    if _m3_thinking_mode in ("enabled", "adaptive"):
+        think_in_template = True
+    if (
+        _is_minimax_m3
+        and _effective_thinking is True
     ):
         think_in_template = True
 
@@ -16418,6 +16437,15 @@ async def stream_responses_api(
         _model_path or _model_name or request.model
     )
     _active_reasoning_parser = _request_reasoning_parser_from_config(_model_config)
+    _is_minimax_m3 = getattr(_model_config, "family_name", None) in (
+        "minimax_m3",
+        "minimax_m3_vl",
+    )
+    _m3_thinking_mode = (
+        (kwargs.get("chat_template_kwargs") or _ct_kwargs or {}).get("thinking_mode")
+        if _is_minimax_m3
+        else None
+    )
     think_in_template = _model_config.think_in_template
 
     # Fallback only for unknown configs. Known families may expose thinking
@@ -16470,6 +16498,19 @@ async def stream_responses_api(
     if _terminal_tool_result_visible_finalization:
         think_in_template = False
 
+    # MiniMax-M3's enabled mode prompt-opens <mm:think> in the rendered
+    # generation prompt, so streamed output starts inside reasoning without
+    # emitting an opening tag. Seed the streaming parser the same way the
+    # non-streaming parser is seeded, otherwise internal reasoning is emitted
+    # as visible content on /v1/responses stream=true.
+    if _m3_thinking_mode in ("enabled", "adaptive"):
+        think_in_template = True
+    if (
+        getattr(_model_config, "family_name", None) in ("minimax_m3", "minimax_m3_vl")
+        and _effective_thinking is True
+    ):
+        think_in_template = True
+
     # The parser seed must match the final prompt the engine renders. Tool
     # requests may intentionally leave reasoning open; no-tool thinking-off
     # requests may close it before decode.
@@ -16481,6 +16522,25 @@ async def stream_responses_api(
 
     # Suppress reasoning output when user explicitly disabled thinking
     suppress_reasoning = _effective_thinking is False
+    m3_reasoning_only_answer_budget: int | None = None
+    m3_reasoning_only_answer_enabled = False
+    if (
+        _is_minimax_m3
+        and _m3_thinking_mode in ("enabled", "adaptive")
+        and not _stream_tools_available
+    ):
+        try:
+            _requested_output_budget = int(kwargs.get("max_tokens") or 256)
+            m3_reasoning_only_answer_budget = max(32, _requested_output_budget)
+            m3_reasoning_only_answer_enabled = True
+            _requested_thinking_budget = getattr(request, "max_thinking_tokens", None)
+            if _requested_thinking_budget is not None:
+                _requested_thinking_budget = max(1, int(_requested_thinking_budget))
+                kwargs = dict(kwargs)
+                kwargs["max_tokens"] = min(_requested_output_budget, _requested_thinking_budget)
+        except Exception:
+            m3_reasoning_only_answer_budget = None
+            m3_reasoning_only_answer_enabled = False
 
     # Create a per-request parser instance to avoid mutable-state conflicts
     # when multiple requests stream concurrently.
@@ -17491,6 +17551,7 @@ async def stream_responses_api(
                 accumulated_reasoning
                 and not reasoning_was_streamed
                 and not suppress_reasoning
+                and not _is_minimax_m3
             ):
                 # Edge case: reasoning was accumulated but NEVER streamed as
                 # deltas (e.g., parser produced full block at end without
@@ -17527,6 +17588,72 @@ async def stream_responses_api(
             # here was the bug that pollutes history.
             if not reasoning_was_streamed:
                 display_text = clean_output_text(full_text) if full_text else ""
+        if (
+            not display_text
+            and m3_reasoning_only_answer_enabled
+            and accumulated_reasoning.strip()
+            and not tool_calls
+        ):
+            logger.info(
+                "MiniMax-M3 forced reasoning produced no visible content; "
+                "running bounded thinking-off answer pass "
+                "(reasoning_chars=%d, answer_budget=%s)",
+                len(accumulated_reasoning),
+                m3_reasoning_only_answer_budget,
+            )
+            answer_messages = list(messages) + [
+                {
+                    "role": "assistant",
+                    "content": "",
+                    "reasoning_content": accumulated_reasoning,
+                }
+            ]
+            answer_kwargs = dict(kwargs)
+            answer_kwargs["enable_thinking"] = False
+            answer_kwargs["max_tokens"] = int(m3_reasoning_only_answer_budget or 256)
+            answer_ct_kwargs = dict(answer_kwargs.get("chat_template_kwargs") or {})
+            answer_ct_kwargs["thinking_mode"] = "disabled"
+            answer_ct_kwargs.pop("enable_thinking", None)
+            answer_kwargs["chat_template_kwargs"] = answer_ct_kwargs
+            answer_kwargs.pop("tools", None)
+            answer_kwargs.pop("_vmlx_tools_present", None)
+            answer_kwargs.pop("_vmlx_template_tools", None)
+            try:
+                answer_output = await _await_chat_with_disconnect_abort(
+                    engine,
+                    messages=answer_messages,
+                    chat_kwargs=answer_kwargs,
+                    timeout=_stream_timeout,
+                    fastapi_request=fastapi_request,
+                    request_id=f"{response_id}:m3-visible-answer",
+                    endpoint="Responses API MiniMax-M3 visible answer pass",
+                )
+                answer_text = _responses_fast_path_visible_text(answer_output, request)
+                answer_text = _finalize_visible_text_for_request(answer_text, request)
+                if answer_text:
+                    display_text = answer_text
+                    content_was_emitted = True
+                    streamed_text += answer_text
+                    completion_tokens += int(
+                        getattr(answer_output, "completion_tokens", 0) or 0
+                    )
+                    yield _sse(
+                        "response.output_text.delta",
+                        {
+                            "type": "response.output_text.delta",
+                            "item_id": msg_id,
+                            "output_index": output_index,
+                            "content_index": 0,
+                            "delta": answer_text,
+                        },
+                    )
+            except Exception as e:
+                logger.error(
+                    "MiniMax-M3 visible answer pass failed for %s: %s",
+                    response_id,
+                    e,
+                    exc_info=True,
+                )
         if not display_text:
             # If reasoning was suppressed and model produced reasoning, the response
             # is intentionally empty. Report it as a diagnostic warning, not as

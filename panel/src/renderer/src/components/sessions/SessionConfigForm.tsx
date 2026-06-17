@@ -329,11 +329,6 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
 
   const normalizedDetectedFamily = normalizeDetectedFamilyName(detectedFamily)
   const dsv4Active = normalizedDetectedFamily === 'deepseek-v4'
-  // MiniMax-M3 (minimax_m3 / minimax_m3_vl bundles resolve to the minimax_m3 family).
-  // M3's MSA dual-cache structurally requires paged KV cache (the engine force-enables
-  // paged for M3 regardless of the flag), and its MSA idx_keys cannot be generic
-  // TurboQuant/stored-KV quantized (the engine skips TQ for M3). Gate the UI so users
-  // cannot set values that would contradict M3's required cache config.
   const m3Active = normalizedDetectedFamily === 'minimax_m3'
   const effectiveSmeltActive = !!config.smelt && !dsv4Active
   const effectiveFlashMoeActive = !!config.flashMoe && !dsv4Active
@@ -376,9 +371,9 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
   const cacheControlState = {
     continuousBatching: effectiveContinuousBatching,
     enablePrefixCache: effectivePrefixCacheEnabled,
-    usePagedCache: dsv4Active ? dsv4CompositeCacheOptIn : config.usePagedCache,
+    usePagedCache: dsv4Active ? dsv4CompositeCacheOptIn : m3Active ? false : config.usePagedCache,
     enableDiskCache: config.enableDiskCache,
-    enableBlockDiskCache: dsv4Active ? dsv4CompositeCacheOptIn && config.enableBlockDiskCache : config.enableBlockDiskCache,
+    enableBlockDiskCache: dsv4Active ? dsv4CompositeCacheOptIn && config.enableBlockDiskCache : m3Active ? false : config.enableBlockDiskCache,
     architectureRequiresPagedCache,
   }
   const cachePolicy = resolveCacheControlPolicy(cacheControlState)
@@ -1186,12 +1181,12 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
         <PerformanceHint text="Controls token streaming, response length, and prompt-window limits. Max Output Tokens caps generated tokens; Max Context Tokens caps accepted prompt/context tokens." />
         {/* JIT is not available for image models or VLM chat models. */}
         <Field label="JIT Compile (mx.compile)" tooltip="Enable Metal kernel fusion via mx.compile on the model forward pass. This optimizes GPU operations for faster inference after a one-time warmup on the first request. May not work with all models — falls back gracefully if compilation fails. Requires restart.">
-          <label className={`flex items-center gap-2 ${flashMoeActive || distributedActive || dsv4Active || zayaCcaActive || turboQuantActive || multimodalActive || hybridCacheActive ? 'cursor-not-allowed opacity-50' : 'cursor-pointer'}`}>
+          <label className={`flex items-center gap-2 ${flashMoeActive || distributedActive || dsv4Active || m3Active || zayaCcaActive || turboQuantActive || multimodalActive || hybridCacheActive ? 'cursor-not-allowed opacity-50' : 'cursor-pointer'}`}>
             <input
               type="checkbox"
-              checked={!!config.enableJit && !flashMoeActive && !distributedActive && !dsv4Active && !zayaCcaActive && !turboQuantActive && !multimodalActive && !hybridCacheActive}
+              checked={!!config.enableJit && !flashMoeActive && !distributedActive && !dsv4Active && !m3Active && !zayaCcaActive && !turboQuantActive && !multimodalActive && !hybridCacheActive}
               onChange={e => onChange('enableJit', e.target.checked)}
-              disabled={flashMoeActive || distributedActive || dsv4Active || zayaCcaActive || turboQuantActive || multimodalActive || hybridCacheActive}
+              disabled={flashMoeActive || distributedActive || dsv4Active || m3Active || zayaCcaActive || turboQuantActive || multimodalActive || hybridCacheActive}
               className="rounded border-input"
             />
             <span className="text-xs text-muted-foreground">
@@ -1199,9 +1194,11 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
             </span>
           </label>
         </Field>
-        {(flashMoeActive || distributedActive || dsv4Active || zayaCcaActive || turboQuantActive || multimodalActive || hybridCacheActive) && (
+        {(flashMoeActive || distributedActive || dsv4Active || m3Active || zayaCcaActive || turboQuantActive || multimodalActive || hybridCacheActive) && (
           <IncompatWarning text={dsv4Active
             ? "JIT is disabled for DeepSeek-V4 native composite cache. DSV4 uses path-dependent SWA+CSA/HCA state that must stay on the uncompiled scheduler path."
+            : m3Active
+            ? "JIT is disabled for MiniMax-M3 native MSA cache. The Lightning-Indexer idx_keys path must stay on the uncompiled scheduler path."
             : zayaCcaActive
             ? "JIT is disabled for ZAYA typed CCA cache. CCA state is path-dependent and the full cache stack benchmarks faster on the uncompiled scheduler path."
             : hybridCacheActive

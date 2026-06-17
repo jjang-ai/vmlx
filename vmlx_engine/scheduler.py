@@ -26,7 +26,7 @@ from enum import Enum
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 from mlx_lm.generate import BatchGenerator, generation_stream
-from .sampling import make_sampler
+from .sampling import make_minimax_m3_sampler, make_sampler
 from .block_disk_store import BlockDiskStore
 from .disk_cache import DiskCacheManager
 from .memory_cache import MemoryAwarePrefixCache, MemoryCacheConfig
@@ -1009,6 +1009,9 @@ class Scheduler:
                 # wrong-model L2 entries before mx.load triggers
                 # multi-hundred-GB metal::malloc.
                 expected_num_layers=int(n_layers) if n_layers else None,
+                required_cache_class=(
+                    "MiniMaxM3SparseCache" if self._uses_m3_msa_cache else None
+                ),
             )
         elif self.config.enable_disk_cache and not self.config.enable_prefix_cache:
             logger.warning(
@@ -2109,6 +2112,9 @@ class Scheduler:
                             eval_args.extend(cache_obj.values)
                         else:
                             eval_args.extend([cache_obj.keys, cache_obj.values])
+                        idx_keys = getattr(cache_obj, "idx_keys", None)
+                        if idx_keys is not None:
+                            eval_args.append(idx_keys)
                     elif hasattr(cache_obj, "cache") and isinstance(
                         cache_obj.cache, list
                     ):
@@ -2679,12 +2685,28 @@ class Scheduler:
         self, sampling_params: SamplingParams
     ) -> BatchGenerator:
         """Create a BatchGenerator with the given sampling parameters."""
-        sampler = make_sampler(
-            temp=sampling_params.temperature,
-            top_p=sampling_params.top_p,
-            min_p=sampling_params.min_p,
-            top_k=sampling_params.top_k,
-        )
+        if getattr(self, "_uses_m3_msa_cache", False):
+            sampler = make_minimax_m3_sampler(
+                temp=sampling_params.temperature,
+                top_p=sampling_params.top_p,
+                min_p=sampling_params.min_p,
+                top_k=sampling_params.top_k,
+            )
+            logger.info(
+                "MiniMax-M3 MSA cache detected — using runtime-compatible "
+                "fp32 logits sampler (temp=%s, top_p=%s, top_k=%s); generic "
+                "MLX-LM logprob sampler bypassed for M3.",
+                sampling_params.temperature,
+                sampling_params.top_p,
+                sampling_params.top_k,
+            )
+        else:
+            sampler = make_sampler(
+                temp=sampling_params.temperature,
+                top_p=sampling_params.top_p,
+                min_p=sampling_params.min_p,
+                top_k=sampling_params.top_k,
+            )
         if float(sampling_params.temperature or 0.0) == 0.0:
             try:
                 setattr(sampler, "_vmlx_accepts_logits", True)
@@ -4087,6 +4109,30 @@ class Scheduler:
                 truncated.append(layer_cache)
                 continue
             cls_name = type(layer_cache).__name__
+            if cls_name == "MiniMaxM3SparseCache":
+                try:
+                    from .models.minimax_m3.cache import clone_minimax_m3_sparse
+                except Exception:
+                    return None
+
+                def _copy_m3_slice(value):
+                    try:
+                        orig_dtype = getattr(value, "dtype", None)
+                        copied = _from_numpy(_to_numpy(value), orig_dtype)
+                        return copied
+                    except Exception:
+                        return value
+
+                new_cache = clone_minimax_m3_sparse(
+                    layer_cache,
+                    target_len,
+                    copy_fn=_copy_m3_slice,
+                    require_idx_keys=True,
+                )
+                if new_cache is None:
+                    return None
+                truncated.append(new_cache)
+                continue
             if Scheduler._is_dsv4_cache_class_name(cls_name):
                 try:
                     from jang_tools.dsv4.mlx_model import DeepseekV4Cache
@@ -5010,7 +5056,14 @@ class Scheduler:
                 _disk_suffix_tokens = list(request.prompt_token_ids[-_gpl:])
             else:
                 _disk_suffix_tokens = []
-            disk_cache = self.disk_cache.fetch(_disk_fetch_tokens)
+            _disk_matched_tokens = list(_disk_fetch_tokens)
+            if hasattr(self.disk_cache, "fetch_longest_prefix"):
+                disk_cache, _disk_matched_tokens = self.disk_cache.fetch_longest_prefix(
+                    _disk_fetch_tokens
+                )
+                _disk_matched_tokens = list(_disk_matched_tokens or [])
+            else:
+                disk_cache = self.disk_cache.fetch(_disk_fetch_tokens)
             if disk_cache is not None:
                 # Disk cache stores full-precision N-1 tokens (last prompt token re-fed on hit)
                 # Dequantize if KV cache quantization is active (disk stores full precision
@@ -5030,11 +5083,28 @@ class Scheduler:
                     )
                 else:
                     request.prompt_cache = disk_cache
-                    remaining, cached_tokens = self._prefix_hit_tail_and_cached_tokens(
-                        fetch_tokens=_disk_fetch_tokens,
-                        remaining=[],
-                        gen_prompt_suffix=_disk_suffix_tokens,
-                    )
+                    if (
+                        _disk_matched_tokens
+                        and len(_disk_matched_tokens) < len(_disk_fetch_tokens)
+                    ):
+                        # SSD L2 prefix hit: payload is cached through
+                        # matched_len - 1, so replay the last matched token,
+                        # then the uncached stripped-prompt tail, then any
+                        # generation-prompt suffix.
+                        cached_tokens = max(len(_disk_matched_tokens) - 1, 0)
+                        remaining = (
+                            list(_disk_matched_tokens[-1:])
+                            + list(_disk_fetch_tokens[len(_disk_matched_tokens):])
+                            + list(_disk_suffix_tokens)
+                        )
+                    else:
+                        if not _disk_matched_tokens:
+                            _disk_matched_tokens = list(_disk_fetch_tokens)
+                        remaining, cached_tokens = self._prefix_hit_tail_and_cached_tokens(
+                            fetch_tokens=_disk_matched_tokens,
+                            remaining=[],
+                            gen_prompt_suffix=_disk_suffix_tokens,
+                        )
                     request.cached_tokens = cached_tokens
                     request.remaining_tokens = remaining
                     # Annotate cache_detail: "disk+tq" for TQ-native 26x-compressed
@@ -5071,9 +5141,9 @@ class Scheduler:
                                 # so memory pressure can shrink the hit instead of
                                 # discarding it and full-prefilling a huge prompt.
                                 _block_store_tokens = (
-                                    _disk_fetch_tokens[:-1]
-                                    if len(_disk_fetch_tokens) > 1
-                                    else list(_disk_fetch_tokens)
+                                    _disk_matched_tokens[:-1]
+                                    if len(_disk_matched_tokens) > 1
+                                    else list(_disk_matched_tokens)
                                 )
                                 _block_table = self.block_aware_cache.store_cache(
                                     request.request_id,
@@ -5117,9 +5187,9 @@ class Scheduler:
                     elif self.memory_aware_cache is not None and not _disk_needs_worker_dequant:
                         try:
                             _l1_store_tokens = (
-                                _disk_fetch_tokens[:-1]
-                                if len(_disk_fetch_tokens) > 1
-                                else list(_disk_fetch_tokens)
+                                _disk_matched_tokens[:-1]
+                                if len(_disk_matched_tokens) > 1
+                                else list(_disk_matched_tokens)
                             )
                             self.memory_aware_cache.store(
                                 _l1_store_tokens,
@@ -5131,9 +5201,9 @@ class Scheduler:
                     elif self.prefix_cache is not None and not _disk_needs_worker_dequant:
                         try:
                             _l1_store_tokens = (
-                                _disk_fetch_tokens[:-1]
-                                if len(_disk_fetch_tokens) > 1
-                                else list(_disk_fetch_tokens)
+                                _disk_matched_tokens[:-1]
+                                if len(_disk_matched_tokens) > 1
+                                else list(_disk_matched_tokens)
                             )
                             self.prefix_cache.store_cache(
                                 _l1_store_tokens,
@@ -5891,8 +5961,34 @@ class Scheduler:
                                 request_processors
                             ]
                     else:
+                        single_batch_cached_prefix: Optional[List[int]] = None
+                        if (
+                            cache_to_use is not None
+                            and self.batch_generator.__class__.__name__
+                            == "SingleBatchGenerator"
+                        ):
+                            cached_prefix_len = max(
+                                0, int(getattr(request, "cached_tokens", 0) or 0)
+                            )
+                            if cached_prefix_len > 0 and request.prompt_token_ids:
+                                single_batch_cached_prefix = list(
+                                    request.prompt_token_ids[
+                                        : min(
+                                            cached_prefix_len,
+                                            len(request.prompt_token_ids),
+                                        )
+                                    ]
+                                )
+                                insert_kwargs["all_tokens"] = [
+                                    single_batch_cached_prefix
+                                ]
+                        processor_context_tokens = (
+                            list(request.prompt_token_ids)
+                            if single_batch_cached_prefix is not None
+                            else list(tokens_to_process)
+                        )
                         request_processors = self._request_logits_processors(
-                            request, list(tokens_to_process)
+                            request, processor_context_tokens
                         )
                         if request_processors is not None:
                             insert_kwargs["logits_processors"] = [
@@ -6724,9 +6820,87 @@ class Scheduler:
                                             request._extracted_cache = None
                                     else:
                                         request._extracted_cache = None
+                                elif getattr(self, "_uses_m3_msa_cache", False):
+                                    # MiniMax-M3 MSA is path-dependent: a cache
+                                    # hit restores K/V/idx_keys, then tail replay
+                                    # extends all three. Persisting that
+                                    # hit-derived extension as a new longer
+                                    # prefix drifted from a clean full-prefill
+                                    # state in live multi-turn tests: the next
+                                    # exact hit answered an earlier turn. Rebuild
+                                    # the N-1 store payload from a clean
+                                    # prompt-only prefill instead.
+                                    m3_prompt_tokens = list(
+                                        request.prompt_token_ids
+                                    )
+                                    _gpl_m3 = (
+                                        getattr(request, "_gen_prompt_len", 0)
+                                        or 0
+                                    )
+                                    if 0 < _gpl_m3 < len(m3_prompt_tokens):
+                                        m3_prompt_tokens = m3_prompt_tokens[
+                                            :-_gpl_m3
+                                        ]
+                                    m3_key_tokens = (
+                                        m3_prompt_tokens[:-1]
+                                        if len(m3_prompt_tokens) > 1
+                                        else []
+                                    )
+                                    if (
+                                        int(
+                                            getattr(request, "cached_tokens", 0)
+                                            or 0
+                                        )
+                                        > 0
+                                        and m3_key_tokens
+                                    ):
+                                        logger.info(
+                                            "MiniMax-M3 prefix cache store using "
+                                            "clean prompt-boundary re-prefill "
+                                            "(%d cache-key tokens from %d "
+                                            "prompt tokens) after cache-hit "
+                                            "tail replay.",
+                                            len(m3_key_tokens),
+                                            len(m3_prompt_tokens),
+                                        )
+                                        clean_cache = (
+                                            self._prefill_for_prompt_only_cache(
+                                                m3_key_tokens
+                                            )
+                                        )
+                                        if clean_cache is not None:
+                                            request._extracted_cache = clean_cache
+                                            request._extracted_cache_key_tokens = list(
+                                                m3_key_tokens
+                                            )
+                                            request._extracted_cache_from_prompt_snapshot = True
+                                        else:
+                                            logger.warning(
+                                                "Cannot produce MiniMax-M3 "
+                                                "prompt-only object cache for "
+                                                "%s, skipping prefix cache store",
+                                                request_id,
+                                            )
+                                            request._extracted_cache = None
+                                    else:
+                                        request._extracted_cache = (
+                                            snapshot_cache
+                                            if snapshot_cache is not None
+                                            else raw_cache
+                                        )
                                 else:
-                                    # Standard cache stores object references
-                                    request._extracted_cache = raw_cache
+                                    # Standard object-cache path. Some native
+                                    # cache families (M3 MSA, DSV4) provide a
+                                    # clean prompt-boundary snapshot because the
+                                    # live cache has already advanced through
+                                    # decode/lookahead by the time we finish.
+                                    # Prefer that snapshot here too; paged-cache
+                                    # already does this above.
+                                    request._extracted_cache = (
+                                        snapshot_cache
+                                        if snapshot_cache is not None
+                                        else raw_cache
+                                    )
                         else:
                             logger.info(
                                 f"No cache returned from BatchGenerator for {request_id}"
@@ -7324,6 +7498,29 @@ class Scheduler:
                                         if prompt_len > 1
                                         else list(prompt_tokens)
                                     )
+                                cache_type = self._pick_cache_type_for_request(request)
+                                # Prompt disk L2 contract: fetch uses the full
+                                # generation-prompt-stripped prompt key, while
+                                # the payload is N-1 so the last prompt token is
+                                # re-fed before generation. M3's default route
+                                # is memory-aware (paged off), so write L2 here
+                                # too; DiskCacheManager preserves M3 idx_keys.
+                                if (
+                                    self.disk_cache is not None
+                                    and not self._is_hybrid
+                                    and len(cache_key_tokens) == max(prompt_len - 1, 0)
+                                ):
+                                    try:
+                                        self.disk_cache.store(
+                                            prompt_tokens,
+                                            cache_to_store,
+                                            cache_type=cache_type,
+                                        )
+                                    except Exception as de:
+                                        logger.debug(
+                                            f"Disk cache store failed for "
+                                            f"{request_id}: {de}"
+                                        )
                                 # Quantize for storage efficiency
                                 if getattr(self, "_kv_cache_bits", 0):
                                     cache_to_store = self._quantize_cache_for_storage(
@@ -7332,9 +7529,7 @@ class Scheduler:
                                 stored = self.memory_aware_cache.store(
                                     cache_key_tokens,
                                     cache_to_store,
-                                    cache_type=self._pick_cache_type_for_request(
-                                        request
-                                    ),
+                                    cache_type=cache_type,
                                 )
                                 if stored:
                                     logger.info(
@@ -7348,11 +7543,8 @@ class Scheduler:
                                         f"Cache store rejected for request {request_id} "
                                         f"({prompt_len} tokens) — entry too large for budget"
                                     )
-                                # NOTE: Disk L2 store is handled by the paged
-                                # cache path (Task 1 above). Memory-aware cache
-                                # is mutually exclusive with paged — if we're here,
-                                # paged cache is disabled and disk L2 is not
-                                # available for this configuration.
+                                # Disk L2 is written above for memory-aware
+                                # configs (including MiniMax-M3 paged-off).
                         except Exception as e:
                             logger.warning(
                                 f"Failed to store memory-aware cache for {request_id}: {e}"

@@ -88,6 +88,11 @@ def ensure_thinking_off_sentinel(
     name = (model_name or "").lower()
     is_lfm2 = fam in {"lfm2", "lfm2_moe"} or "lfm2" in name
     is_step37 = fam in {"step3p7", "step37"} or "step3" in name or "step-3" in name
+    is_minimax_m3 = fam in {"minimax_m3", "minimax_m3_vl"} or "minimax-m3" in name
+    is_minimax = (
+        not is_minimax_m3
+        and (fam == "minimax" or "minimax" in name)
+    )
     if tools_present and not (is_lfm2 or is_step37):
         return prompt
 
@@ -98,7 +103,7 @@ def ensure_thinking_off_sentinel(
             return prompt[: last_open + len("<think>")] + "\n</think>\n\n"
         return prompt
 
-    needs_empty_think = fam == "minimax" or "minimax" in name or is_lfm2
+    needs_empty_think = is_minimax or is_lfm2
     if not needs_empty_think:
         return prompt
 

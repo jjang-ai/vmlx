@@ -658,6 +658,73 @@ def _validate_live_single_cache(layer_cache: Any, *, layer_idx: int) -> Tuple[bo
     if layer_cache is None:
         return False, f"layer {layer_idx}: None cache layer", 0
 
+    def _m3_seq_len(value: Any) -> Optional[int]:
+        shape = getattr(value, "shape", None)
+        if not isinstance(shape, (list, tuple)) or len(shape) < 3:
+            return None
+        try:
+            return int(shape[-2])
+        except Exception:
+            return None
+
+    def _validate_m3_lanes(
+        keys: Any,
+        values: Any,
+        idx_keys: Any,
+        *,
+        meta: Any = None,
+    ) -> Tuple[bool, str, int]:
+        if keys is None or values is None:
+            return False, f"layer {layer_idx}: MiniMaxM3 keys/values are None", 0
+        if idx_keys is None:
+            return False, f"layer {layer_idx}: MiniMaxM3 idx_keys missing", 0
+
+        total_bytes = 0
+        for label, value in (
+            ("keys", keys),
+            ("values", values),
+            ("idx_keys", idx_keys),
+        ):
+            ok, nb, reason = _validate_tensor_tree(
+                value, label=label, layer_idx=layer_idx
+            )
+            if not ok:
+                return False, reason, total_bytes
+            total_bytes += nb
+
+        key_len = _m3_seq_len(keys)
+        value_len = _m3_seq_len(values)
+        idx_len = _m3_seq_len(idx_keys)
+        if key_len is None or value_len is None or idx_len is None:
+            return False, (
+                f"layer {layer_idx}: MiniMaxM3 cache lanes lack sequence axis"
+            ), total_bytes
+        if not (key_len == value_len == idx_len):
+            return False, (
+                f"layer {layer_idx}: MiniMaxM3 lane length mismatch "
+                f"keys={key_len} values={value_len} idx_keys={idx_len}"
+            ), total_bytes
+
+        offset = getattr(layer_cache, "offset", None)
+        seq = _decode_meta_sequence(meta)
+        if offset is None and seq:
+            offset = seq[0]
+        if offset is not None and not type(offset).__module__.startswith("unittest.mock"):
+            ok, parsed_offset, reason = _validate_int_range(
+                offset,
+                label=f"layer {layer_idx}.offset",
+                lo=0,
+                hi=MAX_CACHE_OFFSET,
+            )
+            if not ok:
+                return False, reason, total_bytes
+            if parsed_offset != key_len:
+                return False, (
+                    f"layer {layer_idx}: MiniMaxM3 offset {parsed_offset} "
+                    f"!= lane length {key_len}"
+                ), total_bytes
+        return True, "", total_bytes
+
     def _check_int_attr(attr: str, lo: int, hi: int) -> Tuple[bool, str]:
         if not hasattr(layer_cache, attr):
             return True, ""
@@ -738,14 +805,26 @@ def _validate_live_single_cache(layer_cache: Any, *, layer_idx: int) -> Tuple[bo
     # Extracted state dicts from scheduler extraction paths.
     if isinstance(layer_cache, dict):
         state = layer_cache.get("state")
+        meta = layer_cache.get("meta_state")
+        cls_name = str(layer_cache.get("class_name", ""))
+        if cls_name == "MiniMaxM3SparseCache":
+            if not isinstance(state, (tuple, list)) or len(state) != 3:
+                return False, (
+                    f"layer {layer_idx}: MiniMaxM3 state must contain "
+                    "keys/values/idx_keys"
+                ), total
+            return _validate_m3_lanes(
+                state[0],
+                state[1],
+                state[2],
+                meta=meta,
+            )
         ok, nb, reason = _validate_tensor_tree(
             state, label="state", layer_idx=layer_idx
         )
         if not ok:
             return False, reason, total
         total += nb
-        meta = layer_cache.get("meta_state")
-        cls_name = str(layer_cache.get("class_name", ""))
         if cls_name == "QuantizedKVCache":
             ok, reason = _validate_quant_meta(meta, label=f"layer {layer_idx}.meta")
             if not ok:
@@ -768,6 +847,13 @@ def _validate_live_single_cache(layer_cache: Any, *, layer_idx: int) -> Tuple[bo
     # KVCache / RotatingKVCache / QuantizedKVCache / TurboQuantKVCache.
     has_kv_protocol = hasattr(layer_cache, "keys") and hasattr(layer_cache, "values")
     if has_kv_protocol:
+        if type(layer_cache).__name__ == "MiniMaxM3SparseCache":
+            return _validate_m3_lanes(
+                getattr(layer_cache, "keys", None),
+                getattr(layer_cache, "values", None),
+                getattr(layer_cache, "idx_keys", None),
+                meta=getattr(layer_cache, "meta_state", None),
+            )
         keys = getattr(layer_cache, "keys", None)
         values = getattr(layer_cache, "values", None)
         if keys is None or values is None:

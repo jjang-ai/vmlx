@@ -361,6 +361,16 @@ class SingleBatchGenerator:
             if any(c is None for c in cloned_children):
                 return None
             return mlx_cache.CacheList(*cloned_children)
+        if type(cache_obj).__name__ == "MiniMaxM3SparseCache":
+            try:
+                from ..models.minimax_m3.cache import clone_minimax_m3_sparse
+            except Exception:
+                return None
+            return clone_minimax_m3_sparse(
+                cache_obj,
+                copy_fn=cls._clone_array,
+                require_idx_keys=True,
+            )
         if isinstance(cache_obj, mlx_cache.KVCache):
             cloned = type(cache_obj)()
             if cache_obj.keys is not None:
@@ -383,7 +393,18 @@ class SingleBatchGenerator:
     def _cache_needs_prompt_snapshot(cls, cache_obj) -> bool:
         if isinstance(cache_obj, mlx_cache.CacheList):
             return any(cls._cache_needs_prompt_snapshot(c) for c in cache_obj.caches)
-        return type(cache_obj).__name__ in {"DeepseekV4Cache"}
+        return type(cache_obj).__name__ in {
+            "DeepseekV4Cache",
+            "MiniMaxM3SparseCache",
+        }
+
+    @classmethod
+    def _cache_uses_m3_msa(cls, cache_obj) -> bool:
+        if isinstance(cache_obj, mlx_cache.CacheList):
+            return any(cls._cache_uses_m3_msa(c) for c in cache_obj.caches)
+        if isinstance(cache_obj, (list, tuple)):
+            return any(cls._cache_uses_m3_msa(c) for c in cache_obj)
+        return type(cache_obj).__name__ == "MiniMaxM3SparseCache"
 
     @classmethod
     def _clone_prompt_cache_snapshot(cls, cache):
@@ -723,25 +744,51 @@ class SingleBatchGenerator:
             self._request = None
         return response
 
-    def _prefill_vl_and_sample(self, req: _Request) -> None:
-        """M3 VL prefill: ONE forward over the ENTIRE prompt with pixel_values.
+    def _prefill_full_and_sample(self, req: _Request) -> None:
+        """Prefill one M3 prompt in the same shape as the reference runtime.
 
-        Image-token positions are spliced with vision embeddings inside the
-        model's _embed_with_images, which requires every image-token position to
-        be present in a single forward. We therefore bypass prefill_step_size
-        chunking and run the whole prompt at once, then sample the next token
-        from the final-position logits. _model_call clears req.pixel_values after
-        this forward so decode never re-passes them.
+        The clean MiniMax-M3 runtime calls ``model([full_prompt], cache)`` and
+        samples from the final-position logits. Splitting the final prompt token
+        into a separate decode step builds the MSA idx_keys path differently
+        before the first generated token. M3 VL also requires this path because
+        image-token positions must co-occur for the vision splice.
         """
         tokens = list(req.prompt_tokens)
+        step = max(1, int(self.prefill_step_size or len(tokens) or 1))
+        pos = 0
+        _prefill_keep_alloc = os.environ.get(
+            "VMLINUX_PREFILL_KEEP_ALLOC",
+            os.environ.get("VMLX_PREFILL_KEEP_ALLOC", ""),
+        ).lower() in {"1", "true", "yes", "on"}
         with self._stream_context():
-            logits = self._model_call(tokens, req)  # forwards+clears pixel_values
+            while len(tokens) - pos > step:
+                n = min(step, len(tokens) - pos)
+                # Keep at least two tokens in the final chunk when possible so
+                # the final prompt token is not treated like a standalone decode
+                # step before the first sampled token.
+                if len(tokens) - (pos + n) == 1 and n > 1:
+                    n -= 1
+                chunk = tokens[pos : pos + n]
+                logits = self._model_call(chunk, req)  # forwards+clears pixel_values
+                (logits,) = self._eval_on_stream(logits)
+                req.context_tokens.extend(chunk)
+                if req.logits_processors:
+                    req.token_context.update_and_fetch(
+                        mx.array(chunk, dtype=mx.int32)
+                    )
+                self._sync()
+                if not _prefill_keep_alloc and hasattr(mx, "clear_cache"):
+                    mx.clear_cache()
+                pos += n
+
+            final_chunk = tokens[pos:]
+            logits = self._model_call(final_chunk, req)  # forwards+clears pixel_values
             # Materialize the full vision+text forward on THIS stream before the
             # sample step touches it (prevents stale-stream resolution on the
             # worker thread). Mirrors the decode path's on-stream eval.
             (logits,) = self._eval_on_stream(logits)
             logits = logits[:, -1, :]
-            input_tokens = mx.array([tokens[-1]], dtype=mx.int32)
+            input_tokens = mx.array([final_chunk[-1]], dtype=mx.int32)
             req.next_token, req.next_logprobs = self._sample_from_logits(
                 logits,
                 req,
@@ -749,20 +796,20 @@ class SingleBatchGenerator:
             )
             req.next_token_materialized = True
             req.next_logprobs_materialized = req.next_logprobs is not None
-            req.context_tokens.extend(tokens)
+            req.context_tokens.extend(final_chunk)
             if req.logits_processors:
-                req.token_context.update_and_fetch(mx.array(tokens, dtype=mx.int32))
+                req.token_context.update_and_fetch(mx.array(final_chunk, dtype=mx.int32))
         self._sync()
 
     def _start_request(self, req: _Request) -> Response:
         self._refresh_thread_stream()
         if req.cache is None:
             req.cache = self._make_new_cache()
-        # M3 VL: when vision tensors are attached, prefill the full prompt in one
-        # forward (image-token positions must co-occur for the vision splice).
-        if req.pixel_values is not None:
+        # M3 MSA/VL: build prompt cache exactly like the clean reference runtime:
+        # one full-prompt forward, then sample from the final-position logits.
+        if req.pixel_values is not None or self._cache_uses_m3_msa(req.cache):
             req.prompt_processed = True
-            self._prefill_vl_and_sample(req)
+            self._prefill_full_and_sample(req)
             prompt_cache_snapshot = self._clone_prompt_cache_snapshot(req.cache)
             req.prompt_cache_snapshot = prompt_cache_snapshot
             return self._yield_current_and_schedule_next(

@@ -318,6 +318,7 @@ function buildCommandPreview(
     const detectedFamily = normalizeDetectedFamilyName(detected?.family)
     const turboQuantActive = !!detected?.isTurboQuant
     const dsv4Active = detectedFamily === 'deepseek-v4'
+    const m3Active = detectedFamily === 'minimax_m3'
     const dsv4PrefixCacheOptIn = dsv4Active && config.dsv4PrefixCache !== false
     const omniBackendActive = detectedFamily === 'nemotron-h' && detected?.isMultimodal === true
     const effectiveSmelt = !!config.smelt && !dsv4Active
@@ -326,7 +327,7 @@ function buildCommandPreview(
     const hybridCacheActive = detected?.cacheType === 'hybrid' || detected?.cacheType === 'mamba'
     const effectiveDistributed = requestedDistributed && !dsv4Active
     const effectiveFlashMoe = requestedFlashMoe && !effectiveDistributed && !dsv4Active
-    const effectiveEnableJit = !!config.enableJit && !isVLM && !effectiveFlashMoe && !effectiveDistributed && !dsv4Active && !zayaCcaActive && !turboQuantActive && !hybridCacheActive
+    const effectiveEnableJit = !!config.enableJit && !isVLM && !effectiveFlashMoe && !effectiveDistributed && !dsv4Active && !m3Active && !zayaCcaActive && !turboQuantActive && !hybridCacheActive
 
     parts.push('--host', config.host)
     parts.push('--port', config.port.toString())
@@ -370,10 +371,14 @@ function buildCommandPreview(
             : config.enablePrefixCache !== false,
         usePagedCache: dsv4Active
             ? dsv4PrefixCacheOptIn
+            : m3Active
+            ? false
             : config.usePagedCache ?? detected?.usePagedCache ?? false,
         enableDiskCache: !!config.enableDiskCache,
         enableBlockDiskCache: dsv4Active
             ? dsv4PrefixCacheOptIn && !!config.enableBlockDiskCache
+            : m3Active
+            ? false
             : !!config.enableBlockDiskCache,
         architectureRequiresPagedCache:
             zayaCcaActive ||
@@ -413,7 +418,7 @@ function buildCommandPreview(
         if (maxCacheBlocks != null) parts.push('--max-cache-blocks', maxCacheBlocks.toString())
     }
 
-    if (!prefixCacheOff && !dsv4Active && config.kvCacheQuantization && config.kvCacheQuantization !== 'auto') {
+    if (!prefixCacheOff && !dsv4Active && !m3Active && config.kvCacheQuantization && config.kvCacheQuantization !== 'auto') {
         parts.push('--kv-cache-quantization', config.kvCacheQuantization)
         const kvCacheGroupSize = finitePositiveInteger(config.kvCacheGroupSize)
         if (config.kvCacheQuantization !== 'none' && kvCacheGroupSize != null && kvCacheGroupSize !== 64) {
@@ -1285,6 +1290,42 @@ describe('Tool Integration', () => {
 
         expect(getFlagValue(out, '--tool-call-parser')).toBe('minimax')
         expect(getFlagValue(out, '--reasoning-parser')).toBe('minimax_m2')
+    })
+
+    it('passes MiniMax-M3 through its registered reasoning parser', () => {
+        const out = preview(
+            { reasoningParser: 'auto', toolCallParser: 'auto', enableAutoToolChoice: true },
+            { family: 'minimax_m3', reasoningParser: 'minimax_m3', toolParser: 'minimax_m3', enableAutoToolChoice: true },
+        )
+
+        expect(getFlagValue(out, '--tool-call-parser')).toBe('minimax_m3')
+        expect(getFlagValue(out, '--reasoning-parser')).toBe('minimax_m3')
+    })
+
+    it('keeps MiniMax-M3 on paged-off SSD prefix cache with no generic KV quantization or JIT', () => {
+        const out = preview(
+            {
+                enablePrefixCache: true,
+                usePagedCache: true,
+                enableDiskCache: true,
+                enableBlockDiskCache: true,
+                kvCacheQuantization: 'q4',
+                enableJit: true,
+            },
+            {
+                family: 'minimax_m3',
+                reasoningParser: 'minimax_m3',
+                toolParser: 'minimax_m3',
+                enableAutoToolChoice: true,
+                usePagedCache: false,
+            },
+        )
+
+        expect(hasFlag(out, '--enable-disk-cache')).toBe(true)
+        expect(hasFlag(out, '--use-paged-cache')).toBe(false)
+        expect(hasFlag(out, '--enable-block-disk-cache')).toBe(false)
+        expect(hasFlag(out, '--kv-cache-quantization')).toBe(false)
+        expect(hasFlag(out, '--enable-jit')).toBe(false)
     })
 
     it('exposes MiniMax as its own reasoning parser option instead of under qwen3', () => {
@@ -2278,7 +2319,7 @@ describe('Default IP and New Settings', () => {
     it('session manager migrates the exact stale continuous-cache default tuple', () => {
         const source = readFileSync('src/main/sessions.ts', 'utf8')
         expect(source).toContain('function applyCacheStackStartupDefaultMigration')
-        expect(source).toContain('const CACHE_STACK_STARTUP_DEFAULTS_VERSION = 2')
+        expect(source).toContain('const CACHE_STACK_STARTUP_DEFAULTS_VERSION = 5')
         expect(source).toContain('function markCacheStackStartupDefaultsCurrent')
         expect(source).toContain('config.cacheStackStartupDefaultsVersion = CACHE_STACK_STARTUP_DEFAULTS_VERSION')
         expect(source).toContain('config.continuousBatching === true')

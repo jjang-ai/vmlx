@@ -1439,6 +1439,20 @@ class MLLMScheduler:
             if isinstance(layer_cache, dict):
                 truncated.append(layer_cache)
                 continue
+            if type(layer_cache).__name__ == "MiniMaxM3SparseCache":
+                try:
+                    from .models.minimax_m3.cache import clone_minimax_m3_sparse
+                except Exception:
+                    return None
+                new_cache = clone_minimax_m3_sparse(
+                    layer_cache,
+                    target_len,
+                    require_idx_keys=True,
+                )
+                if new_cache is None:
+                    return None
+                truncated.append(new_cache)
+                continue
             if hasattr(layer_cache, "keys") and layer_cache.keys is not None:
                 try:
                     k = layer_cache.keys

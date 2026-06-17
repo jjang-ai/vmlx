@@ -230,9 +230,11 @@ registerFamily('functionary', { cacheType: 'kv', toolParser: 'functionary', enab
 // MiniMax uses its own parser name so panel-emitted CLI args match the engine
 // registry and diagnostics instead of relying on a generic qwen3 alias.
 registerFamily('minimax', { cacheType: 'kv', toolParser: 'minimax', reasoningParser: 'minimax_m2', enableAutoToolChoice: true, description: 'MiniMax', priority: 20 })
-// MiniMax-M3 (sparse MSA + Lightning-Indexer). PAGED block_disk_store typed 'minimax_m3' lane
-// preserves the MSA idx_keys (standalone disk_cache drops them) -> usePagedCache:true.
-registerFamily('minimax_m3', { cacheType: 'kv', toolParser: 'minimax_m3', reasoningParser: 'minimax_m3', enableAutoToolChoice: true, isMultimodal: true, usePagedCache: true, description: 'MiniMax-M3 (sparse MSA + Lightning-Indexer, VL)', priority: 5 })
+// MiniMax-M3 sparse MSA (MiniMaxM3SparseCache: GQA K/V + append-only idx_keys).
+// M3 must stay paged-OFF by default: the engine stores prefix snapshots through
+// the memory-aware L1 + SSD prompt disk cache, preserving keys/values/idx_keys as
+// a first-class M3 cache. The paged block-disk lane is not the default M3 path.
+registerFamily('minimax_m3', { cacheType: 'kv', toolParser: 'minimax_m3', reasoningParser: 'minimax_m3', enableAutoToolChoice: true, isMultimodal: true, usePagedCache: false, description: 'MiniMax-M3 (sparse MSA + Lightning-Indexer, VL)', priority: 5 })
 
 // Ling / Bailing hybrid: MLA softmax layers plus linear-attention/SSM-style
 // companion state. Eric directive 2026-05-11: treat Ling chat output as plain
