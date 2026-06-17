@@ -83,6 +83,7 @@ const checkServerCacheControls = envBool('VMLINUX_REAL_UI_CHECK_SERVER_CACHE_CON
 const checkMedia = envBool('VMLINUX_REAL_UI_CHECK_MEDIA', false)
 const checkVideo = envBool('VMLINUX_REAL_UI_CHECK_VIDEO', false)
 const expectPagedCacheLocked = envBool('VMLINUX_REAL_UI_EXPECT_PAGED_CACHE_LOCKED', false)
+const expectPagedCache = envBool('VMLINUX_REAL_UI_EXPECT_PAGED_CACHE', false)
 const enableThinkingOverride = (
   process.env.VMLINUX_REAL_UI_ENABLE_THINKING != null
   || process.env.VMLX_REAL_UI_ENABLE_THINKING != null
@@ -1549,6 +1550,7 @@ async function main() {
           const modelPath = ${JSON.stringify(modelPath)};
           const cacheExpectRegex = ${JSON.stringify(cacheExpectRegex)};
           const expectPagedCacheLocked = ${JSON.stringify(expectPagedCacheLocked)};
+          const expectPagedCache = ${JSON.stringify(expectPagedCache)};
           const updateDismiss = [...document.querySelectorAll('button')]
             .find((b) => b.innerText.includes("Got it"));
           if (updateDismiss) {
@@ -1628,7 +1630,7 @@ async function main() {
           const cacheExpectationMatches = !cacheExpectRegex || new RegExp(cacheExpectRegex, 'i').test(bodyText);
           const verified = labels.length === 5
             && initialCacheControls.enablePrefixCache === true
-            && initialCacheControls.usePagedCache === true
+            && initialCacheControls.usePagedCache === expectPagedCache
             && (!expectPagedCacheLocked || initialCacheControls.usePagedCacheDisabled === true)
             && initialCacheControls.enableDiskCacheDisabled === true
             && initialCacheControls.blockDiskCachePresent === true

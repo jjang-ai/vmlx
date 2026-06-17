@@ -513,15 +513,30 @@ def serve_command(args):
             _m3_mt = str(_m3_c.get("model_type", "")).lower()
             _m3_arch = " ".join(str(a) for a in (_m3_c.get("architectures") or [])).lower()
             if _m3_mt in {"minimax_m3", "minimax_m3_vl"} or "minimaxm3" in _m3_arch:
+                # M3's MSA dual-cache is dynamic/path-dependent (idx_keys grow and
+                # the Lightning-Indexer block selection changes every step).
+                # mx.compile (JIT) traces a STATIC graph and cannot follow that —
+                # it corrupts long generations into repetition loops. Disable JIT
+                # for M3, mirroring the DSV4 path-dependent-cache precedent above.
+                _m3_jit_forced_off = bool(getattr(args, "enable_jit", False))
+                if _m3_jit_forced_off:
+                    args.enable_jit = False
+                    logger.warning(
+                        "MiniMax-M3 detected — ignoring --enable-jit. The MSA "
+                        "dynamic cache (idx_keys + block selection) is untraceable "
+                        "by mx.compile and degenerates into loops; staying on the "
+                        "uncompiled scheduler path."
+                    )
                 logger.info(
                     "MiniMax-M3 AUTODETECTED (model_type=%s) -> auto-settings: "
                     "paged_cache=%s, tq_kv=SKIP(native MSA), vl_route=%s, "
-                    "tool_parser=%s, reasoning_parser=%s, msa_per_step_sync=ON",
+                    "tool_parser=%s, reasoning_parser=%s, jit=%s, msa_per_step_sync=ON",
                     _m3_mt or "minimaxm3",
                     "OFF" if not getattr(args, "use_paged_cache", False) else "ON(!)",
                     "ON" if _m3_os.environ.get("VMLX_M3_VL") else "off",
                     getattr(args, "tool_call_parser", None) or "none",
                     getattr(args, "reasoning_parser", None) or "auto/none",
+                    "OFF(forced)" if _m3_jit_forced_off else "off",
                 )
     except Exception:
         pass

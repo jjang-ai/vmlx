@@ -153,6 +153,12 @@ class SingleBatchGenerator:
             self._stream = stream
 
     def _make_generation_stream(self):
+        import os as _os_st
+        if _os_st.environ.get("VMLX_M3_DEFAULT_STREAM") == "1":
+            try:
+                return mx.default_stream(self._device)
+            except Exception:
+                return None
         try:
             return mx.new_stream(self._device)
         except Exception:
@@ -376,6 +382,9 @@ class SingleBatchGenerator:
         req: _Request,
         input_tokens: mx.array,
     ) -> tuple[mx.array, Any]:
+        import os as _os_fp
+        if _os_fp.environ.get("VMLX_M3_FP32_SAMPLE") == "1":
+            logits = logits.astype(mx.float32)
         token_context = None
         if req.logits_processors:
             token_context = req.token_context.update_and_fetch(input_tokens)

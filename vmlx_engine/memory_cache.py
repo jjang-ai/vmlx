@@ -395,6 +395,14 @@ class MemoryAwarePrefixCache:
             _CacheList = ()
 
         def _safe(layer) -> bool:
+            # MiniMax-M3 MSA cache (KVCache subclass + idx_keys lane): _truncate_cache
+            # now rebuilds it AS a fresh isolated MiniMaxM3SparseCache with
+            # keys/values/idx_keys all sliced, so cloning fully isolates the stored
+            # entry. WITHOUT this, the hit returned the stored object by reference and
+            # decode appended into the cached prefix -> polluted reuse -> repetition
+            # loop on the next hit (the real multi-turn / repeated-prompt bug).
+            if type(layer).__name__ == "MiniMaxM3SparseCache":
+                return True
             if isinstance(layer, (KVCache, QuantizedKVCache)):
                 return type(layer).__name__ in ("KVCache", "QuantizedKVCache")
             if _CacheList and isinstance(layer, _CacheList):
@@ -444,6 +452,36 @@ class MemoryAwarePrefixCache:
 
         truncated = []
         for layer_cache in cache:
+            # MiniMax-M3 MSA cache: a KVCache subclass with an EXTRA append-only
+            # idx_keys lane (Lightning-Indexer). The generic KVCache branch below
+            # would downcast it to a plain KVCache and DROP idx_keys — then the
+            # indexer's `isinstance(cache, MiniMaxM3SparseCache)` guard fails, it
+            # skips its idx history, block selection degenerates, and reuse loops.
+            # Rebuild AS a MiniMaxM3SparseCache with keys/values/idx_keys all
+            # sliced to target_len so SSD/prefix reuse stays correct.
+            if type(layer_cache).__name__ == "MiniMaxM3SparseCache":
+                k = getattr(layer_cache, "keys", None)
+                v = getattr(layer_cache, "values", None)
+                if k is None or v is None:
+                    truncated.append(layer_cache)
+                    continue
+                try:
+                    from .models.minimax_m3.cache import (
+                        MiniMaxM3SparseCache as _M3SC,
+                    )
+                except Exception:
+                    return None
+                _st = min(target_len, k.shape[-2])
+                _nc = _M3SC()
+                _nc.keys = k[..., :_st, :]
+                _nc.values = v[..., :_st, :]
+                _nc.offset = _st
+                _idx = getattr(layer_cache, "idx_keys", None)
+                if _idx is not None:
+                    _nc.idx_keys = _idx[..., :_st, :]
+                    _nc._idx_offset = _st
+                truncated.append(_nc)
+                continue
             if _CacheList is not None and isinstance(layer_cache, _CacheList):
                 # MoE CacheList: recurse into sub-caches (each is KVCache)
                 truncated_subs = []
