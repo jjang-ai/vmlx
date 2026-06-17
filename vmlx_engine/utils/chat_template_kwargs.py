@@ -87,7 +87,11 @@ def ensure_thinking_off_sentinel(
     fam = (family_name or "").lower()
     name = (model_name or "").lower()
     is_lfm2 = fam in {"lfm2", "lfm2_moe"} or "lfm2" in name
-    is_minimax = fam == "minimax" or "minimax" in name
+    is_minimax_m3 = fam in {"minimax_m3", "minimax_m3_vl"} or "minimax-m3" in name
+    is_minimax = (
+        not is_minimax_m3
+        and (fam == "minimax" or "minimax" in name)
+    )
 
     last_open = prompt.rfind("<think>")
     if last_open >= 0:

@@ -54,6 +54,22 @@ function hydrateMessages(msgs: Message[]): Message[] {
   })
 }
 
+function latestPendingAssistantId(msgs: Message[]): string | null {
+  for (let i = msgs.length - 1; i >= 0; i--) {
+    const m = msgs[i]
+    if (
+      m.role === 'assistant' &&
+      !String(m.content || '').trim() &&
+      !String(m.reasoningContent || '').trim() &&
+      !m.tokens &&
+      !m.metrics
+    ) {
+      return m.id
+    }
+  }
+  return null
+}
+
 function audioFormatFromDataUrl(dataUrl: string): string {
   const mime = dataUrl.match(/^data:([^;,]+)[;,]/)?.[1]?.toLowerCase() || ''
   if (mime === 'audio/mpeg' || mime === 'audio/mp3') return 'mp3'
@@ -173,7 +189,8 @@ export function ChatInterface({ chatId, onNewChat, sessionEndpoint, sessionId, s
 
     // Load existing messages (hydrate persisted metrics, tool calls, reasoning)
     window.api.chat.getMessages(chatId).then(msgs => {
-      setMessages(hydrateMessages(msgs))
+      const hydrated = hydrateMessages(msgs)
+      setMessages(hydrated)
       // Hydrate tool status map from persisted tool_calls_json
       const restoredTools: Record<string, any[]> = {}
       const restoredReasoning: Record<string, string> = {}
@@ -217,6 +234,16 @@ export function ChatInterface({ chatId, onNewChat, sessionEndpoint, sessionId, s
       if (Object.keys(restoredReasoningSegments).length > 0) {
         setReasoningSegmentMap(restoredReasoningSegments)
       }
+
+      // If the user navigates/reloads during TTFT, the DB already has the
+      // assistant placeholder but no stream delta may arrive until the first
+      // token. Keep it visually bound to the active request instead of
+      // rendering it as a completed blank message.
+      window.api.chat.isStreaming(chatId).then((isActive: boolean) => {
+        if (!isActive || chatIdRef.current !== chatId) return
+        setLoading(true)
+        setStreamingMessageId(prev => prev || latestPendingAssistantId(hydrated))
+      })
     })
 
     // Check if generation is still active for this chat (handles switch-away-and-back)

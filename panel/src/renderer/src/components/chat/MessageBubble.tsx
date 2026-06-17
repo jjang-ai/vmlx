@@ -3,7 +3,7 @@ import hljs from 'highlight.js'
 import 'highlight.js/styles/github-dark.css'
 import DOMPurify from 'dompurify'
 import { useState, useMemo, useCallback, useRef, useEffect, memo } from 'react'
-import { AlertTriangle, Copy, Check, User, Sparkles, RefreshCw, Pencil } from 'lucide-react'
+import { AlertTriangle, Copy, Check, User, Sparkles, RefreshCw, Pencil, Loader2 } from 'lucide-react'
 import { ReasoningBox } from './ReasoningBox'
 import { ToolCallStatus } from './ToolCallStatus'
 import { InlineToolCall, InlineToolGroup } from './InlineToolCall'
@@ -217,6 +217,12 @@ export const MessageBubble = memo(function MessageBubble({ message, isStreaming,
       index === reasoningSegmentsForDisplay.length - 1 ? displayedLatestReasoning : segment
     )
   }, [displayedLatestReasoning, reasoningSegmentsForDisplay])
+  const hasToolStatus = !!(toolStatuses && toolStatuses.length > 0)
+  const isEmptyAssistant =
+    message.role === 'assistant' &&
+    !String(message.content || '').trim() &&
+    displayedReasoningSegments.length === 0 &&
+    !hasToolStatus
 
   // Render a DOMPurify-sanitized markdown segment
   const renderMarkdownSegment = useCallback((text: string, key: string) => {
@@ -526,6 +532,18 @@ export const MessageBubble = memo(function MessageBubble({ message, isStreaming,
         {/* Main content */}
         <div className="text-sm">
           {renderInlineContent()}
+          {isEmptyAssistant && isStreaming && (
+            <div className="flex items-center gap-2 text-muted-foreground py-1">
+              <Loader2 className="h-3.5 w-3.5 animate-spin text-primary" />
+              <span>Waiting for model response...</span>
+            </div>
+          )}
+          {isEmptyAssistant && !isStreaming && (
+            <div className="flex items-center gap-2 rounded-md border border-warning/30 bg-warning/10 px-3 py-2 text-xs text-warning-foreground/90">
+              <AlertTriangle className="h-3.5 w-3.5 flex-shrink-0 text-warning" />
+              <span>No visible response was produced.</span>
+            </div>
+          )}
         </div>
 
         {/* Non-content response warnings from the engine/API */}
@@ -550,7 +568,7 @@ export const MessageBubble = memo(function MessageBubble({ message, isStreaming,
         )}
 
         {/* Typing indicator */}
-        {isStreaming && !message.content && displayedReasoningSegments.length === 0 && !(toolStatuses && toolStatuses.length > 0) && (
+        {isStreaming && !message.content && displayedReasoningSegments.length === 0 && !hasToolStatus && !isEmptyAssistant && (
           <div className="flex items-center gap-2 text-muted-foreground text-sm py-1">
             <span className="flex gap-1">
               <span className="w-1.5 h-1.5 bg-primary rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />

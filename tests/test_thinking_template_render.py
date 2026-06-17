@@ -217,6 +217,26 @@ def test_minimax_thinking_off_adds_empty_thought_sentinel():
     assert _has_empty_think_pair(fixed)
 
 
+def test_minimax_m3_thinking_off_keeps_mmthink_sentinel_only():
+    """MiniMax-M3 owns the no-thinking rail in its native template.
+
+    M3's ``thinking_mode="disabled"`` prompt already ends generation with a
+    ``</mm:think>`` prefix. Appending the older MiniMax-M2 plain
+    ``<think></think>`` sentinel reintroduces the wrong reasoning rail and live
+    UI turns leak internal meta text.
+    """
+    rendered = "]~b]ai\n</mm:think>"
+
+    fixed = ensure_thinking_off_sentinel(
+        rendered,
+        family_name="minimax_m3",
+        model_name="MiniMax-M3-REAP40-d3-JANG_2L",
+    )
+
+    assert fixed == rendered
+    assert "<think>" not in fixed
+
+
 def test_thinking_off_sentinel_closes_open_thought_with_stable_shape():
     prompt = "]~b]ai\n<think>\n"
 

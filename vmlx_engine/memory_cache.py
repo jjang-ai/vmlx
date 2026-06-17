@@ -450,6 +450,23 @@ class MemoryAwarePrefixCache:
         except ImportError:
             _CacheList = None
 
+        def _copy_positional_slice(value):
+            """Materialize a KV slice so cache hits are worker-stream safe."""
+            try:
+                import mlx.core as mx
+                import numpy as np
+
+                orig_dtype = getattr(value, "dtype", None)
+                if orig_dtype == mx.bfloat16:
+                    copied = mx.array(np.array(value.astype(mx.float32))).astype(
+                        mx.bfloat16
+                    )
+                else:
+                    copied = mx.array(np.array(value))
+                return copied
+            except Exception:
+                return value
+
         truncated = []
         for layer_cache in cache:
             # MiniMax-M3 MSA cache: a KVCache subclass with an EXTRA append-only
@@ -460,27 +477,36 @@ class MemoryAwarePrefixCache:
             # Rebuild AS a MiniMaxM3SparseCache with keys/values/idx_keys all
             # sliced to target_len so SSD/prefix reuse stays correct.
             if type(layer_cache).__name__ == "MiniMaxM3SparseCache":
-                k = getattr(layer_cache, "keys", None)
-                v = getattr(layer_cache, "values", None)
-                if k is None or v is None:
-                    truncated.append(layer_cache)
-                    continue
                 try:
-                    from .models.minimax_m3.cache import (
-                        MiniMaxM3SparseCache as _M3SC,
-                    )
+                    from .models.minimax_m3.cache import clone_minimax_m3_sparse
                 except Exception:
                     return None
-                _st = min(target_len, k.shape[-2])
-                _nc = _M3SC()
-                _nc.keys = k[..., :_st, :]
-                _nc.values = v[..., :_st, :]
-                _nc.offset = _st
-                _idx = getattr(layer_cache, "idx_keys", None)
-                if _idx is not None:
-                    _nc.idx_keys = _idx[..., :_st, :]
-                    _nc._idx_offset = _st
-                truncated.append(_nc)
+
+                def _copy_m3_slice(value):
+                    try:
+                        import mlx.core as mx
+                        import numpy as np
+
+                        orig_dtype = getattr(value, "dtype", None)
+                        if orig_dtype == mx.bfloat16:
+                            copied = mx.array(np.array(value.astype(mx.float32))).astype(
+                                mx.bfloat16
+                            )
+                        else:
+                            copied = mx.array(np.array(value))
+                        return copied
+                    except Exception:
+                        return value
+
+                new_cache = clone_minimax_m3_sparse(
+                    layer_cache,
+                    target_len,
+                    copy_fn=_copy_m3_slice,
+                    require_idx_keys=True,
+                )
+                if new_cache is None:
+                    return None
+                truncated.append(new_cache)
                 continue
             if _CacheList is not None and isinstance(layer_cache, _CacheList):
                 # MoE CacheList: recurse into sub-caches (each is KVCache)
@@ -494,8 +520,12 @@ class MemoryAwarePrefixCache:
                             return None
                         safe_target = min(target_len, sc.keys.shape[-2])
                         new_sc = KVCache()
-                        new_sc.keys = sc.keys[..., :safe_target, :]
-                        new_sc.values = sc.values[..., :safe_target, :]
+                        new_sc.keys = _copy_positional_slice(
+                            sc.keys[..., :safe_target, :]
+                        )
+                        new_sc.values = _copy_positional_slice(
+                            sc.values[..., :safe_target, :]
+                        )
                         new_sc.offset = safe_target
                         truncated_subs.append(new_sc)
                     else:
@@ -531,8 +561,12 @@ class MemoryAwarePrefixCache:
                         return None
                     safe_target = min(target_len, k.shape[-2])
                     new_cache = KVCache()
-                    new_cache.keys = k[..., :safe_target, :]
-                    new_cache.values = layer_cache.values[..., :safe_target, :]
+                    new_cache.keys = _copy_positional_slice(
+                        k[..., :safe_target, :]
+                    )
+                    new_cache.values = _copy_positional_slice(
+                        layer_cache.values[..., :safe_target, :]
+                    )
                     new_cache.offset = safe_target
                     truncated.append(new_cache)
             elif hasattr(layer_cache, "cache") and isinstance(

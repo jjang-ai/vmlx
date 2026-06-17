@@ -703,7 +703,7 @@ describe('detectModelConfigFromDir JANG multimodal detection', () => {
     expect(detected.isMultimodal).toBe(false)
   })
 
-  it('autodetects MiniMax-M3 (minimax_m3_vl) as minimax_m3 with mm3 parsers, VL, and PAGED cache', () => {
+  it('autodetects MiniMax-M3 (minimax_m3_vl) as minimax_m3 with mm3 parsers, VL, and paged-off SSD prefix cache', () => {
     const dir = makeModelDir(
       { model_type: 'minimax_m3_vl', text_config: { model_type: 'minimax_m3' }, vision_config: { hidden_size: 1024 } },
       {
@@ -725,9 +725,9 @@ describe('detectModelConfigFromDir JANG multimodal detection', () => {
     expect(detected.reasoningParser).toBe('minimax_m3')
     expect(detected.toolParser).toBe('minimax_m3')
     expect(detected.isMultimodal).toBe(true)
-    // M3 MSA cache only round-trips through the paged block_disk minimax_m3 lane;
-    // standalone disk_cache drops idx_keys -> keep PAGED until Phase-2.
-    expect(detected.usePagedCache).toBe(true)
+    // M3 MSA snapshots preserve keys/values/idx_keys through the prompt disk
+    // cache, so paged/block-disk cache is not the default path.
+    expect(detected.usePagedCache).toBe(false)
   })
 
   it('resolves minimax_m3 family even when only the inner text model_type is minimax_m3', () => {

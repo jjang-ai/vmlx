@@ -236,6 +236,51 @@ class TestEnableThinkingTriState:
 
         assert "think_in_prompt=effective_think_in_template" in source
 
+    def test_minimax_m3_streaming_enabled_mode_seeds_prompt_reasoning(self):
+        """M3 thinking_mode=enabled prompt-opens <mm:think> in streaming too."""
+        import vmlx_engine.server as server_mod
+
+        chat_source = inspect.getsource(server_mod.stream_chat_completion)
+        responses_source = inspect.getsource(server_mod.stream_responses_api)
+
+        for source in (chat_source, responses_source):
+            assert "thinking_mode" in source
+            assert '_m3_thinking_mode in ("enabled", "adaptive")' in source
+            assert '"minimax_m3"' in source
+            assert "_effective_thinking is True" in source
+            assert "think_in_template = True" in source
+
+    def test_minimax_m3_responses_forced_on_has_visible_answer_pass(self):
+        """M3 forced-On can otherwise spend all max_tokens inside <mm:think>."""
+        import vmlx_engine.server as server_mod
+
+        source = inspect.getsource(server_mod.stream_responses_api)
+
+        assert "m3_reasoning_only_answer_enabled" in source
+        assert "max_thinking_tokens" in source
+        assert "kwargs[\"max_tokens\"] = min(" in source
+        assert "reasoning_content" in source
+        assert "thinking_mode\"] = \"disabled\"" in source
+        assert "Responses API MiniMax-M3 visible answer pass" in source
+
+    def test_minimax_m3_responses_never_falls_back_reasoning_as_visible(self):
+        """M3 Auto can reason without tags; do not publish that as output_text."""
+        import vmlx_engine.server as server_mod
+
+        source = inspect.getsource(server_mod.stream_responses_api)
+
+        assert "_is_minimax_m3 =" in source
+        assert "_m3_thinking_mode =" in source
+        assert source.index("_is_minimax_m3 =") < source.index(
+            "m3_reasoning_only_answer_enabled = False"
+        )
+        assert source.index("_m3_thinking_mode =") < source.index(
+            '_m3_thinking_mode in ("enabled", "adaptive")'
+        )
+        assert '_m3_thinking_mode in ("enabled", "adaptive")' in source
+        assert "m3_reasoning_only_answer_enabled = True" in source
+        assert "and not _is_minimax_m3" in source
+
 
 class TestSuppressReasoningDrop:
     """Tests for suppress_reasoning dropping reasoning chunks.

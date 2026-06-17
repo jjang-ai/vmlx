@@ -527,6 +527,9 @@ def serve_command(args):
                         "by mx.compile and degenerates into loops; staying on the "
                         "uncompiled scheduler path."
                     )
+                args.kv_cache_quantization = "none"
+                args.kv_cache_quantization_explicit = False
+                args._m3_force_no_kv_cache_quantization = True
                 logger.info(
                     "MiniMax-M3 AUTODETECTED (model_type=%s) -> auto-settings: "
                     "paged_cache=%s, tq_kv=SKIP(native MSA), vl_route=%s, "
@@ -576,8 +579,21 @@ def serve_command(args):
     # JANG/JANGTQ bundles and q4 stored-prefix compression as the fallback.
     # Explicit values remain exact: q4/q8/none disable loader-level TQ so the
     # user's requested stored-cache codec is the only active cache codec.
-    _kv_quant_explicit = getattr(args, "kv_cache_quantization", None) is not None
-    if not _kv_quant_explicit:
+    _m3_forced_no_kvq = bool(getattr(args, "_m3_force_no_kv_cache_quantization", False))
+    _kv_quant_explicit = (
+        getattr(args, "kv_cache_quantization", None) is not None
+        and not _m3_forced_no_kvq
+    )
+    if _m3_forced_no_kvq:
+        args.kv_cache_quantization = "none"
+        args.kv_cache_quantization_explicit = False
+        os.environ.pop("VMLX_FORCE_TQ_AUTO", None)
+        logger.info(
+            "KV cache auto mode: MiniMax-M3 native MSA cache detected; "
+            "generic TurboQuant/stored KV quantization disabled so "
+            "keys/values/idx_keys remain first-class."
+        )
+    elif not _kv_quant_explicit:
         _default_kvq = os.environ.get("VMLX_DEFAULT_KV_CACHE_QUANTIZATION", "q4")
         if _default_kvq not in ("none", "q4", "q8"):
             logger.warning(

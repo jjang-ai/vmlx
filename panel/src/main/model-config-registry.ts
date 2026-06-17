@@ -207,13 +207,10 @@ registerFamily('functionary', { cacheType: 'kv', toolParser: 'functionary', enab
 // MiniMax uses its own parser name so panel-emitted CLI args match the engine
 // registry and diagnostics instead of relying on a generic qwen3 alias.
 registerFamily('minimax', { cacheType: 'kv', toolParser: 'minimax', reasoningParser: 'minimax_m2', enableAutoToolChoice: true, description: 'MiniMax', priority: 20 })
-// MiniMax-M3 sparse MSA (MiniMaxM3SparseCache: GQA K/V + append-only idx_keys). M3 is positional/
-// append-only so it is NOT path-dependent, BUT its custom cache class only round-trips through the
-// PAGED block_disk_store typed 'minimax_m3' lane (regression-proven). The standalone disk_cache.py
-// SSD tier reconstructs via mlx_lm.load_prompt_cache, which doesn't know MiniMaxM3SparseCache and
-// falls back to plain KVCache -> idx_keys DROPPED -> corrupted sparse-attn on reload. So keep M3
-// PAGED (still SSD-backed via block_disk minimax_m3 lane). paged-off+standalone-SSD is a Phase-2
-// item: inject the cache class + M3-aware reconstruction into disk_cache.py, then prove live.
+// MiniMax-M3 sparse MSA (MiniMaxM3SparseCache: GQA K/V + append-only idx_keys).
+// M3 must stay paged-OFF by default: the engine stores prefix snapshots through
+// the memory-aware L1 + SSD prompt disk cache, preserving keys/values/idx_keys as
+// a first-class M3 cache. The paged block-disk lane is not the default M3 path.
 registerFamily('minimax_m3', { cacheType: 'kv', toolParser: 'minimax_m3', reasoningParser: 'minimax_m3', enableAutoToolChoice: true, isMultimodal: true, usePagedCache: false, description: 'MiniMax-M3 (sparse MSA + Lightning-Indexer, VL)', priority: 5 })
 
 // Ling / Bailing hybrid: MLA softmax layers plus linear-attention/SSM-style
