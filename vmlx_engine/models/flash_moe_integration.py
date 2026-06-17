@@ -273,7 +273,14 @@ class FlashMoEBlock(nn.Module):
             y = fc2(y)
 
         # ── Shared expert ──
-        shared = getattr(orig, "shared_expert", getattr(orig, "shared_experts", None))
+        # Step-3.7/Step3p5 name it `share_expert` (singular) and add it
+        # plainly. Other families use `shared_expert(s)` (optionally gated).
+        shared = (
+            getattr(orig, "shared_expert", None)
+            or getattr(orig, "shared_experts", None)
+            or getattr(orig, "share_expert", None)
+            or getattr(orig, "share_experts", None)
+        )
         if shared is not None:
             seg = getattr(orig, "shared_expert_gate", None)
             if seg is not None:

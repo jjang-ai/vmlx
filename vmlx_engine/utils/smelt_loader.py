@@ -192,6 +192,11 @@ _EXPERT_KEY_RE = re.compile(
     r"|"
     # 4. Qwen/Mistral text + Mistral VLM: *.layers.N.mlp.switch_mlp
     r"(?:[^.]+\.)*layers\.(?P<layer_qw>\d+)\.mlp\.switch_mlp"
+    r"|"
+    # 5. Step-3.7 (step3p5/step3p7) JANG: *.language_model.layers.N.moe
+    #    Raw on-disk keys use a bare ".moe.{proj}" parent (no switch_mlp).
+    #    Router ".moe.gate.weight" and ".share_expert.*" do not match.
+    r"(?:[^.]+\.)*language_model\.layers\.(?P<layer_s3>\d+)\.moe"
     r")"
     r"\."
     r"(?P<proj>gate_proj|up_proj|down_proj|fc1|fc2)"
@@ -219,6 +224,7 @@ def _match_expert_key(key: str) -> Optional[Tuple[int, str, str]]:
         or m.group("layer_mm")
         or m.group("layer_g4")
         or m.group("layer_qw")
+        or m.group("layer_s3")
     )
     proj = m.group("proj")
     # Normalize Nemotron fc1/fc2 → up_proj/down_proj
@@ -451,6 +457,10 @@ def _detect_routing_style(moe_block: nn.Module) -> str:
         "NemotronH" in class_name
         or "Deepseek" in class_name
         or class_name in ("MoE", "Glm4MoeLiteMoE")
+        # Step-3.7 / Step3p5: Step3p5MoEGate returns (topk_indices,
+        # topk_weights) directly (sigmoid + bias + scaling + norm inside).
+        or "Step3p5MoE" in class_name
+        or "Step3p7MoE" in class_name
     ):
         return "pre_routed"
     return "softmax"
