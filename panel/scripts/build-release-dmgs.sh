@@ -82,6 +82,35 @@ sign_bundled_python_native_files() {
   echo "  signed $signed_count bundled Python native files"
 }
 
+sign_release_macho_file() {
+  local file_path="$1"
+  local identity="$2"
+
+  if [[ ! -f "$file_path" ]]; then
+    echo "ERROR: missing release Mach-O file: $file_path" >&2
+    exit 1
+  fi
+  if ! file "$file_path" | grep -q "Mach-O"; then
+    echo "ERROR: expected Mach-O release file: $file_path" >&2
+    exit 1
+  fi
+
+  codesign --force --timestamp --options runtime --sign "$identity" "$file_path" >/dev/null
+}
+
+sign_electron_nested_runtime_files() {
+  local app_path="$1"
+  local identity="$2"
+  local framework_root="$app_path/Contents/Frameworks"
+
+  echo "==> Signing nested Electron/Squirrel runtime files with release identity"
+  sign_release_macho_file "$framework_root/Electron Framework.framework/Versions/A/Libraries/libEGL.dylib" "$identity"
+  sign_release_macho_file "$framework_root/Electron Framework.framework/Versions/A/Libraries/libGLESv2.dylib" "$identity"
+  sign_release_macho_file "$framework_root/Electron Framework.framework/Versions/A/Libraries/libvk_swiftshader.dylib" "$identity"
+  sign_release_macho_file "$framework_root/Electron Framework.framework/Versions/A/Libraries/libffmpeg.dylib" "$identity"
+  sign_release_macho_file "$framework_root/Squirrel.framework/Versions/A/Resources/ShipIt" "$identity"
+}
+
 finalize_release_app_signature() {
   local app_path="$1"
   local identity="${2:-$RELEASE_CODESIGN_IDENTITY}"
@@ -104,6 +133,7 @@ finalize_release_app_signature() {
   fi
 
   sign_bundled_python_native_files "$bundled_python" "$identity"
+  sign_electron_nested_runtime_files "$app_path" "$identity"
   echo "==> Final release app seal/signature: $app_path"
   codesign --force --deep --timestamp --options runtime --entitlements "$entitlements" --sign "$identity" "$app_path"
   codesign --verify --deep --strict --verbose=2 "$app_path"
