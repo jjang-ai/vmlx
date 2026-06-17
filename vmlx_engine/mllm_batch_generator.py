@@ -873,6 +873,20 @@ def _gen_stream() -> Any:
                 _GENERATION_STREAM = mx.default_stream(mx.default_device())
             except Exception:
                 _GENERATION_STREAM = None
+    # P0 VL/audio stream bug: mlx_vlm.generate.generation_stream is a module
+    # global bound to the IMPORT thread; mlx_vlm internals (wired_limit /
+    # generate) call mx.synchronize(generation_stream), which raises "There is
+    # no Stream(gpu, 0) in current thread" when MLLM generation (image OR audio)
+    # runs on the mllm-worker executor. Rebind it to OUR worker-thread stream so
+    # those syncs resolve. Extends the simple-MLLM FIX#7 to MLLMBatchGenerator /
+    # the /v1/responses + dev-build-UI VL+audio path. Idempotent + cheap.
+    if _GENERATION_STREAM is not None:
+        try:
+            import mlx_vlm.generate as _mvg
+            if getattr(_mvg, "generation_stream", None) is not _GENERATION_STREAM:
+                _mvg.generation_stream = _GENERATION_STREAM
+        except Exception:
+            pass
     return _GENERATION_STREAM
 
 
@@ -961,6 +975,48 @@ def _shape_images_for_processor_call(
     if all(isinstance(image, str) and image.startswith("/") for image in images):
         return [list(images)]
     return images
+
+
+def _processor_audio_sampling_rate(processor: Any) -> int:
+    """Best-effort source sampling rate a VLM audio processor expects (Hz)."""
+    for obj in (
+        getattr(processor, "feature_extractor", None),
+        getattr(processor, "audio_processor", None),
+        getattr(processor, "audio_feature_extractor", None),
+        processor,
+    ):
+        sr = getattr(obj, "sampling_rate", None) or getattr(obj, "sample_rate", None)
+        if isinstance(sr, (int, float)) and sr > 0:
+            return int(sr)
+    return 16000
+
+
+def _load_audio_waveforms_for_processor(processor: Any, audio: List[Any]) -> List[Any]:
+    """Load file-path / data-URL audio entries into float32 waveforms.
+
+    process_audio_input() returns a file PATH string (base64 -> temp .wav ->
+    path). Strict HF audio processors (e.g. Gemma 4) expect a list of float32
+    waveform arrays, not paths, and otherwise try to float() the path string
+    ("could not convert string to float: '/.../tmp.wav'"). Load each path with
+    librosa at the processor's source sampling rate. Entries that are already
+    arrays pass through untouched. (MiMo uses its own mel path and is excluded by
+    the caller.)
+    """
+    import numpy as np
+    sr = _processor_audio_sampling_rate(processor)
+    out: List[Any] = []
+    for a in audio:
+        if isinstance(a, str):
+            try:
+                import librosa
+                wf, _ = librosa.load(a, sr=sr, mono=True)
+                out.append(np.asarray(wf, dtype=np.float32))
+            except Exception as exc:
+                logger.warning("Audio waveform load failed for %s: %s", a, exc)
+                out.append(a)
+        else:
+            out.append(a)
+    return out
 
 
 def _call_processor_direct(
@@ -2157,7 +2213,32 @@ def _native_mtp_async_eval(*arrays: Any) -> None:
         mx.eval(*arrays)
 
 
-def _mllm_decode_sync_eval_enabled() -> bool:
+def _m3_affine2_decode_needs_sync(cache: Any = None) -> bool:
+    """MiniMax-M3 + affine-2 fast path requires SYNCHRONOUS decode-token eval.
+
+    The async_eval decode pipeline races with the custom affine-2 SwitchGLU Metal
+    kernel + the lazily-grown MSA cache state and RARELY corrupts long-context
+    decode (degenerate / null-byte output). Evidence (2026-06-15): synchronous
+    decode ~15/15 coherent across fresh processes vs async ~10-25% corrupt; the
+    per-call kernel is numerically exact + deterministic, so this is an eval/
+    materialization-ordering hazard, not a kernel or architecture bug. Forcing
+    mx.eval each step materializes the cache state in lockstep and removes it.
+    Scoped to M3+affine-2 so all other models keep async CPU/GPU overlap.
+    """
+    if cache is None:
+        return False
+    try:
+        if not any(type(c).__name__ == "MiniMaxM3SparseCache" for c in cache):
+            return False
+        from .models.minimax_m3.m3_affine2_switch import _disabled as _aff_disabled
+        return not _aff_disabled()
+    except Exception:
+        return False
+
+
+def _mllm_decode_sync_eval_enabled(cache: Any = None) -> bool:
+    if _m3_affine2_decode_needs_sync(cache):
+        return True
     return os.environ.get("VMLINUX_MLLM_DECODE_SYNC_EVAL", "").lower() in {
         "1",
         "true",
@@ -2166,8 +2247,8 @@ def _mllm_decode_sync_eval_enabled() -> bool:
     }
 
 
-def _submit_decode_token_eval(value: Any) -> None:
-    if _mllm_decode_sync_eval_enabled():
+def _submit_decode_token_eval(value: Any, cache: Any = None) -> None:
+    if _mllm_decode_sync_eval_enabled(cache):
         mx.eval(value)
     else:
         mx.async_eval(value)
@@ -7627,7 +7708,7 @@ class MLLMBatchGenerator:
                             f"native MTP AR fallback unsafe: {fallback_reason}"
                         )
                     batch.y, batch.logprobs = self._step(batch.y[:, None], batch.cache)
-                    _submit_decode_token_eval(batch.y)
+                    _submit_decode_token_eval(batch.y, batch.cache)
                     _native_mtp_log_stats(
                         batch.requests[0].request_id,
                         mtp_state.stats,
@@ -7684,7 +7765,7 @@ class MLLMBatchGenerator:
             batch.y, batch.logprobs = self._step(y[:, None], batch.cache)
             _step_s = time.perf_counter() - _step_t0 if _next_trace else 0.0
             _async_t0 = time.perf_counter() if _next_trace else 0.0
-            _submit_decode_token_eval(batch.y)
+            _submit_decode_token_eval(batch.y, batch.cache)
             _async_s = time.perf_counter() - _async_t0 if _next_trace else 0.0
             _materialize_t0 = time.perf_counter() if _next_trace else 0.0
 

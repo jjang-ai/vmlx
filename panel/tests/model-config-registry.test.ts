@@ -540,7 +540,8 @@ describe('detectModelConfigFromDir JANG multimodal detection', () => {
 
     expect(detected.family).toBe('hy3')
     expect(detected.cacheType).toBe('kv')
-    expect(detected.usePagedCache).toBe(true)
+    // Phase-1 (2026-06-13): plain-KV text models default paged-OFF (SSD prefix).
+    expect(detected.usePagedCache).toBe(false)
     expect(detected.toolParser).toBe('hunyuan')
     expect(detected.reasoningParser).toBe('qwen3')
     expect(detected.enableAutoToolChoice).toBe(true)
@@ -702,6 +703,92 @@ describe('detectModelConfigFromDir JANG multimodal detection', () => {
     expect(detected.isMultimodal).toBe(false)
   })
 
+  it('autodetects MiniMax-M3 (minimax_m3_vl) as minimax_m3 with mm3 parsers, VL, and PAGED cache', () => {
+    const dir = makeModelDir(
+      { model_type: 'minimax_m3_vl', text_config: { model_type: 'minimax_m3' }, vision_config: { hidden_size: 1024 } },
+      {
+        has_vision: true,
+        capabilities: {
+          family: 'minimax_m3',
+          reasoning_parser: 'minimax_m3',
+          tool_parser: 'minimax_m3',
+          supports_tools: true,
+          supports_thinking: true,
+          think_in_template: false,
+          cache_type: 'kv',
+          modality: 'multimodal',
+        },
+      },
+    )
+    const detected = detectModelConfigFromDir(dir)
+    expect(detected.family).toBe('minimax_m3')
+    expect(detected.reasoningParser).toBe('minimax_m3')
+    expect(detected.toolParser).toBe('minimax_m3')
+    expect(detected.isMultimodal).toBe(true)
+    // M3 MSA cache only round-trips through the paged block_disk minimax_m3 lane;
+    // standalone disk_cache drops idx_keys -> keep PAGED until Phase-2.
+    expect(detected.usePagedCache).toBe(true)
+  })
+
+  it('resolves minimax_m3 family even when only the inner text model_type is minimax_m3', () => {
+    const dir = makeModelDir(
+      { model_type: 'minimax_m3' },
+      { capabilities: { family: 'minimax_m3', reasoning_parser: 'minimax_m3', tool_parser: 'minimax_m3' } },
+    )
+    const detected = detectModelConfigFromDir(dir)
+    expect(detected.family).toBe('minimax_m3')
+    expect(detected.toolParser).toBe('minimax_m3')
+  })
+
+  it('autodetects gemma4_unified (Gemma 4 unified VL+audio) as gemma4 multimodal, not unknown', () => {
+    const dir = makeModelDir(
+      {
+        model_type: 'gemma4_unified',
+        text_config: {
+          model_type: 'gemma4_unified_text',
+          layer_types: ['sliding_attention', 'sliding_attention', 'full_attention'],
+        },
+        vision_config: { hidden_size: 1152 },
+      },
+      {
+        has_vision: true,
+        has_audio: true,
+        capabilities: {
+          family: 'gemma4',
+          reasoning_parser: 'gemma4',
+          tool_parser: 'gemma4',
+          supports_tools: true,
+          supports_thinking: true,
+          think_in_template: false,
+          cache_type: 'kv',
+          modality: 'multimodal',
+          modalities: { text: true, vision: true, audio: true, video: false },
+        },
+      },
+    )
+
+    const detected = detectModelConfigFromDir(dir)
+    expect(detected.family).toBe('gemma4')
+    expect(detected.isMultimodal).toBe(true)
+    expect(detected.reasoningParser).toBe('gemma4')
+    expect(detected.toolParser).toBe('gemma4')
+    expect(detected.enableAutoToolChoice).toBe(true)
+    // gemma4 mixed-SWA cache type + Phase-1 paged-off
+    expect(detected.cacheType).toBe('rotating_kv')
+    expect(detected.usePagedCache).toBe(false)
+  })
+
+  it('resolves family from JANG capabilities.family when config.json model_type is unrecognized', () => {
+    const dir = makeModelDir(
+      { model_type: 'some_brand_new_unmapped_type' },
+      { capabilities: { family: 'gemma4', reasoning_parser: 'gemma4', tool_parser: 'gemma4' } },
+    )
+    const detected = detectModelConfigFromDir(dir)
+    expect(detected.family).toBe('gemma4')
+    expect(detected.reasoningParser).toBe('gemma4')
+    expect(detected.toolParser).toBe('gemma4')
+  })
+
   it('keeps Gemma 4 VLM wrapper multimodal instead of demoting to gemma4-text', () => {
     const dir = makeModelDir(
       {
@@ -740,7 +827,9 @@ describe('detectModelConfigFromDir JANG multimodal detection', () => {
 
     expect(detected.family).toBe('gemma4')
     expect(detected.cacheType).toBe('rotating_kv')
-    expect(detected.usePagedCache).toBe(true)
+    // Phase-1 (2026-06-13): Gemma mixed-SWA proven correct paged-OFF (memory-aware
+    // prefix + disk_cache L2 SSD + TurboQuantKVCache, cache HIT no drift).
+    expect(detected.usePagedCache).toBe(false)
   })
 
   it('keeps JANG VLM enabled from capabilities.modality=vision when architecture.has_vision is absent', () => {

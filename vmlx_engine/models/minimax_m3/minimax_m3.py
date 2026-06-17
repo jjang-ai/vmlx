@@ -30,6 +30,8 @@ from mlx_lm.models.base import BaseModelArgs, create_attention_mask, scaled_dot_
 from mlx_lm.models.gpt_oss import SwiGLU, swiglu
 from mlx_lm.models.deepseek_v3 import group_expert_select
 
+EAGLE3_AUX_LAYERS = (2, 30, 57)
+
 try:
     from .cache import MiniMaxM3SparseCache, make_minimax_m3_cache
     from .m3_affine2_switch import MiniMaxM3Affine2SwitchGLU
@@ -71,6 +73,10 @@ class ModelArgs(BaseModelArgs):
     index_local_blocks: int = 1
     sparse_attention_freq: Optional[list] = None
     tie_word_embeddings: bool = False
+    # VL (vision) — populated from raw config in from_dict; None = text-only.
+    vision_config: Optional[dict] = None
+    image_token_index: int = 200025
+    projector_hidden_size: int = 6144
 
     @classmethod
     def from_dict(cls, params):
@@ -87,6 +93,12 @@ class ModelArgs(BaseModelArgs):
         merged = {**tc, **flat, "model_type": params.get("model_type", "minimax_m3_vl")}
         if "num_local_experts" in params:
             merged["num_local_experts"] = params["num_local_experts"]
+        # VL: carry vision config from the raw (top-level) params so the model can
+        # build the vision stack. None when the bundle has no vision_config (text-only).
+        merged["vision_config"] = params.get("vision_config")
+        merged["image_token_index"] = params.get("image_token_index", 200025)
+        merged["projector_hidden_size"] = params.get(
+            "projector_hidden_size", merged.get("hidden_size", 6144))
         allowed = set(cls.__dataclass_fields__)
         return cls(**{k: v for k, v in merged.items() if k in allowed})
 
@@ -201,14 +213,29 @@ class Attention(nn.Module):
         k = self.k_norm(self.k_proj(x).reshape(B, L, self.n_kv, self.hd)).transpose(0, 2, 1, 3)
         v = self.v_proj(x).reshape(B, L, self.n_kv, self.hd).transpose(0, 2, 1, 3)
         q, k = self.rope(q, offset=off), self.rope(k, offset=off)
+        # Append K/V to the cache FIRST (matches upstream MiniMax-M3 ordering) so
+        # the Lightning Indexer sees the COMPLETED post-append sequence length. If
+        # the indexer ran first (on the pre-append offset) its block_bias Sk would
+        # be one key short of SDPA's K once context passes the 2048 sparse
+        # threshold -> broadcast crash + idx/KV desync across decode and
+        # prefix-cache restore. `off` (captured pre-append) is still the correct
+        # RoPE position for the new token(s).
+        if cache is not None:
+            k, v = cache.update_and_fetch(k, v)
         # MSA selection (additive block mask), computed from the SAME hidden x
         attn_mask = mask
         if self.indexer is not None:
             block_bias = self.indexer(x, cache, off)
             if block_bias is not None:
-                attn_mask = block_bias      # already causal + block-restricted
-        if cache is not None:
-            k, v = cache.update_and_fetch(k, v)
+                # block_bias is built as float32 (0.0 / -inf). SDPA requires the
+                # mask dtype to promote to the bf16 compute/output dtype, else it
+                # raises "[scaled_dot_product_attention] Mask type must promote to
+                # output type bfloat16" once the indexer fires past the
+                # index_topk_blocks*index_block_size (=2048) token threshold.
+                # 0.0 and -inf are exactly representable in bf16, so the cast is
+                # lossless. (Root-cause fix for the M3 >2048-token SDPA crash;
+                # gated by context length, NOT cache mode.)
+                attn_mask = block_bias.astype(q.dtype)  # already causal + block-restricted
         o = scaled_dot_product_attention(q, k, v, cache=cache, scale=self.scale, mask=attn_mask)
         return self.o_proj(o.transpose(0, 2, 1, 3).reshape(B, L, -1))
 
@@ -248,7 +275,11 @@ class SparseMoeBlock(nn.Module):
             self.gate(x), self.e_score_correction_bias, self.top_k, 1, 1,
             self.routed_scaling_factor, self.norm_topk_prob)
         y = (self.switch_mlp(x, inds) * scores[..., None]).sum(axis=-2)
-        return y + self.shared_experts(x)
+        # group_expert_select returns float32 scores, which promote the MoE output
+        # (and thus the whole residual stream from layer 3 on) to float32 — forcing
+        # every downstream attention/MLP matmul into float32 (~2x slower than bf16).
+        # Cast back to the model compute dtype so the matmuls stay bf16.
+        return (y + self.shared_experts(x)).astype(x.dtype)
 
 
 class DecoderLayer(nn.Module):
@@ -274,16 +305,29 @@ class MiniMaxM3Model(nn.Module):
         self.layers = [DecoderLayer(args, i) for i in range(args.num_hidden_layers)]
         self.norm = GemmaRMSNorm(args.hidden_size, args.rms_norm_eps)
 
-    def __call__(self, inputs, cache=None, input_embeddings=None):
+    def __call__(
+        self,
+        inputs,
+        cache=None,
+        input_embeddings=None,
+        *,
+        return_aux: bool = False,
+        aux_layers: tuple[int, ...] = EAGLE3_AUX_LAYERS,
+    ):
         h = input_embeddings if input_embeddings is not None else self.embed_tokens(inputs)
         if cache is None:
             cache = [None] * len(self.layers)
         # full-attention layers (0-2) use the standard causal mask; sparse layers
         # build their own block mask, but still need a causal fallback at short ctx.
         mask = create_attention_mask(h, cache[0])
-        for layer, c in zip(self.layers, cache):
+        aux = [] if return_aux else None
+        aux_set = set(aux_layers) if return_aux else set()
+        for li, (layer, c) in enumerate(zip(self.layers, cache)):
             h = layer(h, mask, c)
-        return self.norm(h)
+            if return_aux and li in aux_set:
+                aux.append(h)
+        out = self.norm(h)
+        return (out, aux) if return_aux else out
 
 
 class Model(nn.Module):
@@ -294,11 +338,64 @@ class Model(nn.Module):
         self.model = MiniMaxM3Model(args)
         if not args.tie_word_embeddings:
             self.lm_head = nn.Linear(args.hidden_size, args.vocab_size, bias=False)
+        # VL vision stack (additive — only when the bundle declares vision_config).
+        if getattr(args, "vision_config", None):
+            try:
+                from .minimax_m3_vl import MiniMaxM3VLVisionStack
+            except Exception:  # pragma: no cover - standalone import
+                from minimax_m3_vl import MiniMaxM3VLVisionStack  # type: ignore
+            self.vision = MiniMaxM3VLVisionStack({
+                "vision_config": args.vision_config,
+                "projector_hidden_size": args.projector_hidden_size,
+            })
 
-    def __call__(self, inputs, cache=None, input_embeddings=None):
-        out = self.model(inputs, cache, input_embeddings)
-        return (self.model.embed_tokens.as_linear(out) if self.args.tie_word_embeddings
-                else self.lm_head(out))
+    def _embed_with_images(self, inputs, pixel_values, image_grid_thw):
+        """Run the vision stack and splice image embeds into the text embeddings
+        at the image-token positions. inputs: (B, L). Returns (B, L, H)."""
+        import numpy as np
+        img = self.vision(pixel_values, image_grid_thw)        # (num_img_tokens, H)
+        te = self.model.embed_tokens(inputs)                    # (B, L, H)
+        B, L = inputs.shape[0], inputs.shape[1]
+        flat = te.reshape(B * L, te.shape[-1])
+        ids_np = np.asarray(inputs).reshape(B * L)
+        pos = np.where(ids_np == self.args.image_token_index)[0]
+        if pos.size > 0:
+            flat[mx.array(pos)] = img.reshape(-1, img.shape[-1]).astype(flat.dtype)
+        return flat.reshape(B, L, te.shape[-1])
+
+    def __call__(
+        self,
+        inputs,
+        cache=None,
+        input_embeddings=None,
+        *,
+        pixel_values=None,
+        image_grid_thw=None,
+        mask=None,  # M3 builds its own causal/block mask; accept + ignore.
+        return_aux: bool = False,
+        aux_layers: tuple[int, ...] = EAGLE3_AUX_LAYERS,
+        **kwargs,  # absorb other MLLM kwargs (video_*, audio_*) harmlessly
+    ):
+        if (pixel_values is not None and input_embeddings is None
+                and hasattr(self, "vision")):
+            input_embeddings = self._embed_with_images(
+                inputs, pixel_values, image_grid_thw)
+        out = self.model(
+            inputs,
+            cache,
+            input_embeddings,
+            return_aux=return_aux,
+            aux_layers=aux_layers,
+        )
+        aux = None
+        if return_aux:
+            out, aux = out
+        logits = (
+            self.model.embed_tokens.as_linear(out)
+            if self.args.tie_word_embeddings
+            else self.lm_head(out)
+        )
+        return (logits, aux) if return_aux else logits
 
     def make_cache(self):
         return make_minimax_m3_cache(self.args)
@@ -309,9 +406,19 @@ class Model(nn.Module):
 
     def sanitize(self, weights):
         out = {}
+        has_vision = getattr(self.args, "vision_config", None) is not None
         for k, v in weights.items():
+            if k.startswith("mtp"):
+                continue
             if (k.startswith("vision_tower.") or k.startswith("multi_modal_projector.")
-                    or k.startswith("patch_merge_mlp.") or k.startswith("mtp")):
+                    or k.startswith("patch_merge_mlp.")):
+                if not has_vision:
+                    continue  # text-only build: drop vision weights
+                # 3D patch_embedding conv ships PyTorch layout (Cout,Cin,D,H,W);
+                # MLX Conv3d wants (Cout,D,H,W,Cin).
+                if k.endswith("patch_embedding.weight") and v.ndim == 5:
+                    v = v.moveaxis(1, 4)
+                out["vision." + k] = v
                 continue
             if k.startswith("language_model.model."):
                 k = "model." + k[len("language_model.model."):]

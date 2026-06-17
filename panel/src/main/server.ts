@@ -85,6 +85,9 @@ export interface ServerConfig {
   // Reasoning
   reasoningParser?: string
 
+  // Manual model-family override (--model-family). undefined = autodetect.
+  modelFamily?: string
+
   // DSV4 Flash runtime env controls
   dsv4PrefixCache?: boolean
   dsv4PoolQuant?: boolean

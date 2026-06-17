@@ -39,7 +39,22 @@ def load_minimax_m3(path):
     model = M.Model(args)
 
     weights = {}
+    # Exclude EAGLE3 (or any) sidecar weights: they load standalone into the draft
+    # module and must NOT merge into the main model weight_map (names collide:
+    # embed_tokens/lm_head/norm). See eagle3_config.json runtime_notes.
+    _sidecars = set()
+    _e3 = path / "eagle3_config.json"
+    if _e3.is_file():
+        try:
+            _wf = json.loads(_e3.read_text()).get("weights_file")
+            if _wf:
+                _sidecars.add(_wf)
+        except Exception:
+            pass
     for sf in glob.glob(str(path / "*.safetensors")):
+        _name = Path(sf).name
+        if _name in _sidecars or _name.startswith("eagle3"):
+            continue
         weights.update(mx.load(sf))
     weights = model.sanitize(weights)
 

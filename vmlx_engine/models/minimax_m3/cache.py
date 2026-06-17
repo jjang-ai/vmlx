@@ -67,6 +67,12 @@ class MiniMaxM3SparseCache(KVCache):
         else:
             self.idx_keys = mx.concatenate([prev, idx_k], axis=2)
         self._idx_offset = self.idx_keys.shape[2]
+        # Return idx_keys sliced to the CURRENT KV offset. The attention forward now
+        # calls cache.update_and_fetch(k, v) BEFORE the indexer (upstream ordering),
+        # so self.offset is already the post-append length and this slice equals the
+        # full appended idx history -> Sk matches SDPA's K. Keeps update_index, the
+        # indexer scoring, and `state` serialization all consistent on self.offset
+        # (the 'return full' variant desynced serialization and broke coherence).
         return self.idx_keys[..., : self.offset, :] if self.offset else self.idx_keys
 
     # ── serialization: expose the 3-tensor slice the disk tiers pack ──
@@ -109,6 +115,24 @@ def restore_minimax_m3_sparse(keys, values, idx) -> MiniMaxM3SparseCache:
     c = MiniMaxM3SparseCache()
     c.state = (keys, values, idx)
     return c
+
+
+def truncate_minimax_m3_cache(cache: list, length: int) -> None:
+    """Roll a MiniMax-M3 cache list back to an absolute token length.
+
+    Speculative verification appends a draft chain to every target layer, then
+    must keep only the accepted prefix. Dense layers are stock KVCache; sparse
+    MSA layers override ``trim`` so the K/V and idx_keys streams remain aligned.
+    """
+    if length < 0:
+        raise ValueError("cache truncate length must be non-negative")
+    for entry in cache:
+        offset = getattr(entry, "offset", None)
+        trim = getattr(entry, "trim", None)
+        if offset is None or trim is None:
+            continue
+        if length < offset:
+            trim(offset - length)
 
 
 def make_minimax_m3_cache(config) -> list:

@@ -2,6 +2,7 @@ export const REASONING_PARSERS_FOR_CLI = new Set([
   'qwen3',
   'deepseek_r1',
   'minimax_m2',
+  'minimax_m3',
   'openai_gptoss',
   'mistral',
   'gemma4',

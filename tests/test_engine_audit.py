@@ -12260,6 +12260,42 @@ class TestTurboQuantKVTelemetry:
         assert status["paged"] is True
         assert status["block_disk_l2"] is True
 
+    def test_native_cache_status_reports_minimax_m3_msa_cache(self):
+        from types import SimpleNamespace
+        from vmlx_engine.server import _native_cache_status
+
+        scheduler = SimpleNamespace(
+            _model_type_for_runtime="minimax_m3",
+            _tq_active=True,
+            _kv_cache_bits=4,
+            _kv_cache_group_size=64,
+            block_aware_cache=object(),
+            paged_cache_manager=SimpleNamespace(_disk_store=object()),
+        )
+
+        status = _native_cache_status(scheduler)
+
+        assert status["family"] == "minimax_m3"
+        assert status["schema"] == "minimax_m3_msa_v1"
+        assert status["cache_type"] == "native_msa_sparse_kv"
+        assert status["components"] == [
+            "attention_kv",
+            "msa_idx_keys",
+            "absolute_block_index",
+        ]
+        assert status["generic_turboquant_kv"] == {
+            "enabled": False,
+            "reason": "native_minimax_m3_msa_idx_keys",
+        }
+        assert status["cache_store_policy"] == {
+            "prompt_boundary_snapshot": "required",
+            "generic_kv_quantization": "forced_off",
+            "disk_tuple_tag": "minimax_m3",
+            "paged_required_for_ssd_l2": True,
+        }
+        assert status["paged"] is True
+        assert status["block_disk_l2"] is True
+
     def test_native_cache_status_reports_zaya_typed_cca(self):
         from types import SimpleNamespace
         from vmlx_engine.server import _native_cache_status

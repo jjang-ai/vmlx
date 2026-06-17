@@ -66,6 +66,56 @@ def _write_qwen36_jang_mtp_bundle(path):
     )
 
 
+def _write_minimax_m3_eagle3_bundle(path):
+    (path / "config.json").write_text(
+        json.dumps(
+            {
+                "model_type": "minimax_m3_vl",
+                "text_config": {
+                    "model_type": "minimax_m3",
+                    "num_hidden_layers": 60,
+                },
+            }
+        )
+    )
+    (path / "jang_config.json").write_text(
+        json.dumps(
+            {
+                "format": "jang",
+                "capabilities": {
+                    "family": "minimax_m3_vl",
+                    "cache_type": "minimax_m3",
+                },
+            }
+        )
+    )
+    (path / "model.safetensors.index.json").write_text(
+        json.dumps(
+            {
+                "weight_map": {
+                    "model.embed_tokens.weight": "model-00001-of-00001.safetensors",
+                    "model.layers.0.self_attn.q_proj.weight": "model-00001-of-00001.safetensors",
+                }
+            }
+        )
+    )
+    (path / "eagle3_runtime.safetensors").write_bytes(b"sidecar-placeholder")
+    (path / "eagle3_config.json").write_text(
+        json.dumps(
+            {
+                "method": "eagle3",
+                "weights_file": "eagle3_runtime.safetensors",
+                "hidden_size": 6144,
+                "aux_hidden_state_layers": [2, 30, 57],
+                "draft_to_target_id_map": "identity",
+                "measured_accept": {
+                    "tokens_per_target_forward": 1.76,
+                },
+            }
+        )
+    )
+
+
 def _write_qwen36_mxfp4_mtp_bundle(path):
     _write_qwen36_jang_mtp_bundle(path)
 
@@ -207,6 +257,29 @@ class TestNativeMtpAutodetect:
         assert status["runtime_scope"] == "text+vl"
         assert status["vl_runtime_available"] is True
         assert status["status"] == "native_runtime_ready"
+        assert status["issues"] == []
+
+    def test_minimax_m3_eagle3_sidecar_reports_native_mtp_candidate(self, tmp_path):
+        from vmlx_engine.server import _model_mtp_status
+
+        _write_minimax_m3_eagle3_bundle(tmp_path)
+
+        status = _model_mtp_status(str(tmp_path))
+
+        assert status["artifact_available"] is True
+        assert status["family"] == "minimax_m3_vl"
+        assert status["native_mtp_method"] == "eagle3"
+        assert status["runtime_adapter"] == "minimax_m3_eagle3"
+        assert status["runtime_supported"] is True
+        assert status["runtime_available"] is False
+        assert status["runtime_active"] is False
+        assert status["status"] == "weights_present_runtime_unwired"
+        assert status["runtime_mtp_mode"] == "eagle3_sidecar"
+        assert status["eagle3_weights_file"] == "eagle3_runtime.safetensors"
+        assert status["eagle3_aux_hidden_state_layers"] == [2, 30, 57]
+        assert status["eagle3_draft_to_target_id_map"] == "identity"
+        assert status["eagle3_tokens_per_target_forward"] == 1.76
+        assert status["index_has_mtp_tensors"] is False
         assert status["issues"] == []
 
     def test_qwen36_mxfp4_mtp_bundle_is_text_native_ready(self, tmp_path):

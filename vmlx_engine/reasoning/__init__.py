@@ -82,6 +82,7 @@ def _register_builtin_parsers():
     from .mistral_parser import MistralReasoningParser
     from .qwen3_parser import Qwen3ReasoningParser
     from .think_xml_parser import ThinkXmlReasoningParser
+    from .minimax_m3_parser import MiniMaxM3ReasoningParser
 
     register_parser("qwen3", Qwen3ReasoningParser)
     register_parser("deepseek_r1", DeepSeekR1ReasoningParser)
@@ -93,6 +94,8 @@ def _register_builtin_parsers():
     register_parser("mistral", MistralReasoningParser)
     # Gemma 4 uses <|channel>thought...<channel|> for reasoning
     register_parser("gemma4", Gemma4ReasoningParser)
+    # MiniMax-M3 uses <mm:think>...</mm:think> plain-XML think blocks
+    register_parser("minimax_m3", MiniMaxM3ReasoningParser)
 
 
 # Register built-in parsers on module load

@@ -136,7 +136,7 @@ def _speculative_incompatibility_reason(args) -> str | None:
     try:
         from .api.utils import is_mllm_model
 
-        if is_mllm_model(args.model, force_mllm=getattr(args, "is_mllm", False)):
+        if is_mllm_model(args.model, force_mllm=getattr(args, "is_mllm", False), force_text_only=getattr(args, "force_text_only", False)):
             return "multimodal (VLM)"
     except Exception:
         return None
@@ -486,6 +486,73 @@ def serve_command(args):
     from .server import RateLimiter, app, load_model
 
     logger = logging.getLogger(__name__)
+
+    # --text-only: set the server-global sentinel BEFORE any model-load routing so
+    # EVERY is_mllm_model() caller (incl. argless server-side VL routing) forces a
+    # detected-VL model to load text-only.
+    server._force_text_only = bool(getattr(args, "force_text_only", False))
+
+    # Install the vendored MiniMax-M3 runtime under mlx_lm.models.minimax_m3_vl so the
+    # text loader can resolve model_type=minimax_m3_vl. Idempotent + self-guards when the
+    # bundle/vendored file is absent; harmless for non-M3 models.
+    try:
+        from .models.minimax_m3.minimax_m3_register import register_minimax_m3_runtime
+        register_minimax_m3_runtime()
+    except Exception as _m3reg_e:
+        logger.debug("minimax_m3 runtime registration skipped: %s", _m3reg_e)
+
+    # -- MiniMax-M3 auto-settings TRANSPARENCY log (no-confusion guarantee) --
+    # On an M3 bundle, log the EXACT auto-resolved settings so what is applied is
+    # never ambiguous. Read-only, exception-guarded. paged_cache shows ON(!) if it
+    # were ever wrongly forced on (loud regression signal vs the paged-off policy).
+    try:
+        import json as _m3_json, os as _m3_os
+        _m3_cfgp = _m3_os.path.join(getattr(args, "model", "") or "", "config.json")
+        if _m3_os.path.isfile(_m3_cfgp):
+            _m3_c = _m3_json.load(open(_m3_cfgp))
+            _m3_mt = str(_m3_c.get("model_type", "")).lower()
+            _m3_arch = " ".join(str(a) for a in (_m3_c.get("architectures") or [])).lower()
+            if _m3_mt in {"minimax_m3", "minimax_m3_vl"} or "minimaxm3" in _m3_arch:
+                logger.info(
+                    "MiniMax-M3 AUTODETECTED (model_type=%s) -> auto-settings: "
+                    "paged_cache=%s, tq_kv=SKIP(native MSA), vl_route=%s, "
+                    "tool_parser=%s, reasoning_parser=%s, msa_per_step_sync=ON",
+                    _m3_mt or "minimaxm3",
+                    "OFF" if not getattr(args, "use_paged_cache", False) else "ON(!)",
+                    "ON" if _m3_os.environ.get("VMLX_M3_VL") else "off",
+                    getattr(args, "tool_call_parser", None) or "none",
+                    getattr(args, "reasoning_parser", None) or "auto/none",
+                )
+    except Exception:
+        pass
+
+    # MANUAL FAMILY OVERRIDE: install on the registry BEFORE any lookup so
+    # every downstream consumer (JANGTQ lane, DSV4/ZAYA cache policy, tool /
+    # reasoning parser auto-apply, thinking detection) sees the forced family
+    # instead of the autodetected one. Absent / "auto" leaves autodetect on.
+    _family_override = getattr(args, "model_family", None)
+    if _family_override and str(_family_override).strip().lower() != "auto":
+        try:
+            from .model_config_registry import get_model_config_registry
+            _reg = get_model_config_registry()
+            _reg.set_family_override(_family_override)
+            _known = set(_reg.list_registered())
+            if _family_override not in _known:
+                logger.warning(
+                    "--model-family=%r is not a registered family name. "
+                    "Honoring it anyway with a generic kv-cache contract. "
+                    "Known families: %s",
+                    _family_override,
+                    ", ".join(sorted(_known)),
+                )
+            logger.warning(
+                "Manual model-family override ENABLED: --model-family=%s "
+                "(autodetect bypassed for all registry lookups).",
+                _family_override,
+            )
+        except Exception as _fo_e:
+            logger.warning("Failed to install --model-family override: %s", _fo_e)
+
     _apply_jangtq_mpp_nax_policy(args, logger)
 
     # mlxstudio#138/#156: --kv-cache-quantization explicit-pass detection.
@@ -699,6 +766,7 @@ def serve_command(args):
             from .reasoning import get_parser
             parser_cls = get_parser(parser_name)
             server._reasoning_parser = parser_cls()
+            server._reasoning_parser_explicit_name = parser_name
             logger.info(f"Reasoning parser enabled: {parser_name}")
         except KeyError as e:
             print(f"Error: {e}")
@@ -1328,7 +1396,7 @@ def serve_command(args):
 
         # Check if target model is MLLM
         from .api.utils import is_mllm_model
-        is_mllm = is_mllm_model(args.model, force_mllm=getattr(args, 'is_mllm', False))
+        is_mllm = is_mllm_model(args.model, force_mllm=getattr(args, 'is_mllm', False), force_text_only=getattr(args, 'force_text_only', False))
         if is_mllm:
             print(
                 "  ⚠️  WARNING: Speculative decoding is incompatible with multimodal (VLM) models.")
@@ -1508,6 +1576,22 @@ def bench_command(args):
     import logging
 
     logger = logging.getLogger(__name__)
+
+    # MANUAL FAMILY OVERRIDE (same as serve_command) — install before the
+    # bench JANGTQ/DSV4 lookups so bench measures the forced family path too.
+    _family_override = getattr(args, "model_family", None)
+    if _family_override and str(_family_override).strip().lower() != "auto":
+        try:
+            from .model_config_registry import get_model_config_registry
+            get_model_config_registry().set_family_override(_family_override)
+            logger.warning(
+                "Manual model-family override ENABLED for bench: "
+                "--model-family=%s (autodetect bypassed).",
+                _family_override,
+            )
+        except Exception as _fo_e:
+            logger.warning("Failed to install --model-family override: %s", _fo_e)
+
     _apply_jangtq_mpp_nax_policy(args, logger)
 
     # mlxstudio#138: mirror serve_command's explicit-pass detection so bench
@@ -2467,6 +2551,19 @@ Examples:
              "Example: --enable-auto-tool-choice --tool-call-parser qwen",
     )
     serve_parser.add_argument(
+        "--model-family",
+        type=str,
+        default=None,
+        help="Manually force the model family, bypassing autodetection. The "
+             "engine normally detects the family from jang_config.json / "
+             "config.json; pass this to override that when detection is wrong "
+             "(e.g. renamed fine-tunes, GGUF, custom merges). The chosen "
+             "family's cache + tool/reasoning parser contract is used. "
+             "'auto' (or omitting the flag) keeps autodetection. Run with an "
+             "unknown family name and the engine still honors it with a kv "
+             "cache + a warning. Example: --model-family qwen3",
+    )
+    serve_parser.add_argument(
         "--tool-call-parser",
         type=str,
         default=None,
@@ -2511,6 +2608,7 @@ Examples:
             "granite3",
             "nemotron3",
             "minimax_m2",
+            "minimax_m3",
             "meetkai",
             "stepfun",
             "glm4",
@@ -2537,6 +2635,14 @@ Examples:
              "that content into a separate 'reasoning_content' field in the API response. "
              "'auto' = detect from model name. 'none' = explicitly disable. "
              f"Parsers: {', '.join(reasoning_choices)}.",
+    )
+    serve_parser.add_argument(
+        "--text-only",
+        action="store_true",
+        dest="force_text_only",
+        help="Force the model to load as TEXT-ONLY even if auto-detection recognizes it as a "
+             "vision/multimodal model. Overrides --is-mllm and autodetect. Backs the UI 'Force Off' "
+             "multimodal toggle for genuinely-detected VL models.",
     )
     serve_parser.add_argument(
         "--is-mllm",

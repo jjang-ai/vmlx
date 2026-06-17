@@ -1979,8 +1979,12 @@ class BlockAwarePrefixCache:
                     ):
                         pass  # Fall through to new block allocation
                     else:
-                        existing_block.ref_count += 1
-                        existing_block.touch()
+                        # issue #198 (1A): revive through touch() so a
+                        # cached-but-free block is removed from the free
+                        # queue AND restored to allocated_blocks atomically
+                        # (RLock is reentrant). Bare ref_count += 1 left
+                        # revived blocks missing from allocated_blocks.
+                        self.paged_cache.touch([existing_block])
                         if existing_block.ref_count == 2:
                             self.paged_cache.stats.shared_blocks += 1
                         reused = True
@@ -2020,8 +2024,8 @@ class BlockAwarePrefixCache:
                             ):
                                 existing_block = None  # Fall through to allocation
                             else:
-                                existing_block.ref_count += 1
-                                existing_block.touch()
+                                # issue #198 (1A): atomic revive (see above)
+                                self.paged_cache.touch([existing_block])
                                 if existing_block.ref_count == 2:
                                     self.paged_cache.stats.shared_blocks += 1
                                 self.paged_cache.stats.cache_hits += 1
@@ -3004,6 +3008,14 @@ class BlockAwarePrefixCache:
                 block = self.paged_cache.allocated_blocks.get(block_id)
                 if not block:
                     logger.warning(f"Block {block_id} not found in allocated blocks")
+                    # issue #198 (1B): report contiguous resident prefix so
+                    # partial paged-cache eviction is visible (full partial
+                    # reuse deferred pending live cache-pressure verification).
+                    logger.info(
+                        "issue #198 (1B): partial paged eviction — %d/%d blocks "
+                        "resident before block %s; falling back to cold prefill",
+                        len(all_block_data), len(block_table.block_ids), block_id,
+                    )
                     return None
 
                 if block.cache_data is None:
@@ -3031,6 +3043,12 @@ class BlockAwarePrefixCache:
                             )
                     if block.cache_data is None:
                         logger.debug(f"Block {block_id} has no tensor data stored")
+                        # issue #198 (1B): partial eviction diagnostic
+                        logger.info(
+                            "issue #198 (1B): partial paged eviction — %d/%d blocks "
+                            "resident before block %s (no tensor data); cold prefill",
+                            len(all_block_data), len(block_table.block_ids), block_id,
+                        )
                         return None
 
                 if getattr(block, "cache_data_from_disk", False):

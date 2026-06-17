@@ -357,6 +357,7 @@ class Scheduler:
             or self._model_uses_zaya_cache(model)
         )
         self._is_hybrid = self._is_hybrid_model(model)
+        self._uses_m3_msa_cache = self._model_uses_m3_msa_cache(model)
         # Do not silently widen repetition-penalty history for families whose
         # chat templates contain EOS/turn-boundary sentinels in the prompt.
         # A 512-token lookback penalizes legitimate stop tokens on MiniMax/Ling
@@ -430,6 +431,19 @@ class Scheduler:
                     f"{self.config.kv_cache_quantization} when applicable."
                 )
 
+        if (
+            self._uses_m3_msa_cache
+            and self.config.kv_cache_quantization != "none"
+        ):
+            logger.info(
+                "MiniMax-M3 MSA cache (MiniMaxM3SparseCache, Lightning-Indexer "
+                "idx_keys) detected — disabling generic KV cache quantization "
+                "(was: %s). The append-only MSA dual-cache is structurally "
+                "incompatible with q4/q8 quantized KV (SDPA mask dtype must "
+                "promote to bfloat16).",
+                self.config.kv_cache_quantization,
+            )
+            self.config.kv_cache_quantization = "none"
         if (
             self._uses_zaya_cache
             and self.config.kv_cache_quantization != "none"
@@ -1128,6 +1142,22 @@ class Scheduler:
             return False
 
     @staticmethod
+    def _model_uses_m3_msa_cache(model: Any) -> bool:
+        """Return True when model.make_cache() contains MiniMaxM3SparseCache (MSA).
+
+        MiniMax-M3's append-only MSA dual-cache (keys/values + Lightning-Indexer
+        idx_keys) is structurally incompatible with generic q4/q8 KV quantization:
+        the quantized KV path yields an SDPA mask whose dtype does not promote to
+        the bfloat16 output ("Mask type must promote to output type bfloat16").
+        """
+        if not hasattr(model, "make_cache"):
+            return False
+        try:
+            return any(type(c).__name__ == "MiniMaxM3SparseCache" for c in (model.make_cache() or []))
+        except Exception:
+            return False
+
+    @staticmethod
     def _turboquant_cache_supports_batch_api(model: Any) -> bool:
         """Return True when every TurboQuant cache declares real batch support."""
         if not hasattr(model, "make_cache"):
@@ -1207,8 +1237,13 @@ class Scheduler:
             # Match any class name ending with "KVCache" (e.g., KVCache,
             # RotatingKVCache, QuantizedKVCache, ChunkedKVCache) so future
             # KV cache variants are handled automatically without hardcoding.
+            # MiniMax-M3's MiniMaxM3SparseCache is a KVCache subclass: append-only,
+            # position-truncatable (its trim() slices keys/values/idx_keys by offset).
+            # It is NOT SSM/cumulative, so treat it as KV — otherwise M3 is mis-routed
+            # through the SSM-companion hybrid path (wrong + per-request re-derive overhead).
             kv_types = {
-                t for t in cache_types if t == "KVCache" or t.endswith("KVCache")
+                t for t in cache_types
+                if t == "KVCache" or t.endswith("KVCache") or t == "MiniMaxM3SparseCache"
             }
             if any(Scheduler._is_dsv4_cache_class_name(t) for t in cache_types):
                 return False
@@ -5473,10 +5508,34 @@ class Scheduler:
             # Insert into BatchGenerator with optional cache.
             # Wrapped in try/except to prevent lost requests — if insert fails
             # completely, put the request back in the waiting queue.
+            # M3 VL (additive, gated): when the engine attached preprocessed
+            # vision tensors to this request, the SingleBatchGenerator must see
+            # the FULL prompt (every image-token position present in one forward
+            # for the vision splice) with no partial/prefix cache, plus the
+            # pixel_values/image_grid_thw. Only triggers when VMLX_M3_VL routed
+            # an image request here; text requests are byte-for-byte unchanged.
+            _m3vl_pv = getattr(request, "pixel_values", None)
+            _m3vl_grid = getattr(request, "image_grid_thw", None)
+            _m3vl_active = (
+                _m3vl_pv is not None
+                and self.batch_generator.__class__.__name__ == "SingleBatchGenerator"
+            )
+            if _m3vl_active:
+                tokens_to_process = list(request.prompt_token_ids)
+                cache_to_use = None
+
             try:
                 try:
                     insert_kwargs = {}
-                    if (
+                    if _m3vl_active:
+                        insert_kwargs["pixel_values"] = [_m3vl_pv]
+                        insert_kwargs["image_grid_thw"] = [_m3vl_grid]
+                        request_processors = self._request_logits_processors(
+                            request, list(tokens_to_process)
+                        )
+                        if request_processors is not None:
+                            insert_kwargs["logits_processors"] = [request_processors]
+                    elif (
                         self.batch_generator.__class__.__name__
                         == "DSV4BatchGenerator"
                     ):

@@ -25,7 +25,31 @@ def _quantized_switch_glu(input_dims=128, hidden_dims=64, experts=8, cls=SwitchG
     return switch
 
 
+def _check_group128_realgeometry():
+    """Gate the real MiniMax-M3 routed-expert geometry: group_size=128, bits=2,
+    multiple scale groups (the live path; the default fixture above is group32).
+    Regression guard for the affine-2 kernel being numerically exact at group128.
+    """
+    sw = SwitchGLU(512, 256, 8, bias=False)
+    for name in ("gate_proj", "up_proj", "down_proj"):
+        setattr(sw, name, getattr(sw, name).to_quantized(group_size=128, bits=2, mode="affine"))
+    mx.eval(sw.parameters())
+    worst = 0.0
+    for seed in range(4):
+        mx.random.seed(seed)
+        x = mx.random.normal((1, 1, 512)).astype(mx.bfloat16)
+        indices = mx.random.permutation(8)[:4].reshape(1, 1, 4).astype(mx.uint32)
+        expected = sw(x, indices)
+        actual = affine2_switchglu_decode(sw, x, indices, opt=8)
+        mx.eval(expected, actual)
+        worst = max(worst, float(mx.max(mx.abs(
+            expected.astype(mx.float32) - actual.astype(mx.float32)))))
+    assert worst < 1e-2, ("group128 affine2 kernel diverged", worst)
+    return worst
+
+
 def main():
+    g128 = _check_group128_realgeometry()
     switch = _quantized_switch_glu()
     x = mx.random.normal((1, 1, 128)).astype(mx.bfloat16)
     indices = mx.array([[[1, 3, 5, 7]]], dtype=mx.uint32)
@@ -60,7 +84,17 @@ def main():
     guarded = _quantized_switch_glu(cls=MiniMaxM3Affine2SwitchGLU)
     x2 = mx.random.normal((1, 2, 128)).astype(mx.bfloat16)
     indices2 = mx.array([[[1, 3, 5, 7], [0, 2, 4, 6]]], dtype=mx.uint32)
-    assert can_use_affine2_switchglu(guarded, x, indices)
+    os.environ.pop("VMLINUX_M3_AFFINE2_SWITCH", None)
+    os.environ.pop("VMLX_M3_AFFINE2_SWITCH", None)
+    # Default DISABLED: exact + ~2x faster and short-gen coherent (async cache-sync
+    # fix), but longer/thinking generations still degenerate with the fast path on
+    # (residual async hazard). Keep off until fixed; VMLX_M3_AFFINE2_SWITCH=1 opts in.
+    assert not can_use_affine2_switchglu(guarded, x, indices)
+    os.environ["VMLX_M3_AFFINE2_SWITCH"] = "1"
+    try:
+        assert can_use_affine2_switchglu(guarded, x, indices)
+    finally:
+        os.environ.pop("VMLX_M3_AFFINE2_SWITCH", None)
     os.environ["VMLX_M3_AFFINE2_SWITCH"] = "0"
     try:
         assert not can_use_affine2_switchglu(guarded, x, indices)
@@ -73,7 +107,8 @@ def main():
 
     print(
         f"OK: affine2 SwitchGLU fast path matches baseline, "
-        f"max_abs={max_abs:.6g}, pair_max={pair_max:.6g}; multi-token fallback holds"
+        f"max_abs={max_abs:.6g}, pair_max={pair_max:.6g}, group128_max={g128:.6g}; "
+        f"default-disabled (long-gen corruption, off until fixed) + multi-token fallback holds"
     )
 
 

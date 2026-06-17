@@ -91,7 +91,7 @@ class MiniMaxToolParser(ToolParser):
 
     # Pattern to match <parameter name="key">value</parameter> within an invoke
     PARAM_PATTERN = re.compile(
-        r"<parameter name=([^>]+)>(.*?)</parameter>",
+        r"<(?:parameter|field) name=([^>]+)>(.*?)</(?:parameter|field)>",  # MiniMax-M2.7-Small uses <field>
         re.DOTALL,
     )
 
@@ -104,7 +104,7 @@ class MiniMaxToolParser(ToolParser):
         re.DOTALL,
     )
     LENIENT_PARAM_PATTERN = re.compile(
-        r"<parameter name=([^>]+)>(.*?)(?=(?:</parameter>|<parameter name=|</invoke>|$))",
+        r"<(?:parameter|field) name=([^>]+)>(.*?)(?=(?:</parameter>|</field>|<parameter name=|<field name=|</invoke>|$))",
         re.DOTALL,
     )
 
@@ -230,8 +230,9 @@ class MiniMaxToolParser(ToolParser):
             for param_name, param_value in params:
                 clean_name = _extract_name(param_name)
                 clean_value = param_value.strip()
-                if clean_value.endswith("</parameter>"):
-                    clean_value = clean_value[: -len("</parameter>")].strip()
+                for _close in ("</parameter>", "</field>"):
+                    if clean_value.endswith(_close):
+                        clean_value = clean_value[: -len(_close)].strip()
                 arguments[clean_name] = _convert_param_value(clean_value)
             return {
                 "id": generate_tool_id(),
@@ -241,7 +242,7 @@ class MiniMaxToolParser(ToolParser):
 
         raw_content = invoke_content.strip()
         if raw_content:
-            if lenient and "<parameter" in raw_content:
+            if lenient and ("<parameter" in raw_content or "<field" in raw_content):
                 return None
             try:
                 json.loads(raw_content)

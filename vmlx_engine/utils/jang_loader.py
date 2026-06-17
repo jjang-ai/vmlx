@@ -1205,6 +1205,32 @@ def _patch_turboquant_make_cache(model, jang_cfg: dict, model_config: dict):
         )
         return
 
+    def _is_minimax_m3_config(cfg: dict) -> bool:
+        candidates = [cfg]
+        text_cfg = cfg.get("text_config") if isinstance(cfg.get("text_config"), dict) else None
+        if text_cfg is not None:
+            candidates.append(text_cfg)
+
+        for candidate in candidates:
+            model_type = str(candidate.get("model_type", "")).lower()
+            if model_type in {"minimax_m3", "minimax_m3_vl"}:
+                return True
+            archs = candidate.get("architectures")
+            if isinstance(archs, list) and any(
+                "minimaxm3" in str(arch).lower() for arch in archs
+            ):
+                return True
+        return False
+
+    if _is_minimax_m3_config(model_config):
+        logger.info(
+            "  TurboQuant KV skipped: MiniMax-M3 uses native MSA cache "
+            "(MiniMaxM3SparseCache with keys/values/idx_keys). Generic "
+            "TurboQuantKVCache has no idx_keys lane, so replacing make_cache "
+            "would violate sparse-attention block selection."
+        )
+        return
+
     _tq_cfg = jang_cfg.get("turboquant")
     if not _tq_cfg:
         # Auto mode is selected by the CLI/panel when the user has not
@@ -2014,6 +2040,7 @@ def _load_jang_v2(
         config["quantization"]["bits"],
         config["quantization"]["group_size"],
     )
+    _rebuild_minimax_m3_switch_experts(model, config)
 
     # Mistral-Small-4-119B (and any future model_type-promoted text load):
     # mlx_lm.utils.load_model's nn.quantize predicate `f"{p}.scales" in
@@ -2729,6 +2756,29 @@ def _load_jang_v2_vlm(
     config = vlm_load_config(path)
     _ensure_jang_family_runtime_supported(path, config)
 
+    # JANG Gemma-4 VL bundles (E2B/E4B/26B-A4B/31B) are early-fusion
+    # "gemma4_unified" architecture, but some converter revisions stamp the
+    # top model_type as plain "gemma4". Upstream mlx_vlm.models.gemma4 is the
+    # WRONG graph for these JANG bundles and produces '---'/'<thought' token-
+    # loop gibberish, while the vendored gemma4_unified Model (used by the 12B
+    # which IS stamped unified) decodes them coherently. This path is JANG-only,
+    # so promote any gemma4 -> gemma4_unified to resolve the correct Model.
+    # PROVEN: 31B-qat '---' -> 'The capital of France is Paris.' under this route.
+    if str(config.get("model_type") or "") == "gemma4":
+        config = dict(config)
+        config["model_type"] = "gemma4_unified"
+        _g4_tc = config.get("text_config")
+        if isinstance(_g4_tc, dict):
+            _g4_tc = dict(_g4_tc)
+            if str(_g4_tc.get("model_type") or "") in ("gemma4", "gemma4_text", ""):
+                _g4_tc["model_type"] = "gemma4_unified_text"
+            config["text_config"] = _g4_tc
+        logger.info(
+            "  JANG Gemma-4 VL promotion: model_type gemma4 -> gemma4_unified "
+            "(routing to vendored unified Model; upstream mlx_vlm gemma4 graph "
+            "is incoherent for JANG bundles)"
+        )
+
     # Runtime quantization-shape repair (vmlx#config-repair). See
     # `_load_jang_v2` for the full rationale.
     config, default_bits, block_size = _prepare_runtime_weight_quantization(
@@ -3142,7 +3192,9 @@ def _load_jang_v2_vlm(
     _vlm_text_mt = config.get("text_config", {}).get(
         "model_type", config.get("model_type", "")
     )
-    _vlm_needs_gemma4_switch_remap = _vlm_text_mt in ("gemma4", "gemma4_text")
+    _vlm_needs_gemma4_switch_remap = _vlm_text_mt in (
+        "gemma4", "gemma4_text", "gemma4_unified", "gemma4_unified_text"
+    )
 
     # vmlx#114: cross-shard pre-fix for mixed-precision JANG VLMs. Read all shard
     # headers (no data load) into a combined shape map so a module whose .weight
@@ -3377,7 +3429,7 @@ def _load_jang_v2_vlm(
         _text_mt = config.get("text_config", {}).get("model_type", "")
         _text_cfg_for_ple = config.get("text_config", config)
         _has_ple_module = bool(_text_cfg_for_ple.get("hidden_size_per_layer_input"))
-        _ple_eligible_types = {"gemma4_text", "gemma3n", "gemma3n_text", "gemma4"}
+        _ple_eligible_types = {"gemma4_text", "gemma3n", "gemma3n_text", "gemma4", "gemma4_unified", "gemma4_unified_text"}
         _gemma_family_by_name = _text_mt in _ple_eligible_types or config.get(
             "model_type", ""
         ) in _ple_eligible_types
@@ -3821,6 +3873,56 @@ def _load_safetensors_tensor_for_mlx(path: Path, key: str) -> Any:
 # ─── Public API ──────────────────────────────────────────────────────
 
 
+def _ensure_gemma4_jang_audio_multimodal_flag(path: Path) -> None:
+    """One-time, idempotent in-place patch for Gemma-4 JANG audio bundles.
+
+    JANG_4M (affine-quant) gemma4 bundles shipped WITHOUT
+    ``quantization.multimodal`` in config.json, so the underlying MLX quantizer
+    affine-quantizes the audio (and vision) embedders at load time -> degenerate
+    audio output (the model "thinks" garbage on audio input). mxfp4/mxfp8 ship
+    ``quantization.multimodal = "fp16_passthrough_embedders_early_fusion"`` which
+    keeps the early-fusion embedders in fp16. Detect a gemma4 bundle that HAS
+    audio and is MISSING the flag, and add it to config.json in place.
+
+    Idempotent: returns early if the flag is already present (so mxfp4/mxfp8 are
+    never rewritten). Gated on ``audio_config`` so vision-only gemma4 (26B/31B)
+    and non-quantized bundles are never touched. Best-effort: any failure is
+    logged and skipped (never blocks load).
+    """
+    try:
+        cfg_path = path / "config.json"
+        if not cfg_path.exists():
+            return
+        cfg = json.loads(cfg_path.read_text())
+        mt = str(cfg.get("model_type", "")).lower()
+        tc = cfg.get("text_config")
+        tmt = str(tc.get("model_type", "")).lower() if isinstance(tc, dict) else ""
+        if not (mt.startswith("gemma4") or tmt.startswith("gemma4")):
+            return
+        # Gate on audio: leave vision-only gemma4 (26B/31B) and text bundles alone.
+        if "audio_config" not in cfg:
+            return
+        quant = cfg.get("quantization")
+        if not isinstance(quant, dict):
+            return  # non-quantized (fp16) bundle: embedders already fp16.
+        if quant.get("multimodal"):
+            return  # already correct (mxfp4/mxfp8, or already patched) -> one-time.
+        quant["multimodal"] = "fp16_passthrough_embedders_early_fusion"
+        cfg["quantization"] = quant
+        cfg_path.write_text(json.dumps(cfg, indent=2))
+        logger.info(
+            "  Gemma-4 JANG audio fix: added quantization.multimodal="
+            "'fp16_passthrough_embedders_early_fusion' to %s (keeps audio/vision "
+            "embedders fp16; one-time idempotent in-place patch).",
+            cfg_path,
+        )
+    except Exception as exc:  # never block model load on this best-effort patch
+        logger.warning(
+            "Gemma-4 JANG audio multimodal-flag patch skipped (%s): %s",
+            path, exc,
+        )
+
+
 def load_jang_vlm_model(
     model_path: str | Path, skip_eval: bool = False, filter_expert_keys: bool = False
 ):
@@ -3838,6 +3940,8 @@ def load_jang_vlm_model(
         Tuple of (model, processor) compatible with mlx-vlm.generate()
     """
     path = Path(model_path)
+    # One-time JANG audio fix: ensure gemma4 audio bundles keep embedders fp16.
+    _ensure_gemma4_jang_audio_multimodal_flag(path)
     config_path = _find_config_path(path)
     if not config_path:
         raise FileNotFoundError(f"No JANG config found in {path}")
@@ -4727,6 +4831,147 @@ def _upgrade_switch_to_quantized(model, bits, group_size):
                 else:
                     parent = getattr(parent, p)
             setattr(parent, parts[1], ql)
+
+
+def _is_minimax_m3_config(config: dict | None) -> bool:
+    if not isinstance(config, dict):
+        return False
+    text_config = config.get("text_config")
+    text_model_type = (
+        text_config.get("model_type") if isinstance(text_config, dict) else None
+    )
+    model_type = str(config.get("model_type") or text_model_type or "").lower()
+    architectures = config.get("architectures") or []
+    arch_text = " ".join(str(a).lower() for a in architectures)
+    return model_type in {"minimax_m3", "minimax_m3_vl"} or "minimaxm3" in arch_text
+
+
+def _minimax_m3_switch_quant_override(config: dict, runtime_path: str) -> dict | None:
+    qcfg = config.get("quantization") if isinstance(config, dict) else None
+    if not isinstance(qcfg, dict):
+        return None
+
+    candidates = {runtime_path}
+    if runtime_path.startswith("model."):
+        candidates.add(f"language_model.{runtime_path}")
+    if runtime_path.startswith("language_model.model."):
+        candidates.add(runtime_path[len("language_model.") :])
+
+    expanded = set(candidates)
+    for cand in candidates:
+        expanded.add(cand.replace(".mlp.switch_mlp.", ".block_sparse_moe.switch_mlp."))
+        if cand.startswith("model."):
+            expanded.add(
+                ("language_model." + cand).replace(
+                    ".mlp.switch_mlp.",
+                    ".block_sparse_moe.switch_mlp.",
+                )
+            )
+
+    for cand in expanded:
+        value = qcfg.get(cand)
+        if isinstance(value, dict) and "bits" in value and "group_size" in value:
+            return {
+                "bits": int(value["bits"]),
+                "group_size": int(value["group_size"]),
+                "mode": str(value.get("mode") or qcfg.get("mode") or "affine"),
+            }
+    return None
+
+
+def _set_module_by_path(root, path: str, value) -> bool:
+    parts = path.rsplit(".", 1)
+    if len(parts) != 2:
+        return False
+    parent = root
+    try:
+        for part in parts[0].split("."):
+            if part.isdigit():
+                parent = parent[int(part)]
+            else:
+                parent = getattr(parent, part)
+        setattr(parent, parts[1], value)
+        return True
+    except Exception:
+        return False
+
+
+def _rebuild_minimax_m3_switch_experts(model, config: dict | None) -> int:
+    """Rebuild MiniMax-M3 routed experts with config-authored quant metadata.
+
+    The generic mlx-lm skeleton path can quantize SwitchGLU children with the
+    bundle defaults (8/64 or 4/64). MiniMax-M3 routed experts are declared per
+    projection as 2-bit/group-128 under
+    language_model.model.layers.N.block_sparse_moe.switch_mlp.*. Rebuild before
+    loading weights so gather_qmm and the affine-2 fast path see the correct
+    projection shape and quant settings.
+    """
+    if not _is_minimax_m3_config(config):
+        return 0
+
+    try:
+        from mlx_lm.models.switch_layers import QuantizedSwitchLinear
+    except ImportError:
+        return 0
+
+    text_cfg = (
+        config.get("text_config") if isinstance(config.get("text_config"), dict) else config
+    )
+    hidden_size = int(text_cfg.get("hidden_size") or config.get("hidden_size") or 0)
+    intermediate_size = int(
+        text_cfg.get("intermediate_size") or config.get("intermediate_size") or 0
+    )
+
+    rebuilt = 0
+    for name, module in list(model.named_modules()):
+        if ".switch_mlp." not in name:
+            continue
+        proj_name = name.rsplit(".", 1)[-1]
+        if proj_name not in {"gate_proj", "up_proj", "down_proj"}:
+            continue
+        override = _minimax_m3_switch_quant_override(config, name)
+        if override is None:
+            continue
+
+        num_experts = getattr(module, "num_experts", None)
+        if num_experts is None:
+            weight = getattr(module, "weight", None)
+            if weight is not None and len(getattr(weight, "shape", ())) >= 1:
+                num_experts = int(weight.shape[0])
+        if not num_experts:
+            continue
+
+        if proj_name == "down_proj":
+            input_dims = intermediate_size or int(getattr(module, "input_dims", 0) or 0)
+            output_dims = hidden_size or int(getattr(module, "output_dims", 0) or 0)
+        else:
+            input_dims = hidden_size or int(getattr(module, "input_dims", 0) or 0)
+            output_dims = intermediate_size or int(
+                getattr(module, "output_dims", 0) or 0
+            )
+        if input_dims <= 0 or output_dims <= 0:
+            continue
+
+        has_bias = hasattr(module, "bias") and getattr(module, "bias", None) is not None
+        rebuilt_module = QuantizedSwitchLinear(
+            input_dims,
+            output_dims,
+            int(num_experts),
+            bias=has_bias,
+            group_size=int(override["group_size"]),
+            bits=int(override["bits"]),
+            mode=str(override.get("mode") or "affine"),
+        )
+        if _set_module_by_path(model, name, rebuilt_module):
+            rebuilt += 1
+
+    if rebuilt:
+        logger.info(
+            "  MiniMax-M3: rebuilt %d switch-expert projection(s) from "
+            "config quantization overrides",
+            rebuilt,
+        )
+    return rebuilt
 
 
 def _upgrade_modules_with_uint32_weights(

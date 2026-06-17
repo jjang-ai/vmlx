@@ -226,7 +226,9 @@ class MLLMSchedulerConfig:
 
     # Prefix/Paged cache settings
     enable_prefix_cache: bool = True
-    use_paged_cache: bool = True
+    # Eric mandatory cache policy: default paged cache OFF for all families.
+    # zaya/dsv4/m3 opt back IN explicitly via cli.py per-family overrides.
+    use_paged_cache: bool = False
     paged_cache_block_size: int = 64
     max_cache_blocks: int = 1000
 

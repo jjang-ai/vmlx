@@ -38,6 +38,12 @@ class QwenToolParser(ToolParser):
     # Pattern for bracket-style: [Calling tool: func_name({...})]
     BRACKET_PATTERN = re.compile(r"\[Calling tool:\s*(\w+)\((\{.*?\})\)\]", re.DOTALL)
 
+    # Qwen3-Coder / Qwen3.6 XML function-parameter format (issue #192):
+    #   <function=name><parameter=arg>value</parameter></function>
+    FUNCTION_PATTERN = re.compile(r"<function=([^>]+)>\s*(.*?)\s*</function>", re.DOTALL)
+    PARAMETER_PATTERN = re.compile(r"<parameter=([^>]+)>\s*(.*?)\s*</parameter>", re.DOTALL)
+    BARE_ARG_PATTERN = re.compile(r"<([A-Za-z_][A-Za-z0-9_]*)>\s*(.*?)\s*</\1>", re.DOTALL)
+
     @classmethod
     def _plain_tool_line_call(
         cls, text: str, request: dict[str, Any] | None
@@ -72,6 +78,43 @@ class QwenToolParser(ToolParser):
             "name": tool_name,
             "arguments": json.dumps({param_name: value}, ensure_ascii=False),
         }
+
+    @staticmethod
+    def _coerce_arg_value(value: str) -> Any:
+        value = value.strip()
+        try:
+            return json.loads(value)
+        except (json.JSONDecodeError, ValueError):
+            return value
+
+    @classmethod
+    def _parse_function_blocks(cls, text: str) -> list[dict[str, Any]]:
+        """Parse Qwen3-Coder XML tool format (issue #192).
+
+        <function=name><parameter=p>v</parameter></function>; falls back to
+        bare <p>v</p> params when no <parameter=> tags are present.
+        """
+        calls: list[dict[str, Any]] = []
+        for func_name, body in cls.FUNCTION_PATTERN.findall(text):
+            name = func_name.strip()
+            if not name:
+                continue
+            arguments: dict[str, Any] = {}
+            params = cls.PARAMETER_PATTERN.findall(body)
+            if params:
+                for pn, pv in params:
+                    arguments[pn.strip()] = cls._coerce_arg_value(pv)
+            else:
+                for pn, pv in cls.BARE_ARG_PATTERN.findall(body):
+                    arguments[pn.strip()] = cls._coerce_arg_value(pv)
+            calls.append(
+                {
+                    "id": generate_tool_id(),
+                    "name": name,
+                    "arguments": json.dumps(arguments, ensure_ascii=False),
+                }
+            )
+        return calls
 
     def extract_tool_calls(
         self, model_output: str, request: dict[str, Any] | None = None
@@ -129,6 +172,18 @@ class QwenToolParser(ToolParser):
         if xml_matches:
             cleaned_text = self.XML_PATTERN.sub("", cleaned_text).strip()
 
+        # Qwen3-Coder / Qwen3.6 XML function-parameter format (issue #192)
+        if not tool_calls and "<function=" in cleaned_text:
+            func_calls = self._parse_function_blocks(cleaned_text)
+            if func_calls:
+                tool_calls.extend(func_calls)
+                cleaned_text = self.FUNCTION_PATTERN.sub("", cleaned_text)
+                cleaned_text = (
+                    cleaned_text.replace("<tool_call>", "")
+                    .replace("</tool_call>", "")
+                    .strip()
+                )
+
         if tool_calls:
             return ExtractedToolCallInformation(
                 tools_called=True,
@@ -162,7 +217,9 @@ class QwenToolParser(ToolParser):
         """
         # Check for tool call markers
         has_tool_marker = (
-            "<tool_call>" in current_text or "[Calling tool:" in current_text
+            "<tool_call>" in current_text
+            or "[Calling tool:" in current_text
+            or "<function=" in current_text  # issue #192
         )
 
         if not has_tool_marker:
@@ -170,7 +227,11 @@ class QwenToolParser(ToolParser):
 
         # If we're in a tool call, accumulate and parse at the end
         # For simplicity, return None during accumulation
-        if "</tool_call>" in delta_text or ")]" in delta_text:
+        if (
+            "</tool_call>" in delta_text
+            or ")]" in delta_text
+            or "</function>" in delta_text  # issue #192
+        ):
             # Tool call complete, parse the whole thing
             result = self.extract_tool_calls(current_text)
             if result.tools_called:

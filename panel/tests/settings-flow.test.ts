@@ -115,7 +115,7 @@ const DEFAULT_CONFIG: SessionConfig = {
     cacheMemoryPercent: 15,
     cacheTtlMinutes: 0,
     noMemoryAwareCache: false,
-    usePagedCache: true,
+    usePagedCache: false,
     pagedCacheBlockSize: 64,
     maxCacheBlocks: 1000,
     kvCacheQuantization: 'auto',
@@ -124,7 +124,7 @@ const DEFAULT_CONFIG: SessionConfig = {
     enableDiskCache: true,
     diskCacheMaxGb: 10,
     diskCacheDir: '',
-    enableBlockDiskCache: true,
+    enableBlockDiskCache: false,
     blockDiskCacheMaxGb: 10,
     blockDiskCacheDir: '',
     streamInterval: 1,
@@ -1287,6 +1287,16 @@ describe('Tool Integration', () => {
         expect(getFlagValue(out, '--reasoning-parser')).toBe('minimax_m2')
     })
 
+    it('passes MiniMax-M3 through its registered reasoning parser', () => {
+        const out = preview(
+            { reasoningParser: 'auto', toolCallParser: 'auto', enableAutoToolChoice: true },
+            { family: 'minimax_m3', reasoningParser: 'minimax_m3', toolParser: 'minimax_m3', enableAutoToolChoice: true },
+        )
+
+        expect(getFlagValue(out, '--tool-call-parser')).toBe('minimax_m3')
+        expect(getFlagValue(out, '--reasoning-parser')).toBe('minimax_m3')
+    })
+
     it('exposes MiniMax as its own reasoning parser option instead of under qwen3', () => {
         const formSource = readFileSync(resolve(__dirname, '../src/renderer/src/components/sessions/SessionConfigForm.tsx'), 'utf8')
 
@@ -1960,8 +1970,8 @@ describe('No Hardcoded Values', () => {
     })
 
     it('changing pagedCacheBlockSize produces different CLI output', () => {
-        expect(getFlagValue(preview({ enablePrefixCache: true, pagedCacheBlockSize: 32 }), '--paged-cache-block-size')).toBe('32')
-        expect(getFlagValue(preview({ enablePrefixCache: true, pagedCacheBlockSize: 256 }), '--paged-cache-block-size')).toBe('256')
+        expect(getFlagValue(preview({ enablePrefixCache: true, usePagedCache: true, pagedCacheBlockSize: 32 }), '--paged-cache-block-size')).toBe('32')
+        expect(getFlagValue(preview({ enablePrefixCache: true, usePagedCache: true, pagedCacheBlockSize: 256 }), '--paged-cache-block-size')).toBe('256')
     })
 
     it('deepseek-v4 enables native composite prefix cache by default even with stale cache config', () => {
@@ -2213,8 +2223,8 @@ describe('No Hardcoded Values', () => {
     })
 
     it('changing maxCacheBlocks produces different CLI output', () => {
-        expect(getFlagValue(preview({ enablePrefixCache: true, maxCacheBlocks: 500 }), '--max-cache-blocks')).toBe('500')
-        expect(getFlagValue(preview({ enablePrefixCache: true, maxCacheBlocks: 5000 }), '--max-cache-blocks')).toBe('5000')
+        expect(getFlagValue(preview({ enablePrefixCache: true, usePagedCache: true, maxCacheBlocks: 500 }), '--max-cache-blocks')).toBe('500')
+        expect(getFlagValue(preview({ enablePrefixCache: true, usePagedCache: true, maxCacheBlocks: 5000 }), '--max-cache-blocks')).toBe('5000')
     })
 
     it('changing startup generation defaults does not change CLI output', () => {
@@ -2257,7 +2267,7 @@ describe('Default IP and New Settings', () => {
         expect(getFlagValue(out, '--host')).toBe('127.0.0.1')
     })
 
-    it('current startup defaults keep the single-user cache stack enabled', () => {
+    it('current startup defaults use the paged-off SSD-prefix single-user cache stack', () => {
         const out = preview()
 
         expect(getFlagValue(out, '--max-num-seqs')).toBe('1')
@@ -2266,9 +2276,10 @@ describe('Default IP and New Settings', () => {
         expect(getFlagValue(out, '--completion-batch-size')).toBe('512')
         expect(hasFlag(out, '--continuous-batching')).toBe(true)
         expect(hasFlag(out, '--disable-prefix-cache')).toBe(false)
-        expect(hasFlag(out, '--cache-memory-percent')).toBe(false)
-        expect(hasFlag(out, '--use-paged-cache')).toBe(true)
-        expect(hasFlag(out, '--enable-block-disk-cache')).toBe(true)
+        expect(hasFlag(out, '--cache-memory-percent')).toBe(true)
+        expect(hasFlag(out, '--use-paged-cache')).toBe(false)
+        expect(hasFlag(out, '--enable-block-disk-cache')).toBe(false)
+        expect(hasFlag(out, '--enable-disk-cache')).toBe(true)
         expect(hasFlag(out, '--default-temperature')).toBe(false)
         expect(hasFlag(out, '--default-top-p')).toBe(false)
         expect(hasFlag(out, '--default-repetition-penalty')).toBe(false)
@@ -2278,7 +2289,7 @@ describe('Default IP and New Settings', () => {
     it('session manager migrates the exact stale continuous-cache default tuple', () => {
         const source = readFileSync('src/main/sessions.ts', 'utf8')
         expect(source).toContain('function applyCacheStackStartupDefaultMigration')
-        expect(source).toContain('const CACHE_STACK_STARTUP_DEFAULTS_VERSION = 2')
+        expect(source).toContain('const CACHE_STACK_STARTUP_DEFAULTS_VERSION = 3')
         expect(source).toContain('function markCacheStackStartupDefaultsCurrent')
         expect(source).toContain('config.cacheStackStartupDefaultsVersion = CACHE_STACK_STARTUP_DEFAULTS_VERSION')
         expect(source).toContain('config.continuousBatching === true')
@@ -2298,6 +2309,13 @@ describe('Default IP and New Settings', () => {
         expect(source).toContain('config.enableBlockDiskCache = true')
         expect(source).toContain('config.blockDiskCacheMaxGb = 10')
         expect(source).toContain('config.cacheMemoryPercent = 15')
+        // Phase-1: migration branches outcome by path-dependence.
+        // Generic (non-path-dependent) upgraders flip to paged-OFF + SSD prefix.
+        expect(source).toContain('const staleV2GenericPagedOn =')
+        expect(source).toContain('if (zayaCacheMigrationTarget) {')
+        expect(source).toContain('config.usePagedCache = false')
+        expect(source).toContain('config.enableDiskCache = true')
+        expect(source).toContain('config.enableBlockDiskCache = false')
     })
 
     it('cache-stack migration is one-time versioned so saved user toggles stick', () => {
@@ -3203,7 +3221,7 @@ describe('Settings → CLI Round-Trip Completeness', () => {
         expect(normalized).not.toContain('--rate-limit')     // rateLimit is 0
         expect(normalized).not.toContain('--is-mllm')        // isMultimodal is undefined/false
         expect(normalized).not.toContain('--disable-prefix-cache')  // cache stack is enabled by default
-        expect(normalized).not.toContain('--enable-disk-cache')     // paged cache uses block L2, not legacy prompt L2
+        expect(normalized).toContain('--enable-disk-cache')         // Phase-1: paged RAM cache OFF, SSD prompt L2 is the default prefix cache
         expect(normalized).not.toContain('--speculative-model')     // no speculative model
         expect(normalized).not.toContain('--embedding-model')       // empty
         expect(normalized).not.toContain('--log-level')             // INFO is default (not emitted)
@@ -3219,8 +3237,8 @@ describe('Settings → CLI Round-Trip Completeness', () => {
         expect(normalized).toContain('--timeout')
         expect(normalized).not.toContain('--max-tokens')
         expect(normalized).toContain('--continuous-batching')
-        expect(normalized).toContain('--use-paged-cache')
-        expect(normalized).toContain('--enable-block-disk-cache')
+        expect(normalized).not.toContain('--use-paged-cache')        // Phase-1: paged RAM block pool OFF by default
+        expect(normalized).not.toContain('--enable-block-disk-cache') // block L2 is paged-coupled; off when paged off
         expect(normalized).not.toContain('--default-temperature')
         expect(normalized).not.toContain('--default-top-p')
         expect(normalized).not.toContain('--default-repetition-penalty')

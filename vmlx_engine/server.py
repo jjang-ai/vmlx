@@ -590,6 +590,7 @@ _inference_endpoints: list[str] = [
 _wake_timeout: int = 300
 _model_load_error: str | None = None  # Surfaced via /health when model fails to load
 _smelt_enabled: bool = False  # --smelt: partial expert loading for MoE
+_force_text_only: bool = False  # --text-only: force a detected-VL model to load text-only
 _smelt_experts: int = 50  # --smelt-experts: percentage of experts per layer
 _flash_moe_enabled: bool = False  # --flash-moe: SSD expert streaming
 _flash_moe_loader = None  # FlashMoEExpertLoader instance (set after model load)
@@ -1756,6 +1757,28 @@ def _messages_multimodal_summary(messages) -> dict:
     return summary
 
 
+def _m3_vl_image_ok(engine) -> bool:
+    """True iff VMLX_M3_VL is set and the loaded engine model is MiniMax-M3 VL.
+
+    Additive + gated: lets image requests through the text-routed (is_mllm=False)
+    M3 path instead of being rejected. When VMLX_M3_VL is unset this always
+    returns False, so the existing reject behavior is byte-for-byte unchanged.
+    """
+    try:
+        from .models.minimax_m3.m3_vl_preprocess import (
+            is_m3_vl_model,
+            m3_vl_enabled,
+        )
+    except Exception:
+        return False
+    if not m3_vl_enabled():
+        return False
+    model = getattr(engine, "_model", None)
+    if model is None:
+        return False
+    return is_m3_vl_model(model)
+
+
 def _messages_have_multimodal(messages) -> bool:
     for msg in messages or []:
         if hasattr(msg, "model_dump"):
@@ -2754,7 +2777,7 @@ _VISUAL_GROUNDING_MARKERS = (
     "<|box_end|>",
 )
 _VISUAL_GROUNDING_SPAN_RE = re.compile(
-    r"<\|(?:point|box)_start\|>[\s\S]*?(?:<\|(?:point|box)_end\|>|$)",
+    r"<\|(?:point|box)_start\|>(?P<inner>[\s\S]*?)(?:<\|(?:point|box)_end\|>|$)",
     re.DOTALL,
 )
 _VISUAL_GROUNDING_END_RE = re.compile(r"<\|(?:point|box)_end\|>")
@@ -2772,11 +2795,26 @@ def _strip_partial_visual_grounding_suffix(text: str) -> str:
 
 
 def _strip_visual_grounding_markup_for_display(text: str) -> str:
-    """Remove VL point/box control spans from user-visible assistant text."""
+    """Hide VL point/box control *tokens* from user-visible assistant text.
+
+    Issue #196: the special-token markers are always removed, but a span's
+    literal inner text is preserved when it is coordinate-bearing (contains a
+    digit), e.g. UI-TARS ``<|box_start|>(371,60)<|box_end|>`` -> ``(371,60)``,
+    so grounding VLMs stay usable via the OpenAI API. Pure control-markup
+    spans with no coordinates (ZAYA-VL ``<|point_start|>tool<|point_end|>``)
+    are still dropped entirely.
+    """
     if not text:
         return text
-    cleaned = _VISUAL_GROUNDING_SPAN_RE.sub("", text)
-    cleaned = _VISUAL_GROUNDING_END_RE.sub("", cleaned)
+
+    def _span_sub(match: "re.Match[str]") -> str:
+        inner = match.group("inner") or ""
+        return inner if any(ch.isdigit() for ch in inner) else ""
+
+    cleaned = _VISUAL_GROUNDING_SPAN_RE.sub(_span_sub, text)
+    # Remove any stray/unpaired markers left after coordinate spans.
+    for _marker in _VISUAL_GROUNDING_MARKERS:
+        cleaned = cleaned.replace(_marker, "")
     return _strip_partial_visual_grounding_suffix(cleaned)
 
 
@@ -2811,6 +2849,20 @@ def _strip_tool_markup_residue_for_display(text: str) -> str:
     return re.sub(r"[ \t]*\n[ \t]*\n[ \t]*", "\n", cleaned).strip()
 
 
+def _parser_routes_tools_via_reasoning_channel(request_parser, harmony_active: bool) -> bool:
+    """GPT-OSS/Harmony emit tool calls through the commentary channel that the
+    reasoning parser surfaces alongside reasoning text, so the reasoning tail must
+    be inspected for tool markers there. ALL OTHER reasoning families emit tool
+    calls in the content/action channel after reasoning closes — inspecting their
+    reasoning tail only yields false positives where reasoning that merely MENTIONS
+    tool syntax stalls visible output (issue #199-2A). Gate the reasoning-channel
+    tool-marker buffering trigger on this predicate."""
+    if harmony_active:
+        return True
+    name = type(request_parser).__name__.lower() if request_parser is not None else ""
+    return "gptoss" in name or "gpt_oss" in name or "harmony" in name
+
+
 def _has_tool_marker_or_partial_suffix(text: str) -> bool:
     """Return True for full native tool markers or a marker split at stream tail."""
     if not text:
@@ -2824,6 +2876,49 @@ def _has_tool_marker_or_partial_suffix(text: str) -> bool:
             if text.endswith(marker[:n]):
                 return True
     return False
+
+
+def _text_ends_with_tool_marker(text: str) -> bool:
+    """True only when ``text`` ENDS with a complete tool marker or a partial-
+    marker suffix — i.e. a tool call is being actively emitted at the growing
+    tail. Unlike _has_tool_marker_or_partial_suffix (which matches a marker
+    ANYWHERE), this does NOT fire when a marker appears earlier and is followed
+    by other text, so reasoning prose that merely MENTIONS tool syntax does not
+    trigger tool-call buffering / stall visible output (#199-2A), while a real
+    reasoning-channel tool call (marker at the tail) is still captured."""
+    if not text:
+        return False
+    for marker in _TOOL_CALL_MARKERS:
+        if text.endswith(marker):
+            return True
+        max_prefix = min(len(marker) - 1, len(text))
+        for n in range(max_prefix, 0, -1):
+            if text.endswith(marker[:n]):
+                return True
+    return False
+
+
+_RAW_JSON_TOOL_ANCHOR = '{"name":"'
+
+
+def _content_forms_raw_json_tool_call(text: str) -> bool:
+    """True when visible content is forming a BARE-JSON tool call
+    (``{\"name\": \"...\", \"arguments\": {...}}``) with no XML/bracket marker —
+    the Hermes-style raw-JSON fallback. ``_TOOL_CALL_MARKERS`` only covers
+    tagged markers, so without this such a call streams out as visible content
+    before the post-stream extractor can pull it into tool_calls (a leak).
+    Only consulted inside the ``tool_call_active`` guard. Matches a growing
+    prefix so a split-across-chunk start is caught before any delta is
+    emitted; a false trigger (a genuine JSON answer) finds no tool call at the
+    end and is flushed as content by the no-tool-calls branch — deferred,
+    never lost."""
+    if not text:
+        return False
+    compact = re.sub(r"\s+", "", text.lstrip())
+    if not compact:
+        return False
+    anchor = _RAW_JSON_TOOL_ANCHOR
+    return compact.startswith(anchor) or anchor.startswith(compact)
 
 
 def _rendered_prompt_starts_in_reasoning(rendered: str, marker: str = "__test__") -> bool:
@@ -4730,6 +4825,39 @@ def _registry_model_key(requested_model: str | None = None) -> str:
     avoid false warnings like ``alias/config.json`` missing.
     """
     return _model_path or _model_name or requested_model or ""
+
+
+def _normalize_minimax_m3_thinking_mode(ct_kwargs: dict, request, model_key: str) -> None:
+    """Map the public thinking toggle onto MiniMax-M3's template vocabulary.
+
+    M3's chat_template.jinja branches ONLY on ``thinking_mode`` ∈
+    {``enabled``, ``disabled``, ``adaptive``} and defaults to adaptive when the
+    kwarg is UNDEFINED. It ignores ``enable_thinking`` entirely. Panels/clients
+    may instead send DSV4-vocab (``instruct``/``reasoning``/``max``) or a null
+    ``thinking_mode``; M3 treats those as defined-but-unmatched, emits NO
+    "Current thinking mode" line, and ``auto`` then refuses or loops on ``None``.
+    Normalize to the M3 vocabulary from the resolved toggle (auto→adaptive) and
+    drop ``enable_thinking`` (the template ignores it). Scoped to M3 only.
+    """
+    try:
+        from .model_config_registry import get_model_config_registry
+        _mc = get_model_config_registry().lookup(_registry_model_key(model_key))
+        _fam = str(getattr(_mc, "family_name", "") or "")
+        _mt = str(getattr(_mc, "model_type", "") or "")
+    except Exception:
+        _fam = _mt = ""
+    if _fam not in ("minimax_m3", "minimax_m3_vl") and not _mt.startswith("minimax_m3"):
+        return
+    _rt = getattr(request, "enable_thinking", None)
+    if _rt is None and isinstance(ct_kwargs.get("enable_thinking"), bool):
+        _rt = ct_kwargs["enable_thinking"]
+    # off → disabled (template closes </mm:think>, no thinking — verified live).
+    # on/auto → adaptive: the model emits its own <mm:think>...</mm:think>, which
+    # the reasoning parser catches WITHOUT prompt-priming. The template's "enabled"
+    # mode prompt-opens <mm:think> (needs the streaming parser primed), so we avoid
+    # it here; the enabled→think_in_prompt seeding elsewhere is kept for future use.
+    ct_kwargs["thinking_mode"] = "disabled" if _rt is False else "adaptive"
+    ct_kwargs.pop("enable_thinking", None)
 
 
 def _get_raw_model_from_engine():
@@ -6679,6 +6807,72 @@ def _native_cache_status(scheduler=None, *, family: str | None = None, cfg=None)
         status.update(layout)
         return status
 
+    family_probe_parts = [family_name, scheduler_family]
+    if cfg is not None:
+        if isinstance(cfg, dict):
+            family_probe_parts.append(cfg.get("model_type"))
+            text_cfg = cfg.get("text_config")
+            if isinstance(text_cfg, dict):
+                family_probe_parts.append(text_cfg.get("model_type"))
+        else:
+            family_probe_parts.append(getattr(cfg, "model_type", None))
+            text_cfg = getattr(cfg, "text_config", None)
+            if isinstance(text_cfg, dict):
+                family_probe_parts.append(text_cfg.get("model_type"))
+            else:
+                family_probe_parts.append(getattr(text_cfg, "model_type", None))
+    family_probe = " ".join(str(part).lower() for part in family_probe_parts if part)
+    if "minimax_m3" in family_probe or "minimax-m3" in family_probe:
+        layout: dict[str, Any] = {}
+        try:
+            model = getattr(scheduler, "model", None)
+            cache_layers = model.make_cache() if model is not None else None
+            if cache_layers:
+                class_names = [type(layer_cache).__name__ for layer_cache in cache_layers]
+                sparse_layers = [
+                    idx
+                    for idx, class_name in enumerate(class_names)
+                    if class_name == "MiniMaxM3SparseCache"
+                ]
+                layout = {
+                    "layers": len(cache_layers),
+                    "sparse_msa_layers": sparse_layers,
+                    "dense_kv_layers": [
+                        idx for idx in range(len(cache_layers)) if idx not in sparse_layers
+                    ],
+                }
+        except Exception:
+            layout = {}
+        status = {
+            "family": family_name or scheduler_family or "minimax_m3",
+            "schema": "minimax_m3_msa_v1",
+            "cache_type": "native_msa_sparse_kv",
+            "components": [
+                "attention_kv",
+                "msa_idx_keys",
+                "absolute_block_index",
+            ],
+            "generic_turboquant_kv": {
+                "enabled": False,
+                "reason": "native_minimax_m3_msa_idx_keys",
+            },
+            "storage_quantization": {
+                "enabled": False,
+                "reason": "generic_kv_quantization_forced_off_for_msa_idx_keys",
+            },
+            "cache_store_policy": {
+                "prompt_boundary_snapshot": "required",
+                "generic_kv_quantization": "forced_off",
+                "disk_tuple_tag": "minimax_m3",
+                "paged_required_for_ssd_l2": True,
+            },
+            "prefix": bool(block_aware_cache is not None),
+            "paged": bool(block_aware_cache is not None and paged_cache_manager is not None),
+            "block_disk_l2": bool(block_disk_store is not None),
+        }
+        status.update(layout)
+        return status
+
     if (
         family_name == "zaya"
         or cache_subtype == "zaya_cca"
@@ -7512,7 +7706,9 @@ async def admin_wake():
                             model=_spec_model,
                             num_tokens=_cli_args.get("num_draft_tokens", 3),
                         )
-                        await asyncio.to_thread(load_draft_model, _spec_cfg)
+                        # issue #200: reload draft model on the model worker
+                        # thread to avoid a Metal eval race with generation.
+                        await _run_on_model_executor(load_draft_model, _spec_cfg)
                         logger.info(f"Draft model reloaded: {_spec_model}")
                     except Exception as e:
                         logger.warning(f"Failed to reload draft model on wake: {e}")
@@ -7732,6 +7928,61 @@ async def cache_entries():
     }
 
 
+def _get_model_owner_executor():
+    """Return the single-thread executor that owns MLX model eval, or None.
+
+    Issue #200: background MLX work (cache-warm prefill, draft-model reload)
+    must run on the SAME thread as scheduler.step()/model load. Using
+    asyncio.to_thread()/run_in_executor(None, ...) picks arbitrary default-
+    pool threads; concurrent Metal kernel/library cache population then races
+    the model worker thread and crashes (objc_retain / newFunctionWithName).
+    All three engine shapes expose a single-thread step/model executor.
+    """
+    eng = _engine
+    if eng is None:
+        return None
+    # SimpleEngine (direct / no continuous-batching)
+    ex = getattr(eng, "_model_executor", None)
+    if ex is not None:
+        return ex
+    _ensure = getattr(eng, "_ensure_model_executor", None)
+    if callable(_ensure):
+        try:
+            return _ensure()
+        except Exception:
+            pass
+    # BatchedEngine (MLLM) — scheduler owns the step executor
+    ex = getattr(getattr(eng, "_mllm_scheduler", None), "_step_executor", None)
+    if ex is not None:
+        return ex
+    # BatchedEngine (LLM) — EngineCore.scheduler._step_executor
+    for _attr in ("_engine_core", "engine_core", "_core", "scheduler", "_scheduler"):
+        obj = getattr(eng, _attr, None)
+        if obj is None:
+            continue
+        ex = getattr(obj, "_step_executor", None)
+        if ex is not None:
+            return ex
+        ex = getattr(getattr(obj, "scheduler", None), "_step_executor", None)
+        if ex is not None:
+            return ex
+    return None
+
+
+async def _run_on_model_executor(fn, /, *args, **kwargs):
+    """Run a blocking MLX call on the model-owner thread (issue #200).
+
+    Falls back to asyncio.to_thread only when no model executor is
+    discoverable (e.g. between deep-sleep teardown and reload).
+    """
+    ex = _get_model_owner_executor()
+    if ex is not None:
+        loop = asyncio.get_running_loop()
+        call = functools.partial(fn, *args, **kwargs)
+        return await loop.run_in_executor(ex, call)
+    return await asyncio.to_thread(fn, *args, **kwargs)
+
+
 @app.post("/v1/cache/warm", dependencies=[Depends(verify_api_key)])
 async def cache_warm(request: dict):
     """
@@ -7815,6 +8066,12 @@ async def cache_warm(request: dict):
             "errors": errors if errors else None,
         }
 
+    # issue #200: serialize warm prefill on the model worker thread, not
+    # an arbitrary default-pool thread (would race scheduler.step()).
+    _warm_executor = getattr(scheduler, "_step_executor", None) or _get_model_owner_executor()
+    if _warm_executor is not None:
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(_warm_executor, _do_warm)
     return await asyncio.to_thread(_do_warm)
 
 
@@ -8399,12 +8656,21 @@ async def create_anthropic_message(
 
     engine = get_engine()
     _msg_requested_modalities = _messages_requested_modalities(chat_req.messages)
+    if _msg_requested_modalities and _m3_vl_image_ok(engine):
+        _msg_requested_modalities = {
+            m for m in _msg_requested_modalities
+            if str(m).lower() not in ("image", "vision")
+        }
     if _msg_requested_modalities:
         _reject_unsupported_multimodal(
             "/v1/messages",
             _msg_requested_modalities,
         )
-    if _messages_have_multimodal(chat_req.messages) and not engine.is_mllm:
+    if (
+        _messages_have_multimodal(chat_req.messages)
+        and not engine.is_mllm
+        and not _m3_vl_image_ok(engine)
+    ):
         _reject_unsupported_multimodal("/v1/messages")
 
     # Build generation kwargs from the converted chat request (shared by streaming + non-streaming)
@@ -8525,6 +8791,8 @@ async def create_anthropic_message(
         _msg_kwargs["tools"] = convert_tools_for_template(chat_req.tools)
         _msg_kwargs["_vmlx_tools_present"] = True
 
+    _normalize_minimax_m3_thinking_mode(
+        _ct_kwargs, chat_req, _model_path or _model_name or chat_req.model)
     # Forward extra chat_template_kwargs to engine (exclude enable_thinking, already handled)
     if _ct_kwargs:
         extra_ct = {k: v for k, v in _ct_kwargs.items() if k != "enable_thinking"}
@@ -9199,12 +9467,21 @@ async def ollama_chat(fastapi_request: Request):
 
     engine = get_engine()
     _ollama_requested_modalities = _messages_requested_modalities(chat_req.messages)
+    if _ollama_requested_modalities and _m3_vl_image_ok(engine):
+        _ollama_requested_modalities = {
+            m for m in _ollama_requested_modalities
+            if str(m).lower() not in ("image", "vision")
+        }
     if _ollama_requested_modalities:
         _reject_unsupported_multimodal(
             "/api/chat",
             _ollama_requested_modalities,
         )
-    if _messages_have_multimodal(chat_req.messages) and not engine.is_mllm:
+    if (
+        _messages_have_multimodal(chat_req.messages)
+        and not engine.is_mllm
+        and not _m3_vl_image_ok(engine)
+    ):
         _reject_unsupported_multimodal("/api/chat")
     chat_kwargs = {
         "max_tokens": _resolve_max_tokens(chat_req.max_tokens, chat_req.model),
@@ -11125,6 +11402,12 @@ async def create_chat_completion(
 
     engine = get_engine()
     _chat_requested_modalities = _messages_requested_modalities(request.messages)
+    if _chat_requested_modalities and _m3_vl_image_ok(engine):
+        # M3 VL (gated): image/vision are served by the text-routed M3 path.
+        _chat_requested_modalities = {
+            m for m in _chat_requested_modalities
+            if str(m).lower() not in ("image", "vision")
+        }
     if _chat_requested_modalities:
         _reject_unsupported_multimodal(
             "/v1/chat/completions",
@@ -11159,7 +11442,9 @@ async def create_chat_completion(
         )
 
     has_media = bool(images or videos)
-    if has_media and not engine.is_mllm:
+    if has_media and not engine.is_mllm and not (
+        bool(images) and not videos and _m3_vl_image_ok(engine)
+    ):
         _reject_unsupported_multimodal("/v1/chat/completions")
 
     # Handle response_format - inject system prompt if needed
@@ -11364,6 +11649,8 @@ async def create_chat_completion(
         else:
             _ct_kwargs.pop("reasoning_effort", None)
 
+    _normalize_minimax_m3_thinking_mode(
+        _ct_kwargs, request, _model_path or _model_name or request.model)
     # Forward extra chat_template_kwargs to engine (exclude enable_thinking, already handled)
     if _ct_kwargs:
         extra_ct = {k: v for k, v in _ct_kwargs.items() if k != "enable_thinking"}
@@ -11594,6 +11881,14 @@ async def create_chat_completion(
                 enable_thinking=_eff_thinking_ns,
                 engine=engine,
             ):
+                _think_in_prompt_ns = True
+            # MiniMax-M3 thinking_mode="enabled" prompt-opens <mm:think> in the
+            # generation prompt, so assistant output starts INSIDE reasoning with
+            # no opening tag in the OUTPUT. Seed the parser's implicit-reasoning
+            # mode so the reasoning isn't misclassified as visible content.
+            if (chat_kwargs.get("chat_template_kwargs") or _ct_kwargs or {}).get(
+                "thinking_mode"
+            ) == "enabled":
                 _think_in_prompt_ns = True
         except Exception as _tpe:
             logger.debug(f"think_in_prompt derivation failed non-stream: {_tpe}")
@@ -13293,6 +13588,8 @@ async def create_response(
             f"messages={len(messages) if messages else 0}"
         )
 
+    _normalize_minimax_m3_thinking_mode(
+        _ct_kwargs, request, _model_path or _model_name or request.model)
     # Forward extra chat_template_kwargs to engine (exclude enable_thinking, already handled)
     if _ct_kwargs:
         extra_ct = {k: v for k, v in _ct_kwargs.items() if k != "enable_thinking"}
@@ -13612,6 +13909,14 @@ async def create_response(
                 enable_thinking=_eff_thinking_ns,
                 engine=engine,
             ):
+                _think_in_prompt_ns = True
+            # MiniMax-M3 thinking_mode="enabled" prompt-opens <mm:think> in the
+            # generation prompt, so assistant output starts INSIDE reasoning with
+            # no opening tag in the OUTPUT. Seed the parser's implicit-reasoning
+            # mode so the reasoning isn't misclassified as visible content.
+            if (chat_kwargs.get("chat_template_kwargs") or _ct_kwargs or {}).get(
+                "thinking_mode"
+            ) == "enabled":
                 _think_in_prompt_ns = True
         except Exception as _tpe:
             logger.debug(f"think_in_prompt derivation failed non-stream: {_tpe}")
@@ -14456,15 +14761,19 @@ async def stream_chat_completion(
                     if delta_msg.content and accumulated_content:
                         tool_call_buffering = _has_tool_marker_or_partial_suffix(
                             accumulated_content
-                        )
+                        ) or _content_forms_raw_json_tool_call(accumulated_content)
                     if not tool_call_buffering and delta_msg.reasoning:
-                        # Use trailing window (last 30 chars covers longest marker)
                         _reasoning_tail = (
                             accumulated_reasoning[-30:]
                             if len(accumulated_reasoning) > 30
                             else accumulated_reasoning
                         )
-                        tool_call_buffering = _has_tool_marker_or_partial_suffix(
+                        # #199-2A: buffer only when the reasoning tail is ACTIVELY
+                        # emitting a tool marker (ends with a complete/partial
+                        # marker) — a real reasoning-channel tool call is still
+                        # captured, but reasoning prose that merely MENTIONS tool
+                        # syntax earlier and continues does not stall output.
+                        tool_call_buffering = _text_ends_with_tool_marker(
                             _reasoning_tail
                         )
                     # GPT-OSS/Harmony native tool format: to=<name> code{...}
@@ -14474,7 +14783,12 @@ async def stream_chat_completion(
                             accumulated_content
                             or (
                                 accumulated_reasoning[-30:]
-                                if accumulated_reasoning
+                                if (
+                                    accumulated_reasoning
+                                    and _parser_routes_tools_via_reasoning_channel(
+                                        request_parser, _harmony_prefix_active
+                                    )
+                                )
                                 else ""
                             )
                             or ""
@@ -15623,14 +15937,17 @@ async def stream_responses_api(
                             if delta_msg.content and accumulated_content:
                                 tool_call_buffering = _has_tool_marker_or_partial_suffix(
                                     accumulated_content
-                                )
+                                ) or _content_forms_raw_json_tool_call(accumulated_content)
                             if not tool_call_buffering and delta_msg.reasoning:
                                 _reasoning_tail = (
                                     accumulated_reasoning[-30:]
                                     if len(accumulated_reasoning) > 30
                                     else accumulated_reasoning
                                 )
-                                tool_call_buffering = _has_tool_marker_or_partial_suffix(
+                                # #199-2A: see stream_chat_completion — buffer only
+                                # when the reasoning tail is ACTIVELY emitting a
+                                # tool marker, not on a mere mention in prose.
+                                tool_call_buffering = _text_ends_with_tool_marker(
                                     _reasoning_tail
                                 )
                             # GPT-OSS/Harmony native tool format: to=<name> code{...}
@@ -15639,7 +15956,12 @@ async def stream_responses_api(
                                     accumulated_content
                                     or (
                                         accumulated_reasoning[-30:]
-                                        if accumulated_reasoning
+                                        if (
+                                            accumulated_reasoning
+                                            and _parser_routes_tools_via_reasoning_channel(
+                                                request_parser, _harmony_prefix_active
+                                            )
+                                        )
                                         else ""
                                     )
                                     or ""

@@ -64,6 +64,7 @@ from .xlam_tool_parser import xLAMToolParser
 from .step3p5_tool_parser import Step3p5ToolParser
 from .glm47_tool_parser import Glm47ToolParser
 from .minimax_tool_parser import MiniMaxToolParser
+from .minimax_m3_tool_parser import MiniMaxM3ToolParser  # MiniMax-M3 (tag-named-param XML)
 from .gemma4_tool_parser import Gemma4ToolParser
 from .gemma3_tool_parser import Gemma3ToolParser
 from .zaya_tool_parser import ZayaToolParser
@@ -91,6 +92,7 @@ __all__ = [
     "Glm47ToolParser",
     "Step3p5ToolParser",
     "MiniMaxToolParser",
+    "MiniMaxM3ToolParser",
     "Gemma4ToolParser",
     "Gemma3ToolParser",
     "ZayaToolParser",
