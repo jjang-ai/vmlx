@@ -14765,6 +14765,53 @@ async def stream_chat_completion(
     _request_has_tools = bool(getattr(request, "tools", None))
     _stream_tools_available = bool(kwargs.get("tools")) or _request_has_tools
     tool_call_active = _stream_tools_available and not _suppress_tools
+    m3_reasoning_only_answer_budget: int | None = None
+    m3_reasoning_only_answer_enabled = False
+    reasoning_only_answer_budget: int | None = None
+    reasoning_only_answer_enabled = False
+    reasoning_only_answer_family = ""
+    if (
+        _is_minimax_m3
+        and _m3_thinking_mode in ("enabled", "adaptive")
+        and not _stream_tools_available
+    ):
+        try:
+            _requested_output_budget = int(kwargs.get("max_tokens") or 256)
+            m3_reasoning_only_answer_budget = max(32, _requested_output_budget)
+            m3_reasoning_only_answer_enabled = True
+            _requested_thinking_budget = getattr(request, "max_thinking_tokens", None)
+            if _requested_thinking_budget is not None:
+                _requested_thinking_budget = max(1, int(_requested_thinking_budget))
+                kwargs = dict(kwargs)
+                kwargs["max_tokens"] = min(
+                    _requested_output_budget,
+                    _requested_thinking_budget,
+                )
+        except Exception:
+            m3_reasoning_only_answer_budget = None
+            m3_reasoning_only_answer_enabled = False
+    if (
+        _family_name == "gemma4"
+        and _effective_thinking is not False
+        and not _stream_tools_available
+    ):
+        try:
+            _requested_output_budget = int(kwargs.get("max_tokens") or 256)
+            reasoning_only_answer_budget = max(32, _requested_output_budget)
+            reasoning_only_answer_enabled = True
+            reasoning_only_answer_family = "Gemma4"
+            _requested_thinking_budget = getattr(request, "max_thinking_tokens", None)
+            if _requested_thinking_budget is not None:
+                _requested_thinking_budget = max(1, int(_requested_thinking_budget))
+                kwargs = dict(kwargs)
+                kwargs["max_tokens"] = min(
+                    _requested_output_budget,
+                    _requested_thinking_budget,
+                )
+        except Exception:
+            reasoning_only_answer_budget = None
+            reasoning_only_answer_enabled = False
+            reasoning_only_answer_family = ""
 
     # Track token counts for usage reporting
     prompt_tokens = 0
@@ -15404,6 +15451,87 @@ async def stream_chat_completion(
             ],
         )
         yield f"data: {_dump_sse_json(fallback_chunk)}\n\n"
+
+    if (
+        not content_was_emitted
+        and (m3_reasoning_only_answer_enabled or reasoning_only_answer_enabled)
+        and accumulated_reasoning.strip()
+        and not tool_calls_emitted
+    ):
+        _answer_family = (
+            "MiniMax-M3"
+            if m3_reasoning_only_answer_enabled
+            else (reasoning_only_answer_family or "reasoning model")
+        )
+        _answer_budget = (
+            m3_reasoning_only_answer_budget
+            if m3_reasoning_only_answer_enabled
+            else reasoning_only_answer_budget
+        )
+        logger.info(
+            "%s Chat Completions stream produced no visible content; "
+            "running bounded thinking-off answer pass "
+            "(reasoning_chars=%d, answer_budget=%s)",
+            _answer_family,
+            len(accumulated_reasoning),
+            _answer_budget,
+        )
+        answer_messages = list(messages) + [
+            {
+                "role": "assistant",
+                "content": "",
+                "reasoning_content": accumulated_reasoning,
+            }
+        ]
+        answer_kwargs = dict(kwargs)
+        answer_kwargs["enable_thinking"] = False
+        answer_kwargs["max_tokens"] = int(_answer_budget or 256)
+        answer_ct_kwargs = dict(answer_kwargs.get("chat_template_kwargs") or {})
+        if _answer_family == "MiniMax-M3":
+            answer_ct_kwargs["thinking_mode"] = "disabled"
+        answer_ct_kwargs.pop("enable_thinking", None)
+        answer_kwargs["chat_template_kwargs"] = answer_ct_kwargs
+        answer_kwargs.pop("tools", None)
+        answer_kwargs.pop("_vmlx_tools_present", None)
+        answer_kwargs.pop("_vmlx_template_tools", None)
+        try:
+            answer_output = await _await_chat_with_disconnect_abort(
+                engine,
+                messages=answer_messages,
+                chat_kwargs=answer_kwargs,
+                timeout=_stream_timeout,
+                fastapi_request=fastapi_request,
+                request_id=f"{response_id}:visible-answer",
+                endpoint=f"Chat Completions {_answer_family} visible answer pass",
+            )
+            answer_text = _responses_fast_path_visible_text(answer_output, request)
+            answer_text = _finalize_visible_text_for_request(answer_text, request)
+            if answer_text:
+                content_was_emitted = True
+                streamed_content += answer_text
+                completion_tokens += int(
+                    getattr(answer_output, "completion_tokens", 0) or 0
+                )
+                answer_chunk = ChatCompletionChunk(
+                    id=response_id,
+                    created=_created_ts,
+                    model=request.model,
+                    choices=[
+                        ChatCompletionChunkChoice(
+                            delta=ChatCompletionChunkDelta(content=answer_text),
+                            finish_reason="stop",
+                        )
+                    ],
+                )
+                yield f"data: {_dump_sse_json(answer_chunk)}\n\n"
+        except Exception as e:
+            logger.error(
+                "%s Chat Completions visible answer pass failed for %s: %s",
+                _answer_family,
+                response_id,
+                e,
+                exc_info=True,
+            )
 
     # When reasoning is suppressed and the model produced ONLY reasoning (no content),
     # try to extract tool calls from reasoning before showing the diagnostic.

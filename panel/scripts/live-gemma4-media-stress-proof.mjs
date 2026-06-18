@@ -17,7 +17,7 @@ const modelPath = process.env.VMLX_GEMMA_MODEL_PATH
   || '/Users/example/models/OsaurusAI--gemma-4-E2B-it-qat-MXFP4'
 const appPath = process.env.VMLX_APP_PATH || '/Applications/vMLX.app'
 const appExe = path.join(appPath, 'Contents', 'MacOS', 'vMLX')
-// Gemma audio is intentionally out of the 1.5.63 release gate. Keep audio off
+// Gemma audio is intentionally out of the current release gate. Keep audio off
 // unless a future audio-specific rerun explicitly opts in.
 const expectAudio = process.env.VMLX_GEMMA_EXPECT_AUDIO === '1'
 const expectImage = process.env.VMLX_GEMMA_EXPECT_IMAGE !== '0'
@@ -102,6 +102,26 @@ function labelText(text) {
   return String(text || '')
     .replace(/\\_/g, '_')
     .replace(/&lowbar;/gi, '_')
+}
+
+function startsWithExactMarker(text, expected) {
+  return labelText(text).trimStart().startsWith(expected)
+}
+
+function hasExactMarker(text, expected) {
+  return labelText(text).includes(expected)
+}
+
+function toolCallingCount(row, toolName = '') {
+  try {
+    const events = JSON.parse(row?.toolCallsJson || '[]')
+    return events.filter((event) => (
+      event?.phase === 'calling'
+      && (!toolName || event?.toolName === toolName)
+    )).length
+  } catch {
+    return 0
+  }
 }
 
 function parseMetrics(message) {
@@ -454,7 +474,9 @@ async function streamSse(url, body, kind, timeoutMs = 300_000) {
   let content = ''
   let reasoning = ''
   let toolArgs = ''
+  let responseToolDeltaArgs = ''
   let toolCallSignals = 0
+  const completedToolCalls = []
   try {
     const res = await fetch(url, {
       method: 'POST',
@@ -488,11 +510,22 @@ async function streamSse(url, body, kind, timeoutMs = 300_000) {
           if (obj?.type === 'response.output_text.delta') content += obj.delta || ''
           if (obj?.type === 'response.reasoning.delta') reasoning += obj.delta || ''
           if (String(obj?.type || '').includes('function_call')) toolCallSignals += 1
-          if (obj?.type === 'response.function_call_arguments.delta') toolArgs += obj.delta || ''
+          if (obj?.type === 'response.function_call_arguments.delta') {
+            responseToolDeltaArgs += obj.delta || ''
+            toolArgs += obj.delta || ''
+          }
           const item = obj?.item || obj?.output_item || obj?.response?.output?.[0]
           if (item?.type === 'function_call') {
             toolCallSignals += 1
-            toolArgs += item.arguments || ''
+            completedToolCalls.push({
+              name: item.name || '',
+              arguments: item.arguments || '',
+              call_id: item.call_id || '',
+              status: item.status || '',
+            })
+            if (!responseToolDeltaArgs || !responseToolDeltaArgs.includes(item.arguments || '')) {
+              toolArgs += item.arguments || ''
+            }
           }
         }
       }
@@ -503,6 +536,7 @@ async function streamSse(url, body, kind, timeoutMs = 300_000) {
       content,
       reasoning,
       toolArgs,
+      completedToolCalls,
       hasToolCallSignal: toolCallSignals > 0,
       eventTypes: [...new Set(events.map((e) => e.event || e.obj?.type).filter(Boolean))],
       eventsTail: events.slice(-20),
@@ -708,9 +742,9 @@ async function runMixedUiSession(page, modelPath, endpoint, proofDir, audioFixtu
     gitEnabled: false,
     utilityToolsEnabled: true,
     workingDirectory: toolDir,
-    maxToolIterations: 4,
+    maxToolIterations: 1,
     toolResultMaxChars: 8000,
-  }, 'Mixed tool turn. Reasoning ON and tool required. Use run_command exactly once to create gemma_mixed_tool_on.txt containing exactly GEMMA_MIX_TOOL_ON. After the tool result, reply with GEMMA_MIX_TOOL_ON_DONE.')
+  }, 'Mixed tool turn. Reasoning ON and tool required. Use run_command exactly once to create gemma_mixed_tool_on.txt containing exactly GEMMA_MIX_TOOL_ON. Do not read, cat, verify, or call any second tool. After the tool result, reply with GEMMA_MIX_TOOL_ON_DONE.')
 
   await step('tool_reasoning_auto', {
     wireApi: 'responses',
@@ -729,9 +763,9 @@ async function runMixedUiSession(page, modelPath, endpoint, proofDir, audioFixtu
     gitEnabled: false,
     utilityToolsEnabled: true,
     workingDirectory: toolDir,
-    maxToolIterations: 4,
+    maxToolIterations: 1,
     toolResultMaxChars: 8000,
-  }, 'Mixed tool turn. Reasoning AUTO and tool required. Use run_command exactly once to create gemma_mixed_tool_auto.txt containing exactly GEMMA_MIX_TOOL_AUTO. After the tool result, reply with GEMMA_MIX_TOOL_AUTO_DONE.')
+  }, 'Mixed tool turn. Reasoning AUTO and tool required. Use run_command exactly once to create gemma_mixed_tool_auto.txt containing exactly GEMMA_MIX_TOOL_AUTO. Do not read, cat, verify, or call any second tool. After the tool result, reply with GEMMA_MIX_TOOL_AUTO_DONE.')
 
   const finalLabels = ['GEMMA_MIX_TEXT_OFF', 'GEMMA_MIX_AUTO_TEXT', 'GEMMA_MIX_TOOL_ON', 'GEMMA_MIX_TOOL_AUTO']
   if (expectImage) finalLabels.splice(1, 0, 'GEMMA_MIX_IMAGE_RED')
@@ -864,8 +898,12 @@ function deriveVerdict(result) {
     if (!/GEMMA_MIX_TEXT_OFF/i.test(byLabel.text_reasoning_off?.content || '')) failures.push('mixed text reasoning-off label missing')
     if (!/GEMMA_MIX_AUTO_TEXT/i.test(byLabel.text_reasoning_auto?.content || '')) failures.push('mixed text reasoning-auto label missing')
     if (expectImage && (byLabel.image_reasoning_on?.reasoningChars || 0) <= 0) failures.push('mixed reasoning-on image turn emitted no reasoning')
-    if (!/GEMMA_MIX_TOOL_ON_DONE/i.test(byLabel.tool_reasoning_on?.content || '')) failures.push('mixed reasoning-on tool final label missing')
-    if (!/GEMMA_MIX_TOOL_AUTO_DONE/i.test(byLabel.tool_reasoning_auto?.content || '')) failures.push('mixed reasoning-auto tool final label missing')
+    if (!hasExactMarker(byLabel.tool_reasoning_on?.content || '', 'GEMMA_MIX_TOOL_ON_DONE')) failures.push('mixed reasoning-on tool final label missing')
+    if (!hasExactMarker(byLabel.tool_reasoning_auto?.content || '', 'GEMMA_MIX_TOOL_AUTO_DONE')) failures.push('mixed reasoning-auto tool final label missing')
+    const onToolCalls = toolCallingCount(byLabel.tool_reasoning_on, 'run_command')
+    const autoToolCalls = toolCallingCount(byLabel.tool_reasoning_auto, 'run_command')
+    if (onToolCalls !== 1) failures.push(`mixed reasoning-on expected exactly 1 run_command call, saw ${onToolCalls}`)
+    if (autoToolCalls !== 1) failures.push(`mixed reasoning-auto expected exactly 1 run_command call, saw ${autoToolCalls}`)
     // Gemma4's native template tells required-tool turns to "Output only the
     // tool call"; reasoning-on is still exercised by sending enableThinking=true
     // with tools, but separated reasoning text is not mandatory for that row.
@@ -930,11 +968,13 @@ function deriveVerdict(result) {
     ollamaGenerate: 'GEMMA_OLLAMA_GENERATE_OK',
   })) {
     const row = result.api?.[name]
-    if (row?.ok && !new RegExp(`\\b${expected}\\b`).test(row.text || '')) {
+    if (row?.ok && !startsWithExactMarker(row.text || '', expected)) {
       failures.push(`API ${name} missing exact marker ${expected}`)
     }
   }
   if (!result.api?.chatTool?.hasToolCalls) failures.push('API Chat required tool did not return tool_calls')
+  const apiToolArgs = JSON.stringify(result.api?.chatTool?.message?.tool_calls || [])
+  if (result.api?.chatTool?.hasToolCalls && !hasExactMarker(apiToolArgs, 'GEMMA_TOOL_OK')) failures.push('API Chat tool arguments missing GEMMA_TOOL_OK')
   for (const [name, row] of Object.entries(result.streaming || {})) {
     if (!row?.ok) failures.push(`stream ${name} HTTP failed`)
     if (row?.textScore?.empty && !row?.hasToolCallSignal) failures.push(`stream ${name} reconstructed empty content/tool signal`)
@@ -945,12 +985,22 @@ function deriveVerdict(result) {
     responsesText: 'GEMMA_STREAM_RESP_OK',
   })) {
     const row = result.streaming?.[name]
-    if (row?.ok && !new RegExp(`\\b${expected}\\b`).test(row.content || '')) {
+    if (row?.ok && !startsWithExactMarker(row.content || '', expected)) {
       failures.push(`stream ${name} missing exact marker ${expected}`)
     }
   }
   if (!result.streaming?.chatTool?.hasToolCallSignal) failures.push('streaming Chat tool call signal missing')
   if (!result.streaming?.responsesTool?.hasToolCallSignal) failures.push('streaming Responses tool call signal missing')
+  if (result.streaming?.chatTool?.hasToolCallSignal && !hasExactMarker(result.streaming.chatTool.toolArgs || '', 'GEMMA_STREAM_CHAT_TOOL')) failures.push('streaming Chat tool arguments missing GEMMA_STREAM_CHAT_TOOL')
+  if (result.streaming?.responsesTool?.hasToolCallSignal && !hasExactMarker(result.streaming.responsesTool.toolArgs || '', 'GEMMA_STREAM_RESP_TOOL')) failures.push('streaming Responses tool arguments missing GEMMA_STREAM_RESP_TOOL')
+  const responseStreamToolCalls = result.streaming?.responsesTool?.completedToolCalls || []
+  const exactResponseStreamToolCalls = responseStreamToolCalls.filter((call) => (
+    call?.name === 'record_gemma_stream_response_label'
+    && hasExactMarker(call?.arguments || '', 'GEMMA_STREAM_RESP_TOOL')
+  ))
+  if (result.streaming?.responsesTool?.hasToolCallSignal && exactResponseStreamToolCalls.length !== 1) {
+    failures.push(`streaming Responses expected exactly 1 completed record_gemma_stream_response_label call with GEMMA_STREAM_RESP_TOOL, saw ${exactResponseStreamToolCalls.length}`)
+  }
   if (expectImage && (!/GEMMA_STREAM_IMAGE_RED/i.test(result.streaming?.responsesImage?.content || '') || rejectsRedImageLabel(result.streaming?.responsesImage?.content || ''))) failures.push('streaming Responses image did not identify red image')
   return { status: failures.length ? 'fail' : 'pass', failures }
 }
