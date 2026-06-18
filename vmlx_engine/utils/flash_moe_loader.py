@@ -44,7 +44,7 @@ logger = logging.getLogger(__name__)
 _NP_DTYPE_MAP = {
     "U32": np.uint32,
     "F16": np.float16,
-    "BF16": np.float16,  # loaded as float16, MLX handles bfloat16 conversion
+    "BF16": np.float16,  # 2-byte read only; _pread_tensor bit-reinterprets to bfloat16
     "F32": np.float32,
     "I32": np.int32,
     "U8": np.uint8,
@@ -194,7 +194,11 @@ def _pread_tensor(ti: TensorInfo, expert_idx: int) -> mx.array:
             str(ti.file_path), dtype=np.uint8, count=num_bytes,
             offset=ti.abs_offset,
         )
-        return mx.array(raw.view(np_dtype).reshape(ti.shape))
+        arr = mx.array(raw.view(np_dtype).reshape(ti.shape))
+        # numpy has no bfloat16: bytes were read as float16, so bit-reinterpret
+        # the 16-bit words as real bfloat16 (NOT astype). Without this, bf16
+        # scales/biases are corrupted ~88x -> garbage expert output.
+        return arr.view(mx.bfloat16) if ti.dtype == "BF16" else arr
 
     # Shape is [num_experts, *rest] — compute byte offset for expert_idx
     expert_shape = ti.shape[1:]
@@ -205,7 +209,7 @@ def _pread_tensor(ti: TensorInfo, expert_idx: int) -> mx.array:
     expert_bytes = expert_elements * bytes_per_element
     expert_offset = ti.abs_offset + expert_idx * expert_bytes
 
-    # Read raw bytes then view as typed array (handles BF16 correctly)
+    # Read raw bytes then view as typed array.
     raw = np.fromfile(
         str(ti.file_path), dtype=np.uint8, count=expert_bytes,
         offset=expert_offset,
@@ -217,7 +221,11 @@ def _pread_tensor(ti: TensorInfo, expert_idx: int) -> mx.array:
             f"offset {expert_offset}, got {raw.size} bytes"
         )
 
-    return mx.array(raw.view(np_dtype).reshape(expert_shape))
+    arr = mx.array(raw.view(np_dtype).reshape(expert_shape))
+    # numpy has no bfloat16: bytes were read as float16, so bit-reinterpret the
+    # 16-bit words as real bfloat16 (NOT astype). bf16 scales/biases (oQ3) are
+    # otherwise corrupted ~88x -> garbage; F16 bundles (JANG) were unaffected.
+    return arr.view(mx.bfloat16) if ti.dtype == "BF16" else arr
 
 
 def _load_projection_expert(
