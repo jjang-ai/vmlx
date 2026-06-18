@@ -345,6 +345,226 @@ def _supported_routed_group_size(
     return default_group_size
 
 
+def _split_gemma4_moe_quantized_expert_sidecars(
+    weights: dict[str, mx.array],
+) -> dict[str, mx.array]:
+    """Map Gemma4 fused quantized expert sidecars onto SwitchGLU sidecars.
+
+    Gemma4 A4B QAT bundles store MoE experts as quantized sidecars:
+    ``experts.gate_up_proj.{weight,scales,biases}`` contains fused gate/up rows
+    and ``experts.down_proj.{weight,scales,biases}`` contains down rows. Split
+    along the output axis and keep the last/input axis untouched so affine and
+    native-MXFP groups stay packed exactly as stored.
+    """
+    out = dict(weights)
+    for key in list(weights):
+        for suffix in (".weight", ".scales", ".biases"):
+            gate_marker = f".experts.gate_up_proj{suffix}"
+            if key.endswith(gate_marker):
+                value = weights[key]
+                if value.shape[-2] % 2:
+                    raise ValueError(
+                        f"Cannot split fused Gemma4 expert sidecar {key}: "
+                        f"output dimension {value.shape[-2]} is not even"
+                    )
+                base = key[: -len(gate_marker)]
+                gate, up = mx.split(value, 2, axis=-2)
+                out[
+                    f"{base}.experts.switch_glu.gate_proj{suffix}"
+                ] = mx.contiguous(gate)
+                out[f"{base}.experts.switch_glu.up_proj{suffix}"] = mx.contiguous(up)
+                out.pop(key, None)
+                break
+
+            down_marker = f".experts.down_proj{suffix}"
+            if key.endswith(down_marker):
+                base = key[: -len(down_marker)]
+                out[f"{base}.experts.switch_glu.down_proj{suffix}"] = weights[key]
+                out.pop(key, None)
+                break
+    return out
+
+
+_split_dequantize_gemma4_moe_mxfp_experts = (
+    _split_gemma4_moe_quantized_expert_sidecars
+)
+
+
+def _gemma_ple_config_state(config: dict) -> tuple[bool, bool]:
+    """Return ``(is_gemma_ple_family, has_ple_module)`` for Gemma PLE tensors."""
+    text_mt = str(config.get("text_config", {}).get("model_type", "")).lower()
+    model_mt = str(config.get("model_type", "")).lower()
+    text_cfg = config.get("text_config", config)
+    eligible = {
+        "gemma4_text",
+        "gemma3n",
+        "gemma3n_text",
+        "gemma4",
+        "gemma4_unified",
+        "gemma4_unified_text",
+    }
+    return (
+        text_mt in eligible or model_mt in eligible,
+        bool(text_cfg.get("hidden_size_per_layer_input")),
+    )
+
+
+def _dequantize_gemma_ple_weight(
+    weight: mx.array,
+    scales: mx.array,
+    biases: mx.array | None,
+    *,
+    quant_mode: str,
+    key: str,
+) -> tuple[mx.array, str, int, int]:
+    """Materialize Gemma PLE weights that cannot stay in QuantizedLinear form."""
+    mode = str(quant_mode or "affine").lower()
+    candidates: list[tuple[str, int]] = []
+    if mode in {"mxfp4", "mxfp8"} and scales.dtype == mx.uint8:
+        candidates.append((mode, 4 if mode == "mxfp4" else 8))
+    candidates.extend(("affine", bits) for bits in (8, 6, 4, 3, 2))
+
+    tried: list[str] = []
+    for candidate_mode, bits in candidates:
+        if bits <= 0 or 32 % bits:
+            continue
+        elems_per_u32 = 32 // bits
+        real_cols = weight.shape[-1] * elems_per_u32
+        if scales.shape[-1] == 0:
+            continue
+        group_size = real_cols // scales.shape[-1]
+        if group_size < 2 or group_size * scales.shape[-1] != real_cols:
+            continue
+        tried.append(f"{candidate_mode}:bits={bits}:gs={group_size}")
+        try:
+            if candidate_mode in {"mxfp4", "mxfp8"}:
+                dq = mx.dequantize(
+                    weight,
+                    scales,
+                    None,
+                    group_size=group_size,
+                    bits=bits,
+                    mode=candidate_mode,
+                    dtype=mx.float16,
+                )
+            else:
+                dq = mx.dequantize(
+                    weight,
+                    scales,
+                    biases if biases is not None else mx.zeros_like(scales),
+                    group_size=group_size,
+                    bits=bits,
+                )
+            mx.eval(dq)
+            return dq.astype(mx.float16), candidate_mode, bits, group_size
+        except Exception:
+            continue
+
+    raise RuntimeError(
+        f"jang_loader Gemma4 PLE dequant: failed to decode {key} "
+        f"(shape={weight.shape}, scales={scales.shape}, scales_dtype={scales.dtype}, "
+        f"quant_mode={mode}). Tried {tried or '[no shape-valid candidates]'}. "
+        "Without dequant, forward pass produces garbage output (#52). Please "
+        "verify the JANG file integrity and quant format."
+    )
+
+
+def _prepare_gemma_ple_shard_weights(
+    shard_weights: dict[str, mx.array],
+    config: dict,
+    *,
+    quant_mode: str,
+    quantized_module_paths: set[str] | None = None,
+    pending: dict[str, dict[str, mx.array]] | None = None,
+) -> dict[str, dict[str, mx.array]]:
+    """Drop or materialize Gemma PLE sidecars before ``model.load_weights``.
+
+    Gemma 3n/4 PLE modules are ``nn.Linear`` / ``nn.Embedding`` rather than
+    regular quantized linears. QAT/MXFP bundles can store their sidecars across
+    shard boundaries, so a per-shard loader must hold incomplete pairs until
+    both ``weight`` and ``scales`` are available.
+    """
+    pending = pending if pending is not None else {}
+    quantized_module_paths = quantized_module_paths or set()
+    is_gemma_ple_family, has_ple_module = _gemma_ple_config_state(config)
+    if not is_gemma_ple_family:
+        return pending
+
+    ple_prefixes = tuple(
+        f"{root}.{name}"
+        for name in ("per_layer_model_projection", "embed_tokens_per_layer")
+        for root in ("language_model.model", "model.language_model")
+    )
+
+    if not has_ple_module:
+        for prefix in ple_prefixes:
+            pending.pop(prefix, None)
+            for suffix in (".weight", ".scales", ".biases"):
+                key = prefix + suffix
+                if key in shard_weights:
+                    del shard_weights[key]
+                    logger.info(
+                        "  Dropped orphan Gemma PLE key (model has no PLE "
+                        "module due to hidden_size_per_layer_input=0): %s",
+                        key,
+                    )
+        return pending
+
+    for prefix in ple_prefixes:
+        if prefix in quantized_module_paths:
+            # Current MLX has QuantizedLinear / QuantizedEmbedding support for
+            # these PLE modules. In that case the correct representation is the
+            # native sidecar triplet loaded across shards, not an fp16 tensor
+            # stuffed into a quantized module's packed-weight slot.
+            continue
+
+        parts = pending.pop(prefix, {})
+        keys = {
+            "weight": f"{prefix}.weight",
+            "scales": f"{prefix}.scales",
+            "biases": f"{prefix}.biases",
+        }
+        for part_name, key in keys.items():
+            if key in shard_weights:
+                parts[part_name] = shard_weights.pop(key)
+
+        if not parts:
+            continue
+
+        weight = parts.get("weight")
+        if weight is None:
+            pending[prefix] = parts
+            continue
+
+        weight_key = keys["weight"]
+        if getattr(weight, "dtype", None) != mx.uint32:
+            shard_weights[weight_key] = weight
+            continue
+
+        scales = parts.get("scales")
+        if scales is None:
+            pending[prefix] = parts
+            continue
+
+        dq, used_mode, bits, group_size = _dequantize_gemma_ple_weight(
+            weight,
+            scales,
+            parts.get("biases"),
+            quant_mode=quant_mode,
+            key=weight_key,
+        )
+        shard_weights[weight_key] = dq
+        logger.info(
+            "  Dequantized Gemma4 PLE: %s (mode=%s, bits=%s, gs=%s)",
+            weight_key,
+            used_mode,
+            bits,
+            group_size,
+        )
+
+    return pending
+
+
 def _vlm_quant_module_path_candidates(module_path: str, model_type: str = "") -> set[str]:
     """Return on-disk quant module paths that may correspond to a VLM module."""
     candidates = {module_path, f"model.{module_path}"}
@@ -390,6 +610,30 @@ def _vlm_quant_module_path_candidates(module_path: str, model_type: str = "") ->
                     candidates.add(text_backbone_path.replace(src, dst, 1))
                 if src in raw:
                     candidates.add(raw.replace(src, dst, 1))
+
+    # Gemma4 26B-A4B stores routed experts in fused gate_up/down sidecar keys
+    # while runtime modules are split SwitchGLU gate/up/down projections. The
+    # quantizer predicate sees the runtime module path; include fused on-disk
+    # aliases so `.experts.gate_up_proj.scales` quantizes both split modules.
+    for cand in list(candidates):
+        if ".experts.switch_glu.gate_proj" in cand:
+            candidates.add(
+                cand.replace(
+                    ".experts.switch_glu.gate_proj", ".experts.gate_up_proj", 1
+                )
+            )
+        if ".experts.switch_glu.up_proj" in cand:
+            candidates.add(
+                cand.replace(
+                    ".experts.switch_glu.up_proj", ".experts.gate_up_proj", 1
+                )
+            )
+        if ".experts.switch_glu.down_proj" in cand:
+            candidates.add(
+                cand.replace(
+                    ".experts.switch_glu.down_proj", ".experts.down_proj", 1
+                )
+            )
     return candidates
 
 
@@ -513,6 +757,104 @@ def _normalize_step3p7_model_type(config: dict) -> None:
             "Step-3.7 nested text_config.model_type detected; normalizing "
             "text-runtime dispatch to step3p5."
         )
+
+
+def _normalize_gemma4_config_scalar_types(config: dict) -> None:
+    """Normalize real Gemma4 artifact scalar JSON types before typed configs.
+
+    Some Gemma4 JANG artifacts stamp integer-valued floats in config.json
+    (for example final_logit_softcapping=30). Upstream mlx-vlm/mlx-lm typed
+    config constructors reject those ints even though the semantic value is a
+    float. Normalize in-memory only; never mutate the model artifact.
+    """
+    if not isinstance(config, dict):
+        return
+
+    model_types = {
+        str(config.get("model_type") or "").lower(),
+        str((config.get("text_config") or {}).get("model_type") or "").lower()
+        if isinstance(config.get("text_config"), dict)
+        else "",
+    }
+    if not any(mt.startswith("gemma4") for mt in model_types):
+        return
+
+    changed = False
+    for section in (config, config.get("text_config")):
+        if not isinstance(section, dict):
+            continue
+        value = section.get("final_logit_softcapping")
+        if type(value) is int:
+            section["final_logit_softcapping"] = float(value)
+            changed = True
+
+    if changed:
+        logger.info(
+            "  Gemma4 config scalar normalization: "
+            "final_logit_softcapping int -> float"
+        )
+
+
+def _prepare_gemma4_processor_model_path(path: Path) -> tuple[Path, Any | None]:
+    """Return a processor-load path whose config.json satisfies HF strict types.
+
+    Gemma4 Unified processors call Transformers AutoProcessor/AutoTokenizer,
+    which rereads config.json independently of the JANG model loader. Some
+    local JANG_4M artifacts stamp integer-valued float fields, so model load can
+    succeed while processor load fails inside Transformers strict dataclasses.
+
+    Keep the real model bundle immutable: create a temporary directory with
+    symlinks to the original files and a normalized config.json. The caller must
+    keep the returned TemporaryDirectory object alive for as long as the loaded
+    processor might reference local paths.
+    """
+    config_path = path / "config.json"
+    if not config_path.exists():
+        return path, None
+
+    try:
+        config = json.loads(config_path.read_text())
+    except Exception:
+        return path, None
+
+    text_config = config.get("text_config") if isinstance(config, dict) else None
+    model_types = {
+        str(config.get("model_type") or "").lower() if isinstance(config, dict) else "",
+        str((text_config or {}).get("model_type") or "").lower()
+        if isinstance(text_config, dict)
+        else "",
+    }
+    if not any(mt.startswith("gemma4") for mt in model_types):
+        return path, None
+
+    needs_normalization = False
+    for section in (config, text_config):
+        if (
+            isinstance(section, dict)
+            and type(section.get("final_logit_softcapping")) is int
+        ):
+            needs_normalization = True
+            break
+    if not needs_normalization:
+        return path, None
+
+    _normalize_gemma4_config_scalar_types(config)
+
+    temp_dir = tempfile.TemporaryDirectory(prefix="vmlx-gemma4-processor-")
+    temp_path = Path(temp_dir.name)
+    for child in path.iterdir():
+        if child.name == "config.json":
+            continue
+        (temp_path / child.name).symlink_to(
+            child,
+            target_is_directory=child.is_dir(),
+        )
+    (temp_path / "config.json").write_text(json.dumps(config), encoding="utf-8")
+    logger.info(
+        "  Gemma4 processor config normalization: using temporary typed "
+        "config path for AutoProcessor"
+    )
+    return temp_path, temp_dir
 
 
 def _remap_step3p7_moe_weights(
@@ -745,6 +1087,7 @@ def _load_jang_vlm_processor(path: Path, model):
     """Load a VLM processor while preserving local model-family overrides."""
     from mlx_vlm.utils import load_image_processor, load_processor
 
+    processor_path, processor_temp_dir = _prepare_gemma4_processor_model_path(path)
     eos_token_ids = _resolve_vlm_processor_eos_token_ids(path, model)
     eos_token_id = (
         eos_token_ids
@@ -758,18 +1101,24 @@ def _load_jang_vlm_processor(path: Path, model):
     if model_type == "step3p7":
         return _build_step3p7_vlm_processor(path, eos_token_id=eos_token_id)
 
-    image_processor = load_image_processor(path)
+    image_processor = load_image_processor(processor_path)
 
     if model_type == "zaya1_vl":
-        processor = _build_vlm_processor(path, eos_token_id)
+        processor = _build_vlm_processor(processor_path, eos_token_id)
     else:
         try:
-            processor = load_processor(path, True, eos_token_ids=eos_token_id)
+            processor = load_processor(
+                processor_path,
+                True,
+                eos_token_ids=eos_token_id,
+            )
         except (ImportError, ValueError):
-            processor = _build_vlm_processor(path, eos_token_id)
+            processor = _build_vlm_processor(processor_path, eos_token_id)
 
     if image_processor is not None:
         processor.image_processor = image_processor
+    if processor_temp_dir is not None:
+        processor._vmlx_processor_config_temp_dir = processor_temp_dir
 
     try:
         from jang_tools.load_jangtq_vlm import _install_video_fallback
@@ -1769,6 +2118,7 @@ def _load_jang_v2(
 
     start = time.perf_counter()
     config = load_config(path)
+    _normalize_gemma4_config_scalar_types(config)
     _ensure_jang_family_runtime_supported(path, config)
     _normalize_step3p7_model_type(config)
 
@@ -1847,6 +2197,7 @@ def _load_jang_v2(
         _flat["model_type"] = "gemma4"
         _flat["text_config"] = _text_config
         config = _flat
+        _normalize_gemma4_config_scalar_types(config)
         _ensure_jang_family_runtime_supported(path, config)
 
     # Resolve model-weight quantization through tensor-shape inference before
@@ -2430,7 +2781,7 @@ def _load_jang_v2(
                 if ".switch_mlp." in k:
                     k = k.replace(".switch_mlp.", ".experts.switch_glu.")
                 g4_remapped[k] = v
-            weights = g4_remapped
+            weights = _split_gemma4_moe_quantized_expert_sidecars(g4_remapped)
 
         _dsv4_ready_expert_weights = {}
         if _is_dsv4_model and not filter_expert_keys and _dsv4_n_experts > 0:
@@ -2754,6 +3105,7 @@ def _load_jang_v2_vlm(
         logger.debug(f"LatentMoE patch skipped: {_lmoe_e}")
 
     config = vlm_load_config(path)
+    _normalize_gemma4_config_scalar_types(config)
     _ensure_jang_family_runtime_supported(path, config)
 
     # JANG Gemma-4 VL bundles (E2B/E4B/26B-A4B/31B) are early-fusion
@@ -2778,6 +3130,7 @@ def _load_jang_v2_vlm(
             "(routing to vendored unified Model; upstream mlx_vlm gemma4 graph "
             "is incoherent for JANG bundles)"
         )
+    _normalize_gemma4_config_scalar_types(config)
 
     # Runtime quantization-shape repair (vmlx#config-repair). See
     # `_load_jang_v2` for the full rationale.
@@ -3204,6 +3557,14 @@ def _load_jang_v2_vlm(
     _pre_fix_bits_from_metadata(model, _shape_map_xshard, block_size)
     del _shape_map_xshard
 
+    _gemma_ple_quantized_module_paths = {
+        path
+        for path, module in model.named_modules()
+        if path.endswith(("per_layer_model_projection", "embed_tokens_per_layer"))
+        and hasattr(module, "bits")
+        and hasattr(module, "group_size")
+    }
+    _gemma_ple_pending: dict[str, dict[str, mx.array]] = {}
     for sf in weight_files:
         shard_weights = mx.load(str(sf))
         shard_weights = {
@@ -3336,6 +3697,7 @@ def _load_jang_v2_vlm(
                 (k.replace(".switch_mlp.", ".experts.switch_glu.") if ".switch_mlp." in k else k): v
                 for k, v in shard_weights.items()
             }
+            shard_weights = _split_gemma4_moe_quantized_expert_sidecars(shard_weights)
 
         # Try model.sanitize() — works for dense VL models.
         # Fails on MoE models because it tries to split gate_up_proj which JANG already split.
@@ -3413,105 +3775,13 @@ def _load_jang_v2_vlm(
                                 except Exception:
                                     continue
 
-        # Gemma 3n / 4 PLE: ScaledLinear (per_layer_model_projection) and
-        # nn.Embedding (embed_tokens_per_layer) lack to_quantized(), so
-        # nn.quantize() skips them. JANG packs their weights as uint32 anyway.
-        # Without dequantization, forward pass does matmul/take on uint32 →
-        # garbage → all <pad> output (#52 / #87).
-        #
-        # Previously gated on `gemma4_text` only — broadened to cover Gemma 3n
-        # (same PLE architecture) AND the "no-PLE" variant (Gemma 4 2B/4B-only
-        # gate: if `hidden_size_per_layer_input` is 0/null, the model has
-        # `per_layer_model_projection = None` and the safetensors' scales/
-        # biases orphan → strict load fails with "Received 2 parameters not in
-        # model" (vmlx#87 gyula-coder 2026-04-17). When the module is
-        # disabled in the model, drop the orphan keys instead of dequanting.
-        _text_mt = config.get("text_config", {}).get("model_type", "")
-        _text_cfg_for_ple = config.get("text_config", config)
-        _has_ple_module = bool(_text_cfg_for_ple.get("hidden_size_per_layer_input"))
-        _ple_eligible_types = {"gemma4_text", "gemma3n", "gemma3n_text", "gemma4", "gemma4_unified", "gemma4_unified_text"}
-        _gemma_family_by_name = _text_mt in _ple_eligible_types or config.get(
-            "model_type", ""
-        ) in _ple_eligible_types
-        # Case 1 — PLE keys exist AND model has the module: dequant to fp16
-        # Case 2 — PLE keys exist AND model does NOT have the module: drop orphans
-        # Case 3 — non-Gemma models: skip entirely (original behavior)
-        if _gemma_family_by_name and not _has_ple_module:
-            # Drop orphan PLE quant keys so strict weight load succeeds.
-            # Model doesn't instantiate per_layer_model_projection in this config.
-            for _orphan_pfx in (
-                "language_model.model.per_layer_model_projection",
-                "model.language_model.per_layer_model_projection",
-                "language_model.model.embed_tokens_per_layer",
-                "model.language_model.embed_tokens_per_layer",
-            ):
-                for _suffix in (".weight", ".scales", ".biases"):
-                    _k = _orphan_pfx + _suffix
-                    if _k in shard_weights:
-                        del shard_weights[_k]
-                        logger.info(
-                            f"  Dropped orphan Gemma PLE key (model has no PLE "
-                            f"module due to hidden_size_per_layer_input=0): {_k}"
-                        )
-        elif _gemma_family_by_name and _has_ple_module:
-            for _ple_name in (
-                "per_layer_model_projection",
-                "embed_tokens_per_layer",
-            ):
-                # Try both mlx_vlm naming conventions
-                for _pfx in (
-                    f"language_model.model.{_ple_name}",
-                    f"model.language_model.{_ple_name}",
-                ):
-                    _w_key = f"{_pfx}.weight"
-                    if _w_key not in shard_weights:
-                        continue
-                    _w = shard_weights[_w_key]
-                    if _w.dtype != mx.uint32:
-                        continue
-                    _s_key = f"{_pfx}.scales"
-                    _b_key = f"{_pfx}.biases"
-                    if _s_key not in shard_weights:
-                        continue
-                    _s = shard_weights[_s_key]
-                    _b = shard_weights.get(_b_key, mx.zeros_like(_s))
-                    _ple_dequantized = False
-                    for _try_bits in (8, 6, 4, 3, 2):
-                        _elem = 32 // _try_bits
-                        _real_cols = _w.shape[-1] * _elem
-                        if _s.shape[-1] == 0:
-                            continue
-                        _gs = _real_cols // _s.shape[-1]
-                        if _gs >= 2 and _gs * _s.shape[-1] == _real_cols:
-                            try:
-                                _dq = mx.dequantize(
-                                    _w, _s, _b, group_size=_gs, bits=_try_bits
-                                )
-                                mx.eval(_dq)
-                                shard_weights[_w_key] = _dq.astype(mx.float16)
-                                del shard_weights[_s_key]
-                                if _b_key in shard_weights:
-                                    del shard_weights[_b_key]
-                                logger.info(
-                                    f"  Dequantized Gemma4 PLE: {_w_key} "
-                                    f"(bits={_try_bits}, gs={_gs})"
-                                )
-                                _ple_dequantized = True
-                                break
-                            except Exception:
-                                continue
-                    # Audit-2026-04-07 risk §6.4 hardening: bit-width search exhaustion
-                    # used to silently leave the uint32 weight in place — forward pass
-                    # would then matmul/take on uint32 and produce garbage / all-pad
-                    # output (#52). Fail loud instead so the user gets a clear error.
-                    if not _ple_dequantized:
-                        raise RuntimeError(
-                            f"jang_loader Gemma4 PLE dequant: failed to find a valid "
-                            f"bit-width for {_w_key} (shape={_w.shape}, scales="
-                            f"{_s.shape}). Tried bits=[8,6,4,3,2]. Without dequant, "
-                            f"forward pass produces garbage output (#52). Please "
-                            f"verify the JANG file integrity and quant format."
-                        )
+        _gemma_ple_pending = _prepare_gemma_ple_shard_weights(
+            shard_weights,
+            config,
+            quant_mode=quant_mode,
+            quantized_module_paths=_gemma_ple_quantized_module_paths,
+            pending=_gemma_ple_pending,
+        )
 
         # Mistral4 MLA text models in mlx-lm expect split
         # embed_q/unembed_out weights, but mlx-vlm's Mistral4 VLM wrapper still
@@ -3617,6 +3887,15 @@ def _load_jang_v2_vlm(
         model.load_weights(list(shard_weights.items()), strict=False)
         del shard_weights
         gc.collect()
+
+    if _gemma_ple_pending:
+        pending_keys = sorted(
+            f"{prefix}.{part}" for prefix, parts in _gemma_ple_pending.items() for part in parts
+        )
+        raise RuntimeError(
+            "jang_loader Gemma4 PLE dequant: unresolved cross-shard PLE "
+            f"sidecars after all shards loaded: {pending_keys}"
+        )
 
     _fix_quantized_bits(
         model,
@@ -4103,6 +4382,7 @@ def _load_jang_v1(path: Path, jang_cfg: dict, config_path: Path):
     )
 
     config = load_config(path)
+    _normalize_gemma4_config_scalar_types(config)
     default_bits = _jang_default_bits(jang_cfg, [2, 4, 6, 8])
     config.pop("quantization", None)
     config.pop("quantization_config", None)
@@ -4237,6 +4517,7 @@ def _load_jang_v1_vlm(
     logger.info(f"Loading JANG v1 VLM: {source_model}")
 
     config = vlm_load_config(path)
+    _normalize_gemma4_config_scalar_types(config)
     # Runtime quantization-shape repair (vmlx#config-repair).
     config, default_bits, block_size = _prepare_runtime_weight_quantization(
         path,

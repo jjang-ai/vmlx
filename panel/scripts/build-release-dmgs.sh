@@ -27,13 +27,33 @@ fi
 PREPACKAGE_READY_MANIFEST_OUT="${VMLX_PREPACKAGE_READY_MANIFEST_OUT:-${VMLINUX_PREPACKAGE_READY_MANIFEST_OUT:-$ROOT_DIR/build/current-release-regression-manifest-pre-dmg-release-build.json}}"
 RELEASE_CODESIGN_IDENTITY="${VMLX_RELEASE_CODESIGN_IDENTITY:-${VMLINUX_RELEASE_CODESIGN_IDENTITY:-${CSC_NAME:-Developer ID Application: ShieldStack LLC (55KGF2S5AY)}}}"
 
+RELEASE_SCOPE="${VMLX_RELEASE_SCOPE:-${VMLINUX_RELEASE_SCOPE:-}}"
+
 echo "==> Checking pre-package release ledger before public DMG build"
-(
-  cd "$ROOT_DIR"
-  "$PYTHON_BIN" "tests/cross_matrix/run_release_regression_manifest.py" \
-    --require-prepackage-ready \
-    --out "$PREPACKAGE_READY_MANIFEST_OUT"
-)
+case "$RELEASE_SCOPE" in
+  mm3_gemma_vl)
+    (
+      cd "$ROOT_DIR"
+      "$PYTHON_BIN" "panel/scripts/scoped-release-preflight.py" \
+        --scope mm3_gemma_vl \
+        --out "$PREPACKAGE_READY_MANIFEST_OUT"
+    )
+    ;;
+  "")
+    (
+      cd "$ROOT_DIR"
+      "$PYTHON_BIN" "tests/cross_matrix/run_release_regression_manifest.py" \
+        --require-prepackage-ready \
+        --out "$PREPACKAGE_READY_MANIFEST_OUT"
+    )
+    ;;
+  *)
+    echo "ERROR: unsupported release scope: $RELEASE_SCOPE" >&2
+    echo "Set VMLX_RELEASE_SCOPE=mm3_gemma_vl (or VMLINUX_RELEASE_SCOPE=mm3_gemma_vl)." >&2
+    echo "Supported scoped release value: mm3_gemma_vl" >&2
+    exit 2
+    ;;
+esac
 
 sign_bundled_python_native_files() {
   local bundled_python="$1"

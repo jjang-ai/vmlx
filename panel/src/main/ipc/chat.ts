@@ -169,6 +169,45 @@ function mimeFromDataUrl(dataUrl?: string): string | undefined {
   return dataUrl?.match(/^data:([^;,]+)[;,]/)?.[1]?.toLowerCase();
 }
 
+function summarizeHistoricalMediaPart(part: any): string {
+  const partType = String(part?.type || "media");
+  if (partType === "image_url" || partType === "input_image" || partType === "image") {
+    const url = part.image_url?.url || part.image_url || part.url || part.image;
+    const mime = mimeFromDataUrl(typeof url === "string" ? url : undefined) || "image";
+    return `[Prior ${mime} attachment omitted from replay; use the surrounding chat text and prior assistant answer for continuity.]`;
+  }
+  if (partType === "video_url" || partType === "input_video" || partType === "video") {
+    const url = part.video_url?.url || part.video_url || part.url || part.video;
+    const mime = mimeFromDataUrl(typeof url === "string" ? url : undefined) || "video";
+    return `[Prior ${mime} attachment omitted from replay; use the surrounding chat text and prior assistant answer for continuity.]`;
+  }
+  if (partType === "input_audio" || partType === "audio") {
+    const format = part.input_audio?.format || part.audio?.format || "audio";
+    return `[Prior ${format} audio attachment omitted from replay; use the surrounding chat text and prior assistant answer for continuity.]`;
+  }
+  return `[Prior ${partType} attachment omitted from replay.]`;
+}
+
+function stripHistoricalMediaPartsForReplay(parts: any[]): any[] {
+  const out: any[] = [];
+  for (const part of parts) {
+    if (!part || typeof part !== "object") continue;
+    const partType = String(part.type || "");
+    if (partType === "text") {
+      const text = String(part.text || "");
+      if (text.trim()) out.push({ type: "text", text });
+      continue;
+    }
+    if (partType === "input_text") {
+      const text = String(part.text || "");
+      if (text.trim()) out.push({ type: "text", text });
+      continue;
+    }
+    out.push({ type: "text", text: summarizeHistoricalMediaPart(part) });
+  }
+  return out.length ? out : [{ type: "text", text: "[Prior media attachment omitted from replay.]" }];
+}
+
 function redactContentForLog(content: any): any {
   if (Array.isArray(content)) {
     return content.map((part: any) => {
@@ -1397,7 +1436,17 @@ export function registerChatHandlers(
             const parsed = JSON.parse(msgContent);
             if (Array.isArray(parsed) && parsed.length > 0 && parsed[0].type) {
               if (chatIsMultimodal || isRemote) {
-                msgContent = parsed;
+                // Keep only the current turn's media bytes in the API replay.
+                // Re-sending historical image/audio/video parts on every later
+                // text/tool turn keeps local engines on the media route, which
+                // breaks native tool prompting for families like MiniMax-M3 and
+                // wastes prefix-cache/storage budget. The prior assistant text
+                // remains in history, and the media user turn is represented by
+                // a text placeholder for continuity.
+                msgContent =
+                  !isRemote && m.id !== userMessage.id
+                    ? stripHistoricalMediaPartsForReplay(parsed)
+                    : parsed;
               } else {
                 // Multimodal is disabled for this model.
                 // Strip images entirely to prevent standard text-only engines from throwing 400 Bad Request

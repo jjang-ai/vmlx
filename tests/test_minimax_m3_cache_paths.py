@@ -730,6 +730,56 @@ def test_minimax_m3_reasoning_on_off_auto_map_to_template_modes(monkeypatch):
         assert "enable_thinking" not in ct_kwargs
 
 
+def test_minimax_m3_vl_preprocess_maps_reasoning_to_thinking_mode(monkeypatch):
+    import numpy as np
+
+    from vmlx_engine.models.minimax_m3 import m3_vl_preprocess
+
+    seen_kwargs = []
+
+    class _Tokenizer:
+        def apply_chat_template(self, messages, **kwargs):
+            seen_kwargs.append(dict(kwargs))
+            return "<image> describe"
+
+    class _Processor:
+        tokenizer = _Tokenizer()
+
+        def __call__(self, *, text, images, return_tensors):
+            return {
+                "input_ids": np.array([[1, 200025, 2]], dtype=np.int64),
+                "pixel_values": np.zeros((1, 1, 1), dtype=np.float32),
+                "image_grid_thw": np.array([[1, 1, 1]], dtype=np.int32),
+            }
+
+    monkeypatch.setattr(m3_vl_preprocess, "_get_processor", lambda _path: _Processor())
+    monkeypatch.setattr(m3_vl_preprocess, "_load_pil_images", lambda _images: [object()])
+
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "image_url", "image_url": {"url": "data:image/png;base64,AA=="}},
+                {"type": "text", "text": "describe"},
+            ],
+        }
+    ]
+    cases = [
+        (False, "disabled"),
+        (True, "enabled"),
+        (None, "adaptive"),
+    ]
+
+    for enable_thinking, expected in cases:
+        m3_vl_preprocess.preprocess_m3_vl_messages(
+            "/tmp/m3",
+            messages,
+            enable_thinking=enable_thinking,
+        )
+        assert seen_kwargs[-1]["thinking_mode"] == expected
+        assert "enable_thinking" not in seen_kwargs[-1]
+
+
 def test_minimax_m3_reasoning_parser_accepts_fallback_think_tags():
     from vmlx_engine.reasoning.minimax_m3_parser import MiniMaxM3ReasoningParser
 

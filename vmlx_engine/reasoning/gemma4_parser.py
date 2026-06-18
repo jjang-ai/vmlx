@@ -15,6 +15,8 @@ The parser handles both streaming and complete extraction, including partial
 marker buffering at chunk boundaries.
 """
 
+import re
+
 from .base import DeltaMessage, ReasoningParser
 
 # Channel marker tokens (from Gemma 4 tokenizer_config.json)
@@ -27,6 +29,26 @@ _THOUGHT = "thought"      # Channel name for reasoning
 _THOUGHT_START = f"{_SOC}{_THOUGHT}\n"
 # End of thinking = start of content
 _THOUGHT_END = _EOC
+
+_PLAIN_THINKING_RE = re.compile(
+    r"^\s*(?:\*\*)?Thinking Process:?(?:\*\*)?\s*",
+    re.IGNORECASE,
+)
+_PLAIN_THINKING_PREFIXES = (
+    "Thinking Process:",
+    "**Thinking Process:**",
+    "Thinking Process",
+    "**Thinking Process**",
+)
+_PLAIN_FINAL_RE = re.compile(
+    r"\n\s*(?:\*\*)?(?:Final Answer|Final Response|Answer|Response):(?:\*\*)?\s*",
+    re.IGNORECASE,
+)
+_INLINE_SELF_CORRECTION_TAIL_RE = re.compile(
+    r"(?P<reasoning>[\s\S]*?\*\([^)]*(?:Self-Correction|Self Correction|Refinement|Correction)[^)]*\)\*)"
+    r"(?P<content>[A-Z][A-Z0-9_:-][^\n]*)\s*$",
+    re.IGNORECASE,
+)
 
 
 class Gemma4ReasoningParser(ReasoningParser):
@@ -138,6 +160,10 @@ class Gemma4ReasoningParser(ReasoningParser):
                 reasoning = after_soc.strip()
                 return reasoning or None, None
 
+        plain_reasoning, plain_content = self._extract_plain_thinking_process(text)
+        if plain_reasoning is not None:
+            return plain_reasoning, plain_content
+
         # No thought channel — pure content (thinking was OFF)
         text = text.strip()
         return None, text if text else None
@@ -161,9 +187,11 @@ class Gemma4ReasoningParser(ReasoningParser):
         # Check if we just entered or left thought channel.
         # Accept both the full SOC marker AND the degraded form where
         # the detokenizer stripped `<|channel>` but left `thought\n`.
+        plain_thinking_in_current = _PLAIN_THINKING_RE.match(current_text or "") is not None
         thought_in_current = (
             _SOC + _THOUGHT in current_text
             or current_text.lstrip().startswith(_THOUGHT + "\n")
+            or plain_thinking_in_current
         )
         eoc_in_current = _EOC in current_text
 
@@ -188,6 +216,11 @@ class Gemma4ReasoningParser(ReasoningParser):
             could_be_channel = (
                 _SOC.startswith(stripped) or stripped.startswith(_SOC)
                 or (_THOUGHT + "\n").startswith(stripped) or stripped.startswith(_THOUGHT)
+                or any(
+                    prefix.lower().startswith(stripped.lower())
+                    or stripped.lower().startswith(prefix.lower())
+                    for prefix in _PLAIN_THINKING_PREFIXES
+                )
             )
             if could_be_channel:
                 # Hold until we resolve which side of the marker we're on
@@ -258,6 +291,9 @@ class Gemma4ReasoningParser(ReasoningParser):
             content = content.strip()
             return None, content or None
         else:
+            plain_reasoning, plain_content = self._extract_plain_thinking_process(text)
+            if plain_reasoning is not None:
+                return plain_reasoning, plain_content
             return None, text.strip() if text.strip() else None
 
         eoc_idx = after_soc.find(_EOC)
@@ -283,3 +319,63 @@ class Gemma4ReasoningParser(ReasoningParser):
             if text.endswith(marker[:length]):
                 return text[:-length]
         return text
+
+    @staticmethod
+    def _extract_plain_thinking_process(text: str) -> tuple[str | None, str | None]:
+        """Split Gemma media fallback's plain thinking dialect.
+
+        The full Gemma chat template uses ``<|channel>thought`` markers, but the
+        simple mlx-vlm media fallback can emit a native plain block starting with
+        ``Thinking Process:``. Treat that leading block as reasoning only when it
+        appears at the start of the model output; otherwise ordinary prose stays
+        visible content.
+        """
+        match = _PLAIN_THINKING_RE.match(text or "")
+        if not match:
+            return None, None
+
+        body = text[match.end():].strip()
+        if not body:
+            return None, None
+
+        final_match = None
+        for candidate in _PLAIN_FINAL_RE.finditer(body):
+            final_match = candidate
+        if final_match is not None:
+            reasoning = body[: final_match.start()].strip()
+            content = body[final_match.end():].strip()
+            while content.endswith(_EOT):
+                content = content[:-len(_EOT)].strip()
+            return reasoning or None, content or None
+
+        inline = _INLINE_SELF_CORRECTION_TAIL_RE.match(body)
+        if inline:
+            reasoning = inline.group("reasoning").strip()
+            content = inline.group("content").strip()
+            while content.endswith(_EOT):
+                content = content[:-len(_EOT)].strip()
+            return reasoning or None, content or None
+
+        lines = [line.rstrip() for line in body.splitlines()]
+        nonempty = [i for i, line in enumerate(lines) if line.strip()]
+        if len(nonempty) >= 2:
+            last_idx = nonempty[-1]
+            last = lines[last_idx].strip()
+            reasoning_prefix = "\n".join(lines[:last_idx]).strip()
+            looks_like_reasoning_line = bool(
+                re.match(r"^(?:\d+[\.)]|[-*•]|\*\(|\(|Self[- ]?Correction|Analyze|Verify|Formulate)\b", last, re.I)
+            )
+            # Only split a plain final line when it is short and does not look
+            # like another reasoning bullet. Long unlabeled prose remains
+            # reasoning-only until a content delimiter arrives.
+            if (
+                reasoning_prefix
+                and last
+                and not looks_like_reasoning_line
+                and len(last) <= 240
+            ):
+                while last.endswith(_EOT):
+                    last = last[:-len(_EOT)].strip()
+                return reasoning_prefix or None, last or None
+
+        return body, None

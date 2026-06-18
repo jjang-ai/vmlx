@@ -190,6 +190,7 @@ def _mllm_media_cache_extra_keys(request: Any) -> Optional[Dict[str, str]]:
         or getattr(request, "audio_codes", None) is not None
         or getattr(request, "audio_embeds", None) is not None
         or getattr(request, "audio_features", None) is not None
+        or getattr(request, "audio_features_mask", None) is not None
         or getattr(request, "audio", None)
         or getattr(request, "audios", None)
         or getattr(request, "pixel_values", None) is not None
@@ -236,6 +237,7 @@ def _mllm_media_cache_extra_keys(request: Any) -> Optional[Dict[str, str]]:
     _hash_array("audio_codes", getattr(request, "audio_codes", None))
     _hash_array("audio_embeds", getattr(request, "audio_embeds", None))
     _hash_array("audio_features", getattr(request, "audio_features", None))
+    _hash_array("audio_features_mask", getattr(request, "audio_features_mask", None))
     if not media_sources:
         # Fallback for callers that hand us preprocessed pixel tensors without
         # source URLs/paths. Do not hash attention_mask: it changes with text
@@ -1085,9 +1087,14 @@ def _call_processor_direct(
     if videos:
         kwargs["videos"] = videos
     if audio:
-        kwargs["audio"] = audio
+        processor_audio = (
+            audio
+            if skip_audios_alias
+            else _load_audio_waveforms_for_processor(processor, audio)
+        )
+        kwargs["audio"] = processor_audio
         if not skip_audios_alias and "audios" in params:
-            kwargs["audios"] = audio
+            kwargs["audios"] = processor_audio
     if params and not any(p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values()):
         kwargs = {k: v for k, v in kwargs.items() if k in params}
     return _as_input_mapping(processor(**kwargs))
@@ -3043,6 +3050,8 @@ class MLLMBatchRequest:
     audio_codes: Optional[mx.array] = None
     audio_embeds: Optional[mx.array] = None
     audio_features: Optional[mx.array] = None
+    audio_features_mask: Optional[mx.array] = None
+    audio_features_are_raw_input_features: bool = False
     extra_kwargs: Dict[str, Any] = field(default_factory=dict)
 
     # Generation state
@@ -4346,9 +4355,16 @@ class MLLMBatchGenerator:
         request.audio_embeds = _ensure_mx_array(
             request.extra_kwargs.pop("audio_embeds", None)
         )
+        input_features = request.extra_kwargs.pop("input_features", None)
+        input_features_mask = request.extra_kwargs.pop("input_features_mask", None)
+        audio_features = request.extra_kwargs.pop("audio_features", None)
         request.audio_features = _ensure_mx_array(
-            request.extra_kwargs.pop("audio_features", None)
+            input_features if input_features is not None else audio_features
         )
+        request.audio_features_mask = _ensure_mx_array(
+            input_features_mask if input_features is not None else None, mx.bool_
+        )
+        request.audio_features_are_raw_input_features = input_features is not None
         if (
             all_audio
             and self._model_type == "mimo_v2"
@@ -4822,11 +4838,20 @@ class MLLMBatchGenerator:
         if request.audio_embeds is not None:
             kwargs["audio_embeds"] = request.audio_embeds
         elif request.audio_features is not None:
-            # Some processors name already-computed audio embeddings
-            # `audio_features`. Treat them as precomputed embeddings for the
-            # model bridge. Raw waveform/mel-to-code tokenization is a separate
-            # runtime component and must not be implied by this alias.
-            kwargs["audio_embeds"] = request.audio_features
+            if getattr(request, "audio_features_are_raw_input_features", False):
+                # Gemma4 processors return raw acoustic input features as
+                # `input_features`/`input_features_mask`; the model's audio
+                # embedder must still project them. Do not alias these to
+                # MiMo-style precomputed embeddings.
+                kwargs["input_features"] = request.audio_features
+                if request.audio_features_mask is not None:
+                    kwargs["input_features_mask"] = request.audio_features_mask
+            else:
+                # Some processors name already-computed audio embeddings
+                # `audio_features`. Treat them as precomputed embeddings for the
+                # model bridge. Raw waveform/mel-to-code tokenization is a separate
+                # runtime component and must not be implied by this alias.
+                kwargs["audio_embeds"] = request.audio_features
         if cache is not None:
             kwargs["cache"] = cache
 

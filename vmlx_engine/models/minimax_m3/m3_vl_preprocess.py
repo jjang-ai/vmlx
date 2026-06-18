@@ -94,6 +94,7 @@ def _normalize_messages_for_template(messages: List[dict]) -> Tuple[List[dict], 
             out_msgs.append(msg)
             continue
         new_content = []
+        image_placeholders = []
         for item in content:
             if not isinstance(item, dict):
                 new_content.append(item)
@@ -106,10 +107,16 @@ def _normalize_messages_for_template(messages: List[dict]) -> Tuple[List[dict], 
                     src = src.get("url", src)
                 if src is not None:
                     raw_images.append(src)
-                new_content.append({"type": "image"})
+                image_placeholders.append({"type": "image"})
             else:
                 new_content.append(item)
-        out_msgs.append({**msg, "content": new_content})
+        # MiniMax-M3's proven diagnostic path places image placeholders before
+        # the text in the same user turn. The panel/OpenAI content-array shape
+        # naturally arrives as text then image; preserving that order makes the
+        # model behave as if no image was available on mixed text+image turns.
+        # Keep raw_images in document order, but render image tokens before the
+        # textual prompt for this M3-only preprocessing path.
+        out_msgs.append({**msg, "content": image_placeholders + new_content})
     return out_msgs, raw_images
 
 
@@ -163,9 +170,15 @@ def preprocess_m3_vl_messages(
     if not raw_images:
         return None
 
-    tmpl_kwargs = {}
-    if enable_thinking is not None:
-        tmpl_kwargs["enable_thinking"] = enable_thinking
+    # MiniMax-M3 templates ignore the common enable_thinking kwarg and branch on
+    # thinking_mode only. Keep VL preprocessing aligned with server text routes:
+    # off -> disabled; on -> enabled; omitted/auto -> adaptive.
+    if enable_thinking is False:
+        tmpl_kwargs = {"thinking_mode": "disabled"}
+    elif enable_thinking is True:
+        tmpl_kwargs = {"thinking_mode": "enabled"}
+    else:
+        tmpl_kwargs = {"thinking_mode": "adaptive"}
     try:
         txt = tok.apply_chat_template(
             norm_msgs,
@@ -174,7 +187,7 @@ def preprocess_m3_vl_messages(
             **tmpl_kwargs,
         )
     except TypeError:
-        # Template doesn't accept enable_thinking — retry without it.
+        # Template doesn't accept thinking_mode — retry without it.
         txt = tok.apply_chat_template(
             norm_msgs,
             add_generation_prompt=add_generation_prompt,

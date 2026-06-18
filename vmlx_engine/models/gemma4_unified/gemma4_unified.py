@@ -4,9 +4,45 @@ import mlx.core as mx
 import mlx.nn as nn
 
 from ..base import InputEmbeddingsFeatures
+from ..gemma4.audio import AudioEncoder
 from ..gemma4.gemma4 import MultimodalEmbedder, masked_scatter
 from ..gemma4.language import LanguageModel
+from ..gemma4.vision import VisionModel as Gemma4VisionModel
 from .config import ModelConfig, VisionConfig
+
+
+_EXPERT_SIDECAR_SUFFIXES = (".weight", ".scales", ".biases")
+
+
+def _split_quantized_expert_sidecar(key: str, value: mx.array):
+    """Map fused Gemma4 MoE expert sidecars onto SwitchGLU sidecars.
+
+    Gemma4 26B-A4B QAT bundles store routed experts as
+    ``experts.gate_up_proj.{weight,scales,biases}``. SwitchGLU expects split
+    ``gate_proj`` and ``up_proj`` tensors. Split on the output axis only so
+    affine/native-MXFP groups along the input axis stay intact.
+    """
+    for suffix in _EXPERT_SIDECAR_SUFFIXES:
+        marker = f".experts.gate_up_proj{suffix}"
+        if key.endswith(marker):
+            base = key[: -len(marker)]
+            if value.shape[-2] % 2:
+                raise ValueError(
+                    f"Cannot split fused Gemma4 expert sidecar {key}: "
+                    f"output dimension {value.shape[-2]} is not even"
+                )
+            gate, up = mx.split(value, 2, axis=-2)
+            return (
+                (f"{base}.experts.switch_glu.gate_proj{suffix}", mx.contiguous(gate)),
+                (f"{base}.experts.switch_glu.up_proj{suffix}", mx.contiguous(up)),
+            )
+
+        marker = f".experts.down_proj{suffix}"
+        if key.endswith(marker):
+            base = key[: -len(marker)]
+            return ((f"{base}.experts.switch_glu.down_proj{suffix}", value),)
+
+    return None
 
 
 def _compact_prefix_rows(features: mx.array, valid_mask: mx.array) -> mx.array:
@@ -18,6 +54,10 @@ def _compact_prefix_rows(features: mx.array, valid_mask: mx.array) -> mx.array:
     if not rows:
         return features.reshape(-1, features.shape[-1])[:0]
     return mx.concatenate(rows, axis=0)
+
+
+def _uses_gemma4_audio_tower(audio_config) -> bool:
+    return str(getattr(audio_config, "model_type", "") or "").lower() == "gemma4_audio"
 
 
 class VisionEmbedder(nn.Module):
@@ -73,19 +113,39 @@ class Model(nn.Module):
         self.vocab_size = config.text_config.vocab_size
 
         if config.vision_config is not None:
-            self.vision_embedder = VisionEmbedder(config.vision_config)
+            vision_type = str(
+                getattr(config.vision_config, "model_type", "") or ""
+            ).lower()
+            self._uses_full_gemma4_vision_tower = vision_type == "gemma4_vision"
+            if self._uses_full_gemma4_vision_tower:
+                self.vision_tower = Gemma4VisionModel(config.vision_config)
+                self.vision_embedder = None
+                vision_embedding_dim = config.vision_config.hidden_size
+            else:
+                self.vision_tower = None
+                self.vision_embedder = VisionEmbedder(config.vision_config)
+                vision_embedding_dim = config.vision_config.output_proj_dims
             self.embed_vision = MultimodalEmbedder(
-                embedding_dim=config.vision_config.output_proj_dims,
+                embedding_dim=vision_embedding_dim,
                 text_hidden_size=config.text_config.hidden_size,
                 eps=config.vision_config.rms_norm_eps,
             )
         else:
+            self.vision_tower = None
             self.vision_embedder = None
             self.embed_vision = None
+            self._uses_full_gemma4_vision_tower = False
 
+        self.audio_tower = None
         if config.audio_config is not None:
+            audio_output_dim = (
+                getattr(config.audio_config, "output_proj_dims", None)
+                or config.audio_config.hidden_size
+            )
+            if _uses_gemma4_audio_tower(config.audio_config):
+                self.audio_tower = AudioEncoder(config.audio_config)
             self.embed_audio = MultimodalEmbedder(
-                embedding_dim=config.audio_config.output_proj_dims,
+                embedding_dim=audio_output_dim,
                 text_hidden_size=config.text_config.hidden_size,
                 eps=config.audio_config.rms_norm_eps,
             )
@@ -110,7 +170,10 @@ class Model(nn.Module):
         image_position_ids: Optional[mx.array] = None,
     ) -> mx.array:
         if self.vision_embedder is None or self.embed_vision is None:
-            raise ValueError("Vision inputs were provided, but vision_config is None.")
+            if self.vision_tower is None or self.embed_vision is None:
+                raise ValueError("Vision inputs were provided, but vision_config is None.")
+            embedded = self.vision_tower(pixel_values)
+            return self.embed_vision(embedded)
         embedded = self.vision_embedder(pixel_values, image_position_ids)
         projected = self.embed_vision(embedded)
         if image_position_ids is None:
@@ -141,6 +204,18 @@ class Model(nn.Module):
     ) -> mx.array:
         if self.embed_audio is None:
             raise ValueError("Audio inputs were provided, but audio_config is None.")
+
+        if self.audio_tower is not None:
+            if input_features_mask is None:
+                tower_mask = mx.zeros(input_features.shape[:2], dtype=mx.bool_)
+            else:
+                # Processor masks use True=valid; Gemma4 AudioEncoder expects
+                # True=padding/invalid.
+                tower_mask = ~input_features_mask.astype(mx.bool_)
+            encoded, encoded_padding_mask = self.audio_tower(input_features, tower_mask)
+            projected = self.embed_audio(encoded)
+            return _compact_prefix_rows(projected, ~encoded_padding_mask)
+
         projected = self.embed_audio(input_features)
         if input_features_mask is None:
             return projected.reshape(-1, projected.shape[-1])
@@ -290,7 +365,7 @@ class Model(nn.Module):
                 continue
             if k == "lm_head.weight":
                 continue
-            if self.embed_audio is None and "embed_audio" in k:
+            if self.embed_audio is None and ("embed_audio" in k or "audio_tower" in k):
                 continue
 
             if k.startswith("model."):
@@ -303,6 +378,21 @@ class Model(nn.Module):
             ):
                 rest = new_key[len("language_model.") :]
                 new_key = "language_model.model." + rest
+
+            sidecars = _split_quantized_expert_sidecar(new_key, v)
+            if sidecars is not None:
+                for sidecar_key, sidecar_value in sidecars:
+                    sanitized[sidecar_key] = sidecar_value
+                continue
+
+            if (
+                "subsample_conv_projection" in new_key
+                and "conv.weight" in new_key
+                and v.ndim == 4
+            ):
+                v = v.transpose(0, 2, 3, 1)
+            if "depthwise_conv1d.weight" in new_key and v.ndim == 3:
+                v = v.transpose(0, 2, 1)
 
             if new_key.endswith(".experts.down_proj"):
                 new_key = new_key.replace(

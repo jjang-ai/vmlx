@@ -1417,3 +1417,42 @@ def test_gemma4_reasoning_parser_orphan_channel_close_is_not_visible():
     assert content == "The answer is 4."
     assert "<channel|>" not in content
     assert "<turn|>" not in content
+
+
+def test_gemma4_reasoning_parser_splits_plain_media_thinking_process():
+    """Gemma 4 media fallback can emit plain Thinking Process text."""
+    from vmlx_engine.reasoning.gemma4_parser import Gemma4ReasoningParser
+
+    parser = Gemma4ReasoningParser()
+
+    reasoning, content = parser.extract_reasoning(
+        "Thinking Process:\n\n"
+        "1. Analyze the image.\n"
+        "2. The visible word is RED.\n\n"
+        "*(Self-Correction/Refinement: The visible word is clearly RED.)*"
+        "GEMMA_MIX_IMAGE_RED"
+    )
+
+    assert reasoning is not None
+    assert "Analyze the image" in reasoning
+    assert "GEMMA_MIX_IMAGE_RED" not in reasoning
+    assert content == "GEMMA_MIX_IMAGE_RED"
+
+
+def test_gemma4_reasoning_streaming_splits_plain_media_thinking_process_one_shot():
+    """One-shot simple-media stream should emit reasoning and visible content."""
+    from vmlx_engine.reasoning.gemma4_parser import Gemma4ReasoningParser
+
+    parser = Gemma4ReasoningParser()
+    text = (
+        "Thinking Process:\n\n"
+        "1. Inspect the attached image.\n\n"
+        "Final Answer: GEMMA_MIX_IMAGE_RED"
+    )
+
+    delta = parser.extract_reasoning_streaming("", text, text)
+
+    assert delta is not None
+    assert delta.reasoning is not None
+    assert "Inspect the attached image" in delta.reasoning
+    assert delta.content == "GEMMA_MIX_IMAGE_RED"

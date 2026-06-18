@@ -13,6 +13,34 @@ from mlx_lm.models.rope_utils import initialize_rope
 from mlx_lm.models.switch_layers import SwitchGLU
 
 
+_EXPERT_SIDECAR_SUFFIXES = (".weight", ".scales", ".biases")
+
+
+def _split_quantized_expert_sidecar(key: str, value: mx.array):
+    """Map fused Gemma4 MoE expert sidecars onto SwitchGLU sidecars."""
+    for suffix in _EXPERT_SIDECAR_SUFFIXES:
+        marker = f".experts.gate_up_proj{suffix}"
+        if key.endswith(marker):
+            base = key[: -len(marker)]
+            if value.shape[-2] % 2:
+                raise ValueError(
+                    f"Cannot split fused Gemma4 expert sidecar {key}: "
+                    f"output dimension {value.shape[-2]} is not even"
+                )
+            gate, up = mx.split(value, 2, axis=-2)
+            return (
+                (f"{base}.experts.switch_glu.gate_proj{suffix}", mx.contiguous(gate)),
+                (f"{base}.experts.switch_glu.up_proj{suffix}", mx.contiguous(up)),
+            )
+
+        marker = f".experts.down_proj{suffix}"
+        if key.endswith(marker):
+            base = key[: -len(marker)]
+            return ((f"{base}.experts.switch_glu.down_proj{suffix}", value),)
+
+    return None
+
+
 @dataclass
 class ModelArgs(BaseModelArgs):
     model_type: str = "gemma4_text"
@@ -616,6 +644,12 @@ class Model(nn.Module):
                     "output_min",
                 )
             ):
+                continue
+
+            sidecars = _split_quantized_expert_sidecar(k, v)
+            if sidecars is not None:
+                for sidecar_key, sidecar_value in sidecars:
+                    sanitized[sidecar_key] = sidecar_value
                 continue
 
             if k.endswith(".experts.gate_up_proj"):

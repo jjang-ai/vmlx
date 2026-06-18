@@ -1863,6 +1863,23 @@ def _responses_input_requested_modalities(input_data) -> set[str]:
     return _requested_modalities_from_summary(_responses_input_multimodal_summary(input_data))
 
 
+def _m3_vl_response_image_only(engine, modalities: set[str]) -> bool:
+    normalized = _normalize_modality_set(modalities)
+    return bool(normalized) and _m3_vl_image_ok(engine) and normalized <= {"image", "vision"}
+
+
+def _responses_modalities_unsupported_after_m3_vl_carveout(
+    engine,
+    modalities: set[str],
+) -> set[str]:
+    if not modalities or not _m3_vl_image_ok(engine):
+        return set(modalities or set())
+    return {
+        m for m in modalities
+        if str(m).lower() not in ("image", "vision")
+    }
+
+
 def _log_multimodal_request_shape(route: str, model_name: str, summary: dict) -> None:
     """Log redacted media request shape for user-exported diagnostics."""
     if not summary or int(summary.get("total") or 0) <= 0:
@@ -2233,6 +2250,19 @@ def _bundle_declares_native_audio(bundle_path: str | None) -> bool:
         return False
     jang = _read_bundle_json(bundle_path, "jang_config.json")
     model_type = str(cfg.get("model_type") or "").lower()
+    caps = cfg.get("capabilities") if isinstance(cfg.get("capabilities"), dict) else {}
+    if not caps and isinstance((jang or {}).get("capabilities"), dict):
+        caps = (jang or {}).get("capabilities") or {}
+    cap_modalities = caps.get("modalities") if isinstance(caps, dict) else None
+    if (
+        model_type.startswith("gemma4")
+        and isinstance(cap_modalities, dict)
+        and cap_modalities.get("audio") is False
+    ):
+        # Some Gemma4 vision-only bundles carry a leftover audio_config stub.
+        # The model-owned capabilities field is the stronger truth: do not
+        # advertise audio unless the artifact says it is runtime-supported.
+        return False
     weight_format = str((jang or {}).get("weight_format") or "").lower()
     profile = str((jang or {}).get("profile") or "").lower()
     quant = (jang or {}).get("quantization") if isinstance(jang, dict) else {}
@@ -2260,6 +2290,25 @@ def _bundle_declares_native_audio(bundle_path: str | None) -> bool:
         # stamped/proven. A direct MXFP8 probe can sometimes produce recoverable
         # raw `Audio present.` content, but the API path is not stable enough to
         # advertise audio.
+        return False
+    if model_type == "gemma4_unified" and cfg.get("audio_config") is not None:
+        if _bundle_weight_map_has_prefix(bundle_path, "audio_tower."):
+            return True
+        audio_proven = bool(
+            (cfg.get("capabilities") or {}).get("audio_runtime_proven")
+            or (jang or {}).get("audio_runtime_proven")
+            or ((jang or {}).get("capabilities") or {}).get("audio_runtime_proven")
+        )
+        if audio_proven or (
+            os.environ.get("VMLINUX_ALLOW_EXPERIMENTAL_GEMMA4_DIRECT_AUDIO") == "1"
+            or os.environ.get("VMLX_ALLOW_EXPERIMENTAL_GEMMA4_DIRECT_AUDIO") == "1"
+        ):
+            return True
+        # Gemma4 Unified direct-audio bundles can contain an audio token and
+        # embed_audio projection without a real audio_tower. The 12B JANG_4M
+        # artifact reaches the audio projection but installed UI/Chat/Responses
+        # live proof still answers as if no audio was attached. Keep
+        # capabilities honest until a bundle is explicitly stamped/proven.
         return False
     if cfg.get("audio_config") is not None:
         return True
@@ -2301,6 +2350,8 @@ def _loaded_runtime_modalities() -> list[str]:
     modalities = _loaded_omni_modalities()
     if modalities is not None:
         return modalities
+    if _m3_vl_image_ok(_engine):
+        return ["text", "vision"]
     modalities = _loaded_mllm_modalities()
     if modalities is not None:
         return modalities
@@ -5576,6 +5627,24 @@ def _read_bundle_json(bundle_path: str | None, filename: str) -> dict:
         return data if isinstance(data, dict) else {}
     except Exception:
         return {}
+
+
+def _bundle_weight_map_has_prefix(bundle_path: str | None, prefix: str) -> bool:
+    if not bundle_path or not prefix:
+        return False
+    try:
+        from pathlib import Path
+
+        index_path = Path(bundle_path) / "model.safetensors.index.json"
+        if not index_path.is_file():
+            return False
+        index = json.loads(index_path.read_text())
+        weight_map = index.get("weight_map") if isinstance(index, dict) else None
+        if not isinstance(weight_map, dict):
+            return False
+        return any(str(key).startswith(prefix) for key in weight_map)
+    except Exception:
+        return False
 
 
 def _bundle_has_prestacked_jangtq(bundle_path: str | None) -> bool:
@@ -13323,6 +13392,17 @@ async def create_response(
         _model_path or _model_name or request.model,
         _responses_input_multimodal_summary(request.input),
     )
+    # M3 VL is intentionally loaded through the text-routed M3 engine
+    # (VMLX_M3_VL=1) because the upstream mlx-vlm wrapper is not published.
+    # Chat Completions, Anthropic, and Ollama already allow image-only M3
+    # requests through this path; Responses is the UI default, so it must
+    # preserve the same image carve-out instead of rejecting as text-only.
+    _responses_requested_modalities = (
+        _responses_modalities_unsupported_after_m3_vl_carveout(
+            engine,
+            _responses_requested_modalities,
+        )
+    )
     if _responses_requested_modalities:
         _reject_unsupported_multimodal(
             "/v1/responses",
@@ -13332,6 +13412,10 @@ async def create_response(
         _responses_has_media
         and not engine.is_mllm
         and _loaded_omni_modalities() is None
+        and not _m3_vl_response_image_only(
+            engine,
+            _responses_input_requested_modalities(request.input),
+        )
     ):
         _reject_unsupported_multimodal("/v1/responses")
 
@@ -13343,6 +13427,10 @@ async def create_response(
     # for omni bundles too, otherwise input_image gets collapsed to text and the
     # encoder never sees the image.
     _preserve_mm = bool(engine.is_mllm)
+    if not _preserve_mm:
+        _resp_modalities_for_preserve = _responses_input_requested_modalities(request.input)
+        if _m3_vl_response_image_only(engine, _resp_modalities_for_preserve):
+            _preserve_mm = True
     if not _preserve_mm:
         try:
             from .omni_multimodal import is_omni_multimodal_bundle
@@ -14543,6 +14631,7 @@ async def stream_chat_completion(
     _model_config = get_model_config_registry().lookup(
         _model_path or _model_name or request.model
     )
+    _family_name = getattr(_model_config, "family_name", None)
     _is_minimax_m3 = getattr(_model_config, "family_name", None) in (
         "minimax_m3",
         "minimax_m3_vl",
@@ -15642,7 +15731,8 @@ async def stream_responses_api(
     _model_config = get_model_config_registry().lookup(
         _model_path or _model_name or request.model
     )
-    _is_minimax_m3 = getattr(_model_config, "family_name", None) in (
+    _family_name = getattr(_model_config, "family_name", None)
+    _is_minimax_m3 = _family_name in (
         "minimax_m3",
         "minimax_m3_vl",
     )
@@ -15727,6 +15817,9 @@ async def stream_responses_api(
     suppress_reasoning = _effective_thinking is False
     m3_reasoning_only_answer_budget: int | None = None
     m3_reasoning_only_answer_enabled = False
+    reasoning_only_answer_budget: int | None = None
+    reasoning_only_answer_enabled = False
+    reasoning_only_answer_family = ""
     if (
         _is_minimax_m3
         and _m3_thinking_mode in ("enabled", "adaptive")
@@ -15744,6 +15837,25 @@ async def stream_responses_api(
         except Exception:
             m3_reasoning_only_answer_budget = None
             m3_reasoning_only_answer_enabled = False
+    if (
+        _family_name == "gemma4"
+        and _effective_thinking is not False
+        and not _stream_tools_available
+    ):
+        try:
+            _requested_output_budget = int(kwargs.get("max_tokens") or 256)
+            reasoning_only_answer_budget = max(32, _requested_output_budget)
+            reasoning_only_answer_enabled = True
+            reasoning_only_answer_family = "Gemma4"
+            _requested_thinking_budget = getattr(request, "max_thinking_tokens", None)
+            if _requested_thinking_budget is not None:
+                _requested_thinking_budget = max(1, int(_requested_thinking_budget))
+                kwargs = dict(kwargs)
+                kwargs["max_tokens"] = min(_requested_output_budget, _requested_thinking_budget)
+        except Exception:
+            reasoning_only_answer_budget = None
+            reasoning_only_answer_enabled = False
+            reasoning_only_answer_family = ""
 
     # Create a per-request parser instance to avoid mutable-state conflicts
     # when multiple requests stream concurrently.
@@ -15959,7 +16071,9 @@ async def stream_responses_api(
                 prompt_tokens = output.prompt_tokens
             if hasattr(output, "completion_tokens") and output.completion_tokens:
                 completion_tokens = output.completion_tokens
-            _cached = getattr(output, "cached_tokens", 0)
+            _chunk_cached = int(getattr(output, "cached_tokens", 0) or 0)
+            if _chunk_cached > 0:
+                _cached = _chunk_cached
             _detail_chunk = getattr(output, "cache_detail", "") or None
             if _detail_chunk is not None:
                 _cache_detail = _detail_chunk
@@ -16285,6 +16399,7 @@ async def stream_responses_api(
     # (mirrors the Chat Completions streaming path at lines 2468-2475).
     tool_calls = None
     cleaned_text = full_text
+    _tool_parse_from_reasoning_only = False
     if not _suppress_tools:
         # Use content-only text when reasoning parser separated it (avoids losing
         # tool calls that appear inside <think> blocks during regex stripping).
@@ -16293,11 +16408,17 @@ async def stream_responses_api(
             parse_text = accumulated_content.strip()
         elif request_parser and accumulated_reasoning.strip():
             parse_text = accumulated_reasoning.strip()
+            _tool_parse_from_reasoning_only = True
         else:
             parse_text = _strip_think_for_tool_parse(full_text)
         cleaned_text, tool_calls = _parse_tool_calls_with_parser(
             parse_text or full_text, request
         )
+        if _tool_parse_from_reasoning_only and not tool_calls:
+            # Reasoning-only text is only a candidate tool-call source. If it is
+            # not actually a tool call, never recycle it as visible output_text;
+            # that creates hidden-only/empty UI rows or pollutes chat history.
+            cleaned_text = ""
     else:
         cleaned_text = _clean_suppressed_tool_markup_for_display(
             full_text,
@@ -16506,16 +16627,27 @@ async def stream_responses_api(
                 display_text = clean_output_text(full_text) if full_text else ""
         if (
             not display_text
-            and m3_reasoning_only_answer_enabled
+            and (m3_reasoning_only_answer_enabled or reasoning_only_answer_enabled)
             and accumulated_reasoning.strip()
             and not tool_calls
         ):
+            _answer_family = (
+                "MiniMax-M3"
+                if m3_reasoning_only_answer_enabled
+                else (reasoning_only_answer_family or "reasoning model")
+            )
+            _answer_budget = (
+                m3_reasoning_only_answer_budget
+                if m3_reasoning_only_answer_enabled
+                else reasoning_only_answer_budget
+            )
             logger.info(
-                "MiniMax-M3 forced reasoning produced no visible content; "
+                "%s reasoning produced no visible content; "
                 "running bounded thinking-off answer pass "
                 "(reasoning_chars=%d, answer_budget=%s)",
+                _answer_family,
                 len(accumulated_reasoning),
-                m3_reasoning_only_answer_budget,
+                _answer_budget,
             )
             answer_messages = list(messages) + [
                 {
@@ -16526,9 +16658,10 @@ async def stream_responses_api(
             ]
             answer_kwargs = dict(kwargs)
             answer_kwargs["enable_thinking"] = False
-            answer_kwargs["max_tokens"] = int(m3_reasoning_only_answer_budget or 256)
+            answer_kwargs["max_tokens"] = int(_answer_budget or 256)
             answer_ct_kwargs = dict(answer_kwargs.get("chat_template_kwargs") or {})
-            answer_ct_kwargs["thinking_mode"] = "disabled"
+            if _answer_family == "MiniMax-M3":
+                answer_ct_kwargs["thinking_mode"] = "disabled"
             answer_ct_kwargs.pop("enable_thinking", None)
             answer_kwargs["chat_template_kwargs"] = answer_ct_kwargs
             answer_kwargs.pop("tools", None)
@@ -16541,8 +16674,8 @@ async def stream_responses_api(
                     chat_kwargs=answer_kwargs,
                     timeout=_stream_timeout,
                     fastapi_request=fastapi_request,
-                    request_id=f"{response_id}:m3-visible-answer",
-                    endpoint="Responses API MiniMax-M3 visible answer pass",
+                    request_id=f"{response_id}:visible-answer",
+                    endpoint=f"Responses API {_answer_family} visible answer pass",
                 )
                 answer_text = _responses_fast_path_visible_text(answer_output, request)
                 answer_text = _finalize_visible_text_for_request(answer_text, request)
@@ -16565,7 +16698,8 @@ async def stream_responses_api(
                     )
             except Exception as e:
                 logger.error(
-                    "MiniMax-M3 visible answer pass failed for %s: %s",
+                    "%s visible answer pass failed for %s: %s",
+                    _answer_family,
                     response_id,
                     e,
                     exc_info=True,
