@@ -737,18 +737,31 @@ class DiskCacheManager:
             # Even mx.eval'd arrays can trigger Metal buffer access when
             # mx.save_safetensors runs on the background thread, causing
             # kernel panics. numpy conversion does a CPU memcpy that fully
-            # decouples from Metal. bfloat16 is cast to float16 (numpy
-            # doesn't support bf16) — acceptable precision for prompt cache.
+            # decouples from Metal.
+            #
+            # IMPORTANT: Gemma 4 sliding-window RotatingKVCache.values may be
+            # a non-contiguous MLX view after prefill. Direct np.array(v) on
+            # that view can serialize wrong values while keys/full KV remain
+            # exact, corrupting fresh-process disk-prefix restores into
+            # incoherent output. Materialize a contiguous MLX array before the
+            # CPU copy. bfloat16 is cast to float16 (numpy doesn't support
+            # bf16) — acceptable precision for prompt cache.
             import numpy as np
             np_cache = {}
+            pending_arrays = []
+            arrays_to_eval = []
             for k, v in cache_data_flat.items():
                 if isinstance(v, mx.array):
-                    if v.dtype == mx.bfloat16:
-                        np_cache[k] = np.array(v.astype(mx.float16))
-                    else:
-                        np_cache[k] = np.array(v)
+                    arr = v.astype(mx.float16) if v.dtype == mx.bfloat16 else v
+                    arr = mx.contiguous(arr)
+                    pending_arrays.append((k, arr))
+                    arrays_to_eval.append(arr)
                 else:
                     np_cache[k] = v
+            if arrays_to_eval:
+                mx.eval(*arrays_to_eval)
+            for k, arr in pending_arrays:
+                np_cache[k] = np.array(arr)
             cache_data_flat = np_cache
 
         except Exception as e:
@@ -891,6 +904,11 @@ class DiskCacheManager:
                     logger.warning(f"Background disk cache write failed: {e}")
             except Exception as e:
                 logger.warning(f"Background disk cache write failed: {e}")
+            finally:
+                try:
+                    self._write_queue.task_done()
+                except ValueError:
+                    pass
 
     def _write_cache(
         self,

@@ -136,6 +136,26 @@ class TestPrefixHitTailAccounting:
         assert remaining == []
         assert cached_tokens == 3
 
+    def test_disk_prefix_hit_does_not_refeed_last_matched_token(self):
+        remaining, cached_tokens = Scheduler._disk_prefix_hit_tail_and_cached_tokens(
+            fetch_tokens=[10, 11, 12, 13, 14, 15],
+            matched_tokens=[10, 11, 12, 13],
+            gen_prompt_suffix=[90, 91],
+        )
+
+        assert remaining == [14, 15, 90, 91]
+        assert cached_tokens == 4
+
+    def test_disk_exact_hit_with_generation_suffix_uses_suffix_only(self):
+        remaining, cached_tokens = Scheduler._disk_prefix_hit_tail_and_cached_tokens(
+            fetch_tokens=[10, 11, 12, 13],
+            matched_tokens=[10, 11, 12, 13],
+            gen_prompt_suffix=[90, 91],
+        )
+
+        assert remaining == [90, 91]
+        assert cached_tokens == 4
+
 
 class TestSamplingParams:
     """Tests for SamplingParams."""

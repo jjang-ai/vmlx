@@ -292,6 +292,106 @@ def _estimate_max_prompt_tokens() -> int:
         return 0
 
 
+def _loaded_model_config_for_memory_projection():
+    try:
+        engine = get_engine()
+    except Exception:
+        return None
+    model = getattr(engine, "model", None)
+    if model is None:
+        model = getattr(engine, "_model", None)
+    return getattr(model, "config", None) or getattr(model, "args", None)
+
+
+def _metal_projection_stats() -> tuple[int, int]:
+    import mlx.core as mx
+
+    from vmlx_engine.utils.memory_limits import get_effective_metal_working_set_bytes
+
+    return get_effective_metal_working_set_bytes(mx)
+
+
+def _projection_env(name: str, default: str) -> str:
+    legacy = "VMLINUX_" + name.removeprefix("VMLX_")
+    return os.environ.get(name, os.environ.get(legacy, default))
+
+
+def _metal_projected_output_token_cap(model_name: str = "") -> int | None:
+    """Return a conservative output-token cap from projected Metal headroom.
+
+    This is separate from the existing reactive pressure guards. Those guards
+    reject when current memory is already high; this one prevents an explicit
+    large output request from being accepted when the loaded model leaves only
+    a small working-set margin for generation.
+    """
+    if _projection_env("VMLX_METAL_PROJECTED_OUTPUT_GUARD", "1") == "0":
+        return None
+    try:
+        from vmlx_engine.utils.memory_limits import (
+            estimate_kv_bytes_per_token_from_config,
+            projected_output_token_cap,
+        )
+
+        config = _loaded_model_config_for_memory_projection()
+        bytes_per_token = estimate_kv_bytes_per_token_from_config(config)
+        if bytes_per_token <= 0:
+            return None
+        active, max_ws = _metal_projection_stats()
+        if max_ws <= 0:
+            return None
+        budget_fraction = float(
+            _projection_env("VMLX_METAL_PROJECTED_TOKEN_BUDGET_FRACTION", "0.50")
+        )
+        transient_multiplier = float(
+            _projection_env("VMLX_METAL_PROJECTED_TOKEN_TRANSIENT_MULTIPLIER", "4.0")
+        )
+        return projected_output_token_cap(
+            active_bytes=active,
+            max_working_set_bytes=max_ws,
+            bytes_per_token=bytes_per_token,
+            budget_fraction=budget_fraction,
+            transient_multiplier=transient_multiplier,
+        )
+    except Exception:
+        return None
+
+
+def _apply_projected_output_guard(
+    candidate: int,
+    *,
+    explicit: bool,
+    model_name: str = "",
+) -> int:
+    try:
+        requested = int(candidate)
+    except (TypeError, ValueError):
+        requested = _FALLBACK_MAX_OUTPUT_TOKENS
+    cap = _metal_projected_output_token_cap(model_name)
+    if cap is None or requested <= cap:
+        return requested
+    if explicit:
+        raise HTTPException(
+            status_code=413,
+            detail=(
+                "Requested max output tokens exceed projected safe Metal "
+                f"headroom: requested={requested}, safe_cap={cap}. "
+                "Reduce max_tokens/max_output_tokens, context length, paged "
+                "cache blocks, or load a smaller model. Set "
+                "VMLX_METAL_PROJECTED_OUTPUT_GUARD=0 only for explicit "
+                "developer diagnostics; disabling it accepts Metal OOM / "
+                "kernel-panic risk."
+            ),
+        )
+    logger.warning(
+        "Projected Metal headroom guard clamped implicit max output tokens: "
+        "requested=%d safe_cap=%d model=%s",
+        requested,
+        cap,
+        model_name or _model_path or _model_name or "",
+    )
+    return max(1, int(cap))
+
+
 def _resolve_max_prompt_tokens(
     auto_estimate: int,
     explicit_limit: int | None,
@@ -1301,13 +1401,29 @@ def _resolve_max_tokens(request_value: int | None, model_name: str = "") -> int:
     treating that omission as 32K lets normal chats drift into loops.
     """
     if request_value is not None:
-        return request_value
+        return _apply_projected_output_guard(
+            int(request_value),
+            explicit=True,
+            model_name=model_name,
+        )
     if _default_max_tokens_explicit:
-        return _default_max_tokens
+        return _apply_projected_output_guard(
+            int(_default_max_tokens),
+            explicit=True,
+            model_name=model_name,
+        )
     v = _bundle_sampling_default(model_name, "max_new_tokens")
     if v is not None and v > 0:
-        return int(v)
-    return _FALLBACK_MAX_OUTPUT_TOKENS
+        return _apply_projected_output_guard(
+            int(v),
+            explicit=False,
+            model_name=model_name,
+        )
+    return _apply_projected_output_guard(
+        _FALLBACK_MAX_OUTPUT_TOKENS,
+        explicit=False,
+        model_name=model_name,
+    )
 
 
 @dataclass(frozen=True)

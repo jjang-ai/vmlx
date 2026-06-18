@@ -480,8 +480,8 @@ def test_scheduler_disk_l2_prefix_hit_replays_uncached_tail(monkeypatch):
 
     assert request.prompt_cache is not None
     _assert_m3_cache(request.prompt_cache[0], seq=4)
-    assert request.cached_tokens == 3
-    assert request.remaining_tokens == [13, 14, 90, 91]
+    assert request.cached_tokens == 4
+    assert request.remaining_tokens == [14, 90, 91]
     assert request._cache_detail == "disk"
 
 

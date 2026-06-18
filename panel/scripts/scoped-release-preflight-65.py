@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Fail-closed preflight for the 1.5.64 MM3 + Gemma 4 compatibility gate.
+"""Fail-closed preflight for the 1.5.65 MM3 + Gemma 4 compatibility gate.
 
 This is intentionally separate from ``scoped-release-preflight.py`` because the
-1.5.63 script is a historical scoped-release record.  The 1.5.64 objective is
+1.5.63 script is a historical scoped-release record.  The 1.5.65 objective is
 broader: current MiniMax-M3 strict exactness, current Gemma 4 JANG_4M VL rows,
 current large MXFP4 visual rows, clean-start/autodetect evidence, lifecycle
 evidence, and source version stamps.
@@ -259,28 +259,28 @@ def validate_versions(failures: list[str]) -> dict[str, str | None]:
     panel_version = package.get("version")
     lock_version = lock.get("version")
     lock_root_version = ((lock.get("packages") or {}).get("") or {}).get("version")
-    require(panel_version == "1.5.64", failures, f"panel/package.json version={panel_version!r}")
-    require(lock_version == "1.5.64", failures, f"panel/package-lock.json version={lock_version!r}")
-    require(lock_root_version == "1.5.64", failures, f"panel/package-lock root version={lock_root_version!r}")
-    require('version = "1.5.64"' in pyproject, failures, "pyproject.toml is not 1.5.64")
-    require('__version__ = "1.5.64"' in init_py, failures, "vmlx_engine/__init__.py is not 1.5.64")
+    require(panel_version == "1.5.65", failures, f"panel/package.json version={panel_version!r}")
+    require(lock_version == "1.5.65", failures, f"panel/package-lock.json version={lock_version!r}")
+    require(lock_root_version == "1.5.65", failures, f"panel/package-lock root version={lock_root_version!r}")
+    require('version = "1.5.65"' in pyproject, failures, "pyproject.toml is not 1.5.65")
+    require('__version__ = "1.5.65"' in init_py, failures, "vmlx_engine/__init__.py is not 1.5.65")
     return {
         "panel": panel_version,
         "panel_lock": lock_version,
         "panel_lock_root": lock_root_version,
-        "pyproject": "1.5.64" if 'version = "1.5.64"' in pyproject else None,
-        "engine": "1.5.64" if '__version__ = "1.5.64"' in init_py else None,
+        "pyproject": "1.5.65" if 'version = "1.5.65"' in pyproject else None,
+        "engine": "1.5.65" if '__version__ = "1.5.65"' in init_py else None,
     }
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--out", type=Path, default=ROOT / "build/current-scoped-release-preflight-64.json")
+    parser.add_argument("--out", type=Path, default=ROOT / "build/current-scoped-release-preflight-65.json")
     args = parser.parse_args()
 
     failures: list[str] = []
     manifest: dict[str, Any] = {
-        "scope": "1.5.64-mm3-gemma4",
+        "scope": "1.5.65-mm3-gemma4",
         "status": "fail",
         "failures": failures,
         "versions": validate_versions(failures),

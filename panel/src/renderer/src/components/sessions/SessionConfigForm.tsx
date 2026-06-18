@@ -12,6 +12,11 @@ import {
   resolveCacheControlPolicy,
   type CacheControlUpdate,
 } from '../../../../shared/cacheControlPolicy'
+import {
+  pagedCacheCapacityText,
+  pagedCacheControlsState,
+  pagedCacheMemoryIgnoredText,
+} from '../../../../shared/cacheCapacityDisplay'
 import { normalizeMcpPolicyList } from '../../../../shared/mcpPolicy'
 import { canonicalizeToolParserId } from '../../../../shared/toolParserAliases'
 export interface SessionConfig {
@@ -375,6 +380,13 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
   const effectivePagedCacheBlockSize = dsv4CompositeRequiresPaged
     ? DSV4_PAGED_CACHE_BLOCK_SIZE
     : config.pagedCacheBlockSize
+  const pagedCacheUiState = pagedCacheControlsState(effectiveUsePagedCache)
+  const effectivePagedCapacityText = pagedCacheCapacityText({
+    blockSize: effectivePagedCacheBlockSize,
+    maxBlocks: config.maxCacheBlocks,
+    defaultBlockSize: DEFAULT_CONFIG.pagedCacheBlockSize,
+    defaultMaxBlocks: DEFAULT_CONFIG.maxCacheBlocks,
+  })
   const pagedCacheSectionTitle = t('sessions.config.pagedKVCache')
   const effectiveStoredCacheQuantization = dsv4Active ? 'auto' : config.kvCacheQuantization
   const effectiveMaxNumSeqs = dsv4Active ? 1 : config.maxNumSeqs
@@ -822,7 +834,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
             ) : (
               <>
                 {effectiveUsePagedCache && (
-                  <IncompatWarning text="Cache Memory Limit and Cache Memory % only apply to memory-aware non-paged prefix cache. With paged cache on, use Max Cache Blocks for L1 RAM capacity and Block Cache Max for L2 disk capacity." />
+                  <IncompatWarning text={pagedCacheMemoryIgnoredText} />
                 )}
                 <SliderField
                   label="Cache Memory Limit (MB)"
@@ -836,7 +848,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
                   allowUnlimited
                   unlimitedValue={0}
                   unlimitedLabel="Auto-detect"
-                  disabled={effectiveUsePagedCache}
+                  disabled={pagedCacheUiState.memoryBudgetControlsDisabled}
                 />
                 <SliderField
                   label="Cache Memory %"
@@ -848,9 +860,9 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
                   step={1}
                   defaultValue={DEFAULT_CONFIG.cacheMemoryPercent}
                   maxInput={100}
-                  disabled={effectiveUsePagedCache}
+                  disabled={pagedCacheUiState.memoryBudgetControlsDisabled}
                 />
-                {effectiveUsePagedCache && <IncompatWarning text="Cache TTL has no effect when paged cache is enabled — paged cache uses block-count LRU eviction instead. To control paged cache size, adjust 'Max Cache Blocks' in the Paged KV Cache section below. To use time-based TTL, disable 'Use Paged KV Cache' in the Paged KV Cache section." />}
+                {pagedCacheUiState.memoryBudgetIgnored && <IncompatWarning text="Cache TTL has no effect when paged cache is enabled — paged cache uses block-count LRU eviction instead. To control paged cache size, adjust 'Max Cache Blocks' in the Paged KV Cache section below. To use time-based TTL, disable 'Use Paged KV Cache' in the Paged KV Cache section." />}
                 <SliderField
                   label="Cache TTL (minutes)"
                   tooltip="Time-to-live for memory-aware cache entries. Entries not accessed within this window are evicted to free memory. 'No expiration' means entries are only evicted by memory pressure. Note: this setting has no effect when Paged KV Cache is enabled (paged cache uses its own LRU eviction based on Max Cache Blocks)."
@@ -863,7 +875,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
                   allowUnlimited
                   unlimitedValue={0}
                   unlimitedLabel="No expiration"
-                  disabled={effectiveUsePagedCache}
+                  disabled={pagedCacheUiState.cacheTtlDisabled}
                 />
               </>
             )}
@@ -938,6 +950,7 @@ export function SessionConfigForm({ config, onChange, onReset, detectedCacheType
         {!dsv4Active && <CheckField label="Use Paged KV Cache" tooltip="Manages the KV cache in fixed-size pages instead of contiguous memory. Greatly reduces memory fragmentation and allows serving larger batches or larger contexts on limited GPU RAM. Extremely recommended for long conversations." checked={effectiveUsePagedCache} onChange={v => applyCacheControlUpdates(cacheControlUpdatesForPagedToggle(v, cacheControlState))} disabled={!dsv4Active && cachePolicy.pagedCacheDisabled} />}
         {effectiveUsePagedCache && (
           <>
+            <InfoNote text={effectivePagedCapacityText} />
             <SliderField
               label="Block Size (tokens)"
               tooltip="Number of tokens per paged KV cache block. Smaller blocks reduce memory waste per sequence but increase overhead from managing more blocks. Default 64 is optimal for most models. DSV4 uses 256-token blocks for its native composite cache."

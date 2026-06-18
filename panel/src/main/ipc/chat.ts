@@ -25,6 +25,7 @@ import {
 import { shouldAutoContinueAfterToolUse } from "../../shared/toolAutoContinue";
 import { buildToolMediaFollowupContent } from "../../shared/toolMediaFollowup";
 import { dsv4OutputBudget } from "../../shared/dsv4RequestBudget";
+import { projectedMetalHeadroomChatErrorContent } from "../../shared/chatErrorDisplay";
 import {
   buildNewChatInheritedOverrides,
   sanitizeChatOverrides,
@@ -3829,7 +3830,13 @@ export function registerChatHandlers(
         } catch (_) {}
 
         const _err = error as any;
-        if (!isExpectedChatBackendDisconnectError(error)) {
+        const errMsg = (error as Error).message || "";
+        const projectedMetalHeadroomErrorContent =
+          projectedMetalHeadroomChatErrorContent(errMsg);
+        if (
+          !projectedMetalHeadroomErrorContent &&
+          !isExpectedChatBackendDisconnectError(error)
+        ) {
           console.error("[CHAT] Error caught:", {
             message: _err?.message,
             name: _err?.name,
@@ -3937,6 +3944,7 @@ export function registerChatHandlers(
         const hadVisibleActivity =
           partialContent ||
           abortReasoningContent.trim() ||
+          projectedMetalHeadroomErrorContent ||
           collectedToolStatuses.length > 0 ||
           abortTotalTokens > 0;
 
@@ -3944,7 +3952,7 @@ export function registerChatHandlers(
         if (hadVisibleActivity) {
           assistantMessage.content = partialContent
             ? partialContent + "\n\n[Generation interrupted]"
-            : "[Generation interrupted]";
+            : projectedMetalHeadroomErrorContent || "[Generation interrupted]";
           assistantMessage.tokens = abortTotalTokens;
 
           // Calculate real metrics for the partial generation (not hardcoded zeros)
@@ -4040,7 +4048,6 @@ export function registerChatHandlers(
         // CRITICAL: Check abortController.signal.aborted FIRST — when abort fires during
         // reader.read(), the error message can be 'terminated' instead of 'AbortError',
         // which would be misclassified as "server connection lost".
-        const errMsg = (error as Error).message || "";
         if (timedOut) {
           throw new Error(
             `Request timed out after ${timeoutSeconds}s. Increase the Timeout setting in Server Settings, or the model may be overloaded.`,
@@ -4053,6 +4060,9 @@ export function registerChatHandlers(
             `[CHAT] Abort complete — saved ${partialContent ? partialContent.length : 0} chars, ${collectedToolStatuses.length} tool statuses`,
           );
           return hadVisibleActivity ? assistantMessage : null;
+        }
+        if (projectedMetalHeadroomErrorContent) {
+          return assistantMessage;
         }
         // Check both error message AND error code — Node.js ConnResetException has
         // message "aborted" but code "ECONNRESET", which the message-only check missed.

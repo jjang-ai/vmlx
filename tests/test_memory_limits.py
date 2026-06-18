@@ -8,8 +8,10 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from vmlx_engine.utils.memory_limits import (
+    estimate_kv_bytes_per_token_from_config,
     get_effective_metal_working_set_bytes,
     get_metal_ws_guard_threshold,
+    projected_output_token_cap,
     resolve_working_set_override,
     is_metal_ws_guard_enabled,
     _parse_float_env,
@@ -78,6 +80,32 @@ def test_guard_is_enabled_default_and_disable():
 
 def test_parse_float_env_negative_reverts_to_default():
     assert _parse_float_env("MISSING", 42.0) == 42.0
+
+
+def test_estimate_kv_bytes_per_token_from_text_config_dict():
+    cfg = {
+        "text_config": {
+            "num_hidden_layers": 2,
+            "num_key_value_heads": 4,
+            "head_dim": 8,
+            "torch_dtype": "bfloat16",
+        }
+    }
+
+    assert estimate_kv_bytes_per_token_from_config(cfg) == 2 * 2 * 4 * 8 * 2
+
+
+def test_projected_output_token_cap_accounts_for_transient_multiplier():
+    gib = 1024**3
+    cap = projected_output_token_cap(
+        active_bytes=int(105.41 * gib),
+        max_working_set_bytes=int(107.52 * gib),
+        bytes_per_token=256 * 1024,
+        budget_fraction=0.50,
+        transient_multiplier=4.0,
+    )
+
+    assert 1000 <= cap <= 1100
 
 
 def test_scheduler_waiting_uses_shared_memory_helper():

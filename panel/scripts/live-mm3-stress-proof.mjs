@@ -107,6 +107,15 @@ function equalsText(text, expected) {
   return labelText(text).trim().toLowerCase() === String(expected).toLowerCase()
 }
 
+function escapeRegExp(text) {
+  return String(text).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+function markerWordCount(text, expected) {
+  const re = new RegExp(`\\b${escapeRegExp(expected)}\\b`, 'gi')
+  return (labelText(text).match(re) || []).length
+}
+
 function toolCallingCount(row, toolName = '') {
   try {
     const events = JSON.parse(row?.toolCallsJson || '[]')
@@ -749,9 +758,31 @@ function deriveVerdict(result) {
   if (turns.some((t) => t.score.leakedThinkTags)) failures.push('UI raw think tag leak')
   if (turns.some((t) => t.score.loopSuspect)) failures.push('UI loop suspect')
   if (turns.some((t) => t.autonomousAssistantTurn)) failures.push('UI autonomous assistant turn after completion')
+  const expectedTurnLabels = [
+    [1, ['EBS']],
+    [2, ['AP']],
+    [3, ['GL']],
+    [4, ['RESP']],
+    [5, ['CP']],
+    [6, ['PROFILE']],
+    [7, ['PATCH']],
+    [8, ['AP', 'GL']],
+    [9, ['RESP', 'CP', 'PROFILE']],
+    [10, ['EBS', 'AP', 'GL', 'RESP', 'CP', 'PROFILE', 'PATCH']],
+  ]
+  for (const [turnNumber, expectedLabels] of expectedTurnLabels) {
+    const content = turns[turnNumber - 1]?.content || ''
+    for (const label of expectedLabels) {
+      if (!new RegExp(`\\b${escapeRegExp(label)}\\b`, 'i').test(labelText(content))) {
+        failures.push(`UI turn ${turnNumber} missing exact label ${label}`)
+      }
+    }
+  }
   const final = turns[turns.length - 1]?.content || ''
   for (const label of ['EBS', 'AP', 'GL', 'RESP', 'CP', 'PROFILE', 'PATCH']) {
     if (!new RegExp(`\\b${label}\\b`, 'i').test(final)) failures.push(`final recall missing ${label}`)
+    const count = markerWordCount(final, label)
+    if (count !== 1) failures.push(`final recall expected ${label} exactly once, saw ${count}`)
   }
   const cachedTurns = turns.filter((t) => Number(t.metrics?.cachedTokens || 0) > 0)
   if (!cachedTurns.length) failures.push('UI multiturn cachedTokens never exceeded 0')
@@ -762,20 +793,22 @@ function deriveVerdict(result) {
   const off = result.ui?.reasoningModes?.find((row) => row.mode === 'off')
   const on = result.ui?.reasoningModes?.find((row) => row.mode === 'on')
   if (off && off.reasoningChars > 0) failures.push(`reasoning off produced reasoningChars=${off.reasoningChars}`)
+  if (off && !equalsText(off.content || '', 'OFF_VISIBLE_OK')) failures.push(`reasoning off exact visible mismatch: ${off.content || ''}`)
   if (on && on.reasoningChars <= 0) failures.push('reasoning on produced no reasoning content')
   const tool = result.ui?.toolUse
   if (!tool || tool.fileContent !== 'M3_TOOL_OK') failures.push('UI tool execution file proof missing')
   if (tool?.score?.empty || tool?.hiddenOnly) failures.push('UI tool final answer empty or hidden-only')
-  if (tool && !hasExactMarker(tool.content || '', 'M3_TOOL_OK_DONE')) failures.push('UI tool final marker missing M3_TOOL_OK_DONE')
+  if (tool && !equalsText(tool.content || '', 'M3_TOOL_OK_DONE')) failures.push(`UI tool exact final mismatch: ${tool.content || ''}`)
   const long = result.ui?.longContextPrefix
-  if (!/PROFILE_OPTION_SENTINEL_ZETA_173/i.test(long?.turn2?.content || '')) failures.push('long-context sentinel recall failed')
+  if (long && !equalsText(long.turn1?.content || '', 'LONG_CONTEXT_READY')) failures.push(`long-context prime exact mismatch: ${long.turn1?.content || ''}`)
+  if (long && !equalsText(long.turn2?.content || '', 'PROFILE_OPTION_SENTINEL_ZETA_173')) failures.push(`long-context sentinel exact mismatch: ${long.turn2?.content || ''}`)
   if (Number(long?.turn2?.metrics?.cachedTokens || 0) <= 0) failures.push('long-context turn2 cachedTokens=0')
   const image = result.ui?.imageVl
   if (!image || image.sendError) failures.push(`MM3 image UI send failed: ${image?.sendError || 'missing image row'}`)
   if (image?.score?.empty || image?.hiddenOnly) failures.push('MM3 image UI response empty or hidden-only')
   if (image?.score?.leakedThinkTags) failures.push('MM3 image UI raw think tag leak')
   if (image?.score?.loopSuspect) failures.push('MM3 image UI loop suspect')
-  if (image && (!/MM3_IMAGE_RED/i.test(image.content || '') || rejectsRedImageLabel(image.content || ''))) failures.push('MM3 image UI did not identify red image')
+  if (image && (!equalsText(image.content || '', 'MM3_IMAGE_RED') || rejectsRedImageLabel(image.content || ''))) failures.push(`MM3 image UI exact mismatch: ${image.content || ''}`)
   const defaults = result.generationDefaults
   if (!defaults) failures.push('generation defaults proof missing')
   else {
@@ -803,17 +836,17 @@ function deriveVerdict(result) {
     if ((byLabel.text_reasoning_off?.reasoningChars || 0) > 0) failures.push('mixed reasoning-off turn emitted reasoning')
     if ((byLabel.image_reasoning_on?.reasoningChars || 0) <= 0) failures.push('mixed reasoning-on image turn emitted no reasoning')
     if ((byLabel.tool_reasoning_on?.reasoningChars || 0) <= 0) failures.push('mixed reasoning-on tool turn emitted no reasoning')
-    if (!hasExactMarker(byLabel.tool_reasoning_on?.content || '', 'M3_MIX_TOOL_ON_DONE')) failures.push('mixed reasoning-on tool final marker missing M3_MIX_TOOL_ON_DONE')
-    if (!hasExactMarker(byLabel.tool_reasoning_auto?.content || '', 'M3_MIX_TOOL_AUTO_DONE')) failures.push('mixed reasoning-auto tool final marker missing M3_MIX_TOOL_AUTO_DONE')
+    if (!equalsText(byLabel.tool_reasoning_on?.content || '', 'M3_MIX_TOOL_ON_DONE')) failures.push(`mixed reasoning-on tool exact final mismatch: ${byLabel.tool_reasoning_on?.content || ''}`)
+    if (!equalsText(byLabel.tool_reasoning_auto?.content || '', 'M3_MIX_TOOL_AUTO_DONE')) failures.push(`mixed reasoning-auto tool exact final mismatch: ${byLabel.tool_reasoning_auto?.content || ''}`)
     const onToolCalls = toolCallingCount(byLabel.tool_reasoning_on, 'run_command')
     const autoToolCalls = toolCallingCount(byLabel.tool_reasoning_auto, 'run_command')
     if (onToolCalls !== 1) failures.push(`mixed reasoning-on expected exactly 1 run_command call, saw ${onToolCalls}`)
     if (autoToolCalls !== 1) failures.push(`mixed reasoning-auto expected exactly 1 run_command call, saw ${autoToolCalls}`)
     const mixedImageContent = byLabel.image_reasoning_on?.content || ''
     if (
-      !/MM3_MIX_IMAGE_RED/i.test(mixedImageContent)
+      !equalsText(mixedImageContent, 'MM3_MIX_IMAGE_RED')
       || rejectsRedImageLabel(mixedImageContent)
-    ) failures.push('mixed image turn did not identify red image')
+    ) failures.push(`mixed image exact mismatch: ${mixedImageContent}`)
     const postMediaCacheHit = ['tool_reasoning_on', 'tool_reasoning_auto', 'final_recall_cache']
       .some((label) => Number(byLabel[label]?.metrics?.cachedTokens || 0) > 0)
     if (!postMediaCacheHit) failures.push('mixed post-media/tool cachedTokens never exceeded 0')
@@ -957,7 +990,7 @@ async function main() {
     writeResult(result)
 
     const chat = await page.evaluate(async ({ modelPath }) => {
-      return window.api.chat.create('MM3 1.5.64 10-turn stress', modelPath.split('/').pop(), undefined, modelPath)
+      return window.api.chat.create('MM3 1.5.65 10-turn stress', modelPath.split('/').pop(), undefined, modelPath)
     }, { modelPath })
     await page.evaluate(async ({ chatId }) => {
       await window.api.chat.setOverrides(chatId, {
@@ -978,7 +1011,7 @@ async function main() {
       'Set anchor PATCH=patching. Explain EBS patching basics in two concise bullets and include label PATCH.',
       'Compare AP and GL in one short paragraph. Use labels AP and GL explicitly.',
       'What are the three admin anchors RESP, CP, PROFILE? Use those labels and one short phrase for each.',
-      'Recall all seven anchors EBS, AP, GL, RESP, CP, PROFILE, PATCH. Give one short phrase for each and use every label exactly once.',
+      'Recall all seven anchors EBS, AP, GL, RESP, CP, PROFILE, PATCH. Give one short phrase for each. Use each label exactly once, only before its colon. Do not repeat any label word inside the phrases after colons.',
     ]
     result.ui = { multiturn10: { chatId: chat.id, turns: [] }, reasoningModes: [], toolUse: null, longContextPrefix: null, mixedSession: null }
     for (let i = 0; i < prompts.length; i += 1) {

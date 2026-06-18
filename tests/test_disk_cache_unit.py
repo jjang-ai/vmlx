@@ -16,6 +16,7 @@ Verifies:
 import os
 import sqlite3
 import tempfile
+import threading
 import time
 
 import pytest
@@ -74,6 +75,65 @@ def _insert_fake_entry(
 
 class TestDiskCacheUnit:
     """Disk cache database and filesystem tests."""
+
+    def test_standard_store_materializes_mlx_arrays_contiguous(self, monkeypatch):
+        """Standard disk-cache stores must CPU-copy from contiguous MLX arrays.
+
+        Gemma 4 sliding-window RotatingKVCache.values can be a non-contiguous
+        MLX view after prefill. Direct ``np.array(v)`` on that live view
+        corrupted only the sliding values in a fresh-process disk-prefix
+        restore. Pin the materialization contract at DiskCacheManager.store().
+        """
+        import mlx.core as mx
+        import vmlx_engine.disk_cache as disk_cache
+
+        class FakeCache:
+            @property
+            def state(self):
+                base = mx.arange(64, dtype=mx.float32).reshape(1, 2, 4, 8)
+                return (base.transpose(0, 1, 3, 2),)
+
+            @property
+            def meta_state(self):
+                return ("0", "16", "8", "8")
+
+        tmpdir = tempfile.mkdtemp(prefix="vmlx_disk_cache_test_")
+        mgr = _create_manager(tmpdir)
+        seen = {"contiguous": 0}
+        orig_contiguous = disk_cache.mx.contiguous
+
+        def counting_contiguous(arr):
+            seen["contiguous"] += 1
+            return orig_contiguous(arr)
+
+        monkeypatch.setattr(disk_cache.mx, "contiguous", counting_contiguous)
+        try:
+            assert mgr.store([1, 2, 3], [FakeCache()]) is True
+            assert seen["contiguous"] == 1
+        finally:
+            mgr.shutdown()
+
+    def test_background_writer_marks_standard_write_task_done(self):
+        """Queue joins must complete after a standard background write."""
+        tmpdir = tempfile.mkdtemp(prefix="vmlx_disk_cache_test_")
+        mgr = _create_manager(tmpdir)
+        try:
+            wrote = threading.Event()
+
+            def fake_write_cache(token_hash, tokens, cache_data, metadata, cache_type="assistant"):
+                wrote.set()
+
+            mgr._write_cache = fake_write_cache
+            mgr._write_queue.put(("hash", [1, 2, 3], {}, {}, "assistant"))
+
+            assert wrote.wait(timeout=2.0)
+            join_done = threading.Event()
+            join_thread = threading.Thread(target=lambda: (mgr._write_queue.join(), join_done.set()))
+            join_thread.start()
+            join_thread.join(timeout=2.0)
+            assert join_done.is_set()
+        finally:
+            mgr.shutdown()
 
     def test_store_and_fetch_roundtrip(self):
         """Store data under a token hash, fetch returns the DB row."""
